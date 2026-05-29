@@ -19,7 +19,7 @@
 //! gstreamer, v4l2, cpal…) vivan en crates `multimedia-source-*` o
 //! `multimedia-audio-*` que impl los traits.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,6 +33,49 @@ use std::time::Duration;
 /// entre llamadas para evitar realocs.
 pub trait FrameSource {
     fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)>;
+}
+
+// ============================================================
+// Seekable — transporte para fuentes con timeline conocido
+// ============================================================
+
+/// Capacidad opcional de las fuentes que tienen una posición y/o
+/// duración conocida (WAV, GIF, una pista de Opus). Las fuentes
+/// infinitas o procedurales (TestCard, ToneSource) la pueden NO
+/// implementar — el caller debe `dyn Seekable` por separado.
+///
+/// La implementación es responsable de que `seek_to` no rompa el
+/// estado del decoder: clampea al rango válido y, si la fuente es
+/// loopable, hace módulo de la duración. `position` y `duration`
+/// usan [`Duration`] para ser portátiles entre fuentes con sample
+/// rates distintos.
+pub trait Seekable {
+    /// Tiempo actual de reproducción desde el inicio (ignorando loops
+    /// pasados — siempre módulo `duration` si la fuente loopea).
+    fn position(&self) -> Duration;
+
+    /// Duración total de un loop completo. `None` para fuentes
+    /// infinitas (tono, testcard, stream en vivo).
+    fn duration(&self) -> Option<Duration>;
+
+    /// Mueve la posición. Las fuentes deben clampear/módulo a su
+    /// rango válido — el caller puede pasar valores fuera y esperar
+    /// que se normalicen, no que panickeen.
+    fn seek_to(&mut self, pos: Duration);
+}
+
+// Reenvíos para Box<dyn Seekable + ...> — mismo motivo que los
+// blanket impls de FrameSource/AudioSource.
+impl<T: Seekable + ?Sized> Seekable for Box<T> {
+    fn position(&self) -> Duration {
+        (**self).position()
+    }
+    fn duration(&self) -> Option<Duration> {
+        (**self).duration()
+    }
+    fn seek_to(&mut self, pos: Duration) {
+        (**self).seek_to(pos)
+    }
 }
 
 // Reenvío para `Box<dyn FrameSource ...>`. Igual que el de
@@ -545,6 +588,88 @@ impl<S: FrameSource> FrameSource for PausableVideo<S> {
             return None;
         }
         self.inner.tick(dt, buf)
+    }
+}
+
+// ============================================================
+// Volume — ganancia lineal compartida
+// ============================================================
+
+/// Handle clonable de ganancia lineal aplicada a un [`VolumeAudio`].
+/// Se almacena como `f32` bit-cast a `u32` para que el callback de
+/// audio realtime no necesite tomar un lock. Rango efectivo
+/// `[0.0, 4.0]` — sobre `1.0` amplifica (con riesgo de clipping).
+#[derive(Clone)]
+pub struct Volume {
+    bits: Arc<AtomicU32>,
+}
+
+impl Default for Volume {
+    fn default() -> Self {
+        Self::new(1.0)
+    }
+}
+
+impl Volume {
+    pub fn new(initial: f32) -> Self {
+        let v = initial.clamp(0.0, 4.0).to_bits();
+        Self {
+            bits: Arc::new(AtomicU32::new(v)),
+        }
+    }
+
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.bits.load(Ordering::Relaxed))
+    }
+
+    pub fn set(&self, v: f32) {
+        let clamped = v.clamp(0.0, 4.0);
+        self.bits.store(clamped.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Modifica el valor con una closure (read-modify-write con
+    /// compare-exchange en loop — útil para "subí 5%").
+    pub fn update(&self, f: impl Fn(f32) -> f32) {
+        let mut cur = self.bits.load(Ordering::Relaxed);
+        loop {
+            let nv = f(f32::from_bits(cur)).clamp(0.0, 4.0).to_bits();
+            match self.bits.compare_exchange(
+                cur,
+                nv,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+}
+
+/// Wrapper de [`AudioSource`] que multiplica cada sample por el valor
+/// actual de un [`Volume`] compartido. Sin estado interno: una
+/// instancia del wrapper puede convivir con muchas copias del handle.
+pub struct VolumeAudio<S> {
+    inner: S,
+    volume: Volume,
+}
+
+impl<S> VolumeAudio<S> {
+    pub fn new(inner: S, volume: Volume) -> Self {
+        Self { inner, volume }
+    }
+}
+
+impl<S: AudioSource> AudioSource for VolumeAudio<S> {
+    fn fill(&mut self, buf: &mut [f32], sample_rate: u32, channels: u16) {
+        self.inner.fill(buf, sample_rate, channels);
+        let g = self.volume.get();
+        if (g - 1.0).abs() < 1e-6 {
+            return;
+        }
+        for s in buf.iter_mut() {
+            *s *= g;
+        }
     }
 }
 

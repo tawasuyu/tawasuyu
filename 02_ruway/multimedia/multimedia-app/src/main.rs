@@ -45,7 +45,7 @@ use llimphi_ui::{App, Handle, View};
 use multimedia_audio_cpal::AudioSink;
 use multimedia_core::{
     AudioProbe, AudioSource, FrameSource, Levels, Pause, PausableAudio, PausableVideo,
-    ProbedAudioSource, Spectrum, TestCard, ToneSource,
+    ProbedAudioSource, Seekable, Spectrum, TestCard, ToneSource, Volume, VolumeAudio,
 };
 use multimedia_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use multimedia_source_gif::GifSource;
@@ -66,7 +66,14 @@ enum Msg {
     TogglePause,
     ToggleRecord,
     Snapshot,
+    VolDown,
+    VolUp,
+    SeekBack,
+    SeekFwd,
 }
+
+const VOLUME_STEP: f32 = 0.1;
+const SEEK_STEP_SECS: u64 = 5;
 
 struct Model {
     frames: u64,
@@ -128,6 +135,57 @@ fn pause() -> &'static Pause {
 fn recorder() -> &'static WavRecorder {
     static SLOT: OnceLock<WavRecorder> = OnceLock::new();
     SLOT.get_or_init(WavRecorder::new)
+}
+
+/// Ganancia lineal compartida con el wrapper [`VolumeAudio`]. 1.0 =
+/// passthrough; los botones suben/bajan en pasos de 0.1.
+fn volume() -> &'static Volume {
+    static SLOT: OnceLock<Volume> = OnceLock::new();
+    SLOT.get_or_init(|| Volume::new(1.0))
+}
+
+/// Handle al [`WavSource`] activo (si la fuente es WAV) para poder
+/// llamar `seek_to`/`position`/`duration` desde la UI. `None` con
+/// otras fuentes (tono A4, fallback) — en ese caso los botones de
+/// seek quedan apagados.
+fn wav_handle_slot() -> &'static OnceLock<Option<Arc<Mutex<WavSource>>>> {
+    static SLOT: OnceLock<Option<Arc<Mutex<WavSource>>>> = OnceLock::new();
+    &SLOT
+}
+
+/// Adapter que comparte una fuente vía `Arc<Mutex<T>>` sin moverla.
+/// El cpal sink ve un `AudioSource` normal; otros consumidores (la UI
+/// para seek/position) pueden seguir hablando con el inner por la
+/// otra punta del Arc.
+struct SharedAudio<T> {
+    inner: Arc<Mutex<T>>,
+}
+
+impl<T: AudioSource> AudioSource for SharedAudio<T> {
+    fn fill(&mut self, buf: &mut [f32], sample_rate: u32, channels: u16) {
+        self.inner.lock().fill(buf, sample_rate, channels);
+    }
+}
+
+/// Mueve la posición del WAV activo en `delta_secs` (negativo = atrás)
+/// con wrap módulo duration. No-op si no hay WAV cargado.
+fn seek_audio_by(delta_secs: i64) {
+    let Some(handle) = wav_handle_slot().get().and_then(|o| o.as_ref()) else {
+        return;
+    };
+    let mut wav = handle.lock();
+    let dur = wav.duration().unwrap_or(Duration::from_secs(1));
+    let dur_s = dur.as_secs_f64().max(0.001);
+    let cur_s = wav.position().as_secs_f64();
+    let new_s = (cur_s + delta_secs as f64).rem_euclid(dur_s);
+    wav.seek_to(Duration::from_secs_f64(new_s));
+}
+
+/// Formatea una duración como `M:SS`. Para tracks de menos de una
+/// hora — más allá rolls over y se ve raro, pero MVP.
+fn fmt_secs(d: Duration) -> String {
+    let s = d.as_secs();
+    format!("{}:{:02}", s / 60, s % 60)
 }
 
 /// Path de snapshot único por segundo, en el cwd: `multimedia-snap-N.png`.
@@ -218,6 +276,22 @@ impl App for MultimediaApp {
                 }
                 model
             }
+            Msg::VolDown => {
+                volume().update(|v| v - VOLUME_STEP);
+                model
+            }
+            Msg::VolUp => {
+                volume().update(|v| v + VOLUME_STEP);
+                model
+            }
+            Msg::SeekBack => {
+                seek_audio_by(-(SEEK_STEP_SECS as i64));
+                model
+            }
+            Msg::SeekFwd => {
+                seek_audio_by(SEEK_STEP_SECS as i64);
+                model
+            }
             Msg::Snapshot => {
                 if let Some(pipe) = pipeline_slot().get() {
                     let (w, h) = *pipe.last_dim.lock();
@@ -284,6 +358,45 @@ impl App for MultimediaApp {
             Msg::Snapshot,
         );
 
+        let seekable = wav_handle_slot().get().and_then(|o| o.as_ref()).is_some();
+        let seek_bg = if seekable {
+            Color::from_rgba8(55, 65, 80, 255)
+        } else {
+            // Apagado: gris oscuro para señalizar "no aplica".
+            Color::from_rgba8(40, 46, 56, 255)
+        };
+        let seek_fg = if seekable {
+            Color::from_rgba8(220, 230, 245, 255)
+        } else {
+            Color::from_rgba8(100, 110, 125, 255)
+        };
+        let back_btn = chip_button("«5s", seek_bg, seek_fg, Msg::SeekBack);
+        let fwd_btn = chip_button("5s»", seek_bg, seek_fg, Msg::SeekFwd);
+
+        let vol_label = format!("vol {:.0}%", (volume().get() * 100.0).round());
+        let vol_text = View::new(Style {
+            size: Size {
+                width: length(82.0_f32),
+                height: length(36.0_f32),
+            },
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(vol_label, 13.0, Color::from_rgba8(180, 195, 215, 255));
+        let vol_dn = chip_button(
+            "vol−",
+            Color::from_rgba8(55, 65, 80, 255),
+            Color::from_rgba8(220, 230, 245, 255),
+            Msg::VolDown,
+        );
+        let vol_up = chip_button(
+            "vol+",
+            Color::from_rgba8(55, 65, 80, 255),
+            Color::from_rgba8(220, 230, 245, 255),
+            Msg::VolUp,
+        );
+
         let title_text = View::new(Style {
             size: Size {
                 width: auto(),
@@ -313,7 +426,18 @@ impl App for MultimediaApp {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .children(vec![pause_btn, rec_btn, snap_btn, title_text, meters_panel()]);
+        .children(vec![
+            pause_btn,
+            rec_btn,
+            snap_btn,
+            back_btn,
+            fwd_btn,
+            title_text,
+            vol_dn,
+            vol_text,
+            vol_up,
+            meters_panel(),
+        ]);
 
         let canvas_style = Style {
             size: Size {
@@ -356,6 +480,16 @@ impl App for MultimediaApp {
         })
         .children(vec![waveform_panel(), spectrum_panel()]);
 
+        let time_label = wav_handle_slot()
+            .get()
+            .and_then(|o| o.as_ref())
+            .map(|h| {
+                let w = h.lock();
+                let pos = w.position();
+                let dur = w.duration().unwrap_or(Duration::ZERO);
+                format!(" · {} / {}", fmt_secs(pos), fmt_secs(dur))
+            })
+            .unwrap_or_default();
         let footer = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -366,7 +500,7 @@ impl App for MultimediaApp {
             ..Default::default()
         })
         .text(
-            format!("ticks {} · ui ≈ {fps:.1} fps", model.frames),
+            format!("ticks {} · ui ≈ {fps:.1} fps{time_label}", model.frames),
             14.0,
             Color::from_rgba8(150, 165, 185, 255),
         );
@@ -803,22 +937,31 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
                     wav.source_sample_rate(),
                     wav.duration_seconds(),
                 );
-                Box::new(wav)
+                // Compartido: la cadena del sink se queda con un
+                // Arc clonado, y el slot expone el otro lado para
+                // los handlers de seek de la UI.
+                let shared = Arc::new(Mutex::new(wav));
+                wav_handle_slot().set(Some(shared.clone())).ok();
+                Box::new(SharedAudio { inner: shared })
             }
             Err(e) => {
                 eprintln!("multimedia-app: no pude abrir WAV {path}: {e} — caigo a tono A4");
+                wav_handle_slot().set(None).ok();
                 Box::new(ToneSource::a4())
             }
         }
     } else {
+        wav_handle_slot().set(None).ok();
         Box::new(ToneSource::a4())
     };
     // Orden: Pausable envuelve al productor (silencio cuando pausado);
-    // Recorded captura ese mismo flujo (graba el silencio durante la
-    // pausa, igual que lo escucha el sink); Probed tapea afuera para
-    // que el visor refleje lo que realmente se reproduce.
+    // Volume aplica ganancia después de pausar; Recorded captura ese
+    // mismo flujo (graba el silencio durante la pausa, igual que lo
+    // escucha el sink); Probed tapea afuera para que el visor refleje
+    // lo que realmente se reproduce.
     let pausable = PausableAudio::new(inner, pause().clone());
-    let recorded = RecordedAudioSource::new(pausable, recorder().clone());
+    let voled = VolumeAudio::new(pausable, volume().clone());
+    let recorded = RecordedAudioSource::new(voled, recorder().clone());
     let probed = ProbedAudioSource::new(recorded, probe.clone());
     (Arc::new(Mutex::new(probed)), probe)
 }

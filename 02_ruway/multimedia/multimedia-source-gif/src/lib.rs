@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use image::codecs::gif::GifDecoder;
 use image::AnimationDecoder;
-use multimedia_core::FrameSource;
+use multimedia_core::{FrameSource, Seekable};
 
 #[derive(Debug)]
 pub enum GifError {
@@ -102,6 +102,56 @@ impl GifSource {
 
     pub fn frame_count(&self) -> usize {
         self.frames.len()
+    }
+
+    /// Duración total de una vuelta del loop (suma de los delays de
+    /// cada frame).
+    pub fn total_duration(&self) -> Duration {
+        self.frames.iter().map(|(_, d)| *d).sum()
+    }
+
+    /// Tiempo acumulado de los frames `0..idx` (excluyendo `idx`).
+    fn time_at_frame(&self, idx: usize) -> Duration {
+        self.frames
+            .iter()
+            .take(idx.min(self.frames.len()))
+            .map(|(_, d)| *d)
+            .sum()
+    }
+}
+
+impl Seekable for GifSource {
+    fn position(&self) -> Duration {
+        self.time_at_frame(self.idx) + self.accum
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        Some(self.total_duration())
+    }
+
+    fn seek_to(&mut self, pos: Duration) {
+        let total = self.total_duration();
+        if total.is_zero() || self.frames.is_empty() {
+            return;
+        }
+        // Módulo manual sobre Duration (rem_euclid no aplica directo).
+        let total_nanos = total.as_nanos();
+        let pos_nanos = pos.as_nanos() % total_nanos;
+        let mut acc_nanos: u128 = 0;
+        for (i, (_, delay)) in self.frames.iter().enumerate() {
+            let next = acc_nanos + delay.as_nanos();
+            if pos_nanos < next {
+                self.idx = i;
+                self.accum = Duration::from_nanos((pos_nanos - acc_nanos) as u64);
+                self.emitted_first = false;
+                return;
+            }
+            acc_nanos = next;
+        }
+        // Si caímos exactamente al final, volver al inicio.
+        self.idx = 0;
+        self.accum = Duration::ZERO;
+        self.emitted_first = false;
     }
 }
 

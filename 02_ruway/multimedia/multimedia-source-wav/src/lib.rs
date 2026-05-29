@@ -18,9 +18,10 @@
 //! bloques.
 
 use std::path::Path;
+use std::time::Duration;
 
 use hound::{SampleFormat, WavReader};
-use multimedia_core::AudioSource;
+use multimedia_core::{AudioSource, Seekable};
 
 #[derive(Debug)]
 pub enum WavError {
@@ -136,6 +137,26 @@ impl WavSource {
         let s0 = self.samples[i0 * src_ch + ch];
         let s1 = self.samples[i1 * src_ch + ch];
         s0 + (s1 - s0) * frac
+    }
+}
+
+impl Seekable for WavSource {
+    fn position(&self) -> Duration {
+        // cursor está en frames del source (no en samples), igual que
+        // lo usa sample_at — ver fill().
+        let secs = self.cursor.max(0.0) / self.src_sample_rate.max(1) as f64;
+        Duration::from_secs_f64(secs.max(0.0))
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f32(self.duration_seconds()))
+    }
+
+    fn seek_to(&mut self, pos: Duration) {
+        let src_ch = self.src_channels.max(1) as f64;
+        let total_frames = (self.samples.len() as f64 / src_ch).max(1.0);
+        let frames = pos.as_secs_f64() * self.src_sample_rate.max(1) as f64;
+        self.cursor = frames.rem_euclid(total_frames);
     }
 }
 
