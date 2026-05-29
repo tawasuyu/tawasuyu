@@ -115,7 +115,18 @@ struct Model {
     /// proyección y el sky backdrop. PageUp/PageDown ajustan; Home
     /// resetea a 0. Clampeado a ±PITCH_MAX = π/3.
     view_pitch: f32,
+    /// Fase 3.19: crosshair central on/off (F4). Modernización pura —
+    /// Doom clásico no lo tiene; en Llimphi lo prendemos por default
+    /// porque la sensación de FPS contemporáneo lo da por sentado.
+    show_crosshair: bool,
+    /// Fase 3.19: intensidad de la viñeta de cabina (F5 cicla 0 → 0.55
+    /// → 0.9). Misma justificación que el crosshair: cosmético total,
+    /// no toca la simulación, sólo el rasterizador.
+    vignette_strength: f32,
 }
+
+/// Pasos del cicle F5 para la viñeta — off / sutil (default) / fuerte.
+const VIGNETTE_STEPS: [f32; 3] = [0.0, 0.55, 0.9];
 
 /// Rango sano del pitch en el host (mismo clamp que el renderer).
 const PITCH_MAX: f32 = std::f32::consts::FRAC_PI_3;
@@ -140,6 +151,10 @@ enum Msg {
         delta: f32,
         reset: bool,
     },
+    /// Fase 3.19: alterna el crosshair central (F4).
+    ToggleCrosshair,
+    /// Fase 3.19: cicla la intensidad de la viñeta (F5) por VIGNETTE_STEPS.
+    CycleVignette,
     Quit,
 }
 
@@ -195,6 +210,8 @@ impl App for Supay {
             known_pics: std::collections::HashSet::new(),
             known_sprites: std::collections::HashSet::new(),
             view_pitch: 0.0,
+            show_crosshair: true,
+            vignette_strength: VIGNETTE_STEPS[1],
         }
     }
 
@@ -207,6 +224,13 @@ impl App for Supay {
             if matches!(&e.key, Key::Named(NamedKey::F3)) {
                 // F3 alterna framebuffer ↔ renderer 3D (Fase 1 ↔ Fase 3.0).
                 return Some(Msg::ToggleViewMode);
+            }
+            // Fase 3.19: F4 alterna crosshair, F5 cicla la viñeta.
+            if matches!(&e.key, Key::Named(NamedKey::F4)) {
+                return Some(Msg::ToggleCrosshair);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F5)) {
+                return Some(Msg::CycleVignette);
             }
             // Fase 3.17: mouse-look cosmético. PageUp = mirar arriba,
             // PageDown = mirar abajo, Home = resetear horizonte. No pasan
@@ -290,6 +314,18 @@ impl App for Supay {
                     (m.view_pitch + delta).clamp(-PITCH_MAX, PITCH_MAX)
                 };
             }
+            Msg::ToggleCrosshair => {
+                m.show_crosshair = !m.show_crosshair;
+            }
+            Msg::CycleVignette => {
+                // Buscamos el step actual y avanzamos al siguiente; si
+                // el valor no matchea ninguno (raro), arrancamos en off.
+                let idx = VIGNETTE_STEPS
+                    .iter()
+                    .position(|&s| (s - m.vignette_strength).abs() < 1e-3)
+                    .unwrap_or(0);
+                m.vignette_strength = VIGNETTE_STEPS[(idx + 1) % VIGNETTE_STEPS.len()];
+            }
         }
         m
     }
@@ -310,6 +346,8 @@ impl App for Supay {
                 TICK_PERIOD,
                 RenderConfig {
                     atlas: model.atlas.clone(),
+                    crosshair: model.show_crosshair,
+                    vignette: model.vignette_strength,
                     ..RenderConfig::default()
                 },
             )),
@@ -355,7 +393,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.18 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.19 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

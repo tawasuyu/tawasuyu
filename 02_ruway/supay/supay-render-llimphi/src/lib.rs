@@ -320,6 +320,17 @@ pub struct RenderConfig {
     /// Atlas WAD con paleta + colores de flats. Sin él, el renderer cae
     /// a las paletas hardcoded de 3.1.
     pub atlas: Option<Arc<WadAtlas>>,
+    /// **Fase 3.19 — crosshair central**. Si `true`, pinta una marca
+    /// fina en el centro del viewport (4 chevrons + dot). Modernización
+    /// pura: Doom clásico no lo usa, los FPS contemporáneos sí. Cosmético
+    /// total — sólo afecta el rasterizador, no la simulación.
+    pub crosshair: bool,
+    /// **Fase 3.19 — fuerza de la viñeta de cabina**. `0.0` = off,
+    /// `1.0` = oscurecimiento muy marcado en esquinas. Default `0.55`
+    /// queda sutil: ~70/255 de alpha crimson_deep en el corner más
+    /// lejano del centro. Pintada antes que el crosshair y los overlays
+    /// para que las flashes de damage la cubran.
+    pub vignette: f32,
 }
 
 impl Default for RenderConfig {
@@ -333,6 +344,8 @@ impl Default for RenderConfig {
             wall_bands: 4,
             wall_strips: 8,
             atlas: None,
+            crosshair: true,
+            vignette: 0.55,
         }
     }
 }
@@ -494,10 +507,24 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
     // chaingun, etc. Mismo helper, mismo z-order layer apenas encima.
     draw_weapon_sprite(scene, rect, &snap.weapon_flash, player_light, cfg);
 
+    // Fase 3.19: viñeta de cabina (gradient radial muy sutil). Va antes
+    // que el overlay de PLAYPAL para que un damage flash rojo intenso
+    // cubra la viñeta sin contaminarse con ella. `cfg.vignette == 0.0`
+    // ⇒ no-op.
+    draw_vignette(scene, rect, cfg);
+
     // Fase 3.14: overlay full-screen al final del frame (damage red,
     // pickup yellow, radsuit green, invuln white). Modernización pura
     // de la lógica de Doom de palette swapping a PLAYPAL[1..13].
     draw_player_overlays(scene, rect, &snap.player_overlays, snap.tick);
+
+    // Fase 3.19: crosshair central encima de todo — incluso de los
+    // overlays. Si el jugador está dañado y la pantalla se tinta de
+    // rojo, el crosshair sigue siendo legible. Toggleable desde el host
+    // con `cfg.crosshair = false`.
+    if cfg.crosshair {
+        draw_crosshair(scene, rect);
+    }
 }
 
 struct Renderable {
@@ -2058,6 +2085,109 @@ fn overlay_rgba(ov: &PlayerOverlays, tick: u64) -> Option<(u8, u8, u8, u8)> {
         return Some((180, 40, 30, alpha));
     }
     None
+}
+
+// =====================================================================
+// Crosshair + viñeta de cabina (Fase 3.19)
+// =====================================================================
+//
+// Dos capas cosméticas post-3D:
+//
+//   - **Viñeta**: gradient radial transparente→crimson_deep, oscurece
+//     las esquinas para que el viewport se sienta como mirar por la
+//     visera de un casco. Multiplica el rango de luz percibido: el
+//     foco visual queda en el centro de la acción.
+//   - **Crosshair**: cruz fina centrada de 4 chevrons + dot, con halo
+//     crimson_deep abajo para legibilidad sobre cualquier fondo (paredes
+//     claras, cielo, sprites). 7 px de marca, 1 px de ancho.
+
+/// Pinta una viñeta radial muy sutil sobre todo el rect. `cfg.vignette`
+/// controla la fuerza global (0..1+). Sin allocar paths: un único fill
+/// del rect con el gradient como brush.
+fn draw_vignette(scene: &mut Scene, rect: PaintRect, cfg: &RenderConfig) {
+    use llimphi_ui::llimphi_raster::peniko::{color::AlphaColor, Gradient};
+    if cfg.vignette <= 0.0 || rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+    let cx = rect.x as f64 + rect.w as f64 * 0.5;
+    let cy = rect.y as f64 + rect.h as f64 * 0.5;
+    // Radio = mitad de la diagonal — el último stop alcanza justo a las
+    // esquinas. El centro queda transparente; el final, crimson_deep
+    // tinted con alpha proporcional a `cfg.vignette`.
+    let diag_half = (((rect.w as f64).powi(2) + (rect.h as f64).powi(2)).sqrt() * 0.5) as f32;
+    let strength = cfg.vignette.clamp(0.0, 1.5);
+    // crimson_deep ≈ rgba(90,14,14) — mismo tono del marco del header.
+    let inner: Color = AlphaColor::new([0.35, 0.05, 0.05, 0.0]);
+    let mid: Color = AlphaColor::new([0.35, 0.05, 0.05, 0.05 * strength]);
+    let outer: Color = AlphaColor::new([0.35, 0.05, 0.05, 0.30 * strength]);
+    // Tres stops: el segundo en 0.6 evita que la transición sea lineal
+    // (que se ve falsa) y mantiene el centro limpio. La curva resultante
+    // es casi quadrática — el oscurecimiento empieza recién en el último
+    // tercio del radio.
+    let gradient = Gradient::new_radial(Point::new(cx, cy), diag_half)
+        .with_stops([(0.0, inner), (0.6, mid), (1.0, outer)].as_slice());
+    let full = Rect::new(
+        rect.x as f64,
+        rect.y as f64,
+        (rect.x + rect.w) as f64,
+        (rect.y + rect.h) as f64,
+    );
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &gradient, None, &full);
+}
+
+/// Pinta un crosshair central minimalista: 4 chevrons + dot, con sombra
+/// crimson_deep debajo para destacar sobre fondos claros. Tamaño fijo
+/// en pixels (no escala con el viewport — un crosshair que crece se
+/// siente raro). Diseño:
+///
+/// ```text
+///        ▌
+///        ▌
+///   ▬▬     ▬▬
+///       ·
+///        ▌
+///        ▌
+/// ```
+///
+/// Distancia del centro al inicio de cada marca = `GAP` (6 px).
+/// Largo de cada marca = `LEN` (7 px). Ancho = 1 px (line cap square).
+fn draw_crosshair(scene: &mut Scene, rect: PaintRect) {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    const GAP: f64 = 6.0;
+    const LEN: f64 = 7.0;
+    const W: f64 = 1.0;
+    const DOT: f64 = 1.0;
+    let cx = rect.x as f64 + rect.w as f64 * 0.5;
+    let cy = rect.y as f64 + rect.h as f64 * 0.5;
+    // Color de tinta + sombra. La sombra va 1 px abajo-derecha para
+    // que el ojo lea las marcas aún sobre cielo claro o paredes
+    // texturizadas brillantes.
+    let ink: Color = AlphaColor::new([0.96, 0.92, 0.84, 0.95]); // bone ~232,216,192
+    let halo: Color = AlphaColor::new([0.05, 0.02, 0.02, 0.45]); // crimson_deep darker
+    // Build cada chevron como rect de 1×LEN o LEN×1.
+    let arms: [Rect; 4] = [
+        // top
+        Rect::new(cx - W * 0.5, cy - GAP - LEN, cx + W * 0.5, cy - GAP),
+        // bottom
+        Rect::new(cx - W * 0.5, cy + GAP, cx + W * 0.5, cy + GAP + LEN),
+        // left
+        Rect::new(cx - GAP - LEN, cy - W * 0.5, cx - GAP, cy + W * 0.5),
+        // right
+        Rect::new(cx + GAP, cy - W * 0.5, cx + GAP + LEN, cy + W * 0.5),
+    ];
+    let dot = Rect::new(cx - DOT, cy - DOT, cx + DOT, cy + DOT);
+    // Sombra (offset 1px abajo-derecha): se pinta primero para quedar
+    // debajo de la tinta.
+    let shadow_xform = Affine::translate((1.0, 1.0));
+    for arm in &arms {
+        scene.fill(Fill::NonZero, shadow_xform, halo, None, arm);
+    }
+    scene.fill(Fill::NonZero, shadow_xform, halo, None, &dot);
+    // Tinta principal.
+    for arm in &arms {
+        scene.fill(Fill::NonZero, Affine::IDENTITY, ink, None, arm);
+    }
+    scene.fill(Fill::NonZero, Affine::IDENTITY, ink, None, &dot);
 }
 
 #[cfg(test)]
