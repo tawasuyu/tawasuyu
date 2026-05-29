@@ -154,6 +154,13 @@ fn fundir_capa(
     let opacidad_global = capa.opacidad.clamp(0.0, 1.0);
     let modo = capa.blend;
 
+    // Dissolve es estocástico por píxel: cada píxel queda 100% src o 100%
+    // dst según un umbral PRNG sembrado por el Uuid de la capa. No factoriza
+    // por canal y no encaja en `mezclar_canal`. Rama propia y `return`.
+    if matches!(modo, ModoFusion::Disolver) {
+        return fundir_disolver(acc, n, src, mascara, opacidad_global, capa);
+    }
+
     for i in 0..n {
         let s_idx = i * 4;
         let sr = src[s_idx] as f32 / 255.0;
@@ -197,6 +204,61 @@ fn fundir_capa(
 #[inline]
 fn clamp_u8(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+// =============================================================================
+//  Dissolve — umbralizador estocástico estable
+// -----------------------------------------------------------------------------
+//  Semilla por capa: primeros 8 bytes del Uuid. El Uuid es estable a través
+//  de regeneraciones (lo garantiza tullpu-core), así que el patrón de ruido
+//  acompaña a la capa aunque cambie su contenido. Splitmix64 por píxel: a
+//  partir de `(seed XOR (i * φ))` con φ = 0x9E3779B97F4A7C15 (Golden ratio
+//  scaled). Es lo mismo que usa `rand::SmallRng` internamente — barato y de
+//  buena distribución para 1 sample/píxel.
+// =============================================================================
+
+#[inline]
+fn semilla_dissolve(capa: &Capa) -> u64 {
+    let b = capa.id.as_bytes();
+    u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+}
+
+#[inline]
+fn umbral_dissolve(seed: u64, i: usize) -> f32 {
+    let mut x = seed.wrapping_add((i as u64).wrapping_mul(0x9E3779B97F4A7C15));
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x ^= x >> 31;
+    // Mantissa de 24 bits para evitar artefactos de redondeo en el borde 1.0.
+    ((x >> 40) as f32) / ((1u64 << 24) as f32)
+}
+
+fn fundir_disolver(
+    acc: &mut [u8],
+    n: usize,
+    src: &[u8],
+    mascara: Option<&[u8]>,
+    opacidad_global: f32,
+    capa: &Capa,
+) -> Result<(), Error> {
+    let seed = semilla_dissolve(capa);
+    for i in 0..n {
+        let s_idx = i * 4;
+        let sa = src[s_idx + 3] as f32 / 255.0;
+        let m = mascara.map(|m| m[i] as f32 / 255.0).unwrap_or(1.0);
+        let alfa_efectivo = sa * opacidad_global * m;
+        let umbral = umbral_dissolve(seed, i);
+
+        if alfa_efectivo > umbral {
+            // Píxel gana: src completo, opaco. Reemplaza dst sin mezclar.
+            acc[s_idx] = src[s_idx];
+            acc[s_idx + 1] = src[s_idx + 1];
+            acc[s_idx + 2] = src[s_idx + 2];
+            acc[s_idx + 3] = 255;
+        }
+        // si no, dst se queda tal cual — no tocamos `acc`.
+    }
+    Ok(())
 }
 
 #[inline]
@@ -319,6 +381,7 @@ fn mezclar_canal(modo: ModoFusion, s: (f32, f32, f32), d: (f32, f32, f32)) -> (f
             ModoFusion::ColorMasOscuro | ModoFusion::ColorMasClaro => {
                 unreachable!("comparativos atendidos arriba")
             }
+            ModoFusion::Disolver => unreachable!("dissolve atendido en rama propia de fundir_capa"),
         }
     };
     (f(s.0, d.0), f(s.1, d.1), f(s.2, d.2))
@@ -911,6 +974,123 @@ mod tests {
         assert_eq!(r, [128, 128, 128]);
         let r = blend_1x1(ModoFusion::ColorMasClaro, [128, 128, 128], [128, 128, 128]);
         assert_eq!(r, [128, 128, 128]);
+    }
+
+    #[test]
+    fn disolver_alfa_uno_pinta_todo_src() {
+        // src opaco con opacidad 1.0: todos los píxeles deben terminar en src,
+        // porque el umbral PRNG ∈ [0,1) siempre es < 1.0.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(32, 32, [0, 0, 0, 255]));
+        let top = alm.insertar(buffer_solido(32, 32, [200, 100, 50, 255]));
+        let mut l = Lienzo::nuevo(32, 32);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut c = Capa::raster("top", top);
+        c.blend = ModoFusion::Disolver;
+        l.apilar(c);
+        let img = componer(&l, &alm).unwrap();
+        for y in 0..32 {
+            for x in 0..32 {
+                assert_eq!(pixel(&img, x, y), [200, 100, 50, 255]);
+            }
+        }
+    }
+
+    #[test]
+    fn disolver_alfa_cero_no_pinta_nada() {
+        // src con opacidad 0: el umbral [0,1) nunca es < 0, así que ningún
+        // píxel se reemplaza — el fondo gana entero.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(16, 16, [10, 20, 30, 255]));
+        let top = alm.insertar(buffer_solido(16, 16, [255, 255, 255, 255]));
+        let mut l = Lienzo::nuevo(16, 16);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut c = Capa::raster("top", top);
+        c.blend = ModoFusion::Disolver;
+        c.opacidad = 0.0;
+        l.apilar(c);
+        let img = componer(&l, &alm).unwrap();
+        for y in 0..16 {
+            for x in 0..16 {
+                assert_eq!(pixel(&img, x, y), [10, 20, 30, 255]);
+            }
+        }
+    }
+
+    #[test]
+    fn disolver_alfa_medio_da_ruido_50_50() {
+        // Opacidad 0.5: ~50% píxeles deben quedar src y ~50% dst. Toleramos
+        // ±10% sobre 64×64 = 4096 píxeles para que el test no sea flaky.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(64, 64, [0, 0, 0, 255]));
+        let top = alm.insertar(buffer_solido(64, 64, [255, 255, 255, 255]));
+        let mut l = Lienzo::nuevo(64, 64);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut c = Capa::raster("top", top);
+        c.blend = ModoFusion::Disolver;
+        c.opacidad = 0.5;
+        l.apilar(c);
+        let img = componer(&l, &alm).unwrap();
+        let mut blancos = 0usize;
+        for y in 0..64 {
+            for x in 0..64 {
+                if pixel(&img, x, y)[0] == 255 {
+                    blancos += 1;
+                }
+            }
+        }
+        let total = 64 * 64;
+        let mitad = total / 2;
+        let tolerancia = (total / 10) as i32;
+        let diff = (blancos as i32 - mitad as i32).abs();
+        assert!(
+            diff <= tolerancia,
+            "esperaba ~{mitad} blancos, obtuve {blancos} (tol ±{tolerancia})",
+        );
+    }
+
+    #[test]
+    fn disolver_es_determinista_entre_renders() {
+        // Mismo lienzo + misma capa ⇒ mismo output bit a bit. El patrón
+        // depende sólo del `Capa.id` y la posición del píxel.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(32, 32, [0, 0, 0, 255]));
+        let top = alm.insertar(buffer_solido(32, 32, [255, 255, 255, 255]));
+        let mut l = Lienzo::nuevo(32, 32);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut c = Capa::raster("top", top);
+        c.blend = ModoFusion::Disolver;
+        c.opacidad = 0.5;
+        l.apilar(c);
+        let a = componer(&l, &alm).unwrap();
+        let b = componer(&l, &alm).unwrap();
+        assert_eq!(a.as_raw(), b.as_raw());
+    }
+
+    #[test]
+    fn disolver_patron_cambia_con_capa_id() {
+        // Dos capas distintas (Uuid distinto) con el mismo contenido y
+        // opacidad: los patrones de píxeles ganadores difieren con muy alta
+        // probabilidad. Validamos que NO sean idénticos bit a bit.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(32, 32, [0, 0, 0, 255]));
+        let top = alm.insertar(buffer_solido(32, 32, [255, 255, 255, 255]));
+
+        let render = |opacidad: f32| {
+            let mut l = Lienzo::nuevo(32, 32);
+            l.apilar(Capa::raster("fondo", fondo));
+            let mut c = Capa::raster("top", top);
+            c.blend = ModoFusion::Disolver;
+            c.opacidad = opacidad;
+            l.apilar(c);
+            componer(&l, &alm).unwrap().into_raw()
+        };
+
+        let a = render(0.5);
+        let b = render(0.5);
+        // Mismas opacidades, distintos Uuid (Capa::raster genera uno nuevo
+        // cada vez). El patrón debe diferir.
+        assert_ne!(a, b, "patrón Dissolve no debería repetirse entre Uuid distintos");
     }
 
     #[test]

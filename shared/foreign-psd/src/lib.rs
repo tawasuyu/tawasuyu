@@ -24,11 +24,14 @@
 //!   tullpu las soporta como hash aparte — el bridge no las extrae aún).
 //! - Grupos / folders. Las capas hijas aparecen, los nodos folder se ignoran.
 //! - Clipping masks, layer styles, smart objects, ajustes (curvas, niveles…).
-//! - Modo de fusión `Dissolve` (PRNG por píxel, único residuo tras Fase 9):
-//!   cae a [`ModoFusion::Normal`] y se anota en
-//!   [`InformeImportacion::caidas_a_normal`]. El resto del catálogo
-//!   Photoshop (Burn/Dodge/Light/HSL/Comparativos por luminosidad) mapea
-//!   directo al modelo nativo.
+//!
+//! Catálogo de blend modes Photoshop completo (28 discriminantes upstream):
+//! Normal/PassThrough, Dissolve, Multiply, Screen, Overlay, Darken/Lighten,
+//! Difference, LinearDodge (=Aditivo), familia Burn/Dodge, familia Light
+//! (Soft/Hard/Vivid/Linear/Pin), HardMix, Exclusion, Subtract, Divide,
+//! familia HSL (Hue/Saturation/Color/Luminosity) y comparativos
+//! (DarkerColor/LighterColor). Todos mapean directo a [`ModoFusion`] sin
+//! degradado.
 //!
 //! Es el espejo conceptual de `pluma/foreign-docx`: importa lo legible y
 //! deja la fidelidad fancy al editor nativo.
@@ -234,9 +237,9 @@ fn mapear_blend(disc: u32) -> (ModoFusion, bool) {
         LUMINOSITY => (ModoFusion::HslLuminosidad, false),
         DARKER_COLOR => (ModoFusion::ColorMasOscuro, false),
         LIGHTER_COLOR => (ModoFusion::ColorMasClaro, false),
-        // El único blend "exotic" que queda en degradado es Dissolve, que
-        // necesita PRNG por píxel — no cabe en el modelo determinista de
-        // `mezclar_canal`. El resto del catálogo Photoshop ya cierra.
+        DISSOLVE => (ModoFusion::Disolver, false),
+        // Catálogo Photoshop cerrado: cualquier discriminante futuro que
+        // agregue Adobe cae acá como degradado.
         _ => (ModoFusion::Normal, true),
     }
 }
@@ -421,14 +424,18 @@ mod tests {
             (ModoFusion::ColorMasClaro, false)
         );
 
-        // Único residuo "degradado" después de Fase 9: Dissolve (PRNG por
-        // píxel, no encaja en el modelo determinista de `mezclar_canal`).
-        let (modo, degradado) = mapear_blend(DISSOLVE);
+        // Dissolve: PRNG estable, rama propia en el compositor.
+        assert_eq!(mapear_blend(DISSOLVE), (ModoFusion::Disolver, false));
+
+        // Tras Fase 10, todo el catálogo Photoshop mapea directo —
+        // cualquier disc desconocido cae como degradado a Normal.
+        let (modo, degradado) = mapear_blend(99);
         assert_eq!(modo, ModoFusion::Normal);
         assert!(degradado);
         assert_eq!(nombre_blend(SOFT_LIGHT), "SoftLight");
         assert_eq!(nombre_blend(LUMINOSITY), "Luminosity");
         assert_eq!(nombre_blend(DARKER_COLOR), "DarkerColor");
+        assert_eq!(nombre_blend(DISSOLVE), "Dissolve");
     }
 
     #[test]

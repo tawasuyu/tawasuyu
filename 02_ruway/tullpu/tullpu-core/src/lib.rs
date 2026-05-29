@@ -120,6 +120,15 @@ pub enum ModoFusion {
     ColorMasOscuro,
     /// Lighter Color: el triple con mayor luminosidad.
     ColorMasClaro,
+    // ---- Estocástico por píxel (umbralizador con PRNG espacial) ------------
+    /// Dissolve de Photoshop: por cada píxel se calcula un umbral PRNG
+    /// estable (sembrado por el `Uuid` de la capa) y se compara con el alfa
+    /// efectivo del src. Si `src_alpha > umbral`, el píxel sale 100% src
+    /// con alfa 1.0; si no, queda el dst. El resultado es un patrón de ruido
+    /// granulado en lugar del fade de Normal. Como no es ni separable por
+    /// canal ni una mezcla `(s,d)` determinista en el sentido habitual,
+    /// vive como rama propia en `fundir_capa` — `mezclar_canal` no lo ve.
+    Disolver,
 }
 
 impl Default for ModoFusion {
