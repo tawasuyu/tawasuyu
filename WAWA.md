@@ -3,6 +3,14 @@
 > **V1.0.0‑GOLD — forja sellada (commit `00feda8`, Fase 50).**
 > *"La integridad no es una esperanza estadística; es una certeza geométrica."*
 > 5/5 shared cores verified. Loop autónomo finalizado. Estado estable.
+>
+> **Post‑GOLD (Fases 51–62).** El sello no detuvo el desarrollo. Arco
+> «legacy → virtio moderno» completado: consola (49), scanout virtio‑gpu (60),
+> puntero absoluto virtio‑input/tableta (61), audio PCM real virtio‑sound (62).
+> Arco IA «la máquina propone, el humano firma» (app `asistente`, Fase 60).
+> App `rimay` (verbo de embeddings bare‑metal). GENESIS pasó de 12 a **14** apps.
+> Las secciones §9, §13 y §14 de abajo reflejan este estado; el resto del
+> documento describe la arquitectura sellada en GOLD, que sigue vigente.
 
 > SO experimental SASOS x86_64 bare‑metal. Direccionamiento por contenido,
 > userspace WebAssembly aislado por software, reactor asíncrono cooperativo,
@@ -287,9 +295,10 @@ ráfagas de `ProveedorObjeto` redundantes.
 ## 9. Apps de Génesis (boot/main.rs::GENESIS)
 
 Tras la Fase 50 (consolidación de `pluma`) y el ciclo de release firmado de la
-Fase 48 (`AGORA_AUTH_RING` + `mudanza`), el censo definitivo del array
-`const GENESIS: [AppGenesis; 12]` (en `wawa-boot/src/main.rs:137`) es **doce**
-módulos, no diez:
+Fase 48 (`AGORA_AUTH_RING` + `mudanza`), y sumadas las apps post‑GOLD
+`asistente` (Fase 60) y `rimay`, el censo del array
+`const GENESIS: [AppGenesis; 14]` (en `wawa-boot/src/main.rs:142`) es **catorce**
+módulos:
 
 | Nombre | .wasm | Region (x,y,w,h) | Fuel | Permisos |
 |---|---|---|---|---|
@@ -305,6 +314,8 @@ módulos, no diez:
 | tonalero | tonalero.wasm | (700,220,480,300) | `FUEL_COMUN` | CONFIG |
 | **mudanza** | mudanza.wasm | (60,220,480,240) | `FUEL_COMUN` | **RAIZ** — primer cliente de `MensajeAkasha::AnunciarCanal`; invoca `sys_manifiesto_proponer` (Fase 41/48). |
 | **pluma** | pluma.wasm | (160,60,480,400) | `FUEL_EDITOR` | **GRAFO_ESCRITURA** — cuaderno reactivo consolidado en 11 KiB (post `wasm-opt -Os`, Fase 50). |
+| **asistente** | asistente.wasm | (600,220,480,240) | `FUEL_COMUN` | **RED \| RAIZ** — app conversacional (Fase 60). Pregunta a un LLM externo vía el puente Linux (`asistente-puente --akasha`, EtherType `0x88B6` sobre `CANAL_ASISTENTE 0x4153`); para propuestas hash el operador pulsa SPACE → `RequestFirma` → al llegar la `Firma` host‑side invoca `sys_manifiesto_proponer`. Segunda app con `PERMISO_RAIZ` junto a `mudanza`. La IA propone; el humano firma. |
+| **rimay** | rimay.wasm | (100,120,480,560) | `FUEL_COMUN` | 0 — reflejo bare‑metal del verbo de embeddings (FNV‑1a + LCG + coseno, mismo algoritmo que `rimay-verbo-mock`). Sin permisos: sólo framebuffer + teclado. |
 
 `TECHO_GENESIS = 4 MiB`. Cada app: módulo cdylib WASM con `init()` y `tick()`
 exportados, `#![no_std]`, panic handler propio (`loop {}` que será atrapado por
@@ -363,6 +374,11 @@ verifica:
 | (Fase 58 v10) | polling automático del manifiesto: `tarea_compositor` invoca `refrescar_apps_desde_manifiesto` cada ~6 s |
 | (Fase 59 v1) | módulo `pantallas` — registro `Once<Mutex<Vec<Output>>>` con N=1, fundado desde el framebuffer del bootloader |
 | (Fase 59 v2) | `Ventana::output` + `aplicar_teselado` agrupa por output y tesela cada uno en su `Output::region` |
+| (Fase 60) | App `asistente` + arco IA «la máquina propone, el humano firma»: `format::MensajeAsistente`/`CANAL_ASISTENTE`, puente Linux `asistente-puente` (Akasha + `pluma-llm`), `daemon-firma` distingue cuaderno/configuración, firma humana de propuestas hash, cierre del ciclo `RequestFirma → sys_manifiesto_proponer` |
+| (Fase 60 gpu) | `drivers/gpu.rs` — virtio‑gpu con scanout propio; `consola::presentar` y `baliza` cruzan la frontera vía `gpu::presentar()`/`presentar_baliza()` cuando el dispositivo está montado |
+| `89fd6c4` (Fase 61) | `drivers/tableta.rs` — virtio‑input como tableta: coordenadas ABSOLUTAS por sondeo (no IRQ), comprometidas en cada `EV_SYN` por el sumidero común del ratón. Complementa al PS/2, no lo reemplaza |
+| `1f406b3` (Fase 62) | `drivers/sonido.rs` — virtio‑sound: PCM real S16/2ch/44.1 kHz por DMA no‑bloqueante (`pcm_xfer_nb`/`pcm_xfer_ok`), `tarea_sonido` mantiene periodos en vuelo anti‑underrun, mezclador square‑wave con prioridad a la voz del sistema. `sys_tono`/`altavoz` enrutan aquí; bocina del PIT como fallback |
+| `95c63cf` | App `rimay` — verbo de embeddings bare‑metal (3.3 KiB .wasm), 14ª de GENESIS |
 
 ## 14. Plan — siguientes hitos
 
@@ -563,7 +579,12 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
    geometría real hace falta (a) forkear `bootloader_api` para exponer
    todos los handles GOP que el firmware mantiene, o (b) escribir un
    driver GPU propio (virtio-gpu / PCI) que enumere outputs en runtime.
-   La capa de software ya está lista; falta el origen del dato. Limitación
+   **Actualización (Fase 60):** la opción (b) está a medio camino —
+   `drivers/gpu.rs` ya monta un virtio‑gpu y presenta a UN scanout. Lo
+   que falta para multi‑monitor real es enumerar los `scanouts` que el
+   dispositivo reporta (`VIRTIO_GPU_MAX_SCANOUTS` en la config) y
+   registrar uno por cada uno con su geometría vía `pantallas::registrar`.
+   La capa de software ya está lista; falta cerrar la enumeración. Limitación
    conocida del MVP: `area_apps` resta la consola y la taskbar globales,
    que en N>1 sólo tienen sentido en el output primario — la decisión
    "taskbar replicada en cada monitor vs sólo en uno" queda para cuando
