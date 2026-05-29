@@ -21,6 +21,8 @@ pub enum Msg {
     QuakeBackspace,
     /// Enter en el input — submit del comando actual.
     QuakeSubmit,
+    /// Resultado de una llamada a IA (texto o mensaje de error).
+    QuakeIaResult(Result<String, String>),
     /// Cerrar la app.
     Quit,
 }

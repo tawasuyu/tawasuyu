@@ -10,7 +10,7 @@ use mirada_launcher_llimphi::panel;
 use mirada_launcher_llimphi::widget::{Msg, Widget};
 use mirada_launcher_llimphi::widgets;
 use mirada_launcher_llimphi::widgets::clock::TzMode;
-use mirada_launcher_llimphi::widgets::quake::QuakeInput;
+use mirada_launcher_llimphi::widgets::quake::{ask_ia_blocking, QuakeInput, SubmitKind};
 
 struct Model {
     theme: Theme,
@@ -102,10 +102,55 @@ impl App for LauncherApp {
                 }
             }
             Msg::Quit => handle.quit(),
+            Msg::QuakeSubmit => {
+                // Tomamos posesión del buffer del primer quake abierto.
+                let mut taken: Option<String> = None;
+                for w in model.each_widget_mut() {
+                    if let Some(q) = w.as_any_mut().downcast_mut::<QuakeInput>() {
+                        if q.open && !q.buffer.is_empty() {
+                            taken = Some(std::mem::take(&mut q.buffer));
+                            break;
+                        }
+                    }
+                }
+                if let Some(buffer) = taken {
+                    match QuakeInput::classify(&buffer) {
+                        SubmitKind::Empty => {}
+                        SubmitKind::Shell(cmd) => {
+                            let exec = cmd.to_string();
+                            let status = std::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(&exec)
+                                .spawn()
+                                .map(|_| ());
+                            for w in model.each_widget_mut() {
+                                if let Some(q) = w.as_any_mut().downcast_mut::<QuakeInput>() {
+                                    if q.open {
+                                        q.set_shell_result(&exec, status);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        SubmitKind::Ia(_) => {
+                            for w in model.each_widget_mut() {
+                                if let Some(q) = w.as_any_mut().downcast_mut::<QuakeInput>() {
+                                    if q.open {
+                                        q.mark_pending();
+                                        break;
+                                    }
+                                }
+                            }
+                            let prompt = buffer;
+                            handle.spawn(move || Msg::QuakeIaResult(ask_ia_blocking(&prompt)));
+                        }
+                    }
+                }
+            }
             Msg::QuakeToggle
             | Msg::QuakeChar(_)
             | Msg::QuakeBackspace
-            | Msg::QuakeSubmit => {
+            | Msg::QuakeIaResult(_) => {
                 model.route_to_quake(&msg);
             }
         }

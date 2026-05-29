@@ -73,9 +73,18 @@ kind = "cpu_meter"
 ## Quake overlay
 
 Al togglearlo (`F12` por default), un scrim semi-transparente cubre la
-ventana y aparece una card centrada con input grande. Click fuera del
-input cierra; `Esc` cierra; `Enter` "submitea" (logueado por stderr —
-target real defer a la siguiente iteración).
+ventana y aparece una card centrada con input grande. Click fuera o
+`Esc` cierra. `Enter` "submitea" según prefijo:
+
+- `!firefox` o `$ ls -la` → ejecuta como `sh -c <cmd>` (fire-and-forget).
+- Cualquier otro texto → consulta a IA via `pluma-llm`. Backend según
+  `PLUMA_LLM_BACKEND` (`anthropic` | `gemini` | `deepseek` | `cohere` |
+  `ollama` | `mock`) o autodetectado por env (`ANTHROPIC_API_KEY`, etc.).
+  Sin credenciales cae a Mock — útil para iterar UI sin red.
+
+Mientras espera la respuesta IA, el overlay muestra `…pensando`. La
+respuesta queda visible hasta que el usuario cierra (Esc) o lanza otro
+prompt.
 
 ## Widgets
 

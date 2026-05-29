@@ -27,6 +27,11 @@ pub struct QuakeInput {
     /// Etiqueta del hotkey leída del TOML (p. ej. "F12"). Vacío =
     /// sin hotkey (el widget se abre por click).
     pub hotkey: String,
+    /// `true` mientras espera una respuesta IA.
+    pub pending: bool,
+    /// Último resultado IA / error / status de comando shell, para
+    /// renderear debajo del input.
+    pub result: Option<Result<String, String>>,
 }
 
 impl QuakeInput {
@@ -42,6 +47,22 @@ impl QuakeInput {
             width_open,
             width_closed,
             hotkey,
+            pending: false,
+            result: None,
+        }
+    }
+
+    /// Clasifica el buffer al submit: `!cmd` o `$cmd` van a shell; todo
+    /// lo demás es prompt para IA. La detección la hace el app loop, que
+    /// es quien tiene acceso al `Handle` para hacer `spawn`.
+    pub fn classify(buffer: &str) -> SubmitKind<'_> {
+        let trimmed = buffer.trim();
+        if let Some(rest) = trimmed.strip_prefix('!').or_else(|| trimmed.strip_prefix('$')) {
+            SubmitKind::Shell(rest.trim())
+        } else if trimmed.is_empty() {
+            SubmitKind::Empty
+        } else {
+            SubmitKind::Ia(trimmed)
         }
     }
 
@@ -60,11 +81,63 @@ impl QuakeInput {
             (format!("› {}", self.buffer), theme.fg_text)
         };
 
+        // Filas del card: input + (pending|result|hint).
+        let mut rows: Vec<View<Msg>> = vec![View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .text(content, 22.0, content_color)];
+
+        if self.pending {
+            rows.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::FlexStart),
+                    ..Default::default()
+                })
+                .text("…pensando", 13.0, theme.fg_muted),
+            );
+        } else if let Some(res) = &self.result {
+            let (text, color) = match res {
+                Ok(s) => (s.clone(), theme.fg_text),
+                Err(e) => (e.clone(), theme.fg_destructive),
+            };
+            rows.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::FlexStart),
+                    ..Default::default()
+                })
+                .text(text, 13.0, color),
+            );
+        } else {
+            rows.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::FlexStart),
+                    ..Default::default()
+                })
+                .text(
+                    "Enter — IA · ! prefix — shell · Esc — cerrar",
+                    11.0,
+                    theme.fg_placeholder,
+                ),
+            );
+        }
+
+        // Card adaptativa: más alta si hay resultado para mostrar.
+        let card_height = if self.result.is_some() || self.pending { 132.0 } else { 96.0 };
+
         let card = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
-                width: length(self.width_open.max(360.0_f32)),
-                height: length(96.0_f32),
+                width: length(self.width_open.max(420.0_f32)),
+                height: length(card_height),
             },
             padding: Rect {
                 left: length(20.0_f32),
@@ -73,26 +146,12 @@ impl QuakeInput {
                 bottom: length(20.0_f32),
             },
             justify_content: Some(JustifyContent::Center),
+            gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
             ..Default::default()
         })
         .fill(theme.bg_panel)
         .radius(14.0)
-        .children(vec![
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::FlexStart),
-                ..Default::default()
-            })
-            .text(content, 22.0, content_color),
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::FlexStart),
-                ..Default::default()
-            })
-            .text("Enter — submit · Esc — cerrar", 11.0, theme.fg_placeholder),
-        ]);
+        .children(rows);
 
         let scrim = View::new(Style {
             position: Position::Absolute,
@@ -114,13 +173,17 @@ impl QuakeInput {
         Some(scrim)
     }
 
-    /// Llamado por la app para mutar al recibir mensajes del input.
+    /// Llamado por la app para mutar al recibir mensajes del input. El
+    /// submit en sí lo decide el caller (necesita Handle); acá sólo
+    /// reflejamos los efectos visibles.
     pub fn apply(&mut self, msg: &Msg) {
         match msg {
             Msg::QuakeToggle => {
                 self.open = !self.open;
                 if !self.open {
                     self.buffer.clear();
+                    self.result = None;
+                    self.pending = false;
                 }
             }
             Msg::QuakeChar(c) => {
@@ -134,14 +197,88 @@ impl QuakeInput {
                 }
             }
             Msg::QuakeSubmit => {
-                if self.open && !self.buffer.is_empty() {
-                    eprintln!("quake · submit: {}", self.buffer);
-                    self.buffer.clear();
-                    self.open = false;
-                }
+                // El routing real lo hace el app; acá limpiamos el buffer.
+                // Si fue prompt IA, `pending` lo seteamos desde fuera.
+            }
+            Msg::QuakeIaResult(r) => {
+                self.pending = false;
+                self.result = Some(r.clone());
             }
             _ => {}
         }
+    }
+
+    /// Setear el resultado de un comando shell directamente (sin pasar
+    /// por IA). El app lo llama tras spawn fire-and-forget.
+    pub fn set_shell_result(&mut self, exec: &str, status: std::io::Result<()>) {
+        let msg = match status {
+            Ok(()) => Ok(format!("lanzado: {exec}")),
+            Err(e) => Err(format!("{e}")),
+        };
+        self.result = Some(msg);
+        self.pending = false;
+    }
+
+    /// El caller llama esto cuando arranca una request a IA: limpia el
+    /// resultado previo y marca pending.
+    pub fn mark_pending(&mut self) {
+        self.result = None;
+        self.pending = true;
+    }
+}
+
+/// Categoría detectada en el buffer al hacer submit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitKind<'a> {
+    Empty,
+    Shell(&'a str),
+    Ia(&'a str),
+}
+
+/// Llama a la IA bloqueando — pensado para correr en un thread spawned
+/// vía `Handle::spawn`. `from_env` autodetecta el backend (cae a Mock
+/// si no hay credenciales — en ese caso, la respuesta es un eco
+/// determinista, útil para iterar UI sin red).
+pub fn ask_ia_blocking(prompt: &str) -> Result<String, String> {
+    use pluma_llm::pluma_llm_core::ChatRequest;
+    let cli = pluma_llm::from_env().map_err(|e| format!("{e}"))?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("{e}"))?;
+    rt.block_on(async {
+        let req = ChatRequest::una_vuelta(prompt, 256)
+            .con_sistema("Sos un asistente conciso del escritorio. Responde corto.");
+        cli.complete(&req)
+            .await
+            .map(|r| r.content)
+            .map_err(|e| format!("{e}"))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_empty() {
+        assert_eq!(QuakeInput::classify(""), SubmitKind::Empty);
+        assert_eq!(QuakeInput::classify("   "), SubmitKind::Empty);
+    }
+
+    #[test]
+    fn classify_shell_with_bang() {
+        assert_eq!(QuakeInput::classify("!firefox"), SubmitKind::Shell("firefox"));
+        assert_eq!(QuakeInput::classify("$ ls -la"), SubmitKind::Shell("ls -la"));
+    }
+
+    #[test]
+    fn classify_default_is_ia() {
+        assert_eq!(QuakeInput::classify("hola"), SubmitKind::Ia("hola"));
+        assert_eq!(
+            QuakeInput::classify("  qué hora es?  "),
+            SubmitKind::Ia("qué hora es?"),
+        );
     }
 }
 
