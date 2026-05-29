@@ -85,6 +85,15 @@ static CONFIG_ARRANQUE: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
     // Pedimos la memoria fisica mapeada: cimiento para futuras fases.
     config.mappings.physical_memory = Some(Mapping::Dynamic);
+    // El default del bootloader (80 KiB) es marginal: el kernel corre la
+    // pila UNICA del reactor cooperativo, y sobre ella se apilan la
+    // inicializacion de virtio-drivers (el struct `VirtIOSound` con sus 4
+    // virtqueues mas el `OwningQueue` ronda los ~20 KiB en un solo frame),
+    // el interprete wasmi de cada app de genesis y el compositor. Montar
+    // virtio-sound desbordaba la guard page -> #PF -> doble fallo (#DF). 1
+    // MiB da ~50x de holgura sobre el frame mas profundo; sobre 256 MiB de
+    // RAM el coste es nulo.
+    config.kernel_stack_size = 1024 * 1024;
     config
 };
 
