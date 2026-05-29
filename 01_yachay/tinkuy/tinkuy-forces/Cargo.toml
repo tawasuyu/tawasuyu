@@ -15,4 +15,5 @@ wasm = ["tinkuy-core/wasm"]
 
 [dependencies]
 tinkuy-core = { path = "../tinkuy-core", default-features = false }
+tinkuy-dsl  = { path = "../tinkuy-dsl" }
 rayon = { workspace = true, optional = true }

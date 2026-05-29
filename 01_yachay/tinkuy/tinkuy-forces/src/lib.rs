@@ -16,8 +16,12 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+extern crate alloc;
+
 pub mod lennard_jones;
 pub mod coulomb;
+pub mod dsl;
 
 pub use lennard_jones::{clear_accelerations, lennard_jones, LjParams};
 pub use coulomb::{coulomb, CoulombParams};
+pub use dsl::{DslForce, DslForceError};
