@@ -1763,10 +1763,16 @@ globalThis.Headers.prototype.keys = function() {
 // `aborted: bool` y un addEventListener('abort', fn) que dispara cuando
 // .abort() se llama. fetch() chequea signal.aborted al inicio y registra
 // un listener si el signal está presente.
-globalThis.AbortController = function() {
+//
+// Fase 7.36 — el harness interno `__puriy_make_abort_signal()` extrae la
+// construcción del signal en un helper reusado por AbortController y por
+// los estáticos `AbortSignal.timeout(ms)` / `AbortSignal.any(signals)`.
+// Devuelve `{signal, abort}` — el closure de abort dispara el signal y
+// marca aborted=true idempotente.
+globalThis.__puriy_make_abort_signal = function() {
     var listeners = [];
     var aborted = false;
-    this.signal = {
+    var sig = {
         aborted: false,
         reason: undefined,
         addEventListener: function(type, fn) {
@@ -1782,8 +1788,7 @@ globalThis.AbortController = function() {
             if (this.aborted) throw new Error('AbortError');
         }
     };
-    var sig = this.signal;
-    this.abort = function(reason) {
+    var abort = function(reason) {
         if (aborted) return;
         aborted = true;
         sig.aborted = true;
@@ -1793,6 +1798,50 @@ globalThis.AbortController = function() {
             catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
         }
     };
+    return {signal: sig, abort: abort};
+};
+globalThis.AbortController = function() {
+    var pair = globalThis.__puriy_make_abort_signal();
+    this.signal = pair.signal;
+    this.abort = pair.abort;
+};
+// Fase 7.36 — AbortSignal estáticos. Spec real expone `AbortSignal` como
+// clase; acá la usamos como namespace para los dos helpers que faltaban.
+// `new AbortSignal()` no está soportado (spec real también lo prohíbe).
+globalThis.AbortSignal = {
+    // AbortSignal.timeout(ms) — devuelve un signal que aborta solo tras
+    // `ms` ms. Reusa setTimeout del harness de timers (Fase 4.x): el
+    // host hace tick del reloj y dispara el closure. La razón del abort
+    // es un Error('TimeoutError') — el spec real usa DOMException pero
+    // acá no la tenemos.
+    timeout: function(ms) {
+        var pair = globalThis.__puriy_make_abort_signal();
+        globalThis.setTimeout(function() {
+            pair.abort(new Error('TimeoutError'));
+        }, ms);
+        return pair.signal;
+    },
+    // AbortSignal.any(signals) — devuelve un signal que aborta cuando
+    // CUALQUIERA de los signals input aborta. Si alguno ya está aborted
+    // al construir, el resultante nace aborted con el mismo reason.
+    any: function(signals) {
+        var pair = globalThis.__puriy_make_abort_signal();
+        if (!signals) return pair.signal;
+        for (var i = 0; i < signals.length; i++) {
+            var s = signals[i];
+            if (!s) continue;
+            if (s.aborted) {
+                pair.abort(s.reason);
+                return pair.signal;
+            }
+            (function(s2) {
+                s2.addEventListener('abort', function() {
+                    pair.abort(s2.reason);
+                });
+            })(s);
+        }
+        return pair.signal;
+    }
 };
 // Fase 7.30 — getComputedStyle(el) stub. Spec: devuelve un
 // CSSStyleDeclaration con todos los propiedades computadas post-cascade
@@ -6912,6 +6961,66 @@ mod tests {
         } else {
             panic!("expected string, got {v:?}");
         }
+    }
+
+    // ============= Fase 7.36 — AbortSignal.timeout / .any =============
+
+    #[test]
+    fn abort_signal_timeout_aborta_tras_ms() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var s = AbortSignal.timeout(50)").expect("e");
+        let v = rt.eval("s.aborted").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+        // Avanzamos el reloj 50ms — el setTimeout dispara y aborta.
+        rt.tick(50).expect("tick");
+        let v = rt.eval("s.aborted").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_signal_timeout_rechaza_fetch() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var s = AbortSignal.timeout(10); var err = null; \
+             fetch('/x', {signal: s}).catch(function(e) { err = e.message; });",
+        )
+        .expect("e");
+        rt.tick(10).expect("tick");
+        let v = rt.eval("err").expect("e");
+        if let JsValue::String(s) = v {
+            assert!(s.contains("AbortError"), "msg: {s}");
+        } else {
+            panic!("expected string, got {v:?}");
+        }
+    }
+
+    #[test]
+    fn abort_signal_any_aborta_cuando_cualquiera_aborta() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var c1 = new AbortController(); var c2 = new AbortController(); \
+             var s = AbortSignal.any([c1.signal, c2.signal]); \
+             c2.abort();",
+        )
+        .expect("e");
+        let v = rt.eval("s.aborted").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_signal_any_input_ya_aborted_nace_aborted() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var c = new AbortController(); c.abort(); \
+             var s = AbortSignal.any([c.signal]);",
+        )
+        .expect("e");
+        let v = rt.eval("s.aborted").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
     }
 
     #[test]
