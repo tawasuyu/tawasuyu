@@ -1737,7 +1737,19 @@ globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) 
 };
 // Fase 7.31 — resolve y reject los Promises pending. El chrome los
 // llama desde el handler de Msg::FetchComplete.
+//
+// Fase 7.38 — el mismo canal sirve para XHR (`__puriy_xhr_pending[id]`).
+// Si el id está en el mapa XHR, ruteamos al handler XHR (que llena
+// status/responseText/headers y dispara onreadystatechange + onload).
+// Sino, va al Promise-based fetch como hasta ahora.
+globalThis.__puriy_xhr_pending = {};
 globalThis.__puriy_fetch_resolve = function(id, status, statusText, body, hdrPairs) {
+    var xhr = globalThis.__puriy_xhr_pending[id];
+    if (xhr) {
+        delete globalThis.__puriy_xhr_pending[id];
+        xhr.__puriy_complete(status, statusText, body, hdrPairs);
+        return;
+    }
     var pending = globalThis.__puriy_fetch_pending[id];
     if (!pending) return;
     delete globalThis.__puriy_fetch_pending[id];
@@ -1745,6 +1757,12 @@ globalThis.__puriy_fetch_resolve = function(id, status, statusText, body, hdrPai
     pending.resolve(resp);
 };
 globalThis.__puriy_fetch_reject = function(id, msg) {
+    var xhr = globalThis.__puriy_xhr_pending[id];
+    if (xhr) {
+        delete globalThis.__puriy_xhr_pending[id];
+        xhr.__puriy_error(String(msg));
+        return;
+    }
     var pending = globalThis.__puriy_fetch_pending[id];
     if (!pending) return;
     delete globalThis.__puriy_fetch_pending[id];
@@ -1879,6 +1897,164 @@ globalThis.AbortSignal = {
             })(s);
         }
         return pair.signal;
+    }
+};
+// Fase 7.38 — XMLHttpRequest sobre el pipeline fetch. Reusa el mismo
+// canal de mutación `kind: 'fetch'` y los handlers `__puriy_fetch_resolve`/
+// `__puriy_fetch_reject` — registrarse en `__puriy_xhr_pending[id]` los
+// rutea al método del XHR en vez de un Promise.
+//
+// readyState semántica: 0 UNSENT, 1 OPENED, 2 HEADERS_RECEIVED, 3 LOADING,
+// 4 DONE. Acá saltamos directo de 2 a 4 al completar — no hay streaming.
+// Sólo async=true soportado; abrir con async=false tira porque el chrome
+// no expone HTTP síncrono al JS (estaría bloqueando el UI thread y
+// nuestro fetch_full no se llama desde el JS thread).
+globalThis.XMLHttpRequest = function() {
+    this.readyState = 0;
+    this.status = 0;
+    this.statusText = '';
+    this.responseText = '';
+    this.response = '';
+    this.responseType = '';
+    this.responseURL = '';
+    this.onreadystatechange = null;
+    this.onload = null;
+    this.onerror = null;
+    this.onabort = null;
+    this.ontimeout = null;
+    this._method = 'GET';
+    this._url = '';
+    this._headers = [];
+    this._response_headers = {};
+    this._aborted = false;
+    this._sent = false;
+};
+globalThis.XMLHttpRequest.UNSENT = 0;
+globalThis.XMLHttpRequest.OPENED = 1;
+globalThis.XMLHttpRequest.HEADERS_RECEIVED = 2;
+globalThis.XMLHttpRequest.LOADING = 3;
+globalThis.XMLHttpRequest.DONE = 4;
+globalThis.XMLHttpRequest.prototype.open = function(method, url, async_) {
+    if (async_ === false) {
+        throw new Error('XMLHttpRequest síncrono no soportado');
+    }
+    this._method = String(method || 'GET').toUpperCase();
+    this._url = String(url || '');
+    this._headers = [];
+    this._response_headers = {};
+    this.readyState = 1;
+    this.status = 0;
+    this.statusText = '';
+    this.responseText = '';
+    this.response = '';
+    this._sent = false;
+    this._aborted = false;
+    if (typeof this.onreadystatechange === 'function') {
+        try { this.onreadystatechange(); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+};
+globalThis.XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+    this._headers.push(String(name));
+    this._headers.push(String(value));
+};
+globalThis.XMLHttpRequest.prototype.send = function(body) {
+    if (this.readyState !== 1) {
+        throw new Error('InvalidStateError: open() no llamado');
+    }
+    if (this._sent) {
+        throw new Error('InvalidStateError: send() ya llamado');
+    }
+    this._sent = true;
+    var id = globalThis.__puriy_fetch_next_id++;
+    globalThis.__puriy_xhr_pending[id] = this;
+    var has_body = body != null;
+    var body_str = has_body ? String(body) : '';
+    var base = (globalThis.location && globalThis.location.href) || '';
+    var resolved = globalThis.__puriy_resolve_url(this._url, base);
+    this.responseURL = resolved;
+    // Payload: mismo formato que fetch() (Fase 7.34).
+    var payload = String(id) + '' + this._method + '' + resolved
+                + '' + (has_body ? '1' : '0')
+                + '' + body_str
+                + '' + this._headers.join('');
+    globalThis.__puriy_dirty.push({
+        id: '__window__',
+        kind: 'fetch',
+        value: payload
+    });
+    // Transición readyState 1→2: spec lo hace cuando llegan headers; acá
+    // no hay streaming, así que disparamos al lanzar send() para que apps
+    // que escuchan ese estado funcionen.
+    this.readyState = 2;
+    if (typeof this.onreadystatechange === 'function') {
+        try { this.onreadystatechange(); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+};
+globalThis.XMLHttpRequest.prototype.abort = function() {
+    if (this.readyState === 0 || this.readyState === 4) return;
+    this._aborted = true;
+    this.readyState = 4;
+    this.status = 0;
+    this.statusText = '';
+    if (typeof this.onreadystatechange === 'function') {
+        try { this.onreadystatechange(); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+    if (typeof this.onabort === 'function') {
+        try { this.onabort(); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+};
+globalThis.XMLHttpRequest.prototype.getResponseHeader = function(name) {
+    var k = String(name).toLowerCase();
+    return Object.prototype.hasOwnProperty.call(this._response_headers, k)
+         ? this._response_headers[k] : null;
+};
+globalThis.XMLHttpRequest.prototype.getAllResponseHeaders = function() {
+    var out = '';
+    for (var k in this._response_headers) {
+        if (Object.prototype.hasOwnProperty.call(this._response_headers, k)) {
+            out += k + ': ' + this._response_headers[k] + '\r\n';
+        }
+    }
+    return out;
+};
+// Helpers llamados desde __puriy_fetch_resolve/reject.
+globalThis.XMLHttpRequest.prototype.__puriy_complete = function(status, statusText, body, hdrPairs) {
+    if (this._aborted) return;
+    this.status = status;
+    this.statusText = statusText;
+    this.responseText = body;
+    this.response = body;
+    if (hdrPairs) {
+        for (var i = 0; i + 1 < hdrPairs.length; i += 2) {
+            this._response_headers[String(hdrPairs[i]).toLowerCase()] = hdrPairs[i + 1];
+        }
+    }
+    this.readyState = 4;
+    if (typeof this.onreadystatechange === 'function') {
+        try { this.onreadystatechange(); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+    if (typeof this.onload === 'function') {
+        try { this.onload(); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+};
+globalThis.XMLHttpRequest.prototype.__puriy_error = function(msg) {
+    if (this._aborted) return;
+    this.status = 0;
+    this.statusText = '';
+    this.readyState = 4;
+    if (typeof this.onreadystatechange === 'function') {
+        try { this.onreadystatechange(); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+    if (typeof this.onerror === 'function') {
+        try { this.onerror(new Error(msg)); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
     }
 };
 // Fase 7.30 — getComputedStyle(el) stub. Spec: devuelve un
@@ -6999,6 +7175,156 @@ mod tests {
         } else {
             panic!("expected string, got {v:?}");
         }
+    }
+
+    // ============= Fase 7.38 — XMLHttpRequest =============
+
+    #[test]
+    fn xhr_open_setea_ready_state_1() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval("var x = new XMLHttpRequest(); x.open('GET', '/api')")
+            .expect("e");
+        let v = rt.eval("x.readyState").expect("e");
+        assert_eq!(v, JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn xhr_open_async_false_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        let res = rt.eval(
+            "var err = null; \
+             try { var x = new XMLHttpRequest(); x.open('GET', '/api', false); } \
+             catch (e) { err = e.message; } \
+             err",
+        )
+        .expect("e");
+        if let JsValue::String(s) = res {
+            assert!(s.contains("no soportado"), "msg: {s}");
+        } else {
+            panic!("expected string, got {res:?}");
+        }
+    }
+
+    #[test]
+    fn xhr_send_publica_mutacion_fetch() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var x = new XMLHttpRequest(); \
+             x.open('POST', '/api/x'); \
+             x.setRequestHeader('X-Token', 'abc'); \
+             x.send('hola');",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "fetch");
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[1], "POST");
+        assert_eq!(parts[2], "https://example.com/api/x");
+        assert_eq!(parts[3], "1");
+        assert_eq!(parts[4], "hola");
+        assert!(parts.iter().any(|p| *p == "X-Token"));
+        assert!(parts.iter().any(|p| *p == "abc"));
+    }
+
+    #[test]
+    fn xhr_send_dispara_ready_state_2() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var states = []; var x = new XMLHttpRequest(); \
+             x.onreadystatechange = function() { states.push(x.readyState); }; \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        // Por open: 1, por send: 2.
+        let v = rt.eval("states.join(',')").expect("e");
+        assert_eq!(v, JsValue::String("1,2".into()));
+    }
+
+    #[test]
+    fn xhr_resolve_fetch_dispara_onload_y_response_text() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var loaded = false; var txt = null; var s = null; \
+             var x = new XMLHttpRequest(); \
+             x.onload = function() { loaded = true; txt = x.responseText; s = x.status; }; \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        // El id es 1 (primer fetch del runtime).
+        rt.resolve_fetch(1, 200, "OK", "hola mundo", &[]).expect("r");
+        let v = rt.eval("loaded").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("txt").expect("e");
+        assert_eq!(v, JsValue::String("hola mundo".into()));
+        let v = rt.eval("s").expect("e");
+        assert_eq!(v, JsValue::Number(200.0));
+        let v = rt.eval("x.readyState").expect("e");
+        assert_eq!(v, JsValue::Number(4.0));
+    }
+
+    #[test]
+    fn xhr_get_response_header_case_insensitive() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var x = new XMLHttpRequest(); x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+        rt.resolve_fetch(1, 200, "OK", "{}", &headers).expect("r");
+        let v = rt.eval("x.getResponseHeader('content-type')").expect("e");
+        assert_eq!(v, JsValue::String("application/json".into()));
+        let v = rt.eval("x.getResponseHeader('Content-Type')").expect("e");
+        assert_eq!(v, JsValue::String("application/json".into()));
+        let v = rt.eval("x.getResponseHeader('missing')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn xhr_reject_fetch_dispara_onerror() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var errored = false; var x = new XMLHttpRequest(); \
+             x.onerror = function() { errored = true; }; \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.reject_fetch(1, "network down").expect("r");
+        let v = rt.eval("errored").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("x.readyState").expect("e");
+        assert_eq!(v, JsValue::Number(4.0));
+        let v = rt.eval("x.status").expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn xhr_abort_dispara_onabort_y_descarta_resolve_posterior() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var aborted = false; var loaded = false; var x = new XMLHttpRequest(); \
+             x.onabort = function() { aborted = true; }; \
+             x.onload = function() { loaded = true; }; \
+             x.open('GET', '/x'); x.send(); x.abort();",
+        )
+        .expect("e");
+        // El abort eliminó al XHR del pending — el resolve posterior debe
+        // ser no-op para el XHR (no encuentra entrada y cae al Promise pending,
+        // que tampoco existe).
+        rt.resolve_fetch(1, 200, "OK", "hola", &[]).expect("r");
+        let v = rt.eval("aborted").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("loaded").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
     }
 
     // ============= Fase 7.37 — URL relativa contra base =============
