@@ -156,6 +156,27 @@ pub struct TabState {
     /// `Msg::ToggleDetails(idx)` flippean el bool. Reset en cada
     /// navegación para evitar índices stale.
     pub details_open: Vec<bool>,
+    /// Runtime JavaScript de la pestaña (creado lazily la primera vez
+    /// que la página tiene un `<script>` inline). Lleva el contexto JS
+    /// con `console`/`document` ya bootstraped. Se destruye en cada
+    /// `Msg::Navigate` para que `var x = ...` de una página no fugue
+    /// a la siguiente.
+    ///
+    /// `Box` para mantener el `TabState` pequeño en el caso común
+    /// (mayoría de pestañas no usan JS) y evitar mover ~1MB de runtime
+    /// cuando el Vec<TabState> se redimensiona. `JsRuntime` no es
+    /// `Send` — el `Model` vive en el UI thread y nunca cruza hilos.
+    pub js: Option<Box<puriy_js::JsRuntime>>,
+    /// Resumen del último batch de scripts ejecutados: contador de logs
+    /// y errores. Se muestra en la status bar cuando es no-cero.
+    pub js_summary: JsSummary,
+}
+
+/// Resultado agregado de ejecutar todos los `<script>` de un load.
+#[derive(Default, Debug, Clone)]
+pub struct JsSummary {
+    pub logs: usize,
+    pub errors: usize,
 }
 
 impl TabState {
@@ -180,6 +201,8 @@ impl TabState {
             selects: Vec::new(),
             focused_input: None,
             details_open: Vec::new(),
+            js: None,
+            js_summary: JsSummary::default(),
         }
     }
 
@@ -263,6 +286,10 @@ pub enum Msg {
         /// `<meta http-equiv="refresh">` del head, si existía. El chrome
         /// programa un thread con sleep y dispatcha `MetaRefreshFire`.
         meta_refresh: Option<puriy_engine::MetaRefresh>,
+        /// `<script>` extraídos del DOM en orden. El chrome los ejecuta
+        /// en orden tras el load (sólo los inline; src= se ignora hasta
+        /// que tengamos async fetch + queue de ejecución).
+        scripts: Vec<puriy_engine::ScriptInfo>,
     },
     /// Disparo del temporizador de `<meta refresh>`. El handler valida
     /// `tab` y `gen` para descartar refreshes pendientes de pestañas
@@ -516,7 +543,7 @@ impl App for Puriy {
                 let url = m.active().url.clone();
                 start_load(&mut m, url, /* push_history */ false, handle);
             }
-            Msg::Loaded { tab, gen, final_url, title, box_tree, source, meta_refresh } => {
+            Msg::Loaded { tab, gen, final_url, title, box_tree, source, meta_refresh, scripts } => {
                 if let Some(idx) = m.tab_idx(tab) {
                     let t = &mut m.tabs[idx];
                     if t.gen == gen {
@@ -574,6 +601,25 @@ impl App for Puriy {
                         t.selects = selects;
                         t.focused_input = autofocus_idx;
                         t.box_tree = Some(box_tree);
+                        // Ejecuta los `<script>` inline del documento.
+                        // Destruimos cualquier JsRuntime previo (var x = ...
+                        // de la página anterior no debe fugar). Si esta
+                        // página tiene scripts, instanciamos un runtime
+                        // fresh, hacemos set_document con el snapshot del
+                        // DOM, y eval cada script en orden. Logs y errores
+                        // se acumulan en t.js_summary y se muestran en la
+                        // status bar.
+                        t.js = None;
+                        t.js_summary = JsSummary::default();
+                        run_scripts_on_tab(t, &scripts);
+                        if t.js_summary.errors > 0 {
+                            t.status =
+                                format!("{} · JS: {} log/{} err",
+                                    t.status, t.js_summary.logs, t.js_summary.errors);
+                        } else if t.js_summary.logs > 0 {
+                            t.status = format!("{} · JS: {} logs",
+                                t.status, t.js_summary.logs);
+                        }
                         // Registra en la history global del Profile (no
                         // confundir con TabState.history, que es el
                         // stack back/fwd de la pestaña).
@@ -1581,6 +1627,101 @@ fn collect_history() -> (String, Vec<PanelItem>) {
     (title, items)
 }
 
+/// Ejecuta los scripts inline del documento en el `JsRuntime` de la
+/// pestaña. Crea el runtime lazily si no existía. Llama `set_document`
+/// con un snapshot (`title`, `url`, `body_text`) para que `document.*`
+/// devuelva valores reales en lugar de undefined.
+///
+/// Scripts con `src=` (externos) se saltean por ahora — Fase 7.4+
+/// tendrá un async fetch + queue de ejecución. Scripts marcados como
+/// `is_module=true` también se saltean: el runtime de Fase 7.x es
+/// clásico (no module loader).
+///
+/// `t.js_summary` se actualiza con counts agregados. La función NO toca
+/// `t.status` — el caller decide cómo mostrarlo.
+fn run_scripts_on_tab(t: &mut TabState, scripts: &[puriy_engine::ScriptInfo]) {
+    if scripts.is_empty() {
+        return;
+    }
+    // Body text — concatenación de las hojas de texto del box tree.
+    // Snapshot a momento de Load; muta si la página re-renderiza pero
+    // el JS no re-lee. Fase 7.4 lo hará reactivo.
+    let body_text = t
+        .box_tree
+        .as_ref()
+        .map(extract_body_text)
+        .unwrap_or_default();
+    // Lazy: instanciar el JsRuntime cuesta ~200ms — sólo si la página
+    // realmente tiene scripts ejecutables.
+    let has_executable = scripts
+        .iter()
+        .any(|s| s.inline.is_some() && !s.is_module);
+    if !has_executable {
+        return;
+    }
+    let rt = match puriy_js::JsRuntime::new() {
+        Ok(r) => Box::new(r),
+        Err(_) => {
+            t.js_summary.errors += 1;
+            return;
+        }
+    };
+    t.js = Some(rt);
+    let rt = t.js.as_mut().unwrap();
+    let _ = rt.set_document(&t.title, &t.url, &body_text);
+    let mut prev_stdout_len = rt.stdout().len();
+    let mut prev_stderr_len = rt.stderr().len();
+    for s in scripts {
+        if s.is_module {
+            continue;
+        }
+        let Some(body) = s.inline.as_ref() else {
+            continue;
+        };
+        // Skip non-JS types (templates, application/json, etc.).
+        if let Some(t_attr) = &s.type_attr {
+            let l = t_attr.to_ascii_lowercase();
+            if !l.is_empty()
+                && !l.contains("javascript")
+                && !l.contains("ecmascript")
+                && l != "text/js"
+            {
+                continue;
+            }
+        }
+        if let Err(_e) = rt.eval(body) {
+            t.js_summary.errors += 1;
+        }
+        // Contá líneas nuevas en stdout/stderr — `console.log` agrega
+        // exactamente una `\n` por llamada.
+        let new_stdout = rt.stdout();
+        let new_stderr = rt.stderr();
+        t.js_summary.logs += new_stdout[prev_stdout_len..].matches('\n').count();
+        t.js_summary.errors += new_stderr[prev_stderr_len..].matches('\n').count();
+        prev_stdout_len = new_stdout.len();
+        prev_stderr_len = new_stderr.len();
+    }
+}
+
+/// Concatena las hojas de texto del box tree en un único string — el
+/// `body.textContent` que ve el JS via `document.body.textContent`.
+/// Separa con un espacio entre nodos para evitar que palabras de
+/// nodos adyacentes se peguen.
+fn extract_body_text(bt: &BoxTree) -> String {
+    let mut out = String::new();
+    bt.walk(|b| {
+        if let Some(text) = &b.text {
+            if !text.is_empty() {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(text);
+            }
+        }
+    });
+    out
+}
+
 /// Inicia la carga de `url` en la pestaña activa. Si `push_history` es
 /// `true`, se trunca y empuja al stack — útil para Navigate; back/fwd/
 /// reload pasan `false`.
@@ -1626,6 +1767,7 @@ fn spawn_load(tab: TabId, gen: u64, url: String, referer: Option<String>, handle
                     box_tree: doc.box_tree,
                     source: doc.source,
                     meta_refresh: doc.meta_refresh,
+                    scripts: doc.scripts,
                 });
                 // Best-effort: persistimos la cache después de cada
                 // navegación exitosa. Si el proceso muere por SIGKILL o
@@ -1668,6 +1810,7 @@ fn start_load_post(m: &mut Model, url: String, body: String, handle: &Handle<Msg
                     box_tree: doc.box_tree,
                     source: doc.source,
                     meta_refresh: doc.meta_refresh,
+                    scripts: doc.scripts,
                 });
             }
             Err(e) => h.dispatch(Msg::LoadFailed { tab: id, gen, err: e.to_string() }),
@@ -3696,5 +3839,129 @@ mod tests {
         let mut counter = 0_usize;
         skip_count_details(&tree.root, &mut counter);
         assert_eq!(counter, 0);
+    }
+
+    #[test]
+    fn extract_body_text_concatena_hojas() {
+        let tree = parse("<body><h1>Hola</h1><p>mundo cruel</p></body>");
+        let text = extract_body_text(&tree);
+        assert!(text.contains("Hola"));
+        assert!(text.contains("mundo cruel"));
+    }
+
+    #[test]
+    fn run_scripts_actualiza_summary_logs() {
+        let mut t = TabState::new("about:test".into());
+        t.title = "T".into();
+        t.url = "about:test".into();
+        t.box_tree = Some(parse("<p>x</p>"));
+        let scripts = vec![puriy_engine::ScriptInfo {
+            src: None,
+            inline: Some("console.log('a'); console.log('b')".into()),
+            type_attr: None,
+            is_module: false,
+            defer: false,
+            async_: false,
+        }];
+        run_scripts_on_tab(&mut t, &scripts);
+        assert_eq!(t.js_summary.logs, 2, "esperaba 2 logs");
+        assert_eq!(t.js_summary.errors, 0);
+        // El runtime debe haberse instanciado.
+        assert!(t.js.is_some());
+    }
+
+    #[test]
+    fn run_scripts_captura_error_thrown() {
+        let mut t = TabState::new("about:test".into());
+        t.box_tree = Some(parse("<p>x</p>"));
+        let scripts = vec![puriy_engine::ScriptInfo {
+            src: None,
+            inline: Some("console.log('ok'); throw new Error('boom')".into()),
+            type_attr: None,
+            is_module: false,
+            defer: false,
+            async_: false,
+        }];
+        run_scripts_on_tab(&mut t, &scripts);
+        // 1 log de console + 1 error del throw.
+        assert_eq!(t.js_summary.logs, 1);
+        assert_eq!(t.js_summary.errors, 1);
+    }
+
+    #[test]
+    fn run_scripts_saltea_modules_y_src_externo() {
+        let mut t = TabState::new("about:test".into());
+        t.box_tree = Some(parse("<p>x</p>"));
+        let scripts = vec![
+            puriy_engine::ScriptInfo {
+                src: Some("/main.js".into()),
+                inline: None,
+                type_attr: None,
+                is_module: false,
+                defer: false,
+                async_: false,
+            },
+            puriy_engine::ScriptInfo {
+                src: None,
+                inline: Some("console.log('module')".into()),
+                type_attr: Some("module".into()),
+                is_module: true,
+                defer: false,
+                async_: false,
+            },
+        ];
+        run_scripts_on_tab(&mut t, &scripts);
+        // Ninguno de los dos ejecutable → no se instancia runtime.
+        assert!(t.js.is_none());
+        assert_eq!(t.js_summary.logs, 0);
+        assert_eq!(t.js_summary.errors, 0);
+    }
+
+    #[test]
+    fn run_scripts_documento_inyecta_title_y_url() {
+        let mut t = TabState::new("https://example.com/x".into());
+        t.title = "Hola mundo".into();
+        t.box_tree = Some(parse("<p>cuerpo</p>"));
+        let scripts = vec![puriy_engine::ScriptInfo {
+            src: None,
+            inline: Some(
+                "console.log(document.title); console.log(document.URL)".into(),
+            ),
+            type_attr: None,
+            is_module: false,
+            defer: false,
+            async_: false,
+        }];
+        run_scripts_on_tab(&mut t, &scripts);
+        let rt = t.js.as_ref().expect("rt creado");
+        let out = rt.stdout();
+        assert!(out.contains("Hola mundo"), "stdout: {out:?}");
+        assert!(out.contains("https://example.com/x"), "stdout: {out:?}");
+    }
+
+    #[test]
+    fn run_scripts_skip_application_json_pero_no_text_javascript() {
+        let mut t = TabState::new("about:test".into());
+        t.box_tree = Some(parse("<p>x</p>"));
+        let scripts = vec![
+            puriy_engine::ScriptInfo {
+                src: None,
+                inline: Some("{\"k\":1}".into()),
+                type_attr: Some("application/json".into()),
+                is_module: false,
+                defer: false,
+                async_: false,
+            },
+            puriy_engine::ScriptInfo {
+                src: None,
+                inline: Some("console.log('ejecuto')".into()),
+                type_attr: Some("text/javascript".into()),
+                is_module: false,
+                defer: false,
+                async_: false,
+            },
+        ];
+        run_scripts_on_tab(&mut t, &scripts);
+        assert_eq!(t.js_summary.logs, 1);
     }
 }

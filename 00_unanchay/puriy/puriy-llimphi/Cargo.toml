@@ -10,6 +10,7 @@ description = "puriy — chrome del navegador (toolbar + viewport) sobre Llimphi
 [dependencies]
 puriy-core = { path = "../puriy-core" }
 puriy-engine = { path = "../puriy-engine" }
+puriy-js = { path = "../puriy-js" }
 llimphi-ui = { path = "../../../02_ruway/llimphi/llimphi-ui" }
 llimphi-layout = { path = "../../../02_ruway/llimphi/llimphi-layout" }
 llimphi-raster = { path = "../../../02_ruway/llimphi/llimphi-raster" }
