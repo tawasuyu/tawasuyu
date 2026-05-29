@@ -72,12 +72,109 @@ globalThis.__puriy_stderr = '';
         }
         return parts.join(' ');
     }
+    // Fase 7.27 — state para console.group/groupEnd: indent prefix
+    // que se prepende a cada línea del stdout/stderr mientras un grupo
+    // está abierto. Nesteable. console.assert/count/time/trace también
+    // viven acá.
+    var groupIndent = '';
+    var counters = {};
+    var timers = {};
+    function writeOut(s) { globalThis.__puriy_stdout += groupIndent + s + '\n'; }
+    function writeErr(s) { globalThis.__puriy_stderr += groupIndent + s + '\n'; }
     globalThis.console = {
-        log: function() { globalThis.__puriy_stdout += fmt(arguments) + '\n'; },
-        info: function() { globalThis.__puriy_stdout += fmt(arguments) + '\n'; },
-        debug: function() { globalThis.__puriy_stdout += fmt(arguments) + '\n'; },
-        error: function() { globalThis.__puriy_stderr += fmt(arguments) + '\n'; },
-        warn: function() { globalThis.__puriy_stderr += fmt(arguments) + '\n'; }
+        log: function() { writeOut(fmt(arguments)); },
+        info: function() { writeOut(fmt(arguments)); },
+        debug: function() { writeOut(fmt(arguments)); },
+        error: function() { writeErr(fmt(arguments)); },
+        warn: function() { writeErr(fmt(arguments)); },
+        // Fase 7.27 — group/groupCollapsed: imprimen el label y aumentan
+        // el indent. groupCollapsed es alias (no tenemos UI plegable).
+        // groupEnd cierra el grupo más reciente. Nesteable.
+        group: function() {
+            writeOut(fmt(arguments));
+            groupIndent += '  ';
+        },
+        groupCollapsed: function() {
+            writeOut(fmt(arguments));
+            groupIndent += '  ';
+        },
+        groupEnd: function() {
+            if (groupIndent.length >= 2) groupIndent = groupIndent.slice(0, -2);
+        },
+        // Fase 7.27 — assert(cond, ...msg): si cond falsy, imprime
+        // "Assertion failed: ..." en stderr. Si cond truthy, no-op
+        // silencioso (matchea spec).
+        assert: function() {
+            if (arguments.length === 0 || arguments[0]) return;
+            var rest = Array.prototype.slice.call(arguments, 1);
+            writeErr('Assertion failed: ' + fmt(rest));
+        },
+        // Fase 7.27 — count(label): incrementa el counter y lo imprime
+        // como "label: N". Default label 'default' (spec).
+        count: function(label) {
+            var k = (label == null) ? 'default' : String(label);
+            counters[k] = (counters[k] || 0) + 1;
+            writeOut(k + ': ' + counters[k]);
+        },
+        countReset: function(label) {
+            var k = (label == null) ? 'default' : String(label);
+            counters[k] = 0;
+        },
+        // Fase 7.27 — time(label)/timeEnd(label): mide tiempo entre
+        // ambas calls usando __puriy_now_ms del runtime. Resolución
+        // depende del tick del host (~33ms); útil para "rough timing".
+        time: function(label) {
+            var k = (label == null) ? 'default' : String(label);
+            timers[k] = globalThis.__puriy_now_ms || 0;
+        },
+        timeEnd: function(label) {
+            var k = (label == null) ? 'default' : String(label);
+            if (timers[k] == null) {
+                writeErr("Timer '" + k + "' does not exist");
+                return;
+            }
+            var dt = (globalThis.__puriy_now_ms || 0) - timers[k];
+            delete timers[k];
+            writeOut(k + ': ' + dt + 'ms');
+        },
+        // Fase 7.27 — trace: equivalente a console.log + indent state.
+        // No emitimos stack porque QuickJS no lo expone de forma estándar.
+        trace: function() {
+            writeOut('Trace: ' + fmt(arguments));
+        },
+        // Fase 7.27 — dir(obj): muestra la representación profunda del
+        // objeto. Sin colorización ni expansion interactiva — texto
+        // plano con JSON.stringify cuando podemos.
+        dir: function(obj) {
+            try { writeOut(JSON.stringify(obj, null, 2)); }
+            catch (_e) { writeOut(String(obj)); }
+        },
+        // Fase 7.27 — table(data): render minimalista de una table. Si
+        // data es array de objetos, muestra "[i] {k1: v1, k2: v2}".
+        // Si es array de primitivos, "[i] v". Si es objeto, "k: v".
+        // Sin formato ASCII (columnas alineadas) — sólo legible.
+        table: function(data) {
+            if (data == null) { writeOut(String(data)); return; }
+            if (Array.isArray(data)) {
+                for (var i = 0; i < data.length; i++) {
+                    var row = data[i];
+                    if (row !== null && typeof row === 'object') {
+                        try { writeOut('[' + i + '] ' + JSON.stringify(row)); }
+                        catch (_e) { writeOut('[' + i + '] ' + String(row)); }
+                    } else {
+                        writeOut('[' + i + '] ' + String(row));
+                    }
+                }
+            } else if (typeof data === 'object') {
+                for (var k in data) {
+                    if (Object.prototype.hasOwnProperty.call(data, k)) {
+                        writeOut(k + ': ' + String(data[k]));
+                    }
+                }
+            } else {
+                writeOut(String(data));
+            }
+        }
     };
 })();
 "#;
@@ -5459,6 +5556,107 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.27 — console.group/assert/count/time/dir/table =============
+
+    #[test]
+    fn console_group_indenta_subsiguientes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("console.group('outer'); console.log('inside'); console.groupEnd(); console.log('after')")
+            .expect("e");
+        // group label sin indent; inside con 2-space indent; after sin indent.
+        let out = rt.stdout();
+        assert!(out.contains("outer\n"), "out: {out:?}");
+        assert!(out.contains("  inside\n"), "out: {out:?}");
+        assert!(out.contains("after\n") && !out.contains("  after\n"), "out: {out:?}");
+    }
+
+    #[test]
+    fn console_group_es_nesteable() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "console.group('a'); console.group('b'); console.log('x'); \
+             console.groupEnd(); console.log('y'); console.groupEnd();",
+        )
+        .expect("e");
+        let out = rt.stdout();
+        // a sin indent, b con 2 spaces (dentro de a), x con 4 (dentro de a+b),
+        // y con 2 (sólo dentro de a).
+        assert!(out.contains("a\n"), "out: {out:?}");
+        assert!(out.contains("  b\n"), "out: {out:?}");
+        assert!(out.contains("    x\n"), "out: {out:?}");
+        assert!(out.contains("  y\n"), "out: {out:?}");
+    }
+
+    #[test]
+    fn console_assert_falsy_emite_stderr_truthy_no_op() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("console.assert(false, 'algo', 'mal')").expect("e");
+        assert!(rt.stderr().contains("Assertion failed: algo mal"), "stderr: {:?}", rt.stderr());
+        rt.eval("console.assert(true, 'no aparece')").expect("e");
+        // stderr no debe sumar (assert con cond truthy es no-op).
+        assert!(!rt.stderr().contains("no aparece"));
+    }
+
+    #[test]
+    fn console_count_incrementa_por_label() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("console.count('a'); console.count('a'); console.count('b'); console.count('a')")
+            .expect("e");
+        let out = rt.stdout();
+        assert!(out.contains("a: 1\n"), "out: {out:?}");
+        assert!(out.contains("a: 2\n"), "out: {out:?}");
+        assert!(out.contains("b: 1\n"), "out: {out:?}");
+        assert!(out.contains("a: 3\n"), "out: {out:?}");
+    }
+
+    #[test]
+    fn console_count_reset_vuelve_a_cero() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("console.count('x'); console.countReset('x'); console.count('x')")
+            .expect("e");
+        let out = rt.stdout();
+        assert!(out.contains("x: 1\n"));
+        // Post-reset el siguiente count debería ser 1 (no 2).
+        assert_eq!(out.matches("x: 1\n").count(), 2);
+    }
+
+    #[test]
+    fn console_time_end_calcula_delta_via_now_ms() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(100);
+        rt.eval("console.time('t1')").expect("e");
+        rt.set_now_ms(250);
+        rt.eval("console.timeEnd('t1')").expect("e");
+        let out = rt.stdout();
+        assert!(out.contains("t1: 150ms"), "out: {out:?}");
+    }
+
+    #[test]
+    fn console_time_end_sin_time_emite_warning_a_stderr() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("console.timeEnd('inexistente')").expect("e");
+        assert!(rt.stderr().contains("Timer 'inexistente' does not exist"), "stderr: {:?}", rt.stderr());
+    }
+
+    #[test]
+    fn console_table_array_de_objetos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("console.table([{name:'a', n:1}, {name:'b', n:2}])").expect("e");
+        let out = rt.stdout();
+        assert!(out.contains("[0]"), "out: {out:?}");
+        assert!(out.contains("[1]"), "out: {out:?}");
+        assert!(out.contains("\"name\":\"a\""), "out: {out:?}");
+    }
+
+    #[test]
+    fn console_dir_serializa_objeto_con_json() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("console.dir({a: 1, b: [2, 3]})").expect("e");
+        let out = rt.stdout();
+        assert!(out.contains("\"a\""), "out: {out:?}");
+        assert!(out.contains("1"), "out: {out:?}");
     }
 
     // ============= Fase 7.26 — Window/Element scroll APIs =============
