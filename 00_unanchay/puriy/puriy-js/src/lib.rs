@@ -5468,6 +5468,100 @@ mod tests {
         assert_eq!(v, JsValue::Null);
     }
 
+    // ============= Fase 7.47 — XHR responseType + Blob =============
+
+    #[test]
+    fn xhr_response_type_json_parsea_el_body() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var r = null; var x = new XMLHttpRequest(); x.responseType = 'json'; \
+             x.onload = function() { r = x.response; }; x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", r#"{"name":"sergio","n":7}"#, &[]).expect("r");
+        assert_eq!(rt.eval("r.name").expect("e"), JsValue::String("sergio".into()));
+        assert_eq!(rt.eval("r.n").expect("e"), JsValue::Number(7.0));
+    }
+
+    #[test]
+    fn xhr_response_type_json_invalido_da_null() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var r = 'x'; var x = new XMLHttpRequest(); x.responseType = 'json'; \
+             x.onload = function() { r = x.response; }; x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "{roto", &[]).expect("r");
+        assert_eq!(rt.eval("r").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn xhr_response_type_arraybuffer_da_bytes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var b0 = null; var b1 = null; var isBuf = null; \
+             var x = new XMLHttpRequest(); x.responseType = 'arraybuffer'; \
+             x.onload = function() { isBuf = x.response instanceof ArrayBuffer; \
+                var v = new Uint8Array(x.response); b0 = v[0]; b1 = v[1]; }; \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "AB", &[]).expect("r");
+        assert_eq!(rt.eval("isBuf").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("b0").expect("e"), JsValue::Number(65.0));
+        assert_eq!(rt.eval("b1").expect("e"), JsValue::Number(66.0));
+    }
+
+    #[test]
+    fn xhr_response_type_blob_da_blob_con_type() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var size = null; var type = null; var txt = null; \
+             var x = new XMLHttpRequest(); x.responseType = 'blob'; \
+             x.onload = function() { size = x.response.size; type = x.response.type; \
+                x.response.text().then(function(t) { txt = t; }); }; \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        let headers = vec![("Content-Type".to_string(), "text/plain".to_string())];
+        rt.resolve_fetch(1, 200, "OK", "hola", &headers).expect("r");
+        assert_eq!(rt.eval("size").expect("e"), JsValue::Number(4.0));
+        assert_eq!(rt.eval("type").expect("e"), JsValue::String("text/plain".into()));
+        assert_eq!(rt.eval("txt").expect("e"), JsValue::String("hola".into()));
+    }
+
+    #[test]
+    fn xhr_response_type_text_default_es_string() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var r = null; var x = new XMLHttpRequest(); \
+             x.onload = function() { r = x.response; }; x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "plano", &[]).expect("r");
+        assert_eq!(rt.eval("r").expect("e"), JsValue::String("plano".into()));
+    }
+
+    #[test]
+    fn blob_constructor_y_slice() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var b = new Blob(['abc', 'def'], { type: 'text/plain' }); \
+             var sz = b.size; var ty = b.type; \
+             var sl = b.slice(1, 4); var slTxt = null; \
+             sl.text().then(function(t) { slTxt = t; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("sz").expect("e"), JsValue::Number(6.0));
+        assert_eq!(rt.eval("ty").expect("e"), JsValue::String("text/plain".into()));
+        assert_eq!(rt.eval("slTxt").expect("e"), JsValue::String("bcd".into()));
+    }
+
     #[test]
     fn xhr_reject_fetch_dispara_onerror() {
         let mut rt = JsRuntime::new().expect("rt");

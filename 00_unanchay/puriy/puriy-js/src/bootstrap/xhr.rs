@@ -126,12 +126,33 @@ globalThis.XMLHttpRequest.prototype.__puriy_complete = function(status, statusTe
     if (this._aborted) return;
     this.status = status;
     this.statusText = statusText;
+    // `responseText` sólo es válido para responseType '' o 'text' (spec lo
+    // hace tirar para otros tipos); acá lo dejamos poblado siempre por
+    // lenidad — divergencia documentada. `response` sí respeta el tipo.
     this.responseText = body;
-    this.response = body;
     if (hdrPairs) {
         for (var i = 0; i + 1 < hdrPairs.length; i += 2) {
             this._response_headers[String(hdrPairs[i]).toLowerCase()] = hdrPairs[i + 1];
         }
+    }
+    // Fase 7.47 — `response` según responseType.
+    var rtype = this.responseType || '';
+    if (rtype === '' || rtype === 'text') {
+        this.response = body;
+    } else if (rtype === 'json') {
+        // Spec: JSON inválido → response null (no tira).
+        try { this.response = JSON.parse(body); } catch (e) { this.response = null; }
+    } else if (rtype === 'arraybuffer') {
+        var len = body.length;
+        var buf = new ArrayBuffer(len);
+        var view = new Uint8Array(buf);
+        for (var i = 0; i < len; i++) view[i] = body.charCodeAt(i) & 0xff;
+        this.response = buf;
+    } else if (rtype === 'blob') {
+        this.response = new globalThis.Blob([body], { type: this.getResponseHeader('content-type') || '' });
+    } else {
+        // 'document' no soportado (no parseamos el response a DOM) → null.
+        this.response = null;
     }
     this.readyState = 4;
     if (typeof this.onreadystatechange === 'function') {
