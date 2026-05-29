@@ -147,6 +147,13 @@ pub struct TabState {
     /// `select` walk del Loaded). Cada slot lleva el índice seleccionado
     /// y si está abierto (dropdown expandido).
     pub selects: Vec<SelectState>,
+    /// `element_id` paralelo a `inputs` (sólo presente si el `<input>`
+    /// o `<textarea>` tiene atributo `id=`). Permite despachar
+    /// `focus`/`blur`/`keydown`/`input` JS sobre el elemento focado
+    /// cuando el usuario interactúa con el input.
+    pub inputs_element_ids: Vec<Option<String>>,
+    /// `element_id` paralelo a `selects` (Fase 7.7).
+    pub selects_element_ids: Vec<Option<String>>,
     /// Índice DFS del input/textarea focado (clave en `inputs`). `None` =
     /// sin foco; el chrome rutea teclas al resto del flow.
     pub focused_input: Option<usize>,
@@ -199,6 +206,8 @@ impl TabState {
             inputs: Vec::new(),
             input_checks: Vec::new(),
             selects: Vec::new(),
+            inputs_element_ids: Vec::new(),
+            selects_element_ids: Vec::new(),
             focused_input: None,
             details_open: Vec::new(),
             js: None,
@@ -610,6 +619,8 @@ impl App for Puriy {
                         let mut inputs: Vec<TextInputState> = Vec::new();
                         let mut input_checks: Vec<bool> = Vec::new();
                         let mut selects: Vec<SelectState> = Vec::new();
+                        let mut inputs_element_ids: Vec<Option<String>> = Vec::new();
+                        let mut selects_element_ids: Vec<Option<String>> = Vec::new();
                         let mut autofocus_idx: Option<usize> = None;
                         box_tree.walk(|b| {
                             if b.tag.as_deref() == Some("details") {
@@ -623,6 +634,7 @@ impl App for Puriy {
                                 let idx = inputs.len();
                                 inputs.push(s);
                                 input_checks.push(b.input_checked_initial);
+                                inputs_element_ids.push(b.element_id.clone());
                                 if b.input_autofocus && autofocus_idx.is_none() {
                                     autofocus_idx = Some(idx);
                                 }
@@ -632,12 +644,15 @@ impl App for Puriy {
                                     selected: sel.initial,
                                     open: false,
                                 });
+                                selects_element_ids.push(b.element_id.clone());
                             }
                         });
                         t.details_open = details_open;
                         t.inputs = inputs;
                         t.input_checks = input_checks;
                         t.selects = selects;
+                        t.inputs_element_ids = inputs_element_ids;
+                        t.selects_element_ids = selects_element_ids;
                         t.focused_input = autofocus_idx;
                         t.box_tree = Some(box_tree);
                         // Ejecuta los `<script>` inline del documento.
@@ -1044,6 +1059,17 @@ impl App for Puriy {
                     s.selected = opt;
                     s.open = false;
                 }
+                // Fase 7.7: despachar `change` JS si el <select> tiene id.
+                let eid = m
+                    .active()
+                    .selects_element_ids
+                    .get(idx)
+                    .cloned()
+                    .flatten();
+                if let Some(eid) = eid {
+                    let now_ms = m.start.elapsed().as_millis() as u64;
+                    dispatch_js_event(&mut m, &eid, "change", now_ms);
+                }
             }
             Msg::ToggleCheckbox(idx) => {
                 let t = m.active_mut();
@@ -1092,6 +1118,25 @@ impl App for Puriy {
                 }
             }
             Msg::FocusInput(idx) => {
+                // Fase 7.7: despachar blur al input previo (si tenía id)
+                // y focus al nuevo (si tiene id).
+                let prev = m.active().focused_input;
+                let prev_eid = prev.and_then(|i| {
+                    m.active()
+                        .inputs_element_ids
+                        .get(i)
+                        .cloned()
+                        .flatten()
+                });
+                let new_eid = if idx == usize::MAX {
+                    None
+                } else {
+                    m.active()
+                        .inputs_element_ids
+                        .get(idx)
+                        .cloned()
+                        .flatten()
+                };
                 let t = m.active_mut();
                 if idx == usize::MAX {
                     // sentinel = blur
@@ -1100,6 +1145,13 @@ impl App for Puriy {
                     t.focused_input = Some(idx);
                     // Blur address bar para que las teclas no compitan.
                     t.addr_focused = false;
+                }
+                let now_ms = m.start.elapsed().as_millis() as u64;
+                if let Some(eid) = prev_eid {
+                    dispatch_js_event(&mut m, &eid, "blur", now_ms);
+                }
+                if let Some(eid) = new_eid {
+                    dispatch_js_event(&mut m, &eid, "focus", now_ms);
                 }
             }
             Msg::FocusNext => {
@@ -1134,10 +1186,29 @@ impl App for Puriy {
                             "↵ submit: el input no está dentro de un <form action> conocido".into();
                     }
                 } else {
-                    let t = m.active_mut();
-                    if let Some(idx) = t.focused_input {
-                        if let Some(input) = t.inputs.get_mut(idx) {
-                            input.apply_key(&e);
+                    // Fase 7.7: despachar `keydown` al elemento focado si
+                    // tiene `id=`. Si el handler hace `preventDefault()`,
+                    // la tecla NO se aplica al input — el JS toma el control.
+                    let focused_idx = m.active().focused_input;
+                    let eid = focused_idx.and_then(|i| {
+                        m.active()
+                            .inputs_element_ids
+                            .get(i)
+                            .cloned()
+                            .flatten()
+                    });
+                    let prevented = if let Some(eid) = eid {
+                        let now_ms = m.start.elapsed().as_millis() as u64;
+                        dispatch_js_event(&mut m, &eid, "keydown", now_ms).default_prevented
+                    } else {
+                        false
+                    };
+                    if !prevented {
+                        let t = m.active_mut();
+                        if let Some(idx) = t.focused_input {
+                            if let Some(input) = t.inputs.get_mut(idx) {
+                                input.apply_key(&e);
+                            }
                         }
                     }
                 }
@@ -4471,6 +4542,38 @@ mod tests {
         let r = dispatch_js_event(&mut m, "a", "click", 0);
         assert!(r.default_prevented);
         assert_eq!(r.count, 1);
+    }
+
+    #[test]
+    fn dispatch_keydown_focus_blur_change_son_event_types_validos() {
+        // Sanity: el harness JS acepta cualquier event_type — no está
+        // restringido a 'click'. Esto destraba Fase 7.7.
+        let mut m = model_con_script("/* boot */");
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "i".into(),
+            tag_name: "input".into(),
+            text_content: "".into(),
+        }])
+        .expect("e");
+        rt.eval(
+            "var el = document.getElementById('i'); \
+             el.addEventListener('keydown', function(e){ console.log('K:'+e.type) }); \
+             el.addEventListener('focus',   function(e){ console.log('F:'+e.type) }); \
+             el.addEventListener('blur',    function(e){ console.log('B:'+e.type) }); \
+             el.addEventListener('change',  function(e){ console.log('C:'+e.type) });",
+        )
+        .expect("e");
+        dispatch_js_event(&mut m, "i", "keydown", 0);
+        dispatch_js_event(&mut m, "i", "focus", 0);
+        dispatch_js_event(&mut m, "i", "blur", 0);
+        dispatch_js_event(&mut m, "i", "change", 0);
+        let rt = m.tabs[0].js.as_ref().expect("rt");
+        let out = rt.stdout();
+        assert!(out.contains("K:keydown"), "stdout: {out:?}");
+        assert!(out.contains("F:focus"), "stdout: {out:?}");
+        assert!(out.contains("B:blur"), "stdout: {out:?}");
+        assert!(out.contains("C:change"), "stdout: {out:?}");
     }
 
     #[test]
