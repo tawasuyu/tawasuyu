@@ -1,0 +1,30 @@
+[package]
+name = "chaka-app-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "chaka-app-llimphi — UI de escritorio del transpilador COBOL → Rust sobre Llimphi: navega el corpus, edita el .cob, corre la sombra y revisa el código generado."
+
+[[bin]]
+name = "chaka-app-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+chaka-lexer = { path = "../chaka-lexer" }
+chaka-parser = { path = "../chaka-parser" }
+chaka-ir = { path = "../chaka-ir" }
+chaka-codegen = { path = "../chaka-codegen" }
+chaka-shadow = { path = "../chaka-shadow" }
+
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-app-header = { workspace = true }
+llimphi-widget-banner = { workspace = true }
+llimphi-widget-button = { workspace = true }
+llimphi-widget-tabs = { workspace = true }
+llimphi-widget-text-editor = { workspace = true }
+llimphi-widget-theme-switcher = { workspace = true }
+llimphi-widget-tree = { workspace = true }
