@@ -21,13 +21,16 @@
 //! K snapshots en un ring buffer. El `view` lee el modelo y pinta los
 //! cuatro tiles.
 //!
-//! El **visor 3D** queda como placeholder textual hasta E3 — el tile
-//! existe, recibe el drag-to-swap y aloja un view; lo que pinta dentro
-//! lo decide E3 con `View::paint_with`.
+//! El **visor 3D** (E3) pinta vía `View::paint_with` con proyección
+//! axonométrica fija (sin cámara orbital): cada partícula es un círculo
+//! coloreado por |v| (cold→hot lerp en sRGB), ordenadas back-to-front
+//! por painter's algorithm. El wireframe de la caja sim da contexto
+//! espacial. Ver el módulo [`visor`] para la proyección pura testeable.
 
 #![forbid(unsafe_code)]
 
 pub mod grafo;
+pub mod visor;
 
 use std::collections::VecDeque;
 
@@ -36,7 +39,8 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Stroke};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, View};
 use llimphi_widget_nodegraph::{nodegraph_view, NodegraphMetrics, NodegraphPalette};
@@ -417,8 +421,8 @@ impl App for TinkuyApp {
             .iter()
             .map(|id| match id {
                 TileId::Visor => TileSpec {
-                    label: "visor 3D (E3 pendiente)".into(),
-                    content: visor_placeholder(&theme),
+                    label: "visor 3D (axonométrico · |v|→color)".into(),
+                    content: visor_body(model, &theme),
                 },
                 TileId::Fuerzas => TileSpec {
                     label: fuerzas_label(model),
@@ -494,30 +498,120 @@ fn text_row<Msg2: Clone + Send + Sync + 'static>(
     .text_aligned(text, size, color, Alignment::Start)
 }
 
-fn visor_placeholder(theme: &Theme) -> View<Msg> {
-    // Marcado deliberadamente como "placeholder" — E3 lo reemplaza con un
-    // `View::paint_with` que pinta partículas como puntos coloreados por |v|.
-    padded_col(
-        vec![
-            text_row("(visor 3D — E3)".into(), 13.0, theme.fg_muted),
-            text_row(
-                "el tile existe y recibe drag-to-swap.".into(),
-                11.0,
-                theme.fg_muted,
-            ),
-            text_row(
-                "E3 enchufa paint_with(Scene) para".into(),
-                11.0,
-                theme.fg_muted,
-            ),
-            text_row(
-                "pintar partículas con proyección ortográfica.".into(),
-                11.0,
-                theme.fg_muted,
-            ),
-        ],
-        None,
-    )
+/// Tile del visor 3D (E3). Proyección axonométrica fija (ver
+/// [`visor::project`]); partículas como circulitos coloreados por |v|
+/// (cold→hot, lerp en sRGB premultiplicado). Sin cámara orbital — el
+/// MVP confía en que el lattice 4³ con la inclinación de `z` ya se lee
+/// como caja. Wireframe de la caja sim como contexto visual.
+fn visor_body(model: &Model, theme: &Theme) -> View<Msg> {
+    // Capturamos las SoA de posiciones/velocidades por valor — el painter
+    // es `Arc<dyn Fn ... + 'static + Send + Sync>`. Con N=64 el clone son
+    // ~1.5 KiB por frame; el coste del compositor lo eclipsa.
+    let n = model.world.len();
+    let xs = model.world.xs.0[..n].to_vec();
+    let ys = model.world.ys.0[..n].to_vec();
+    let zs = model.world.zs.0[..n].to_vec();
+    let vxs = model.world.vxs.0[..n].to_vec();
+    let vys = model.world.vys.0[..n].to_vec();
+    let vzs = model.world.vzs.0[..n].to_vec();
+    let bmin = model.bounds_min;
+    let bmax = model.bounds_max;
+
+    let bg = theme.bg_panel_alt;
+    let edge_color = theme.border;
+    // Cold→hot: azul-cian (frío) → naranja-rojo (caliente). Se interpolan
+    // con `lerp_rect` por par; la gradiente en sRGB es suficiente sin
+    // pisarse con el azul del tema oscuro.
+    let cold = Color::from_rgba8(80, 160, 240, 255);
+    let hot = Color::from_rgba8(240, 110, 60, 255);
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(bg)
+    .paint_with(move |scene, _ts, rect| {
+        if rect.w <= 4.0 || rect.h <= 4.0 {
+            return;
+        }
+        let pad: f32 = 18.0;
+        let avail_w = (rect.w - 2.0 * pad).max(1.0);
+        let avail_h = (rect.h - 2.0 * pad).max(1.0);
+
+        let (umin, umax, vmin, vmax_box) = visor::project_bbox(bmin, bmax);
+        let span_u = (umax - umin).max(1e-6);
+        let span_v = (vmax_box - vmin).max(1e-6);
+        let scale = (avail_w / span_u).min(avail_h / span_v);
+        let proj_w = span_u * scale;
+        let proj_h = span_v * scale;
+        let off_x = rect.x + pad + (avail_w - proj_w) * 0.5;
+        let off_y = rect.y + pad + (avail_h - proj_h) * 0.5;
+
+        // Mapeo (u, v) sim → canvas; flip de v porque canvas crece hacia abajo.
+        let map_uv = |u: f32, v: f32| -> (f64, f64) {
+            let cx = off_x + (u - umin) * scale;
+            let cy = off_y + (vmax_box - v) * scale;
+            (cx as f64, cy as f64)
+        };
+
+        // 1) Wireframe de la caja sim (contexto espacial).
+        let corners = visor::box_corners(bmin, bmax);
+        let mut canvas_corners = [(0.0_f64, 0.0_f64); 8];
+        for (i, &(cx, cy, cz)) in corners.iter().enumerate() {
+            let (u, v) = visor::project(cx, cy, cz);
+            canvas_corners[i] = map_uv(u, v);
+        }
+        let edge_stroke = Stroke::new(1.0);
+        for &(a, b) in &visor::BOX_EDGES {
+            let (x1, y1) = canvas_corners[a];
+            let (x2, y2) = canvas_corners[b];
+            let mut path = BezPath::new();
+            path.move_to((x1, y1));
+            path.line_to((x2, y2));
+            scene.stroke(&edge_stroke, Affine::IDENTITY, edge_color, None, &path);
+        }
+
+        if n == 0 {
+            return;
+        }
+
+        // 2) |v|_max para normalizar el color. Un solo paso, en el espacio
+        // de velocidades; sqrt al final del bucle (más barato que por par).
+        let mut vmax_sq = 0.0_f32;
+        for i in 0..n {
+            let v2 = vxs[i] * vxs[i] + vys[i] * vys[i] + vzs[i] * vzs[i];
+            if v2 > vmax_sq {
+                vmax_sq = v2;
+            }
+        }
+        let v_max = vmax_sq.sqrt().max(1e-6);
+
+        // 3) Painter's algorithm: ordenar back-to-front por depth_key.
+        // Los más al fondo (depth_key alto) se pintan primero.
+        let mut order: Vec<u32> = (0..n as u32).collect();
+        order.sort_by(|&a, &b| {
+            let da = visor::depth_key(xs[a as usize], zs[a as usize]);
+            let db = visor::depth_key(xs[b as usize], zs[b as usize]);
+            db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // 4) Pintar partículas. Radio base 3 px; sin profundidad-radio en MVP.
+        let radius: f64 = 3.0;
+        for &idx in &order {
+            let i = idx as usize;
+            let (u, v) = visor::project(xs[i], ys[i], zs[i]);
+            let (cx, cy) = map_uv(u, v);
+            let spd = (vxs[i] * vxs[i] + vys[i] * vys[i] + vzs[i] * vzs[i]).sqrt();
+            let t = (spd / v_max).clamp(0.0, 1.0);
+            let col = cold.lerp_rect(hot, t);
+            let circle = Circle::new((cx, cy), radius);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &circle);
+        }
+    })
 }
 
 /// El label de la title bar del tile "fuerzas" lleva el estado de la última
