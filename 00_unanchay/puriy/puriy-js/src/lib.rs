@@ -5602,6 +5602,89 @@ mod tests {
         assert_eq!(v, JsValue::Bool(false));
     }
 
+    // ============= Fase 7.48 — XHR eventos de progreso + addEventListener =============
+
+    #[test]
+    fn xhr_addeventlistener_load_dispara() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var hits = 0; var x = new XMLHttpRequest(); \
+             x.addEventListener('load', function() { hits++; }); \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "hola", &[]).expect("r");
+        assert_eq!(rt.eval("hits").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn xhr_dispara_loadstart_progress_load_loadend_en_orden() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var seq = []; var x = new XMLHttpRequest(); \
+             ['loadstart','progress','load','loadend'].forEach(function(t) { \
+                 x.addEventListener(t, function() { seq.push(t); }); }); \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        // loadstart se dispara en send().
+        assert_eq!(rt.eval("seq.join(',')").expect("e"), JsValue::String("loadstart".into()));
+        rt.resolve_fetch(1, 200, "OK", "hola", &[]).expect("r");
+        assert_eq!(
+            rt.eval("seq.join(',')").expect("e"),
+            JsValue::String("loadstart,progress,load,loadend".into())
+        );
+    }
+
+    #[test]
+    fn xhr_progress_event_reporta_loaded_y_total() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var lc = null; var ld = null; var tot = null; \
+             var x = new XMLHttpRequest(); \
+             x.onprogress = function(e) { lc = e.lengthComputable; ld = e.loaded; tot = e.total; }; \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "hola", &[]).expect("r");
+        assert_eq!(rt.eval("lc").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ld").expect("e"), JsValue::Number(4.0));
+        assert_eq!(rt.eval("tot").expect("e"), JsValue::Number(4.0));
+    }
+
+    #[test]
+    fn xhr_error_dispara_error_y_loadend() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var seq = []; var x = new XMLHttpRequest(); \
+             x.addEventListener('error', function() { seq.push('error'); }); \
+             x.addEventListener('loadend', function() { seq.push('loadend'); }); \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.reject_fetch(1, "boom").expect("r");
+        assert_eq!(rt.eval("seq.join(',')").expect("e"), JsValue::String("error,loadend".into()));
+    }
+
+    #[test]
+    fn xhr_remove_event_listener_silencia() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var hits = 0; var f = function() { hits++; }; \
+             var x = new XMLHttpRequest(); \
+             x.addEventListener('load', f); x.removeEventListener('load', f); \
+             x.open('GET', '/x'); x.send();",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "hola", &[]).expect("r");
+        assert_eq!(rt.eval("hits").expect("e"), JsValue::Number(0.0));
+    }
+
     // ============= Fase 7.37 — URL relativa contra base =============
 
     #[test]
