@@ -170,6 +170,7 @@ members = [
     "02_ruway/ayni/ayni-index",
     "02_ruway/ayni/ayni-ai",
     "02_ruway/ayni/ayni-minga",
+    "02_ruway/ayni/ayni-app",
     "02_ruway/chasqui/card-admin",
     "02_ruway/chasqui/card-handshake",
     "02_ruway/chasqui/card-sidecar",
@@ -189,6 +190,7 @@ members = [
     "02_ruway/llimphi/llimphi-surface",
     "02_ruway/llimphi/llimphi-ui",
     "02_ruway/llimphi/llimphi-motion",
+    "02_ruway/llimphi/llimphi-icons",
     "02_ruway/llimphi/llimphi-gpu-bench",
     "02_ruway/llimphi/android/clear-screen-android",
     "02_ruway/llimphi/android/vello-hello-android",
@@ -200,6 +202,15 @@ members = [
     "02_ruway/llimphi/widgets/context-menu",
     "02_ruway/llimphi/widgets/gallery",
     "02_ruway/llimphi/widgets/wawa-mark",
+    "02_ruway/llimphi/widgets/tooltip",
+    "02_ruway/llimphi/widgets/spinner",
+    "02_ruway/llimphi/widgets/progress",
+    "02_ruway/llimphi/widgets/toast",
+    "02_ruway/llimphi/widgets/modal",
+    "02_ruway/llimphi/widgets/empty",
+    "02_ruway/llimphi/widgets/status-bar",
+    "02_ruway/llimphi/widgets/shortcuts-help",
+    "02_ruway/llimphi/widgets/splash",
     "02_ruway/llimphi/widgets/list",
     "02_ruway/llimphi/widgets/slider",
     "02_ruway/llimphi/widgets/splitter",
@@ -222,6 +233,7 @@ members = [
     "02_ruway/llimphi/modules/plugin-host",
     "02_ruway/llimphi/modules/shuma-term",
     "02_ruway/llimphi/modules/symbol-outline",
+    "02_ruway/llimphi/modules/selector",
     "02_ruway/nahual/nahual-shell-llimphi",
     "02_ruway/nahual/nahual-file-explorer-llimphi",
     "02_ruway/nahual/nahual-image-viewer-llimphi",
@@ -524,6 +536,8 @@ llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 llimphi-theme = { path = "02_ruway/llimphi/llimphi-theme" }
 # Tweens y helpers de animación sobre el bucle Elm.
 llimphi-motion = { path = "02_ruway/llimphi/llimphi-motion" }
+# Iconos vectoriales (BezPath en grid 24×24) compartidos por todas las apps.
+llimphi-icons = { path = "02_ruway/llimphi/llimphi-icons" }
 # Widgets reusables sobre llimphi-ui — uno por crate.
 llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }
 llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }
@@ -554,6 +568,19 @@ llimphi-widget-nodegraph = { path = "02_ruway/llimphi/widgets/nodegraph" }
 llimphi-widget-tree = { path = "02_ruway/llimphi/widgets/tree" }
 # Sello vectorial wawa (rombo + W implícita + Merkle Core).
 llimphi-widget-wawa-mark = { path = "02_ruway/llimphi/widgets/wawa-mark" }
+# Widgets de elegancia transversal (tooltip, spinner, progress, toast,
+# modal, empty, status-bar, shortcuts-help, splash).
+llimphi-widget-tooltip = { path = "02_ruway/llimphi/widgets/tooltip" }
+llimphi-widget-spinner = { path = "02_ruway/llimphi/widgets/spinner" }
+llimphi-widget-progress = { path = "02_ruway/llimphi/widgets/progress" }
+llimphi-widget-toast = { path = "02_ruway/llimphi/widgets/toast" }
+llimphi-widget-modal = { path = "02_ruway/llimphi/widgets/modal" }
+llimphi-widget-empty = { path = "02_ruway/llimphi/widgets/empty" }
+llimphi-widget-status-bar = { path = "02_ruway/llimphi/widgets/status-bar" }
+llimphi-widget-shortcuts-help = { path = "02_ruway/llimphi/widgets/shortcuts-help" }
+llimphi-widget-splash = { path = "02_ruway/llimphi/widgets/splash" }
+# Abstracción Selector — host (paths) + wawa (khipus).
+llimphi-module-selector = { path = "02_ruway/llimphi/modules/selector" }
 
 # === Filesystem helpers ===
 directories = "5"

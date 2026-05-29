@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-spinner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-spinner — spinner circular animado por reloj absoluto (no requiere ticks del modelo). Stroke gradient circular. Default 24×24 pero escalable."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-widget-toast"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-toast — notificaciones efímeras apiladas bottom-right. Severidades info/success/warning/error. Auto-dismiss configurable. Render-only; el ciclo de vida lo maneja la app."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-icons = { workspace = true }

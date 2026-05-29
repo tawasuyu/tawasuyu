@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-module-selector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-module-selector — trait Selector con dos backends: HostSelector (paths del FS via std::fs) y WawaSelector (khipus por hash, sello digital). Una sola API 'abrir/guardar' que funciona en cualquier entorno gioser."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

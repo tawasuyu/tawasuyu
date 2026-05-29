@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-tooltip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-tooltip — tooltip flotante posicionado por anchor + viewport. Render-only: la app decide cuándo abrir (típico: hover-after-delay manejado en update)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-icons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-icons — set mínimo de iconos vectoriales (BezPath en grid 24×24) renderizables vía paint_with. Stroke-based, escalables. Cubre las acciones canónicas de cualquier UI gioser."
+
+[dependencies]
+llimphi-ui = { workspace = true }

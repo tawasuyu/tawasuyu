@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-widget-splash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-splash — splash de arranque gioser: cuatro cuadrantes (unanchay/yachay/ruway/ukupacha) animados con tween de entrada secuencial. Identidad visual del SO."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-motion = { workspace = true }

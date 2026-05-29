@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-modal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-modal — diálogo genérico (título + body arbitrario + botones primary/cancel/destructive) con scrim y centrado. Para menús contextuales usar llimphi-widget-context-menu."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
