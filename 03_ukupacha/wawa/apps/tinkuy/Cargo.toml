@@ -1,0 +1,37 @@
+# =============================================================================
+#  renaser :: apps/tinkuy — capa 2 del roadmap tinkuy
+# -----------------------------------------------------------------------------
+#  cdylib que envuelve `tinkuy-abi` para WASM bare-metal de Wawa. NO añade
+#  lógica: re-exporta el símbolo plano `tk_sim_*` por `pub use` para que el
+#  loader `wasmi` del kernel exponga la ABI tal cual al userspace. La elección
+#  del backend (single-thread) se fija en compile-time vía la feature `wasm`
+#  reenviada a `tinkuy-abi` → `tinkuy-{core,forces}`.
+#
+#  Perfil release endurecido (opt-level=z + lto + codegen-units=1 + strip) para
+#  cuidar el footprint del bytecode. El script `scripts/build-tinkuy.sh`
+#  encadena `wasm-opt -Os` y consolida el binario en `wawa-kernel/assets/`.
+# =============================================================================
+
+[package]
+name = "tinkuy"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM tinkuy — motor de partículas DOD vía tinkuy-abi"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tinkuy-abi = { path = "../../../../01_yachay/tinkuy/tinkuy-abi", default-features = false, features = ["wasm"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"

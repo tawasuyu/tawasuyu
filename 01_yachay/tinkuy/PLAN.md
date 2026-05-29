@@ -40,9 +40,10 @@ Meta: `tinkuy-core` ejecutable dentro de Wawa userspace como app WASM.
   - `tk_buf_free(*ptr, len)`
   - Códigos: `TK_OK = 0`, `TK_ERR_NULL = -1`, `TK_ERR_INVALID = -2`, `TK_ERR_OOM = -3`.
   - Tests: 5/5 con `cpu` y 5/5 con `wasm`. `wasm32-unknown-unknown` compila.
-- **C3 — Crate `tinkuy-wasm`.** `crate-type = ["cdylib"]`, target `wasm32-unknown-unknown`. Re-exporta la ABI de `tinkuy-abi` con `pub use`. Objetivo: <200 KB post `wasm-opt -Os`. Sin `wasm-bindgen` para mantener ABI plana (lo consume Wawa, no JS).
-- **C4 — App wawa `03_ukupacha/wawa/apps/tinkuy/`.** Carga `tinkuy-wasm.wasm`, corre LJ 256 partículas, muestra step/T/CID en texto plano. Reusa el pipeline de `apps/pluma/` (host: `wasmi`).
-- **C5 — `scripts/build-tinkuy.sh`.** Análogo a `build-pluma.sh`: cargo build wasm32 → wasm-opt -Os → copia a `wawa-kernel/assets/`.
+- **C3 — App cdylib `03_ukupacha/wawa/apps/tinkuy`.** ✅ `pub use tinkuy_abi::*;` deja los 12 exports `tk_*` directos en el cdylib (verificado por `strings`). Pipeline release endurecido (opt-level=z + lto + codegen-units=1 + strip).
+  - Decisión: la app wawa actúa como `tinkuy-wasm` (re-exporter cdylib). No hace falta un crate intermedio.
+- **C4 — Integración kernel wawa.** Pendiente. El reactor `wasmi` debe cargar `assets/tinkuy.wasm`, exponer `tk_*` al host, y una app de UI (texto plano) llamar `tk_sim_new → spawn × N → step_lj × M → snapshot_cid` mostrando step/T/CID. Requiere tocar el loader del kernel; lo dejamos como sub-fase aislada porque cruza la frontera Ring 0 ↔ Ring 3.
+- **C5 — `scripts/build-tinkuy.sh`.** ✅ cargo build wasm32-unknown-unknown → `wasm-opt -Os --strip-debug --strip-producers --enable-{bulk-memory,sign-ext,nontrapping-float-to-int,mutable-globals}` → consolida `wawa-kernel/assets/tinkuy.wasm`. Tamaño actual: **30 KB** (techo plan: 200 KB).
 
 ## Capa 3 — DSL matemático
 
