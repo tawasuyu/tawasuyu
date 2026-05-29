@@ -245,7 +245,7 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 ### Fases (orden por dependencia)
 
 1. ✅ **`llimphi-surface`** — primitivo de textura GPU persistente; lo usa `media-app` para blitear video sin copia CPU.
-2. ✅ **`media-core` + `media-source-av1` (rav1d)** — decode AV1 nativo puro-Rust (IVF + OBU + rav1d → `FrameSource` RGBA). Audio Opus nativo pendiente (sin decoder puro-Rust maduro; symphonia no trae Opus) → por ahora vía foreign-av.
+2. ✅ **`media-core` + `media-source-av1` (rav1d) + `media-source-opus` (opus-wave)** — decode AV1 nativo (IVF + OBU + rav1d → `FrameSource` RGBA) y **Opus nativo** (Ogg + opus-wave → `AudioSource`). Ambos puro-Rust, par video/audio del formato nativo de gioser. (Falta demux nativo de AV1+Opus en un MKV/WebM único; hoy AV1 va en IVF y Opus en Ogg por separado, o el archivo combinado entra por foreign-av.)
 3. ✅ **`nahual-video-viewer-llimphi`** — reproductor reusable (header + transporte + frame `View::image`); decode AV1 nativo. Acepta cualquier `FrameSource` (foreign-av, TestCard). El camino cero-copia `llimphi-surface` lo ejerce `media-app`.
 4. ✅ **`shared/foreign-av`** — puente ffmpeg (movido desde `media-source-ffmpeg`, regla #4) + `transcode_a_av1` (ingesta a AV1/Opus).
 5. **`tullpu`** — editor de capas (ver su SDD; fases propias) — avanzado (PSD, export).

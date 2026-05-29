@@ -76,6 +76,7 @@ use foreign_av::{FfmpegAudioSource, FfmpegVideoSource, MediaSession};
 use media_source_gif::GifSource;
 use media_source_image::ImageSource;
 use media_source_mp3::Mp3Source;
+use media_source_opus::OpusSource;
 use media_source_wav::WavSource;
 use parking_lot::Mutex;
 
@@ -276,6 +277,9 @@ impl<T: AudioSource> AudioSource for SharedAudio<T> {
 enum LoadedTrack {
     Wav(WavSource),
     Mp3(Mp3Source),
+    /// Audio Opus NATIVO (puro-Rust, opus-wave) desde Ogg. Par del video
+    /// AV1 nativo — sin pasar por ffmpeg.
+    Opus(OpusSource),
     /// Audio extraído por ffmpeg desde un archivo de video. Comparte
     /// `MediaSession` con el FfmpegVideoSource del pipeline — un solo
     /// subprocess sirve ambos streams.
@@ -296,8 +300,11 @@ impl LoadedTrack {
             Some("mp3") => Mp3Source::from_path(path)
                 .map(LoadedTrack::Mp3)
                 .map_err(|e| format!("MP3 {}: {e}", path.display())),
+            Some("opus" | "ogg") => OpusSource::from_path(path)
+                .map(LoadedTrack::Opus)
+                .map_err(|e| format!("Opus {}: {e}", path.display())),
             other => Err(format!(
-                "extensión {:?} no soportada en playlist (.wav | .mp3)",
+                "extensión {:?} no soportada en playlist (.wav | .mp3 | .opus)",
                 other
             )),
         }
@@ -307,6 +314,7 @@ impl LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.set_speed(speed),
             LoadedTrack::Mp3(m) => m.set_speed(speed),
+            LoadedTrack::Opus(o) => o.set_speed(speed),
             // FfmpegAudio: el binario ffmpeg no expone varispeed en
             // tiempo real sin re-encoding; respawnear con -af atempo
             // metería un salto cada vez. Por ahora no-op.
@@ -318,6 +326,7 @@ impl LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.set_loop(looped),
             LoadedTrack::Mp3(m) => m.set_loop(looped),
+            LoadedTrack::Opus(o) => o.set_loop(looped),
             // FfmpegAudio no loopea naturalmente (al EOF emite
             // silencio); el Playlist decide qué hacer con la pista.
             LoadedTrack::FfmpegAudio(_) => {}
@@ -331,6 +340,7 @@ impl LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.is_finished(),
             LoadedTrack::Mp3(m) => m.is_finished(),
+            LoadedTrack::Opus(o) => o.is_finished(),
             LoadedTrack::FfmpegAudio(a) => {
                 let dur = a.duration().unwrap_or(Duration::ZERO);
                 !dur.is_zero()
@@ -345,6 +355,7 @@ impl AudioSource for LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.fill(buf, sample_rate, channels),
             LoadedTrack::Mp3(m) => m.fill(buf, sample_rate, channels),
+            LoadedTrack::Opus(o) => o.fill(buf, sample_rate, channels),
             LoadedTrack::FfmpegAudio(a) => a.fill(buf, sample_rate, channels),
         }
     }
@@ -355,6 +366,7 @@ impl Seekable for LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.position(),
             LoadedTrack::Mp3(m) => m.position(),
+            LoadedTrack::Opus(o) => o.position(),
             LoadedTrack::FfmpegAudio(a) => a.position(),
         }
     }
@@ -362,6 +374,7 @@ impl Seekable for LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.duration(),
             LoadedTrack::Mp3(m) => m.duration(),
+            LoadedTrack::Opus(o) => o.duration(),
             LoadedTrack::FfmpegAudio(a) => a.duration(),
         }
     }
@@ -369,6 +382,7 @@ impl Seekable for LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.seek_to(pos),
             LoadedTrack::Mp3(m) => m.seek_to(pos),
+            LoadedTrack::Opus(o) => o.seek_to(pos),
             LoadedTrack::FfmpegAudio(a) => a.seek_to(pos),
         }
     }

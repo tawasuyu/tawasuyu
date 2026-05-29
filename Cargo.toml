@@ -278,6 +278,7 @@ members = [
     "02_ruway/media/media-recorder-wav",
     "02_ruway/media/media-source-av1",
     "02_ruway/media/media-source-gif",
+    "02_ruway/media/media-source-opus",
     "02_ruway/media/media-source-image",
     "02_ruway/media/media-source-mp3",
     "02_ruway/media/media-source-wav",
@@ -772,3 +773,10 @@ hound = "3.5"
 # MP3 desde disco. Sin features extra: nada de aac/flac/opus/vorbis
 # para no inflar el target.
 symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
+
+# === media-source-opus (decoder Opus NATIVO puro-Rust) ===
+# Opus es el formato de audio nativo de gioser (par del video AV1). ogg
+# demuxea las páginas Ogg; opus-wave es un port puro-Rust de libopus
+# (SILK+CELT, sin C ni FFI) — par del rav1d del lado video.
+ogg = "0.9"
+opus-wave = "3"

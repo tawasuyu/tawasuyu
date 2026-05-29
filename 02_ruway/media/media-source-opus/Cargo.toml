@@ -1,0 +1,15 @@
+[package]
+name = "media-source-opus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/media-source-opus — decode Opus NATIVO puro-Rust (opus-wave) desde Ogg → AudioSource. Opus es el formato de audio nativo de gioser, par del video AV1."
+
+[dependencies]
+media-core = { path = "../media-core" }
+# ogg: demuxer Ogg puro-Rust (las páginas que envuelven los paquetes Opus).
+ogg = { workspace = true }
+# opus-wave: port puro-Rust de libopus (decoder + SILK/CELT). Sin C, sin FFI.
+opus-wave = { workspace = true }
