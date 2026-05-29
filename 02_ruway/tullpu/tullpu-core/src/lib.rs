@@ -43,9 +43,13 @@ pub fn hash_bytes(bytes: &[u8]) -> Hash {
 
 /// Cómo se compone una capa sobre la composición de las capas inferiores.
 /// El catálogo arranca con los modos canónicos de Porter-Duff + los aritméticos
-/// más usados. Ampliable a medida que el compositor (`tullpu-render`) los
-/// soporte; cada variante nueva debe quedar cubierta por un test de regresión
-/// allá.
+/// más usados y crece para cubrir el set por-canal de Photoshop. Ampliable a
+/// medida que el compositor (`tullpu-render`) los soporte; cada variante nueva
+/// debe quedar cubierta por un test de regresión allá.
+///
+/// El orden de las variantes es **estable**: postcard serializa enums por
+/// índice de variante, así que nuevas variantes se agregan **al final** —
+/// nunca insertar en medio ni reordenar (rompe lienzos persistidos).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModoFusion {
     /// `src.over(dst)` clásico — la capa pinta encima respetando su alfa.
@@ -64,6 +68,38 @@ pub enum ModoFusion {
     Diferencia,
     /// `out = src + dst` saturado.
     Aditivo,
+    // ---- Familia "burn" (oscurecen aún más que multiplicar) -----------------
+    /// Color Burn de Photoshop: `out = 1 - (1-dst)/src`, con `src=0 ⇒ 0`.
+    SubExpQuemado,
+    /// Linear Burn: `out = src + dst - 1` (clamped a 0).
+    SubLinealQuemado,
+    // ---- Familia "dodge" (aclaran aún más que pantalla) ---------------------
+    /// Color Dodge: `out = dst / (1-src)`, con `src=1 ⇒ 1`.
+    SobreExpAclarado,
+    // ---- Familia "light" (Superponer ↔ HardLight con src/dst intercambiados,
+    //      más las variantes que combinan burn + dodge) ----------------------
+    /// Hard Light: igual que [`Superponer`] pero con `src`/`dst` intercambiados.
+    LuzFuerte,
+    /// Soft Light (fórmula Photoshop):
+    /// `g(d) = (d ≤ 0.25) ? ((16*d - 12)*d + 4)*d : sqrt(d)`,
+    /// `out = (s ≤ 0.5) ? d - (1-2s)*d*(1-d) : d + (2s-1)*(g(d) - d)`.
+    LuzSuave,
+    /// Vivid Light: Color Burn si `src < 0.5`, Color Dodge si no
+    /// (con `src` reescalado a `[0,1]` en cada rama).
+    LuzViva,
+    /// Linear Light: `out = dst + 2*src - 1`.
+    LuzLineal,
+    /// Pin Light: `out = (src < 0.5) ? min(dst, 2*src) : max(dst, 2*src - 1)`.
+    LuzPunto,
+    /// Hard Mix: `out = (src + dst ≥ 1) ? 1 : 0` por canal. Posteriza fuerte.
+    MezclaDura,
+    // ---- Familia "comparativos" + aritméticos faltantes ---------------------
+    /// Exclusion: `out = src + dst - 2*src*dst`. Como Diferencia pero más suave.
+    Exclusion,
+    /// Subtract: `out = dst - src` (clamped a 0).
+    Resta,
+    /// Divide: `out = dst / src` (clamped a 1; `src=0 ⇒ 1`).
+    Division,
 }
 
 impl Default for ModoFusion {

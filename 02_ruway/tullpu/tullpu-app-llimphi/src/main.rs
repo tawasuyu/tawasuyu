@@ -199,7 +199,19 @@ fn siguiente_blend(b: ModoFusion) -> ModoFusion {
         ModoFusion::Aclarar => ModoFusion::Oscurecer,
         ModoFusion::Oscurecer => ModoFusion::Diferencia,
         ModoFusion::Diferencia => ModoFusion::Aditivo,
-        ModoFusion::Aditivo => ModoFusion::Normal,
+        ModoFusion::Aditivo => ModoFusion::SubExpQuemado,
+        ModoFusion::SubExpQuemado => ModoFusion::SubLinealQuemado,
+        ModoFusion::SubLinealQuemado => ModoFusion::SobreExpAclarado,
+        ModoFusion::SobreExpAclarado => ModoFusion::LuzFuerte,
+        ModoFusion::LuzFuerte => ModoFusion::LuzSuave,
+        ModoFusion::LuzSuave => ModoFusion::LuzViva,
+        ModoFusion::LuzViva => ModoFusion::LuzLineal,
+        ModoFusion::LuzLineal => ModoFusion::LuzPunto,
+        ModoFusion::LuzPunto => ModoFusion::MezclaDura,
+        ModoFusion::MezclaDura => ModoFusion::Exclusion,
+        ModoFusion::Exclusion => ModoFusion::Resta,
+        ModoFusion::Resta => ModoFusion::Division,
+        ModoFusion::Division => ModoFusion::Normal,
     }
 }
 
@@ -213,6 +225,18 @@ fn etiqueta_blend(b: ModoFusion) -> &'static str {
         ModoFusion::Oscurecer => "oscurecer",
         ModoFusion::Diferencia => "diferencia",
         ModoFusion::Aditivo => "aditivo",
+        ModoFusion::SubExpQuemado => "subexp-quemado",
+        ModoFusion::SubLinealQuemado => "sublineal-quemado",
+        ModoFusion::SobreExpAclarado => "sobreexp-aclarado",
+        ModoFusion::LuzFuerte => "luz-fuerte",
+        ModoFusion::LuzSuave => "luz-suave",
+        ModoFusion::LuzViva => "luz-viva",
+        ModoFusion::LuzLineal => "luz-lineal",
+        ModoFusion::LuzPunto => "luz-punto",
+        ModoFusion::MezclaDura => "mezcla-dura",
+        ModoFusion::Exclusion => "exclusión",
+        ModoFusion::Resta => "resta",
+        ModoFusion::Division => "división",
     }
 }
 

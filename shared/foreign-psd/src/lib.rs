@@ -214,8 +214,22 @@ fn mapear_blend(disc: u32) -> (ModoFusion, bool) {
         DARKEN => (ModoFusion::Oscurecer, false),
         DIFFERENCE => (ModoFusion::Diferencia, false),
         LINEAR_DODGE => (ModoFusion::Aditivo, false),
-        // Caen a Normal y se anotan en el informe — la composición no será
-        // pixel-exacta vs. Photoshop hasta que tullpu-render soporte estos.
+        COLOR_BURN => (ModoFusion::SubExpQuemado, false),
+        LINEAR_BURN => (ModoFusion::SubLinealQuemado, false),
+        COLOR_DODGE => (ModoFusion::SobreExpAclarado, false),
+        HARD_LIGHT => (ModoFusion::LuzFuerte, false),
+        SOFT_LIGHT => (ModoFusion::LuzSuave, false),
+        VIVID_LIGHT => (ModoFusion::LuzViva, false),
+        LINEAR_LIGHT => (ModoFusion::LuzLineal, false),
+        PIN_LIGHT => (ModoFusion::LuzPunto, false),
+        HARD_MIX => (ModoFusion::MezclaDura, false),
+        EXCLUSION => (ModoFusion::Exclusion, false),
+        SUBTRACT => (ModoFusion::Resta, false),
+        DIVIDE => (ModoFusion::Division, false),
+        // Quedan en degradado: HSL completos (Hue, Saturation, Color,
+        // Luminosity) y los descartados raros (Dissolve, DarkerColor,
+        // LighterColor). La composición no será pixel-exacta vs Photoshop
+        // hasta que tullpu-render pase a un blend HSL real (post-MVP).
         _ => (ModoFusion::Normal, true),
     }
 }
@@ -364,11 +378,36 @@ mod tests {
         assert_eq!(mapear_blend(SCREEN), (ModoFusion::Pantalla, false));
         assert_eq!(mapear_blend(LINEAR_DODGE), (ModoFusion::Aditivo, false));
 
-        // Soft Light no está en tullpu — debe caer a Normal con degradado=true.
-        let (modo, degradado) = mapear_blend(SOFT_LIGHT);
-        assert_eq!(modo, ModoFusion::Normal);
-        assert!(degradado);
+        // Familia "burn/dodge/light" — ahora directos, sin degradado.
+        assert_eq!(mapear_blend(COLOR_BURN), (ModoFusion::SubExpQuemado, false));
+        assert_eq!(
+            mapear_blend(LINEAR_BURN),
+            (ModoFusion::SubLinealQuemado, false)
+        );
+        assert_eq!(
+            mapear_blend(COLOR_DODGE),
+            (ModoFusion::SobreExpAclarado, false)
+        );
+        assert_eq!(mapear_blend(SOFT_LIGHT), (ModoFusion::LuzSuave, false));
+        assert_eq!(mapear_blend(HARD_LIGHT), (ModoFusion::LuzFuerte, false));
+        assert_eq!(mapear_blend(VIVID_LIGHT), (ModoFusion::LuzViva, false));
+        assert_eq!(mapear_blend(LINEAR_LIGHT), (ModoFusion::LuzLineal, false));
+        assert_eq!(mapear_blend(PIN_LIGHT), (ModoFusion::LuzPunto, false));
+        assert_eq!(mapear_blend(HARD_MIX), (ModoFusion::MezclaDura, false));
+        assert_eq!(mapear_blend(EXCLUSION), (ModoFusion::Exclusion, false));
+        assert_eq!(mapear_blend(SUBTRACT), (ModoFusion::Resta, false));
+        assert_eq!(mapear_blend(DIVIDE), (ModoFusion::Division, false));
+
+        // El residuo "degradado" queda en los HSL y los raros: Hue,
+        // Saturation, Color, Luminosity (necesitan un blend HSL real),
+        // más Dissolve / DarkerColor / LighterColor.
+        for raro in [HUE, SATURATION, COLOR, LUMINOSITY, DISSOLVE, DARKER_COLOR, LIGHTER_COLOR] {
+            let (modo, degradado) = mapear_blend(raro);
+            assert_eq!(modo, ModoFusion::Normal);
+            assert!(degradado, "esperaba degradado para disc {raro}");
+        }
         assert_eq!(nombre_blend(SOFT_LIGHT), "SoftLight");
+        assert_eq!(nombre_blend(LUMINOSITY), "Luminosity");
     }
 
     #[test]
