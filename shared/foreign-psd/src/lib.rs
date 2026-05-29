@@ -226,10 +226,13 @@ fn mapear_blend(disc: u32) -> (ModoFusion, bool) {
         EXCLUSION => (ModoFusion::Exclusion, false),
         SUBTRACT => (ModoFusion::Resta, false),
         DIVIDE => (ModoFusion::Division, false),
-        // Quedan en degradado: HSL completos (Hue, Saturation, Color,
-        // Luminosity) y los descartados raros (Dissolve, DarkerColor,
-        // LighterColor). La composición no será pixel-exacta vs Photoshop
-        // hasta que tullpu-render pase a un blend HSL real (post-MVP).
+        HUE => (ModoFusion::HslTono, false),
+        SATURATION => (ModoFusion::HslSaturacion, false),
+        COLOR => (ModoFusion::HslColor, false),
+        LUMINOSITY => (ModoFusion::HslLuminosidad, false),
+        // Quedan en degradado los blends "exotic" sin equivalente per-pixel
+        // sensato: Dissolve (necesita PRNG por píxel), DarkerColor y
+        // LighterColor (basados en luminosidad pero no per-channel).
         _ => (ModoFusion::Normal, true),
     }
 }
@@ -398,10 +401,16 @@ mod tests {
         assert_eq!(mapear_blend(SUBTRACT), (ModoFusion::Resta, false));
         assert_eq!(mapear_blend(DIVIDE), (ModoFusion::Division, false));
 
-        // El residuo "degradado" queda en los HSL y los raros: Hue,
-        // Saturation, Color, Luminosity (necesitan un blend HSL real),
-        // más Dissolve / DarkerColor / LighterColor.
-        for raro in [HUE, SATURATION, COLOR, LUMINOSITY, DISSOLVE, DARKER_COLOR, LIGHTER_COLOR] {
+        // Familia HSL — ya directos vía W3C Compositing.
+        assert_eq!(mapear_blend(HUE), (ModoFusion::HslTono, false));
+        assert_eq!(mapear_blend(SATURATION), (ModoFusion::HslSaturacion, false));
+        assert_eq!(mapear_blend(COLOR), (ModoFusion::HslColor, false));
+        assert_eq!(mapear_blend(LUMINOSITY), (ModoFusion::HslLuminosidad, false));
+
+        // El residuo "degradado" queda sólo en los exotic per-pixel sin
+        // equivalente sensato: Dissolve (PRNG por píxel) y
+        // DarkerColor/LighterColor (comparativos basados en luminosidad).
+        for raro in [DISSOLVE, DARKER_COLOR, LIGHTER_COLOR] {
             let (modo, degradado) = mapear_blend(raro);
             assert_eq!(modo, ModoFusion::Normal);
             assert!(degradado, "esperaba degradado para disc {raro}");

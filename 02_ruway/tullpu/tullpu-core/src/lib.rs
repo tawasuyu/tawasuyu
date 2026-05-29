@@ -100,6 +100,19 @@ pub enum ModoFusion {
     Resta,
     /// Divide: `out = dst / src` (clamped a 1; `src=0 ⇒ 1`).
     Division,
+    // ---- Familia HSL (operan sobre el triple, no por canal) ----------------
+    // Sigue el W3C Compositing & Blending spec: luminosidad ponderada
+    // `Lum = 0.3R + 0.59G + 0.11B`, saturación `max - min`, y SetLum/SetSat
+    // con ClipColor. Cuatro variantes simétricas que extraen una componente
+    // de src y dos del dst.
+    /// Hue: matiz de src, saturación y luminosidad de dst.
+    HslTono,
+    /// Saturation: saturación de src, matiz y luminosidad de dst.
+    HslSaturacion,
+    /// Color: matiz y saturación de src, luminosidad de dst.
+    HslColor,
+    /// Luminosity: luminosidad de src, matiz y saturación de dst.
+    HslLuminosidad,
 }
 
 impl Default for ModoFusion {

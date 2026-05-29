@@ -201,6 +201,15 @@ fn clamp_u8(v: f32) -> u8 {
 
 #[inline]
 fn mezclar_canal(modo: ModoFusion, s: (f32, f32, f32), d: (f32, f32, f32)) -> (f32, f32, f32) {
+    // Los blends HSL operan sobre el triple — no factorizan por canal.
+    // Se cortocircuitan antes del despacho per-channel.
+    match modo {
+        ModoFusion::HslTono => return blend_hsl_tono(s, d),
+        ModoFusion::HslSaturacion => return blend_hsl_saturacion(s, d),
+        ModoFusion::HslColor => return blend_hsl_color(s, d),
+        ModoFusion::HslLuminosidad => return blend_hsl_luminosidad(s, d),
+        _ => {}
+    }
     let f = |s: f32, d: f32| -> f32 {
         match modo {
             ModoFusion::Normal => s,
@@ -295,9 +304,114 @@ fn mezclar_canal(modo: ModoFusion, s: (f32, f32, f32), d: (f32, f32, f32)) -> (f
                     (d / s).clamp(0.0, 1.0)
                 }
             }
+            // Inalcanzables: los HSL se manejan arriba del match. Quedan acá
+            // sólo para que el match siga exhaustivo y el compilador nos avise
+            // si en el futuro alguien agrega una variante nueva sin cablearla.
+            ModoFusion::HslTono
+            | ModoFusion::HslSaturacion
+            | ModoFusion::HslColor
+            | ModoFusion::HslLuminosidad => unreachable!("HSL atendido arriba"),
         }
     };
     (f(s.0, d.0), f(s.1, d.1), f(s.2, d.2))
+}
+
+// =============================================================================
+//  Blends HSL — W3C Compositing & Blending Level 1 §10.3
+// -----------------------------------------------------------------------------
+//  Los cuatro blends no separables (Hue, Saturation, Color, Luminosity) operan
+//  sobre el triple RGB completo via las primitivas Lum/SetLum/Sat/SetSat.
+//  Los pesos de luminosidad (0.3, 0.59, 0.11) son los del spec — no
+//  Rec.601/709, sino los originales de Photoshop / sRGB.
+// =============================================================================
+
+#[inline]
+fn lum(c: (f32, f32, f32)) -> f32 {
+    0.3 * c.0 + 0.59 * c.1 + 0.11 * c.2
+}
+
+#[inline]
+fn sat(c: (f32, f32, f32)) -> f32 {
+    let max = c.0.max(c.1).max(c.2);
+    let min = c.0.min(c.1).min(c.2);
+    max - min
+}
+
+/// Reescala `c` hacia luminosidad `l` y clampa al cubo `[0,1]³` preservando
+/// el matiz/saturación tanto como sea posible (`ClipColor` del spec).
+#[inline]
+fn set_lum(c: (f32, f32, f32), l: f32) -> (f32, f32, f32) {
+    let d = l - lum(c);
+    let cc = (c.0 + d, c.1 + d, c.2 + d);
+    clip_color(cc)
+}
+
+#[inline]
+fn clip_color(mut c: (f32, f32, f32)) -> (f32, f32, f32) {
+    let l = lum(c);
+    let n = c.0.min(c.1).min(c.2);
+    let x = c.0.max(c.1).max(c.2);
+    if n < 0.0 {
+        let k = l / (l - n);
+        c = (
+            l + (c.0 - l) * k,
+            l + (c.1 - l) * k,
+            l + (c.2 - l) * k,
+        );
+    }
+    if x > 1.0 {
+        let k = (1.0 - l) / (x - l);
+        c = (
+            l + (c.0 - l) * k,
+            l + (c.1 - l) * k,
+            l + (c.2 - l) * k,
+        );
+    }
+    c
+}
+
+/// Reescala `c` para que su saturación (max-min) sea `s`, preservando el
+/// orden relativo de los canales. Implementa `SetSat` del spec.
+fn set_sat(c: (f32, f32, f32), s: f32) -> (f32, f32, f32) {
+    let mut arr = [(c.0, 0usize), (c.1, 1), (c.2, 2)];
+    arr.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let (cmin_v, cmin_i) = arr[0];
+    let (cmid_v, cmid_i) = arr[1];
+    let (cmax_v, cmax_i) = arr[2];
+    let (new_cmid, new_cmax) = if cmax_v > cmin_v {
+        (((cmid_v - cmin_v) * s) / (cmax_v - cmin_v), s)
+    } else {
+        (0.0, 0.0)
+    };
+    let mut out = [0.0f32; 3];
+    out[cmin_i] = 0.0;
+    out[cmid_i] = new_cmid;
+    out[cmax_i] = new_cmax;
+    (out[0], out[1], out[2])
+}
+
+#[inline]
+fn blend_hsl_tono(s: (f32, f32, f32), d: (f32, f32, f32)) -> (f32, f32, f32) {
+    // SetLum(SetSat(src, Sat(dst)), Lum(dst))
+    set_lum(set_sat(s, sat(d)), lum(d))
+}
+
+#[inline]
+fn blend_hsl_saturacion(s: (f32, f32, f32), d: (f32, f32, f32)) -> (f32, f32, f32) {
+    // SetLum(SetSat(dst, Sat(src)), Lum(dst))
+    set_lum(set_sat(d, sat(s)), lum(d))
+}
+
+#[inline]
+fn blend_hsl_color(s: (f32, f32, f32), d: (f32, f32, f32)) -> (f32, f32, f32) {
+    // SetLum(src, Lum(dst))
+    set_lum(s, lum(d))
+}
+
+#[inline]
+fn blend_hsl_luminosidad(s: (f32, f32, f32), d: (f32, f32, f32)) -> (f32, f32, f32) {
+    // SetLum(dst, Lum(src))
+    set_lum(d, lum(s))
 }
 
 // =============================================================================
@@ -689,6 +803,63 @@ mod tests {
         assert_eq!(
             blend_1x1(ModoFusion::LuzViva, [50, 50, 50], [255, 255, 255]),
             [255, 255, 255]
+        );
+    }
+
+    #[test]
+    fn hsl_color_sobre_grayscale_coloriza() {
+        // Source rojo puro sobre fondo gris medio: el matiz/saturación de src
+        // gana, la luminosidad de dst se preserva. Cálculo W3C:
+        // Lum(0.5)=0.5; SetLum((1,0,0)→Lum 0.3, target 0.5):
+        // d=0.2 ⇒ (1.2,0.2,0.2), ClipColor (x=1.2 > 1):
+        // k=0.5/0.7 ⇒ (1.0, 0.286, 0.286) ⇒ [255, 73, 73].
+        let r = blend_1x1(ModoFusion::HslColor, [128, 128, 128], [255, 0, 0]);
+        // Matiz preservado: R domina, G≈B (rojo puro tiene G=B=0 en src).
+        assert!(r[0] > r[1], "esperaba R > G: {:?}", r);
+        assert!(r[0] > r[2], "esperaba R > B: {:?}", r);
+        assert!((r[1] as i32 - r[2] as i32).abs() <= 1, "G≈B: {:?}", r);
+        // G/B no son cero — la luminosidad de dst lifted el suelo.
+        assert!(r[1] > 50, "fondo gris elevó suelo: {:?}", r);
+        // Y la luminosidad ponderada del resultado coincide con dst (≈128).
+        let lum = 0.3 * (r[0] as f32) + 0.59 * (r[1] as f32) + 0.11 * (r[2] as f32);
+        assert!((lum - 128.0).abs() < 3.0, "lum~128, obtuve {lum}: {:?}", r);
+    }
+
+    #[test]
+    fn hsl_luminosidad_pasa_brillo_de_src() {
+        // Source blanco sobre fondo rojo: aplica Lum(blanco)=1 al dst rojo
+        // ⇒ blanco (clip al cubo 1³).
+        let r = blend_1x1(ModoFusion::HslLuminosidad, [255, 0, 0], [255, 255, 255]);
+        assert_eq!(r, [255, 255, 255]);
+        // Source negro sobre fondo rojo: Lum(negro)=0 ⇒ negro.
+        let r = blend_1x1(ModoFusion::HslLuminosidad, [255, 0, 0], [0, 0, 0]);
+        assert_eq!(r, [0, 0, 0]);
+    }
+
+    #[test]
+    fn hsl_saturacion_grayscale_anula_dst() {
+        // Source grayscale (Sat=0) sobre fondo colorido ⇒ dst se desatura:
+        // SetSat(dst, 0) = (0,0,0), SetLum(esto, Lum(dst)) ⇒ gris con la
+        // luminosidad de dst.
+        let r = blend_1x1(ModoFusion::HslSaturacion, [200, 100, 50], [128, 128, 128]);
+        // Los 3 canales deben quedar aproximadamente iguales (gris).
+        let dif_max = ((r[0] as i32 - r[1] as i32).abs())
+            .max((r[1] as i32 - r[2] as i32).abs())
+            .max((r[0] as i32 - r[2] as i32).abs());
+        assert!(dif_max <= 2, "esperaba gris uniforme, encontré {:?}", r);
+    }
+
+    #[test]
+    fn hsl_tono_preserva_lum_de_dst() {
+        // Tomamos un dst con Lum específica (verde puro: Lum = 0.59).
+        // Source rojo puro: hue cambia, Lum(dst)≈0.59 se mantiene.
+        let r = blend_1x1(ModoFusion::HslTono, [0, 255, 0], [255, 0, 0]);
+        let lum = 0.3 * (r[0] as f32) + 0.59 * (r[1] as f32) + 0.11 * (r[2] as f32);
+        let lum_dst = 0.59 * 255.0;
+        // Tolerancia generosa por redondeo a u8 + clip.
+        assert!(
+            (lum - lum_dst).abs() < 3.0,
+            "esperaba lum~{lum_dst}, obtuve {lum}: {r:?}"
         );
     }
 

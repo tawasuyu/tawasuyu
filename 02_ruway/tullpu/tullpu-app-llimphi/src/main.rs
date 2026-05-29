@@ -211,7 +211,11 @@ fn siguiente_blend(b: ModoFusion) -> ModoFusion {
         ModoFusion::MezclaDura => ModoFusion::Exclusion,
         ModoFusion::Exclusion => ModoFusion::Resta,
         ModoFusion::Resta => ModoFusion::Division,
-        ModoFusion::Division => ModoFusion::Normal,
+        ModoFusion::Division => ModoFusion::HslTono,
+        ModoFusion::HslTono => ModoFusion::HslSaturacion,
+        ModoFusion::HslSaturacion => ModoFusion::HslColor,
+        ModoFusion::HslColor => ModoFusion::HslLuminosidad,
+        ModoFusion::HslLuminosidad => ModoFusion::Normal,
     }
 }
 
@@ -237,6 +241,10 @@ fn etiqueta_blend(b: ModoFusion) -> &'static str {
         ModoFusion::Exclusion => "exclusión",
         ModoFusion::Resta => "resta",
         ModoFusion::Division => "división",
+        ModoFusion::HslTono => "hsl-tono",
+        ModoFusion::HslSaturacion => "hsl-saturación",
+        ModoFusion::HslColor => "hsl-color",
+        ModoFusion::HslLuminosidad => "hsl-luminosidad",
     }
 }
 
