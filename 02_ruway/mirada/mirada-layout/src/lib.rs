@@ -22,8 +22,10 @@ extern crate alloc;
 
 pub mod geometry;
 pub mod layout;
+pub mod outputs;
 pub mod workspace;
 
 pub use geometry::Rect;
 pub use layout::{tile, LayoutMode, LayoutParams};
+pub use outputs::{disponer, envolvente, Disposicion};
 pub use workspace::{Workspace, WindowId};
