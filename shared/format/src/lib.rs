@@ -672,13 +672,29 @@ impl Objeto {
 /// Version del format de un `Arbol`.
 pub const VERSION_ARBOL: u32 = 1;
 
-/// Qué clase de objeto referencia una entrada de árbol.
+/// Qué clase de objeto referencia una entrada de árbol. Espeja los modos de
+/// git (archivo / archivo+x / symlink / directorio). Variantes AÑADIDAS AL
+/// FINAL: los tags `postcard` se asignan por orden y mover una romperia árboles
+/// ya serializados.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ModoEntrada {
-    /// El hash apunta a un BLOB (contenido de archivo).
+    /// El hash apunta a un archivo regular (blob plano o índice de trozos).
     Archivo,
     /// El hash apunta a otro ÁRBOL (subdirectorio).
     Directorio,
+    /// Como `Archivo` pero con bit de ejecución (un script, un binario).
+    Ejecutable,
+    /// El hash apunta a un blob cuyo contenido es el DESTINO del enlace
+    /// simbólico (la ruta a la que apunta), en UTF-8.
+    Symlink,
+}
+
+impl ModoEntrada {
+    /// `true` si el modo referencia CONTENIDO de archivo (blob/índice): un
+    /// archivo regular o un ejecutable. `Symlink` y `Directorio` no.
+    pub fn es_archivo(&self) -> bool {
+        matches!(self, ModoEntrada::Archivo | ModoEntrada::Ejecutable)
+    }
 }
 
 /// Una entrada de un árbol: un nombre dentro del directorio + el modo + el hash
@@ -728,6 +744,22 @@ pub fn objeto_blob(datos: Vec<u8>) -> Objeto {
     Objeto {
         datos,
         hijos: Vec::new(),
+    }
+}
+
+/// Construye el objeto ÍNDICE de un archivo GRANDE partido en trozos: `datos`
+/// VACÍO, `hijos` = los hashes de los blobs-trozo EN ORDEN. La convención de
+/// lectura: una entrada de archivo (`Archivo`/`Ejecutable`) cuyo objeto tiene
+/// `hijos` no vacío es un índice, y el contenido del archivo es la
+/// concatenación de los `datos` de sus trozos; si `hijos` está vacío, el
+/// objeto ES el contenido (blob plano). Así un archivo de cualquier tamaño se
+/// referencia igual desde el árbol — el lector decide plano vs índice por la
+/// forma del objeto, sin un modo aparte. Un archivo vacío es un blob plano
+/// (`datos` vacío, `hijos` vacío), nunca un índice.
+pub fn objeto_blob_indice(hijos: Vec<Hash>) -> Objeto {
+    Objeto {
+        datos: Vec::new(),
+        hijos,
     }
 }
 
@@ -1170,6 +1202,37 @@ mod pruebas {
         assert!(Arbol::deserializar(&arbol.serializar().unwrap()).is_ok());
         arbol.version = 99;
         assert!(Arbol::deserializar(&arbol.serializar().unwrap()).is_err());
+    }
+
+    #[test]
+    fn indice_de_blob_grande_tiene_datos_vacio_e_hijos() {
+        let idx = objeto_blob_indice(vec![[1; 32], [2; 32], [3; 32]]);
+        assert!(idx.datos.is_empty(), "el índice no porta datos, solo hijos");
+        assert_eq!(idx.hijos, vec![[1u8; 32], [2u8; 32], [3u8; 32]]);
+        // Distinguible de un archivo vacío (blob plano): hijos no vacío.
+        let vacio = objeto_blob(vec![]);
+        assert!(vacio.hijos.is_empty());
+    }
+
+    #[test]
+    fn modo_es_archivo_distingue_contenido_de_estructura() {
+        assert!(ModoEntrada::Archivo.es_archivo());
+        assert!(ModoEntrada::Ejecutable.es_archivo());
+        assert!(!ModoEntrada::Symlink.es_archivo());
+        assert!(!ModoEntrada::Directorio.es_archivo());
+    }
+
+    #[test]
+    fn modos_nuevos_sobreviven_round_trip_en_arbol() {
+        let entradas = vec![
+            EntradaArbol { nombre: "run.sh".into(), modo: ModoEntrada::Ejecutable, hash: [1; 32] },
+            EntradaArbol { nombre: "link".into(), modo: ModoEntrada::Symlink, hash: [2; 32] },
+        ];
+        let obj = objeto_arbol(entradas).unwrap();
+        let arbol = Arbol::deserializar(&obj.datos).unwrap();
+        assert_eq!(arbol.entradas[0].nombre, "link");
+        assert_eq!(arbol.entradas[0].modo, ModoEntrada::Symlink);
+        assert_eq!(arbol.entradas[1].modo, ModoEntrada::Ejecutable);
     }
 
     #[test]
