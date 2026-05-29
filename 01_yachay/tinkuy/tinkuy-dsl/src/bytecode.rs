@@ -7,14 +7,12 @@
 //!
 //! El programa final consta de:
 //!   - `code: Vec<Op>` — instrucciones (~1 B cada una salvo `Const{idx: u16}`).
-//!   - `consts: Vec<f32>` — pool de constantes deduplicado opcionalmente
-//!     (D4 lo hará; D2 deja entradas separadas).
+//!   - `consts: Vec<f32>` — pool de constantes deduplicado por igualdad
+//!     bit-a-bit en `push_const` (`+0.0` y `-0.0` cuentan como distintos para
+//!     no romper la semántica IEEE en divisiones).
 //!   - `stack_depth: u16` — profundidad máxima alcanzada durante la
 //!     simulación abstracta del compilador. El caller asigna un buffer de
 //!     `[f32; stack_depth]` y `eval_with_stack` no aloca nada.
-//!
-//! Esto es la base para D3: enchufar como `Force` que itera neighbor-list y
-//! evalúa el bytecode por par sin allocs en el hot loop.
 
 use alloc::vec::Vec;
 
@@ -97,6 +95,12 @@ pub fn compile(expr: &Expr) -> Result<Bytecode, CompileError> {
 }
 
 fn push_const(c: f32, consts: &mut Vec<f32>) -> Result<u16, CompileError> {
+    // Dedupe por bits: dos constantes idénticas comparten slot. NaN no aparece
+    // por construcción (el lexer rechaza no-finitos), así que basta `to_bits()`.
+    let bits = c.to_bits();
+    if let Some(idx) = consts.iter().position(|x| x.to_bits() == bits) {
+        return Ok(idx as u16);
+    }
     if consts.len() >= u16::MAX as usize {
         return Err(CompileError::ConstPoolOverflow);
     }
@@ -391,6 +395,18 @@ mod tests {
         let v = VarBindings { r: 2.0, sigma: 1.0, ..Default::default() };
         let err = eval_with_stack(&bc, &v, &mut small).unwrap_err();
         assert!(matches!(err, EvalError::StackTooSmall { .. }));
+    }
+
+    #[test]
+    fn const_pool_dedupes_repeated_literals() {
+        // `2 + 2 * 2` tiene tres apariciones del literal `2`. El pool debe
+        // tener una sola entrada y los tres `Op::Const` apuntar al mismo idx.
+        let bc = compile(&parse("2 + 2 * 2").unwrap()).unwrap();
+        assert_eq!(bc.consts, alloc::vec![2.0_f32], "pool sin dedupar: {:?}", bc.consts);
+        let const_ops: alloc::vec::Vec<_> = bc.code.iter()
+            .filter_map(|op| if let Op::Const(i) = op { Some(*i) } else { None })
+            .collect();
+        assert_eq!(const_ops, alloc::vec![0_u16, 0, 0]);
     }
 
     #[test]

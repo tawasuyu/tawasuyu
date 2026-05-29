@@ -1,8 +1,10 @@
 //! `tinkuy-dsl` — DSL matemático mínimo para fuerzas pairwise.
 //!
-//! Capa 3 del roadmap. D1 (este crate): gramática + lexer + parser Pratt
-//! → AST. D2 añadirá compilación a bytecode y eval cero-alloc. D3 enchufa el
-//! resultado como `Force` en `tinkuy-core::World`.
+//! Capa 3 del roadmap (D1-D5, cerrada). Este crate aporta gramática +
+//! lexer + parser Pratt → AST (`lib.rs`), compilador a bytecode stack-machine
+//! con eval cero-alloc (`bytecode.rs`) y optimizer fold+algebraico
+//! (`optimize.rs`). `tinkuy-forces::DslForce` lo enchufa como `Force` sobre
+//! `tinkuy-core::World`.
 //!
 //! **Gramática** (EBNF-ish):
 //!

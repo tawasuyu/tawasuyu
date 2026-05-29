@@ -112,9 +112,11 @@ impl DslForce {
                 let dz = zi - world.zs.0[j];
                 let r2 = dx * dx + dy * dy + dz * dz;
                 if r2 > cutoff2 || r2 < 1.0e-12 { return; }
-                // r se calcula explícitamente para que el DSL pueda usarlo
-                // como variable (`r`); si el programa no lo referencia, el
-                // optimizador en D4 podrá eliminar este sqrt.
+                // r se calcula incondicionalmente porque vive en Rust, fuera
+                // del bytecode — el optimizer del DSL no puede skipearlo. Si
+                // el sqrt aparece como cuello, lo natural es exponer un flag
+                // `usa_r: bool` en `DslForce` (lectura del AST en `from_src`)
+                // y saltar el cómputo cuando el programa no lo referencia.
                 let r = libm_sqrtf(r2);
                 let vars = VarBindings {
                     r, r2, eps, sigma,
