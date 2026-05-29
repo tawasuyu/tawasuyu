@@ -244,13 +244,13 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 
 ### Fases (orden por dependencia)
 
-1. **`llimphi-surface`** — primitivo de textura. Sin esto no hay video serio. Spike chico, máxima palanca.
-2. **`media-core` + `rav1d`/`symphonia`** — decode AV1/Opus → superficie + sink `cpal` con sync A/V.
-3. **`nahual-video-viewer-llimphi`** — primer reproductor real (valida 1+2).
-4. **`shared/foreign-av`** — puente H.264/H.265 opcional.
-5. **`tullpu`** — editor de capas (ver su SDD; fases propias).
-6. **`pixel-verbo-daemon` + visión en `pluma-llm`** — capa IA.
-7. **`shared/foreign-psd`** — import Photoshop (post-tullpu, §6.ter).
+1. ✅ **`llimphi-surface`** — primitivo de textura GPU persistente; lo usa `media-app` para blitear video sin copia CPU.
+2. ✅ **`media-core` + `media-source-av1` (rav1d)** — decode AV1 nativo puro-Rust (IVF + OBU + rav1d → `FrameSource` RGBA). Audio Opus nativo pendiente (sin decoder puro-Rust maduro; symphonia no trae Opus) → por ahora vía foreign-av.
+3. ✅ **`nahual-video-viewer-llimphi`** — reproductor reusable (header + transporte + frame `View::image`); decode AV1 nativo. Acepta cualquier `FrameSource` (foreign-av, TestCard). El camino cero-copia `llimphi-surface` lo ejerce `media-app`.
+4. ✅ **`shared/foreign-av`** — puente ffmpeg (movido desde `media-source-ffmpeg`, regla #4) + `transcode_a_av1` (ingesta a AV1/Opus).
+5. **`tullpu`** — editor de capas (ver su SDD; fases propias) — avanzado (PSD, export).
+6. **`pixel-verbo-daemon`** ✅ (en tullpu) **+ visión en `pluma-llm`** — capa IA.
+7. ✅ **`shared/foreign-psd`** — import Photoshop (post-tullpu, §6.ter).
 
 **Nota hardware**: wgpu no expone Vulkan Video hoy → el decode arranca en CPU (rav1d es threaded y rinde). `media-core` deja el hook para frame-ya-en-GPU cuando el camino madure.
 

@@ -1,0 +1,19 @@
+[package]
+name = "nahual-video-viewer-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-video-viewer-llimphi — reproductor/visor de video sobre Llimphi. Decodifica AV1 nativo (media-source-av1) frame a frame y lo pinta con View::image; header con tiempo + transporte. Análogo Llimphi del nahual-image-viewer."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+media-core = { path = "../../media/media-core" }
+media-source-av1 = { path = "../../media/media-source-av1" }
+
+[[example]]
+name = "video_viewer_demo"
+path = "examples/video_viewer_demo.rs"
