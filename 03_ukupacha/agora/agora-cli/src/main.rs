@@ -133,6 +133,37 @@ enum WawaOp {
         #[arg(long)]
         salida: PathBuf,
     },
+    /// Fase 66 :: importa un directorio REAL al grafo direccionado por
+    /// contenido (el monorepo como grafo). Cada archivo se vuelve un BLOB,
+    /// cada subdirectorio un ÁRBOL (git-like). Escribe un `<hash>.obj` por
+    /// objeto en `--salida/` + `raiz.txt` con el hash raíz. Archivos idénticos
+    /// comparten un solo blob; el árbol entero colapsa a UN hash. El bundle
+    /// resultante se sirve a wawa con `servir_release` (objetos grandes se
+    /// fragmentan, Fase 65).
+    Importar {
+        /// Directorio a importar.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Directorio de salida del bundle (se crea si no existe).
+        #[arg(long)]
+        salida: PathBuf,
+    },
+    /// Fase 66 :: exporta un árbol del grafo de vuelta al filesystem —el
+    /// inverso de `importar`—. Reconstruye el directorio byte a byte desde los
+    /// `<hash>.obj` del bundle, empezando por la raíz dada. Verifica el hash de
+    /// cada objeto contra su nombre (integridad de punta a punta).
+    Exportar {
+        /// Directorio bundle con los `<hash>.obj`.
+        #[arg(long)]
+        bundle: PathBuf,
+        /// Hash raíz del árbol a exportar (64 hex). Si se omite, se lee de
+        /// `<bundle>/raiz.txt`.
+        #[arg(long)]
+        raiz: Option<String>,
+        /// Directorio destino (se crea si no existe).
+        #[arg(long)]
+        destino: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -504,6 +535,10 @@ fn run(cmd: Cmd) -> CliResult<()> {
         },
         Cmd::Wawa { op } => match op {
             WawaOp::Publicar { como, spec, salida } => wawa_publicar(&como, &spec, &salida),
+            WawaOp::Importar { dir, salida } => wawa_importar(&dir, &salida),
+            WawaOp::Exportar { bundle, raiz, destino } => {
+                wawa_exportar(&bundle, raiz.as_deref(), &destino)
+            }
             WawaOp::ForjarClave { name } => wawa_forjar_clave(&name),
             WawaOp::ForjarPropuesta { como, hash, salida } => {
                 wawa_forjar_propuesta(&como, &hash, &salida)
@@ -1087,6 +1122,146 @@ fn wawa_publicar(como: &str, spec_path: &Path, salida: &Path) -> CliResult<()> {
 /// aquél cambia, este aviso queda desfasado — es sólo un AVISO informativo.
 fn umbral_fragmento() -> usize {
     1024
+}
+
+// =============================================================================
+//  Fase 66 :: el monorepo como grafo — importar / exportar
+// =============================================================================
+
+/// `agora-cli wawa importar` — directorio real -> grafo de objetos.
+fn wawa_importar(dir: &Path, salida: &Path) -> CliResult<()> {
+    if !dir.is_dir() {
+        return Err(Error::Spec(format!("«{}» no es un directorio", dir.display())));
+    }
+    fs::create_dir_all(salida)?;
+    let raiz = importar_dir(dir, salida)?;
+    fs::write(salida.join("raiz.txt"), format!("{}\n", hex_de(&raiz)))?;
+
+    // Contar objetos únicos = archivos `.obj` en el bundle.
+    let n_obj = fs::read_dir(salida)?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .map(|n| n.ends_with(".obj"))
+                .unwrap_or(false)
+        })
+        .count();
+
+    println!("importado: {} -> {}", dir.display(), salida.display());
+    println!("  objetos : {n_obj}");
+    println!("  raiz    : {}", hex_de(&raiz));
+    println!();
+    println!("Exportar de vuelta (round-trip):");
+    println!("  agora-cli wawa exportar --bundle {} --destino <DIR>", salida.display());
+    Ok(())
+}
+
+/// Importa un directorio recursivamente, de abajo hacia arriba: cada archivo
+/// se emite como blob, cada subdirectorio como árbol. Devuelve el hash del
+/// árbol de ESTE directorio.
+fn importar_dir(dir: &Path, salida: &Path) -> CliResult<format::Hash> {
+    let mut entradas: Vec<format::EntradaArbol> = Vec::new();
+    for ent in fs::read_dir(dir)? {
+        let ent = ent?;
+        let ruta = ent.path();
+        let nombre = ent.file_name().to_string_lossy().into_owned();
+        let ft = ent.file_type()?;
+        if ft.is_dir() {
+            let hash = importar_dir(&ruta, salida)?;
+            entradas.push(format::EntradaArbol {
+                nombre,
+                modo: format::ModoEntrada::Directorio,
+                hash,
+            });
+        } else if ft.is_file() {
+            let bytes = fs::read(&ruta)?;
+            if bytes.len() > format::MAX_OBJETO {
+                return Err(Error::Spec(format!(
+                    "«{}» ({} B) excede MAX_OBJETO ({} B); el blob-chunking en grafo es trabajo futuro",
+                    ruta.display(),
+                    bytes.len(),
+                    format::MAX_OBJETO
+                )));
+            }
+            let hash = emitir_objeto(&format::objeto_blob(bytes), salida)?;
+            entradas.push(format::EntradaArbol {
+                nombre,
+                modo: format::ModoEntrada::Archivo,
+                hash,
+            });
+        }
+        // Symlinks y otros tipos se ignoran por ahora (round-trip de archivos
+        // y directorios; enlaces/permisos quedan como trabajo futuro).
+    }
+    let objeto = format::objeto_arbol(entradas).map_err(Error::Canal)?;
+    emitir_objeto(&objeto, salida)
+}
+
+/// Serializa un objeto, lo escribe como `<hash>.obj` en el bundle y devuelve
+/// su hash. Idempotente: dos objetos idénticos sobreescriben el mismo archivo.
+fn emitir_objeto(objeto: &format::Objeto, salida: &Path) -> CliResult<format::Hash> {
+    let payload = objeto.serializar().map_err(Error::Canal)?;
+    let hash = format::hash(&payload);
+    fs::write(salida.join(format!("{}.obj", hex_de(&hash))), &payload)?;
+    Ok(hash)
+}
+
+/// `agora-cli wawa exportar` — grafo de objetos -> directorio real.
+fn wawa_exportar(bundle: &Path, raiz_hex: Option<&str>, destino: &Path) -> CliResult<()> {
+    // La raíz viene del flag o de `raiz.txt` del bundle.
+    let raiz_hex = match raiz_hex {
+        Some(h) => h.to_string(),
+        None => fs::read_to_string(bundle.join("raiz.txt"))
+            .map_err(|e| Error::Spec(format!("sin --raiz y no pude leer raiz.txt: {e}")))?
+            .trim()
+            .to_string(),
+    };
+    let raiz = parse_hash(&raiz_hex)?;
+    fs::create_dir_all(destino)?;
+    let n = exportar_arbol(bundle, &raiz, destino)?;
+    println!("exportado: raiz {}… -> {}", &hex_de(&raiz)[..16], destino.display());
+    println!("  archivos: {n}");
+    Ok(())
+}
+
+/// Reconstruye el directorio cuyo árbol es `hash` dentro de `destino`.
+/// Devuelve cuántos ARCHIVOS escribió (recursivo).
+fn exportar_arbol(bundle: &Path, hash: &format::Hash, destino: &Path) -> CliResult<usize> {
+    let objeto = leer_objeto(bundle, hash)?;
+    let arbol = format::Arbol::deserializar(&objeto.datos).map_err(Error::Canal)?;
+    let mut archivos = 0;
+    for entrada in &arbol.entradas {
+        let dest = destino.join(&entrada.nombre);
+        match entrada.modo {
+            format::ModoEntrada::Archivo => {
+                let blob = leer_objeto(bundle, &entrada.hash)?;
+                fs::write(&dest, &blob.datos)?;
+                archivos += 1;
+            }
+            format::ModoEntrada::Directorio => {
+                fs::create_dir_all(&dest)?;
+                archivos += exportar_arbol(bundle, &entrada.hash, &dest)?;
+            }
+        }
+    }
+    Ok(archivos)
+}
+
+/// Lee un objeto del bundle por su hash y VERIFICA que su contenido rehashea
+/// a ese hash — integridad de punta a punta del grafo direccionado por
+/// contenido.
+fn leer_objeto(bundle: &Path, hash: &format::Hash) -> CliResult<format::Objeto> {
+    let ruta = bundle.join(format!("{}.obj", hex_de(hash)));
+    let bytes = fs::read(&ruta)
+        .map_err(|e| Error::Spec(format!("no pude leer {}: {e}", ruta.display())))?;
+    if format::hash(&bytes) != *hash {
+        return Err(Error::Spec(format!(
+            "objeto {} corrupto: su contenido no rehashea a su nombre",
+            &hex_de(hash)[..16]
+        )));
+    }
+    format::Objeto::deserializar(&bytes).map_err(Error::Canal)
 }
 
 fn grafo_resumen() -> CliResult<()> {
