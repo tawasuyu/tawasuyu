@@ -4,9 +4,10 @@ pub(crate) const BLOB_BOOTSTRAP: &str = r#"
 // bytes crudos en `_bytes` (Array de 0..255). Soporta partes string,
 // ArrayBuffer, TypedArray y otros Blob al construir.
 //
-// Limitaciones: sin `stream()`, sin URL.createObjectURL, sin endings
-// normalization de los string parts (\r\n). Suficiente para "recibí un
-// blob del server y lo leo con .text()/.arrayBuffer()/.slice()".
+// Limitaciones: sin endings normalization de los string parts (\r\n).
+// Suficiente para "recibí un blob del server y lo leo con
+// .text()/.arrayBuffer()/.slice()/.stream()". `URL.createObjectURL` vive
+// en el módulo `objecturl` (Fase 7.50).
 globalThis.Blob = function(parts, options) {
     var bytes = [];
     if (parts) {
@@ -43,6 +44,24 @@ globalThis.Blob.prototype.arrayBuffer = function() {
     var view = new Uint8Array(buf);
     for (var i = 0; i < len; i++) view[i] = this._bytes[i];
     return Promise.resolve(buf);
+};
+// Fase 7.49 — `stream()` devuelve un ReadableStream de un solo chunk
+// (Uint8Array de los bytes) seguido de done. Reusa la máquina de
+// `bootstrap/streams`. Snapshot de `_bytes` al construir el source para
+// que mutar el Blob después no afecte el stream ya emitido.
+globalThis.Blob.prototype.stream = function() {
+    var bytes = this._bytes;
+    var emitted = false;
+    return new globalThis.ReadableStream({
+        pull: function(controller) {
+            if (emitted) { controller.close(); return; }
+            emitted = true;
+            var len = bytes.length;
+            var view = new Uint8Array(len);
+            for (var i = 0; i < len; i++) view[i] = bytes[i];
+            controller.enqueue(view);
+        }
+    });
 };
 globalThis.Blob.prototype.slice = function(start, end, contentType) {
     var n = this._bytes.length;

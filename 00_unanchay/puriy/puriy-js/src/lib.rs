@@ -5685,6 +5685,26 @@ mod tests {
         assert_eq!(rt.eval("hits").expect("e"), JsValue::Number(0.0));
     }
 
+    // ============= Fase 7.49 — Blob.stream() =============
+
+    #[test]
+    fn blob_stream_emite_los_bytes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var bytes = null; var done2 = null; \
+             var b = new Blob(['Hi']); \
+             var rd = b.stream().getReader(); \
+             rd.read().then(function(r) { \
+                 bytes = [r.value[0], r.value[1]]; \
+                 return rd.read(); \
+             }).then(function(r2) { done2 = r2.done; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("bytes[0]").expect("e"), JsValue::Number(72.0)); // 'H'
+        assert_eq!(rt.eval("bytes[1]").expect("e"), JsValue::Number(105.0)); // 'i'
+        assert_eq!(rt.eval("done2").expect("e"), JsValue::Bool(true));
+    }
+
     // ============= Fase 7.37 — URL relativa contra base =============
 
     #[test]
