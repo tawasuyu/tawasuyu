@@ -23,9 +23,12 @@
 //!    edita predicado y valor; "atestar" firma y agrega al grafo.
 //! 3. Tile **Atestaciones**: lista verificada del grafo. Click sobre
 //!    una fila la selecciona para que la política aplique sobre su claim.
-//! 4. Tile **Política**: slider `min_third_party` (0..=5) + toggle
-//!    `accept_self`; veredicto en vivo abajo, basado en el claim de la
-//!    atestación seleccionada.
+//! 4. Tile **Política**: slider `min_third_party` (0..=5), toggle
+//!    `accept_self`, ciclo de `kind` (off/persona/comunidad/alianza/
+//!    institución) + slider de mínimo cuando el kind está activo, y
+//!    ciclo de `max_age` (off/1m/5m/1h/1d/7d). Veredicto en vivo abajo,
+//!    basado en el claim de la atestación seleccionada y evaluado con
+//!    todos los ejes activos.
 
 use std::path::PathBuf;
 
@@ -64,6 +67,23 @@ enum Tile {
 enum ComposeField {
     Predicate,
     Value,
+}
+
+/// Severidad de un mensaje de estado de servicio (persistencia, red,
+/// keystore). Determina el color del banner.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatusLevel {
+    Info,
+    Error,
+}
+
+/// Banner visible al pie de la ventana cuando hay un error o info que
+/// vale la pena destacar (típicamente fallas de I/O o de red que antes
+/// iban a stderr y nadie veía en una app de UI). `None` significa que
+/// no hay nada que mostrar y el banner se oculta.
+struct StatusBanner {
+    level: StatusLevel,
+    text: String,
 }
 
 /// Pantalla activa. `Unlock` pide la passphrase; `Main` muestra los
@@ -106,12 +126,28 @@ struct Model {
     compose_status: String,
 
     policy: TrustPolicy,
+
+    /// Último mensaje de estado de servicio (I/O, red, keystore). El
+    /// `view` lo pinta como banner al pie. Se descarta con
+    /// [`Msg::DescartarStatus`] o se sobreescribe automáticamente al
+    /// salir otro evento de estado.
+    status: Option<StatusBanner>,
 }
 
 impl Model {
-    fn save_graph(&self) {
+    fn set_status(&mut self, level: StatusLevel, text: impl Into<String>) {
+        self.status = Some(StatusBanner {
+            level,
+            text: text.into(),
+        });
+    }
+
+    fn save_graph(&mut self) {
         if let Err(e) = agora_store::save(&self.store_path, &self.graph) {
-            eprintln!("agora-app: no pude persistir el grafo: {e}");
+            self.set_status(
+                StatusLevel::Error,
+                format!("no pude persistir el grafo: {e}"),
+            );
         }
     }
 
@@ -207,6 +243,16 @@ enum Msg {
     SliderMinThird(DragPhase, f32),
     /// Toggle de `accept_self`.
     ToggleAcceptSelf,
+    /// Cicla el eje `min_attesters_of_kind`:
+    /// off → Person → Community → Alliance → Institution → off.
+    /// Al pasar de off a un kind, el N arranca en 1.
+    CycleKind,
+    /// Drag del slider del N requerido para el kind activo.
+    /// No tiene efecto si el kind está en off.
+    SliderMinKind(DragPhase, f32),
+    /// Cicla el eje `max_age_secs` por presets:
+    /// off → 60 → 300 → 3_600 → 86_400 → 604_800 → off.
+    CycleMaxAge,
 
     /// El archivo `graph.json` cambió en disco (lo escribió otro proceso,
     /// típicamente `agora-cli`). Recarga el grafo desde el snapshot.
@@ -216,6 +262,9 @@ enum Msg {
     UnlockKey(KeyEvent),
     /// Intenta desbloquear el keystore con la passphrase actual.
     UnlockSubmit,
+
+    /// Cierra el banner de estado de servicio.
+    DescartarStatus,
 }
 
 // =============================================================================
@@ -296,6 +345,7 @@ impl App for AgoraApp {
             compose_focus: ComposeField::Predicate,
             compose_status: String::new(),
             policy: TrustPolicy::default(),
+            status: None,
         };
 
         if !necesita_unlock {
@@ -402,7 +452,10 @@ impl App for AgoraApp {
                                 if let Err(e) =
                                     agora_store::append_attestation(&model.store_path, &att)
                                 {
-                                    eprintln!("agora-app: no pude appendear atestación: {e}");
+                                    model.set_status(
+                                        StatusLevel::Error,
+                                        format!("no pude appendear la atestación: {e}"),
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -421,6 +474,35 @@ impl App for AgoraApp {
 
             Msg::ToggleAcceptSelf => {
                 model.policy.accept_self = !model.policy.accept_self;
+            }
+
+            Msg::CycleKind => {
+                model.policy.min_attesters_of_kind = match model.policy.min_attesters_of_kind {
+                    None => Some((IdentityKind::Person, 1)),
+                    Some((IdentityKind::Person, n)) => Some((IdentityKind::Community, n)),
+                    Some((IdentityKind::Community, n)) => Some((IdentityKind::Alliance, n)),
+                    Some((IdentityKind::Alliance, n)) => Some((IdentityKind::Institution, n)),
+                    Some((IdentityKind::Institution, _)) => None,
+                };
+            }
+
+            Msg::SliderMinKind(_phase, dv) => {
+                if let Some((kind, n)) = model.policy.min_attesters_of_kind {
+                    let cur = n as f32 + dv;
+                    let new = cur.clamp(1.0, 5.0).round() as usize;
+                    model.policy.min_attesters_of_kind = Some((kind, new));
+                }
+            }
+
+            Msg::CycleMaxAge => {
+                model.policy.max_age_secs = match model.policy.max_age_secs {
+                    None => Some(60),
+                    Some(60) => Some(300),
+                    Some(300) => Some(3_600),
+                    Some(3_600) => Some(86_400),
+                    Some(86_400) => Some(604_800),
+                    _ => None,
+                };
             }
 
             Msg::UnlockKey(ev) => {
@@ -471,12 +553,36 @@ impl App for AgoraApp {
                                 model.selected_attestation = None;
                             }
                         }
+                        let antes_atts = model.graph.attestation_count();
+                        let antes_idents = model.graph.identity_count();
                         model.graph = g;
+                        let delta_atts =
+                            model.graph.attestation_count() as isize - antes_atts as isize;
+                        let delta_idents =
+                            model.graph.identity_count() as isize - antes_idents as isize;
+                        if delta_atts != 0 || delta_idents != 0 {
+                            model.set_status(
+                                StatusLevel::Info,
+                                format!(
+                                    "grafo recargado desde disco · {:+} atestaciones · {:+} identidades",
+                                    delta_atts, delta_idents
+                                ),
+                            );
+                        }
                     }
                     Err(e) => {
-                        eprintln!("agora-app: no pude recargar graph.json ({e}); sigo con el grafo en memoria.");
+                        model.set_status(
+                            StatusLevel::Error,
+                            format!(
+                                "no pude recargar graph.json ({e}); sigo con el grafo en memoria"
+                            ),
+                        );
                     }
                 }
+            }
+
+            Msg::DescartarStatus => {
+                model.status = None;
             }
         }
         model
@@ -538,12 +644,85 @@ impl App for AgoraApp {
             })
             .collect();
 
-        tiled_view_reorderable(
-            tiles,
-            |from, to| Some(Msg::SwapTile(from, to)),
-            &palette,
-        )
+        let tiled =
+            tiled_view_reorderable(tiles, |from, to| Some(Msg::SwapTile(from, to)), &palette);
+
+        match &model.status {
+            None => tiled,
+            Some(banner) => status_layout(&theme, tiled, banner),
+        }
     }
+}
+
+/// Compone el tiled view con un banner al pie. El banner ocupa
+/// 34 px fijos y empuja al tiled hacia arriba.
+fn status_layout(theme: &Theme, tiled: View<Msg>, banner: &StatusBanner) -> View<Msg> {
+    let (bg, fg) = match banner.level {
+        StatusLevel::Info => (theme.bg_panel, theme.fg_text),
+        StatusLevel::Error => (theme.fg_destructive, theme.bg_app),
+    };
+
+    let texto = View::new(Style {
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: edge_padding(12.0, 0.0),
+        ..Default::default()
+    })
+    .text_aligned(banner.text.clone(), 12.0, fg, Alignment::Start);
+
+    let cerrar = button_styled(
+        "×",
+        Style {
+            size: Size {
+                width: length(34.0_f32),
+                height: percent(1.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        },
+        Alignment::Center,
+        &ButtonPalette {
+            bg,
+            bg_hover: theme.bg_button_hover,
+            fg,
+            radius: 0.0,
+        },
+        Msg::DescartarStatus,
+    );
+
+    let banner_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(34.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .children(vec![texto, cerrar]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![grow(tiled), banner_row])
 }
 
 // =============================================================================
@@ -969,12 +1148,11 @@ fn politica_view(model: &Model, theme: &Theme) -> View<Msg> {
         |phase, dv| Some(Msg::SliderMinThird(phase, dv)),
     );
 
-    let toggle_label = format!(
-        "accept_self: {}",
-        if model.policy.accept_self { "sí" } else { "no" }
-    );
     let toggle = button_styled(
-        toggle_label,
+        format!(
+            "accept_self: {}",
+            if model.policy.accept_self { "sí" } else { "no" }
+        ),
         Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -988,6 +1166,63 @@ fn politica_view(model: &Model, theme: &Theme) -> View<Msg> {
         Alignment::Center,
         &button_palette_secondary(theme),
         Msg::ToggleAcceptSelf,
+    );
+
+    let kind_label = match model.policy.min_attesters_of_kind {
+        None => "kind: off".to_string(),
+        Some((k, _)) => format!("kind: {}", kind_str(k)),
+    };
+    let kind_button = button_styled(
+        kind_label,
+        Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(30.0_f32),
+            },
+            padding: edge_padding(10.0, 0.0),
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        },
+        Alignment::Center,
+        &button_palette_secondary(theme),
+        Msg::CycleKind,
+    );
+
+    // Slider del N sólo aparece si el eje kind está activo. Cuando está
+    // en off mostramos un hint discreto para que el tile no salte de
+    // alto entre estados.
+    let kind_n_view: View<Msg> = match model.policy.min_attesters_of_kind {
+        Some((_, n)) => slider_view(
+            "min de kind",
+            n as f32,
+            1.0,
+            5.0,
+            &slider_palette,
+            |phase, dv| Some(Msg::SliderMinKind(phase, dv)),
+        ),
+        None => label_line(
+            "(activá un kind para exigir un mínimo)",
+            10.0,
+            theme.fg_muted,
+        ),
+    };
+
+    let max_age_button = button_styled(
+        format!("edad máx: {}", format_max_age(model.policy.max_age_secs)),
+        Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(30.0_f32),
+            },
+            padding: edge_padding(10.0, 0.0),
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        },
+        Alignment::Center,
+        &button_palette_secondary(theme),
+        Msg::CycleMaxAge,
     );
 
     // Veredicto sobre la atestación seleccionada.
@@ -1006,7 +1241,17 @@ fn politica_view(model: &Model, theme: &Theme) -> View<Msg> {
                 &att.claim.predicate,
                 &att.claim.value,
             );
-            let ok = model.policy.accepts(&cor);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let ok = model.graph.is_accepted_at(
+                att.claim.subject,
+                &att.claim.predicate,
+                &att.claim.value,
+                &model.policy,
+                now,
+            );
             let veredicto_color = if ok { theme.accent } else { theme.fg_destructive };
             let veredicto = label_line(
                 if ok { "ACEPTA" } else { "rechaza" },
@@ -1014,7 +1259,47 @@ fn politica_view(model: &Model, theme: &Theme) -> View<Msg> {
                 veredicto_color,
             );
 
-            column(vec![
+            // Desglose por eje: indica cuál falla y cuál pasa, para que
+            // el usuario entienda por qué el veredicto es lo que es.
+            let eje_basico = model.policy.accepts(&cor);
+            let eje_kind = match model.policy.min_attesters_of_kind {
+                None => None,
+                Some((kind, n)) => {
+                    let count = cor
+                        .attesters
+                        .iter()
+                        .filter(|id| {
+                            model
+                                .graph
+                                .identity(**id)
+                                .map(|i| i.kind == kind)
+                                .unwrap_or(false)
+                        })
+                        .count();
+                    Some((kind, n, count))
+                }
+            };
+            let eje_edad: Option<(u64, u64)> = match model.policy.max_age_secs {
+                None => None,
+                Some(max_age) => {
+                    let mas_reciente = model
+                        .graph
+                        .attestations()
+                        .iter()
+                        .filter(|a| {
+                            a.claim.subject == att.claim.subject
+                                && a.claim.predicate == att.claim.predicate
+                                && a.claim.value == att.claim.value
+                        })
+                        .map(|a| a.claim.issued_at)
+                        .max()
+                        .unwrap_or(0);
+                    let edad = now.saturating_sub(mas_reciente);
+                    Some((edad, max_age))
+                }
+            };
+
+            let mut detail: Vec<View<Msg>> = vec![
                 label_line(
                     &format!("claim: {} = {}", att.claim.predicate, att.claim.value),
                     12.0,
@@ -1028,17 +1313,47 @@ fn politica_view(model: &Model, theme: &Theme) -> View<Msg> {
                 spacer(4.0),
                 label_line(
                     &format!(
-                        "atestadores: {} (terceros: {}, auto: {})",
-                        cor.total(),
+                        "{}  básico: terceros {} / {} · auto {}",
+                        if eje_basico { "✓" } else { "✗" },
                         cor.third_party(),
+                        model.policy.min_third_party,
                         if cor.self_attested { "sí" } else { "no" }
                     ),
                     11.0,
-                    theme.fg_muted,
+                    if eje_basico { theme.fg_muted } else { theme.fg_destructive },
                 ),
-                spacer(6.0),
-                veredicto,
-            ])
+            ];
+            if let Some((kind, requeridos, count)) = eje_kind {
+                let pasa = count >= requeridos;
+                detail.push(label_line(
+                    &format!(
+                        "{}  kind: {} {} / {}",
+                        if pasa { "✓" } else { "✗" },
+                        kind_str(kind),
+                        count,
+                        requeridos
+                    ),
+                    11.0,
+                    if pasa { theme.fg_muted } else { theme.fg_destructive },
+                ));
+            }
+            if let Some((edad, max_age)) = eje_edad {
+                let pasa = edad <= max_age;
+                detail.push(label_line(
+                    &format!(
+                        "{}  edad: {} / {} máx",
+                        if pasa { "✓" } else { "✗" },
+                        format_duration(edad),
+                        format_duration(max_age)
+                    ),
+                    11.0,
+                    if pasa { theme.fg_muted } else { theme.fg_destructive },
+                ));
+            }
+            detail.push(spacer(6.0));
+            detail.push(veredicto);
+
+            column(detail)
         }
     };
 
@@ -1047,10 +1362,43 @@ fn politica_view(model: &Model, theme: &Theme) -> View<Msg> {
         slider,
         spacer(8.0),
         toggle,
+        spacer(8.0),
+        kind_button,
+        kind_n_view,
+        spacer(8.0),
+        max_age_button,
         spacer(12.0),
         verdict_block,
         grow(empty()),
     ])
+}
+
+fn kind_str(k: IdentityKind) -> &'static str {
+    match k {
+        IdentityKind::Person => "persona",
+        IdentityKind::Community => "comunidad",
+        IdentityKind::Alliance => "alianza",
+        IdentityKind::Institution => "institución",
+    }
+}
+
+fn format_max_age(v: Option<u64>) -> String {
+    match v {
+        None => "off".into(),
+        Some(s) => format_duration(s),
+    }
+}
+
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3_600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
 }
 
 // =============================================================================
