@@ -110,6 +110,98 @@ impl DomTree {
         });
         out
     }
+
+    /// Itera in-order todos los `<script>` del documento y devuelve sus
+    /// metadatos. Cada script lleva, o bien un `src` externo (a bajar),
+    /// o bien el body inline; nunca ambos a la vez (HTML spec: si hay
+    /// `src`, el contenido inline se ignora).
+    ///
+    /// Scripts con `type` no-JS (`application/json`, `module-shim`,
+    /// `text/template`, etc.) se devuelven igual — el caller decide qué
+    /// hacer. `type="module"` y `type="text/javascript"` son JS estándar;
+    /// el resto el runtime los puede saltear.
+    ///
+    /// **Fase 7.0**: el caller (`puriy-js::JsRuntime`) todavía es un
+    /// stub y no ejecuta nada. Esto sólo expone el cableado para que
+    /// Fase 7.1 enchufe el runtime real sin tocar el DOM.
+    pub fn collect_scripts(&self) -> Vec<ScriptInfo> {
+        let mut out = Vec::new();
+        walk(&self.document(), &mut |node| {
+            if let NodeData::Element { name, .. } = &node.data {
+                if name.local.as_ref() != "script" {
+                    return;
+                }
+                let src = attr(node, "src").and_then(|v| {
+                    let t = v.trim().to_string();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t)
+                    }
+                });
+                let inline = if src.is_some() {
+                    None
+                } else {
+                    let body = collect_text(node);
+                    if body.is_empty() {
+                        None
+                    } else {
+                        Some(body)
+                    }
+                };
+                let type_attr = attr(node, "type").and_then(|v| {
+                    let t = v.trim().to_string();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t)
+                    }
+                });
+                let is_module = type_attr
+                    .as_deref()
+                    .map(|t| t.eq_ignore_ascii_case("module"))
+                    .unwrap_or(false);
+                let defer = attr(node, "defer").is_some();
+                let async_ = attr(node, "async").is_some();
+                // Si no hay ni src ni inline, no aporta nada — lo
+                // dropeamos para que el caller no itere sobre vacíos.
+                if src.is_none() && inline.is_none() {
+                    return;
+                }
+                out.push(ScriptInfo {
+                    src,
+                    inline,
+                    type_attr,
+                    is_module,
+                    defer,
+                    async_,
+                });
+            }
+        });
+        out
+    }
+}
+
+/// Metadatos de un `<script>` extraído del DOM. La ejecución es
+/// responsabilidad del caller (típicamente el chrome, vía `puriy-js`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptInfo {
+    /// URL externa (resolver contra base antes de fetchear). `None` si
+    /// el script es inline.
+    pub src: Option<String>,
+    /// Body inline. `None` si tiene `src` (HTML spec ignora el inline en
+    /// ese caso).
+    pub inline: Option<String>,
+    /// Valor del atributo `type` literal — útil para distinguir module
+    /// JS de templates / json embebidos.
+    pub type_attr: Option<String>,
+    /// `true` cuando `type="module"`. El runtime de Fase 7.x es clásico
+    /// (no module loader) — los módulos se saltean por ahora.
+    pub is_module: bool,
+    /// `defer`: ejecución pospuesta a `DOMContentLoaded`.
+    pub defer: bool,
+    /// `async`: ejecución asíncrona apenas el script termine de bajar.
+    pub async_: bool,
 }
 
 /// DFS pre-order. La closure recibe cada Handle.
@@ -302,5 +394,78 @@ mod tests {
         let html = "<html><head></head><body></body></html>";
         let dom = DomTree::parse(html);
         assert!(dom.meta_refresh().is_none());
+    }
+
+    #[test]
+    fn collect_scripts_detecta_inline() {
+        let html = r#"<html><head><script>console.log("hola")</script></head><body></body></html>"#;
+        let scripts = DomTree::parse(html).collect_scripts();
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].src, None);
+        assert_eq!(scripts[0].inline.as_deref(), Some("console.log(\"hola\")"));
+        assert!(!scripts[0].is_module);
+        assert!(!scripts[0].defer);
+        assert!(!scripts[0].async_);
+    }
+
+    #[test]
+    fn collect_scripts_detecta_src_externo() {
+        let html = r#"<html><body><script src="/main.js" defer async></script></body></html>"#;
+        let scripts = DomTree::parse(html).collect_scripts();
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].src.as_deref(), Some("/main.js"));
+        assert_eq!(scripts[0].inline, None);
+        assert!(scripts[0].defer);
+        assert!(scripts[0].async_);
+    }
+
+    #[test]
+    fn collect_scripts_ignora_body_si_hay_src() {
+        // Según HTML spec, si <script src=...> tiene contenido, se ignora.
+        let html =
+            r#"<html><body><script src="/x.js">esto no se ejecuta</script></body></html>"#;
+        let scripts = DomTree::parse(html).collect_scripts();
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].src.as_deref(), Some("/x.js"));
+        assert_eq!(scripts[0].inline, None);
+    }
+
+    #[test]
+    fn collect_scripts_marca_modulo_por_type() {
+        let html = r#"<html><body>
+            <script type="module">import x from "./x.js"</script>
+            <script type="text/javascript">var a=1</script>
+            <script type="application/json">{"k":"v"}</script>
+        </body></html>"#;
+        let scripts = DomTree::parse(html).collect_scripts();
+        assert_eq!(scripts.len(), 3);
+        assert!(scripts[0].is_module);
+        assert!(!scripts[1].is_module);
+        assert_eq!(scripts[2].type_attr.as_deref(), Some("application/json"));
+        assert!(!scripts[2].is_module);
+    }
+
+    #[test]
+    fn collect_scripts_dropea_vacios() {
+        // <script></script> sin src ni body: no aporta nada, lo
+        // saltamos para que el caller no itere sobre nada.
+        let html = r#"<html><body><script></script><script src=""></script></body></html>"#;
+        let scripts = DomTree::parse(html).collect_scripts();
+        assert!(scripts.is_empty());
+    }
+
+    #[test]
+    fn collect_scripts_preserva_orden_dom() {
+        let html = r#"<html><body>
+            <script>1</script>
+            <p>x</p>
+            <script>2</script>
+            <div><script>3</script></div>
+        </body></html>"#;
+        let scripts = DomTree::parse(html).collect_scripts();
+        assert_eq!(scripts.len(), 3);
+        assert_eq!(scripts[0].inline.as_deref(), Some("1"));
+        assert_eq!(scripts[1].inline.as_deref(), Some("2"));
+        assert_eq!(scripts[2].inline.as_deref(), Some("3"));
     }
 }

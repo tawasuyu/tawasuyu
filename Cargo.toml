@@ -92,6 +92,7 @@ members = [
     "00_unanchay/puriy/puriy-app",
     "00_unanchay/puriy/puriy-core",
     "00_unanchay/puriy/puriy-engine",
+    "00_unanchay/puriy/puriy-js",
     "00_unanchay/puriy/puriy-llimphi",
     "01_yachay/cosmos/cosmos-app-llimphi",
     "01_yachay/cosmos/cosmos-astrology",

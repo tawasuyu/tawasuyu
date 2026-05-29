@@ -33,7 +33,7 @@ pub use boxes::{
     BoxNode, BoxTree, Color, Display, FormInfo, FormMethod, InputKind, PathCmd, SelectInfo,
     SelectOption, SvgPrim, SvgScene,
 };
-pub use dom::{DomTree, MetaRefresh};
+pub use dom::{DomTree, MetaRefresh, ScriptInfo};
 pub use fetch::{fetch, FetchError};
 pub use style::{
     AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, ContentItem, FlexDirection,
@@ -101,6 +101,7 @@ impl Engine {
         let box_tree = boxes::build(&dom, &styles, url);
         let title = dom.title().unwrap_or_default();
         let meta_refresh = dom.meta_refresh();
+        let scripts = dom.collect_scripts();
         Document {
             url: url.to_string(),
             title,
@@ -108,6 +109,7 @@ impl Engine {
             dom,
             box_tree,
             meta_refresh,
+            scripts,
         }
     }
 }
@@ -131,6 +133,10 @@ pub struct Document {
     /// el delay y URL destino. El chrome lo programa con un sleep en un
     /// worker thread y dispatcha `Msg::Navigate` cuando vence.
     pub meta_refresh: Option<MetaRefresh>,
+    /// `<script>` recolectados en orden DOM. Fase 7.0: el chrome todavía
+    /// no los ejecuta (`puriy-js::JsRuntime` es un stub). Fase 7.1
+    /// enchufa el runtime real y arranca a procesarlos.
+    pub scripts: Vec<ScriptInfo>,
 }
 
 #[derive(Debug, Error)]
