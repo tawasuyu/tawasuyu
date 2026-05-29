@@ -757,6 +757,40 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             else if (a && a._synthetic) el.appendChild(a);
         }
     };
+    // Fase 7.26 — scrollTop / scrollLeft get/set. Spec: get devuelve el
+    // scroll interno del elemento; set mueve el viewport. Acá el modelo
+    // de scroll es por-tab (no por-elemento), así que:
+    //   - get: devuelve _scrollTop/_scrollLeft local (mirror, default 0)
+    //   - set: publica mutación 'scrollTop:N' al chrome. El chrome
+    //     ignora si el elemento no es el body root (no hay scroll
+    //     containers anidados). Cuando aparezca caso real con div
+    //     overflow:scroll, agregar scroll per-element al BoxTree.
+    el._scrollTop = 0;
+    el._scrollLeft = 0;
+    Object.defineProperty(el, 'scrollTop', {
+        get: function() { return el._scrollTop; },
+        set: function(v) {
+            el._scrollTop = Number(v) || 0;
+            globalThis.__puriy_dirty.push({
+                id: el._id,
+                kind: 'scrollTop',
+                value: String(el._scrollTop)
+            });
+        },
+        configurable: true
+    });
+    Object.defineProperty(el, 'scrollLeft', {
+        get: function() { return el._scrollLeft; },
+        set: function(v) {
+            el._scrollLeft = Number(v) || 0;
+            globalThis.__puriy_dirty.push({
+                id: el._id,
+                kind: 'scrollLeft',
+                value: String(el._scrollLeft)
+            });
+        },
+        configurable: true
+    });
     // Fase 7.25 — dispatchEvent(event). Acepta un Event/CustomEvent ya
     // construido y lo rutea por capture/target/bubble (delega a
     // __puriy_dispatch_event). Devuelve `!event.defaultPrevented` (true
@@ -1340,6 +1374,56 @@ globalThis.Event = function(type, init) {
 globalThis.CustomEvent = function(type, init) {
     globalThis.Event.call(this, type, init);
     this.detail = (init && init.detail !== undefined) ? init.detail : null;
+};
+// Fase 7.26 — Window scroll APIs. Mirror local del scroll position: el
+// JS sólo lee lo que el JS mismo seteó. El wheel/keys del usuario que
+// mueven scroll_y del chrome NO se reflejan acá (gap honesto — sync
+// inverso requeriría que el chrome publique `__puriy_scroll_y` al
+// runtime antes de cada eval/tick, lo cual agregaría I/O en el hot
+// path). Para apps que necesiten leer el scroll "real", la solución
+// futura es agregar `JsRuntime::set_scroll(x, y)` y llamarla desde el
+// chrome en cada Msg::Scroll y antes de cada eval.
+globalThis.__puriy_scroll_x = 0;
+globalThis.__puriy_scroll_y = 0;
+Object.defineProperty(globalThis, 'scrollX', {
+    get: function() { return globalThis.__puriy_scroll_x; },
+    configurable: true
+});
+Object.defineProperty(globalThis, 'scrollY', {
+    get: function() { return globalThis.__puriy_scroll_y; },
+    configurable: true
+});
+Object.defineProperty(globalThis, 'pageXOffset', {
+    get: function() { return globalThis.__puriy_scroll_x; },
+    configurable: true
+});
+Object.defineProperty(globalThis, 'pageYOffset', {
+    get: function() { return globalThis.__puriy_scroll_y; },
+    configurable: true
+});
+globalThis.scrollTo = function(x, y) {
+    if (typeof x === 'object' && x !== null) {
+        y = x.top;
+        x = x.left;
+    }
+    globalThis.__puriy_scroll_x = Number(x) || 0;
+    globalThis.__puriy_scroll_y = Number(y) || 0;
+    globalThis.__puriy_dirty.push({
+        id: '__window__',
+        kind: 'scroll',
+        value: globalThis.__puriy_scroll_x + ',' + globalThis.__puriy_scroll_y
+    });
+};
+globalThis.scroll = globalThis.scrollTo;
+globalThis.scrollBy = function(dx, dy) {
+    if (typeof dx === 'object' && dx !== null) {
+        dy = dx.top;
+        dx = dx.left;
+    }
+    globalThis.scrollTo(
+        globalThis.__puriy_scroll_x + (Number(dx) || 0),
+        globalThis.__puriy_scroll_y + (Number(dy) || 0)
+    );
 };
 globalThis.__puriy_dispatch_event = function(id, event) {
     var target = globalThis.__puriy_elements[id];
@@ -5375,6 +5459,74 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.26 — Window/Element scroll APIs =============
+
+    #[test]
+    fn window_scroll_to_actualiza_scroll_x_y_y_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("scrollTo(50, 200)").expect("e");
+        let v = rt.eval("scrollY").expect("e");
+        assert_eq!(v, JsValue::Number(200.0));
+        let v = rt.eval("scrollX").expect("e");
+        assert_eq!(v, JsValue::Number(50.0));
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "scroll");
+        assert_eq!(muts[0].value, "50,200");
+    }
+
+    #[test]
+    fn window_scroll_to_acepta_object_top_left() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("scrollTo({top: 100, left: 30})").expect("e");
+        let v = rt.eval("scrollY").expect("e");
+        assert_eq!(v, JsValue::Number(100.0));
+        let v = rt.eval("scrollX").expect("e");
+        assert_eq!(v, JsValue::Number(30.0));
+    }
+
+    #[test]
+    fn window_scroll_by_suma_al_actual() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("scrollTo(10, 20); scrollBy(5, 30)").expect("e");
+        let v = rt.eval("scrollX").expect("e");
+        assert_eq!(v, JsValue::Number(15.0));
+        let v = rt.eval("scrollY").expect("e");
+        assert_eq!(v, JsValue::Number(50.0));
+    }
+
+    #[test]
+    fn page_y_offset_es_alias_de_scroll_y() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("scrollTo(0, 99)").expect("e");
+        let v = rt.eval("pageYOffset").expect("e");
+        assert_eq!(v, JsValue::Number(99.0));
+    }
+
+    #[test]
+    fn element_scroll_top_get_set_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        // Get inicial es 0.
+        let v = rt.eval("document.getElementById('x').scrollTop").expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+        rt.drain_dom_mutations();
+        rt.eval("document.getElementById('x').scrollTop = 42").expect("e");
+        // Mirror local actualizado.
+        let v = rt.eval("document.getElementById('x').scrollTop").expect("e");
+        assert_eq!(v, JsValue::Number(42.0));
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "scrollTop");
+        assert_eq!(muts[0].value, "42");
     }
 
     // ============= Fase 7.25 — Event/CustomEvent + dispatchEvent =============

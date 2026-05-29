@@ -2298,6 +2298,39 @@ fn apply_dom_mutations(t: &mut TabState) {
                     t.focused_input = None;
                 }
             }
+        } else if m.kind == "scroll" {
+            // Fase 7.26: window.scrollTo(x, y) publica con id vacío y
+            // value = "x,y". Sólo aplicamos la coord Y al scroll_y del
+            // tab (no tenemos scroll horizontal por ahora).
+            if let Some(comma) = m.value.find(',') {
+                if let Ok(y) = m.value[comma + 1..].parse::<f32>() {
+                    t.scroll_y = y.max(0.0);
+                }
+            }
+        } else if m.kind == "scrollTop" {
+            // Fase 7.26: el.scrollTop = N. Aplica sólo si el id matchea
+            // body/html/main (el "viewport root" del tab). Otros
+            // elementos requerirían scroll containers per-elemento.
+            let mut applied = false;
+            bt.walk(|b| {
+                if applied {
+                    return;
+                }
+                if b.element_id.as_deref() == Some(m.id.as_str()) {
+                    let is_root =
+                        matches!(b.tag.as_deref(), Some("body") | Some("html") | Some("main"));
+                    if is_root {
+                        if let Ok(y) = m.value.parse::<f32>() {
+                            t.scroll_y = y.max(0.0);
+                            applied = true;
+                        }
+                    }
+                }
+            });
+            let _ = applied; // permite que se compile aunque no se use; doc-only
+        } else if m.kind == "scrollLeft" {
+            // Fase 7.26: scrollLeft no aplica — no tenemos scroll
+            // horizontal en el chrome. No-op silencioso.
         } else if m.kind == "scrollIntoView" {
             // Fase 7.24: scroll heurístico DFS-order × 30px. Sin layout
             // taffy exacto (vive sólo en frame render), aproximamos la
@@ -5879,5 +5912,31 @@ mod tests {
         .expect("e");
         apply_dom_mutations(t);
         assert_eq!(t.scroll_y, 42.0, "scroll no debe moverse para id inexistente");
+    }
+
+    // ============= Fase 7.26 — window.scrollTo aplicado al chrome =============
+
+    #[test]
+    fn apply_scroll_mutation_actualiza_scroll_y_del_tab() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body></body>"#));
+        t.scroll_y = 0.0;
+        let rt = t.js.as_mut().expect("rt");
+        rt.eval("scrollTo(0, 250)").expect("e");
+        apply_dom_mutations(t);
+        assert_eq!(t.scroll_y, 250.0);
+    }
+
+    #[test]
+    fn apply_scroll_mutation_clampea_a_no_negativo() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body></body>"#));
+        t.scroll_y = 100.0;
+        let rt = t.js.as_mut().expect("rt");
+        rt.eval("scrollTo(0, -50)").expect("e");
+        apply_dom_mutations(t);
+        assert_eq!(t.scroll_y, 0.0);
     }
 }
