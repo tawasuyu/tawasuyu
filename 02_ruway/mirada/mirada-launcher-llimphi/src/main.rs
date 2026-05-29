@@ -5,7 +5,7 @@ use std::time::Duration;
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 
-use mirada_launcher_llimphi::config::Config;
+use mirada_launcher_llimphi::config::{Config, FloatingCard};
 use mirada_launcher_llimphi::panel;
 use mirada_launcher_llimphi::widget::{Msg, Widget};
 use mirada_launcher_llimphi::widgets;
@@ -18,6 +18,8 @@ struct Model {
     left: Vec<Box<dyn Widget>>,
     center: Vec<Box<dyn Widget>>,
     right: Vec<Box<dyn Widget>>,
+    /// Tarjetas flotantes (esquemas + widgets vivos en paralelo).
+    floating: Vec<(FloatingCard, Vec<Box<dyn Widget>>)>,
 }
 
 impl Model {
@@ -26,6 +28,7 @@ impl Model {
             .iter_mut()
             .chain(self.center.iter_mut())
             .chain(self.right.iter_mut())
+            .chain(self.floating.iter_mut().flat_map(|(_, ws)| ws.iter_mut()))
     }
 
     fn each_widget(&self) -> impl Iterator<Item = &Box<dyn Widget>> {
@@ -33,6 +36,7 @@ impl Model {
             .iter()
             .chain(self.center.iter())
             .chain(self.right.iter())
+            .chain(self.floating.iter().flat_map(|(_, ws)| ws.iter()))
     }
 
     fn route_to_quake(&mut self, msg: &Msg) {
@@ -65,7 +69,7 @@ impl App for LauncherApp {
 
     fn app_id() -> Option<&'static str> { Some("mirada.launcher") }
 
-    fn initial_size() -> (u32, u32) { (1280, 36) }
+    fn initial_size() -> (u32, u32) { (1280, 720) }
 
     fn init(handle: &Handle<Msg>) -> Model {
         let cfg = Config::load_or_default();
@@ -75,10 +79,19 @@ impl App for LauncherApp {
         let left = cfg.panel.left.iter().map(|s| widgets::build(s, &ctx)).collect();
         let center = cfg.panel.center.iter().map(|s| widgets::build(s, &ctx)).collect();
         let right = cfg.panel.right.iter().map(|s| widgets::build(s, &ctx)).collect();
+        let floating = cfg
+            .panel
+            .floating
+            .iter()
+            .map(|card| {
+                let ws = card.widgets.iter().map(|s| widgets::build(s, &ctx)).collect();
+                (card.clone(), ws)
+            })
+            .collect();
 
         handle.spawn_periodic(Duration::from_secs(1), || Msg::Tick);
 
-        Model { theme: Theme::dark(), cfg, left, center, right }
+        Model { theme: Theme::dark(), cfg, left, center, right, floating }
     }
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -106,7 +119,12 @@ impl App for LauncherApp {
             &model.left,
             &model.center,
             &model.right,
+            &model.floating,
         )
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        panel::overlay_view(&model.theme, model.each_widget())
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {

@@ -1,16 +1,20 @@
-//! Composición visual del panel: barra horizontal o vertical con tres
-//! slots `left | center | right`. Conky-style floating queda para una
-//! iteración posterior — la barra alcanza para validar el modelo.
+//! Composición visual del panel:
+//!
+//! - Barra horizontal o vertical con tres slots `left | center | right`.
+//! - **Área libre** debajo (futuros widgets tipo conky: floating cards,
+//!   por ahora vacía).
+//! - **Overlay** del quake_input (centrado, vía `App::view_overlay`).
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, AlignItems, FlexDirection, JustifyContent, Size, Style},
+    prelude::{auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
     Rect,
 };
 use llimphi_ui::View;
 
-use crate::config::PanelConfig;
+use crate::config::{FloatingCard, PanelConfig};
 use crate::widget::{Msg, Widget};
+use crate::widgets::quake::QuakeInput;
 
 /// Direcciona el panel según `position`.
 pub fn flex_dir(pos: &str) -> FlexDirection {
@@ -20,13 +24,15 @@ pub fn flex_dir(pos: &str) -> FlexDirection {
     }
 }
 
-/// Construye el `View<Msg>` raíz a partir de la config y los widgets vivos.
+/// Construye el `View<Msg>` raíz: ventana → barra arriba → área libre con
+/// tarjetas flotantes (estilo conky) en sus posiciones absolutas.
 pub fn build(
     cfg: &PanelConfig,
     theme: &Theme,
     left: &[Box<dyn Widget>],
     center: &[Box<dyn Widget>],
     right: &[Box<dyn Widget>],
+    floating: &[(FloatingCard, Vec<Box<dyn Widget>>)],
 ) -> View<Msg> {
     let dir = flex_dir(&cfg.position);
 
@@ -79,17 +85,98 @@ pub fn build(
         ..Default::default()
     };
 
+    // Área debajo de la barra — pinta el bg del tema y dentro coloca
+    // tarjetas flotantes con posición absoluta en píxeles.
+    let cards: Vec<View<Msg>> = floating
+        .iter()
+        .map(|(card, ws)| card_view(card, ws, theme))
+        .collect();
+
+    let free_area = {
+        let mut style = Style {
+            size: Size { width: percent(1.0_f32), height: percent(0.0_f32) },
+            ..Default::default()
+        };
+        style.flex_grow = 1.0;
+        View::new(style).fill(theme.bg_app).children(cards)
+    };
+
+    let bar = View::new(bar_style)
+        .fill(theme.bg_panel_alt)
+        .children(vec![
+            slot(left, JustifyContent::FlexStart, 1.0),
+            slot(center, JustifyContent::Center, 1.0),
+            slot(right, JustifyContent::FlexEnd, 1.0),
+        ]);
+
     let root_style = Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     };
 
-    View::new(root_style).fill(theme.bg_app).children(vec![View::new(bar_style)
-        .fill(theme.bg_panel_alt)
-        .children(vec![
-            slot(left, JustifyContent::FlexStart, 1.0),
-            slot(center, JustifyContent::Center, 1.0),
-            slot(right, JustifyContent::FlexEnd, 1.0),
-        ])])
+    // Si la barra va abajo, invertimos el orden.
+    let bar_at_top = !matches!(cfg.position.as_str(), "bottom");
+    let children = if bar_at_top { vec![bar, free_area] } else { vec![free_area, bar] };
+
+    View::new(root_style).fill(theme.bg_app).children(children)
+}
+
+/// Construye una tarjeta flotante: rectángulo absoluto con título
+/// opcional y los widgets apilados verticalmente.
+fn card_view(card: &FloatingCard, widgets: &[Box<dyn Widget>], theme: &Theme) -> View<Msg> {
+    let mut children: Vec<View<Msg>> = Vec::new();
+    if let Some(t) = &card.title {
+        children.push(
+            View::new(Style {
+                size: Size { width: auto(), height: length(20.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::FlexStart),
+                ..Default::default()
+            })
+            .text(t.clone(), 12.0, theme.fg_muted),
+        );
+    }
+    for w in widgets {
+        children.push(w.view(theme));
+    }
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(card.x),
+            top: length(card.y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(card.w), height: length(card.h) },
+        flex_direction: FlexDirection::Column,
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .children(children)
+}
+
+/// Devuelve el overlay del primer `QuakeInput` que esté abierto, o
+/// `None` si no hay ninguno activo.
+pub fn overlay_view<'a>(
+    theme: &Theme,
+    widgets: impl Iterator<Item = &'a Box<dyn Widget>>,
+) -> Option<View<Msg>> {
+    for w in widgets {
+        if let Some(q) = w.as_any().downcast_ref::<QuakeInput>() {
+            if let Some(v) = q.overlay(theme) {
+                return Some(v);
+            }
+        }
+    }
+    None
 }

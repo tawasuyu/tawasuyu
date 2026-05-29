@@ -8,9 +8,10 @@
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, AlignItems, FlexDirection, JustifyContent, Size, Style},
+    prelude::{length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
     Rect,
 };
+use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{KeyEvent, KeyState, View};
 
 use crate::config::WidgetSpec;
@@ -42,6 +43,75 @@ impl QuakeInput {
             width_closed,
             hotkey,
         }
+    }
+
+    /// Vista del overlay full-screen cuando `open` — scrim semi-transparente
+    /// con la card del input centrada. La app lo enchufa desde
+    /// `view_overlay`; cuando `open == false` devuelve `None` y el runtime
+    /// no pinta nada.
+    pub fn overlay(&self, theme: &Theme) -> Option<View<Msg>> {
+        if !self.open {
+            return None;
+        }
+
+        let (content, content_color) = if self.buffer.is_empty() {
+            (self.placeholder.clone(), theme.fg_placeholder)
+        } else {
+            (format!("› {}", self.buffer), theme.fg_text)
+        };
+
+        let card = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: length(self.width_open.max(360.0_f32)),
+                height: length(96.0_f32),
+            },
+            padding: Rect {
+                left: length(20.0_f32),
+                right: length(20.0_f32),
+                top: length(20.0_f32),
+                bottom: length(20.0_f32),
+            },
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .radius(14.0)
+        .children(vec![
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::FlexStart),
+                ..Default::default()
+            })
+            .text(content, 22.0, content_color),
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::FlexStart),
+                ..Default::default()
+            })
+            .text("Enter — submit · Esc — cerrar", 11.0, theme.fg_placeholder),
+        ]);
+
+        let scrim = View::new(Style {
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(0.0_f32),
+                top: length(0.0_f32),
+                right: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(Color::from_rgba8(0, 0, 0, 160))
+        .on_click(Msg::QuakeToggle)
+        .children(vec![card]);
+
+        Some(scrim)
     }
 
     /// Llamado por la app para mutar al recibir mensajes del input.

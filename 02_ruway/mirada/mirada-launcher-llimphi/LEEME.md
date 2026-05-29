@@ -54,7 +54,28 @@ kind = "cpu_meter"
 kind   = "quake_input"
 hotkey = "F12"
 placeholder = "› preguntá, lanzá, navegá"
+
+# Tarjetas flotantes estilo conky (debajo de la barra, posición absoluta)
+[[panel.floating]]
+x = 40
+y = 80
+w = 260
+h = 110
+title = "sistema"
+
+[[panel.floating.widgets]]
+kind = "ram_meter"
+
+[[panel.floating.widgets]]
+kind = "cpu_meter"
 ```
+
+## Quake overlay
+
+Al togglearlo (`F12` por default), un scrim semi-transparente cubre la
+ventana y aparece una card centrada con input grande. Click fuera del
+input cierra; `Esc` cierra; `Enter` "submitea" (logueado por stderr —
+target real defer a la siguiente iteración).
 
 ## Widgets
 

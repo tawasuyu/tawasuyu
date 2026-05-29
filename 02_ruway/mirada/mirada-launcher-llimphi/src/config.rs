@@ -59,6 +59,26 @@ pub struct PanelConfig {
     pub center: Vec<WidgetSpec>,
     #[serde(default)]
     pub right: Vec<WidgetSpec>,
+    /// Tarjetas flotantes tipo conky en el área debajo de la barra.
+    /// Cada una tiene posición absoluta en píxeles desde la esquina
+    /// superior-izquierda del área libre.
+    #[serde(default)]
+    pub floating: Vec<FloatingCard>,
+}
+
+/// Una tarjeta posicionada en píxeles dentro del área libre.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FloatingCard {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Título opcional (chip arriba a la izquierda).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Widgets dentro de la tarjeta, apilados verticalmente.
+    #[serde(default)]
+    pub widgets: Vec<WidgetSpec>,
 }
 
 /// Una entrada del config: `kind` + props arbitrarios. Los props los lee
@@ -112,6 +132,7 @@ impl Default for PanelConfig {
                     .into(),
                 },
             ],
+            floating: Vec::new(),
         }
     }
 }
@@ -174,19 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn quake_default_carries_f12_hotkey() {
-        let cfg = Config::default();
-        let q = cfg.panel.right.iter().find(|w| w.kind == "quake_input").unwrap();
-        assert_eq!(q.str_prop("hotkey", "?"), "F12");
-    }
-
-    #[test]
-    fn general_defaults_timezone_auto() {
-        let cfg = Config::default();
-        assert_eq!(cfg.general.timezone, "auto");
-    }
-
-    #[test]
     fn parses_minimal_toml() {
         let src = r#"
             [panel]
@@ -220,5 +228,43 @@ mod tests {
         let w = &cfg.panel.left[0];
         assert_eq!(w.str_prop("color", "?"), "rebeccapurple");
         assert!((w.float_prop("ratio", 0.0) - 0.42).abs() < 1e-9);
+    }
+
+    #[test]
+    fn quake_default_carries_f12_hotkey() {
+        let cfg = Config::default();
+        let q = cfg.panel.right.iter().find(|w| w.kind == "quake_input").unwrap();
+        assert_eq!(q.str_prop("hotkey", "?"), "F12");
+    }
+
+    #[test]
+    fn general_defaults_timezone_auto() {
+        let cfg = Config::default();
+        assert_eq!(cfg.general.timezone, "auto");
+    }
+
+    #[test]
+    fn parses_floating_card() {
+        let src = r#"
+            [[panel.floating]]
+            x = 40
+            y = 80
+            w = 280
+            h = 140
+            title = "sistema"
+
+            [[panel.floating.widgets]]
+            kind = "ram_meter"
+
+            [[panel.floating.widgets]]
+            kind = "cpu_meter"
+        "#;
+        let cfg: Config = toml::from_str(src).unwrap();
+        assert_eq!(cfg.panel.floating.len(), 1);
+        let card = &cfg.panel.floating[0];
+        assert_eq!(card.x, 40.0);
+        assert_eq!(card.title.as_deref(), Some("sistema"));
+        assert_eq!(card.widgets.len(), 2);
+        assert_eq!(card.widgets[0].kind, "ram_meter");
     }
 }
