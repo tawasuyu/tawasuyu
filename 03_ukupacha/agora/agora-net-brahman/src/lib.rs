@@ -44,6 +44,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod rate_limit;
+
 use std::sync::Arc;
 
 use agora_core::Attestation;
@@ -136,6 +138,9 @@ pub struct SyncStats {
 pub struct AgoraNet {
     net: Arc<BrahmanNet>,
     graph: Arc<Mutex<TrustGraph>>,
+    /// Si está presente, el accept loop le pide un token por sesión
+    /// entrante. `None` (default) = sin límite.
+    limiter: Option<Arc<rate_limit::RateLimiter>>,
 }
 
 impl AgoraNet {
@@ -151,6 +156,7 @@ impl AgoraNet {
         Self {
             net,
             graph: Arc::new(Mutex::new(graph)),
+            limiter: None,
         }
     }
 
@@ -159,6 +165,22 @@ impl AgoraNet {
     pub fn standalone(graph: TrustGraph) -> Result<Self, AgoraNetError> {
         let net = Arc::new(BrahmanNet::new()?);
         Ok(Self::sharing(net, graph))
+    }
+
+    /// Activa el rate limiter sobre el lado pasivo. Tras esta llamada
+    /// el `run_passive_accept` siguiente descarta sesiones de peers que
+    /// hayan agotado su balde de tokens. Llamarlo antes de
+    /// `run_passive_accept`; el limitador no se actualiza para tasks
+    /// ya en vuelo.
+    pub fn with_rate_limit(mut self, cfg: rate_limit::RateLimitConfig) -> Self {
+        self.limiter = Some(Arc::new(rate_limit::RateLimiter::new(cfg)));
+        self
+    }
+
+    /// Acceso al limitador activo, si lo hay. Útil para observabilidad
+    /// (cuántos tokens le quedan a un peer, qué config se está usando).
+    pub fn rate_limiter(&self) -> Option<Arc<rate_limit::RateLimiter>> {
+        self.limiter.clone()
     }
 
     pub fn peer_id(&self) -> PeerId {
@@ -202,11 +224,23 @@ impl AgoraNet {
     pub fn run_passive_accept(&self) -> tokio::task::JoinHandle<()> {
         let mut control = self.net.control.clone();
         let graph = Arc::clone(&self.graph);
+        let limiter = self.limiter.clone();
         tokio::spawn(async move {
             let mut incoming = control
                 .accept(GOSSIP_PROTOCOL)
                 .expect("only one accept handle per protocol");
-            while let Some((_peer, stream)) = incoming.next().await {
+            while let Some((peer, stream)) = incoming.next().await {
+                if let Some(ref l) = limiter {
+                    if !l.try_take(peer).await {
+                        // Balde vacío: cerramos la stream sin atender.
+                        // Dropear el `Stream` cierra los half-sockets;
+                        // el peer ve EOF inmediato — señal explícita de
+                        // que llegó al límite. No logueamos en hot path
+                        // para no abrir nuevo vector de spam (logs).
+                        drop(stream);
+                        continue;
+                    }
+                }
                 let graph = Arc::clone(&graph);
                 tokio::spawn(async move {
                     // Errores de stream son normales (peer se cae,
@@ -366,7 +400,9 @@ impl AgoraNet {
         let net = Arc::clone(&self.net);
         let graph = Arc::clone(&self.graph);
         tokio::spawn(async move {
-            let stub = AgoraNet { net, graph };
+            // El stub no necesita limiter — sólo dispara `sync_with`
+            // (lado activo), no acepta sesiones entrantes.
+            let stub = AgoraNet { net, graph, limiter: None };
             loop {
                 tokio::time::sleep(period).await;
                 for peer in peers() {
@@ -905,5 +941,102 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         loop_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn rate_limit_descarta_sesiones_extra_de_un_mismo_peer() {
+        // Bob corre con limiter burst=1, refill=0. Alice abre dos
+        // sesiones de gossip seguidas: la primera pasa, la segunda
+        // queda sin token y Bob cierra sin atender. Stats: la segunda
+        // termina con `bundles_enviados == 0` porque Bob no respondió
+        // Request.
+        let yumaira = Keypair::from_seed([21; 32]);
+        let venezuela = Keypair::from_seed([11; 32]);
+
+        let mut g_alice = TrustGraph::new();
+        g_alice.register(yumaira.identity(IdentityKind::Person, "Yumaira"));
+        g_alice.register(venezuela.identity(IdentityKind::Institution, "Venezuela"));
+        g_alice
+            .add_attestation(make_attestation(&venezuela, &yumaira, "nacionalidad", "venezolana"))
+            .unwrap();
+
+        let mut g_bob = TrustGraph::new();
+        g_bob.register(yumaira.identity(IdentityKind::Person, "Yumaira"));
+        g_bob.register(venezuela.identity(IdentityKind::Institution, "Venezuela"));
+
+        let alice = AgoraNet::standalone(g_alice).expect("alice");
+        let cfg = rate_limit::RateLimitConfig { burst: 1, refill_per_sec: 0.0 };
+        let bob = AgoraNet::standalone(g_bob).expect("bob").with_rate_limit(cfg);
+
+        let bob_pid = bob.peer_id();
+        let bob_listen = bob.listen("/ip4/127.0.0.1/tcp/0".parse().unwrap()).await;
+        let _bob_accept = bob.run_passive_accept();
+        let dial_addr: Multiaddr =
+            format!("{}/p2p/{}", bob_listen, bob_pid).parse().unwrap();
+        alice.dial(dial_addr);
+        wait_for_dial(&alice.net, bob_pid).await;
+
+        // Primera sesión: debe pasar y propagar 1 atestación.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let stats1 = loop {
+            match alice.gossip_with(bob_pid).await {
+                Ok(s) => break s,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => panic!("gossip_with #1 failed: {e}"),
+            }
+        };
+        assert_eq!(stats1.bundles_enviados, 1, "primera sesión: bundle propagado");
+
+        // Esperamos que bob mergee.
+        for _ in 0..20 {
+            if bob.snapshot().await.attestation_count() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(bob.snapshot().await.attestation_count(), 1);
+
+        // Inyectamos una segunda atestación en Alice para tener algo
+        // que empujar de nuevo. La segunda sesión debe quedar bloqueada
+        // por el rate limit — Bob no leerá nuestro Announce ni
+        // mandará Request.
+        let comunidad = Keypair::from_seed([31; 32]);
+        {
+            let g = alice.graph();
+            let mut g = g.lock().await;
+            g.register(comunidad.identity(IdentityKind::Community, "Vecinos"));
+            g.add_attestation(make_attestation(&comunidad, &yumaira, "miembro-de", "Valle"))
+                .unwrap();
+        }
+        // La segunda sesión puede manifestarse de dos maneras según
+        // cuándo el accept loop dropea la stream: (a) Bob cierra antes
+        // de que Alice termine el Announce → Alice ve `Io(WriteZero)`;
+        // (b) Bob cierra justo después → Alice no recibe Request y
+        // termina con `bundles_enviados == 0`. Ambas son evidencia
+        // válida del rate limit.
+        match alice.gossip_with(bob_pid).await {
+            Ok(s) => assert_eq!(
+                s.bundles_enviados, 0,
+                "rate-limited: Bob no pidió el bundle (b)"
+            ),
+            Err(AgoraNetError::Io(_)) => { /* (a) */ }
+            Err(e) => panic!("error inesperado en sesión rate-limited: {e}"),
+        }
+
+        // Bob no integró la segunda atestación.
+        let g_bob_final = bob.snapshot().await;
+        assert_eq!(
+            g_bob_final.attestation_count(),
+            1,
+            "rate limit bloquea sync; bob queda con la atestación de la 1ra sesión únicamente"
+        );
+
+        // Confirmamos vía el limiter directo que el peer está en cero.
+        let limiter = bob.rate_limiter().expect("limiter activado");
+        let alice_pid = alice.peer_id();
+        let tokens = limiter.tokens_for(alice_pid).await;
+        assert!(tokens < 1.0, "balde de alice debería estar < 1.0, got {tokens}");
     }
 }

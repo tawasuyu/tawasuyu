@@ -31,6 +31,11 @@ enum Cmd {
         #[command(subcommand)]
         op: IdentidadOp,
     },
+    /// Operaciones sobre atestaciones.
+    Atestacion {
+        #[command(subcommand)]
+        op: AtestacionOp,
+    },
     /// Firma una atestación con una identidad propia y la agrega al grafo.
     Atestar {
         /// Identidad firmante (debe estar en el keystore).
@@ -157,6 +162,49 @@ enum IdentidadOp {
     /// Imprime la cara pública de una identidad (pubkey hex).
     Exportar {
         id: String,
+    },
+    /// Cambia el `display_name` de una identidad ya registrada (el id
+    /// no cambia — sólo la etiqueta presentacional).
+    Rename {
+        /// Id o prefijo hex de la identidad a renombrar.
+        id: String,
+        /// Nombre nuevo. No es único; no se valida contra el grafo.
+        #[arg(long)]
+        nombre: String,
+    },
+    /// Borra una identidad del grafo local y purga sus atestaciones
+    /// asociadas (como attester o como subject). Sólo aplica a seeds
+    /// propias del keystore — para borrar identidades ajenas hay que
+    /// pasar `--force` (se mantiene la atestación huérfana fuera).
+    Remove {
+        /// Id o prefijo hex de la identidad a borrar.
+        id: String,
+        /// Permite borrar identidades sin seed local. Por defecto sólo
+        /// se aceptan las propias para evitar errores destructivos.
+        #[arg(long)]
+        force: bool,
+        /// Borra también la seed cifrada del keystore. Sin esto, la
+        /// identidad se puede re-registrar con `agora-cli identidad
+        /// nueva --seed-stdin` después.
+        #[arg(long)]
+        purgar_keystore: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AtestacionOp {
+    /// Lista atestaciones del grafo local. Sin filtros, muestra todas
+    /// (orden de inserción). Los filtros son AND.
+    Listar {
+        /// Sólo atestaciones cuyo `claim.subject` matchea ese id/prefijo.
+        #[arg(long)]
+        subject: Option<String>,
+        /// Sólo atestaciones cuyo `attester` matchea ese id/prefijo.
+        #[arg(long)]
+        attester: Option<String>,
+        /// Sólo claims con ese predicado exacto (case-sensitive).
+        #[arg(long)]
+        predicate: Option<String>,
     },
 }
 
@@ -400,6 +448,15 @@ fn run(cmd: Cmd) -> CliResult<()> {
             }
             IdentidadOp::Listar => identidad_listar(),
             IdentidadOp::Exportar { id } => identidad_exportar(&id),
+            IdentidadOp::Rename { id, nombre } => identidad_rename(&id, &nombre),
+            IdentidadOp::Remove { id, force, purgar_keystore } => {
+                identidad_remove(&id, force, purgar_keystore)
+            }
+        },
+        Cmd::Atestacion { op } => match op {
+            AtestacionOp::Listar { subject, attester, predicate } => {
+                atestacion_listar(subject.as_deref(), attester.as_deref(), predicate.as_deref())
+            }
         },
         Cmd::Atestar { como, sobre, pred, valor } => atestar(&como, &sobre, &pred, &valor),
         Cmd::Verificar { archivo } => verificar(&archivo),
@@ -462,6 +519,125 @@ fn identidad_listar() -> CliResult<()> {
             kind = kind_label(ident.kind),
             name = ident.display_name,
         );
+    }
+    Ok(())
+}
+
+fn identidad_rename(id: &str, nombre: &str) -> CliResult<()> {
+    if nombre.is_empty() {
+        return Err(Error::Canal("nombre vacío — pasá --nombre con un valor"));
+    }
+    let mut s = Sesion::abrir()?;
+    let id = s.resolver_id(id)?;
+    let prev = s
+        .graph
+        .identity(id)
+        .ok_or(Error::IdentidadDesconocida(id))?
+        .display_name
+        .clone();
+    if !s.graph.set_display_name(id, nombre.to_string()) {
+        // No debería pasar — `identity()` ya devolvió Some — pero
+        // dejamos el error explícito por si el contrato del graph cambia.
+        return Err(Error::IdentidadDesconocida(id));
+    }
+    s.guardar()?;
+    println!(
+        "identidad {} renombrada: \"{}\" → \"{}\"",
+        hex_de(id.as_bytes()),
+        prev,
+        nombre
+    );
+    Ok(())
+}
+
+fn identidad_remove(id: &str, force: bool, purgar_keystore: bool) -> CliResult<()> {
+    let mut s = Sesion::abrir()?;
+    let id = s.resolver_id(id)?;
+    if s.graph.identity(id).is_none() {
+        return Err(Error::IdentidadDesconocida(id));
+    }
+    if !s.es_mia(id) && !force {
+        return Err(Error::Canal(
+            "identidad ajena (sin seed local) — pasá --force si querés \
+             borrarla igual del grafo local",
+        ));
+    }
+    let stats = s.graph.remove_identity(id);
+    if purgar_keystore && s.keystore.exists(id) {
+        s.keystore.remove(id).map_err(Error::Keystore)?;
+    }
+    s.guardar()?;
+    println!(
+        "identidad {} borrada del grafo · {} atestación{} relacionada{} purgada{}{}",
+        hex_de(id.as_bytes()),
+        stats.attestations,
+        if stats.attestations == 1 { "" } else { "es" },
+        if stats.attestations == 1 { "" } else { "s" },
+        if stats.attestations == 1 { "" } else { "s" },
+        if purgar_keystore {
+            " · seed borrada del keystore"
+        } else if s.es_mia(id) {
+            " · seed PRESERVADA en el keystore (re-registrable con --seed-stdin)"
+        } else {
+            ""
+        }
+    );
+    Ok(())
+}
+
+fn atestacion_listar(
+    subject: Option<&str>,
+    attester: Option<&str>,
+    predicate: Option<&str>,
+) -> CliResult<()> {
+    let s = Sesion::abrir()?;
+    // Los filtros de id se resuelven contra el grafo: aceptamos
+    // prefijos por consistencia con el resto de la CLI.
+    let subject_id = subject.map(|x| s.resolver_id(x)).transpose()?;
+    let attester_id = attester.map(|x| s.resolver_id(x)).transpose()?;
+
+    let mut total = 0usize;
+    for att in s.graph.attestations() {
+        if let Some(id) = subject_id {
+            if att.claim.subject != id {
+                continue;
+            }
+        }
+        if let Some(id) = attester_id {
+            if att.attester != id {
+                continue;
+            }
+        }
+        if let Some(p) = predicate {
+            if att.claim.predicate != p {
+                continue;
+            }
+        }
+        total += 1;
+        let hash = hex_de(&att.stable_hash());
+        let hash_short: String = hash.chars().take(12).collect();
+        let attester_short: String =
+            hex_de(att.attester.as_bytes()).chars().take(12).collect();
+        let subject_short: String = hex_de(att.claim.subject.as_bytes())
+            .chars()
+            .take(12)
+            .collect();
+        let mark = if s.es_mia(att.attester) { "★" } else { " " };
+        println!(
+            "{mark} {hash_short}  {attester_short}→{subject_short}  {pred}={valor}  ts={ts}",
+            mark = mark,
+            hash_short = hash_short,
+            attester_short = attester_short,
+            subject_short = subject_short,
+            pred = att.claim.predicate,
+            valor = att.claim.value,
+            ts = att.claim.issued_at,
+        );
+    }
+    if total == 0 {
+        println!("(0 atestaciones bajo los filtros aplicados)");
+    } else {
+        println!("— {total} atestación{plural}", plural = if total == 1 { "" } else { "es" });
     }
     Ok(())
 }

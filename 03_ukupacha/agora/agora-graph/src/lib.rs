@@ -121,6 +121,17 @@ impl Default for TrustPolicy {
     }
 }
 
+/// Cuántas cosas removió [`TrustGraph::remove_identity`]. Útil para
+/// reportes "borré una identidad y N atestaciones huérfanas".
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RemoveStats {
+    /// `true` si la identidad estaba registrada y se eliminó.
+    pub identity: bool,
+    /// Cantidad de atestaciones purgadas (mencionaban al id como
+    /// attester o como claim.subject).
+    pub attestations: usize,
+}
+
 /// La red de confianza: identidades conocidas + atestaciones verificadas.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TrustGraph {
@@ -176,6 +187,42 @@ impl TrustGraph {
             self.attestations.push(att);
         }
         Ok(())
+    }
+
+    /// Cambia el `display_name` de una identidad ya registrada. Devuelve
+    /// `false` si la identidad no existe. El `display_name` es local y
+    /// no autoritativo — el id sigue siendo el mismo, lo que cambia es
+    /// cómo se presenta. Las atestaciones existentes no se tocan (su
+    /// `subject`/`attester` son ids, no nombres).
+    pub fn set_display_name(&mut self, id: IdentityId, name: impl Into<String>) -> bool {
+        match self.identities.get_mut(&id) {
+            Some(ident) => {
+                ident.display_name = name.into();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Saca una identidad del grafo y purga toda atestación que la
+    /// mencione (como `attester` o como `claim.subject`). Devuelve la
+    /// cuenta de cosas removidas — `removed.identity == false` significa
+    /// que no había nada con ese id; las atestaciones se purgan igual
+    /// (caso degenerado: hubo identidad antes y dejó huérfanos).
+    ///
+    /// **No** toca el keystore — eso es responsabilidad del caller.
+    /// Pensado para `agora-cli identidad remove` sobre seeds propias;
+    /// para identidades ajenas sólo borra la visión local del grafo.
+    pub fn remove_identity(&mut self, id: IdentityId) -> RemoveStats {
+        let identity = self.identities.remove(&id).is_some();
+        let before = self.attestations.len();
+        self.attestations
+            .retain(|a| a.attester != id && a.claim.subject != id);
+        let removed_attestations = before - self.attestations.len();
+        RemoveStats {
+            identity,
+            attestations: removed_attestations,
+        }
     }
 
     /// Atestaciones cuyo claim trata sobre `subject`.
@@ -518,5 +565,53 @@ mod tests {
         assert!(g.is_accepted(yumaira.identity_id(), "lema", "sembrar", &lax));
         // La política por defecto, sin terceros, no la acepta.
         assert!(!g.is_accepted(yumaira.identity_id(), "lema", "sembrar", &TrustPolicy::default()));
+    }
+
+    #[test]
+    fn set_display_name_replaces_label_keeping_id() {
+        let (yumaira, ..) = actors();
+        let mut g = TrustGraph::new();
+        g.register(yumaira.identity(IdentityKind::Person, "Yumi"));
+        let id = yumaira.identity_id();
+        assert_eq!(g.identity(id).unwrap().display_name, "Yumi");
+        assert!(g.set_display_name(id, "Yumaira"));
+        assert_eq!(g.identity(id).unwrap().display_name, "Yumaira");
+        // Identidad inexistente: false, sin crear nada.
+        let (_, _, _, vecina) = actors();
+        assert!(!g.set_display_name(vecina.identity_id(), "Carmen"));
+        assert!(g.identity(vecina.identity_id()).is_none());
+    }
+
+    #[test]
+    fn remove_identity_purges_related_attestations() {
+        let (yumaira, venezuela, comunidad, vecina) = actors();
+        let mut g = TrustGraph::new();
+        g.register(yumaira.identity(IdentityKind::Person, "Yumaira"));
+        g.register(venezuela.identity(IdentityKind::Institution, "Venezuela"));
+        g.register(vecina.identity(IdentityKind::Person, "Carmen"));
+        // Venezuela atestigua sobre Yumaira → al borrar Venezuela esta
+        // atestación cae (mencionaba al attester).
+        g.add_attestation(attest(&venezuela, yumaira.identity_id(), "nacionalidad", "venezolana"))
+            .unwrap();
+        // Yumaira atestigua sobre Carmen → al borrar Yumaira cae.
+        g.add_attestation(attest(&yumaira, vecina.identity_id(), "vecindad", "valle"))
+            .unwrap();
+        // Comunidad NO está registrada pero atestigua sobre Carmen — la
+        // atestación entra al graph igual; debe sobrevivir al remove de
+        // Venezuela.
+        g.add_attestation(attest(&comunidad, vecina.identity_id(), "miembro-de", "Valle"))
+            .unwrap();
+        assert_eq!(g.attestation_count(), 3);
+
+        let stats = g.remove_identity(venezuela.identity_id());
+        assert!(stats.identity);
+        assert_eq!(stats.attestations, 1);
+        assert_eq!(g.attestation_count(), 2);
+        assert!(g.identity(venezuela.identity_id()).is_none());
+
+        // Doble remove no rompe; identity:false, attestations:0.
+        let again = g.remove_identity(venezuela.identity_id());
+        assert!(!again.identity);
+        assert_eq!(again.attestations, 0);
     }
 }
