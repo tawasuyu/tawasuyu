@@ -757,6 +757,19 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             else if (a && a._synthetic) el.appendChild(a);
         }
     };
+    // Fase 7.25 — dispatchEvent(event). Acepta un Event/CustomEvent ya
+    // construido y lo rutea por capture/target/bubble (delega a
+    // __puriy_dispatch_event). Devuelve `!event.defaultPrevented` (true
+    // = no se canceló). Spec patrón:
+    //   el.dispatchEvent(new CustomEvent('save', {detail: {file: ...}}));
+    // Handlers reciben el OBJETO original (con `detail` y cualquier
+    // método custom que el caller agregó).
+    el.dispatchEvent = function(event) {
+        if (!event || typeof event.type !== 'string') {
+            throw new Error('dispatchEvent: event inválido');
+        }
+        return globalThis.__puriy_dispatch_event(el._id, event);
+    };
     // Fase 7.24 — scrollIntoView(). Publica mutación al chrome para
     // que mueva `scroll_y` del tab a la posición aproximada del
     // elemento. Heurística DFS-order × 30px en el chrome — sin layout
@@ -1304,6 +1317,101 @@ globalThis.__puriy_drain_dirty = function() {
 };
 "#;
 
+/// Fase 7.25 — Event/CustomEvent constructors + dispatch helper para
+/// eventos pre-construidos. Apended al final del DRAIN_DIRTY bootstrap
+/// via eval separado en `JsRuntime::new`. Mantener acá fuera del raw
+/// string evita problemas con los ``/`` que viven en
+/// DRAIN_DIRTY.
+const EVENT_CONSTRUCTORS_BOOTSTRAP: &str = r#"
+globalThis.Event = function(type, init) {
+    this.type = String(type);
+    this.bubbles = !!(init && init.bubbles);
+    this.cancelable = !!(init && init.cancelable);
+    this.defaultPrevented = false;
+    this._stopped = false;
+    this.eventPhase = 0;
+    this.target = null;
+    this.currentTarget = null;
+    this.preventDefault = function() {
+        if (this.cancelable) this.defaultPrevented = true;
+    };
+    this.stopPropagation = function() { this._stopped = true; };
+};
+globalThis.CustomEvent = function(type, init) {
+    globalThis.Event.call(this, type, init);
+    this.detail = (init && init.detail !== undefined) ? init.detail : null;
+};
+globalThis.__puriy_dispatch_event = function(id, event) {
+    var target = globalThis.__puriy_elements[id];
+    if (!target) return false;
+    event.target = target;
+    event.currentTarget = target;
+    event._stopped = false;
+    var chain = [target];
+    if (event.bubbles) {
+        var visited = {}; visited[target.id] = true;
+        var cur = target; var depth = 0;
+        while (cur && cur._parent_id && depth < 64) {
+            var next = globalThis.__puriy_elements[cur._parent_id];
+            if (!next || visited[next.id]) break;
+            visited[next.id] = true;
+            chain.push(next);
+            cur = next;
+            depth++;
+        }
+    }
+    var type = event.type;
+    function invoke(node, store) {
+        var ls = store && store[type];
+        if (!ls) return;
+        var arr2 = ls.slice();
+        var to_remove = [];
+        for (var i = 0; i < arr2.length; i++) {
+            var entry = arr2[i];
+            var fn = typeof entry === 'function' ? entry : entry.fn;
+            var once = typeof entry === 'object' && entry.once === true;
+            try { fn.call(node, event); }
+            catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+            if (once) to_remove.push(entry);
+            if (event._stopped) break;
+        }
+        if (to_remove.length > 0) {
+            var live = store[type];
+            for (var k = 0; k < to_remove.length; k++) {
+                var idx = live.indexOf(to_remove[k]);
+                if (idx >= 0) live.splice(idx, 1);
+            }
+        }
+    }
+    event.eventPhase = 1;
+    for (var i = chain.length - 1; i > 0; i--) {
+        if (event._stopped) break;
+        event.currentTarget = chain[i];
+        invoke(chain[i], chain[i]._capture_listeners);
+    }
+    event.eventPhase = 2;
+    event.currentTarget = target;
+    if (!event._stopped) invoke(target, target._capture_listeners);
+    var onName = 'on' + type;
+    if (!event._stopped && typeof target[onName] === 'function') {
+        try { target[onName].call(target, event); }
+        catch (e3) { globalThis.__puriy_stderr += String(e3) + '\n'; }
+    }
+    if (!event._stopped) invoke(target, target._listeners);
+    event.eventPhase = 3;
+    for (var j = 1; j < chain.length; j++) {
+        if (event._stopped) break;
+        event.currentTarget = chain[j];
+        if (typeof chain[j][onName] === 'function') {
+            try { chain[j][onName].call(chain[j], event); }
+            catch (e2) { globalThis.__puriy_stderr += String(e2) + '\n'; }
+        }
+        invoke(chain[j], chain[j]._listeners);
+    }
+    return !event.defaultPrevented;
+};
+"#;
+
 /// Script que escupe el contenido de `__puriy_stdout`/`__puriy_stderr`
 /// concatenados, los vacía, y devuelve un string con ambos separados
 /// por `'SOH'` (SOH — Start Of Header, control char no-printable
@@ -1469,6 +1577,11 @@ impl JsRuntime {
         // DOM que tienen `id=`, y luego `dispatch_event(id, type)` cuando
         // el usuario interactúa con uno de ellos.
         rt.eval_raw(EVENTS_BOOTSTRAP)?;
+        // Bootstrap Event/CustomEvent + dispatch helper para eventos
+        // pre-construidos. Fase 7.25 — depende de __puriy_elements
+        // (poblado por set_elements) pero las funciones globales en sí
+        // pueden cargar antes; el target lookup ocurre en runtime.
+        rt.eval_raw(EVENT_CONSTRUCTORS_BOOTSTRAP)?;
         Ok(rt)
     }
 
@@ -5262,6 +5375,118 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.25 — Event/CustomEvent + dispatchEvent =============
+
+    #[test]
+    fn event_constructor_construye_objeto_con_type_y_flags() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        let v = rt
+            .eval("var e = new Event('foo', {bubbles: true, cancelable: true}); e.type")
+            .expect("e");
+        assert_eq!(v, JsValue::String("foo".into()));
+        let v = rt.eval("e.bubbles").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("e.cancelable").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("e.defaultPrevented").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+    }
+
+    #[test]
+    fn custom_event_lleva_detail_arbitrario() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        let v = rt
+            .eval("var e = new CustomEvent('save', {detail: {file: 'a.txt', size: 42}}); e.detail.file")
+            .expect("e");
+        assert_eq!(v, JsValue::String("a.txt".into()));
+        let v = rt.eval("e.detail.size").expect("e");
+        assert_eq!(v, JsValue::Number(42.0));
+        let v = rt.eval("e.type").expect("e");
+        assert_eq!(v, JsValue::String("save".into()));
+    }
+
+    #[test]
+    fn dispatch_event_corre_handler_con_event_original() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('x').addEventListener('save', function(e) { \
+                console.log('detail:' + e.detail.file); \
+             });",
+        )
+        .expect("e");
+        let v = rt
+            .eval(
+                "document.getElementById('x').dispatchEvent(\
+                    new CustomEvent('save', {detail: {file: 'a.txt'}}))",
+            )
+            .expect("e");
+        // dispatchEvent devuelve true (no cancelado).
+        assert_eq!(v, JsValue::Bool(true));
+        assert_eq!(rt.stdout(), "detail:a.txt\n");
+    }
+
+    #[test]
+    fn dispatch_event_bubbleable_sube_por_ancestros() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("parent", "div", ""),
+            snap_with_parent("child", "span", "parent"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('parent').addEventListener('foo', function() { console.log('p'); }); \
+             document.getElementById('child').addEventListener('foo', function() { console.log('c'); });",
+        )
+        .expect("e");
+        // Con bubbles=true: handler de parent también corre.
+        rt.eval(
+            "document.getElementById('child').dispatchEvent(new Event('foo', {bubbles: true}))",
+        )
+        .expect("e");
+        assert_eq!(rt.stdout(), "c\np\n");
+        // Sin bubbles: sólo target.
+        rt.clear_io();
+        rt.eval("document.getElementById('child').dispatchEvent(new Event('foo'))").expect("e");
+        assert_eq!(rt.stdout(), "c\n");
+    }
+
+    #[test]
+    fn dispatch_event_prevent_default_devuelve_false_si_cancelable() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('x').addEventListener('foo', function(e) { e.preventDefault(); });",
+        )
+        .expect("e");
+        // cancelable: true → preventDefault() afecta defaultPrevented → returns false.
+        let v = rt
+            .eval("document.getElementById('x').dispatchEvent(new Event('foo', {cancelable: true}))")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+        // cancelable: false → preventDefault() es no-op → returns true.
+        let v = rt
+            .eval("document.getElementById('x').dispatchEvent(new Event('foo'))")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_event_falla_sin_event_valido() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        let res = rt.eval("document.getElementById('x').dispatchEvent(null)");
+        assert!(res.is_err(), "dispatchEvent(null) debe lanzar");
+        let res = rt.eval("document.getElementById('x').dispatchEvent({})");
+        assert!(res.is_err(), "dispatchEvent({{}}) sin type debe lanzar");
     }
 
     // ============= Fase 7.24 — replaceChildren + scrollIntoView =============
