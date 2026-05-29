@@ -74,9 +74,10 @@ las dos UIs (`ayni-cli` y `ayni-llimphi`) son frontends delgados sobre él:
 
 **Genuinamente diferido** (deuda real, no fingida): **MLS de grupo** (forward/
 post-compromise secrecy con OpenMLS — sincronizar estado de grupo es un
-protocolo en sí; el canal de hoy es 1:1 sin PCS); **transporte sobre akasha
-dentro de wawa** (la app P6 es hoy single-author local; falta exponer la red del
-kernel al módulo); **NAT traversal** (deuda de `minga`, no de Ayni).
+protocolo en sí; el canal de hoy es 1:1 sin PCS); **NAT traversal** (deuda de
+`minga`, no de Ayni); y, dentro de la app de wawa, **anti-entropía completa
+sobre L2** (hoy se difunde y absorbe en vivo, falta reconciliar historial) y
+**cifrado de sesión en wawa**.
 
 `ayni-core` es `#![no_std] + alloc` **desde el día cero** — no parcheado
 después — para que el mismo núcleo viaje como app WASM dentro de wawa (P6) sin
@@ -150,6 +151,14 @@ y se verifica por *closure*; las primitivas Ed25519/MLS viven en `ayni-crypto`.
   funda su propio heap (`linked_list_allocator`, el del kernel) — el grafo de la
   conversación necesita `alloc`. `ayni-core` ganó `MensajeNodo::serializar`/
   `deserializar` (el grano fino que el grafo de objetos y la anti-entropía piden).
+  **P6+ — habla por akasha:** la app dejó de ser monólogo. Tecleás (teclado del
+  kernel, `sys_get_scancode`), pulsás Enter, y el nodo firmado se persiste en el
+  grafo Y se DIFUNDE por la red del SO en un frame Ethernet de EtherType propio
+  (`0x88B7`), sin TCP/IP — akasha puro (`sys_net_*`, `PERMISO_RED`). Otra wawa en
+  el segmento absorbe el frame, **verifica la firma** e integra el nodo: dos
+  wawas convergen su conversación sin servidor. Pendiente: anti-entropía completa
+  sobre L2 (hoy un peer recién arrancado ve lo NUEVO en vivo, no el historial
+  hasta que alguien reemita) y cifrado de sesión.
 - **P7 — confianza/UX** ✅ *(hecho)*: la dimensión SOCIAL del grafo, como cargas
   firmadas más (en `ayni-core`, módulo `confianza` — modelo puro `no_std`, viaja
   a wawa con el resto). Tres hechos que se DERIVAN plegando el DAG, sin autoridad

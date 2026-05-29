@@ -189,17 +189,18 @@ const GENESIS: [AppGenesis; 16] = [
     // red, no necesita raiz. 480x240 a la derecha del compositor para no
     // colisionar con `pluma` ni `asistente`.
     AppGenesis { nombre: "testigo", archivo: "testigo.wasm", region: (600, 520, 480, 240), fuel: FUEL_COMUN, permisos: format::PERMISO_TINKUY },
-    // P6 :: `ayni` — el chat soberano DENTRO de wawa. La prueba de que el mismo
-    // `ayni-core` (no_std + alloc) que corre el chat en Linux viaja sin reescribir
-    // su modelo a una app WASM. Cada nodo de la conversación —un mensaje firmado
-    // Ed25519, direccionado por contenido (BLAKE3 de `format`)— se persiste como
-    // un OBJETO del grafo de akasha, encadenado al anterior: la conversación
-    // sobrevive a los reinicios porque vive en el disco de objetos, igual que la
-    // crónica de la `cronista`. De ahí PERMISO_GRAFO_ESCRITURA | PERMISO_RAIZ
-    // (graba el nodo con sys_object_put y corona la nueva cabeza como raíz). Es
-    // la primera app de genesis que funda su propio heap (`alloc` lo exige el
-    // grafo de la conversación). 480x400 a la derecha, como `rimay`.
-    AppGenesis { nombre: "ayni", archivo: "ayni.wasm", region: (700, 120, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA | format::PERMISO_RAIZ },
+    // P6+ :: `ayni` — el chat soberano DENTRO de wawa, que HABLA POR LA RED. El
+    // mismo `ayni-core` (no_std + alloc) que corre el chat en Linux, sin reescribir
+    // su modelo, como app WASM. Tecleás un mensaje: se firma Ed25519, se persiste
+    // como OBJETO del grafo de akasha —encadenado al anterior en una espina dorsal
+    // que sobrevive a los reinicios, como la crónica de la `cronista`— y se DIFUNDE
+    // en un frame Ethernet de EtherType propio (0x88B7), sin TCP/IP (akasha puro).
+    // Otra instancia de wawa en el segmento absorbe el frame, verifica la firma e
+    // integra el nodo: dos wawas convergen su conversación sin servidor. De ahí los
+    // tres permisos: PERMISO_RED (sys_net_*), PERMISO_GRAFO_ESCRITURA + PERMISO_RAIZ
+    // (sys_object_put + fijar_raiz). Primera app de genesis que funda su propio heap
+    // (`alloc` lo exige el grafo). 480x400 a la derecha, como `rimay`.
+    AppGenesis { nombre: "ayni", archivo: "ayni.wasm", region: (700, 120, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_RED | format::PERMISO_GRAFO_ESCRITURA | format::PERMISO_RAIZ },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente
