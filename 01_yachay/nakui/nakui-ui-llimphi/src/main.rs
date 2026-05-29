@@ -11,15 +11,23 @@
 //! - Llimphi shell: sidebar de módulos (clickeable) + menú del módulo
 //!   activo + área principal.
 //! - **Meta-form Llimphi** (paralelo al `nahual-widget-meta-form` GPUI
-//!   borrado): la vista `List` renderea filas reales con botones
-//!   editar/borrar por fila + `+ Nuevo`; la vista `Form` renderea inputs
-//!   por `FieldKind` (text/multiline/number/date/bool/select/entityref/
-//!   autoid), con foco de teclado y submit que dispara `SeedEntity`,
-//!   edición (`update` con delta) o `Morphism` contra el backend. El
-//!   resultado (o el error de validación) se muestra como banner.
+//!   borrado): cuatro vistas meta-driven.
+//!   - `List`: filas reales con columnas del manifest (refs resueltas a
+//!     su label legible), botones editar/borrar por fila, `+ Nuevo`, y
+//!     `👁` por fila cuando declara `row_detail`.
+//!   - `Form`: inputs por `FieldKind` (text/multiline/number/date/bool/
+//!     select/entity_ref/auto_id), con foco de teclado y submit que
+//!     dispara `SeedEntity`, edición (`update` con delta) o `Morphism`.
+//!   - `Detail`: ficha de un record (← Volver / ✎ Editar), sus campos y
+//!     las listas de records relacionados (back-references por
+//!     `via_field`).
+//!   - `Dashboard`: grilla de tarjetas de KPI (`Count`/`Sum`/`GroupBy`
+//!     vía `compute_metric`, con `ValueFormat` y filtros).
+//!   El resultado (o el error de validación) se muestra como banner.
 //!
 //! El ciclo de escritura ya no pasa por CLI/tests: la UI crea, edita,
-//! borra y corre morfismos directamente sobre el event log.
+//! borra, corre morfismos y consulta tableros directamente sobre el
+//! event log.
 //!
 //! ## Uso
 //!
@@ -37,7 +45,7 @@ use std::sync::{Arc, Mutex};
 use cards::CardBody;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -51,11 +59,13 @@ use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use nahual_meta_runtime::{
-    compute_clear_fields, compute_field_delta, parse_field_value, preview_value,
-    resolve_param_value, short_uuid, validate_entity_refs, MetaBackend, WriteOutcome,
+    compute_clear_fields, compute_field_delta, compute_metric, format_value,
+    human_label_for_record, parse_field_value, preview_value, render_value, resolve_param_value,
+    short_uuid, validate_entity_refs, MetaBackend, MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, FieldKind, FieldSpec, FormView, Module, View as ModuleView,
+    Action, Column, DashboardView, FieldKind, FieldSpec, FormView, Module, RelatedList,
+    ValueFormat, View as ModuleView,
 };
 use nakui_core::executor::Executor;
 use serde_json::Value;
@@ -104,6 +114,14 @@ enum Msg {
     SubmitForm,
     CancelForm,
     DismissToast,
+    /// Abre la ficha de detalle de un record (desde el 👁 de una fila).
+    OpenDetail {
+        module_idx: usize,
+        view_key: String,
+        entity: String,
+        id: Uuid,
+    },
+    CloseDetail,
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -144,6 +162,15 @@ struct Toast {
     text: String,
 }
 
+/// Ficha de detalle activa: el record `id` de `entity`, renderizado con
+/// la vista `view_key` (un `View::Detail`) del módulo `module_idx`.
+struct DetailState {
+    module_idx: usize,
+    view_key: String,
+    entity: String,
+    id: Uuid,
+}
+
 struct Model {
     modules: Vec<Module>,
     backend: Arc<Mutex<NakuiBackend>>,
@@ -152,6 +179,7 @@ struct Model {
     selected_module: Option<usize>,
     selected_menu: Option<usize>,
     form: Option<FormState>,
+    detail: Option<DetailState>,
     toast: Option<Toast>,
 }
 
@@ -257,6 +285,7 @@ impl App for NakuiApp {
             selected_module,
             selected_menu,
             form: None,
+            detail: None,
             toast: None,
         }
     }
@@ -269,6 +298,7 @@ impl App for NakuiApp {
                     m.selected_module = Some(i);
                     m.selected_menu = (!m.modules[i].menu.is_empty()).then_some(0);
                     m.form = None;
+                    m.detail = None;
                     sync_form_to_menu(&mut m);
                 }
             }
@@ -277,6 +307,7 @@ impl App for NakuiApp {
                     if i < m.modules[mod_idx].menu.len() {
                         m.selected_menu = Some(i);
                         m.form = None;
+                        m.detail = None;
                         sync_form_to_menu(&mut m);
                     }
                 }
@@ -406,6 +437,24 @@ impl App for NakuiApp {
             }
             Msg::DismissToast => {
                 m.toast = None;
+            }
+            Msg::OpenDetail {
+                module_idx,
+                view_key,
+                entity,
+                id,
+            } => {
+                m.detail = Some(DetailState {
+                    module_idx,
+                    view_key,
+                    entity,
+                    id,
+                });
+                m.form = None;
+                m.toast = None;
+            }
+            Msg::CloseDetail => {
+                m.detail = None;
             }
         }
         m
@@ -846,9 +895,12 @@ fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
-    // El form, si hay uno activo, gana el área principal.
+    // Prioridad del área principal: form > ficha de detalle > vista
+    // seleccionada en el menú.
     let inner = if let Some(form) = &model.form {
         build_form_panel(model, form, theme)
+    } else if let Some(detail) = &model.detail {
+        build_detail_panel(model, detail, theme)
     } else {
         match (model.selected_module, model.selected_menu) {
             (Some(mod_idx), Some(menu_idx)) => {
@@ -920,20 +972,15 @@ fn build_view_panel(
             column(vec![title, open], 8.0)
         }
         ModuleView::Detail(dv) => {
-            let lines = vec![
-                format!("kind: detail · entity: {}", dv.entity),
-                rimay_localize::t("nakui-pending-render-detail"),
-            ];
+            // Una Detail seleccionada desde el menú no tiene record
+            // objetivo: se llega con el 👁 de una fila de lista.
+            let lines = vec![format!(
+                "elegí un record desde una lista (botón 👁) para ver su ficha de '{}'.",
+                dv.entity
+            )];
             placeholder_panel(module, &dv.title, lines, theme)
         }
-        ModuleView::Dashboard(d) => {
-            let lines = vec![
-                "kind: dashboard".into(),
-                format!("cards: {}", d.cards.len()),
-                rimay_localize::t("nakui-pending-render-dashboard"),
-            ];
-            placeholder_panel(module, &d.title, lines, theme)
-        }
+        ModuleView::Dashboard(dv) => build_dashboard_panel(model, module, dv, theme),
     }
 }
 
@@ -946,9 +993,11 @@ fn build_list_panel(
     theme: &Theme,
 ) -> View<Msg> {
     let module = &model.modules[mod_idx];
-    let records = model
-        .backend
-        .lock()
+    // Sostenemos el guard durante el armado para resolver las columnas
+    // `ref_entity` a su label legible sin re-lockear por celda.
+    let guard = model.backend.lock().ok();
+    let records = guard
+        .as_ref()
         .map(|b| b.list_records(&lv.entity))
         .unwrap_or_default();
 
@@ -999,15 +1048,29 @@ fn build_list_panel(
         let mut cells: Vec<View<Msg>> = Vec::new();
         // Columna implícita: id corto.
         cells.push(cell_text(short_uuid(id), 90.0, theme.fg_muted));
-        // Columnas del manifest.
+        // Columnas del manifest (ref_entity resuelve al label legible).
         for col in &lv.columns {
-            let raw = rec
-                .get(&col.field)
-                .map(|v| preview_value(v, 40))
-                .unwrap_or_default();
-            cells.push(cell_flex(raw, theme.fg_text));
+            let disp = match guard.as_ref() {
+                Some(b) => cell_display(b, col, lookup_field(rec, &col.field)),
+                None => render_value(lookup_field(rec, &col.field)),
+            };
+            cells.push(cell_flex(disp, theme.fg_text));
         }
         // Acciones.
+        if let Some(detail_vk) = &lv.row_detail {
+            cells.push(button_styled(
+                "👁",
+                btn_style(44.0),
+                Alignment::Center,
+                &ButtonPalette::from_theme(theme),
+                Msg::OpenDetail {
+                    module_idx: mod_idx,
+                    view_key: detail_vk.clone(),
+                    entity: lv.entity.clone(),
+                    id: *id,
+                },
+            ));
+        }
         if has_form {
             cells.push(button_styled(
                 "editar",
@@ -1051,6 +1114,382 @@ fn build_list_panel(
     }
 
     column(rows, 6.0)
+}
+
+/// Vista `Detail`: ficha de un record. Header con `← Volver` + `✎
+/// Editar`, los campos declarados (label · valor, refs resueltas) y las
+/// listas de records relacionados (back-references).
+fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Theme) -> View<Msg> {
+    let Some(module) = model.modules.get(detail.module_idx) else {
+        return empty_panel(theme, "módulo inválido");
+    };
+    let Some(ModuleView::Detail(dv)) = module.views.get(&detail.view_key) else {
+        return empty_panel(theme, "la vista de detalle ya no existe en el manifest");
+    };
+
+    // Header: título + Volver + Editar.
+    let title = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(24.0),
+        },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{} · {}", module.label, dv.title),
+        16.0,
+        theme.fg_text,
+        Alignment::Start,
+    );
+    let mut header_children = vec![
+        title,
+        button_styled(
+            "← Volver",
+            btn_style(100.0),
+            Alignment::Center,
+            &ButtonPalette::from_theme(theme),
+            Msg::CloseDetail,
+        ),
+    ];
+    if find_form_view(module, &detail.entity).is_some() {
+        header_children.push(button_styled(
+            "✎ Editar",
+            btn_style(100.0),
+            Alignment::Center,
+            &accent_btn(theme),
+            Msg::EditRecord {
+                module_idx: detail.module_idx,
+                entity: detail.entity.clone(),
+                id: detail.id,
+            },
+        ));
+    }
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(34.0),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(10.0),
+            height: length(0.0),
+        },
+        ..Default::default()
+    })
+    .children(header_children);
+
+    let mut children: Vec<View<Msg>> = vec![header];
+
+    // El cuerpo necesita el backend; lo sostenemos para el armado.
+    let guard = model.backend.lock().ok();
+    let record = guard
+        .as_ref()
+        .and_then(|b| b.load_record(&detail.entity, detail.id));
+
+    let Some(record) = record else {
+        children.push(text_line(
+            format!("el record {} ya no existe.", short_uuid(&detail.id)),
+            12.0,
+            theme.fg_muted,
+        ));
+        return column(children, 8.0);
+    };
+
+    // Campos del record (label fijo a la izquierda · valor).
+    for col in &dv.fields {
+        let value = match guard.as_ref() {
+            Some(b) => cell_display(b, col, lookup_field(&record, &col.field)),
+            None => render_value(lookup_field(&record, &col.field)),
+        };
+        let label = cell_text(col.label.clone(), 160.0, theme.fg_muted);
+        let val = cell_flex(value, theme.fg_text);
+        children.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(26.0),
+                },
+                align_items: Some(AlignItems::Center),
+                gap: Size {
+                    width: length(12.0),
+                    height: length(0.0),
+                },
+                ..Default::default()
+            })
+            .children(vec![label, val]),
+        );
+    }
+
+    // Listas de records relacionados.
+    for rl in &dv.related {
+        if let Some(b) = guard.as_ref() {
+            children.push(build_related_list(b, rl, detail.id, theme));
+        }
+    }
+
+    column(children, 8.0)
+}
+
+/// Una lista de back-references dentro de una ficha: los records de
+/// `rl.entity` cuyo `rl.via_field` apunta al record `target_id`.
+fn build_related_list(
+    backend: &NakuiBackend,
+    rl: &RelatedList,
+    target_id: Uuid,
+    theme: &Theme,
+) -> View<Msg> {
+    let id_str = target_id.to_string();
+    let rows: Vec<(Uuid, Value)> = backend
+        .list_records(&rl.entity)
+        .into_iter()
+        .filter(|(_, v)| v.get(&rl.via_field).and_then(Value::as_str) == Some(id_str.as_str()))
+        .collect();
+
+    let mut children: Vec<View<Msg>> = vec![text_line(
+        format!("{} ({})", rl.title, rows.len()),
+        13.0,
+        theme.fg_text,
+    )];
+
+    if rows.is_empty() {
+        children.push(text_line("(ninguno)".into(), 11.0, theme.fg_muted));
+    } else {
+        // Header de columnas.
+        let head_cells: Vec<View<Msg>> = rl
+            .columns
+            .iter()
+            .map(|c| cell_flex(c.label.clone(), theme.fg_muted))
+            .collect();
+        children.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(20.0),
+                },
+                gap: Size {
+                    width: length(8.0),
+                    height: length(0.0),
+                },
+                ..Default::default()
+            })
+            .children(head_cells),
+        );
+
+        for (_, v) in &rows {
+            let cells: Vec<View<Msg>> = rl
+                .columns
+                .iter()
+                .map(|c| {
+                    cell_flex(cell_display(backend, c, lookup_field(v, &c.field)), theme.fg_text)
+                })
+                .collect();
+            children.push(
+                View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(22.0),
+                    },
+                    gap: Size {
+                        width: length(8.0),
+                        height: length(0.0),
+                    },
+                    ..Default::default()
+                })
+                .children(cells),
+            );
+        }
+    }
+
+    // Bloque que se ajusta al contenido, con un poco de aire arriba.
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        flex_shrink: 0.0,
+        margin: Rect {
+            left: length(0.0),
+            right: length(0.0),
+            top: length(10.0),
+            bottom: length(0.0),
+        },
+        gap: Size {
+            width: length(0.0),
+            height: length(4.0),
+        },
+        ..Default::default()
+    })
+    .children(children)
+}
+
+/// Vista `Dashboard`: una grilla de tarjetas de KPI, cada una con su
+/// agregado (`Count`/`Sum`/`GroupBy`) computado sobre los records de su
+/// entity.
+fn build_dashboard_panel(
+    model: &Model,
+    module: &Module,
+    dv: &DashboardView,
+    theme: &Theme,
+) -> View<Msg> {
+    let title = text_line(
+        format!("{} · {}", module.label, dv.title),
+        16.0,
+        theme.fg_text,
+    );
+
+    let guard = model.backend.lock().ok();
+    let mut cards: Vec<View<Msg>> = Vec::new();
+    for card in &dv.cards {
+        let records = guard
+            .as_ref()
+            .map(|b| b.list_records(&card.entity))
+            .unwrap_or_default();
+        let result = compute_metric(&card.metric, card.filter.as_ref(), &records);
+        cards.push(dashboard_card(&card.label, &result, &card.format, theme));
+    }
+
+    let grid = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        align_content: Some(llimphi_ui::llimphi_layout::taffy::AlignContent::Start),
+        gap: Size {
+            width: length(12.0),
+            height: length(12.0),
+        },
+        ..Default::default()
+    })
+    .children(cards);
+
+    column(vec![title, grid], 12.0)
+}
+
+/// Una tarjeta del tablero: label + número grande (Scalar) o barras de
+/// breakdown (GroupBy).
+fn dashboard_card(
+    label: &str,
+    result: &MetricResult,
+    fmt: &ValueFormat,
+    theme: &Theme,
+) -> View<Msg> {
+    let mut children: Vec<View<Msg>> = vec![text_line(label.to_string(), 11.0, theme.fg_muted)];
+
+    match result {
+        MetricResult::Scalar(s) => {
+            // Entero si no tiene parte decimal (Count / sumas enteras).
+            let value = if s.fract() == 0.0 {
+                Value::from(*s as i64)
+            } else {
+                Value::from(*s)
+            };
+            children.push(
+                View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(34.0),
+                    },
+                    align_items: Some(AlignItems::Center),
+                    ..Default::default()
+                })
+                .text_aligned(
+                    format_value(Some(&value), fmt),
+                    26.0,
+                    theme.accent,
+                    Alignment::Start,
+                ),
+            );
+        }
+        MetricResult::Breakdown(rows) => {
+            if rows.is_empty() {
+                children.push(text_line("(sin datos)".into(), 11.0, theme.fg_muted));
+            }
+            let max = rows.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+            for (key, n) in rows {
+                let bar = "█".repeat((n * 12 / max).max(1));
+                let row = View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(18.0),
+                    },
+                    align_items: Some(AlignItems::Center),
+                    gap: Size {
+                        width: length(6.0),
+                        height: length(0.0),
+                    },
+                    ..Default::default()
+                })
+                .children(vec![
+                    cell_text(key.clone(), 96.0, theme.fg_text),
+                    cell_flex(bar, theme.accent),
+                    cell_text(n.to_string(), 32.0, theme.fg_muted),
+                ]);
+                children.push(row);
+            }
+        }
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(220.0),
+            height: auto(),
+        },
+        flex_grow: 0.0,
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(14.0),
+            right: length(14.0),
+            top: length(12.0),
+            bottom: length(12.0),
+        },
+        gap: Size {
+            width: length(0.0),
+            height: length(6.0),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(8.0)
+    .children(children)
+}
+
+/// Render del valor de una celda. Una columna con `ref_entity` resuelve
+/// su UUID al label del record referido; el resto aplica el
+/// `ValueFormat` de la columna. Espejo del `render_cell` GPUI.
+fn cell_display(backend: &NakuiBackend, col: &Column, v: Option<&Value>) -> String {
+    if let Some(ref_entity) = &col.ref_entity {
+        return match v {
+            Some(Value::String(s)) => match Uuid::parse_str(s) {
+                Ok(uuid) => backend
+                    .load_record(ref_entity, uuid)
+                    .map(|rec| human_label_for_record(&rec, &uuid))
+                    .unwrap_or_else(|| format!("(borrado · {})", short_uuid(&uuid))),
+                Err(_) => render_value(v),
+            },
+            _ => render_value(v),
+        };
+    }
+    format_value(v, &col.format)
+}
+
+/// Navega un path con puntos (`address.city`) dentro de un `Value`.
+fn lookup_field<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut cur = v;
+    for seg in path.split('.') {
+        cur = cur.get(seg)?;
+    }
+    Some(cur)
 }
 
 /// Panel del formulario activo: un `field_view` por field + fila de
@@ -1636,6 +2075,18 @@ mod tests {
         // Tiene un Form para cada entity (customers + orders).
         assert!(find_form_view(m, "Customer").is_some());
         assert!(find_form_view(m, "Order").is_some());
+        // Y las cuatro clases de vista están presentes.
+        assert!(matches!(m.views.get("tablero"), Some(ModuleView::Dashboard(_))));
+        assert!(matches!(
+            m.views.get("customer_detail"),
+            Some(ModuleView::Detail(_))
+        ));
+        // La lista de clientes enlaza la ficha vía row_detail.
+        if let Some(ModuleView::List(lv)) = m.views.get("customers_list") {
+            assert_eq!(lv.row_detail.as_deref(), Some("customer_detail"));
+        } else {
+            panic!("customers_list debería ser una List");
+        }
         // El form de cliente arma un FormState con AutoId pre-rellenado.
         let fv = find_form_view(m, "Customer").unwrap();
         let form = build_form(0, fv, None);
@@ -1645,6 +2096,34 @@ mod tests {
             .find(|f| f.spec.kind == FieldKind::AutoId)
             .expect("el form tiene un AutoId");
         assert!(Uuid::parse_str(&id_field.raw()).is_ok());
+    }
+
+    #[test]
+    fn lookup_field_navigates_nested_paths() {
+        let v = json!({"name": "Acme", "address": {"city": "Lima"}});
+        assert_eq!(lookup_field(&v, "name"), Some(&json!("Acme")));
+        assert_eq!(lookup_field(&v, "address.city"), Some(&json!("Lima")));
+        assert_eq!(lookup_field(&v, "address.zip"), None);
+        assert_eq!(lookup_field(&v, "missing"), None);
+    }
+
+    /// `cell_display` aplica el `ValueFormat` de la columna (sin
+    /// ref_entity, no toca el backend).
+    #[test]
+    fn cell_display_formats_currency() {
+        use nahual_meta_schema::Column;
+        let col = Column {
+            field: "monto".into(),
+            label: "Monto".into(),
+            weight: 1.0,
+            ref_entity: None,
+            format: ValueFormat::Currency { symbol: "$".into() },
+        };
+        let v = json!(12000);
+        // No necesita backend porque la columna no es ref_entity; el
+        // path de formato es puro.
+        let out = format_value(Some(&v), &col.format);
+        assert_eq!(out, "$12,000");
     }
 
     #[test]

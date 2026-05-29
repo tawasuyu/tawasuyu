@@ -3,7 +3,7 @@ name = "nakui-ui-llimphi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Nakui — runtime Llimphi de la metainterfaz. Carga module.json desde un directorio, monta sidebar de módulos + menú + área principal. Meta-form Llimphi vivo: listas con filas reales (editar/borrar/+Nuevo) y formularios meta-driven (seed/edición/morphism) sobre el event log del backend."
+description = "Nakui — runtime Llimphi de la metainterfaz. Carga module.json desde un directorio, monta sidebar de módulos + menú + área principal. Meta-form Llimphi vivo con las cuatro vistas: List (filas reales, editar/borrar/+Nuevo, 👁 detalle), Form (seed/edición/morphism), Detail (ficha + relacionados) y Dashboard (KPIs Count/Sum/GroupBy) sobre el event log del backend."
 
 [dependencies]
 nakui-core = { path = "../nakui-core" }

@@ -7,20 +7,54 @@
     { "name": "Order", "label": "Orden", "fields": [] }
   ],
   "menu": [
+    { "label": "Tablero", "view": "tablero" },
     { "label": "Clientes", "view": "customers_list" },
     { "label": "+ Cliente", "view": "customers_form" },
     { "label": "Órdenes", "view": "orders_list" },
     { "label": "+ Orden", "view": "orders_form" }
   ],
   "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Resumen",
+      "cards": [
+        { "label": "Clientes", "entity": "Customer", "metric": { "kind": "count" } },
+        { "label": "Órdenes", "entity": "Order", "metric": { "kind": "count" } },
+        { "label": "Facturado", "entity": "Order", "metric": { "kind": "sum", "field": "monto" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Cobrado", "entity": "Order", "metric": { "kind": "sum", "field": "monto" }, "filter": { "field": "pagado", "equals": "true" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Clientes por plan", "entity": "Customer", "metric": { "kind": "group_by", "field": "tier" } }
+      ]
+    },
     "customers_list": {
       "kind": "list",
       "title": "Clientes",
       "entity": "Customer",
+      "row_detail": "customer_detail",
       "columns": [
         { "field": "name", "label": "Nombre" },
         { "field": "tier", "label": "Plan" },
         { "field": "activo", "label": "Activo" }
+      ]
+    },
+    "customer_detail": {
+      "kind": "detail",
+      "title": "Ficha de cliente",
+      "entity": "Customer",
+      "fields": [
+        { "field": "name", "label": "Nombre" },
+        { "field": "tier", "label": "Plan" },
+        { "field": "activo", "label": "Activo" }
+      ],
+      "related": [
+        {
+          "title": "Órdenes del cliente",
+          "entity": "Order",
+          "via_field": "customer",
+          "columns": [
+            { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } },
+            { "field": "pagado", "label": "Pagado" }
+          ]
+        }
       ]
     },
     "customers_form": {
