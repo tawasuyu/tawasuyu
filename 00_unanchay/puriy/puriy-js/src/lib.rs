@@ -1482,6 +1482,29 @@ globalThis.CustomEvent = function(type, init) {
 // chrome en cada Msg::Scroll y antes de cada eval.
 globalThis.__puriy_scroll_x = 0;
 globalThis.__puriy_scroll_y = 0;
+// Fase 7.28 — viewport dims. Default 1024×768 — el chrome los
+// sobreescribe con set_viewport(w, h) post-Loaded. Valores razonables
+// para que código que checkea innerWidth al startup tenga algo válido.
+globalThis.__puriy_inner_width = 1024;
+globalThis.__puriy_inner_height = 768;
+Object.defineProperty(globalThis, 'innerWidth', {
+    get: function() { return globalThis.__puriy_inner_width; },
+    configurable: true
+});
+Object.defineProperty(globalThis, 'innerHeight', {
+    get: function() { return globalThis.__puriy_inner_height; },
+    configurable: true
+});
+// Legacy aliases — outerWidth/outerHeight son spec-distintos (incluyen
+// chrome UI) pero el modelo headless no distingue. Devolver lo mismo.
+Object.defineProperty(globalThis, 'outerWidth', {
+    get: function() { return globalThis.__puriy_inner_width; },
+    configurable: true
+});
+Object.defineProperty(globalThis, 'outerHeight', {
+    get: function() { return globalThis.__puriy_inner_height; },
+    configurable: true
+});
 Object.defineProperty(globalThis, 'scrollX', {
     get: function() { return globalThis.__puriy_scroll_x; },
     configurable: true
@@ -2171,6 +2194,29 @@ impl JsRuntime {
     /// inmediatos (`setTimeout(fn, 0)`).
     pub fn set_now_ms(&mut self, now_ms: u64) -> Result<(), JsError> {
         let script = format!("globalThis.__puriy_now_ms = {now_ms};");
+        self.eval_raw(&script).map(|_| ())
+    }
+
+    /// Fase 7.28 — sync inverso del scroll. El chrome lo llama antes de
+    /// cada eval/tick/dispatch para que `window.scrollY`/`scrollX` desde
+    /// JS reflejen el scroll real del usuario (movido por wheel/keys).
+    /// Sin esto, los getters sólo veían el valor que JS mismo escribió
+    /// vía `scrollTo` (gap honesto documentado en Fase 7.26).
+    pub fn set_scroll(&mut self, x: f32, y: f32) -> Result<(), JsError> {
+        let script = format!(
+            "globalThis.__puriy_scroll_x = {x}; globalThis.__puriy_scroll_y = {y};"
+        );
+        self.eval_raw(&script).map(|_| ())
+    }
+
+    /// Fase 7.28 — sync de las dimensiones del viewport del chrome. El
+    /// chrome lo llama en `Msg::Loaded` y en `Msg::Resize` (cuando
+    /// implementado). Habilita que `window.innerWidth`/`innerHeight` y
+    /// `getBoundingClientRect` (Fase 7.29) tengan valores realistas.
+    pub fn set_viewport(&mut self, width: f32, height: f32) -> Result<(), JsError> {
+        let script = format!(
+            "globalThis.__puriy_inner_width = {width}; globalThis.__puriy_inner_height = {height};"
+        );
         self.eval_raw(&script).map(|_| ())
     }
 
@@ -5556,6 +5602,51 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.28 — sync chrome→JS scroll + innerWidth/Height =============
+
+    #[test]
+    fn set_scroll_actualiza_scroll_y_global() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_scroll(10.0, 200.0).expect("set_scroll");
+        let v = rt.eval("scrollY").expect("e");
+        assert_eq!(v, JsValue::Number(200.0));
+        let v = rt.eval("scrollX").expect("e");
+        assert_eq!(v, JsValue::Number(10.0));
+        // pageYOffset es alias.
+        let v = rt.eval("pageYOffset").expect("e");
+        assert_eq!(v, JsValue::Number(200.0));
+    }
+
+    #[test]
+    fn set_viewport_actualiza_inner_width_height() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        // Default es 1024×768.
+        let v = rt.eval("innerWidth").expect("e");
+        assert_eq!(v, JsValue::Number(1024.0));
+        rt.set_viewport(1920.0, 1080.0).expect("set_vp");
+        let v = rt.eval("innerWidth").expect("e");
+        assert_eq!(v, JsValue::Number(1920.0));
+        let v = rt.eval("innerHeight").expect("e");
+        assert_eq!(v, JsValue::Number(1080.0));
+        // outer* son alias en headless (no hay UI chrome).
+        let v = rt.eval("outerWidth").expect("e");
+        assert_eq!(v, JsValue::Number(1920.0));
+    }
+
+    #[test]
+    fn set_scroll_no_publica_mutaciones_dirty() {
+        // El chrome llama set_scroll para informar al JS, no para
+        // pedirle al JS que aplique algo. La sincronización es read-only
+        // desde la perspectiva del JS — no debe rebotar como mutación.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.set_scroll(0.0, 500.0).expect("set");
+        assert!(rt.drain_dom_mutations().is_empty());
     }
 
     // ============= Fase 7.27 — console.group/assert/count/time/dir/table =============

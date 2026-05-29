@@ -1874,6 +1874,13 @@ fn run_scripts_on_tab(
     // en el primer tick que cruce 100ms del wall clock (raro pero
     // posible). Setearlo acá los ancla al reloj real del chrome.
     let _ = rt.set_now_ms(now_ms);
+    // Fase 7.28 — sync scroll + viewport. Habilita que `window.scrollY`/
+    // `innerWidth` desde JS reflejen state real del chrome. El viewport
+    // se asume 1024×768 acá porque el tab no tiene un width real hasta
+    // que el render layer mide; cuando llegue Msg::Resize, llamar
+    // set_viewport con valores actuales.
+    let _ = rt.set_scroll(0.0, t.scroll_y);
+    let _ = rt.set_viewport(1024.0, 768.0);
     let mut prev_stdout_len = rt.stdout().len();
     let mut prev_stderr_len = rt.stderr().len();
     for s in scripts {
@@ -2034,6 +2041,11 @@ fn dispatch_js_event_with_init(
     // DEFAULT_FUEL (50M) — corta loops infinitos dentro de un handler.
     rt.set_fuel(puriy_js::DEFAULT_FUEL);
     let _ = rt.set_now_ms(now_ms);
+    // Fase 7.28 — refresh scroll antes del dispatch: el handler puede
+    // leer `window.scrollY` para "estoy en el footer?" o "header
+    // sticky?". Sin esto, leería el último valor que el JS mismo
+    // escribió, no el scroll real del usuario.
+    let _ = rt.set_scroll(0.0, t.scroll_y);
     let prev_stdout_len = rt.stdout().len();
     let prev_stderr_len = rt.stderr().len();
     let result = match rt.dispatch_event(element_id, event_type, init.as_ref()) {
@@ -2145,6 +2157,9 @@ fn tick_js_runtimes(m: &mut Model, now_ms: u64) {
         // Fase 7.11 — refresh del fuel por tick. Cada tick es una unidad
         // independiente al estilo del event loop; no acumulamos cap.
         rt.set_fuel(puriy_js::DEFAULT_FUEL);
+        // Fase 7.28 — scroll sync para los rAF/setInterval callbacks que
+        // leen window.scrollY (animation loops chequeando posición).
+        let _ = rt.set_scroll(0.0, t.scroll_y);
         let prev_stdout_len = rt.stdout().len();
         let prev_stderr_len = rt.stderr().len();
         match rt.tick(now_ms) {
