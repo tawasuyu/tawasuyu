@@ -94,6 +94,16 @@ pub fn conf_entries(content: &str) -> Vec<String> {
         .collect()
 }
 
+/// Directorio del card store del fractal. Override con `ARJE_CARDS_DIR`,
+/// default canónico `/etc/arje/cards.d`. Es la fuente de verdad para
+/// StartUnit / ListUnitFiles / SpawnCardFromDisk — un único path expuesto
+/// para que todos los shims lean lo mismo.
+pub fn cards_dir() -> std::path::PathBuf {
+    std::env::var("ARJE_CARDS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/etc/arje/cards.d"))
+}
+
 /// `true` si `s` es un hostname válido: ASCII alfanumérico más `-`,
 /// `.`, `_`; longitud `1..=253`; sin espacios ni caracteres de control.
 pub fn is_valid_hostname(s: &str) -> bool {

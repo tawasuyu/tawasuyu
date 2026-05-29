@@ -1,17 +1,14 @@
 //! ente-machined-compat: shim de `org.freedesktop.machine1`.
 //!
-//! systemd-machined trackea VMs y containers (typically managed por systemd-nspawn).
-//! En el fractal cada Ente con namespaces es candidato a "machine", pero la
-//! correspondencia no es 1:1 — un Ente puede tener menos aislamiento que una
-//! container completa.
-//!
-//! Este shim devuelve listas vacías para no romper clientes (gnome-boxes,
-//! virt-manager, etc) que llaman a `ListMachines` durante boot. Métodos de
-//! mutación (RegisterMachine, KillMachine) se aceptan como no-op con audit
-//! log via tracing.
-//!
-//! Producción real: integrar con el graph del fractal — ListMachines query
-//! BusRequest::ListEntes filtrado por `card.soma.namespaces.pid`.
+//! Cada Ente del fractal con PID se expone como una "machine" — la analogía
+//! con systemd-machined no es perfecta (allá una machine es una nspawn
+//! container o VM, acá es cualquier Ente nativo) pero es la más honesta
+//! sin un modelo de containerización propio. ListMachines / GetMachine /
+//! GetMachineByPid consultan ListEntes vía bus interno; TerminateMachine
+//! y KillMachine forwardean a KillEnte como systemd1.stop_unit. La
+//! mutación que sí queda como NotSupported es RegisterMachine /
+//! CreateMachine — un "registrar machine externa" no tiene contraparte
+//! en un fractal donde toda Card pasa por la Semilla.
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
@@ -19,7 +16,7 @@ use std::collections::HashMap;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
-use zbus::{fdo, interface, zvariant::OwnedValue};
+use zbus::{fdo, interface, zvariant::{ObjectPath, OwnedValue}};
 
 const BUS_NAME: &str = "org.freedesktop.machine1";
 const OBJ_PATH: &str = "/org/freedesktop/machine1";
@@ -55,17 +52,45 @@ type Machine = (String, String, String, u32, String);
 
 #[interface(name = "org.freedesktop.machine1.Manager")]
 impl MachineManager {
-    /// Lista vacía — no trackeamos containers todavía.
     async fn list_machines(&self) -> fdo::Result<Vec<Machine>> {
-        Ok(vec![])
+        let entes = query_list_entes().await.unwrap_or_default();
+        let out: Vec<Machine> = entes
+            .into_iter()
+            .filter_map(|e| {
+                e.pid.map(|p| {
+                    (
+                        e.label.clone(),
+                        "container".to_string(), // ver header — analogía pragmática
+                        "arje".to_string(),       // service que registra: nosotros
+                        p as u32,
+                        String::new(),            // root_directory desconocido sin SomaSpec
+                    )
+                })
+            })
+            .collect();
+        info!(count = out.len(), "ListMachines");
+        Ok(out)
     }
 
-    /// Devuelve siempre NotFound — sin machines registradas.
     async fn get_machine(&self, name: String) -> fdo::Result<zbus::zvariant::OwnedObjectPath> {
+        let entes = query_list_entes().await.unwrap_or_default();
+        if entes.iter().any(|e| e.label == name && e.pid.is_some()) {
+            let path = format!("/org/freedesktop/machine1/machine/{}", escape_unit_name(&name));
+            return ObjectPath::try_from(path)
+                .map(zbus::zvariant::OwnedObjectPath::from)
+                .map_err(|e| fdo::Error::Failed(format!("path: {e}")));
+        }
         Err(fdo::Error::Failed(format!("machine '{name}' no encontrada")))
     }
 
     async fn get_machine_by_pid(&self, pid: u32) -> fdo::Result<zbus::zvariant::OwnedObjectPath> {
+        let entes = query_list_entes().await.unwrap_or_default();
+        if let Some(e) = entes.iter().find(|e| e.pid == Some(pid as i32)) {
+            let path = format!("/org/freedesktop/machine1/machine/{}", escape_unit_name(&e.label));
+            return ObjectPath::try_from(path)
+                .map(zbus::zvariant::OwnedObjectPath::from)
+                .map_err(|err| fdo::Error::Failed(format!("path: {err}")));
+        }
         Err(fdo::Error::Failed(format!("PID {pid} no asociado a ninguna machine")))
     }
 
@@ -114,13 +139,13 @@ impl MachineManager {
     }
 
     async fn terminate_machine(&self, name: String) -> fdo::Result<()> {
-        info!(%name, "TerminateMachine (no-op)");
-        Ok(())
+        // Terminate = SIGTERM. La Supervision::Restart del Ente puede traerlo
+        // de vuelta — comportamiento documentado, igual que systemd1.stop_unit.
+        kill_machine_via_bus(&name, libc::SIGTERM).await
     }
 
-    async fn kill_machine(&self, name: String, _who: String, _signal: i32) -> fdo::Result<()> {
-        info!(%name, "KillMachine (no-op)");
-        Ok(())
+    async fn kill_machine(&self, name: String, _who: String, signal: i32) -> fdo::Result<()> {
+        kill_machine_via_bus(&name, signal).await
     }
 
     async fn get_machine_address(&self, name: String) -> fdo::Result<Vec<(i32, Vec<u8>)>> {
@@ -151,6 +176,55 @@ impl MachineManager {
     ) -> fdo::Result<(zbus::zvariant::OwnedObjectPath, zbus::zvariant::OwnedFd)> {
         Err(fdo::Error::NotSupported("OpenMachineShell no implementado".into()))
     }
+}
+
+/// Resuelve `name` (label del Ente) a su Ulid via ListEntes y forwardea
+/// KillEnte. Compartido por TerminateMachine y KillMachine — paralelo a
+/// `kill_unit_via_bus` del shim systemd1.
+async fn kill_machine_via_bus(name: &str, signal: i32) -> fdo::Result<()> {
+    let entes = query_list_entes().await
+        .ok_or_else(|| fdo::Error::Failed("bus interno no disponible".into()))?;
+    let target = entes
+        .into_iter()
+        .find(|e| e.label == name)
+        .ok_or_else(|| fdo::Error::Failed(format!("machine '{name}' no encontrada")))?;
+    let mut client = BusClient::from_env().await
+        .map_err(|e| fdo::Error::Failed(format!("bus connect: {e}")))?;
+    match client.call(BusRequest::KillEnte { target: target.id, signal }).await {
+        Ok(BusResponse::Ok) => {
+            info!(%name, ulid = %target.id, signal, "KillEnte aplicado");
+            Ok(())
+        }
+        Ok(BusResponse::Error(e)) => {
+            warn!(%name, %e, "KillEnte rechazado por el bus");
+            Err(fdo::Error::Failed(e))
+        }
+        Ok(other) => {
+            warn!(%name, ?other, "KillEnte respuesta inesperada");
+            Err(fdo::Error::Failed("respuesta inesperada del bus".into()))
+        }
+        Err(e) => Err(fdo::Error::Failed(format!("bus call: {e}"))),
+    }
+}
+
+async fn query_list_entes() -> Option<Vec<arje_bus::EnteInfo>> {
+    let mut client = match BusClient::from_env().await {
+        Ok(c) => c,
+        Err(e) => { warn!(?e, "no bus client — devuelvo vacío"); return None; }
+    };
+    match client.call(BusRequest::ListEntes).await {
+        Ok(BusResponse::Entes(entes)) => Some(entes),
+        Ok(other) => { warn!(?other, "ListEntes respuesta inesperada"); None }
+        Err(e) => { warn!(?e, "ListEntes call falló"); None }
+    }
+}
+
+/// Escape simple para nombres en object paths (parallel al de systemd1-compat).
+fn escape_unit_name(name: &str) -> String {
+    name.chars().map(|c| match c {
+        c if c.is_ascii_alphanumeric() => c.to_string(),
+        c => format!("_{:02x}", c as u32),
+    }).collect()
 }
 
 async fn announce_to_fractal() {

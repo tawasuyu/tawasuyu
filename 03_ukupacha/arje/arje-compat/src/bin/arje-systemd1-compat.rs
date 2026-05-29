@@ -20,6 +20,7 @@
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
+use arje_compat::cards_dir;
 use std::collections::HashMap;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
@@ -199,8 +200,24 @@ impl SystemdManager {
     }
 
     async fn list_unit_files(&self) -> fdo::Result<Vec<(String, String)>> {
-        // Empty: no usamos unit files. Cards en su lugar.
-        Ok(vec![])
+        // El "store" de unit files del fractal es ARJE_CARDS_DIR (default
+        // /etc/arje/cards.d). Cada `<nombre>.json` es una Card invocable
+        // vía StartUnit. State = "static" — las Cards no se enable/disable
+        // (no hay tabla persistente de qué arranca al boot; eso lo decide
+        // la Semilla). systemctl list-unit-files ya no devuelve vacío.
+        let dir = cards_dir();
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for entry in rd.flatten() {
+                if let Ok(name) = entry.file_name().into_string() {
+                    if let Some(stem) = name.strip_suffix(".json") {
+                        out.push((format!("{stem}.service"), "static".to_string()));
+                    }
+                }
+            }
+        }
+        info!(count = out.len(), dir = %dir.display(), "ListUnitFiles");
+        Ok(out)
     }
 
     async fn list_jobs(&self) -> fdo::Result<Vec<(u32, String, String, String, OwnedObjectPath, OwnedObjectPath)>> {
