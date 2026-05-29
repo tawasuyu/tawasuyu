@@ -707,6 +707,57 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             else parent.appendChild(node);
         }
     };
+    // Fase 7.21 — cloneNode(deep). Crea un Element sintético nuevo con
+    // mismo tag/textContent/className/value y copia data-*/atributos
+    // genéricos. `deep === true` (o cualquier truthy) en el spec real
+    // clona también children, pero el modelo JS sólo conoce elementos
+    // con id (los descendientes intermedios viven en el BoxTree). Por
+    // eso `deep` se acepta pero no walka subárbol — el clone resultante
+    // siempre tiene 0 children (matchea el caso shallow). Documentado
+    // como limitación; los scripts que clonan templates triviales (sin
+    // children) funcionan; los que clonan árboles complejos NO.
+    el.cloneNode = function(_deep) {
+        if (!el._tagName) {
+            // Text node clone — createTextNode con mismo content.
+            return document.createTextNode(el._textContent || '');
+        }
+        var clone = document.createElement(el._tagName);
+        if (el._textContent) clone._textContent = el._textContent;
+        if (el._classList && el._classList.length > 0) {
+            clone._classList = el._classList.slice();
+        }
+        if (el._value !== '') clone._value = el._value;
+        // Copiar data-* del store interno.
+        for (var dk in el._dataset_store) {
+            if (Object.prototype.hasOwnProperty.call(el._dataset_store, dk)) {
+                clone._dataset_store[dk] = el._dataset_store[dk];
+            }
+        }
+        // Copiar attrs genéricos (aria-*, href, src, etc.).
+        for (var ak in el._attributes_store) {
+            if (Object.prototype.hasOwnProperty.call(el._attributes_store, ak)) {
+                clone._attributes_store[ak] = el._attributes_store[ak];
+            }
+        }
+        return clone;
+    };
+    // Fase 7.21 — contains(other). Walka el subárbol de `el` siguiendo
+    // _parent_id de cada elemento conocido. true si `other === el` o si
+    // `other` es descendiente. false si other es null o no se encuentra
+    // en el subárbol. Cap 64 niveles contra ciclos en _parent_id.
+    el.contains = function(other) {
+        if (!other) return false;
+        if (other === el) return true;
+        var cur = other;
+        var hops = 0;
+        while (cur && hops < 64) {
+            if (!cur._parent_id) return false;
+            if (cur._parent_id === el._id) return true;
+            cur = globalThis.__puriy_elements[cur._parent_id] || null;
+            hops++;
+        }
+        return false;
+    };
     // Fase 7.13 — el.click() dispara un click sintético programáticamente.
     // Reusamos __puriy_dispatch: bubblea por ancestros, ejecuta handlers
     // capture/bubble + on<type> property. preventDefault del handler NO
@@ -1205,7 +1256,7 @@ const DRAIN_IO: &str = "(function(){var s=globalThis.__puriy_stdout||'';var e=gl
 /// margen, pero corta loops infinitos en ~2s wall-clock. Subido de 50M
 /// en Fase 7.12 cuando el bootstrap con `id` property reindexable y la
 /// 3-fase dispatch lo exigió.
-pub const DEFAULT_FUEL: u64 = 100_000_000;
+pub const DEFAULT_FUEL: u64 = 200_000_000;
 
 /// Tags del enum interno de QuickJS — codificados en los bits 32..63 de
 /// cada `JSValue`. La discriminación de tipo se hace mirando estos bits.
@@ -5054,5 +5105,100 @@ mod tests {
         )
         .expect("e");
         assert!(rt.drain_dom_mutations().is_empty());
+    }
+
+    // ============= Fase 7.21 — cloneNode + contains =============
+
+    #[test]
+    fn clone_node_copia_tag_class_text_attrs() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[ElementSnapshot {
+            id: "src".into(),
+            tag_name: "a".into(),
+            text_content: "click".into(),
+            class_list: vec!["btn".into(), "primary".into()],
+            value: None,
+            parent_id: None,
+            dataset: vec![("track".into(), "hero".into())],
+            attributes: vec![
+                ("data-track".into(), "hero".into()),
+                ("href".into(), "/x".into()),
+            ],
+        }])
+        .expect("e");
+        rt.eval("var c = document.getElementById('src').cloneNode(false)").expect("e");
+        let v = rt.eval("c._tagName").expect("e");
+        assert_eq!(v, JsValue::String("a".into()));
+        let v = rt.eval("c._textContent").expect("e");
+        assert_eq!(v, JsValue::String("click".into()));
+        let v = rt.eval("c._classList.join(',')").expect("e");
+        assert_eq!(v, JsValue::String("btn,primary".into()));
+        let v = rt.eval("c._dataset_store.track").expect("e");
+        assert_eq!(v, JsValue::String("hero".into()));
+        let v = rt.eval("c._attributes_store.href").expect("e");
+        assert_eq!(v, JsValue::String("/x".into()));
+        // Clone tiene id NUEVO (synth_), no el del original.
+        let v = rt.eval("c.id !== 'src' && c.id.indexOf('__synth_') === 0").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        // Clone es synthetic + no insertado (listo para appendChild).
+        let v = rt.eval("c._synthetic && !c._inserted").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn clone_node_de_text_node_crea_otro_text_node() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        let v = rt
+            .eval(
+                "var t = document.createTextNode('Hola'); \
+                 var c = t.cloneNode(true); c._textContent",
+            )
+            .expect("e");
+        assert_eq!(v, JsValue::String("Hola".into()));
+        let v = rt.eval("c._isText").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn contains_self_devuelve_true() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("a", "div", "")]).expect("e");
+        let v = rt
+            .eval("var a = document.getElementById('a'); a.contains(a)")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn contains_descendiente_directo_y_anidado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("root", "div", ""),
+            snap_with_parent("mid", "section", "root"),
+            snap_with_parent("leaf", "span", "mid"),
+        ])
+        .expect("e");
+        // Hijo directo.
+        let v = rt
+            .eval("document.getElementById('root').contains(document.getElementById('mid'))")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        // Nieto.
+        let v = rt
+            .eval("document.getElementById('root').contains(document.getElementById('leaf'))")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        // Reverso — leaf NO contiene a root.
+        let v = rt
+            .eval("document.getElementById('leaf').contains(document.getElementById('root'))")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+        // null arg → false.
+        let v = rt.eval("document.getElementById('root').contains(null)").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
     }
 }
