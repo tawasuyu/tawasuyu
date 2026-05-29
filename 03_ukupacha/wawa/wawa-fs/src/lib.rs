@@ -140,7 +140,33 @@ pub enum MensajeAkasha {
         #[serde(with = "BigArray")]
         firma: FirmaAkasha,
     },
+    /// Fase 65 :: UN FRAGMENTO de un objeto cuyo payload no cabe en un solo
+    /// frame de capa-2 (`> MAX_PAYLOAD_AKASHA`). El emisor parte el payload
+    /// serializado del objeto en trozos de hasta [`MAX_FRAGMENTO_DATOS`] bytes
+    /// y emite `total` fragmentos `[0..total)`. El receptor los reensambla con
+    /// un [`Reensamblador`] y, al completar, verifica `blake3(payload) == id`
+    /// igual que con `ProveedorObjeto` —la integridad se valida SOBRE EL OBJETO
+    /// ENTERO reensamblado, no sobre los trozos—. Variante AÑADIDA AL FINAL del
+    /// enum a proposito: los tags `postcard` se asignan por orden, y mover una
+    /// variante existente romperia la compatibilidad con binarios viejos.
+    ProveedorFragmento {
+        /// Hash del objeto COMPLETO (no del fragmento): clave de reensamblado
+        /// y testigo de integridad final.
+        id: ObjectId,
+        /// Indice de este fragmento en `[0, total)`.
+        indice: u16,
+        /// Cuantos fragmentos componen el objeto entero.
+        total: u16,
+        /// Los bytes de este fragmento (≤ [`MAX_FRAGMENTO_DATOS`]).
+        datos: Vec<u8>,
+    },
 }
+
+/// Bytes maximos de `datos` en un `ProveedorFragmento`. El frame `postcard`
+/// resultante (tag 1 B + id 32 B + indice/total ≤ 6 B + prefijo de longitud
+/// ≤ 3 B + datos) queda holgadamente bajo `MAX_PAYLOAD_AKASHA` (1486): con
+/// 1024 el frame ronda los 1066 B. Margen deliberado para no rozar la MTU.
+pub const MAX_FRAGMENTO_DATOS: usize = 1024;
 
 /// El motivo por el que un frame AoE no se pudo componer o analizar.
 #[derive(Clone, Copy, Debug)]
@@ -203,6 +229,113 @@ pub fn analizar_frame(frame: &[u8]) -> Result<(Mac, MensajeAkasha), ErrorAkasha>
     let mensaje: MensajeAkasha =
         postcard::from_bytes(payload).map_err(|_| ErrorAkasha::PayloadInvalido)?;
     Ok((src, mensaje))
+}
+
+// =============================================================================
+//  Fragmentacion y reensamblado (Fase 65)
+// =============================================================================
+
+/// Cuantos fragmentos de [`MAX_FRAGMENTO_DATOS`] hacen falta para `len` bytes.
+/// Siempre >= 1 (un payload vacio viaja como un unico fragmento vacio). El
+/// emisor recorre `payload.chunks(MAX_FRAGMENTO_DATOS)` y compone un
+/// `ProveedorFragmento { id, indice, total, datos }` por trozo.
+pub fn total_fragmentos(len: usize) -> u16 {
+    if len == 0 {
+        return 1;
+    }
+    len.div_ceil(MAX_FRAGMENTO_DATOS) as u16
+}
+
+/// Tope DURO de fragmentos por objeto: acota la memoria del reensamblado
+/// frente a un emisor adversario que anuncie un `total` absurdo. 2048 * 1024 B
+/// = 2 MiB de techo transitorio; el `almacen` rechaza luego cualquier objeto
+/// que exceda su propio `MAX_OBJETO` al verificar el hash.
+pub const MAX_FRAGMENTOS: u16 = 2048;
+
+/// Reensamblador de UNA SOLA RANURA: acumula los fragmentos de un objeto hasta
+/// completarlo. Disenado para el patron real del cable —un emisor sirve los
+/// fragmentos de un objeto de corrido en respuesta a un `SolicitarObjeto`—, de
+/// modo que una sola ranura basta: si llega un fragmento de un `id` distinto
+/// (o un `total` distinto para el mismo `id`), se descarta el progreso anterior
+/// y se empieza de nuevo. Vive como `static` en el kernel tras un `Mutex`.
+///
+/// NO verifica el hash: eso lo hace el llamante sobre el payload completo
+/// (`absorber_proveedor` ya rehashea). El reensamblador solo junta los trozos.
+pub struct Reensamblador {
+    id: ObjectId,
+    total: u16,
+    trozos: Vec<Option<Vec<u8>>>,
+    faltantes: u16,
+    activo: bool,
+}
+
+impl Default for Reensamblador {
+    fn default() -> Self {
+        Self::nuevo()
+    }
+}
+
+impl Reensamblador {
+    /// `const fn` para vivir como `static` sin lazy-init: arranca inactivo.
+    pub const fn nuevo() -> Self {
+        Self {
+            id: [0; 32],
+            total: 0,
+            trozos: Vec::new(),
+            faltantes: 0,
+            activo: false,
+        }
+    }
+
+    /// Ingiere un fragmento. Devuelve `Some(payload completo)` cuando el objeto
+    /// `id` queda entero (y libera la ranura); `None` si aun faltan trozos o el
+    /// fragmento es invalido (total fuera de rango, indice fuera de rango).
+    pub fn ingerir(
+        &mut self,
+        id: ObjectId,
+        indice: u16,
+        total: u16,
+        datos: &[u8],
+    ) -> Option<Vec<u8>> {
+        if total == 0 || total > MAX_FRAGMENTOS || indice >= total {
+            return None;
+        }
+        // Arrancar (o reiniciar) la ranura si es un objeto/tamano distinto.
+        if !self.activo || self.id != id || self.total != total {
+            self.id = id;
+            self.total = total;
+            self.trozos = (0..total).map(|_| None).collect();
+            self.faltantes = total;
+            self.activo = true;
+        }
+        // Registrar el trozo si es nuevo (los duplicados se ignoran).
+        let ranura = &mut self.trozos[indice as usize];
+        if ranura.is_none() {
+            *ranura = Some(datos.to_vec());
+            self.faltantes -= 1;
+        }
+        if self.faltantes != 0 {
+            return None;
+        }
+        // Completo: concatenar en orden y liberar la ranura.
+        let mut completo = Vec::new();
+        for trozo in &self.trozos {
+            if let Some(bytes) = trozo {
+                completo.extend_from_slice(bytes);
+            }
+        }
+        self.reiniciar();
+        Some(completo)
+    }
+
+    /// Descarta el progreso y libera la memoria de la ranura.
+    pub fn reiniciar(&mut self) {
+        self.id = [0; 32];
+        self.total = 0;
+        self.trozos = Vec::new();
+        self.faltantes = 0;
+        self.activo = false;
+    }
 }
 
 // =============================================================================
@@ -316,5 +449,82 @@ mod pruebas {
             analizar_frame(&frame),
             Err(ErrorAkasha::PayloadInvalido)
         ));
+    }
+
+    #[test]
+    fn fragmento_grande_cabe_en_un_frame() {
+        // El frame de un ProveedorFragmento con datos al maximo no debe
+        // exceder MAX_PAYLOAD_AKASHA — la razon de ser del techo de 1024.
+        let datos = vec![0xABu8; MAX_FRAGMENTO_DATOS];
+        let msg = MensajeAkasha::ProveedorFragmento {
+            id: HASH_X,
+            indice: 3,
+            total: 12,
+            datos,
+        };
+        let frame = componer_frame(MAC_A, MAC_B, &msg).expect("debe componer");
+        assert!(frame.len() <= CABECERA_ETHERNET + MAX_PAYLOAD_AKASHA);
+    }
+
+    #[test]
+    fn total_fragmentos_redondea_hacia_arriba() {
+        assert_eq!(total_fragmentos(0), 1);
+        assert_eq!(total_fragmentos(1), 1);
+        assert_eq!(total_fragmentos(MAX_FRAGMENTO_DATOS), 1);
+        assert_eq!(total_fragmentos(MAX_FRAGMENTO_DATOS + 1), 2);
+        assert_eq!(total_fragmentos(3 * MAX_FRAGMENTO_DATOS), 3);
+    }
+
+    /// Parte `payload` y lo alimenta al reensamblador en el orden dado por
+    /// `orden` (indices). Devuelve lo reensamblado al completar.
+    fn roundtrip(payload: &[u8], orden: &[u16]) -> Option<Vec<u8>> {
+        let total = total_fragmentos(payload.len());
+        let trozos: Vec<&[u8]> = payload.chunks(MAX_FRAGMENTO_DATOS).collect();
+        let trozos = if trozos.is_empty() { vec![&[][..]] } else { trozos };
+        let mut r = Reensamblador::nuevo();
+        let mut salida = None;
+        for &i in orden {
+            salida = r.ingerir(HASH_X, i, total, trozos[i as usize]);
+        }
+        salida
+    }
+
+    #[test]
+    fn reensamblar_en_orden_reconstruye_el_payload() {
+        let payload: Vec<u8> = (0..2600u32).map(|i| i as u8).collect(); // 3 trozos
+        let total = total_fragmentos(payload.len());
+        assert_eq!(total, 3);
+        let recon = roundtrip(&payload, &[0, 1, 2]).expect("completo");
+        assert_eq!(recon, payload);
+    }
+
+    #[test]
+    fn reensamblar_desordenado_y_con_duplicados() {
+        let payload: Vec<u8> = (0..3000u32).map(|i| (i * 7) as u8).collect(); // 3 trozos
+        // Orden invertido + un duplicado intercalado: el duplicado se ignora,
+        // el resultado es identico.
+        let recon = roundtrip(&payload, &[2, 0, 2, 1]).expect("completo");
+        assert_eq!(recon, payload);
+    }
+
+    #[test]
+    fn fragmento_invalido_no_completa() {
+        let mut r = Reensamblador::nuevo();
+        // total=0 e indice fuera de rango son invalidos.
+        assert!(r.ingerir(HASH_X, 0, 0, b"x").is_none());
+        assert!(r.ingerir(HASH_X, 5, 3, b"x").is_none());
+        // total absurdo (sobre el tope) se rechaza.
+        assert!(r.ingerir(HASH_X, 0, MAX_FRAGMENTOS + 1, b"x").is_none());
+    }
+
+    #[test]
+    fn cambio_de_id_reinicia_el_reensamblado() {
+        let mut r = Reensamblador::nuevo();
+        // Medio objeto X (1 de 2 trozos)...
+        assert!(r.ingerir(HASH_X, 0, 2, b"aaaa").is_none());
+        // ...y de pronto llega un objeto Y de 1 trozo: completa Y, no mezcla.
+        let otro: ObjectId = [0x22; 32];
+        let completo = r.ingerir(otro, 0, 1, b"YY").expect("Y completo");
+        assert_eq!(completo, b"YY");
     }
 }
