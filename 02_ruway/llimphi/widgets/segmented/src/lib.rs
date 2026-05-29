@@ -94,6 +94,7 @@ fn segment_view<Msg: Clone + 'static>(
         (None, palette.fg_inactive)
     };
 
+    let seg_radius = radius::XS;
     let mut node = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -110,12 +111,33 @@ fn segment_view<Msg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .radius(radius::XS)
+    .radius(seg_radius)
     .text_aligned(label.to_string(), 11.5, fg, Alignment::Center)
     .on_click(msg);
 
     if let Some(c) = bg {
-        node = node.fill(c);
+        node = node.fill(c).paint_with(move |scene, _ts, rect| {
+            // Gloss superior sólo en el segmento activo — refuerza
+            // "esto está seleccionado" con la misma firma de button (P6).
+            // Los segmentos inactivos quedan planos para que el contraste
+            // sea inequívoco.
+            use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+            use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+            if rect.w <= 0.0 || rect.h <= 0.0 {
+                return;
+            }
+            let x0 = rect.x as f64;
+            let y0 = rect.y as f64;
+            let x1 = (rect.x + rect.w) as f64;
+            let y1 = (rect.y + rect.h) as f64;
+            let y_mid = y0 + (y1 - y0) * 0.5;
+            let rr = RoundedRect::new(x0, y0, x1, y1, seg_radius);
+            let top = Color::from_rgba8(255, 255, 255, 28);
+            let bot = Color::from_rgba8(255, 255, 255, 0);
+            let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y_mid))
+                .with_stops([top, bot].as_slice());
+            scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
+        });
     }
     node
 }

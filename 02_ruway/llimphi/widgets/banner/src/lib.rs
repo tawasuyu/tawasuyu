@@ -50,16 +50,37 @@ impl BannerKind {
     }
 }
 
+/// Ancho del rail de severidad en el edge izquierdo. Mismo valor que
+/// `llimphi-widget-toast` — banner y toast son las versiones persistente
+/// y efímera del mismo lenguaje (P5 → P8).
+const RAIL_W: f32 = 3.0;
+
 /// Banner simple: una fila con `message` centrado verticalmente y
 /// alineado a la izquierda. bg/fg vienen del `kind`.
 pub fn banner_view<Msg: Clone + 'static>(
     kind: BannerKind,
     message: impl Into<String>,
 ) -> View<Msg> {
-    View::new(Style {
+    use llimphi_ui::llimphi_layout::taffy::prelude::FlexDirection;
+
+    // Rail de severidad en el edge izquierdo — stripe del color fg
+    // semántico, visible al pasar el ojo. Mismo patrón que toast P5.
+    let rail = View::new(Style {
+        size: Size {
+            width: length(RAIL_W),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(kind.fg());
+
+    // Contenedor del mensaje: padding original ahora vive acá para que
+    // el rail pegue al borde sin offset y el texto arranque después.
+    let body = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(28.0_f32),
+            height: percent(1.0_f32),
         },
         padding: Rect {
             left: length(12.0_f32),
@@ -70,7 +91,19 @@ pub fn banner_view<Msg: Clone + 'static>(
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
+    .text_aligned(message.into(), 11.0, kind.fg(), Alignment::Start);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
     .fill(kind.bg())
     .radius(3.0)
-    .text_aligned(message.into(), 11.0, kind.fg(), Alignment::Start)
+    .clip(true)
+    .children(vec![rail, body])
 }
