@@ -155,10 +155,85 @@ pub struct ResumenCapacidades {
 pub fn montar() -> Result<ResumenCapacidades, &'static str> {
     let hallados = pci::enumerar_por_clase(pci::clases::USB_XHCI);
     let num_controladores = hallados.len();
-    let info = hallados
-        .into_iter()
-        .next()
-        .ok_or("xhci :: no se hallo controlador en el bus PCI")?;
+    if num_controladores == 0 {
+        return Err("xhci :: no se hallo controlador en el bus PCI");
+    }
+
+    let mut resumen_global: Vec<String> = Vec::new();
+    resumen_global.push(format!("usb :: {num_controladores} controlador(es) XHCI"));
+
+    // Inicializar CADA controlador XHCI y quedarse con el PRIMERO que tenga un
+    // raton USB. Muchas maquinas tienen varios controladores —o el raton cuelga
+    // de uno distinto al primero—, asi que mirar solo el primero no basta. Si
+    // ninguno tiene raton, se guarda el primero que haya inicializado para que
+    // el resto del kernel sepa que hay XHCI. Los controladores no elegidos
+    // quedan corriendo pero sin servir — inofensivo.
+    let mut elegido: Option<ControladorListo> = None;
+
+    for (idx, info) in hallados.into_iter().enumerate() {
+        match intentar_controlador(info) {
+            Ok(mut listo) => {
+                let tiene_raton = listo.raton_hid.is_some();
+                resumen_global.push(format!(
+                    "usb ctrl{idx}: {} puertos, {} con disp, raton={}",
+                    listo.caps.max_puertos,
+                    listo.conectados,
+                    if tiene_raton { "SI" } else { "NO" },
+                ));
+                resumen_global.append(&mut listo.diag);
+                if tiene_raton {
+                    elegido = Some(listo);
+                    break; // hallado el del raton; no inicializar mas.
+                }
+                if elegido.is_none() {
+                    elegido = Some(listo);
+                }
+            }
+            Err(motivo) => {
+                resumen_global.push(format!("usb ctrl{idx}: fallo: {motivo}"));
+            }
+        }
+    }
+
+    let elegido = elegido.ok_or("xhci :: ningun controlador XHCI inicializo")?;
+    let caps = elegido.caps;
+    if elegido.raton_hid.is_none() {
+        resumen_global.push(String::from("usb raton USB: NO (sigue el pad PS/2)"));
+    }
+
+    ESTADO.call_once(move || {
+        Mutex::new(Estado {
+            pci: elegido.pci,
+            bar0_fisica: elegido.bar0_fisica,
+            registros: elegido.registros,
+            estructuras: elegido.estructuras,
+            raton_hid: elegido.raton_hid,
+            resumen: resumen_global,
+        })
+    });
+
+    Ok(caps)
+}
+
+/// Todo lo que aporta UN controlador XHCI ya inicializado. `montar` colecciona
+/// uno por controlador del bus y se queda con el que tenga raton.
+struct ControladorListo {
+    pci: DeviceFunction,
+    bar0_fisica: u64,
+    registros: Registers<MapeadorXhci>,
+    estructuras: EstructurasArranque,
+    raton_hid: Option<super::hid::RatonHid>,
+    caps: ResumenCapacidades,
+    conectados: usize,
+    diag: Vec<String>,
+}
+
+/// Inicializa UN controlador XHCI end-to-end: bus master, mapear BAR, leer
+/// capacidades, reset (X2b), estructuras DMA + USBCMD.RS=1 (X2c), enumerar
+/// puertos (X2d) y dispositivos (raton HID, X3). Devuelve todo lo necesario
+/// para guardarlo, o un Err legible si un paso critico falla —ese controlador
+/// se omite y se prueba el siguiente—.
+fn intentar_controlador(info: pci::InfoPci) -> Result<ControladorListo, &'static str> {
     let pci_df = info.device_function();
 
     // Habilitar Bus Master + Memory Space antes de tocar el BAR.
@@ -166,32 +241,25 @@ pub fn montar() -> Result<ResumenCapacidades, &'static str> {
 
     let bar0_fisica = leer_bar0(pci_df);
     if bar0_fisica == 0 {
-        return Err("xhci :: BAR0 vale cero — controlador sin BAR programado");
+        return Err("BAR0 vale cero");
     }
 
-    // SEGURIDAD: `xhci::Registers::new` toma la base FISICA del BAR0 y un
-    // Mapper que sabe como llevarla a virtual. Nuestro `MapeadorXhci` se
-    // apoya en `memory::mmio` para abrir paginas y traducir.
+    // SEGURIDAD: `Registers::new` toma la base FISICA del BAR0 y un Mapper que
+    // sabe llevarla a virtual (`MapeadorXhci` sobre `memory::mmio`).
     let mut registros = unsafe { Registers::new(bar0_fisica as usize, MapeadorXhci) };
 
-    // Leer la tabla de capacidades a un resumen plano.
-    let caps = &registros.capability;
-    let version = caps.hciversion.read_volatile().get();
-    let hcsparams1 = caps.hcsparams1.read_volatile();
-    let hcsparams2 = caps.hcsparams2.read_volatile();
-    let hccparams1 = caps.hccparams1.read_volatile();
+    let cap = &registros.capability;
+    let version = cap.hciversion.read_volatile().get();
+    let hcsparams1 = cap.hcsparams1.read_volatile();
+    let hccparams1 = cap.hccparams1.read_volatile();
     let max_slots = hcsparams1.number_of_device_slots();
     let max_puertos = hcsparams1.number_of_ports();
     let max_interrupters = hcsparams1.number_of_interrupts();
-    // HCSPARAMS2 anuncia campos de scratchpad / ERST max, pero el tamano de
-    // pagina vive en el operacional `pagesize` — se lee mas abajo.
-    let _ = hcsparams2;
     let ac64 = hccparams1.addressing_capability();
     let contexts_64 = hccparams1.context_size();
-
     let tam_pagina = registros.operational.pagesize.read_volatile().get() as u32;
 
-    let resumen = ResumenCapacidades {
+    let caps = ResumenCapacidades {
         version,
         max_slots,
         max_puertos,
@@ -203,92 +271,38 @@ pub fn montar() -> Result<ResumenCapacidades, &'static str> {
 
     let _ = writeln!(
         crate::baliza::Serie,
-        "xhci :: hallado en PCI {}:{}.{} vendor={:#06x} device={:#06x} BAR0={:#x}",
-        pci_df.bus,
-        pci_df.device,
-        pci_df.function,
-        info.vendor_id,
-        info.device_id,
-        bar0_fisica,
-    );
-    let _ = writeln!(
-        crate::baliza::Serie,
-        "xhci :: version={:#06x} slots_max={} puertos_max={} interrupters={} pagesize={:#x} ac64={} ctx64={}",
-        version,
-        max_slots,
-        max_puertos,
-        max_interrupters,
-        tam_pagina,
-        ac64,
-        contexts_64,
+        "xhci :: PCI {}:{}.{} vendor={:#06x} device={:#06x} BAR0={:#x} ver={:#06x} slots={} puertos={}",
+        pci_df.bus, pci_df.device, pci_df.function,
+        info.vendor_id, info.device_id, bar0_fisica, version, max_slots, max_puertos,
     );
 
-    // X2b :: reset del controlador. La secuencia de la spec xHCI §4.2:
-    //   1. Si esta corriendo, USBCMD.RS=0 y esperar HCHalted=1.
-    //   2. USBCMD.HCRST=1; la HW lo baja sola al completar el reset.
-    //   3. Esperar HCRST=0 (reset completo).
-    //   4. Esperar USBSTS.CNR=0 (Controller Not Ready) — el HC esta
-    //      listo para que el driver programe DCBAA, Command Ring, etc.
     resetear_controlador(&mut registros)?;
-
-    // X2c :: programar las estructuras DMA y arrancar el controlador.
-    // Allocar DCBAA + Command Ring + Event Ring + ERST, escribir DCBAAP,
-    // CRCR, ERSTSZ/ERDP/ERSTBA, IMAN.IE, y poner USBCMD.RS=1. Tras esto
-    // HCHalted=0 y el controlador esta listo para recibir comandos.
     let mut estructuras = EstructurasArranque::fundar(&mut registros, max_slots)?;
-
-    // X2d-parcial :: enumerar los puertos del controlador, disparar reset
-    // por los conectados y reportar velocidad detectada.
     let conectados = super::puertos::enumerar(&mut registros, max_puertos);
-    let _ = writeln!(
-        crate::baliza::Serie,
-        "xhci :: total puertos con dispositivo = {}",
-        conectados,
-    );
 
-    // X2d-completo :: ENUMERACION POR PUERTO. Para cada puerto con
-    // dispositivo conectado: Enable Slot → preparar contextos → Address
-    // Device → GET_DESCRIPTOR(Device, 0, 8) → re-leer descriptor completo
-    // → GET_DESCRIPTOR(Configuration, ...) parsea interfaces/endpoints.
-    let mut resumen_pantalla: Vec<String> = Vec::new();
-    resumen_pantalla.push(format!(
-        "usb :: {num_controladores} controlador(es) XHCI; usando el 1ro: {max_puertos} puertos"
-    ));
-    resumen_pantalla.push(format!("usb XHCI ok :: {conectados} puerto(s) con dispositivo"));
-    let raton_hid = if conectados > 0 {
+    let (raton_hid, diag) = if conectados > 0 {
         match enumerar_dispositivos(&mut registros, &mut estructuras, max_puertos) {
-            Ok((r, diag)) => {
-                resumen_pantalla.extend(diag);
-                r
-            }
+            Ok(r) => r,
             Err(motivo) => {
-                resumen_pantalla.push(format!("usb enumeracion abortada: {motivo}"));
-                let _ = writeln!(
-                    crate::baliza::Serie,
-                    "xhci :: enumeracion dispositivos abortada :: {motivo}",
-                );
-                None
+                let mut d: Vec<String> = Vec::new();
+                d.push(format!("usb enum abortada: {motivo}"));
+                (None, d)
             }
         }
     } else {
-        None
+        (None, Vec::new())
     };
-    if raton_hid.is_none() {
-        resumen_pantalla.push(String::from("usb raton USB: NO (sigue el pad PS/2)"));
-    }
 
-    ESTADO.call_once(|| {
-        Mutex::new(Estado {
-            pci: pci_df,
-            bar0_fisica,
-            registros,
-            estructuras,
-            raton_hid,
-            resumen: resumen_pantalla,
-        })
-    });
-
-    Ok(resumen)
+    Ok(ControladorListo {
+        pci: pci_df,
+        bar0_fisica,
+        registros,
+        estructuras,
+        raton_hid,
+        caps,
+        conectados,
+        diag,
+    })
 }
 
 /// Bajar el controlador a HCHalted, dispararle HCRST=1, esperar a que la HW
