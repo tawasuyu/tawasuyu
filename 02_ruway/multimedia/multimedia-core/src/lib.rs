@@ -825,6 +825,153 @@ impl FrameSource for VideoSwitcher {
     }
 }
 
+// ============================================================
+// Waterfall — historial 2D del espectro
+// ============================================================
+
+/// Historial rotativo de magnitudes del [`Spectrum`]. Cada `analyze`
+/// corre el Goertzel sobre el snapshot recibido y guarda la fila
+/// resultante en un ring buffer de `rows` filas × `bands` columnas
+/// — el visor (spectrogram waterfall) pinta el ring en orden
+/// newest-first para que la onda nueva entre por arriba y empuje a
+/// la vieja hacia abajo.
+///
+/// Las filas anteriores a la primera escritura quedan en 0.0
+/// (silencio). El consumidor puede leer con [`Waterfall::snapshot`]
+/// en orden cronológico inverso (fila 0 = más nueva).
+pub struct Waterfall {
+    spectrum: Spectrum,
+    /// Buffer plano `rows × bands` (fila i, banda j en `[i*bands + j]`).
+    grid: Vec<f32>,
+    bands: usize,
+    rows: usize,
+    /// Índice de la fila a sobrescribir en el próximo analyze.
+    head: usize,
+    /// Cuántas filas se escribieron históricamente (clampada a rows).
+    written: usize,
+}
+
+impl Waterfall {
+    /// Crea un waterfall sobre `bands` bandas log-espaciadas y `rows`
+    /// filas de historial. `bands == 0` o `rows == 0` se clampean a 1.
+    pub fn new(bands: usize, rows: usize, fmin: f32, fmax: f32) -> Self {
+        let bands = bands.max(1);
+        let rows = rows.max(1);
+        Self {
+            spectrum: Spectrum::log_bands(bands, fmin, fmax),
+            grid: vec![0.0; bands * rows],
+            bands,
+            rows,
+            head: 0,
+            written: 0,
+        }
+    }
+
+    pub fn bands(&self) -> usize {
+        self.bands
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// Frecuencias centro de cada banda — espejo de [`Spectrum::bands`].
+    pub fn band_freqs(&self) -> &[f32] {
+        self.spectrum.bands()
+    }
+
+    /// Corre el spectrum sobre `samples` y agrega la fila resultante
+    /// al ring. La fila vieja en `head` queda sobrescrita.
+    pub fn analyze(&mut self, samples: &[f32], channels: u16, sample_rate: u32) {
+        self.spectrum.analyze(samples, channels, sample_rate);
+        let mags = self.spectrum.magnitudes();
+        let bands = self.bands;
+        let start = self.head * bands;
+        // Copia la fila — `mags.len()` ya es == bands por construcción.
+        self.grid[start..start + bands].copy_from_slice(mags);
+        self.head = (self.head + 1) % self.rows;
+        self.written = (self.written + 1).min(self.rows);
+    }
+
+    /// Copia el grid a `out` en orden newest-first: la fila 0 de
+    /// `out` es la última analizada, fila `rows-1` la más vieja.
+    /// `out` se redimensiona a `rows * bands`. Devuelve `(rows, bands)`.
+    pub fn snapshot(&self, out: &mut Vec<f32>) -> (usize, usize) {
+        let total = self.rows * self.bands;
+        if out.len() != total {
+            out.resize(total, 0.0);
+        }
+        if self.written == 0 {
+            for v in out.iter_mut() {
+                *v = 0.0;
+            }
+            return (self.rows, self.bands);
+        }
+        // newest = (head + rows - 1) % rows.
+        let newest = (self.head + self.rows - 1) % self.rows;
+        for i in 0..self.rows {
+            // out[i] = grid[(newest - i) mod rows]
+            let src_row = (newest + self.rows - i) % self.rows;
+            let src_off = src_row * self.bands;
+            let dst_off = i * self.bands;
+            out[dst_off..dst_off + self.bands]
+                .copy_from_slice(&self.grid[src_off..src_off + self.bands]);
+        }
+        (self.rows, self.bands)
+    }
+}
+
+#[cfg(test)]
+mod tests_waterfall {
+    use super::*;
+
+    fn synthetic_block(freq: f32, frames: usize, sr: u32) -> Vec<f32> {
+        let mut v = Vec::with_capacity(frames);
+        let dphi = std::f32::consts::TAU * freq / sr as f32;
+        let mut phi = 0.0_f32;
+        for _ in 0..frames {
+            v.push(phi.sin() * 0.5);
+            phi += dphi;
+        }
+        v
+    }
+
+    #[test]
+    fn snapshot_is_newest_first() {
+        let mut w = Waterfall::new(8, 4, 100.0, 4_000.0);
+        // Primero un análisis con señal fuerte (482 Hz ≈ banda 3),
+        // después uno con silencio. El release del Spectrum hace que
+        // la fila más nueva tenga ENERGÍA MENOR que la fila anterior
+        // (que vio la señal fresca).
+        let hot = synthetic_block(482.0, 4096, 48_000);
+        let silence = vec![0.0_f32; 4096];
+        w.analyze(&hot, 1, 48_000);
+        w.analyze(&silence, 1, 48_000);
+
+        let mut snap = Vec::new();
+        let (rows, bands) = w.snapshot(&mut snap);
+        assert_eq!(rows, 4);
+        assert_eq!(bands, 8);
+
+        let row0_sum: f32 = snap[0..8].iter().sum();
+        let row1_sum: f32 = snap[8..16].iter().sum();
+        assert!(row1_sum > 0.0, "row1 debería capturar la señal");
+        assert!(
+            row1_sum > row0_sum,
+            "row1 (señal fresca, {row1_sum}) debería superar a row0 (post-silencio, {row0_sum})"
+        );
+    }
+
+    #[test]
+    fn empty_snapshot_is_zero() {
+        let w = Waterfall::new(4, 4, 100.0, 1_000.0);
+        let mut snap = Vec::new();
+        let (rows, bands) = w.snapshot(&mut snap);
+        assert_eq!((rows, bands), (4, 4));
+        assert!(snap.iter().all(|&v| v == 0.0));
+    }
+}
+
 #[cfg(test)]
 mod tests_composition {
     use super::*;

@@ -57,8 +57,8 @@ use llimphi_ui::{App, Handle, View};
 use multimedia_audio_cpal::AudioSink;
 use multimedia_core::{
     AudioProbe, AudioSource, FrameSource, Levels, MixerAudio, Pause, PausableAudio,
-    PausableVideo, ProbedAudioSource, Seekable, Spectrum, TestCard, ToneSource, Volume,
-    VolumeAudio,
+    PausableVideo, ProbedAudioSource, Seekable, TestCard, ToneSource, Volume, VolumeAudio,
+    Waterfall,
 };
 use multimedia_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use multimedia_source_gif::GifSource;
@@ -521,7 +521,7 @@ impl App for MultimediaApp {
             },
             ..Default::default()
         })
-        .children(vec![waveform_panel(), spectrum_panel()]);
+        .children(vec![waveform_panel(), waterfall_panel()]);
 
         let time_label = seekable_handle_slot()
             .get()
@@ -634,9 +634,10 @@ fn waveform_panel<Msg: 'static>() -> View<Msg> {
             return;
         }
 
-        // Bucket por columna: agrupa frames en `cols` columnas tomando
-        // el pico absoluto del bucket (más legible que el promedio para
-        // formas de onda).
+        // Envelope min/max por columna: por cada bucket de frames
+        // guardamos el mínimo y el máximo del mono fold y dibujamos
+        // la forma como un polígono cerrado (relleno tenue + stroke).
+        // Da mucho más "cuerpo" que la línea pico-sólo.
         let cols = inner_w.max(2.0) as usize;
         let cols = cols.min(total_frames);
         let frames_per_col = total_frames / cols.max(1);
@@ -645,36 +646,83 @@ fn waveform_panel<Msg: 'static>() -> View<Msg> {
         }
         let amp = inner_h * 0.5;
 
-        let mut path = BezPath::new();
+        let mut top = BezPath::new();
+        let mut bot = BezPath::new();
+        let mut envelope = BezPath::new();
         for col in 0..cols {
             let f0 = col * frames_per_col;
             let f1 = ((col + 1) * frames_per_col).min(total_frames);
-            let mut peak = 0.0_f32;
+            let mut vmin = f32::INFINITY;
+            let mut vmax = f32::NEG_INFINITY;
             for f in f0..f1 {
-                // Mono = promedio simple de canales del frame.
                 let mut acc = 0.0_f32;
                 for ch in 0..channels {
                     acc += snap[f * channels + ch];
                 }
-                let v = acc / channels as f32;
-                if v.abs() > peak.abs() {
-                    peak = v;
+                let v = (acc / channels as f32).clamp(-1.0, 1.0);
+                if v < vmin {
+                    vmin = v;
+                }
+                if v > vmax {
+                    vmax = v;
                 }
             }
             let x = inner_x + (col as f32 / (cols as f32 - 1.0).max(1.0)) * inner_w;
-            let y = mid_y - peak.clamp(-1.0, 1.0) * amp;
+            let y_top = mid_y - vmax * amp;
+            let y_bot = mid_y - vmin * amp;
             if col == 0 {
-                path.move_to((x as f64, y as f64));
+                top.move_to((x as f64, y_top as f64));
+                bot.move_to((x as f64, y_bot as f64));
+                envelope.move_to((x as f64, y_top as f64));
             } else {
-                path.line_to((x as f64, y as f64));
+                top.line_to((x as f64, y_top as f64));
+                bot.line_to((x as f64, y_bot as f64));
+                envelope.line_to((x as f64, y_top as f64));
             }
         }
+        // Cierre del polígono envelope: vuelve por la línea de
+        // mínimos en sentido inverso.
+        for col in (0..cols).rev() {
+            let f0 = col * frames_per_col;
+            let f1 = ((col + 1) * frames_per_col).min(total_frames);
+            let mut vmin = f32::INFINITY;
+            for f in f0..f1 {
+                let mut acc = 0.0_f32;
+                for ch in 0..channels {
+                    acc += snap[f * channels + ch];
+                }
+                let v = (acc / channels as f32).clamp(-1.0, 1.0);
+                if v < vmin {
+                    vmin = v;
+                }
+            }
+            let x = inner_x + (col as f32 / (cols as f32 - 1.0).max(1.0)) * inner_w;
+            let y_bot = mid_y - vmin * amp;
+            envelope.line_to((x as f64, y_bot as f64));
+        }
+        envelope.close_path();
+
+        let fill_color = Color::from_rgba8(120, 220, 170, 70);
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            fill_color,
+            None,
+            &envelope,
+        );
         scene.stroke(
-            &Stroke::new(1.5),
+            &Stroke::new(1.2),
             Affine::IDENTITY,
             stroke_color,
             None,
-            &path,
+            &top,
+        );
+        scene.stroke(
+            &Stroke::new(1.2),
+            Affine::IDENTITY,
+            stroke_color,
+            None,
+            &bot,
         );
     })
 }
@@ -841,12 +889,19 @@ fn level_color(v: f32) -> Color {
 /// Panel de espectro: banco Goertzel sobre el probe + barras log
 /// espaciadas (40 Hz → 16 kHz). Sin probe queda con la base oscura y
 /// las casillas vacías.
-fn spectrum_panel<Msg: 'static>() -> View<Msg> {
+/// Panel waterfall (spectrogram histórico): cada fila es un análisis
+/// Goertzel sobre el probe; las filas nuevas entran por arriba y
+/// empujan a las viejas hacia abajo. Color va de fondo casi negro a
+/// ámbar/blanco según magnitud — la "ráfaga" del bajo y los picos
+/// quedan visibles ~2-3 segundos antes de desvanecerse.
+fn waterfall_panel<Msg: 'static>() -> View<Msg> {
     let probe = audio_probe_slot().get().cloned().flatten();
     let scratch: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
-    let analyzer: Arc<Mutex<Spectrum>> =
-        Arc::new(Mutex::new(Spectrum::log_bands(28, 40.0, 16_000.0)));
-    let bar_color = Color::from_rgba8(255, 175, 95, 255);
+    let grid_buf: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    // 28 bandas para tener resolución y a la vez celdas pintables
+    // sin amontonar. ~60 filas a 30 fps = 2 segundos de historia.
+    let waterfall: Arc<Mutex<Waterfall>> =
+        Arc::new(Mutex::new(Waterfall::new(28, 60, 40.0, 16_000.0)));
     let base_color = Color::from_rgba8(46, 36, 28, 255);
 
     View::new(Style {
@@ -863,17 +918,15 @@ fn spectrum_panel<Msg: 'static>() -> View<Msg> {
         if rect.w <= 4.0 || rect.h <= 4.0 {
             return;
         }
-        let pad_x: f32 = 12.0;
-        let pad_y: f32 = 10.0;
-        let inner_x = rect.x + pad_x;
-        let inner_y = rect.y + pad_y;
-        let inner_w = (rect.w - 2.0 * pad_x).max(1.0);
-        let inner_h = (rect.h - 2.0 * pad_y).max(1.0);
-        let baseline = inner_y + inner_h;
+        let pad: f32 = 6.0;
+        let inner_x = rect.x + pad;
+        let inner_y = rect.y + pad;
+        let inner_w = (rect.w - 2.0 * pad).max(1.0);
+        let inner_h = (rect.h - 2.0 * pad).max(1.0);
 
         let Some(probe) = probe.as_ref() else {
-            // Sin probe: dibuja una línea de base apagada como hint
-            // de que el visor está vivo.
+            // Sin probe: línea base apagada — mismo lenguaje que los
+            // otros visores.
             let mut center = BezPath::new();
             let mid = inner_y + inner_h * 0.5;
             center.move_to((inner_x as f64, mid as f64));
@@ -893,29 +946,63 @@ fn spectrum_panel<Msg: 'static>() -> View<Msg> {
         if sr == 0 {
             return;
         }
-        let mut analyzer = analyzer.lock();
-        analyzer.analyze(&snap, channels, sr);
-        let mags = analyzer.magnitudes();
-        let n_bands = mags.len();
-        if n_bands == 0 {
-            return;
-        }
-        let gap: f32 = 2.0;
-        let total_gap = gap * (n_bands as f32 + 1.0);
-        let bar_w = ((inner_w - total_gap) / n_bands as f32).max(1.0);
-        for (i, &m) in mags.iter().enumerate() {
-            let h = (m.clamp(0.0, 1.0) * inner_h).max(1.0);
-            let x0 = inner_x + gap + i as f32 * (bar_w + gap);
-            let y0 = baseline - h;
-            let rect = KurboRect::new(
-                x0 as f64,
-                y0 as f64,
-                (x0 + bar_w) as f64,
-                baseline as f64,
-            );
-            scene.fill(Fill::NonZero, Affine::IDENTITY, bar_color, None, &rect);
+        let mut wf = waterfall.lock();
+        wf.analyze(&snap, channels, sr);
+
+        let mut grid = grid_buf.lock();
+        let (rows, bands) = wf.snapshot(&mut grid);
+        let cell_w = inner_w / bands as f32;
+        let cell_h = inner_h / rows as f32;
+        for r in 0..rows {
+            let y0 = inner_y + r as f32 * cell_h;
+            for b in 0..bands {
+                let m = grid[r * bands + b];
+                if m < 0.02 {
+                    continue;
+                }
+                let x0 = inner_x + b as f32 * cell_w;
+                let cell = KurboRect::new(
+                    x0 as f64,
+                    y0 as f64,
+                    (x0 + cell_w + 0.5) as f64,
+                    (y0 + cell_h + 0.5) as f64,
+                );
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    heat_color(m),
+                    None,
+                    &cell,
+                );
+            }
         }
     })
+}
+
+/// Gradiente "heat" para el waterfall: tinte oscuro → ámbar → claro
+/// según magnitud. Bandas vacías no se pintan (fondo del View queda
+/// visible).
+fn heat_color(v: f32) -> Color {
+    let v = v.clamp(0.0, 1.0);
+    if v < 0.25 {
+        let t = v / 0.25;
+        let r = (60.0 + 110.0 * t) as u8;
+        let g = (20.0 + 30.0 * t) as u8;
+        let b = (20.0 + 10.0 * t) as u8;
+        Color::from_rgba8(r, g, b, 255)
+    } else if v < 0.6 {
+        let t = (v - 0.25) / 0.35;
+        let r = (170.0 + 70.0 * t) as u8;
+        let g = (50.0 + 110.0 * t) as u8;
+        let b = (30.0 + 40.0 * t) as u8;
+        Color::from_rgba8(r, g, b, 255)
+    } else {
+        let t = (v - 0.6) / 0.4;
+        let r = (240.0 + 15.0 * t) as u8;
+        let g = (160.0 + 80.0 * t) as u8;
+        let b = (70.0 + 160.0 * t) as u8;
+        Color::from_rgba8(r, g, b, 255.min((180.0 + 75.0 * t) as u8))
+    }
 }
 
 fn main() {
