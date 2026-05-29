@@ -1160,14 +1160,30 @@ fn wawa_importar(dir: &Path, salida: &Path) -> CliResult<()> {
 /// Importa un directorio recursivamente, de abajo hacia arriba: cada archivo
 /// se emite como blob, cada subdirectorio como árbol. Devuelve el hash del
 /// árbol de ESTE directorio.
+/// Tamaño de trozo para archivos grandes. 256 KiB << MAX_OBJETO (1 MiB), así
+/// cada trozo es un objeto del grafo holgado y el índice (N·32 B) cabe de sobra.
+const TAMANO_TROZO: usize = 256 * 1024;
+
 fn importar_dir(dir: &Path, salida: &Path) -> CliResult<format::Hash> {
+    use std::os::unix::fs::PermissionsExt;
+
     let mut entradas: Vec<format::EntradaArbol> = Vec::new();
     for ent in fs::read_dir(dir)? {
         let ent = ent?;
         let ruta = ent.path();
         let nombre = ent.file_name().to_string_lossy().into_owned();
-        let ft = ent.file_type()?;
-        if ft.is_dir() {
+        let ft = ent.file_type()?; // no sigue symlinks: los detecta como tales
+        if ft.is_symlink() {
+            // El destino del enlace se guarda como blob de texto.
+            let destino = fs::read_link(&ruta)?;
+            let bytes = destino.to_string_lossy().into_owned().into_bytes();
+            let hash = emitir_objeto(&format::objeto_blob(bytes), salida)?;
+            entradas.push(format::EntradaArbol {
+                nombre,
+                modo: format::ModoEntrada::Symlink,
+                hash,
+            });
+        } else if ft.is_dir() {
             let hash = importar_dir(&ruta, salida)?;
             entradas.push(format::EntradaArbol {
                 nombre,
@@ -1176,26 +1192,36 @@ fn importar_dir(dir: &Path, salida: &Path) -> CliResult<format::Hash> {
             });
         } else if ft.is_file() {
             let bytes = fs::read(&ruta)?;
-            if bytes.len() > format::MAX_OBJETO {
-                return Err(Error::Spec(format!(
-                    "«{}» ({} B) excede MAX_OBJETO ({} B); el blob-chunking en grafo es trabajo futuro",
-                    ruta.display(),
-                    bytes.len(),
-                    format::MAX_OBJETO
-                )));
-            }
-            let hash = emitir_objeto(&format::objeto_blob(bytes), salida)?;
-            entradas.push(format::EntradaArbol {
-                nombre,
-                modo: format::ModoEntrada::Archivo,
-                hash,
-            });
+            let hash = importar_archivo(bytes, salida)?;
+            // Bit de ejecución (cualquiera de los tres x de Unix).
+            let ejecutable = fs::metadata(&ruta)?.permissions().mode() & 0o111 != 0;
+            let modo = if ejecutable {
+                format::ModoEntrada::Ejecutable
+            } else {
+                format::ModoEntrada::Archivo
+            };
+            entradas.push(format::EntradaArbol { nombre, modo, hash });
         }
-        // Symlinks y otros tipos se ignoran por ahora (round-trip de archivos
-        // y directorios; enlaces/permisos quedan como trabajo futuro).
+        // Otros tipos (FIFOs, sockets, devices) se ignoran — no son código.
     }
     let objeto = format::objeto_arbol(entradas).map_err(Error::Canal)?;
     emitir_objeto(&objeto, salida)
+}
+
+/// Importa el contenido de un archivo: blob plano si cabe en un trozo, o índice
+/// de trozos si es grande (blob-chunking en grafo). Devuelve el hash con que el
+/// árbol lo referencia.
+fn importar_archivo(bytes: Vec<u8>, salida: &Path) -> CliResult<format::Hash> {
+    if bytes.len() <= TAMANO_TROZO {
+        return emitir_objeto(&format::objeto_blob(bytes), salida);
+    }
+    // Grande: partir en trozos, emitir cada uno como blob, y un índice que los
+    // encadena. El lector concatena los `datos` de los hijos del índice.
+    let mut trozos: Vec<format::Hash> = Vec::new();
+    for trozo in bytes.chunks(TAMANO_TROZO) {
+        trozos.push(emitir_objeto(&format::objeto_blob(trozo.to_vec()), salida)?);
+    }
+    emitir_objeto(&format::objeto_blob_indice(trozos), salida)
 }
 
 /// Serializa un objeto, lo escribe como `<hash>.obj` en el bundle y devuelve
@@ -1228,15 +1254,28 @@ fn wawa_exportar(bundle: &Path, raiz_hex: Option<&str>, destino: &Path) -> CliRe
 /// Reconstruye el directorio cuyo árbol es `hash` dentro de `destino`.
 /// Devuelve cuántos ARCHIVOS escribió (recursivo).
 fn exportar_arbol(bundle: &Path, hash: &format::Hash, destino: &Path) -> CliResult<usize> {
+    use std::os::unix::fs::PermissionsExt;
+
     let objeto = leer_objeto(bundle, hash)?;
     let arbol = format::Arbol::deserializar(&objeto.datos).map_err(Error::Canal)?;
     let mut archivos = 0;
     for entrada in &arbol.entradas {
         let dest = destino.join(&entrada.nombre);
         match entrada.modo {
-            format::ModoEntrada::Archivo => {
+            format::ModoEntrada::Archivo | format::ModoEntrada::Ejecutable => {
+                let contenido = reconstruir_archivo(bundle, &entrada.hash)?;
+                fs::write(&dest, &contenido)?;
+                if entrada.modo == format::ModoEntrada::Ejecutable {
+                    fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+                }
+                archivos += 1;
+            }
+            format::ModoEntrada::Symlink => {
                 let blob = leer_objeto(bundle, &entrada.hash)?;
-                fs::write(&dest, &blob.datos)?;
+                let objetivo = String::from_utf8_lossy(&blob.datos).into_owned();
+                // Recrear el enlace simbólico; si ya existe, reemplazarlo.
+                let _ = fs::remove_file(&dest);
+                std::os::unix::fs::symlink(&objetivo, &dest)?;
                 archivos += 1;
             }
             format::ModoEntrada::Directorio => {
@@ -1246,6 +1285,23 @@ fn exportar_arbol(bundle: &Path, hash: &format::Hash, destino: &Path) -> CliResu
         }
     }
     Ok(archivos)
+}
+
+/// Reconstruye el CONTENIDO de un archivo: si su objeto es un blob plano
+/// (`hijos` vacío) son sus `datos`; si es un índice (`hijos` no vacío) es la
+/// concatenación de los `datos` de cada trozo, en orden. Verifica el hash de
+/// cada objeto leído.
+fn reconstruir_archivo(bundle: &Path, hash: &format::Hash) -> CliResult<Vec<u8>> {
+    let objeto = leer_objeto(bundle, hash)?;
+    if objeto.hijos.is_empty() {
+        return Ok(objeto.datos);
+    }
+    let mut contenido = Vec::new();
+    for trozo_hash in &objeto.hijos {
+        let trozo = leer_objeto(bundle, trozo_hash)?;
+        contenido.extend_from_slice(&trozo.datos);
+    }
+    Ok(contenido)
 }
 
 /// Lee un objeto del bundle por su hash y VERIFICA que su contenido rehashea
