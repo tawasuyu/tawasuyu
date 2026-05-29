@@ -32,6 +32,26 @@ pub enum AuditAction {
     PromoteCrystal { rule_id: Ulid, crystal: Crystal },
     RemoveRule { rule_id: Ulid },
     LoadRulesFile { path: String, count: usize },
+    /// Un peer del bus pidió enviar una señal a un Ente del fractal.
+    /// El registro precede al `kill(2)` — capturamos la intención sin
+    /// importar si el syscall succede.
+    KillEnte { caller: Ulid, target: Ulid, signal: i32 },
+    /// Un peer del bus pidió cargar una Card por nombre desde el card store.
+    /// `caller` es la identidad autenticada del peer; `name` el filename
+    /// sin la extensión `.json`.
+    SpawnCardFromDisk { caller: Ulid, name: String },
+    /// El cerebro declaró una inhibición. Mientras la entrada esté viva
+    /// (TTL en el grafo), las acciones escalatorias quedan bloqueadas;
+    /// auditar la entrada permite reconstruir por qué.
+    BrainInhibit { reason: String },
+    /// Un peer del bus pidió shutdown/reboot/suspend/hibernate. `caller`
+    /// es None si vino anónimo (no autenticado contra el grafo).
+    PowerMgmt {
+        caller: Option<Ulid>,
+        peer_pid: i32,
+        kind: String,
+        interactive: bool,
+    },
 }
 
 pub struct AuditLog {
@@ -347,6 +367,15 @@ pub fn replay_chain(
                 // Los archivos referenciados por path pueden haber cambiado
                 // o no existir. Log y skip — el replay sólo reconstruye
                 // promotes/removes que tienen estado en CAS.
+            }
+            AuditAction::KillEnte { .. }
+            | AuditAction::SpawnCardFromDisk { .. }
+            | AuditAction::BrainInhibit { .. }
+            | AuditAction::PowerMgmt { .. } => {
+                // Acciones del bus son auditoría narrativa, no estado del
+                // motor de reglas. El replay las preserva en la cadena CAS
+                // (vía sha encadenado) pero no las aplica — no tienen
+                // contraparte estructural en `RuleEngine`.
             }
         }
         applied += 1;

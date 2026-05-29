@@ -66,6 +66,11 @@ pub struct WavSource {
     /// monotónica; al pasarse del final hace `% samples.len()`.
     /// Es f64 para acumular la fracción del resampleo.
     cursor: f64,
+    /// Multiplicador de velocidad de reproducción (1.0 = nativa).
+    /// Ajusta el resampling step en `fill`; valores < 1 enlentecen y
+    /// bajan el pitch, > 1 aceleran y suben el pitch (sin
+    /// time-stretching: es el modo "varispeed" honesto).
+    speed: f32,
 }
 
 impl WavSource {
@@ -104,7 +109,18 @@ impl WavSource {
             src_channels: channels,
             src_sample_rate: sample_rate,
             cursor: 0.0,
+            speed: 1.0,
         })
+    }
+
+    /// Setea velocidad de reproducción (clampeada a [0.1, 4.0]). 1.0
+    /// = nativa. Cambia el pitch porque no hay time-stretching.
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed.clamp(0.1, 4.0);
+    }
+
+    pub fn speed(&self) -> f32 {
+        self.speed
     }
 
     pub fn source_channels(&self) -> u16 {
@@ -165,7 +181,9 @@ impl AudioSource for WavSource {
         let out_channels = channels.max(1) as usize;
         let sink_sr = sample_rate.max(1) as f64;
         let src_sr = self.src_sample_rate.max(1) as f64;
-        let step = src_sr / sink_sr; // frames del source por frame del sink
+        // Velocidad escala el step del resampleo — multiplicar avanza
+        // más rápido por el buffer del source (acelera).
+        let step = (src_sr / sink_sr) * self.speed as f64;
         let frames = buf.len() / out_channels;
         let mut cursor = self.cursor;
         for frame in 0..frames {

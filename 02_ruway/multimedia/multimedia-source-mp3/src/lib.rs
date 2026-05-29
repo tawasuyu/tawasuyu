@@ -63,6 +63,9 @@ pub struct Mp3Source {
     src_channels: u16,
     src_sample_rate: u32,
     cursor: f64,
+    /// Multiplicador de velocidad — mismo modo varispeed que WAV (no
+    /// hay time-stretching: cambia pitch). Clampeado en `set_speed`.
+    speed: f32,
 }
 
 impl Mp3Source {
@@ -139,7 +142,16 @@ impl Mp3Source {
             src_channels: channels.max(1),
             src_sample_rate: sample_rate.max(1),
             cursor: 0.0,
+            speed: 1.0,
         })
+    }
+
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed.clamp(0.1, 4.0);
+    }
+
+    pub fn speed(&self) -> f32 {
+        self.speed
     }
 
     pub fn source_channels(&self) -> u16 {
@@ -193,7 +205,7 @@ impl AudioSource for Mp3Source {
         let out_channels = channels.max(1) as usize;
         let sink_sr = sample_rate.max(1) as f64;
         let src_sr = self.src_sample_rate.max(1) as f64;
-        let step = src_sr / sink_sr;
+        let step = (src_sr / sink_sr) * self.speed as f64;
         let frames = buf.len() / out_channels;
         let mut cursor = self.cursor;
         for frame in 0..frames {

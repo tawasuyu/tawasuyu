@@ -1261,3 +1261,251 @@ mod tests_audio_primitives {
         assert!(tail.iter().all(|&v| (v - 0.3).abs() < 1e-6));
     }
 }
+
+// ============================================================
+// Subtitles — SRT parser + query por timestamp
+// ============================================================
+
+/// Una entrada de subtítulo con su rango temporal y el texto a
+/// mostrar mientras dure. `text` puede contener saltos de línea
+/// (las líneas múltiples del SRT se preservan con `\n`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubtitleCue {
+    pub start: Duration,
+    pub end: Duration,
+    pub text: String,
+}
+
+/// Pista de subtítulos ordenada por tiempo. Querys binarias para
+/// resolver "qué cue está activo en t". El consumidor (UI) le pasa
+/// la posición actual del audio y recibe el texto a pintar.
+#[derive(Debug, Clone, Default)]
+pub struct SubtitleTrack {
+    cues: Vec<SubtitleCue>,
+}
+
+impl SubtitleTrack {
+    pub fn new(mut cues: Vec<SubtitleCue>) -> Self {
+        cues.sort_by_key(|c| c.start);
+        Self { cues }
+    }
+
+    pub fn cues(&self) -> &[SubtitleCue] {
+        &self.cues
+    }
+
+    pub fn len(&self) -> usize {
+        self.cues.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cues.is_empty()
+    }
+
+    /// Devuelve el cue activo en `t`, si existe. Si dos cues se
+    /// solapan, gana el de `start` más cercano por debajo de `t`
+    /// (el último que arrancó).
+    pub fn at(&self, t: Duration) -> Option<&SubtitleCue> {
+        // Binary search por start; el cue candidato es el último con
+        // start <= t. Si su end > t, es el activo.
+        if self.cues.is_empty() {
+            return None;
+        }
+        let idx = match self.cues.binary_search_by_key(&t, |c| c.start) {
+            Ok(i) => i,
+            Err(0) => return None,
+            Err(i) => i - 1,
+        };
+        let c = &self.cues[idx];
+        if t < c.end {
+            Some(c)
+        } else {
+            None
+        }
+    }
+
+    /// Parsea un cuerpo SRT. Tolerante: salta entradas malformadas
+    /// con un mensaje en el log de errores devuelto. Si el archivo
+    /// entero no tiene cues válidos, devuelve `Err`.
+    ///
+    /// Formato SRT esperado por entrada:
+    ///
+    /// ```text
+    /// 1
+    /// 00:00:01,000 --> 00:00:03,500
+    /// Línea uno
+    /// Línea dos
+    ///
+    /// 2
+    /// ...
+    /// ```
+    ///
+    /// El número de índice se ignora. El separador `,` o `.` para
+    /// los milisegundos se acepta indistinto (compat WebVTT mínimo).
+    pub fn parse_srt(text: &str) -> Result<Self, String> {
+        let mut cues: Vec<SubtitleCue> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+
+        // Normalizamos line endings y partimos por bloques separados
+        // por línea vacía.
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        for (i, block) in text.split("\n\n").enumerate() {
+            let block = block.trim_matches('\n');
+            if block.is_empty() {
+                continue;
+            }
+            let mut lines = block.lines();
+            // Primera línea puede ser índice (numérico) o ya la
+            // línea de timing si el SRT lo omitió.
+            let first = match lines.next() {
+                Some(l) => l.trim(),
+                None => continue,
+            };
+            let timing_line = if first.contains("-->") {
+                first
+            } else {
+                match lines.next() {
+                    Some(l) => l.trim(),
+                    None => {
+                        warnings.push(format!("bloque {i}: falta línea de timing"));
+                        continue;
+                    }
+                }
+            };
+            let (start, end) = match parse_timing_line(timing_line) {
+                Ok(t) => t,
+                Err(e) => {
+                    warnings.push(format!("bloque {i}: timing '{timing_line}' — {e}"));
+                    continue;
+                }
+            };
+            let rest: Vec<&str> = lines.collect();
+            let text = rest.join("\n").trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            cues.push(SubtitleCue { start, end, text });
+        }
+        if cues.is_empty() {
+            return Err(format!(
+                "ningún cue válido en el SRT (avisos: {})",
+                warnings.join(" · ")
+            ));
+        }
+        Ok(Self::new(cues))
+    }
+}
+
+fn parse_timing_line(s: &str) -> Result<(Duration, Duration), String> {
+    let parts: Vec<&str> = s.split("-->").map(str::trim).collect();
+    if parts.len() != 2 {
+        return Err("esperaba 'HH:MM:SS,mmm --> HH:MM:SS,mmm'".into());
+    }
+    let start = parse_timestamp(parts[0])?;
+    let end = parse_timestamp(parts[1])?;
+    Ok((start, end))
+}
+
+fn parse_timestamp(s: &str) -> Result<Duration, String> {
+    // Acepta HH:MM:SS,mmm o HH:MM:SS.mmm. Trim para tolerar espacios.
+    let s = s.trim();
+    let (hms, ms_part) = match s.rsplit_once(',').or_else(|| s.rsplit_once('.')) {
+        Some(p) => p,
+        None => (s, "0"),
+    };
+    let hms_parts: Vec<&str> = hms.split(':').collect();
+    if hms_parts.len() != 3 {
+        return Err(format!("timestamp inválido '{s}'"));
+    }
+    let h: u64 = hms_parts[0]
+        .parse()
+        .map_err(|_| format!("hora inválida en '{s}'"))?;
+    let m: u64 = hms_parts[1]
+        .parse()
+        .map_err(|_| format!("minuto inválido en '{s}'"))?;
+    let sec: u64 = hms_parts[2]
+        .parse()
+        .map_err(|_| format!("segundo inválido en '{s}'"))?;
+    let ms: u64 = ms_part
+        .parse()
+        .map_err(|_| format!("ms inválidos en '{s}'"))?;
+    let total_ms = ((h * 3600) + (m * 60) + sec) * 1000 + ms;
+    Ok(Duration::from_millis(total_ms))
+}
+
+#[cfg(test)]
+mod tests_subtitles {
+    use super::*;
+
+    #[test]
+    fn parse_simple_srt() {
+        let src = "1\n\
+            00:00:01,000 --> 00:00:03,500\n\
+            Hola mundo\n\
+            \n\
+            2\n\
+            00:00:04,000 --> 00:00:06,000\n\
+            Segunda línea\n";
+        let track = SubtitleTrack::parse_srt(src).unwrap();
+        assert_eq!(track.len(), 2);
+        assert_eq!(track.cues()[0].text, "Hola mundo");
+        assert_eq!(track.cues()[0].start, Duration::from_millis(1000));
+        assert_eq!(track.cues()[0].end, Duration::from_millis(3500));
+    }
+
+    #[test]
+    fn query_active_cue() {
+        let src = "1\n\
+            00:00:01,000 --> 00:00:03,000\n\
+            uno\n\
+            \n\
+            2\n\
+            00:00:05,000 --> 00:00:07,000\n\
+            dos\n";
+        let track = SubtitleTrack::parse_srt(src).unwrap();
+        assert!(track.at(Duration::from_millis(500)).is_none());
+        assert_eq!(track.at(Duration::from_millis(2000)).unwrap().text, "uno");
+        // Entre cues: gap, sin activo.
+        assert!(track.at(Duration::from_millis(4000)).is_none());
+        assert_eq!(track.at(Duration::from_millis(6500)).unwrap().text, "dos");
+    }
+
+    #[test]
+    fn multiline_text_preserved() {
+        let src = "1\n\
+            00:00:01,000 --> 00:00:02,000\n\
+            primera\n\
+            segunda\n";
+        let track = SubtitleTrack::parse_srt(src).unwrap();
+        assert_eq!(track.cues()[0].text, "primera\nsegunda");
+    }
+
+    #[test]
+    fn dot_separator_accepted() {
+        let src = "1\n00:00:01.500 --> 00:00:03.250\nhola\n";
+        let track = SubtitleTrack::parse_srt(src).unwrap();
+        assert_eq!(track.cues()[0].start, Duration::from_millis(1500));
+        assert_eq!(track.cues()[0].end, Duration::from_millis(3250));
+    }
+
+    #[test]
+    fn empty_srt_fails() {
+        let err = SubtitleTrack::parse_srt("").unwrap_err();
+        assert!(err.contains("cue"));
+    }
+
+    #[test]
+    fn malformed_block_skipped() {
+        let src = "1\n\
+            no-es-timing\n\
+            texto\n\
+            \n\
+            2\n\
+            00:00:01,000 --> 00:00:02,000\n\
+            válido\n";
+        let track = SubtitleTrack::parse_srt(src).unwrap();
+        // Sólo el segundo bloque entra.
+        assert_eq!(track.len(), 1);
+        assert_eq!(track.cues()[0].text, "válido");
+    }
+}

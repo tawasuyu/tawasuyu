@@ -23,7 +23,8 @@ mod keypair_store;
 mod seed;
 
 use anyhow::Context;
-use arje_brain::{BrainState, IntrospectServer};
+use arje_brain::{audit::AuditAction, BrainState, IntrospectServer};
+use arje_bus::{BusRequest, PeerCreds};
 use arje_kernel::{become_child_subreaper, bootstrap_kernel_surface, spawn_sigchld_stream, spawn_uevent_stream};
 use events::{ExitStatus, GraphEvent, ShutdownReason};
 use graph::EnteGraph;
@@ -570,6 +571,9 @@ async fn dispatch_graph_event(
             }
         }
         GraphEvent::BusRequest { peer, from, request, outbound, reply } => {
+            if let Some(action) = bus_request_to_audit(&peer, &from, &request) {
+                brain.audit.write().await.append(action);
+            }
             graph.on_bus_request(peer, from, request, outbound, reply).await;
         }
         GraphEvent::BusResponse { seq, response } => {
@@ -588,6 +592,9 @@ async fn dispatch_graph_event(
             graph.forward_brain_spawn(card).await;
         }
         GraphEvent::BrainInhibit { reason } => {
+            brain.audit.write().await.append(AuditAction::BrainInhibit {
+                reason: reason.clone(),
+            });
             graph.apply_brain_inhibit(reason);
         }
         GraphEvent::Shutdown { reason } => {
@@ -617,6 +624,38 @@ async fn dispatch_graph_event(
         }
     }
     false
+}
+
+/// Mapea una `BusRequest` a un `AuditAction` cuando vale la pena registrarla.
+/// Cubre acciones privilegiadas (KillEnte, SpawnCardFromDisk) y todas las de
+/// power-mgmt (incluso anónimas — anonimato es información). Otras (Announce,
+/// Invoke, ListEntes, UpdateCapabilities) son routine y no se auditan aquí.
+fn bus_request_to_audit(
+    peer: &PeerCreds,
+    from: &Option<ulid::Ulid>,
+    req: &BusRequest,
+) -> Option<AuditAction> {
+    match req {
+        BusRequest::KillEnte { target, signal } => from.map(|caller| AuditAction::KillEnte {
+            caller, target: *target, signal: *signal,
+        }),
+        BusRequest::SpawnCardFromDisk { name } => from.map(|caller| AuditAction::SpawnCardFromDisk {
+            caller, name: name.clone(),
+        }),
+        BusRequest::PowerOff { interactive } => Some(AuditAction::PowerMgmt {
+            caller: *from, peer_pid: peer.pid, kind: "PowerOff".into(), interactive: *interactive,
+        }),
+        BusRequest::Reboot { interactive } => Some(AuditAction::PowerMgmt {
+            caller: *from, peer_pid: peer.pid, kind: "Reboot".into(), interactive: *interactive,
+        }),
+        BusRequest::Suspend { interactive } => Some(AuditAction::PowerMgmt {
+            caller: *from, peer_pid: peer.pid, kind: "Suspend".into(), interactive: *interactive,
+        }),
+        BusRequest::Hibernate { interactive } => Some(AuditAction::PowerMgmt {
+            caller: *from, peer_pid: peer.pid, kind: "Hibernate".into(), interactive: *interactive,
+        }),
+        _ => None,
+    }
 }
 
 async fn reap_until_empty(graph: &mut EnteGraph, tx: &mpsc::Sender<GraphEvent>) {

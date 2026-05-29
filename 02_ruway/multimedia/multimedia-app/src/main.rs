@@ -39,6 +39,13 @@
 //! `MULTIMEDIA_MIX_TONE=0.25` (rango 0..1) superpone un tono A4 a esa
 //! ganancia sobre la fuente principal vía MixerAudio — demo del
 //! mezclador con cualquier fuente.
+//!
+//! `MULTIMEDIA_PLAYLIST=lista.m3u` carga una lista (formato m3u
+//! simple: una línea por archivo `.wav`/`.mp3`, `#` = comentario,
+//! paths relativos al .m3u). Los botones `⟨trk` / `trk⟩` ciclan
+//! manualmente y `speed` cicla velocidades 0.5×..2×. `MULTIMEDIA_SRT=
+//! subs.srt` carga subtítulos que se muestran sincronizados a la
+//! posición actual del track.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -57,8 +64,8 @@ use llimphi_ui::{App, Handle, View};
 use multimedia_audio_cpal::AudioSink;
 use multimedia_core::{
     AudioProbe, AudioSource, FrameSource, Levels, MixerAudio, Pause, PausableAudio,
-    PausableVideo, ProbedAudioSource, Seekable, TestCard, ToneSource, Volume, VolumeAudio,
-    Waterfall,
+    PausableVideo, ProbedAudioSource, Seekable, SubtitleTrack, TestCard, ToneSource, Volume,
+    VolumeAudio, Waterfall,
 };
 use multimedia_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use multimedia_source_gif::GifSource;
@@ -85,10 +92,17 @@ enum Msg {
     VolUp,
     SeekBack,
     SeekFwd,
+    PrevTrack,
+    NextTrack,
+    CycleSpeed,
 }
 
 const VOLUME_STEP: f32 = 0.1;
 const SEEK_STEP_SECS: u64 = 5;
+/// Multiplicadores de velocidad que cicla el botón `speed`. 1.0 es
+/// el natural; el resto va por debajo y por encima en pasos
+/// equivalentes a 1.25× del nivel anterior.
+const SPEED_STEPS: &[f32] = &[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
 struct Model {
     frames: u64,
@@ -166,11 +180,18 @@ fn volume() -> &'static Volume {
     SLOT.get_or_init(|| Volume::new(1.0))
 }
 
-/// Handle a la fuente audio cuando es `Seekable` (WAV o MP3). `None`
-/// si la activa es tono A4 o no hay sink — en ese caso los botones
-/// de seek quedan apagados.
-fn seekable_handle_slot() -> &'static OnceLock<Option<Arc<Mutex<dyn Seekable + Send>>>> {
-    static SLOT: OnceLock<Option<Arc<Mutex<dyn Seekable + Send>>>> = OnceLock::new();
+/// Handle al [`Playlist`] activo cuando hay tracks WAV/MP3. `None`
+/// si la fuente es tono A4 — en ese caso los botones de seek /
+/// playlist / speed quedan apagados.
+fn playlist_slot() -> &'static OnceLock<Option<Arc<Mutex<Playlist>>>> {
+    static SLOT: OnceLock<Option<Arc<Mutex<Playlist>>>> = OnceLock::new();
+    &SLOT
+}
+
+/// Pista de subtítulos cargada, si MULTIMEDIA_SRT apuntó a un SRT
+/// válido. Se consulta por timestamp del seekable_handle activo.
+fn subtitles_slot() -> &'static OnceLock<Option<SubtitleTrack>> {
+    static SLOT: OnceLock<Option<SubtitleTrack>> = OnceLock::new();
     &SLOT
 }
 
@@ -188,11 +209,172 @@ impl<T: AudioSource> AudioSource for SharedAudio<T> {
     }
 }
 
-/// Mueve la posición de la fuente audio Seekable activa en
-/// `delta_secs` (negativo = atrás) con wrap módulo duration. No-op si
-/// la fuente actual no es seekable (tono A4).
+/// Una pista cargada de la playlist — enum cerrado para evitar
+/// dispatch dinámico y mantener clara la lista de formatos.
+enum LoadedTrack {
+    Wav(WavSource),
+    Mp3(Mp3Source),
+}
+
+impl LoadedTrack {
+    fn from_path(path: &std::path::Path) -> Result<Self, String> {
+        match path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("wav") => WavSource::from_path(path)
+                .map(LoadedTrack::Wav)
+                .map_err(|e| format!("WAV {}: {e}", path.display())),
+            Some("mp3") => Mp3Source::from_path(path)
+                .map(LoadedTrack::Mp3)
+                .map_err(|e| format!("MP3 {}: {e}", path.display())),
+            other => Err(format!(
+                "extensión {:?} no soportada en playlist (.wav | .mp3)",
+                other
+            )),
+        }
+    }
+
+    fn set_speed(&mut self, speed: f32) {
+        match self {
+            LoadedTrack::Wav(w) => w.set_speed(speed),
+            LoadedTrack::Mp3(m) => m.set_speed(speed),
+        }
+    }
+}
+
+impl AudioSource for LoadedTrack {
+    fn fill(&mut self, buf: &mut [f32], sample_rate: u32, channels: u16) {
+        match self {
+            LoadedTrack::Wav(w) => w.fill(buf, sample_rate, channels),
+            LoadedTrack::Mp3(m) => m.fill(buf, sample_rate, channels),
+        }
+    }
+}
+
+impl Seekable for LoadedTrack {
+    fn position(&self) -> Duration {
+        match self {
+            LoadedTrack::Wav(w) => w.position(),
+            LoadedTrack::Mp3(m) => m.position(),
+        }
+    }
+    fn duration(&self) -> Option<Duration> {
+        match self {
+            LoadedTrack::Wav(w) => w.duration(),
+            LoadedTrack::Mp3(m) => m.duration(),
+        }
+    }
+    fn seek_to(&mut self, pos: Duration) {
+        match self {
+            LoadedTrack::Wav(w) => w.seek_to(pos),
+            LoadedTrack::Mp3(m) => m.seek_to(pos),
+        }
+    }
+}
+
+/// Playlist con prev/next manual. Mantiene una `current` cargada y
+/// el resto de `tracks` como paths — al cambiar de pista se decodea
+/// el archivo nuevo y se descarta el viejo. La velocidad se persiste
+/// entre cambios.
+struct Playlist {
+    tracks: Vec<PathBuf>,
+    idx: usize,
+    current: LoadedTrack,
+    speed: f32,
+}
+
+impl Playlist {
+    fn new(tracks: Vec<PathBuf>) -> Result<Self, String> {
+        if tracks.is_empty() {
+            return Err("playlist vacía".into());
+        }
+        let current = LoadedTrack::from_path(&tracks[0])?;
+        Ok(Self {
+            tracks,
+            idx: 0,
+            current,
+            speed: 1.0,
+        })
+    }
+
+    fn track_path(&self) -> &std::path::Path {
+        &self.tracks[self.idx]
+    }
+
+    fn len(&self) -> usize {
+        self.tracks.len()
+    }
+
+    fn idx(&self) -> usize {
+        self.idx
+    }
+
+    fn current_speed(&self) -> f32 {
+        self.speed
+    }
+
+    fn step(&mut self, delta: i64) {
+        if self.tracks.len() <= 1 {
+            return;
+        }
+        let n = self.tracks.len() as i64;
+        let new = ((self.idx as i64 + delta).rem_euclid(n)) as usize;
+        match LoadedTrack::from_path(&self.tracks[new]) {
+            Ok(mut t) => {
+                t.set_speed(self.speed);
+                self.idx = new;
+                self.current = t;
+                eprintln!(
+                    "multimedia-app: playlist [{}/{}] → {}",
+                    self.idx + 1,
+                    self.tracks.len(),
+                    self.tracks[self.idx].display()
+                );
+            }
+            Err(e) => eprintln!("multimedia-app: cambio de pista falló: {e}"),
+        }
+    }
+
+    fn next(&mut self) {
+        self.step(1)
+    }
+    fn prev(&mut self) {
+        self.step(-1)
+    }
+
+    fn set_speed(&mut self, speed: f32) {
+        let s = speed.clamp(0.1, 4.0);
+        self.speed = s;
+        self.current.set_speed(s);
+    }
+}
+
+impl AudioSource for Playlist {
+    fn fill(&mut self, buf: &mut [f32], sample_rate: u32, channels: u16) {
+        self.current.fill(buf, sample_rate, channels);
+    }
+}
+
+impl Seekable for Playlist {
+    fn position(&self) -> Duration {
+        self.current.position()
+    }
+    fn duration(&self) -> Option<Duration> {
+        self.current.duration()
+    }
+    fn seek_to(&mut self, pos: Duration) {
+        self.current.seek_to(pos);
+    }
+}
+
+/// Mueve la posición del Playlist (= track actual) en `delta_secs`
+/// (negativo = atrás) con wrap módulo duration. No-op si no hay
+/// playlist (tono A4).
 fn seek_audio_by(delta_secs: i64) {
-    let Some(handle) = seekable_handle_slot().get().and_then(|o| o.as_ref()) else {
+    let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
         return;
     };
     let mut src = handle.lock();
@@ -201,6 +383,51 @@ fn seek_audio_by(delta_secs: i64) {
     let cur_s = src.position().as_secs_f64();
     let new_s = (cur_s + delta_secs as f64).rem_euclid(dur_s);
     src.seek_to(Duration::from_secs_f64(new_s));
+}
+
+/// Cicla a la siguiente velocidad de [`SPEED_STEPS`]. No-op sin
+/// playlist activo.
+fn cycle_speed() {
+    let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
+        return;
+    };
+    let mut pl = handle.lock();
+    let cur = pl.current_speed();
+    // Próximo step (con tolerancia ε para evitar problemas de f32).
+    let next_idx = SPEED_STEPS
+        .iter()
+        .position(|&s| (s - cur).abs() < 1e-3)
+        .map(|i| (i + 1) % SPEED_STEPS.len())
+        .unwrap_or(0);
+    let next = SPEED_STEPS[next_idx];
+    pl.set_speed(next);
+    eprintln!("multimedia-app: speed {:.2}×", next);
+}
+
+/// Carga un .m3u simple: una línea por archivo, líneas vacías y `#`
+/// se ignoran. Paths relativos se resuelven contra el directorio
+/// del propio archivo.
+fn load_playlist_file(path: &str) -> Result<Vec<PathBuf>, String> {
+    let p = PathBuf::from(path);
+    let body = std::fs::read_to_string(&p).map_err(|e| format!("io: {e}"))?;
+    let base = p.parent().map(|d| d.to_path_buf());
+    let mut out = Vec::new();
+    for raw in body.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let item = PathBuf::from(line);
+        let resolved = if item.is_absolute() {
+            item
+        } else if let Some(b) = &base {
+            b.join(item)
+        } else {
+            item
+        };
+        out.push(resolved);
+    }
+    Ok(out)
 }
 
 /// Formatea una duración como `M:SS`. Para tracks de menos de una
@@ -332,6 +559,22 @@ impl App for MultimediaApp {
                 seek_audio_by(SEEK_STEP_SECS as i64);
                 model
             }
+            Msg::PrevTrack => {
+                if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                    h.lock().prev();
+                }
+                model
+            }
+            Msg::NextTrack => {
+                if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                    h.lock().next();
+                }
+                model
+            }
+            Msg::CycleSpeed => {
+                cycle_speed();
+                model
+            }
             Msg::Snapshot => {
                 if let Some(pipe) = pipeline_slot().get() {
                     let (w, h) = *pipe.last_dim.lock();
@@ -398,7 +641,7 @@ impl App for MultimediaApp {
             Msg::Snapshot,
         );
 
-        let seekable = seekable_handle_slot()
+        let seekable = playlist_slot()
             .get()
             .and_then(|o| o.as_ref())
             .is_some();
@@ -415,6 +658,42 @@ impl App for MultimediaApp {
         };
         let back_btn = chip_button("«5s", seek_bg, seek_fg, Msg::SeekBack);
         let fwd_btn = chip_button("5s»", seek_bg, seek_fg, Msg::SeekFwd);
+
+        let playlist_active = playlist_slot()
+            .get()
+            .and_then(|o| o.as_ref())
+            .map(|h| h.lock().len() > 1)
+            .unwrap_or(false);
+        let pl_bg = if playlist_active {
+            Color::from_rgba8(55, 65, 80, 255)
+        } else {
+            Color::from_rgba8(40, 46, 56, 255)
+        };
+        let pl_fg = if playlist_active {
+            Color::from_rgba8(220, 230, 245, 255)
+        } else {
+            Color::from_rgba8(100, 110, 125, 255)
+        };
+        let prev_btn = chip_button("⟨trk", pl_bg, pl_fg, Msg::PrevTrack);
+        let next_btn = chip_button("trk⟩", pl_bg, pl_fg, Msg::NextTrack);
+
+        let current_speed = playlist_slot()
+            .get()
+            .and_then(|o| o.as_ref())
+            .map(|h| h.lock().current_speed())
+            .unwrap_or(1.0);
+        let speed_label = format!("{:.2}×", current_speed);
+        let speed_bg = if seekable {
+            Color::from_rgba8(55, 65, 80, 255)
+        } else {
+            Color::from_rgba8(40, 46, 56, 255)
+        };
+        let speed_fg = if seekable {
+            Color::from_rgba8(220, 230, 245, 255)
+        } else {
+            Color::from_rgba8(100, 110, 125, 255)
+        };
+        let speed_btn = chip_button(&speed_label, speed_bg, speed_fg, Msg::CycleSpeed);
 
         let vol_label = format!("vol {:.0}%", (volume().get() * 100.0).round());
         let vol_text = View::new(Style {
@@ -470,11 +749,14 @@ impl App for MultimediaApp {
             ..Default::default()
         })
         .children(vec![
+            prev_btn,
             pause_btn,
+            next_btn,
             rec_btn,
             snap_btn,
             back_btn,
             fwd_btn,
+            speed_btn,
             title_text,
             vol_dn,
             vol_text,
@@ -523,14 +805,21 @@ impl App for MultimediaApp {
         })
         .children(vec![waveform_panel(), waterfall_panel()]);
 
-        let time_label = seekable_handle_slot()
+        let subs_strip = subtitle_strip();
+
+        let time_label = playlist_slot()
             .get()
             .and_then(|o| o.as_ref())
             .map(|h| {
                 let s = h.lock();
                 let pos = s.position();
                 let dur = s.duration().unwrap_or(Duration::ZERO);
-                format!(" · {} / {}", fmt_secs(pos), fmt_secs(dur))
+                let track = if s.len() > 1 {
+                    format!(" · trk {}/{}", s.idx() + 1, s.len())
+                } else {
+                    String::new()
+                };
+                format!(" · {} / {}{}", fmt_secs(pos), fmt_secs(dur), track)
             })
             .unwrap_or_default();
         let footer = View::new(Style {
@@ -567,8 +856,45 @@ impl App for MultimediaApp {
             ..Default::default()
         })
         .fill(Color::from_rgba8(22, 26, 34, 255))
-        .children(vec![title, canvas, visor_row, footer])
+        .children(vec![title, canvas, subs_strip, visor_row, footer])
     }
+}
+
+/// Franja debajo del canvas que muestra el cue de subtítulo activo
+/// según la posición del playlist. Si no hay SRT cargado, queda con
+/// altura 0 (invisible) para no morder layout.
+fn subtitle_strip<Msg: 'static>() -> View<Msg> {
+    let Some(track) = subtitles_slot().get().and_then(|o| o.as_ref()) else {
+        // Cero altura — no mete espacio en la columna.
+        return View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        });
+    };
+    let position = playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .map(|h| h.lock().position())
+        .unwrap_or(Duration::ZERO);
+    let text = track
+        .at(position)
+        .map(|c| c.text.clone())
+        .unwrap_or_default();
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(44.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(8, 10, 14, 240))
+    .radius(6.0)
+    .text(text, 18.0, Color::from_rgba8(240, 240, 240, 255))
 }
 
 /// Panel inferior con la forma de onda del último tramo del stream
@@ -1045,6 +1371,33 @@ fn main() {
     };
     config_slot().set(cfg).ok();
 
+    // Subtítulos: MULTIMEDIA_SRT apunta al archivo .srt; si parsea OK
+    // queda disponible para el subtitle_strip. Falla silenciosa con
+    // log en stderr — la app sigue funcionando sin subs.
+    let subs = match std::env::var("MULTIMEDIA_SRT") {
+        Ok(path) => match std::fs::read_to_string(&path) {
+            Ok(body) => match SubtitleTrack::parse_srt(&body) {
+                Ok(t) => {
+                    eprintln!(
+                        "multimedia-app: subtitles {path} · {} cues",
+                        t.len()
+                    );
+                    Some(t)
+                }
+                Err(e) => {
+                    eprintln!("multimedia-app: SRT inválido ({e})");
+                    None
+                }
+            },
+            Err(e) => {
+                eprintln!("multimedia-app: no pude leer SRT {path}: {e}");
+                None
+            }
+        },
+        Err(_) => None,
+    };
+    subtitles_slot().set(subs).ok();
+
     // Audio: si MULTIMEDIA_MUTE está set, saltamos. Si no, elegimos
     // fuente — MULTIMEDIA_WAV=path la activa, sino cae al ToneSource
     // (A4). El AudioSink debe vivir hasta el exit — `cpal::Stream` no
@@ -1080,49 +1433,52 @@ fn main() {
 fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     let probe = AudioProbe::new(PROBE_CAPACITY);
 
-    // Prioridad: WAV → MP3 → tono A4.
-    let inner: Box<dyn AudioSource + Send> = if let Ok(path) = std::env::var("MULTIMEDIA_WAV") {
-        match WavSource::from_path(&path) {
-            Ok(wav) => {
+    // Prioridad de fuentes audio:
+    //   MULTIMEDIA_PLAYLIST=path (m3u simple, una línea por archivo, # = comentario)
+    //   MULTIMEDIA_WAV=path
+    //   MULTIMEDIA_MP3=path
+    //   fallback → tono A4 sin playlist
+    let tracks: Option<Vec<PathBuf>> =
+        if let Ok(playlist_path) = std::env::var("MULTIMEDIA_PLAYLIST") {
+            match load_playlist_file(&playlist_path) {
+                Ok(t) if !t.is_empty() => Some(t),
+                Ok(_) => {
+                    eprintln!("multimedia-app: playlist {playlist_path} vacía");
+                    None
+                }
+                Err(e) => {
+                    eprintln!("multimedia-app: no pude leer playlist {playlist_path}: {e}");
+                    None
+                }
+            }
+        } else if let Ok(p) = std::env::var("MULTIMEDIA_WAV") {
+            Some(vec![PathBuf::from(p)])
+        } else if let Ok(p) = std::env::var("MULTIMEDIA_MP3") {
+            Some(vec![PathBuf::from(p)])
+        } else {
+            None
+        };
+
+    let inner: Box<dyn AudioSource + Send> = if let Some(tracks) = tracks {
+        match Playlist::new(tracks) {
+            Ok(pl) => {
                 eprintln!(
-                    "multimedia-app: wav {path} · {} ch · {} Hz · {:.1}s",
-                    wav.source_channels(),
-                    wav.source_sample_rate(),
-                    wav.duration_seconds(),
+                    "multimedia-app: playlist [1/{}] → {}",
+                    pl.len(),
+                    pl.track_path().display(),
                 );
-                let shared: Arc<Mutex<WavSource>> = Arc::new(Mutex::new(wav));
-                let seek_ref: Arc<Mutex<dyn Seekable + Send>> = shared.clone();
-                seekable_handle_slot().set(Some(seek_ref)).ok();
+                let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(pl));
+                playlist_slot().set(Some(shared.clone())).ok();
                 Box::new(SharedAudio { inner: shared })
             }
             Err(e) => {
-                eprintln!("multimedia-app: no pude abrir WAV {path}: {e} — caigo a tono A4");
-                seekable_handle_slot().set(None).ok();
-                Box::new(ToneSource::a4())
-            }
-        }
-    } else if let Ok(path) = std::env::var("MULTIMEDIA_MP3") {
-        match Mp3Source::from_path(&path) {
-            Ok(mp3) => {
-                eprintln!(
-                    "multimedia-app: mp3 {path} · {} ch · {} Hz · {:.1}s",
-                    mp3.source_channels(),
-                    mp3.source_sample_rate(),
-                    mp3.duration_seconds(),
-                );
-                let shared: Arc<Mutex<Mp3Source>> = Arc::new(Mutex::new(mp3));
-                let seek_ref: Arc<Mutex<dyn Seekable + Send>> = shared.clone();
-                seekable_handle_slot().set(Some(seek_ref)).ok();
-                Box::new(SharedAudio { inner: shared })
-            }
-            Err(e) => {
-                eprintln!("multimedia-app: no pude abrir MP3 {path}: {e} — caigo a tono A4");
-                seekable_handle_slot().set(None).ok();
+                eprintln!("multimedia-app: playlist falló ({e}) — caigo a tono A4");
+                playlist_slot().set(None).ok();
                 Box::new(ToneSource::a4())
             }
         }
     } else {
-        seekable_handle_slot().set(None).ok();
+        playlist_slot().set(None).ok();
         Box::new(ToneSource::a4())
     };
 
