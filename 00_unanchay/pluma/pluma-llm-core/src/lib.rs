@@ -36,11 +36,50 @@ pub enum Role {
     Assistant,
 }
 
-/// Un mensaje dentro de la conversación.
+/// Una imagen adjunta a un mensaje (visión multimodal). Los proveedores
+/// que soportan visión (Anthropic, Gemini) la reciben como bloque de
+/// contenido junto al texto; los que no, la ignoran y usan solo `content`.
+///
+/// Los bytes viajan en base64 (estándar, sin saltos de línea) para no
+/// acoplar el contrato a `&[u8]` crudos al serializar la request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatImage {
+    /// MIME type del contenido, p.ej. `"image/png"`, `"image/jpeg"`,
+    /// `"image/webp"`, `"image/gif"`.
+    pub media_type: String,
+    /// Bytes de la imagen codificados en base64.
+    pub data_base64: String,
+}
+
+impl ChatImage {
+    /// Construye desde base64 ya codificado.
+    pub fn new(media_type: impl Into<String>, data_base64: impl Into<String>) -> Self {
+        Self {
+            media_type: media_type.into(),
+            data_base64: data_base64.into(),
+        }
+    }
+
+    /// Construye desde bytes crudos, codificando a base64.
+    pub fn from_bytes(media_type: impl Into<String>, bytes: &[u8]) -> Self {
+        use base64::Engine as _;
+        Self {
+            media_type: media_type.into(),
+            data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        }
+    }
+}
+
+/// Un mensaje dentro de la conversación. Además del texto en `content`
+/// puede llevar imágenes (`images`) para los backends con visión.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,
+    /// Imágenes adjuntas (visión). Vacío = mensaje solo-texto. Tiene
+    /// `serde(default)` para retrocompat con payloads previos sin el campo.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ChatImage>,
 }
 
 impl ChatMessage {
@@ -48,13 +87,29 @@ impl ChatMessage {
         Self {
             role: Role::User,
             content: content.into(),
+            images: Vec::new(),
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            images: Vec::new(),
         }
+    }
+
+    /// Mensaje de usuario con texto + imágenes (visión).
+    pub fn user_con_imagenes(content: impl Into<String>, images: Vec<ChatImage>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            images,
+        }
+    }
+
+    /// `true` si el mensaje lleva al menos una imagen.
+    pub fn tiene_imagenes(&self) -> bool {
+        !self.images.is_empty()
     }
 }
 
@@ -197,6 +252,31 @@ mod pruebas {
         assert_eq!(r.temperature, 1.0);
         let r = ChatRequest::una_vuelta("x", 10).con_temperatura(-0.5);
         assert_eq!(r.temperature, 0.0);
+    }
+
+    #[test]
+    fn chat_image_from_bytes_codifica_base64() {
+        let img = ChatImage::from_bytes("image/png", &[0, 1, 2, 3]);
+        assert_eq!(img.media_type, "image/png");
+        assert_eq!(img.data_base64, "AAECAw==");
+    }
+
+    #[test]
+    fn mensaje_con_imagenes_y_retrocompat_serde() {
+        let m = ChatMessage::user_con_imagenes(
+            "¿qué hay acá?",
+            vec![ChatImage::new("image/jpeg", "Zm9v")],
+        );
+        assert!(m.tiene_imagenes());
+        // Un mensaje solo-texto NO serializa el campo `images` (sigue
+        // produciendo el mismo JSON que antes de agregar visión).
+        let plano = ChatMessage::user("hola");
+        let json = serde_json::to_string(&plano).unwrap();
+        assert_eq!(json, r#"{"role":"user","content":"hola"}"#);
+        // Y un JSON viejo sin `images` deserializa igual.
+        let back: ChatMessage =
+            serde_json::from_str(r#"{"role":"user","content":"x"}"#).unwrap();
+        assert!(!back.tiene_imagenes());
     }
 
     #[test]

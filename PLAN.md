@@ -249,7 +249,7 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 3. ✅ **`nahual-video-viewer-llimphi`** — reproductor reusable (header + transporte + frame `View::image`); decode AV1 nativo. Acepta cualquier `FrameSource` (foreign-av, TestCard). El camino cero-copia `llimphi-surface` lo ejerce `media-app`.
 4. ✅ **`shared/foreign-av`** — puente ffmpeg (movido desde `media-source-ffmpeg`, regla #4) + `transcode_a_av1` (ingesta a AV1/Opus).
 5. **`tullpu`** — editor de capas (ver su SDD; fases propias) — avanzado (PSD, export).
-6. **`pixel-verbo-daemon`** ✅ (en tullpu) **+ visión en `pluma-llm`** — capa IA.
+6. **`pixel-verbo-daemon`** ✅ (en tullpu) **+ visión en `pluma-llm`** ✅ — `ChatMessage` lleva `images: Vec<ChatImage>` (base64, retrocompat por `serde(default)`); backends Anthropic (bloques `image`/`source`) y Gemini (`inlineData`) los emiten. Capa IA.
 7. ✅ **`shared/foreign-psd`** — import Photoshop (post-tullpu, §6.ter).
 
 **Nota hardware**: wgpu no expone Vulkan Video hoy → el decode arranca en CPU (rav1d es threaded y rinde). `media-core` deja el hook para frame-ya-en-GPU cuando el camino madure.

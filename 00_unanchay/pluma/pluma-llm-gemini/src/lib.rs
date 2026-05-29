@@ -192,9 +192,21 @@ fn construir_payload(req: &ChatRequest) -> serde_json::Value {
                 Role::User => "user",
                 Role::Assistant => "model",
             };
+            // Texto primero, luego las imágenes como `inlineData`
+            // (camelCase, igual que el resto del payload Gemini).
+            let mut parts: Vec<serde_json::Value> =
+                vec![serde_json::json!({"text": m.content})];
+            for img in &m.images {
+                parts.push(serde_json::json!({
+                    "inlineData": {
+                        "mimeType": img.media_type,
+                        "data": img.data_base64,
+                    }
+                }));
+            }
             serde_json::json!({
                 "role": role,
-                "parts": [{"text": m.content}],
+                "parts": parts,
             })
         })
         .collect();
@@ -311,6 +323,25 @@ mod pruebas {
         let p = construir_payload(&req);
         assert_eq!(p["contents"][0]["role"], "user");
         assert_eq!(p["contents"][1]["role"], "model");
+    }
+
+    #[test]
+    fn mensaje_con_imagen_agrega_part_inline_data() {
+        use pluma_llm_core::ChatImage;
+        let req = ChatRequest {
+            system: None,
+            max_tokens: 100,
+            temperature: 0.0,
+            messages: vec![ChatMessage::user_con_imagenes(
+                "describe",
+                vec![ChatImage::new("image/jpeg", "Zm9v")],
+            )],
+        };
+        let p = construir_payload(&req);
+        let parts = &p["contents"][0]["parts"];
+        assert_eq!(parts[0]["text"], "describe");
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/jpeg");
+        assert_eq!(parts[1]["inlineData"]["data"], "Zm9v");
     }
 
     #[test]

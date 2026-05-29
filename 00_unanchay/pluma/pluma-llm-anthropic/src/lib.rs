@@ -203,10 +203,34 @@ fn construir_payload(
                 Role::User => "user",
                 Role::Assistant => "assistant",
             };
-            serde_json::json!({
-                "role": role,
-                "content": m.content,
-            })
+            if m.images.is_empty() {
+                // Solo-texto: `content` como string plano (idéntico al
+                // payload previo a visión — no rompe caching ni tests).
+                serde_json::json!({
+                    "role": role,
+                    "content": m.content,
+                })
+            } else {
+                // Multimodal: array de bloques. Anthropic recomienda las
+                // imágenes ANTES del texto. Cada imagen es un bloque
+                // `image` con `source` base64.
+                let mut blocks: Vec<serde_json::Value> = m
+                    .images
+                    .iter()
+                    .map(|img| {
+                        serde_json::json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img.media_type,
+                                "data": img.data_base64,
+                            }
+                        })
+                    })
+                    .collect();
+                blocks.push(serde_json::json!({"type": "text", "text": m.content}));
+                serde_json::json!({ "role": role, "content": blocks })
+            }
         })
         .collect();
 
@@ -337,5 +361,29 @@ mod pruebas {
         assert_eq!(p["messages"][1]["role"], "assistant");
         assert_eq!(p["messages"][2]["role"], "user");
         assert_eq!(p["messages"][2]["content"], "U2");
+    }
+
+    #[test]
+    fn mensaje_con_imagen_emite_bloques_image_y_text() {
+        use pluma_llm_core::ChatImage;
+        let req = ChatRequest {
+            system: None,
+            max_tokens: 100,
+            temperature: 0.0,
+            messages: vec![ChatMessage::user_con_imagenes(
+                "¿qué hay en la foto?",
+                vec![ChatImage::new("image/png", "AAEC")],
+            )],
+        };
+        let p = construir_payload(&req, "claude-sonnet-4-6", false);
+        let content = &p["messages"][0]["content"];
+        assert!(content.is_array(), "content debe ser array con imagen");
+        // Imagen primero, texto después.
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(content[0]["source"]["type"], "base64");
+        assert_eq!(content[0]["source"]["media_type"], "image/png");
+        assert_eq!(content[0]["source"]["data"], "AAEC");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "¿qué hay en la foto?");
     }
 }

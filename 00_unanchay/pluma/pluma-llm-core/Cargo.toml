@@ -9,5 +9,9 @@ description = "pluma — contrato del cliente LLM (chat completion): trait ChatC
 
 [dependencies]
 async-trait = { workspace = true }
+base64 = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
