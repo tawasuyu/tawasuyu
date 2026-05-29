@@ -243,7 +243,17 @@ pub struct Model {
     /// muestra todo. Persistente entre toggle del panel pero se limpia
     /// si el usuario cambia de pestaña (no — por ahora se conserva).
     pub panel_filter: TextInputState,
+    /// Instante de arranque — base monotónica para el reloj que el
+    /// reactor JS le pasa a `setTimeout`/`setInterval`. Cada `JsTick`
+    /// calcula `start.elapsed().as_millis()` y avanza el runtime.
+    pub start: std::time::Instant,
 }
+
+/// Periodo del poll del reactor JS — disparo de `Msg::JsTick`. ~30 fps
+/// matchea el comportamiento de browsers reales para `setTimeout(_, 0)`
+/// (la spec dice 4ms pero los browsers clampan a ~16ms; nosotros a
+/// 33ms para no saturar el UI thread con ticks vacíos).
+const JS_POLL_PERIOD_MS: u64 = 33;
 
 /// Tipo de panel auxiliar que reemplaza el viewport cuando está abierto.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,6 +400,12 @@ pub enum Msg {
     /// `details_open` actual, el msg es no-op (ej: re-render durante una
     /// carga nueva).
     ToggleDetails(usize),
+    /// Tick periódico del reactor JS — disparado por `Handle::spawn_periodic`
+    /// cada `JS_POLL_PERIOD_MS`. Para cada pestaña con `JsRuntime` y timers
+    /// vivos, avanza el reloj a `Model.start.elapsed_ms()` y corre los
+    /// callbacks vencidos (setTimeout/setInterval). Sin payload — el handler
+    /// computa el now al momento de procesar.
+    JsTick,
 }
 
 impl App for Puriy {
@@ -415,6 +431,13 @@ impl App for Puriy {
         let mut tab = TabState::new(url.clone());
         tab.gen = 1;
         spawn_load(tab.id, tab.gen, url, /* referer */ None, handle.clone());
+        // Poll del reactor JS — un solo thread global que dispatcha
+        // `Msg::JsTick` cada ~33ms. El handler walka las pestañas y
+        // saltea las que no tienen runtime (cost ~ns por tab inactiva).
+        handle.spawn_periodic(
+            std::time::Duration::from_millis(JS_POLL_PERIOD_MS),
+            || Msg::JsTick,
+        );
         Model {
             tabs: vec![tab],
             active: 0,
@@ -425,6 +448,7 @@ impl App for Puriy {
             panel: None,
             panel_filter: TextInputState::new(),
             hover_link: None,
+            start: std::time::Instant::now(),
         }
     }
 
@@ -611,7 +635,8 @@ impl App for Puriy {
                         // status bar.
                         t.js = None;
                         t.js_summary = JsSummary::default();
-                        run_scripts_on_tab(t, &scripts);
+                        let now_ms = m.start.elapsed().as_millis() as u64;
+                        run_scripts_on_tab(t, &scripts, now_ms);
                         if t.js_summary.errors > 0 {
                             t.status =
                                 format!("{} · JS: {} log/{} err",
@@ -960,6 +985,10 @@ impl App for Puriy {
                 if let Some(slot) = t.details_open.get_mut(idx) {
                     *slot = !*slot;
                 }
+            }
+            Msg::JsTick => {
+                let now_ms = m.start.elapsed().as_millis() as u64;
+                tick_js_runtimes(&mut m, now_ms);
             }
             Msg::PanelFilterKey(e) => {
                 m.panel_filter.apply_key(&e);
@@ -1641,13 +1670,17 @@ fn collect_history() -> (String, Vec<PanelItem>) {
 ///
 /// `t.js_summary` se actualiza con counts agregados. La función NO toca
 /// `t.status` — el caller decide cómo mostrarlo.
-fn run_scripts_on_tab(t: &mut TabState, scripts: &[puriy_engine::ScriptInfo]) {
+fn run_scripts_on_tab(
+    t: &mut TabState,
+    scripts: &[puriy_engine::ScriptInfo],
+    now_ms: u64,
+) {
     if scripts.is_empty() {
         return;
     }
     // Body text — concatenación de las hojas de texto del box tree.
     // Snapshot a momento de Load; muta si la página re-renderiza pero
-    // el JS no re-lee. Fase 7.4 lo hará reactivo.
+    // el JS no re-lee. Fase 7.5+ lo hará reactivo.
     let body_text = t
         .box_tree
         .as_ref()
@@ -1671,6 +1704,11 @@ fn run_scripts_on_tab(t: &mut TabState, scripts: &[puriy_engine::ScriptInfo]) {
     t.js = Some(rt);
     let rt = t.js.as_mut().unwrap();
     let _ = rt.set_document(&t.title, &t.url, &body_text);
+    // Reloj inicial — sin esto, `setTimeout(fn, 100)` registrado por un
+    // script inicial dispararía contra `__puriy_now_ms=0` y se vencería
+    // en el primer tick que cruce 100ms del wall clock (raro pero
+    // posible). Setearlo acá los ancla al reloj real del chrome.
+    let _ = rt.set_now_ms(now_ms);
     let mut prev_stdout_len = rt.stdout().len();
     let mut prev_stderr_len = rt.stderr().len();
     for s in scripts {
@@ -1702,6 +1740,40 @@ fn run_scripts_on_tab(t: &mut TabState, scripts: &[puriy_engine::ScriptInfo]) {
         t.js_summary.errors += new_stderr[prev_stderr_len..].matches('\n').count();
         prev_stdout_len = new_stdout.len();
         prev_stderr_len = new_stderr.len();
+    }
+}
+
+/// Avanza el reloj de cada `JsRuntime` vivo del Model al `now_ms` actual
+/// y dispara los callbacks `setTimeout`/`setInterval` vencidos. Llamado
+/// desde `Msg::JsTick` (cada `JS_POLL_PERIOD_MS`).
+///
+/// Pestañas sin runtime se saltean en ~ns (chequeo `Option::is_some`).
+/// Pestañas con runtime pero sin timers vivos también se saltean tras
+/// un `pending_timers` que cuesta un eval mini (~µs). No queremos
+/// dejar de polear porque mismo runtime puede registrar timers más
+/// tarde via event handlers (Fase 7.5b+).
+///
+/// Cada disparo nuevo de stdout/stderr se cuenta a `t.js_summary`,
+/// alineado con el conteo que hace `run_scripts_on_tab`.
+fn tick_js_runtimes(m: &mut Model, now_ms: u64) {
+    for t in m.tabs.iter_mut() {
+        let Some(rt) = t.js.as_mut() else { continue };
+        if rt.pending_timers() == 0 {
+            continue;
+        }
+        let prev_stdout_len = rt.stdout().len();
+        let prev_stderr_len = rt.stderr().len();
+        match rt.tick(now_ms) {
+            Ok(_r) => {
+                let new_stdout = rt.stdout();
+                let new_stderr = rt.stderr();
+                t.js_summary.logs += new_stdout[prev_stdout_len..].matches('\n').count();
+                t.js_summary.errors += new_stderr[prev_stderr_len..].matches('\n').count();
+            }
+            Err(_) => {
+                t.js_summary.errors += 1;
+            }
+        }
     }
 }
 
@@ -3865,7 +3937,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts);
+        run_scripts_on_tab(&mut t, &scripts, 0);
         assert_eq!(t.js_summary.logs, 2, "esperaba 2 logs");
         assert_eq!(t.js_summary.errors, 0);
         // El runtime debe haberse instanciado.
@@ -3884,7 +3956,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts);
+        run_scripts_on_tab(&mut t, &scripts, 0);
         // 1 log de console + 1 error del throw.
         assert_eq!(t.js_summary.logs, 1);
         assert_eq!(t.js_summary.errors, 1);
@@ -3912,7 +3984,7 @@ mod tests {
                 async_: false,
             },
         ];
-        run_scripts_on_tab(&mut t, &scripts);
+        run_scripts_on_tab(&mut t, &scripts, 0);
         // Ninguno de los dos ejecutable → no se instancia runtime.
         assert!(t.js.is_none());
         assert_eq!(t.js_summary.logs, 0);
@@ -3934,7 +4006,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts);
+        run_scripts_on_tab(&mut t, &scripts, 0);
         let rt = t.js.as_ref().expect("rt creado");
         let out = rt.stdout();
         assert!(out.contains("Hola mundo"), "stdout: {out:?}");
@@ -3963,7 +4035,92 @@ mod tests {
                 async_: false,
             },
         ];
-        run_scripts_on_tab(&mut t, &scripts);
+        run_scripts_on_tab(&mut t, &scripts, 0);
         assert_eq!(t.js_summary.logs, 1);
+    }
+
+    fn model_con_script(inline: &str) -> Model {
+        let mut t = TabState::new("about:test".into());
+        t.title = "T".into();
+        t.url = "about:test".into();
+        t.box_tree = Some(parse("<p>x</p>"));
+        let scripts = vec![puriy_engine::ScriptInfo {
+            src: None,
+            inline: Some(inline.into()),
+            type_attr: None,
+            is_module: false,
+            defer: false,
+            async_: false,
+        }];
+        run_scripts_on_tab(&mut t, &scripts, 0);
+        Model {
+            tabs: vec![t],
+            active: 0,
+            zoom: 1.0,
+            find_active: false,
+            find_input: TextInputState::new(),
+            find_current: 0,
+            panel: None,
+            panel_filter: TextInputState::new(),
+            hover_link: None,
+            start: std::time::Instant::now(),
+        }
+    }
+
+    #[test]
+    fn tick_dispara_settimeout_pendiente() {
+        let mut m = model_con_script("setTimeout(function(){ console.log('tic') }, 100)");
+        assert!(m.tabs[0].js.is_some());
+        let logs_pre = m.tabs[0].js_summary.logs;
+        tick_js_runtimes(&mut m, 50);
+        assert_eq!(m.tabs[0].js_summary.logs, logs_pre);
+        tick_js_runtimes(&mut m, 100);
+        assert_eq!(m.tabs[0].js_summary.logs, logs_pre + 1);
+    }
+
+    #[test]
+    fn tick_no_panic_en_pestana_sin_js() {
+        let mut t = TabState::new("about:test".into());
+        t.box_tree = Some(parse("<p>x</p>"));
+        let mut m = Model {
+            tabs: vec![t],
+            active: 0,
+            zoom: 1.0,
+            find_active: false,
+            find_input: TextInputState::new(),
+            find_current: 0,
+            panel: None,
+            panel_filter: TextInputState::new(),
+            hover_link: None,
+            start: std::time::Instant::now(),
+        };
+        tick_js_runtimes(&mut m, 1234);
+        assert!(m.tabs[0].js.is_none());
+        assert_eq!(m.tabs[0].js_summary.logs, 0);
+    }
+
+    #[test]
+    fn tick_acumula_errores_en_summary() {
+        let mut m = model_con_script(
+            "setTimeout(function(){ throw new Error('boom') }, 10)",
+        );
+        let errs_pre = m.tabs[0].js_summary.errors;
+        tick_js_runtimes(&mut m, 50);
+        assert!(
+            m.tabs[0].js_summary.errors > errs_pre,
+            "esperaba al menos 1 error nuevo en summary"
+        );
+    }
+
+    #[test]
+    fn tick_continua_disparando_interval() {
+        let mut m = model_con_script(
+            "setInterval(function(){ console.log('p') }, 20)",
+        );
+        let logs0 = m.tabs[0].js_summary.logs;
+        tick_js_runtimes(&mut m, 20);
+        tick_js_runtimes(&mut m, 40);
+        tick_js_runtimes(&mut m, 60);
+        assert_eq!(m.tabs[0].js_summary.logs, logs0 + 3);
     }
 }

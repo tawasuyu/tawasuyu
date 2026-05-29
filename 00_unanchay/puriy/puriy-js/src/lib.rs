@@ -82,6 +82,79 @@ globalThis.__puriy_stderr = '';
 })();
 "#;
 
+/// Harness JS-puro de timers — `setTimeout` / `setInterval` /
+/// `clearTimeout` / `clearInterval` viven en `globalThis` y guardan sus
+/// entries en `globalThis.__puriy_timers.queue` indexado por id.
+///
+/// El host actualiza `globalThis.__puriy_now_ms` antes de cada
+/// `tick()` (y antes de cada `eval()` de usuario para que un setTimeout
+/// se registre con un `fire_at` consistente). `__puriy_tick(now)` itera
+/// el queue en orden por `fire_at`, dispara los vencidos, captura
+/// excepciones (van a stderr sin crashear el tick) y reprograma los
+/// intervals. Devuelve el conteo de timers disparados.
+///
+/// Callbacks: aceptamos `typeof === 'function'` (lo más común) y
+/// `typeof === 'string'` (legacy — `(1, eval)(s)` lo fuerza al scope
+/// global). `setInterval(_, ms)` clamp-ea ms a un mínimo de 1ms (spec
+/// real es 4ms pero acá no peleamos por eso — el poller del host
+/// dispara a ~33ms anyway).
+const TIMERS_BOOTSTRAP: &str = r#"
+globalThis.__puriy_now_ms = 0;
+globalThis.__puriy_timers = { next_id: 1, queue: {} };
+globalThis.setTimeout = function(cb, ms) {
+    if (typeof ms !== 'number' || ms < 0) ms = 0;
+    var id = globalThis.__puriy_timers.next_id++;
+    globalThis.__puriy_timers.queue[id] = {
+        fire_at: (globalThis.__puriy_now_ms || 0) + ms,
+        callback: cb,
+        interval_ms: null
+    };
+    return id;
+};
+globalThis.setInterval = function(cb, ms) {
+    if (typeof ms !== 'number' || ms < 1) ms = 1;
+    var id = globalThis.__puriy_timers.next_id++;
+    globalThis.__puriy_timers.queue[id] = {
+        fire_at: (globalThis.__puriy_now_ms || 0) + ms,
+        callback: cb,
+        interval_ms: ms
+    };
+    return id;
+};
+globalThis.clearTimeout = function(id) {
+    delete globalThis.__puriy_timers.queue[id];
+};
+globalThis.clearInterval = globalThis.clearTimeout;
+globalThis.__puriy_tick = function(now) {
+    var q = globalThis.__puriy_timers.queue;
+    var ids = Object.keys(q);
+    ids.sort(function(a, b) { return q[a].fire_at - q[b].fire_at; });
+    var fired = 0;
+    for (var i = 0; i < ids.length; i++) {
+        var id = ids[i];
+        var t = q[id];
+        if (!t) continue;
+        if (t.fire_at > now) continue;
+        try {
+            if (typeof t.callback === 'function') {
+                t.callback();
+            } else if (typeof t.callback === 'string') {
+                (1, eval)(t.callback);
+            }
+        } catch (e) {
+            globalThis.__puriy_stderr += String(e) + '\n';
+        }
+        fired++;
+        if (t.interval_ms !== null && q[id]) {
+            q[id].fire_at = now + t.interval_ms;
+        } else {
+            delete q[id];
+        }
+    }
+    return fired;
+};
+"#;
+
 /// Script que escupe el contenido de `__puriy_stdout`/`__puriy_stderr`
 /// concatenados, los vacía, y devuelve un string con ambos separados
 /// por `'SOH'` (SOH — Start Of Header, control char no-printable
@@ -234,6 +307,11 @@ impl JsRuntime {
         // fijo, no podemos extender su function table), esta indirec-
         // ción JS-puro es la forma limpia de cablear hostcalls.
         rt.eval_raw(CONSOLE_BOOTSTRAP)?;
+        // Bootstrap timers — `setTimeout`/`setInterval`/`clearTimeout`/
+        // `clearInterval` + `__puriy_tick`. Mismo molde JS-puro: el host
+        // sólo necesita actualizar `__puriy_now_ms` antes de cada eval
+        // y llamar `__puriy_tick(now)` en su poll loop.
+        rt.eval_raw(TIMERS_BOOTSTRAP)?;
         Ok(rt)
     }
 
@@ -397,6 +475,57 @@ impl JsRuntime {
         );
         self.eval_raw(&script)?;
         Ok(())
+    }
+
+    /// Actualiza `globalThis.__puriy_now_ms` para que `setTimeout` y
+    /// `setInterval` registren sus `fire_at` contra el reloj del host.
+    /// Llamado automáticamente desde `tick()`; el chrome también lo
+    /// llama antes de `eval()` para cubrir scripts que registran timers
+    /// inmediatos (`setTimeout(fn, 0)`).
+    pub fn set_now_ms(&mut self, now_ms: u64) -> Result<(), JsError> {
+        let script = format!("globalThis.__puriy_now_ms = {now_ms};");
+        self.eval_raw(&script).map(|_| ())
+    }
+
+    /// Avanza el reloj a `now_ms` y dispara cada `setTimeout`/
+    /// `setInterval` con `fire_at <= now_ms`. Devuelve cuántos
+    /// callbacks corrieron + cuántos timers quedan vivos (para que el
+    /// chrome decida si dejar de polear).
+    ///
+    /// Errores DENTRO de un callback van a stderr (drena después como
+    /// cualquier eval). Errores del propio `__puriy_tick` (no debería
+    /// pasar si el bootstrap está sano) salen como `JsError::Runtime`.
+    pub fn tick(&mut self, now_ms: u64) -> Result<TickResult, JsError> {
+        let script = format!(
+            r#"(function(){{
+                globalThis.__puriy_now_ms = {now_ms};
+                var f = globalThis.__puriy_tick({now_ms});
+                var r = Object.keys(globalThis.__puriy_timers.queue).length;
+                return f + ',' + r;
+            }})()"#
+        );
+        let v = self.eval(&script)?;
+        let s = match v {
+            JsValue::String(s) => s,
+            other => {
+                return Err(JsError::Runtime(format!(
+                    "tick devolvió tipo inesperado: {other:?}"
+                )))
+            }
+        };
+        let mut parts = s.splitn(2, ',');
+        let fired: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let remaining: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        Ok(TickResult { fired, remaining })
+    }
+
+    /// Cantidad de timers (setTimeout pendientes + setInterval vivos).
+    /// `0` quiere decir que el chrome puede parar el poll.
+    pub fn pending_timers(&mut self) -> u32 {
+        match self.eval("Object.keys(globalThis.__puriy_timers.queue).length") {
+            Ok(JsValue::Number(n)) if n >= 0.0 => n as u32,
+            _ => 0,
+        }
     }
 
     /// Fuel restante en el store. Tras un eval pesado se acerca a 0;
@@ -636,6 +765,15 @@ impl JsValue {
             JsValue::String(s) => !s.is_empty(),
         }
     }
+}
+
+/// Resultado de un `tick()`. `fired` es cuántos callbacks corrieron en
+/// el tick; `remaining` cuántos timers siguen vivos después (timeouts
+/// pendientes + intervals).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TickResult {
+    pub fired: u32,
+    pub remaining: u32,
 }
 
 /// Errores devueltos por el runtime.
@@ -1254,5 +1392,163 @@ mod tests {
         let lit = js_string_literal(&s);
         assert!(lit.contains("\\u2028"));
         assert!(lit.contains("\\u2029"));
+    }
+
+    #[test]
+    fn set_timeout_dispara_al_tick_correcto() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval("setTimeout(function(){ console.log('boom') }, 100)")
+            .expect("registrar timeout");
+        // Tick a t=50ms: aún no debe dispararse.
+        let r = rt.tick(50).expect("tick 50");
+        assert_eq!(r.fired, 0);
+        assert_eq!(r.remaining, 1);
+        assert!(rt.stdout().is_empty());
+        // Tick a t=100ms: corresponde el fire_at exacto.
+        let r = rt.tick(100).expect("tick 100");
+        assert_eq!(r.fired, 1);
+        assert_eq!(r.remaining, 0);
+        assert_eq!(rt.stdout(), "boom\n");
+    }
+
+    #[test]
+    fn set_interval_se_reprograma_y_dispara_repetido() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval("setInterval(function(){ console.log('t') }, 50)")
+            .expect("registrar interval");
+        let r1 = rt.tick(50).expect("tick 50");
+        assert_eq!(r1.fired, 1);
+        assert_eq!(r1.remaining, 1, "interval sigue vivo");
+        let r2 = rt.tick(100).expect("tick 100");
+        assert_eq!(r2.fired, 1);
+        assert_eq!(r2.remaining, 1);
+        let r3 = rt.tick(120).expect("tick 120");
+        // 120 < 150, no debería dispararse aún.
+        assert_eq!(r3.fired, 0);
+        assert_eq!(r3.remaining, 1);
+        assert_eq!(rt.stdout(), "t\nt\n");
+    }
+
+    #[test]
+    fn clear_timeout_cancela_antes_de_fire() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval("var id = setTimeout(function(){ console.log('no') }, 100); clearTimeout(id);")
+            .expect("registrar+cancelar");
+        let r = rt.tick(200).expect("tick");
+        assert_eq!(r.fired, 0);
+        assert_eq!(r.remaining, 0);
+        assert!(rt.stdout().is_empty());
+    }
+
+    #[test]
+    fn clear_interval_para_el_loop() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval(
+            "var id = setInterval(function(){ console.log('x') }, 10); \
+             setTimeout(function(){ clearInterval(id) }, 25);",
+        )
+        .expect("registrar interval+timeout");
+        // `__puriy_tick` dispara cada timer A LO SUMO una vez por tick
+        // (no "catch-up" — matchea el comportamiento de browsers reales
+        // cuando hay backlog). Así que en tick(30):
+        //   - interval id=1 (fire_at=10) dispara una vez, reprograma a 40
+        //   - timeout id=2 (fire_at=25) dispara y borra id=1
+        let r = rt.tick(30).expect("tick 30");
+        assert_eq!(r.fired, 2, "1 interval + 1 timeout cancelador");
+        assert_eq!(r.remaining, 0, "clearInterval lo borró");
+        assert_eq!(rt.stdout(), "x\n");
+        // Tick siguiente: no debe disparar nada porque clearInterval
+        // sacó el interval del queue.
+        let r2 = rt.tick(100).expect("tick 100");
+        assert_eq!(r2.fired, 0);
+        assert_eq!(rt.stdout(), "x\n");
+    }
+
+    #[test]
+    fn interval_no_hace_catch_up_por_tick() {
+        // Si el host atrasa el poll (ej. 200ms con interval de 10ms), el
+        // tick NO dispara 20 veces — sólo una vez, y reprograma al
+        // siguiente. Esto matchea browsers reales (no spam de ticks
+        // perdidos) y previene loops infinitos en setInterval(_, 0).
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval("setInterval(function(){ console.log('p') }, 10)")
+            .expect("e");
+        let r = rt.tick(200).expect("tick 200");
+        assert_eq!(r.fired, 1);
+        assert_eq!(r.remaining, 1);
+        assert_eq!(rt.stdout(), "p\n");
+    }
+
+    #[test]
+    fn callback_string_se_evalua_en_scope_global() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval("setTimeout('console.log(\"via string\")', 10)")
+            .expect("registrar timeout con string");
+        let r = rt.tick(10).expect("tick");
+        assert_eq!(r.fired, 1);
+        assert_eq!(rt.stdout(), "via string\n");
+    }
+
+    #[test]
+    fn error_en_callback_no_crashea_el_tick() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval(
+            "setTimeout(function(){ throw new Error('boom') }, 10); \
+             setTimeout(function(){ console.log('sigo vivo') }, 20);",
+        )
+        .expect("registrar dos timers");
+        let r = rt.tick(20).expect("tick");
+        assert_eq!(r.fired, 2);
+        assert_eq!(rt.stdout(), "sigo vivo\n");
+        // El error fue capturado por el try/catch del __puriy_tick y
+        // appendeado a __puriy_stderr.
+        assert!(rt.stderr().contains("boom"), "stderr: {:?}", rt.stderr());
+    }
+
+    #[test]
+    fn pending_timers_reporta_count_correcto() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        assert_eq!(rt.pending_timers(), 0);
+        rt.eval("setTimeout(function(){}, 100); setTimeout(function(){}, 200);")
+            .expect("e");
+        assert_eq!(rt.pending_timers(), 2);
+        rt.tick(100).expect("tick 100");
+        assert_eq!(rt.pending_timers(), 1, "uno disparado, uno queda");
+        rt.tick(200).expect("tick 200");
+        assert_eq!(rt.pending_timers(), 0);
+    }
+
+    #[test]
+    fn set_timeout_zero_dispara_al_proximo_tick() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval("setTimeout(function(){ console.log('now') }, 0)")
+            .expect("e");
+        let r = rt.tick(0).expect("tick mismo instante");
+        assert_eq!(r.fired, 1);
+        assert_eq!(rt.stdout(), "now\n");
+    }
+
+    #[test]
+    fn timers_respetan_now_ms_del_host_no_clock_real() {
+        // El host pasa now_ms manualmente — los timers no avanzan con
+        // wall clock. Probar que sin tick no hay fire.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("set_now");
+        rt.eval("setTimeout(function(){ console.log('x') }, 1)")
+            .expect("e");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // El wall clock avanzó pero __puriy_now_ms NO. Sin tick, no
+        // hay fire.
+        assert_eq!(rt.pending_timers(), 1);
+        assert!(rt.stdout().is_empty());
     }
 }
