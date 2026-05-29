@@ -35,7 +35,7 @@ pub use boxes::{
     PathCmd, SelectInfo, SelectOption, SvgPrim, SvgScene,
 };
 pub use dom::{DomTree, MetaRefresh, ScriptInfo};
-pub use fetch::{fetch, fetch_full, FetchError, FetchResponse};
+pub use fetch::{fetch, FetchError};
 pub use style::{
     AlignItems, AlignSelf, AnimationBinding, AnimationDirection, AnimationFillMode,
     AnimationIterations, BoxShadow, BoxSizing, ComputedStyle, ContentItem, EasingFunction,
