@@ -18,6 +18,7 @@
 
 use core::fmt::Write;
 
+use alloc::{format, string::String, vec::Vec};
 use spin::{Mutex, Once};
 use virtio_drivers::transport::pci::bus::DeviceFunction;
 
@@ -48,6 +49,10 @@ struct Estado {
     /// (X3). `atender_raton_hid` lo polea por fotograma. `None` si no hay
     /// raton USB —se cae al PS/2/tableta como hasta X2—.
     raton_hid: Option<super::hid::RatonHid>,
+    /// Lineas de diagnostico legibles —que clase tiene cada dispositivo USB
+    /// visto, si se monto raton— para volcarlas A PANTALLA desde main.rs. En
+    /// metal sin COM1 esta es la UNICA forma de saber que paso con el USB.
+    resumen: Vec<String>,
 }
 
 // SEGURIDAD: `Registers` contiene punteros crudos al MMIO. renaser es de un
@@ -244,10 +249,16 @@ pub fn montar() -> Result<ResumenCapacidades, &'static str> {
     // dispositivo conectado: Enable Slot → preparar contextos → Address
     // Device → GET_DESCRIPTOR(Device, 0, 8) → re-leer descriptor completo
     // → GET_DESCRIPTOR(Configuration, ...) parsea interfaces/endpoints.
+    let mut resumen_pantalla: Vec<String> = Vec::new();
+    resumen_pantalla.push(format!("usb XHCI ok :: {conectados} puerto(s) con dispositivo"));
     let raton_hid = if conectados > 0 {
         match enumerar_dispositivos(&mut registros, &mut estructuras, max_puertos) {
-            Ok(r) => r,
+            Ok((r, diag)) => {
+                resumen_pantalla.extend(diag);
+                r
+            }
             Err(motivo) => {
+                resumen_pantalla.push(format!("usb enumeracion abortada: {motivo}"));
                 let _ = writeln!(
                     crate::baliza::Serie,
                     "xhci :: enumeracion dispositivos abortada :: {motivo}",
@@ -258,6 +269,9 @@ pub fn montar() -> Result<ResumenCapacidades, &'static str> {
     } else {
         None
     };
+    if raton_hid.is_none() {
+        resumen_pantalla.push(String::from("usb raton USB: NO (sigue el pad PS/2)"));
+    }
 
     ESTADO.call_once(|| {
         Mutex::new(Estado {
@@ -266,6 +280,7 @@ pub fn montar() -> Result<ResumenCapacidades, &'static str> {
             registros,
             estructuras,
             raton_hid,
+            resumen: resumen_pantalla,
         })
     });
 
@@ -344,6 +359,16 @@ pub fn esta_vivo() -> bool {
     ESTADO.get().is_some()
 }
 
+/// Lineas de diagnostico del USB para volcar A PANTALLA. Vacio si el
+/// controlador no se monto (no hay XHCI en el bus). En metal sin COM1 esta es
+/// la unica via para saber que dispositivos USB vio el kernel.
+pub fn resumen_usb() -> Vec<String> {
+    match ESTADO.get() {
+        Some(estado) => estado.lock().resumen.clone(),
+        None => Vec::new(),
+    }
+}
+
 /// X3 :: polea el raton USB HID una vez. Lo llama el reactor (tarea_compositor)
 /// cada fotograma. No-op si el controlador no se monto o no hay raton USB —se
 /// cae al PS/2/tableta—. Drena el Event Ring SIN bloquear y entrega los deltas
@@ -392,13 +417,15 @@ fn enumerar_dispositivos(
     registros: &mut Registers<MapeadorXhci>,
     estructuras: &mut super::rings::EstructurasArranque,
     max_puertos: u8,
-) -> Result<Option<super::hid::RatonHid>, &'static str> {
+) -> Result<(Option<super::hid::RatonHid>, Vec<String>), &'static str> {
     use super::comandos;
     use super::contextos::{registrar_en_dcbaa, ContextoDispositivo};
 
     // El primer raton USB HID hallado se configura y se devuelve para que el
     // reactor lo polee. Los demas dispositivos solo se trazan (X3 cubre raton).
     let mut raton: Option<super::hid::RatonHid> = None;
+    // Lineas legibles para volcar a pantalla (sin COM1 es lo unico visible).
+    let mut diag: Vec<String> = Vec::new();
 
     for puerto in 0..max_puertos as usize {
         let portsc = registros.port_register_set.read_volatile_at(puerto);
@@ -406,6 +433,7 @@ fn enumerar_dispositivos(
             continue;
         }
         let velocidad = portsc.portsc.port_speed();
+        diag.push(format!("usb p{} conectado (vel {})", puerto, velocidad));
 
         // 1. Enable Slot.
         let slot_id = match emitir_enable_slot(
@@ -564,6 +592,10 @@ fn enumerar_dispositivos(
             config.interfaces.len(),
         );
         for iface in &config.interfaces {
+            diag.push(format!(
+                "usb p{} cls={:#04x}/{:#04x}/{:#04x} eps={}",
+                puerto, iface.clase, iface.subclase, iface.protocolo, iface.endpoints.len(),
+            ));
             let _ = writeln!(
                 crate::baliza::Serie,
                 "xhci :: puerto {} :: iface {} alt {} class={:#x}/{:#x}/{:#x} eps={}",
@@ -620,6 +652,7 @@ fn enumerar_dispositivos(
                     &in_ep,
                 ) {
                     Ok(r) => {
+                        diag.push(format!("usb p{} RATON HID montado", puerto));
                         let _ = writeln!(
                             crate::baliza::Serie,
                             "xhci :: puerto {} :: raton USB HID montado",
@@ -628,6 +661,7 @@ fn enumerar_dispositivos(
                         raton = Some(r);
                     }
                     Err(m) => {
+                        diag.push(format!("usb p{} raton HID FALLO: {m}", puerto));
                         let _ = writeln!(
                             crate::baliza::Serie,
                             "xhci :: puerto {} :: raton HID fallo :: {m}",
@@ -638,7 +672,7 @@ fn enumerar_dispositivos(
             }
         }
     }
-    Ok(raton)
+    Ok((raton, diag))
 }
 
 /// Emite un Enable Slot Command en el Command Ring, toca el Doorbell 0 y

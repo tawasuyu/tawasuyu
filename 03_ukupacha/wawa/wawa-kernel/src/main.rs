@@ -982,8 +982,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 "xhci :: montado :: version={:#06x} slots={} puertos={}",
                 caps.version, caps.max_slots, caps.max_puertos,
             );
+            // A PANTALLA: en metal sin COM1 esto es lo unico visible. Dice que
+            // dispositivos USB vio el kernel y si monto el raton.
+            for linea in drivers::xhci::controlador::resumen_usb() {
+                reportar(&linea);
+            }
         }
         Err(motivo) => {
+            reportar(&format!("usb :: {motivo}"));
             let _ = writeln!(baliza::Serie, "xhci :: {motivo} (sin USB nativo)");
         }
     }
