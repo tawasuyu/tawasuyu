@@ -41,6 +41,9 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+pub mod bytecode;
+pub use bytecode::{compile, eval_with_stack, Bytecode, CompileError, EvalError, Op, VarBindings};
+
 // ─── AST ────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
