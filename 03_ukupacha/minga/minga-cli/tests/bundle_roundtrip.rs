@@ -234,6 +234,77 @@ fn multi_bundle_import_is_idempotent() {
 }
 
 #[test]
+fn multi_bundle_zstd_roundtrip_keeps_data_and_reports_ratio() {
+    // El export-all comprime con zstd; el import-all debe descomprimir y
+    // recuperar exactamente las mismas raíces. uncompressed_bytes >
+    // bytes salvo en el degenerado del archivo casi vacío.
+    let dir = TempDir::new().unwrap();
+    let repo_a = dir.path().join("a");
+    cmd_init(&repo_a, "p").unwrap();
+    let mut alphas = Vec::new();
+    for i in 0..5 {
+        let p = dir.path().join(format!("a{i}.rs"));
+        std::fs::write(&p, format!("fn a{i}() -> i32 {{ {i} }}")).unwrap();
+        alphas.push(cmd_ingest(&repo_a, "p", &p).unwrap().alpha);
+    }
+
+    let pkg = dir.path().join("z.bundle");
+    let exp = cmd_bundle_export_all(&repo_a, "p", &pkg).unwrap();
+    assert_eq!(exp.roots, 5);
+    assert!(
+        exp.uncompressed_bytes > 0,
+        "el postcard raw no puede ser vacío para 5 raíces"
+    );
+    // No exigimos ratio > 1: con datos muy chicos zstd a veces ni
+    // comprime. Pero sí exigimos que el header haya cambiado a MNGZ.
+    let on_disk = std::fs::read(&pkg).unwrap();
+    assert_eq!(&on_disk[..4], b"MNGZ", "export-all nuevo emite MNGZ");
+
+    let repo_b = dir.path().join("b");
+    cmd_init(&repo_b, "p").unwrap();
+    let imp = cmd_bundle_import_all(&repo_b, "p", &pkg).unwrap();
+    assert_eq!(imp.roots_new(), 5);
+}
+
+#[test]
+fn multi_bundle_legacy_mngm_still_imports() {
+    // Construimos a mano un archivo `MNGM` + postcard sin compresión
+    // (simulando un bundle generado por una versión vieja) y
+    // verificamos que el import nuevo lo acepta. Sin esto, romperíamos
+    // a usuarios con archivos pre-zstd en disco.
+    use minga_cli::bundle::{BundleMultiV1, MULTI_MAGIC};
+
+    let dir = TempDir::new().unwrap();
+    let repo_a = dir.path().join("a");
+    cmd_init(&repo_a, "p").unwrap();
+    let p = dir.path().join("legacy.rs");
+    std::fs::write(&p, "fn legacy() -> i32 { 1 }").unwrap();
+    let ing = cmd_ingest(&repo_a, "p", &p).unwrap();
+
+    // Reusamos la implementación existente para armar un BundleV1 single,
+    // y lo envolvemos a mano con el header MNGM legacy.
+    let single = dir.path().join("legacy.single");
+    cmd_bundle_export(&repo_a, "p", &ing.alpha.to_string(), &single).unwrap();
+    let single_bytes = std::fs::read(&single).unwrap();
+    let bundle: minga_cli::bundle::BundleV1 = postcard::from_bytes(&single_bytes).unwrap();
+    let multi = BundleMultiV1 {
+        version: 1,
+        items: vec![bundle],
+    };
+    let body = postcard::to_allocvec(&multi).unwrap();
+    let mut legacy = Vec::with_capacity(MULTI_MAGIC.len() + body.len());
+    legacy.extend_from_slice(MULTI_MAGIC);
+    legacy.extend_from_slice(&body);
+    let pkg = dir.path().join("legacy.mngm");
+    std::fs::write(&pkg, &legacy).unwrap();
+
+    let repo_b = dir.path().join("b");
+    cmd_init(&repo_b, "p").unwrap();
+    let imp = cmd_bundle_import_all(&repo_b, "p", &pkg).unwrap();
+    assert_eq!(imp.roots_new(), 1);
+}
+
+#[test]
 fn multi_bundle_rejects_single_bundle_and_viceversa() {
     // Cruzar single ↔ multi import debe devolver el error específico,
     // no `InvalidBundle`. Eso le ahorra al usuario el "qué archivo es

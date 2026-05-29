@@ -40,7 +40,19 @@ pub const BUNDLE_VERSION: u32 = 1;
 /// `BundleV1` clásico — esto preserva compat con bundles existentes
 /// sin tocar su layout.
 pub const MULTI_MAGIC: &[u8; 4] = b"MNGM";
+/// Variante zstd-comprimida del multi-bundle. El cuerpo tras el magic
+/// es un stream zstd que, descomprimido, produce exactamente el postcard
+/// de `BundleMultiV1`. El export nuevo siempre escribe esta variante; el
+/// import detecta `MNGM` (legacy, sin compresión) y `MNGZ` (comprimido)
+/// transparentemente — repos viejos siguen pudiendo importar y leer.
+pub const MULTI_MAGIC_ZSTD: &[u8; 4] = b"MNGZ";
 pub const MULTI_VERSION: u32 = 1;
+
+/// Nivel de compresión zstd para el export. 3 es el default del crate
+/// (rápido, ratio decente). Subir a 19+ exprime hasta 30 % extra pero
+/// triplica el tiempo de export — no vale para un caso "dump completo
+/// del repo a USB".
+const ZSTD_LEVEL: i32 = 3;
 
 /// El bundle serializable. El layout es estable: cualquier cambio de
 /// campos sube `BUNDLE_VERSION` y agrega una rama en `import`.
@@ -92,7 +104,11 @@ pub struct BundleExportAllStats {
     pub total_nodes: usize,
     pub total_attestations: usize,
     pub total_retractions: usize,
+    /// Tamaño final del archivo en disco (post-compresión).
     pub bytes: usize,
+    /// Tamaño del postcard plano antes de comprimir — útil para ver el
+    /// ratio cuando interesa.
+    pub uncompressed_bytes: usize,
 }
 
 /// Estadísticas agregadas del import de un multi-bundle.
@@ -182,10 +198,12 @@ pub fn cmd_bundle_export_all(
         items,
     };
     let body = postcard::to_allocvec(&multi).map_err(|_| CliError::InvalidBundle)?;
+    let uncompressed_bytes = body.len();
+    let compressed = zstd::encode_all(body.as_slice(), ZSTD_LEVEL).map_err(CliError::Io)?;
 
-    let mut bytes = Vec::with_capacity(MULTI_MAGIC.len() + body.len());
-    bytes.extend_from_slice(MULTI_MAGIC);
-    bytes.extend_from_slice(&body);
+    let mut bytes = Vec::with_capacity(MULTI_MAGIC_ZSTD.len() + compressed.len());
+    bytes.extend_from_slice(MULTI_MAGIC_ZSTD);
+    bytes.extend_from_slice(&compressed);
     std::fs::write(out, &bytes)?;
 
     Ok(BundleExportAllStats {
@@ -195,6 +213,7 @@ pub fn cmd_bundle_export_all(
         total_attestations,
         total_retractions,
         bytes: bytes.len(),
+        uncompressed_bytes,
     })
 }
 
@@ -283,13 +302,23 @@ pub fn cmd_bundle_import(
     let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
 
     let bytes = std::fs::read(in_path)?;
-    if bytes.len() >= MULTI_MAGIC.len() && &bytes[..MULTI_MAGIC.len()] == MULTI_MAGIC {
+    if is_multi_bundle_magic(&bytes) {
         return Err(CliError::ExpectedSingleBundle);
     }
     let bundle: BundleV1 = postcard::from_bytes(&bytes).map_err(|_| CliError::InvalidBundle)?;
     let stats = import_one(&repo, bundle)?;
     repo.flush()?;
     Ok(stats)
+}
+
+/// `true` si los primeros bytes son `MNGM` (multi-bundle legacy) o
+/// `MNGZ` (multi-bundle comprimido). Helper compartido entre
+/// `cmd_bundle_import` (que lo usa para rechazar multi) y la detección
+/// previa al strip del prefijo en `import_all`.
+fn is_multi_bundle_magic(bytes: &[u8]) -> bool {
+    bytes.len() >= MULTI_MAGIC.len()
+        && (&bytes[..MULTI_MAGIC.len()] == MULTI_MAGIC
+            || &bytes[..MULTI_MAGIC_ZSTD.len()] == MULTI_MAGIC_ZSTD)
 }
 
 /// Importa un multi-bundle (formato `MULTI_MAGIC + BundleMultiV1`). Si
@@ -304,11 +333,17 @@ pub fn cmd_bundle_import_all(
     let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
 
     let bytes = std::fs::read(in_path)?;
-    if bytes.len() < MULTI_MAGIC.len() || &bytes[..MULTI_MAGIC.len()] != MULTI_MAGIC {
+    let body: Vec<u8> = if bytes.len() >= MULTI_MAGIC_ZSTD.len()
+        && &bytes[..MULTI_MAGIC_ZSTD.len()] == MULTI_MAGIC_ZSTD
+    {
+        zstd::decode_all(&bytes[MULTI_MAGIC_ZSTD.len()..]).map_err(CliError::Io)?
+    } else if bytes.len() >= MULTI_MAGIC.len() && &bytes[..MULTI_MAGIC.len()] == MULTI_MAGIC {
+        bytes[MULTI_MAGIC.len()..].to_vec()
+    } else {
         return Err(CliError::ExpectedMultiBundle);
-    }
-    let multi: BundleMultiV1 = postcard::from_bytes(&bytes[MULTI_MAGIC.len()..])
-        .map_err(|_| CliError::InvalidBundle)?;
+    };
+    let multi: BundleMultiV1 =
+        postcard::from_bytes(&body).map_err(|_| CliError::InvalidBundle)?;
     if multi.version != MULTI_VERSION {
         return Err(CliError::UnsupportedBundleVersion(multi.version));
     }

@@ -305,6 +305,39 @@ fn blame_attributes_lines_across_two_revisions() {
 }
 
 #[test]
+fn signers_since_filters_old_attestations() {
+    // `cmd_signers` con `Some(now+horizonte)` debe filtrar todo: la
+    // firma local quedó persistida con `ts_secs == now`, así que un
+    // corte muy futuro la deja afuera. Y un corte de hace una hora la
+    // incluye. Verifica el filtro sin necesidad de manipular tiempo.
+    use minga_cli::cmd_signers;
+
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    cmd_init(&repo, "p").unwrap();
+    let src = dir.path().join("s.rs");
+    fs::write(&src, "fn s() -> i32 { 1 }").unwrap();
+    let ing = cmd_ingest(&repo, "p", &src).unwrap();
+
+    // Sin filtro: 1 firma.
+    let all = cmd_signers(&repo, "p", &ing.alpha.to_string(), None).unwrap();
+    assert_eq!(all.len(), 1);
+
+    // Filtro al futuro: 0 firmas.
+    let future = u64::MAX / 2;
+    let none = cmd_signers(&repo, "p", &ing.alpha.to_string(), Some(future)).unwrap();
+    assert!(none.is_empty());
+
+    // Filtro a "hace una hora": 1 firma (la nuestra es de hace segundos).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let recent = cmd_signers(&repo, "p", &ing.alpha.to_string(), Some(now - 3600)).unwrap();
+    assert_eq!(recent.len(), 1);
+}
+
+#[test]
 fn blame_errors_for_path_without_history() {
     use minga_cli::cmd_blame;
 

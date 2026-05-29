@@ -9,7 +9,7 @@ use std::fs;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use minga_cli::serve::build_router_for_test;
+use minga_cli::serve::{build_router_for_test, build_router_for_test_with_token};
 use minga_cli::{cmd_init, cmd_ingest};
 use serde_json::Value;
 use tempfile::TempDir;
@@ -164,6 +164,89 @@ async fn http_signers_returns_local_author() {
     let items = json["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["author"], did.to_string());
+}
+
+#[tokio::test]
+async fn http_without_token_rejects_unauthenticated() {
+    // Token activado pero el request no manda Authorization → 401.
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("r");
+    cmd_init(&repo, "p").unwrap();
+
+    let app = build_router_for_test_with_token(repo, "p".to_string(), "secret-42".to_string());
+    let res = app
+        .oneshot(Request::builder().uri("/status").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn http_with_wrong_token_rejects() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("r");
+    cmd_init(&repo, "p").unwrap();
+
+    let app = build_router_for_test_with_token(repo, "p".to_string(), "secret-42".to_string());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("authorization", "Bearer secret-NO")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn http_with_correct_token_passes() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("r");
+    cmd_init(&repo, "p").unwrap();
+
+    let app = build_router_for_test_with_token(repo, "p".to_string(), "secret-42".to_string());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("authorization", "Bearer secret-42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn http_signers_since_filters_in_query() {
+    // Endpoint /roots/:α/signers?since=<future> debe devolver lista vacía.
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("r");
+    cmd_init(&repo, "p").unwrap();
+    let src = dir.path().join("z.rs");
+    fs::write(&src, "fn z() -> i32 { 8 }").unwrap();
+    let ing = cmd_ingest(&repo, "p", &src).unwrap();
+
+    let app = build_router_for_test(repo, "p".to_string());
+    // since muy en el futuro → 0 firmas
+    let huge = u64::MAX / 2;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/roots/{}/signers?since={}", ing.alpha, huge))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json["items"].as_array().unwrap().is_empty());
 }
 
 // Silenciamos el unused warning del helper de exploración.

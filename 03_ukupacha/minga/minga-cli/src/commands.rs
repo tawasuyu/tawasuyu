@@ -235,10 +235,17 @@ pub struct SignerEntry {
 /// primero). Marca con `retracted = true` a los DIDs que también
 /// emitieron una retracción — útil para visualizar cambios de postura
 /// en la cadena de aval.
+///
+/// `since_secs` filtra firmas observadas antes de ese instante Unix
+/// (utilidad: feed "qué hay nuevo en este repo" para integraciones tipo
+/// shuma/minga-explorer). Atestaciones sin timestamp (`ts_secs == 0`,
+/// típicas en repos viejos sin `SledTimestampStore`) se excluyen cuando
+/// se aplica el filtro — no podemos decir si son recientes.
 pub fn cmd_signers(
     repo_path: &Path,
     passphrase: &str,
     hash_hex: &str,
+    since_secs: Option<u64>,
 ) -> Result<Vec<SignerEntry>, CliError> {
     use std::collections::HashSet;
 
@@ -265,6 +272,10 @@ pub fn cmd_signers(
                 ts_secs: ts,
                 retracted: retract_authors.contains(&a.author),
             }
+        })
+        .filter(|e| match since_secs {
+            Some(cut) => e.ts_secs >= cut,
+            None => true,
         })
         .collect();
 

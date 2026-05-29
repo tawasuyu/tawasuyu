@@ -174,6 +174,12 @@ enum Command {
     Signers {
         /// α-hash en hex (64 caracteres).
         hash: String,
+        /// Filtra firmas observadas desde ese instante. Acepta:
+        /// `YYYY-MM-DD` (medianoche UTC), o un relativo con sufijo
+        /// `m`/`h`/`d`/`w` (`30d`, `12h`, `2w`). Atestaciones sin
+        /// timestamp local (legacy) quedan fuera del filtro.
+        #[arg(long)]
+        since: Option<String>,
     },
 
     /// Bundle: empaquetar / desempaquetar una raíz para transferencia
@@ -188,6 +194,12 @@ enum Command {
     Serve {
         /// Socket de escucha (ej. `127.0.0.1:7777`).
         addr: String,
+        /// Si se pasa, exige `Authorization: Bearer <token>` en cada
+        /// request — sin token, el daemon corre abierto (ok sólo en
+        /// `127.0.0.1`). Para no exponer el token en el `ps`,
+        /// también se acepta vía env `MINGA_SERVE_TOKEN`.
+        #[arg(long)]
+        token: Option<String>,
     },
 }
 
@@ -475,11 +487,19 @@ fn run() -> Result<(), CliError> {
                 println!("{} {}  {}  [{}]", mark, when, e.alpha, dialect);
             }
         }
-        Command::Signers { hash } => {
+        Command::Signers { hash, since } => {
             let pass = prompt_passphrase()?;
-            let entries = cmd_signers(&cli.repo, &pass, &hash)?;
+            let since_secs = match since.as_deref() {
+                Some(s) => Some(parse_since(s)?),
+                None => None,
+            };
+            let entries = cmd_signers(&cli.repo, &pass, &hash, since_secs)?;
             if entries.is_empty() {
-                println!("(sin atestaciones locales para ese α-hash)");
+                let extra = match since_secs {
+                    Some(_) => " bajo el filtro --since",
+                    None => "",
+                };
+                println!("(sin atestaciones locales para ese α-hash{extra})");
             }
             for e in entries {
                 let when = format_ts(e.ts_secs);
@@ -524,7 +544,16 @@ fn run() -> Result<(), CliError> {
             println!("  nodos:         {}", s.total_nodes);
             println!("  atestaciones:  {}", s.total_attestations);
             println!("  retractions:   {}", s.total_retractions);
-            println!("  tamaño:        {} bytes", s.bytes);
+            println!(
+                "  tamaño:        {} bytes (zstd · raw {} bytes, ratio {:.2}×)",
+                s.bytes,
+                s.uncompressed_bytes,
+                if s.bytes == 0 {
+                    0.0
+                } else {
+                    s.uncompressed_bytes as f64 / s.bytes as f64
+                }
+            );
             if !s.skipped_missing_dialect.is_empty() {
                 println!(
                     "  ⚠ {} raíces saltadas (sin dialect registrado):",
@@ -535,11 +564,15 @@ fn run() -> Result<(), CliError> {
                 }
             }
         }
-        Command::Serve { addr } => {
+        Command::Serve { addr, token } => {
             let pass = prompt_passphrase()?;
+            // Fallback al env si --token no se pasó. La env es el camino
+            // recomendado para evitar exponer el secreto en el `ps`.
+            let env_tok = std::env::var("MINGA_SERVE_TOKEN").ok();
+            let token = token.or(env_tok);
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| CliError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-            rt.block_on(cmd_serve(&cli.repo, &pass, &addr))?;
+            rt.block_on(cmd_serve(&cli.repo, &pass, &addr, token.as_deref()))?;
         }
         Command::Bundle(BundleCommand::ImportAll { file }) => {
             let pass = prompt_passphrase()?;
@@ -576,6 +609,73 @@ fn format_ts(secs: u64) -> String {
     let m = (secs_of_day % 3600) / 60;
     let (y, mo, d) = civil_from_days(days + 719_468);
     format!("{:04}-{:02}-{:02} {:02}:{:02}", y, mo, d, h, m)
+}
+
+/// Resuelve `--since` a un instante Unix (UTC). Acepta:
+/// - `YYYY-MM-DD` → medianoche UTC de ese día;
+/// - sufijo de duración `Nm` / `Nh` / `Nd` / `Nw` → `now - N`.
+///
+/// El parser es estricto para no confundir un typo con una fecha
+/// silenciosamente válida; cualquier formato inesperado produce
+/// `InvalidInput` con un mensaje claro.
+fn parse_since(s: &str) -> Result<u64, CliError> {
+    let s = s.trim();
+    // Forma absoluta: YYYY-MM-DD.
+    if let Some((y, rest)) = s.split_once('-') {
+        if let Some((mo, d)) = rest.split_once('-') {
+            let y: i64 = y.parse().map_err(|_| since_err(s))?;
+            let mo: u32 = mo.parse().map_err(|_| since_err(s))?;
+            let d: u32 = d.parse().map_err(|_| since_err(s))?;
+            if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+                return Err(since_err(s));
+            }
+            let days = days_from_civil(y, mo, d);
+            let unix_days = days - 719_468;
+            if unix_days < 0 {
+                return Err(since_err(s));
+            }
+            return Ok((unix_days as u64) * 86_400);
+        }
+    }
+    // Forma relativa: digit+ + sufijo.
+    let last = s.chars().last().ok_or_else(|| since_err(s))?;
+    let (num, mult) = match last {
+        'm' => (&s[..s.len() - 1], 60u64),
+        'h' => (&s[..s.len() - 1], 3_600u64),
+        'd' => (&s[..s.len() - 1], 86_400u64),
+        'w' => (&s[..s.len() - 1], 7 * 86_400u64),
+        _ => return Err(since_err(s)),
+    };
+    let n: u64 = num.parse().map_err(|_| since_err(s))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Ok(now.saturating_sub(n.saturating_mul(mult)))
+}
+
+fn since_err(input: &str) -> CliError {
+    CliError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "--since '{input}' inválido: usá YYYY-MM-DD o un relativo \
+             como 30d / 12h / 2w / 15m"
+        ),
+    ))
+}
+
+/// Inversa de `civil_from_days`: cuenta de días absolutos según el
+/// algoritmo de Howard Hinnant. Resultado se interpreta a Unix days
+/// restándole 719_468.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let m = m as u64;
+    let d = d as u64;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe as i64
 }
 
 /// Howard Hinnant — días desde Mar 1, 0000 (sistema proléptico) a (Y, M, D).

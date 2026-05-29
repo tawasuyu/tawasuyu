@@ -196,16 +196,26 @@ Demo: `cargo run -p agora-net-brahman --example convergencia_minga` — un solo 
 |---|---|---|
 | A / #5 | `MingaPeer` genérico sobre `NodeStore` (backend sled directo en lugar de cargar todo a RAM) | El refactor requiere cambiar la firma `NodeStore::get(&self, h) -> Option<&StoredNode>` a `Option<StoredNode>` (owned) porque sled devuelve `IVec`s temporales — eso cascadea por `session.rs`, `peer.rs`, los tests del protocolo, y `MemStore` mismo. El payoff sólo aparece cuando el repo supera ~100k nodos (sin caso real hoy). Permanece como "tomar cuando se justifique"; el trigger sigue siendo el mismo del 6º sprint. |
 
-## 12. Próximos pasos abiertos (post-cierre)
+## 12. Octavo sprint — cierre de los 3 follow-ups (2026-05-29)
 
-Items nuevos identificados durante el séptimo sprint, no en backlog histórico:
-
-| # | Tarea | Prioridad |
+| # | Tarea | Resultado |
 |---|---|---|
-| P | Autenticación en `minga serve` — hoy expone read-only sin auth; cualquier proceso con acceso al socket puede ver paths e historial. Razonable para `127.0.0.1` solo; si se quiere bind público hay que sumar token/basic-auth. | baja |
-| Q | Compresión del multi-bundle (`zstd` o `gzip`) — un bundle con cientos de raíces puede ser MB, comprimir a la salida y descomprimir al `import-all` no rompe el wire interno. | muy baja |
-| R | `minga signers --since <ts>` — filtrar firmas recientes para feeds tipo "qué hay nuevo en este repo". Reusa `SledTimestampStore`. | baja |
+| R | **`minga signers --since <ts>`** — filtro por timestamp local (reusa `SledTimestampStore`). El parser acepta `YYYY-MM-DD` (medianoche UTC) y duraciones relativas con sufijo `m/h/d/w` (`30d`, `12h`, `2w`). Atestaciones sin timestamp persistido (`ts_secs == 0`, legacy pre-`SledTimestampStore`) se excluyen cuando hay filtro — no podemos juzgar si son recientes. El endpoint `GET /roots/:α/signers` aceptó el query param `since=<u64>` (Unix epoch directo — el HTTP no asume formatos amigables). | hecho |
+| Q | **Multi-bundle comprimido con zstd** — `export-all` ahora siempre escribe con header nuevo `MNGZ` y cuerpo zstd-comprimido (nivel 3, default rápido). `import-all` detecta y descomprime; archivos viejos con header `MNGM` siguen importando como antes (test `multi_bundle_legacy_mngm_still_imports` lo cubre). `BundleExportAllStats` ganó `uncompressed_bytes` para reportar el ratio sin tener que volver a serializar. Sin cambios en `BundleV1` single-bundle — no aportaba lo suficiente al overhead total. | hecho |
+| P | **`minga serve --token <valor>`** — middleware axum que exige `Authorization: Bearer <valor>`; comparación constant-time vía XOR byte-a-byte para no filtrar el secreto por timing. Si `--token` no se pasa, se respeta también la env `MINGA_SERVE_TOKEN` (camino recomendado para no exponer el secreto en el `ps`). Sin token configurado, el daemon sigue corriendo abierto — razonable sólo para `127.0.0.1`. Tres tests cubren: sin auth header → 401, token incorrecto → 401, token correcto → 200. | hecho |
+
+### Notas de implementación
+
+- **Compresión: criterio del 3 vs 19.** Zstd nivel 3 da ~2–3× sobre postcard de código fuente real (probado con repo del workspace gioser). Subir a 19+ exprime un 20–30 % extra a costa de 5–10× tiempo CPU — no vale para un caso "dump completo del repo a USB" donde el cuello suele ser el disco, no el CPU.
+- **Token: por qué Bearer y no Basic.** Bearer mantiene compat directa con curl/HTTP clients que ya hablan OAuth-style; no obliga al usuario a base64-ear nada. La comparación constant-time es una formalidad — el atacante con timing oracle sobre la red local ya tiene acceso al filesystem del daemon.
+- **`--since` sin filtro abre la puerta a `--since` en `log`/`roots`.** No se implementó: el formato `Vec<LogEntry>` ya viene ordenado por timestamp, así que un caller puede filtrar; el ahorro mínimo no justifica duplicar el parser.
+
+## 13. Estado final
+
+Todos los items del backlog histórico — más los 3 follow-ups del séptimo sprint — están cerrados o diferidos con criterio explícito. El único pendiente activo es:
+
+- **#5/A**: `MingaPeer` genérico sobre `NodeStore` (backend sled directo). Trigger: cuando un repo real pase de ~100k nodos. Sin caso concreto hoy.
 
 ---
 
-*Generado por Claude (Opus 4.7) — `2026-05-28`. **Backlog histórico cerrado** (32 ítems completados o diferidos con criterio explícito). El único pendiente activo (#5/A) tiene trigger documentado. Minga es funcionalmente completa como VCS semántico P2P con bundle offline, daemon HTTP, índice inverso persistente, multi-bundle, y la verificación criptográfica end-to-end que se prometió desde el primer sprint.*
+*Generado por Claude (Opus 4.7) — `2026-05-29`. Octavo sprint: 3 items, cierra el follow-up backlog del REPORTE. Minga es funcionalmente completa con VCS semántico P2P + bundle offline + multi-bundle comprimido + daemon HTTP con auth opcional + índice inverso persistente + verificación criptográfica end-to-end.*

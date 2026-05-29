@@ -410,6 +410,9 @@ epub = "2.1"
 # === Bulk import Wikipedia (iniy-wiki dump) ===
 bzip2 = "0.4"
 
+# === Compresión (minga multi-bundle) ===
+zstd = "0.13"
+
 # === HTTP server (iniy-server) ===
 axum = "0.7"
 tower = "0.5"

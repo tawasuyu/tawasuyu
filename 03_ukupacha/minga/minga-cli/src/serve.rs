@@ -23,8 +23,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path as AxumPath, Query, Request, State};
+use axum::http::{header, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -41,10 +42,16 @@ struct AppState {
 
 /// Arranca el daemon HTTP. Bloquea hasta Ctrl+C (o hasta que axum cierre
 /// por algún error de bind).
+///
+/// Si `token` es `Some`, cada request debe llegar con un header
+/// `Authorization: Bearer <token>`; comparación constant-time. Sin
+/// `token`, el daemon corre como antes (read-only sin auth — razonable
+/// sólo en `127.0.0.1`).
 pub async fn cmd_serve(
     repo_path: &std::path::Path,
     passphrase: &str,
     addr: &str,
+    token: Option<&str>,
 ) -> Result<(), CliError> {
     // Sanity check: que el repo se pueda abrir y la passphrase sea
     // correcta. Si esto falla, devolvemos el error al CLI sin levantar
@@ -57,13 +64,7 @@ pub async fn cmd_serve(
         passphrase: Arc::new(passphrase.to_string()),
     };
 
-    let app = Router::new()
-        .route("/status", get(get_status))
-        .route("/roots", get(get_roots))
-        .route("/roots/:alpha/show", get(get_show))
-        .route("/roots/:alpha/signers", get(get_signers))
-        .route("/roots/:alpha/history", get(get_history))
-        .with_state(state);
+    let app = build_router(state, token.map(|t| t.to_string()));
 
     let sock: SocketAddr = addr.parse().map_err(|_| {
         CliError::Io(std::io::Error::new(
@@ -72,9 +73,68 @@ pub async fn cmd_serve(
         ))
     })?;
     let listener = tokio::net::TcpListener::bind(sock).await.map_err(CliError::Io)?;
-    eprintln!("minga serve escuchando en http://{}", sock);
+    let auth_state = match token {
+        Some(_) => "con token requerido",
+        None => "sin auth — bindeá a 127.0.0.1",
+    };
+    eprintln!("minga serve escuchando en http://{} ({})", sock, auth_state);
     axum::serve(listener, app).await.map_err(CliError::Io)?;
     Ok(())
+}
+
+/// Construye el router con las rutas + (opcionalmente) la layer de
+/// auth. Comparte la base entre `cmd_serve` y `build_router_for_test`.
+fn build_router(state: AppState, token: Option<String>) -> Router {
+    let mut r = Router::new()
+        .route("/status", get(get_status))
+        .route("/roots", get(get_roots))
+        .route("/roots/:alpha/show", get(get_show))
+        .route("/roots/:alpha/signers", get(get_signers))
+        .route("/roots/:alpha/history", get(get_history))
+        .with_state(state);
+    if let Some(tok) = token {
+        let expected = Arc::new(tok);
+        r = r.layer(middleware::from_fn(move |req, next| {
+            let expected = expected.clone();
+            async move { require_bearer(expected, req, next).await }
+        }));
+    }
+    r
+}
+
+/// Middleware: rechaza con 401 si falta el header o no hace match con
+/// `expected`. La comparación es constant-time vía `subtle` indirecto
+/// (XOR byte-a-byte sobre slices del mismo largo).
+async fn require_bearer(expected: Arc<String>, req: Request, next: Next) -> Response {
+    let Some(h) = req.headers().get(header::AUTHORIZATION) else {
+        return unauthorized("missing Authorization header");
+    };
+    let Ok(val) = h.to_str() else {
+        return unauthorized("invalid Authorization header");
+    };
+    let Some(tok) = val.strip_prefix("Bearer ") else {
+        return unauthorized("expected Bearer scheme");
+    };
+    if constant_time_eq(tok.as_bytes(), expected.as_bytes()) {
+        next.run(req).await
+    } else {
+        unauthorized("invalid token")
+    }
+}
+
+fn unauthorized(msg: &str) -> Response {
+    (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": msg }))).into_response()
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 async fn get_status(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -125,11 +185,19 @@ async fn get_show(
         .into_response())
 }
 
+#[derive(Deserialize)]
+struct SignersQuery {
+    /// Cutoff Unix timestamp; sólo se incluyen firmas con
+    /// `ts_secs >= since`. Mismo significado que `--since` del CLI.
+    since: Option<u64>,
+}
+
 async fn get_signers(
     State(s): State<AppState>,
     AxumPath(alpha): AxumPath<String>,
+    Query(q): Query<SignersQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let entries = cmd_signers(&s.repo, &s.passphrase, &alpha)?;
+    let entries = cmd_signers(&s.repo, &s.passphrase, &alpha, q.since)?;
     let items: Vec<_> = entries
         .into_iter()
         .map(|e| {
@@ -204,12 +272,20 @@ pub fn build_router_for_test(repo_path: PathBuf, passphrase: String) -> Router {
         repo: Arc::new(repo_path),
         passphrase: Arc::new(passphrase),
     };
-    Router::new()
-        .route("/status", get(get_status))
-        .route("/roots", get(get_roots))
-        .route("/roots/:alpha/show", get(get_show))
-        .route("/roots/:alpha/signers", get(get_signers))
-        .route("/roots/:alpha/history", get(get_history))
-        .with_state(state)
+    build_router(state, None)
+}
+
+/// Variante con token activo, para tests de auth.
+#[doc(hidden)]
+pub fn build_router_for_test_with_token(
+    repo_path: PathBuf,
+    passphrase: String,
+    token: String,
+) -> Router {
+    let state = AppState {
+        repo: Arc::new(repo_path),
+        passphrase: Arc::new(passphrase),
+    };
+    build_router(state, Some(token))
 }
 
