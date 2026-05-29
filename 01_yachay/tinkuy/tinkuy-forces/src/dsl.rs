@@ -85,10 +85,15 @@ impl DslForce {
         let eps = self.eps;
         let sigma = self.sigma;
 
-        // Single-thread por ahora. La paralelización con rayon vendrá si los
-        // benches (D4) lo justifican. Mantener el evaluador escalar
-        // single-thread es lo más fácil de razonar y suficiente para tests +
-        // sims pequeñas; el kernel nativo seguirá siendo el fast-path.
+        // Single-thread por decisión deliberada (D4, 2026-05-29). El bench
+        // `tinkuy-dsl/benches/optimize` mide 13–46 Me/s en eval escalar; con
+        // N≤256 (techo del scratch del kernel wawa) el coste pairwise es
+        // O(N²)/2 evals → 8 µs/step para LJ. El kernel nativo de `tinkuy-forces`
+        // ya está paralelizado con rayon y sigue siendo el fast path; `DslForce`
+        // existe para iteración interactiva del grafo de nodos, no para sims
+        // de producción a N grande. Paralelizar exigiría stack por hilo y un
+        // segundo `Bytecode` clonable: queda como puerta abierta si alguien
+        // empuja DslForce a N>>1024.
         for i in 0..n {
             let xi = world.xs.0[i];
             let yi = world.ys.0[i];
