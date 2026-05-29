@@ -100,6 +100,8 @@ enum Msg {
     PrevTrack,
     NextTrack,
     CycleSpeed,
+    CycleRepeat,
+    ToggleShuffle,
 }
 
 const VOLUME_STEP: f32 = 0.1;
@@ -266,6 +268,31 @@ impl LoadedTrack {
             LoadedTrack::FfmpegAudio(_) => {}
         }
     }
+
+    fn set_loop(&mut self, looped: bool) {
+        match self {
+            LoadedTrack::Wav(w) => w.set_loop(looped),
+            LoadedTrack::Mp3(m) => m.set_loop(looped),
+            // FfmpegAudio no loopea naturalmente (al EOF emite
+            // silencio); el Playlist decide qué hacer con la pista.
+            LoadedTrack::FfmpegAudio(_) => {}
+        }
+    }
+
+    /// `true` cuando la pista llegó al final en modo no-loop. Para
+    /// FfmpegAudio se compara position con duration porque el
+    /// `exhausted` interno no es accesible.
+    fn is_finished(&self) -> bool {
+        match self {
+            LoadedTrack::Wav(w) => w.is_finished(),
+            LoadedTrack::Mp3(m) => m.is_finished(),
+            LoadedTrack::FfmpegAudio(a) => {
+                let dur = a.duration().unwrap_or(Duration::ZERO);
+                !dur.is_zero()
+                    && a.position() + Duration::from_millis(80) >= dur
+            }
+        }
+    }
 }
 
 impl AudioSource for LoadedTrack {
@@ -302,8 +329,41 @@ impl Seekable for LoadedTrack {
     }
 }
 
-/// Playlist con prev/next manual. Mantiene una `current` cargada y
-/// el resto de `tracks` como paths — al cambiar de pista se decodea
+/// Modo de loop del Playlist global.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RepeatMode {
+    /// Reproduce las pistas en orden y al final del último deja
+    /// silencio (las pistas individuales NO loopean).
+    Off,
+    /// La pista actual se repite hasta que el usuario cambie de
+    /// pista manualmente. Se delega al `set_loop(true)` del track.
+    One,
+    /// Al terminar avanza a la próxima; al final del último vuelve
+    /// al primero.
+    All,
+}
+
+impl RepeatMode {
+    fn next(self) -> Self {
+        match self {
+            Self::Off => Self::One,
+            Self::One => Self::All,
+            Self::All => Self::Off,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "rep-",
+            Self::One => "rep1",
+            Self::All => "repA",
+        }
+    }
+}
+
+/// Playlist con prev/next manual + auto-advance al fin de cada pista
+/// según [`RepeatMode`] y [`Shuffle`]. Mantiene una `current` cargada
+/// y el resto de `tracks` como paths — al cambiar de pista se decodea
 /// el archivo nuevo y se descarta el viejo. La velocidad se persiste
 /// entre cambios.
 struct Playlist {
@@ -311,6 +371,16 @@ struct Playlist {
     idx: usize,
     current: LoadedTrack,
     speed: f32,
+    repeat: RepeatMode,
+    shuffle: Option<ShuffleOrder>,
+    /// Estado RNG simple para `ShuffleOrder::reshuffle` — xorshift de
+    /// 64 bits, suficiente para randomizar un orden de N pistas.
+    rng_state: u64,
+}
+
+struct ShuffleOrder {
+    order: Vec<usize>,
+    pos: usize,
 }
 
 impl Playlist {
@@ -318,12 +388,18 @@ impl Playlist {
         if tracks.is_empty() {
             return Err("playlist vacía".into());
         }
-        let current = LoadedTrack::from_path(&tracks[0])?;
+        let mut current = LoadedTrack::from_path(&tracks[0])?;
+        // Default: las pistas individuales no loopean — el Playlist
+        // decide qué pasa al final según RepeatMode.
+        current.set_loop(false);
         Ok(Self {
             tracks,
             idx: 0,
             current,
             speed: 1.0,
+            repeat: RepeatMode::Off,
+            shuffle: None,
+            rng_state: 0x9E37_79B9_7F4A_7C15,
         })
     }
 
@@ -331,13 +407,63 @@ impl Playlist {
     /// cargado (caso video file con FfmpegAudio). `tracks` queda con
     /// el `path` correspondiente para etiquetado pero no se usa para
     /// reload — prev/next quedan inertes con un solo elemento.
-    fn new_single(label_path: PathBuf, track: LoadedTrack) -> Self {
+    fn new_single(label_path: PathBuf, mut track: LoadedTrack) -> Self {
+        track.set_loop(false);
         Self {
             tracks: vec![label_path],
             idx: 0,
             current: track,
             speed: 1.0,
+            repeat: RepeatMode::Off,
+            shuffle: None,
+            rng_state: 0x9E37_79B9_7F4A_7C15,
         }
+    }
+
+    fn repeat_mode(&self) -> RepeatMode {
+        self.repeat
+    }
+
+    fn shuffle_on(&self) -> bool {
+        self.shuffle.is_some()
+    }
+
+    fn cycle_repeat(&mut self) {
+        self.repeat = self.repeat.next();
+        // Si pasamos a `One`, activamos el loop interno del track —
+        // así no hay glitch al reiniciar el sample 0.
+        let want_loop = matches!(self.repeat, RepeatMode::One);
+        self.current.set_loop(want_loop);
+    }
+
+    fn toggle_shuffle(&mut self) {
+        if self.shuffle.is_some() {
+            self.shuffle = None;
+        } else if self.tracks.len() > 1 {
+            self.shuffle = Some(self.build_shuffle_order());
+        }
+    }
+
+    fn build_shuffle_order(&mut self) -> ShuffleOrder {
+        let mut order: Vec<usize> = (0..self.tracks.len()).collect();
+        // Fisher–Yates con xorshift64.
+        for i in (1..order.len()).rev() {
+            let j = (self.rand_u64() % (i as u64 + 1)) as usize;
+            order.swap(i, j);
+        }
+        // Posiciona al inicio del shuffle en el track actual si está
+        // adentro — UX más natural que arrancar de otra pista.
+        let pos = order.iter().position(|&t| t == self.idx).unwrap_or(0);
+        ShuffleOrder { order, pos }
+    }
+
+    fn rand_u64(&mut self) -> u64 {
+        let mut x = self.rng_state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng_state = x;
+        x
     }
 
     fn track_path(&self) -> &std::path::Path {
@@ -360,11 +486,23 @@ impl Playlist {
         if self.tracks.len() <= 1 {
             return;
         }
-        let n = self.tracks.len() as i64;
-        let new = ((self.idx as i64 + delta).rem_euclid(n)) as usize;
+        let new = match self.shuffle.as_mut() {
+            Some(sh) => {
+                let n = sh.order.len() as i64;
+                let new_pos = (sh.pos as i64 + delta).rem_euclid(n) as usize;
+                sh.pos = new_pos;
+                sh.order[new_pos]
+            }
+            None => {
+                let n = self.tracks.len() as i64;
+                ((self.idx as i64 + delta).rem_euclid(n)) as usize
+            }
+        };
         match LoadedTrack::from_path(&self.tracks[new]) {
             Ok(mut t) => {
                 t.set_speed(self.speed);
+                // Respeta el modo: One = loop interno, Off/All = no.
+                t.set_loop(matches!(self.repeat, RepeatMode::One));
                 self.idx = new;
                 self.current = t;
                 eprintln!(
@@ -385,6 +523,45 @@ impl Playlist {
         self.step(-1)
     }
 
+    /// Verifica si la pista terminó (en modo no-loop) y avanza según
+    /// `repeat`. Llamado desde [`AudioSource::fill`] del Playlist
+    /// después de cada bloque para que el siguiente bloque ya salga
+    /// del track nuevo.
+    fn maybe_auto_advance(&mut self) {
+        if !self.current.is_finished() {
+            return;
+        }
+        match self.repeat {
+            RepeatMode::One => {
+                // Con loop interno encendido nunca debería pasar
+                // (set_loop(true) en cycle_repeat / step), pero por
+                // robustez reseteamos.
+                self.current.seek_to(Duration::ZERO);
+            }
+            RepeatMode::All => {
+                if self.tracks.len() > 1 {
+                    self.next();
+                } else {
+                    // Single track con repeat All se comporta como
+                    // repeat One — reinicia.
+                    self.current.seek_to(Duration::ZERO);
+                }
+            }
+            RepeatMode::Off => {
+                // Avanzo si no es la última; si es la última, dejo
+                // silencio (la pista se queda finished y fill emite
+                // ceros indefinidamente).
+                let last = match self.shuffle.as_ref() {
+                    Some(sh) => sh.pos + 1 >= sh.order.len(),
+                    None => self.idx + 1 >= self.tracks.len(),
+                };
+                if !last {
+                    self.next();
+                }
+            }
+        }
+    }
+
     fn set_speed(&mut self, speed: f32) {
         let s = speed.clamp(0.1, 4.0);
         self.speed = s;
@@ -395,6 +572,10 @@ impl Playlist {
 impl AudioSource for Playlist {
     fn fill(&mut self, buf: &mut [f32], sample_rate: u32, channels: u16) {
         self.current.fill(buf, sample_rate, channels);
+        // Después de cada bloque, si la pista quedó "finished" el
+        // próximo bloque arranca con la nueva pista (o queda en
+        // silencio si Off + última).
+        self.maybe_auto_advance();
     }
 }
 
@@ -633,6 +814,25 @@ impl App for MultimediaApp {
                 cycle_speed();
                 model
             }
+            Msg::CycleRepeat => {
+                if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                    let mut pl = h.lock();
+                    pl.cycle_repeat();
+                    eprintln!("multimedia-app: repeat {}", pl.repeat_mode().label());
+                }
+                model
+            }
+            Msg::ToggleShuffle => {
+                if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                    let mut pl = h.lock();
+                    pl.toggle_shuffle();
+                    eprintln!(
+                        "multimedia-app: shuffle {}",
+                        if pl.shuffle_on() { "on" } else { "off" }
+                    );
+                }
+                model
+            }
             Msg::Snapshot => {
                 if let Some(pipe) = pipeline_slot().get() {
                     let (w, h) = *pipe.last_dim.lock();
@@ -753,6 +953,37 @@ impl App for MultimediaApp {
         };
         let speed_btn = chip_button(&speed_label, speed_bg, speed_fg, Msg::CycleSpeed);
 
+        let (repeat_label, shuffle_on) = playlist_slot()
+            .get()
+            .and_then(|o| o.as_ref())
+            .map(|h| {
+                let pl = h.lock();
+                (pl.repeat_mode().label(), pl.shuffle_on())
+            })
+            .unwrap_or(("rep-", false));
+        let loop_bg = if seekable {
+            Color::from_rgba8(55, 65, 80, 255)
+        } else {
+            Color::from_rgba8(40, 46, 56, 255)
+        };
+        let loop_fg = if seekable {
+            Color::from_rgba8(220, 230, 245, 255)
+        } else {
+            Color::from_rgba8(100, 110, 125, 255)
+        };
+        let loop_btn = chip_button(repeat_label, loop_bg, loop_fg, Msg::CycleRepeat);
+        let shuf_bg = if shuffle_on {
+            Color::from_rgba8(60, 110, 150, 255)
+        } else {
+            loop_bg
+        };
+        let shuf_btn = chip_button(
+            if shuffle_on { "shuf!" } else { "shuf-" },
+            shuf_bg,
+            loop_fg,
+            Msg::ToggleShuffle,
+        );
+
         let vol_label = format!("vol {:.0}%", (volume().get() * 100.0).round());
         let vol_text = View::new(Style {
             size: Size {
@@ -815,6 +1046,8 @@ impl App for MultimediaApp {
             back_btn,
             fwd_btn,
             speed_btn,
+            loop_btn,
+            shuf_btn,
             title_text,
             vol_dn,
             vol_text,

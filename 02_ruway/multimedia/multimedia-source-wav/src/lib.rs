@@ -71,6 +71,14 @@ pub struct WavSource {
     /// bajan el pitch, > 1 aceleran y suben el pitch (sin
     /// time-stretching: es el modo "varispeed" honesto).
     speed: f32,
+    /// Si `true` (default), al pasar el final el cursor wrappea y
+    /// la pista reproduce en loop infinito. Si `false`, después del
+    /// final el fill emite silencio y `position()` reporta `duration`
+    /// — el caller (Playlist) puede detectar el fin y avanzar.
+    looped: bool,
+    /// Última vez que el cursor pasó por el final desde el inicio del
+    /// playback actual. Sólo significa algo con `looped == false`.
+    finished: bool,
 }
 
 impl WavSource {
@@ -110,7 +118,24 @@ impl WavSource {
             src_sample_rate: sample_rate,
             cursor: 0.0,
             speed: 1.0,
+            looped: true,
+            finished: false,
         })
+    }
+
+    /// Activa / desactiva el loop infinito. Con `false`, después del
+    /// final emite silencio y `is_finished()` queda en `true`.
+    pub fn set_loop(&mut self, looped: bool) {
+        self.looped = looped;
+        // Apagar el loop no apaga el flag de "ya terminé" porque el
+        // cursor puede haber dado vueltas; resetear `finished` aquí
+        // sería incorrecto si el track ya terminó en modo no-loop.
+    }
+
+    /// `true` cuando el playback terminó en modo no-loop. Resetea al
+    /// hacer seek (incluyendo seek a 0).
+    pub fn is_finished(&self) -> bool {
+        self.finished
     }
 
     /// Setea velocidad de reproducción (clampeada a [0.1, 4.0]). 1.0
@@ -173,6 +198,9 @@ impl Seekable for WavSource {
         let total_frames = (self.samples.len() as f64 / src_ch).max(1.0);
         let frames = pos.as_secs_f64() * self.src_sample_rate.max(1) as f64;
         self.cursor = frames.rem_euclid(total_frames);
+        // Cualquier seek (incluido a 0) resetea el flag: vuelve a ser
+        // un playback en curso.
+        self.finished = false;
     }
 }
 
@@ -185,26 +213,47 @@ impl AudioSource for WavSource {
         // más rápido por el buffer del source (acelera).
         let step = (src_sr / sink_sr) * self.speed as f64;
         let frames = buf.len() / out_channels;
+        let src_ch = self.src_channels.max(1) as usize;
+        let total_frames = (self.samples.len() / src_ch) as f64;
+        let total_samples = frames * out_channels;
+
+        // Modo no-loop ya terminado → silencio puro, no toca cursor.
+        if !self.looped && self.finished {
+            for s in &mut buf[..] {
+                *s = 0.0;
+            }
+            return;
+        }
+
         let mut cursor = self.cursor;
         for frame in 0..frames {
+            // En modo no-loop, una vez que cursor pasó el final
+            // dejamos de leer y rellenamos con silencio.
+            if !self.looped && cursor >= total_frames {
+                for ch in 0..out_channels {
+                    buf[frame * out_channels + ch] = 0.0;
+                }
+                self.finished = true;
+                continue;
+            }
             for ch in 0..out_channels {
                 let v = self.sample_at(cursor, ch as u16);
                 buf[frame * out_channels + ch] = v;
             }
             cursor += step;
         }
-        // Mantiene cursor dentro del rango de frames del source para
-        // que no crezca sin cota.
-        let src_ch = self.src_channels.max(1) as usize;
-        let total_frames = (self.samples.len() / src_ch) as f64;
-        if total_frames > 0.0 {
+        // En modo loop, mantenemos cursor dentro del rango. En modo
+        // no-loop, lo dejamos en `total_frames` para que `position()`
+        // devuelva `duration`.
+        if self.looped && total_frames > 0.0 {
             cursor = cursor.rem_euclid(total_frames);
+        } else if !self.looped {
+            cursor = cursor.min(total_frames);
         }
         self.cursor = cursor;
 
         // Tail: si len no es múltiplo de channels, silencio.
-        let tail = frames * out_channels;
-        for s in &mut buf[tail..] {
+        for s in &mut buf[total_samples..] {
             *s = 0.0;
         }
     }

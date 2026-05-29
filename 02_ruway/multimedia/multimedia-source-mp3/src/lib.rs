@@ -66,6 +66,10 @@ pub struct Mp3Source {
     /// Multiplicador de velocidad — mismo modo varispeed que WAV (no
     /// hay time-stretching: cambia pitch). Clampeado en `set_speed`.
     speed: f32,
+    /// Loop infinito al pasar el final (default true). Misma
+    /// semántica que [`WavSource::set_loop`].
+    looped: bool,
+    finished: bool,
 }
 
 impl Mp3Source {
@@ -143,6 +147,8 @@ impl Mp3Source {
             src_sample_rate: sample_rate.max(1),
             cursor: 0.0,
             speed: 1.0,
+            looped: true,
+            finished: false,
         })
     }
 
@@ -152,6 +158,14 @@ impl Mp3Source {
 
     pub fn speed(&self) -> f32 {
         self.speed
+    }
+
+    pub fn set_loop(&mut self, looped: bool) {
+        self.looped = looped;
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished
     }
 
     pub fn source_channels(&self) -> u16 {
@@ -197,6 +211,7 @@ impl Seekable for Mp3Source {
         let total_frames = (self.samples.len() as f64 / src_ch).max(1.0);
         let frames = pos.as_secs_f64() * self.src_sample_rate.max(1) as f64;
         self.cursor = frames.rem_euclid(total_frames);
+        self.finished = false;
     }
 }
 
@@ -207,18 +222,35 @@ impl AudioSource for Mp3Source {
         let src_sr = self.src_sample_rate.max(1) as f64;
         let step = (src_sr / sink_sr) * self.speed as f64;
         let frames = buf.len() / out_channels;
+        let src_ch = self.src_channels.max(1) as usize;
+        let total_frames = (self.samples.len() / src_ch) as f64;
+
+        if !self.looped && self.finished {
+            for s in buf.iter_mut() {
+                *s = 0.0;
+            }
+            return;
+        }
+
         let mut cursor = self.cursor;
         for frame in 0..frames {
+            if !self.looped && cursor >= total_frames {
+                for ch in 0..out_channels {
+                    buf[frame * out_channels + ch] = 0.0;
+                }
+                self.finished = true;
+                continue;
+            }
             for ch in 0..out_channels {
                 let v = self.sample_at(cursor, ch as u16);
                 buf[frame * out_channels + ch] = v;
             }
             cursor += step;
         }
-        let src_ch = self.src_channels.max(1) as usize;
-        let total_frames = (self.samples.len() / src_ch) as f64;
-        if total_frames > 0.0 {
+        if self.looped && total_frames > 0.0 {
             cursor = cursor.rem_euclid(total_frames);
+        } else if !self.looped {
+            cursor = cursor.min(total_frames);
         }
         self.cursor = cursor;
         let tail = frames * out_channels;
