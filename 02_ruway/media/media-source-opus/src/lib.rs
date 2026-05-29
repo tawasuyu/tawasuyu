@@ -136,19 +136,62 @@ impl OpusSource {
             return Err(OpusError::NoOpusHead);
         }
 
-        // Descartar el pre-skip (delay del encoder) del frente.
+        Self::finalizar(interleaved, channels, pre_skip, gain_factor)
+    }
+
+    /// Construye desde paquetes Opus ya demuxeados (p.ej. el track
+    /// `A_OPUS` de un WebM) más el `codec_private` del track, que en
+    /// Matroska/WebM ES la cabecera `OpusHead`. El decode es el mismo
+    /// opus-wave.
+    pub fn from_opus_packets(
+        codec_private: &[u8],
+        packets: &[Vec<u8>],
+    ) -> Result<Self, OpusError> {
+        let head = parse_opus_head(codec_private)?;
+        let channels = head.channels as u16;
+        let ch = channels.max(1) as usize;
+        let opus_ch = if channels >= 2 {
+            Channels::Stereo
+        } else {
+            Channels::Mono
+        };
+        let mut decoder = OpusDecoder::new(SampleRate::Hz48000, opus_ch)
+            .map_err(|e| OpusError::Decode(format!("{e:?}")))?;
+
+        let mut interleaved: Vec<f32> = Vec::new();
+        for pkt in packets {
+            if pkt.is_empty() {
+                continue;
+            }
+            let mut pcm = vec![0f32; MAX_FRAME * ch];
+            match decoder.decode_float(Some(pkt), &mut pcm, MAX_FRAME as i32, false) {
+                Ok(n) if n > 0 => interleaved.extend_from_slice(&pcm[..n as usize * ch]),
+                Ok(_) => {}
+                Err(e) => return Err(OpusError::Decode(format!("{e:?}"))),
+            }
+        }
+        Self::finalizar(interleaved, channels, head.pre_skip as u32, head.gain_factor())
+    }
+
+    /// Aplica pre-skip + output gain y arma la fuente. Compartido entre
+    /// el camino Ogg ([`from_path`](Self::from_path)) y el de paquetes
+    /// ([`from_opus_packets`](Self::from_opus_packets)).
+    fn finalizar(
+        mut interleaved: Vec<f32>,
+        channels: u16,
+        pre_skip: u32,
+        gain_factor: f32,
+    ) -> Result<Self, OpusError> {
         let ch = channels.max(1) as usize;
         let skip = (pre_skip as usize).saturating_mul(ch).min(interleaved.len());
         if skip > 0 {
             interleaved.drain(0..skip);
         }
-        // Aplicar output gain si no es unidad.
         if (gain_factor - 1.0).abs() > 1e-6 {
             for s in interleaved.iter_mut() {
                 *s = (*s * gain_factor).clamp(-1.0, 1.0);
             }
         }
-
         if interleaved.is_empty() {
             return Err(OpusError::Empty);
         }

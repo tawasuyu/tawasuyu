@@ -41,7 +41,16 @@ impl App for Showcase {
         handle.spawn_periodic(TICK, || Msg::Tick);
         let arg = std::env::args().nth(1).map(PathBuf::from);
         let state = match arg {
-            Some(p) => VideoViewerState::open_av1(&p),
+            Some(p) => {
+                let ext = p
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(str::to_ascii_lowercase);
+                match ext.as_deref() {
+                    Some("webm" | "mkv") => VideoViewerState::open_webm(&p),
+                    _ => VideoViewerState::open_av1(&p),
+                }
+            }
             None => VideoViewerState::from_source(
                 Box::new(TestCard::new(512, 320, 30.0)),
                 "testcard 512×320",

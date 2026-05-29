@@ -110,6 +110,46 @@ impl VideoViewerState {
         }
     }
 
+    /// Abre un `.webm`/`.mkv` con video AV1 vía el demuxer nativo
+    /// (`media-source-webm` → AV1 puro-Rust). Usa sólo el track de video
+    /// (el viewer no tiene sink de audio). Si no hay track AV1 o falla el
+    /// demux, queda en estado de error.
+    pub fn open_webm(path: &Path) -> Self {
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        match media_source_webm::WebmMedia::open(path) {
+            Ok(media) => match media.video {
+                Some(src) => {
+                    let (w, h) = (media.width, media.height);
+                    Self {
+                        source: Some(Box::new(src)),
+                        frame: None,
+                        width: w,
+                        height: h,
+                        rgba: Vec::new(),
+                        playing: true,
+                        position: Duration::ZERO,
+                        duration: media.duration,
+                        name,
+                        error: None,
+                    }
+                }
+                None => Self {
+                    name,
+                    error: Some("el webm no tiene track de video AV1".to_string()),
+                    ..Default::default()
+                },
+            },
+            Err(e) => Self {
+                name,
+                error: Some(e.to_string()),
+                ..Default::default()
+            },
+        }
+    }
+
     /// Construye el viewer sobre una fuente arbitraria (p.ej. un puente
     /// `foreign-av`). El viewer no decodifica: sólo tickea y pinta.
     pub fn from_source(

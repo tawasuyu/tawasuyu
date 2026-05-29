@@ -77,12 +77,53 @@ impl Drop for Dav1dDecoder {
 
 // ─── Av1VideoSource ──────────────────────────────────────────────────────────
 
-/// Fuente de frames AV1 nativa: demuxea IVF y decodifica con rav1d. Es
-/// la implementación del formato de video NATIVO de gioser (sin ffmpeg,
-/// sin C, sin patentes).
+/// De dónde salen las temporal units AV1: del contenedor IVF en disco,
+/// o de una lista en memoria (p.ej. los paquetes de un track AV1 de un
+/// WebM ya demuxeado). El decoder rav1d es el mismo en ambos casos.
+enum PacketFeed {
+    Ivf {
+        path: PathBuf,
+        reader: IvfReader<BufReader<File>>,
+    },
+    Memory {
+        packets: Vec<Vec<u8>>,
+        pos: usize,
+    },
+}
+
+impl PacketFeed {
+    /// Próxima temporal unit, o `None` al final.
+    fn next(&mut self) -> Option<Vec<u8>> {
+        match self {
+            PacketFeed::Ivf { reader, .. } => reader.next_unit().ok().flatten().map(|u| u.data),
+            PacketFeed::Memory { packets, pos } => {
+                let p = packets.get(*pos).cloned();
+                if p.is_some() {
+                    *pos += 1;
+                }
+                p
+            }
+        }
+    }
+
+    /// Vuelve al inicio (reabre el IVF / resetea el índice).
+    fn reset(&mut self) {
+        match self {
+            PacketFeed::Ivf { path, reader } => {
+                if let Ok(r) = IvfReader::open(&*path) {
+                    *reader = r;
+                }
+            }
+            PacketFeed::Memory { pos, .. } => *pos = 0,
+        }
+    }
+}
+
+/// Fuente de frames AV1 nativa: alimenta rav1d con temporal units (de un
+/// IVF o de memoria) y decodifica. Es la implementación del formato de
+/// video NATIVO de gioser (sin ffmpeg, sin C, sin patentes).
 pub struct Av1VideoSource {
-    path: PathBuf,
-    reader: IvfReader<BufReader<File>>,
+    feed: PacketFeed,
     width: u32,
     height: u32,
     fps: f32,
@@ -114,12 +155,40 @@ impl Av1VideoSource {
         }
         let decoder = Dav1dDecoder::new()?;
         Ok(Self {
-            path,
-            reader,
+            feed: PacketFeed::Ivf { path, reader },
             width: h.width as u32,
             height: h.height as u32,
             fps: h.fps(),
             num_frames: h.num_frames,
+            decoder,
+            staged: None,
+            eof: false,
+            exhausted: false,
+            frame_index: 0,
+            target_frame: 0,
+            accum: Duration::ZERO,
+        })
+    }
+
+    /// Construye desde una lista de temporal units AV1 ya demuxeadas (p.ej.
+    /// el track `V_AV1` de un WebM) más las dimensiones y el framerate del
+    /// contenedor. El decode es el mismo rav1d; el seek resetea el índice
+    /// en memoria. `num_frames` puede ser 0 si el contenedor no lo declara
+    /// (entonces `duration` será `None`).
+    pub fn from_av1_packets(
+        packets: Vec<Vec<u8>>,
+        width: u32,
+        height: u32,
+        fps: f32,
+        num_frames: u32,
+    ) -> Result<Self, String> {
+        let decoder = Dav1dDecoder::new()?;
+        Ok(Self {
+            feed: PacketFeed::Memory { packets, pos: 0 },
+            width,
+            height,
+            fps: if fps > 0.0 { fps } else { 30.0 },
+            num_frames,
             decoder,
             staged: None,
             eof: false,
@@ -163,19 +232,15 @@ impl Av1VideoSource {
             }
             // 1. Asegurar datos en vuelo si quedan TUs.
             if self.staged.is_none() && !self.eof {
-                match self.reader.next_unit() {
-                    Ok(Some(u)) => match self.make_data(&u.data) {
+                match self.feed.next() {
+                    Some(data) => match self.make_data(&data) {
                         Some(d) => self.staged = Some(d),
                         None => {
                             self.exhausted = true;
                             return None;
                         }
                     },
-                    Ok(None) => self.eof = true,
-                    Err(_) => {
-                        self.exhausted = true;
-                        return None;
-                    }
+                    None => self.eof = true,
                 }
             }
             // 2. Enviar (o reintentar) la TU staged.
@@ -234,9 +299,7 @@ impl Av1VideoSource {
 
     /// Reabre desde el inicio y configura el descarte hasta `frame`.
     fn restart_to(&mut self, frame: u32) {
-        if let Ok(r) = IvfReader::open(&self.path) {
-            self.reader = r;
-        }
+        self.feed.reset();
         // SAFETY: ctx vivo; flush descarta estado interno.
         if let Some(ctx) = self.decoder.ctx {
             unsafe { dav1d_flush(ctx) };

@@ -279,6 +279,7 @@ members = [
     "02_ruway/media/media-source-av1",
     "02_ruway/media/media-source-gif",
     "02_ruway/media/media-source-opus",
+    "02_ruway/media/media-source-webm",
     "02_ruway/media/media-source-image",
     "02_ruway/media/media-source-mp3",
     "02_ruway/media/media-source-wav",
@@ -780,3 +781,9 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 # (SILK+CELT, sin C ni FFI) — par del rav1d del lado video.
 ogg = "0.9"
 opus-wave = "3"
+
+# === media-source-webm (demux nativo Matroska/WebM) ===
+# matroska-demuxer es un demuxer puro-Rust de MKV/WebM (EBML). Saca los
+# paquetes de los tracks V_AV1 y A_OPUS para alimentar a media-source-av1
+# y media-source-opus — un .webm AV1+Opus se reproduce 100% nativo.
+matroska-demuxer = "0.7"
