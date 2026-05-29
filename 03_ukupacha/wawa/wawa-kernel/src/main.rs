@@ -995,6 +995,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
     traza("xhci :: listo");
 
+    // PAUSA DE LECTURA (depuración USB en metal sin COM1): el compositor pintará
+    // sus ventanas encima del log apenas arranque el reactor, tapando las líneas
+    // `usb ...`. Aquí —antes del reactor, con las IRQs aún apagadas— un spin
+    // acotado mantiene el log en pantalla unos segundos para poder leerlo. Es
+    // temporal mientras cazamos el raton USB; se quita despues.
+    reportar(">> PAUSA 8s — lee las lineas 'usb ctrlN:' de arriba <<");
+    for _ in 0..3_000_000_000u32 {
+        core::hint::spin_loop();
+    }
+
     // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
     //        GRAFO. El kernel ya no empotra los modulos WASM: lee el
     //        Manifiesto de Genesis que `boot` sembro en la imagen de disco e
