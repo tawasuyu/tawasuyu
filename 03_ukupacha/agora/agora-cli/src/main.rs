@@ -148,6 +148,30 @@ enum WawaOp {
         #[arg(long)]
         salida: PathBuf,
     },
+    /// importa una IMAGEN DE DISPOSITIVO (USB/partición/imagen de disco) al
+    /// grafo, leyendo su sistema de archivos SIN montar vía `foreign-fs`. Lee
+    /// la tabla de particiones (GPT/MBR) o un FS suelto, autodetecta FAT vs
+    /// ext2/3/4 en cada partición, y absorbe a `<hash>.obj` + `raiz.txt` igual
+    /// que `importar` —pero desde bytes crudos, no desde un directorio montado—.
+    /// Es la vía host para tragar el USB/partición vieja del usuario hacia un
+    /// bundle servible por `servir_release`. (El gemelo in-cage corre dentro de
+    /// wawa cuando exista el driver de bloque.)
+    ///
+    ///   - 1 partición reconocida  → la raíz es el árbol de ESE FS.
+    ///   - varias                  → la raíz es un árbol `particionN/` por cada
+    ///                               FS reconocido (las swap/desconocidas se omiten).
+    ImportarImagen {
+        /// Archivo de imagen del dispositivo (un disco entero o una partición).
+        #[arg(long)]
+        imagen: PathBuf,
+        /// Directorio de salida del bundle (se crea si no existe).
+        #[arg(long)]
+        salida: PathBuf,
+        /// Absorber sólo la partición de este slot 1-based de la tabla (en vez
+        /// de todo el dispositivo).
+        #[arg(long)]
+        particion: Option<usize>,
+    },
     /// Fase 66 :: exporta un árbol del grafo de vuelta al filesystem —el
     /// inverso de `importar`—. Reconstruye el directorio byte a byte desde los
     /// `<hash>.obj` del bundle, empezando por la raíz dada. Verifica el hash de
@@ -422,6 +446,8 @@ enum Error {
     Release(String),
     #[error("spec JSON: {0}")]
     Spec(String),
+    #[error("foreign-fs: {0:?}")]
+    ForeignFs(foreign_fs::FsError),
 }
 
 type CliResult<T> = std::result::Result<T, Error>;
@@ -536,6 +562,9 @@ fn run(cmd: Cmd) -> CliResult<()> {
         Cmd::Wawa { op } => match op {
             WawaOp::Publicar { como, spec, salida } => wawa_publicar(&como, &spec, &salida),
             WawaOp::Importar { dir, salida } => wawa_importar(&dir, &salida),
+            WawaOp::ImportarImagen { imagen, salida, particion } => {
+                wawa_importar_imagen(&imagen, &salida, particion)
+            }
             WawaOp::Exportar { bundle, raiz, destino } => {
                 wawa_exportar(&bundle, raiz.as_deref(), &destino)
             }
@@ -1231,6 +1260,130 @@ fn emitir_objeto(objeto: &format::Objeto, salida: &Path) -> CliResult<format::Ha
     let hash = format::hash(&payload);
     fs::write(salida.join(format!("{}.obj", hex_de(&hash))), &payload)?;
     Ok(hash)
+}
+
+/// `foreign_fs::Emisor` que escribe cada objeto como `<hash>.obj` en el bundle
+/// —el mismo formato que produce `emitir_objeto`/`importar`, así que la salida
+/// de `importar-imagen` es servible por `servir_release` igual que la de
+/// `importar`. Captura el primer error de I/O para reportarlo con detalle.
+struct EmisorBundle<'a> {
+    salida: &'a Path,
+    error_io: Option<std::io::Error>,
+}
+
+impl<'a> EmisorBundle<'a> {
+    fn nuevo(salida: &'a Path) -> Self {
+        Self { salida, error_io: None }
+    }
+}
+
+impl foreign_fs::Emisor for EmisorBundle<'_> {
+    fn emitir(&mut self, objeto: &format::Objeto) -> Result<format::Hash, foreign_fs::FsError> {
+        let payload = objeto.serializar().map_err(foreign_fs::FsError::Format)?;
+        let hash = format::hash(&payload);
+        if let Err(e) = fs::write(self.salida.join(format!("{}.obj", hex_de(&hash))), &payload) {
+            self.error_io.get_or_insert(e);
+            return Err(foreign_fs::FsError::EmisionFallida);
+        }
+        Ok(hash)
+    }
+}
+
+/// `agora-cli wawa importar-imagen` — absorbe una imagen de dispositivo (sin
+/// montar) al grafo, vía `foreign-fs`.
+fn wawa_importar_imagen(
+    imagen: &Path,
+    salida: &Path,
+    particion: Option<usize>,
+) -> CliResult<()> {
+    use foreign_fs::particion::{
+        absorber_dispositivo, absorber_particion, detectar_fs, tabla_particiones,
+        SistemaArchivos,
+    };
+
+    let datos = fs::read(imagen)?;
+    fs::create_dir_all(salida)?;
+
+    // Enumera y reporta la tabla — orientación para el operador.
+    let particiones = tabla_particiones(&datos).map_err(Error::ForeignFs)?;
+    println!("imagen: {} ({} bytes)", imagen.display(), datos.len());
+    println!("particiones:");
+    for p in &particiones {
+        let fin = ((p.inicio + p.tam) as usize).min(datos.len());
+        let fs_str = match datos.get(p.inicio as usize..fin) {
+            Some(s) => match detectar_fs(s) {
+                SistemaArchivos::Fat => "FAT",
+                SistemaArchivos::Ext => "ext2/3/4",
+                SistemaArchivos::Desconocido => "desconocido (se omite)",
+            },
+            None => "fuera del medio",
+        };
+        println!(
+            "  [{}] {:?}  inicio={} tam={}  fs={}",
+            p.indice, p.esquema, p.inicio, p.tam, fs_str
+        );
+    }
+
+    let mut emisor = EmisorBundle::nuevo(salida);
+    let raiz = if let Some(slot) = particion {
+        let p = particiones
+            .iter()
+            .find(|p| p.indice == slot)
+            .ok_or_else(|| Error::Spec(format!("no hay partición en el slot {slot}")))?;
+        absorber_particion(&datos, p, &mut emisor)
+    } else {
+        // Por defecto: una sola partición reconocida → su FS directo (sin
+        // envoltorio); varias → árbol de dispositivo `particionN/`.
+        let reconocidas: Vec<_> = particiones
+            .iter()
+            .filter(|p| {
+                let fin = ((p.inicio + p.tam) as usize).min(datos.len());
+                datos
+                    .get(p.inicio as usize..fin)
+                    .map(|s| detectar_fs(s) != SistemaArchivos::Desconocido)
+                    .unwrap_or(false)
+            })
+            .collect();
+        match reconocidas.len() {
+            0 => {
+                return Err(Error::Spec(
+                    "ninguna partición con un FS reconocido (FAT/ext)".into(),
+                ))
+            }
+            1 => absorber_particion(&datos, reconocidas[0], &mut emisor),
+            _ => absorber_dispositivo(&datos, &mut emisor),
+        }
+    };
+
+    // Propaga un error de I/O del emisor con su detalle real.
+    let raiz = match raiz {
+        Ok(h) => h,
+        Err(foreign_fs::FsError::EmisionFallida) => {
+            return Err(emisor
+                .error_io
+                .map(Error::Io)
+                .unwrap_or(Error::ForeignFs(foreign_fs::FsError::EmisionFallida)))
+        }
+        Err(e) => return Err(Error::ForeignFs(e)),
+    };
+
+    fs::write(salida.join("raiz.txt"), format!("{}\n", hex_de(&raiz)))?;
+    let n_obj = fs::read_dir(salida)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_str().map(|n| n.ends_with(".obj")).unwrap_or(false))
+        .count();
+
+    println!();
+    println!("absorbido: {} -> {}", imagen.display(), salida.display());
+    println!("  objetos : {n_obj}");
+    println!("  raiz    : {}", hex_de(&raiz));
+    println!();
+    println!("Servir a una wawa en la misma red L2:");
+    println!(
+        "  sudo -E cargo run -p wawa-explorer-aoe --example servir_release -- <iface> {}",
+        salida.display()
+    );
+    Ok(())
 }
 
 /// `agora-cli wawa exportar` — grafo de objetos -> directorio real.

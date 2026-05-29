@@ -19,6 +19,7 @@ agora-store = { path = "../agora-store" }
 agora-keystore = { path = "../agora-keystore" }
 agora-channel = { path = "../agora-channel" }
 format = { path = "../../../shared/format" }
+foreign-fs = { path = "../../../shared/foreign-fs" }
 clap = { workspace = true }
 directories = { workspace = true }
 rand = { workspace = true }
