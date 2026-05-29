@@ -136,6 +136,11 @@ struct Model {
     /// El alpha del boost se computa cada frame como
     /// `max(0, 1 - elapsed/MUZZLE_DECAY_SECS)`.
     muzzle_glow_at: Option<Instant>,
+    /// Fase 3.23: oclusión sectorial del muzzle boost on/off (F9). Default
+    /// on — el fogonazo respeta paredes (sólo ilumina el cuarto actual y
+    /// los conectados directamente). Off vuelve al 3.22 (ilumina todo lo
+    /// que está dentro del radio, ignorando paredes).
+    muzzle_occlusion: bool,
 }
 
 /// Tiempo de decaimiento del fogonazo del arma — el boost cae de 1.0 a 0
@@ -179,6 +184,8 @@ enum Msg {
     ToggleSpriteShadows,
     /// Fase 3.22: alterna el muzzle world light (F8).
     ToggleMuzzleLight,
+    /// Fase 3.23: alterna la oclusión sectorial del muzzle (F9).
+    ToggleMuzzleOcclusion,
     Quit,
 }
 
@@ -240,6 +247,7 @@ impl App for Supay {
             sprite_shadows: true,
             muzzle_world_light: true,
             muzzle_glow_at: None,
+            muzzle_occlusion: true,
         }
     }
 
@@ -268,6 +276,9 @@ impl App for Supay {
             }
             if matches!(&e.key, Key::Named(NamedKey::F8)) {
                 return Some(Msg::ToggleMuzzleLight);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F9)) {
+                return Some(Msg::ToggleMuzzleOcclusion);
             }
             // Fase 3.17: mouse-look cosmético. PageUp = mirar arriba,
             // PageDown = mirar abajo, Home = resetear horizonte. No pasan
@@ -388,6 +399,9 @@ impl App for Supay {
                     m.muzzle_glow_at = None;
                 }
             }
+            Msg::ToggleMuzzleOcclusion => {
+                m.muzzle_occlusion = !m.muzzle_occlusion;
+            }
         }
         m
     }
@@ -416,6 +430,8 @@ impl App for Supay {
                     // el último fogonazo. Cuando el toggle está apagado
                     // o nunca disparó, alpha=0 ⇒ render no aplica boost.
                     muzzle_glow_alpha: muzzle_alpha_now(model),
+                    // Fase 3.23: oclusión sectorial del muzzle. Default on.
+                    muzzle_occlusion: model.muzzle_occlusion,
                     ..RenderConfig::default()
                 },
             )),
@@ -475,7 +491,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.22 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.23 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

@@ -54,7 +54,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -354,6 +354,16 @@ pub struct RenderConfig {
     /// jugador. Doom clásico cicla la PLAYPAL completa; esta es la
     /// modernización por sector/depth.
     pub muzzle_glow_alpha: f32,
+    /// **Fase 3.23 — oclusión sectorial del muzzle boost**. Si `true`,
+    /// el destello del arma sólo ilumina superficies del sector donde
+    /// está parado el jugador y de los sectores conectados a él por al
+    /// menos una linedef two-sided (puerta, escalón abierto, ventana).
+    /// Una pared sólida entre el jugador y un sprite/pared lejana corta
+    /// el boost: el cuarto vecino queda oscuro aunque su distancia
+    /// euclidiana esté bajo `MUZZLE_RADIUS_WORLD`. Si `false`, vuelve al
+    /// comportamiento 3.22 (boost ignora paredes). En stub sin BSP el
+    /// flag no aplica — el renderer ilumina todo igual.
+    pub muzzle_occlusion: bool,
 }
 
 impl Default for RenderConfig {
@@ -372,6 +382,7 @@ impl Default for RenderConfig {
             hud: true,
             sprite_shadows: true,
             muzzle_glow_alpha: 0.0,
+            muzzle_occlusion: true,
         }
     }
 }
@@ -448,6 +459,63 @@ fn sprite_shade_with_muzzle(shade: f32, boost: f32) -> [f32; 3] {
         (shade * tg).clamp(0.0, 1.0),
         (shade * tb).clamp(0.0, 1.0),
     ]
+}
+
+/// Fase 3.23 — conjunto de sectores que reciben el muzzle boost.
+///
+/// El destello del arma sólo ilumina superficies dentro del cuarto
+/// donde está parado el jugador y los cuartos vecinos conectados por
+/// alguna linedef two-sided (puerta, escalón abierto, ventana). Una
+/// pared sólida entre medio corta la luz — el muzzle ya no "ilumina
+/// a través de la pared" como en 3.22.
+///
+/// La heurística es barata: O(walls) por frame, sin BFS multi-nivel.
+/// Cubre los casos típicos de Doom (cuarto + sus vecinos directos) que
+/// están dentro de `MUZZLE_RADIUS_WORLD = 384`. Cuartos más lejanos
+/// quedan oscuros aunque la distancia euclidiana los alcance — es el
+/// trade-off buscado: oclusión correcta sin exponer subsector-id por
+/// sprite ni hacer raycasts.
+///
+/// Devuelve `None` cuando no hay BSP (modo stub o mapa pre-carga); en
+/// ese caso el caller debe asumir "todo lit" y aplicar el comportamiento
+/// 3.22 (boost everywhere).
+fn compute_muzzle_lit_sectors(snap: &SceneSnapshot) -> Option<HashSet<u32>> {
+    if snap.nodes.is_empty() || snap.subsectors.is_empty() {
+        return None;
+    }
+    let player_ss = subsector_at_point(&snap.nodes, snap.player.x, snap.player.y)?;
+    let ss = snap.subsectors.get(player_ss as usize)?;
+    let player_sec = ss.sector;
+    let mut lit: HashSet<u32> = HashSet::with_capacity(16);
+    lit.insert(player_sec);
+    for wall in snap.walls.iter() {
+        if wall.back_sector == NO_SECTOR {
+            continue;
+        }
+        if wall.front_sector == player_sec {
+            lit.insert(wall.back_sector);
+        } else if wall.back_sector == player_sec {
+            lit.insert(wall.front_sector);
+        }
+    }
+    Some(lit)
+}
+
+/// Gate del muzzle boost por sector cuando la oclusión está activa.
+/// `sector_id` es el sector "dueño" de la superficie (subsector.sector
+/// para planos; sprite.sector para sprites; front-side sector para la
+/// pared). Si la oclusión está activa y `sector_id ∉ lit_sectors`, la
+/// función devuelve 0 (sin boost). Sin oclusión o sin BSP devuelve el
+/// boost crudo.
+fn muzzle_boost_gated(
+    boost: f32,
+    sector_id: u32,
+    lit_sectors: Option<&HashSet<u32>>,
+) -> f32 {
+    match lit_sectors {
+        Some(lit) if !lit.contains(&sector_id) => 0.0,
+        _ => boost,
+    }
 }
 
 // =====================================================================
@@ -537,6 +605,18 @@ fn render_frame(
         Vec::new()
     };
 
+    // Fase 3.23: si la oclusión sectorial está activa y hay BSP, calculamos
+    // el conjunto de sectores iluminables por el muzzle flash una sola vez
+    // por frame. `None` ⇒ "iluminar todo" (modo stub o toggle apagado),
+    // que reproduce el comportamiento 3.22.
+    let lit_sectors: Option<HashSet<u32>> =
+        if cfg.muzzle_occlusion && cfg.muzzle_glow_alpha > 0.0 {
+            compute_muzzle_lit_sectors(snap)
+        } else {
+            None
+        };
+    let lit_ref = lit_sectors.as_ref();
+
     let cap = snap.walls.len() * (cfg.wall_bands as usize * 2 + 2)
         + snap.subsectors.len() * 2
         + snap.sprites.len();
@@ -554,6 +634,7 @@ fn render_frame(
                 &rect,
                 cfg,
                 bsp_depth,
+                lit_ref,
             );
         }
     }
@@ -568,10 +649,11 @@ fn render_frame(
             &rect,
             cfg,
             use_subsectors,
+            lit_ref,
         );
     }
     for sprite in snap.sprites.iter() {
-        gather_sprite(&mut renderables, sprite, snap, &cam, &proj, cfg);
+        gather_sprite(&mut renderables, sprite, snap, &cam, &proj, cfg, lit_ref);
     }
     renderables.sort_by(|a, b| {
         b.depth
@@ -779,6 +861,7 @@ fn gather_wall(
     rect: &PaintRect,
     cfg: &RenderConfig,
     skip_fake_floor: bool,
+    lit_sectors: Option<&HashSet<u32>>,
 ) {
     // Front/back side por convención Doom.
     let cross = (wall.x2 - wall.x1) * (cam.py - wall.y1)
@@ -864,7 +947,12 @@ fn gather_wall(
     let depth = (mid_x * mid_x + mid_y * mid_y).sqrt();
     // Fase 3.22: boost del muzzle flash en el midpoint de la pared.
     // Cae con distancia² desde el jugador (en cam-space player = origen).
-    let muzzle_boost = muzzle_boost_cam(mid_x, mid_y, cfg.muzzle_glow_alpha);
+    // Fase 3.23: gateado por el sector "near" del wall (el lado del que
+    // miramos). Si ese sector no está en el lit set (cuarto inalcanzable
+    // desde el player por linedef two-sided directo), el boost se anula
+    // — la pared queda como en escena base, sin tinte cálido.
+    let muzzle_boost_raw = muzzle_boost_cam(mid_x, mid_y, cfg.muzzle_glow_alpha);
+    let muzzle_boost = muzzle_boost_gated(muzzle_boost_raw, near_idx, lit_sectors);
 
     // -----------------------------------------------------------------
     // Floor & ceiling strips ("fake floor") — fallback de 3.1 cuando no
@@ -1312,6 +1400,7 @@ fn gather_subsector_planes(
     rect: &PaintRect,
     cfg: &RenderConfig,
     bsp_depth_override: Option<f32>,
+    lit_sectors: Option<&HashSet<u32>>,
 ) {
     if sub.num_segs < 2 {
         return;
@@ -1381,7 +1470,10 @@ fn gather_subsector_planes(
     };
     let shade_depth = (centroid_cx * centroid_cx + centroid_cy * centroid_cy).sqrt();
     // Fase 3.22: muzzle boost en el centroide del plano (en cam-space).
-    let muzzle_boost = muzzle_boost_cam(centroid_cx, centroid_cy, cfg.muzzle_glow_alpha);
+    // Fase 3.23: gateado por `sub.sector` — si el subsector no está en
+    // el cuarto del player ni en uno vecino directo, no recibe tinte.
+    let muzzle_boost_raw = muzzle_boost_cam(centroid_cx, centroid_cy, cfg.muzzle_glow_alpha);
+    let muzzle_boost = muzzle_boost_gated(muzzle_boost_raw, sub.sector, lit_sectors);
     // Depth para painter's sort:
     // - Con BSP (Fase 3.13), usamos el depth asignado por la travesía
     //   back-to-front del árbol — orden correcto Doom, elimina glitches
@@ -1718,6 +1810,7 @@ fn gather_sprite(
     cam: &Camera,
     proj: &Projection,
     cfg: &RenderConfig,
+    lit_sectors: Option<&HashSet<u32>>,
 ) {
     let (x_cam, y_cam) = cam.to_cam_2d(sprite.x, sprite.y);
     if x_cam < cfg.near {
@@ -1784,7 +1877,12 @@ fn gather_sprite(
             // full-bright (proyectiles, fire frames) ya estaban a luz plena
             // y reciben el tinte amarillo sin saturarse — `sprite_shade_with_muzzle`
             // clampea ≤ 1.0 por canal.
-            let muzzle_boost = muzzle_boost_cam(x_cam, y_cam, cfg.muzzle_glow_alpha);
+            // Fase 3.23: gateado por `sprite.sector` — un imp atrás de una
+            // pared sólida no se ilumina aunque la distancia euclidiana
+            // del player lo alcance.
+            let muzzle_boost_raw = muzzle_boost_cam(x_cam, y_cam, cfg.muzzle_glow_alpha);
+            let muzzle_boost =
+                muzzle_boost_gated(muzzle_boost_raw, sprite.sector, lit_sectors);
             let shade_rgb = sprite_shade_with_muzzle(shade, muzzle_boost);
             let img = make_tinted_sprite_image_rgb(&patch, shade_rgb);
             // Mirror = pintamos espejado: scale_x negativo + corrimiento.
@@ -1817,7 +1915,8 @@ fn gather_sprite(
     path.line_to(tr);
     path.line_to(br);
     path.close_path();
-    let boost = muzzle_boost_cam(x_cam, y_cam, cfg.muzzle_glow_alpha);
+    let boost_raw = muzzle_boost_cam(x_cam, y_cam, cfg.muzzle_glow_alpha);
+    let boost = muzzle_boost_gated(boost_raw, sprite.sector, lit_sectors);
     out.push(Renderable {
         depth,
         color: apply_muzzle_tint(sprite_color(sprite, sec, depth, cfg), boost),
@@ -3623,5 +3722,110 @@ mod tests {
         assert!(s[1] > s[2], "G > B");
         // Todos los canales clampean ≤ 1.0.
         assert!(s[0] <= 1.0 && s[1] <= 1.0 && s[2] <= 1.0);
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.23: oclusión sectorial del muzzle boost
+    // -----------------------------------------------------------------
+
+    /// Construye un snapshot con el BSP de 2 hojas y un set de paredes
+    /// que conectan el sector 0 (player room) al 1 vía two-sided, y
+    /// dejan el sector 2 aislado (sólo paredes one-sided).
+    fn snap_with_adjacency() -> SceneSnapshot {
+        let mk_sector = || SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 160,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sectors = Arc::from(vec![mk_sector(), mk_sector(), mk_sector()]);
+        // 2 subsectores: ss0 → sector 0 (player), ss1 → sector 1.
+        snap.subsectors = Arc::from(vec![
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+            SubsectorSnap { sector: 1, first_seg: 0, num_segs: 0 },
+        ]);
+        snap.nodes = Arc::from(simple_two_leaf_bsp());
+        // Player en (-10, 0) ⇒ subsector 0 ⇒ sector 0 (ver
+        // `subsector_at_point_picks_leaf_containing_point`).
+        snap.player.x = -10.0;
+        snap.player.y = 0.0;
+
+        let wall = |fs: u32, bs: u32| WallSeg {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 0.0,
+            y2: 0.0,
+            front_sector: fs,
+            back_sector: bs,
+            flags: 0,
+            textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
+        };
+        snap.walls = Arc::from(vec![
+            // 0↔1 two-sided: el muzzle del player en 0 ilumina al 1.
+            wall(0, 1),
+            // Sector 2: sólo paredes one-sided ⇒ no conecta con player.
+            wall(2, NO_SECTOR),
+        ]);
+        snap
+    }
+
+    #[test]
+    fn lit_sectors_includes_player_sector() {
+        let snap = snap_with_adjacency();
+        let lit = compute_muzzle_lit_sectors(&snap).expect("BSP disponible");
+        assert!(lit.contains(&0), "sector del player siempre lit");
+    }
+
+    #[test]
+    fn lit_sectors_includes_adjacent_via_twosided() {
+        let snap = snap_with_adjacency();
+        let lit = compute_muzzle_lit_sectors(&snap).expect("BSP disponible");
+        assert!(lit.contains(&1), "vecino directo via two-sided lit");
+    }
+
+    #[test]
+    fn lit_sectors_excludes_unconnected_sector() {
+        let snap = snap_with_adjacency();
+        let lit = compute_muzzle_lit_sectors(&snap).expect("BSP disponible");
+        assert!(
+            !lit.contains(&2),
+            "sector aislado (sólo one-sided) no entra al lit set"
+        );
+    }
+
+    #[test]
+    fn lit_sectors_none_without_bsp() {
+        // Stub mode: sin nodes BSP devuelve None ⇒ "lit everywhere"
+        // (3.22 behavior preservado en stub).
+        let snap = SceneSnapshot::empty(0);
+        assert!(compute_muzzle_lit_sectors(&snap).is_none());
+    }
+
+    #[test]
+    fn muzzle_boost_gated_passes_through_when_lit_none() {
+        // Sin lit set (modo stub o toggle apagado), el boost pasa
+        // sin gating — equivalente a 3.22.
+        let b = muzzle_boost_gated(0.3, 42, None);
+        assert!((b - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn muzzle_boost_gated_keeps_when_sector_in_lit() {
+        let mut lit = HashSet::new();
+        lit.insert(7_u32);
+        let b = muzzle_boost_gated(0.3, 7, Some(&lit));
+        assert!((b - 0.3).abs() < 1e-6, "sector 7 está en lit ⇒ boost intacto");
+    }
+
+    #[test]
+    fn muzzle_boost_gated_zeroes_when_sector_not_in_lit() {
+        let mut lit = HashSet::new();
+        lit.insert(7_u32);
+        let b = muzzle_boost_gated(0.3, 99, Some(&lit));
+        assert_eq!(b, 0.0, "sector 99 no está en lit ⇒ boost gateado a 0");
     }
 }
