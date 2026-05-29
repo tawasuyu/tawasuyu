@@ -5863,6 +5863,44 @@ mod tests {
         assert_eq!(rt.eval("s").expect("e"), JsValue::String("Hi!".into()));
     }
 
+    // ============= Fase 7.53 — btoa / atob =============
+
+    #[test]
+    fn btoa_codifica_base64() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var a = btoa('Hello'); var b = btoa('M'); var c = btoa('Ma');").expect("e");
+        assert_eq!(rt.eval("a").expect("e"), JsValue::String("SGVsbG8=".into()));
+        assert_eq!(rt.eval("b").expect("e"), JsValue::String("TQ==".into()));
+        assert_eq!(rt.eval("c").expect("e"), JsValue::String("TWE=".into()));
+    }
+
+    #[test]
+    fn atob_decodifica_base64() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var a = atob('SGVsbG8='); var b = atob('TQ==');").expect("e");
+        assert_eq!(rt.eval("a").expect("e"), JsValue::String("Hello".into()));
+        assert_eq!(rt.eval("b").expect("e"), JsValue::String("M".into()));
+    }
+
+    #[test]
+    fn btoa_atob_round_trip_y_btoa_rechaza_no_latin1() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Construimos el binary string en runtime (bytes 0 y 255 incluidos)
+        // para no embeber un NUL literal en el source.
+        rt.eval(
+            "var s = String.fromCharCode(98,105,0,255,33); \
+             var ok = atob(btoa(s)) === s;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        // '€' = U+20AC (8364) está fuera de Latin1 → btoa debe tirar.
+        let threw = rt.eval(
+            "var threw = false; try { btoa('€'); } catch (e) { threw = true; } threw;",
+        )
+        .expect("e");
+        assert_eq!(threw, JsValue::Bool(true));
+    }
+
     // ============= Fase 7.37 — URL relativa contra base =============
 
     #[test]

@@ -14,6 +14,7 @@ mod blob;
 mod objecturl;
 mod urlsearchparams;
 mod textcodec;
+mod base64;
 mod fetch;
 mod headers;
 mod abort;
@@ -34,6 +35,7 @@ pub(crate) use blob::BLOB_BOOTSTRAP;
 pub(crate) use objecturl::OBJECT_URL_BOOTSTRAP;
 pub(crate) use urlsearchparams::URLSEARCHPARAMS_BOOTSTRAP;
 pub(crate) use textcodec::TEXTCODEC_BOOTSTRAP;
+pub(crate) use base64::BASE64_BOOTSTRAP;
 pub(crate) use fetch::FETCH_BOOTSTRAP;
 pub(crate) use headers::HEADERS_BOOTSTRAP;
 pub(crate) use abort::ABORT_BOOTSTRAP;
@@ -56,6 +58,7 @@ pub(crate) const ALL: &[&str] = &[
     OBJECT_URL_BOOTSTRAP,
     URLSEARCHPARAMS_BOOTSTRAP,
     TEXTCODEC_BOOTSTRAP,
+    BASE64_BOOTSTRAP,
     FETCH_BOOTSTRAP,
     HEADERS_BOOTSTRAP,
     ABORT_BOOTSTRAP,
