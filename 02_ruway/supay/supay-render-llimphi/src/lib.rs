@@ -461,20 +461,35 @@ fn sprite_shade_with_muzzle(shade: f32, boost: f32) -> [f32; 3] {
     ]
 }
 
-/// Fase 3.23 — conjunto de sectores que reciben el muzzle boost.
+/// Fase 3.24 — máximo de saltos del BFS de sectores iluminables.
+///
+/// 1 hop = vecino directo del jugador (puerta/ventana inmediata).
+/// 2 hops = vecino del vecino — cubre escenarios típicos de Doom donde
+/// el flash debería alcanzar el siguiente cuarto a través de una puerta
+/// abierta sin necesidad de R_CheckSight completo. >2 hops empieza a
+/// "filtrar" luz por geometrías retorcidas sin agregar valor visual; el
+/// radio físico (`MUZZLE_RADIUS_WORLD`) ya cortaría antes en la mayoría.
+const MUZZLE_BFS_MAX_HOPS: usize = 2;
+
+/// Fase 3.23 (BFS desde 3.24) — conjunto de sectores que reciben el
+/// muzzle boost.
 ///
 /// El destello del arma sólo ilumina superficies dentro del cuarto
-/// donde está parado el jugador y los cuartos vecinos conectados por
-/// alguna linedef two-sided (puerta, escalón abierto, ventana). Una
-/// pared sólida entre medio corta la luz — el muzzle ya no "ilumina
-/// a través de la pared" como en 3.22.
+/// donde está parado el jugador y los cuartos alcanzables a `≤
+/// MUZZLE_BFS_MAX_HOPS` linedefs two-sided **cuyos midpoints están
+/// dentro de `MUZZLE_RADIUS_WORLD`** del jugador. Esto extiende la
+/// adyacencia simple de 3.23 a 2 niveles cuando la geometría lo
+/// permite (puertas en cadena, balcones), pero descarta paredes lejanas
+/// que serían un "puente" físicamente irrelevante.
 ///
-/// La heurística es barata: O(walls) por frame, sin BFS multi-nivel.
-/// Cubre los casos típicos de Doom (cuarto + sus vecinos directos) que
-/// están dentro de `MUZZLE_RADIUS_WORLD = 384`. Cuartos más lejanos
-/// quedan oscuros aunque la distancia euclidiana los alcance — es el
-/// trade-off buscado: oclusión correcta sin exponer subsector-id por
-/// sprite ni hacer raycasts.
+/// Una pared sólida entre medio corta la luz — el muzzle ya no "ilumina
+/// a través de la pared" como en 3.22, y la propagación se queda en el
+/// vecino directo si el siguiente bridge wall está fuera del radio
+/// (3.24 sobre 3.23).
+///
+/// La heurística es barata: O(walls · hops) por frame. Cubre los casos
+/// típicos de Doom (cuarto + sus vecinos + vecinos-del-vecino conexos)
+/// sin exponer subsector-id por sprite ni hacer raycasts.
 ///
 /// Devuelve `None` cuando no hay BSP (modo stub o mapa pre-carga); en
 /// ese caso el caller debe asumir "todo lit" y aplicar el comportamiento
@@ -488,15 +503,40 @@ fn compute_muzzle_lit_sectors(snap: &SceneSnapshot) -> Option<HashSet<u32>> {
     let player_sec = ss.sector;
     let mut lit: HashSet<u32> = HashSet::with_capacity(16);
     lit.insert(player_sec);
-    for wall in snap.walls.iter() {
-        if wall.back_sector == NO_SECTOR {
-            continue;
+    let r2 = MUZZLE_RADIUS_WORLD * MUZZLE_RADIUS_WORLD;
+    let mut frontier: Vec<u32> = vec![player_sec];
+    for _ in 0..MUZZLE_BFS_MAX_HOPS {
+        let mut next_frontier: Vec<u32> = Vec::new();
+        for wall in snap.walls.iter() {
+            if wall.back_sector == NO_SECTOR {
+                continue;
+            }
+            // Filtrado por radio físico: si el midpoint de la pared
+            // que serviría de "puente" está fuera del disco del muzzle,
+            // no propagamos. Evita iluminar habitaciones colgadas al
+            // final de pasillos largos que técnicamente vecinean pero
+            // quedan oscuras en la práctica.
+            let mx = (wall.x1 + wall.x2) * 0.5;
+            let my = (wall.y1 + wall.y2) * 0.5;
+            let dx = mx - snap.player.x;
+            let dy = my - snap.player.y;
+            if dx * dx + dy * dy > r2 {
+                continue;
+            }
+            let a = wall.front_sector;
+            let b = wall.back_sector;
+            let in_a = frontier.contains(&a);
+            let in_b = frontier.contains(&b);
+            if in_a && !in_b && lit.insert(b) {
+                next_frontier.push(b);
+            } else if in_b && !in_a && lit.insert(a) {
+                next_frontier.push(a);
+            }
         }
-        if wall.front_sector == player_sec {
-            lit.insert(wall.back_sector);
-        } else if wall.back_sector == player_sec {
-            lit.insert(wall.front_sector);
+        if next_frontier.is_empty() {
+            break;
         }
+        frontier = next_frontier;
     }
     Some(lit)
 }
@@ -3827,5 +3867,105 @@ mod tests {
         lit.insert(7_u32);
         let b = muzzle_boost_gated(0.3, 99, Some(&lit));
         assert_eq!(b, 0.0, "sector 99 no está en lit ⇒ boost gateado a 0");
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.24: BFS multi-hop + filtro por radio del bridge wall
+    // -----------------------------------------------------------------
+
+    /// Snap con una cadena de sectores 0→1→2→3 vía paredes two-sided
+    /// + sector 5 colgado al jugador por un bridge wall lejano.
+    /// Player en (-10, 0) ⇒ subsector 0 ⇒ sector 0.
+    fn snap_with_chain() -> SceneSnapshot {
+        let mk_sector = || SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 160,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sectors = Arc::from(vec![
+            mk_sector(),
+            mk_sector(),
+            mk_sector(),
+            mk_sector(),
+            mk_sector(),
+            mk_sector(),
+        ]);
+        snap.subsectors = Arc::from(vec![
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+            SubsectorSnap { sector: 1, first_seg: 0, num_segs: 0 },
+        ]);
+        snap.nodes = Arc::from(simple_two_leaf_bsp());
+        snap.player.x = -10.0;
+        snap.player.y = 0.0;
+
+        // Pared con midpoint en `(mx, my)` (segmento `[mx, my]→[mx, my]`
+        // → midpoint trivial). Suficiente para el test del radius filter
+        // del BFS — la geometría real no importa.
+        let wall = |fs: u32, bs: u32, mx: f32, my: f32| WallSeg {
+            x1: mx,
+            y1: my,
+            x2: mx,
+            y2: my,
+            front_sector: fs,
+            back_sector: bs,
+            flags: 0,
+            textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
+        };
+        // Cadena 0↔1↔2↔3 con midpoints crecientes en X. Todos dentro
+        // del radio salvo el último W23 a 200 unidades (aún dentro de
+        // 384 desde player=-10 → distancia 210 < 384). El sector 3
+        // queda fuera del lit por hops>MAX (2), no por radio.
+        //
+        // Bridge wall lejano 0↔5 con midpoint a 500 — fuera del radio
+        // desde player=-10 (distancia 510 > 384). Sector 5 no entra al
+        // lit pese a ser vecino directo.
+        snap.walls = Arc::from(vec![
+            wall(0, 1, 0.0, 0.0),     // hop 1: dist 10 → ✓
+            wall(1, 2, 50.0, 0.0),    // hop 2: dist 60 → ✓
+            wall(2, 3, 200.0, 0.0),   // hop 3 (no se llega por MAX=2)
+            wall(0, 5, 500.0, 0.0),   // hop 1 pero bridge fuera del radio
+        ]);
+        snap
+    }
+
+    #[test]
+    fn lit_sectors_includes_two_hop_neighbor_within_radius() {
+        // BFS llega a sector 2 vía W01 (hop 1) + W12 (hop 2). Ambos
+        // bridge walls dentro del radio físico.
+        let snap = snap_with_chain();
+        let lit = compute_muzzle_lit_sectors(&snap).expect("BSP disponible");
+        assert!(lit.contains(&0), "sector del player");
+        assert!(lit.contains(&1), "vecino directo");
+        assert!(lit.contains(&2), "vecino-del-vecino dentro del radio");
+    }
+
+    #[test]
+    fn lit_sectors_bfs_stops_at_max_hops() {
+        // Sector 3 requeriría hop 3 (MAX=2 corta). Aunque W23 está dentro
+        // del radio, el BFS ya no lo alcanza.
+        let snap = snap_with_chain();
+        let lit = compute_muzzle_lit_sectors(&snap).expect("BSP disponible");
+        assert!(
+            !lit.contains(&3),
+            "sector a 3 hops no entra al lit (MAX_HOPS=2)"
+        );
+    }
+
+    #[test]
+    fn lit_sectors_excludes_one_hop_when_bridge_wall_beyond_radius() {
+        // Sector 5 es vecino directo de 0 (W05), pero el midpoint del
+        // bridge está a >MUZZLE_RADIUS_WORLD del jugador. El filtro
+        // descarta el wall del BFS aunque la adyacencia exista.
+        let snap = snap_with_chain();
+        let lit = compute_muzzle_lit_sectors(&snap).expect("BSP disponible");
+        assert!(
+            !lit.contains(&5),
+            "vecino directo con bridge wall fuera de MUZZLE_RADIUS no entra al lit"
+        );
     }
 }
