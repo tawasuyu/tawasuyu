@@ -1,0 +1,13 @@
+[package]
+name = "media-source-flac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+media-core = { path = "../media-core" }
+# symphonia con el feature `flac` (decoder + demuxer FLAC nativo, puro-Rust).
+# La feature se declara en el dep raíz del workspace.
+symphonia = { workspace = true }

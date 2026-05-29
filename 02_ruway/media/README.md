@@ -27,7 +27,8 @@ Mascota: un calcetín — guarda cosas, se pierde, abriga.
 |-----------------------|----------------------------------------------------------------------|
 | `media-core`          | traits `FrameSource` / `AudioSource` + primitivas comunes (probe, espectro, pausa, volumen, mixer, switcher, waterfall, niveles, subtítulos) |
 | `media-source-wav`    | WAV (hound) → `AudioSource + Seekable`                               |
-| `media-source-mp3`    | MP3 (symphonia, sólo feature `mp3`) → `AudioSource + Seekable`       |
+| `media-source-mp3`    | MP3 (symphonia, feature `mp3`) → `AudioSource + Seekable`            |
+| `media-source-flac`   | **FLAC nativo** (puro-Rust, symphonia feature `flac`) → `AudioSource + Seekable`. Lossless patent-free; par sin pérdida del Opus. Ver su README. |
 | `media-source-opus`   | **Opus nativo** (puro-Rust, opus-wave) sobre Ogg → `AudioSource + Seekable`. Formato de audio nativo de gioser, par del video AV1. Ver su README. |
 | `media-source-webm`   | **Demux Matroska/WebM nativo** (matroska-demuxer): un `.webm`/`.mkv` AV1+Opus alimenta los decoders nativos (av1 + opus) → reproducción 100% puro-Rust. Ver su README. |
 | `shared/foreign-av`   | MP4/WebM/MKV/MOV/AVI/FLV via ffmpeg subprocess — 1 proceso por archivo (audio + video desde el mismo ffmpeg vía pipes dup'eados a fd 3/4). **Vive en `shared/foreign-*`** (regla dura #4: formatos ajenos por puente). Ofrece además `transcode_a_av1` (ingesta al formato nativo). |

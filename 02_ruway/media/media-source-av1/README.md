@@ -49,12 +49,14 @@ ffmpeg -f lavfi -i testsrc=size=320x240:rate=30:duration=2 \
 cargo run -p media-source-av1 --example av1_decode --release -- clip.ivf
 ```
 
-## Pendiente: audio Opus nativo
+## Audio: par nativo
 
-El audio nativo de gioser es Opus, pero no hay decoder Opus puro-Rust
-maduro (symphonia trae mp3/vorbis/flac/aac, no Opus). Hasta entonces el
-audio de un AV1+Opus se saca por `shared/foreign-av`. Este crate cubre
-sólo el video.
+Este crate cubre sólo el video. El audio nativo de gioser es **Opus**
+(`media-source-opus`, puro-Rust vía opus-wave); el lossless es **FLAC**
+(`media-source-flac`, vía symphonia). Un `.webm` AV1+Opus se reproduce
+100% nativo uniendo `media-source-av1` + `media-source-opus` por
+`media-source-webm` (demux Matroska). H.264/H.265/AAC entran por
+`shared/foreign-av`.
 
 ## Tests
 

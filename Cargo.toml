@@ -277,6 +277,7 @@ members = [
     "02_ruway/media/media-core",
     "02_ruway/media/media-recorder-wav",
     "02_ruway/media/media-source-av1",
+    "02_ruway/media/media-source-flac",
     "02_ruway/media/media-source-gif",
     "02_ruway/media/media-source-opus",
     "02_ruway/media/media-source-webm",
@@ -768,12 +769,12 @@ cpal = "0.15"
 # stems de prueba sin meter ffmpeg/symphonia.
 hound = "3.5"
 
-# === media-source-mp3 (decoder MP3 vía symphonia) ===
-# symphonia es una colección de decoders puro-Rust mantenida; con sólo
-# las features `mp3` + `isomp4` arrastra lo mínimo para reproducir un
-# MP3 desde disco. Sin features extra: nada de aac/flac/opus/vorbis
-# para no inflar el target.
-symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
+# === media-source-mp3 + media-source-flac (decoders vía symphonia) ===
+# symphonia es una colección de decoders puro-Rust mantenida. `mp3` cubre
+# media-source-mp3; `flac` (decoder + demuxer FLAC nativo) cubre
+# media-source-flac — lossless patent-free, par lossless del Opus nativo.
+# Sin más features: nada de aac/opus/vorbis para no inflar el target.
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac"] }
 
 # === media-source-opus (decoder Opus NATIVO puro-Rust) ===
 # Opus es el formato de audio nativo de gioser (par del video AV1). ogg
