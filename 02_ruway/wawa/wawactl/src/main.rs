@@ -152,6 +152,28 @@ enum Cmd {
         #[command(subcommand)]
         op: ClavesCmd,
     },
+    /// Fase 63 :: dispara una compactacion del grafo del kernel de Wawa de
+    /// forma remota, sobre el MISMO virtio-console que `daemon-firma`. Emite
+    /// `wawactl::gc_request::` por el canal y espera el veredicto
+    /// `wawactl::gc_reply::vivos=N muertos=M sectores=A->B` (timeout 30 s).
+    /// Es la cara host-side de la syscall `sys_grafo_compactar` (Fase 53) y
+    /// de la palanca `Alt+G` (Fase 57) — el operador fuerza el GC desde el
+    /// anfitrion sin tocar el teclado del huesped.
+    ///
+    /// Uso tipico (QEMU con virtio-console mapeado a un char device/socket):
+    ///   wawactl gc --char-device /dev/pts/N
+    Gc {
+        /// Path al char device / socket del virtio-console (el mismo backend
+        /// que `daemon-firma --char-device`). Alias: `--virtio-port`.
+        #[arg(long = "char-device")]
+        char_device: Option<String>,
+        /// Alias de `--char-device`.
+        #[arg(long = "virtio-port")]
+        virtio_port: Option<String>,
+        /// Segundos a esperar el veredicto antes de rendirse. Default 30.
+        #[arg(long, default_value_t = 30u64)]
+        timeout: u64,
+    },
     DaemonFirma {
         /// LEGACY (Fase 38/39) :: path al PTY/dispositivo serial que QEMU
         /// expone como COM1. Activa el parser ASCII
@@ -261,6 +283,18 @@ fn run(cmd: Cmd) -> Result<(), String> {
             ClavesCmd::Forjar { slot, salida } => cmd_claves_forjar(slot, &salida),
             ClavesCmd::DerivarPubkey { clave_privada } => cmd_claves_derivar_pubkey(&clave_privada),
         },
+        Cmd::Gc {
+            char_device,
+            virtio_port,
+            timeout,
+        } => {
+            let path = char_device.or(virtio_port).ok_or_else(|| {
+                "gc requiere --char-device <PATH> (o --virtio-port), el backend del \
+                 virtio-console expuesto por QEMU"
+                    .to_string()
+            })?;
+            cmd_gc(&path, timeout)
+        }
         Cmd::DaemonFirma {
             pty,
             char_device,
@@ -785,6 +819,92 @@ enum DecisionOperador {
 /// FASE 39/41/49 :: subcomando `daemon-firma`. Crea un runtime tokio y
 /// delega en el ejecutor que case con el `ModoTransporte`. Devolver
 /// `Err` aqui imprime al stderr de wawactl y sale con codigo no-cero.
+/// FASE 63 :: lo que el host emite por el virtio-console para pedir un GC.
+/// Terminado en '\n' — el lado kernel (`control.rs`) parsea por lineas.
+const GC_REQUEST: &[u8] = b"wawactl::gc_request::\n";
+
+/// FASE 63 :: prefijo de la respuesta del kernel. El cuerpo es
+/// `vivos=N muertos=M sectores=A->B` o `error::<motivo>`.
+const GC_REPLY_PREFIJO: &[u8] = b"wawactl::gc_reply::";
+
+/// FASE 63 :: subcomando `wawactl gc`. Abre el virtio-console, emite el
+/// `gc_request` y espera la linea de veredicto con timeout. Operacion de un
+/// solo disparo: ni demonio ni estado persistente.
+fn cmd_gc(transporte_path: &str, timeout_s: u64) -> Result<(), String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("no pude construir el runtime tokio: {e}"))?;
+    rt.block_on(ejecutar_gc(transporte_path.to_string(), timeout_s))
+}
+
+async fn ejecutar_gc(transporte_path: String, timeout_s: u64) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&transporte_path)
+        .await
+        .map_err(|e| format!("no pude abrir {transporte_path}: {e}"))?;
+    let (mut reader, mut writer) = tokio::io::split(file);
+
+    writer
+        .write_all(GC_REQUEST)
+        .await
+        .map_err(|e| format!("no pude emitir gc_request: {e}"))?;
+    writer.flush().await.ok();
+    eprintln!("wawactl: gc_request emitido a {transporte_path}; esperando veredicto…");
+
+    // Acumular el RX y escanear linea a linea hasta hallar el reply. La
+    // ventana tolera basura previa (trazas de boot, ecos del propio request).
+    let mut acc: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 256];
+    let leer = async {
+        loop {
+            let n = reader
+                .read(&mut chunk)
+                .await
+                .map_err(|e| format!("error leyendo del transporte: {e}"))?;
+            if n == 0 {
+                return Err("transporte cerrado antes del veredicto".to_string());
+            }
+            acc.extend_from_slice(&chunk[..n]);
+            if let Some(linea) = extraer_gc_reply(&acc) {
+                return Ok(linea);
+            }
+        }
+    };
+
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_s), leer).await {
+        Ok(Ok(linea)) => {
+            println!("{linea}");
+            Ok(())
+        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(format!(
+            "timeout: el kernel no respondio en {timeout_s} s \
+             (¿vivo el huesped? ¿es el char device correcto?)"
+        )),
+    }
+}
+
+/// Escanea `buf` linea a linea (terminadas en '\n') buscando la que empiece
+/// por `wawactl::gc_reply::`. Devuelve su contenido sin el salto de linea.
+/// `None` si aun no llego una linea de reply completa.
+fn extraer_gc_reply(buf: &[u8]) -> Option<String> {
+    let mut inicio = 0;
+    while inicio < buf.len() {
+        let fin = buf[inicio..].iter().position(|&b| b == b'\n')? + inicio;
+        let linea = &buf[inicio..fin];
+        if linea.starts_with(GC_REPLY_PREFIJO) {
+            return Some(String::from_utf8_lossy(linea).trim_end().to_string());
+        }
+        inicio = fin + 1;
+    }
+    None
+}
+
 fn cmd_daemon_firma(
     transporte: &str,
     modo: ModoTransporte,
@@ -1317,5 +1437,31 @@ mod pruebas_clasificador {
             TipoSolicitud::Configuracion.etiqueta_audit(),
             "configuracion"
         );
+    }
+
+    #[test]
+    fn gc_reply_extrae_veredicto_entre_basura() {
+        // El kernel emite trazas de boot y la baliza serial intercaladas;
+        // el parser debe pescar la linea de reply sin tropezar.
+        let flujo = b"renaser :: boot ok\ngc :: remoto\n\
+                      wawactl::gc_reply::vivos=42 muertos=7 sectores=100->58\nmas ruido\n";
+        let linea = extraer_gc_reply(flujo).expect("debe hallar el reply");
+        assert_eq!(linea, "wawactl::gc_reply::vivos=42 muertos=7 sectores=100->58");
+    }
+
+    #[test]
+    fn gc_reply_incompleto_es_none() {
+        // Sin '\n' tras el prefijo aun no hay linea completa: hay que seguir
+        // leyendo del transporte.
+        assert!(extraer_gc_reply(b"wawactl::gc_reply::vivos=1 muertos=0").is_none());
+        assert!(extraer_gc_reply(b"").is_none());
+        assert!(extraer_gc_reply(b"trazas sin reply\nmas trazas\n").is_none());
+    }
+
+    #[test]
+    fn gc_reply_reconoce_error() {
+        let flujo = b"wawactl::gc_reply::error::almacen no inicializado\n";
+        let linea = extraer_gc_reply(flujo).expect("debe hallar el reply de error");
+        assert_eq!(linea, "wawactl::gc_reply::error::almacen no inicializado");
     }
 }

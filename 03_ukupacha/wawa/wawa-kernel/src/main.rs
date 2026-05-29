@@ -52,6 +52,7 @@ mod baliza;
 mod claves;
 mod compositor;
 mod consola;
+mod control;
 mod drivers;
 mod gdt;
 mod grafico;
@@ -930,6 +931,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // voz del kernel suena por la bocina del PIT como hasta la Fase 61.
     if drivers::sonido::disponible() {
         ejecutor.spawn(tarea_sonido());
+    }
+    // FASE 63 :: si hay virtio-console, una tarea del reactor escucha el canal
+    // de control host->kernel (`wawactl gc`). Sin dispositivo, no se engendra:
+    // la palanca de compactacion sigue viva por `Alt+G` y por el tic ocioso.
+    if drivers::consola_virtio::montada() {
+        ejecutor.spawn(control::tarea_consola_control());
     }
     // FASE 15 :: la voz del sistema da los buenos dias con un acorde de Do
     // mayor. La tarea del compositor lo hara sonar nota a nota una vez que
