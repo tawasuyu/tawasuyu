@@ -1,12 +1,12 @@
 //! `llimphi-widget-wawa-mark` — sello vectorial del SO wawa.
 //!
-//! ## Spec (2026-05-29)
+//! ## Spec (revisión 2026-05-29)
 //!
 //! Identidad nominal **implícita**: el rombo de fondo lleva la paleta
-//! oficial (Azul Índigo / Púrpura Profundo) y un único trazo blanco
-//! continuo, fino y angular dibuja una 'W' geométrica perfectamente
-//! simétrica usando las aristas del grafo. No hay tipografía superpuesta
-//! ni letras pintadas — sólo geometría.
+//! oficial (Azul Índigo / Púrpura Profundo) y los trazos blancos forman
+//! las letras **"WA"** pero geométricamente — no son tipografía, son
+//! aristas internas que rebotan en los mismos 45° del rombo, así dan
+//! sensación de facetas talladas dentro del diamante.
 //!
 //! ### Composición
 //!
@@ -14,44 +14,49 @@
 //!    visible: índigo arriba, púrpura abajo. El degradado lineal cubre
 //!    toda la altura del rombo (no sólo la mitad), de modo que el cambio
 //!    de tono es continuo.
-//! 2. **Trazo de 'W' implícita** — un solo `BezPath` que arranca en la
-//!    zona media-izquierda (cuadrante azul), baja al valle del cuadrante
-//!    púrpura inferior-izquierdo, sube hasta tocar el centro exacto de
-//!    la sutura azul/púrpura (el ecuador `y = mid`), baja simétricamente
-//!    al valle púrpura inferior-derecho y sube a morir en la zona
-//!    media-derecha del cuadrante azul. Cinco vértices, cuatro segmentos.
+//! 2. **Trazo "WA"** — un único `BezPath` con dos subtrazos:
+//!    - **W** (izquierda): zigzag de 4 segmentos, todos a 45° (matching
+//!      las aristas del rombo). Picos en la sutura azul/púrpura
+//!      (y = 0.50), valles en y = 0.60. Cinco vértices, cuatro segmentos.
+//!    - **A** (derecha): triángulo abierto formado por dos legs a 45°
+//!      + un crossbar horizontal a mitad de altura. Tres segmentos.
+//!    Las strokes diagonales (6 de las 7) son paralelas a las aristas
+//!    del rombo, por eso "leen" como filos cortados del diamante en vez
+//!    de letras pintadas encima.
 //! 3. **Merkle Core** — punto luminoso con halo en el pico central de
-//!    la 'W' (sobre la sutura). Es el nodo raíz que amarra el sistema.
+//!    la W (sobre la sutura, donde azul y púrpura se encuentran). Es el
+//!    nodo raíz que amarra el sistema.
 //!
 //! ### Geometría (en coords normalizadas `[0, 1] × [0, 1]` del rect)
 //!
 //! ```text
-//!                      Top
-//!                       ◇
-//!                      / \
-//!                     /   \           ← azul índigo
-//!                P0  ●     ●  P4      ← y ≈ 0.46  (media-izq / media-der)
-//!                   /\     /\
-//!                  /  \   /  \
-//!                 /    ★ /    \       ← P2 = pico medio (sutura, y = 0.50)
-//!                /    /│ \     \         + Merkle Core
-//!     Left  ◇──/───/──┼──\──\───◇  Right
-//!              /  /   │   \  \
-//!             ●─/     │     \─●        ← púrpura profundo
-//!             P1      │      P3       ← y ≈ 0.78  (valles)
-//!               \     │     /
-//!                \    │    /
-//!                 \   │   /
-//!                  \  │  /
-//!                   \ │ /
-//!                    \│/
-//!                     ◇
-//!                   Bottom
+//!                            Top
+//!                             ◇
+//!                            / \
+//!                           /   \              ← azul índigo
+//!                          /     \
+//!                P0    P2★    P4 A1
+//!                  ●─.   ●  .─●  ●─.  .─●     ← y = 0.50 (sutura)
+//!                     ╲ ╱ ╲ ╱     ╲      ╱
+//!                      ╳   ╳       ╲────╱     ← crossbar A (y=0.55)
+//!                     ╱ ╲ ╱ ╲     ╱      ╲
+//!                  ●─'   ●  '─●  ●─'    '─●  ← y = 0.60 (valles/pies)
+//!                P1    P3    A0    A2
+//!                          ↑
+//!                          gap entre W y A
+//!     Left  ◇─────────────────────────────────◇  Right
+//!                          (sutura, y = 0.50)
+//!                          /
+//!                         /
+//!                        /                     ← púrpura profundo
+//!                       /
+//!                      ◇
+//!                    Bottom
 //! ```
 //!
-//! Las coords están elegidas para que (a) los segmentos sean diagonales
-//! con pendiente ~constante, dando una 'W' visualmente simétrica, y (b)
-//! todos los puntos queden bien dentro del rombo (sin sangrar al borde).
+//! Las strokes diagonales todas a slope ±1, igual que las aristas del
+//! rombo. El crossbar de la A es la única horizontal — concesión mínima
+//! a la legibilidad de la letra, queda subordinado al patrón diamante.
 //!
 //! ## Uso
 //!
@@ -164,39 +169,76 @@ pub fn paint_mark(
 
     scene.fill(Fill::NonZero, Affine::IDENTITY, &gradient, None, &rhombus);
 
-    // === 2) 'W' implícita ===
+    // === 2) "WA" implícita ===
     //
     // Coords en porcentaje del rombo (origen = esquina top-left del bbox
-    // del rombo = (cx-half, cy-half), unidad = side). Los valores fueron
-    // ajustados para que la 'W' quede inscrita con holgura y los
-    // segmentos sean visualmente equilibrados.
-    //
-    // - P0/P4 = (0.22, 0.46) y (0.78, 0.46)  → media-izq / media-der
-    //   en zona azul, ligeramente arriba de la sutura.
-    // - P1/P3 = (0.34, 0.78) y (0.66, 0.78)  → valles en cuadrante púrpura.
-    // - P2 = (0.50, 0.50)                     → pico central sobre la sutura.
+    // del rombo = (cx-half, cy-half), unidad = side). Toda stroke diagonal
+    // tiene |dy/dx| = 1 (paralela a las aristas del rombo) — por eso lee
+    // como faceta del diamante en vez de letra dibujada encima.
     let coord = |fx: f64, fy: f64| -> Point {
         Point::new(
             cx - half + fx * side,
             cy - half + fy * side,
         )
     };
-    let p0 = coord(0.22, 0.46);
-    let p1 = coord(0.34, 0.78);
-    let p2 = coord(0.50, 0.50);
-    let p3 = coord(0.66, 0.78);
-    let p4 = coord(0.78, 0.46);
 
-    let mut w_path = BezPath::new();
-    w_path.move_to(p0);
-    w_path.line_to(p1);
-    w_path.line_to(p2);
-    w_path.line_to(p3);
-    w_path.line_to(p4);
+    // Unidad de escala: span vertical de las letras. dx==dy en cada leg
+    // hace que las strokes corran a 45° exactos (mismo ángulo que las
+    // aristas del rombo). Probado para que WA quede inscrita con holgura
+    // en el rombo a cualquier escala — al achicar (32px) sigue legible,
+    // al ampliar (300px) no se ve disperso.
+    let unit: f64 = 0.10;
+    // Línea de picos en la sutura azul/púrpura.
+    let top_y = 0.50;
+    // Línea de valles/pies en el cuadrante púrpura inferior.
+    let bot_y = top_y + unit;
 
-    // Espesor escalable: ~2.3% del lado del rombo. A 128px = ~3px;
-    // a 256px = ~6px. Mantiene nitidez sin engordar.
-    let stroke_w = (side * 0.023).max(1.0);
+    // ---- W (zigzag de 4 segmentos) ----
+    // Centramos la composición WA: span total ≈ 0.61 (W 0.36 + gap 0.03
+    // + A 0.18 + holgura). Empezamos en x = 0.19 para que el centro
+    // óptico de WA caiga cerca de x = 0.50.
+    let w_left = 0.20;
+    let p0 = coord(w_left + 0.0 * unit, top_y);
+    let p1 = coord(w_left + 1.0 * unit, bot_y);
+    let p2 = coord(w_left + 2.0 * unit, top_y);
+    let p3 = coord(w_left + 3.0 * unit, bot_y);
+    let p4 = coord(w_left + 4.0 * unit, top_y);
+
+    // ---- A (legs + crossbar) ----
+    // Gap entre W y A — apenas un respiro para que no se confundan en
+    // un solo zigzag.
+    let gap = 0.04;
+    let a_left = w_left + 4.0 * unit + gap;
+    let a0 = coord(a_left + 0.0 * unit, bot_y);
+    let a1 = coord(a_left + 1.0 * unit, top_y);
+    let a2 = coord(a_left + 2.0 * unit, bot_y);
+    // Crossbar a mitad de altura, en el tercio interno de cada leg para
+    // que no toque las puntas (queda más A que H).
+    let cross_y = (top_y + bot_y) * 0.5 + 0.005; // un toque debajo del medio óptico
+    let c_offset = 0.30 * unit;
+    let cb0 = coord(a_left + 0.0 * unit + c_offset, cross_y);
+    let cb1 = coord(a_left + 2.0 * unit - c_offset, cross_y);
+
+    // Un único BezPath con cuatro subtrazos (move_to abre subtrazo nuevo).
+    let mut wa = BezPath::new();
+    // W
+    wa.move_to(p0);
+    wa.line_to(p1);
+    wa.line_to(p2);
+    wa.line_to(p3);
+    wa.line_to(p4);
+    // A — legs.
+    wa.move_to(a0);
+    wa.line_to(a1);
+    wa.line_to(a2);
+    // A — crossbar (horizontal, único trazo no diagonal).
+    wa.move_to(cb0);
+    wa.line_to(cb1);
+
+    // Espesor escalable: ~2.0% del lado del rombo. Levemente más fino
+    // que la W sola, porque ahora hay 7 strokes en vez de 4 y conviene
+    // bajar densidad.
+    let stroke_w = (side * 0.020).max(1.0);
     let stroke = Stroke::new(stroke_w)
         .with_join(llimphi_ui::llimphi_raster::kurbo::Join::Miter)
         .with_caps(llimphi_ui::llimphi_raster::kurbo::Cap::Butt);
@@ -206,22 +248,16 @@ pub fn paint_mark(
         Affine::IDENTITY,
         palette.stroke,
         None,
-        &w_path,
+        &wa,
     );
 
     // === 3) Merkle Core ===
     //
-    // Punto luminoso sobre P2 — el pico central de la 'W', en la sutura
-    // exacta entre azul y púrpura. Renderizamos un halo (círculo grande
-    // semi-transparente) + un núcleo (círculo pequeño opaco) para
-    // sensación de glow sin necesidad de blur de verdad.
+    // Sobre P2 — pico central de la W, en la sutura exacta entre azul y
+    // púrpura. Halo amplio semi-transparente + núcleo opaco compacto
+    // dan sensación de glow sin blur real.
     let core_r = (side * 0.018).max(1.2);
     let halo_r = core_r * 2.6;
-
-    // Halo: mismo color que el core pero con alpha bajo, encima del
-    // trazo de la W para que tape la intersección. Usamos add mode no:
-    // mejor un solo fill blando, que es lo que pide la spec ("punto
-    // luminoso", no "destello de cámara").
     let halo_color = with_alpha(palette.core, 0.30);
     scene.push_layer(Mix::Normal, 1.0, Affine::IDENTITY, &Circle::new(p2, halo_r));
     scene.fill(
@@ -232,8 +268,6 @@ pub fn paint_mark(
         &Circle::new(p2, halo_r),
     );
     scene.pop_layer();
-
-    // Core opaco.
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
