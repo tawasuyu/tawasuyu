@@ -258,21 +258,18 @@ pub(crate) fn attr(node: &Handle, name: &str) -> Option<String> {
     None
 }
 
-/// Lee todos los atributos de un Element cuyo nombre empieza con
-/// `prefix` (case-insensitive). Devuelve la lista `(suffix, value)` —
-/// `suffix` es el nombre del atributo SIN el prefijo, preservando el
-/// caso original. Pensado para `data-*` (Fase 7.11) y `aria-*` futuros.
-pub(crate) fn attrs_with_prefix(node: &Handle, prefix: &str) -> Vec<(String, String)> {
+/// Lee TODOS los atributos del Element. Devuelve `(name_lowercase,
+/// value)`. Pensado para el `attributes` general del `BoxNode`, que
+/// alimenta `el.getAttribute(name)` desde JS (Fase 7.16). Si el nodo no
+/// es un Element, devuelve vacío.
+pub(crate) fn all_attrs(node: &Handle) -> Vec<(String, String)> {
     let NodeData::Element { attrs, .. } = &node.data else {
         return Vec::new();
     };
     let attrs: &RefCell<Vec<markup5ever::interface::Attribute>> = attrs;
     let mut out = Vec::new();
     for a in attrs.borrow().iter() {
-        let name = a.name.local.as_ref();
-        if name.len() > prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix) {
-            out.push((name[prefix.len()..].to_string(), a.value.to_string()));
-        }
+        out.push((a.name.local.as_ref().to_ascii_lowercase(), a.value.to_string()));
     }
     out
 }

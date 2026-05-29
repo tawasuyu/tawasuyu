@@ -170,7 +170,7 @@ globalThis.__puriy_tick = function(now) {
 const EVENTS_BOOTSTRAP: &str = r#"
 globalThis.__puriy_elements = {};
 globalThis.__puriy_dirty = [];
-globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id, dataset_pairs) {
+globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id, dataset_pairs, attribute_pairs) {
     var el = {
         _id: id,
         tagName: tag,
@@ -405,6 +405,21 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             el._dataset_store[dataset_pairs[di][0]] = dataset_pairs[di][1];
         }
     }
+    // Fase 7.16 — _attributes_store guarda TODOS los atributos del
+    // elemento como `{ <full-kebab-name>: <value> }`. Alimenta
+    // `el.getAttribute(name)` / `setAttribute` / `hasAttribute` /
+    // `removeAttribute` para nombres no especiales (`aria-*`, `href`,
+    // `src`, `title`, `role`, etc.). Las ramas especiales (`id`/
+    // `class`/`value`/`data-*`) siguen routeando a sus propias APIs
+    // específicas; este store NO las espeja para evitar drift de
+    // sincronización (la fuente única sigue siendo `_id`/`_classList`/
+    // `_value`/`_dataset_store`).
+    el._attributes_store = {};
+    if (attribute_pairs) {
+        for (var ai = 0; ai < attribute_pairs.length; ai++) {
+            el._attributes_store[attribute_pairs[ai][0]] = attribute_pairs[ai][1];
+        }
+    }
     el.dataset = new Proxy(el._dataset_store, {
         get: function(target, prop) {
             if (typeof prop !== 'string') return undefined;
@@ -580,42 +595,47 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     el.focus = function() {
         globalThis.__puriy_dispatch(el._id, 'focus', null);
     };
-    // Fase 7.15 — getAttribute/setAttribute/hasAttribute/removeAttribute.
-    // Routea por name a las APIs específicas que ya manejamos:
+    // Fase 7.15/7.16 — getAttribute/setAttribute/hasAttribute/removeAttribute.
+    // Routea por name:
     //   - 'id'    → el._id / setter de id (reindexa)
     //   - 'class' → _classList join/set
     //   - 'value' → _value (publica mutación 'value')
     //   - 'data-*' → _dataset_store + mutación 'dataset:*'
-    //   - 'aria-*' / cualquier otro: NO soportado (devuelve null / no
-    //     publica). Cuando aparezca caso real con aria, agregamos
-    //     attributes generic en el BoxNode.
+    //   - cualquier otro (`aria-*`, `href`, `src`, `title`, `role`...):
+    //     _attributes_store + mutación 'attr:<kebab>' / 'attr-remove:<kebab>'.
+    // Los names se normalizan a lowercase para matchear el formato del
+    // store (los attrs HTML son case-insensitive en parse pero el spec
+    // del DOM API los devuelve lowercase).
     el.getAttribute = function(name) {
         if (typeof name !== 'string') return null;
-        if (name === 'id') return el._id || null;
-        if (name === 'class') return el._classList.join(' ') || null;
-        if (name === 'value') return el._value;
-        if (name.indexOf('data-') === 0) {
+        var n = name.toLowerCase();
+        if (n === 'id') return el._id || null;
+        if (n === 'class') return el._classList.join(' ') || null;
+        if (n === 'value') return el._value;
+        if (n.indexOf('data-') === 0) {
             // El _dataset_store guarda con key SIN el prefix 'data-'
             // (ese es el formato del dataset proxy de Fase 7.11).
-            var suffix = name.slice(5);
+            var suffix = n.slice(5);
             var v = el._dataset_store[suffix];
             return v == null ? null : v;
         }
-        return null;
+        var av = el._attributes_store[n];
+        return av == null ? null : av;
     };
     el.setAttribute = function(name, value) {
         if (typeof name !== 'string') return;
+        var n = name.toLowerCase();
         var v = String(value);
-        if (name === 'id') { el.id = v; return; }
-        if (name === 'class') { el.className = v; return; }
-        if (name === 'value') {
+        if (n === 'id') { el.id = v; return; }
+        if (n === 'class') { el.className = v; return; }
+        if (n === 'value') {
             // Mismo path que el.value setter.
             el._value = v;
             globalThis.__puriy_dirty.push({id: el._id, kind: 'value', value: v});
             return;
         }
-        if (name.indexOf('data-') === 0) {
-            var suffix = name.slice(5);
+        if (n.indexOf('data-') === 0) {
+            var suffix = n.slice(5);
             el._dataset_store[suffix] = v;
             globalThis.__puriy_dirty.push({
                 id: el._id,
@@ -624,25 +644,34 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             });
             return;
         }
-        // Otros attrs: no-op (warning silencioso por ahora).
+        // Fase 7.16 — attrs genéricos. Se almacenan localmente Y se
+        // publican como mutación 'attr:<name>' al chrome.
+        el._attributes_store[n] = v;
+        globalThis.__puriy_dirty.push({
+            id: el._id,
+            kind: 'attr:' + n,
+            value: v
+        });
     };
     el.hasAttribute = function(name) {
         if (typeof name !== 'string') return false;
-        if (name === 'id') return !!el._id;
-        if (name === 'class') return el._classList.length > 0;
-        if (name === 'value') return el._value !== '';
-        if (name.indexOf('data-') === 0) {
-            return Object.prototype.hasOwnProperty.call(el._dataset_store, name.slice(5));
+        var n = name.toLowerCase();
+        if (n === 'id') return !!el._id;
+        if (n === 'class') return el._classList.length > 0;
+        if (n === 'value') return el._value !== '';
+        if (n.indexOf('data-') === 0) {
+            return Object.prototype.hasOwnProperty.call(el._dataset_store, n.slice(5));
         }
-        return false;
+        return Object.prototype.hasOwnProperty.call(el._attributes_store, n);
     };
     el.removeAttribute = function(name) {
         if (typeof name !== 'string') return;
-        if (name === 'id') { el.id = ''; return; }
-        if (name === 'class') { el.className = ''; return; }
-        if (name === 'value') { el.value = ''; return; }
-        if (name.indexOf('data-') === 0) {
-            var suffix = name.slice(5);
+        var n = name.toLowerCase();
+        if (n === 'id') { el.id = ''; return; }
+        if (n === 'class') { el.className = ''; return; }
+        if (n === 'value') { el.value = ''; return; }
+        if (n.indexOf('data-') === 0) {
+            var suffix = n.slice(5);
             delete el._dataset_store[suffix];
             globalThis.__puriy_dirty.push({
                 id: el._id,
@@ -651,6 +680,13 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             });
             return;
         }
+        // Fase 7.16 — attrs genéricos.
+        delete el._attributes_store[n];
+        globalThis.__puriy_dirty.push({
+            id: el._id,
+            kind: 'attr-remove:' + n,
+            value: ''
+        });
     };
     el.blur = function() {
         globalThis.__puriy_dispatch(el._id, 'blur', null);
@@ -1213,8 +1249,24 @@ impl JsRuntime {
                 ds_arr.push(']');
             }
             ds_arr.push(']');
+            // Fase 7.16 — attributes: array de [name, value] pairs con
+            // TODOS los atributos del elemento (lowercase name).
+            // Alimenta `el.getAttribute(name)` para cualquier atributo
+            // no especial (aria-*, href, src, role, title, etc.).
+            let mut attr_arr = String::from("[");
+            for (i, (k, v)) in el.attributes.iter().enumerate() {
+                if i > 0 {
+                    attr_arr.push(',');
+                }
+                attr_arr.push('[');
+                attr_arr.push_str(&js_string_literal(k));
+                attr_arr.push(',');
+                attr_arr.push_str(&js_string_literal(v));
+                attr_arr.push(']');
+            }
+            attr_arr.push(']');
             script.push_str(&format!(
-                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val}, {parent}, {ds});\n",
+                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val}, {parent}, {ds}, {attrs});\n",
                 id = js_string_literal(&el.id),
                 tag = js_string_literal(&el.tag_name),
                 text = js_string_literal(&el.text_content),
@@ -1222,6 +1274,7 @@ impl JsRuntime {
                 val = value_arg,
                 parent = parent_arg,
                 ds = ds_arr,
+                attrs = attr_arr,
             ));
         }
         // Reset del buffer de dirty para que mutaciones de la página
@@ -1629,6 +1682,13 @@ pub struct ElementSnapshot {
     /// Pasado al `el.dataset` proxy: `el.dataset.fooBar` se mapea al
     /// suffix `foo-bar` (kebab → camel en JS). Fase 7.11.
     pub dataset: Vec<(String, String)>,
+    /// **Todos** los atributos del elemento, como `(name_lowercase,
+    /// value)`. Incluye `data-*`, `aria-*`, `href`, `src`, `title`,
+    /// `role`, etc. Pasado al `_attributes_store` del elemento JS para
+    /// que `el.getAttribute(name)` devuelva el valor para names que NO
+    /// estén capturados por una rama especial (`id`/`class`/`value`/
+    /// `data-*`). Fase 7.16.
+    pub attributes: Vec<(String, String)>,
 }
 
 /// Init opcional para [`JsRuntime::dispatch_event`]. Lleva los campos
@@ -2485,6 +2545,7 @@ mod tests {
             value: None,
             parent_id: None,
             dataset: Vec::new(),
+            attributes: Vec::new(),
         }
     }
 
@@ -2497,6 +2558,7 @@ mod tests {
             value: None,
             parent_id: None,
             dataset: Vec::new(),
+            attributes: Vec::new(),
         }
     }
 
@@ -2509,6 +2571,7 @@ mod tests {
             value: Some(value.into()),
             parent_id: None,
             dataset: Vec::new(),
+            attributes: Vec::new(),
         }
     }
 
@@ -2521,10 +2584,18 @@ mod tests {
             value: None,
             parent_id: Some(parent_id.into()),
             dataset: Vec::new(),
+            attributes: Vec::new(),
         }
     }
 
     fn snap_with_dataset(id: &str, tag: &str, dataset: &[(&str, &str)]) -> ElementSnapshot {
+        // Reflejamos los data-* también en attributes — así un test que
+        // construya un snapshot con `data-foo` puede leerlo tanto desde
+        // `el.dataset.foo` como desde `el.getAttribute('data-foo')`.
+        let attributes = dataset
+            .iter()
+            .map(|(k, v)| (format!("data-{}", k), v.to_string()))
+            .collect();
         ElementSnapshot {
             id: id.into(),
             tag_name: tag.into(),
@@ -2533,6 +2604,20 @@ mod tests {
             value: None,
             parent_id: None,
             dataset: dataset.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            attributes,
+        }
+    }
+
+    fn snap_with_attrs(id: &str, tag: &str, attrs: &[(&str, &str)]) -> ElementSnapshot {
+        ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: attrs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
         }
     }
 
@@ -3766,6 +3851,7 @@ mod tests {
             value: Some("hola".into()),
             parent_id: None,
             dataset: vec![("role".into(), "main".into())],
+            attributes: vec![("data-role".into(), "main".into())],
         }])
         .expect("e");
         let v = rt.eval("document.getElementById('x').getAttribute('id')").expect("e");
@@ -3841,6 +3927,7 @@ mod tests {
             value: None,
             parent_id: None,
             dataset: vec![("role".into(), "main".into())],
+            attributes: vec![("data-role".into(), "main".into())],
         }])
         .expect("e");
         rt.drain_dom_mutations();
@@ -3852,20 +3939,72 @@ mod tests {
         assert_eq!(v, JsValue::Null);
     }
 
+    // Fase 7.16 — attrs genéricos (aria-*, href, src...) ahora se publican
+    // como `attr:<name>` y se reflejan tanto en _attributes_store como en
+    // el BoxNode al aplicar la mutación.
     #[test]
-    fn set_attribute_no_soportado_es_noop() {
+    fn set_attribute_generico_publica_attr_mutation() {
         let mut rt = JsRuntime::new().expect("rt");
         rt.set_document("t", "u", "b").expect("d");
         rt.set_elements(&[snap("x", "div", "")]).expect("e");
         rt.drain_dom_mutations();
-        // aria-label no está soportado todavía — no debería crash ni
-        // publicar mutaciones.
         rt.eval("document.getElementById('x').setAttribute('aria-label', 'main nav')")
             .expect("e");
-        assert!(rt.drain_dom_mutations().is_empty());
-        // getAttribute devuelve null para attrs no-tracked.
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "attr:aria-label");
+        assert_eq!(muts[0].value, "main nav");
+        // El getter reflexivo devuelve el value seteado.
         let v = rt.eval("document.getElementById('x').getAttribute('aria-label')").expect("e");
+        assert_eq!(v, JsValue::String("main nav".into()));
+        // hasAttribute lo reconoce.
+        let v = rt.eval("document.getElementById('x').hasAttribute('aria-label')").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn get_attribute_lee_attribute_initial_del_snapshot() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_attrs("x", "a", &[
+            ("href", "https://gioser.net"),
+            ("aria-current", "page"),
+            ("title", "ir a inicio"),
+        ])])
+        .expect("e");
+        let v = rt.eval("document.getElementById('x').getAttribute('href')").expect("e");
+        assert_eq!(v, JsValue::String("https://gioser.net".into()));
+        let v = rt.eval("document.getElementById('x').getAttribute('aria-current')").expect("e");
+        assert_eq!(v, JsValue::String("page".into()));
+        // hasAttribute true para los presentes, false para los ausentes.
+        assert_eq!(
+            rt.eval("document.getElementById('x').hasAttribute('title')").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("document.getElementById('x').hasAttribute('rel')").expect("e"),
+            JsValue::Bool(false)
+        );
+        // Name uppercased en JS se normaliza a lowercase para matchear el store.
+        let v = rt.eval("document.getElementById('x').getAttribute('HREF')").expect("e");
+        assert_eq!(v, JsValue::String("https://gioser.net".into()));
+    }
+
+    #[test]
+    fn remove_attribute_generico_publica_attr_remove() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_attrs("x", "a", &[("href", "https://x.io")])])
+            .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval("document.getElementById('x').removeAttribute('href')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "attr-remove:href");
+        let v = rt.eval("document.getElementById('x').getAttribute('href')").expect("e");
         assert_eq!(v, JsValue::Null);
+        let v = rt.eval("document.getElementById('x').hasAttribute('href')").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
     }
 
     #[test]

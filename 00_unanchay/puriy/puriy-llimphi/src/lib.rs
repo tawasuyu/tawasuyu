@@ -1941,6 +1941,16 @@ fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
             } else {
                 None
             };
+            // Fase 7.16 — dataset filtra los attrs por prefijo data-,
+            // preservando el suffix sin prefijo (kebab) como key. attributes
+            // lleva el set completo (data-*, aria-*, href, src, role, etc.)
+            // con names lowercased — alimenta el _attributes_store del JS
+            // para `el.getAttribute(name)` genérico.
+            let dataset = b
+                .dataset()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
             out.push(puriy_js::ElementSnapshot {
                 id: id.to_string(),
                 tag_name,
@@ -1948,7 +1958,8 @@ fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
                 class_list: b.class_list.clone(),
                 value,
                 parent_id: parent_id.map(String::from),
-                dataset: b.dataset.clone(),
+                dataset,
+                attributes: b.attributes.clone(),
             });
         }
         // Si yo tengo id, los hijos me ven como su parent. Si no, los
@@ -2228,6 +2239,16 @@ fn apply_dom_mutations(t: &mut TabState) {
             // Fase 7.11: delete el.dataset.fooBar publica con kind =
             // "dataset-remove:foo-bar".
             bt.remove_element_dataset(&m.id, key);
+        } else if let Some(name) = m.kind.strip_prefix("attr:") {
+            // Fase 7.16: el.setAttribute(name, value) publica con kind =
+            // "attr:<name-lowercase>" para atributos no especiales
+            // (aria-*, href, src, title, role, etc.). El name viene ya
+            // lowercased desde el harness JS.
+            bt.set_element_attribute(&m.id, name, &m.value);
+        } else if let Some(name) = m.kind.strip_prefix("attr-remove:") {
+            // Fase 7.16: el.removeAttribute(name) publica con kind =
+            // "attr-remove:<name-lowercase>".
+            bt.remove_element_attribute(&m.id, name);
         } else if m.kind == "value" {
             // Fase 7.9: el.value = X aplica al TextInputState (para
             // <input>/<textarea>) o al SelectState (para <select>).
@@ -4699,7 +4720,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "btn".into(),
             tag_name: "button".into(),
-            text_content: "click me".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
+            text_content: "click me".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("set_elements");
         rt.eval(
@@ -4761,7 +4782,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "out".into(),
             tag_name: "div".into(),
-            text_content: "antes".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
+            text_content: "antes".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("set_elements");
         rt.eval(
@@ -4793,7 +4814,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "clock".into(),
             tag_name: "span".into(),
-            text_content: "00:00".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
+            text_content: "00:00".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.set_now_ms(0).expect("now");
@@ -4853,7 +4874,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -4892,7 +4913,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
+            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -4913,7 +4934,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "i".into(),
             tag_name: "input".into(),
-            text_content: "".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
+            text_content: "".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -4943,7 +4964,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
+            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
@@ -5062,7 +5083,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some("viejo".into()),
             parent_id: None,
-            dataset: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval("document.getElementById('x').value = 'nuevo'")
@@ -5091,7 +5112,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some("es".into()),
             parent_id: None,
-            dataset: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval("document.getElementById('lang').value = 'en'")
@@ -5112,7 +5133,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some(String::new()),
             parent_id: None,
-            dataset: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -5224,7 +5245,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval("document.getElementById('x').dataset.role = 'main'")
@@ -5234,7 +5255,7 @@ mod tests {
         let mut found = false;
         bt.walk(|b| {
             if b.element_id.as_deref() == Some("x") {
-                if b.dataset.iter().any(|(k, v)| k == "role" && v == "main") {
+                if b.dataset().iter().any(|(k, v)| *k == "role" && *v == "main") {
                     found = true;
                 }
             }
@@ -5257,7 +5278,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -5301,7 +5322,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: None,
-                dataset: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(),
             },
             puriy_js::ElementSnapshot {
                 id: "a".into(),
@@ -5310,7 +5331,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: Some("list".into()),
-                dataset: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(),
             },
         ])
         .expect("e");
@@ -5353,7 +5374,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: None,
-                dataset: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(),
             },
             puriy_js::ElementSnapshot {
                 id: "a".into(),
@@ -5362,7 +5383,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: Some("list".into()),
-                dataset: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(),
             },
         ])
         .expect("e");
@@ -5401,7 +5422,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: None,
-                dataset: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(),
             },
         ])
         .expect("e");
@@ -5442,7 +5463,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -5486,7 +5507,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(),
         }])
         .expect("e");
         // textContent inicial via el payload del appendChild.
@@ -5528,6 +5549,7 @@ mod tests {
             value: None,
             parent_id: None,
             dataset: vec![("role".into(), "main".into())],
+            attributes: vec![("data-role".into(), "main".into())],
         }])
         .expect("e");
         rt.eval("delete document.getElementById('x').dataset.role")
@@ -5537,11 +5559,93 @@ mod tests {
         let mut still_there = false;
         bt.walk(|b| {
             if b.element_id.as_deref() == Some("x") {
-                if b.dataset.iter().any(|(k, _)| k == "role") {
+                if b.dataset().iter().any(|(k, _)| *k == "role") {
                     still_there = true;
                 }
             }
         });
         assert!(!still_there, "data-role no debería existir tras el delete");
+    }
+
+    // ============= Fase 7.16 — attributes genéricos =============
+
+    #[test]
+    fn collect_element_snapshots_pobla_attributes_completo() {
+        let tree = parse(
+            r#"<body><a id="nav" href="https://gioser.net" aria-current="page" data-track="hero" rel="noopener">x</a></body>"#,
+        );
+        let snaps = collect_element_snapshots(&tree);
+        let s = snaps.iter().find(|s| s.id == "nav").expect("found");
+        // attributes incluye TODOS los attrs (data-*, aria-*, href, rel, id).
+        assert!(s.attributes.iter().any(|(k, v)| k == "href" && v == "https://gioser.net"));
+        assert!(s.attributes.iter().any(|(k, v)| k == "aria-current" && v == "page"));
+        assert!(s.attributes.iter().any(|(k, v)| k == "data-track" && v == "hero"));
+        assert!(s.attributes.iter().any(|(k, v)| k == "rel" && v == "noopener"));
+        // dataset sigue filtrando sólo data-* sin prefijo.
+        assert!(s.dataset.iter().any(|(k, v)| k == "track" && v == "hero"));
+        assert!(s.dataset.iter().all(|(k, _)| !k.starts_with("data-")));
+    }
+
+    #[test]
+    fn apply_attr_mutation_actualiza_box_tree() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><div id="x">y</div></body>"#));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "x".into(),
+            tag_name: "div".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+        }])
+        .expect("e");
+        rt.eval("document.getElementById('x').setAttribute('aria-label', 'main')")
+            .expect("e");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("x")
+                && b.attributes.iter().any(|(k, v)| k == "aria-label" && v == "main")
+            {
+                found = true;
+            }
+        });
+        assert!(found, "setAttribute debería poblar attributes en el BoxTree");
+    }
+
+    #[test]
+    fn apply_attr_remove_mutation_quita_la_key() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><a id="x" href="/old">y</a></body>"#));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "x".into(),
+            tag_name: "a".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: vec![("href".into(), "/old".into())],
+        }])
+        .expect("e");
+        rt.eval("document.getElementById('x').removeAttribute('href')").expect("e");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut still = false;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("x")
+                && b.attributes.iter().any(|(k, _)| k == "href")
+            {
+                still = true;
+            }
+        });
+        assert!(!still, "removeAttribute debe quitar href del BoxTree");
     }
 }

@@ -238,11 +238,44 @@ pub struct BoxNode {
     /// pueda indexar elementos por class y soportar `querySelector('.foo')`
     /// — Fase 7.8.
     pub class_list: Vec<String>,
-    /// Atributos `data-*` del elemento — el sufijo después de `data-`
-    /// como key (sin transformar) y el valor del atributo. Para que
-    /// `el.dataset.foo` desde JS funcione — Fase 7.11. Vacío para
-    /// nodos sin data attrs.
-    pub dataset: Vec<(String, String)>,
+    /// **Todos** los atributos HTML del elemento (name lowercased + value
+    /// literal). Esto incluye `data-*`, `aria-*`, `href`, `src`, `title`,
+    /// `role`, etc. Los atributos ya parseados como campos dedicados
+    /// (`id`, `class`, `href` para links, `src` para imgs, `value` para
+    /// inputs) también aparecen acá — son redundantes pero permiten que
+    /// `getAttribute('id')` funcione uniformemente desde JS sin sub-rutas.
+    /// Fase 7.16. Antes (7.11) este campo se llamaba `dataset` y sólo
+    /// guardaba los `data-*` sin prefijo.
+    pub attributes: Vec<(String, String)>,
+}
+
+impl BoxNode {
+    /// Filtra `attributes` por prefijo `data-` y devuelve `(suffix, value)`.
+    /// Spec del `el.dataset` API: `data-foo-bar` → key `foo-bar`. Cada
+    /// llamada recorre los atributos; para nodos con miles no es óptimo
+    /// pero es lo esperado para el uso típico (<10 attrs por elemento).
+    /// Fase 7.16 — antes vivía como campo separado `dataset`.
+    pub fn dataset(&self) -> Vec<(&str, &str)> {
+        let mut out = Vec::new();
+        for (k, v) in &self.attributes {
+            if let Some(rest) = strip_data_prefix(k) {
+                out.push((rest, v.as_str()));
+            }
+        }
+        out
+    }
+}
+
+/// Devuelve el sufijo si `name` empieza con `data-` (case-insensitive),
+/// o `None` en caso contrario. Helper local porque `attributes` guarda
+/// nombres lowercased; el matching es sobre prefix de 5 bytes ASCII.
+fn strip_data_prefix(name: &str) -> Option<&str> {
+    let b = name.as_bytes();
+    if b.len() > 5 && b[..5].eq_ignore_ascii_case(b"data-") {
+        Some(&name[5..])
+    } else {
+        None
+    }
 }
 
 /// Escena SVG minimal: lista de primitivas + viewBox opcional.
@@ -446,17 +479,30 @@ impl BoxTree {
         set_element_style_inner(&mut self.root, id, prop, value)
     }
 
-    /// Setea / actualiza un atributo `data-<key>` del nodo `id`. `key`
-    /// va sin el prefijo `data-`. Devuelve `true` si encontró el nodo.
-    /// Fase 7.11 — `el.dataset.foo = 'bar'` publica esta mutación.
-    pub fn set_element_dataset(&mut self, id: &str, key: &str, value: &str) -> bool {
-        set_dataset_inner(&mut self.root, id, key, Some(value))
+    /// Setea / actualiza el atributo `name` del nodo `id`. `name` va con
+    /// su prefijo completo (`data-foo`, `aria-checked`, `href`, etc.) y
+    /// debe venir ya en lowercase kebab. Devuelve `true` si encontró el
+    /// nodo. Fase 7.16 — `el.setAttribute(name, value)` publica esta
+    /// mutación; también la usan internamente los setters `data-*`.
+    pub fn set_element_attribute(&mut self, id: &str, name: &str, value: &str) -> bool {
+        set_attribute_inner(&mut self.root, id, name, Some(value))
     }
 
-    /// Borra el atributo `data-<key>` del nodo `id`. Devuelve `true` si
-    /// encontró el nodo (haya o no existido la key). Fase 7.11.
+    /// Borra el atributo `name` del nodo `id`. Devuelve `true` si
+    /// encontró el nodo (haya o no existido la key). Fase 7.16.
+    pub fn remove_element_attribute(&mut self, id: &str, name: &str) -> bool {
+        set_attribute_inner(&mut self.root, id, name, None)
+    }
+
+    /// Wrapper sobre `set_element_attribute` que reconstruye `data-<key>`
+    /// para preservar la API de Fase 7.11. `key` va sin prefijo.
+    pub fn set_element_dataset(&mut self, id: &str, key: &str, value: &str) -> bool {
+        self.set_element_attribute(id, &format!("data-{}", key), value)
+    }
+
+    /// Wrapper sobre `remove_element_attribute`. Fase 7.11/7.16.
     pub fn remove_element_dataset(&mut self, id: &str, key: &str) -> bool {
-        set_dataset_inner(&mut self.root, id, key, None)
+        self.remove_element_attribute(id, &format!("data-{}", key))
     }
 
     /// Agrega `child` como último hijo del nodo `parent_id`. Fase 7.12.
@@ -624,21 +670,21 @@ fn find_node_mut<'a>(root: &'a mut BoxNode, target: &str) -> Option<&'a mut BoxN
     None
 }
 
-fn set_dataset_inner(
+fn set_attribute_inner(
     node: &mut BoxNode,
     target: &str,
-    key: &str,
+    name: &str,
     value: Option<&str>,
 ) -> bool {
     if node.element_id.as_deref() == Some(target) {
-        node.dataset.retain(|(k, _)| k != key);
+        node.attributes.retain(|(k, _)| k != name);
         if let Some(v) = value {
-            node.dataset.push((key.to_string(), v.to_string()));
+            node.attributes.push((name.to_string(), v.to_string()));
         }
         return true;
     }
     for c in node.children.iter_mut() {
-        if set_dataset_inner(c, target, key, value) {
+        if set_attribute_inner(c, target, name, value) {
             return true;
         }
     }
@@ -1390,7 +1436,7 @@ fn empty_root() -> BoxNode {
         svg: None,
         element_id: None,
         class_list: Vec::new(),
-        dataset: Vec::new(),
+        attributes: Vec::new(),
     }
 }
 
@@ -1758,7 +1804,7 @@ fn build_node(
                             .collect()
                     })
                     .unwrap_or_default(),
-                dataset: dom::attrs_with_prefix(node, "data-"),
+                attributes: dom::all_attrs(node),
             })
         }
         NodeData::Text { contents } => {
@@ -1874,7 +1920,7 @@ fn build_node(
         svg: None,
         element_id: None,
         class_list: Vec::new(),
-        dataset: Vec::new(),
+        attributes: Vec::new(),
             })
         }
     }
@@ -1960,7 +2006,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         svg: None,
         element_id: None,
         class_list: Vec::new(),
-        dataset: Vec::new(),
+        attributes: Vec::new(),
     }
 }
 
@@ -3673,6 +3719,124 @@ mod tests {
         let html = r#"<html><body><p>x</p></body></html>"#;
         let mut doc = Engine::new().load_html("about:t", html);
         assert!(!doc.box_tree.set_element_style("fantasma", "color", "red"));
+    }
+
+    // ============= Fase 7.16 — attributes genéricos =============
+
+    #[test]
+    fn box_node_attributes_contiene_todos_los_attrs_html() {
+        let html = r#"<html><body><a id="x" href="https://gioser.net" aria-current="page" data-track="hero" rel="noopener">x</a></body></html>"#;
+        let doc = Engine::new().load_html("about:t", html);
+        let mut found: Option<Vec<(String, String)>> = None;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("x") {
+                found = Some(b.attributes.clone());
+            }
+        });
+        let attrs = found.expect("a#x existe");
+        // Todos los attrs aparecen, lowercase names, values literales.
+        assert!(attrs.iter().any(|(k, v)| k == "href" && v == "https://gioser.net"));
+        assert!(attrs.iter().any(|(k, v)| k == "aria-current" && v == "page"));
+        assert!(attrs.iter().any(|(k, v)| k == "data-track" && v == "hero"));
+        assert!(attrs.iter().any(|(k, v)| k == "rel" && v == "noopener"));
+        // El attr id también aparece — no se filtra (el getAttribute('id')
+        // resuelve por la rama especial del JS, pero el campo se mantiene
+        // uniforme para evitar ramas adicionales en el chrome).
+        assert!(attrs.iter().any(|(k, v)| k == "id" && v == "x"));
+    }
+
+    #[test]
+    fn box_node_dataset_filter_view_devuelve_solo_data_attrs() {
+        let html = r##"<html><body><div id="x" data-foo="1" aria-label="hi" data-bar-baz="2" href="#">y</div></body></html>"##;
+        let doc = Engine::new().load_html("about:t", html);
+        let mut found: Option<Vec<(String, String)>> = None;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("x") {
+                found = Some(b.dataset().into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
+            }
+        });
+        let ds = found.expect("div#x existe");
+        assert_eq!(ds.len(), 2);
+        assert!(ds.iter().any(|(k, v)| k == "foo" && v == "1"));
+        assert!(ds.iter().any(|(k, v)| k == "bar-baz" && v == "2"));
+    }
+
+    #[test]
+    fn set_element_attribute_agrega_attr_nuevo() {
+        let html = r#"<html><body><div id="x">y</div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        assert!(doc.box_tree.set_element_attribute("x", "aria-current", "step"));
+        let mut found = false;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("x")
+                && b.attributes.iter().any(|(k, v)| k == "aria-current" && v == "step")
+            {
+                found = true;
+            }
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn set_element_attribute_reemplaza_attr_existente() {
+        let html = r#"<html><body><a id="x" href="/old">y</a></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        assert!(doc.box_tree.set_element_attribute("x", "href", "/nuevo"));
+        let mut count_href = 0;
+        let mut val = String::new();
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("x") {
+                for (k, v) in &b.attributes {
+                    if k == "href" {
+                        count_href += 1;
+                        val = v.clone();
+                    }
+                }
+            }
+        });
+        assert_eq!(count_href, 1, "href no debe duplicarse al reemplazar");
+        assert_eq!(val, "/nuevo");
+    }
+
+    #[test]
+    fn remove_element_attribute_quita_la_key() {
+        let html = r#"<html><body><a id="x" href="/x" aria-label="hi">y</a></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        assert!(doc.box_tree.remove_element_attribute("x", "aria-label"));
+        let mut still = false;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("x")
+                && b.attributes.iter().any(|(k, _)| k == "aria-label")
+            {
+                still = true;
+            }
+        });
+        assert!(!still);
+    }
+
+    #[test]
+    fn set_element_dataset_wrapper_usa_set_element_attribute() {
+        let html = r#"<html><body><div id="x">y</div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        // El wrapper de Fase 7.11 ahora delega a set_element_attribute
+        // con el prefijo data-; verificamos que ambos vean el mismo store.
+        assert!(doc.box_tree.set_element_dataset("x", "role", "main"));
+        let mut found = false;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("x")
+                && b.attributes.iter().any(|(k, v)| k == "data-role" && v == "main")
+            {
+                found = true;
+            }
+        });
+        assert!(found, "set_element_dataset debe poblar attributes con data-<key>");
+    }
+
+    #[test]
+    fn set_element_attribute_id_inexistente_devuelve_false() {
+        let html = r#"<html><body><p>x</p></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        assert!(!doc.box_tree.set_element_attribute("fantasma", "href", "/"));
     }
 
     #[test]
