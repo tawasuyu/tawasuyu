@@ -7,9 +7,8 @@
 //! Read-only properties: leemos /etc/hostname, /etc/os-release, uname().
 //! Set* methods: persisten en disco — SetHostname al kernel (transient),
 //! SetStaticHostname a /etc/hostname, el resto (PrettyHostname, IconName,
-//! Chassis, Deployment, Location) a /etc/machine-info — todo atomic_write.
-//! Pendiente: emitir PropertiesChanged tras cada setter (los consumidores
-//! zbus no se enteran del cambio hasta reconectar).
+//! Chassis, Deployment, Location) a /etc/machine-info — todo atomic_write
+//! + PropertiesChanged emitido por el `SignalContext` inyectado.
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
@@ -18,7 +17,7 @@ use std::sync::Mutex;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
-use zbus::{fdo, interface};
+use zbus::{fdo, interface, SignalContext};
 
 const BUS_NAME: &str = "org.freedesktop.hostname1";
 const OBJ_PATH: &str = "/org/freedesktop/hostname1";
@@ -157,7 +156,12 @@ impl HostnameManager {
 
     // ----- Setters: forward al bus interno y guardan en cache -----
 
-    async fn set_hostname(&self, name: String, _interactive: bool) -> fdo::Result<()> {
+    async fn set_hostname(
+        &self,
+        name: String,
+        _interactive: bool,
+        #[zbus(signal_context)] ctxt: SignalContext<'_>,
+    ) -> fdo::Result<()> {
         if !is_valid_hostname(&name) {
             return Err(fdo::Error::InvalidArgs(format!("hostname inválido: {name:?}")));
         }
@@ -171,10 +175,16 @@ impl HostnameManager {
         }
         *self.transient_hostname.lock().unwrap() = Some(name.clone());
         info!(%name, "SetHostname aplicado");
+        self.hostname_changed(&ctxt).await.map_err(zbus_to_fdo)?;
         Ok(())
     }
 
-    async fn set_static_hostname(&self, name: String, _interactive: bool) -> fdo::Result<()> {
+    async fn set_static_hostname(
+        &self,
+        name: String,
+        _interactive: bool,
+        #[zbus(signal_context)] ctxt: SignalContext<'_>,
+    ) -> fdo::Result<()> {
         if !is_valid_hostname(&name) {
             return Err(fdo::Error::InvalidArgs(format!("hostname inválido: {name:?}")));
         }
@@ -186,46 +196,83 @@ impl HostnameManager {
         // gethostname() del kernel si éste también se actualizó).
         *self.transient_hostname.lock().unwrap() = None;
         info!(%name, "SetStaticHostname → /etc/hostname");
+        // Cambian tanto static como (potencialmente) el hostname efectivo.
+        self.static_hostname_changed(&ctxt).await.map_err(zbus_to_fdo)?;
+        self.hostname_changed(&ctxt).await.map_err(zbus_to_fdo)?;
         Ok(())
     }
 
-    async fn set_pretty_hostname(&self, name: String, _interactive: bool) -> fdo::Result<()> {
+    async fn set_pretty_hostname(
+        &self,
+        name: String,
+        _interactive: bool,
+        #[zbus(signal_context)] ctxt: SignalContext<'_>,
+    ) -> fdo::Result<()> {
         update_machine_info("PRETTY_HOSTNAME", &name)
             .map_err(|e| fdo::Error::Failed(format!("machine-info: {e}")))?;
         info!(%name, "SetPrettyHostname → /etc/machine-info");
+        self.pretty_hostname_changed(&ctxt).await.map_err(zbus_to_fdo)?;
         Ok(())
     }
 
-    async fn set_icon_name(&self, name: String, _interactive: bool) -> fdo::Result<()> {
+    async fn set_icon_name(
+        &self,
+        name: String,
+        _interactive: bool,
+        #[zbus(signal_context)] ctxt: SignalContext<'_>,
+    ) -> fdo::Result<()> {
         update_machine_info("ICON_NAME", &name)
             .map_err(|e| fdo::Error::Failed(format!("machine-info: {e}")))?;
         info!(%name, "SetIconName → /etc/machine-info");
+        self.icon_name_changed(&ctxt).await.map_err(zbus_to_fdo)?;
         Ok(())
     }
 
-    async fn set_chassis(&self, chassis: String, _interactive: bool) -> fdo::Result<()> {
+    async fn set_chassis(
+        &self,
+        chassis: String,
+        _interactive: bool,
+        #[zbus(signal_context)] ctxt: SignalContext<'_>,
+    ) -> fdo::Result<()> {
         if !matches!(chassis.as_str(), "desktop"|"laptop"|"server"|"tablet"|"handset"|"watch"|"embedded"|"vm"|"container") {
             return Err(fdo::Error::InvalidArgs(format!("chassis inválido: {chassis}")));
         }
         update_machine_info("CHASSIS", &chassis)
             .map_err(|e| fdo::Error::Failed(format!("machine-info: {e}")))?;
         info!(%chassis, "SetChassis → /etc/machine-info");
+        self.chassis_changed(&ctxt).await.map_err(zbus_to_fdo)?;
         Ok(())
     }
 
-    async fn set_deployment(&self, deployment: String, _interactive: bool) -> fdo::Result<()> {
+    async fn set_deployment(
+        &self,
+        deployment: String,
+        _interactive: bool,
+        #[zbus(signal_context)] ctxt: SignalContext<'_>,
+    ) -> fdo::Result<()> {
         update_machine_info("DEPLOYMENT", &deployment)
             .map_err(|e| fdo::Error::Failed(format!("machine-info: {e}")))?;
         info!(%deployment, "SetDeployment → /etc/machine-info");
+        self.deployment_changed(&ctxt).await.map_err(zbus_to_fdo)?;
         Ok(())
     }
 
-    async fn set_location(&self, location: String, _interactive: bool) -> fdo::Result<()> {
+    async fn set_location(
+        &self,
+        location: String,
+        _interactive: bool,
+        #[zbus(signal_context)] ctxt: SignalContext<'_>,
+    ) -> fdo::Result<()> {
         update_machine_info("LOCATION", &location)
             .map_err(|e| fdo::Error::Failed(format!("machine-info: {e}")))?;
         info!(%location, "SetLocation → /etc/machine-info");
+        self.location_changed(&ctxt).await.map_err(zbus_to_fdo)?;
         Ok(())
     }
+}
+
+fn zbus_to_fdo(e: zbus::Error) -> fdo::Error {
+    fdo::Error::Failed(format!("PropertiesChanged: {e}"))
 }
 
 // ---------------- helpers ----------------

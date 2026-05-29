@@ -143,20 +143,23 @@ impl SystemdManager {
     }
 
     async fn stop_unit(&self, name: String, _mode: String) -> fdo::Result<OwnedObjectPath> {
-        // No se finge éxito: detener una Card por nombre de unit exige
-        // una capability del bus del fractal que aún no existe. Hasta
-        // entonces, se rechaza con honestidad (igual que StartUnit).
-        warn!(%name, "StopUnit rechazado — el fractal no detiene Cards por nombre de unit");
-        Err(fdo::Error::NotSupported(
-            "StopUnit: el fractal supervisa Cards; no se detienen por nombre de unit".into(),
-        ))
+        // Stop = SIGTERM al PID del Ente. La supervisión decide si vuelve:
+        //  - Supervision::OneShot|Delegate → muere y queda muerto.
+        //  - Supervision::Restart → reaparece tras el backoff.
+        // El último caso difiere de systemd (donde Stop es definitivo) pero
+        // refleja la realidad del fractal — el supervisor es soberano.
+        kill_unit_via_bus(&name, libc::SIGTERM).await?;
+        no_job_path()
     }
 
     async fn restart_unit(&self, name: String, _mode: String) -> fdo::Result<OwnedObjectPath> {
-        warn!(%name, "RestartUnit rechazado — sin StopUnit honesto no hay reinicio");
-        Err(fdo::Error::NotSupported(
-            "RestartUnit: el fractal no reinicia Cards por nombre de unit".into(),
-        ))
+        // Restart = SIGTERM y dejamos que la Supervision::Restart de la Card
+        // lo levante. Si la Card no es Restart, el "restart" es efectivamente
+        // un stop. Honesto pero asimétrico con systemd — lo documentamos en
+        // el log.
+        kill_unit_via_bus(&name, libc::SIGTERM).await?;
+        info!(%name, "RestartUnit: SIGTERM emitido; el supervisor decide si vuelve");
+        no_job_path()
     }
 
     async fn reload_unit(&self, name: String, _mode: String) -> fdo::Result<OwnedObjectPath> {
@@ -166,37 +169,7 @@ impl SystemdManager {
     }
 
     async fn kill_unit(&self, name: String, _who: String, signal: i32) -> fdo::Result<()> {
-        // Mapeo: unit ↔ Ente cuyo label coincide con el prefijo (sin .service).
-        // Reusa ListEntes para resolver el Ulid; luego forwardea KillEnte al
-        // bus interno, que aplica la señal en el PID real.
-        let entes = match query_list_entes().await {
-            Some(es) => es,
-            None => {
-                warn!(%name, "KillUnit: no se pudo consultar el bus");
-                return Err(fdo::Error::Failed("bus interno no disponible".into()));
-            }
-        };
-        let target = entes
-            .into_iter()
-            .find(|e| format!("{}.service", e.label) == name)
-            .ok_or_else(|| fdo::Error::Failed(format!("Unit {name} no encontrada")))?;
-        let mut client = BusClient::from_env().await
-            .map_err(|e| fdo::Error::Failed(format!("bus connect: {e}")))?;
-        match client.call(BusRequest::KillEnte { target: target.id, signal }).await {
-            Ok(BusResponse::Ok) => {
-                info!(%name, ulid = %target.id, signal, "KillUnit aplicado");
-                Ok(())
-            }
-            Ok(BusResponse::Error(e)) => {
-                warn!(%name, %e, "KillUnit rechazado por el bus");
-                Err(fdo::Error::Failed(e))
-            }
-            Ok(other) => {
-                warn!(%name, ?other, "KillUnit respuesta inesperada");
-                Err(fdo::Error::Failed("respuesta inesperada del bus".into()))
-            }
-            Err(e) => Err(fdo::Error::Failed(format!("bus call: {e}"))),
-        }
+        kill_unit_via_bus(&name, signal).await
     }
 
     async fn subscribe(&self) -> fdo::Result<()> { Ok(()) }
@@ -254,6 +227,43 @@ impl SystemdManager {
 
     #[zbus(property)]
     async fn progress(&self) -> f64 { 1.0 }
+}
+
+/// Resuelve `<name>.service` a su Ulid via ListEntes y forwardea KillEnte
+/// al bus interno. Compartido por StopUnit, RestartUnit y KillUnit.
+async fn kill_unit_via_bus(name: &str, signal: i32) -> fdo::Result<()> {
+    let entes = query_list_entes().await
+        .ok_or_else(|| fdo::Error::Failed("bus interno no disponible".into()))?;
+    let target = entes
+        .into_iter()
+        .find(|e| format!("{}.service", e.label) == name)
+        .ok_or_else(|| fdo::Error::Failed(format!("Unit {name} no encontrada")))?;
+    let mut client = BusClient::from_env().await
+        .map_err(|e| fdo::Error::Failed(format!("bus connect: {e}")))?;
+    match client.call(BusRequest::KillEnte { target: target.id, signal }).await {
+        Ok(BusResponse::Ok) => {
+            info!(%name, ulid = %target.id, signal, "KillEnte aplicado");
+            Ok(())
+        }
+        Ok(BusResponse::Error(e)) => {
+            warn!(%name, %e, "KillEnte rechazado por el bus");
+            Err(fdo::Error::Failed(e))
+        }
+        Ok(other) => {
+            warn!(%name, ?other, "KillEnte respuesta inesperada");
+            Err(fdo::Error::Failed("respuesta inesperada del bus".into()))
+        }
+        Err(e) => Err(fdo::Error::Failed(format!("bus call: {e}"))),
+    }
+}
+
+/// systemd devuelve un object path de `job` por Start/Stop/Restart. El
+/// fractal no tiene jobs (las mutaciones son síncronas desde la vista del
+/// caller), así que devolvemos "/" — convención zbus para "no job".
+fn no_job_path() -> fdo::Result<OwnedObjectPath> {
+    ObjectPath::try_from("/")
+        .map(OwnedObjectPath::from)
+        .map_err(|e| fdo::Error::Failed(format!("path: {e}")))
 }
 
 /// Pregunta al bus interno por la lista de Entes vivos.

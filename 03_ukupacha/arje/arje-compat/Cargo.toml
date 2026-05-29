@@ -87,6 +87,11 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 zbus = { version = "4", default-features = false, features = ["tokio"] }
+# Resolver DNS para arje-resolved-compat. La versión coincide con la que
+# ya entra transitivamente por libp2p — declararla explícita no añade
+# coste de compilación pero da acceso a RecordType/RData.
+hickory-resolver = { version = "0.25", default-features = false, features = ["tokio", "system-config"] }
+hickory-proto = { version = "0.25", default-features = false }
 
 [dev-dependencies]
 tempfile = { workspace = true }

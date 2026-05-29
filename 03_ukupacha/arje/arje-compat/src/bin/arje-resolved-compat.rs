@@ -1,21 +1,49 @@
 //! ente-resolved-compat: shim de `org.freedesktop.resolve1`.
 //!
-//! Bajo el capó usa `tokio::net::lookup_host` (que termina en getaddrinfo
-//! del libc del sistema). No reimplementamos un resolver DNS — delegamos
-//! al stack de resolución del kernel/glibc.
-//!
-//! Métodos cubiertos:
-//!   - ResolveHostname (name → addresses)
-//!   - ResolveAddress (address → name reverse)
-//!   - ResolveRecord (TXT/SRV/etc) — NotSupported (requiere DNS query directa)
+//! ResolveHostname/ResolveAddress delegan en getaddrinfo/getnameinfo del
+//! libc (vía tokio::net::lookup_host). ResolveRecord usa hickory-resolver
+//! para emitir queries DNS de tipos arbitrarios (TXT, SRV, MX, etc.) cuyo
+//! rdata empaquetamos en bytes wire-format — lo que pide la firma D-Bus
+//! `a(iqqay)` del método.
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
+use hickory_proto::serialize::binary::{BinEncodable, BinEncoder};
+use hickory_resolver::{
+    config::ResolverConfig,
+    name_server::TokioConnectionProvider,
+    proto::rr::RecordType,
+    TokioResolver,
+};
 use std::net::IpAddr;
+use std::sync::OnceLock;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use zbus::{fdo, interface};
+
+/// Una instancia compartida — el resolver es Send+Sync y cachea respuestas.
+/// Lazy init para no fallar si /etc/resolv.conf todavía no existe al boot.
+static RESOLVER: OnceLock<TokioResolver> = OnceLock::new();
+
+fn resolver() -> &'static TokioResolver {
+    RESOLVER.get_or_init(|| {
+        // builder_tokio() lee /etc/resolv.conf. Si no existe (boot temprano),
+        // construimos con ResolverConfig::default() (Google/Cloudflare) que
+        // al menos permite responder antes de que la red local esté lista.
+        match TokioResolver::builder_tokio() {
+            Ok(b) => b.build(),
+            Err(e) => {
+                warn!(?e, "resolv.conf no disponible, usando default");
+                TokioResolver::builder_with_config(
+                    ResolverConfig::default(),
+                    TokioConnectionProvider::default(),
+                )
+                .build()
+            }
+        }
+    })
+}
 
 const BUS_NAME: &str = "org.freedesktop.resolve1";
 const OBJ_PATH: &str = "/org/freedesktop/resolve1";
@@ -106,17 +134,44 @@ impl ResolveManager {
         Ok((vec![(0, name)], 0))
     }
 
+    /// Wire signature: `ResolveRecord(in iiqqt, out a(iqqay)t)` — recibe
+    /// (ifindex, name, class, type, flags), devuelve (records, flags).
+    /// Cada record es (ifindex, class, type, rdata-wire-bytes).
     async fn resolve_record(
         &self,
         _ifindex: i32,
-        _name: String,
-        _class: u16,
-        _type_: u16,
+        name: String,
+        class: u16,
+        type_: u16,
         _flags: u64,
     ) -> fdo::Result<(Vec<(i32, u16, u16, Vec<u8>)>, u64)> {
-        Err(fdo::Error::NotSupported(
-            "ResolveRecord requiere acceso DNS directo — stub no implementado".into()
-        ))
+        let rtype = RecordType::from(type_);
+        let lookup = resolver()
+            .lookup(name.clone(), rtype)
+            .await
+            .map_err(|e| fdo::Error::Failed(format!("DNS {name} type={type_}: {e}")))?;
+        let mut out = Vec::new();
+        for record in lookup.records() {
+            let data = match record.data() {
+                d => d,
+            };
+            let mut bytes = Vec::with_capacity(64);
+            {
+                let mut enc = BinEncoder::new(&mut bytes);
+                if let Err(e) = data.emit(&mut enc) {
+                    warn!(%name, ?e, "rdata emit falló, record descartado");
+                    continue;
+                }
+            }
+            out.push((0i32, class, type_, bytes));
+        }
+        if out.is_empty() {
+            return Err(fdo::Error::Failed(format!(
+                "sin registros para {name} type={type_}"
+            )));
+        }
+        info!(%name, type_, count = out.len(), "ResolveRecord");
+        Ok((out, 0))
     }
 }
 
