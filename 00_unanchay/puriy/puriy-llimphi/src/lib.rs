@@ -5762,4 +5762,43 @@ mod tests {
         apply_dom_mutations(t);
         assert_eq!(t.focused_input, None);
     }
+
+    // ============= Fase 7.19 — text node sintético =============
+
+    #[test]
+    fn apply_append_text_node_inserta_text_leaf_sin_tag() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><div id="parent"></div></body>"#));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "parent".into(),
+            tag_name: "div".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+        }])
+        .expect("e");
+        rt.eval(
+            "var p = document.getElementById('parent'); \
+             p.append(document.createTextNode('Hola mundo'));",
+        )
+        .expect("e");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("parent") {
+                for c in &b.children {
+                    if c.tag.is_none() && c.text.as_deref() == Some("Hola mundo") {
+                        found = true;
+                    }
+                }
+            }
+        });
+        assert!(found, "parent debe tener text leaf 'Hola mundo' como hijo");
+    }
 }

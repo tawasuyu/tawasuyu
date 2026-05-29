@@ -549,6 +549,38 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         });
         return newChild;
     };
+    // Fase 7.19 — append(...nodes) / prepend(...nodes) variadic DOM4.
+    // Aceptan mezcla de Elements sintéticos no insertados Y strings (que
+    // se convierten en text nodes automáticamente). Append los pone al
+    // final; prepend al inicio. Mismo error model que appendChild —
+    // tirar si un Element ya fue insertado.
+    el.append = function() {
+        for (var i = 0; i < arguments.length; i++) {
+            var a = arguments[i];
+            if (typeof a === 'string') {
+                el.appendChild(document.createTextNode(a));
+            } else if (a && a._synthetic) {
+                el.appendChild(a);
+            }
+            // null/undefined/otros: skip silencioso (matchea spec laxo).
+        }
+    };
+    el.prepend = function() {
+        // Reversed iteration + insertBefore(arg, firstChild) preserva el
+        // orden de los args en el output. Si no hay firstChild, cae a
+        // append (matchea spec).
+        var first = el.firstElementChild;
+        for (var i = arguments.length - 1; i >= 0; i--) {
+            var a = arguments[i];
+            var node = null;
+            if (typeof a === 'string') node = document.createTextNode(a);
+            else if (a && a._synthetic) node = a;
+            else continue;
+            if (first) el.insertBefore(node, first);
+            else el.appendChild(node);
+            first = node;
+        }
+    };
     el.appendChild = function(child) {
         if (!child || !child._synthetic) {
             throw new Error('appendChild: child debe venir de createElement');
@@ -1430,6 +1462,17 @@ impl JsRuntime {
                     el._synthetic = true; \
                     el._inserted = false; \
                     el._parent_id = null; \
+                    globalThis.__puriy_elements[synth_id] = el; \
+                    return el; \
+                }}, \
+                createTextNode: function(text) {{ \
+                    var synth_id = '__synth_' + (++globalThis.__puriy_synth_counter); \
+                    /* Fase 7.19 — text node sintético: tag vacío + text\n                     * content. El chrome lo distingue por tag === '' en\n                     * el payload del appendChild y construye un BoxNode\n                     * inline con text=Some(content), sin tag. */ \
+                    var el = globalThis.__puriy_make_element(synth_id, '', String(text), [], null, null, [], []); \
+                    el._synthetic = true; \
+                    el._inserted = false; \
+                    el._parent_id = null; \
+                    el._isText = true; \
                     globalThis.__puriy_elements[synth_id] = el; \
                     return el; \
                 }}, \
@@ -4811,5 +4854,84 @@ mod tests {
         let JsValue::String(s) = v else { panic!("expected string") };
         assert!(s.contains(r#"title="a&quot;b&lt;c""#), "got: {s}");
         assert!(s.contains("&lt;b&gt;&amp;&lt;/b&gt;"), "got: {s}");
+    }
+
+    // ============= Fase 7.19 — createTextNode + append/prepend =============
+
+    #[test]
+    fn create_text_node_devuelve_handle_sintetico_con_text_y_tag_vacio() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        let v = rt
+            .eval("var t = document.createTextNode('Hola'); t._textContent")
+            .expect("e");
+        assert_eq!(v, JsValue::String("Hola".into()));
+        let v = rt.eval("t._isText").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("t._tagName").expect("e");
+        assert_eq!(v, JsValue::String("".into()));
+        let v = rt.eval("t._synthetic").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn append_acepta_mezcla_de_elementos_y_strings() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("parent", "div", "")]).expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var p = document.getElementById('parent'); \
+             var child = document.createElement('span'); \
+             p.append(child, ' texto suelto', document.createElement('em'));",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        // 3 mutaciones de appendChild — span, text node, em.
+        let appends: Vec<_> = muts.iter().filter(|m| m.kind == "appendChild").collect();
+        assert_eq!(appends.len(), 3);
+        // El 2do payload empieza con tag vacío (text node).
+        let p2 = &appends[1].value;
+        assert!(p2.starts_with('\u{001D}'), "text node payload empieza con sep (tag vacío): {p2:?}");
+        // Args null/undefined se silencian.
+        rt.drain_dom_mutations();
+        rt.eval("p.append(null, undefined)").expect("e");
+        assert!(rt.drain_dom_mutations().is_empty());
+    }
+
+    #[test]
+    fn prepend_invierte_orden_via_insert_before() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("parent", "div", ""), snap_with_parent("existing", "p", "parent")])
+            .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var p = document.getElementById('parent'); \
+             var a = document.createElement('li'); a.id = 'a'; \
+             var b = document.createElement('li'); b.id = 'b'; \
+             p.prepend(a, b);",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        // Las dos inserciones van como insertBefore (hay firstElementChild).
+        let inserts: Vec<_> = muts.iter().filter(|m| m.kind == "insertBefore").collect();
+        assert_eq!(inserts.len(), 2);
+    }
+
+    #[test]
+    fn prepend_sin_first_element_child_cae_a_append() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("parent", "div", "")]).expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var p = document.getElementById('parent'); \
+             p.prepend(document.createElement('span'));",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        // Sin firstElementChild cae a appendChild.
+        assert!(muts.iter().any(|m| m.kind == "appendChild"));
     }
 }

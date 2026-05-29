@@ -616,6 +616,18 @@ pub fn synthesize_box_node(
     class_list: Vec<String>,
     value: Option<&str>,
 ) -> BoxNode {
+    // Fase 7.19 — tag vacío significa text node (createTextNode). El
+    // BoxNode resultante es inline sin tag y con `text = Some(content)`.
+    // El padre lo trata como cualquier otro text leaf; herencia de
+    // estilos via inherit_style_to_child al append.
+    if tag.is_empty() {
+        let mut leaf = empty_root();
+        leaf.display = Display::Inline;
+        leaf.tag = None;
+        leaf.text = Some(text_content.to_string());
+        leaf.element_id = id.map(|s| s.to_string());
+        return leaf;
+    }
     let mut node = empty_root();
     node.tag = Some(tag.to_string());
     node.element_id = id.map(|s| s.to_string());
