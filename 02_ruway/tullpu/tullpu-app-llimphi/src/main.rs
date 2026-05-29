@@ -30,6 +30,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use llimphi_ui::llimphi_layout::taffy::{
@@ -45,7 +46,7 @@ use pixel_verbo_core::{OpPixel, Proveedor};
 use pixel_verbo_daemon::ClienteBloqueante;
 use pixel_verbo_mock::ProveedorMock;
 use tullpu_core::{
-    Capa, Frescura, Lienzo, ModoFusion, OpLocal, OrigenCapa, TransformacionPixel,
+    Capa, Frescura, Hash, Lienzo, ModoFusion, OpLocal, OrigenCapa, TransformacionPixel,
 };
 use tullpu_ops::{regenerar_stale_con_ia, transformacion_ia};
 use tullpu_render::{componer, AlmacenEnMemoria, FormatoExport, FuenteBuffers};
@@ -63,6 +64,10 @@ struct Model {
     estado: String,
     proveedor: Box<dyn Proveedor>,
     proveedor_etiqueta: String,
+    /// Cache de thumbnails por hash del buffer Rgba8. Una entrada se reusa
+    /// mientras el hash siga vivo en alguna capa; tras `regenerar_stale`
+    /// hacemos un GC simple sobre los hashes presentes en el lienzo.
+    thumbs: HashMap<Hash, Image>,
 }
 
 #[derive(Clone)]
@@ -208,7 +213,7 @@ fn inicializar() -> Model {
     let (proveedor, proveedor_etiqueta) = resolver_proveedor();
 
     let imagen = recomponer(&lienzo, &almacen);
-    Model {
+    let mut model = Model {
         lienzo,
         almacen,
         seleccionada: Some(id_inicial),
@@ -216,7 +221,10 @@ fn inicializar() -> Model {
         estado,
         proveedor,
         proveedor_etiqueta,
-    }
+        thumbs: HashMap::new(),
+    };
+    sincronizar_thumbs(&mut model);
+    model
 }
 
 fn lienzo_default() -> (Lienzo, AlmacenEnMemoria, Uuid, String) {
@@ -257,7 +265,56 @@ fn aplicar_y_recomponer(model: &mut Model) {
         Some(img) => model.imagen = Some(img),
         None => model.estado = "error compositor".into(),
     }
+    sincronizar_thumbs(model);
 }
+
+/// Lado del thumb en píxeles. Pequeño a propósito — la fila de capa es de
+/// 28 px de alto y conviene dejar aire arriba/abajo.
+const THUMB_LADO: u32 = 22;
+
+/// Asegura que cada capa del lienzo tenga su thumbnail en el cache, y
+/// descarta entries cuyos hashes ya no están en uso. La regeneración por
+/// op (vía `regenerar_stale_con_ia`) cambia `Capa.contenido` para las
+/// derivadas; el hash nuevo entra al cache, el viejo se barre.
+fn sincronizar_thumbs(model: &mut Model) {
+    let lienzo_w = model.lienzo.width;
+    let lienzo_h = model.lienzo.height;
+    let vivos: std::collections::HashSet<Hash> =
+        model.lienzo.capas.iter().map(|c| c.contenido).collect();
+    model.thumbs.retain(|h, _| vivos.contains(h));
+    for capa in &model.lienzo.capas {
+        if model.thumbs.contains_key(&capa.contenido) {
+            continue;
+        }
+        if let Some(img) = thumbnail_de_buffer(capa.contenido, lienzo_w, lienzo_h, &model.almacen)
+        {
+            model.thumbs.insert(capa.contenido, img);
+        }
+    }
+}
+
+/// Construye un thumbnail `peniko::Image` de lado máximo `THUMB_LADO`
+/// preservando aspect ratio. `nearest` es suficiente para 22 px y mantiene
+/// el costo cercano a cero — un PSD de 30 capas son ~30 reescalados de
+/// imagen grande a 22 px, lineal en píxeles totales.
+fn thumbnail_de_buffer(
+    hash: Hash,
+    w: u32,
+    h: u32,
+    fuente: &impl FuenteBuffers,
+) -> Option<Image> {
+    let buf = fuente.obtener(hash)?;
+    let rgba = image::RgbaImage::from_raw(w, h, buf.to_vec())?;
+    let thumb = image::imageops::thumbnail(&rgba, THUMB_LADO, THUMB_LADO);
+    let (tw, th) = (thumb.width(), thumb.height());
+    Some(Image::new(
+        Blob::from(thumb.into_raw()),
+        ImageFormat::Rgba8,
+        tw,
+        th,
+    ))
+}
+
 
 // =============================================================================
 //  Ciclar blend modes (no hay dropdown todavía — clic cicla)
@@ -365,6 +422,7 @@ fn fila_capa(
     theme: &llimphi_theme::Theme,
     capa: &Capa,
     seleccionada: bool,
+    thumb: Option<&Image>,
 ) -> View<Msg> {
     let btn_pal = ButtonPalette::from_theme(theme);
     let nombre_op = match &capa.origen {
@@ -430,6 +488,33 @@ fn fila_capa(
     let blend = mini_btn("blnd", Msg::CiclarBlend(capa.id), &btn_pal);
     let elim = mini_btn("✕", Msg::Eliminar(capa.id), &btn_pal);
 
+    // Thumbnail a la izquierda (slot fijo aun si el cache aún no lo tiene
+    // — evita reflow). 24×24 con un margen interno para respirar.
+    let thumb_view = match thumb {
+        Some(img) => View::new(Style {
+            size: Size {
+                width: length(24.0_f32),
+                height: length(24.0_f32),
+            },
+            padding: Rect {
+                left: length(1.0_f32),
+                right: length(3.0_f32),
+                top: length(1.0_f32),
+                bottom: length(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .image(img.clone()),
+        None => View::new(Style {
+            size: Size {
+                width: length(24.0_f32),
+                height: length(24.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel_alt),
+    };
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -445,7 +530,7 @@ fn fila_capa(
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .children(vec![nombre, toggle, opd, opu, blend, elim])
+    .children(vec![thumb_view, nombre, toggle, opd, opu, blend, elim])
 }
 
 fn mini_btn(label: &str, msg: Msg, pal: &ButtonPalette) -> View<Msg> {
@@ -492,7 +577,8 @@ fn panel_capas(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     // Las pintamos top → fondo (al revés que el orden visual interno).
     for capa in model.lienzo.capas.iter().rev() {
         let sel = model.seleccionada == Some(capa.id);
-        hijos.push(fila_capa(theme, capa, sel));
+        let thumb = model.thumbs.get(&capa.contenido);
+        hijos.push(fila_capa(theme, capa, sel, thumb));
     }
     View::new(Style {
         flex_direction: FlexDirection::Column,
