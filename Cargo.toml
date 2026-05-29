@@ -258,6 +258,7 @@ members = [
     "02_ruway/mirada/mirada-ctl",
     "02_ruway/mirada/mirada-greeter",
     "02_ruway/mirada/mirada-launcher",
+    "02_ruway/mirada/mirada-launcher-llimphi",
     "02_ruway/mirada/mirada-layout",
     "02_ruway/mirada/mirada-link",
     "02_ruway/mirada/mirada-portal",
