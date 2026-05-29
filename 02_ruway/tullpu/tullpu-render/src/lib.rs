@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 
-use image::RgbaImage;
+use image::{ExtendedColorType, ImageEncoder, RgbaImage};
 use tullpu_core::{Capa, Hash, Lienzo, ModoFusion};
 
 // =============================================================================
@@ -92,6 +92,8 @@ pub enum Error {
     },
     #[error("guardar imagen falló: {0}")]
     Imagen(#[from] image::ImageError),
+    #[error("io export: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 // =============================================================================
@@ -511,18 +513,65 @@ pub fn buffer_mascara(w: u32, h: u32, valor: u8) -> Vec<u8> {
 //  Export
 // =============================================================================
 
-/// Compone el lienzo y guarda el resultado como PNG en `ruta`. El formato lo
-/// deduce `image` por extensión — pasar un path `.png` para PNG, `.jpg` para
-/// JPEG, etc. Devuelve los píxeles compuestos (`width × height`) por si el
-/// caller los necesita además del archivo en disco.
+/// Formato de salida solicitado al exportar. Atado al codec, no a la
+/// extensión: el caller elige formato y path por separado.
+///
+/// - `Png` lossless, conserva alfa.
+/// - `Jpeg { calidad }` con `calidad ∈ 1..=100` (80–90 para foto estándar);
+///   descarta alfa porque JPEG no lo soporta — el alfa del compuesto se pierde.
+/// - `Webp` lossless (el encoder puro-Rust de `image` no expone lossy).
+///   Conserva alfa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatoExport {
+    Png,
+    Jpeg { calidad: u8 },
+    Webp,
+}
+
+/// Compone el lienzo y lo escribe en `ruta` con el codec correspondiente al
+/// `formato`. Devuelve los píxeles compuestos por si el caller los necesita
+/// además del archivo en disco. Si `componer` falla, no se toca el disco
+/// (no se llega a abrir el archivo).
+pub fn exportar(
+    l: &Lienzo,
+    fuente: &impl FuenteBuffers,
+    ruta: impl AsRef<std::path::Path>,
+    formato: FormatoExport,
+) -> Result<RgbaImage, Error> {
+    let img = componer(l, fuente)?;
+    let archivo = std::fs::File::create(ruta.as_ref())?;
+    let writer = std::io::BufWriter::new(archivo);
+    let (w, h) = (img.width(), img.height());
+    match formato {
+        FormatoExport::Png => {
+            let enc = image::codecs::png::PngEncoder::new(writer);
+            enc.write_image(img.as_raw(), w, h, ExtendedColorType::Rgba8)?;
+        }
+        FormatoExport::Jpeg { calidad } => {
+            // JpegEncoder::encode sólo acepta L8/Rgb8 — descartamos alfa
+            // antes de codificar (calco de lo que hace `save()` internamente).
+            let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
+            let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                writer,
+                calidad.clamp(1, 100),
+            );
+            enc.write_image(rgb.as_raw(), w, h, ExtendedColorType::Rgb8)?;
+        }
+        FormatoExport::Webp => {
+            let enc = image::codecs::webp::WebPEncoder::new_lossless(writer);
+            enc.write_image(img.as_raw(), w, h, ExtendedColorType::Rgba8)?;
+        }
+    }
+    Ok(img)
+}
+
+/// Atajo histórico: equivale a `exportar(.., FormatoExport::Png)`.
 pub fn exportar_png(
     l: &Lienzo,
     fuente: &impl FuenteBuffers,
     ruta: impl AsRef<std::path::Path>,
 ) -> Result<RgbaImage, Error> {
-    let img = componer(l, fuente)?;
-    img.save(ruta.as_ref())?;
-    Ok(img)
+    exportar(l, fuente, ruta, FormatoExport::Png)
 }
 
 // =============================================================================
@@ -1135,6 +1184,77 @@ mod tests {
         assert_eq!(leido.width(), 4);
         assert_eq!(leido.height(), 3);
         assert_eq!(leido.as_raw(), img_compuesto.as_raw());
+    }
+
+    #[test]
+    fn exportar_webp_es_lossless() {
+        // WebPEncoder::new_lossless conserva alfa y píxeles bit a bit.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(8, 5, [10, 20, 30, 255]));
+        let top = alm.insertar(buffer_solido(8, 5, [200, 100, 50, 128]));
+        let mut l = Lienzo::nuevo(8, 5);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut c = Capa::raster("top", top);
+        c.opacidad = 0.7;
+        l.apilar(c);
+
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("salida.webp");
+        let img_compuesto =
+            super::exportar(&l, &alm, &ruta, super::FormatoExport::Webp).unwrap();
+
+        assert!(ruta.exists());
+        let leido = image::open(&ruta).unwrap().to_rgba8();
+        assert_eq!(leido.dimensions(), img_compuesto.dimensions());
+        assert_eq!(leido.as_raw(), img_compuesto.as_raw());
+    }
+
+    #[test]
+    fn exportar_jpeg_descarta_alfa_y_se_relee() {
+        // JPEG no soporta alfa: lo descartamos antes de codificar y al releer
+        // el RGB debe parecerse al RGB compuesto dentro de la tolerancia de
+        // calidad 90 (color sólido → cuantización mínima).
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let h = alm.insertar(buffer_solido(8, 8, [200, 100, 50, 255]));
+        let mut l = Lienzo::nuevo(8, 8);
+        l.apilar(Capa::raster("solido", h));
+
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("salida.jpg");
+        let img = super::exportar(
+            &l,
+            &alm,
+            &ruta,
+            super::FormatoExport::Jpeg { calidad: 90 },
+        )
+        .unwrap();
+
+        assert!(ruta.exists());
+        let leido = image::open(&ruta).unwrap().to_rgb8();
+        assert_eq!(leido.dimensions(), img.dimensions());
+        // Tolerancia ±6 por canal — JPEG a q90 sobre un color uniforme no
+        // debería moverse mucho más que eso en ningún píxel.
+        let p = leido.get_pixel(4, 4);
+        assert!((p.0[0] as i16 - 200).abs() <= 6, "R: {:?}", p);
+        assert!((p.0[1] as i16 - 100).abs() <= 6, "G: {:?}", p);
+        assert!((p.0[2] as i16 - 50).abs() <= 6, "B: {:?}", p);
+    }
+
+    #[test]
+    fn exportar_jpeg_clamp_calidad_fuera_de_rango() {
+        // calidad=0 es inválido para el encoder; nosotros clampamos a 1.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let h = alm.insertar(buffer_solido(4, 4, [128, 128, 128, 255]));
+        let mut l = Lienzo::nuevo(4, 4);
+        l.apilar(Capa::raster("g", h));
+
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("salida.jpg");
+        super::exportar(&l, &alm, &ruta, super::FormatoExport::Jpeg { calidad: 0 }).unwrap();
+        assert!(ruta.exists());
+        // El archivo abre como JPEG válido — no se rechazó.
+        let leido = image::open(&ruta).unwrap().to_rgb8();
+        assert_eq!(leido.dimensions(), (4, 4));
     }
 
     #[test]

@@ -48,7 +48,7 @@ use tullpu_core::{
     Capa, Frescura, Lienzo, ModoFusion, OpLocal, OrigenCapa, TransformacionPixel,
 };
 use tullpu_ops::{regenerar_stale_con_ia, transformacion_ia};
-use tullpu_render::{componer, AlmacenEnMemoria, FuenteBuffers};
+use tullpu_render::{componer, AlmacenEnMemoria, FormatoExport, FuenteBuffers};
 use uuid::Uuid;
 
 // =============================================================================
@@ -75,7 +75,7 @@ enum Msg {
     Agregar(OpLocal),
     AgregarIa(OpPixel),
     Recargar,
-    ExportarPng,
+    Exportar(FormatoExport),
 }
 
 // =============================================================================
@@ -535,9 +535,19 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     // "salida" arriba de todo: no requiere selección, siempre activa.
     let mut hijos = vec![subtitulo("salida")];
     hijos.push(envolver_fila(button_view(
-        "💾 exportar PNG".to_string(),
+        "💾 PNG (lossless · α)".to_string(),
         &pal,
-        Msg::ExportarPng,
+        Msg::Exportar(FormatoExport::Png),
+    )));
+    hijos.push(envolver_fila(button_view(
+        "💾 JPEG q90 (sin α)".to_string(),
+        &pal,
+        Msg::Exportar(FormatoExport::Jpeg { calidad: 90 }),
+    )));
+    hijos.push(envolver_fila(button_view(
+        "💾 WebP (lossless · α)".to_string(),
+        &pal,
+        Msg::Exportar(FormatoExport::Webp),
     )));
 
     hijos.push(subtitulo("locales"));
@@ -802,19 +812,21 @@ impl App for Tullpu {
             Msg::Recargar => {
                 aplicar_y_recomponer(&mut model);
             }
-            Msg::ExportarPng => {
+            Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app
-                // todavía no tiene). El usuario ve el path final en el
-                // header para `find` / `xdg-open` desde fuera.
+                // todavía no tiene). La extensión la elige el formato; el
+                // usuario ve el path final en el header.
                 let ts = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let ruta = std::path::PathBuf::from(format!("tullpu-export-{ts}.png"));
-                model.estado = match tullpu_render::exportar_png(
+                let ext = extension_export(formato);
+                let ruta = std::path::PathBuf::from(format!("tullpu-export-{ts}.{ext}"));
+                model.estado = match tullpu_render::exportar(
                     &model.lienzo,
                     &model.almacen,
                     &ruta,
+                    formato,
                 ) {
                     Ok(_) => format!("exportado → {}", ruta.display()),
                     Err(e) => format!("export falló: {e}"),
@@ -856,6 +868,14 @@ impl App for Tullpu {
         })
         .fill(theme.bg_app)
         .children(vec![cabecera, centro])
+    }
+}
+
+fn extension_export(f: FormatoExport) -> &'static str {
+    match f {
+        FormatoExport::Png => "png",
+        FormatoExport::Jpeg { .. } => "jpg",
+        FormatoExport::Webp => "webp",
     }
 }
 

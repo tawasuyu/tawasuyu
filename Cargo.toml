@@ -512,10 +512,10 @@ notify = "6.1"
 petgraph = "0.6"
 
 # === Image decoding (nahual-image-viewer-llimphi) ===
-# default-features = false: nos quedamos con PNG + JPEG, que es el 95%
-# de los formatos en el wild. WebP/AVIF/etc. los habilitamos si una app
+# default-features = false: nos quedamos con PNG + JPEG + WebP (lossless).
+# tullpu-render exporta a las tres; AVIF/TIFF/… los habilitamos si una app
 # los pide específicamente.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # === FUSE (minga-vfs) ===
 # default-features = false: prescinde de pkg-config/libfuse-dev en build.
