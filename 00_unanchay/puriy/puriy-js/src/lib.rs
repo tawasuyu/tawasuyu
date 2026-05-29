@@ -546,6 +546,13 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     // al chrome. Usamos un Proxy para capturar cualquier `el.style.X = Y`
     // sin tener que enumerar las propiedades. QuickJS-NG soporta Proxy
     // (ES2015+).
+    // Fase 7.30 — _style_store guarda lo que `el.style.X = Y` setea
+    // con keys kebab-case. Alimenta `getComputedStyle(el)` que devuelve
+    // un objeto con `getPropertyValue(kebab)` leyendo de este store.
+    // Sin info real del chrome (computed post-cascade vive en el style
+    // engine que no exponemos al JS), getComputedStyle sólo devuelve lo
+    // inline que JS escribió — divergencia honesta del spec.
+    el._style_store = {};
     el.style = new Proxy({}, {
         set: function(target, prop, value) {
             target[prop] = value;
@@ -555,6 +562,7 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             var kebab = String(prop).replace(/([A-Z])/g, function(m) {
                 return '-' + m.toLowerCase();
             });
+            el._style_store[kebab] = String(value);
             globalThis.__puriy_dirty.push({
                 id: el.id,
                 kind: 'style:' + kebab,
@@ -1576,6 +1584,46 @@ globalThis.scrollBy = function(dx, dy) {
         globalThis.__puriy_scroll_x + (Number(dx) || 0),
         globalThis.__puriy_scroll_y + (Number(dy) || 0)
     );
+};
+// Fase 7.30 — getComputedStyle(el) stub. Spec: devuelve un
+// CSSStyleDeclaration con todos los propiedades computadas post-cascade
+// del CSS (UA stylesheet + author rules + inline). Acá no tenemos
+// acceso al style engine del chrome desde el runtime, así que devolvemos
+// SÓLO los estilos inline que el JS mismo seteó via `el.style.X = Y`
+// (almacenados en `el._style_store` con keys kebab). Suficiente para
+// scripts que leen lo que setearon antes; insuficiente para "leer
+// computed color heredado del padre via CSS".
+globalThis.getComputedStyle = function(el) {
+    if (!el) {
+        return {
+            getPropertyValue: function() { return ''; },
+            length: 0
+        };
+    }
+    var store = el._style_store || {};
+    return {
+        getPropertyValue: function(prop) {
+            if (typeof prop !== 'string') return '';
+            // CSS spec: keys son case-insensitive y se normalizan kebab.
+            var k = prop.toLowerCase();
+            return store[k] != null ? store[k] : '';
+        },
+        // Acceso por property camelCase (`.color`, `.fontSize`) — itera
+        // el store y matchea convirtiendo a kebab. Sirve para los lookups
+        // más comunes; lookups complejos requieren getPropertyValue.
+        get color() { return store['color'] || ''; },
+        get backgroundColor() { return store['background-color'] || ''; },
+        get fontSize() { return store['font-size'] || ''; },
+        get fontWeight() { return store['font-weight'] || ''; },
+        get display() { return store['display'] || ''; },
+        get visibility() { return store['visibility'] || ''; },
+        get width() { return store['width'] || ''; },
+        get height() { return store['height'] || ''; },
+        get opacity() { return store['opacity'] || ''; },
+        get length() {
+            return Object.keys(store).length;
+        }
+    };
 };
 globalThis.__puriy_dispatch_event = function(id, event) {
     var target = globalThis.__puriy_elements[id];
@@ -5653,6 +5701,81 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.30 — getComputedStyle stub =============
+
+    #[test]
+    fn get_computed_style_lee_lo_que_el_style_seteo() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval("document.getElementById('x').style.color = 'red'").expect("e");
+        rt.eval("document.getElementById('x').style.fontSize = '14px'").expect("e");
+        // getPropertyValue con kebab name.
+        let v = rt
+            .eval("getComputedStyle(document.getElementById('x')).getPropertyValue('color')")
+            .expect("e");
+        assert_eq!(v, JsValue::String("red".into()));
+        let v = rt
+            .eval("getComputedStyle(document.getElementById('x')).getPropertyValue('font-size')")
+            .expect("e");
+        assert_eq!(v, JsValue::String("14px".into()));
+        // Property access camelCase para propiedades comunes.
+        let v = rt
+            .eval("getComputedStyle(document.getElementById('x')).color")
+            .expect("e");
+        assert_eq!(v, JsValue::String("red".into()));
+        let v = rt
+            .eval("getComputedStyle(document.getElementById('x')).fontSize")
+            .expect("e");
+        assert_eq!(v, JsValue::String("14px".into()));
+    }
+
+    #[test]
+    fn get_computed_style_prop_no_seteada_devuelve_empty_string() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        // Sin style.X seteado, getPropertyValue devuelve ''.
+        let v = rt
+            .eval("getComputedStyle(document.getElementById('x')).getPropertyValue('color')")
+            .expect("e");
+        assert_eq!(v, JsValue::String("".into()));
+        let v = rt
+            .eval("getComputedStyle(document.getElementById('x')).color")
+            .expect("e");
+        assert_eq!(v, JsValue::String("".into()));
+    }
+
+    #[test]
+    fn get_computed_style_null_no_crash() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        let v = rt
+            .eval("getComputedStyle(null).getPropertyValue('color')")
+            .expect("e");
+        assert_eq!(v, JsValue::String("".into()));
+    }
+
+    #[test]
+    fn get_computed_style_length_cuenta_propiedades_seteadas() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        let v = rt
+            .eval("getComputedStyle(document.getElementById('x')).length")
+            .expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+        rt.eval(
+            "var s = document.getElementById('x').style; \
+             s.color = 'red'; s.fontWeight = 'bold'; s.padding = '8px';",
+        )
+        .expect("e");
+        let v = rt
+            .eval("getComputedStyle(document.getElementById('x')).length")
+            .expect("e");
+        assert_eq!(v, JsValue::Number(3.0));
     }
 
     // ============= Fase 7.29 — getBoundingClientRect heurístico =============
