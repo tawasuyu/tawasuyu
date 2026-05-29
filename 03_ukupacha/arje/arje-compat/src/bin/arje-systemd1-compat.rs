@@ -136,10 +136,28 @@ impl SystemdManager {
     }
 
     async fn start_unit(&self, name: String, _mode: String) -> fdo::Result<OwnedObjectPath> {
-        warn!(%name, "StartUnit no implementado — Cards no se 'start' tras boot");
-        Err(fdo::Error::NotSupported(
-            "StartUnit: el fractal usa Cards cargadas al boot, no unit files dinámicos".into()
-        ))
+        // Mapeo: `foo.service` → card store `<ARJE_CARDS_DIR>/foo.json`.
+        // arje-zero parsea y encarna; idempotente si ya hay un Ente con
+        // ese label en cuanto al efecto observable (otro Ente con mismo
+        // label se materializa — la Card es la fuente de verdad).
+        let stem = name.strip_suffix(".service").unwrap_or(&name).to_string();
+        let mut client = BusClient::from_env().await
+            .map_err(|e| fdo::Error::Failed(format!("bus connect: {e}")))?;
+        match client.call(BusRequest::SpawnCardFromDisk { name: stem.clone() }).await {
+            Ok(BusResponse::Ok) => {
+                info!(%name, %stem, "StartUnit aplicado");
+                no_job_path()
+            }
+            Ok(BusResponse::Error(e)) => {
+                warn!(%name, %e, "StartUnit rechazado por el bus");
+                Err(fdo::Error::Failed(e))
+            }
+            Ok(other) => {
+                warn!(%name, ?other, "StartUnit respuesta inesperada");
+                Err(fdo::Error::Failed("respuesta inesperada del bus".into()))
+            }
+            Err(e) => Err(fdo::Error::Failed(format!("bus call: {e}"))),
+        }
     }
 
     async fn stop_unit(&self, name: String, _mode: String) -> fdo::Result<OwnedObjectPath> {

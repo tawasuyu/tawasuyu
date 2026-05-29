@@ -28,7 +28,16 @@ fn requires_auth(req: &BusRequest) -> bool {
         BusRequest::Announce { .. }
             | BusRequest::UpdateCapabilities { .. }
             | BusRequest::KillEnte { .. }
+            | BusRequest::SpawnCardFromDisk { .. }
     )
+}
+
+/// Directorio del card store. Override con `ARJE_CARDS_DIR`. Default
+/// canónico `/etc/arje/cards.d`. Cada archivo es un `EntityCard` JSON.
+fn cards_dir() -> std::path::PathBuf {
+    std::env::var("ARJE_CARDS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/etc/arje/cards.d"))
 }
 
 impl EnteGraph {
@@ -139,6 +148,47 @@ impl EnteGraph {
                 let resp = self.kill_ente(caller, target, signal);
                 let _ = reply.send(resp);
             }
+            BusRequest::SpawnCardFromDisk { name } => {
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = self.spawn_card_from_disk(caller, name).await;
+                let _ = reply.send(resp);
+            }
+        }
+    }
+
+    /// Carga una Card desde el card store y la encarna usando la Semilla
+    /// como requester. Bloquea I/O del filesystem en el bucle primordial —
+    /// aceptable porque el store es local y el caller espera la respuesta.
+    async fn spawn_card_from_disk(&mut self, caller: Ulid, name: String) -> BusResponse {
+        // Validación de nombre: nada de `..`, `/`, ni absolutas.
+        if name.is_empty() || name.contains('/') || name.contains("..") {
+            warn!(%caller, %name, "SpawnCardFromDisk: nombre inválido");
+            return BusResponse::Error(format!("nombre inválido: {name:?}"));
+        }
+        if let Some(reasons) = self.inhibit_block_reason() {
+            warn!(%caller, %name, ?reasons, "SpawnCardFromDisk denegado por inhibición");
+            return BusResponse::Error(format!("inhibited: {reasons}"));
+        }
+        let path = cards_dir().join(format!("{name}.json"));
+        let blob = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(%caller, %name, path = %path.display(), ?e, "card no encontrada");
+                return BusResponse::Error(format!("card {name}: {e}"));
+            }
+        };
+        let card: arje_card::EntityCard = match serde_json::from_str(&blob) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(%caller, %name, ?e, "card JSON inválido");
+                return BusResponse::Error(format!("card {name} JSON: {e}"));
+            }
+        };
+        info!(%caller, %name, label = %card.label, "SpawnCardFromDisk");
+        let seed_id = self.seed.id;
+        match self.authorize_and_spawn(card, seed_id).await {
+            Ok(()) => BusResponse::Ok,
+            Err(e) => BusResponse::Error(format!("spawn: {e}")),
         }
     }
 

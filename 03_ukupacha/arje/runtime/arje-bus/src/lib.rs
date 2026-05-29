@@ -98,6 +98,14 @@ pub enum BusRequest {
     /// `kill(pid, signal)`. Sólo Entes con `Payload::Native|Legacy` son
     /// matables (los Virtual y los Wasm responden NotApplicable).
     KillEnte { target: Ulid, signal: i32 },
+
+    /// Pide a arje-zero que cargue una Card por nombre desde el store en
+    /// disco (`/etc/arje/cards.d/{name}.json`, override con env
+    /// `ARJE_CARDS_DIR`) y la encarne. Requiere identidad autenticada —
+    /// el caller queda registrado en logs; la Card spawnea con la
+    /// Semilla como `requester` para satisfacer Capability::Spawn sin
+    /// distribuirla a cada shim de compat.
+    SpawnCardFromDisk { name: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
