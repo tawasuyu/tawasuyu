@@ -104,6 +104,7 @@ inyecta vía `CARGO_BIN_FILE_KERNEL_kernel`.
 | `manifiesto.rs` | Manifiesto de Génesis vivo (apps + estado + Configuracion) |
 | `compositor.rs` | Teselado vía `mirada-layout` + taskbar + ventanas flotantes |
 | `akasha.rs` | Demultiplexor de protocolo Akasha en RX |
+| `control.rs` | Canal de control host→kernel sobre virtio-console (`wawactl gc` → `almacen::compactar`, Fase 63) |
 | `wasm/` | Runtime `wasmi` + matriz de capacidades + ContextoCapacidades |
 | `baliza.rs` | Red de seguridad visual: panic handler, OOM handler, traza serial |
 
@@ -379,6 +380,7 @@ verifica:
 | `89fd6c4` (Fase 61) | `drivers/tableta.rs` — virtio‑input como tableta: coordenadas ABSOLUTAS por sondeo (no IRQ), comprometidas en cada `EV_SYN` por el sumidero común del ratón. Complementa al PS/2, no lo reemplaza |
 | `1f406b3` (Fase 62) | `drivers/sonido.rs` — virtio‑sound: PCM real S16/2ch/44.1 kHz por DMA no‑bloqueante (`pcm_xfer_nb`/`pcm_xfer_ok`), `tarea_sonido` mantiene periodos en vuelo anti‑underrun, mezclador square‑wave con prioridad a la voz del sistema. `sys_tono`/`altavoz` enrutan aquí; bocina del PIT como fallback |
 | `95c63cf` | App `rimay` — verbo de embeddings bare‑metal (3.3 KiB .wasm), 14ª de GENESIS |
+| (Fase 63) | `wawactl gc` — control remoto del GC sobre virtio-console (`kernel/src/control.rs` + subcomando host). `mirada-layout::outputs` — geometría pura de disposición multi-output (down-payment de multi-monitor) |
 
 ## 14. Plan — siguientes hitos
 
@@ -559,13 +561,27 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
 
 ### 14.1 Hitos genuinamente pendientes (orden de mérito)
 
-1. **`wawactl gc`**: subcomando host-side complementario a `sys_grafo_compactar`
-   (Fase 53, §14.0). Lee superbloque / dispara compactación vía socket de
-   control que aún no existe — su diseño debería reusar el virtio-console
-   ya cableado por `daemon-firma` (Fase 49) con un PREFIJO distinto
-   (`wawactl::gc_request::`), respondido por un Ente userspace mínimo con
-   `PERMISO_COMPACTAR` que invoque `sys_grafo_compactar`. Alternativa
-   pesada: nuevo char-device dedicado.
+1. **`wawactl gc`** — **HECHA (Fase 63).** Subcomando host-side
+   complementario a `sys_grafo_compactar` (Fase 53) y a `Alt+G` (Fase 57).
+   Reusa el virtio-console ya cableado por `daemon-firma` (Fase 49) con un
+   prefijo nuevo `wawactl::gc_request::`; el kernel responde
+   `wawactl::gc_reply::vivos=N muertos=M sectores=A->B`. Piezas:
+   - Host: `wawactl gc --char-device <PATH>` (`02_ruway/wawa/wawactl`),
+     emite el request y espera el veredicto con timeout (default 30 s).
+     Parser `extraer_gc_reply` tolera basura intercalada (trazas de boot,
+     ecos); 3 tests unitarios.
+   - Kernel: `kernel/src/control.rs` — `tarea_consola_control` drena el
+     virtio-console cada fotograma y, ante un `gc_request` completo, invoca
+     `almacen::compactar()` y responde por el mismo canal. Convive con la
+     cadena de firma sin pisarla: el reactor es cooperativo de un núcleo, la
+     syscall de firma drena el ring de forma síncrona dentro del tic de la
+     app, así que la tarea de control nunca corre a la vez.
+   Decisión vs el plan original: se atiende en kernel (kernel-direct, como
+   `Alt+G`) en vez de delegar a un Ente userspace con `PERMISO_COMPACTAR` —
+   el canal de control host↔kernel ya es privilegiado por construcción
+   (quien controla el virtio-console controla la VM). El Ente userspace
+   queda como endurecimiento futuro si se quiere la frontera de capacidad.
+   **Pendiente de validar en QEMU** (el autor corre la imagen).
 
 2. **Multi-monitor — refactor estructural HECHO, bloqueador físico vigente**
    (Fase 59 v1+v2). El **modelo** ya es N-output: el módulo `pantallas`
@@ -579,12 +595,24 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
    geometría real hace falta (a) forkear `bootloader_api` para exponer
    todos los handles GOP que el firmware mantiene, o (b) escribir un
    driver GPU propio (virtio-gpu / PCI) que enumere outputs en runtime.
-   **Actualización (Fase 60):** la opción (b) está a medio camino —
-   `drivers/gpu.rs` ya monta un virtio‑gpu y presenta a UN scanout. Lo
-   que falta para multi‑monitor real es enumerar los `scanouts` que el
-   dispositivo reporta (`VIRTIO_GPU_MAX_SCANOUTS` en la config) y
-   registrar uno por cada uno con su geometría vía `pantallas::registrar`.
-   La capa de software ya está lista; falta cerrar la enumeración. Limitación
+   **Actualización (Fase 60 + 63):** la opción (b) está a medio camino
+   pero el bloqueador se desplazó al CRATE. `drivers/gpu.rs` monta un
+   virtio‑gpu y presenta a UN scanout vía `virtio-drivers` 0.13. Auditado
+   el crate (Fase 63): `VirtIOGpu` LEE `num_scanouts` de la config pero
+   **no lo expone**, y `change_resolution`/`setup_framebuffer`/`set_scanout`/
+   `flush` están cableados a un único `SCANOUT_ID`/`RESOURCE_ID_FB`;
+   `get_display_info` (que trae el rect por‑scanout) es privado. Conclusión:
+   enumerar cabezas reales exige **forkear `virtio-drivers`** (exponer
+   `num_scanouts` + `get_display_info` + setup multi‑recurso) o **escribir
+   un driver virtio‑gpu nativo**. Ninguno es verificable sin QEMU
+   multi‑display.
+   Down‑payment hecho (Fase 63): la **matemática pura de disposición** de N
+   outputs vive en `mirada-layout::outputs` (`disponer(&[(w,h)], Disposicion)
+   -> Vec<Rect>` + `envolvente`), host‑testeada (7 tests) y `no_std`. El día
+   que la enumeración exista, traducir cada `Rect` a `RegionPantalla` y
+   llamar `pantallas::registrar` es lo único que resta — la geometría ya
+   está probada. La capa de software (registro N‑output + teselado por
+   output, Fase 59) sigue lista; falta sólo el origen del dato. Limitación
    conocida del MVP: `area_apps` resta la consola y la taskbar globales,
    que en N>1 sólo tienen sentido en el output primario — la decisión
    "taskbar replicada en cada monitor vs sólo en uno" queda para cuando
