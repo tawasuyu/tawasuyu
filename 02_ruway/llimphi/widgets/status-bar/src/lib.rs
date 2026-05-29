@@ -19,6 +19,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_icons::{icon_view, Icon};
 use llimphi_theme::Theme;
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 /// Paleta de la barra de estado.
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +29,11 @@ pub struct StatusBarPalette {
     pub fg_muted: Color,
     pub bg_hover: Color,
     pub border: Color,
+    /// Firma visual de la barra: gradient sutil + hairline accent en su
+    /// top edge — el hairline funciona como "techo" que separa la barra
+    /// de la zona de contenido. `None` cae al fill plano + border top
+    /// del modo previo (back-compat).
+    pub signature: Option<PanelStyle>,
 }
 
 impl StatusBarPalette {
@@ -38,6 +44,11 @@ impl StatusBarPalette {
             fg_muted: t.fg_muted,
             bg_hover: t.bg_row_hover,
             border: t.border,
+            signature: Some(PanelStyle {
+                radius: 0.0,
+                bg_base: t.bg_panel_alt,
+                ..PanelStyle::from_theme(t)
+            }),
         }
     }
 }
@@ -114,18 +125,9 @@ pub fn status_bar_view<Msg: Clone + 'static>(
     let center_region = make_region(center, JustifyContent::Center);
     let right_region = make_region(right, JustifyContent::FlexEnd);
 
-    // Borde top de 1px — separa visualmente de la zona principal.
-    let border = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(1.0_f32),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(palette.border);
-
-    let bar = View::new(Style {
+    // Modo con firma: la barra trae su propio hairline accent en el top
+    // edge — reemplaza el border plano del modo previo.
+    let bar_style = Style {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
@@ -140,9 +142,28 @@ pub fn status_bar_view<Msg: Clone + 'static>(
         align_items: Some(AlignItems::Center),
         flex_shrink: 0.0,
         ..Default::default()
+    };
+
+    if let Some(style) = palette.signature {
+        return View::new(bar_style)
+            .paint_with(panel_signature_painter(style))
+            .children(vec![left_region, center_region, right_region]);
+    }
+
+    // Back-compat: fill plano + border top 1px en el wrapper column.
+    let border = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
     })
-    .fill(palette.bg)
-    .children(vec![left_region, center_region, right_region]);
+    .fill(palette.border);
+
+    let bar = View::new(bar_style)
+        .fill(palette.bg)
+        .children(vec![left_region, center_region, right_region]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,

@@ -10,3 +10,4 @@ description = "llimphi-widget-app-header — tira superior estándar para apps L
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-panel = { workspace = true }

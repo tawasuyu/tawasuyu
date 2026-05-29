@@ -11,3 +11,4 @@ description = "llimphi-widget-status-bar — barra inferior con segmentos left/c
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-icons = { workspace = true }
+llimphi-widget-panel = { workspace = true }

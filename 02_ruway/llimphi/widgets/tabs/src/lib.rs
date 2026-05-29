@@ -36,6 +36,7 @@ const TAB_GAP: f32 = 2.0;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 /// Paleta del tab bar.
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +49,10 @@ pub struct TabsPalette {
     pub fg_text_active: Color,
     /// Línea bajo el tab activo (acento). Si es `None` no se dibuja.
     pub accent: Option<Color>,
+    /// Firma visual del área de contenido (sólo gradient — el accent
+    /// del tab activo justo encima ya cumple el rol del hairline). `None`
+    /// cae al fill plano de `bg_tab_active` (back-compat).
+    pub content_signature: Option<PanelStyle>,
 }
 
 impl Default for TabsPalette {
@@ -67,6 +72,11 @@ impl TabsPalette {
             fg_text: t.fg_muted,
             fg_text_active: t.fg_text,
             accent: Some(t.accent),
+            content_signature: Some(PanelStyle {
+                radius: 0.0,
+                bg_base: t.bg_app,
+                ..PanelStyle::neutral(t)
+            }),
         }
     }
 }
@@ -147,16 +157,22 @@ where
     .fill(palette.bg_bar)
     .children(bar_children);
 
-    let content_wrap = View::new(Style {
+    let content_style = Style {
         size: Size {
             width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
         flex_grow: 1.0,
         ..Default::default()
-    })
-    .fill(palette.bg_tab_active)
-    .children(vec![content]);
+    };
+    let content_wrap = match palette.content_signature {
+        Some(style) => View::new(content_style)
+            .paint_with(panel_signature_painter(style))
+            .children(vec![content]),
+        None => View::new(content_style)
+            .fill(palette.bg_tab_active)
+            .children(vec![content]),
+    };
 
     View::new(Style {
         flex_direction: FlexDirection::Column,

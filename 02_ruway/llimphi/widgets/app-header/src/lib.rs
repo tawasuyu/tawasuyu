@@ -20,6 +20,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 /// Paleta del header. Defaults desde el theme global.
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +29,11 @@ pub struct AppHeaderPalette {
     pub border_bottom: Color,
     pub fg_text: Color,
     pub height: f32,
+    /// Firma visual: gradient sutil + hairline accent en el top edge. Se
+    /// activa por defecto al construir desde theme. `None` cae al fill
+    /// plano de `bg` (modo back-compat para sitios que arman la palette
+    /// a mano sin theme).
+    pub signature: Option<PanelStyle>,
 }
 
 impl Default for AppHeaderPalette {
@@ -43,6 +49,10 @@ impl AppHeaderPalette {
             border_bottom: t.border,
             fg_text: t.fg_text,
             height: 40.0,
+            signature: Some(PanelStyle {
+                radius: 0.0,
+                ..PanelStyle::from_theme(t)
+            }),
         }
     }
 }
@@ -93,9 +103,10 @@ pub fn app_header<Msg: Clone + 'static>(
     })
     .children(actions);
 
-    // Bottom border: el header rellena `bg`, y debajo va una línea 1px
-    // de `border_bottom`. Lo metemos como un wrapper column.
-    let bar = View::new(Style {
+    // Bottom border: el header rellena `bg` (o aplica la firma si está
+    // habilitada), y debajo va una línea 1px de `border_bottom`. Lo
+    // metemos como un wrapper column.
+    let bar_style = Style {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
@@ -103,9 +114,15 @@ pub fn app_header<Msg: Clone + 'static>(
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
-    })
-    .fill(palette.bg)
-    .children(vec![label_view, actions_view]);
+    };
+    let bar = match palette.signature {
+        Some(style) => View::new(bar_style)
+            .paint_with(panel_signature_painter(style))
+            .children(vec![label_view, actions_view]),
+        None => View::new(bar_style)
+            .fill(palette.bg)
+            .children(vec![label_view, actions_view]),
+    };
 
     let underline = View::new(Style {
         size: Size {
