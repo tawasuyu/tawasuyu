@@ -231,14 +231,21 @@ pub struct Model {
     pub zoom: f32,
     /// `Ctrl+F` levanta la find bar arriba del viewport; Esc la cierra.
     pub find_active: bool,
-    /// Texto a buscar (se redacta vía `TextInputState`). Comparación
-    /// case-insensitive contra cada hoja de texto del box tree del
-    /// documento activo. Vacío = sin highlight.
+    /// Texto a buscar (se redacta vía `TextInputState`). Se compila a un
+    /// `Matcher` (con los toggles `find_case_sensitive`/`find_whole_word`)
+    /// contra cada hoja de texto del box tree del documento activo. Vacío
+    /// = sin highlight.
     pub find_input: TextInputState,
     /// Match "actual" (1-based) cuando el usuario navega con
     /// Enter/Shift+Enter. `0` = sin nav todavía (todos los matches en
     /// amarillo); `>= 1` = ese match pinta en naranja para destacarse.
     pub find_current: usize,
+    /// Toggle "Aa" de la find bar — distingue mayúsculas/minúsculas.
+    /// Default `false` (búsqueda case-insensitive, como los browsers).
+    pub find_case_sensitive: bool,
+    /// Toggle "W" de la find bar — sólo matchea palabras completas
+    /// (delimitadas por bordes no-alfanuméricos). Default `false`.
+    pub find_whole_word: bool,
     /// `Ctrl+B`/`Ctrl+H` abren un panel que reemplaza el viewport con la
     /// lista de bookmarks o el historial. `None` = panel cerrado y el
     /// documento se renderea normal. Sólo aplica cuando el chrome corre
@@ -286,6 +293,53 @@ impl Model {
     }
     fn tab_idx(&self, id: TabId) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
+    }
+    /// Compila el predicado de búsqueda activo (query + toggles) en un
+    /// `Matcher` reutilizable por count/highlight/scroll. La query se
+    /// normaliza una sola vez acá para no pagar el cast por hoja.
+    fn find_matcher(&self) -> Matcher {
+        Matcher::new(
+            &self.find_input.text(),
+            MatchOpts {
+                case_sensitive: self.find_case_sensitive,
+                whole_word: self.find_whole_word,
+            },
+        )
+    }
+
+    /// `Ctrl+F` — levanta la find bar con query fresca.
+    fn find_open(&mut self) {
+        self.find_active = true;
+        // Re-abrir limpia query previa para que el usuario arranque fresh.
+        self.find_input.clear();
+        self.find_current = 0;
+    }
+
+    /// `Esc` / ✕ — cierra la find bar y limpia la query (el highlight
+    /// desaparece porque el matcher queda vacío).
+    fn find_close(&mut self) {
+        self.find_active = false;
+        self.find_input.clear();
+        self.find_current = 0;
+    }
+
+    /// Navega al match siguiente (`forward=true`) o anterior con
+    /// wrap-around 1↔N. No-op si la query no tiene matches. Mueve el
+    /// `scroll_y` del tab activo al match resultante.
+    fn find_step(&mut self, forward: bool) {
+        let matcher = self.find_matcher();
+        let total = count_matches(self.active().box_tree.as_ref(), &matcher);
+        if total == 0 {
+            return;
+        }
+        self.find_current = if forward {
+            if self.find_current >= total { 1 } else { self.find_current + 1 }
+        } else if self.find_current <= 1 {
+            total
+        } else {
+            self.find_current - 1
+        };
+        scroll_to_find_match(self, &matcher);
     }
 }
 
@@ -366,6 +420,11 @@ pub enum Msg {
     FindNext,
     /// Shift+Enter — retrocede un match (wrap a N).
     FindPrev,
+    /// Click en el toggle "Aa" — alterna búsqueda case-sensitive y
+    /// resetea la navegación (cambia el conjunto de matches).
+    FindToggleCase,
+    /// Click en el toggle "W" — alterna match de palabra completa.
+    FindToggleWord,
     /// Ctrl+B — toggle del panel de bookmarks. Si el panel está abierto
     /// en bookmarks, lo cierra; sino lo abre con bookmarks.
     ToggleBookmarks,
@@ -469,6 +528,8 @@ impl App for Puriy {
             find_active: false,
             find_input: TextInputState::new(),
             find_current: 0,
+            find_case_sensitive: false,
+            find_whole_word: false,
             panel: None,
             panel_filter: TextInputState::new(),
             hover_link: None,
@@ -936,15 +997,10 @@ impl App for Puriy {
                 m.active_mut().status = "zoom: 100%".into();
             }
             Msg::FindOpen => {
-                m.find_active = true;
-                // Re-abrir limpia query previa para que el usuario arranque fresh.
-                m.find_input.clear();
-                m.find_current = 0;
+                m.find_open();
             }
             Msg::FindClose => {
-                m.find_active = false;
-                m.find_input.clear();
-                m.find_current = 0;
+                m.find_close();
             }
             Msg::FindKey(e) => {
                 let before = m.find_input.text();
@@ -958,28 +1014,20 @@ impl App for Puriy {
                 }
             }
             Msg::FindNext => {
-                let q = m.find_input.text().to_lowercase();
-                let total = count_matches(m.active().box_tree.as_ref(), &q);
-                if total > 0 {
-                    m.find_current = if m.find_current >= total {
-                        1
-                    } else {
-                        m.find_current + 1
-                    };
-                    scroll_to_find_match(&mut m, &q);
-                }
+                m.find_step(true);
             }
             Msg::FindPrev => {
-                let q = m.find_input.text().to_lowercase();
-                let total = count_matches(m.active().box_tree.as_ref(), &q);
-                if total > 0 {
-                    m.find_current = if m.find_current <= 1 {
-                        total
-                    } else {
-                        m.find_current - 1
-                    };
-                    scroll_to_find_match(&mut m, &q);
-                }
+                m.find_step(false);
+            }
+            Msg::FindToggleCase => {
+                m.find_case_sensitive = !m.find_case_sensitive;
+                // El conjunto de matches cambió → reseteamos la nav; el
+                // próximo Enter arranca desde el primer match nuevo.
+                m.find_current = 0;
+            }
+            Msg::FindToggleWord => {
+                m.find_whole_word = !m.find_whole_word;
+                m.find_current = 0;
             }
             Msg::ToggleBookmarks => {
                 m.panel = match m.panel {
@@ -1304,16 +1352,16 @@ impl App for Puriy {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let tabs_bar = tabs_bar(model);
         let header = header_bar(model.active(), model.zoom, model.hover_link.as_deref());
-        let query = model.find_input.text();
-        let query_lc = query.to_lowercase();
-        // Pre-cuenta los matches del documento contra la query para
-        // mostrarlos en la find bar. Si find_active=false o query vacía,
-        // count=0 y el viewport rendea sin highlight.
-        let find_count = if model.find_active && !query_lc.is_empty() {
-            count_matches(model.active().box_tree.as_ref(), &query_lc)
+        // Predicado de búsqueda activo (query + toggles case/whole-word).
+        // Si la find bar está cerrada, un matcher vacío → sin highlight.
+        let matcher = if model.find_active {
+            model.find_matcher()
         } else {
-            0
+            Matcher::new("", MatchOpts::default())
         };
+        // Pre-cuenta los matches del documento para mostrarlos en la
+        // find bar. Matcher vacío (bar cerrada / query vacía) → count 0.
+        let find_count = count_matches(model.active().box_tree.as_ref(), &matcher);
         let body = match model.panel {
             Some(kind) => panel_view(
                 kind,
@@ -1321,12 +1369,18 @@ impl App for Puriy {
                 model.active().source.as_deref(),
                 model.zoom,
             ),
-            None => viewport(model.active(), model.zoom, &query_lc, model.find_current),
+            None => viewport(model.active(), model.zoom, &matcher, model.find_current),
         };
 
         let mut children: Vec<View<Msg>> = vec![tabs_bar, header];
         if model.find_active {
-            children.push(find_bar(&model.find_input, find_count, model.find_current));
+            children.push(find_bar(
+                &model.find_input,
+                find_count,
+                model.find_current,
+                model.find_case_sensitive,
+                model.find_whole_word,
+            ));
         }
         children.push(body);
 
@@ -1340,18 +1394,17 @@ impl App for Puriy {
     }
 }
 
-/// Walk del box tree contando hojas de texto cuyo contenido (lowercased)
-/// contiene `query_lc`. La query ya viene en minúsculas para evitar
-/// pagar el cast por hoja.
-fn count_matches(tree: Option<&BoxTree>, query_lc: &str) -> usize {
+/// Walk del box tree contando hojas de texto que matchean el `matcher`
+/// (query + toggles case/whole-word). Matcher vacío → 0 matches.
+fn count_matches(tree: Option<&BoxTree>, matcher: &Matcher) -> usize {
     let Some(t) = tree else { return 0 };
-    if query_lc.is_empty() {
+    if matcher.is_empty() {
         return 0;
     }
     let mut count = 0_usize;
     t.walk(|b| {
         if let Some(txt) = &b.text {
-            if txt.to_lowercase().contains(query_lc) {
+            if matcher.matches(txt) {
                 count += 1;
             }
         }
@@ -1359,9 +1412,171 @@ fn count_matches(tree: Option<&BoxTree>, query_lc: &str) -> usize {
     count
 }
 
-/// Find bar — input + contador + close. Sticky entre header y viewport
-/// mientras `find_active`.
-fn find_bar(input: &TextInputState, count: usize, current: usize) -> View<Msg> {
+/// Opciones de coincidencia de la find bar (Fase 7.31). Default = búsqueda
+/// case-insensitive por substring (comportamiento clásico de browsers).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub struct MatchOpts {
+    /// Distingue mayúsculas/minúsculas.
+    pub case_sensitive: bool,
+    /// Sólo matchea palabras completas (delimitadas por bordes
+    /// no-alfanuméricos, incluyendo inicio/fin de la hoja de texto).
+    pub whole_word: bool,
+}
+
+/// Predicado de búsqueda compilado: la query ya viene normalizada
+/// (lowercased si no es case-sensitive) para no pagar el cast por hoja.
+/// Reúne el matching de count/highlight/scroll en un solo lugar para que
+/// las tres vistas cuenten exactamente los mismos matches en el mismo
+/// orden DFS.
+pub(crate) struct Matcher {
+    needle: String,
+    case_sensitive: bool,
+    whole_word: bool,
+}
+
+impl Matcher {
+    fn new(query: &str, opts: MatchOpts) -> Self {
+        let needle = if opts.case_sensitive {
+            query.to_string()
+        } else {
+            query.to_lowercase()
+        };
+        Matcher {
+            needle,
+            case_sensitive: opts.case_sensitive,
+            whole_word: opts.whole_word,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.needle.is_empty()
+    }
+
+    /// `true` si `text` contiene al menos una ocurrencia de la query bajo
+    /// las opciones activas.
+    fn matches(&self, text: &str) -> bool {
+        if self.needle.is_empty() {
+            return false;
+        }
+        if self.case_sensitive {
+            self.find_in(text)
+        } else {
+            self.find_in(&text.to_lowercase())
+        }
+    }
+
+    /// `hay` ya viene normalizado (lowercased si corresponde) — busca la
+    /// `needle` con o sin restricción de palabra completa.
+    fn find_in(&self, hay: &str) -> bool {
+        if !self.whole_word {
+            return hay.contains(&self.needle);
+        }
+        // Whole-word: cada ocurrencia debe estar delimitada por bordes de
+        // palabra (inicio/fin del string o un char no alfanumérico).
+        // Caminamos char-aware para no romper en UTF-8 multibyte.
+        let nlen = self.needle.len();
+        let mut start = 0_usize;
+        while let Some(pos) = hay[start..].find(&self.needle) {
+            let i = start + pos;
+            let before_ok = hay[..i].chars().next_back().map_or(true, |c| !is_word_char(c));
+            let after_ok = hay[i + nlen..].chars().next().map_or(true, |c| !is_word_char(c));
+            if before_ok && after_ok {
+                return true;
+            }
+            // Avanzar al siguiente boundary de char válido para no panicar
+            // en el próximo `find` ni quedar estancados.
+            start = i + 1;
+            while start < hay.len() && !hay.is_char_boundary(start) {
+                start += 1;
+            }
+        }
+        false
+    }
+}
+
+/// Un caracter cuenta como "de palabra" si es alfanumérico (cualquier
+/// alfabeto Unicode) o `_`. Lo demás (espacios, puntuación, símbolos)
+/// es un borde de palabra.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Estima la y del N-ésimo (1-based) leaf de texto que matchea el
+/// `matcher`, acumulando alturas igual que `BoxTree::find_y_of_match` del
+/// engine pero con el predicado configurable de la find bar (Fase 7.31).
+/// Se replica acá en vez de extender el engine para no tocar `boxes.rs` —
+/// el costo es ~15 líneas y mantiene el scroll consistente con los
+/// toggles case/whole-word.
+fn find_match_y(tree: &BoxTree, matcher: &Matcher, nth_1based: usize) -> Option<f32> {
+    if matcher.is_empty() || nth_1based == 0 {
+        return None;
+    }
+    let mut acc = 0.0_f32;
+    let mut seen = 0_usize;
+    find_match_y_inner(&tree.root, matcher, nth_1based, &mut acc, &mut seen)
+}
+
+fn find_match_y_inner(
+    b: &BoxNode,
+    matcher: &Matcher,
+    target_nth: usize,
+    acc: &mut f32,
+    seen: &mut usize,
+) -> Option<f32> {
+    if let Some(text) = &b.text {
+        if matcher.matches(text) {
+            *seen += 1;
+            if *seen == target_nth {
+                return Some(*acc);
+            }
+        }
+        *acc += b.font_size * b.line_height.unwrap_or(1.2);
+        return None;
+    }
+    *acc += b.margin.top + b.padding.top;
+    for c in &b.children {
+        if let Some(y) = find_match_y_inner(c, matcher, target_nth, acc, seen) {
+            return Some(y);
+        }
+    }
+    *acc += b.margin.bottom + b.padding.bottom;
+    None
+}
+
+/// Chip-toggle de la find bar (`Aa` case-sensitive / `W` whole-word).
+/// Activo = fondo azul; inactivo = gris apagado. Click → `msg`.
+fn find_toggle(label: &str, active: bool, msg: Msg) -> View<Msg> {
+    let (bg, fg) = if active {
+        (Color::from_rgb8(86, 124, 196), Color::from_rgb8(245, 245, 255))
+    } else {
+        (Color::from_rgb8(70, 70, 84), Color::from_rgb8(165, 165, 180))
+    };
+    View::new(Style {
+        size: Size { width: length(26.0_f32), height: length(22.0_f32) },
+        margin: Rect {
+            left: length(6.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(3.0)
+    .text_aligned(label, 11.0, fg, Alignment::Center)
+    .on_click(msg)
+}
+
+/// Find bar — input + contador + toggles (Aa/W) + close. Sticky entre
+/// header y viewport mientras `find_active`.
+fn find_bar(
+    input: &TextInputState,
+    count: usize,
+    current: usize,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> View<Msg> {
     let palette = TextInputPalette::default();
     // Siempre focado mientras está abierta — Ctrl+F fue la última acción
     // explícita del usuario, no tiene sentido que el input no acepte teclas.
@@ -1425,6 +1640,8 @@ fn find_bar(input: &TextInputState, count: usize, current: usize) -> View<Msg> {
             ..Default::default()
         })
         .text_aligned(count_label, 11.0, Color::from_rgb8(200, 200, 215), Alignment::Start),
+        find_toggle("Aa", case_sensitive, Msg::FindToggleCase),
+        find_toggle("W", whole_word, Msg::FindToggleWord),
         close,
     ])
 }
@@ -2702,7 +2919,7 @@ fn header_bar(t: &TabState, zoom: f32, hover_link: Option<&str>) -> View<Msg> {
 /// no tengan 10 params; los `*_counter` se mutan por referencia.
 struct RenderCtx<'a> {
     zoom: f32,
-    find_query_lc: &'a str,
+    matcher: &'a Matcher,
     find_current: usize,
     find_counter: usize,
     details_open: &'a [bool],
@@ -2715,7 +2932,7 @@ struct RenderCtx<'a> {
     select_counter: usize,
 }
 
-fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -> View<Msg> {
+fn viewport(t: &TabState, zoom: f32, matcher: &Matcher, find_current: usize) -> View<Msg> {
     let Some(tree) = t.box_tree.as_ref() else {
         let msg = if t.url == NEW_TAB_URL {
             "(pestaña vacía · escribí una URL arriba)"
@@ -2741,7 +2958,7 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -
     // escala es el contenido (font_size + spacing del box tree).
     let mut ctx = RenderCtx {
         zoom,
-        find_query_lc,
+        matcher,
         find_current,
         find_counter: 0,
         details_open: &t.details_open,
@@ -2866,11 +3083,11 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // (find_current, 1-based) y pinta en naranja para destacarse —
     // el resto en amarillo. El paint del fill normal del nodo
     // (background CSS) se sobrescribe si hay match.
-    let find_hit = !ctx.find_query_lc.is_empty()
-        && b.text
-            .as_ref()
-            .map(|s| s.to_lowercase().contains(ctx.find_query_lc))
-            .unwrap_or(false);
+    let find_hit = b
+        .text
+        .as_ref()
+        .map(|s| ctx.matcher.matches(s))
+        .unwrap_or(false);
     let find_hit_color: Option<Color> = if find_hit {
         ctx.find_counter += 1;
         let is_current = ctx.find_current != 0 && ctx.find_counter == ctx.find_current;
@@ -3262,11 +3479,11 @@ fn render_link_subtree(
     let mut view = View::new(box_style(b, zoom))
         .on_click(nav_msg(target))
         .on_middle_click(Msg::NavigateNewTab(target.to_string()));
-    let find_hit = !ctx.find_query_lc.is_empty()
-        && b.text
-            .as_ref()
-            .map(|s| s.to_lowercase().contains(ctx.find_query_lc))
-            .unwrap_or(false);
+    let find_hit = b
+        .text
+        .as_ref()
+        .map(|s| ctx.matcher.matches(s))
+        .unwrap_or(false);
     let find_hit_color: Option<Color> = if find_hit {
         ctx.find_counter += 1;
         let is_current = ctx.find_current != 0 && ctx.find_counter == ctx.find_current;
@@ -4417,7 +4634,7 @@ fn download_path(filename: &str) -> std::path::PathBuf {
 /// `find_y_of_match` del box tree con el contador 1-based; si encuentra
 /// la y aproximada, setea `scroll_y` ~80px arriba del match para dar
 /// contexto visual. No-op si no hay box tree o el match no se encuentra.
-fn scroll_to_find_match(m: &mut Model, query_lower: &str) {
+fn scroll_to_find_match(m: &mut Model, matcher: &Matcher) {
     if m.find_current == 0 {
         return;
     }
@@ -4426,7 +4643,7 @@ fn scroll_to_find_match(m: &mut Model, query_lower: &str) {
         .active()
         .box_tree
         .as_ref()
-        .and_then(|bt| bt.find_y_of_match(query_lower, nth));
+        .and_then(|bt| find_match_y(bt, matcher, nth));
     if let Some(y) = y {
         let t = m.active_mut();
         t.scroll_y = (y - 80.0).max(0.0);
@@ -4513,22 +4730,26 @@ mod tests {
         );
     }
 
+    /// Matcher case-insensitive por substring (el default de la find bar).
+    fn ci(q: &str) -> Matcher {
+        Matcher::new(q, MatchOpts::default())
+    }
+
     #[test]
     fn count_matches_devuelve_cero_cuando_query_vacia() {
         let tree = parse("<p>hola mundo</p>");
-        assert_eq!(count_matches(Some(&tree), ""), 0);
+        assert_eq!(count_matches(Some(&tree), &ci("")), 0);
     }
 
     #[test]
     fn count_matches_devuelve_cero_cuando_tree_none() {
-        assert_eq!(count_matches(None, "algo"), 0);
+        assert_eq!(count_matches(None, &ci("algo")), 0);
     }
 
     #[test]
     fn count_matches_es_case_insensitive() {
         let tree = parse("<p>Hola MUNDO</p><p>mundO repetido</p>");
-        // La query ya viene lowercased — emula lo que hace `view()`.
-        let n = count_matches(Some(&tree), "mundo");
+        let n = count_matches(Some(&tree), &ci("mundo"));
         assert!(n >= 2, "esperaba >= 2 matches, conseguí {n}");
     }
 
@@ -4538,14 +4759,178 @@ mod tests {
             "<article><h1>Tutorial</h1><p>Este tutorial cubre Rust</p><p>Otra cosa</p></article>",
         );
         // La query "tutorial" matchea el <h1> y el primer <p> (ambos como hojas).
-        let n = count_matches(Some(&tree), "tutorial");
+        let n = count_matches(Some(&tree), &ci("tutorial"));
         assert_eq!(n, 2);
     }
 
     #[test]
     fn count_matches_query_sin_hits_devuelve_cero() {
         let tree = parse("<p>foo bar baz</p>");
-        assert_eq!(count_matches(Some(&tree), "qwerty"), 0);
+        assert_eq!(count_matches(Some(&tree), &ci("qwerty")), 0);
+    }
+
+    // ── Fase 7.31 — toggles case-sensitive / whole-word ──────────────
+
+    #[test]
+    fn matcher_case_sensitive_distingue_mayusculas() {
+        let tree = parse("<p>Hola MUNDO</p><p>mundo bajo</p>");
+        let sensible = Matcher::new("mundo", MatchOpts { case_sensitive: true, whole_word: false });
+        // Sólo el "mundo" en minúsculas del segundo <p> matchea.
+        assert_eq!(count_matches(Some(&tree), &sensible), 1);
+        // Sin el toggle, ambos (MUNDO y mundo) matchean.
+        assert_eq!(count_matches(Some(&tree), &ci("mundo")), 2);
+    }
+
+    #[test]
+    fn matcher_whole_word_excluye_substrings() {
+        let tree = parse("<p>cat</p><p>category</p><p>a cat sat</p>");
+        let word = Matcher::new("cat", MatchOpts { case_sensitive: false, whole_word: true });
+        // "cat" y "a cat sat" matchean como palabra; "category" no.
+        assert_eq!(count_matches(Some(&tree), &word), 2);
+        // Sin whole-word, los tres contienen "cat".
+        assert_eq!(count_matches(Some(&tree), &ci("cat")), 3);
+    }
+
+    #[test]
+    fn matcher_whole_word_respeta_bordes_unicode() {
+        let tree = parse("<p>café con leche</p><p>cafetería</p>");
+        let word = Matcher::new("café", MatchOpts { case_sensitive: false, whole_word: true });
+        // "café" es palabra completa en el primero; "cafetería" no contiene
+        // "café" como substring (la 'é' difiere), así que igual no matchea.
+        assert_eq!(count_matches(Some(&tree), &word), 1);
+    }
+
+    #[test]
+    fn matcher_query_vacia_no_matchea_nada() {
+        let m = ci("");
+        assert!(m.is_empty());
+        assert!(!m.matches("cualquier texto"));
+    }
+
+    // ── Fase 7.31 — flujo de Msg de la find bar (sin Handle) ─────────
+    // `update` necesita un `Handle` (no construible en test), pero los
+    // handlers de find delegan en métodos puros de `Model`. Testeamos
+    // esos métodos para cubrir el flujo open → query → next → prev.
+
+    /// Model mínimo con una sola pestaña cuyo box tree es `parse(html)`.
+    fn model_con_doc(html: &str) -> Model {
+        let mut t = TabState::new("about:test".into());
+        t.box_tree = Some(parse(html));
+        Model {
+            tabs: vec![t],
+            active: 0,
+            zoom: 1.0,
+            find_active: false,
+            find_input: TextInputState::new(),
+            find_current: 0,
+            find_case_sensitive: false,
+            find_whole_word: false,
+            panel: None,
+            panel_filter: TextInputState::new(),
+            hover_link: None,
+            start: std::time::Instant::now(),
+        }
+    }
+
+    #[test]
+    fn find_open_y_close_alternan_estado_y_limpian_query() {
+        let mut m = model_con_doc("<p>uno</p><p>dos</p>");
+        m.find_open();
+        assert!(m.find_active);
+        assert!(m.find_input.text().is_empty());
+        assert_eq!(m.find_current, 0);
+        m.find_input.set_text("dos");
+        m.find_current = 1;
+        m.find_close();
+        assert!(!m.find_active);
+        assert!(m.find_input.text().is_empty(), "close limpia la query");
+        assert_eq!(m.find_current, 0);
+    }
+
+    #[test]
+    fn find_step_avanza_y_wrapea() {
+        // Tres hojas de texto con "rust" → tres matches.
+        let mut m = model_con_doc(
+            "<p>rust uno</p><p>dos rust</p><p>tres rust cuatro</p>",
+        );
+        m.find_open();
+        m.find_input.set_text("rust");
+        // open → primer next va al match 1.
+        m.find_step(true);
+        assert_eq!(m.find_current, 1);
+        m.find_step(true);
+        assert_eq!(m.find_current, 2);
+        m.find_step(true);
+        assert_eq!(m.find_current, 3);
+        // Cuarto next wrapea a 1.
+        m.find_step(true);
+        assert_eq!(m.find_current, 1);
+    }
+
+    #[test]
+    fn find_step_prev_wrapea_al_ultimo() {
+        let mut m = model_con_doc("<p>foo</p><p>foo otra vez</p>");
+        m.find_open();
+        m.find_input.set_text("foo");
+        // Desde 0, prev wrapea al último (total = 2).
+        m.find_step(false);
+        assert_eq!(m.find_current, 2);
+        m.find_step(false);
+        assert_eq!(m.find_current, 1);
+        m.find_step(false);
+        assert_eq!(m.find_current, 2);
+    }
+
+    #[test]
+    fn find_step_sin_matches_es_no_op() {
+        let mut m = model_con_doc("<p>hola</p>");
+        m.find_open();
+        m.find_input.set_text("zzz");
+        m.find_step(true);
+        assert_eq!(m.find_current, 0, "sin matches no avanza");
+    }
+
+    #[test]
+    fn find_step_mueve_scroll_del_tab() {
+        // Un documento alto: el match vive bien abajo → scroll_y > 0.
+        let mut m = model_con_doc(
+            "<p>arriba</p><p>x</p><p>x</p><p>x</p><p>x</p><p>x</p><p>objetivo abajo</p>",
+        );
+        m.find_open();
+        m.find_input.set_text("objetivo");
+        m.find_step(true);
+        assert_eq!(m.find_current, 1);
+        assert!(
+            m.tabs[0].scroll_y >= 0.0,
+            "scroll_y debe ser no-negativo tras navegar"
+        );
+    }
+
+    #[test]
+    fn toggle_case_resetea_navegacion_y_filtra() {
+        let mut m = model_con_doc("<p>Rust</p><p>rust</p>");
+        m.find_open();
+        m.find_input.set_text("rust");
+        // Case-insensitive: ambos matchean → next llega al 2.
+        m.find_step(true);
+        m.find_step(true);
+        assert_eq!(m.find_current, 2);
+        // Activar case-sensitive resetea la nav y reduce a 1 match.
+        m.find_case_sensitive = !m.find_case_sensitive;
+        m.find_current = 0;
+        let total = count_matches(m.active().box_tree.as_ref(), &m.find_matcher());
+        assert_eq!(total, 1, "case-sensitive deja sólo el 'rust' minúscula");
+        assert_eq!(m.find_current, 0, "toggle resetea la nav");
+    }
+
+    #[test]
+    fn toggle_whole_word_filtra_substrings() {
+        let mut m = model_con_doc("<p>cat</p><p>category</p>");
+        m.find_open();
+        m.find_input.set_text("cat");
+        m.find_whole_word = true;
+        let total = count_matches(m.active().box_tree.as_ref(), &m.find_matcher());
+        assert_eq!(total, 1, "whole-word excluye 'category'");
     }
 
     #[test]
@@ -4721,6 +5106,8 @@ mod tests {
             find_active: false,
             find_input: TextInputState::new(),
             find_current: 0,
+            find_case_sensitive: false,
+            find_whole_word: false,
             panel: None,
             panel_filter: TextInputState::new(),
             hover_link: None,
@@ -4750,6 +5137,8 @@ mod tests {
             find_active: false,
             find_input: TextInputState::new(),
             find_current: 0,
+            find_case_sensitive: false,
+            find_whole_word: false,
             panel: None,
             panel_filter: TextInputState::new(),
             hover_link: None,
