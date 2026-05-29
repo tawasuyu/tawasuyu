@@ -249,6 +249,43 @@ globalThis.cancelAnimationFrame = function(raf_id) {
         delete globalThis.__puriy_raf.ids[raf_id];
     }
 };
+// Fase 7.43 — requestIdleCallback / cancelIdleCallback. Apps usan esto
+// para diferir trabajo no-crítico (analytics flush, cache warming,
+// prefetch) hasta que el main thread esté libre. **Spec real**: el
+// browser corre el callback cuando detecta idle time; le pasa un
+// `IdleDeadline { timeRemaining(), didTimeout }`. Si pasa `opts.timeout`
+// ms sin idle, dispara igual con `didTimeout=true`.
+// **Acá**: shim sobre setTimeout(cb, 0). El deadline simula 50ms libres
+// siempre (apps no toman decisiones basadas en eso normalmente — sólo
+// chequean `> 0`). Si hay timeout, lo respetamos como delay del
+// setTimeout. id propio para que `cancelIdleCallback` no afecte timers.
+globalThis.__puriy_ric = { next_id: 1, ids: {} };
+globalThis.requestIdleCallback = function(cb, opts) {
+    var ric_id = globalThis.__puriy_ric.next_id++;
+    var delay = (opts && typeof opts.timeout === 'number' && opts.timeout > 0)
+        ? Math.min(opts.timeout, 50)
+        : 0;
+    var didTimeout = !!(opts && typeof opts.timeout === 'number' && opts.timeout > 0);
+    var timer_id = globalThis.setTimeout(function() {
+        delete globalThis.__puriy_ric.ids[ric_id];
+        if (typeof cb !== 'function') return;
+        var deadline = {
+            didTimeout: didTimeout,
+            timeRemaining: function() { return 50; }
+        };
+        try { cb(deadline); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }, delay);
+    globalThis.__puriy_ric.ids[ric_id] = timer_id;
+    return ric_id;
+};
+globalThis.cancelIdleCallback = function(ric_id) {
+    var timer_id = globalThis.__puriy_ric.ids[ric_id];
+    if (timer_id) {
+        globalThis.clearTimeout(timer_id);
+        delete globalThis.__puriy_ric.ids[ric_id];
+    }
+};
 globalThis.__puriy_tick = function(now) {
     var q = globalThis.__puriy_timers.queue;
     var ids = Object.keys(q);
@@ -7372,6 +7409,58 @@ mod tests {
         } else {
             panic!("expected string, got {v:?}");
         }
+    }
+
+    // ============= Fase 7.43 — requestIdleCallback =============
+
+    #[test]
+    fn request_idle_callback_corre_callback_con_deadline() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var ran = false; var deadline = null; \
+             requestIdleCallback(function(d) { ran = true; deadline = d; });",
+        )
+        .expect("e");
+        // setTimeout(0) → fire en tick(0).
+        rt.tick(0).expect("tick");
+        let v = rt.eval("ran").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        // El deadline tiene didTimeout=false (sin opts.timeout) y timeRemaining() > 0.
+        let v = rt.eval("deadline.didTimeout").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+        let v = rt.eval("deadline.timeRemaining()").expect("e");
+        assert_eq!(v, JsValue::Number(50.0));
+    }
+
+    #[test]
+    fn request_idle_callback_con_timeout_marca_did_timeout() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var got = null; \
+             requestIdleCallback(function(d) { got = d.didTimeout; }, {timeout: 30});",
+        )
+        .expect("e");
+        // El delay queda en min(30, 50) = 30ms — tick(30) lo fire.
+        rt.tick(30).expect("tick");
+        let v = rt.eval("got").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cancel_idle_callback_evita_el_disparo() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var ran = false; \
+             var id = requestIdleCallback(function() { ran = true; }); \
+             cancelIdleCallback(id);",
+        )
+        .expect("e");
+        rt.tick(0).expect("tick");
+        let v = rt.eval("ran").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
     }
 
     // ============= Fase 7.42 — Page Visibility =============
