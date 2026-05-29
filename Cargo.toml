@@ -229,6 +229,7 @@ members = [
     "02_ruway/mirada/mirada-protocol",
     "02_ruway/multimedia/multimedia-app",
     "02_ruway/multimedia/multimedia-core",
+    "02_ruway/multimedia/multimedia-source-gif",
     "02_ruway/nahual/libs/meta-runtime",
     "02_ruway/nahual/libs/meta-schema",
     "02_ruway/wawa/wawa-panel-llimphi",

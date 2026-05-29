@@ -1,14 +1,16 @@
 //! multimedia-app — primer reproductor del dominio.
 //!
-//! Pipeline: [`multimedia_core::TestCard`] genera RGBA cada ~33 ms,
-//! lo empuja a un [`llimphi_surface::ExternalSurface`], y la UI
-//! Llimphi lo expone en un canvas central vía `View::gpu_paint_with`.
-//! Es el MVP feo: gradiente animado + círculo rebotando. Sin
-//! ffmpeg/gstreamer ni nada. Sirve para validar que la cadena
-//! productor → surface → frame anda extremo a extremo.
+//! Pipeline: una fuente [`FrameSource`] genera RGBA, lo empuja a un
+//! [`llimphi_surface::ExternalSurface`], y la UI Llimphi lo expone en
+//! un canvas central vía `View::gpu_paint_with`. Con argumento es un
+//! GIF en disco (loop infinito); sin argumento cae al [`TestCard`]
+//! sintético (gradiente animado + círculo rebotando).
 //!
-//! Corre con: `cargo run -p multimedia-app --release`.
+//! Corre con:
+//!   `cargo run -p multimedia-app --release`
+//!   `cargo run -p multimedia-app --release -- /ruta/al/anim.gif`
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -21,11 +23,12 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{App, Handle, View};
 use multimedia_core::{FrameSource, TestCard};
+use multimedia_source_gif::GifSource;
 use parking_lot::Mutex;
 
-const SOURCE_W: u32 = 480;
-const SOURCE_H: u32 = 270;
-const SOURCE_FPS: f32 = 30.0;
+const TESTCARD_W: u32 = 480;
+const TESTCARD_H: u32 = 270;
+const TESTCARD_FPS: f32 = 30.0;
 const TICK_MS: u64 = 33;
 
 #[derive(Clone)]
@@ -40,9 +43,14 @@ struct Model {
 
 struct Pipeline {
     surface: ExternalSurface,
-    source: Mutex<TestCard>,
+    source: Mutex<Box<dyn FrameSource + Send>>,
     buf: Mutex<Vec<u8>>,
     last_tick: Mutex<Instant>,
+}
+
+fn config_slot() -> &'static OnceLock<Config> {
+    static SLOT: OnceLock<Config> = OnceLock::new();
+    &SLOT
 }
 
 fn pipeline_slot() -> &'static OnceLock<Pipeline> {
@@ -50,12 +58,42 @@ fn pipeline_slot() -> &'static OnceLock<Pipeline> {
     &SLOT
 }
 
+struct Config {
+    label: String,
+    init_source: fn() -> Box<dyn FrameSource + Send>,
+    // El path del GIF (si aplica) viaja por otro static — fn pointers
+    // no capturan, así que `init_source` lo lee de `gif_path_slot`.
+}
+
+fn gif_path_slot() -> &'static OnceLock<PathBuf> {
+    static SLOT: OnceLock<PathBuf> = OnceLock::new();
+    &SLOT
+}
+
+fn new_testcard() -> Box<dyn FrameSource + Send> {
+    Box::new(TestCard::new(TESTCARD_W, TESTCARD_H, TESTCARD_FPS))
+}
+
+fn new_gif() -> Box<dyn FrameSource + Send> {
+    let path = gif_path_slot().get().expect("gif path set");
+    match GifSource::from_path(path) {
+        Ok(s) => Box::new(s),
+        Err(e) => {
+            eprintln!("multimedia-app: error abriendo GIF {path:?}: {e} — caigo a testcard");
+            new_testcard()
+        }
+    }
+}
+
 fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'static Pipeline {
-    pipeline_slot().get_or_init(|| Pipeline {
-        surface: ExternalSurface::new(device, queue),
-        source: Mutex::new(TestCard::new(SOURCE_W, SOURCE_H, SOURCE_FPS)),
-        buf: Mutex::new(Vec::with_capacity((SOURCE_W * SOURCE_H * 4) as usize)),
-        last_tick: Mutex::new(Instant::now()),
+    pipeline_slot().get_or_init(|| {
+        let cfg = config_slot().get().expect("config set");
+        Pipeline {
+            surface: ExternalSurface::new(device, queue),
+            source: Mutex::new((cfg.init_source)()),
+            buf: Mutex::new(Vec::new()),
+            last_tick: Mutex::new(Instant::now()),
+        }
     })
 }
 
@@ -66,7 +104,7 @@ impl App for MultimediaApp {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "multimedia · testcard"
+        "multimedia · player"
     }
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
@@ -87,6 +125,7 @@ impl App for MultimediaApp {
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
+        let cfg = config_slot().get().expect("config set");
         let secs = model.started_at.elapsed().as_secs_f32().max(0.001);
         let fps = model.frames as f32 / secs;
 
@@ -100,7 +139,7 @@ impl App for MultimediaApp {
             ..Default::default()
         })
         .text(
-            format!("multimedia — testcard {SOURCE_W}×{SOURCE_H} @ {SOURCE_FPS:.0} fps"),
+            format!("multimedia — {}", cfg.label),
             22.0,
             Color::from_rgba8(220, 230, 245, 255),
         );
@@ -114,10 +153,6 @@ impl App for MultimediaApp {
             ..Default::default()
         };
 
-        // Marco oscuro debajo de la surface — vello pinta el fill, GPU
-        // pinta el video encima con LoadOp::Load. El callback de
-        // gpu_paint_with inicializa el pipeline en el primer frame
-        // (cuando ya tenemos device/queue) y avanza el TestCard.
         let canvas = View::new(canvas_style)
             .fill(Color::from_rgba8(10, 12, 18, 255))
             .radius(10.0)
@@ -174,5 +209,22 @@ impl App for MultimediaApp {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cfg = match args.first() {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            let label = format!("gif {}", path.display());
+            gif_path_slot().set(path).ok();
+            Config {
+                label,
+                init_source: new_gif,
+            }
+        }
+        None => Config {
+            label: format!("testcard {TESTCARD_W}×{TESTCARD_H} @ {TESTCARD_FPS:.0} fps"),
+            init_source: new_testcard,
+        },
+    };
+    config_slot().set(cfg).ok();
     llimphi_ui::run::<MultimediaApp>();
 }
