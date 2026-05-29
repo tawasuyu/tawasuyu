@@ -1585,6 +1585,41 @@ globalThis.scrollBy = function(dx, dy) {
         globalThis.__puriy_scroll_y + (Number(dy) || 0)
     );
 };
+// Fase 7.37 — resolver URL relativa contra una base.
+// Casos cubiertos:
+//   - URL ya absoluta (`scheme:...`)            → tal cual
+//   - protocol-relative (`//host/path`)         → scheme de base + url
+//   - absoluta de path (`/path`)                → origin de base + url
+//   - solo query (`?q=1`)                       → base sin query + url
+//   - solo hash (`#h`)                          → base sin hash + url
+//   - relativa de path (`foo/bar`, `../x`)      → dir(base) + url (sin
+//     normalizar `..`/`.` — divergencia documentada; el spec WHATWG sí
+//     los colapsa. Cuando aparezca caso real, agregar normalize_segments).
+// Sin base, devuelve la url tal cual (matchea spec — `new URL(rel)` tira).
+globalThis.__puriy_resolve_url = function(url, base) {
+    if (url == null) return base || '';
+    url = String(url);
+    if (!url) return base || '';
+    // Absolute con scheme.
+    if (/^[a-z][a-z0-9+.\-]*:/i.test(url)) return url;
+    if (!base) return url;
+    base = String(base);
+    var m = /^([a-z][a-z0-9+.\-]*:)\/\/([^\/?#]+)(\/[^?#]*)?/i.exec(base);
+    if (!m) return url;
+    var scheme = m[1];
+    var origin = scheme + '//' + m[2];
+    var basePath = m[3] || '/';
+    if (url.indexOf('//') === 0) return scheme + url;
+    if (url.charAt(0) === '/') return origin + url;
+    if (url.charAt(0) === '?') return origin + basePath + url;
+    if (url.charAt(0) === '#') {
+        var hp = base.indexOf('#');
+        return (hp >= 0 ? base.substring(0, hp) : base) + url;
+    }
+    var lastSlash = basePath.lastIndexOf('/');
+    var dir = lastSlash >= 0 ? basePath.substring(0, lastSlash + 1) : '/';
+    return origin + dir + url;
+};
 // Fase 7.31 — fetch() async. Crea un Promise, registra los handlers
 // resolve/reject en `__puriy_fetch_pending[id]`, publica una mutación
 // `kind: 'fetch:<id>'` con el payload serializado, y devuelve el
@@ -1635,7 +1670,10 @@ globalThis.fetch = function(url, init) {
     }
     // Payload: campos separados por U+001D (Group Separator).
     // [0] id, [1] method, [2] url, [3] body, [4] headers...
-    var payload = String(id) + '' + method + '' + String(url || '')
+    // Fase 7.37 — resolver URL relativa contra location.href.
+    var base = (globalThis.location && globalThis.location.href) || '';
+    var resolved = globalThis.__puriy_resolve_url(url, base);
+    var payload = String(id) + '' + method + '' + resolved
                 + '' + (has_body ? '1' : '0')
                 + '' + body
                 + '' + hdr_pairs.join('');
@@ -6961,6 +6999,64 @@ mod tests {
         } else {
             panic!("expected string, got {v:?}");
         }
+    }
+
+    // ============= Fase 7.37 — URL relativa contra base =============
+
+    #[test]
+    fn fetch_url_absoluta_de_path_resuelve_contra_origin() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/page", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("fetch('/api/x')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[2], "https://example.com/api/x");
+    }
+
+    #[test]
+    fn fetch_url_absoluta_completa_se_respeta() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/page", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("fetch('https://other.com/raw')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[2], "https://other.com/raw");
+    }
+
+    #[test]
+    fn fetch_url_relativa_resuelve_contra_directorio_base() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/a/b/page.html", "b")
+            .expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("fetch('foo.json')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[2], "https://example.com/a/b/foo.json");
+    }
+
+    #[test]
+    fn fetch_url_protocol_relative_hereda_scheme() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/page", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("fetch('//cdn.example.com/lib.js')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[2], "https://cdn.example.com/lib.js");
+    }
+
+    #[test]
+    fn fetch_url_solo_query_reemplaza_query_de_base() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/page", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("fetch('?q=hola')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[2], "https://example.com/page?q=hola");
     }
 
     // ============= Fase 7.36 — AbortSignal.timeout / .any =============
