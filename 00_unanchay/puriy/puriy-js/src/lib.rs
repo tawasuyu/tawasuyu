@@ -5705,6 +5705,47 @@ mod tests {
         assert_eq!(rt.eval("done2").expect("e"), JsValue::Bool(true));
     }
 
+    // ============= Fase 7.50 — URL.createObjectURL / revokeObjectURL =============
+
+    #[test]
+    fn url_create_object_url_resuelve_al_blob() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var b = new Blob(['x'], { type: 'text/plain' }); \
+             var u = URL.createObjectURL(b); \
+             var isBlobScheme = u.indexOf('blob:') === 0; \
+             var resolved = globalThis.__puriy_resolve_blob_url(u); \
+             var same = resolved === b;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("isBlobScheme").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("same").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn url_revoke_object_url_borra_la_entrada() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var b = new Blob(['x']); var u = URL.createObjectURL(b); \
+             URL.revokeObjectURL(u); \
+             var resolved = globalThis.__puriy_resolve_blob_url(u);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("resolved").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn url_create_object_url_da_urls_unicas() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var u1 = URL.createObjectURL(new Blob(['a'])); \
+             var u2 = URL.createObjectURL(new Blob(['b'])); \
+             var distintas = u1 !== u2;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("distintas").expect("e"), JsValue::Bool(true));
+    }
+
     // ============= Fase 7.37 — URL relativa contra base =============
 
     #[test]

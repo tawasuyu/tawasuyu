@@ -11,6 +11,7 @@ mod window_events;
 mod url;
 mod streams;
 mod blob;
+mod objecturl;
 mod fetch;
 mod headers;
 mod abort;
@@ -28,6 +29,7 @@ pub(crate) use window_events::WINDOW_EVENTS_BOOTSTRAP;
 pub(crate) use url::URL_BOOTSTRAP;
 pub(crate) use streams::STREAMS_BOOTSTRAP;
 pub(crate) use blob::BLOB_BOOTSTRAP;
+pub(crate) use objecturl::OBJECT_URL_BOOTSTRAP;
 pub(crate) use fetch::FETCH_BOOTSTRAP;
 pub(crate) use headers::HEADERS_BOOTSTRAP;
 pub(crate) use abort::ABORT_BOOTSTRAP;
@@ -47,6 +49,7 @@ pub(crate) const ALL: &[&str] = &[
     URL_BOOTSTRAP,
     STREAMS_BOOTSTRAP,
     BLOB_BOOTSTRAP,
+    OBJECT_URL_BOOTSTRAP,
     FETCH_BOOTSTRAP,
     HEADERS_BOOTSTRAP,
     ABORT_BOOTSTRAP,
