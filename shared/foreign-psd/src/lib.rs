@@ -24,9 +24,11 @@
 //!   tullpu las soporta como hash aparte — el bridge no las extrae aún).
 //! - Grupos / folders. Las capas hijas aparecen, los nodos folder se ignoran.
 //! - Clipping masks, layer styles, smart objects, ajustes (curvas, niveles…).
-//! - Modos de fusión que tullpu aún no compone (Color Burn, Soft/Hard Light,
-//!   HSL, etc.); caen a [`ModoFusion::Normal`] y se anotan en
-//!   [`InformeImportacion::caidas_a_normal`].
+//! - Modo de fusión `Dissolve` (PRNG por píxel, único residuo tras Fase 9):
+//!   cae a [`ModoFusion::Normal`] y se anota en
+//!   [`InformeImportacion::caidas_a_normal`]. El resto del catálogo
+//!   Photoshop (Burn/Dodge/Light/HSL/Comparativos por luminosidad) mapea
+//!   directo al modelo nativo.
 //!
 //! Es el espejo conceptual de `pluma/foreign-docx`: importa lo legible y
 //! deja la fidelidad fancy al editor nativo.
@@ -230,9 +232,11 @@ fn mapear_blend(disc: u32) -> (ModoFusion, bool) {
         SATURATION => (ModoFusion::HslSaturacion, false),
         COLOR => (ModoFusion::HslColor, false),
         LUMINOSITY => (ModoFusion::HslLuminosidad, false),
-        // Quedan en degradado los blends "exotic" sin equivalente per-pixel
-        // sensato: Dissolve (necesita PRNG por píxel), DarkerColor y
-        // LighterColor (basados en luminosidad pero no per-channel).
+        DARKER_COLOR => (ModoFusion::ColorMasOscuro, false),
+        LIGHTER_COLOR => (ModoFusion::ColorMasClaro, false),
+        // El único blend "exotic" que queda en degradado es Dissolve, que
+        // necesita PRNG por píxel — no cabe en el modelo determinista de
+        // `mezclar_canal`. El resto del catálogo Photoshop ya cierra.
         _ => (ModoFusion::Normal, true),
     }
 }
@@ -407,16 +411,24 @@ mod tests {
         assert_eq!(mapear_blend(COLOR), (ModoFusion::HslColor, false));
         assert_eq!(mapear_blend(LUMINOSITY), (ModoFusion::HslLuminosidad, false));
 
-        // El residuo "degradado" queda sólo en los exotic per-pixel sin
-        // equivalente sensato: Dissolve (PRNG por píxel) y
-        // DarkerColor/LighterColor (comparativos basados en luminosidad).
-        for raro in [DISSOLVE, DARKER_COLOR, LIGHTER_COLOR] {
-            let (modo, degradado) = mapear_blend(raro);
-            assert_eq!(modo, ModoFusion::Normal);
-            assert!(degradado, "esperaba degradado para disc {raro}");
-        }
+        // Comparativos por luminosidad: ahora directos al triple per-píxel.
+        assert_eq!(
+            mapear_blend(DARKER_COLOR),
+            (ModoFusion::ColorMasOscuro, false)
+        );
+        assert_eq!(
+            mapear_blend(LIGHTER_COLOR),
+            (ModoFusion::ColorMasClaro, false)
+        );
+
+        // Único residuo "degradado" después de Fase 9: Dissolve (PRNG por
+        // píxel, no encaja en el modelo determinista de `mezclar_canal`).
+        let (modo, degradado) = mapear_blend(DISSOLVE);
+        assert_eq!(modo, ModoFusion::Normal);
+        assert!(degradado);
         assert_eq!(nombre_blend(SOFT_LIGHT), "SoftLight");
         assert_eq!(nombre_blend(LUMINOSITY), "Luminosity");
+        assert_eq!(nombre_blend(DARKER_COLOR), "DarkerColor");
     }
 
     #[test]

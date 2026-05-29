@@ -202,12 +202,16 @@ fn clamp_u8(v: f32) -> u8 {
 #[inline]
 fn mezclar_canal(modo: ModoFusion, s: (f32, f32, f32), d: (f32, f32, f32)) -> (f32, f32, f32) {
     // Los blends HSL operan sobre el triple — no factorizan por canal.
-    // Se cortocircuitan antes del despacho per-channel.
+    // Lo mismo los comparativos por luminosidad (ColorMasOscuro/Claro): la
+    // decisión es por píxel completo, no canal a canal. Cortocircuito antes
+    // del despacho per-channel.
     match modo {
         ModoFusion::HslTono => return blend_hsl_tono(s, d),
         ModoFusion::HslSaturacion => return blend_hsl_saturacion(s, d),
         ModoFusion::HslColor => return blend_hsl_color(s, d),
         ModoFusion::HslLuminosidad => return blend_hsl_luminosidad(s, d),
+        ModoFusion::ColorMasOscuro => return if lum(s) < lum(d) { s } else { d },
+        ModoFusion::ColorMasClaro => return if lum(s) > lum(d) { s } else { d },
         _ => {}
     }
     let f = |s: f32, d: f32| -> f32 {
@@ -304,13 +308,17 @@ fn mezclar_canal(modo: ModoFusion, s: (f32, f32, f32), d: (f32, f32, f32)) -> (f
                     (d / s).clamp(0.0, 1.0)
                 }
             }
-            // Inalcanzables: los HSL se manejan arriba del match. Quedan acá
-            // sólo para que el match siga exhaustivo y el compilador nos avise
-            // si en el futuro alguien agrega una variante nueva sin cablearla.
+            // Inalcanzables: HSL y comparativos por-luminosidad se manejan
+            // arriba del match. Quedan acá sólo para que el match siga
+            // exhaustivo y el compilador nos avise si en el futuro alguien
+            // agrega una variante nueva sin cablearla.
             ModoFusion::HslTono
             | ModoFusion::HslSaturacion
             | ModoFusion::HslColor
             | ModoFusion::HslLuminosidad => unreachable!("HSL atendido arriba"),
+            ModoFusion::ColorMasOscuro | ModoFusion::ColorMasClaro => {
+                unreachable!("comparativos atendidos arriba")
+            }
         }
     };
     (f(s.0, d.0), f(s.1, d.1), f(s.2, d.2))
@@ -861,6 +869,48 @@ mod tests {
             (lum - lum_dst).abs() < 3.0,
             "esperaba lum~{lum_dst}, obtuve {lum}: {r:?}"
         );
+    }
+
+    #[test]
+    fn color_mas_oscuro_elige_triple_completo() {
+        // Lum ponderada: rojo puro (1,0,0)=0.30 vs verde puro (0,1,0)=0.59.
+        // El rojo es más oscuro → gana sobre el verde para ColorMasOscuro.
+        let r = blend_1x1(ModoFusion::ColorMasOscuro, [0, 255, 0], [255, 0, 0]);
+        assert_eq!(r, [255, 0, 0]);
+        // Si en cambio src tiene MÁS luminosidad que dst, gana dst.
+        let r = blend_1x1(ModoFusion::ColorMasOscuro, [255, 0, 0], [0, 255, 0]);
+        assert_eq!(r, [255, 0, 0]);
+    }
+
+    #[test]
+    fn color_mas_oscuro_es_per_pixel_no_per_canal() {
+        // Distinción clave con `Oscurecer` (min por canal): aquí ningún canal
+        // se interpola; o sale el triple src, o sale el triple dst. Con
+        // fondo (200,50,50) Lum≈75 y top (50,50,200) Lum≈37, gana el top
+        // entero — incluyendo el azul 200 aunque el fondo sea 50 ahí.
+        let r = blend_1x1(ModoFusion::ColorMasOscuro, [200, 50, 50], [50, 50, 200]);
+        assert_eq!(r, [50, 50, 200]);
+    }
+
+    #[test]
+    fn color_mas_claro_elige_triple_completo() {
+        // Verde puro Lum=0.59 > rojo puro Lum=0.30: con src verde sobre dst
+        // rojo, gana src (verde).
+        let r = blend_1x1(ModoFusion::ColorMasClaro, [255, 0, 0], [0, 255, 0]);
+        assert_eq!(r, [0, 255, 0]);
+        // Y al revés: src rojo, dst verde — gana dst (más claro).
+        let r = blend_1x1(ModoFusion::ColorMasClaro, [0, 255, 0], [255, 0, 0]);
+        assert_eq!(r, [0, 255, 0]);
+    }
+
+    #[test]
+    fn comparativos_empate_eligen_dst() {
+        // Cuando Lum(src) == Lum(dst) el orden estricto < / > deja al dst.
+        // No es un requisito hard del spec, pero documentamos la convención.
+        let r = blend_1x1(ModoFusion::ColorMasOscuro, [128, 128, 128], [128, 128, 128]);
+        assert_eq!(r, [128, 128, 128]);
+        let r = blend_1x1(ModoFusion::ColorMasClaro, [128, 128, 128], [128, 128, 128]);
+        assert_eq!(r, [128, 128, 128]);
     }
 
     #[test]

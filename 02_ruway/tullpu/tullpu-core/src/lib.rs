@@ -113,6 +113,13 @@ pub enum ModoFusion {
     HslColor,
     /// Luminosity: luminosidad de src, matiz y saturación de dst.
     HslLuminosidad,
+    // ---- Comparativos por luminosidad (eligen el triple completo) ----------
+    // No per-canal: el blend mira `Lum(src)` vs `Lum(dst)` y elige uno de los
+    // dos triples completo. Cortocircuitan antes del despacho per-channel.
+    /// Darker Color de Photoshop: el triple (src o dst) con menor luminosidad.
+    ColorMasOscuro,
+    /// Lighter Color: el triple con mayor luminosidad.
+    ColorMasClaro,
 }
 
 impl Default for ModoFusion {

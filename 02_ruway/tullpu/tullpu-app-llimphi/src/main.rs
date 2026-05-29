@@ -215,7 +215,9 @@ fn siguiente_blend(b: ModoFusion) -> ModoFusion {
         ModoFusion::HslTono => ModoFusion::HslSaturacion,
         ModoFusion::HslSaturacion => ModoFusion::HslColor,
         ModoFusion::HslColor => ModoFusion::HslLuminosidad,
-        ModoFusion::HslLuminosidad => ModoFusion::Normal,
+        ModoFusion::HslLuminosidad => ModoFusion::ColorMasOscuro,
+        ModoFusion::ColorMasOscuro => ModoFusion::ColorMasClaro,
+        ModoFusion::ColorMasClaro => ModoFusion::Normal,
     }
 }
 
@@ -245,6 +247,8 @@ fn etiqueta_blend(b: ModoFusion) -> &'static str {
         ModoFusion::HslSaturacion => "hsl-saturación",
         ModoFusion::HslColor => "hsl-color",
         ModoFusion::HslLuminosidad => "hsl-luminosidad",
+        ModoFusion::ColorMasOscuro => "color-más-oscuro",
+        ModoFusion::ColorMasClaro => "color-más-claro",
     }
 }
 
