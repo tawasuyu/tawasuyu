@@ -1585,6 +1585,72 @@ globalThis.scrollBy = function(dx, dy) {
         globalThis.__puriy_scroll_y + (Number(dy) || 0)
     );
 };
+// Fase 7.39 — window-level event listeners. `window === globalThis`, así
+// que `window.addEventListener('scroll', fn)` cae acá. Aparte del store
+// de elementos (Fase 7.10) porque el target es el propio globalThis y no
+// pasa por __puriy_elements. El chrome llama `dispatch_window_event` cuando
+// el user-scroll mueve scroll_y / resize cambia el viewport / la página
+// termina de cargar (load).
+globalThis.__puriy_window_listeners = {};
+globalThis.addEventListener = function(type, fn, options) {
+    var capture = options === true ||
+                  (options && typeof options === 'object' && options.capture === true);
+    var once = !!(options && typeof options === 'object' && options.once === true);
+    var key = (capture ? 'c:' : '') + String(type);
+    if (!globalThis.__puriy_window_listeners[key]) {
+        globalThis.__puriy_window_listeners[key] = [];
+    }
+    globalThis.__puriy_window_listeners[key].push({ fn: fn, once: once });
+};
+globalThis.removeEventListener = function(type, fn, options) {
+    var capture = options === true ||
+                  (options && typeof options === 'object' && options.capture === true);
+    var key = (capture ? 'c:' : '') + String(type);
+    var list = globalThis.__puriy_window_listeners[key];
+    if (!list) return;
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].fn === fn) { list.splice(i, 1); return; }
+    }
+};
+// onload / onscroll / onresize property handlers — apps modernas suelen
+// usar addEventListener pero el shorthand `window.onload = fn` sigue vivo
+// en código viejo. Los disparamos junto a los listeners (matchea spec).
+globalThis.__puriy_dispatch_window = function(type, init) {
+    var event = {
+        type: type,
+        target: globalThis,
+        currentTarget: globalThis,
+        defaultPrevented: false,
+        _stopped: false,
+        preventDefault: function() { this.defaultPrevented = true; },
+        stopPropagation: function() { this._stopped = true; }
+    };
+    if (init) {
+        for (var k in init) {
+            if (Object.prototype.hasOwnProperty.call(init, k)) event[k] = init[k];
+        }
+    }
+    var count = 0;
+    var prop = globalThis['on' + type];
+    if (typeof prop === 'function') {
+        try { prop(event); count++; }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+    var list = globalThis.__puriy_window_listeners[String(type)];
+    if (list) {
+        var snapshot = list.slice();
+        for (var i = 0; i < snapshot.length; i++) {
+            var entry = snapshot[i];
+            try { entry.fn(event); count++; }
+            catch (e2) { globalThis.__puriy_stderr += String(e2) + '\n'; }
+            if (entry.once) {
+                var idx = list.indexOf(entry);
+                if (idx >= 0) list.splice(idx, 1);
+            }
+        }
+    }
+    return count + ',' + (event.defaultPrevented ? '1' : '0');
+};
 // Fase 7.37 — resolver URL relativa contra una base.
 // Casos cubiertos:
 //   - URL ya absoluta (`scheme:...`)            → tal cual
@@ -2767,6 +2833,39 @@ impl JsRuntime {
             _ => return Ok(DispatchResult::default()),
         };
         // Formato "count,prevented" donde prevented es 0 o 1.
+        let mut parts = s.splitn(2, ',');
+        let count: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let default_prevented = parts.next() == Some("1");
+        Ok(DispatchResult {
+            count,
+            default_prevented,
+        })
+    }
+
+    /// Fase 7.39 — dispatcha un evento sobre `window` (no sobre un
+    /// elemento). Cubre `scroll`/`resize`/`load`/`beforeunload`/etc. Corre
+    /// `window.on<type>` si está seteado y todos los `addEventListener` del
+    /// store `__puriy_window_listeners`. Devuelve `DispatchResult` con count
+    /// y default_prevented (matchea `dispatch_event`).
+    pub fn dispatch_window_event(
+        &mut self,
+        event_type: &str,
+        init: Option<&EventInit>,
+    ) -> Result<DispatchResult, JsError> {
+        let init_lit = match init {
+            Some(i) => i.to_js_literal(),
+            None => "null".to_string(),
+        };
+        let script = format!(
+            "globalThis.__puriy_dispatch_window({type_}, {init})",
+            type_ = js_string_literal(event_type),
+            init = init_lit,
+        );
+        let v = self.eval(&script)?;
+        let s = match v {
+            JsValue::String(s) => s,
+            _ => return Ok(DispatchResult::default()),
+        };
         let mut parts = s.splitn(2, ',');
         let count: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
         let default_prevented = parts.next() == Some("1");
@@ -7175,6 +7274,81 @@ mod tests {
         } else {
             panic!("expected string, got {v:?}");
         }
+    }
+
+    // ============= Fase 7.39 — window events =============
+
+    #[test]
+    fn window_add_event_listener_scroll_corre_handler() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var got = null; \
+             window.addEventListener('scroll', function() { got = window.scrollY; });",
+        )
+        .expect("e");
+        rt.set_scroll(0.0, 123.0).expect("scroll");
+        let r = rt.dispatch_window_event("scroll", None).expect("d");
+        assert_eq!(r.count, 1);
+        let v = rt.eval("got").expect("e");
+        assert_eq!(v, JsValue::Number(123.0));
+    }
+
+    #[test]
+    fn window_on_load_property_corre() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval("var loaded = false; window.onload = function() { loaded = true; };")
+            .expect("e");
+        rt.dispatch_window_event("load", None).expect("d");
+        let v = rt.eval("loaded").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn window_event_listener_y_on_property_corren_juntos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var n = 0; \
+             window.onresize = function() { n++; }; \
+             window.addEventListener('resize', function() { n++; }); \
+             window.addEventListener('resize', function() { n++; });",
+        )
+        .expect("e");
+        let r = rt.dispatch_window_event("resize", None).expect("d");
+        assert_eq!(r.count, 3);
+    }
+
+    #[test]
+    fn window_remove_event_listener_lo_quita() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var n = 0; var f = function() { n++; }; \
+             window.addEventListener('scroll', f); \
+             window.removeEventListener('scroll', f);",
+        )
+        .expect("e");
+        rt.dispatch_window_event("scroll", None).expect("d");
+        let v = rt.eval("n").expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn window_add_event_listener_once_se_borra_tras_disparar() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var n = 0; \
+             window.addEventListener('scroll', function() { n++; }, {once: true});",
+        )
+        .expect("e");
+        rt.dispatch_window_event("scroll", None).expect("d");
+        rt.dispatch_window_event("scroll", None).expect("d");
+        rt.dispatch_window_event("scroll", None).expect("d");
+        let v = rt.eval("n").expect("e");
+        assert_eq!(v, JsValue::Number(1.0));
     }
 
     // ============= Fase 7.38 — XMLHttpRequest =============

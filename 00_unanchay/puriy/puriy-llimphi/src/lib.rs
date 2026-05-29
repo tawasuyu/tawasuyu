@@ -754,6 +754,16 @@ impl App for Puriy {
                         for req in pending {
                             handle.dispatch(req);
                         }
+                        // Fase 7.39 — disparar 'load' al window. Apps usan
+                        // `window.addEventListener('load', fn)` para diferir
+                        // init hasta que el DOM esté pronto. Sólo si el tab
+                        // creó runtime (hay scripts en la página).
+                        if t.js.is_some() {
+                            let (_, pending) = dispatch_window_js_event_on_tab(t, "load", now_ms);
+                            for req in pending {
+                                handle.dispatch(req);
+                            }
+                        }
                         if t.js_summary.errors > 0 {
                             t.status =
                                 format!("{} · JS: {} log/{} err",
@@ -916,8 +926,19 @@ impl App for Puriy {
                 m.panel_filter.clear();
             }
             Msg::Scroll(dy) => {
+                let now_ms = m.start.elapsed().as_millis() as u64;
                 let t = m.active_mut();
                 t.scroll_y = (t.scroll_y + dy).max(0.0);
+                // Fase 7.39 — dispatchar 'scroll' al window para handlers
+                // tipo `window.addEventListener('scroll', fn)` (header
+                // sticky, infinite scroll, etc.). Sólo si hay JS runtime
+                // creado para esta pestaña.
+                if t.js.is_some() {
+                    let (_, pending) = dispatch_window_js_event_on_tab(t, "scroll", now_ms);
+                    for req in pending {
+                        handle.dispatch(req);
+                    }
+                }
             }
             Msg::FocusAddr => {
                 m.active_mut().addr_focused = true;
@@ -2346,6 +2367,42 @@ fn dispatch_js_event_with_init(
     let prev_stdout_len = rt.stdout().len();
     let prev_stderr_len = rt.stderr().len();
     let result = match rt.dispatch_event(element_id, event_type, init.as_ref()) {
+        Ok(r) => {
+            let new_stdout = rt.stdout();
+            let new_stderr = rt.stderr();
+            t.js_summary.logs += new_stdout[prev_stdout_len..].matches('\n').count();
+            t.js_summary.errors += new_stderr[prev_stderr_len..].matches('\n').count();
+            r
+        }
+        Err(_) => {
+            t.js_summary.errors += 1;
+            puriy_js::DispatchResult::default()
+        }
+    };
+    let pending = apply_dom_mutations(t);
+    (result, pending)
+}
+
+/// Fase 7.39 — dispatcha un evento sobre `window` (no sobre un elemento)
+/// para una pestaña dada. Refresca fuel/now/scroll antes para que los
+/// handlers vean state consistente y dropea mutaciones DOM resultantes
+/// en el return (igual que `dispatch_js_event`). Toma `&mut TabState`
+/// directo (no `Model`) para que la pestaña pueda no ser la activa —
+/// 'load' puede dispararse en background loads.
+fn dispatch_window_js_event_on_tab(
+    t: &mut TabState,
+    event_type: &str,
+    now_ms: u64,
+) -> (puriy_js::DispatchResult, Vec<Msg>) {
+    let Some(rt) = t.js.as_mut() else {
+        return (puriy_js::DispatchResult::default(), Vec::new());
+    };
+    rt.set_fuel(puriy_js::DEFAULT_FUEL);
+    let _ = rt.set_now_ms(now_ms);
+    let _ = rt.set_scroll(0.0, t.scroll_y);
+    let prev_stdout_len = rt.stdout().len();
+    let prev_stderr_len = rt.stderr().len();
+    let result = match rt.dispatch_window_event(event_type, None) {
         Ok(r) => {
             let new_stdout = rt.stdout();
             let new_stderr = rt.stderr();
@@ -5438,6 +5495,67 @@ mod tests {
             }
         });
         assert!(found, "el handler debió mutar 'antes' a 'después'");
+    }
+
+    // ============= Fase 7.39 — window events =============
+
+    #[test]
+    fn dispatch_window_event_scroll_corre_listener_y_ve_scroll_y_actual() {
+        // Setup: el script registra un listener que muta el DOM con el
+        // scrollY actual cuando dispara 'scroll'.
+        let mut m = model_con_script(
+            "window.addEventListener('scroll', function() { \
+                document.getElementById('out').textContent = String(window.scrollY); \
+             });",
+        );
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "out".into(),
+            tag_name: "div".into(),
+            text_content: "0".into(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        m.tabs[0].box_tree = Some(parse(r#"<body><div id="out">0</div></body>"#));
+        // Simulamos un scroll a 150px y dispatcheamos directamente.
+        m.tabs[0].scroll_y = 150.0;
+        let t = &mut m.tabs[0];
+        let (r, _pending) = dispatch_window_js_event_on_tab(t, "scroll", 0);
+        assert_eq!(r.count, 1);
+        // Verifica que el handler vio scrollY=150 mutando el DOM.
+        let bt = m.tabs[0].box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.text.as_deref() == Some("150") {
+                found = true;
+            }
+        });
+        assert!(found, "el handler debió ver scrollY=150 y mutar a '150'");
+    }
+
+    #[test]
+    fn dispatch_window_event_load_corre_window_onload() {
+        let mut m = model_con_script("var ran = false; window.onload = function(){ ran = true; };");
+        let t = &mut m.tabs[0];
+        let (r, _pending) = dispatch_window_js_event_on_tab(t, "load", 0);
+        assert_eq!(r.count, 1);
+        let v = m.tabs[0].js.as_mut().expect("rt").eval("ran").expect("e");
+        assert_eq!(v, puriy_js::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_window_event_sin_runtime_es_no_op() {
+        // Tab sin runtime — no debe panic.
+        let mut t = TabState::new("about:blank".into());
+        assert!(t.js.is_none());
+        let (r, pending) = dispatch_window_js_event_on_tab(&mut t, "scroll", 0);
+        assert_eq!(r.count, 0);
+        assert!(pending.is_empty());
     }
 
     #[test]
