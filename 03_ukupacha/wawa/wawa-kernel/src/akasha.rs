@@ -221,6 +221,13 @@ pub fn ultimo_anuncio() -> Option<AnuncioCanal> {
     *ULTIMO_ANUNCIO.lock()
 }
 
+/// Reensamblador de objetos GRANDES (Fase 65). Un objeto cuyo payload excede
+/// `MAX_PAYLOAD_AKASHA` viaja en varios `ProveedorFragmento`; esta ranura los
+/// acumula y, al completar, entrega el payload entero a `absorber_proveedor`
+/// (que rehashea y verifica la integridad SOBRE EL TODO). Una sola ranura: el
+/// emisor sirve los fragmentos de un objeto de corrido tras un `SolicitarObjeto`.
+static REENSAMBLADOR: Mutex<akasha::Reensamblador> = Mutex::new(akasha::Reensamblador::nuevo());
+
 /// Frames AoE emitidos en TX, por variante.
 static TX_SOLICITUDES: AtomicU64 = AtomicU64::new(0);
 static TX_PROVEEDORES: AtomicU64 = AtomicU64::new(0);
@@ -414,6 +421,22 @@ fn procesar(mensaje: MensajeAkasha, origen: Mac, nuestra: Mac) {
         MensajeAkasha::ProveedorObjeto(id, payload) => {
             RX_PROVEEDORES.fetch_add(1, Ordering::Relaxed);
             absorber_proveedor(id, &payload, origen);
+        }
+        MensajeAkasha::ProveedorFragmento {
+            id,
+            indice,
+            total,
+            datos,
+        } => {
+            // Fase 65 :: un trozo de un objeto grande. Lo acumulamos; cuando
+            // el objeto queda entero, `absorber_proveedor` rehashea el todo y
+            // verifica la integridad —un fragmento perdido o corrupto se delata
+            // como hash que no casa, igual que un `ProveedorObjeto` adulterado—.
+            RX_PROVEEDORES.fetch_add(1, Ordering::Relaxed);
+            let completo = REENSAMBLADOR.lock().ingerir(id, indice, total, &datos);
+            if let Some(payload) = completo {
+                absorber_proveedor(id, &payload, origen);
+            }
         }
         MensajeAkasha::AnunciarRaiz(id) => {
             RX_ANUNCIOS.fetch_add(1, Ordering::Relaxed);
