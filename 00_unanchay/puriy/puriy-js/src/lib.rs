@@ -1610,7 +1610,36 @@ impl JsRuntime {
                 }} \
             }}; \
             globalThis.window = globalThis; \
-            globalThis.location = {{ href: {u}, toString: function() {{ return {u}; }} }};",
+            globalThis.location = {{ href: {u}, toString: function() {{ return {u}; }} }}; \
+            /* Fase 7.22 — localStorage + sessionStorage.\n             * In-memory por ahora — no persiste entre sesiones. Cuando\n             * aparezca caso real con datos que deben sobrevivir un\n             * reload, persistir localStorage en `$profile_dir/storage/`\n             * con keys URL-scoped (mismo origen). sessionStorage queda\n             * in-memory siempre (matchea spec — borrar al cerrar tab).\n             * Sin Proxy magic — la spec acepta `localStorage.foo` con\n             * setter property pero usar `setItem('foo', ...)` cubre el\n             * 95% del uso real. */ \
+            globalThis.__puriy_make_storage = function() {{ \
+                var store = {{}}; \
+                return {{ \
+                    get length() {{ return Object.keys(store).length; }}, \
+                    getItem: function(key) {{ \
+                        if (key == null) return null; \
+                        var k = String(key); \
+                        return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; \
+                    }}, \
+                    setItem: function(key, value) {{ \
+                        if (key == null) return; \
+                        store[String(key)] = String(value); \
+                    }}, \
+                    removeItem: function(key) {{ \
+                        if (key == null) return; \
+                        delete store[String(key)]; \
+                    }}, \
+                    clear: function() {{ \
+                        for (var k in store) {{ if (Object.prototype.hasOwnProperty.call(store, k)) delete store[k]; }} \
+                    }}, \
+                    key: function(i) {{ \
+                        var keys = Object.keys(store); \
+                        return (i >= 0 && i < keys.length) ? keys[i] : null; \
+                    }} \
+                }}; \
+            }}; \
+            globalThis.localStorage = globalThis.__puriy_make_storage(); \
+            globalThis.sessionStorage = globalThis.__puriy_make_storage();",
             t = js_string_literal(title),
             u = js_string_literal(url),
             b = js_string_literal(body_text),
@@ -5170,6 +5199,69 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.22 — localStorage + sessionStorage =============
+
+    #[test]
+    fn local_storage_set_get_remove_y_clear() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("localStorage.setItem('user', 'sergio'); localStorage.setItem('lang', 'es')")
+            .expect("e");
+        let v = rt.eval("localStorage.getItem('user')").expect("e");
+        assert_eq!(v, JsValue::String("sergio".into()));
+        let v = rt.eval("localStorage.length").expect("e");
+        assert_eq!(v, JsValue::Number(2.0));
+        // getItem de key inexistente devuelve null.
+        let v = rt.eval("localStorage.getItem('nada')").expect("e");
+        assert_eq!(v, JsValue::Null);
+        // removeItem borra.
+        rt.eval("localStorage.removeItem('user')").expect("e");
+        let v = rt.eval("localStorage.getItem('user')").expect("e");
+        assert_eq!(v, JsValue::Null);
+        let v = rt.eval("localStorage.length").expect("e");
+        assert_eq!(v, JsValue::Number(1.0));
+        // clear vacía todo.
+        rt.eval("localStorage.clear()").expect("e");
+        let v = rt.eval("localStorage.length").expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn local_storage_setitem_coerciona_a_string() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("localStorage.setItem('n', 42); localStorage.setItem('b', true)").expect("e");
+        let v = rt.eval("localStorage.getItem('n')").expect("e");
+        assert_eq!(v, JsValue::String("42".into()));
+        let v = rt.eval("localStorage.getItem('b')").expect("e");
+        assert_eq!(v, JsValue::String("true".into()));
+    }
+
+    #[test]
+    fn local_storage_key_devuelve_key_por_indice() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("localStorage.setItem('a', '1'); localStorage.setItem('b', '2')").expect("e");
+        let v = rt.eval("localStorage.key(0)").expect("e");
+        assert_eq!(v, JsValue::String("a".into()));
+        let v = rt.eval("localStorage.key(1)").expect("e");
+        assert_eq!(v, JsValue::String("b".into()));
+        // Fuera de rango devuelve null.
+        let v = rt.eval("localStorage.key(99)").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn session_storage_es_independiente_de_local_storage() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("localStorage.setItem('x', 'L'); sessionStorage.setItem('x', 'S')").expect("e");
+        let v = rt.eval("localStorage.getItem('x')").expect("e");
+        assert_eq!(v, JsValue::String("L".into()));
+        let v = rt.eval("sessionStorage.getItem('x')").expect("e");
+        assert_eq!(v, JsValue::String("S".into()));
     }
 
     #[test]
