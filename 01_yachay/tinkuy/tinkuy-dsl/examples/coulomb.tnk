@@ -1,0 +1,14 @@
+# Coulomb electrostática con cutoff.
+#
+#   F⃗_{i ← j} = k_e · q_i · q_j · (r_i − r_j) / r³
+#
+# Como el evaluador retorna F_over_r, factorizamos r³ = r·r²:
+#
+#   F_over_r = q_i · q_j · inv(r²) · inv(r)
+#
+# k_e se asume 1 en unidades reducidas. Si el caller necesita otro sistema,
+# multiplica por la constante fuera del DSL al armar el DslForce.
+#
+# Vars usadas: qi, qj, r, r2.
+
+qi * qj * inv(r2) * inv(r)

@@ -1,0 +1,19 @@
+# Fuerza tipo Hooke con distancia de equilibrio r0.
+#
+#   F⃗_{i ← j} = -k · (r − r0) · r̂_ij
+#                = -k · (r − r0) / r · (r_i − r_j)
+#
+# Por convención F_over_r:
+#
+#   F_over_r = -k · (r − r0) · inv(r)
+#
+# Para r > r0 (estirado): F_over_r < 0 → atracción hacia j (correcto).
+# Para r < r0 (comprimido): F_over_r > 0 → repulsión de j (correcto).
+#
+# La rigidez `k` y el reposo `r0` se incrustan como literales — el DSL no
+# tiene espacio de configuración fuera de las vars físicas. Para variar:
+# regenerar el bytecode con otro texto.
+#
+# Vars usadas: r.
+
+-100.0 * (r - 1.0) * inv(r)

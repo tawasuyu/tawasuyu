@@ -1,0 +1,12 @@
+# Lennard-Jones 12-6 con cutoff.
+#
+# Forma radial:
+#   F_over_r = (24·ε / r²) · (2·(σ/r)¹² − (σ/r)⁶)
+#
+# Convención: el evaluador retorna F_over_r; la fuerza vectorial sobre la
+# partícula i se compone como F⃗ = (F_over_r) · (r_i − r_j).
+#
+# Vars usadas: r, r2, eps, sigma.
+# Const folding (D4): no aplica — todo depende de eps/sigma/r/r2.
+
+24 * eps * (2 * pow(sigma / r, 12) - pow(sigma / r, 6)) * inv(r2)

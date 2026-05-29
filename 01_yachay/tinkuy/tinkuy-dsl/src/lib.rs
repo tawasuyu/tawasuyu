@@ -42,7 +42,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub mod bytecode;
+pub mod optimize;
 pub use bytecode::{compile, eval_with_stack, Bytecode, CompileError, EvalError, Op, VarBindings};
+pub use optimize::optimize;
 
 // ─── AST ────────────────────────────────────────────────────────────────────
 
@@ -147,6 +149,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ParseError> {
         let c = bytes[i] as char;
         match c {
             ' ' | '\t' | '\n' | '\r' => { i += 1; }
+            // Comentarios `#` hasta fin de línea. Útiles en archivos `.tnk`
+            // para anotar fórmulas y convenciones sin interferir con el AST.
+            '#' => {
+                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+            }
             '(' => { out.push(Token { tok: Tok::LParen, pos: i }); i += 1; }
             ')' => { out.push(Token { tok: Tok::RParen, pos: i }); i += 1; }
             ',' => { out.push(Token { tok: Tok::Comma,  pos: i }); i += 1; }
@@ -452,6 +459,29 @@ mod tests {
         assert!(matches!(err, ParseError::UnexpectedEof { .. }));
         let err2 = parse("r2 r").unwrap_err();
         assert!(matches!(err2, ParseError::UnexpectedToken { .. }));
+    }
+
+    #[test]
+    fn line_comments_are_ignored() {
+        let src = "# esto es un comentario\n1 + 2 # cola de línea\n";
+        assert_eq!(parse(src).unwrap(), bin(BinOp::Add, n(1.0), n(2.0)));
+    }
+
+    /// Los archivos `.tnk` de `examples/` son la especificación viva de D5.
+    /// Si alguno deja de parsear+compilar+optimizar es una regresión real.
+    #[test]
+    fn example_tnk_files_all_compile() {
+        use crate::{compile, optimize};
+        let cases: &[(&str, &str)] = &[
+            ("lj.tnk",      include_str!("../examples/lj.tnk")),
+            ("coulomb.tnk", include_str!("../examples/coulomb.tnk")),
+            ("hooke.tnk",   include_str!("../examples/hooke.tnk")),
+        ];
+        for (name, src) in cases {
+            let ast = parse(src).unwrap_or_else(|e| panic!("parse {name}: {e:?}"));
+            let opt = optimize(ast);
+            compile(&opt).unwrap_or_else(|e| panic!("compile {name}: {e:?}"));
+        }
     }
 
     #[test]
