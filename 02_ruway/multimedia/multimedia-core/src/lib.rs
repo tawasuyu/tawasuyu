@@ -1101,3 +1101,163 @@ impl Levels {
         };
     }
 }
+
+#[cfg(test)]
+mod tests_audio_primitives {
+    use super::*;
+
+    fn sine(freq: f32, frames: usize, sr: u32, amp: f32) -> Vec<f32> {
+        let mut v = Vec::with_capacity(frames);
+        let dphi = std::f32::consts::TAU * freq / sr as f32;
+        let mut phi = 0.0_f32;
+        for _ in 0..frames {
+            v.push(phi.sin() * amp);
+            phi += dphi;
+        }
+        v
+    }
+
+    // ---------- Spectrum ----------
+
+    #[test]
+    fn spectrum_peaks_at_dominant_band() {
+        // Senoide alineada exactamente al centro de banda 2.
+        // Goertzel resuena → esa banda gana sin ambigüedad.
+        let mut spec = Spectrum::log_bands(4, 100.0, 4_000.0);
+        spec.set_release(0.0); // sin smoothing — análisis puro.
+        let target = spec.bands()[2];
+        let sig = sine(target, 4096, 48_000, 0.5);
+        spec.analyze(&sig, 1, 48_000);
+        let mags = spec.magnitudes();
+        let argmax = mags
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+        assert_eq!(argmax, 2, "esperaba banda 2, mags={mags:?}");
+        assert!(mags[2] > 0.2, "magnitud banda dominante = {}", mags[2]);
+    }
+
+    #[test]
+    fn spectrum_silence_decays() {
+        let mut spec = Spectrum::log_bands(8, 40.0, 16_000.0);
+        // Cargo energía y después silencio: el release debe bajar.
+        let sig = sine(440.0, 4096, 48_000, 0.5);
+        spec.analyze(&sig, 1, 48_000);
+        let after_hot = spec.magnitudes().iter().sum::<f32>();
+        spec.analyze(&[0.0; 4096], 1, 48_000);
+        let after_silence = spec.magnitudes().iter().sum::<f32>();
+        assert!(
+            after_silence < after_hot,
+            "silencio ({after_silence}) debería ser menor que hot ({after_hot})"
+        );
+    }
+
+    // ---------- Levels ----------
+
+    #[test]
+    fn levels_peak_matches_signal_amplitude() {
+        let mut lv = Levels::new();
+        lv.set_release(0.0);
+        // Senoide de amplitud 0.4 — pico debería estar cerca de 0.4.
+        let sig = sine(440.0, 4096, 48_000, 0.4);
+        lv.analyze(&sig, 1);
+        assert!(
+            (lv.peak() - 0.4).abs() < 0.02,
+            "peak = {}, esperaba ≈ 0.4",
+            lv.peak()
+        );
+        // RMS senoide = amp / sqrt(2) ≈ 0.283 para amp=0.4.
+        let expected_rms = 0.4_f32 / std::f32::consts::SQRT_2;
+        assert!(
+            (lv.rms() - expected_rms).abs() < 0.02,
+            "rms = {}, esperaba ≈ {expected_rms}",
+            lv.rms()
+        );
+    }
+
+    #[test]
+    fn levels_silence_zeros_with_no_release() {
+        let mut lv = Levels::new();
+        lv.set_release(0.0);
+        lv.analyze(&[0.0; 1024], 1);
+        assert_eq!(lv.peak(), 0.0);
+        assert_eq!(lv.rms(), 0.0);
+    }
+
+    #[test]
+    fn levels_mono_fold_averages_channels() {
+        let mut lv = Levels::new();
+        lv.set_release(0.0);
+        // Stereo donde L=+0.5 y R=-0.5: mono fold = 0, peak debería
+        // estar cerca de 0 (cancela), no de 0.5.
+        let mut sig = Vec::new();
+        for _ in 0..1024 {
+            sig.push(0.5);
+            sig.push(-0.5);
+        }
+        lv.analyze(&sig, 2);
+        assert!(lv.peak() < 1e-4, "peak con cancelación = {}", lv.peak());
+    }
+
+    // ---------- AudioProbe ----------
+
+    #[test]
+    fn probe_push_then_snapshot_is_chronological() {
+        // Capacidad mínima del probe es 64 (ver AudioProbe::new) —
+        // los tests trabajan a ese tamaño y validan los slots
+        // ocupados al final del snapshot.
+        let probe = AudioProbe::new(64);
+        let data: Vec<f32> = (1..=6).map(|i| i as f32).collect();
+        probe.push(&data, 48_000, 1);
+        let mut out = Vec::new();
+        let (sr, ch) = probe.snapshot(&mut out);
+        assert_eq!(sr, 48_000);
+        assert_eq!(ch, 1);
+        assert_eq!(out.len(), 64);
+        // Los primeros 58 slots quedaron en silencio (no se llenó
+        // todavía la vuelta); los últimos 6 son el bloque empujado
+        // en orden cronológico.
+        assert!(out[..58].iter().all(|&v| v == 0.0));
+        assert_eq!(&out[58..64], &data[..]);
+    }
+
+    #[test]
+    fn probe_wrap_overwrites_oldest() {
+        let probe = AudioProbe::new(64);
+        // Empuja 70 valores en un ring de cap=64: los 6 primeros se
+        // sobrescriben, el snapshot trae [7..70] en orden cronológico.
+        let data: Vec<f32> = (1..=70).map(|i| i as f32).collect();
+        probe.push(&data, 44_100, 2);
+        let mut out = Vec::new();
+        let (sr, ch) = probe.snapshot(&mut out);
+        assert_eq!(sr, 44_100);
+        assert_eq!(ch, 2);
+        let expected: Vec<f32> = (7..=70).map(|i| i as f32).collect();
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn probed_audio_source_is_transparent_and_caches() {
+        struct Const(f32);
+        impl AudioSource for Const {
+            fn fill(&mut self, buf: &mut [f32], _: u32, _: u16) {
+                for s in buf.iter_mut() {
+                    *s = self.0;
+                }
+            }
+        }
+        let probe = AudioProbe::new(16);
+        let mut probed = ProbedAudioSource::new(Const(0.3), probe.clone());
+        let mut buf = vec![0.0_f32; 8];
+        probed.fill(&mut buf, 48_000, 1);
+        // El sink ve el mismo flujo que el inner.
+        assert!(buf.iter().all(|&v| (v - 0.3).abs() < 1e-6));
+        // El probe vio el bloque entero.
+        let mut snap = Vec::new();
+        probe.snapshot(&mut snap);
+        let tail: Vec<f32> = snap.iter().rev().take(8).cloned().collect();
+        assert!(tail.iter().all(|&v| (v - 0.3).abs() < 1e-6));
+    }
+}
