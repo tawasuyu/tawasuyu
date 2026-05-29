@@ -63,10 +63,11 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, Rect};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
+use llimphi_ui::llimphi_text::{self as text, Alignment, TextBlock, Typesetter};
 use supay_scene::{
-    interpolate, NodeSnap, PlayerOverlays, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap,
-    SubsectorSnap, WallSeg, WeaponSpriteSnap, ML_DONTPEGBOTTOM, ML_DONTPEGTOP, NF_SUBSECTOR,
-    NO_SECTOR, NO_SKY_PIC,
+    interpolate, NodeSnap, PlayerOverlays, PlayerStats, SceneSnapshot, SectorSnap, SnapshotPair,
+    SpriteSnap, SubsectorSnap, WallSeg, WeaponSpriteSnap, ML_DONTPEGBOTTOM, ML_DONTPEGTOP,
+    NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
 };
 
 // =====================================================================
@@ -331,6 +332,12 @@ pub struct RenderConfig {
     /// lejano del centro. Pintada antes que el crosshair y los overlays
     /// para que las flashes de damage la cubran.
     pub vignette: f32,
+    /// **Fase 3.20 — HUD inferior**. Si `true`, pinta una banda slim al
+    /// pie del viewport con health/armor/ammo/keys leídos del
+    /// `PlayerStats` del snapshot. Modernización de la status bar
+    /// clásica de Doom (320×32 al pie del FB): mismos datos, layout
+    /// "tile-by-tile" co-locado con la imagen 3D.
+    pub hud: bool,
 }
 
 impl Default for RenderConfig {
@@ -346,6 +353,7 @@ impl Default for RenderConfig {
             atlas: None,
             crosshair: true,
             vignette: 0.55,
+            hud: true,
         }
     }
 }
@@ -373,10 +381,10 @@ pub fn scene_view<Msg: Clone + Send + Sync + 'static>(
         ..Default::default()
     })
     .clip(true)
-    .paint_with(move |scene, _ts, rect: PaintRect| {
+    .paint_with(move |scene, ts, rect: PaintRect| {
         let alpha = (last_tick_at.elapsed().as_secs_f32() / tick_period_secs).clamp(0.0, 1.0);
         let snap = make_frame(prev.as_ref(), next.as_ref(), alpha);
-        render_frame(scene, rect, &snap, &config);
+        render_frame(scene, ts, rect, &snap, &config);
     })
 }
 
@@ -396,7 +404,13 @@ fn make_frame(
 // Render por frame
 // =====================================================================
 
-fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &RenderConfig) {
+fn render_frame(
+    scene: &mut Scene,
+    ts: &mut Typesetter,
+    rect: PaintRect,
+    snap: &SceneSnapshot,
+    cfg: &RenderConfig,
+) {
     if rect.w <= 0.0 || rect.h <= 0.0 {
         return;
     }
@@ -524,6 +538,14 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
     // con `cfg.crosshair = false`.
     if cfg.crosshair {
         draw_crosshair(scene, rect);
+    }
+
+    // Fase 3.20: HUD inferior modernista. Va al final, encima de todo,
+    // para que la barra slim al pie con health/armor/ammo/keys quede
+    // siempre legible. El HUD se desactiva en stub mode (sin jugador
+    // real → stats hueco) y cuando el caller pone `cfg.hud = false`.
+    if cfg.hud && snap.player_stats.health > 0 {
+        draw_hud(scene, ts, rect, &snap.player_stats);
     }
 }
 
@@ -2188,6 +2210,352 @@ fn draw_crosshair(scene: &mut Scene, rect: PaintRect) {
         scene.fill(Fill::NonZero, Affine::IDENTITY, ink, None, arm);
     }
     scene.fill(Fill::NonZero, Affine::IDENTITY, ink, None, &dot);
+}
+
+// =====================================================================
+// HUD inferior modernista (Fase 3.20)
+// =====================================================================
+//
+// Banda slim al pie del viewport 3D con los stats vitales del jugador:
+// HEALTH (% + barra), ARMOR (% + barra tinted por tipo), AMMO (current
+// / max del slot del arma activa), KEYS (chips por color).
+//
+// Paleta espejo del header del host (crimson/amber/bone/dust) para que
+// la app entera se sienta una sola pieza. Fondo COLOR_BG_PANEL con
+// alpha para no ocluir totalmente la acción del piso.
+
+/// Paleta interna usada por el HUD — eco visual del header del host.
+mod hud_color {
+    use super::Color;
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    pub const PANEL: Color = Color::from_rgba8(12, 8, 8, 215);
+    pub const RULE: Color = Color::from_rgba8(48, 16, 16, 255);
+    pub const RULE_SOFT: Color = Color::from_rgba8(48, 16, 16, 140);
+    pub const TRACK: Color = Color::from_rgba8(6, 4, 4, 255);
+    pub const BONE: Color = Color::from_rgba8(216, 204, 188, 255);
+    pub const DUST: Color = Color::from_rgba8(132, 124, 116, 255);
+    pub const AMBER: Color = Color::from_rgba8(232, 168, 76, 255);
+    pub const HEALTH_OK: Color = Color::from_rgba8(140, 188, 96, 255);
+    pub const HEALTH_LOW: Color = Color::from_rgba8(232, 168, 76, 255);
+    pub const HEALTH_CRIT: Color = Color::from_rgba8(220, 50, 50, 255);
+    pub const ARMOR_GREEN: Color = Color::from_rgba8(140, 188, 96, 255);
+    pub const ARMOR_BLUE: Color = Color::from_rgba8(96, 160, 232, 255);
+    pub const KEY_BLUE: Color = Color::from_rgba8(56, 128, 224, 255);
+    pub const KEY_YELLOW: Color = Color::from_rgba8(232, 200, 72, 255);
+    pub const KEY_RED: Color = Color::from_rgba8(220, 60, 60, 255);
+    /// Tinte para el indicador "skull" — más cálido/desaturado.
+    pub fn skullize(base: Color) -> Color {
+        let [r, g, b, a] = base.components;
+        AlphaColor::new([r * 0.85, g * 0.85, b * 0.85, a])
+    }
+}
+
+const HUD_HEIGHT: f64 = 38.0;
+const HUD_PAD: f64 = 10.0;
+
+/// Pinta la banda del HUD al pie del `rect`. Asume `stats.health > 0`
+/// (caller filtra el pre-mapa para que no aparezca un HUD hueco).
+fn draw_hud(scene: &mut Scene, ts: &mut Typesetter, rect: PaintRect, stats: &PlayerStats) {
+    let view_w = rect.w as f64;
+    let view_h = rect.h as f64;
+    if view_w < 160.0 || view_h < HUD_HEIGHT + 32.0 {
+        // Viewport demasiado chico — el HUD comería medio frame.
+        return;
+    }
+    let bottom = rect.y as f64 + view_h;
+    let top = bottom - HUD_HEIGHT;
+    let left = rect.x as f64;
+    let right = left + view_w;
+
+    // Fondo + hairline crimson del borde superior.
+    let panel = Rect::new(left, top, right, bottom);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, hud_color::PANEL, None, &panel);
+    let rule = Rect::new(left, top, right, top + 1.0);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, hud_color::RULE, None, &rule);
+
+    // Layout: 4 tiles. Anchos relativos al view_w restante.
+    //   [ HEALTH 28% ][ ARMOR 22% ][ AMMO 26% ][ KEYS resto ]
+    let usable = view_w - HUD_PAD * 2.0;
+    let w_health = (usable * 0.28).floor();
+    let w_armor = (usable * 0.22).floor();
+    let w_ammo = (usable * 0.26).floor();
+    let w_keys = usable - w_health - w_armor - w_ammo;
+
+    let mut x = left + HUD_PAD;
+    draw_hud_stat_tile(
+        scene, ts, x, top, w_health,
+        "HP",
+        format!("{}", stats.health.max(0)),
+        stats.health as f32 / 100.0,
+        health_color(stats.health),
+    );
+    x += w_health;
+    // Divider sutil entre tiles.
+    draw_hud_divider(scene, x, top);
+    draw_hud_stat_tile(
+        scene, ts, x, top, w_armor,
+        "AR",
+        format!("{}", stats.armor_points.max(0)),
+        stats.armor_points as f32 / 100.0,
+        armor_color(stats.armor_type),
+    );
+    x += w_armor;
+    draw_hud_divider(scene, x, top);
+    draw_hud_ammo_tile(scene, ts, x, top, w_ammo, stats);
+    x += w_ammo;
+    draw_hud_divider(scene, x, top);
+    draw_hud_keys_tile(scene, ts, x, top, w_keys, stats);
+}
+
+/// Tile genérico de "stat con barra": label dust arriba-izquierda,
+/// número grande bone abajo-izquierda, barra slim al pie del tile.
+fn draw_hud_stat_tile(
+    scene: &mut Scene,
+    ts: &mut Typesetter,
+    x: f64,
+    top: f64,
+    w: f64,
+    label: &str,
+    value: String,
+    pct: f32,
+    bar_color: Color,
+) {
+    // Label "HP" / "AR" arriba.
+    text::draw_block(
+        scene,
+        ts,
+        &TextBlock {
+            text: label,
+            size_px: 9.0,
+            color: hud_color::DUST,
+            origin: (x + 4.0, top + 4.0),
+            max_width: Some(w as f32 - 8.0),
+            alignment: Alignment::Start,
+            line_height: 1.0,
+            italic: false,
+            font_family: None,
+        },
+    );
+    // Valor grande abajo del label.
+    text::draw_block(
+        scene,
+        ts,
+        &TextBlock {
+            text: &value,
+            size_px: 16.0,
+            color: hud_color::BONE,
+            origin: (x + 4.0, top + 13.0),
+            max_width: Some(w as f32 - 8.0),
+            alignment: Alignment::Start,
+            line_height: 1.0,
+            italic: false,
+            font_family: None,
+        },
+    );
+    // Barra slim al pie. 3 px de alto + track 1 px.
+    let bar_y0 = top + HUD_HEIGHT - 6.0;
+    let bar_y1 = bar_y0 + 3.0;
+    let bar_x0 = x + 4.0;
+    let bar_x1 = x + w - 6.0;
+    let track = Rect::new(bar_x0, bar_y0, bar_x1, bar_y1);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, hud_color::TRACK, None, &track);
+    let fill_w = ((bar_x1 - bar_x0) * pct.clamp(0.0, 1.0) as f64).max(0.0);
+    if fill_w > 0.0 {
+        let filled = Rect::new(bar_x0, bar_y0, bar_x0 + fill_w, bar_y1);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, bar_color, None, &filled);
+    }
+}
+
+/// Tile de ammo: muestra `current / max` del slot del arma activa, o
+/// "—" si la actual no consume ammo (puño, motosierra).
+fn draw_hud_ammo_tile(
+    scene: &mut Scene,
+    ts: &mut Typesetter,
+    x: f64,
+    top: f64,
+    w: f64,
+    stats: &PlayerStats,
+) {
+    // Label "AMMO" + sufijo del slot (CLIP/SHELL/CELL/MISL).
+    let slot_label = stats.weapon_ammo_slot().map(ammo_slot_name).unwrap_or("—");
+    text::draw_block(
+        scene,
+        ts,
+        &TextBlock {
+            text: &format!("AMMO · {slot_label}"),
+            size_px: 9.0,
+            color: hud_color::DUST,
+            origin: (x + 4.0, top + 4.0),
+            max_width: Some(w as f32 - 8.0),
+            alignment: Alignment::Start,
+            line_height: 1.0,
+            italic: false,
+            font_family: None,
+        },
+    );
+    // current / max — current en ámbar si está bajo (<25%).
+    let (value, pct, color) = match stats.weapon_ammo_slot() {
+        Some(slot) => {
+            let cur = stats.ammo[slot].max(0);
+            let max = stats.max_ammo[slot].max(1);
+            let pct = (cur as f32) / (max as f32);
+            let col = if pct < 0.25 {
+                hud_color::HEALTH_CRIT
+            } else if pct < 0.5 {
+                hud_color::HEALTH_LOW
+            } else {
+                hud_color::BONE
+            };
+            (format!("{cur} / {max}"), pct, col)
+        }
+        None => ("∞".to_string(), 0.0, hud_color::DUST),
+    };
+    text::draw_block(
+        scene,
+        ts,
+        &TextBlock {
+            text: &value,
+            size_px: 16.0,
+            color,
+            origin: (x + 4.0, top + 13.0),
+            max_width: Some(w as f32 - 8.0),
+            alignment: Alignment::Start,
+            line_height: 1.0,
+            italic: false,
+            font_family: None,
+        },
+    );
+    // Barra slim al pie — ammo en ámbar para distinguir de HP/AR.
+    let bar_y0 = top + HUD_HEIGHT - 6.0;
+    let bar_y1 = bar_y0 + 3.0;
+    let bar_x0 = x + 4.0;
+    let bar_x1 = x + w - 6.0;
+    let track = Rect::new(bar_x0, bar_y0, bar_x1, bar_y1);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, hud_color::TRACK, None, &track);
+    if pct > 0.0 {
+        let fill_w = ((bar_x1 - bar_x0) * pct.clamp(0.0, 1.0) as f64).max(0.0);
+        let filled = Rect::new(bar_x0, bar_y0, bar_x0 + fill_w, bar_y1);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, hud_color::AMBER, None, &filled);
+    }
+}
+
+/// Tile de llaves: hasta 6 chips por color (cards + skulls). Chip
+/// vacío si no se tiene la llave — silueta crimson_deep.
+fn draw_hud_keys_tile(
+    scene: &mut Scene,
+    ts: &mut Typesetter,
+    x: f64,
+    top: f64,
+    w: f64,
+    stats: &PlayerStats,
+) {
+    text::draw_block(
+        scene,
+        ts,
+        &TextBlock {
+            text: "KEYS",
+            size_px: 9.0,
+            color: hud_color::DUST,
+            origin: (x + 4.0, top + 4.0),
+            max_width: Some(w as f32 - 8.0),
+            alignment: Alignment::Start,
+            line_height: 1.0,
+            italic: false,
+            font_family: None,
+        },
+    );
+    // 6 chips: card_blue, card_yellow, card_red, skull_blue, skull_yellow, skull_red.
+    // Cards: rectángulo 12×8. Skulls: rectángulo 12×8 con borde más grueso
+    // (un truco visual para distinguirlos sin pintar un sprite real).
+    let colors = [
+        hud_color::KEY_BLUE,
+        hud_color::KEY_YELLOW,
+        hud_color::KEY_RED,
+    ];
+    let chip_w = 13.0;
+    let chip_h = 8.0;
+    let gap = 4.0;
+    let chips_total = chip_w * 6.0 + gap * 5.0;
+    let mut cx = x + 4.0;
+    // Si los chips no entran, los apretamos.
+    let avail = w - 8.0;
+    let scale = if chips_total > avail {
+        avail / chips_total
+    } else {
+        1.0
+    };
+    let chip_w = chip_w * scale;
+    let gap = gap * scale;
+    let cy0 = top + 18.0;
+    let cy1 = cy0 + chip_h;
+    for i in 0..6 {
+        let has = stats.cards[i];
+        let color_idx = i % 3;
+        let is_skull = i >= 3;
+        let base = colors[color_idx];
+        let chip = Rect::new(cx, cy0, cx + chip_w, cy1);
+        if has {
+            let fill = if is_skull { hud_color::skullize(base) } else { base };
+            scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &chip);
+            if is_skull {
+                // Mini-banda crimson en el medio del chip → silueta de
+                // calavera apenas evocada.
+                let band = Rect::new(
+                    cx + chip_w * 0.35,
+                    cy0 + 2.0,
+                    cx + chip_w * 0.65,
+                    cy1 - 2.0,
+                );
+                scene.fill(Fill::NonZero, Affine::IDENTITY, hud_color::TRACK, None, &band);
+            }
+        } else {
+            // Chip vacío: borde crimson_deep, interior transparente.
+            // Lo aproximamos con 4 rects 1px (top/bottom/left/right).
+            let bw = 1.0;
+            for r in &[
+                Rect::new(cx, cy0, cx + chip_w, cy0 + bw),
+                Rect::new(cx, cy1 - bw, cx + chip_w, cy1),
+                Rect::new(cx, cy0, cx + bw, cy1),
+                Rect::new(cx + chip_w - bw, cy0, cx + chip_w, cy1),
+            ] {
+                scene.fill(Fill::NonZero, Affine::IDENTITY, hud_color::RULE_SOFT, None, r);
+            }
+        }
+        cx += chip_w + gap;
+    }
+}
+
+fn draw_hud_divider(scene: &mut Scene, x: f64, top: f64) {
+    let r = Rect::new(x, top + 6.0, x + 1.0, top + HUD_HEIGHT - 6.0);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, hud_color::RULE_SOFT, None, &r);
+}
+
+fn health_color(hp: i32) -> Color {
+    if hp >= 60 {
+        hud_color::HEALTH_OK
+    } else if hp >= 25 {
+        hud_color::HEALTH_LOW
+    } else {
+        hud_color::HEALTH_CRIT
+    }
+}
+
+fn armor_color(armor_type: u8) -> Color {
+    match armor_type {
+        1 => hud_color::ARMOR_GREEN,
+        2 => hud_color::ARMOR_BLUE,
+        _ => hud_color::DUST,
+    }
+}
+
+fn ammo_slot_name(slot: usize) -> &'static str {
+    match slot {
+        0 => "CLIP",
+        1 => "SHELL",
+        2 => "CELL",
+        3 => "MISL",
+        _ => "—",
+    }
 }
 
 #[cfg(test)]

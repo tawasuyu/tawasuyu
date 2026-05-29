@@ -191,6 +191,56 @@ pub struct PlayerOverlays {
     pub power_strength: u32,
 }
 
+/// Fase 3.20 — stats vitales del jugador para el HUD inferior.
+///
+/// Doom mantiene `players[consoleplayer].{health, armorpoints, armortype,
+/// readyweapon, ammo[], maxammo[], cards[]}` y los pinta como status bar
+/// 320×32 al pie del framebuffer original (`ST_drawer`). En modo Scene3d
+/// el renderer 3D moderno los lee de este struct y dibuja una banda HUD
+/// modernista co-locada con el viewport.
+///
+/// Los valores son tal cual los devuelve el motor — sin escalas. El
+/// renderer hace clamp y conversión a porcentaje cuando dibuja barras.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayerStats {
+    /// 0..200. >100 = sobrecarga (megasphere). 0 = muerto.
+    pub health: i32,
+    /// 0..200. Acumula con `armortype` para decidir absorción de daño.
+    pub armor_points: i32,
+    /// 0 = sin armor, 1 = green (33% absorb, max 100), 2 = blue (50%
+    /// absorb, max 200). El renderer lo usa para el color de la barra.
+    pub armor_type: u8,
+    /// Arma activa (`weapontype_t`: 0..8 = fist, pistol, shotgun,
+    /// chaingun, missile, plasma, BFG, chainsaw, super-shotgun).
+    pub ready_weapon: u8,
+    /// Balas actuales: `[clip, shell, cell, missile]`. Cada slot el
+    /// renderer lo asocia al arma activa para mostrar el conteo.
+    pub ammo: [i32; 4],
+    /// Capacidad máxima de cada slot. Se duplica al levantar la mochila.
+    pub max_ammo: [i32; 4],
+    /// Llaves tomadas: `[blue_card, yellow_card, red_card, blue_skull,
+    /// yellow_skull, red_skull]`. El HUD pinta sólo los iconos con `true`.
+    pub cards: [bool; 6],
+}
+
+impl PlayerStats {
+    /// Slot de ammo correspondiente al arma activa, o `None` si el arma
+    /// no consume ammo (fist, chainsaw). Convención Doom:
+    /// `weaponinfo[w].ammo`. Codificamos la tabla acá para no depender
+    /// del motor C — los mappings son estables desde Doom 1.0.
+    pub fn weapon_ammo_slot(&self) -> Option<usize> {
+        // 0=fist, 1=pistol, 2=shotgun, 3=chaingun, 4=rocket, 5=plasma,
+        // 6=bfg, 7=chainsaw, 8=super-shotgun.
+        match self.ready_weapon {
+            1 | 3 => Some(0), // clip
+            2 | 8 => Some(1), // shell
+            5 | 6 => Some(2), // cell
+            4 => Some(3),     // missile
+            _ => None,        // fist / chainsaw
+        }
+    }
+}
+
 /// Una hoja convexa del BSP — referencia a un sector y un rango
 /// contiguo en [`SceneSnapshot::segs`] (`first_seg`, `num_segs`).
 ///
@@ -309,6 +359,10 @@ pub struct SceneSnapshot {
     /// para muzzle flashes (BFG, plasma, chaingun fire frames). Sobrepuesto
     /// a `weapon`. Inactivo la mayor parte del tiempo.
     pub weapon_flash: WeaponSpriteSnap,
+    /// Fase 3.20: stats vitales del jugador (health, armor, ammo del arma
+    /// activa, llaves). Drives el HUD inferior modernista. Default = todo
+    /// en cero (pre-mapa / stub) → el HUD se pinta hueco.
+    pub player_stats: PlayerStats,
 }
 
 impl Default for SceneSnapshot {
@@ -334,6 +388,7 @@ impl SceneSnapshot {
             player_overlays: PlayerOverlays::default(),
             weapon: WeaponSpriteSnap::default(),
             weapon_flash: WeaponSpriteSnap::default(),
+            player_stats: PlayerStats::default(),
         }
     }
 }
@@ -475,6 +530,11 @@ pub fn interpolate(prev: &SceneSnapshot, next: &SceneSnapshot, alpha: f32) -> Sc
         // pistola al caminar — vale la pena.
         weapon: lerp_weapon(&prev.weapon, &next.weapon, a),
         weapon_flash: lerp_weapon(&prev.weapon_flash, &next.weapon_flash, a),
+        // Stats (Fase 3.20): health/ammo cambian en pasos discretos por
+        // tick — interpolar daría medio HP de fantasma. Tomamos `next`
+        // puro; el cambio se ve como salto entre frames (que es como
+        // lo siente el jugador).
+        player_stats: next.player_stats,
     }
 }
 

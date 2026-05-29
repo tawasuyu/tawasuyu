@@ -229,6 +229,54 @@ int supay_scene_player_weapon(uint16_t *spritenum, uint8_t *frame,
     return 1;
 }
 
+/* Fase 3.20 — stats vitales del jugador para el HUD inferior.
+ *
+ * Outs:
+ *   - health: 0..200 (puede llegar a 200 con sobrecarga; 0 = muerto).
+ *   - armor_points: 0..200, blue = 200 max, green = 100 max.
+ *   - armor_type: 0 = ninguno, 1 = green, 2 = blue (Doom convention).
+ *   - ready_weapon: enum weapontype_t (wp_fist..wp_supershotgun = 0..8).
+ *   - ammo[4]: clip / shell / cell / missile, balas actuales.
+ *   - maxammo[4]: máximos con/sin backpack (Doom los actualiza al
+ *     levantar la mochila duplicando los slots; el motor mantiene
+ *     `maxammo[i]` que es el max efectivo en cada momento).
+ *   - cards[6]: blue/yellow/red card + blue/yellow/red skull, en
+ *     orden de `it_bluecard..it_redskull`. 0 = no tiene, 1 = tiene.
+ *
+ * Devuelve 0 si el jugador no existe (pre-mapa) — outs en cero, Rust
+ * trata como "sin stats" y el HUD se pinta hueco. */
+int supay_scene_player_stats(int *health, int *armor_points, int *armor_type,
+                             int *ready_weapon,
+                             int ammo[4], int maxammo[4],
+                             uint8_t cards[6]) {
+    player_t *p = &players[consoleplayer];
+    if (!p->mo) {
+        *health = 0;
+        *armor_points = 0;
+        *armor_type = 0;
+        *ready_weapon = 0;
+        for (int i = 0; i < 4; ++i) { ammo[i] = 0; maxammo[i] = 0; }
+        for (int i = 0; i < 6; ++i) { cards[i] = 0; }
+        return 0;
+    }
+    *health = p->health;
+    *armor_points = p->armorpoints;
+    *armor_type = p->armortype;
+    *ready_weapon = (int)p->readyweapon;
+    /* Compile-time check: NUMAMMO=4, NUMCARDS=6 a la fecha de doomgeneric;
+     * si cambian, fallamos en build antes que en runtime. */
+    _Static_assert(NUMAMMO == 4, "scene_export espera NUMAMMO==4");
+    _Static_assert(NUMCARDS == 6, "scene_export espera NUMCARDS==6");
+    for (int i = 0; i < 4; ++i) {
+        ammo[i] = p->ammo[i];
+        maxammo[i] = p->maxammo[i];
+    }
+    for (int i = 0; i < 6; ++i) {
+        cards[i] = p->cards[i] ? 1 : 0;
+    }
+    return 1;
+}
+
 /* ---- Walls (linedefs) ---- */
 
 int supay_scene_num_walls(void) {

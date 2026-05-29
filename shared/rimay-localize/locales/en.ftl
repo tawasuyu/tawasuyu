@@ -189,7 +189,7 @@ supay-stub-step-2-cmd =     curl -O https://distro.ibiblio.org/slitaz/sources/pa
 supay-stub-step-3 = Run it again
 supay-stub-step-3-cmd =     cargo run -p supay-doom-llimphi --release
 supay-stub-footer = doomgeneric (C) ticks at 35 Hz; the 320×200 ARGB framebuffer paints in aspect-fit.
-supay-controls-hint = WASD/← → move  ·  Ctrl fire  ·  Space use  ·  Tab map  ·  Esc menu  ·  F3 view  ·  F4 crosshair  ·  F5 vignette  ·  F12 quit
+supay-controls-hint = WASD/← → move  ·  Ctrl fire  ·  Space use  ·  Tab map  ·  F3 view  ·  F4 crosshair  ·  F5 vignette  ·  F6 HUD  ·  F12 quit
 supay-stub-controls-hint = F3 toggles FB/3D  ·  F12 closes the window
 
 # === shuma-shell ===

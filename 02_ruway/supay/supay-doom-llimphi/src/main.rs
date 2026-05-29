@@ -123,6 +123,10 @@ struct Model {
     /// → 0.9). Misma justificación que el crosshair: cosmético total,
     /// no toca la simulación, sólo el rasterizador.
     vignette_strength: f32,
+    /// Fase 3.20: HUD inferior on/off (F6). Por default prendido — un
+    /// FPS sin status bar visible se siente "incompleto". Pero algunos
+    /// jugadores prefieren la inmersión sin chrome — el toggle queda.
+    show_hud: bool,
 }
 
 /// Pasos del cicle F5 para la viñeta — off / sutil (default) / fuerte.
@@ -155,6 +159,8 @@ enum Msg {
     ToggleCrosshair,
     /// Fase 3.19: cicla la intensidad de la viñeta (F5) por VIGNETTE_STEPS.
     CycleVignette,
+    /// Fase 3.20: alterna el HUD inferior (F6).
+    ToggleHud,
     Quit,
 }
 
@@ -212,6 +218,7 @@ impl App for Supay {
             view_pitch: 0.0,
             show_crosshair: true,
             vignette_strength: VIGNETTE_STEPS[1],
+            show_hud: true,
         }
     }
 
@@ -231,6 +238,9 @@ impl App for Supay {
             }
             if matches!(&e.key, Key::Named(NamedKey::F5)) {
                 return Some(Msg::CycleVignette);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F6)) {
+                return Some(Msg::ToggleHud);
             }
             // Fase 3.17: mouse-look cosmético. PageUp = mirar arriba,
             // PageDown = mirar abajo, Home = resetear horizonte. No pasan
@@ -326,6 +336,9 @@ impl App for Supay {
                     .unwrap_or(0);
                 m.vignette_strength = VIGNETTE_STEPS[(idx + 1) % VIGNETTE_STEPS.len()];
             }
+            Msg::ToggleHud => {
+                m.show_hud = !m.show_hud;
+            }
         }
         m
     }
@@ -348,6 +361,7 @@ impl App for Supay {
                     atlas: model.atlas.clone(),
                     crosshair: model.show_crosshair,
                     vignette: model.vignette_strength,
+                    hud: model.show_hud,
                     ..RenderConfig::default()
                 },
             )),
@@ -393,7 +407,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.19 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.20 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

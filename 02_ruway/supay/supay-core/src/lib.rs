@@ -30,9 +30,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 pub use supay_scene::{
-    interpolate, NodeSnap, PlayerOverlays, PlayerSnap, SceneSnapshot, SectorSnap, SegSnap,
-    SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg, WeaponSpriteSnap, NF_SUBSECTOR, NO_SECTOR,
-    NO_SKY_PIC,
+    interpolate, NodeSnap, PlayerOverlays, PlayerSnap, PlayerStats, SceneSnapshot, SectorSnap,
+    SegSnap, SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg, WeaponSpriteSnap, NF_SUBSECTOR,
+    NO_SECTOR, NO_SKY_PIC,
 };
 
 // doomgeneric default es 640×400 (auto-scaling factor 2 sobre los
@@ -309,6 +309,19 @@ extern "C" {
         frame: *mut u8,
         sx: *mut f32,
         sy: *mut f32,
+    ) -> std::ffi::c_int;
+    /// Fase 3.20: stats vitales del jugador para el HUD inferior.
+    /// `ammo` y `maxammo` apuntan a buffers `[i32; 4]`; `cards` a
+    /// `[u8; 6]`. Devuelve 0 si el jugador no existe (pre-mapa) — todo
+    /// el buffer queda en cero y el HUD se pinta hueco.
+    fn supay_scene_player_stats(
+        health: *mut std::ffi::c_int,
+        armor_points: *mut std::ffi::c_int,
+        armor_type: *mut std::ffi::c_int,
+        ready_weapon: *mut std::ffi::c_int,
+        ammo: *mut std::ffi::c_int,
+        maxammo: *mut std::ffi::c_int,
+        cards: *mut u8,
     ) -> std::ffi::c_int;
 }
 
@@ -827,6 +840,9 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
     let weapon = capture_psprite(false);
     let weapon_flash = capture_psprite(true);
 
+    // Fase 3.20: stats vitales del jugador (HUD inferior).
+    let player_stats = capture_player_stats();
+
     SceneSnapshot {
         tick,
         player,
@@ -840,6 +856,51 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         player_overlays,
         weapon,
         weapon_flash,
+        player_stats,
+    }
+}
+
+/// Captura los stats del jugador (health/armor/ammo/keys) desde el motor.
+/// Devuelve `Default` si el jugador no existe (pre-mapa) — el HUD se
+/// pintará hueco.
+#[cfg(not(doomgeneric_stub))]
+fn capture_player_stats() -> PlayerStats {
+    let mut health = 0_i32;
+    let mut armor_points = 0_i32;
+    let mut armor_type = 0_i32;
+    let mut ready_weapon = 0_i32;
+    let mut ammo = [0_i32; 4];
+    let mut maxammo = [0_i32; 4];
+    let mut cards = [0_u8; 6];
+    // SAFETY: punteros a locales válidos en la frame actual. Los buffers
+    // de 4 ints y 6 bytes matchean los `_Static_assert`-s de
+    // `scene_export.c`.
+    let _ = unsafe {
+        supay_scene_player_stats(
+            &mut health,
+            &mut armor_points,
+            &mut armor_type,
+            &mut ready_weapon,
+            ammo.as_mut_ptr(),
+            maxammo.as_mut_ptr(),
+            cards.as_mut_ptr(),
+        )
+    };
+    PlayerStats {
+        health,
+        armor_points,
+        armor_type: armor_type.max(0).min(u8::MAX as i32) as u8,
+        ready_weapon: ready_weapon.max(0).min(u8::MAX as i32) as u8,
+        ammo,
+        max_ammo: maxammo,
+        cards: [
+            cards[0] != 0,
+            cards[1] != 0,
+            cards[2] != 0,
+            cards[3] != 0,
+            cards[4] != 0,
+            cards[5] != 0,
+        ],
     }
 }
 
@@ -990,5 +1051,7 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
         // Stub: sin arma — no hay psprite que mostrar sin jugador real.
         weapon: WeaponSpriteSnap::default(),
         weapon_flash: WeaponSpriteSnap::default(),
+        // Stub: HUD hueco (default = todos los valores en cero).
+        player_stats: PlayerStats::default(),
     }
 }
