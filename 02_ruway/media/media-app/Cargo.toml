@@ -1,0 +1,21 @@
+[package]
+name = "media-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+llimphi-surface = { path = "../../llimphi/llimphi-surface" }
+llimphi-ui = { path = "../../llimphi/llimphi-ui" }
+image = { workspace = true }
+media-audio-cpal = { path = "../media-audio-cpal" }
+media-core = { path = "../media-core" }
+media-recorder-wav = { path = "../media-recorder-wav" }
+media-source-ffmpeg = { path = "../media-source-ffmpeg" }
+media-source-gif = { path = "../media-source-gif" }
+media-source-image = { path = "../media-source-image" }
+media-source-mp3 = { path = "../media-source-mp3" }
+media-source-wav = { path = "../media-source-wav" }
+parking_lot = { workspace = true }

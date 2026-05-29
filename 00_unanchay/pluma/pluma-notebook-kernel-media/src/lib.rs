@@ -1,16 +1,16 @@
-//! `pluma-notebook-kernel-multimedia` — kernel notebook que analiza
+//! `pluma-notebook-kernel-media` — kernel notebook que analiza
 //! offline un archivo de audio (WAV/MP3) y devuelve PNG + observables.
 //!
-//! Cierra la integración del dominio multimedia (`02_ruway/multimedia/`)
+//! Cierra la integración del dominio media (`02_ruway/media/`)
 //! con pluma: las primitivas de visualización (Spectrum, Waterfall,
-//! Levels) que ya alimentan los visores live en `multimedia-app` se
+//! Levels) que ya alimentan los visores live en `media-app` se
 //! exponen acá como celdas reactivas del DAG del notebook. El kernel
 //! es offline puro — sin cpal, sin Llimphi — para correr en CI,
 //! sandboxes y futuro wawa userspace.
 //!
 //! ## Lenguaje reconocido
 //!
-//! `multimedia`. El source son líneas `key = value`; comentarios con
+//! `media`. El source son líneas `key = value`; comentarios con
 //! `#` o `//` y líneas vacías se ignoran. Claves principales:
 //!
 //! ```text
@@ -41,29 +41,29 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use multimedia_core::{AudioSource, Levels, Waterfall};
-use multimedia_source_mp3::Mp3Source;
-use multimedia_source_wav::WavSource;
+use media_core::{AudioSource, Levels, Waterfall};
+use media_source_mp3::Mp3Source;
+use media_source_wav::WavSource;
 use pluma_notebook_core::cell::{CellOutput, OutputPayload};
 use pluma_notebook_exec::{Kernel, KernelError, KernelOutput};
 
-/// Kernel notebook multimedia. Stateless — toda la config viene en el
+/// Kernel notebook media. Stateless — toda la config viene en el
 /// `source` de la celda.
 #[derive(Debug, Clone, Default)]
-pub struct MultimediaKernel;
+pub struct MediaKernel;
 
-impl MultimediaKernel {
+impl MediaKernel {
     pub fn new() -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl Kernel for MultimediaKernel {
+impl Kernel for MediaKernel {
     async fn execute(&self, source: &str, language: &str) -> Result<KernelOutput, KernelError> {
-        if language != "multimedia" && language != "mm" {
+        if language != "media" {
             return Err(KernelError::Runtime(format!(
-                "MultimediaKernel no maneja '{language}' (se esperaba 'multimedia' o 'mm')"
+                "MediaKernel no maneja '{language}' (se esperaba 'media')"
             )));
         }
         let cfg = Config::parse(source).map_err(KernelError::Runtime)?;

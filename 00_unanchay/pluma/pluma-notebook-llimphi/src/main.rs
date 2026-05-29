@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use pluma_notebook_exec::{Kernel, KernelError, KernelOutput};
-use pluma_notebook_kernel_multimedia::MultimediaKernel;
+use pluma_notebook_kernel_media::MediaKernel;
 use pluma_notebook_kernel_python::PythonKernel;
 use pluma_notebook_kernel_wasm::WasmKernel;
 
@@ -992,7 +992,7 @@ fn demo_notebook() -> Notebook {
 struct MultiKernel {
     wasm: WasmKernel,
     python: PythonKernel,
-    multimedia: MultimediaKernel,
+    media: MediaKernel,
 }
 
 impl MultiKernel {
@@ -1000,7 +1000,7 @@ impl MultiKernel {
         Self {
             wasm: WasmKernel::new(),
             python: PythonKernel::new(),
-            multimedia: MultimediaKernel::new(),
+            media: MediaKernel::new(),
         }
     }
 }
@@ -1011,9 +1011,9 @@ impl Kernel for MultiKernel {
         match language {
             "wasm" | "wat" => self.wasm.execute(source, language).await,
             "python" | "py" => self.python.execute(source, language).await,
-            "multimedia" | "mm" => self.multimedia.execute(source, language).await,
+            "media" => self.media.execute(source, language).await,
             other => Err(KernelError::Runtime(format!(
-                "ningún kernel registrado para '{other}' (disponibles: wasm/wat, python/py, multimedia/mm)"
+                "ningún kernel registrado para '{other}' (disponibles: wasm/wat, python/py, media)"
             ))),
         }
     }

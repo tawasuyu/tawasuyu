@@ -23,7 +23,7 @@ Lectura previa obligatoria al tocar cualquier cosa de fondo: `README.md`, `PLAN.
 ```
 00_unanchay/   PERCIBIR  — pluma · khipu · rimay · chaka · pineal · puriy
 01_yachay/     CONOCER   — cosmos · dominium · nakui · iniy · tinkuy
-02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi · supay · nada · wawa (host-side)
+02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi · supay · media · nada · wawa (host-side)
 03_ukupacha/   RAÍZ      — arje · wawa (kernel + apps WASM) · agora · minga · wawa-explorer
 shared/                  — sandokan · auth · card · ssh · format · foreign-* · rimay-localize · wawa-config · forth-emisor
 web/                     — landing sobria (no producto)

@@ -1,5 +1,5 @@
 [package]
-name = "pluma-notebook-kernel-multimedia"
+name = "pluma-notebook-kernel-media"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,9 +8,9 @@ publish.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-multimedia-core = { path = "../../../02_ruway/multimedia/multimedia-core" }
-multimedia-source-mp3 = { path = "../../../02_ruway/multimedia/multimedia-source-mp3" }
-multimedia-source-wav = { path = "../../../02_ruway/multimedia/multimedia-source-wav" }
+media-core = { path = "../../../02_ruway/media/media-core" }
+media-source-mp3 = { path = "../../../02_ruway/media/media-source-mp3" }
+media-source-wav = { path = "../../../02_ruway/media/media-source-wav" }
 pluma-notebook-core = { path = "../pluma-notebook-core" }
 pluma-notebook-exec = { path = "../pluma-notebook-exec" }
 png = { workspace = true }

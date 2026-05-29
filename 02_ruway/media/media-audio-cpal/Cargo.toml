@@ -1,0 +1,12 @@
+[package]
+name = "media-audio-cpal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+media-core = { path = "../media-core" }
+cpal = { workspace = true }
+parking_lot = { workspace = true }
