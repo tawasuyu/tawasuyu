@@ -5566,6 +5566,65 @@ mod tests {
         assert_eq!(parts[2], "https://example.com/page?q=hola");
     }
 
+    // ============= Fase 7.46 — normalización de segmentos =============
+
+    fn resolved_url(rt: &mut JsRuntime, rel: &str) -> String {
+        rt.drain_dom_mutations();
+        rt.eval(&format!("fetch({rel:?})")).expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<String> = muts[0].value.split('\u{001D}').map(|s| s.to_string()).collect();
+        parts[2].clone()
+    }
+
+    #[test]
+    fn url_relativa_colapsa_dotdot() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/a/b/page.html", "b").expect("d");
+        assert_eq!(resolved_url(&mut rt, "../x.json"), "https://example.com/a/x.json");
+        assert_eq!(resolved_url(&mut rt, "../../x.json"), "https://example.com/x.json");
+    }
+
+    #[test]
+    fn url_relativa_colapsa_dot() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/a/b/page.html", "b").expect("d");
+        assert_eq!(resolved_url(&mut rt, "./x.json"), "https://example.com/a/b/x.json");
+        assert_eq!(resolved_url(&mut rt, "c/./d/../e"), "https://example.com/a/b/c/e");
+    }
+
+    #[test]
+    fn url_absoluta_de_path_colapsa_segmentos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/a/b/page.html", "b").expect("d");
+        assert_eq!(resolved_url(&mut rt, "/x/y/../z"), "https://example.com/x/z");
+    }
+
+    #[test]
+    fn url_dotdot_no_escapa_la_raiz() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/a/page.html", "b").expect("d");
+        // Más `..` que niveles → se clava en la raíz, no escapa el origin.
+        assert_eq!(resolved_url(&mut rt, "../../../x"), "https://example.com/x");
+    }
+
+    #[test]
+    fn url_dotdot_final_preserva_slash() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/a/b/page.html", "b").expect("d");
+        // Último segmento `..` deja directorio con slash final (WHATWG).
+        assert_eq!(resolved_url(&mut rt, "c/d/.."), "https://example.com/a/b/c/");
+    }
+
+    #[test]
+    fn url_relativa_normaliza_pero_preserva_query() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/a/b/page.html", "b").expect("d");
+        assert_eq!(
+            resolved_url(&mut rt, "../api?id=1#frag"),
+            "https://example.com/a/api?id=1#frag"
+        );
+    }
+
     // ============= Fase 7.36 — AbortSignal.timeout / .any =============
 
     #[test]
