@@ -13,8 +13,10 @@
 //! - **Meta-form Llimphi** (paralelo al `nahual-widget-meta-form` GPUI
 //!   borrado): cuatro vistas meta-driven.
 //!   - `List`: filas reales con columnas del manifest (refs resueltas a
-//!     su label legible), botones editar/borrar por fila, `+ Nuevo`, y
-//!     `👁` por fila cuando declara `row_detail`.
+//!     su label legible), búsqueda por `search_in`, orden clickeando el
+//!     header de columna (asc→desc→sin), paginación, botones editar/
+//!     borrar por fila, `👁` cuando declara `row_detail`, `+ Nuevo` y
+//!     export CSV de las filas filtradas/ordenadas.
 //!   - `Form`: inputs por `FieldKind` (text/multiline/number/date/bool/
 //!     select/entity_ref/auto_id), con foco de teclado y submit que
 //!     dispara `SeedEntity`, edición (`update` con delta) o `Morphism`.
@@ -59,12 +61,12 @@ use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use nahual_meta_runtime::{
-    compute_clear_fields, compute_field_delta, compute_metric, format_value,
+    cmp_values, compute_clear_fields, compute_field_delta, compute_metric, format_value,
     human_label_for_record, parse_field_value, preview_value, render_value, resolve_param_value,
-    short_uuid, validate_entity_refs, MetaBackend, MetricResult, WriteOutcome,
+    short_uuid, to_csv, validate_entity_refs, MetaBackend, MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, Column, DashboardView, FieldKind, FieldSpec, FormView, Module, RelatedList,
+    Action, Column, DashboardView, FieldKind, FieldSpec, FormView, ListView, Module, RelatedList,
     ValueFormat, View as ModuleView,
 };
 use nakui_core::executor::Executor;
@@ -78,6 +80,8 @@ const ROW_HEIGHT: f32 = 22.0;
 /// Tope de records ofrecidos en un selector `EntityRef` (evita pintar
 /// miles de botones). Si la entity tiene más, se avisa al usuario.
 const ENTITY_REF_LIMIT: usize = 50;
+/// Filas por página en las listas.
+const LIST_PAGE_SIZE: usize = 20;
 
 #[derive(Clone)]
 enum Msg {
@@ -122,6 +126,19 @@ enum Msg {
         id: Uuid,
     },
     CloseDetail,
+    /// Foco a la caja de búsqueda de la lista activa.
+    FocusListSearch,
+    /// Tecla ruteada a la caja de búsqueda.
+    ListSearchKey(KeyEvent),
+    /// Click en un header de columna: cicla orden asc → desc → sin.
+    SortBy(String),
+    /// Paginación de la lista activa.
+    ListPagePrev,
+    ListPageNext,
+    /// Exporta la lista activa (filas filtradas/ordenadas) a un CSV.
+    ExportCsv {
+        entity: String,
+    },
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -181,6 +198,23 @@ struct Model {
     form: Option<FormState>,
     detail: Option<DetailState>,
     toast: Option<Toast>,
+    /// Estado de la lista activa (se resetea al cambiar de vista).
+    list_search: TextInputState,
+    list_search_focused: bool,
+    /// Columna de orden + dirección (`true` = ascendente).
+    list_sort: Option<(String, bool)>,
+    list_page: usize,
+}
+
+impl Model {
+    /// Resetea el estado efímero de la lista (búsqueda/orden/página) al
+    /// navegar a otra vista.
+    fn reset_list_state(&mut self) {
+        self.list_search.clear();
+        self.list_search_focused = false;
+        self.list_sort = None;
+        self.list_page = 0;
+    }
 }
 
 struct NakuiApp;
@@ -287,6 +321,10 @@ impl App for NakuiApp {
             form: None,
             detail: None,
             toast: None,
+            list_search: TextInputState::new(),
+            list_search_focused: false,
+            list_sort: None,
+            list_page: 0,
         }
     }
 
@@ -299,6 +337,7 @@ impl App for NakuiApp {
                     m.selected_menu = (!m.modules[i].menu.is_empty()).then_some(0);
                     m.form = None;
                     m.detail = None;
+                    m.reset_list_state();
                     sync_form_to_menu(&mut m);
                 }
             }
@@ -308,6 +347,7 @@ impl App for NakuiApp {
                         m.selected_menu = Some(i);
                         m.form = None;
                         m.detail = None;
+                        m.reset_list_state();
                         sync_form_to_menu(&mut m);
                     }
                 }
@@ -456,20 +496,50 @@ impl App for NakuiApp {
             Msg::CloseDetail => {
                 m.detail = None;
             }
+            Msg::FocusListSearch => {
+                m.list_search_focused = true;
+            }
+            Msg::ListSearchKey(ev) => {
+                if m.list_search_focused && m.list_search.apply_key(&ev) {
+                    // La búsqueda cambió: volver a la primera página.
+                    m.list_page = 0;
+                }
+            }
+            Msg::SortBy(field) => {
+                m.list_sort = next_sort(m.list_sort.take(), &field);
+                m.list_page = 0;
+            }
+            Msg::ListPagePrev => {
+                m.list_page = m.list_page.saturating_sub(1);
+            }
+            Msg::ListPageNext => {
+                // El clamp real lo hace el render contra el total; acá
+                // sólo avanzamos (el render no deja pasar de la última).
+                m.list_page = m.list_page.saturating_add(1);
+            }
+            Msg::ExportCsv { entity } => {
+                m.toast = Some(export_active_list_csv(&m, &entity));
+            }
         }
         m
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
-        let form = model.form.as_ref()?;
-        // Sólo capturamos teclas cuando hay un field de texto enfocado.
-        let _ = form.focused?;
-        if event.state == KeyState::Pressed {
-            if let Key::Named(NamedKey::Escape) = &event.key {
-                return Some(Msg::CancelForm);
+        // El form gana el teclado cuando tiene un field de texto activo.
+        if let Some(form) = &model.form {
+            form.focused?;
+            if event.state == KeyState::Pressed {
+                if let Key::Named(NamedKey::Escape) = &event.key {
+                    return Some(Msg::CancelForm);
+                }
             }
+            return Some(Msg::FieldKey(event.clone()));
         }
-        Some(Msg::FieldKey(event.clone()))
+        // Si no hay form, la caja de búsqueda de la lista puede tener foco.
+        if model.list_search_focused {
+            return Some(Msg::ListSearchKey(event.clone()));
+        }
+        None
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -984,32 +1054,55 @@ fn build_view_panel(
     }
 }
 
-/// Vista `List`: filas reales del store con columnas del manifest +
-/// botones editar/borrar por fila y `+ Nuevo` arriba.
-fn build_list_panel(
-    model: &Model,
-    mod_idx: usize,
-    lv: &nahual_meta_schema::ListView,
-    theme: &Theme,
-) -> View<Msg> {
+/// Vista `List`: filas reales del store con columnas del manifest,
+/// búsqueda (`search_in`), orden por columna, paginación, botones
+/// editar/borrar/👁 por fila, `+ Nuevo` y export CSV.
+fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, theme: &Theme) -> View<Msg> {
     let module = &model.modules[mod_idx];
     // Sostenemos el guard durante el armado para resolver las columnas
     // `ref_entity` a su label legible sin re-lockear por celda.
     let guard = model.backend.lock().ok();
-    let records = guard
-        .as_ref()
-        .map(|b| b.list_records(&lv.entity))
-        .unwrap_or_default();
+    let records = match guard.as_ref() {
+        Some(b) => list_filtered_sorted(b, lv, &model.list_search.text(), &model.list_sort),
+        None => Vec::new(),
+    };
 
+    let total = records.len();
     let has_form = find_form_view(module, &lv.entity).is_some();
+    let can_search = !lv.search_in.is_empty();
 
-    // Header: título + contador + botón Nuevo.
-    let title = text_line(
-        format!("{} · {} ({})", module.label, lv.title, records.len()),
+    // Paginación: clamp de la página contra el total filtrado.
+    let pages = total.div_ceil(LIST_PAGE_SIZE).max(1);
+    let page = model.list_page.min(pages - 1);
+
+    // --- Fila 1: título + contador + Export + Nuevo. ---
+    let title = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(24.0),
+        },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{} · {} ({total})", module.label, lv.title),
         16.0,
         theme.fg_text,
+        Alignment::Start,
     );
     let mut header_children = vec![title];
+    if total > 0 {
+        header_children.push(button_styled(
+            "exportar CSV",
+            btn_style(120.0),
+            Alignment::Center,
+            &ButtonPalette::from_theme(theme),
+            Msg::ExportCsv {
+                entity: lv.entity.clone(),
+            },
+        ));
+    }
     if has_form {
         header_children.push(button_styled(
             "+ Nuevo",
@@ -1028,27 +1121,88 @@ fn build_list_panel(
             width: percent(1.0_f32),
             height: length(34.0),
         },
-        justify_content: Some(JustifyContent::SpaceBetween),
         align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(8.0),
+            height: length(0.0),
+        },
         ..Default::default()
     })
     .children(header_children);
 
     let mut rows: Vec<View<Msg>> = vec![header];
 
-    if records.is_empty() {
-        rows.push(text_line(
-            "(sin records — usá + Nuevo)".into(),
-            12.0,
-            theme.fg_muted,
+    // --- Caja de búsqueda (sólo si la lista declara search_in). ---
+    if can_search {
+        rows.push(text_input_view(
+            &model.list_search,
+            &format!("buscar en {}…", lv.search_in.join(", ")),
+            model.list_search_focused,
+            &TextInputPalette::from_theme(theme),
+            Msg::FocusListSearch,
         ));
     }
 
-    for (id, rec) in &records {
-        let mut cells: Vec<View<Msg>> = Vec::new();
-        // Columna implícita: id corto.
-        cells.push(cell_text(short_uuid(id), 90.0, theme.fg_muted));
-        // Columnas del manifest (ref_entity resuelve al label legible).
+    // --- Fila de headers de columna (clickeables para ordenar). ---
+    let mut head_cells: Vec<View<Msg>> = vec![cell_text("id".into(), 90.0, theme.fg_muted)];
+    for col in &lv.columns {
+        let arrow = match &model.list_sort {
+            Some((f, true)) if *f == col.field => " ▲",
+            Some((f, false)) if *f == col.field => " ▼",
+            _ => "",
+        };
+        head_cells.push(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(22.0),
+                },
+                flex_grow: 1.0,
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(
+                format!("{}{arrow}", col.label),
+                12.0,
+                theme.fg_muted,
+                Alignment::Start,
+            )
+            .on_click(Msg::SortBy(col.field.clone())),
+        );
+    }
+    rows.push(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(24.0),
+            },
+            align_items: Some(AlignItems::Center),
+            gap: Size {
+                width: length(8.0),
+                height: length(0.0),
+            },
+            ..Default::default()
+        })
+        .children(head_cells),
+    );
+
+    if total == 0 {
+        let msg = if model.list_search.text().trim().is_empty() {
+            "(sin records — usá + Nuevo)"
+        } else {
+            "(ningún record coincide con la búsqueda)"
+        };
+        rows.push(text_line(msg.into(), 12.0, theme.fg_muted));
+    }
+
+    // --- Filas de la página actual. ---
+    for (id, rec) in records
+        .iter()
+        .skip(page * LIST_PAGE_SIZE)
+        .take(LIST_PAGE_SIZE)
+    {
+        let mut cells: Vec<View<Msg>> = vec![cell_text(short_uuid(id), 90.0, theme.fg_muted)];
         for col in &lv.columns {
             let disp = match guard.as_ref() {
                 Some(b) => cell_display(b, col, lookup_field(rec, &col.field)),
@@ -1056,7 +1210,6 @@ fn build_list_panel(
             };
             cells.push(cell_flex(disp, theme.fg_text));
         }
-        // Acciones.
         if let Some(detail_vk) = &lv.row_detail {
             cells.push(button_styled(
                 "👁",
@@ -1113,7 +1266,165 @@ fn build_list_panel(
         );
     }
 
+    // --- Controles de paginación (sólo si hay más de una página). ---
+    if pages > 1 {
+        let prev = button_styled(
+            "‹ anterior",
+            btn_style(100.0),
+            Alignment::Center,
+            &ButtonPalette::from_theme(theme),
+            Msg::ListPagePrev,
+        );
+        let indicator = View::new(Style {
+            size: Size {
+                width: length(140.0),
+                height: length(30.0),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .text_aligned(
+            format!("página {} de {pages}", page + 1),
+            12.0,
+            theme.fg_muted,
+            Alignment::Center,
+        );
+        let next = button_styled(
+            "siguiente ›",
+            btn_style(100.0),
+            Alignment::Center,
+            &ButtonPalette::from_theme(theme),
+            Msg::ListPageNext,
+        );
+        rows.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(38.0),
+                },
+                align_items: Some(AlignItems::Center),
+                gap: Size {
+                    width: length(8.0),
+                    height: length(0.0),
+                },
+                ..Default::default()
+            })
+            .children(vec![prev, indicator, next]),
+        );
+    }
+
     column(rows, 6.0)
+}
+
+/// Próximo estado de orden al clickear el header `field`: la misma
+/// columna cicla ascendente → descendente → sin orden; otra arranca asc.
+fn next_sort(current: Option<(String, bool)>, field: &str) -> Option<(String, bool)> {
+    match current {
+        Some((f, true)) if f == field => Some((f, false)),
+        Some((f, false)) if f == field => None,
+        _ => Some((field.to_string(), true)),
+    }
+}
+
+/// Filas de una lista tras aplicar búsqueda (`search_in`) y orden.
+/// Compartido por el render y el export CSV. La búsqueda compara el
+/// valor crudo (`render_value`) de cada `search_in` field, sin distinguir
+/// mayúsculas.
+fn list_filtered_sorted(
+    backend: &NakuiBackend,
+    lv: &ListView,
+    query: &str,
+    sort: &Option<(String, bool)>,
+) -> Vec<(Uuid, Value)> {
+    let mut rows = backend.list_records(&lv.entity);
+    let q = query.trim().to_lowercase();
+    if !q.is_empty() && !lv.search_in.is_empty() {
+        rows.retain(|(_, v)| {
+            lv.search_in.iter().any(|field| {
+                lookup_field(v, field)
+                    .map(|c| render_value(Some(c)).to_lowercase().contains(&q))
+                    .unwrap_or(false)
+            })
+        });
+    }
+    if let Some((field, asc)) = sort {
+        rows.sort_by(|(_, a), (_, b)| {
+            let ord = cmp_values(lookup_field(a, field), lookup_field(b, field));
+            if *asc {
+                ord
+            } else {
+                ord.reverse()
+            }
+        });
+    }
+    rows
+}
+
+/// El `ListView` de la vista seleccionada cuya entity coincide.
+fn active_list_view<'a>(m: &'a Model, entity: &str) -> Option<&'a ListView> {
+    let module = m.modules.get(m.selected_module?)?;
+    let item = module.menu.get(m.selected_menu?)?;
+    match module.views.get(&item.view) {
+        Some(ModuleView::List(lv)) if lv.entity == entity => Some(lv),
+        _ => None,
+    }
+}
+
+/// Ruta destino de un export CSV: `<entity>-<unix-secs>.csv` en el cwd.
+fn export_path(entity: &str) -> std::path::PathBuf {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let name = format!("{entity}-{secs}.csv");
+    std::env::current_dir()
+        .map(|d| d.join(&name))
+        .unwrap_or_else(|_| std::path::PathBuf::from(name))
+}
+
+/// Exporta la lista activa (filas filtradas/ordenadas, todas las
+/// columnas con sus valores renderizados) a un CSV en el cwd; devuelve
+/// un toast con el resultado.
+fn export_active_list_csv(m: &Model, entity: &str) -> Toast {
+    let Some(lv) = active_list_view(m, entity) else {
+        return Toast {
+            kind: BannerKind::Error,
+            text: "no encontré la lista activa para exportar".into(),
+        };
+    };
+    let Ok(backend) = m.backend.lock() else {
+        return Toast {
+            kind: BannerKind::Error,
+            text: "backend lock envenenado".into(),
+        };
+    };
+    let rows = list_filtered_sorted(&backend, lv, &m.list_search.text(), &m.list_sort);
+    let headers: Vec<String> = lv.columns.iter().map(|c| c.label.clone()).collect();
+    let data: Vec<Vec<String>> = rows
+        .iter()
+        .map(|(_, v)| {
+            lv.columns
+                .iter()
+                .map(|c| cell_display(&backend, c, lookup_field(v, &c.field)))
+                .collect()
+        })
+        .collect();
+    drop(backend);
+
+    let csv = to_csv(&headers, &data);
+    let path = export_path(entity);
+    match std::fs::write(&path, csv) {
+        Ok(()) => Toast {
+            kind: BannerKind::Success,
+            text: format!("exporté {} fila(s) a {}", rows.len(), path.display()),
+        },
+        Err(e) => Toast {
+            kind: BannerKind::Error,
+            text: format!("no pude exportar CSV: {e}"),
+        },
+    }
 }
 
 /// Vista `Detail`: ficha de un record. Header con `← Volver` + `✎
@@ -2096,6 +2407,24 @@ mod tests {
             .find(|f| f.spec.kind == FieldKind::AutoId)
             .expect("el form tiene un AutoId");
         assert!(Uuid::parse_str(&id_field.raw()).is_ok());
+    }
+
+    #[test]
+    fn next_sort_cycles_asc_desc_off() {
+        // Columna nueva → ascendente.
+        assert_eq!(next_sort(None, "name"), Some(("name".into(), true)));
+        // Misma columna asc → desc.
+        assert_eq!(
+            next_sort(Some(("name".into(), true)), "name"),
+            Some(("name".into(), false))
+        );
+        // Misma columna desc → sin orden.
+        assert_eq!(next_sort(Some(("name".into(), false)), "name"), None);
+        // Otra columna → arranca ascendente.
+        assert_eq!(
+            next_sort(Some(("name".into(), false)), "tier"),
+            Some(("tier".into(), true))
+        );
     }
 
     #[test]

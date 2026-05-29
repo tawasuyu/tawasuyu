@@ -30,6 +30,7 @@
       "title": "Clientes",
       "entity": "Customer",
       "row_detail": "customer_detail",
+      "search_in": ["name", "tier"],
       "columns": [
         { "field": "name", "label": "Nombre" },
         { "field": "tier", "label": "Plan" },
@@ -82,6 +83,7 @@
       "kind": "list",
       "title": "Órdenes",
       "entity": "Order",
+      "search_in": ["monto"],
       "columns": [
         { "field": "customer", "label": "Cliente", "ref_entity": "Customer" },
         { "field": "monto", "label": "Monto" },
