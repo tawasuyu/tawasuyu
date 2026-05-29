@@ -32,6 +32,13 @@ pub const POLKIT_DECISION_IFACE: arje_card::InterfaceId =
 pub const POLKIT_SERVICE_IFACE: arje_card::InterfaceId =
     arje_card::InterfaceId([0xa4; 16]);
 
+/// Interface UUID por la que el cerebro entrega notificaciones dirigidas a
+/// un Ente concreto. El blob es UTF-8 del mensaje. Provee canal sin protocolo
+/// para que reglas del fractal puedan poke a Entes específicos sin un Endpoint
+/// por dominio. El proveedor decide cómo reaccionar (log, hint, etc).
+pub const BRAIN_NOTIFY_IFACE: arje_card::InterfaceId =
+    arje_card::InterfaceId([0xbe; 16]);
+
 /// Credenciales del peer extraídas vía SO_PEERCRED al accept del bus.
 /// Imposibles de falsear desde el cliente — el kernel las inyecta.
 /// Definidas aquí (no en ente-zero) porque conceptualmente son atributo

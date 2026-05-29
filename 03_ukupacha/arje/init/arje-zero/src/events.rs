@@ -39,6 +39,14 @@ pub enum GraphEvent {
     /// Cliente del bus cerró su conexión. Si había anunciado identidad,
     /// el grafo retira esa conexión del registry.
     BusConnClosed { ente_id: Option<Ulid> },
+    /// Invoke originado por el cerebro (no por un peer del bus). El grafo
+    /// busca el proveedor en `bus_connections` y empuja un BusMessage
+    /// fire-and-forget — sin entry en `pending_invokes`, sin reply.
+    BrainInvoke { cap: Capability, blob: Vec<u8> },
+    /// Notificación dirigida a un Ente específico por Ulid. Se empuja como
+    /// Invoke a la interfaz `BRAIN_NOTIFY_IFACE` del proveedor. Si el Ente
+    /// no tiene conexión al bus, se descarta con warn.
+    BrainNotify { target_id: Ulid, message: String },
     Shutdown { reason: ShutdownReason },
 }
 

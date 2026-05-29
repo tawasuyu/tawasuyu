@@ -581,6 +581,12 @@ async fn dispatch_graph_event(
         GraphEvent::BusConnClosed { ente_id } => {
             graph.on_bus_conn_closed(ente_id).await;
         }
+        GraphEvent::BrainInvoke { cap, blob } => {
+            graph.forward_brain_invoke(cap, blob).await;
+        }
+        GraphEvent::BrainNotify { target_id, message } => {
+            graph.forward_brain_notify(target_id, message).await;
+        }
         GraphEvent::Shutdown { reason } => {
             warn!(?reason, "shutdown del fractal");
             if let Some(path) = checkpoint.as_ref() {

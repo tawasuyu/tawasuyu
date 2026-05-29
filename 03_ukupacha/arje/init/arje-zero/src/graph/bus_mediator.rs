@@ -237,4 +237,55 @@ impl EnteGraph {
             debug!(%id, "bus connection cerrada");
         }
     }
+
+    /// Invoke originado por el cerebro. Fire-and-forget: empuja el BusMessage
+    /// al proveedor real sin registrar `pending_invokes` (no hay reply que
+    /// retornar a un peer del bus — la decisión vivió en proceso). Si no hay
+    /// proveedor invokable o el canal está saturado, se registra warn.
+    pub async fn forward_brain_invoke(&mut self, cap: Capability, blob: Vec<u8>) {
+        let Some(provider_id) = self.pick_invokable_provider(&cap) else {
+            warn!(?cap, "brain invoke: sin proveedor invokable, descartado");
+            return;
+        };
+        let Some(outbound) = self.bus_connections.get(&provider_id).cloned() else {
+            warn!(?cap, %provider_id, "brain invoke: proveedor sin conexión, descartado");
+            return;
+        };
+        let seq = self.alloc_invoke_seq();
+        debug!(?cap, %provider_id, seq, blob_len = blob.len(), "brain invoke forwardeado");
+        let msg = BusMessage {
+            from: None,
+            seq,
+            payload: BusPayload::Request(BusRequest::Invoke { cap, blob }),
+        };
+        if outbound.send(msg).await.is_err() {
+            warn!(seq, "brain invoke: outbound del proveedor cerrado");
+        }
+    }
+
+    /// Notificación dirigida a un Ente por Ulid. Empaqueta el mensaje como
+    /// Invoke contra `BRAIN_NOTIFY_IFACE`. Es la única vía de comunicación
+    /// directa (no por capacidad anónima) que ofrece el cerebro.
+    pub async fn forward_brain_notify(&mut self, target_id: Ulid, message: String) {
+        let Some(outbound) = self.bus_connections.get(&target_id).cloned() else {
+            warn!(%target_id, "brain notify: target sin conexión al bus, descartado");
+            return;
+        };
+        let seq = self.alloc_invoke_seq();
+        debug!(%target_id, seq, len = message.len(), "brain notify forwardeado");
+        let msg = BusMessage {
+            from: None,
+            seq,
+            payload: BusPayload::Request(BusRequest::Invoke {
+                cap: Capability::Endpoint {
+                    interface: arje_bus::BRAIN_NOTIFY_IFACE,
+                    version: 1,
+                },
+                blob: message.into_bytes(),
+            }),
+        };
+        if outbound.send(msg).await.is_err() {
+            warn!(seq, %target_id, "brain notify: outbound cerrado");
+        }
+    }
 }

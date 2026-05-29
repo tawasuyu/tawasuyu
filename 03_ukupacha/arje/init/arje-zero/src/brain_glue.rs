@@ -95,17 +95,24 @@ impl ActionSink for GraphSink {
     }
 
     fn invoke(&self, target_cap: Capability, blob: Vec<u8>) {
-        // Sin BusClient en proceso — el sink registra la intención. Una mejora
-        // futura: spawn un BusClient::connect + call. Por ahora log estructurado.
-        warn!(?target_cap, blob_len = blob.len(), "brain invoke: no bus client en glue (TODO)");
+        let evt = GraphEvent::BrainInvoke { cap: target_cap, blob };
+        if self.graph_tx.try_send(evt).is_err() {
+            warn!("brain invoke: graph_tx lleno o cerrado");
+        }
     }
 
     fn notify(&self, target_id: Ulid, message: &str) {
-        warn!(%target_id, %message, "brain notify: no implementado en glue");
+        let evt = GraphEvent::BrainNotify { target_id, message: message.to_string() };
+        if self.graph_tx.try_send(evt).is_err() {
+            warn!(%target_id, "brain notify: graph_tx lleno o cerrado");
+        }
     }
 
     fn inhibit(&self, reason: &str) {
-        warn!(%reason, "brain inhibit: no implementado en glue");
+        // No hay semántica de inhibición en el grafo todavía — el cerebro la
+        // emite, el sink la registra para auditoría. Cualquier consumidor del
+        // log puede correlacionar con grants/forwards subsiguientes.
+        warn!(%reason, "brain inhibit recibido (sin sumidero estructural)");
     }
 }
 
