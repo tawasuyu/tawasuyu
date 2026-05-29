@@ -646,6 +646,106 @@ impl Objeto {
     }
 }
 
+// =============================================================================
+//  Fase 66 :: Árbol/Blob — el monorepo como grafo
+// -----------------------------------------------------------------------------
+//  El grafo direccionado por contenido ES el modelo de objetos de git. Esta
+//  capa lo hace explícito para que un árbol de directorios viva en el grafo:
+//
+//    * BLOB      :: el contenido de un archivo. Es un `Objeto { datos: bytes,
+//                   hijos: [] }` — sin estructura, solo bytes direccionados por
+//                   su hash. Archivos idénticos comparten un solo blob (dedup
+//                   por contenido, gratis).
+//    * ÁRBOL     :: el contenido de un directorio. Un `Objeto` cuyo `datos` es
+//                   un `Arbol` postcard (la lista de entradas: nombre + modo +
+//                   hash) y cuyos `hijos` son los hashes de esas entradas — así
+//                   el MARK del GC del kernel alcanza todo el subárbol siguiendo
+//                   `hijos`, SIN tener que entender el format `Arbol`.
+//
+//  Las entradas de un árbol van ORDENADAS por nombre: mismo contenido de
+//  directorio => mismo árbol serializado => mismo hash. Determinismo total, la
+//  base de la dedup y de la verificación. Un repositorio entero colapsa a UN
+//  hash raíz; dos commits que solo tocan un archivo comparten todo el resto del
+//  árbol (estructura compartida, como git).
+// =============================================================================
+
+/// Version del format de un `Arbol`.
+pub const VERSION_ARBOL: u32 = 1;
+
+/// Qué clase de objeto referencia una entrada de árbol.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModoEntrada {
+    /// El hash apunta a un BLOB (contenido de archivo).
+    Archivo,
+    /// El hash apunta a otro ÁRBOL (subdirectorio).
+    Directorio,
+}
+
+/// Una entrada de un árbol: un nombre dentro del directorio + el modo + el hash
+/// del objeto que la realiza (un blob si `Archivo`, un árbol si `Directorio`).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct EntradaArbol {
+    /// Nombre del archivo/subdirectorio (sin separadores de ruta).
+    pub nombre: String,
+    /// Si el hash apunta a un blob o a un subárbol.
+    pub modo: ModoEntrada,
+    /// Hash del objeto (blob o árbol) que esta entrada referencia.
+    pub hash: Hash,
+}
+
+/// Un árbol: el contenido de un directorio, como lista ordenada de entradas.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct Arbol {
+    /// Version del format — debe ser [`VERSION_ARBOL`].
+    pub version: u32,
+    /// Entradas ORDENADAS por nombre (invariante que `objeto_arbol` impone).
+    pub entradas: Vec<EntradaArbol>,
+}
+
+impl Arbol {
+    /// Serializa el árbol a su forma `postcard` —la carga útil del objeto que
+    /// lo aloja—.
+    pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
+        postcard::to_allocvec(self).map_err(|_| "arbol :: serializacion fallida")
+    }
+
+    /// Reconstruye un árbol desde la carga útil de su objeto. Rechaza una
+    /// version desconocida en lugar de malinterpretarla.
+    pub fn deserializar(bytes: &[u8]) -> Result<Arbol, &'static str> {
+        let (arbol, _) =
+            postcard::take_from_bytes::<Arbol>(bytes).map_err(|_| "arbol :: deserializacion fallida")?;
+        if arbol.version != VERSION_ARBOL {
+            return Err("arbol :: version de format desconocida");
+        }
+        Ok(arbol)
+    }
+}
+
+/// Construye el objeto BLOB de un archivo: bytes crudos, sin hijos. El hash de
+/// este objeto (sobre su forma serializada) es la identidad del archivo en el
+/// grafo. Dos archivos con idéntico contenido producen el MISMO blob.
+pub fn objeto_blob(datos: Vec<u8>) -> Objeto {
+    Objeto {
+        datos,
+        hijos: Vec::new(),
+    }
+}
+
+/// Construye el objeto ÁRBOL de un directorio a partir de sus entradas. ORDENA
+/// las entradas por nombre (determinismo: mismo directorio → mismo hash) y fija
+/// `hijos` con los hashes de las entradas, en el MISMO orden, para que el GC
+/// alcance el subárbol siguiendo `hijos` sin parsear el `Arbol`.
+pub fn objeto_arbol(mut entradas: Vec<EntradaArbol>) -> Result<Objeto, &'static str> {
+    entradas.sort_by(|a, b| a.nombre.cmp(&b.nombre));
+    let hijos: Vec<Hash> = entradas.iter().map(|e| e.hash).collect();
+    let arbol = Arbol {
+        version: VERSION_ARBOL,
+        entradas,
+    };
+    let datos = arbol.serializar()?;
+    Ok(Objeto { datos, hijos })
+}
+
 impl SuperBloque {
     /// Serializa el superbloque a su forma binaria `postcard`.
     pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
@@ -1024,6 +1124,53 @@ pub fn leer_cabecera_cable(bytes: &[u8]) -> Option<(TipoCable, u64)> {
 #[cfg(test)]
 mod pruebas {
     use super::*;
+
+    #[test]
+    fn blob_no_tiene_hijos() {
+        let b = objeto_blob(vec![0xAA, 0xBB, 0xCC]);
+        assert_eq!(b.datos, vec![0xAA, 0xBB, 0xCC]);
+        assert!(b.hijos.is_empty());
+    }
+
+    #[test]
+    fn arbol_ordena_entradas_por_nombre() {
+        // Entradas en orden caótico — el objeto-árbol debe ordenarlas.
+        let entradas = vec![
+            EntradaArbol { nombre: "zeta.rs".into(), modo: ModoEntrada::Archivo, hash: [1; 32] },
+            EntradaArbol { nombre: "alfa.rs".into(), modo: ModoEntrada::Archivo, hash: [2; 32] },
+            EntradaArbol { nombre: "sub".into(), modo: ModoEntrada::Directorio, hash: [3; 32] },
+        ];
+        let obj = objeto_arbol(entradas).unwrap();
+        let arbol = Arbol::deserializar(&obj.datos).unwrap();
+        let nombres: Vec<&str> = arbol.entradas.iter().map(|e| e.nombre.as_str()).collect();
+        assert_eq!(nombres, ["alfa.rs", "sub", "zeta.rs"]);
+        // `hijos` viaja en el MISMO orden que las entradas ordenadas.
+        assert_eq!(obj.hijos, vec![[2u8; 32], [3u8; 32], [1u8; 32]]);
+    }
+
+    #[test]
+    fn arbol_es_determinista_independiente_del_orden_de_entrada() {
+        // El mismo directorio dado en dos órdenes distintos => MISMO hash.
+        let a = vec![
+            EntradaArbol { nombre: "b".into(), modo: ModoEntrada::Archivo, hash: [5; 32] },
+            EntradaArbol { nombre: "a".into(), modo: ModoEntrada::Archivo, hash: [6; 32] },
+        ];
+        let b = vec![
+            EntradaArbol { nombre: "a".into(), modo: ModoEntrada::Archivo, hash: [6; 32] },
+            EntradaArbol { nombre: "b".into(), modo: ModoEntrada::Archivo, hash: [5; 32] },
+        ];
+        let ha = hash(&objeto_arbol(a).unwrap().serializar().unwrap());
+        let hb = hash(&objeto_arbol(b).unwrap().serializar().unwrap());
+        assert_eq!(ha, hb);
+    }
+
+    #[test]
+    fn arbol_rechaza_version_desconocida() {
+        let mut arbol = Arbol { version: VERSION_ARBOL, entradas: vec![] };
+        assert!(Arbol::deserializar(&arbol.serializar().unwrap()).is_ok());
+        arbol.version = 99;
+        assert!(Arbol::deserializar(&arbol.serializar().unwrap()).is_err());
+    }
 
     #[test]
     fn objeto_ida_y_vuelta() {
