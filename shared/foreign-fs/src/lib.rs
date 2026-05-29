@@ -29,6 +29,7 @@ use alloc::vec::Vec;
 
 pub mod ext4;
 pub mod fat;
+pub mod particion;
 
 /// Tamaño de trozo para archivos grandes. IDÉNTICO al host
 /// (`agora-cli::TAMANO_TROZO`): 256 KiB << `MAX_OBJETO` (1 MiB). Cambiarlo aquí
