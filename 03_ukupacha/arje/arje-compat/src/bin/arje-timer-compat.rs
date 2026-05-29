@@ -24,12 +24,10 @@
 //! Schedule: cron 5-fields `min hour dom mon dow` (DOM/DOW como en cron
 //! tradicional). `*` y `*/N` soportados, listas no.
 //!
-//! Cuando un timer dispara, se envía un `BusRequest::Invoke` al bus interno
-//! con la cap "TimerFire" + payload = serialized Card. Un Ente que provea
-//! esa cap (futuro: ente-zero internamente) hace el spawn.
-//!
-//! Para el demo: log "FIRE" cada vez que el schedule matchea, sin spawn real
-//! (requiere mover SpawnRequest al protocolo del bus, fuera de scope).
+//! Cuando un timer dispara, si la entry trae `card` (nombre del store), el
+//! shim envía `BusRequest::SpawnCardFromDisk { name }` al bus interno;
+//! arje-zero carga `$ARJE_CARDS_DIR/<name>.json` y encarna con la Semilla
+//! como requester. Sin `card` el fire es sólo log estructurado.
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
@@ -44,9 +42,11 @@ struct TimerConfig {
     name: String,
     /// Cron 5-field: `min hour dom mon dow`. `*`, `N`, `*/N` soportados.
     schedule: String,
-    /// Card a disparar. Por ahora se loguea — futuro: SpawnRequest via bus.
+    /// Nombre de la Card en el store (`<ARJE_CARDS_DIR>/<card>.json`). El
+    /// fire envía `SpawnCardFromDisk { name: card }` al bus interno. None
+    /// = fire silencioso (sólo log).
     #[serde(default)]
-    card: Option<serde_json::Value>,
+    card: Option<String>,
 }
 
 #[derive(Debug)]
@@ -182,12 +182,26 @@ async fn main() -> anyhow::Result<()> {
 
 async fn fire(cfg: &TimerConfig) {
     info!(name = %cfg.name, "TIMER FIRE");
-    if cfg.card.is_none() {
-        return;
+    let Some(card_name) = cfg.card.as_deref() else { return };
+    let mut client = match BusClient::from_env().await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(?e, name = %cfg.name, "no bus client al fire");
+            return;
+        }
+    };
+    let req = BusRequest::SpawnCardFromDisk { name: card_name.to_string() };
+    match client.call(req).await {
+        Ok(BusResponse::Ok) => {
+            info!(name = %cfg.name, card = card_name, "card spawn aplicado");
+        }
+        Ok(other) => {
+            warn!(name = %cfg.name, ?other, "spawn rechazado por el bus");
+        }
+        Err(e) => {
+            warn!(?e, name = %cfg.name, "bus call falló");
+        }
     }
-    // En el futuro: forwardear via bus a un proveedor que haga SpawnRequest.
-    // Por ahora log estructurado.
-    info!(name = %cfg.name, "card spawn requested (no-op por ahora)");
 }
 
 fn load_timers() -> Vec<TimerConfig> {
