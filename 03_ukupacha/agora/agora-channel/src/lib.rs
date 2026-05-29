@@ -18,6 +18,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod release;
+pub use release::{construir_release, AppSpec, ObjetoEmitido, Release, ReleaseError};
+
 use agora_core::{verify_signature, AgoraError, IdentityId, Keypair};
 use format::{AgoraId, Canal, Firma, Hash, ManifiestoFirmado, RaizFirmada};
 use thiserror::Error;
