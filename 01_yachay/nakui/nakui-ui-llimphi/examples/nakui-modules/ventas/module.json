@@ -1,0 +1,69 @@
+{
+  "id": "ventas",
+  "label": "Ventas",
+  "description": "Demo del meta-form Llimphi: clientes + órdenes (alta/edición/borrado vivos)",
+  "entities": [
+    { "name": "Customer", "label": "Cliente", "fields": [] },
+    { "name": "Order", "label": "Orden", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Clientes", "view": "customers_list" },
+    { "label": "+ Cliente", "view": "customers_form" },
+    { "label": "Órdenes", "view": "orders_list" },
+    { "label": "+ Orden", "view": "orders_form" }
+  ],
+  "views": {
+    "customers_list": {
+      "kind": "list",
+      "title": "Clientes",
+      "entity": "Customer",
+      "columns": [
+        { "field": "name", "label": "Nombre" },
+        { "field": "tier", "label": "Plan" },
+        { "field": "activo", "label": "Activo" }
+      ]
+    },
+    "customers_form": {
+      "kind": "form",
+      "title": "Cliente",
+      "entity": "Customer",
+      "fields": [
+        { "name": "id", "label": "Id", "kind": "auto_id" },
+        { "name": "name", "label": "Nombre", "kind": "text", "required": true, "help": "Razón social del cliente" },
+        {
+          "name": "tier",
+          "label": "Plan",
+          "kind": "select",
+          "options": [
+            { "value": "free", "label": "Free" },
+            { "value": "pro", "label": "Pro" },
+            { "value": "enterprise", "label": "Enterprise" }
+          ]
+        },
+        { "name": "activo", "label": "Activo", "kind": "boolean", "default": "true" }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Customer", "next_view": "customers_list" }
+    },
+    "orders_list": {
+      "kind": "list",
+      "title": "Órdenes",
+      "entity": "Order",
+      "columns": [
+        { "field": "customer", "label": "Cliente", "ref_entity": "Customer" },
+        { "field": "monto", "label": "Monto" },
+        { "field": "pagado", "label": "Pagado" }
+      ]
+    },
+    "orders_form": {
+      "kind": "form",
+      "title": "Orden",
+      "entity": "Order",
+      "fields": [
+        { "name": "customer", "label": "Cliente", "kind": "entity_ref", "ref_entity": "Customer", "required": true, "help": "Elegí un cliente existente" },
+        { "name": "monto", "label": "Monto", "kind": "number", "required": true },
+        { "name": "pagado", "label": "Pagado", "kind": "boolean", "default": "false" }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Order", "next_view": "orders_list" }
+    }
+  }
+}

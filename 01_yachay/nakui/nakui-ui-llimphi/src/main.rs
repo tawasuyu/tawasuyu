@@ -1,25 +1,25 @@
 //! `nakui-ui-llimphi` — binario shell de la metainterfaz Nakui sobre
 //! Llimphi.
 //!
-//! ## Estado actual (MVP)
+//! ## Estado actual
 //!
 //! - Carga módulos UI desde `NAKUI_MODULES_DIR` (o `./nakui-modules`)
 //!   vía `cards::load_cards_from_dir`.
 //! - Crea `NakuiBackend` (event log persistente + replay + snapshot +
 //!   auto-compact). El backend implementa `nahual_meta_runtime::MetaBackend`
-//!   completo (seed/update/delete/morphism), igual que la versión GPUI.
+//!   completo (seed/update/delete/morphism).
 //! - Llimphi shell: sidebar de módulos (clickeable) + menú del módulo
-//!   activo + área principal con la vista seleccionada. Por ahora la
-//!   vista muestra **read-only**: para una `List` se enumera la cantidad
-//!   de records de la entity correspondiente; para `Form`/`Detail`/
-//!   `Dashboard` se muestra el kind y el aviso de que el meta-form
-//!   widget Llimphi todavía no existe.
+//!   activo + área principal.
+//! - **Meta-form Llimphi** (paralelo al `nahual-widget-meta-form` GPUI
+//!   borrado): la vista `List` renderea filas reales con botones
+//!   editar/borrar por fila + `+ Nuevo`; la vista `Form` renderea inputs
+//!   por `FieldKind` (text/multiline/number/date/bool/select/entityref/
+//!   autoid), con foco de teclado y submit que dispara `SeedEntity`,
+//!   edición (`update` con delta) o `Morphism` contra el backend. El
+//!   resultado (o el error de validación) se muestra como banner.
 //!
-//! Falta: el widget Llimphi paralelo a `nahual-widget-meta-form` (2k
-//! LOC) que renderea los formularios de seed/edit y dispara las
-//! acciones `Morphism` / `OpenView` del manifest. Hasta entonces la
-//! mutación pasa por los binarios CLI / tests del backend; la UI es
-//! exploratoria.
+//! El ciclo de escritura ya no pasa por CLI/tests: la UI crea, edita,
+//! borra y corre morfismos directamente sobre el event log.
 //!
 //! ## Uso
 //!
@@ -30,7 +30,7 @@
 
 mod backend;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -38,28 +38,110 @@ use cards::CardBody;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
-    AlignItems, Rect,
+    AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
+use llimphi_widget_button::{button_styled, ButtonPalette};
+use llimphi_widget_field::{field_view, FieldPalette, FieldSpec as FieldWidgetSpec};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-use nahual_meta_runtime::MetaBackend;
-use nahual_meta_schema::{Module, View as ModuleView};
+use nahual_meta_runtime::{
+    compute_clear_fields, compute_field_delta, parse_field_value, preview_value,
+    resolve_param_value, short_uuid, validate_entity_refs, MetaBackend, WriteOutcome,
+};
+use nahual_meta_schema::{
+    Action, FieldKind, FieldSpec, FormView, Module, View as ModuleView,
+};
 use nakui_core::executor::Executor;
+use serde_json::Value;
+use uuid::Uuid;
 
 use crate::backend::NakuiBackend;
 
 const SIDEBAR_WIDTH: f32 = 240.0;
 const ROW_HEIGHT: f32 = 22.0;
+/// Tope de records ofrecidos en un selector `EntityRef` (evita pintar
+/// miles de botones). Si la entity tiene más, se avisa al usuario.
+const ENTITY_REF_LIMIT: usize = 50;
 
 #[derive(Clone)]
 enum Msg {
     SelectModule(usize),
     SelectMenu(usize),
+    /// Abre un form fresco para la vista `view_key` del módulo.
+    OpenForm {
+        module_idx: usize,
+        view_key: String,
+    },
+    /// `+ Nuevo` desde una lista: busca el Form view de la entity.
+    NewRecord {
+        module_idx: usize,
+        entity: String,
+    },
+    /// Editar una fila: abre el Form view pre-rellenado con el record.
+    EditRecord {
+        module_idx: usize,
+        entity: String,
+        id: Uuid,
+    },
+    DeleteRecord {
+        entity: String,
+        id: Uuid,
+    },
+    /// Foco a un field de texto (text/multiline/number/date).
+    FocusField(usize),
+    /// Tecla ruteada al field con foco.
+    FieldKey(KeyEvent),
+    /// Elección de un `Select` o `EntityRef` (guarda el value crudo).
+    SetSelect(usize, String),
+    /// Toggle de un `Boolean`.
+    ToggleBool(usize),
+    SubmitForm,
+    CancelForm,
+    DismissToast,
+}
+
+/// Sesión de edición de un formulario. Vive en el `Model` porque cada
+/// input mantiene su `TextInputState` (cursor + buffer) entre frames.
+struct FormState {
+    module_idx: usize,
+    entity: String,
+    title: String,
+    on_submit: Action,
+    fields: Vec<FieldRuntime>,
+    /// `Some(id)` = edición de un record existente; `None` = alta nueva.
+    editing: Option<Uuid>,
+    /// Estado original del record en edición (para computar el delta).
+    original: Option<Value>,
+    /// Índice del field con foco de teclado (sólo fields de texto).
+    focused: Option<usize>,
+    /// Error de validación / del backend tras un submit fallido.
+    error: Option<String>,
+}
+
+/// Un field vivo del form: su spec del manifest + el buffer editable.
+/// Para TODOS los kinds el value crudo vive como string en `input`
+/// (text/multiline/number/date se teclean; select/entityref/bool/autoid
+/// se setean por click), y `parse_field_value` lo convierte al submit.
+struct FieldRuntime {
+    spec: FieldSpec,
+    input: TextInputState,
+}
+
+impl FieldRuntime {
+    fn raw(&self) -> String {
+        self.input.text().to_string()
+    }
+}
+
+struct Toast {
+    kind: BannerKind,
+    text: String,
 }
 
 struct Model {
@@ -69,6 +151,8 @@ struct Model {
     load_error: Option<String>,
     selected_module: Option<usize>,
     selected_menu: Option<usize>,
+    form: Option<FormState>,
+    toast: Option<Toast>,
 }
 
 struct NakuiApp;
@@ -162,8 +246,8 @@ impl App for NakuiApp {
         }
 
         let selected_module = (!modules.is_empty()).then_some(0);
-        let selected_menu = selected_module
-            .and_then(|i| (!modules[i].menu.is_empty()).then_some(0));
+        let selected_menu =
+            selected_module.and_then(|i| (!modules[i].menu.is_empty()).then_some(0));
 
         Model {
             modules,
@@ -172,6 +256,8 @@ impl App for NakuiApp {
             load_error,
             selected_module,
             selected_menu,
+            form: None,
+            toast: None,
         }
     }
 
@@ -182,17 +268,159 @@ impl App for NakuiApp {
                 if i < m.modules.len() {
                     m.selected_module = Some(i);
                     m.selected_menu = (!m.modules[i].menu.is_empty()).then_some(0);
+                    m.form = None;
+                    sync_form_to_menu(&mut m);
                 }
             }
             Msg::SelectMenu(i) => {
                 if let Some(mod_idx) = m.selected_module {
                     if i < m.modules[mod_idx].menu.len() {
                         m.selected_menu = Some(i);
+                        m.form = None;
+                        sync_form_to_menu(&mut m);
                     }
                 }
             }
+            Msg::OpenForm {
+                module_idx,
+                view_key,
+            } => {
+                if let Some(module) = m.modules.get(module_idx) {
+                    if let Some(ModuleView::Form(fv)) = module.views.get(&view_key) {
+                        m.form = Some(build_form(module_idx, fv, None));
+                        m.toast = None;
+                    }
+                }
+            }
+            Msg::NewRecord { module_idx, entity } => {
+                if let Some(module) = m.modules.get(module_idx) {
+                    match find_form_view(module, &entity) {
+                        Some(fv) => {
+                            m.form = Some(build_form(module_idx, fv, None));
+                            m.toast = None;
+                        }
+                        None => {
+                            m.toast = Some(Toast {
+                                kind: BannerKind::Warning,
+                                text: format!(
+                                    "el módulo no declara un Form para la entity '{entity}'"
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            Msg::EditRecord {
+                module_idx,
+                entity,
+                id,
+            } => {
+                let record = m
+                    .backend
+                    .lock()
+                    .ok()
+                    .and_then(|b| b.load_record(&entity, id));
+                match (m.modules.get(module_idx), record) {
+                    (Some(module), Some(rec)) => match find_form_view(module, &entity) {
+                        Some(fv) => {
+                            m.form = Some(build_form(module_idx, fv, Some((id, rec))));
+                            m.toast = None;
+                        }
+                        None => {
+                            m.toast = Some(Toast {
+                                kind: BannerKind::Warning,
+                                text: format!(
+                                    "el módulo no declara un Form para editar '{entity}'"
+                                ),
+                            });
+                        }
+                    },
+                    _ => {
+                        m.toast = Some(Toast {
+                            kind: BannerKind::Error,
+                            text: "no pude cargar el record a editar".into(),
+                        });
+                    }
+                }
+            }
+            Msg::DeleteRecord { entity, id } => {
+                let result = m
+                    .backend
+                    .lock()
+                    .map_err(|_| "backend lock envenenado".to_string())
+                    .and_then(|mut b| b.delete(&entity, id));
+                m.toast = Some(match result {
+                    Ok(_) => Toast {
+                        kind: BannerKind::Success,
+                        text: format!("borrado {} de {entity}", short_uuid(&id)),
+                    },
+                    Err(e) => Toast {
+                        kind: BannerKind::Error,
+                        text: format!("no pude borrar: {e}"),
+                    },
+                });
+            }
+            Msg::FocusField(i) => {
+                if let Some(form) = &mut m.form {
+                    if form
+                        .fields
+                        .get(i)
+                        .map(|f| is_text_field(f.spec.kind))
+                        .unwrap_or(false)
+                    {
+                        form.focused = Some(i);
+                    }
+                }
+            }
+            Msg::FieldKey(ev) => {
+                if let Some(form) = &mut m.form {
+                    if let Some(i) = form.focused {
+                        if let Some(fr) = form.fields.get_mut(i) {
+                            fr.input.apply_key(&ev);
+                        }
+                    }
+                }
+            }
+            Msg::SetSelect(i, value) => {
+                if let Some(form) = &mut m.form {
+                    if let Some(fr) = form.fields.get_mut(i) {
+                        fr.input.set_text(value);
+                    }
+                    form.focused = None;
+                }
+            }
+            Msg::ToggleBool(i) => {
+                if let Some(form) = &mut m.form {
+                    if let Some(fr) = form.fields.get_mut(i) {
+                        let now = fr.raw() == "true";
+                        fr.input.set_text(if now { "false" } else { "true" });
+                    }
+                }
+            }
+            Msg::SubmitForm => {
+                submit_form(&mut m);
+            }
+            Msg::CancelForm => {
+                m.form = None;
+                m.toast = None;
+            }
+            Msg::DismissToast => {
+                m.toast = None;
+            }
         }
         m
+    }
+
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        let form = model.form.as_ref()?;
+        // Sólo capturamos teclas cuando hay un field de texto enfocado.
+        let _ = form.focused?;
+        if event.state == KeyState::Pressed {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::CancelForm);
+            }
+        }
+        Some(Msg::FieldKey(event.clone()))
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -226,8 +454,304 @@ impl App for NakuiApp {
     }
 }
 
+/// Tras cambiar de módulo/menú: si la vista activa es un `Form`, abre el
+/// form fresco (así clickear "Nuevo" en el menú muestra el formulario).
+fn sync_form_to_menu(m: &mut Model) {
+    let (Some(mod_idx), Some(menu_idx)) = (m.selected_module, m.selected_menu) else {
+        return;
+    };
+    let Some(module) = m.modules.get(mod_idx) else {
+        return;
+    };
+    let Some(item) = module.menu.get(menu_idx) else {
+        return;
+    };
+    if let Some(ModuleView::Form(fv)) = module.views.get(&item.view) {
+        m.form = Some(build_form(mod_idx, fv, None));
+    }
+}
+
+/// Localiza el primer `Form` view de un módulo cuya entity coincide.
+fn find_form_view<'a>(module: &'a Module, entity: &str) -> Option<&'a FormView> {
+    module.views.values().find_map(|v| match v {
+        ModuleView::Form(fv) if fv.entity == entity => Some(fv),
+        _ => None,
+    })
+}
+
+/// Construye un `FormState` desde un `FormView`. `editing` pre-rellena
+/// los inputs desde un record existente; en alta, los `AutoId` se
+/// rellenan con un UUID nuevo y el resto con su `default`.
+fn build_form(module_idx: usize, fv: &FormView, editing: Option<(Uuid, Value)>) -> FormState {
+    let fields = fv
+        .fields
+        .iter()
+        .map(|fs| {
+            let mut input = TextInputState::new();
+            let raw = match &editing {
+                Some((_, rec)) => rec
+                    .get(&fs.name)
+                    .map(value_to_raw)
+                    .unwrap_or_default(),
+                None => match fs.kind {
+                    FieldKind::AutoId => Uuid::new_v4().to_string(),
+                    FieldKind::Boolean => fs.default.clone().unwrap_or_else(|| "false".into()),
+                    _ => fs.default.clone().unwrap_or_default(),
+                },
+            };
+            input.set_text(raw);
+            FieldRuntime {
+                spec: fs.clone(),
+                input,
+            }
+        })
+        .collect();
+
+    FormState {
+        module_idx,
+        entity: fv.entity.clone(),
+        title: fv.title.clone(),
+        on_submit: fv.on_submit.clone(),
+        fields,
+        editing: editing.as_ref().map(|(id, _)| *id),
+        original: editing.map(|(_, v)| v),
+        focused: None,
+        error: None,
+    }
+}
+
+/// Representación cruda (string) de un valor JSON para precargar un input.
+fn value_to_raw(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn is_text_field(kind: FieldKind) -> bool {
+    matches!(
+        kind,
+        FieldKind::Text | FieldKind::Multiline | FieldKind::Number | FieldKind::Date
+    )
+}
+
+/// Ejecuta el submit del form activo contra el backend. Espeja
+/// `commit_seed` / `commit_morphism` del meta-form GPUI borrado:
+/// valida required, parsea por kind, valida `EntityRef`s, y ramifica en
+/// edición (`update` con delta) vs alta (`seed`/`morphism`).
+///
+/// Saca el form del modelo con `take()` para no aliasar `m` mientras
+/// tiene tomado el guard del backend; si algo falla, lo reinserta con el
+/// error puesto para que la UI lo muestre.
+fn submit_form(m: &mut Model) {
+    let Some(mut form) = m.form.take() else {
+        return;
+    };
+
+    // 1. Recolectar y parsear los fields.
+    let mut obj = serde_json::Map::new();
+    let mut to_clear: Vec<String> = Vec::new();
+    let mut entity_refs: Vec<(String, String, Uuid)> = Vec::new();
+    let mut by_name: BTreeMap<String, String> = BTreeMap::new();
+    let mut parse_error: Option<String> = None;
+
+    for fr in &form.fields {
+        let raw = fr.raw();
+        by_name.insert(fr.spec.name.clone(), raw.clone());
+
+        if fr.spec.required && raw.trim().is_empty() && fr.spec.kind != FieldKind::AutoId {
+            parse_error = Some(format!("campo '{}' es obligatorio", fr.spec.label));
+            break;
+        }
+        if raw.is_empty() && !fr.spec.required {
+            to_clear.push(fr.spec.name.clone());
+            continue;
+        }
+        let value = match parse_field_value(fr.spec.kind, &raw) {
+            Ok(v) => v,
+            Err(e) => {
+                parse_error = Some(format!("campo '{}': {e}", fr.spec.label));
+                break;
+            }
+        };
+        if fr.spec.kind == FieldKind::EntityRef {
+            if let (Some(target), Some(uuid_str)) = (&fr.spec.ref_entity, value.as_str()) {
+                if let Ok(id) = Uuid::parse_str(uuid_str) {
+                    entity_refs.push((fr.spec.label.clone(), target.clone(), id));
+                }
+            }
+        }
+        obj.insert(fr.spec.name.clone(), value);
+    }
+
+    if let Some(e) = parse_error {
+        form.error = Some(e);
+        m.form = Some(form);
+        return;
+    }
+
+    // 2. Datos derivados (sin tocar `form` durante el lock del backend).
+    let module_id = m
+        .modules
+        .get(form.module_idx)
+        .map(|md| md.id.clone())
+        .unwrap_or_default();
+    let entity = form.entity.clone();
+    let editing = form.editing;
+    let original = form.original.clone();
+    let on_submit = form.on_submit.clone();
+    let specs: BTreeMap<String, FieldSpec> = form
+        .fields
+        .iter()
+        .map(|f| (f.spec.name.clone(), f.spec.clone()))
+        .collect();
+
+    // 3. Resolver contra el backend (lock una sola vez).
+    let result: Result<WriteOutcome, String> = match m.backend.lock() {
+        Ok(mut backend) => {
+            let refs_ok: Result<(), String> = if entity_refs.is_empty() {
+                Ok(())
+            } else {
+                validate_entity_refs(|e, id| backend.load_record(e, id), &entity_refs)
+            };
+            match refs_ok {
+                Err(e) => Err(e),
+                Ok(()) => {
+                    if let Some(id) = editing {
+                        let current = original.unwrap_or(Value::Null);
+                        let set = compute_field_delta(&current, &obj);
+                        let clear = compute_clear_fields(&current, &to_clear);
+                        backend.update(&entity, id, set, clear)
+                    } else {
+                        match &on_submit {
+                            Action::SeedEntity { entity: e, .. } => backend.seed(e, obj),
+                            Action::Morphism {
+                                name,
+                                inputs,
+                                params,
+                                ..
+                            } => commit_morphism(
+                                &mut backend,
+                                &module_id,
+                                name,
+                                inputs,
+                                params,
+                                &by_name,
+                                &specs,
+                            ),
+                            Action::OpenView { .. } => {
+                                Err("on_submit OpenView no crea ni edita records".into())
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => Err("backend lock envenenado".into()),
+    };
+
+    // 4. Toast + navegación.
+    match result {
+        Ok(outcome) => {
+            let verb = if editing.is_some() { "guardado" } else { "creado" };
+            let mut text = match outcome.changed {
+                0 => format!("{entity}: sin cambios"),
+                _ => format!("{entity} {verb} ✓"),
+            };
+            if let Some(post) = outcome.post_status {
+                text = format!("{text} · {post}");
+            }
+            m.toast = Some(Toast {
+                kind: BannerKind::Success,
+                text,
+            });
+            // `form` queda consumido (no reinsertado): cerramos la sesión.
+            navigate_next_view(m, &on_submit);
+        }
+        Err(e) => {
+            form.error = Some(e);
+            m.form = Some(form);
+        }
+    }
+}
+
+/// Resuelve inputs (role→field→UUID) y params (fields → JSON) y delega
+/// al backend. Espejo de `commit_morphism` del widget GPUI.
+fn commit_morphism(
+    backend: &mut NakuiBackend,
+    module_id: &str,
+    name: &str,
+    inputs_map: &BTreeMap<String, String>,
+    params_fields: &[String],
+    by_name: &BTreeMap<String, String>,
+    specs: &BTreeMap<String, FieldSpec>,
+) -> Result<WriteOutcome, String> {
+    // Inputs: cada (role, field) → parsear el value del field como UUID.
+    let mut inputs: BTreeMap<String, Uuid> = BTreeMap::new();
+    for (role, field_name) in inputs_map {
+        let raw = by_name
+            .get(field_name)
+            .ok_or_else(|| format!("input field '{field_name}' no existe en el form"))?;
+        let id = Uuid::parse_str(raw.trim()).map_err(|_| {
+            format!("input '{role}' (field '{field_name}'): '{raw}' no es UUID válido")
+        })?;
+        inputs.insert(role.clone(), id);
+    }
+
+    // Params: lista explícita, o todos los fields que no son inputs.
+    let input_fields: BTreeSet<&String> = inputs_map.values().collect();
+    let field_iter: Vec<String> = if params_fields.is_empty() {
+        by_name
+            .keys()
+            .filter(|k| !input_fields.contains(*k))
+            .cloned()
+            .collect()
+    } else {
+        params_fields.to_vec()
+    };
+
+    let mut params_obj = serde_json::Map::new();
+    for field_name in field_iter {
+        let raw = by_name.get(&field_name).cloned().unwrap_or_default();
+        let spec = specs.get(&field_name);
+        let value = resolve_param_value(&field_name, &raw, spec)?;
+        params_obj.insert(field_name, value);
+    }
+
+    backend.morphism(module_id, name, inputs, Value::Object(params_obj))
+}
+
+/// Tras un submit exitoso, salta al `next_view` declarado en la acción
+/// (típicamente `"list"`), seleccionando ese ítem del menú del módulo.
+fn navigate_next_view(m: &mut Model, action: &Action) {
+    let next = match action {
+        Action::SeedEntity { next_view, .. } => next_view.clone(),
+        Action::Morphism { next_view, .. } => next_view.clone(),
+        Action::OpenView { view, .. } => Some(view.clone()),
+    };
+    let Some(view_key) = next else {
+        return;
+    };
+    let Some(mod_idx) = m.selected_module else {
+        return;
+    };
+    if let Some(module) = m.modules.get(mod_idx) {
+        if let Some(i) = module.menu.iter().position(|it| it.view == view_key) {
+            m.selected_menu = Some(i);
+        }
+    }
+}
+
 fn build_banners(model: &Model) -> Vec<View<Msg>> {
     let mut out: Vec<View<Msg>> = Vec::new();
+    if let Some(t) = &model.toast {
+        out.push(
+            banner_view::<Msg>(t.kind, t.text.clone()).on_click(Msg::DismissToast),
+        );
+    }
     if let Some(msg) = &model.initial_toast {
         out.push(banner_view::<Msg>(BannerKind::Info, msg.clone()));
     }
@@ -322,23 +846,25 @@ fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
-    let inner = match (model.selected_module, model.selected_menu) {
-        (Some(mod_idx), Some(menu_idx)) => {
-            let m = &model.modules[mod_idx];
-            let item = &m.menu[menu_idx];
-            match m.views.get(&item.view) {
-                Some(view) => build_view_panel(model, m, view, theme),
-                None => empty_panel(
-                    theme,
-                    &format!(
-                        "vista '{}' no existe en el manifest del módulo",
-                        item.view
+    // El form, si hay uno activo, gana el área principal.
+    let inner = if let Some(form) = &model.form {
+        build_form_panel(model, form, theme)
+    } else {
+        match (model.selected_module, model.selected_menu) {
+            (Some(mod_idx), Some(menu_idx)) => {
+                let m = &model.modules[mod_idx];
+                let item = &m.menu[menu_idx];
+                match m.views.get(&item.view) {
+                    Some(view) => build_view_panel(model, mod_idx, view, theme),
+                    None => empty_panel(
+                        theme,
+                        &format!("vista '{}' no existe en el manifest del módulo", item.view),
                     ),
-                ),
+                }
             }
+            (Some(_), None) => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-menu")),
+            _ => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-module")),
         }
-        (Some(_), None) => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-menu")),
-        _ => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-module")),
     };
 
     View::new(Style {
@@ -366,39 +892,39 @@ fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
 
 fn build_view_panel(
     model: &Model,
-    module: &Module,
+    mod_idx: usize,
     view: &ModuleView,
     theme: &Theme,
 ) -> View<Msg> {
-    let (title, body_lines) = match view {
-        ModuleView::List(lv) => {
-            let count = model
-                .backend
-                .lock()
-                .map(|b| b.list_records(&lv.entity).len())
-                .unwrap_or(0);
-            let lines = vec![
-                format!("kind: list · entity: {}", lv.entity),
-                format!("columns: {}", lv.columns.len()),
-                format!("records en store: {count}"),
-                format!("acciones: {}", lv.actions.len()),
-            ];
-            (lv.title.clone(), lines)
-        }
+    let module = &model.modules[mod_idx];
+    match view {
+        ModuleView::List(lv) => build_list_panel(model, mod_idx, lv, theme),
         ModuleView::Form(fv) => {
-            let lines = vec![
-                format!("kind: form · entity: {}", fv.entity),
-                format!("fields: {}", fv.fields.len()),
-                rimay_localize::t("nakui-pending-edit"),
-            ];
-            (fv.title.clone(), lines)
+            // Form alcanzado sin sesión activa (p.ej. tras cancelar):
+            // ofrecer reabrirlo.
+            let title = text_line(
+                format!("{} · {}", module.label, fv.title),
+                16.0,
+                theme.fg_text,
+            );
+            let open = button_styled(
+                "+ Abrir formulario",
+                btn_style(200.0),
+                Alignment::Center,
+                &accent_btn(theme),
+                Msg::OpenForm {
+                    module_idx: mod_idx,
+                    view_key: form_view_key(module, fv),
+                },
+            );
+            column(vec![title, open], 8.0)
         }
         ModuleView::Detail(dv) => {
             let lines = vec![
                 format!("kind: detail · entity: {}", dv.entity),
                 rimay_localize::t("nakui-pending-render-detail"),
             ];
-            (dv.title.clone(), lines)
+            placeholder_panel(module, &dv.title, lines, theme)
         }
         ModuleView::Dashboard(d) => {
             let lines = vec![
@@ -406,23 +932,338 @@ fn build_view_panel(
                 format!("cards: {}", d.cards.len()),
                 rimay_localize::t("nakui-pending-render-dashboard"),
             ];
-            (d.title.clone(), lines)
+            placeholder_panel(module, &d.title, lines, theme)
         }
-    };
+    }
+}
 
-    let header_line = text_line(
-        format!("{} · {}", module.label, title),
+/// Vista `List`: filas reales del store con columnas del manifest +
+/// botones editar/borrar por fila y `+ Nuevo` arriba.
+fn build_list_panel(
+    model: &Model,
+    mod_idx: usize,
+    lv: &nahual_meta_schema::ListView,
+    theme: &Theme,
+) -> View<Msg> {
+    let module = &model.modules[mod_idx];
+    let records = model
+        .backend
+        .lock()
+        .map(|b| b.list_records(&lv.entity))
+        .unwrap_or_default();
+
+    let has_form = find_form_view(module, &lv.entity).is_some();
+
+    // Header: título + contador + botón Nuevo.
+    let title = text_line(
+        format!("{} · {} ({})", module.label, lv.title, records.len()),
         16.0,
         theme.fg_text,
     );
-    let mut children: Vec<View<Msg>> = vec![header_line];
-    if let Some(desc) = &module.description {
-        children.push(text_line(desc.clone(), 11.0, theme.fg_muted));
+    let mut header_children = vec![title];
+    if has_form {
+        header_children.push(button_styled(
+            "+ Nuevo",
+            btn_style(110.0),
+            Alignment::Center,
+            &accent_btn(theme),
+            Msg::NewRecord {
+                module_idx: mod_idx,
+                entity: lv.entity.clone(),
+            },
+        ));
     }
-    for line in body_lines {
-        children.push(text_line(line, 12.0, theme.fg_text));
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(34.0),
+        },
+        justify_content: Some(JustifyContent::SpaceBetween),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(header_children);
+
+    let mut rows: Vec<View<Msg>> = vec![header];
+
+    if records.is_empty() {
+        rows.push(text_line(
+            "(sin records — usá + Nuevo)".into(),
+            12.0,
+            theme.fg_muted,
+        ));
     }
 
+    for (id, rec) in &records {
+        let mut cells: Vec<View<Msg>> = Vec::new();
+        // Columna implícita: id corto.
+        cells.push(cell_text(short_uuid(id), 90.0, theme.fg_muted));
+        // Columnas del manifest.
+        for col in &lv.columns {
+            let raw = rec
+                .get(&col.field)
+                .map(|v| preview_value(v, 40))
+                .unwrap_or_default();
+            cells.push(cell_flex(raw, theme.fg_text));
+        }
+        // Acciones.
+        if has_form {
+            cells.push(button_styled(
+                "editar",
+                btn_style(70.0),
+                Alignment::Center,
+                &ButtonPalette::from_theme(theme),
+                Msg::EditRecord {
+                    module_idx: mod_idx,
+                    entity: lv.entity.clone(),
+                    id: *id,
+                },
+            ));
+        }
+        cells.push(button_styled(
+            "borrar",
+            btn_style(70.0),
+            Alignment::Center,
+            &danger_btn(theme),
+            Msg::DeleteRecord {
+                entity: lv.entity.clone(),
+                id: *id,
+            },
+        ));
+
+        rows.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(30.0),
+                },
+                align_items: Some(AlignItems::Center),
+                gap: Size {
+                    width: length(8.0),
+                    height: length(0.0),
+                },
+                ..Default::default()
+            })
+            .children(cells),
+        );
+    }
+
+    column(rows, 6.0)
+}
+
+/// Panel del formulario activo: un `field_view` por field + fila de
+/// acciones (Cancelar / Guardar) + banner de error.
+fn build_form_panel(model: &Model, form: &FormState, theme: &Theme) -> View<Msg> {
+    let module = model.modules.get(form.module_idx);
+    let module_label = module.map(|m| m.label.as_str()).unwrap_or("");
+    let mode = if form.editing.is_some() {
+        "editar"
+    } else {
+        "nuevo"
+    };
+    let title = text_line(
+        format!("{module_label} · {} ({mode})", form.title),
+        16.0,
+        theme.fg_text,
+    );
+
+    let field_palette = FieldPalette::from_theme(theme);
+    let input_palette = TextInputPalette::from_theme(theme);
+
+    let mut children: Vec<View<Msg>> = vec![title];
+
+    for (i, fr) in form.fields.iter().enumerate() {
+        let focused = form.focused == Some(i);
+        let control = build_field_control(model, fr, i, focused, &input_palette, theme);
+        children.push(field_view(FieldWidgetSpec {
+            label: fr.spec.label.clone(),
+            control,
+            required: fr.spec.required,
+            helper: fr.spec.help.clone(),
+            error: None,
+            palette: field_palette,
+        }));
+    }
+
+    if let Some(err) = &form.error {
+        children.push(banner_view::<Msg>(BannerKind::Error, err.clone()));
+    }
+
+    // Fila de acciones.
+    let actions = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(38.0),
+        },
+        gap: Size {
+            width: length(10.0),
+            height: length(0.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        button_styled(
+            "Cancelar",
+            btn_style(120.0),
+            Alignment::Center,
+            &ButtonPalette::from_theme(theme),
+            Msg::CancelForm,
+        ),
+        button_styled(
+            if form.editing.is_some() {
+                "Guardar"
+            } else {
+                "Crear"
+            },
+            btn_style(120.0),
+            Alignment::Center,
+            &accent_btn(theme),
+            Msg::SubmitForm,
+        ),
+    ]);
+    children.push(actions);
+
+    column(children, 10.0)
+}
+
+/// Renderea el control de un field según su `FieldKind`.
+fn build_field_control(
+    model: &Model,
+    fr: &FieldRuntime,
+    i: usize,
+    focused: bool,
+    input_palette: &TextInputPalette,
+    theme: &Theme,
+) -> View<Msg> {
+    match fr.spec.kind {
+        FieldKind::Text | FieldKind::Multiline | FieldKind::Number | FieldKind::Date => {
+            let placeholder = fr.spec.help.clone().unwrap_or_default();
+            text_input_view(
+                &fr.input,
+                &placeholder,
+                focused,
+                input_palette,
+                Msg::FocusField(i),
+            )
+        }
+        FieldKind::Boolean => {
+            let on = fr.raw() == "true";
+            let pal = if on {
+                accent_btn(theme)
+            } else {
+                ButtonPalette::from_theme(theme)
+            };
+            button_styled(
+                if on { "Sí" } else { "No" },
+                btn_style(80.0),
+                Alignment::Center,
+                &pal,
+                Msg::ToggleBool(i),
+            )
+        }
+        FieldKind::AutoId => {
+            // Read-only: el UUID autogenerado, sin foco.
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(28.0),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(fr.raw(), 12.0, theme.fg_muted, Alignment::Start)
+        }
+        FieldKind::Select => {
+            let current = fr.raw();
+            let chips: Vec<View<Msg>> = fr
+                .spec
+                .options
+                .iter()
+                .map(|opt| {
+                    let selected = current == opt.value;
+                    let pal = if selected {
+                        accent_btn(theme)
+                    } else {
+                        ButtonPalette::from_theme(theme)
+                    };
+                    button_styled(
+                        opt.display().to_string(),
+                        btn_style_auto(),
+                        Alignment::Center,
+                        &pal,
+                        Msg::SetSelect(i, opt.value.clone()),
+                    )
+                })
+                .collect();
+            chip_row(chips)
+        }
+        FieldKind::EntityRef => {
+            let target = fr.spec.ref_entity.clone().unwrap_or_default();
+            let current = fr.raw();
+            let records = model
+                .backend
+                .lock()
+                .map(|b| b.list_records(&target))
+                .unwrap_or_default();
+            let total = records.len();
+            let mut chips: Vec<View<Msg>> = records
+                .iter()
+                .take(ENTITY_REF_LIMIT)
+                .map(|(id, rec)| {
+                    let id_str = id.to_string();
+                    let selected = current == id_str;
+                    let label = entity_ref_label(id, rec);
+                    let pal = if selected {
+                        accent_btn(theme)
+                    } else {
+                        ButtonPalette::from_theme(theme)
+                    };
+                    button_styled(
+                        label,
+                        btn_style_auto(),
+                        Alignment::Center,
+                        &pal,
+                        Msg::SetSelect(i, id_str),
+                    )
+                })
+                .collect();
+            if total == 0 {
+                chips.push(cell_text(
+                    format!("(sin records en '{target}')"),
+                    240.0,
+                    theme.fg_muted,
+                ));
+            } else if total > ENTITY_REF_LIMIT {
+                chips.push(cell_text(
+                    format!("… +{} más", total - ENTITY_REF_LIMIT),
+                    120.0,
+                    theme.fg_muted,
+                ));
+            }
+            chip_row(chips)
+        }
+    }
+}
+
+/// Etiqueta de un record en un selector EntityRef: id corto + preview
+/// del primer campo string del record (si lo hay).
+fn entity_ref_label(id: &Uuid, rec: &Value) -> String {
+    let preview = rec.as_object().and_then(|m| {
+        m.values()
+            .find_map(|v| v.as_str().map(|s| s.to_string()))
+    });
+    match preview {
+        Some(name) => format!("{} · {}", short_uuid(id), preview_value(&Value::String(name), 24)),
+        None => short_uuid(id),
+    }
+}
+
+// ----- helpers de layout -----
+
+fn column(children: Vec<View<Msg>>, gap: f32) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -431,11 +1272,49 @@ fn build_view_panel(
         },
         gap: Size {
             width: length(0.0_f32),
-            height: length(6.0_f32),
+            height: length(gap),
         },
         ..Default::default()
     })
     .children(children)
+}
+
+fn chip_row(children: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(32.0),
+        },
+        gap: Size {
+            width: length(6.0),
+            height: length(6.0),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(children)
+}
+
+fn placeholder_panel(
+    module: &Module,
+    title: &str,
+    body_lines: Vec<String>,
+    theme: &Theme,
+) -> View<Msg> {
+    let mut children: Vec<View<Msg>> = vec![text_line(
+        format!("{} · {}", module.label, title),
+        16.0,
+        theme.fg_text,
+    )];
+    if let Some(desc) = &module.description {
+        children.push(text_line(desc.clone(), 11.0, theme.fg_muted));
+    }
+    for line in body_lines {
+        children.push(text_line(line, 12.0, theme.fg_text));
+    }
+    column(children, 6.0)
 }
 
 fn empty_panel(theme: &Theme, msg: &str) -> View<Msg> {
@@ -466,6 +1345,106 @@ fn text_line(content: String, size_px: f32, color: Color) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(content, size_px, color, Alignment::Start)
+}
+
+/// Celda de ancho fijo (px) para columnas tipo id/acción.
+fn cell_text(content: String, width: f32, color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(width),
+            height: length(24.0),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(content, 12.0, color, Alignment::Start)
+}
+
+/// Celda elástica para columnas de datos.
+fn cell_flex(content: String, color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(24.0),
+        },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(content, 12.0, color, Alignment::Start)
+}
+
+/// Style de botón de ancho fijo.
+fn btn_style(width: f32) -> Style {
+    Style {
+        size: Size {
+            width: length(width),
+            height: length(30.0),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(10.0),
+            right: length(10.0),
+            top: length(4.0),
+            bottom: length(4.0),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    }
+}
+
+/// Style de botón que se ajusta al contenido (chips de select/ref).
+fn btn_style_auto() -> Style {
+    Style {
+        size: Size {
+            width: length(140.0),
+            height: length(26.0),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(8.0),
+            right: length(8.0),
+            top: length(2.0),
+            bottom: length(2.0),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    }
+}
+
+/// Paleta de botón con acento (acción primaria / selección activa).
+fn accent_btn(theme: &Theme) -> ButtonPalette {
+    let mut p = ButtonPalette::from_theme(theme);
+    p.bg = theme.accent;
+    p.bg_hover = theme.accent;
+    p.fg = theme.bg_app;
+    p
+}
+
+/// Paleta de botón destructivo (borrar).
+fn danger_btn(theme: &Theme) -> ButtonPalette {
+    let mut p = ButtonPalette::from_theme(theme);
+    p.bg = theme.fg_destructive;
+    p.bg_hover = theme.fg_destructive;
+    p.fg = theme.bg_app;
+    p
+}
+
+/// Clave del Form view dentro del módulo (para `Msg::OpenForm`).
+fn form_view_key(module: &Module, fv: &FormView) -> String {
+    module
+        .views
+        .iter()
+        .find_map(|(k, v)| match v {
+            ModuleView::Form(f) if f.entity == fv.entity && f.title == fv.title => {
+                Some(k.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// Carga UiModules desde un directorio via el brazo unificado
@@ -568,5 +1547,111 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// `build_form` en alta: AutoId se rellena con un UUID, default
+    /// puebla el resto, sin record original.
+    #[test]
+    fn build_form_fresh_fills_autoid_and_defaults() {
+        let fv = FormView {
+            title: "Nuevo".into(),
+            entity: "Customer".into(),
+            fields: vec![
+                FieldSpec {
+                    name: "id".into(),
+                    label: "Id".into(),
+                    kind: FieldKind::AutoId,
+                    default: None,
+                    required: false,
+                    help: None,
+                    ref_entity: None,
+                    options: Vec::new(),
+                    section: None,
+                },
+                FieldSpec {
+                    name: "tier".into(),
+                    label: "Tier".into(),
+                    kind: FieldKind::Text,
+                    default: Some("free".into()),
+                    required: false,
+                    help: None,
+                    ref_entity: None,
+                    options: Vec::new(),
+                    section: None,
+                },
+            ],
+            on_submit: Action::SeedEntity {
+                entity: "Customer".into(),
+                next_view: Some("list".into()),
+            },
+        };
+        let form = build_form(0, &fv, None);
+        assert!(form.editing.is_none());
+        // AutoId parseable como UUID.
+        assert!(Uuid::parse_str(&form.fields[0].raw()).is_ok());
+        assert_eq!(form.fields[1].raw(), "free");
+    }
+
+    /// `build_form` en edición: pre-rellena desde el record original.
+    #[test]
+    fn build_form_editing_prefills_from_record() {
+        let fv = FormView {
+            title: "Editar".into(),
+            entity: "Customer".into(),
+            fields: vec![FieldSpec {
+                name: "name".into(),
+                label: "Nombre".into(),
+                kind: FieldKind::Text,
+                default: None,
+                required: true,
+                help: None,
+                ref_entity: None,
+                options: Vec::new(),
+                section: None,
+            }],
+            on_submit: Action::SeedEntity {
+                entity: "Customer".into(),
+                next_view: None,
+            },
+        };
+        let id = Uuid::new_v4();
+        let form = build_form(0, &fv, Some((id, json!({"name": "Acme"}))));
+        assert_eq!(form.editing, Some(id));
+        assert_eq!(form.fields[0].raw(), "Acme");
+    }
+
+    /// El módulo demo (`examples/nakui-modules/ventas.json`) carga,
+    /// valida y trae los Form views esperados — guarda el fixture que
+    /// el binario abre por default.
+    #[test]
+    fn demo_module_loads_and_validates() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
+        assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
+        assert_eq!(modules.len(), 1);
+        let m = &modules[0];
+        assert_eq!(m.id, "ventas");
+        // Tiene un Form para cada entity (customers + orders).
+        assert!(find_form_view(m, "Customer").is_some());
+        assert!(find_form_view(m, "Order").is_some());
+        // El form de cliente arma un FormState con AutoId pre-rellenado.
+        let fv = find_form_view(m, "Customer").unwrap();
+        let form = build_form(0, fv, None);
+        let id_field = form
+            .fields
+            .iter()
+            .find(|f| f.spec.kind == FieldKind::AutoId)
+            .expect("el form tiene un AutoId");
+        assert!(Uuid::parse_str(&id_field.raw()).is_ok());
+    }
+
+    #[test]
+    fn value_to_raw_covers_scalar_kinds() {
+        assert_eq!(value_to_raw(&json!("hola")), "hola");
+        assert_eq!(value_to_raw(&json!(true)), "true");
+        assert_eq!(value_to_raw(&json!(42)), "42");
+        assert_eq!(value_to_raw(&Value::Null), "");
     }
 }
