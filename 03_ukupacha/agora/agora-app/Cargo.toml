@@ -27,3 +27,4 @@ llimphi-widget-button = { workspace = true }
 directories = { workspace = true }
 rand = { workspace = true }
 notify = { workspace = true }
+postcard = { workspace = true }

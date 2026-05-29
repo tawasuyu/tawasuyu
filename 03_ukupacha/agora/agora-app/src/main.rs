@@ -32,7 +32,7 @@
 
 use std::path::PathBuf;
 
-use agora_core::{Attestation, Claim, IdentityKind, Keypair};
+use agora_core::{Attestation, Claim, IdentityKind, Keypair, MultiSignature};
 use agora_graph::{Corroboration, TrustGraph, TrustPolicy};
 use agora_keystore::Keystore;
 use agora_core::IdentityId;
@@ -61,12 +61,25 @@ enum Tile {
     Compositor,
     Atestaciones,
     Politica,
+    /// Compositor de [`MultiSignature`]: elige firmantes "míos", escribe
+    /// el mensaje (típicamente una raíz canónica), elige umbral M, firma
+    /// y exporta postcard en hex.
+    Multifirma,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ComposeField {
     Predicate,
     Value,
+}
+
+/// Qué input recibe las teclas en la pantalla principal. Como el tile
+/// del compositor de atestaciones y el tile multifirma comparten el
+/// mismo `on_key`, necesitamos saber a cuál routear cada evento.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FocusedInput {
+    Compose(ComposeField),
+    MultiMessage,
 }
 
 /// Severidad de un mensaje de estado de servicio (persistencia, red,
@@ -121,11 +134,29 @@ struct Model {
 
     compose_predicate: TextInputState,
     compose_value: TextInputState,
-    compose_focus: ComposeField,
+    /// Input que recibe las teclas. Incluye los del compositor y el
+    /// mensaje de la multifirma para que un solo `on_key` pueda
+    /// rutearlas sin ambigüedad.
+    focused_input: FocusedInput,
     /// Último mensaje al pie del compositor (éxito, error, hint).
     compose_status: String,
 
     policy: TrustPolicy,
+
+    /// Texto del mensaje sobre el que se compone la multifirma. En el
+    /// uso típico (raíz canónica) es ASCII corto; el compositor lo trata
+    /// como bytes UTF-8.
+    multi_message: TextInputState,
+    /// Identidades "mías" elegidas como firmantes de la próxima
+    /// multifirma. Sólo entran ids que estén en `seeds`.
+    multi_selected: std::collections::BTreeSet<IdentityId>,
+    /// Umbral M de la próxima multifirma. Se clampa a `[1, max(1, N)]`
+    /// donde N = `multi_selected.len()` al renderizar el slider.
+    multi_threshold: usize,
+    /// Última multifirma producida por el compositor. `None` hasta que
+    /// el usuario presione "firmar"; se descarta cuando cambian las
+    /// selecciones o el mensaje y se vuelve a firmar.
+    multi_current: Option<MultiSignature>,
 
     /// Último mensaje de estado de servicio (I/O, red, keystore). El
     /// `view` lo pinta como banner al pie. Se descarta con
@@ -265,6 +296,26 @@ enum Msg {
 
     /// Cierra el banner de estado de servicio.
     DescartarStatus,
+
+    /// Tecla aplicada al `multi_message` (el mensaje a multifirmar).
+    EditMultiMessage(KeyEvent),
+    /// Cambia el foco de edición hacia el `multi_message`.
+    FocoMultiMessage,
+    /// Toggle de inclusión/exclusión de una identidad propia en la
+    /// próxima multifirma. Ignora ids que no estén en `seeds`.
+    ToggleMultiFirmante(IdentityId),
+    /// Drag del slider del umbral M.
+    SliderMultiUmbral(DragPhase, f32),
+    /// Firma `multi_message` con cada seed de `multi_selected` y guarda
+    /// el resultado en `multi_current`. No persiste — la multifirma se
+    /// queda en memoria hasta exportar o limpiar.
+    FirmarMulti,
+    /// Limpia `multi_current` y resetea las selecciones.
+    LimpiarMulti,
+    /// Serializa `multi_current` a postcard, lo presenta en hex en el
+    /// banner de estado (Info). Si no hay multifirma vigente, muestra
+    /// un error.
+    ExportarMulti,
 }
 
 // =============================================================================
@@ -336,15 +387,20 @@ impl App for AgoraApp {
                 Tile::Compositor,
                 Tile::Atestaciones,
                 Tile::Politica,
+                Tile::Multifirma,
             ],
             focused_subject: None,
             active_signer: None,
             selected_attestation: None,
             compose_predicate: TextInputState::new(),
             compose_value: TextInputState::new(),
-            compose_focus: ComposeField::Predicate,
+            focused_input: FocusedInput::Compose(ComposeField::Predicate),
             compose_status: String::new(),
             policy: TrustPolicy::default(),
+            multi_message: TextInputState::new(),
+            multi_selected: std::collections::BTreeSet::new(),
+            multi_threshold: 1,
+            multi_current: None,
             status: None,
         };
 
@@ -405,17 +461,21 @@ impl App for AgoraApp {
             }
 
             Msg::FocoCompose(field) => {
-                model.compose_focus = field;
+                model.focused_input = FocusedInput::Compose(field);
             }
 
-            Msg::EditCompose(ev) => match model.compose_focus {
-                ComposeField::Predicate => {
-                    model.compose_predicate.apply_key(&ev);
+            Msg::EditCompose(ev) => {
+                if let FocusedInput::Compose(field) = model.focused_input {
+                    match field {
+                        ComposeField::Predicate => {
+                            model.compose_predicate.apply_key(&ev);
+                        }
+                        ComposeField::Value => {
+                            model.compose_value.apply_key(&ev);
+                        }
+                    }
                 }
-                ComposeField::Value => {
-                    model.compose_value.apply_key(&ev);
-                }
-            },
+            }
 
             Msg::Atestar => {
                 let signer = model.signer_keypair();
@@ -584,6 +644,109 @@ impl App for AgoraApp {
             Msg::DescartarStatus => {
                 model.status = None;
             }
+
+            Msg::FocoMultiMessage => {
+                model.focused_input = FocusedInput::MultiMessage;
+            }
+
+            Msg::EditMultiMessage(ev) => {
+                if matches!(model.focused_input, FocusedInput::MultiMessage) {
+                    model.multi_message.apply_key(&ev);
+                    model.multi_current = None;
+                }
+            }
+
+            Msg::ToggleMultiFirmante(id) => {
+                if !model.seeds.contains_key(&id) {
+                    // Sólo permitimos seleccionar identidades propias
+                    // (las que tienen seed en el keystore desbloqueado).
+                    return model;
+                }
+                if !model.multi_selected.insert(id) {
+                    model.multi_selected.remove(&id);
+                }
+                // Cualquier cambio en el conjunto invalida la firma
+                // vigente y reclampa el umbral.
+                model.multi_current = None;
+                let n = model.multi_selected.len();
+                if n == 0 {
+                    model.multi_threshold = 1;
+                } else if model.multi_threshold > n {
+                    model.multi_threshold = n;
+                } else if model.multi_threshold == 0 {
+                    model.multi_threshold = 1;
+                }
+            }
+
+            Msg::SliderMultiUmbral(_phase, dv) => {
+                let n = model.multi_selected.len().max(1);
+                let cur = model.multi_threshold as f32 + dv;
+                model.multi_threshold = cur.clamp(1.0, n as f32).round() as usize;
+            }
+
+            Msg::FirmarMulti => {
+                if model.multi_selected.is_empty() {
+                    model.set_status(
+                        StatusLevel::Error,
+                        "elegí al menos una identidad propia como firmante",
+                    );
+                    return model;
+                }
+                let mensaje_txt = model.multi_message.text();
+                if mensaje_txt.trim().is_empty() {
+                    model.set_status(
+                        StatusLevel::Error,
+                        "el mensaje de la multifirma no puede estar vacío",
+                    );
+                    return model;
+                }
+                // Materializamos un keypair por seed seleccionada y
+                // firmamos `mensaje` (bytes UTF-8 crudos).
+                let pares: Vec<Keypair> = model
+                    .multi_selected
+                    .iter()
+                    .filter_map(|id| model.seeds.get(id).copied().map(Keypair::from_seed))
+                    .collect();
+                let refs: Vec<&Keypair> = pares.iter().collect();
+                let multi = MultiSignature::create(&refs, mensaje_txt.as_bytes());
+                model.multi_current = Some(multi);
+            }
+
+            Msg::LimpiarMulti => {
+                model.multi_selected.clear();
+                model.multi_threshold = 1;
+                model.multi_current = None;
+                model.multi_message.clear();
+            }
+
+            Msg::ExportarMulti => {
+                match model.multi_current.as_ref() {
+                    None => {
+                        model.set_status(
+                            StatusLevel::Error,
+                            "no hay multifirma vigente — firmá primero",
+                        );
+                    }
+                    Some(multi) => match postcard::to_allocvec(multi) {
+                        Ok(bytes) => {
+                            let hex = bytes_to_hex(&bytes);
+                            model.set_status(
+                                StatusLevel::Info,
+                                format!(
+                                    "multifirma postcard ({n} bytes): {hex}",
+                                    n = bytes.len()
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            model.set_status(
+                                StatusLevel::Error,
+                                format!("no pude serializar la multifirma: {e}"),
+                            );
+                        }
+                    },
+                }
+            }
         }
         model
     }
@@ -600,18 +763,36 @@ impl App for AgoraApp {
             }
             return Some(Msg::UnlockKey(event.clone()));
         }
-        // Tab cicla campo focado en el compositor.
+        // Tab cicla campos del compositor cuando el foco está ahí. Si
+        // el foco está en el multi_message, Tab lo manda al compositor.
         if let Key::Named(NamedKey::Tab) = &event.key {
-            return Some(Msg::FocoCompose(match model.compose_focus {
-                ComposeField::Predicate => ComposeField::Value,
-                ComposeField::Value => ComposeField::Predicate,
-            }));
+            return Some(match model.focused_input {
+                FocusedInput::Compose(ComposeField::Predicate) => {
+                    Msg::FocoCompose(ComposeField::Value)
+                }
+                FocusedInput::Compose(ComposeField::Value) => {
+                    Msg::FocoCompose(ComposeField::Predicate)
+                }
+                FocusedInput::MultiMessage => Msg::FocoCompose(ComposeField::Predicate),
+            });
         }
-        // Enter sobre el compositor firma.
-        if let Key::Named(NamedKey::Enter) = &event.key {
-            return Some(Msg::Atestar);
+        match model.focused_input {
+            FocusedInput::Compose(_) => {
+                // Enter firma la atestación; el resto edita el input
+                // del compositor.
+                if let Key::Named(NamedKey::Enter) = &event.key {
+                    return Some(Msg::Atestar);
+                }
+                Some(Msg::EditCompose(event.clone()))
+            }
+            FocusedInput::MultiMessage => {
+                // Enter dispara la firma de la multifirma.
+                if let Key::Named(NamedKey::Enter) = &event.key {
+                    return Some(Msg::FirmarMulti);
+                }
+                Some(Msg::EditMultiMessage(event.clone()))
+            }
         }
-        Some(Msg::EditCompose(event.clone()))
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -640,6 +821,10 @@ impl App for AgoraApp {
                 Tile::Politica => TileSpec {
                     label: "política".into(),
                     content: politica_view(model, &theme),
+                },
+                Tile::Multifirma => TileSpec {
+                    label: "multifirma".into(),
+                    content: multifirma_view(model, &theme),
                 },
             })
             .collect();
@@ -1002,14 +1187,14 @@ fn compositor_view(model: &Model, theme: &Theme) -> View<Msg> {
     let input_predicate = input_row(
         &model.compose_predicate,
         "nacionalidad / miembro-de / habilidad …",
-        model.compose_focus == ComposeField::Predicate,
+        model.focused_input == FocusedInput::Compose(ComposeField::Predicate),
         &input_palette,
         Msg::FocoCompose(ComposeField::Predicate),
     );
     let input_value = input_row(
         &model.compose_value,
         "venezolana / El Valle / soldadura …",
-        model.compose_focus == ComposeField::Value,
+        model.focused_input == FocusedInput::Compose(ComposeField::Value),
         &input_palette,
         Msg::FocoCompose(ComposeField::Value),
     );
@@ -1399,6 +1584,211 @@ fn format_duration(secs: u64) -> String {
     } else {
         format!("{}d", secs / 86_400)
     }
+}
+
+// =============================================================================
+//  Tile: Multifirma
+// =============================================================================
+
+fn multifirma_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let input_palette = TextInputPalette::from_theme(theme);
+    let list_palette = ListPalette::from_theme(theme);
+    let slider_palette = SliderPalette::from_theme(theme);
+
+    let mensaje_label = label_line("mensaje a multifirmar", 10.0, theme.fg_muted);
+    let mensaje_input = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(32.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        &model.multi_message,
+        "raíz canónica / hash de manifiesto / …",
+        matches!(model.focused_input, FocusedInput::MultiMessage),
+        &input_palette,
+        Msg::FocoMultiMessage,
+    )]);
+
+    // Lista de identidades propias con check ☑/☐ indicando selección.
+    // Click toggle: la fila NO se pinta como selected porque eso ya lo
+    // hace el check; selected lo reservamos para focused_subject.
+    let mut mias: Vec<_> = model
+        .seeds
+        .keys()
+        .copied()
+        .filter_map(|id| model.graph.identity(id).map(|i| (id, i)))
+        .collect();
+    mias.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let rows: Vec<ListRow<Msg>> = mias
+        .iter()
+        .map(|(id, ident)| {
+            let check = if model.multi_selected.contains(id) {
+                "☑"
+            } else {
+                "☐"
+            };
+            ListRow {
+                label: format!(
+                    "{check}  {id}  {kind}  {name}",
+                    id = id,
+                    kind = kind_str(ident.kind),
+                    name = ident.display_name
+                ),
+                selected: false,
+                on_click: Msg::ToggleMultiFirmante(*id),
+            }
+        })
+        .collect();
+    let firmantes_list = list_view(ListSpec {
+        rows,
+        total: mias.len(),
+        caption: Some(format!(
+            "{} identidades propias · {} elegidas",
+            mias.len(),
+            model.multi_selected.len()
+        )),
+        truncated_hint: None,
+        row_height: 22.0,
+        palette: list_palette,
+    });
+
+    let n_seleccionados = model.multi_selected.len().max(1);
+    let umbral_slider = slider_view(
+        "umbral M",
+        model.multi_threshold as f32,
+        1.0,
+        n_seleccionados as f32,
+        &slider_palette,
+        |phase, dv| Some(Msg::SliderMultiUmbral(phase, dv)),
+    );
+
+    let firmar = button_styled(
+        "firmar las elegidas (Enter)",
+        Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(30.0_f32),
+            },
+            padding: edge_padding(10.0, 0.0),
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        },
+        Alignment::Center,
+        &button_palette_primary(theme),
+        Msg::FirmarMulti,
+    );
+
+    let exportar = button_styled(
+        "exportar postcard hex →",
+        Style {
+            size: Size {
+                width: percent(0.5_f32),
+                height: length(30.0_f32),
+            },
+            padding: edge_padding(10.0, 0.0),
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        },
+        Alignment::Center,
+        &button_palette_secondary(theme),
+        Msg::ExportarMulti,
+    );
+
+    let limpiar = button_styled(
+        "limpiar",
+        Style {
+            size: Size {
+                width: percent(0.5_f32),
+                height: length(30.0_f32),
+            },
+            padding: edge_padding(10.0, 0.0),
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        },
+        Alignment::Center,
+        &button_palette_secondary(theme),
+        Msg::LimpiarMulti,
+    );
+
+    let acciones_secundarias = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(34.0_f32),
+        },
+        flex_shrink: 0.0,
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![exportar, limpiar]);
+
+    // Veredicto en vivo: si hay multifirma vigente, evaluamos su umbral
+    // contra el mensaje actual y mostramos firmantes_distintos / N.
+    let veredicto_block: View<Msg> = match &model.multi_current {
+        None => label_line(
+            "(sin multifirma vigente — elegí firmantes, escribí el mensaje y Enter)",
+            11.0,
+            theme.fg_muted,
+        ),
+        Some(multi) => {
+            let mensaje_bytes = model.multi_message.text();
+            let v = multi.verdict(mensaje_bytes.as_bytes());
+            let pasa = v.firmantes_distintos >= model.multi_threshold;
+            let color = if pasa { theme.accent } else { theme.fg_destructive };
+            column(vec![
+                label_line(
+                    &format!(
+                        "verdict: {} válidas · {} distintas · umbral {}",
+                        v.validas, v.firmantes_distintos, model.multi_threshold
+                    ),
+                    11.0,
+                    color,
+                ),
+                label_line(
+                    if pasa {
+                        "ACEPTA (umbral alcanzado)"
+                    } else {
+                        "rechaza (faltan firmantes distintos)"
+                    },
+                    14.0,
+                    color,
+                ),
+            ])
+        }
+    };
+
+    column(vec![
+        spacer(6.0),
+        mensaje_label,
+        mensaje_input,
+        spacer(8.0),
+        grow(firmantes_list),
+        spacer(6.0),
+        umbral_slider,
+        spacer(6.0),
+        firmar,
+        spacer(4.0),
+        acciones_secundarias,
+        spacer(8.0),
+        veredicto_block,
+    ])
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
 }
 
 // =============================================================================
