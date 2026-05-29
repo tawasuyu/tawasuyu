@@ -18,37 +18,34 @@
 //! - Pila de capas raster: nombre, blend mode, opacidad, visibilidad y RGBA.
 //! - Mapeo conservador de [`psd::BlendMode`] a [`tullpu_core::ModoFusion`].
 //!
-//! ## Grupos / folders (aplanados)
+//! ## Grupos / folders (aplanados o rasterizados)
 //!
 //! `tullpu-core::Lienzo` es una lista plana de capas. PSD permite grupos
-//! anidados con sus propias propiedades (visibilidad, opacidad, blend).
-//! Para no inventar un modelo de árbol en `tullpu-core` para este puente, el
-//! bridge **aplana** la jerarquía y propaga las propiedades del grupo a sus
-//! hijas:
+//! anidados con sus propias propiedades (visibilidad, opacidad, blend). El
+//! bridge construye un árbol interno (`NodoPsd::{Capa,Grupo}`) y lo recorre
+//! en post-order; cada grupo decide su destino según su blend efectivo:
 //!
-//! - El nombre de la capa importada lleva la ruta completa, separada por `/`:
-//!   `"raíz/sub/hoja"`.
-//! - La **visibilidad efectiva** es el AND lógico de `visible` de la capa y
-//!   de todos los grupos por encima (un grupo invisible esconde todas sus
-//!   hojas).
-//! - La **opacidad efectiva** es el producto de la opacidad de la capa por
-//!   la de cada grupo (todas como `[0,1]`).
-//! - El **blend de la capa** se preserva. Si algún grupo en la cadena tiene
-//!   blend distinto de `Normal`/`PassThrough`, el bridge lo registra en
-//!   `informe.grupos_con_blend_propio` — modelarlo fielmente requeriría
-//!   rasterizar el grupo a una capa intermedia (no este puente).
+//! - **Grupos `Normal` o `PassThrough`** (el caso por defecto en Photoshop):
+//!   se **aplanan**. El nombre lleva la ruta completa separada por `/`
+//!   (`"raíz/sub/hoja"`); la opacidad se multiplica; la visibilidad es AND
+//!   lógico. Resultado idéntico al render Photoshop sin componer nada.
+//! - **Grupos con blend distinto** (Multiply, Screen, Overlay…): se
+//!   **rasterizan** internamente. Las capas dentro se componen con
+//!   `tullpu-render::componer` a un único buffer Rgba8, y el grupo entero
+//!   queda como una sola `Capa` raster con el blend del grupo aplicado.
+//!   Las propiedades del grupo (opacidad, visibilidad) se preservan en esa
+//!   capa resultante. El nombre y blend de la capa rasterizada se anotan en
+//!   `informe.grupos_rasterizados` para que la UI los muestre.
 //!
-//! Esta aproximación es **exacta** cuando todos los grupos están en
-//! `Normal`/`PassThrough` (el caso por defecto en Photoshop). Para los demás
-//! casos el render visual diverge, pero queda anotado en el informe para que
-//! la UI lo señale al usuario.
+//! La rasterización es post-order: si un grupo Multiply contiene un grupo
+//! Screen, primero se rasteriza el Screen interno, luego ese resultado
+//! participa de la composición del Multiply externo. El blend de capa
+//! propio se preserva al pie de la letra.
 //!
 //! ## Qué NO se porta (todavía)
 //!
 //! - Máscaras de capa (PSD las codifica por canal separado; el modelo de
 //!   tullpu las soporta como hash aparte — el bridge no las extrae aún).
-//! - Blend de grupo distinto de `Normal`/`PassThrough` (se aplana y se
-//!   anota; ver arriba).
 //! - Clipping masks, layer styles, smart objects, ajustes (curvas, niveles…).
 //!
 //! Catálogo de blend modes Photoshop completo (28 discriminantes upstream):
@@ -105,12 +102,13 @@ pub struct InformeImportacion {
     /// `(nombre_capa, blend_original_debug)`.
     pub caidas_a_normal: Vec<(String, String)>,
     /// Cantidad de grupos / folders detectados en el PSD. El bridge los
-    /// aplana; este número es informativo para que la UI lo muestre.
+    /// aplana (`Normal`/`PassThrough`) o rasteriza (otros blends); este
+    /// número es informativo para que la UI lo muestre.
     pub grupos_detectados: usize,
-    /// Grupos cuyo blend mode efectivo no es Normal ni PassThrough — el
-    /// bridge no rasteriza grupos, así que ese blend no se respeta. Pares
-    /// `(ruta_grupo, blend_original_debug)`.
-    pub grupos_con_blend_propio: Vec<(String, String)>,
+    /// Grupos cuyo blend mode requirió composición intermedia y aparecen en
+    /// el lienzo como una sola capa raster con ese blend. Pares
+    /// `(nombre_grupo, blend_debug)`.
+    pub grupos_rasterizados: Vec<(String, String)>,
 }
 
 /// Errores del import. Se mantiene chico: o falla parsear el PSD, o el
@@ -135,102 +133,54 @@ impl From<PsdError> for ImportPsdError {
 
 /// Importa un `.psd` desde bytes (lo que devuelve `std::fs::read`).
 ///
-/// Construye el [`Lienzo`] con sus capas en orden visual (índice 0 = fondo),
-/// hashea cada buffer Rgba8 con BLAKE3 y deduplica: si dos capas comparten
-/// pixel data exacta, comparten hash y entrada en `buffers`.
-///
-/// Si el PSD tiene grupos, se aplanan: el nombre lleva la ruta jerárquica
-/// (`"raíz/sub/hoja"`), la opacidad multiplica las de los grupos por encima,
-/// y la visibilidad se anula si cualquier grupo de la cadena está oculto.
-/// Ver el doc del módulo para los casos límite (blend de grupo distinto de
-/// Normal/PassThrough).
+/// Construye un árbol interno con la jerarquía PSD (capas y grupos), lo
+/// recorre en post-order, y produce un [`Lienzo`] con capas en orden visual
+/// (índice 0 = fondo). Los grupos con blend Normal/PassThrough se aplanan;
+/// los demás se rasterizan componiendo sus capas vía
+/// [`tullpu_render::componer`]. Ver el doc del módulo para los detalles.
 pub fn importar_psd(bytes: &[u8]) -> Result<DocumentoPsdImportado, ImportPsdError> {
     let psd = Psd::from_bytes(bytes)?;
     let width = psd.width();
     let height = psd.height();
-    let n_capas = psd.layers().len();
+    let layers = psd.layers();
+    let n_capas = layers.len();
     if n_capas == 0 {
         return Err(ImportPsdError::SinCapas);
     }
-
     let grupos = psd.groups();
-    let mut lienzo = Lienzo::nuevo(width, height);
+    let esperado = (width as usize) * (height as usize) * 4;
+
     let mut buffers: HashMap<Hash, Vec<u8>> = HashMap::new();
     let mut informe = InformeImportacion::default();
     informe.grupos_detectados = grupos.len();
 
-    // Pre-computamos la cadena efectiva (path + propiedades) por grupo,
-    // memoizando: cada grupo se resuelve a lo sumo una vez aunque tenga
-    // varias capas adentro.
-    let mut cache_cadenas: HashMap<u32, CadenaGrupo> = HashMap::new();
-    let mut grupos_blend_reportados: std::collections::HashSet<u32> =
-        std::collections::HashSet::new();
+    let arbol = construir_arbol(layers, grupos);
 
-    let esperado = (width as usize) * (height as usize) * 4;
-
-    for layer in psd.layers() {
-        let bytes_rgba = layer.rgba();
-        // `psd::PsdLayer::rgba()` documenta devolver un buffer canvas-sized.
-        // Si por algún motivo no, lo reportamos como inválido (el modelo de
-        // tullpu exige W*H*4 estricto, lo valida `tullpu-render`).
-        if bytes_rgba.len() != esperado {
-            return Err(ImportPsdError::Psd(format!(
-                "capa '{}' devolvió {} bytes, esperaba {} (lienzo {}×{})",
-                layer.name(),
-                bytes_rgba.len(),
-                esperado,
-                width,
-                height,
-            )));
-        }
-
-        let hash = hash_bytes(&bytes_rgba);
-        buffers.entry(hash).or_insert(bytes_rgba);
-
-        // El crate `psd` no re-exporta `BlendMode` en su raíz pública (sólo lo
-        // devuelve por valor desde `PsdLayer::blend_mode`). Como el enum
-        // upstream documenta discriminantes explícitos (`PassThrough = 0`,
-        // `Normal = 1`, ..., `Luminosity = 27`), casteamos al discriminante
-        // y mapeamos por número — estable mientras el crate no rompa esos
-        // valores (cosa que sería un breaking change explícito).
-        let blend_disc = layer.blend_mode() as u32;
-        let (blend, degradado) = mapear_blend(blend_disc);
-
-        // Resolvemos la cadena de grupos por encima de esta capa (si está
-        // adentro de alguno) — memoizada por id de grupo.
-        let cadena = match layer.parent_id() {
-            Some(gid) => cadena_de_grupo(
-                gid,
-                grupos,
-                &mut cache_cadenas,
-                &mut informe,
-                &mut grupos_blend_reportados,
-            ),
-            None => CadenaGrupo::raiz(),
-        };
-
-        let nombre_efectivo = if cadena.ruta.is_empty() {
-            layer.name().to_string()
-        } else {
-            format!("{}/{}", cadena.ruta, layer.name())
-        };
-        let opacidad_capa = layer.opacity() as f32 / 255.0;
-        let visible_capa = layer.visible();
-
-        if degradado {
-            informe.caidas_a_normal.push((
-                nombre_efectivo.clone(),
-                nombre_blend(blend_disc).to_string(),
-            ));
-        }
-
-        let mut capa = Capa::raster(&nombre_efectivo, hash);
-        capa.blend = blend;
-        capa.opacidad = (opacidad_capa * cadena.opacidad).clamp(0.0, 1.0);
-        capa.visible = visible_capa && cadena.visible;
-        lienzo.apilar(capa);
+    // Recorrido post-order: cada nodo aporta una lista de capas
+    // ya-propagadas (o una sola, si era un grupo non-Normal rasterizado).
+    let mut propagables: Vec<CapaPropagable> = Vec::new();
+    for nodo in &arbol {
+        propagables.extend(procesar_nodo(
+            nodo,
+            layers,
+            grupos,
+            width,
+            height,
+            esperado,
+            &mut buffers,
+            &mut informe,
+        )?);
     }
 
+    // Construimos el Lienzo final a partir de la lista plana resultante.
+    let mut lienzo = Lienzo::nuevo(width, height);
+    for prop in propagables {
+        let mut capa = Capa::raster(&prop.nombre, prop.contenido);
+        capa.blend = prop.blend;
+        capa.opacidad = prop.opacidad;
+        capa.visible = prop.visible;
+        lienzo.apilar(capa);
+    }
     informe.capas_importadas = lienzo.capas.len();
 
     Ok(DocumentoPsdImportado {
@@ -240,76 +190,244 @@ pub fn importar_psd(bytes: &[u8]) -> Result<DocumentoPsdImportado, ImportPsdErro
     })
 }
 
-/// Propiedades acumuladas de una cadena de grupos (los ancestros de una
-/// capa, de raíz a hoja). Calculada una vez por grupo y memoizada.
-#[derive(Debug, Clone)]
-struct CadenaGrupo {
-    /// Ruta separada por `/`, vacía si la capa está en la raíz.
-    ruta: String,
-    /// Producto de opacidades de todos los grupos en la cadena. `1.0` en raíz.
-    opacidad: f32,
-    /// AND lógico de `visible` de los grupos. `true` en raíz.
-    visible: bool,
+// =============================================================================
+//  Árbol PSD y recorrido post-order
+// =============================================================================
+
+/// Nodo interno del árbol PSD que el bridge recorre para aplanar o
+/// rasterizar grupos. `Capa` referencia una capa hoja por su índice en
+/// `psd.layers()`; `Grupo` contiene a sus hijos directos en orden visual.
+#[derive(Debug)]
+enum NodoPsd {
+    Capa { idx: usize },
+    Grupo { id: u32, hijos: Vec<NodoPsd> },
 }
 
-impl CadenaGrupo {
-    fn raiz() -> Self {
-        Self {
-            ruta: String::new(),
-            opacidad: 1.0,
-            visible: true,
+/// Capa "casi lista" — el resultado de procesar un nodo: nombre con su
+/// prefijo de path, blend, opacidad y visibilidad ya combinadas con las
+/// propiedades de los grupos por encima, y el hash del buffer Rgba8 que
+/// referencia. Se vuelca a `Lienzo::capas` al final.
+#[derive(Debug, Clone)]
+struct CapaPropagable {
+    nombre: String,
+    blend: ModoFusion,
+    opacidad: f32,
+    visible: bool,
+    contenido: Hash,
+}
+
+/// Reconstruye el árbol PSD a partir de las capas hoja (orden bottom→top) y
+/// el mapa de grupos. El orden entre hermanos de un mismo padre se infiere
+/// del menor índice de capa hoja que cae bajo cada nodo — PSD codifica las
+/// capas en una secuencia plana donde las hijas de un grupo son contiguas.
+fn construir_arbol(
+    layers: &[psd::PsdLayer],
+    grupos: &HashMap<u32, PsdGroup>,
+) -> Vec<NodoPsd> {
+    let mut orden_cache: HashMap<u32, usize> = HashMap::new();
+    for g in grupos.values() {
+        calcular_orden_grupo(g.id(), layers, grupos, &mut orden_cache);
+    }
+    construir_subarbol(None, layers, grupos, &orden_cache)
+}
+
+/// Orden visual inferido de un grupo: el mínimo índice de capa hoja que
+/// queda bajo su descendencia. `usize::MAX` si el grupo está vacío.
+fn calcular_orden_grupo(
+    gid: u32,
+    layers: &[psd::PsdLayer],
+    grupos: &HashMap<u32, PsdGroup>,
+    cache: &mut HashMap<u32, usize>,
+) -> usize {
+    if let Some(&v) = cache.get(&gid) {
+        return v;
+    }
+    let min_layers = layers
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.parent_id() == Some(gid))
+        .map(|(i, _)| i)
+        .min();
+    let min_subgrupos = grupos
+        .values()
+        .filter(|g| g.parent_id() == Some(gid))
+        .map(|g| calcular_orden_grupo(g.id(), layers, grupos, cache))
+        .min();
+    let r = match (min_layers, min_subgrupos) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => usize::MAX,
+    };
+    cache.insert(gid, r);
+    r
+}
+
+fn construir_subarbol(
+    parent_id: Option<u32>,
+    layers: &[psd::PsdLayer],
+    grupos: &HashMap<u32, PsdGroup>,
+    orden_cache: &HashMap<u32, usize>,
+) -> Vec<NodoPsd> {
+    let mut entries: Vec<(usize, NodoPsd)> = Vec::new();
+    for (idx, layer) in layers.iter().enumerate() {
+        if layer.parent_id() == parent_id {
+            entries.push((idx, NodoPsd::Capa { idx }));
+        }
+    }
+    for grupo in grupos.values() {
+        if grupo.parent_id() == parent_id {
+            let orden = orden_cache.get(&grupo.id()).copied().unwrap_or(usize::MAX);
+            let hijos = construir_subarbol(Some(grupo.id()), layers, grupos, orden_cache);
+            entries.push((orden, NodoPsd::Grupo { id: grupo.id(), hijos }));
+        }
+    }
+    entries.sort_by_key(|(o, _)| *o);
+    entries.into_iter().map(|(_, n)| n).collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn procesar_nodo(
+    nodo: &NodoPsd,
+    layers: &[psd::PsdLayer],
+    grupos: &HashMap<u32, PsdGroup>,
+    width: u32,
+    height: u32,
+    esperado: usize,
+    buffers: &mut HashMap<Hash, Vec<u8>>,
+    informe: &mut InformeImportacion,
+) -> Result<Vec<CapaPropagable>, ImportPsdError> {
+    match nodo {
+        NodoPsd::Capa { idx } => {
+            let layer = &layers[*idx];
+            let bytes_rgba = layer.rgba();
+            if bytes_rgba.len() != esperado {
+                return Err(ImportPsdError::Psd(format!(
+                    "capa '{}' devolvió {} bytes, esperaba {} (lienzo {}×{})",
+                    layer.name(),
+                    bytes_rgba.len(),
+                    esperado,
+                    width,
+                    height,
+                )));
+            }
+            let hash = hash_bytes(&bytes_rgba);
+            buffers.entry(hash).or_insert(bytes_rgba);
+
+            let blend_disc = layer.blend_mode() as u32;
+            let (blend, degradado) = mapear_blend(blend_disc);
+            if degradado {
+                informe
+                    .caidas_a_normal
+                    .push((layer.name().to_string(), nombre_blend(blend_disc).to_string()));
+            }
+            Ok(vec![CapaPropagable {
+                nombre: layer.name().to_string(),
+                blend,
+                opacidad: layer.opacity() as f32 / 255.0,
+                visible: layer.visible(),
+                contenido: hash,
+            }])
+        }
+        NodoPsd::Grupo { id, hijos } => {
+            // Procesamos los hijos primero (post-order).
+            let mut sub: Vec<CapaPropagable> = Vec::new();
+            for hijo in hijos {
+                sub.extend(procesar_nodo(
+                    hijo, layers, grupos, width, height, esperado, buffers, informe,
+                )?);
+            }
+            // Si el grupo no existe en el mapa (defensa), tratamos como
+            // transparente — devolvemos los hijos tal cual.
+            let Some(grupo) = grupos.get(id) else {
+                return Ok(sub);
+            };
+            let blend_disc = grupo.blend_mode() as u32;
+            let g_op = grupo.opacity() as f32 / 255.0;
+            let g_vis = grupo.visible();
+            let nombre_g = grupo.name();
+
+            if blend_disc == NORMAL || blend_disc == PASS_THROUGH {
+                // Aplanar con propagación: prefix path, multiplicar opacidad,
+                // AND visible. Resultado idéntico al render Photoshop.
+                let aplanadas = sub
+                    .into_iter()
+                    .map(|c| CapaPropagable {
+                        nombre: if c.nombre.is_empty() {
+                            nombre_g.to_string()
+                        } else {
+                            format!("{}/{}", nombre_g, c.nombre)
+                        },
+                        blend: c.blend,
+                        opacidad: (c.opacidad * g_op).clamp(0.0, 1.0),
+                        visible: c.visible && g_vis,
+                        contenido: c.contenido,
+                    })
+                    .collect();
+                Ok(aplanadas)
+            } else {
+                // Rasterizar: componer todas las capas del grupo en un único
+                // buffer Rgba8 y devolver UNA sola capa raster con el blend
+                // del grupo. Recursión segura: los subgrupos con blend propio
+                // ya quedaron rasterizados antes (post-order).
+                let raster_hash = rasterizar_grupo(&sub, width, height, buffers)?;
+                let (blend_grupo, _) = mapear_blend(blend_disc);
+                informe
+                    .grupos_rasterizados
+                    .push((nombre_g.to_string(), nombre_blend(blend_disc).to_string()));
+                Ok(vec![CapaPropagable {
+                    nombre: nombre_g.to_string(),
+                    blend: blend_grupo,
+                    opacidad: g_op.clamp(0.0, 1.0),
+                    visible: g_vis,
+                    contenido: raster_hash,
+                }])
+            }
         }
     }
 }
 
-/// Resuelve recursivamente la cadena de un grupo, memoizando. Si encuentra
-/// un grupo con blend distinto de Normal/PassThrough lo anota en el informe
-/// (una sola vez por grupo).
-fn cadena_de_grupo(
-    gid: u32,
-    grupos: &HashMap<u32, PsdGroup>,
-    cache: &mut HashMap<u32, CadenaGrupo>,
-    informe: &mut InformeImportacion,
-    reportados: &mut std::collections::HashSet<u32>,
-) -> CadenaGrupo {
-    if let Some(c) = cache.get(&gid) {
-        return c.clone();
+/// Compone las `capas` sobre un lienzo `width × height` y guarda el buffer
+/// resultante en `buffers`, devolviendo su hash. Adapter trivial entre el
+/// `HashMap` de buffers que el bridge va llenando y el trait
+/// `FuenteBuffers` que espera el compositor.
+fn rasterizar_grupo(
+    capas: &[CapaPropagable],
+    width: u32,
+    height: u32,
+    buffers: &mut HashMap<Hash, Vec<u8>>,
+) -> Result<Hash, ImportPsdError> {
+    let mut temp = Lienzo::nuevo(width, height);
+    for c in capas {
+        let mut tc = Capa::raster(&c.nombre, c.contenido);
+        tc.blend = c.blend;
+        tc.opacidad = c.opacidad;
+        tc.visible = c.visible;
+        temp.apilar(tc);
     }
-    let Some(grupo) = grupos.get(&gid) else {
-        // El PSD referenció un grupo que no existe en el mapa — defensa.
-        return CadenaGrupo::raiz();
+    // Componer requiere `&FuenteBuffers`, así que congelamos el borrow de
+    // `buffers` adentro del scope y soltamos antes de extender.
+    let bytes = {
+        let vista = VistaBuffers { buffers: &*buffers };
+        let img = tullpu_render::componer(&temp, &vista)
+            .map_err(|e| ImportPsdError::Psd(format!("rasterizar grupo: {e}")))?;
+        img.into_raw()
     };
-    // Cadena del padre (recursión memoizada).
-    let padre = match grupo.parent_id() {
-        Some(pid) => cadena_de_grupo(pid, grupos, cache, informe, reportados),
-        None => CadenaGrupo::raiz(),
-    };
+    let hash = hash_bytes(&bytes);
+    buffers.entry(hash).or_insert(bytes);
+    Ok(hash)
+}
 
-    let nombre = grupo.name();
-    let ruta = if padre.ruta.is_empty() {
-        nombre.to_string()
-    } else {
-        format!("{}/{}", padre.ruta, nombre)
-    };
-    let opacidad = padre.opacidad * (grupo.opacity() as f32 / 255.0);
-    let visible = padre.visible && grupo.visible();
+/// Vista de solo lectura sobre el mapa de buffers para alimentar el
+/// compositor sin clonar.
+struct VistaBuffers<'a> {
+    buffers: &'a HashMap<Hash, Vec<u8>>,
+}
 
-    // El blend del grupo PSD sólo se respeta para Normal/PassThrough — el
-    // resto requeriría rasterizar el grupo y se reporta como divergencia.
-    let blend_disc = grupo.blend_mode() as u32;
-    if blend_disc != NORMAL && blend_disc != PASS_THROUGH && reportados.insert(gid) {
-        informe
-            .grupos_con_blend_propio
-            .push((ruta.clone(), nombre_blend(blend_disc).to_string()));
+impl<'a> tullpu_render::FuenteBuffers for VistaBuffers<'a> {
+    fn obtener(&self, hash: Hash) -> Option<&[u8]> {
+        self.buffers.get(&hash).map(|v| v.as_slice())
     }
-
-    let cadena = CadenaGrupo {
-        ruta,
-        opacidad: opacidad.clamp(0.0, 1.0),
-        visible,
-    };
-    cache.insert(gid, cadena.clone());
-    cadena
 }
 
 // =============================================================================
@@ -600,7 +718,7 @@ mod tests {
         let imp = importar_psd(FIXTURE_GRUPO_UNA_CAPA).unwrap();
         assert_eq!(imp.lienzo.capas.len(), 1, "1 capa hoja");
         assert_eq!(imp.informe.grupos_detectados, 1);
-        assert!(imp.informe.grupos_con_blend_propio.is_empty());
+        assert!(imp.informe.grupos_rasterizados.is_empty());
 
         let nombre = &imp.lienzo.capas[0].nombre;
         assert!(
@@ -691,5 +809,123 @@ mod tests {
         assert_eq!(imp.lienzo, l2);
         // Dos buffers únicos → dos hijos en el objeto.
         assert_eq!(obj.hijos.len(), 2);
+    }
+
+    // -------------------------------------------------------------------------
+    //  Rasterización de grupos (Fase 15) — tests sintéticos contra el helper
+    //  `rasterizar_grupo` directamente, sin pasar por un PSD real (no hay
+    //  fixtures con grupos non-Normal en el corpus upstream).
+    // -------------------------------------------------------------------------
+
+    fn buffer_solido(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
+        let mut v = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..(w * h) {
+            v.extend_from_slice(&rgba);
+        }
+        v
+    }
+
+    #[test]
+    fn rasterizar_grupo_multiplicar_da_color_esperado() {
+        // Dos capas dentro de un "grupo Multiply" (semánticamente): fondo
+        // gris [128,128,128,255] y top blanco [255,255,255,255] con blend
+        // Multiplicar opacidad 1.0. El composite del sub-lienzo es el fondo
+        // tal cual: Multiply(gris, blanco) = gris.
+        let w = 2;
+        let h = 2;
+        let mut buffers: HashMap<Hash, Vec<u8>> = HashMap::new();
+        let h_fondo = hash_bytes(&buffer_solido(w, h, [128, 128, 128, 255]));
+        let h_top = hash_bytes(&buffer_solido(w, h, [255, 255, 255, 255]));
+        buffers.insert(h_fondo, buffer_solido(w, h, [128, 128, 128, 255]));
+        buffers.insert(h_top, buffer_solido(w, h, [255, 255, 255, 255]));
+
+        let capas = vec![
+            CapaPropagable {
+                nombre: "fondo".into(),
+                blend: ModoFusion::Normal,
+                opacidad: 1.0,
+                visible: true,
+                contenido: h_fondo,
+            },
+            CapaPropagable {
+                nombre: "top".into(),
+                blend: ModoFusion::Multiplicar,
+                opacidad: 1.0,
+                visible: true,
+                contenido: h_top,
+            },
+        ];
+        let hash_raster = super::rasterizar_grupo(&capas, w, h, &mut buffers).unwrap();
+        let buf = buffers.get(&hash_raster).expect("buffer rasterizado presente");
+        assert_eq!(buf.len(), (w * h * 4) as usize);
+        // Multiply(0.5, 1.0) = 0.5 → 128 (con pequeño redondeo). Verificamos
+        // los 4 píxeles.
+        for px in buf.chunks_exact(4) {
+            assert!(
+                (px[0] as i16 - 128).abs() <= 1,
+                "R: {:?}",
+                px
+            );
+            assert!((px[1] as i16 - 128).abs() <= 1, "G: {:?}", px);
+            assert!((px[2] as i16 - 128).abs() <= 1, "B: {:?}", px);
+            assert_eq!(px[3], 255, "alfa opaca, {:?}", px);
+        }
+    }
+
+    #[test]
+    fn rasterizar_grupo_capa_invisible_no_aporta() {
+        // Una capa visible roja + una capa invisible azul → la azul no debe
+        // aparecer en el resultado.
+        let w = 1;
+        let h = 1;
+        let mut buffers: HashMap<Hash, Vec<u8>> = HashMap::new();
+        let h_roja = hash_bytes(&buffer_solido(w, h, [200, 0, 0, 255]));
+        let h_azul = hash_bytes(&buffer_solido(w, h, [0, 0, 255, 255]));
+        buffers.insert(h_roja, buffer_solido(w, h, [200, 0, 0, 255]));
+        buffers.insert(h_azul, buffer_solido(w, h, [0, 0, 255, 255]));
+
+        let capas = vec![
+            CapaPropagable {
+                nombre: "roja".into(),
+                blend: ModoFusion::Normal,
+                opacidad: 1.0,
+                visible: true,
+                contenido: h_roja,
+            },
+            CapaPropagable {
+                nombre: "azul-oculta".into(),
+                blend: ModoFusion::Normal,
+                opacidad: 1.0,
+                visible: false,
+                contenido: h_azul,
+            },
+        ];
+        let hash = super::rasterizar_grupo(&capas, w, h, &mut buffers).unwrap();
+        let buf = buffers.get(&hash).unwrap();
+        assert_eq!(buf[0], 200);
+        assert_eq!(buf[2], 0);
+    }
+
+    #[test]
+    fn rasterizar_grupo_dedup_misma_composicion() {
+        // Dos llamadas con las mismas capas → mismo hash. Garantiza la
+        // dedup natural por content-addressing aún para buffers
+        // rasterizados.
+        let w = 2;
+        let h = 1;
+        let mut buffers: HashMap<Hash, Vec<u8>> = HashMap::new();
+        let h_a = hash_bytes(&buffer_solido(w, h, [10, 20, 30, 255]));
+        buffers.insert(h_a, buffer_solido(w, h, [10, 20, 30, 255]));
+
+        let capas = vec![CapaPropagable {
+            nombre: "a".into(),
+            blend: ModoFusion::Normal,
+            opacidad: 1.0,
+            visible: true,
+            contenido: h_a,
+        }];
+        let h1 = super::rasterizar_grupo(&capas, w, h, &mut buffers).unwrap();
+        let h2 = super::rasterizar_grupo(&capas, w, h, &mut buffers).unwrap();
+        assert_eq!(h1, h2);
     }
 }

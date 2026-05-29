@@ -29,7 +29,10 @@ description = "tullpu/foreign-psd — importa `.psd` (Photoshop) como Lienzo nat
 psd = "0.3"
 thiserror = { workspace = true }
 tullpu-core = { path = "../../02_ruway/tullpu/tullpu-core" }
+# `tullpu-render` se usa para componer in-memory los grupos PSD con blend no
+# Normal/PassThrough — el bridge los rasteriza a una sola capa para preservar
+# el render. Sin esto tendríamos que modelar grupos en `tullpu-core`.
+tullpu-render = { path = "../../02_ruway/tullpu/tullpu-render" }
 
 [dev-dependencies]
 image = { workspace = true }
-tullpu-render = { path = "../../02_ruway/tullpu/tullpu-render" }

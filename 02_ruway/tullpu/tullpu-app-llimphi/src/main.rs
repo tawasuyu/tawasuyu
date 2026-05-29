@@ -175,11 +175,12 @@ fn cargar_psd(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMemoria, Uuid,
     let n_capas = imp.lienzo.capas.len();
     let n_degradadas = imp.informe.caidas_a_normal.len();
     let n_grupos = imp.informe.grupos_detectados;
-    let n_grupos_raros = imp.informe.grupos_con_blend_propio.len();
+    let n_rasterizados = imp.informe.grupos_rasterizados.len();
     // El primer Uuid (fondo) sirve como selección inicial — si el PSD vino
     // vacío (foreign-psd ya lo rechaza, pero por defensa), caemos a default.
     let id = imp.lienzo.capas.first()?.id;
-    // Etiqueta progresiva: prefijo base + anotaciones sólo si hubo divergencias.
+    // Etiqueta progresiva: prefijo base + anotaciones sólo si hubo
+    // divergencias o composición intermedia.
     let mut etiqueta = format!("psd · {} capas", n_capas);
     if n_grupos > 0 {
         etiqueta.push_str(&format!(" · {} grupos", n_grupos));
@@ -188,8 +189,8 @@ fn cargar_psd(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMemoria, Uuid,
     if n_degradadas > 0 {
         anotaciones.push(format!("{} blend→Normal", n_degradadas));
     }
-    if n_grupos_raros > 0 {
-        anotaciones.push(format!("{} grupos no-Normal", n_grupos_raros));
+    if n_rasterizados > 0 {
+        anotaciones.push(format!("{} rasterizados", n_rasterizados));
     }
     if !anotaciones.is_empty() {
         etiqueta.push_str(&format!(" ({})", anotaciones.join(", ")));
