@@ -256,4 +256,19 @@ impl MensajeNodo {
     pub fn verificar(&self, verificar: impl FnOnce(&AgoraId, &Hash, &Firma) -> bool) -> bool {
         verificar(&self.contenido.autor, &self.id(), &self.firma)
     }
+
+    /// La forma `postcard` de UN nodo suelto — la que viaja por el cable
+    /// (`Sobre::Nodo` de `ayni-sync`) y la que se guarda direccionada por su id
+    /// en un store key-value (`ayni-store`) o como objeto del grafo de akasha
+    /// (la app de wawa, P6). Espeja a [`Conversacion::serializar`], pero para un
+    /// solo nodo: el grano fino que la anti-entropía y el grafo de objetos piden.
+    pub fn serializar(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("ayni :: postcard alloc no falla para MensajeNodo")
+    }
+
+    /// Reconstruye un nodo desde su forma `postcard`. No verifica la firma —eso
+    /// es trabajo del closure verificador en la capa que tenga la cripto—.
+    pub fn deserializar(bytes: &[u8]) -> Result<Self, crate::ErrorAyni> {
+        postcard::from_bytes(bytes).map_err(|_| crate::ErrorAyni::Deserializacion)
+    }
 }

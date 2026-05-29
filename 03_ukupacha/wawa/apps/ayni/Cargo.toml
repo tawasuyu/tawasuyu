@@ -1,0 +1,58 @@
+# =============================================================================
+#  ayni :: apps/ayni — P6 :: el chat soberano, ahora dentro de wawa
+# -----------------------------------------------------------------------------
+#  La PRUEBA de la tesis de `ayni-core`: el MISMO núcleo `no_std + alloc` que
+#  corre el chat en Linux viaja, sin reescribir una línea de su modelo, a una
+#  app WASM dentro del SO bare-metal wawa. La conversación es un DAG de mensajes
+#  firmados, direccionado por contenido (BLAKE3 de `format`) — el mismísimo
+#  direccionamiento que usa el grafo de objetos de akasha. Por eso cada nodo de
+#  la conversación se persiste como un OBJETO de akasha (`sys_object_put`), y la
+#  cadena sobrevive a los reinicios: local-first de verdad, sobre el SO soberano.
+#
+#  A diferencia de la mayoría de apps de wawa (no_std PURO, sin allocator),
+#  ésta funda su propio heap: `ayni-core` necesita `alloc` (Vec/BTreeMap/String
+#  para el grafo y postcard). El allocator es el MISMO `linked_list_allocator`
+#  que usa el kernel, sobre una arena estática de esta memoria lineal.
+#
+#  Tiene su propio `[workspace]`: queda fuera del espacio de trabajo del kernel
+#  y del workspace global (compila para `wasm32-unknown-unknown`).
+# =============================================================================
+
+[package]
+name = "ayni"
+version = "0.1.0"
+edition = "2021"
+description = "ayni :: app WASM — chat soberano (DAG firmado) persistido en el grafo de akasha"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# EL núcleo del chat soberano, reusado VERBATIM desde `02_ruway/ayni`. Es
+# `#![no_std] + alloc` desde el día cero justamente para este momento (P6):
+# el modelo de la conversación cruza la frontera del workspace por path, como
+# `format` y `akasha`. Su única dependencia transitiva de dominio es `format`,
+# el núcleo no_std que comparten kernel/boot/akasha.
+ayni-core = { path = "../../../../02_ruway/ayni/ayni-core" }
+# Firma Ed25519 REAL dentro de la jaula: el mismo crate no_std (`ed25519-compact`,
+# default-features=false) que el kernel usa en `claves.rs`. `ayni-core` es
+# cripto-agnóstico (firma por closure); aquí ponemos la primitiva. Los nodos que
+# se graban en akasha quedan firmados y verificables, no maquetas.
+ed25519-compact = { version = "2", default-features = false }
+# Allocator del heap de la app — el mismo que el kernel. Sobre una arena estática.
+linked_list_allocator = "0.10"
+# Tipografía 8x8 pixel-perfect (la misma de `bitacora`/`cronista`) para pintar
+# las líneas del chat. no_std, compila limpia a wasm32 con default-features=false.
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = "symbols"

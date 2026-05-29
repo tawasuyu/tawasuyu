@@ -45,6 +45,10 @@ reproducible.
 | `ayni-index`   | búsqueda semántica local (rimay embeddings + coseno)           | ✅ P4  |
 | `ayni-ai`      | multilienzo: traducir/resumir/tono vía pluma-llm (máquina propone) | ✅ P4 |
 
+La app de wawa (P6) vive aparte, en `03_ukupacha/wawa/apps/ayni` (módulo WASM
+sobre akasha), porque cruza la frontera del workspace bare-metal; reusa
+`ayni-core` por path, como `format`.
+
 `ayni-core` es `#![no_std] + alloc` **desde el día cero** — no parcheado
 después — para que el mismo núcleo viaje como app WASM dentro de wawa (P6) sin
 reescribir el modelo. Por la misma razón es **cripto-agnóstico**: la firma entra
@@ -102,7 +106,21 @@ y se verifica por *closure*; las primitivas Ed25519/MLS viven en `ayni-crypto`.
   `blobs_faltantes`/`servir_blobs`/`blob_valido`). El mismo hash en el grafo de
   la app de origen y en el adjunto apuntan al mismo objeto — editar en origen da
   otro hash (otra versión): referencias vivas, no copias.
-- **P6 — Ayni en wawa**: app WASM/akasha reusando `ayni-core` no_std.
+- **P6 — Ayni en wawa** ✅ *(hecho)*: el MISMO `ayni-core` (no_std + alloc) que
+  corre el chat en Linux viaja, sin reescribir su modelo, a una app WASM dentro
+  del SO bare-metal wawa — `03_ukupacha/wawa/apps/ayni`. Y ata dos grafos
+  direccionados por contenido que comparten la misma `format::hash` (BLAKE3):
+  cada nodo de la conversación —un mensaje firmado Ed25519 de verdad
+  (`ed25519-compact`, el mismo del kernel)— se persiste como un OBJETO del grafo
+  de akasha (`sys_object_put`), encadenado al anterior en una espina dorsal que
+  el kernel custodia en disco. Al arrancar, la app recorre la espina, reconstruye
+  la `Conversacion` con `desde_nodos`, añade el mensaje de este arranque, lo graba
+  y corona la nueva cabeza como raíz: la conversación sobrevive a los reinicios
+  porque vive en el disco de objetos, no en la RAM (local-first sobre el SO
+  soberano, como la crónica de la `cronista`). Es la primera app de genesis que
+  funda su propio heap (`linked_list_allocator`, el del kernel) — el grafo de la
+  conversación necesita `alloc`. `ayni-core` ganó `MensajeNodo::serializar`/
+  `deserializar` (el grano fino que el grafo de objetos y la anti-entropía piden).
 - **P7 — confianza/UX**: grafo agora, membresía firmada, recibos simétricos.
 
 ### Por qué `02_ruway` (HACER)

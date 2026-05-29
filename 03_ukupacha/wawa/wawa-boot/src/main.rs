@@ -139,7 +139,7 @@ const FUEL_EDITOR: u32 = 6_000_000;
 /// `rimay` (reflejo bare-metal del subdominio host de embeddings — demo
 /// determinista de verbo + coseno sin daemon, sin red, sin descarga de
 /// modelo).
-const GENESIS: [AppGenesis; 15] = [
+const GENESIS: [AppGenesis; 16] = [
     AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR, permisos: 0 },
     AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
     AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: format::PERMISO_ALTAVOZ },
@@ -189,6 +189,17 @@ const GENESIS: [AppGenesis; 15] = [
     // red, no necesita raiz. 480x240 a la derecha del compositor para no
     // colisionar con `pluma` ni `asistente`.
     AppGenesis { nombre: "testigo", archivo: "testigo.wasm", region: (600, 520, 480, 240), fuel: FUEL_COMUN, permisos: format::PERMISO_TINKUY },
+    // P6 :: `ayni` — el chat soberano DENTRO de wawa. La prueba de que el mismo
+    // `ayni-core` (no_std + alloc) que corre el chat en Linux viaja sin reescribir
+    // su modelo a una app WASM. Cada nodo de la conversación —un mensaje firmado
+    // Ed25519, direccionado por contenido (BLAKE3 de `format`)— se persiste como
+    // un OBJETO del grafo de akasha, encadenado al anterior: la conversación
+    // sobrevive a los reinicios porque vive en el disco de objetos, igual que la
+    // crónica de la `cronista`. De ahí PERMISO_GRAFO_ESCRITURA | PERMISO_RAIZ
+    // (graba el nodo con sys_object_put y corona la nueva cabeza como raíz). Es
+    // la primera app de genesis que funda su propio heap (`alloc` lo exige el
+    // grafo de la conversación). 480x400 a la derecha, como `rimay`.
+    AppGenesis { nombre: "ayni", archivo: "ayni.wasm", region: (700, 120, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA | format::PERMISO_RAIZ },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente

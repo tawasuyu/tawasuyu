@@ -260,6 +260,27 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_serializacion_de_un_nodo_suelto() {
+        // El grano fino que `ayni-store`, `ayni-sync` y la app de wawa (P6)
+        // persisten/transmiten: un nodo solo, no la conversación entera.
+        let sk = clave(3);
+        let autor = autor_de(&sk);
+        let c = Contenido::nuevo(autor, alloc::vec![], Carga::Texto("solo".into()), 9);
+        let nodo = MensajeNodo::sellar(c, firmar_con(&sk));
+
+        let bytes = nodo.serializar();
+        let recuperado = MensajeNodo::deserializar(&bytes).expect("roundtrip de nodo");
+        assert_eq!(recuperado, nodo, "el nodo sobrevive bit-a-bit al postcard");
+        assert_eq!(recuperado.id(), nodo.id(), "mismo id ⇒ misma dirección");
+        assert!(recuperado.verificar(verificador), "la firma sigue válida");
+
+        assert!(
+            MensajeNodo::deserializar(b"\xff\xff basura").is_err(),
+            "bytes corruptos ⇒ error, no pánico"
+        );
+    }
+
+    #[test]
     fn roundtrip_serializacion_de_la_conversacion() {
         let alicia = clave(1);
         let beto = clave(2);
