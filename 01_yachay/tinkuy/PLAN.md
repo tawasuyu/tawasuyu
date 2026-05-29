@@ -4,7 +4,7 @@ Visión declarada en el README (anti token-junkie, orden confirmado):
 
 ```
 1. Motor Rust            ✅  B1–B5 cerrados (2026-05)
-2. ABI WASM              ◐  C1/C2/C3/C5 ✅ · C4 (kernel wawa) pendiente
+2. ABI WASM              ✅  C1–C5 cerrados (2026-05)
 3. DSL matemático        ✅  D1–D5 cerrados (2026-05)
 4. Nodos visuales        ✅  E1–E5 cerrados (2026-05)
 ```
@@ -42,7 +42,7 @@ Meta: `tinkuy-core` ejecutable dentro de Wawa userspace como app WASM.
   - Tests: 5/5 con `cpu` y 5/5 con `wasm`. `wasm32-unknown-unknown` compila.
 - **C3 — App cdylib `03_ukupacha/wawa/apps/tinkuy`.** ✅ `pub use tinkuy_abi::*;` deja los 12 exports `tk_*` directos en el cdylib (verificado por `strings`). Pipeline release endurecido (opt-level=z + lto + codegen-units=1 + strip).
   - Decisión: la app wawa actúa como `tinkuy-wasm` (re-exporter cdylib). No hace falta un crate intermedio.
-- **C4 — Integración kernel wawa.** Pendiente. El reactor `wasmi` debe cargar `assets/tinkuy.wasm`, exponer `tk_*` al host, y una app de UI (texto plano) llamar `tk_sim_new → spawn × N → step_lj × M → snapshot_cid` mostrando step/T/CID. Requiere tocar el loader del kernel; lo dejamos como sub-fase aislada porque cruza la frontera Ring 0 ↔ Ring 3.
+- **C4 — Integración kernel wawa.** ✅ Módulo `wawa-kernel/src/tinkuy.rs` instala `assets/tinkuy.wasm` UNA sola vez en su propia sub-jaula `wasmi` (Store independiente, fuel desactivado por ser código del kernel, Linker vacío — el cdylib no importa nada). Resuelve los 9 `TypedFunc` `tk_*` y crece 64 páginas extras como scratch: dlmalloc del modulo nunca toca esas páginas, así que el kernel las usa indefinidamente como buzón de parámetros para los punteros que exigen `tk_sim_new`/`tk_sim_step_lj`/`tk_sim_snapshot_cid`. Tabla `[Option<Slot>; 8]` por `indice_app` aísla sims entre apps (matemática, no permisos). Cleanup automático en `AplicacionWasm::drop` (`liberar_owner`) evita sims huérfanas si una app cae. Nueva matriz de capacidades `sys_tinkuy_*` (7 syscalls: sim_new, sim_spawn, sim_rebuild_grid, sim_step_lj, sim_len, sim_observables, sim_snapshot_cid, sim_free) gateada por `PERMISO_TINKUY = 1 << 6` en `format`. App userspace `apps/testigo` ejerce el ciclo completo: `sim_new → spawn × 64 (lattice 4³ con velocidades xorshift32) → rebuild_grid → step_lj × 4/tick → observables → snapshot_cid` y pinta step / T / KE / CID[..16] con la 8×8 escalada ×2 + mini-barra de KE. Sembrada en GENESIS como app 15 con `PERMISO_TINKUY`, región `(600, 520, 480, 240)`, FUEL_COMUN. `cargo +nightly check --target x86_64-unknown-none -Z build-std=core,alloc` verde sobre el kernel; `cargo check --workspace` verde; `cargo build -p testigo --target wasm32-unknown-unknown --release` → 7.55 KB crudo / 5.35 KB sellado (`scripts/build-testigo.sh`).
 - **C5 — `scripts/build-tinkuy.sh`.** ✅ cargo build wasm32-unknown-unknown → `wasm-opt -Os --strip-debug --strip-producers --enable-{bulk-memory,sign-ext,nontrapping-float-to-int,mutable-globals}` → consolida `wawa-kernel/assets/tinkuy.wasm`. Tamaño actual: **30 KB** (techo plan: 200 KB).
 
 ## Capa 3 — DSL matemático

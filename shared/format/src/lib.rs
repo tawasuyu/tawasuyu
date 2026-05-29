@@ -357,6 +357,17 @@ pub const PERMISO_CONFIG: Permisos = 1 << 4;
 /// userspace generico.
 pub const PERMISO_COMPACTAR: Permisos = 1 << 5;
 
+/// Permite llamar al motor `tinkuy` embebido en el kernel: una sub-jaula
+/// `wasmi` aparte, con su propio Store y su propio fuel — la que carga
+/// `assets/tinkuy.wasm` y expone los `tk_*`. La capa de capacidades
+/// `sys_tinkuy_*` enlaza solo si el bit esta puesto. El motor tinkuy es
+/// computo puro (sin red, sin grafo, sin altavoz): el bit lo SE PARA del
+/// resto de capacidades, no porque sea privilegiado, sino porque tiene
+/// memoria persistente entre `tick`s — una app que lo tenga puede
+/// secuestrar slots de simulacion entre fotogramas y conviene que el
+/// operador lo declare a sabiendas.
+pub const PERMISO_TINKUY: Permisos = 1 << 6;
+
 /// Una entrada del manifiesto: una aplicacion del userspace y todo lo que el
 /// kernel necesita para darle vida — su bytecode, su ventana, su cuota de
 /// memoria, su tabla de permisos y, si lo tuviera, su ultimo estado persistido.

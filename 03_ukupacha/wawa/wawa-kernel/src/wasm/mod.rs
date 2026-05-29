@@ -472,6 +472,12 @@ impl Drop for AplicacionWasm {
         let indice = self.almacen.data().indice_app;
         crate::async_system::teclado::cerrar_canal(indice);
         crate::async_system::puntero::cerrar_canal(indice);
+        // Las sims que esta app dejo abiertas en el motor `tinkuy` mueren con
+        // ella. Sin esto, un slot huerfano impediria que la proxima carga del
+        // mismo indice obtuviera un slot fresco — y el bytecode del motor lo
+        // mantendria vivo en su heap. Idempotente: si la app jamas pidio una
+        // sim, la barrida es un no-op.
+        crate::tinkuy::liberar_owner(indice);
         // MANIFIESTO DE MUERTE. Antes de soltar el `Store` —que devolveria
         // los bytes al heap del kernel sin tocarlos—, teñimos la memoria
         // lineal entera de ceros. El siguiente owner de esos bloques jamas

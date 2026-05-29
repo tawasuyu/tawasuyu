@@ -139,7 +139,7 @@ const FUEL_EDITOR: u32 = 6_000_000;
 /// `rimay` (reflejo bare-metal del subdominio host de embeddings — demo
 /// determinista de verbo + coseno sin daemon, sin red, sin descarga de
 /// modelo).
-const GENESIS: [AppGenesis; 14] = [
+const GENESIS: [AppGenesis; 15] = [
     AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR, permisos: 0 },
     AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
     AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: format::PERMISO_ALTAVOZ },
@@ -182,6 +182,13 @@ const GENESIS: [AppGenesis; 14] = [
     // que el kernel inyecta a toda app. La region se solapa con `hola`
     // (su mismo tamaño) — el operador elige cuál mirar.
     AppGenesis { nombre: "rimay", archivo: "rimay.wasm", region: (100, 120, 480, 560), fuel: FUEL_COMUN, permisos: 0 },
+    // Fase C4 :: `testigo` — la app userspace que cierra el bucle del motor
+    // `tinkuy` empotrado en el kernel. PERMISO_TINKUY le abre el grupo de
+    // capacidades `sys_tinkuy_*`: sim_new + spawn × N + step_lj + observables
+    // + snapshot_cid. No necesita nada mas — no toca el grafo, no habla por
+    // red, no necesita raiz. 480x240 a la derecha del compositor para no
+    // colisionar con `pluma` ni `asistente`.
+    AppGenesis { nombre: "testigo", archivo: "testigo.wasm", region: (600, 520, 480, 240), fuel: FUEL_COMUN, permisos: format::PERMISO_TINKUY },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente

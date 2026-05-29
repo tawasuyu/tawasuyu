@@ -1,0 +1,32 @@
+# =============================================================================
+#  renaser :: apps/testigo — Fase C4 :: el testigo del motor `tinkuy`
+# -----------------------------------------------------------------------------
+#  La primera app userspace que ejerce las capacidades `sys_tinkuy_*`. Llama a
+#  `sim_new → spawn × N → step_lj → snapshot_cid` y pinta step / T / CID en su
+#  region — un texto plano que demuestra el reactor `wasmi` empotrado del
+#  kernel funcionando sobre `assets/tinkuy.wasm`. Sin grafo, sin red, sin
+#  altavoz: PERMISO_TINKUY a secas.
+# =============================================================================
+
+[package]
+name = "testigo"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM — testigo del motor de particulas tinkuy"
+
+[workspace]
+
+[dependencies]
+# Tipografia 8x8 pixel-perfect — la misma que el resto del userspace.
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

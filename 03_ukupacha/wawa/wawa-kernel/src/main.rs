@@ -63,6 +63,7 @@ mod pantallas;
 mod pic;
 mod sync;
 mod texto;
+mod tinkuy;
 mod wasm;
 
 // Reexportacion para que los submodulos conserven rutas `crate::` estables.
