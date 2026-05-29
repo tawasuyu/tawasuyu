@@ -1632,9 +1632,11 @@ fn collect_history() -> (String, Vec<PanelItem>) {
 /// con un snapshot (`title`, `url`, `body_text`) para que `document.*`
 /// devuelva valores reales en lugar de undefined.
 ///
-/// Scripts con `src=` (externos) se saltean por ahora — Fase 7.4+
-/// tendrá un async fetch + queue de ejecución. Scripts marcados como
-/// `is_module=true` también se saltean: el runtime de Fase 7.x es
+/// Scripts externos (`src=`) llegan acá ya descargados por
+/// `puriy_engine::scripts::fetch_externals` (Fase 7.4): el body UTF-8
+/// quedó copiado en `inline`. Si la descarga falló, `inline` sigue en
+/// `None` y se saltea silenciosamente (no es error JS — es network).
+/// Scripts `is_module=true` se saltean: el runtime de Fase 7.x es
 /// clásico (no module loader).
 ///
 /// `t.js_summary` se actualiza con counts agregados. La función NO toca

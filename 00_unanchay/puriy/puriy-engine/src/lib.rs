@@ -25,6 +25,7 @@ pub mod cache;
 pub mod cookies;
 pub mod dom;
 pub mod fetch;
+pub mod scripts;
 pub mod style;
 
 use thiserror::Error;
@@ -72,7 +73,9 @@ impl Engine {
     ) -> Result<Document, EngineError> {
         let parsed = url::Url::parse(url).map_err(|e| EngineError::Url(e.to_string()))?;
         let (html, final_url) = fetch::fetch_with_referer(&parsed, referer)?;
-        Ok(self.load_html(&final_url, &html))
+        let mut doc = self.load_html(&final_url, &html);
+        scripts::fetch_externals(&mut doc.scripts, &doc.url);
+        Ok(doc)
     }
 
     /// POST con body `application/x-www-form-urlencoded`. Mismo pipeline
@@ -91,7 +94,9 @@ impl Engine {
         let parsed = url::Url::parse(url).map_err(|e| EngineError::Url(e.to_string()))?;
         let (html, final_url) =
             fetch::post_form_with_referer(parsed.as_str(), body, referer)?;
-        Ok(self.load_html(&final_url, &html))
+        let mut doc = self.load_html(&final_url, &html);
+        scripts::fetch_externals(&mut doc.scripts, &doc.url);
+        Ok(doc)
     }
 
     /// Variante para tests / data URLs: parsea HTML ya en memoria.
