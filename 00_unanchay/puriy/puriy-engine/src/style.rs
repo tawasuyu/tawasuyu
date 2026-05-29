@@ -159,6 +159,15 @@ pub struct ComputedStyle {
     /// Para `display: grid` — pistas de columnas y filas.
     pub grid_template_columns: Vec<GridTrackSize>,
     pub grid_template_rows: Vec<GridTrackSize>,
+    /// `animation: <name> <duration> ...` colapsado en una binding.
+    /// `None` = sin animación. **Sólo parseado**: no hay runtime de tween
+    /// todavía, así que esto no anima nada (ver Fase B4). El runtime
+    /// futuro cruzaría `name` contra [`StyleEngine::keyframes`].
+    pub animation: Option<AnimationBinding>,
+    /// `transition: <prop> <duration> ...`. Lista separada por coma →
+    /// varios bindings. Vacío = sin transición. **Sólo parseado** — sin
+    /// runtime de tween no dispara nada (ver Fase B4).
+    pub transitions: Vec<TransitionBinding>,
 }
 
 /// Estilo del marker de `<li>`. Reducido al subset que el chrome puede
@@ -694,6 +703,8 @@ impl Default for ComputedStyle {
             transforms: Vec::new(),
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            animation: None,
+            transitions: Vec::new(),
         }
     }
 }
@@ -1490,6 +1501,10 @@ enum DeclKind {
     Transforms(Vec<Transform>),
     GridTemplateColumns(Vec<GridTrackSize>),
     GridTemplateRows(Vec<GridTrackSize>),
+    /// `animation: ...`. `None` = `animation: none`.
+    Animation(Option<AnimationBinding>),
+    /// `transition: ...`. Vec vacío = `transition: none`.
+    Transitions(Vec<TransitionBinding>),
 }
 
 impl Decl {
@@ -1594,6 +1609,8 @@ impl Decl {
             DeclKind::Transforms(tr) => s.transforms = tr.clone(),
             DeclKind::GridTemplateColumns(t) => s.grid_template_columns = t.clone(),
             DeclKind::GridTemplateRows(t) => s.grid_template_rows = t.clone(),
+            DeclKind::Animation(a) => s.animation = a.clone(),
+            DeclKind::Transitions(t) => s.transitions = t.clone(),
         }
     }
 }
@@ -2223,6 +2240,273 @@ fn parse_keyframe_declarations(inner: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Parsea una duración CSS (`2s`, `200ms`, `0.3s`) a segundos. `0` sin
+/// unidad → 0.0. Sin unidad reconocida → None (así un token numérico puro
+/// no se confunde con una duración al clasificar el shorthand).
+fn parse_time(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix("ms") {
+        return num.trim().parse::<f32>().ok().map(|v| v / 1000.0);
+    }
+    if let Some(num) = s.strip_suffix('s') {
+        return num.trim().parse::<f32>().ok();
+    }
+    if s == "0" {
+        return Some(0.0);
+    }
+    None
+}
+
+/// Parsea una `<timing-function>`: keywords (`ease`/`linear`/`ease-in`/
+/// `ease-out`/`ease-in-out`/`step-start`/`step-end`), `cubic-bezier(...)`
+/// y `steps(n, term)`. None si no encaja.
+fn parse_easing(s: &str) -> Option<EasingFunction> {
+    let t = s.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "linear" => return Some(EasingFunction::Linear),
+        "ease" => return Some(EasingFunction::Ease),
+        "ease-in" => return Some(EasingFunction::EaseIn),
+        "ease-out" => return Some(EasingFunction::EaseOut),
+        "ease-in-out" => return Some(EasingFunction::EaseInOut),
+        "step-start" => return Some(EasingFunction::StepStart),
+        "step-end" => return Some(EasingFunction::StepEnd),
+        _ => {}
+    }
+    if let Some(args) = t.strip_prefix("cubic-bezier(").and_then(|r| r.strip_suffix(')')) {
+        let nums: Vec<f32> = args.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+        if nums.len() == 4 {
+            return Some(EasingFunction::CubicBezier(nums[0], nums[1], nums[2], nums[3]));
+        }
+        return None;
+    }
+    if let Some(args) = t.strip_prefix("steps(").and_then(|r| r.strip_suffix(')')) {
+        let parts: Vec<&str> = args.split(',').map(|p| p.trim()).collect();
+        let n: u32 = parts.first()?.parse().ok()?;
+        let jump_start = parts
+            .get(1)
+            .map(|p| *p == "start" || *p == "jump-start")
+            .unwrap_or(false);
+        return Some(EasingFunction::Steps(n, jump_start));
+    }
+    None
+}
+
+/// Tokeniza un value por whitespace de nivel superior, respetando
+/// paréntesis: `cubic-bezier(.1, .2, .3, .4)` queda como un único token.
+fn split_top_level_ws(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut depth: i32 = 0;
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+/// Separa por comas de nivel superior, respetando paréntesis. Usado para
+/// las listas de `transition`/`animation` múltiples.
+fn split_top_level_comma(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut depth: i32 = 0;
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => out.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    out.push(cur);
+    out
+}
+
+/// `animation: <name> <duration> <timing> <delay> <iteration> <direction>
+/// <fill>`. Clasifica cada token por forma, no por posición. `none` →
+/// `Animation(None)`. Lista separada por coma → nos quedamos con la
+/// primera animación parseable (no hay runtime multi-animación todavía).
+fn parse_animation(value: &str) -> Option<DeclKind> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(DeclKind::Animation(None));
+    }
+    let seg = split_top_level_comma(v).into_iter().next()?;
+    Some(DeclKind::Animation(parse_one_animation(&seg)))
+}
+
+fn parse_one_animation(seg: &str) -> Option<AnimationBinding> {
+    let tokens = split_top_level_ws(seg.trim());
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut name: Option<String> = None;
+    let mut duration: Option<f32> = None;
+    let mut delay: Option<f32> = None;
+    let mut timing: Option<EasingFunction> = None;
+    let mut iterations: Option<AnimationIterations> = None;
+    let mut direction: Option<AnimationDirection> = None;
+    let mut fill: Option<AnimationFillMode> = None;
+    for tok in &tokens {
+        let lt = tok.to_ascii_lowercase();
+        // Duración primero, delay después (orden posicional de los dos
+        // valores de tiempo — único caso donde la posición importa).
+        if let Some(t) = parse_time(tok) {
+            if duration.is_none() {
+                duration = Some(t);
+            } else if delay.is_none() {
+                delay = Some(t);
+            }
+            continue;
+        }
+        if lt == "infinite" {
+            iterations = Some(AnimationIterations::Infinite);
+            continue;
+        }
+        // Número puro sin unidad → iteration-count (`parse_time` ya
+        // descartó los que llevan `s`/`ms`).
+        if let Ok(n) = lt.parse::<f32>() {
+            iterations = Some(AnimationIterations::Count(n));
+            continue;
+        }
+        if timing.is_none() {
+            if let Some(e) = parse_easing(&lt) {
+                timing = Some(e);
+                continue;
+            }
+        }
+        match lt.as_str() {
+            "normal" => {
+                direction = Some(AnimationDirection::Normal);
+                continue;
+            }
+            "reverse" => {
+                direction = Some(AnimationDirection::Reverse);
+                continue;
+            }
+            "alternate" => {
+                direction = Some(AnimationDirection::Alternate);
+                continue;
+            }
+            "alternate-reverse" => {
+                direction = Some(AnimationDirection::AlternateReverse);
+                continue;
+            }
+            "forwards" => {
+                fill = Some(AnimationFillMode::Forwards);
+                continue;
+            }
+            "backwards" => {
+                fill = Some(AnimationFillMode::Backwards);
+                continue;
+            }
+            "both" => {
+                fill = Some(AnimationFillMode::Both);
+                continue;
+            }
+            // `none` acá sería `animation-name: none` o `fill-mode: none` —
+            // ambiguo y raro en shorthand; lo tratamos como "sin nombre".
+            "none" => continue,
+            _ => {}
+        }
+        if name.is_none() {
+            name = Some(tok.clone());
+        }
+    }
+    let name = name?;
+    Some(AnimationBinding {
+        name,
+        duration_s: duration.unwrap_or(0.0),
+        timing: timing.unwrap_or_default(),
+        delay_s: delay.unwrap_or(0.0),
+        iterations: iterations.unwrap_or(AnimationIterations::Count(1.0)),
+        direction: direction.unwrap_or(AnimationDirection::Normal),
+        fill_mode: fill.unwrap_or(AnimationFillMode::None),
+    })
+}
+
+/// `transition: <property> <duration> <timing> <delay>`. Lista separada
+/// por coma → varios bindings. `none` → lista vacía.
+fn parse_transition(value: &str) -> Option<DeclKind> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(DeclKind::Transitions(Vec::new()));
+    }
+    let mut out = Vec::new();
+    for seg in split_top_level_comma(v) {
+        if let Some(b) = parse_one_transition(&seg) {
+            out.push(b);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(DeclKind::Transitions(out))
+    }
+}
+
+fn parse_one_transition(seg: &str) -> Option<TransitionBinding> {
+    let tokens = split_top_level_ws(seg.trim());
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut property: Option<String> = None;
+    let mut duration: Option<f32> = None;
+    let mut delay: Option<f32> = None;
+    let mut timing: Option<EasingFunction> = None;
+    for tok in &tokens {
+        let lt = tok.to_ascii_lowercase();
+        if let Some(t) = parse_time(tok) {
+            if duration.is_none() {
+                duration = Some(t);
+            } else if delay.is_none() {
+                delay = Some(t);
+            }
+            continue;
+        }
+        if timing.is_none() {
+            if let Some(e) = parse_easing(&lt) {
+                timing = Some(e);
+                continue;
+            }
+        }
+        // El primer token que no es tiempo ni easing es la propiedad
+        // (`opacity`, `transform`, `all`, `background-color`...).
+        if property.is_none() {
+            property = Some(lt);
+        }
+    }
+    Some(TransitionBinding {
+        property: property.unwrap_or_else(|| "all".to_string()),
+        duration_s: duration.unwrap_or(0.0),
+        timing: timing.unwrap_or_default(),
+        delay_s: delay.unwrap_or(0.0),
+    })
+}
+
 /// Reemplaza `var(--name)` y `var(--name, fallback)` en `value` por el
 /// valor recogido en `vars`. Si la variable no existe y hay fallback, lo
 /// usa; sino, sustituye por cadena vacía. La sustitución es recursiva
@@ -2768,6 +3052,8 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_grid_template(value).map(DeclKind::GridTemplateColumns)
         }
         "grid-template-rows" => parse_grid_template(value).map(DeclKind::GridTemplateRows),
+        "animation" => parse_animation(value),
+        "transition" => parse_transition(value),
         // `grid-gap` (legacy) = `gap`.
         "grid-gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "grid-row-gap" => parse_length_px(value).map(DeclKind::RowGap),
@@ -6285,5 +6571,110 @@ line2</pre></body></html>"#;
         assert!(eng.keyframes().contains_key("spin"));
         let p = dom.find("p").unwrap();
         assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
+    }
+
+    // === Fase B2: animation shorthand ===
+
+    fn anim_de(decl: &str) -> AnimationBinding {
+        let html = format!("<html><body><p style=\"{decl}\">x</p></body></html>");
+        let dom = DomTree::parse(&html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        eng.compute(&p).animation.expect("animation ausente")
+    }
+
+    #[test]
+    fn animation_shorthand_completo() {
+        let a = anim_de("animation: spin 2s ease-in-out 0.5s infinite alternate forwards");
+        assert_eq!(a.name, "spin");
+        assert_eq!(a.duration_s, 2.0);
+        assert_eq!(a.timing, EasingFunction::EaseInOut);
+        assert_eq!(a.delay_s, 0.5);
+        assert_eq!(a.iterations, AnimationIterations::Infinite);
+        assert_eq!(a.direction, AnimationDirection::Alternate);
+        assert_eq!(a.fill_mode, AnimationFillMode::Forwards);
+    }
+
+    #[test]
+    fn animation_orden_laxo_y_defaults() {
+        // Tokens en orden no canónico + count numérico + ms.
+        let a = anim_de("animation: 200ms linear 3 fade");
+        assert_eq!(a.name, "fade");
+        assert!((a.duration_s - 0.2).abs() < 1e-6);
+        assert_eq!(a.timing, EasingFunction::Linear);
+        assert_eq!(a.iterations, AnimationIterations::Count(3.0));
+        assert_eq!(a.delay_s, 0.0);
+        assert_eq!(a.direction, AnimationDirection::Normal);
+        assert_eq!(a.fill_mode, AnimationFillMode::None);
+    }
+
+    #[test]
+    fn animation_cubic_bezier_no_se_parte_por_comas() {
+        let a = anim_de("animation: bounce 1s cubic-bezier(0.1, 0.7, 1.0, 0.1)");
+        assert_eq!(a.name, "bounce");
+        assert_eq!(a.duration_s, 1.0);
+        assert_eq!(a.timing, EasingFunction::CubicBezier(0.1, 0.7, 1.0, 0.1));
+    }
+
+    #[test]
+    fn animation_none_limpia() {
+        let html = r#"<html><body><p style="animation: none">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).animation, None);
+    }
+
+    // === Fase B3: transition shorthand ===
+
+    fn trans_de(decl: &str) -> Vec<TransitionBinding> {
+        let html = format!("<html><body><p style=\"{decl}\">x</p></body></html>");
+        let dom = DomTree::parse(&html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        eng.compute(&p).transitions
+    }
+
+    #[test]
+    fn transition_simple() {
+        let t = trans_de("transition: opacity 200ms ease");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].property, "opacity");
+        assert!((t[0].duration_s - 0.2).abs() < 1e-6);
+        assert_eq!(t[0].timing, EasingFunction::Ease);
+        assert_eq!(t[0].delay_s, 0.0);
+    }
+
+    #[test]
+    fn transition_lista_multiple() {
+        let t = trans_de("transition: opacity 200ms ease, transform 0.3s ease-in 0.1s");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].property, "opacity");
+        assert_eq!(t[1].property, "transform");
+        assert!((t[1].duration_s - 0.3).abs() < 1e-6);
+        assert_eq!(t[1].timing, EasingFunction::EaseIn);
+        assert!((t[1].delay_s - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn transition_default_property_es_all() {
+        // Sin nombre de propiedad, default `all` (CSS spec).
+        let t = trans_de("transition: 1s");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].property, "all");
+        assert_eq!(t[0].duration_s, 1.0);
+        assert_eq!(t[0].timing, EasingFunction::Ease);
+    }
+
+    #[test]
+    fn transition_steps_y_none() {
+        let t = trans_de("transition: width 2s steps(4, end)");
+        assert_eq!(t[0].timing, EasingFunction::Steps(4, false));
+
+        let html = r#"<html><body><p style="transition: none">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert!(eng.compute(&p).transitions.is_empty());
     }
 }
