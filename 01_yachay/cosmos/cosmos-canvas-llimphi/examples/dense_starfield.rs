@@ -108,7 +108,7 @@ impl App for DenseStarfield {
             let layout = layout_block(ts, &block);
             draw_layout(scene, &layout, block.color, block.origin);
         })
-        .gpu_paint_with(move |device, queue, encoder, view, rect| {
+        .gpu_paint_with(move |device, queue, encoder, view, rect, _viewport| {
             let pipelines = pipelines_for(device);
             let mut batch = GpuBatch::new(&pipelines);
             {

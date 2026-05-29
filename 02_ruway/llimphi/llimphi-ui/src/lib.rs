@@ -330,6 +330,7 @@ pub type GpuPaintFn = Arc<
             &mut llimphi_hal::wgpu::CommandEncoder,
             &llimphi_hal::wgpu::TextureView,
             PaintRect,
+            (u32, u32),
         ) + Send
         + Sync,
 >;
@@ -672,10 +673,13 @@ impl<Msg> View<Msg> {
     }
 
     /// Registra una closure de pintura GPU directo. La closure recibe
-    /// `(&Device, &Queue, &mut CommandEncoder, &TextureView, PaintRect)`
+    /// `(&Device, &Queue, &mut CommandEncoder, &TextureView, PaintRect, (viewport_w, viewport_h))`
     /// y debe escribir sobre el `TextureView` con `LoadOp::Load` (no
-    /// clear) para preservar la pasada vello previa. Ver [`GpuPaintFn`]
-    /// para semántica completa, contexto y orden de pintura.
+    /// clear) para preservar la pasada vello previa. El último
+    /// argumento es el tamaño en pixels de la `TextureView` destino
+    /// (la intermedia del frame) — necesario para calcular NDC sin
+    /// asumir un viewport fijo. Ver [`GpuPaintFn`] para semántica
+    /// completa, contexto y orden de pintura.
     pub fn gpu_paint_with<F>(mut self, painter: F) -> Self
     where
         F: Fn(
@@ -684,6 +688,7 @@ impl<Msg> View<Msg> {
                 &mut llimphi_hal::wgpu::CommandEncoder,
                 &llimphi_hal::wgpu::TextureView,
                 PaintRect,
+                (u32, u32),
             ) + Send
             + Sync
             + 'static,
@@ -962,6 +967,7 @@ fn paint_gpu<Msg>(
     queue: &llimphi_hal::wgpu::Queue,
     encoder: &mut llimphi_hal::wgpu::CommandEncoder,
     view: &llimphi_hal::wgpu::TextureView,
+    viewport: (u32, u32),
 ) -> bool {
     let mut any = false;
     for node in &mounted.nodes {
@@ -982,6 +988,7 @@ fn paint_gpu<Msg>(
                 w: r.w,
                 h: r.h,
             },
+            viewport,
         );
         any = true;
     }
@@ -1732,6 +1739,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         label: Some("llimphi-ui-gpu-paint"),
                     },
                 );
+                let viewport = frame.size();
                 let mut any_gpu = paint_gpu(
                     &mounted,
                     &computed,
@@ -1739,6 +1747,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     &state.hal.queue,
                     &mut gpu_encoder,
                     frame.view(),
+                    viewport,
                 );
                 if let Some(ov) = overlay_built.as_ref() {
                     any_gpu |= paint_gpu(
@@ -1748,6 +1757,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         &state.hal.queue,
                         &mut gpu_encoder,
                         frame.view(),
+                        viewport,
                     );
                 }
                 if any_gpu {

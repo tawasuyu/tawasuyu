@@ -83,7 +83,7 @@ impl App for GpuDemo {
         })
         .fill(Color::from_rgba8(14, 18, 28, 255))
         .radius(8.0)
-        .gpu_paint_with(move |device, queue, encoder, view, rect| {
+        .gpu_paint_with(move |device, queue, encoder, view, rect, _viewport| {
             draw_points(device, queue, encoder, view, rect, seed);
         })
         .on_click(Msg::Bump);
