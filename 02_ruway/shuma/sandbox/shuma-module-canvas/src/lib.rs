@@ -37,6 +37,10 @@ pub const ID: &str = "canvas";
 pub struct State {
     pub graph: SessionGraph,
     pub scroll_y: f32,
+    /// `%cN` actualmente enfocado (último click sobre una caja). Pinta
+    /// el borde más grueso y habilita el panel inferior con el detalle
+    /// (intención completa + buffer `%pN`).
+    pub focused: Option<u32>,
 }
 
 impl Clone for State {
@@ -44,6 +48,7 @@ impl Clone for State {
         Self {
             graph: self.graph.clone(),
             scroll_y: self.scroll_y,
+            focused: self.focused,
         }
     }
 }
@@ -53,6 +58,7 @@ impl State {
         Self {
             graph: SessionGraph::new(),
             scroll_y: 0.0,
+            focused: None,
         }
     }
 
@@ -71,6 +77,7 @@ impl State {
         Self {
             graph: g,
             scroll_y: 0.0,
+            focused: None,
         }
     }
 }
@@ -97,6 +104,16 @@ pub enum Msg {
     /// el lienzo en sync con el `SessionGraph` del módulo shell.
     /// Si el snapshot coincide con el grafo actual, el state queda igual.
     SyncGraph(SessionGraph),
+    /// Click sobre una caja del lienzo. Si `Some(id)` enfoca el nodo
+    /// (toggle: si ya estaba enfocado, lo desfoca); `None` cuando se
+    /// clickeó fuera de cualquier caja → desfoca.
+    NodeClicked(Option<u32>),
+    /// Pedido de insertar una referencia (`%cN`/`%pN`) en el input del
+    /// shell. El chasis intercepta esta variante y la routea al primer
+    /// `shuma-module-shell` activo como `Msg::InsertAtCursor(text)`;
+    /// el canvas mismo no toca el shell. Si llega al `update` del
+    /// canvas sin que el chasis la haya consumido, es no-op.
+    InsertRef(String),
 }
 
 pub fn dispatch(action_id: &str) -> Option<Msg> {
@@ -124,6 +141,31 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::SyncGraph(graph) => {
             s.graph = graph;
+            // Si el nodo enfocado ya no existe en el snapshot nuevo,
+            // limpiamos el foco para que el detalle no muestre stale.
+            if let Some(id) = s.focused {
+                if !s.graph.commands().iter().any(|c| c.id == id) {
+                    s.focused = None;
+                }
+            }
+        }
+        Msg::NodeClicked(target) => match target {
+            Some(id) if s.focused == Some(id) => {
+                // Toggle: segundo click sobre el mismo nodo lo desenfoca.
+                s.focused = None;
+            }
+            Some(id) => {
+                s.focused = Some(id);
+            }
+            None => {
+                s.focused = None;
+            }
+        },
+        Msg::InsertRef(_) => {
+            // No-op acá — el chasis intercepta esta variante antes de
+            // que entre al update del canvas. Si llega es porque el
+            // canvas está corriendo standalone (sin chasis); no podemos
+            // hacer nada útil sin acceso al shell.
         }
     }
     s
@@ -222,11 +264,16 @@ fn layout(graph: &SessionGraph) -> (Vec<LaidBox>, Vec<LaidEdge>) {
 pub fn view<HostMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
-    _lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
 ) -> View<HostMsg> {
     let (boxes, edges) = layout(&state.graph);
+    // El painter y la closure de on_click_at ambos consumen `boxes`;
+    // pre-clonamos para alimentar al click_handler antes de mover el
+    // vector al painter.
+    let hit_boxes = boxes.clone();
     let theme_clone = *theme;
     let scroll_y = state.scroll_y as f64;
+    let focused_id = state.focused;
     let header_label = format!(
         "Lienzo de contexto · {} comandos · {} aristas",
         boxes.len(),
@@ -284,8 +331,11 @@ pub fn view<HostMsg: Clone + 'static>(
                 NodeStatus::Ok => Color::from_rgba8(0x4c, 0xaf, 0x6a, 255),
                 NodeStatus::Failed => Color::from_rgba8(0xd0, 0x46, 0x3b, 255),
             };
+            // Stroke por status. Si el nodo está enfocado va el doble
+            // de grueso para destacar.
+            let stroke_w = if focused_id == Some(b.id) { 3.5 } else { 2.0 };
             scene.stroke(
-                &llimphi_ui::llimphi_raster::kurbo::Stroke::new(2.0),
+                &llimphi_ui::llimphi_raster::kurbo::Stroke::new(stroke_w),
                 vello::kurbo::Affine::IDENTITY,
                 status_color,
                 None,
@@ -345,6 +395,12 @@ pub fn view<HostMsg: Clone + 'static>(
     })
     .text_aligned(header_label, 12.0, theme.fg_muted, Alignment::Start);
 
+    // hit_test_box devuelve qué `%cN` cayó bajo el cursor en
+    // coordenadas locales del canvas (paint_with usa las mismas
+    // (b.x, b.y) corregidas por scroll_y). Si nada matchea, emitimos
+    // `NodeClicked(None)` para desfocar.
+    let lift_click = lift.clone();
+    let scroll_y_f32 = state.scroll_y;
     let canvas = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -355,7 +411,20 @@ pub fn view<HostMsg: Clone + 'static>(
     })
     .fill(theme.bg_panel_alt)
     .radius(3.0)
-    .paint_with(painter);
+    .paint_with(painter)
+    .on_click_at(move |lx, ly, _w, _h| {
+        let hit = hit_test_box(&hit_boxes, lx, ly, scroll_y_f32);
+        Some(lift_click(Msg::NodeClicked(hit)))
+    });
+
+    let detail = focused_id
+        .and_then(|id| state.graph.commands().iter().find(|c| c.id == id).cloned())
+        .map(|node| focus_detail::<HostMsg>(&node, theme, lift.clone()));
+
+    let mut children = vec![header, canvas];
+    if let Some(d) = detail {
+        children.push(d);
+    }
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -376,7 +445,143 @@ pub fn view<HostMsg: Clone + 'static>(
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![header, canvas])
+    .children(children)
+}
+
+/// Hit-test puro: dado `(lx, ly)` en coordenadas locales del rect del
+/// canvas + el `scroll_y` activo, devuelve el `%cN` del nodo que cubre
+/// ese punto, o `None`. Si dos cajas se superponen (no debería con el
+/// layout columnar), se devuelve la primera del orden de inserción.
+fn hit_test_box(boxes: &[LaidBox], lx: f32, ly: f32, scroll_y: f32) -> Option<u32> {
+    let y_world = ly + scroll_y;
+    boxes
+        .iter()
+        .find(|b| lx >= b.x && lx <= b.x + b.w && y_world >= b.y && y_world <= b.y + b.h)
+        .map(|b| b.id)
+}
+
+/// Tira inferior con el detalle del nodo enfocado: intención completa,
+/// status, bytes producidos + dos botones que piden insertar `%cN` o
+/// `%pN` en el input del shell vía `Msg::InsertRef`.
+fn focus_detail<HostMsg: Clone + 'static>(
+    node: &shuma_intent::CommandNode,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+
+    let status_label = match node.status {
+        NodeStatus::Running => "● running",
+        NodeStatus::Ok => "✔ ok",
+        NodeStatus::Failed => "✘ failed",
+    };
+    let header_text = format!(
+        "%c{}  {}    {}    {} B",
+        node.id, node.intention, status_label, node.output_bytes
+    );
+
+    let header = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(20.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(header_text, 12.0, theme.fg_text, Alignment::Start);
+
+    let cn_ref = format!("%c{}", node.id);
+    let pn_ref = node.output_buffer.map(|n| format!("%p{}", n));
+
+    let lift_cn = lift.clone();
+    let cn_button = View::new(Style {
+        size: Size {
+            width: length(110.0_f32),
+            height: length(24.0_f32),
+        },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .hover_fill(theme.bg_button_hover)
+    .radius(4.0)
+    .text_aligned(
+        format!("Insertar {cn_ref}"),
+        11.0,
+        theme.fg_text,
+        Alignment::Center,
+    )
+    .on_click(lift_cn(Msg::InsertRef(cn_ref)));
+
+    let mut row: Vec<View<HostMsg>> = vec![cn_button];
+    if let Some(pref) = pn_ref {
+        let lift_pn = lift.clone();
+        let label = format!("Insertar {pref}");
+        let pn_button = View::new(Style {
+            size: Size {
+                width: length(110.0_f32),
+                height: length(24.0_f32),
+            },
+            padding: Rect {
+                left: length(10.0_f32),
+                right: length(10.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            margin: Rect {
+                left: length(6.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_button)
+        .hover_fill(theme.bg_button_hover)
+        .radius(4.0)
+        .text_aligned(label, 11.0, theme.fg_text, Alignment::Center)
+        .on_click(lift_pn(Msg::InsertRef(pref)));
+        row.push(pn_button);
+    }
+
+    let buttons = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(row);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(58.0_f32),
+        },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(3.0)
+    .children(vec![header, buttons])
 }
 
 /// Trunca `s` a `max_chars` chars (caracteres, no bytes), agregando `…`.
@@ -464,6 +669,80 @@ mod tests {
         let s = update(s, Msg::SyncGraph(other));
         assert_eq!(s.graph.commands().len(), 1);
         assert_eq!(s.graph.commands()[0].intention, "ls -la");
+    }
+
+    #[test]
+    fn node_clicked_focuses_and_second_click_toggles() {
+        let s = State::demo();
+        assert!(s.focused.is_none());
+        let s = update(s, Msg::NodeClicked(Some(2)));
+        assert_eq!(s.focused, Some(2));
+        // Mismo id otra vez → toggle off.
+        let s = update(s, Msg::NodeClicked(Some(2)));
+        assert!(s.focused.is_none());
+    }
+
+    #[test]
+    fn node_clicked_outside_clears_focus() {
+        let mut s = State::demo();
+        s.focused = Some(1);
+        let s = update(s, Msg::NodeClicked(None));
+        assert!(s.focused.is_none());
+    }
+
+    #[test]
+    fn sync_graph_clears_focus_if_node_dropped() {
+        let mut s = State::demo();
+        s.focused = Some(3);
+        let s = update(s, Msg::SyncGraph(SessionGraph::new()));
+        assert!(
+            s.focused.is_none(),
+            "el nodo desapareció — el foco debe limpiarse"
+        );
+    }
+
+    #[test]
+    fn hit_test_finds_box_under_cursor() {
+        let s = State::demo();
+        let (boxes, _) = layout(&s.graph);
+        // El primer comando (`%c1`, "cat data.json") está en la
+        // columna 0 → x = 16.0, y = 16.0, ancho 160, alto 56.
+        let c1 = &boxes[0];
+        let cx = c1.x + c1.w * 0.5;
+        let cy = c1.y + c1.h * 0.5;
+        assert_eq!(hit_test_box(&boxes, cx, cy, 0.0), Some(c1.id));
+        // Click fuera del rect — None.
+        assert!(hit_test_box(&boxes, 1000.0, 1000.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn hit_test_respects_scroll_offset() {
+        let s = State::demo();
+        let (boxes, _) = layout(&s.graph);
+        let c1 = &boxes[0];
+        let cx = c1.x + c1.w * 0.5;
+        let cy = c1.y + c1.h * 0.5;
+        // Con un scroll positivo, el cursor en `cy` apuntaría al espacio
+        // *encima* del nodo (cy + scroll_y > b.y + b.h cuando scroll>0)
+        // — el hit-test debería fallar si seguimos clickeando en la misma
+        // coord local sin compensar.
+        let scrolled_local_y = cy - 80.0; // simulamos que el nodo se movió arriba
+        assert_eq!(
+            hit_test_box(&boxes, cx, scrolled_local_y, 80.0),
+            Some(c1.id)
+        );
+    }
+
+    #[test]
+    fn insert_ref_msg_is_noop_on_canvas_state() {
+        // Sin chasis, `InsertRef` no debería mutar el canvas — el chasis
+        // intercepta esta variante. Garantiza que canvas standalone no
+        // se rompe si la variante se le cuela.
+        let s = State::demo();
+        let before = (s.graph.commands().len(), s.focused);
+        let s = update(s, Msg::InsertRef("%p1".into()));
+        assert_eq!(s.graph.commands().len(), before.0);
+        assert_eq!(s.focused, before.1);
     }
 
     #[test]

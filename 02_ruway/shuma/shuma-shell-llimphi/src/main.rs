@@ -497,6 +497,27 @@ fn apply_module_msg(mut m: Model, slot: Slot, msg: ModuleMsg) -> Model {
         }
     }
 
+    // Hook: el `shuma-module-canvas` pide insertar una referencia
+    // `%cN`/`%pN` en el input del shell. Buscamos la primera instancia
+    // `Shell` (en el mismo orden que `sync_canvas_from_primary_shell`)
+    // y le mandamos `InsertAtCursor`. Si la shell vive en una tab del
+    // drawer, abrimos el drawer y enfocamos esa tab. La variante NO
+    // se propaga al canvas — el canvas solo emite la intención.
+    if let ModuleMsg::Canvas(shuma_module_canvas::Msg::InsertRef(text)) = &msg {
+        if let Some(target) = first_shell_slot(&m) {
+            let insert_msg = ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(
+                text.clone(),
+            ));
+            if let Slot::DrawerTab(i) = &target {
+                m.active_drawer_tab = *i;
+                m.drawer_open = true;
+            }
+            return apply_module_msg(m, target, insert_msg);
+        }
+        // Sin shell activo: el pedido se descarta silencioso.
+        return m;
+    }
+
     match slot {
         Slot::TopBar => {
             if let Some(inst) = m.topbar.as_mut() {
@@ -711,6 +732,37 @@ fn sync_canvas_from_primary_shell(m: &mut Model) {
     for inst in m.drawer_tabs.iter_mut() {
         sync_one(inst);
     }
+}
+
+/// Slot del primer `Shell` activo siguiendo el mismo orden que
+/// `find_primary_shell_graph`. Lo usa el hook de `Msg::Canvas(InsertRef)`
+/// para encontrar a quién enrutarle el `InsertAtCursor`.
+fn first_shell_slot(m: &Model) -> Option<Slot> {
+    if matches!(
+        m.topbar.as_ref().map(|i| &i.state),
+        Some(ModuleState::Shell(_))
+    ) {
+        return Some(Slot::TopBar);
+    }
+    if matches!(
+        m.bottombar.as_ref().map(|i| &i.state),
+        Some(ModuleState::Shell(_))
+    ) {
+        return Some(Slot::BottomBar);
+    }
+    if matches!(
+        m.main.as_ref().map(|i| &i.state),
+        Some(ModuleState::Shell(_))
+    ) {
+        return Some(Slot::Main);
+    }
+    m.drawer_tabs.iter().enumerate().find_map(|(i, inst)| {
+        if matches!(inst.state, ModuleState::Shell(_)) {
+            Some(Slot::DrawerTab(i))
+        } else {
+            None
+        }
+    })
 }
 
 fn find_primary_shell_graph(m: &Model) -> Option<shuma_intent::SessionGraph> {

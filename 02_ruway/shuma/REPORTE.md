@@ -258,6 +258,21 @@ del primer shell encontrado a todas las instancias canvas con
 `Msg::SyncGraph(graph)`. El lienzo refleja al instante el flujo de la
 sesión (3 tests nuevos en `shell` + 1 en `canvas`).
 
+**Canvas clickeable (2026-05-29, segundo bloque).** Las cajas del
+lienzo responden al click vía `on_click_at` + `hit_test_box`: el
+primer click enfoca el `%cN` (borde 3.5 px en lugar de 2.0), el
+segundo desenfoca, y un click en vacío también desenfoca. Cuando hay
+un nodo enfocado aparece una tira inferior con la intención completa,
+status y bytes; al lado, dos botones "Insertar %cN" / "Insertar %pN"
+emiten `Msg::InsertRef(text)`. El chasis intercepta esta variante
+(`apply_module_msg` antes de routear al canvas), busca el primer
+`Shell` con `first_shell_slot`, abre+enfoca el drawer si está en una
+tab, y le manda `Msg::InsertAtCursor(text)` al shell. El shell inserta
+en la posición actual del cursor del `LineState`, cierra el overlay
+Ctrl-R si estaba abierto y deja el cursor justo después del texto.
+`SyncGraph` ahora limpia `focused` si el nodo desapareció del snapshot
+nuevo (evita detalle stale). 6 tests nuevos en canvas + 1 en shell.
+
 Pendientes opcionales restantes:
 - Mouse en el PTY (vt100 ya parsea; falta cablear el mouse de Llimphi).
 - Tooltip "what would clicking this do?" en decoraciones (espera al hover de llimphi-ui).

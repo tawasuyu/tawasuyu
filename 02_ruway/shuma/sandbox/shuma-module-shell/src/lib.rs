@@ -431,6 +431,12 @@ pub enum Msg {
     /// Click en una decoración del output — el dispatch decide la
     /// acción (cd, xdg-open, pre-llenar el input, etc.).
     OpenDecoration(shuma_line::DecorationKind),
+    /// Inserta `text` en la posición actual del cursor del input. La
+    /// dispara el chasis cuando otro módulo (p. ej. `shuma-module-canvas`
+    /// al clickear un nodo) quiere empujar una referencia `%pN`/`%cN`
+    /// al REPL. Cierra los overlays de búsqueda y deja el cursor justo
+    /// después del texto insertado.
+    InsertAtCursor(String),
 }
 
 /// Mapea `action_id` de `ShortcutAction::ModuleAction` al `Msg`.
@@ -611,6 +617,14 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::OpenDecoration(kind) => {
             s = open_decoration(s, kind);
+        }
+        Msg::InsertAtCursor(text) => {
+            // Cerramos cualquier overlay activo para que el texto
+            // pegado quede visible sin tener que cerrar el Ctrl-R a mano.
+            s.history_search = None;
+            s.history_cursor = None;
+            s.input.insert(&text);
+            s.focused = true;
         }
     }
     s
@@ -3001,5 +3015,14 @@ mod tests {
             s.intent_graph().is_empty(),
             "builtins no entran al grafo de intenciones"
         );
+    }
+
+    #[test]
+    fn insert_at_cursor_appends_into_input() {
+        let mut s = State::new(Source::Local);
+        // `set_text` deja el cursor al final, así que `insert` extiende.
+        s.input.set_text("sort ");
+        s = update(s, Msg::InsertAtCursor("%p1".into()));
+        assert_eq!(s.input.text(), "sort %p1");
     }
 }
