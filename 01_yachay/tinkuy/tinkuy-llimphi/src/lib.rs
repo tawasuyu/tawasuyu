@@ -33,6 +33,7 @@ pub mod grafo;
 pub mod visor;
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -122,6 +123,13 @@ pub enum Msg {
         to_node: u32,
         to_input: u16,
     },
+    /// Rebobina al snapshot `idx` del ring. Restaura el `World` con
+    /// `Snapshot::restore_into` (CID idéntico al original), retrocede
+    /// `step`/`t` al instante capturado y pausa la simulación para que
+    /// el usuario pueda inspeccionar el estado antes de continuar.
+    LoadSnapshot {
+        idx: usize,
+    },
 }
 
 pub struct Model {
@@ -168,10 +176,14 @@ struct Observables {
     cid_short: [u8; 8],
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SnapshotEntry {
     step: usize,
     cid_short: [u8; 8],
+    /// Payload del snapshot — el mismo `Snapshot::bytes` que generó la CID.
+    /// `Arc<[u8]>` para que el clon en el ring buffer y el Msg sean baratos
+    /// (~16 B por copia en vez de `n*44 + 8` por click).
+    bytes: Arc<[u8]>,
 }
 
 // ─── PRNG determinista (igual que tinkuy-sim, sin dep externa) ─────────────────
@@ -240,7 +252,10 @@ fn init_world() -> (World, Grid3D, [f32; 3], [f32; 3]) {
     (w, g, bounds_min, bounds_max)
 }
 
-fn capture_obs(world: &World) -> Observables {
+/// Captura observables y devuelve también el `Snapshot` — `bytes` viajan al
+/// ring para que un click en E4 pueda rebobinar. Los call sites que sólo
+/// necesitan observables descartan el `Snapshot` con `_`.
+fn capture_obs_and_snap(world: &World) -> (Observables, Snapshot) {
     let ke = kinetic_energy(world);
     let temp = temperature(world, KB);
     let [px, py, pz] = total_momentum(world);
@@ -248,12 +263,15 @@ fn capture_obs(world: &World) -> Observables {
     let snap = Snapshot::capture(world);
     let mut cid_short = [0u8; 8];
     cid_short.copy_from_slice(&snap.cid[..8]);
-    Observables {
-        ke,
-        temp,
-        p_mag,
-        cid_short,
-    }
+    (
+        Observables {
+            ke,
+            temp,
+            p_mag,
+            cid_short,
+        },
+        snap,
+    )
 }
 
 fn cid_to_hex(cid: &[u8; 8]) -> String {
@@ -293,7 +311,7 @@ impl App for TinkuyApp {
 
         let force_graph = ForceGraph::lennard_jones_default();
         let (force, force_status) = recompile_force(&force_graph);
-        let obs = capture_obs(&world);
+        let (obs, _) = capture_obs_and_snap(&world);
         Model {
             world,
             grid,
@@ -344,14 +362,17 @@ impl App for TinkuyApp {
                         model.step += 1;
                         model.t += DT as f64;
                     }
-                    let obs = capture_obs(&model.world);
-                    // Empuja al ring: drop más viejo si llena.
+                    let (obs, snap) = capture_obs_and_snap(&model.world);
+                    // Empuja al ring: drop más viejo si llena. `snap.bytes`
+                    // ya está alocado por `Snapshot::capture` — lo movemos
+                    // a un `Arc<[u8]>` directamente.
                     if model.snapshots.len() == SNAPSHOTS_K {
                         model.snapshots.pop_front();
                     }
                     model.snapshots.push_back(SnapshotEntry {
                         step: model.step,
                         cid_short: obs.cid_short,
+                        bytes: Arc::from(snap.bytes.into_boxed_slice()),
                     });
                     model.obs = obs;
                 }
@@ -372,7 +393,8 @@ impl App for TinkuyApp {
                 };
                 model.step = 0;
                 model.t = 0.0;
-                model.obs = capture_obs(&model.world);
+                let (obs, _) = capture_obs_and_snap(&model.world);
+                model.obs = obs;
                 model.snapshots.clear();
             }
             Msg::Swap { from, to } => {
@@ -395,6 +417,27 @@ impl App for TinkuyApp {
                 let (force, status) = recompile_force(&model.force_graph);
                 model.force = force;
                 model.force_status = status;
+            }
+            Msg::LoadSnapshot { idx } => {
+                if let Some(entry) = model.snapshots.get(idx).cloned() {
+                    // `restore_into` repuebla las SoA y zera ax_prev; el
+                    // CID tras restaurar coincide con `entry.cid_short` por
+                    // construcción (round-trip de Snapshot, ver tinkuy-core).
+                    if Snapshot::restore_into(&entry.bytes, &mut model.world).is_ok() {
+                        // Rebuild de la grilla espacial para que el siguiente
+                        // tick de fuerzas vea las partículas en sus celdas
+                        // restauradas (las posiciones cambiaron).
+                        model.grid.rebuild(&model.world);
+                        model.step = entry.step;
+                        model.t = entry.step as f64 * DT as f64;
+                        // Recapturamos observables sobre el estado restaurado.
+                        let (obs, _) = capture_obs_and_snap(&model.world);
+                        model.obs = obs;
+                        // Pausa: el usuario pidió ver este estado; respetar
+                        // su mirada antes de reanudar (Space para retomar).
+                        model.paused = true;
+                    }
+                }
             }
         }
         model
@@ -433,7 +476,7 @@ impl App for TinkuyApp {
                     content: observables_body(model, &theme),
                 },
                 TileId::Snapshots => TileSpec {
-                    label: "snapshots (CID[..8])".into(),
+                    label: "snapshots · click rebobina".into(),
                     content: snapshots_body(model, &theme),
                 },
             })
@@ -672,21 +715,54 @@ fn observables_body(model: &Model, theme: &Theme) -> View<Msg> {
 
 fn snapshots_body(model: &Model, theme: &Theme) -> View<Msg> {
     // Más reciente arriba — más legible que el orden natural del VecDeque.
-    let mut rows: Vec<View<Msg>> = Vec::with_capacity(SNAPSHOTS_K + 1);
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(SNAPSHOTS_K + 2);
     rows.push(text_row(
-        format!("últimas {} CIDs (ring)", SNAPSHOTS_K),
+        format!("últimas {} CIDs (click → rebobinar)", SNAPSHOTS_K),
         11.0,
         theme.fg_muted,
     ));
     if model.snapshots.is_empty() {
         rows.push(text_row("(esperando primer tick…)".into(), 12.0, theme.fg_muted));
     } else {
-        for entry in model.snapshots.iter().rev() {
-            let txt = format!("step {:>6}   {}", entry.step, cid_to_hex(&entry.cid_short));
-            rows.push(text_row(txt, 12.0, theme.fg_text));
+        // El ring guarda `step` ascendente; iteramos en reverso para que el
+        // más reciente quede arriba, manteniendo el `idx` original — el Msg
+        // ::LoadSnapshot lo usa para indexar la VecDeque sin reverse.
+        let total = model.snapshots.len();
+        for (i, entry) in model.snapshots.iter().enumerate().rev() {
+            let marker = if entry.step == model.step { "▶ " } else { "  " };
+            let txt = format!(
+                "{}step {:>6}   {}",
+                marker,
+                entry.step,
+                cid_to_hex(&entry.cid_short)
+            );
+            rows.push(snapshot_row(txt, i, total, theme));
         }
     }
     padded_col(rows, None)
+}
+
+/// Una fila de snapshot — clickeable, con hover para sugerir que se puede
+/// rebobinar a este estado. El `idx` es el índice en `model.snapshots`
+/// (VecDeque) y viaja directo al `Msg::LoadSnapshot`.
+fn snapshot_row(text: String, idx: usize, _total: usize, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(20.0_f32),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(text, 12.0, theme.fg_text, Alignment::Start)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::LoadSnapshot { idx })
 }
 
 // ─── Recompilación grafo → DslForce ───────────────────────────────────────────
@@ -731,4 +807,87 @@ fn lift_error_to_string(err: LiftError) -> String {
 /// del crate quepa en una línea.
 pub fn run() {
     llimphi_ui::run::<TinkuyApp>();
+}
+
+#[cfg(test)]
+mod rewind_tests {
+    //! Tests del round-trip de E4 — sin tocar la UI: ejercitamos el camino
+    //! "capture → mutate → restore" tal como lo hace `Msg::LoadSnapshot`,
+    //! para garantizar que la CID se conserva bit a bit y que la grilla
+    //! puede repoblarse con el estado restaurado.
+    use super::*;
+
+    fn step_once(
+        world: &mut World,
+        grid: &mut Grid3D,
+        params: &IntegratorParams,
+        outboxes: &mut Vec<Outbox>,
+        force: &mut DslForce,
+    ) {
+        velocity_verlet_step(world, grid, params, outboxes, |w, _g| {
+            clear_accelerations(w);
+            // No aplicamos fuerza acá — sólo queremos verificar el rewind
+            // sobre un mundo "vivo" con posiciones/velocidades distintas
+            // entre dos instantes. La fuerza importa para el round-trip
+            // del CID sólo en la medida en que cambia el estado.
+            let _ = force;
+        });
+    }
+
+    #[test]
+    fn rewind_restaura_cid_bit_a_bit() {
+        let (mut world, mut grid, bmin, bmax) = init_world();
+        let params = IntegratorParams { dt: DT, bounds_min: bmin, bounds_max: bmax };
+        let mut outboxes = vec![Outbox::default()];
+        let graph = ForceGraph::lennard_jones_default();
+        let (force_opt, _) = recompile_force(&graph);
+        let mut force = force_opt.expect("LJ default debe compilar");
+
+        // Snapshot en t=0.
+        let snap_a = Snapshot::capture(&world);
+
+        // Avanza 16 steps con paredes (cualquier mutación sirve).
+        for _ in 0..16 {
+            step_once(&mut world, &mut grid, &params, &mut outboxes, &mut force);
+            reflect_walls(&mut world, bmin, bmax);
+        }
+        // Snapshot en t=16.
+        let snap_b = Snapshot::capture(&world);
+        assert_ne!(snap_a.cid, snap_b.cid, "16 steps deben cambiar el estado");
+
+        // Rewind a t=0 vía restore_into y comparamos CID byte a byte.
+        Snapshot::restore_into(&snap_a.bytes, &mut world).unwrap();
+        grid.rebuild(&world);
+        let snap_a_again = Snapshot::capture(&world);
+        assert_eq!(snap_a.cid, snap_a_again.cid, "rewind debe devolver bit-exacto");
+    }
+
+    #[test]
+    fn rewind_dos_veces_a_dos_estados_distintos() {
+        let (mut world, mut grid, bmin, bmax) = init_world();
+        let params = IntegratorParams { dt: DT, bounds_min: bmin, bounds_max: bmax };
+        let mut outboxes = vec![Outbox::default()];
+        let graph = ForceGraph::lennard_jones_default();
+        let mut force = recompile_force(&graph).0.unwrap();
+
+        for _ in 0..4 {
+            step_once(&mut world, &mut grid, &params, &mut outboxes, &mut force);
+            reflect_walls(&mut world, bmin, bmax);
+        }
+        let snap_4 = Snapshot::capture(&world);
+
+        for _ in 0..4 {
+            step_once(&mut world, &mut grid, &params, &mut outboxes, &mut force);
+            reflect_walls(&mut world, bmin, bmax);
+        }
+        let snap_8 = Snapshot::capture(&world);
+
+        // Saltamos al 8, después al 4, después de vuelta al 8.
+        Snapshot::restore_into(&snap_8.bytes, &mut world).unwrap();
+        assert_eq!(Snapshot::capture(&world).cid, snap_8.cid);
+        Snapshot::restore_into(&snap_4.bytes, &mut world).unwrap();
+        assert_eq!(Snapshot::capture(&world).cid, snap_4.cid);
+        Snapshot::restore_into(&snap_8.bytes, &mut world).unwrap();
+        assert_eq!(Snapshot::capture(&world).cid, snap_8.cid);
+    }
 }

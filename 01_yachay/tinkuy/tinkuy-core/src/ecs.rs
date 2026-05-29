@@ -113,6 +113,24 @@ impl World {
             && self.generations[h.idx as usize] == h.gen
     }
 
+    /// Punto de entrada **sólo para `Snapshot::restore_into`**: sincroniza
+    /// `len` con las arrays SoA tras una sobreescritura externa, reasigna
+    /// `generations` (bumpea +1 para invalidar handles previos) y limpia
+    /// `free_slots`. No usar fuera de la ruta de restore — los SoA deben
+    /// ya estar del largo `n` correcto.
+    pub fn set_len_for_restore(&mut self, n: usize) {
+        // Bumpea las gens existentes que sobreviven al rewind (invalida
+        // cualquier handle externo cacheado) y extiende con 1s si crece.
+        if self.generations.len() < n {
+            self.generations.resize(n, 1);
+        }
+        for g in self.generations.iter_mut().take(n) {
+            *g = g.wrapping_add(1);
+        }
+        self.free_slots.clear();
+        self.len = n;
+    }
+
     pub fn despawn(&mut self, h: EntityHandle) {
         if !self.alive(h) { return; }
         let i = h.idx as usize;
