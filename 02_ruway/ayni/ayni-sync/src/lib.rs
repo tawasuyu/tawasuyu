@@ -52,8 +52,48 @@ pub enum Sobre {
     /// El emisor entrega los nodos pedidos. Sus padres ausentes se piden a su vez.
     Entrega(Vec<MensajeNodo>),
     /// Un nodo nuevo, difundido en caliente apenas su autor lo redacta. Su carga
-    /// puede ser texto plano o `Carga::Cifrado` — al transporte le da igual.
+    /// puede ser texto plano, `Carga::Cifrado` o `Carga::Adjunto` — al transporte
+    /// le da igual.
     Nodo(MensajeNodo),
+    /// Anti-entropía de BLOBS (P5): el receptor pide los blobs de adjuntos que
+    /// le faltan, por su hash. Gemelo de `Pedir`, pero para contenidos pesados.
+    PedirBlob(Vec<Hash>),
+    /// Entrega de blobs pedidos: `(hash, bytes)`. El receptor verifica cada uno
+    /// contra su hash antes de guardarlo ([`blob_valido`]).
+    Blob(Vec<(Hash, Vec<u8>)>),
+}
+
+/// ¿Estos bytes corresponden a este hash? El direccionamiento por contenido
+/// hace la verificación trivial e infalsificable: recalcular BLAKE3 y comparar.
+/// Se corre sobre cada blob recibido antes de guardarlo.
+pub fn blob_valido(hash: &Hash, bytes: &[u8]) -> bool {
+    ayni_core::hash(bytes) == *hash
+}
+
+/// Dada la lista de adjuntos que la conversación referencia y un predicado
+/// "¿tengo este blob?", devuelve los hashes que FALTAN —lo que hay que pedir—.
+pub fn blobs_faltantes(
+    adjuntos: &[ayni_core::Adjunto],
+    tengo: impl Fn(&Hash) -> bool,
+) -> Vec<Hash> {
+    let mut faltan = Vec::new();
+    for a in adjuntos {
+        if !tengo(&a.hash) && !faltan.contains(&a.hash) {
+            faltan.push(a.hash);
+        }
+    }
+    faltan
+}
+
+/// Dada una lista de hashes pedidos y un getter, arma los `(hash, bytes)` que se
+/// pueden servir (omite los que no se tienen). Es lo que va en [`Sobre::Blob`].
+pub fn servir_blobs(
+    ids: &[Hash],
+    obtener: impl Fn(&Hash) -> Option<Vec<u8>>,
+) -> Vec<(Hash, Vec<u8>)> {
+    ids.iter()
+        .filter_map(|h| obtener(h).map(|b| (*h, b)))
+        .collect()
 }
 
 /// Lo que el transporte entrega a la aplicación por el canal de eventos.
@@ -272,6 +312,41 @@ mod tests {
         assert_eq!(recibido.contenido.carga.texto(), None, "el nodo no trae claro");
         let claro = canal_b.descifrar(recibido.contenido.carga.cifrado().unwrap()).unwrap();
         assert_eq!(claro, secreto.as_bytes(), "Beto recupera el claro E2EE");
+    }
+
+    #[test]
+    fn transferencia_de_blobs_de_adjuntos() {
+        use ayni_core::Adjunto;
+        use std::collections::HashMap;
+
+        // Alicia tiene un blob; Beto no. La referencia (Adjunto) viaja en un
+        // nodo; el blob se pide y se transfiere aparte, verificado por hash.
+        let contenido = b"# documento adjunto\ncuerpo pesado";
+        let adj = Adjunto::de_bytes("pluma", "text/markdown", "doc.md", contenido);
+
+        let mut almacen_a: HashMap<Hash, Vec<u8>> = HashMap::new();
+        almacen_a.insert(adj.hash, contenido.to_vec());
+        let mut almacen_b: HashMap<Hash, Vec<u8>> = HashMap::new();
+
+        // Beto descubre el adjunto (p. ej. al recibir el nodo) y pide lo que falta.
+        let adjuntos = [adj.clone()];
+        let faltan = blobs_faltantes(&adjuntos, |h| almacen_b.contains_key(h));
+        assert_eq!(faltan, vec![adj.hash], "Beto pide el blob que no tiene");
+
+        // Alicia sirve los blobs pedidos.
+        let entrega = servir_blobs(&faltan, |h| almacen_a.get(h).cloned());
+        assert_eq!(entrega.len(), 1);
+
+        // Beto recibe y verifica cada blob por su hash antes de guardarlo.
+        for (h, bytes) in entrega {
+            assert!(blob_valido(&h, &bytes), "el blob coincide con su hash");
+            almacen_b.insert(h, bytes);
+        }
+        assert_eq!(almacen_b.get(&adj.hash).unwrap(), contenido);
+        assert!(adj.verifica(almacen_b.get(&adj.hash).unwrap()));
+
+        // un blob manipulado se rechaza.
+        assert!(!blob_valido(&adj.hash, b"bytes ajenos"));
     }
 
     #[test]

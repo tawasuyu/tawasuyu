@@ -136,6 +136,10 @@ impl Fusionador {
                 let nuevos = self.aplicar_nodo(conv, nodo, verificar);
                 (nuevos, self.pedir_padres(conv))
             }
+            // Los blobs de adjuntos (P5) no son asunto del fusionador de NODOS:
+            // los maneja la capa de blobs de la app (que tiene el almacén), con
+            // `blobs_faltantes`/`servir_blobs`. Aquí se ignoran.
+            Sobre::PedirBlob(_) | Sobre::Blob(_) => (Vec::new(), Vec::new()),
         }
     }
 

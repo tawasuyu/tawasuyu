@@ -31,6 +31,64 @@ use format::{AgoraId, Firma, Hash};
 /// viejo rechaza un nodo de versión desconocida en vez de malinterpretarlo.
 pub const VERSION_NODO: u32 = 1;
 
+/// Una REFERENCIA VIVA a un objeto del grafo soberano —no una copia muerta—.
+///
+/// Todo en gioser se direcciona por contenido (BLAKE3): un documento de pluma,
+/// una nota de khipu, una carta de cosmos, un archivo. Adjuntar uno a un mensaje
+/// es citar su `hash`, no duplicar sus bytes. El mismo hash en el grafo de la app
+/// de origen y en esta referencia apuntan AL MISMO objeto: editar en origen
+/// engendra un hash nuevo (otra versión), y el adjunto puede apuntar a cualquiera.
+/// La dedup es gratis —dos mensajes que adjuntan el mismo objeto comparten un
+/// solo blob— y la referencia viaja DENTRO del contenido firmado: nadie puede
+/// alterar a qué objeto apunta sin invalidar la firma.
+///
+/// Los bytes del objeto NO viajan aquí (la referencia es minúscula); viajan
+/// aparte como un blob direccionado por `hash`, y se verifican contra él al
+/// recibirse ([`Adjunto::verifica`]).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct Adjunto {
+    /// El hash BLAKE3 del contenido del objeto — su identidad en el grafo.
+    pub hash: Hash,
+    /// De qué app del grafo proviene: `"pluma"`, `"khipu"`, `"cosmos"`,
+    /// `"archivo"`… Informa a la UI cómo abrirlo/editarlo en su app nativa.
+    pub app: String,
+    /// La clase/MIME del contenido: `"text/markdown"`, `"image/png"`,
+    /// `"pluma/documento"`. Guía el render y la resolución.
+    pub clase: String,
+    /// Nombre legible para mostrar.
+    pub nombre: String,
+    /// Tamaño del contenido en bytes — para mostrar y para acotar transferencias.
+    pub tamano: u64,
+}
+
+impl Adjunto {
+    /// Crea una referencia a partir de los bytes del objeto: calcula su hash
+    /// BLAKE3 (la misma función del grafo) y su tamaño. Los `bytes` son el blob
+    /// que el llamador guardará/transferirá aparte; aquí sólo nace la referencia.
+    pub fn de_bytes(
+        app: impl Into<String>,
+        clase: impl Into<String>,
+        nombre: impl Into<String>,
+        bytes: &[u8],
+    ) -> Adjunto {
+        Adjunto {
+            hash: format::hash(bytes),
+            app: app.into(),
+            clase: clase.into(),
+            nombre: nombre.into(),
+            tamano: bytes.len() as u64,
+        }
+    }
+
+    /// ¿Estos bytes SON el objeto que la referencia nombra? Comprueba tamaño y
+    /// hash BLAKE3. Es la verificación que se corre al recibir un blob por la
+    /// red antes de aceptarlo: el direccionamiento por contenido hace imposible
+    /// colar bytes ajenos bajo un hash dado.
+    pub fn verifica(&self, bytes: &[u8]) -> bool {
+        bytes.len() as u64 == self.tamano && format::hash(bytes) == self.hash
+    }
+}
+
 /// La carga útil de un mensaje. Es un `enum` —no un `String` pelado— para
 /// poder crecer sin romper nodos ya firmados: adjuntos como objetos del grafo,
 /// ediciones con procedencia, reacciones, lienzos derivados (traducción /
@@ -49,6 +107,10 @@ pub enum Carga {
     /// al transporte: la red mueve un nodo con carga `Cifrado` sin enterarse de
     /// que lo es —no hay nada que adaptar aguas abajo—.
     Cifrado(Vec<u8>),
+    /// Un ADJUNTO: una referencia viva a un objeto del grafo (P5). No copia los
+    /// bytes —cita su hash—; los bytes viajan aparte como blob y se verifican
+    /// contra la referencia. Ver [`Adjunto`].
+    Adjunto(Adjunto),
 }
 
 impl Carga {
@@ -58,16 +120,24 @@ impl Carga {
     pub fn texto(&self) -> Option<&str> {
         match self {
             Carga::Texto(t) => Some(t),
-            Carga::Cifrado(_) => None,
+            _ => None,
         }
     }
 
     /// El blob AEAD cuando la carga está cifrada — lo que `CanalSeguro::descifrar`
-    /// consume. `None` si la carga es texto plano.
+    /// consume. `None` en otro caso.
     pub fn cifrado(&self) -> Option<&[u8]> {
         match self {
             Carga::Cifrado(b) => Some(b),
-            Carga::Texto(_) => None,
+            _ => None,
+        }
+    }
+
+    /// La referencia de adjunto cuando la carga es un adjunto. `None` en otro caso.
+    pub fn adjunto(&self) -> Option<&Adjunto> {
+        match self {
+            Carga::Adjunto(a) => Some(a),
+            _ => None,
         }
     }
 }

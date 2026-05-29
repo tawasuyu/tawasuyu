@@ -29,12 +29,12 @@ mod nodo;
 
 pub use conversacion::Conversacion;
 pub use error::ErrorAyni;
-pub use nodo::{Carga, Contenido, MensajeNodo, VERSION_NODO};
+pub use nodo::{Adjunto, Carga, Contenido, MensajeNodo, VERSION_NODO};
 
 // Re-export de los tipos del grafo soberano que un consumidor de Ayni maneja
 // constantemente, para que no tenga que depender de `format` por separado sólo
 // para nombrar un id o una identidad.
-pub use format::{AgoraId, Firma, Hash};
+pub use format::{hash, AgoraId, Firma, Hash};
 
 #[cfg(test)]
 mod tests {
@@ -238,6 +238,25 @@ mod tests {
         conv.publicar_texto(autor, "uno", 1, firmar_con(&sk)).unwrap();
         conv.publicar_texto(autor, "dos", 2, firmar_con(&sk)).unwrap();
         assert!(conv.verificar_firmas(verificador).is_ok());
+    }
+
+    #[test]
+    fn adjunto_referencia_viva_por_hash() {
+        let bytes = b"# Documento\nun cuerpo de pluma cualquiera";
+        let adj = nodo::Adjunto::de_bytes("pluma", "text/markdown", "doc.md", bytes);
+        assert_eq!(adj.tamano, bytes.len() as u64);
+        assert_eq!(adj.hash, format::hash(bytes), "el hash es el del contenido");
+        assert!(adj.verifica(bytes), "los bytes correctos verifican");
+        assert!(!adj.verifica(b"otros bytes"), "bytes ajenos no verifican");
+
+        // un nodo con adjunto: la referencia viaja firmada; texto() es None.
+        let sk = clave(5);
+        let autor = autor_de(&sk);
+        let conv = Conversacion::nueva();
+        let n = conv.redactar(autor, Carga::Adjunto(adj.clone()), 1, firmar_con(&sk));
+        assert!(n.verificar(verificador), "la referencia va firmada");
+        assert_eq!(n.contenido.carga.texto(), None);
+        assert_eq!(n.contenido.carga.adjunto(), Some(&adj));
     }
 
     #[test]

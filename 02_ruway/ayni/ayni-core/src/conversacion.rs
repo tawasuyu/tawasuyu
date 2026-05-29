@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 use format::{AgoraId, Firma, Hash};
 
 use crate::error::ErrorAyni;
-use crate::nodo::{Carga, Contenido, MensajeNodo, VERSION_NODO};
+use crate::nodo::{Adjunto, Carga, Contenido, MensajeNodo, VERSION_NODO};
 
 /// El grafo de una conversación: nodos direccionados por su id.
 ///
@@ -145,6 +145,19 @@ impl Conversacion {
             }
         }
         nuevos
+    }
+
+    /// Todos los adjuntos referenciados por los nodos del grafo (P5). Es la
+    /// lista de blobs que la conversación cita por hash; el llamador compara
+    /// contra su almacén de blobs para saber cuáles le faltan y pedirlos.
+    pub fn adjuntos_referenciados(&self) -> Vec<Adjunto> {
+        self.nodos
+            .values()
+            .filter_map(|n| match &n.contenido.carga {
+                Carga::Adjunto(a) => Some(a.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// El nodo de un id, si está presente.

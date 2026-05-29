@@ -38,7 +38,7 @@ reproducible.
 | `ayni-core`    | DAG de mensajes firmados, direccionado por contenido (no_std)  | ✅ P0  |
 | `ayni-crypto`  | firma Ed25519 sobre agora ✅ + E2EE 1:1 (X25519/HKDF/ChaCha) ✅ | ✅ P2  |
 | `ayni-sync`    | `Transporte` + `EnlaceTcp` + anti-entropía (diff Merkle) ✅; (P3) `EnlaceMinga` | ✅ P3 |
-| `ayni-store`   | persistencia del DAG sobre sled (local-first, store-and-forward) | ✅ P3 |
+| `ayni-store`   | persistencia del DAG + blobs de adjuntos (dedup) sobre sled    | ✅ P3/P5 |
 | `ayni-cli`     | chat headless de terminal (bin `ayni`)                         | ✅ P1  |
 | `ayni-llimphi` | UI Llimphi (frontend intercambiable sobre `ayni-core`)         | ✅ P1  |
 | `ayni-index`   | búsqueda semántica local (rimay embeddings + coseno)           | ✅ P4  |
@@ -90,7 +90,16 @@ y se verifica por *closure*; las primitivas Ed25519/MLS viven en `ayni-crypto`.
   `ayni-ai` (multilienzo: traducir/resumir/tono vía la fachada `pluma-llm`,
   Mock determinista sin credenciales). "Máquina propone, humano firma": la IA
   redacta, no envía sola.
-- **P5 — cross-app**: adjuntar objetos del grafo (pluma/khipu/cosmos vivos).
+- **P5 — cross-app** ✅ *(modelo+protocolo+store; UX de adjuntar en CLI/UI pendiente)*:
+  `Carga::Adjunto(Adjunto)` — una REFERENCIA VIVA por hash a un objeto del grafo
+  (pluma/khipu/cosmos/archivo), no una copia muerta. La referencia viaja DENTRO
+  del contenido firmado (intacta, infalsificable); los bytes viajan aparte como
+  blob direccionado por hash, con **dedup** (mismo objeto = un solo blob) y
+  **verificación** por contenido al recibir (`Adjunto::verifica`). `ayni-store`
+  guarda blobs (árbol aparte); `ayni-sync` los reconcilia (`PedirBlob`/`Blob` +
+  `blobs_faltantes`/`servir_blobs`/`blob_valido`). El mismo hash en el grafo de
+  la app de origen y en el adjunto apuntan al mismo objeto — editar en origen da
+  otro hash (otra versión): referencias vivas, no copias.
 - **P6 — Ayni en wawa**: app WASM/akasha reusando `ayni-core` no_std.
 - **P7 — confianza/UX**: grafo agora, membresía firmada, recibos simétricos.
 
