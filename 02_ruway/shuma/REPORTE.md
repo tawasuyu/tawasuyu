@@ -242,10 +242,23 @@ F3. Editor multi-línea: `shuma-line::continuation::needs_continuation` ya está
 | ✅ | D1..D3 — wawa watcher + theme/lang live | preferencias unificadas | hecho 2026-05-28 |
 | ✅ | E1 E3 E4 — limpieza | SO_PEERCRED, parser bindings, lienzo | hecho 2026-05-28 |
 | ✅ | F2 F3 F1 — features grandes | jobs, multi-línea, lienzo | hecho 2026-05-28 |
+| ✅ | shell↔canvas live | runs del shell aparecen como `%cN` en el lienzo | hecho 2026-05-29 |
 | ⏳ | E2 — hover trigger drawer | requiere WIP llimphi-ui (pointer events) | bloqueado |
 
-Pendientes opcionales (cosas que el reporte mencionó como "futuro"):
-- Integración shell↔canvas: `shuma-module-shell` registra cada run en el `SessionGraph` del `shuma-module-canvas` activo (hoy el canvas vive como módulo standalone con demo).
+**Integración shell↔canvas (2026-05-29).** `shuma-module-shell` mantiene
+su propio `SessionGraph` (campo `intent_graph` en `State`) y registra
+cada `start_run` como `%cN`. `drain_run` acumula bytes de
+stdout/stderr/raw y al cerrar el run llama `complete(id, ok, bytes)` —
+nodo verde si `exit 0`, rojo en cualquier otro caso (incluidos errores
+de spawn del backend remoto). Builtins (`cd`/`pwd`/`clear`/`exit` y los
+`:jobs/:term/:stop/:cont`) no entran al grafo. El chasis añadió
+`Kind::Canvas` con tab nuevo "Lienzo" en el drawer por defecto; cada
+`SHELL_TICK` (~100 ms) `sync_canvas_from_primary_shell` empuja el grafo
+del primer shell encontrado a todas las instancias canvas con
+`Msg::SyncGraph(graph)`. El lienzo refleja al instante el flujo de la
+sesión (3 tests nuevos en `shell` + 1 en `canvas`).
+
+Pendientes opcionales restantes:
 - Mouse en el PTY (vt100 ya parsea; falta cablear el mouse de Llimphi).
 - Tooltip "what would clicking this do?" en decoraciones (espera al hover de llimphi-ui).
 

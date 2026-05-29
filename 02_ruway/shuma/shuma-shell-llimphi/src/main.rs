@@ -91,6 +91,7 @@ enum Kind {
     Shell,
     Matilda,
     Minga,
+    Canvas,
 }
 
 impl Kind {
@@ -103,6 +104,7 @@ impl Kind {
             Kind::Shell => shuma_module_shell::ID,
             Kind::Matilda => shuma_module_matilda::ID,
             Kind::Minga => shuma_module_minga::ID,
+            Kind::Canvas => shuma_module_canvas::ID,
         }
     }
 }
@@ -117,6 +119,7 @@ enum ModuleState {
     // de bytes); boxearlo mantiene el enum ModuleState compacto.
     Matilda(Box<shuma_module_matilda::State>),
     Minga(shuma_module_minga::State),
+    Canvas(shuma_module_canvas::State),
 }
 
 /// Una instancia activa de un módulo. `kind` + `state` deben coincidir
@@ -182,6 +185,14 @@ impl Instance {
             state: ModuleState::Minga(shuma_module_minga::State::new(source)),
         }
     }
+
+    fn canvas(label: String) -> Self {
+        Self {
+            kind: Kind::Canvas,
+            label,
+            state: ModuleState::Canvas(shuma_module_canvas::State::new()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +203,7 @@ enum ModuleMsg {
     Shell(shuma_module_shell::Msg),
     Matilda(shuma_module_matilda::Msg),
     Minga(shuma_module_minga::Msg),
+    Canvas(shuma_module_canvas::Msg),
 }
 
 // ─── Slot del chasis al que va un Msg de módulo ────────────────────
@@ -316,11 +328,14 @@ impl App for Shell {
         let main = resolve_slot(cfg.main.as_ref());
 
         let drawer_tabs = if cfg.drawer.tabs.is_empty() {
-            // Default cuando no hay `[[drawer.tabs]]`: shell + matilda
-            // locales para que el chasis sea exploratorio desde el día
-            // uno sin que el usuario tenga que escribir un shumarc.
+            // Default cuando no hay `[[drawer.tabs]]`: shell + lienzo +
+            // matilda locales para que el chasis sea exploratorio desde
+            // el día uno sin que el usuario tenga que escribir un shumarc.
+            // El lienzo se mantiene en sync con el grafo del shell cada
+            // `SHELL_TICK` (~100 ms).
             vec![
                 Instance::shell(rimay_localize::t("shuma-label-shell"), Source::Local),
+                Instance::canvas(rimay_localize::t("shuma-label-canvas")),
                 Instance::matilda(rimay_localize::t("shuma-label-matilda"), Source::Local),
             ]
         } else {
@@ -548,6 +563,7 @@ fn resolve_instance(
             label, source, inventory,
         )),
         shuma_module_minga::ID => Some(Instance::minga(label, source)),
+        shuma_module_canvas::ID => Some(Instance::canvas(label)),
         unknown => {
             eprintln!("shuma: módulo desconocido «{unknown}» — se ignora");
             None
@@ -600,6 +616,7 @@ fn collect_contributions(model: &Model) -> Vec<(Slot, ModuleContributions)> {
             ModuleState::Shell(s) => shuma_module_shell::contributions(s),
             ModuleState::Matilda(s) => shuma_module_matilda::contributions(s),
             ModuleState::Minga(s) => shuma_module_minga::contributions(s),
+            ModuleState::Canvas(s) => shuma_module_canvas::contributions(s),
         };
         out.push((slot, c));
     };
@@ -642,6 +659,10 @@ fn sample_extra_monitors(m: &mut Model) {
 /// Aplica `Msg::Tick` a cada `Instance` de tipo `Shell` activa para que
 /// drene la salida streamed de `shuma-exec`. Llamado a cadencia rápida
 /// (`SHELL_TICK`) sin tocar el muestreo de sysmon (`TICK`).
+///
+/// Después de drenar, sincroniza el `intent_graph` de la primera shell
+/// encontrada hacia todas las instancias `Canvas` activas — el lienzo
+/// de contexto refleja en tiempo real los `%cN`/`%pN` del shell.
 fn drain_shell_instances(m: &mut Model) {
     fn tick_one(inst: &mut Instance) {
         if let ModuleState::Shell(s) = &mut inst.state {
@@ -660,6 +681,64 @@ fn drain_shell_instances(m: &mut Model) {
     for inst in m.drawer_tabs.iter_mut() {
         tick_one(inst);
     }
+    sync_canvas_from_primary_shell(m);
+}
+
+/// Toma el `intent_graph` de la primera instancia `Shell` encontrada
+/// (en orden: topbar, bottombar, main, drawer tabs) y lo empuja a cada
+/// instancia `Canvas` activa vía `Msg::SyncGraph`. Si no hay shells, el
+/// canvas mantiene lo último que tenía (incluyendo su grafo de demo).
+fn sync_canvas_from_primary_shell(m: &mut Model) {
+    let snapshot = find_primary_shell_graph(m);
+    let Some(graph) = snapshot else { return };
+    let sync_one = |inst: &mut Instance| {
+        if let ModuleState::Canvas(s) = &mut inst.state {
+            *s = shuma_module_canvas::update(
+                s.clone(),
+                shuma_module_canvas::Msg::SyncGraph(graph.clone()),
+            );
+        }
+    };
+    if let Some(inst) = m.topbar.as_mut() {
+        sync_one(inst);
+    }
+    if let Some(inst) = m.bottombar.as_mut() {
+        sync_one(inst);
+    }
+    if let Some(inst) = m.main.as_mut() {
+        sync_one(inst);
+    }
+    for inst in m.drawer_tabs.iter_mut() {
+        sync_one(inst);
+    }
+}
+
+fn find_primary_shell_graph(m: &Model) -> Option<shuma_intent::SessionGraph> {
+    let pick = |inst: &Instance| match &inst.state {
+        ModuleState::Shell(s) => Some(s.intent_graph().clone()),
+        _ => None,
+    };
+    if let Some(inst) = m.topbar.as_ref() {
+        if let Some(g) = pick(inst) {
+            return Some(g);
+        }
+    }
+    if let Some(inst) = m.bottombar.as_ref() {
+        if let Some(g) = pick(inst) {
+            return Some(g);
+        }
+    }
+    if let Some(inst) = m.main.as_ref() {
+        if let Some(g) = pick(inst) {
+            return Some(g);
+        }
+    }
+    for inst in &m.drawer_tabs {
+        if let Some(g) = pick(inst) {
+            return Some(g);
+        }
+    }
+    None
 }
 
 fn monitor_key(slot: &Slot, spec: &MonitorSpec) -> String {
@@ -982,6 +1061,7 @@ fn dispatch_to_module(slot: &Slot, model: &Model, action_id: &str) -> Option<Mod
         Kind::Shell => shuma_module_shell::dispatch(action_id).map(ModuleMsg::Shell),
         Kind::Matilda => shuma_module_matilda::dispatch(action_id).map(ModuleMsg::Matilda),
         Kind::Minga => shuma_module_minga::dispatch(action_id).map(ModuleMsg::Minga),
+        Kind::Canvas => shuma_module_canvas::dispatch(action_id).map(ModuleMsg::Canvas),
     }
 }
 
@@ -1001,6 +1081,9 @@ fn route_to_instance(inst: &mut Instance, msg: ModuleMsg) {
         }
         (ModuleState::Minga(s), ModuleMsg::Minga(m)) => {
             *s = shuma_module_minga::update(s.clone(), m);
+        }
+        (ModuleState::Canvas(s), ModuleMsg::Canvas(m)) => {
+            *s = shuma_module_canvas::update(s.clone(), m);
         }
         // Combinación inconsistente (state ≠ msg kind): no hace nada.
         // El registry no debería emitirlos; si pasa es un bug del chasis.
@@ -1091,6 +1174,11 @@ fn render_main_layer(model: &Model, theme: &Theme) -> View<Msg> {
             (Kind::Minga, ModuleState::Minga(state)) => {
                 shuma_module_minga::view::<Msg>(state, theme, |m| {
                     Msg::Module(Slot::Main, ModuleMsg::Minga(m))
+                })
+            }
+            (Kind::Canvas, ModuleState::Canvas(state)) => {
+                shuma_module_canvas::view::<Msg>(state, theme, |m| {
+                    Msg::Module(Slot::Main, ModuleMsg::Canvas(m))
                 })
             }
             _ => placeholder(theme, &rimay_localize::t("shuma-empty-main-incompat")),
@@ -1207,6 +1295,7 @@ fn drawer_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         ModuleState::Shell(s) => shuma_module_shell::contributions(s),
         ModuleState::Matilda(s) => shuma_module_matilda::contributions(s),
         ModuleState::Minga(s) => shuma_module_minga::contributions(s),
+        ModuleState::Canvas(s) => shuma_module_canvas::contributions(s),
     };
 
     if contribs.shortcuts.is_empty() {
@@ -1310,6 +1399,11 @@ fn drawer_tab_content(model: &Model, theme: &Theme) -> View<Msg> {
         (Kind::Minga, ModuleState::Minga(state)) => {
             shuma_module_minga::view::<Msg>(state, theme, move |m| {
                 Msg::Module(Slot::DrawerTab(idx), ModuleMsg::Minga(m))
+            })
+        }
+        (Kind::Canvas, ModuleState::Canvas(state)) => {
+            shuma_module_canvas::view::<Msg>(state, theme, move |m| {
+                Msg::Module(Slot::DrawerTab(idx), ModuleMsg::Canvas(m))
             })
         }
         // Otros Kinds (Launcher/CommandBar) no tienen sentido como tab;

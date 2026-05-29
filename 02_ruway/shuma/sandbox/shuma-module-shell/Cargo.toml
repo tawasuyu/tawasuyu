@@ -15,6 +15,7 @@ shuma-protocol = { path = "../shuma-protocol" }
 shuma-link = { path = "../shuma-link" }
 shuma-line = { path = "../shuma-line" }
 shuma-history = { path = "../shuma-history" }
+shuma-intent = { path = "../shuma-intent" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }

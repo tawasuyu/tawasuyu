@@ -200,6 +200,7 @@ shuma-label-launcher = Launcher
 shuma-label-command = Command
 shuma-label-shell = Shell
 shuma-label-matilda = Matilda
+shuma-label-canvas = Lienzo
 shuma-empty-main-incompat = Módulo Main no compatible
 shuma-empty-no-main = Sin módulo Main configurado.
 shuma-empty-no-main-hint = F12 abre el drawer con shell + monitores. Click en la command bar también.

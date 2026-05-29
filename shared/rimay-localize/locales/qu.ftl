@@ -203,6 +203,7 @@ shuma-label-launcher = Launcher
 shuma-label-command = Kamachiq
 shuma-label-shell = Shell
 shuma-label-matilda = Matilda
+shuma-label-canvas = Rikukuy
 shuma-empty-main-incompat = Main yanapakuq mana atinmanchu
 shuma-empty-no-main = Mana Main yanapakuq churasqa.
 shuma-empty-no-main-hint = F12 drawer-ta kichan shell + qhawanakunawan. Command bar-pi click-pis.

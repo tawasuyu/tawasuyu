@@ -38,6 +38,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_theme::Theme;
 use shuma_exec::{CommandSpec, Exec, Killer, RunEvent, RunHandle, StageSpec};
+use shuma_intent::SessionGraph;
 use shuma_remote_exec::RemoteRunHandle;
 use shuma_line::{LineState, TokenKind};
 use shuma_module::{ModuleContributions, ShortcutSpec, Source};
@@ -245,6 +246,16 @@ pub struct State {
     /// buffer prefijado por `[N]`. Builtins `:jobs`, `:term N`,
     /// `:stop N`, `:cont N` operan sobre estos.
     pub bg_jobs: Vec<Arc<Mutex<ActiveRun>>>,
+    /// Grafo de intenciones de la sesión — alimenta el lienzo de
+    /// contexto (`shuma-module-canvas`). Cada `start_run` registra un
+    /// nodo `%cN` y `drain_run` lo cierra con el status del exit.
+    pub intent_graph: SessionGraph,
+    /// `%cN` del run en foreground actual; `None` cuando no hay nada
+    /// corriendo. Se setea en `start_run` y se consume en `drain_run`.
+    pub current_run_node: Option<u32>,
+    /// Bytes acumulados de stdout+stderr del run actual; se vuelca al
+    /// nodo del grafo cuando el comando cierra (`complete`).
+    pub current_run_bytes: u64,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -273,6 +284,9 @@ impl State {
             history_search: None,
             last_tui_rect: Arc::new(Mutex::new((0.0, 0.0))),
             bg_jobs: Vec::new(),
+            intent_graph: SessionGraph::new(),
+            current_run_node: None,
+            current_run_bytes: 0,
         }
     }
 
@@ -284,6 +298,12 @@ impl State {
     /// `true` si hay un comando ejecutándose ahora.
     pub fn is_running(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// Snapshot del grafo de intenciones — el chasis lo lee cada tick
+    /// y lo sincroniza al `shuma-module-canvas` activo.
+    pub fn intent_graph(&self) -> &SessionGraph {
+        &self.intent_graph
     }
 }
 
@@ -1106,6 +1126,12 @@ fn start_bg(mut s: State, line: String) -> State {
 fn start_run(mut s: State, line: String) -> State {
     let cwd_str = s.cwd.display().to_string();
     let (spec, tui) = build_spec(&line, &cwd_str);
+    // Registramos la intención antes de hacer spawn — si el spawn
+    // remoto falla, igual queda el nodo `%cN` con status `Failed`
+    // marcado más abajo (vía el RunEvent::Failed que retorna el
+    // backend). El lienzo refleja el intento.
+    s.current_run_node = Some(s.intent_graph.record(line.clone()));
+    s.current_run_bytes = 0;
     let active = match &s.source {
         Source::Local => {
             // Camino histórico — exec directo sobre esta máquina.
@@ -1151,6 +1177,7 @@ fn start_run(mut s: State, line: String) -> State {
                             &mut s.output,
                             OutputLine::notice(format!("✘ daemon: {e}")),
                         );
+                        fail_pending_intent(&mut s);
                         return s;
                     }
                 }
@@ -1178,6 +1205,7 @@ fn start_run(mut s: State, line: String) -> State {
                             &mut s.output,
                             OutputLine::notice(format!("✘ identity: {e}")),
                         );
+                        fail_pending_intent(&mut s);
                         return s;
                     }
                 };
@@ -1188,6 +1216,7 @@ fn start_run(mut s: State, line: String) -> State {
                             &mut s.output,
                             OutputLine::notice(format!("✘ server_pub_hex: {e}")),
                         );
+                        fail_pending_intent(&mut s);
                         return s;
                     }
                 };
@@ -1203,6 +1232,7 @@ fn start_run(mut s: State, line: String) -> State {
                             &mut s.output,
                             OutputLine::notice(format!("✘ daemon tcp: {e}")),
                         );
+                        fail_pending_intent(&mut s);
                         return s;
                     }
                 }
@@ -1230,6 +1260,17 @@ fn start_run(mut s: State, line: String) -> State {
     };
     s.running = Some(Arc::new(Mutex::new(active)));
     s
+}
+
+/// Cierra el nodo `%cN` registrado por `start_run` como fallido cuando
+/// el spawn no llega a colocar el `RunHandle` (errores de socket/identity/
+/// pub-hex/tcp). Sin esto el lienzo mostraría el comando como "running"
+/// para siempre. Limpiá también el contador de bytes.
+fn fail_pending_intent(s: &mut State) {
+    if let Some(id) = s.current_run_node.take() {
+        s.intent_graph.complete(id, false, 0);
+    }
+    s.current_run_bytes = 0;
 }
 
 /// Carga el `Keypair` del shell desde el archivo de identidad,
@@ -1332,8 +1373,17 @@ fn drain_run(mut s: State) -> State {
         let events = guard.handle.try_events();
         for ev in events {
             match ev {
-                RunEvent::Stdout(line) => push_line(&mut s.output, OutputLine::stdout(line)),
-                RunEvent::Stderr(line) => push_line(&mut s.output, OutputLine::stderr(line)),
+                RunEvent::Stdout(line) => {
+                    // +1 por el `\n` implícito de cada línea drenada.
+                    s.current_run_bytes =
+                        s.current_run_bytes.saturating_add(line.len() as u64 + 1);
+                    push_line(&mut s.output, OutputLine::stdout(line));
+                }
+                RunEvent::Stderr(line) => {
+                    s.current_run_bytes =
+                        s.current_run_bytes.saturating_add(line.len() as u64 + 1);
+                    push_line(&mut s.output, OutputLine::stderr(line));
+                }
                 RunEvent::Truncated => push_line(
                     &mut s.output,
                     OutputLine::notice("… (salida truncada por límite de captura)"),
@@ -1343,6 +1393,8 @@ fn drain_run(mut s: State) -> State {
                     OutputLine::notice(format!("… (resto volcado a {path})")),
                 ),
                 RunEvent::Bytes(bytes) => {
+                    s.current_run_bytes =
+                        s.current_run_bytes.saturating_add(bytes.len() as u64);
                     if let Some(tui) = guard.tui.as_mut() {
                         tui.parser.process(&bytes);
                     }
@@ -1354,6 +1406,7 @@ fn drain_run(mut s: State) -> State {
         }
     }
     if let Some(ev) = finished_with {
+        let ok = matches!(ev, RunEvent::Exited(0));
         let notice = match ev {
             RunEvent::Exited(0) => "✔ exit 0".to_string(),
             RunEvent::Exited(code) => format!("✘ exit {code}"),
@@ -1361,6 +1414,12 @@ fn drain_run(mut s: State) -> State {
             _ => unreachable!(),
         };
         push_line(&mut s.output, OutputLine::notice(notice));
+        // Cerrá el nodo del grafo de intenciones — el lienzo lo refleja
+        // como verde/rojo en el próximo render.
+        if let Some(id) = s.current_run_node.take() {
+            s.intent_graph.complete(id, ok, s.current_run_bytes);
+        }
+        s.current_run_bytes = 0;
         s.running = None;
         // Si quedó algo en cola, arrancarlo ya — sin esperar otro Tick.
         if let Some(next) = s.queue.pop_front() {
@@ -2891,5 +2950,56 @@ mod tests {
         };
         s = update(s, Msg::Key(key));
         assert_eq!(s.input.text(), "h");
+    }
+
+    #[test]
+    fn external_command_records_intention_in_graph() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        assert!(s.intent_graph().is_empty(), "grafo arranca vacío");
+        s.input.set_text("echo lienzo");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(
+            s.intent_graph().len(),
+            1,
+            "Enter debe registrar el `%c1` en el grafo"
+        );
+        assert_eq!(
+            s.intent_graph().commands()[0].intention,
+            "echo lienzo"
+        );
+        s = drain_until_idle(s);
+        let node = &s.intent_graph().commands()[0];
+        assert_eq!(node.status, shuma_intent::NodeStatus::Ok);
+        assert!(
+            node.output_bytes >= 7,
+            "esperaba ≥7 bytes (len de 'lienzo\\n'), recibí {}",
+            node.output_bytes
+        );
+    }
+
+    #[test]
+    fn failed_command_records_failed_status() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text("false");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        s = drain_until_idle(s);
+        assert_eq!(s.intent_graph().len(), 1);
+        assert_eq!(
+            s.intent_graph().commands()[0].status,
+            shuma_intent::NodeStatus::Failed
+        );
+    }
+
+    #[test]
+    fn builtin_does_not_register_in_graph() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("pwd");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(
+            s.intent_graph().is_empty(),
+            "builtins no entran al grafo de intenciones"
+        );
     }
 }

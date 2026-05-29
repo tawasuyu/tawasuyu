@@ -92,6 +92,11 @@ pub enum Msg {
     CollapseSucceeded,
     /// Limpiar el grafo entero.
     Reset,
+    /// Reemplazar el grafo completo con el snapshot que viene del
+    /// shell. El chasis lo dispara en cada `ShellTick` para mantener
+    /// el lienzo en sync con el `SessionGraph` del módulo shell.
+    /// Si el snapshot coincide con el grafo actual, el state queda igual.
+    SyncGraph(SessionGraph),
 }
 
 pub fn dispatch(action_id: &str) -> Option<Msg> {
@@ -116,6 +121,9 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::Reset => {
             s.graph = SessionGraph::new();
+        }
+        Msg::SyncGraph(graph) => {
+            s.graph = graph;
         }
     }
     s
@@ -443,6 +451,19 @@ mod tests {
         let s = State::demo();
         let s = update(s, Msg::Reset);
         assert!(s.graph.is_empty());
+    }
+
+    #[test]
+    fn sync_graph_replaces_state() {
+        // El chasis empuja el snapshot del shell — el canvas adopta el
+        // grafo entero sin reconciliar nodo por nodo.
+        let s = State::demo();
+        assert_eq!(s.graph.commands().len(), 4);
+        let mut other = SessionGraph::new();
+        other.record("ls -la");
+        let s = update(s, Msg::SyncGraph(other));
+        assert_eq!(s.graph.commands().len(), 1);
+        assert_eq!(s.graph.commands()[0].intention, "ls -la");
     }
 
     #[test]

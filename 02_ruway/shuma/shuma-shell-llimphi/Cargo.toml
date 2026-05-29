@@ -21,6 +21,8 @@ matilda-core = { path = "../baremetal/matilda-core" }
 shuma-module-minga = { path = "../sandbox/shuma-module-minga" }
 minga-core = { path = "../../../03_ukupacha/minga/minga-core" }
 shuma-module-shell = { path = "../sandbox/shuma-module-shell" }
+shuma-module-canvas = { path = "../sandbox/shuma-module-canvas" }
+shuma-intent = { path = "../sandbox/shuma-intent" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
