@@ -1,0 +1,19 @@
+[package]
+name = "pluma-notebook-kernel-tinkuy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — kernel de notebook que simula partículas Lennard-Jones con tinkuy-core y devuelve OutputPayload::Image{PNG visor} + observables como texto. Cierre del E5 del roadmap tinkuy."
+
+[dependencies]
+async-trait        = { workspace = true }
+png                = { workspace = true }
+pluma-notebook-core = { path = "../pluma-notebook-core" }
+pluma-notebook-exec = { path = "../pluma-notebook-exec" }
+tinkuy-core    = { path = "../../../01_yachay/tinkuy/tinkuy-core" }
+tinkuy-forces  = { path = "../../../01_yachay/tinkuy/tinkuy-forces" }
+
+[dev-dependencies]
+tokio = { workspace = true }
