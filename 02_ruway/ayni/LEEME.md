@@ -36,12 +36,12 @@ reproducible.
 | crate          | rol                                                            | estado |
 |----------------|----------------------------------------------------------------|--------|
 | `ayni-core`    | DAG de mensajes firmados, direccionado por contenido (no_std)  | ✅ P0  |
-| `ayni-crypto`  | MLS/OpenMLS + Ed25519/X25519 sobre identidad agora             | P2     |
-| `ayni-sync`    | transporte: chasqui (LAN) + minga (P2P) + akasha (wawa)        | P1/P3  |
+| `ayni-crypto`  | firma Ed25519 sobre agora ✅; (P2) E2EE 1:1                    | ✅ P1  |
+| `ayni-sync`    | trait `Transporte` + `EnlaceTcp` (LAN) ✅; (P3) minga/chasqui  | ✅ P1  |
+| `ayni-cli`     | chat headless de terminal (bin `ayni`)                         | ✅ P1  |
+| `ayni-llimphi` | UI Llimphi (frontend intercambiable sobre `ayni-core`)         | ✅ P1  |
 | `ayni-index`   | búsqueda semántica local (rimay embeddings)                    | P4     |
 | `ayni-ai`      | multilienzo (pluma-transform + rimay-localize + pluma-llm)     | P4     |
-| `ayni-llimphi` | UI (frontend intercambiable sobre `ayni-core`)                 | P1     |
-| `ayni-app` / `ayni-cli` | binarios                                              | P1     |
 
 `ayni-core` es `#![no_std] + alloc` **desde el día cero** — no parcheado
 después — para que el mismo núcleo viaje como app WASM dentro de wawa (P6) sin
@@ -55,8 +55,14 @@ y se verifica por *closure*; las primitivas Ed25519/MLS viven en `ayni-crypto`.
   firma sobre el id, operaciones de DAG (cabezas, raíces, orden topológico
   determinista, verificación de firmas). 12 tests, incl. bifurcación/reconciliación
   y firma Ed25519 real.
-- **P1 — primer lazo vivo**: chasqui LAN, 2 clientes, UI Llimphi MVP (fea).
-- **P2 — E2EE**: MLS 1:1 (`ayni-crypto`).
+- **P1 — primer lazo vivo** ✅ *(hecho)*: dos clientes chatean por LAN, mensajes
+  firmados Ed25519, grafos que convergen sin servidor. `ayni-crypto` (identidad +
+  firma), `ayni-sync` (trait `Transporte` + `EnlaceTcp` directo + `Fusionador`
+  con búfer de fuera-de-orden), `ayni-cli` (chat de terminal, probado vivo) y
+  `ayni-llimphi` (UI MVP). El transporte es TCP directo, no el daemon brahman de
+  chasqui (matchmaking app↔app, desproporcionado para chat humano); minga/chasqui
+  serán impls del mismo trait en P3.
+- **P2 — E2EE**: MLS 1:1 (`ayni-crypto::canal`). *(en curso)*
 - **P3 — sin servidor** *(HITO)*: sync P2P minga, DHT, store-and-forward.
 - **P4 — inteligencia local**: búsqueda rimay + traducir-al-llegar / resumen.
 - **P5 — cross-app**: adjuntar objetos del grafo (pluma/khipu/cosmos vivos).

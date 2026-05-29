@@ -164,6 +164,7 @@ members = [
     "02_ruway/ayni/ayni-crypto",
     "02_ruway/ayni/ayni-sync",
     "02_ruway/ayni/ayni-cli",
+    "02_ruway/ayni/ayni-llimphi",
     "02_ruway/chasqui/card-admin",
     "02_ruway/chasqui/card-handshake",
     "02_ruway/chasqui/card-sidecar",

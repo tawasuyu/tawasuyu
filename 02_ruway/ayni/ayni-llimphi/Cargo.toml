@@ -1,0 +1,32 @@
+# =============================================================================
+#  ayni :: ayni-llimphi — la cara gráfica del chat soberano
+# -----------------------------------------------------------------------------
+#  Frontend Llimphi (bucle Elm) sobre los `*-core` agnósticos: el estado es una
+#  Conversacion, el transporte un EnlaceTcp, la firma una Identidad. Un hilo de
+#  red bombea los EventoRed al `update` vía Handle::dispatch. MVP feo a propósito
+#  —lista de mensajes + input + enviar—: la funcionalidad antes que la estética.
+#
+#      AYNI_NOMBRE=Alicia AYNI_ESCUCHAR=127.0.0.1:7700 cargo run -p ayni-llimphi
+#      AYNI_NOMBRE=Beto AYNI_ESCUCHAR=127.0.0.1:7701 \
+#        AYNI_CONECTAR=127.0.0.1:7700 cargo run -p ayni-llimphi
+# =============================================================================
+
+[package]
+name = "ayni-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "ayni — UI Llimphi del chat soberano (P1): lista de mensajes + input, sobre EnlaceTcp"
+
+[[bin]]
+name = "ayni-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+ayni-core = { path = "../ayni-core" }
+ayni-crypto = { path = "../ayni-crypto" }
+ayni-sync = { path = "../ayni-sync" }
+llimphi-ui = { workspace = true }
+blake3 = { workspace = true }
