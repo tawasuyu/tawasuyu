@@ -155,6 +155,45 @@ globalThis.__puriy_tick = function(now) {
 };
 "#;
 
+/// Harness JS-puro de event handlers — el snapshot DOM puede indexar
+/// elementos con `id=` en `__puriy_elements[id]`. Cada uno expone
+/// `id`/`tagName`/`textContent`/`addEventListener`/`removeEventListener`
+/// + slots `on<type>` que el JS de usuario asigna libremente. El host
+/// llama `__puriy_dispatch(id, type)` cuando el usuario interactúa, y
+/// el harness corre `on<type>` (si existe) + cada listener registrado
+/// por `addEventListener`.
+///
+/// Excepciones DENTRO de un handler van a `__puriy_stderr` sin abortar
+/// el dispatch — los demás handlers del evento siguen ejecutándose.
+/// `__puriy_dispatch` devuelve cuántos handlers corrieron (útil para
+/// que el chrome decida si fallback al behavior default).
+const EVENTS_BOOTSTRAP: &str = r#"
+globalThis.__puriy_elements = {};
+globalThis.__puriy_dispatch = function(id, type) {
+    var el = globalThis.__puriy_elements[id];
+    if (!el) return 0;
+    // count = cuántos handlers se DISPARARON, hayan o no tirado. El
+    // chrome lo usa para decidir fallback (count==0 => default action).
+    var count = 0;
+    var onName = 'on' + type;
+    if (typeof el[onName] === 'function') {
+        count++;
+        try { el[onName](); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+    var ls = el._listeners && el._listeners[type];
+    if (ls) {
+        var arr = ls.slice();
+        for (var i = 0; i < arr.length; i++) {
+            count++;
+            try { arr[i](); }
+            catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+        }
+    }
+    return count;
+};
+"#;
+
 /// Script que escupe el contenido de `__puriy_stdout`/`__puriy_stderr`
 /// concatenados, los vacía, y devuelve un string con ambos separados
 /// por `'SOH'` (SOH — Start Of Header, control char no-printable
@@ -312,6 +351,11 @@ impl JsRuntime {
         // sólo necesita actualizar `__puriy_now_ms` antes de cada eval
         // y llamar `__puriy_tick(now)` en su poll loop.
         rt.eval_raw(TIMERS_BOOTSTRAP)?;
+        // Bootstrap events — índice `__puriy_elements` + `__puriy_dispatch`.
+        // El chrome llama `set_elements` con la lista de elementos del
+        // DOM que tienen `id=`, y luego `dispatch_event(id, type)` cuando
+        // el usuario interactúa con uno de ellos.
+        rt.eval_raw(EVENTS_BOOTSTRAP)?;
         Ok(rt)
     }
 
@@ -463,8 +507,16 @@ impl JsRuntime {
                 URL: {u}, \
                 readyState: 'complete', \
                 body: {{ textContent: {b}, innerHTML: {b} }}, \
-                getElementById: function(_id) {{ return null; }}, \
-                querySelector: function(_sel) {{ return null; }}, \
+                getElementById: function(id) {{ \
+                    return (globalThis.__puriy_elements && globalThis.__puriy_elements[id]) || null; \
+                }}, \
+                querySelector: function(sel) {{ \
+                    if (typeof sel === 'string' && sel.charAt(0) === '#') {{ \
+                        var id = sel.slice(1); \
+                        return (globalThis.__puriy_elements && globalThis.__puriy_elements[id]) || null; \
+                    }} \
+                    return null; \
+                }}, \
                 querySelectorAll: function(_sel) {{ return []; }} \
             }}; \
             globalThis.window = globalThis; \
@@ -475,6 +527,74 @@ impl JsRuntime {
         );
         self.eval_raw(&script)?;
         Ok(())
+    }
+
+    /// Inyecta el snapshot de elementos del DOM que tienen atributo
+    /// `id=`. Cada uno se indexa en `globalThis.__puriy_elements[id]`
+    /// con propiedades `id`/`tagName`/`textContent`, un `_listeners: {}`
+    /// para `addEventListener`, y los métodos `addEventListener`/
+    /// `removeEventListener`. `onclick`/`onload`/etc. se asignan
+    /// directamente como propiedades del objeto (sin getter/setter
+    /// magia).
+    ///
+    /// Idempotente — llamarla varias veces resetea el índice. Llamada
+    /// post-`set_document` por el chrome en cada `Msg::Loaded`. Para
+    /// Fase 7.5b sólo elementos con `id=` se exponen; selectores CSS
+    /// más ricos requerirán un index secundario por classname/tag.
+    pub fn set_elements(&mut self, elements: &[ElementSnapshot]) -> Result<(), JsError> {
+        // Construir el script en una sola pasada — un eval por entrada
+        // sería ~N evals para una página con N elementos id.
+        let mut script = String::from("globalThis.__puriy_elements = {};\n");
+        for el in elements {
+            let id_lit = js_string_literal(&el.id);
+            script.push_str(&format!(
+                "globalThis.__puriy_elements[{id}] = {{ \
+                    id: {id}, \
+                    tagName: {tag}, \
+                    textContent: {text}, \
+                    _listeners: {{}}, \
+                    addEventListener: function(type, fn) {{ \
+                        if (!this._listeners[type]) this._listeners[type] = []; \
+                        this._listeners[type].push(fn); \
+                    }}, \
+                    removeEventListener: function(type, fn) {{ \
+                        if (!this._listeners[type]) return; \
+                        var i = this._listeners[type].indexOf(fn); \
+                        if (i >= 0) this._listeners[type].splice(i, 1); \
+                    }} \
+                }};\n",
+                id = id_lit,
+                tag = js_string_literal(&el.tag_name),
+                text = js_string_literal(&el.text_content),
+            ));
+        }
+        self.eval_raw(&script).map(|_| ())
+    }
+
+    /// Dispara los handlers `on<event_type>` y cada listener
+    /// registrado por `addEventListener(event_type, ...)` sobre el
+    /// elemento `element_id`. Devuelve cuántos handlers corrieron — el
+    /// chrome usa ese count para decidir si fallback al comportamiento
+    /// default (ej. navegar el link).
+    ///
+    /// Si el elemento no existe en el índice (`getElementById` daría
+    /// null), devuelve `0` sin error. Excepciones DENTRO de un handler
+    /// van a stderr pero no interrumpen los demás.
+    pub fn dispatch_event(
+        &mut self,
+        element_id: &str,
+        event_type: &str,
+    ) -> Result<u32, JsError> {
+        let script = format!(
+            "globalThis.__puriy_dispatch({id}, {type_})",
+            id = js_string_literal(element_id),
+            type_ = js_string_literal(event_type),
+        );
+        let v = self.eval(&script)?;
+        Ok(match v {
+            JsValue::Number(n) if n >= 0.0 => n as u32,
+            _ => 0,
+        })
     }
 
     /// Actualiza `globalThis.__puriy_now_ms` para que `setTimeout` y
@@ -774,6 +894,18 @@ impl JsValue {
 pub struct TickResult {
     pub fired: u32,
     pub remaining: u32,
+}
+
+/// Snapshot de un elemento del DOM al momento del load. Pasado por el
+/// chrome a [`JsRuntime::set_elements`] para que `getElementById` y los
+/// event handlers funcionen. Fase 7.5b sólo expone los elementos con
+/// `id=` (matchea `getElementById`); selectores CSS más complejos
+/// requerirán un índice secundario.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElementSnapshot {
+    pub id: String,
+    pub tag_name: String,
+    pub text_content: String,
 }
 
 /// Errores devueltos por el runtime.
@@ -1535,6 +1667,173 @@ mod tests {
         let r = rt.tick(0).expect("tick mismo instante");
         assert_eq!(r.fired, 1);
         assert_eq!(rt.stdout(), "now\n");
+    }
+
+    fn snap(id: &str, tag: &str, text: &str) -> ElementSnapshot {
+        ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: text.into(),
+        }
+    }
+
+    #[test]
+    fn get_element_by_id_devuelve_el_indexado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("hero", "h1", "Hola mundo")]).expect("e");
+        let v = rt.eval("document.getElementById('hero').tagName").expect("e");
+        assert_eq!(v, JsValue::String("h1".into()));
+        let v = rt.eval("document.getElementById('hero').textContent").expect("e");
+        assert_eq!(v, JsValue::String("Hola mundo".into()));
+        let v = rt.eval("document.getElementById('inexistente')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn query_selector_id_consulta_indice() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "contenido")]).expect("e");
+        let v = rt.eval("document.querySelector('#x').id").expect("e");
+        assert_eq!(v, JsValue::String("x".into()));
+        // Selectores no-id siguen devolviendo null en esta fase.
+        let v = rt.eval("document.querySelector('.foo')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn add_event_listener_se_registra_y_dispara() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "click me")]).expect("e");
+        rt.eval(
+            "document.getElementById('btn').addEventListener('click', \
+                function(){ console.log('clicked') })",
+        )
+        .expect("e");
+        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        assert_eq!(count, 1);
+        assert_eq!(rt.stdout(), "clicked\n");
+    }
+
+    #[test]
+    fn onclick_property_se_dispara_igual_que_listener() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "x")]).expect("e");
+        rt.eval(
+            "document.getElementById('btn').onclick = function(){ console.log('on') }",
+        )
+        .expect("e");
+        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        assert_eq!(count, 1);
+        assert_eq!(rt.stdout(), "on\n");
+    }
+
+    #[test]
+    fn onclick_y_listeners_disparan_ambos() {
+        // Si setear `.onclick = fn` Y registrar listener via
+        // addEventListener, ambos corren.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "x")]).expect("e");
+        rt.eval(
+            "var el = document.getElementById('btn'); \
+             el.onclick = function(){ console.log('property') }; \
+             el.addEventListener('click', function(){ console.log('listener') });",
+        )
+        .expect("e");
+        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        assert_eq!(count, 2);
+        assert_eq!(rt.stdout(), "property\nlistener\n");
+    }
+
+    #[test]
+    fn dispatch_sobre_id_inexistente_devuelve_cero() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[]).expect("e");
+        let count = rt.dispatch_event("fantasma", "click").expect("dispatch");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn remove_event_listener_cancela() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "x")]).expect("e");
+        rt.eval(
+            "var el = document.getElementById('btn'); \
+             var f = function(){ console.log('boom') }; \
+             el.addEventListener('click', f); \
+             el.removeEventListener('click', f);",
+        )
+        .expect("e");
+        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        assert_eq!(count, 0);
+        assert!(rt.stdout().is_empty());
+    }
+
+    #[test]
+    fn error_en_handler_no_aborta_los_siguientes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "x")]).expect("e");
+        rt.eval(
+            "var el = document.getElementById('btn'); \
+             el.addEventListener('click', function(){ throw new Error('boom') }); \
+             el.addEventListener('click', function(){ console.log('sigo') });",
+        )
+        .expect("e");
+        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        assert_eq!(count, 2);
+        assert_eq!(rt.stdout(), "sigo\n");
+        assert!(rt.stderr().contains("boom"), "stderr: {:?}", rt.stderr());
+    }
+
+    #[test]
+    fn set_elements_reset_borra_los_anteriores() {
+        // Una página recarga y el snapshot cambia — los elementos
+        // viejos no deben sobrevivir.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("a", "div", "uno")]).expect("e");
+        assert_eq!(
+            rt.eval("!!document.getElementById('a')").expect("e"),
+            JsValue::Bool(true)
+        );
+        // Snapshot nuevo sin "a".
+        rt.set_elements(&[snap("b", "div", "dos")]).expect("e");
+        assert_eq!(
+            rt.eval("document.getElementById('a')").expect("e"),
+            JsValue::Null
+        );
+        assert_eq!(
+            rt.eval("document.getElementById('b').textContent").expect("e"),
+            JsValue::String("dos".into())
+        );
+    }
+
+    #[test]
+    fn handler_puede_registrar_timer_que_se_dispara_despues() {
+        // Cadena event → setTimeout: handler hace setTimeout(fn, 50)
+        // que el tick subsiguiente dispara.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "x")]).expect("e");
+        rt.set_now_ms(0).expect("now");
+        rt.eval(
+            "document.getElementById('btn').onclick = function(){ \
+                setTimeout(function(){ console.log('después') }, 50); \
+            }",
+        )
+        .expect("e");
+        rt.dispatch_event("btn", "click").expect("dispatch");
+        // Aún no se disparó el timer.
+        assert!(rt.stdout().is_empty());
+        rt.tick(100).expect("tick");
+        assert_eq!(rt.stdout(), "después\n");
     }
 
     #[test]

@@ -406,6 +406,17 @@ pub enum Msg {
     /// callbacks vencidos (setTimeout/setInterval). Sin payload — el handler
     /// computa el now al momento de procesar.
     JsTick,
+    /// Dispatch de un evento JS sobre el elemento `element_id` de la
+    /// pestaña activa. El chrome arma este msg cuando el usuario hace
+    /// click sobre un nodo con `id=` que no tiene otra acción nativa
+    /// (link/download/submit). El handler llama
+    /// `dispatch_event(element_id, event_type)` sobre el runtime de la
+    /// pestaña activa. `event_type` típicamente "click" — armado por el
+    /// chrome, no por el usuario.
+    JsDispatchEvent {
+        element_id: String,
+        event_type: String,
+    },
 }
 
 impl App for Puriy {
@@ -989,6 +1000,10 @@ impl App for Puriy {
             Msg::JsTick => {
                 let now_ms = m.start.elapsed().as_millis() as u64;
                 tick_js_runtimes(&mut m, now_ms);
+            }
+            Msg::JsDispatchEvent { element_id, event_type } => {
+                let now_ms = m.start.elapsed().as_millis() as u64;
+                dispatch_js_event(&mut m, &element_id, &event_type, now_ms);
             }
             Msg::PanelFilterKey(e) => {
                 m.panel_filter.apply_key(&e);
@@ -1701,9 +1716,18 @@ fn run_scripts_on_tab(
             return;
         }
     };
+    // Snapshot de elementos con `id=` — el harness JS los expone via
+    // `getElementById` / `document.querySelector('#x')`. textContent
+    // del subárbol de cada uno (snapshot read-only, igual que body).
+    let elements = t
+        .box_tree
+        .as_ref()
+        .map(collect_element_snapshots)
+        .unwrap_or_default();
     t.js = Some(rt);
     let rt = t.js.as_mut().unwrap();
     let _ = rt.set_document(&t.title, &t.url, &body_text);
+    let _ = rt.set_elements(&elements);
     // Reloj inicial — sin esto, `setTimeout(fn, 100)` registrado por un
     // script inicial dispararía contra `__puriy_now_ms=0` y se vencería
     // en el primer tick que cruce 100ms del wall clock (raro pero
@@ -1740,6 +1764,82 @@ fn run_scripts_on_tab(
         t.js_summary.errors += new_stderr[prev_stderr_len..].matches('\n').count();
         prev_stdout_len = new_stdout.len();
         prev_stderr_len = new_stderr.len();
+    }
+}
+
+/// Walka el `BoxTree` y arma un `Vec<ElementSnapshot>` para cada nodo
+/// con `element_id` no-vacío. El `text_content` del snapshot es la
+/// concatenación de las hojas de texto del subárbol (con separadores
+/// espacio), análoga a `body.textContent` pero scoped al elemento.
+///
+/// Sólo nodos con `id=` se exponen — match exacto del modelo que el
+/// harness JS usa (índice `__puriy_elements[id]`). Elementos sin id no
+/// se exponen ni a `getElementById` ni a event handlers.
+fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
+    let mut out = Vec::new();
+    bt.walk(|b| {
+        let Some(id) = &b.element_id else { return };
+        if id.is_empty() {
+            return;
+        }
+        let tag_name = b.tag.clone().unwrap_or_default();
+        // textContent del subárbol — copy the cheap "concat text leaves"
+        // walk del body pero scoped al nodo (no tenemos sub-walk en
+        // BoxTree, así que reconstruimos in-line via build_text_of).
+        let text_content = node_text_content(b);
+        out.push(puriy_js::ElementSnapshot {
+            id: id.clone(),
+            tag_name,
+            text_content,
+        });
+    });
+    out
+}
+
+/// Concatena las hojas de texto del subárbol del nodo `b`, separadas
+/// por espacio. Mismo molde que `extract_body_text` pero scoped — útil
+/// para que `el.textContent` devuelva sólo lo que vive bajo el elemento.
+fn node_text_content(b: &BoxNode) -> String {
+    let mut out = String::new();
+    fn rec(b: &BoxNode, out: &mut String) {
+        if let Some(text) = &b.text {
+            if !text.is_empty() {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(text);
+            }
+        }
+        for c in &b.children {
+            rec(c, out);
+        }
+    }
+    rec(b, &mut out);
+    out
+}
+
+/// Dispara los handlers JS registrados sobre `element_id` (vía
+/// `onclick` / `addEventListener`) en la pestaña activa. Si el runtime
+/// no existe o ningún handler corrió, queda como no-op — el chrome
+/// no aplica fallback al default action (los `<a>` con id+link ya
+/// navegan por el path nativo, este msg sólo se arma para elementos
+/// sin link).
+fn dispatch_js_event(m: &mut Model, element_id: &str, event_type: &str, now_ms: u64) {
+    let t = m.active_mut();
+    let Some(rt) = t.js.as_mut() else { return };
+    let _ = rt.set_now_ms(now_ms);
+    let prev_stdout_len = rt.stdout().len();
+    let prev_stderr_len = rt.stderr().len();
+    match rt.dispatch_event(element_id, event_type) {
+        Ok(_count) => {
+            let new_stdout = rt.stdout();
+            let new_stderr = rt.stderr();
+            t.js_summary.logs += new_stdout[prev_stdout_len..].matches('\n').count();
+            t.js_summary.errors += new_stderr[prev_stderr_len..].matches('\n').count();
+        }
+        Err(_) => {
+            t.js_summary.errors += 1;
+        }
     }
 }
 
@@ -2314,6 +2414,23 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 .on_middle_click(Msg::NavigateNewTab(target.clone()))
                 .on_pointer_enter(Msg::HoverLink(Some(target.clone())))
                 .on_pointer_leave(Msg::HoverLink(None));
+        }
+    } else if let Some(eid) = &b.element_id {
+        // Elemento con `id=` y sin link/download/submit nativo: si JS
+        // registró handlers para 'click', el chrome los dispara. Sin
+        // handlers, `dispatch_event` devuelve 0 y nada pasa — el evento
+        // no propaga al default action (no hay default action para un
+        // `<div id=>`/`<button id=>` puro).
+        //
+        // Limitación de Fase 7.5b: nodos `<a href=... id=...>` siguen
+        // navegando por el path nativo del rama anterior; los handlers
+        // JS sobre ellos no se disparan. preventDefault y la cohabitación
+        // navigate+handler quedan para una fase posterior.
+        if pe_active && !eid.is_empty() && !matches!(b.display, Display::None) {
+            view = view.on_click(Msg::JsDispatchEvent {
+                element_id: eid.clone(),
+                event_type: "click".into(),
+            });
         }
     }
 
@@ -4122,5 +4239,65 @@ mod tests {
         tick_js_runtimes(&mut m, 40);
         tick_js_runtimes(&mut m, 60);
         assert_eq!(m.tabs[0].js_summary.logs, logs0 + 3);
+    }
+
+    #[test]
+    fn collect_element_snapshots_indexa_solo_los_con_id() {
+        let tree = parse(
+            r#"<div><h1 id="hero">Título</h1><p>sin id</p><button id="b">x</button></div>"#,
+        );
+        let snaps = collect_element_snapshots(&tree);
+        let ids: Vec<&str> = snaps.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"hero"), "snaps: {snaps:?}");
+        assert!(ids.contains(&"b"), "snaps: {snaps:?}");
+        assert_eq!(ids.len(), 2, "snaps: {snaps:?}");
+    }
+
+    #[test]
+    fn collect_element_snapshots_text_content_concatena_subarbol() {
+        let tree = parse(r#"<div id="x"><span>uno</span> <b>dos</b></div>"#);
+        let snaps = collect_element_snapshots(&tree);
+        let x = snaps.iter().find(|s| s.id == "x").expect("id=x");
+        assert!(x.text_content.contains("uno"), "tc: {:?}", x.text_content);
+        assert!(x.text_content.contains("dos"), "tc: {:?}", x.text_content);
+    }
+
+    #[test]
+    fn dispatch_js_event_corre_handler_y_acumula_logs() {
+        let mut m = model_con_script("/* sin scripts */ console.log('boot')");
+        // El runtime ya existe gracias al script de boot. Registramos
+        // manualmente un elemento + handler antes del dispatch.
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "btn".into(),
+            tag_name: "button".into(),
+            text_content: "click me".into(),
+        }])
+        .expect("set_elements");
+        rt.eval(
+            "document.getElementById('btn').onclick = \
+                function(){ console.log('clicked') }",
+        )
+        .expect("e");
+        let logs0 = m.tabs[0].js_summary.logs;
+        dispatch_js_event(&mut m, "btn", "click", 0);
+        assert!(
+            m.tabs[0].js_summary.logs > logs0,
+            "esperaba logs nuevos tras dispatch — logs: {}",
+            m.tabs[0].js_summary.logs
+        );
+        let rt = m.tabs[0].js.as_ref().expect("rt");
+        assert!(rt.stdout().contains("clicked"), "stdout: {:?}", rt.stdout());
+    }
+
+    #[test]
+    fn dispatch_sobre_id_sin_handler_no_panic() {
+        let mut m = model_con_script("console.log('boot')");
+        // No registramos ningún elemento — el dispatch va al vacío.
+        dispatch_js_event(&mut m, "fantasma", "click", 0);
+        // Si llegamos acá sin panic, OK.
+        let rt = m.tabs[0].js.as_ref().expect("rt");
+        // stdout sigue siendo sólo el "boot" del script inicial.
+        assert!(rt.stdout().contains("boot"));
     }
 }
