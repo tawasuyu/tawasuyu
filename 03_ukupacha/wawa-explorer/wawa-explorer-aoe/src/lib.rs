@@ -28,7 +28,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -63,6 +63,19 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Qué pasó durante una sesión de [`ClienteAoE::servir`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct EstadisticasServir {
+    /// Pedidos respondidos con `ProveedorObjeto`.
+    pub servidos: u64,
+    /// Pedidos de objetos que no teníamos (`id` desconocido) — ruido normal
+    /// del cable, no un error.
+    pub ignorados: u64,
+    /// Pedidos de objetos que SÍ teníamos pero superan `MAX_PAYLOAD_AKASHA`
+    /// y no caben en un frame — pendiente de chunking.
+    pub omitidos_grandes: u64,
+}
 
 /// Cliente conectado a una interfaz Ethernet específica.
 ///
@@ -129,6 +142,108 @@ impl ClienteAoE {
             componer_frame(self.my_mac, MAC_BROADCAST, &MensajeAkasha::AnunciarRaiz(id))
                 .map_err(Error::Aoe)?;
         enviar_frame(&self.fd, self.ifindex, MAC_BROADCAST, &frame)
+    }
+
+    /// Difunde `AnunciarCanal{...}` — la recomendación FIRMADA de release, el
+    /// "apt upgrade en un frame de capa-2". No espera respuesta: los peers que
+    /// confíen en `autor` pedirán luego el canal, el manifiesto y los bytecodes
+    /// por `SolicitarObjeto` — atendelos con [`servir`]. Los campos firmados
+    /// los produce `agora_channel::construir_release` (`canal`, `manifiesto`
+    /// como `raiz`, `autor`, `timestamp`, `firma_anuncio`).
+    pub fn anunciar_canal(
+        &self,
+        canal: ObjectId,
+        raiz: ObjectId,
+        autor: akasha::AutorId,
+        timestamp: u64,
+        firma: akasha::FirmaAkasha,
+    ) -> Result<()> {
+        let frame = componer_frame(
+            self.my_mac,
+            MAC_BROADCAST,
+            &MensajeAkasha::AnunciarCanal {
+                canal,
+                raiz,
+                autor,
+                timestamp,
+                firma,
+            },
+        )
+        .map_err(Error::Aoe)?;
+        enviar_frame(&self.fd, self.ifindex, MAC_BROADCAST, &frame)
+    }
+
+    /// Atiende `SolicitarObjeto` durante `duracion`: por cada pedido cuyo `id`
+    /// esté en `objetos`, responde `ProveedorObjeto(id, datos)` UNICAST al
+    /// solicitante. Es el lado servidor del pull AoE — lo que permite a una
+    /// wawa corriendo absorber el grafo de un release recién publicado.
+    ///
+    /// LÍMITE DE FRAME: un objeto cuyo payload serializado supere
+    /// `akasha::MAX_PAYLOAD_AKASHA` (1486 B) NO cabe en un frame de capa-2 y se
+    /// OMITE (contado en [`EstadisticasServir::omitidos_grandes`]). Hoy un
+    /// `.wasm` real (rimay 3.3 KiB, pluma 11 KiB) excede ese techo; el chunking
+    /// —partir un objeto grande en un árbol de trozos < 1486 B y reensamblarlo
+    /// en el kernel— es el hito siguiente. Apps muy chicas y el canal/manifiesto
+    /// (si caben) ya viajan por este camino.
+    ///
+    /// Bloquea el hilo durante `duracion`. Devuelve cuántos pedidos sirvió,
+    /// ignoró (id desconocido) y omitió (demasiado grande).
+    pub fn servir(
+        &self,
+        objetos: &HashMap<ObjectId, Vec<u8>>,
+        duracion: Duration,
+    ) -> Result<EstadisticasServir> {
+        let inicio = Instant::now();
+        let mut buf = vec![0u8; 65536];
+        let mut stats = EstadisticasServir::default();
+
+        loop {
+            let restante = match duracion.checked_sub(inicio.elapsed()) {
+                Some(r) if !r.is_zero() => r,
+                _ => break,
+            };
+            // Despertamos al menos cada 200 ms para reevaluar `duracion`, así
+            // un `servir` largo no queda colgado en un recv eterno.
+            setsockopt_rcvtimeo(&self.fd, restante.min(Duration::from_millis(200)))?;
+
+            match recvfrom_frame(&self.fd, &mut buf) {
+                Ok(longitud) => {
+                    let (origen, mensaje) = match analizar_frame(&buf[..longitud]) {
+                        Ok(t) => t,
+                        Err(_) => continue, // frame ajeno
+                    };
+                    if let MensajeAkasha::SolicitarObjeto(id) = mensaje {
+                        let Some(datos) = objetos.get(&id) else {
+                            stats.ignorados += 1;
+                            continue;
+                        };
+                        let frame = match componer_frame(
+                            self.my_mac,
+                            origen,
+                            &MensajeAkasha::ProveedorObjeto(id, datos.clone()),
+                        ) {
+                            Ok(f) => f,
+                            Err(_) => {
+                                // Objeto más grande que un frame de capa-2.
+                                stats.omitidos_grandes += 1;
+                                continue;
+                            }
+                        };
+                        enviar_frame(&self.fd, self.ifindex, origen, &frame)?;
+                        stats.servidos += 1;
+                    }
+                }
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
+                {
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Ok(stats)
     }
 
     /// Difunde `SolicitarObjeto(id)` y bloquea hasta recibir
