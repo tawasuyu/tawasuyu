@@ -170,13 +170,14 @@ globalThis.__puriy_tick = function(now) {
 const EVENTS_BOOTSTRAP: &str = r#"
 globalThis.__puriy_elements = {};
 globalThis.__puriy_dirty = [];
-globalThis.__puriy_make_element = function(id, tag, text, classes, value) {
+globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id) {
     var el = {
         id: id,
         tagName: tag,
         _textContent: text,
         _classList: classes || [],
         _value: value == null ? '' : String(value),
+        _parent_id: parent_id == null ? null : String(parent_id),
         _listeners: {},
         addEventListener: function(type, fn) {
             if (!this._listeners[type]) this._listeners[type] = [];
@@ -188,6 +189,17 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value) {
             if (i >= 0) this._listeners[type].splice(i, 1);
         }
     };
+    // Fase 7.10 — parentElement como property que resuelve via
+    // _parent_id contra __puriy_elements. Devuelve null si el
+    // elemento no tiene ancestro registrado.
+    Object.defineProperty(el, 'parentElement', {
+        get: function() {
+            if (!el._parent_id) return null;
+            return globalThis.__puriy_elements[el._parent_id] || null;
+        },
+        enumerable: true,
+        configurable: true
+    });
     // Fase 7.9 — el.value get/set. Get devuelve el mirror local que el
     // chrome sincroniza vía init.value antes de cada dispatch. Set
     // publica una mutación que el chrome aplica al TextInputState (para
@@ -274,16 +286,18 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value) {
     return el;
 };
 globalThis.__puriy_dispatch = function(id, type, init) {
-    var el = globalThis.__puriy_elements[id];
-    if (!el) return '0,0';
+    var target = globalThis.__puriy_elements[id];
+    if (!target) return '0,0';
     // Construye el `event` object que se pasa a cada handler. Shape
     // esencial: type/target/currentTarget + preventDefault/stopPropagation.
-    // Sin propagation real porque Fase 7.x no bubble-ea — `_stopped` se
-    // traga silenciosamente (no hay padre que continúe).
+    // Fase 7.10 — bubbling real: el dispatch sube por _parent_id hasta
+    // que algún handler llame stopPropagation() o se llegue al root.
+    // `target` queda fijo al originador; `currentTarget` se actualiza
+    // a cada ancestro a medida que sube.
     var event = {
         type: type,
-        target: el,
-        currentTarget: el,
+        target: target,
+        currentTarget: target,
         defaultPrevented: false,
         _stopped: false,
         preventDefault: function() { this.defaultPrevented = true; },
@@ -302,24 +316,40 @@ globalThis.__puriy_dispatch = function(id, type, init) {
         if (init.metaKey !== undefined) event.metaKey = init.metaKey;
         if (init.value !== undefined) {
             event.value = init.value;
-            el._value = String(init.value);
+            target._value = String(init.value);
         }
     }
     var count = 0;
     var onName = 'on' + type;
-    if (typeof el[onName] === 'function') {
-        count++;
-        try { el[onName].call(el, event); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
-    var ls = el._listeners && el._listeners[type];
-    if (ls) {
-        var arr = ls.slice();
-        for (var i = 0; i < arr.length; i++) {
+    // Fase 7.10 — visited guard para defensa contra ciclos (parent_id
+    // mal poblado por el chrome no debería pasar, pero un infinite
+    // bubble agotaría el fuel del runtime). Max 64 niveles cubre
+    // cualquier DOM real.
+    var visited = {};
+    var current = target;
+    var depth = 0;
+    while (current && !event._stopped && depth < 64) {
+        if (visited[current.id]) break;
+        visited[current.id] = true;
+        event.currentTarget = current;
+        if (typeof current[onName] === 'function') {
             count++;
-            try { arr[i].call(el, event); }
+            try { current[onName].call(current, event); }
             catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
         }
+        var ls = current._listeners && current._listeners[type];
+        if (ls) {
+            var arr = ls.slice();
+            for (var i = 0; i < arr.length; i++) {
+                count++;
+                try { arr[i].call(current, event); }
+                catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+            }
+        }
+        // Sube al ancestro. parent_id null detiene el bubble.
+        if (!current._parent_id) break;
+        current = globalThis.__puriy_elements[current._parent_id] || null;
+        depth++;
     }
     return count + ',' + (event.defaultPrevented ? '1' : '0');
 };
@@ -727,13 +757,20 @@ impl JsRuntime {
                 Some(v) => js_string_literal(v),
                 None => "null".to_string(),
             };
+            // Fase 7.10 — parent_id: null si no tiene ancestro con id,
+            // sino string literal. Habilita bubbling vía _parent_id.
+            let parent_arg = match &el.parent_id {
+                Some(p) => js_string_literal(p),
+                None => "null".to_string(),
+            };
             script.push_str(&format!(
-                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val});\n",
+                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val}, {parent});\n",
                 id = js_string_literal(&el.id),
                 tag = js_string_literal(&el.tag_name),
                 text = js_string_literal(&el.text_content),
                 cls = cls_arr,
                 val = value_arg,
+                parent = parent_arg,
             ));
         }
         // Reset del buffer de dirty para que mutaciones de la página
@@ -1130,6 +1167,12 @@ pub struct ElementSnapshot {
     /// `<select>`. `None` significa que `el.value` arranca como `""` y
     /// no se sincroniza desde el chrome. Fase 7.9.
     pub value: Option<String>,
+    /// `id=` del ancestro Element más cercano (subiendo por el DOM)
+    /// que también tenga `id=`. `None` si este elemento no tiene
+    /// ancestro con id. Habilita event bubbling — el dispatch sube
+    /// `event.currentTarget` por la cadena de ancestros hasta
+    /// `stopPropagation()` o llegar al root. Fase 7.10.
+    pub parent_id: Option<String>,
 }
 
 /// Init opcional para [`JsRuntime::dispatch_event`]. Lleva los campos
@@ -1984,6 +2027,7 @@ mod tests {
             text_content: text.into(),
             class_list: Vec::new(),
             value: None,
+            parent_id: None,
         }
     }
 
@@ -1994,6 +2038,7 @@ mod tests {
             text_content: text.into(),
             class_list: vec![class.into()],
             value: None,
+            parent_id: None,
         }
     }
 
@@ -2004,6 +2049,18 @@ mod tests {
             text_content: String::new(),
             class_list: Vec::new(),
             value: Some(value.into()),
+            parent_id: None,
+        }
+    }
+
+    fn snap_with_parent(id: &str, tag: &str, parent_id: &str) -> ElementSnapshot {
+        ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: Some(parent_id.into()),
         }
     }
 
@@ -2596,5 +2653,152 @@ mod tests {
         assert!(lit.contains("key:\"a\""));
         assert!(lit.contains("shiftKey:true"));
         assert!(lit.contains("value:\"v\""));
+    }
+
+    // ============= Fase 7.10 — bubbling DOM =============
+
+    #[test]
+    fn bubbling_dispara_handler_del_padre() {
+        // <div id=outer><button id=btn></button></div>
+        // click en btn debe disparar handler en btn Y en outer.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('outer').onclick = function(e){ \
+                console.log('outer:' + e.target.id + ':' + e.currentTarget.id) \
+            }; \
+             document.getElementById('btn').onclick = function(e){ \
+                console.log('btn:' + e.target.id + ':' + e.currentTarget.id) \
+            };",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("btn", "click", None).expect("d");
+        assert_eq!(r.count, 2);
+        // target permanece fijo a 'btn'; currentTarget cambia al subir.
+        assert!(rt.stdout().contains("btn:btn:btn"));
+        assert!(rt.stdout().contains("outer:btn:outer"));
+    }
+
+    #[test]
+    fn stop_propagation_detiene_el_bubble() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('outer').onclick = function(){ \
+                console.log('OUTER') \
+            }; \
+             document.getElementById('btn').onclick = function(e){ \
+                console.log('BTN'); e.stopPropagation(); \
+            };",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("btn", "click", None).expect("d");
+        // Sólo se disparó el handler de btn; outer NO se llamó.
+        assert_eq!(r.count, 1);
+        assert_eq!(rt.stdout(), "BTN\n");
+    }
+
+    #[test]
+    fn bubbling_se_detiene_en_root_sin_parent() {
+        // Elemento sin parent_id no debe seguir bubbling.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("solo", "div", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('solo').onclick = function(){ console.log('hit') }",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("solo", "click", None).expect("d");
+        assert_eq!(r.count, 1);
+        assert_eq!(rt.stdout(), "hit\n");
+    }
+
+    #[test]
+    fn bubbling_no_dispara_handlers_de_otro_tipo() {
+        // Padre tiene handler de 'mouseover'; dispatch de 'click' al
+        // hijo no debe disparar el handler del padre.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('outer').onmouseover = function(){ console.log('over') }; \
+             document.getElementById('btn').onclick = function(){ console.log('clicked') };",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("btn", "click", None).expect("d");
+        assert_eq!(r.count, 1);
+        assert_eq!(rt.stdout(), "clicked\n");
+    }
+
+    #[test]
+    fn bubbling_tres_niveles_sube_completo() {
+        // <section id=section><div id=outer><button id=btn></button></div></section>
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("section", "section", ""),
+            snap_with_parent("outer", "div", "section"),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('section').onclick = function(){ console.log('S') }; \
+             document.getElementById('outer').onclick   = function(){ console.log('O') }; \
+             document.getElementById('btn').onclick     = function(){ console.log('B') };",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("btn", "click", None).expect("d");
+        assert_eq!(r.count, 3);
+        assert_eq!(rt.stdout(), "B\nO\nS\n");
+    }
+
+    #[test]
+    fn parent_element_resuelve_via_id() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        let v = rt
+            .eval("document.getElementById('btn').parentElement.id")
+            .expect("e");
+        assert_eq!(v, JsValue::String("outer".into()));
+        let v = rt
+            .eval("document.getElementById('outer').parentElement")
+            .expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn bubbling_no_repite_si_hay_ciclo_en_parent_id() {
+        // Si el chrome mal-pobló parent_id apuntando a sí mismo,
+        // el guard visited rompe el loop antes de agotar fuel.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_parent("x", "div", "x")])
+            .expect("e");
+        rt.eval(
+            "document.getElementById('x').onclick = function(){ console.log('once') }",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("x", "click", None).expect("d");
+        assert_eq!(r.count, 1);
+        assert_eq!(rt.stdout(), "once\n");
     }
 }

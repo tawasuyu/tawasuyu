@@ -1235,11 +1235,36 @@ impl App for Puriy {
                         false
                     };
                     if !prevented {
+                        let mut new_value: Option<String> = None;
+                        let mut input_eid: Option<String> = None;
                         let t = m.active_mut();
                         if let Some(idx) = t.focused_input {
                             if let Some(input) = t.inputs.get_mut(idx) {
                                 input.apply_key(&e);
+                                new_value = Some(input.text());
+                                input_eid = t
+                                    .inputs_element_ids
+                                    .get(idx)
+                                    .cloned()
+                                    .flatten();
                             }
+                        }
+                        // Fase 7.10 — `input` event DESPUÉS de aplicar la
+                        // tecla (a diferencia de `keydown` que se dispara
+                        // ANTES). Handlers de autocomplete/search-as-you-
+                        // type leen `event.target.value` con el value
+                        // recién actualizado.
+                        if let (Some(eid), Some(v)) = (input_eid, new_value) {
+                            let now_ms = m.start.elapsed().as_millis() as u64;
+                            let mut init = puriy_js::EventInit::default();
+                            init.value = Some(v);
+                            dispatch_js_event_with_init(
+                                &mut m,
+                                &eid,
+                                "input",
+                                now_ms,
+                                Some(init),
+                            );
                         }
                     }
                 }
@@ -1897,38 +1922,43 @@ fn run_scripts_on_tab(
 /// se exponen ni a `getElementById` ni a event handlers.
 fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
     let mut out = Vec::new();
-    bt.walk(|b| {
-        let Some(id) = &b.element_id else { return };
-        if id.is_empty() {
-            return;
+    // Fase 7.10 — walk recursivo manual para que cada elemento conozca
+    // el id de su ancestro Element más cercano con id=. `bt.walk(|b|)`
+    // no propaga contexto del parent, así que usamos rec con stack.
+    fn rec(b: &BoxNode, parent_id: Option<&str>, out: &mut Vec<puriy_js::ElementSnapshot>) {
+        let my_id_opt = b.element_id.as_deref().filter(|s| !s.is_empty());
+        if let Some(id) = my_id_opt {
+            let tag_name = b.tag.clone().unwrap_or_default();
+            let text_content = node_text_content(b);
+            // Fase 7.9 — value inicial para inputs/textareas/selects.
+            let value = if b.input_kind.is_some() {
+                b.input_initial.clone().or_else(|| Some(String::new()))
+            } else if let Some(sel) = &b.select {
+                sel.options
+                    .get(sel.initial)
+                    .map(|opt| opt.value.clone())
+                    .or_else(|| Some(String::new()))
+            } else {
+                None
+            };
+            out.push(puriy_js::ElementSnapshot {
+                id: id.to_string(),
+                tag_name,
+                text_content,
+                class_list: b.class_list.clone(),
+                value,
+                parent_id: parent_id.map(String::from),
+            });
         }
-        let tag_name = b.tag.clone().unwrap_or_default();
-        // textContent del subárbol — copy the cheap "concat text leaves"
-        // walk del body pero scoped al nodo (no tenemos sub-walk en
-        // BoxTree, así que reconstruimos in-line via build_text_of).
-        let text_content = node_text_content(b);
-        // Fase 7.9 — value inicial para inputs/textareas/selects. El
-        // chrome puede sincronizar antes de cada dispatch vía
-        // EventInit.value, pero el snapshot inicial garantiza que
-        // `el.value` arranque con el contenido correcto.
-        let value = if b.input_kind.is_some() {
-            b.input_initial.clone().or_else(|| Some(String::new()))
-        } else if let Some(sel) = &b.select {
-            sel.options
-                .get(sel.initial)
-                .map(|opt| opt.value.clone())
-                .or_else(|| Some(String::new()))
-        } else {
-            None
-        };
-        out.push(puriy_js::ElementSnapshot {
-            id: id.clone(),
-            tag_name,
-            text_content,
-            class_list: b.class_list.clone(),
-            value,
-        });
-    });
+        // Si yo tengo id, los hijos me ven como su parent. Si no, los
+        // hijos heredan mi parent_id — saltamos elementos sin id en la
+        // cadena (matchea el modelo que JS sólo conoce elementos con id).
+        let next_parent = my_id_opt.or(parent_id);
+        for c in &b.children {
+            rec(c, next_parent, out);
+        }
+    }
+    rec(&bt.root, None, &mut out);
     out
 }
 
@@ -4605,7 +4635,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "btn".into(),
             tag_name: "button".into(),
-            text_content: "click me".into(), class_list: Vec::new(), value: None,
+            text_content: "click me".into(), class_list: Vec::new(), value: None, parent_id: None,
         }])
         .expect("set_elements");
         rt.eval(
@@ -4667,7 +4697,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "out".into(),
             tag_name: "div".into(),
-            text_content: "antes".into(), class_list: Vec::new(), value: None,
+            text_content: "antes".into(), class_list: Vec::new(), value: None, parent_id: None,
         }])
         .expect("set_elements");
         rt.eval(
@@ -4699,7 +4729,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "clock".into(),
             tag_name: "span".into(),
-            text_content: "00:00".into(), class_list: Vec::new(), value: None,
+            text_content: "00:00".into(), class_list: Vec::new(), value: None, parent_id: None,
         }])
         .expect("e");
         rt.set_now_ms(0).expect("now");
@@ -4758,6 +4788,7 @@ mod tests {
             text_content: "".into(),
             class_list: Vec::new(),
             value: None,
+            parent_id: None,
         }])
         .expect("e");
         rt.eval(
@@ -4796,7 +4827,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(), value: None,
+            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None,
         }])
         .expect("e");
         rt.eval(
@@ -4817,7 +4848,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "i".into(),
             tag_name: "input".into(),
-            text_content: "".into(), class_list: Vec::new(), value: None,
+            text_content: "".into(), class_list: Vec::new(), value: None, parent_id: None,
         }])
         .expect("e");
         rt.eval(
@@ -4847,7 +4878,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(), value: None,
+            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None,
         }])
         .expect("e");
         rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
@@ -4965,6 +4996,7 @@ mod tests {
             text_content: String::new(),
             class_list: Vec::new(),
             value: Some("viejo".into()),
+            parent_id: None,
         }])
         .expect("e");
         rt.eval("document.getElementById('x').value = 'nuevo'")
@@ -4992,6 +5024,7 @@ mod tests {
             text_content: String::new(),
             class_list: Vec::new(),
             value: Some("es".into()),
+            parent_id: None,
         }])
         .expect("e");
         rt.eval("document.getElementById('lang').value = 'en'")
@@ -5011,6 +5044,7 @@ mod tests {
             text_content: String::new(),
             class_list: Vec::new(),
             value: Some(String::new()),
+            parent_id: None,
         }])
         .expect("e");
         rt.eval(
@@ -5045,5 +5079,54 @@ mod tests {
         assert_eq!(select_value_at(&m.tabs[0], 0, 1).as_deref(), Some("en"));
         assert_eq!(select_value_at(&m.tabs[0], 0, 0).as_deref(), Some("es"));
         assert_eq!(select_value_at(&m.tabs[0], 99, 0), None);
+    }
+
+    // ============= Fase 7.10 — bubbling + input event =============
+
+    #[test]
+    fn collect_element_snapshots_pobla_parent_id_directo() {
+        // <div id=outer><button id=btn></button></div>
+        let tree = parse(r#"<body><div id="outer"><button id="btn">x</button></div></body>"#);
+        let snaps = collect_element_snapshots(&tree);
+        let outer = snaps.iter().find(|s| s.id == "outer").expect("outer");
+        let btn = snaps.iter().find(|s| s.id == "btn").expect("btn");
+        assert_eq!(outer.parent_id, None);
+        assert_eq!(btn.parent_id.as_deref(), Some("outer"));
+    }
+
+    #[test]
+    fn collect_element_snapshots_salta_ancestros_sin_id() {
+        // <section id=s><div><button id=btn></button></div></section>
+        // El <div> sin id no aparece en la cadena de bubbling — btn
+        // pasa a tener parent_id = s directamente.
+        let tree = parse(
+            r#"<body><section id="s"><div><button id="btn">x</button></div></section></body>"#,
+        );
+        let snaps = collect_element_snapshots(&tree);
+        let btn = snaps.iter().find(|s| s.id == "btn").expect("btn");
+        assert_eq!(btn.parent_id.as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn collect_element_snapshots_root_sin_parent() {
+        // El elemento del root no debe tener parent_id.
+        let tree = parse(r#"<body><div id="root">x</div></body>"#);
+        let snaps = collect_element_snapshots(&tree);
+        let root = snaps.iter().find(|s| s.id == "root").expect("root");
+        assert_eq!(root.parent_id, None);
+    }
+
+    #[test]
+    fn collect_element_snapshots_tres_niveles_de_anidacion() {
+        let tree = parse(
+            r#"<body><div id="a"><div id="b"><div id="c">x</div></div></div></body>"#,
+        );
+        let snaps = collect_element_snapshots(&tree);
+        let a = snaps.iter().find(|s| s.id == "a").expect("a");
+        let b = snaps.iter().find(|s| s.id == "b").expect("b");
+        let c = snaps.iter().find(|s| s.id == "c").expect("c");
+        assert_eq!(a.parent_id, None);
+        assert_eq!(b.parent_id.as_deref(), Some("a"));
+        assert_eq!(c.parent_id.as_deref(), Some("b"));
     }
 }
