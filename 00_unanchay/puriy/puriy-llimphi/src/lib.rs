@@ -2273,8 +2273,33 @@ fn apply_dom_mutations(t: &mut TabState) {
                     }
                 }
             }
+        } else if m.kind == "focus" {
+            // Fase 7.18: el.focus() desde JS. Si el id corresponde a un
+            // input slot, mueve el cursor del usuario allí (focused_input
+            // = Some(slot)). Si no es input, no-op silencioso — un
+            // .focus() sobre un button/div sólo dispara el event handler.
+            if let Some(slot) = t
+                .inputs_element_ids
+                .iter()
+                .position(|e| e.as_deref() == Some(m.id.as_str()))
+            {
+                t.focused_input = Some(slot);
+            }
+        } else if m.kind == "blur" {
+            // Fase 7.18: el.blur() desde JS. Sólo limpia focused_input si
+            // el elemento era el actualmente focado — un .blur() sobre un
+            // input no-focado no afecta el cursor del usuario.
+            if let Some(slot) = t
+                .inputs_element_ids
+                .iter()
+                .position(|e| e.as_deref() == Some(m.id.as_str()))
+            {
+                if t.focused_input == Some(slot) {
+                    t.focused_input = None;
+                }
+            }
         }
-        // Otros kinds (`attr`, `classList`, ...) llegarán en fases siguientes.
+        // Otros kinds (`classList`, ...) llegarán en fases siguientes.
     }
 }
 
@@ -5647,5 +5672,94 @@ mod tests {
             }
         });
         assert!(!still, "removeAttribute debe quitar href del BoxTree");
+    }
+
+    // ============= Fase 7.18 — focus()/blur() chrome-side =============
+
+    #[test]
+    fn apply_focus_mutation_setea_focused_input_si_es_input_slot() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><input id="user" /><input id="pw" /></body>"#));
+        // Pre-pueblo inputs_element_ids como lo hace Msg::Loaded (orden DFS).
+        t.inputs.push(TextInputState::new());
+        t.inputs.push(TextInputState::new());
+        t.inputs_element_ids = vec![Some("user".into()), Some("pw".into())];
+        t.focused_input = None;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[
+            puriy_js::ElementSnapshot {
+                id: "user".into(),
+                tag_name: "input".into(),
+                text_content: String::new(),
+                class_list: Vec::new(),
+                value: Some(String::new()),
+                parent_id: None,
+                dataset: Vec::new(),
+                attributes: Vec::new(),
+            },
+            puriy_js::ElementSnapshot {
+                id: "pw".into(),
+                tag_name: "input".into(),
+                text_content: String::new(),
+                class_list: Vec::new(),
+                value: Some(String::new()),
+                parent_id: None,
+                dataset: Vec::new(),
+                attributes: Vec::new(),
+            },
+        ])
+        .expect("e");
+        rt.eval("document.getElementById('pw').focus()").expect("e");
+        apply_dom_mutations(t);
+        assert_eq!(t.focused_input, Some(1), "el focus en 'pw' (slot 1) debió moverse");
+    }
+
+    #[test]
+    fn apply_focus_mutation_sobre_no_input_no_afecta_focused_input() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><button id="btn">x</button></body>"#));
+        t.focused_input = None;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "btn".into(),
+            tag_name: "button".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+        }])
+        .expect("e");
+        rt.eval("document.getElementById('btn').focus()").expect("e");
+        apply_dom_mutations(t);
+        assert_eq!(t.focused_input, None, "focus en un button no afecta el cursor");
+    }
+
+    #[test]
+    fn apply_blur_mutation_limpia_focused_input_si_era_el_actual() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><input id="user" /></body>"#));
+        t.inputs.push(TextInputState::new());
+        t.inputs_element_ids = vec![Some("user".into())];
+        t.focused_input = Some(0);
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "user".into(),
+            tag_name: "input".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: Some(String::new()),
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+        }])
+        .expect("e");
+        rt.eval("document.getElementById('user').blur()").expect("e");
+        apply_dom_mutations(t);
+        assert_eq!(t.focused_input, None);
     }
 }

@@ -381,7 +381,15 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         configurable: true
     });
     Object.defineProperty(el, 'innerHTML', {
-        get: function() { return el._textContent; },
+        get: function() {
+            // Fase 7.18 — getter devuelve _textContent crudo. No serializa
+            // children porque el modelo JS no enumera el subárbol (sólo
+            // elementos con id; los text nodes intermedios viven en el
+            // BoxTree, no en __puriy_elements). Para inspeccionar
+            // estructura completa hay que usar el chrome (no exposed por
+            // ahora). Suficiente para "leer el texto que setié antes".
+            return el._textContent;
+        },
         set: function(v) {
             // Fase 7.5c: innerHTML se trata como textContent (sin
             // parsear HTML interno). Suficiente para "label.innerHTML =
@@ -389,6 +397,22 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             el._textContent = String(v);
             if (el._synthetic && !el._inserted) return;
             globalThis.__puriy_dirty.push({id: el.id, kind: 'text', value: el._textContent});
+        },
+        enumerable: true,
+        configurable: true
+    });
+    // Fase 7.18 — outerHTML getter. Serializa `<tag attrs>innerHTML</tag>`
+    // a partir del state local: _tagName + attributes + _textContent.
+    // Útil para debugging, "save-as-html" y patrones de templating. Tags
+    // void (img/br/hr/input/...) no llevan closing tag. Escaping mínimo:
+    // `&` → `&amp;`, `<` → `&lt;` en text content; `"` → `&quot;` en
+    // attr values. Setter NO implementado — settear outerHTML requeriría
+    // parsear HTML y reconstruir el subárbol del DOM, lo cual no
+    // soportamos sin un parser real (vendría con createDocumentFragment
+    // y appendChild de DOM trees, fases futuras).
+    Object.defineProperty(el, 'outerHTML', {
+        get: function() {
+            return globalThis.__puriy_serialize_element(el);
         },
         enumerable: true,
         configurable: true
@@ -615,6 +639,16 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     // distinto). Útil para llamar handlers sin un click real.
     el.focus = function() {
         globalThis.__puriy_dispatch(el._id, 'focus', null);
+        // Fase 7.18 — además del dispatch del evento, marca dirty con
+        // kind 'focus' para que el chrome resuelva el id contra sus
+        // inputs_element_ids y mueva el cursor al input matching.
+        // Sin esto, los handlers JS reaccionaban pero el cursor real
+        // del usuario no se movía — el .focus() sólo simulaba el evento.
+        globalThis.__puriy_dirty.push({
+            id: el._id,
+            kind: 'focus',
+            value: ''
+        });
     };
     // Fase 7.15/7.16 — getAttribute/setAttribute/hasAttribute/removeAttribute.
     // Routea por name:
@@ -711,7 +745,53 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     };
     el.blur = function() {
         globalThis.__puriy_dispatch(el._id, 'blur', null);
+        // Fase 7.18 — además del dispatch del evento, marca dirty para
+        // que el chrome haga `focused_input = None` si el elemento
+        // era el input focado actualmente.
+        globalThis.__puriy_dirty.push({
+            id: el._id,
+            kind: 'blur',
+            value: ''
+        });
     };
+    // Fase 7.18 — el.attributes: NamedNodeMap-ish. Devuelve un Array
+    // (no live HTMLCollection) con TODOS los attrs del elemento como
+    // `{ name, value }` objetos. Cada acceso recomputa walking los
+    // stores. Spec real devuelve un NamedNodeMap con `.length`/`.item(i)`/
+    // `.getNamedItem(name)`; Array soporta `.length` y `[i]` directo
+    // (matchea 95% del uso) + `.find()` / `.filter()` / `for...of` nativos.
+    // Orden: id primero (si presente), luego class, value, data-*, attrs
+    // genéricos en orden de inserción del store. NO refleja cambios in
+    // place — un loop `for (a of el.attributes)` opera sobre el snapshot
+    // del momento del acceso.
+    Object.defineProperty(el, 'attributes', {
+        get: function() {
+            var out = [];
+            if (el._id) out.push({name: 'id', value: el._id});
+            if (el._classList && el._classList.length > 0) {
+                out.push({name: 'class', value: el._classList.join(' ')});
+            }
+            if (el._value !== '') out.push({name: 'value', value: el._value});
+            for (var dk in el._dataset_store) {
+                if (Object.prototype.hasOwnProperty.call(el._dataset_store, dk)) {
+                    out.push({name: 'data-' + dk, value: el._dataset_store[dk]});
+                }
+            }
+            for (var ak in el._attributes_store) {
+                if (Object.prototype.hasOwnProperty.call(el._attributes_store, ak)) {
+                    // Saltear los que ya cubrimos por la rama especial
+                    // para evitar duplicar (el snapshot inicial pobla
+                    // tanto _attributes_store como _id/_classList/etc.).
+                    if (ak === 'id' || ak === 'class' || ak === 'value') continue;
+                    if (ak.indexOf('data-') === 0) continue;
+                    out.push({name: ak, value: el._attributes_store[ak]});
+                }
+            }
+            return out;
+        },
+        enumerable: true,
+        configurable: true
+    });
     // Fase 7.17 — hasAttributes(): bool. Devuelve true si el elemento
     // tiene algún atributo presente entre los stores especiales
     // (id/class/value/data-*) o el genérico (_attributes_store). Spec:
@@ -847,6 +927,39 @@ globalThis.__puriy_has_attr = function(el, name) {
         return Object.prototype.hasOwnProperty.call(el._dataset_store, n.slice(5));
     }
     return Object.prototype.hasOwnProperty.call(el._attributes_store, n);
+};
+// Fase 7.18 — set de tags void (HTML spec). No llevan cierre `</tag>` ni
+// contenido. Lista del WHATWG HTML living standard.
+globalThis.__puriy_void_tags = {
+    area: 1, base: 1, br: 1, col: 1, embed: 1, hr: 1, img: 1, input: 1,
+    link: 1, meta: 1, param: 1, source: 1, track: 1, wbr: 1
+};
+globalThis.__puriy_escape_attr = function(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;');
+};
+globalThis.__puriy_escape_text = function(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+};
+globalThis.__puriy_serialize_element = function(el) {
+    var tag = (el._tagName || '').toLowerCase();
+    if (!tag) tag = 'div';
+    var open = '<' + tag;
+    var attrs = el.attributes;
+    for (var i = 0; i < attrs.length; i++) {
+        open += ' ' + attrs[i].name + '="' + globalThis.__puriy_escape_attr(attrs[i].value) + '"';
+    }
+    if (globalThis.__puriy_void_tags[tag]) {
+        return open + '>';
+    }
+    open += '>';
+    var inner = globalThis.__puriy_escape_text(el._textContent || '');
+    return open + inner + '</' + tag + '>';
 };
 globalThis.__puriy_get_attr = function(el, name) {
     var n = name.toLowerCase();
@@ -4550,5 +4663,153 @@ mod tests {
         assert_eq!(v, JsValue::Bool(true), "tiene id → true");
         let v = rt.eval("document.getElementById('solo_attr').hasAttributes()").expect("e");
         assert_eq!(v, JsValue::Bool(true), "tiene attrs → true");
+    }
+
+    // ============= Fase 7.18 — focus()/blur() chrome-side, attributes, outerHTML =============
+
+    #[test]
+    fn focus_publica_mutacion_focus_y_dispara_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("inp", "input", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('inp').addEventListener('focus', \
+                function() { console.log('focused') });",
+        )
+        .expect("e");
+        rt.eval("document.getElementById('inp').focus()").expect("e");
+        // Handler corrió Y se publicó mutación focus para el chrome.
+        assert_eq!(rt.stdout(), "focused\n");
+        let muts = rt.drain_dom_mutations();
+        assert!(muts.iter().any(|m| m.id == "inp" && m.kind == "focus"));
+    }
+
+    #[test]
+    fn blur_publica_mutacion_blur() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("inp", "input", "")]).expect("e");
+        rt.eval("document.getElementById('inp').blur()").expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert!(muts.iter().any(|m| m.id == "inp" && m.kind == "blur"));
+    }
+
+    #[test]
+    fn attributes_enumera_id_class_value_dataset_y_genericos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[ElementSnapshot {
+            id: "x".into(),
+            tag_name: "a".into(),
+            text_content: String::new(),
+            class_list: vec!["btn".into(), "primary".into()],
+            value: None,
+            parent_id: None,
+            dataset: vec![("track".into(), "hero".into())],
+            attributes: vec![
+                ("data-track".into(), "hero".into()),
+                ("href".into(), "/x".into()),
+                ("aria-current".into(), "page".into()),
+            ],
+        }])
+        .expect("e");
+        let v = rt.eval("document.getElementById('x').attributes.length").expect("e");
+        // id, class, data-track, href, aria-current = 5.
+        assert_eq!(v, JsValue::Number(5.0));
+        // Verificamos forma de cada entry — {name, value}.
+        let v = rt
+            .eval("document.getElementById('x').attributes[0].name")
+            .expect("e");
+        assert_eq!(v, JsValue::String("id".into()));
+        // attributes es iterable con for...of (JS array nativo).
+        let v = rt
+            .eval(
+                "var names = []; \
+                 for (var a of document.getElementById('x').attributes) names.push(a.name); \
+                 names.indexOf('href') >= 0 && names.indexOf('aria-current') >= 0",
+            )
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn attributes_no_duplica_si_attributes_store_tiene_data_o_id() {
+        // Si el snapshot pobla ambos _dataset_store Y _attributes_store
+        // con la misma key, attributes debe devolver una sola entry (la
+        // del dataset; el _attributes_store skippea las que ya cubrió
+        // por rama especial).
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_dataset("x", "div", &[("role", "main")])])
+            .expect("e");
+        let v = rt
+            .eval(
+                "var dups = 0; \
+                 for (var a of document.getElementById('x').attributes) \
+                     if (a.name === 'data-role') dups++; \
+                 dups",
+            )
+            .expect("e");
+        assert_eq!(v, JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn outer_html_serializa_elemento_con_attrs_y_text() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[ElementSnapshot {
+            id: "x".into(),
+            tag_name: "a".into(),
+            text_content: "Inicio".into(),
+            class_list: vec!["btn".into()],
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: vec![("href".into(), "/x".into())],
+        }])
+        .expect("e");
+        let v = rt.eval("document.getElementById('x').outerHTML").expect("e");
+        let JsValue::String(s) = v else { panic!("expected string") };
+        // El orden de attrs sigue id, class, [value], data-*, otros.
+        assert!(s.starts_with("<a "), "got: {s}");
+        assert!(s.contains(r#"id="x""#), "got: {s}");
+        assert!(s.contains(r#"class="btn""#), "got: {s}");
+        assert!(s.contains(r#"href="/x""#), "got: {s}");
+        assert!(s.ends_with(">Inicio</a>"), "got: {s}");
+    }
+
+    #[test]
+    fn outer_html_void_tag_no_lleva_cierre() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[ElementSnapshot {
+            id: "i".into(),
+            tag_name: "img".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: vec![("src".into(), "/foo.png".into())],
+        }])
+        .expect("e");
+        let v = rt.eval("document.getElementById('i').outerHTML").expect("e");
+        assert_eq!(v, JsValue::String(r#"<img id="i" src="/foo.png">"#.into()));
+    }
+
+    #[test]
+    fn outer_html_escapa_quotes_y_lt_en_attr_y_text() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        // Después del set, el outerHTML debe escapar caracteres especiales.
+        rt.eval("document.getElementById('x').setAttribute('title', 'a\"b<c')")
+            .expect("e");
+        rt.eval("document.getElementById('x').textContent = '<b>&</b>'")
+            .expect("e");
+        let v = rt.eval("document.getElementById('x').outerHTML").expect("e");
+        let JsValue::String(s) = v else { panic!("expected string") };
+        assert!(s.contains(r#"title="a&quot;b&lt;c""#), "got: {s}");
+        assert!(s.contains("&lt;b&gt;&amp;&lt;/b&gt;"), "got: {s}");
     }
 }
