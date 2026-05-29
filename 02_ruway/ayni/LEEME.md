@@ -37,7 +37,8 @@ reproducible.
 |----------------|----------------------------------------------------------------|--------|
 | `ayni-core`    | DAG de mensajes firmados, direccionado por contenido (no_std)  | ✅ P0  |
 | `ayni-crypto`  | firma Ed25519 sobre agora ✅ + E2EE 1:1 (X25519/HKDF/ChaCha) ✅ | ✅ P2  |
-| `ayni-sync`    | `Transporte` + `EnlaceTcp` + anti-entropía (diff Merkle) ✅; (P3) `EnlaceMinga` | ✅ P3 |
+| `ayni-sync`    | `Transporte` + `EnlaceTcp` + anti-entropía (diff Merkle)       | ✅ P3  |
+| `ayni-minga`   | `EnlaceMinga`: transporte P2P sobre libp2p (mismo trait `Transporte`) | ✅ P3 |
 | `ayni-store`   | persistencia del DAG + blobs de adjuntos (dedup) sobre sled    | ✅ P3/P5 |
 | `ayni-cli`     | chat headless de terminal (bin `ayni`)                         | ✅ P1  |
 | `ayni-llimphi` | UI Llimphi (frontend intercambiable sobre `ayni-core`)         | ✅ P1  |
@@ -76,15 +77,16 @@ y se verifica por *closure*; las primitivas Ed25519/MLS viven en `ayni-crypto`.
   (Welcome/commits/epochs) sobre el transporte, que es un protocolo en sí mismo.
   `CanalSeguro` es el seam donde MLS entrará. El canal de hoy es static-static
   (estilo `crypto_box`): confidencialidad + integridad 1:1, sin PCS.
-- **P3 — sin servidor** *(parcial)*: **anti-entropía** (diff de Merkle del DAG:
-  sólo viaja lo que falta; la reconciliación camina el DAG hacia atrás) ✅ y
+- **P3 — sin servidor** ✅ *(hecho)*: **anti-entropía** (diff de Merkle del DAG:
+  sólo viaja lo que falta; la reconciliación camina el DAG hacia atrás),
   **persistencia** (`ayni-store` sobre sled; local-first + base del
-  store-and-forward) ✅, ambas transport-agnósticas y probadas sobre TCP.
-  **Pendiente:** `EnlaceMinga` (transporte P2P real sobre libp2p de minga: DHT,
-  identify, y NAT traversal —que minga aún no tiene, la pieza espinosa—). minga
-  ya expone `open_stream`/`accept` y su propia anti-entropía; el wrapper
-  async/sync es la costura. La anti-entropía de Ayni ya está lista para montarse
-  sobre él sin cambios.
+  store-and-forward), y **`EnlaceMinga`** — transporte P2P real sobre el nodo
+  libp2p de minga (`card_net::BrahmanNet`: TCP+Noise+yamux, Kademlia DHT,
+  identify), tras el MISMO trait `Transporte` que `EnlaceTcp` (la app no cambia).
+  Bridge async→sync: runtime tokio en hilo propio, protocolo `/ayni/transporte/1.0.0`.
+  Test de 2 nodos libp2p convergiendo por anti-entropía, verde y estable. Lo
+  único que falta es ajeno a Ayni: **NAT traversal**, que minga aún no implementa
+  (hoy TCP directo + descubrimiento DHT en LAN).
 - **P4 — inteligencia local** ✅ *(hecho)*: `ayni-index` (embeddings rimay +
   búsqueda coseno top-k sobre el historial, todo local; omite cifrados) y
   `ayni-ai` (multilienzo: traducir/resumir/tono vía la fachada `pluma-llm`,

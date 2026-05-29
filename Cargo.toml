@@ -168,6 +168,7 @@ members = [
     "02_ruway/ayni/ayni-store",
     "02_ruway/ayni/ayni-index",
     "02_ruway/ayni/ayni-ai",
+    "02_ruway/ayni/ayni-minga",
     "02_ruway/chasqui/card-admin",
     "02_ruway/chasqui/card-handshake",
     "02_ruway/chasqui/card-sidecar",

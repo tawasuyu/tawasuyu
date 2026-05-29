@@ -1,0 +1,42 @@
+# =============================================================================
+#  ayni :: ayni-minga — transporte P2P sobre libp2p (minga)
+# -----------------------------------------------------------------------------
+#  Cierra el "sin servidor" de P3: `EnlaceMinga` implementa el MISMO trait
+#  `Transporte` que `EnlaceTcp`, pero sobre el nodo libp2p de gioser
+#  (`card_net::BrahmanNet`: TCP+Noise+yamux, Kademlia DHT, identify). La app no
+#  cambia al cambiar de transporte — sólo elige el enlace al arrancar.
+#
+#  libp2p es async (tokio); el trait `Transporte` es sync. `EnlaceMinga` salva
+#  esa brecha corriendo un runtime tokio en su propio hilo y exponiendo métodos
+#  sync que mandan comandos por canal y reciben `EventoRed` por un mpsc —idéntico
+#  contrato que `EnlaceTcp`—. Crate APARTE para que el pesado árbol de libp2p no
+#  recaiga sobre `ayni-core`/`-sync`/`-cli` salvo que se quiera P2P.
+#
+#  Pendiente real (no de este crate): NAT traversal —minga aún no lo tiene; hoy
+#  es TCP directo + descubrimiento por DHT—.
+# =============================================================================
+
+[package]
+name = "ayni-minga"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "ayni — transporte P2P (EnlaceMinga) sobre el nodo libp2p de minga; mismo trait Transporte que EnlaceTcp"
+
+[lib]
+doctest = false
+
+[dependencies]
+ayni-sync = { path = "../ayni-sync" }
+card-net = { path = "../../../shared/card/card-net" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+ayni-core = { path = "../ayni-core" }
+ayni-crypto = { path = "../ayni-crypto" }
