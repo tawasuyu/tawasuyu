@@ -35,6 +35,10 @@
 //! la fuente (`.gif` → anim, `.png/.jpg/.webp/.bmp/.tiff/.jpeg` →
 //! imagen fija). La pista de audio se elige con `MULTIMEDIA_WAV` o
 //! `MULTIMEDIA_MP3` — sin ninguna, suena un tono A4 sintético.
+//!
+//! `MULTIMEDIA_MIX_TONE=0.25` (rango 0..1) superpone un tono A4 a esa
+//! ganancia sobre la fuente principal vía MixerAudio — demo del
+//! mezclador con cualquier fuente.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -52,8 +56,9 @@ use llimphi_ui::llimphi_text::{self, TextBlock};
 use llimphi_ui::{App, Handle, View};
 use multimedia_audio_cpal::AudioSink;
 use multimedia_core::{
-    AudioProbe, AudioSource, FrameSource, Levels, Pause, PausableAudio, PausableVideo,
-    ProbedAudioSource, Seekable, Spectrum, TestCard, ToneSource, Volume, VolumeAudio,
+    AudioProbe, AudioSource, FrameSource, Levels, MixerAudio, Pause, PausableAudio,
+    PausableVideo, ProbedAudioSource, Seekable, Spectrum, TestCard, ToneSource, Volume,
+    VolumeAudio,
 };
 use multimedia_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use multimedia_source_gif::GifSource;
@@ -1032,6 +1037,24 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     } else {
         seekable_handle_slot().set(None).ok();
         Box::new(ToneSource::a4())
+    };
+
+    // Overlay opcional de tono A4 mezclado a `MULTIMEDIA_MIX_TONE`
+    // (0..1) — útil para probar el mixer con cualquier fuente. Si
+    // está set y parsea bien, env la fuente principal en un MixerAudio
+    // junto a un ToneSource atenuado por su propio Volume.
+    let inner: Box<dyn AudioSource + Send> = match std::env::var("MULTIMEDIA_MIX_TONE")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        Some(g) if g > 0.0 => {
+            let g = g.min(1.0);
+            eprintln!("multimedia-app: overlay tono A4 a {:.0}%", g * 100.0);
+            let tone = VolumeAudio::new(ToneSource::a4(), Volume::new(g));
+            let mix = MixerAudio::with_sources(vec![inner, Box::new(tone)]);
+            Box::new(mix)
+        }
+        _ => inner,
     };
     // Orden: Pausable envuelve al productor (silencio cuando pausado);
     // Volume aplica ganancia después de pausar; Recorded captura ese
