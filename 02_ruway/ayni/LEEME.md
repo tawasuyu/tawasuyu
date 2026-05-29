@@ -37,11 +37,12 @@ reproducible.
 |----------------|----------------------------------------------------------------|--------|
 | `ayni-core`    | DAG de mensajes firmados, direccionado por contenido (no_std)  | ✅ P0  |
 | `ayni-crypto`  | firma Ed25519 sobre agora ✅ + E2EE 1:1 (X25519/HKDF/ChaCha) ✅ | ✅ P2  |
-| `ayni-sync`    | trait `Transporte` + `EnlaceTcp` (LAN) ✅; (P3) minga/chasqui  | ✅ P1  |
+| `ayni-sync`    | `Transporte` + `EnlaceTcp` + anti-entropía (diff Merkle) ✅; (P3) `EnlaceMinga` | ✅ P3 |
+| `ayni-store`   | persistencia del DAG sobre sled (local-first, store-and-forward) | ✅ P3 |
 | `ayni-cli`     | chat headless de terminal (bin `ayni`)                         | ✅ P1  |
 | `ayni-llimphi` | UI Llimphi (frontend intercambiable sobre `ayni-core`)         | ✅ P1  |
-| `ayni-index`   | búsqueda semántica local (rimay embeddings)                    | P4     |
-| `ayni-ai`      | multilienzo (pluma-transform + rimay-localize + pluma-llm)     | P4     |
+| `ayni-index`   | búsqueda semántica local (rimay embeddings + coseno)           | ✅ P4  |
+| `ayni-ai`      | multilienzo: traducir/resumir/tono vía pluma-llm (máquina propone) | ✅ P4 |
 
 `ayni-core` es `#![no_std] + alloc` **desde el día cero** — no parcheado
 después — para que el mismo núcleo viaje como app WASM dentro de wawa (P6) sin
@@ -75,8 +76,20 @@ y se verifica por *closure*; las primitivas Ed25519/MLS viven en `ayni-crypto`.
   (Welcome/commits/epochs) sobre el transporte, que es un protocolo en sí mismo.
   `CanalSeguro` es el seam donde MLS entrará. El canal de hoy es static-static
   (estilo `crypto_box`): confidencialidad + integridad 1:1, sin PCS.
-- **P3 — sin servidor** *(HITO)*: sync P2P minga, DHT, store-and-forward.
-- **P4 — inteligencia local**: búsqueda rimay + traducir-al-llegar / resumen.
+- **P3 — sin servidor** *(parcial)*: **anti-entropía** (diff de Merkle del DAG:
+  sólo viaja lo que falta; la reconciliación camina el DAG hacia atrás) ✅ y
+  **persistencia** (`ayni-store` sobre sled; local-first + base del
+  store-and-forward) ✅, ambas transport-agnósticas y probadas sobre TCP.
+  **Pendiente:** `EnlaceMinga` (transporte P2P real sobre libp2p de minga: DHT,
+  identify, y NAT traversal —que minga aún no tiene, la pieza espinosa—). minga
+  ya expone `open_stream`/`accept` y su propia anti-entropía; el wrapper
+  async/sync es la costura. La anti-entropía de Ayni ya está lista para montarse
+  sobre él sin cambios.
+- **P4 — inteligencia local** ✅ *(hecho)*: `ayni-index` (embeddings rimay +
+  búsqueda coseno top-k sobre el historial, todo local; omite cifrados) y
+  `ayni-ai` (multilienzo: traducir/resumir/tono vía la fachada `pluma-llm`,
+  Mock determinista sin credenciales). "Máquina propone, humano firma": la IA
+  redacta, no envía sola.
 - **P5 — cross-app**: adjuntar objetos del grafo (pluma/khipu/cosmos vivos).
 - **P6 — Ayni en wawa**: app WASM/akasha reusando `ayni-core` no_std.
 - **P7 — confianza/UX**: grafo agora, membresía firmada, recibos simétricos.

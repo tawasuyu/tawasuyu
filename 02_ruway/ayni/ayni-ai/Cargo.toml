@@ -1,0 +1,34 @@
+# =============================================================================
+#  ayni :: ayni-ai — multilienzo del chat: la máquina propone, el humano firma
+# -----------------------------------------------------------------------------
+#  Lienzos derivados VIVOS sobre un mensaje: traducción al vuelo, resumen, cambio
+#  de tono. La IA REDACTA una propuesta; nunca la envía sola — el humano la lee y,
+#  si la firma, recién entonces entra al grafo como un mensaje suyo. Reusa la
+#  fachada de LLM de pluma (`pluma-llm`): Anthropic/Gemini/DeepSeek/Cohere/Ollama,
+#  o Mock determinista sin red para tests y para arrancar sin credenciales.
+#
+#  La integración profunda con `pluma-transform` (alineación párrafo-a-párrafo,
+#  CartaHebras, cuerpos derivados con procedencia) queda para el multilienzo
+#  pleno; aquí basta la propuesta de texto, que es lo que un chat necesita.
+# =============================================================================
+
+[package]
+name = "ayni-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "ayni — multilienzo del chat (traducir/resumir/tono) vía pluma-llm; máquina propone, humano firma"
+
+[lib]
+doctest = false
+
+[dependencies]
+pluma-llm-core = { path = "../../../00_unanchay/pluma/pluma-llm-core" }
+pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pluma-llm-mock = { path = "../../../00_unanchay/pluma/pluma-llm-mock" }
+tokio = { workspace = true }
