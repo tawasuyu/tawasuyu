@@ -191,7 +191,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 | `foreign-psd` | `shared/foreign-psd` | psd ↔ AST de capas tullpu | no |
 | `yupay` (motor de fórmulas) | `01_yachay/nakui/yupay-core` + `yupay-fns` | DSL Excel-like (`=SUMA(A1:A10)`, bilingüe es/qu) compilado a Rhai; lambdas y full-Rhai en celdas avanzadas | crate nuevo, **Rhai ya está en el stack** |
 | Vista de hoja en `nakui-ui-llimphi` | `01_yachay/nakui/nakui-ui-llimphi` | celdas + headers + freeze panes + pivot views | vista alterna; no toca el ERP view |
-| `tullpu` (editor de capas) | `02_ruway/tullpu/tullpu-core` + `tullpu-app-llimphi` + `tullpu-render` | App nueva: lienzo, capas (cada una objeto del grafo BLAKE3 → dedup automático), brush, máscaras, ajustes no destructivos como nodos del DAG | crate nuevo |
+| `tullpu` (editor de capas) | `02_ruway/tullpu/tullpu-core` + `tullpu-app-llimphi` + `tullpu-render` + `tullpu-ops` | App nueva: lienzo, capas (cada una objeto del grafo BLAKE3 → dedup automático), brush, máscaras, ajustes no destructivos + ops IA como nodos del DAG. **SDD autoritativo: `02_ruway/tullpu/SDD.md`**. Multimedia en §6.quinquies | crate nuevo |
 
 **Estimaciones gruesas**: foreign-docx 2-3 sem · foreign-xlsx sin fórmulas 1-2 sem · yupay 6-10 sem · vista spreadsheet 3-4 sem · foreign-pptx 1-2 sem · tullpu base 3-4 meses · foreign-psd 2 sem post-tullpu.
 
@@ -209,6 +209,50 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 | Vista multilienzo en `pluma-editor-llimphi` | `pluma-editor-llimphi` | Scroll horizontal, *hebras* (barras de color) entre párrafos correspondientes; focus mode 1-2 lienzos |
 
 Ver §11 abajo para la propuesta detallada.
+
+## 6.quinquies Hito — Multimedia (video · audio · editor de imágenes)
+
+**Visión** (2026-05-29): desplegar multimedia en gioser siguiendo las mismas tres capas que todo el resto — **códec/puente → representación nativa (DAG BLAKE3) → frontend Llimphi intercambiable**. Lo único genuinamente nuevo del motor es **un primitivo** (`llimphi-surface`); el resto es reuso de patrones existentes.
+
+### El reemplazo de ffmpeg = el split nativo/foreign
+
+El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla dura #4** (formatos ajenos por puente, apps en nativo):
+
+| Tier | Códecs | Crates | Por qué |
+|---|---|---|---|
+| **Nativo** (Rust puro, compila a WASM, patent-free) | AV1, VP9, Opus, Vorbis, FLAC | `rav1d` (decode AV1, port de dav1d), `rav1e` (encode AV1), `symphonia` (audio + demux MP4/MKV/Ogg/WebM), `muxide` (mux MP4 salida) | Sin C, sin patentes, corre igual en wawa. La limpieza de patentes mapea sobre "nativo". |
+| **Foreign** (patentado, sin decoder Rust puro existente) | H.264, H.265, AAC | `shared/foreign-av` — feature-flag opcional sobre `ffmpeg-next`/`gstreamer-rs`, o Vulkan Video (GStreamer 1.28 ya envía AV1/VP9 por Vulkan, ene-2026) | Aislado del core como `foreign-docx`; idealmente transcodifica a AV1 al importar. |
+
+**Decisión**: AV1/Opus son el **formato de medios nativo** de gioser; H.264/H.265 entran por puente opcional. (`OxiMedia`, reconstrucción pura de ffmpeg royalty-free, v0.1.7 mar-2026 — a vigilar, demasiado joven para apostar el core hoy.)
+
+### Las dos piezas nuevas
+
+| Pieza | Crate | Propósito |
+|---|---|---|
+| `llimphi-surface` | `02_ruway/llimphi/llimphi-hal` + `llimphi-ui` | **Primitivo de mayor palanca.** Textura wgpu persistente que un productor (decoder, cámara, captura, compute shader) escribe sin pasar por vello; `View::surface(handle)` la compone en el árbol Elm. Cero copia CPU por frame. Hoy solo hay `View::image` (reconstruye `peniko::Image` cada tick — sirve a slideshow, muere a 4K@60fps). Desbloquea video + cámara + captura + canvas GPU vivo de un golpe. |
+| `pixel-verbo-daemon` | nuevo (calco de `rimay-verbo-daemon`) | Sirve modelos de imagen (SAM/segmentación, inpaint, upscale, difusión) por socket Unix vía ONNX. Consumidores cambian `Mock` por `DaemonClient::connect(...)`. Una instancia = un modelo. Es lo que hace "IA-able" a tullpu sin acoplarlo a ningún modelo. En paralelo: binding de visión en el trait `ChatClient` de `pluma-llm` (hoy solo-texto; Anthropic/Gemini ya soportan visión). |
+
+### El stack
+
+| Pieza | Crate | Propósito |
+|---|---|---|
+| `media-core` | nuevo (agnóstico) | Decode AV1/Opus → frames a `llimphi-surface` + sink de audio (`cpal`, fuera de Llimphi) con sync A/V por PTS. Hook para frame-ya-en-GPU (Vulkan Video futuro). |
+| `nahual-video-viewer-llimphi` | `02_ruway/nahual` | **Reproductor** (viewer, no editor → cae en nahual). Sobre `media-core` + `llimphi-surface` + widgets de transporte. |
+| `llimphi-widget-{transport,timeline,waveform}` | `02_ruway/llimphi/widgets` | Controles play/scrub, línea de tiempo, forma de onda — todo `paint_with` + input ya existente. |
+| `tullpu` (editor de capas IA) | `02_ruway/tullpu/*` | Editor de imágenes por capas; capas = DAG, ops IA = `Transformacion` (calco del haz de cuerpos de pluma). **Ver `02_ruway/tullpu/SDD.md`** (autoritativo) y §6.ter. |
+| `shared/foreign-av` | nuevo | Puente H.264/H.265/AAC opcional (transcode-a-AV1 al importar). |
+
+### Fases (orden por dependencia)
+
+1. **`llimphi-surface`** — primitivo de textura. Sin esto no hay video serio. Spike chico, máxima palanca.
+2. **`media-core` + `rav1d`/`symphonia`** — decode AV1/Opus → superficie + sink `cpal` con sync A/V.
+3. **`nahual-video-viewer-llimphi`** — primer reproductor real (valida 1+2).
+4. **`shared/foreign-av`** — puente H.264/H.265 opcional.
+5. **`tullpu`** — editor de capas (ver su SDD; fases propias).
+6. **`pixel-verbo-daemon` + visión en `pluma-llm`** — capa IA.
+7. **`shared/foreign-psd`** — import Photoshop (post-tullpu, §6.ter).
+
+**Nota hardware**: wgpu no expone Vulkan Video hoy → el decode arranca en CPU (rav1d es threaded y rinde). `media-core` deja el hook para frame-ya-en-GPU cuando el camino madure.
 
 ## 7. Repos legacy
 
