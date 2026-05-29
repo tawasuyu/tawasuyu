@@ -328,3 +328,124 @@ impl<S: AudioSource> AudioSource for ProbedAudioSource<S> {
         self.probe.push(buf, sample_rate, channels);
     }
 }
+
+// ============================================================
+// Spectrum — análisis por bandas log-spaced (Goertzel)
+// ============================================================
+
+/// Banco de filtros Goertzel sobre un conjunto fijo de frecuencias
+/// centro log-espaciadas. Pensado como motor del visor "barras"
+/// (spectrogram instantáneo) sin traer dep de FFT.
+///
+/// Goertzel cuesta `2·N + 4` adds/mults por banda y por snapshot.
+/// Para 32 bandas × 4096 samples ≈ 131k mults — barato a 30 fps.
+///
+/// El uso típico:
+///
+/// ```ignore
+/// let mut spec = Spectrum::log_bands(32, 40.0, 16_000.0);
+/// // ... más tarde, por frame:
+/// spec.analyze(&snapshot, channels, sample_rate);
+/// for (f, a) in spec.bands().iter().zip(spec.magnitudes()) { ... }
+/// ```
+pub struct Spectrum {
+    centers: Vec<f32>,
+    /// Magnitudes con suavizado temporal (attack/release simple).
+    mags: Vec<f32>,
+    /// Factor de release (0..1). Más cerca de 1 = decae más lento.
+    release: f32,
+}
+
+impl Spectrum {
+    /// Construye `n` bandas log-espaciadas entre `fmin` y `fmax`.
+    /// Falla silenciosamente con `n == 0` (mags queda vacío y
+    /// `analyze` no hace nada).
+    pub fn log_bands(n: usize, fmin: f32, fmax: f32) -> Self {
+        let fmin = fmin.max(1.0);
+        let fmax = fmax.max(fmin * 2.0);
+        let lo = fmin.ln();
+        let hi = fmax.ln();
+        let denom = (n.saturating_sub(1)).max(1) as f32;
+        let centers: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / denom;
+                (lo + (hi - lo) * t).exp()
+            })
+            .collect();
+        Self {
+            mags: vec![0.0; centers.len()],
+            centers,
+            release: 0.78,
+        }
+    }
+
+    /// Factor de "release" del suavizado temporal: cuán rápido baja
+    /// una banda cuando ya no hay señal. 0 = sin memoria; 0.95 = muy
+    /// suave. Default 0.78 (≈ medio segundo a 30 fps).
+    pub fn set_release(&mut self, release: f32) {
+        self.release = release.clamp(0.0, 0.99);
+    }
+
+    pub fn bands(&self) -> &[f32] {
+        &self.centers
+    }
+
+    pub fn magnitudes(&self) -> &[f32] {
+        &self.mags
+    }
+
+    /// Corre Goertzel sobre `samples` (intercalados) plegando a mono y
+    /// actualiza las magnitudes con attack inmediato + release
+    /// exponencial. `sample_rate` y `channels` provienen del snapshot
+    /// del probe.
+    pub fn analyze(&mut self, samples: &[f32], channels: u16, sample_rate: u32) {
+        if self.mags.is_empty() || samples.is_empty() || sample_rate == 0 {
+            return;
+        }
+        let ch = channels.max(1) as usize;
+        let frames = samples.len() / ch;
+        if frames < 4 {
+            return;
+        }
+        // Mono fold reusable. Lo construimos una vez por análisis para
+        // que Goertzel itere sobre f32 contiguos.
+        let mut mono: Vec<f32> = Vec::with_capacity(frames);
+        let inv_ch = 1.0 / ch as f32;
+        for f in 0..frames {
+            let mut s = 0.0_f32;
+            for c in 0..ch {
+                s += samples[f * ch + c];
+            }
+            mono.push(s * inv_ch);
+        }
+
+        let n = frames as f32;
+        let sr = sample_rate as f32;
+        let nyquist = sr * 0.5;
+        for (i, &freq) in self.centers.iter().enumerate() {
+            if freq >= nyquist {
+                // Sobre Nyquist no hay nada que medir; sólo decae.
+                self.mags[i] *= self.release;
+                continue;
+            }
+            // k continuo (no entero) sigue siendo válido para
+            // visualización — distorsión leve cerca de bordes.
+            let k = n * freq / sr;
+            let w = std::f32::consts::TAU * k / n;
+            let coeff = 2.0 * w.cos();
+            let mut q1 = 0.0_f32;
+            let mut q2 = 0.0_f32;
+            for &s in &mono {
+                let q0 = coeff * q1 - q2 + s;
+                q2 = q1;
+                q1 = q0;
+            }
+            // |X(k)|² = q1² + q2² - q1·q2·coeff
+            let mag2 = (q1 * q1 + q2 * q2 - q1 * q2 * coeff).max(0.0);
+            let mag = (mag2.sqrt() * 2.0 / n).min(1.0);
+            // Attack inmediato, release suave.
+            let prev = self.mags[i] * self.release;
+            self.mags[i] = if mag > prev { mag } else { prev };
+        }
+    }
+}

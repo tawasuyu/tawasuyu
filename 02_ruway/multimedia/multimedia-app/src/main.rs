@@ -33,12 +33,12 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect as TaffyRect,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::{App, Handle, View};
 use multimedia_audio_cpal::AudioSink;
 use multimedia_core::{
-    AudioProbe, AudioSource, FrameSource, ProbedAudioSource, TestCard, ToneSource,
+    AudioProbe, AudioSource, FrameSource, ProbedAudioSource, Spectrum, TestCard, ToneSource,
 };
 use multimedia_source_gif::GifSource;
 use multimedia_source_wav::WavSource;
@@ -199,7 +199,19 @@ impl App for MultimediaApp {
                 pipe.surface.blit(queue, encoder, view, rect, viewport);
             });
 
-        let waveform = waveform_panel();
+        let visor_row = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(96.0_f32),
+            },
+            gap: Size {
+                width: length(10.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![waveform_panel(), spectrum_panel()]);
 
         let footer = View::new(Style {
             size: Size {
@@ -235,7 +247,7 @@ impl App for MultimediaApp {
             ..Default::default()
         })
         .fill(Color::from_rgba8(22, 26, 34, 255))
-        .children(vec![title, canvas, waveform, footer])
+        .children(vec![title, canvas, visor_row, footer])
     }
 }
 
@@ -252,9 +264,10 @@ fn waveform_panel<Msg: 'static>() -> View<Msg> {
 
     View::new(Style {
         size: Size {
-            width: percent(1.0_f32),
-            height: length(96.0_f32),
+            width: auto(),
+            height: percent(1.0_f32),
         },
+        flex_grow: 1.0,
         ..Default::default()
     })
     .fill(Color::from_rgba8(14, 16, 22, 255))
@@ -343,6 +356,86 @@ fn waveform_panel<Msg: 'static>() -> View<Msg> {
             None,
             &path,
         );
+    })
+}
+
+/// Panel de espectro: banco Goertzel sobre el probe + barras log
+/// espaciadas (40 Hz → 16 kHz). Sin probe queda con la base oscura y
+/// las casillas vacías.
+fn spectrum_panel<Msg: 'static>() -> View<Msg> {
+    let probe = audio_probe_slot().get().cloned().flatten();
+    let scratch: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let analyzer: Arc<Mutex<Spectrum>> =
+        Arc::new(Mutex::new(Spectrum::log_bands(28, 40.0, 16_000.0)));
+    let bar_color = Color::from_rgba8(255, 175, 95, 255);
+    let base_color = Color::from_rgba8(46, 36, 28, 255);
+
+    View::new(Style {
+        size: Size {
+            width: auto(),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(14, 16, 22, 255))
+    .radius(8.0)
+    .paint_with(move |scene, _ts, rect| {
+        if rect.w <= 4.0 || rect.h <= 4.0 {
+            return;
+        }
+        let pad_x: f32 = 12.0;
+        let pad_y: f32 = 10.0;
+        let inner_x = rect.x + pad_x;
+        let inner_y = rect.y + pad_y;
+        let inner_w = (rect.w - 2.0 * pad_x).max(1.0);
+        let inner_h = (rect.h - 2.0 * pad_y).max(1.0);
+        let baseline = inner_y + inner_h;
+
+        let Some(probe) = probe.as_ref() else {
+            // Sin probe: dibuja una línea de base apagada como hint
+            // de que el visor está vivo.
+            let mut center = BezPath::new();
+            let mid = inner_y + inner_h * 0.5;
+            center.move_to((inner_x as f64, mid as f64));
+            center.line_to(((inner_x + inner_w) as f64, mid as f64));
+            scene.stroke(
+                &Stroke::new(1.0),
+                Affine::IDENTITY,
+                base_color,
+                None,
+                &center,
+            );
+            return;
+        };
+
+        let mut snap = scratch.lock();
+        let (sr, channels) = probe.snapshot(&mut snap);
+        if sr == 0 {
+            return;
+        }
+        let mut analyzer = analyzer.lock();
+        analyzer.analyze(&snap, channels, sr);
+        let mags = analyzer.magnitudes();
+        let n_bands = mags.len();
+        if n_bands == 0 {
+            return;
+        }
+        let gap: f32 = 2.0;
+        let total_gap = gap * (n_bands as f32 + 1.0);
+        let bar_w = ((inner_w - total_gap) / n_bands as f32).max(1.0);
+        for (i, &m) in mags.iter().enumerate() {
+            let h = (m.clamp(0.0, 1.0) * inner_h).max(1.0);
+            let x0 = inner_x + gap + i as f32 * (bar_w + gap);
+            let y0 = baseline - h;
+            let rect = KurboRect::new(
+                x0 as f64,
+                y0 as f64,
+                (x0 + bar_w) as f64,
+                baseline as f64,
+            );
+            scene.fill(Fill::NonZero, Affine::IDENTITY, bar_color, None, &rect);
+        }
     })
 }
 
