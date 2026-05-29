@@ -216,6 +216,43 @@ pub unsafe extern "C" fn tk_sim_total_momentum(
     TK_OK
 }
 
+// ─── Posiciones (AoS para el caller — render 3D) ───────────────────────────
+
+/// Copia las posiciones `(x, y, z)` de TODAS las partículas vivas como un
+/// arreglo plano `f32[N*3]` en `out`. El layout interno es SoA; este export
+/// hace la transposición a AoS para que el caller — típicamente un renderer
+/// que proyecta a 2D — itere de un tirón sin saltos entre buffers.
+///
+/// `cap_count` es la capacidad del buffer en NÚMERO DE PARTÍCULAS (no en
+/// floats ni bytes). Si `cap_count < world.len()`, se devuelve
+/// `TK_ERR_INVALID` sin copiar nada.
+///
+/// Devuelve `n` (cantidad copiada) como `i32`, o un código negativo.
+#[no_mangle]
+pub unsafe extern "C" fn tk_sim_positions(
+    sim: *const TkSim,
+    out: *mut f32,
+    cap_count: u32,
+) -> i32 {
+    let Some(s) = (unsafe { sim_ref(sim) }) else { return TK_ERR_NULL; };
+    if out.is_null() { return TK_ERR_NULL; }
+    let n = s.world.len();
+    if (cap_count as usize) < n {
+        return TK_ERR_INVALID;
+    }
+    let xs = &s.world.xs.0;
+    let ys = &s.world.ys.0;
+    let zs = &s.world.zs.0;
+    for i in 0..n {
+        unsafe {
+            *out.add(i * 3) = xs[i];
+            *out.add(i * 3 + 1) = ys[i];
+            *out.add(i * 3 + 2) = zs[i];
+        }
+    }
+    n as i32
+}
+
 // ─── Snapshots ──────────────────────────────────────────────────────────────
 
 /// Escribe los 32 B del CID BLAKE3 del estado actual en `out_32`.
@@ -385,6 +422,36 @@ mod tests {
         // header u64 + 5 partículas × 11 campos × 4 B = 8 + 220 = 228 B
         assert_eq!(len, 8 + 5 * 11 * 4);
         unsafe { tk_buf_free(ptr, len); }
+        unsafe { tk_sim_free(s); }
+    }
+
+    #[test]
+    fn positions_are_copied_aos() {
+        let s = fresh_sim();
+        // Tres partículas con posiciones únicas para identificar el orden.
+        let pts = [
+            [1.0f32,  2.0,  3.0],
+            [4.0,     5.0,  6.0],
+            [-7.0,    8.0, -9.0],
+        ];
+        for p in &pts {
+            let mut idx = 0u32;
+            let rc = unsafe { tk_sim_spawn(s, p[0], p[1], p[2], 0., 0., 0., 1., 0., &mut idx) };
+            assert_eq!(rc, TK_OK);
+        }
+        let mut buf = [0.0f32; 16 * 3];
+        let n = unsafe { tk_sim_positions(s, buf.as_mut_ptr(), 16) };
+        assert_eq!(n, 3);
+        for (i, p) in pts.iter().enumerate() {
+            assert_eq!(buf[i * 3], p[0]);
+            assert_eq!(buf[i * 3 + 1], p[1]);
+            assert_eq!(buf[i * 3 + 2], p[2]);
+        }
+        // Capacidad insuficiente: rechazo limpio sin tocar el buffer.
+        let mut buf2 = [42.0f32; 6];
+        let rc = unsafe { tk_sim_positions(s, buf2.as_mut_ptr(), 2) };
+        assert_eq!(rc, TK_ERR_INVALID);
+        assert!(buf2.iter().all(|&v| v == 42.0));
         unsafe { tk_sim_free(s); }
     }
 

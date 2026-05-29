@@ -2463,6 +2463,55 @@ pub(crate) fn enlazar_capacidades(
                 crate::tinkuy::sim_free(owner, slot)
             },
         )?;
+
+        // --- CAPACIDAD :: sys_tinkuy_sim_positions(slot, out_ptr, cap_count) -> i32 ---
+        // Copia las posiciones (x,y,z) en AoS hacia la memoria lineal de la
+        // app. `cap_count` es el numero de PARTICULAS que cabe en `out_ptr`;
+        // la syscall valida que `cap_count * 12` esta dentro de la memoria
+        // de la app y devuelve la cantidad real copiada (>= 0) o un codigo
+        // negativo. Cota dura: `MAX_PARTICULAS_VIZ` (256) — el kernel
+        // truncara silenciosamente si la sim tuviera mas.
+        enlazador.func_wrap(
+            "renaser",
+            "sys_tinkuy_sim_positions",
+            |mut caller: Caller<'_, ContextoCapacidades>,
+             slot: u32,
+             out_ptr: u32,
+             cap_count: u32|
+             -> Result<i32, Error> {
+                let owner = caller.data().indice_app;
+                let (n, posiciones) = match crate::tinkuy::sim_positions(owner, slot) {
+                    Ok(t) => t,
+                    Err(codigo) => return Ok(codigo),
+                };
+                let n_a_copiar = n.min(cap_count).min(
+                    crate::tinkuy::MAX_PARTICULAS_VIZ as u32,
+                ) as usize;
+                let bytes_a_copiar = n_a_copiar * 12;
+                let memoria = obtener_memoria(&caller)?;
+                {
+                    let m = memoria.data(&caller);
+                    rango(
+                        m,
+                        out_ptr,
+                        bytes_a_copiar,
+                        "WASM :: sys_tinkuy_sim_positions desbordo memoria",
+                    )?;
+                }
+                let m = memoria.data_mut(&mut caller);
+                let off = out_ptr as usize;
+                for i in 0..n_a_copiar {
+                    let base = off + i * 12;
+                    m[base..base + 4]
+                        .copy_from_slice(&posiciones[i][0].to_le_bytes());
+                    m[base + 4..base + 8]
+                        .copy_from_slice(&posiciones[i][1].to_le_bytes());
+                    m[base + 8..base + 12]
+                        .copy_from_slice(&posiciones[i][2].to_le_bytes());
+                }
+                Ok(n_a_copiar as i32)
+            },
+        )?;
     } // PERMISO_TINKUY
 
     Ok(())

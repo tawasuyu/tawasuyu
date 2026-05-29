@@ -143,6 +143,7 @@ struct Motor {
     tk_sim_kinetic_energy: TypedFunc<u32, f64>,
     tk_sim_temperature: TypedFunc<(u32, f64), f64>,
     tk_sim_snapshot_cid: TypedFunc<(u32, u32), i32>,
+    tk_sim_positions: TypedFunc<(u32, u32, u32), i32>,
     slots: [Slot; MAX_SLOTS],
 }
 
@@ -255,6 +256,9 @@ fn construir_motor() -> Result<Motor, ()> {
     let tk_sim_snapshot_cid = instancia
         .get_typed_func::<(u32, u32), i32>(&store, "tk_sim_snapshot_cid")
         .map_err(|_| ())?;
+    let tk_sim_positions = instancia
+        .get_typed_func::<(u32, u32, u32), i32>(&store, "tk_sim_positions")
+        .map_err(|_| ())?;
 
     let _ = format!("[renaser/tinkuy] motor empotrado, scratch @ {scratch_base:#x}");
     Ok(Motor {
@@ -270,6 +274,7 @@ fn construir_motor() -> Result<Motor, ()> {
         tk_sim_kinetic_energy,
         tk_sim_temperature,
         tk_sim_snapshot_cid,
+        tk_sim_positions,
         slots: [
             Slot::libre(), Slot::libre(), Slot::libre(), Slot::libre(),
             Slot::libre(), Slot::libre(), Slot::libre(), Slot::libre(),
@@ -530,6 +535,67 @@ pub fn sim_snapshot_cid(owner: usize, slot: u32) -> Result<[u8; 32], i32> {
         let mut cid = [0u8; 32];
         cid.copy_from_slice(&memoria[out_ptr as usize..out_ptr as usize + 32]);
         Ok(cid)
+    })
+    .unwrap_or(Err(TK_HOST_ERR_MOTOR))
+}
+
+/// `sys_tinkuy_sim_positions`: copia las posiciones de la sim del slot
+/// como un arreglo `f32[N*3]` (AoS). El kernel apoya la transferencia en
+/// dos saltos:
+///   1) llamada al motor (`tk_sim_positions`) escribe en el scratch del
+///      MOTOR un arreglo AoS de hasta `MAX_PARTICULAS_VIZ * 3` floats;
+///   2) el host copia esos bytes a un buffer de pila propio y lo
+///      devuelve al caller, que lo replicara en la memoria de la APP.
+/// Cota: `MAX_PARTICULAS_VIZ` particulas — el caso de uso es renderizado
+/// 2D, donde mas de unos cientos satura cualquier rasterizador del
+/// userspace. Si el dia de mañana hay miles, se sube esta cota o se
+/// expone el snapshot completo.
+pub const MAX_PARTICULAS_VIZ: usize = 256;
+
+/// Devuelve `(n_copiadas, [(x, y, z); MAX_PARTICULAS_VIZ])`. `n_copiadas`
+/// es la cantidad real de particulas; el resto del arreglo queda en cero.
+pub fn sim_positions(
+    owner: usize,
+    slot: u32,
+) -> Result<(u32, [[f32; 3]; MAX_PARTICULAS_VIZ]), i32> {
+    con_motor(|motor, slots| {
+        let idx = validar_slot(slots, slot, owner)?;
+        let sim_ptr = slots[idx].sim_ptr;
+        // Reservamos un area en el scratch a partir del offset 256 — fuera
+        // de los buffers cortos usados por sim_new/step_lj/snapshot_cid.
+        // Tamaño: MAX_PARTICULAS_VIZ × 3 × 4 = 3072 B, que cabe holgado
+        // dentro de la pagina scratch (los primeros 65536 B son nuestros).
+        const SCRATCH_OFF: u32 = 256;
+        let buf_ptr = motor.scratch_base + SCRATCH_OFF;
+        // Limpiar la zona destino — defensa contra leer ceros viejos.
+        {
+            let memoria = motor.memoria.data_mut(&mut motor.store);
+            let off = buf_ptr as usize;
+            let len = MAX_PARTICULAS_VIZ * 3 * 4;
+            memoria[off..off + len].fill(0);
+        }
+        let rc = motor
+            .tk_sim_positions
+            .call(&mut motor.store, (sim_ptr, buf_ptr, MAX_PARTICULAS_VIZ as u32))
+            .map_err(|_| TK_HOST_ERR_MOTOR)?;
+        if rc < 0 {
+            return Err(TK_HOST_ERR_MOTOR);
+        }
+        let n = rc as u32;
+        let mut salida = [[0.0f32; 3]; MAX_PARTICULAS_VIZ];
+        let memoria = motor.memoria.data(&motor.store);
+        let off = buf_ptr as usize;
+        for i in 0..(n as usize).min(MAX_PARTICULAS_VIZ) {
+            let base = off + i * 12;
+            let mut buf = [0u8; 4];
+            buf.copy_from_slice(&memoria[base..base + 4]);
+            salida[i][0] = f32::from_le_bytes(buf);
+            buf.copy_from_slice(&memoria[base + 4..base + 8]);
+            salida[i][1] = f32::from_le_bytes(buf);
+            buf.copy_from_slice(&memoria[base + 8..base + 12]);
+            salida[i][2] = f32::from_le_bytes(buf);
+        }
+        Ok((n, salida))
     })
     .unwrap_or(Err(TK_HOST_ERR_MOTOR))
 }

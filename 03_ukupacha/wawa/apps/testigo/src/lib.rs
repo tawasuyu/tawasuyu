@@ -54,6 +54,7 @@ extern "C" {
     ) -> i32;
     fn sys_tinkuy_sim_observables(slot: u32, out_24_ptr: u32) -> i32;
     fn sys_tinkuy_sim_snapshot_cid(slot: u32, out_32_ptr: u32) -> i32;
+    fn sys_tinkuy_sim_positions(slot: u32, out_ptr: u32, cap_count: u32) -> i32;
     #[allow(dead_code)]
     fn sys_tinkuy_sim_free(slot: u32) -> i32;
     #[allow(dead_code)]
@@ -95,9 +96,10 @@ const CUTOFF: f32 = 2.5;
 const SUBSTEPS_POR_TICK: u32 = 4;
 
 /// Estado interno de testigo: el slot que el kernel le entrego en `init` y
-/// el ultimo paquete de observables / CID. Si la sim no se pudo crear
-/// (PERMISO_TINKUY ausente, motor no instalado), `slot < 0` y la app pinta
-/// un cartel de error en lugar de los numeros.
+/// el ultimo paquete de observables / CID + posiciones para el visor 3D. Si
+/// la sim no se pudo crear (PERMISO_TINKUY ausente, motor no instalado),
+/// `slot < 0` y la app pinta un cartel de error en lugar de los numeros.
+const CAP_PARTICULAS: usize = 64;
 struct Estado {
     slot: i32,
     step: u64,
@@ -108,6 +110,11 @@ struct Estado {
     /// Codigo del ultimo `sys_tinkuy_*` no-cero; lo pinta el cartel rojo
     /// cuando el motor del kernel rechaza una llamada.
     ultimo_codigo: i32,
+    /// AoS de hasta CAP_PARTICULAS particulas: 3 f32 por particula.
+    /// La syscall `sys_tinkuy_sim_positions` lo reescribe cada `tick`.
+    posiciones: [f32; CAP_PARTICULAS * 3],
+    /// Cantidad real de particulas en `posiciones` (0..=CAP_PARTICULAS).
+    n_particulas: u32,
 }
 
 static mut ESTADO: Estado = Estado {
@@ -118,6 +125,8 @@ static mut ESTADO: Estado = Estado {
     cid: [0u8; 32],
     ok: false,
     ultimo_codigo: 0,
+    posiciones: [0.0; CAP_PARTICULAS * 3],
+    n_particulas: 0,
 };
 
 #[no_mangle]
@@ -223,11 +232,42 @@ pub extern "C" fn tick() {
         estado.ultimo_codigo = rc;
     }
 
+    // 4. Posiciones para el visor 3D — AoS f32[N*3].
+    let rc = unsafe {
+        sys_tinkuy_sim_positions(
+            slot,
+            estado.posiciones.as_mut_ptr() as u32,
+            CAP_PARTICULAS as u32,
+        )
+    };
+    if rc >= 0 {
+        estado.n_particulas = rc as u32;
+    } else {
+        estado.ultimo_codigo = rc;
+        estado.n_particulas = 0;
+    }
+
     estado.ok = true;
     pintar(estado);
 }
 
 // ─── Render ────────────────────────────────────────────────────────────────
+
+// --- Visor 3D :: geometria del viewport y del dominio ----------------------
+const VISOR_X0: usize = 240;
+const VISOR_Y0: usize = 32;
+const VISOR_ANCHO: usize = 228;
+const VISOR_ALTO: usize = 184;
+const DOMINIO_MIN: f32 = -50.0;
+const DOMINIO_MAX: f32 = 50.0;
+/// Color frio (z chico) -> color caliente (z grande). Lerp lineal sobre
+/// los canales R/G/B en bytes (la app no usa premultiplicado).
+const FRIO_R: i32 = 0x40;
+const FRIO_G: i32 = 0x80;
+const FRIO_B: i32 = 0xC8;
+const CALIENTE_R: i32 = 0xC8;
+const CALIENTE_G: i32 = 0x60;
+const CALIENTE_B: i32 = 0x40;
 
 fn pintar(estado: &Estado) {
     let lienzo: &mut [u32] = unsafe { &mut *core::ptr::addr_of_mut!(LIENZO) };
@@ -236,18 +276,18 @@ fn pintar(estado: &Estado) {
     }
 
     // Linea 0: cabecera.
-    texto(lienzo, MARGEN_X, 12, "testigo :: motor tinkuy embebido", HIGHLIGHT);
+    texto(lienzo, MARGEN_X, 8, "testigo :: motor tinkuy embebido", HIGHLIGHT);
 
     if estado.slot < 0 || !estado.ok {
-        texto(lienzo, MARGEN_X, 56, "ERROR :: el motor tinkuy rechazo una llamada", ERROR);
+        texto(lienzo, MARGEN_X, 48, "ERROR :: el motor tinkuy rechazo una llamada", ERROR);
         let mut buf = [0u8; 32];
         let txt = render_codigo(estado.ultimo_codigo, &mut buf);
-        texto(lienzo, MARGEN_X, 84, "codigo:", ETIQUETA);
-        texto(lienzo, MARGEN_X + 7 * GLIFO * ESCALA + 8, 84, txt, ERROR);
+        texto(lienzo, MARGEN_X, 76, "codigo:", ETIQUETA);
+        texto(lienzo, MARGEN_X + 7 * GLIFO * ESCALA + 8, 76, txt, ERROR);
         texto(
             lienzo,
             MARGEN_X,
-            132,
+            120,
             "comprueba PERMISO_TINKUY en el manifiesto",
             ETIQUETA,
         );
@@ -255,47 +295,249 @@ fn pintar(estado: &Estado) {
         return;
     }
 
-    // Etiquetas.
-    texto(lienzo, MARGEN_X, 52, "step", ETIQUETA);
-    texto(lienzo, MARGEN_X + 80, 52, "T", ETIQUETA);
-    texto(lienzo, MARGEN_X + 160, 52, "KE", ETIQUETA);
-
-    // Numeros.
+    // --- Panel izquierdo :: lectura de observables -------------------------
+    // Una columna estrecha (12..220) con step/T/KE como etiqueta+valor en
+    // tres lineas, mas el CID (primeros 4 B en hex) y la mini-barra de KE.
+    texto(lienzo, MARGEN_X, 36, "step", ETIQUETA);
     let mut buf = [0u8; 32];
     let txt_step = render_u64(estado.step, &mut buf);
-    texto(lienzo, MARGEN_X, 72, txt_step, TINTA);
+    texto(lienzo, MARGEN_X + 72, 36, txt_step, TINTA);
 
+    texto(lienzo, MARGEN_X, 56, "T", ETIQUETA);
     let mut buf_t = [0u8; 32];
     let txt_t = render_f64_fixed(estado.temp, 4, &mut buf_t);
-    texto(lienzo, MARGEN_X + 80, 72, txt_t, TINTA);
+    texto(lienzo, MARGEN_X + 72, 56, txt_t, TINTA);
 
+    texto(lienzo, MARGEN_X, 76, "KE", ETIQUETA);
     let mut buf_ke = [0u8; 32];
     let txt_ke = render_f64_fixed(estado.ke, 3, &mut buf_ke);
-    texto(lienzo, MARGEN_X + 160, 72, txt_ke, TINTA);
+    texto(lienzo, MARGEN_X + 72, 76, txt_ke, TINTA);
 
-    // CID — primeros 16 nibbles (8 bytes en hex) bastan como huella visible.
-    texto(lienzo, MARGEN_X, 108, "CID", ETIQUETA);
-    let mut hex = [0u8; 16];
-    for i in 0..8 {
+    // CID — 4 bytes (8 nibbles) caben en el panel izquierdo (128 px).
+    texto(lienzo, MARGEN_X, 96, "CID", ETIQUETA);
+    let mut hex = [0u8; 8];
+    for i in 0..4 {
         let b = estado.cid[i];
         hex[i * 2] = nibble_a_hex(b >> 4);
         hex[i * 2 + 1] = nibble_a_hex(b & 0x0F);
     }
-    texto_bytes(lienzo, MARGEN_X + 48, 108, &hex, TINTA);
+    texto_bytes(lienzo, MARGEN_X + 60, 96, &hex, TINTA);
 
     // Mini-barra de KE: el ancho es proporcional a la energia cinetica,
     // saturada a un techo razonable. Ayuda al ojo a ver la termalizacion.
     let techo_ke: f64 = 30.0;
     let frac = (estado.ke / techo_ke).clamp(0.0, 1.0);
-    let ancho_barra = ((ANCHO - 2 * MARGEN_X) as f64 * frac) as usize;
-    banda(lienzo, MARGEN_X, MARGEN_X + ancho_barra, 156, 172, BARRA);
-    texto(lienzo, MARGEN_X, 184, "ke (barra: 0..30)", ETIQUETA);
+    let ancho_max_barra = 200usize;
+    let ancho_barra = (ancho_max_barra as f64 * frac) as usize;
+    banda(lienzo, MARGEN_X, MARGEN_X + ancho_barra, 124, 138, BARRA);
+    texto(lienzo, MARGEN_X, 148, "ke 0..30", ETIQUETA);
 
     // Linea de status.
-    texto(lienzo, MARGEN_X, 212, "OK", OK);
-    texto(lienzo, MARGEN_X + 36, 212, "LJ N=64 dt=0.005", ETIQUETA);
+    texto(lienzo, MARGEN_X, 220, "OK", OK);
+    texto(lienzo, MARGEN_X + 40, 220, "LJ N=64", ETIQUETA);
+
+    // --- Panel derecho :: visor 3D axonometrico ---------------------------
+    pintar_visor(lienzo, estado);
 
     volcar(lienzo);
+}
+
+/// Proyeccion axonometrica fija (mismo helper que `tinkuy-llimphi::visor`):
+/// `(x + 0.6·z, y + 0.4·z)`. Sin camara orbital — la sim cabe holgada y la
+/// vista 3/4 da sensacion espacial inmediata.
+#[inline]
+fn proyectar(p: [f32; 3]) -> (f32, f32) {
+    (p[0] + 0.6 * p[2], p[1] + 0.4 * p[2])
+}
+
+/// Convierte una coord proyectada del DOMINIO al pixel del viewport. La
+/// escala se elige una sola vez con el dominio del kernel — caja
+/// `[-50, +50]^3` proyectada: x' ∈ [-80, +80], y' ∈ [-70, +70].
+#[inline]
+fn ndc_a_pixel(xp: f32, yp: f32) -> (i32, i32) {
+    const X_MIN: f32 = DOMINIO_MIN + 0.6 * DOMINIO_MIN;
+    const X_MAX: f32 = DOMINIO_MAX + 0.6 * DOMINIO_MAX;
+    const Y_MIN: f32 = DOMINIO_MIN + 0.4 * DOMINIO_MIN;
+    const Y_MAX: f32 = DOMINIO_MAX + 0.4 * DOMINIO_MAX;
+    let u = (xp - X_MIN) / (X_MAX - X_MIN);
+    let v = (yp - Y_MIN) / (Y_MAX - Y_MIN);
+    let px = VISOR_X0 as i32 + (u * VISOR_ANCHO as f32) as i32;
+    let py = VISOR_Y0 as i32 + (v * VISOR_ALTO as f32) as i32;
+    (px, py)
+}
+
+fn pintar_visor(lienzo: &mut [u32], estado: &Estado) {
+    // Fondo del viewport: una sombra discreta.
+    banda(
+        lienzo,
+        VISOR_X0,
+        VISOR_X0 + VISOR_ANCHO,
+        VISOR_Y0,
+        VISOR_Y0 + VISOR_ALTO,
+        0x18_22_38,
+    );
+    // Borde fino.
+    contorno(
+        lienzo,
+        VISOR_X0,
+        VISOR_Y0,
+        VISOR_X0 + VISOR_ANCHO,
+        VISOR_Y0 + VISOR_ALTO,
+        ETIQUETA,
+    );
+
+    // Wireframe del cubo `[-50, +50]^3` — 12 aristas.
+    pintar_caja(lienzo);
+
+    if estado.n_particulas == 0 {
+        return;
+    }
+    let n = (estado.n_particulas as usize).min(CAP_PARTICULAS);
+
+    // Ordenar por depth_key = z + 0.3·x (back-to-front), para que las
+    // particulas mas "cerca" del ojo pisen a las mas lejanas. Insertion-sort
+    // por indice — N=64 → trivialmente rapido y cero alloc.
+    let mut orden = [0u8; CAP_PARTICULAS];
+    for i in 0..n {
+        orden[i] = i as u8;
+    }
+    let mut i = 1;
+    while i < n {
+        let mut j = i;
+        while j > 0 {
+            let a = orden[j - 1] as usize;
+            let b = orden[j] as usize;
+            let ka = depth_key(estado, a);
+            let kb = depth_key(estado, b);
+            if ka <= kb {
+                break;
+            }
+            orden.swap(j - 1, j);
+            j -= 1;
+        }
+        i += 1;
+    }
+
+    // Pintar cada particula como disco de 3 px coloreado por z.
+    for k in 0..n {
+        let idx = orden[k] as usize;
+        let p = [
+            estado.posiciones[idx * 3],
+            estado.posiciones[idx * 3 + 1],
+            estado.posiciones[idx * 3 + 2],
+        ];
+        let (xp, yp) = proyectar(p);
+        let (px, py) = ndc_a_pixel(xp, yp);
+        let z_norm = ((p[2] - DOMINIO_MIN) / (DOMINIO_MAX - DOMINIO_MIN))
+            .clamp(0.0, 1.0);
+        let color = lerp_color(z_norm);
+        disco(lienzo, px, py, 3, color);
+    }
+}
+
+#[inline]
+fn depth_key(estado: &Estado, i: usize) -> f32 {
+    let x = estado.posiciones[i * 3];
+    let z = estado.posiciones[i * 3 + 2];
+    z + 0.3 * x
+}
+
+fn lerp_color(t: f32) -> u32 {
+    let r = FRIO_R + ((CALIENTE_R - FRIO_R) as f32 * t) as i32;
+    let g = FRIO_G + ((CALIENTE_G - FRIO_G) as f32 * t) as i32;
+    let b = FRIO_B + ((CALIENTE_B - FRIO_B) as f32 * t) as i32;
+    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+}
+
+fn pintar_caja(lienzo: &mut [u32]) {
+    // 8 vertices del cubo `[DOMINIO_MIN, DOMINIO_MAX]^3`, proyectados.
+    let mut puntos = [(0i32, 0i32); 8];
+    let v: [[f32; 3]; 8] = [
+        [DOMINIO_MIN, DOMINIO_MIN, DOMINIO_MIN],
+        [DOMINIO_MAX, DOMINIO_MIN, DOMINIO_MIN],
+        [DOMINIO_MAX, DOMINIO_MAX, DOMINIO_MIN],
+        [DOMINIO_MIN, DOMINIO_MAX, DOMINIO_MIN],
+        [DOMINIO_MIN, DOMINIO_MIN, DOMINIO_MAX],
+        [DOMINIO_MAX, DOMINIO_MIN, DOMINIO_MAX],
+        [DOMINIO_MAX, DOMINIO_MAX, DOMINIO_MAX],
+        [DOMINIO_MIN, DOMINIO_MAX, DOMINIO_MAX],
+    ];
+    for (i, p) in v.iter().enumerate() {
+        let (xp, yp) = proyectar(*p);
+        puntos[i] = ndc_a_pixel(xp, yp);
+    }
+    // 12 aristas — mismas que `tinkuy-llimphi::visor::BOX_EDGES`.
+    const ARISTAS: [(usize, usize); 12] = [
+        (0, 1), (1, 2), (2, 3), (3, 0),
+        (4, 5), (5, 6), (6, 7), (7, 4),
+        (0, 4), (1, 5), (2, 6), (3, 7),
+    ];
+    let color = 0x2A_3A_56;
+    for (a, b) in ARISTAS {
+        linea(lienzo, puntos[a].0, puntos[a].1, puntos[b].0, puntos[b].1, color);
+    }
+}
+
+// --- Rasterizado helpers ---------------------------------------------------
+
+fn pintar_pixel(lienzo: &mut [u32], x: i32, y: i32, color: u32) {
+    if x < 0 || y < 0 {
+        return;
+    }
+    let xu = x as usize;
+    let yu = y as usize;
+    if xu >= ANCHO || yu >= ALTO {
+        return;
+    }
+    lienzo[yu * ANCHO + xu] = color;
+}
+
+fn disco(lienzo: &mut [u32], cx: i32, cy: i32, r: i32, color: u32) {
+    let r2 = r * r;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            if dx * dx + dy * dy <= r2 {
+                pintar_pixel(lienzo, cx + dx, cy + dy, color);
+            }
+        }
+    }
+}
+
+/// Bresenham clasico. Cero alloc, todos los casos de pendiente.
+fn linea(lienzo: &mut [u32], x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    let mut x = x0;
+    let mut y = y0;
+    loop {
+        pintar_pixel(lienzo, x, y, color);
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
+fn contorno(lienzo: &mut [u32], x0: usize, y0: usize, x1: usize, y1: usize, color: u32) {
+    let xi0 = x0 as i32;
+    let yi0 = y0 as i32;
+    let xi1 = x1 as i32 - 1;
+    let yi1 = y1 as i32 - 1;
+    linea(lienzo, xi0, yi0, xi1, yi0, color);
+    linea(lienzo, xi1, yi0, xi1, yi1, color);
+    linea(lienzo, xi1, yi1, xi0, yi1, color);
+    linea(lienzo, xi0, yi1, xi0, yi0, color);
 }
 
 fn volcar(lienzo: &[u32]) {
