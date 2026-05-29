@@ -182,21 +182,29 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         _capture_listeners: {},
         addEventListener: function(type, fn, options) {
             // Fase 7.11 — options puede ser `true` (shorthand para
-            // capture) o `{capture: true}`. Otros campos (once, passive,
-            // signal) se ignoran por ahora.
+            // capture) o `{capture: true}`. Fase 7.13 — `{once: true}`:
+            // el listener se borra después de la primera invocación.
+            // `passive`/`signal` siguen ignorados.
             var capture = options === true ||
                           (options && typeof options === 'object' && options.capture === true);
+            var once = !!(options && typeof options === 'object' && options.once === true);
             var store = capture ? this._capture_listeners : this._listeners;
             if (!store[type]) store[type] = [];
-            store[type].push(fn);
+            // Storage: cada entry es {fn, once}. once=true marca al
+            // listener para auto-borrado tras dispatch.
+            store[type].push({ fn: fn, once: once });
         },
         removeEventListener: function(type, fn, options) {
             var capture = options === true ||
                           (options && typeof options === 'object' && options.capture === true);
             var store = capture ? this._capture_listeners : this._listeners;
             if (!store[type]) return;
-            var i = store[type].indexOf(fn);
-            if (i >= 0) store[type].splice(i, 1);
+            for (var i = 0; i < store[type].length; i++) {
+                if (store[type][i].fn === fn) {
+                    store[type].splice(i, 1);
+                    return;
+                }
+            }
         }
     };
     // Fase 7.10 — parentElement como property que resuelve via
@@ -206,6 +214,40 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         get: function() {
             if (!el._parent_id) return null;
             return globalThis.__puriy_elements[el._parent_id] || null;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    // Fase 7.13 — el.children es un getter que computa la lista de
+    // elementos hijos walking __puriy_elements en busca de los que
+    // tienen _parent_id === el.id. NO es una HTMLCollection viva real
+    // (cada acceso recomputa), pero matchea la API más común: iterar
+    // hijos y indexar por número. .length funciona.
+    Object.defineProperty(el, 'children', {
+        get: function() {
+            var out = [];
+            var els = globalThis.__puriy_elements || {};
+            for (var k in els) {
+                if (els[k]._parent_id === el._id) out.push(els[k]);
+            }
+            return out;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    // Fase 7.13 — firstElementChild / lastElementChild como conveniencia.
+    Object.defineProperty(el, 'firstElementChild', {
+        get: function() {
+            var c = el.children;
+            return c.length > 0 ? c[0] : null;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(el, 'lastElementChild', {
+        get: function() {
+            var c = el.children;
+            return c.length > 0 ? c[c.length - 1] : null;
         },
         enumerable: true,
         configurable: true
@@ -417,6 +459,25 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         });
         delete globalThis.__puriy_elements[el.id];
     };
+    // Fase 7.13 — el.click() dispara un click sintético programáticamente.
+    // Reusamos __puriy_dispatch: bubblea por ancestros, ejecuta handlers
+    // capture/bubble + on<type> property. preventDefault del handler NO
+    // tiene efecto en click() (no hay default action que detener — el
+    // chrome no navega tras un dispatch sintético JS, sólo tras click
+    // real del usuario sobre un <a>).
+    el.click = function() {
+        globalThis.__puriy_dispatch(el._id, 'click', null);
+    };
+    // Fase 7.13 — focus()/blur() programáticos. Por ahora sólo
+    // dispatchamos el evento JS correspondiente; el chrome no actualiza
+    // su focused_input desde acá (eso requeriría un puente JS→chrome
+    // distinto). Útil para llamar handlers sin un click real.
+    el.focus = function() {
+        globalThis.__puriy_dispatch(el._id, 'focus', null);
+    };
+    el.blur = function() {
+        globalThis.__puriy_dispatch(el._id, 'blur', null);
+    };
     return el;
 };
 globalThis.__puriy_dispatch = function(id, type, init) {
@@ -472,16 +533,32 @@ globalThis.__puriy_dispatch = function(id, type, init) {
         depth++;
     }
     // Helper local: invoca todos los handlers del tipo en cada listener
-    // map (on<type> property + listeners del map). Devuelve si seguir.
+    // map (on<type> property + listeners del map). Fase 7.13 — entries
+    // pueden ser objeto {fn, once} (post-Fase 7.13) o fn directo (legacy
+    // path en algún lugar). Acepta ambas formas. Listeners con once=true
+    // se borran del store DESPUÉS de la invocación.
     function invoke(node, store) {
         var ls = store && store[type];
         if (!ls) return;
         var arr = ls.slice();
+        var to_remove = [];
         for (var i = 0; i < arr.length; i++) {
             count++;
-            try { arr[i].call(node, event); }
+            var entry = arr[i];
+            var fn = typeof entry === 'function' ? entry : entry.fn;
+            var once = typeof entry === 'object' && entry.once === true;
+            try { fn.call(node, event); }
             catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-            if (event._stopped) return;
+            if (once) to_remove.push(entry);
+            if (event._stopped) break;
+        }
+        // Borrar los once listeners del store original.
+        if (to_remove.length > 0) {
+            var live = store[type];
+            for (var k = 0; k < to_remove.length; k++) {
+                var idx = live.indexOf(to_remove[k]);
+                if (idx >= 0) live.splice(idx, 1);
+            }
         }
     }
     // (1) Capture phase: del ancestro más lejano al hijo del target,
@@ -3174,6 +3251,188 @@ mod tests {
         // Y el getter después del delete devuelve undefined.
         let v = rt.eval("document.getElementById('x').dataset.role").expect("e");
         assert_eq!(v, JsValue::Undefined);
+    }
+
+    // ============= Fase 7.13 — options.once =============
+
+    #[test]
+    fn once_listener_se_dispara_una_sola_vez() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('btn').addEventListener('click', \
+                function(){ console.log('hit') }, { once: true });",
+        )
+        .expect("e");
+        rt.dispatch_event("btn", "click", None).expect("d1");
+        rt.dispatch_event("btn", "click", None).expect("d2");
+        rt.dispatch_event("btn", "click", None).expect("d3");
+        // Sólo el primer dispatch corrió el handler.
+        assert_eq!(rt.stdout(), "hit\n");
+    }
+
+    #[test]
+    fn once_listener_no_afecta_otros_listeners() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "")]).expect("e");
+        rt.eval(
+            "var el = document.getElementById('btn'); \
+             el.addEventListener('click', function(){ console.log('once') }, { once: true }); \
+             el.addEventListener('click', function(){ console.log('forever') });",
+        )
+        .expect("e");
+        rt.dispatch_event("btn", "click", None).expect("d1");
+        rt.dispatch_event("btn", "click", None).expect("d2");
+        // Primer dispatch: ambos. Segundo: sólo 'forever' (once se borró).
+        assert_eq!(rt.stdout(), "once\nforever\nforever\n");
+    }
+
+    #[test]
+    fn children_lista_hijos_con_parent_id_matching() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("a", "li", "p"),
+            snap_with_parent("b", "li", "p"),
+            snap_with_parent("c", "li", "p"),
+            snap("other", "div", ""), // sin parent_id = p, no debe aparecer
+        ])
+        .expect("e");
+        let v = rt
+            .eval("document.getElementById('p').children.length")
+            .expect("e");
+        assert_eq!(v, JsValue::Number(3.0));
+        let v = rt
+            .eval("document.getElementById('p').children[0].id")
+            .expect("e");
+        assert_eq!(v, JsValue::String("a".into()));
+    }
+
+    #[test]
+    fn first_last_element_child_funcionan() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("a", "li", "p"),
+            snap_with_parent("b", "li", "p"),
+        ])
+        .expect("e");
+        let v = rt
+            .eval("document.getElementById('p').firstElementChild.id")
+            .expect("e");
+        assert_eq!(v, JsValue::String("a".into()));
+        let v = rt
+            .eval("document.getElementById('p').lastElementChild.id")
+            .expect("e");
+        assert_eq!(v, JsValue::String("b".into()));
+    }
+
+    #[test]
+    fn children_vacios_es_array_length_0() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p", "div", "")]).expect("e");
+        let v = rt
+            .eval("document.getElementById('p').children.length")
+            .expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+        let v = rt
+            .eval("document.getElementById('p').firstElementChild")
+            .expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn el_click_dispara_handler_programaticamente() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('btn').onclick = function(){ console.log('clicked') }; \
+             document.getElementById('btn').click();",
+        )
+        .expect("e");
+        assert_eq!(rt.stdout(), "clicked\n");
+    }
+
+    #[test]
+    fn el_click_bubblea_por_ancestros() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('outer').onclick = function(){ console.log('OUT') }; \
+             document.getElementById('btn').onclick = function(){ console.log('BTN') }; \
+             document.getElementById('btn').click();",
+        )
+        .expect("e");
+        // click() reusa el dispatch normal: bubblea normalmente.
+        assert_eq!(rt.stdout(), "BTN\nOUT\n");
+    }
+
+    #[test]
+    fn el_focus_blur_disparan_eventos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("i", "input", "")]).expect("e");
+        rt.eval(
+            "var el = document.getElementById('i'); \
+             el.onfocus = function(){ console.log('F') }; \
+             el.onblur = function(){ console.log('B') }; \
+             el.focus(); el.blur();",
+        )
+        .expect("e");
+        assert_eq!(rt.stdout(), "F\nB\n");
+    }
+
+    #[test]
+    fn children_refleja_createElement_appendChild() {
+        // Después de appendChild, el child queda con _parent_id = parent.id
+        // y debe aparecer en parent.children.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p", "ul", "")]).expect("e");
+        rt.eval(
+            "var li = document.createElement('li'); \
+             li.id = 'fresh'; \
+             document.getElementById('p').appendChild(li);",
+        )
+        .expect("e");
+        let v = rt
+            .eval("document.getElementById('p').children.length")
+            .expect("e");
+        assert_eq!(v, JsValue::Number(1.0));
+        let v = rt
+            .eval("document.getElementById('p').children[0].id")
+            .expect("e");
+        assert_eq!(v, JsValue::String("fresh".into()));
+    }
+
+    #[test]
+    fn once_capture_listener_tambien_se_borra() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "div", ""),
+            snap_with_parent("c", "span", "p"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('p').addEventListener('click', \
+                function(){ console.log('cap') }, { capture: true, once: true });",
+        )
+        .expect("e");
+        rt.dispatch_event("c", "click", None).expect("d1");
+        rt.dispatch_event("c", "click", None).expect("d2");
+        assert_eq!(rt.stdout(), "cap\n");
     }
 
     // ============= Fase 7.12 — createElement + appendChild/remove =============
