@@ -28,7 +28,7 @@ Mascota: un calcetín — guarda cosas, se pierde, abriga.
 | `media-core`          | traits `FrameSource` / `AudioSource` + primitivas comunes (probe, espectro, pausa, volumen, mixer, switcher, waterfall, niveles, subtítulos) |
 | `media-source-wav`    | WAV (hound) → `AudioSource + Seekable`                               |
 | `media-source-mp3`    | MP3 (symphonia, sólo feature `mp3`) → `AudioSource + Seekable`       |
-| `media-source-ffmpeg` | MP4/WebM/MKV/MOV/AVI/FLV via ffmpeg subprocess — 1 proceso por archivo (audio + video desde el mismo ffmpeg vía pipes dup'eados a fd 3/4) |
+| `shared/foreign-av`   | MP4/WebM/MKV/MOV/AVI/FLV via ffmpeg subprocess — 1 proceso por archivo (audio + video desde el mismo ffmpeg vía pipes dup'eados a fd 3/4). **Vive en `shared/foreign-*`** (regla dura #4: formatos ajenos por puente). Ofrece además `transcode_a_av1` (ingesta al formato nativo). |
 | `media-source-gif`    | GIF animado (image) → `FrameSource + Seekable`                       |
 | `media-source-image`  | PNG/JPEG/WebP/BMP/TIFF (image) → `FrameSource` (frame único)         |
 | `media-audio-cpal`    | sink realtime sobre cpal (default output device)                     |
@@ -71,8 +71,9 @@ de afuera (Pause, Volume global, Recorded, Probed) sigue igual.
 
 ## Video — ffmpeg como puente
 
-`media-source-ffmpeg` es el único crate del dominio que sabe que
-`ffmpeg` existe. Spawnea UN solo subprocess por archivo que decodea
+`shared/foreign-av` es el único crate del workspace que sabe que
+`ffmpeg` existe (regla dura #4 — vive fuera del dominio, en
+`shared/foreign-*`). Spawnea UN solo subprocess por archivo que decodea
 audio Y video simultáneamente; los streams salen por fds extra
 (3 y 4) enchufados via `pre_exec` + `dup2`. Una `MediaSession`
 clonable (`Arc<Mutex<…>>`) coordina la sesión — `FfmpegVideoSource`
@@ -143,7 +144,7 @@ del notebook funciona como patch-bay del audio.
 ```bash
 cargo test -p media-core              # primitivas puras (Spectrum, Levels, AudioProbe, Mixer, Waterfall, Subtitles)
 cargo test -p media-recorder-wav      # round-trip de grabación
-cargo test -p media-source-ffmpeg     # parse + clamp (sin invocar ffmpeg)
+cargo test -p foreign-av              # parse + clamp (sin invocar ffmpeg)
 cargo test -p pluma-notebook-kernel-media   # parse del mini-DSL
 ```
 

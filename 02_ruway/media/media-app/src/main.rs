@@ -72,7 +72,7 @@ use media_core::{
     VolumeAudio, Waterfall,
 };
 use media_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
-use media_source_ffmpeg::{FfmpegAudioSource, FfmpegVideoSource, MediaSession};
+use foreign_av::{FfmpegAudioSource, FfmpegVideoSource, MediaSession};
 use media_source_gif::GifSource;
 use media_source_image::ImageSource;
 use media_source_mp3::Mp3Source;
@@ -1789,7 +1789,7 @@ fn main() {
     if let (Some(path), Some(VideoKind::Ffmpeg)) =
         (video_path_slot().get(), config_slot().get().map(|c| c.kind))
     {
-        match media_source_ffmpeg::probe(path)
+        match foreign_av::probe(path)
             .and_then(MediaSession::open)
         {
             Ok(session) => {

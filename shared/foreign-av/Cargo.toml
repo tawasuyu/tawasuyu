@@ -1,0 +1,39 @@
+# =============================================================================
+#  gioser :: foreign-av — puente audio/video ajeno ↔ FrameSource/AudioSource
+# -----------------------------------------------------------------------------
+#  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
+#  nunca al núcleo de las apps. Este crate es la ÚNICA pieza del workspace que
+#  sabe que el binario `ffmpeg` existe. Decodea cualquier contenedor/códec que
+#  ffmpeg entienda (MP4/WebM/MKV/MOV/AVI/FLV con H.264/H.265/VP9/AAC…) y lo
+#  expone como `media_core::FrameSource` / `AudioSource` — el resto del dominio
+#  `media` lo ve como una fuente más.
+#
+#  La política nativo/foreign del hito Multimedia (PLAN.md §6.quinquies): AV1 +
+#  Opus son el formato NATIVO de gioser (decode puro-Rust en `media-source-av1`);
+#  los códecs patentados (H.264/H.265/AAC) entran por ESTE puente, idealmente
+#  transcodificados a AV1 al importar (`transcode_a_av1`).
+#
+#  Espejo conceptual de `shared/foreign-psd` / `00_unanchay/pluma/foreign-docx`:
+#  ingestar lo ajeno, dejar el formato nativo a las apps.
+#
+#  Unix-only por ahora — el truco de pasar fds extra al child (pre_exec + dup2)
+#  es POSIX; en otros SO `MediaSession::open` devuelve `FfmpegError::Unsupported`.
+# =============================================================================
+
+[package]
+name = "foreign-av"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/foreign-av — puente al binario ffmpeg: decodea formatos ajenos (H.264/H.265/VP9/AAC…) como FrameSource/AudioSource y transcodifica a AV1/Opus al importar."
+
+[dependencies]
+media-core = { path = "../../02_ruway/media/media-core" }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

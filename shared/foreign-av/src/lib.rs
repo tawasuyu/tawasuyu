@@ -1,13 +1,18 @@
-//! media-source-ffmpeg — puente al binario `ffmpeg` para decodificar
-//! cualquier formato de video/audio que ffmpeg entienda.
+//! foreign-av — puente al binario `ffmpeg` para decodificar cualquier
+//! formato de video/audio que ffmpeg entienda.
 //!
-//! Es la única forma realista hoy de tener un reproductor que abra MP4,
-//! WebM, MKV, MOV, FLV, etc. — los codecs dominantes (H.264, VP9) no
-//! tienen decoders puro-Rust maduros, y los que existen (rav1d para
-//! AV1) cubren una fracción del contenido real. La política del
-//! dominio (`shared/foreign-*`, `media-source-*`) trata ffmpeg
-//! como cualquier puente: una sola pieza del workspace sabe que existe;
-//! el resto lo ve como un `FrameSource` / `AudioSource` más.
+//! Vive en `shared/foreign-*` por la regla dura #4: los formatos ajenos
+//! entran por puentes, nunca al núcleo de las apps. Es la única pieza
+//! del workspace que sabe que el binario `ffmpeg` existe — el dominio
+//! `media` lo ve como un `FrameSource` / `AudioSource` más.
+//!
+//! Es la única forma realista hoy de abrir MP4, WebM, MKV, MOV, FLV,
+//! etc. con códecs patentados (H.264, H.265, AAC) o VP9 — que no tienen
+//! decoders puro-Rust maduros. El formato NATIVO de gioser es AV1+Opus
+//! (decode puro-Rust en `media-source-av1`); por eso este puente ofrece
+//! además [`transcode_a_av1`]: ingerir lo ajeno transcodificándolo al
+//! formato nativo de una vez, igual que `foreign-docx` normaliza al
+//! formato nativo de pluma al importar.
 //!
 //! ## Modelo "un ffmpeg por archivo"
 //!
@@ -83,7 +88,7 @@ impl std::fmt::Display for FfmpegError {
             Self::Io(e) => write!(f, "io: {e}"),
             Self::Unsupported => write!(
                 f,
-                "media-source-ffmpeg requiere Unix (pre_exec + dup2)"
+                "foreign-av requiere Unix (pre_exec + dup2)"
             ),
         }
     }
@@ -725,6 +730,54 @@ fn clamp_pos(pos: Duration, dur: Duration) -> Duration {
     } else {
         pos
     }
+}
+
+// ─── Transcode a AV1+Opus — ingesta al formato nativo ────────────────────────
+
+/// Transcodifica cualquier entrada que ffmpeg entienda a un MKV con
+/// video **AV1** (`libsvtav1`) y audio **Opus** (`libopus`) — el formato
+/// de medios nativo de gioser (PLAN.md §6.quinquies). Es el camino
+/// "ingerir lo ajeno y normalizar de una vez": tras correrlo, el archivo
+/// resultante se reproduce con el decoder puro-Rust de `media-source-av1`
+/// sin volver a tocar ffmpeg.
+///
+/// `crf` es el factor de calidad de SVT-AV1 (0–63; ~30 razonable, menor =
+/// mejor calidad / archivo más grande). Bloquea hasta que ffmpeg termina.
+///
+/// Falla con [`FfmpegError::Spawn`] si ffmpeg no está en PATH, o
+/// [`FfmpegError::Probe`] si el proceso sale con código != 0 (reusa la
+/// variante para no multiplicar tipos — el mensaje trae el stderr).
+pub fn transcode_a_av1(
+    input: impl AsRef<Path>,
+    output: impl AsRef<Path>,
+    crf: u8,
+) -> Result<(), FfmpegError> {
+    let crf = crf.min(63);
+    let output = output.as_ref();
+    let status = Command::new("ffmpeg")
+        .args(["-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(input.as_ref())
+        .args([
+            "-c:v",
+            "libsvtav1",
+            "-crf",
+            &crf.to_string(),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "128k",
+        ])
+        .arg(output)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| FfmpegError::Spawn(e.to_string()))?;
+    if !status.status.success() {
+        let stderr = String::from_utf8_lossy(&status.stderr).trim().to_string();
+        return Err(FfmpegError::Probe(stderr));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
