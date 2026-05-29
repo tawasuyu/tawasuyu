@@ -1,0 +1,35 @@
+# =============================================================================
+#  gioser :: foreign-psd — puente Photoshop ↔ grafo de capas tullpu
+# -----------------------------------------------------------------------------
+#  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
+#  nunca al núcleo de las apps. Este crate IMPORTA un `.psd` (Photoshop) al
+#  modelo nativo de tullpu — `tullpu_core::Lienzo` con `Capa`s raster
+#  apuntando a buffers Rgba8 por hash BLAKE3.
+#
+#  Una capa PSD → una `Capa` raster. El orden visual coincide: en PSD index 0 es
+#  el fondo, en `Lienzo::capas` también. Blend modes se mapean al catálogo de
+#  `ModoFusion` (los soportados); el resto cae a Normal con un warning en el
+#  resultado. Opacidad 0-255 → f32 / 255.0. Capacidades NO portadas (post-MVP):
+#  máscaras, grupos, clipping, ajustes, layer styles, smart objects.
+#
+#  Espejo conceptual de `00_unanchay/pluma/foreign-docx`: misma estética de
+#  "ingestar lo legible y dejar el formato fancy al editor nativo".
+# =============================================================================
+
+[package]
+name = "foreign-psd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tullpu/foreign-psd — importa `.psd` (Photoshop) como Lienzo nativo de tullpu. Capa PSD → Capa raster con buffer Rgba8 en almacén content-addressed."
+
+[dependencies]
+psd = "0.3"
+thiserror = { workspace = true }
+tullpu-core = { path = "../../02_ruway/tullpu/tullpu-core" }
+
+[dev-dependencies]
+image = { workspace = true }
+tullpu-render = { path = "../../02_ruway/tullpu/tullpu-render" }

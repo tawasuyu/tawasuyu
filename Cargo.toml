@@ -379,6 +379,7 @@ members = [
     "shared/card/card-net",
     "shared/card/card-wit",
     "shared/foreign-fs",
+    "shared/foreign-psd",
     "shared/format",
     "shared/forth-emisor",
     "shared/rimay-localize",
