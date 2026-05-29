@@ -169,11 +169,13 @@ pub fn montar() -> Result<ResumenCapacidades, &'static str> {
     // el resto del kernel sepa que hay XHCI. Los controladores no elegidos
     // quedan corriendo pero sin servir — inofensivo.
     let mut elegido: Option<ControladorListo> = None;
+    let mut total_disp = 0usize;
 
     for (idx, info) in hallados.into_iter().enumerate() {
         match intentar_controlador(info) {
             Ok(mut listo) => {
                 let tiene_raton = listo.raton_hid.is_some();
+                total_disp += listo.conectados;
                 resumen_global.push(format!(
                     "usb ctrl{idx}: {} puertos, {} con disp, raton={}",
                     listo.caps.max_puertos,
@@ -197,9 +199,13 @@ pub fn montar() -> Result<ResumenCapacidades, &'static str> {
 
     let elegido = elegido.ok_or("xhci :: ningun controlador XHCI inicializo")?;
     let caps = elegido.caps;
-    if elegido.raton_hid.is_none() {
-        resumen_global.push(String::from("usb raton USB: NO (sigue el pad PS/2)"));
-    }
+    // Linea-resumen DECISIVA: cuantos dispositivos hay en los puertos raiz de
+    // todos los controladores. >0 sin raton = hay algo (probable HUB con el
+    // raton detras, que aun no atravesamos). =0 = no se detecta nada conectado.
+    resumen_global.push(format!(
+        "usb RESUMEN: {num_controladores} ctrls, {total_disp} disp en puertos raiz, raton={}",
+        if elegido.raton_hid.is_some() { "SI" } else { "NO" },
+    ));
 
     ESTADO.call_once(move || {
         Mutex::new(Estado {

@@ -998,10 +998,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // PAUSA DE LECTURA (depuración USB en metal sin COM1): el compositor pintará
     // sus ventanas encima del log apenas arranque el reactor, tapando las líneas
     // `usb ...`. Aquí —antes del reactor, con las IRQs aún apagadas— un spin
-    // acotado mantiene el log en pantalla unos segundos para poder leerlo. Es
-    // temporal mientras cazamos el raton USB; se quita despues.
-    reportar(">> PAUSA 8s — lee las lineas 'usb ctrlN:' de arriba <<");
-    for _ in 0..3_000_000_000u32 {
+    // acotado mantiene el log en pantalla ~10s para poder leerlo. Es temporal
+    // mientras cazamos el raton USB; se quita despues. (OJO: `spin_loop`/PAUSE
+    // cuesta ~100 ciclos; 3e8 ≈ 10s a GHz — NO subir a miles de millones.)
+    reportar(">> PAUSA ~10s, SIGUE SOLA — lee las lineas 'usb ...' de arriba <<");
+    for _ in 0..300_000_000u32 {
         core::hint::spin_loop();
     }
 
