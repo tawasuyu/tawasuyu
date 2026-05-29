@@ -1,0 +1,13 @@
+[package]
+name = "media-source-vorbis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+media-core = { path = "../media-core" }
+# symphonia con `vorbis` + `ogg` (codec Vorbis + demuxer Ogg, puro-Rust).
+# Las features se declaran en el dep raíz del workspace.
+symphonia = { workspace = true }
