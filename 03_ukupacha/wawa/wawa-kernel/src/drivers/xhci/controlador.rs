@@ -154,6 +154,7 @@ pub struct ResumenCapacidades {
 /// resetea el controlador ni levanta USBCMD.RS; solo lee.
 pub fn montar() -> Result<ResumenCapacidades, &'static str> {
     let hallados = pci::enumerar_por_clase(pci::clases::USB_XHCI);
+    let num_controladores = hallados.len();
     let info = hallados
         .into_iter()
         .next()
@@ -250,6 +251,9 @@ pub fn montar() -> Result<ResumenCapacidades, &'static str> {
     // Device → GET_DESCRIPTOR(Device, 0, 8) → re-leer descriptor completo
     // → GET_DESCRIPTOR(Configuration, ...) parsea interfaces/endpoints.
     let mut resumen_pantalla: Vec<String> = Vec::new();
+    resumen_pantalla.push(format!(
+        "usb :: {num_controladores} controlador(es) XHCI; usando el 1ro: {max_puertos} puertos"
+    ));
     resumen_pantalla.push(format!("usb XHCI ok :: {conectados} puerto(s) con dispositivo"));
     let raton_hid = if conectados > 0 {
         match enumerar_dispositivos(&mut registros, &mut estructuras, max_puertos) {
