@@ -24,15 +24,23 @@ Cerrada en commits `436007b`/`0b0f685`/`67d6dbf`:
 
 Meta: `tinkuy-core` ejecutable dentro de Wawa userspace como app WASM.
 
-- **C1 — Backend `wasm` single-thread.** Añadir variantes `#[cfg(feature = "wasm")]` de `kick_drift`, `finish_kick`, `lennard_jones`, `coulomb` que iteran 0..n en single-thread (sin rayon, sin SyncPtr). `cargo check -p tinkuy-core --no-default-features --features wasm --target wasm32-unknown-unknown` debe pasar; ídem `-p tinkuy-forces`. Tests `cfg(all(test, feature = "wasm"))` que validen equivalencia con la rama cpu sobre 32 partículas LJ (mismo CID).
-- **C2 — ABI estable.** Diseñar superficie C-friendly (`#[repr(C)]`, `extern "C"`, sin lifetimes, errores como `i32`, punteros opacos a `World`/`Grid3D`):
-  - `tk_world_new(cap, *mut *mut World) -> i32`
-  - `tk_world_spawn(w, x, y, z, vx, vy, vz, m, q, *mut u32) -> i32`
-  - `tk_world_step(w, grid, dt, *mut LjParams) -> i32`
-  - `tk_world_snapshot_cid(w, *mut [u8; 32]) -> i32`
-  - `tk_world_export_postcard(w, *mut *mut u8, *mut usize) -> i32` (alloc en `tinkuy-wasm` allocator, free explícito).
-  - `tk_world_import_postcard(*const u8, len, *mut *mut World) -> i32`
-- **C3 — Crate `tinkuy-wasm`.** `crate-type = ["cdylib"]`, target `wasm32-unknown-unknown`. Re-exporta la ABI. Objetivo: <200 KB post `wasm-opt -Os`. Sin `wasm-bindgen` para mantener ABI plana (lo consume Wawa, no JS).
+- **C1 — Backend `wasm` single-thread.** ✅ (commit `7d90035`) Variantes `#[cfg(all(feature = "wasm", not(feature = "cpu")))]` de `kick_drift`, `finish_kick`, `lennard_jones`, `coulomb`. Tests host con `--features wasm`: 16/16 core + 8/8 forces.
+- **C2 — ABI estable.** ✅ Crate `tinkuy-abi` (rlib) con superficie plana C-friendly. Handle opaco `TkSim` que agrupa `World + Grid3D + outboxes`:
+  - `tk_sim_new(cap, *origin, cell_size, *dims, **out) -> i32`
+  - `tk_sim_free(*sim)`
+  - `tk_sim_spawn(*sim, x,y,z,vx,vy,vz,m,q, *out_idx) -> i32`
+  - `tk_sim_len(*sim) -> u32`
+  - `tk_sim_rebuild_grid(*sim) -> i32`
+  - `tk_sim_step_lj(*sim, dt, ε, σ, cutoff, *bmin, *bmax) -> i32`
+  - `tk_sim_kinetic_energy(*sim) -> f64`
+  - `tk_sim_temperature(*sim, kb) -> f64`
+  - `tk_sim_total_momentum(*sim, *out_xyz) -> i32`
+  - `tk_sim_snapshot_cid(*sim, *out_32) -> i32`
+  - `tk_sim_snapshot_export(*sim, **out_ptr, *out_len) -> i32`
+  - `tk_buf_free(*ptr, len)`
+  - Códigos: `TK_OK = 0`, `TK_ERR_NULL = -1`, `TK_ERR_INVALID = -2`, `TK_ERR_OOM = -3`.
+  - Tests: 5/5 con `cpu` y 5/5 con `wasm`. `wasm32-unknown-unknown` compila.
+- **C3 — Crate `tinkuy-wasm`.** `crate-type = ["cdylib"]`, target `wasm32-unknown-unknown`. Re-exporta la ABI de `tinkuy-abi` con `pub use`. Objetivo: <200 KB post `wasm-opt -Os`. Sin `wasm-bindgen` para mantener ABI plana (lo consume Wawa, no JS).
 - **C4 — App wawa `03_ukupacha/wawa/apps/tinkuy/`.** Carga `tinkuy-wasm.wasm`, corre LJ 256 partículas, muestra step/T/CID en texto plano. Reusa el pipeline de `apps/pluma/` (host: `wasmi`).
 - **C5 — `scripts/build-tinkuy.sh`.** Análogo a `build-pluma.sh`: cargo build wasm32 → wasm-opt -Os → copia a `wawa-kernel/assets/`.
 
