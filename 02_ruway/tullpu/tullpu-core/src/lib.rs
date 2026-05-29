@@ -395,6 +395,52 @@ impl Lienzo {
         afectados
     }
 
+    /// Sube una capa un puesto hacia el tope (mayor índice). Devuelve `true`
+    /// si hubo movimiento; `false` si ya estaba en el tope o no existe. No
+    /// invalida frescuras: la pila pintor-de-pintor reordena la composición,
+    /// pero las dependencias madre→hija son por `Uuid` y siguen valiendo.
+    pub fn mover_arriba(&mut self, id: Uuid) -> bool {
+        let Some(i) = self.capas.iter().position(|c| c.id == id) else {
+            return false;
+        };
+        if i + 1 >= self.capas.len() {
+            return false;
+        }
+        self.capas.swap(i, i + 1);
+        true
+    }
+
+    /// Baja una capa un puesto hacia el fondo (menor índice). Misma forma que
+    /// [`mover_arriba`] en espejo.
+    pub fn mover_abajo(&mut self, id: Uuid) -> bool {
+        let Some(i) = self.capas.iter().position(|c| c.id == id) else {
+            return false;
+        };
+        if i == 0 {
+            return false;
+        }
+        self.capas.swap(i, i - 1);
+        true
+    }
+
+    /// Duplica una capa: inserta una copia con `Uuid` nuevo justo encima de la
+    /// original. Devuelve el `Uuid` recién acuñado, o `None` si `id` no
+    /// existía. Una raster duplicada apunta al mismo hash de contenido (el
+    /// almacén content-addressed no replica buffers). Una derivada apunta a
+    /// la misma madre con la misma op y preserva su estado de frescura — el
+    /// almacén ya tiene el buffer cacheado bajo ese hash. Las hijas existentes
+    /// de la original siguen apuntando a la original; el clone vive su
+    /// propia vida.
+    pub fn duplicar(&mut self, id: Uuid) -> Option<Uuid> {
+        let i = self.capas.iter().position(|c| c.id == id)?;
+        let mut clon = self.capas[i].clone();
+        clon.id = Uuid::new_v4();
+        clon.nombre = format!("{} (copia)", clon.nombre);
+        let nuevo_id = clon.id;
+        self.capas.insert(i + 1, clon);
+        Some(nuevo_id)
+    }
+
     /// Marca una capa derivada como `Fresca` — lo invoca el compositor tras
     /// regenerar el buffer cacheado. Devuelve `true` si la capa existía y
     /// era derivada.
@@ -647,6 +693,74 @@ mod tests {
         let h3 = hash_bytes(b"pluma");
         assert_eq!(h1, h2);
         assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn mover_arriba_abajo_reordena_pila() {
+        let mut l = Lienzo::nuevo(8, 8);
+        let a = Capa::raster("a", h(1));
+        let b = Capa::raster("b", h(2));
+        let c = Capa::raster("c", h(3));
+        let (id_a, id_b, id_c) = (a.id, b.id, c.id);
+        l.apilar(a);
+        l.apilar(b);
+        l.apilar(c);
+
+        // Orden inicial: [a, b, c] (a fondo, c tope).
+        assert!(l.mover_arriba(id_b)); // [a, c, b]
+        let orden: Vec<Uuid> = l.capas.iter().map(|x| x.id).collect();
+        assert_eq!(orden, vec![id_a, id_c, id_b]);
+
+        // c ya está en tope tras el swap — no, b sí. Bajamos b: [a, b, c].
+        assert!(l.mover_abajo(id_b));
+        let orden: Vec<Uuid> = l.capas.iter().map(|x| x.id).collect();
+        assert_eq!(orden, vec![id_a, id_b, id_c]);
+
+        // a en el fondo no baja más; c en el tope no sube más.
+        assert!(!l.mover_abajo(id_a));
+        assert!(!l.mover_arriba(id_c));
+
+        // Capa inexistente.
+        assert!(!l.mover_arriba(Uuid::new_v4()));
+        assert!(!l.mover_abajo(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn duplicar_inserta_clon_justo_encima() {
+        let mut l = Lienzo::nuevo(8, 8);
+        let a = Capa::raster("a", h(1));
+        let id_a = a.id;
+        l.apilar(a);
+        let b = Capa::derivada("b", id_a, TransformacionPixel::Local(OpLocal::Invertir), h(0));
+        let id_b = b.id;
+        l.apilar(b);
+
+        let id_clon = l.duplicar(id_a).expect("a existe");
+        assert_eq!(l.capas.len(), 3);
+        // Orden esperado: [a, a_clon, b]
+        assert_eq!(l.capas[0].id, id_a);
+        assert_eq!(l.capas[1].id, id_clon);
+        assert_eq!(l.capas[2].id, id_b);
+
+        // El clon tiene Uuid nuevo, mismo contenido, nombre con sufijo.
+        assert_ne!(id_clon, id_a);
+        assert_eq!(l.capas[1].contenido, h(1));
+        assert_eq!(l.capas[1].nombre, "a (copia)");
+
+        // Las hijas de la original siguen apuntando a la original, no al clon.
+        assert_eq!(l.capa(id_b).unwrap().madre(), Some(id_a));
+
+        // Duplicar una derivada copia la op y la madre.
+        let id_clon_b = l.duplicar(id_b).expect("b existe");
+        let clon_b = l.capa(id_clon_b).unwrap();
+        assert_eq!(clon_b.madre(), Some(id_a));
+        assert!(matches!(
+            &clon_b.origen,
+            OrigenCapa::Derivada { op: TransformacionPixel::Local(OpLocal::Invertir), .. }
+        ));
+
+        // Capa inexistente.
+        assert!(l.duplicar(Uuid::new_v4()).is_none());
     }
 
     #[test]

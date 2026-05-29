@@ -76,6 +76,9 @@ enum Msg {
     ToggleVisible(Uuid),
     BumpOpacidad(Uuid, f32),
     CiclarBlend(Uuid),
+    MoverArriba(Uuid),
+    MoverAbajo(Uuid),
+    Duplicar(Uuid),
     Eliminar(Uuid),
     Agregar(OpLocal),
     AgregarIa(OpPixel),
@@ -486,6 +489,12 @@ fn fila_capa(
     let opd = mini_btn("α−", Msg::BumpOpacidad(capa.id, -0.1), &btn_pal);
     let opu = mini_btn("α+", Msg::BumpOpacidad(capa.id, 0.1), &btn_pal);
     let blend = mini_btn("blnd", Msg::CiclarBlend(capa.id), &btn_pal);
+    // En la lista la pintamos top→fondo: "↑" visualmente sube en la lista,
+    // lo que equivale a bajar el índice en la pila (más cerca del fondo).
+    // Mantengo la semántica visual para que el usuario haga lo que ve.
+    let subir = mini_btn("↑", Msg::MoverArriba(capa.id), &btn_pal);
+    let bajar = mini_btn("↓", Msg::MoverAbajo(capa.id), &btn_pal);
+    let dup = mini_btn("⎘", Msg::Duplicar(capa.id), &btn_pal);
     let elim = mini_btn("✕", Msg::Eliminar(capa.id), &btn_pal);
 
     // Thumbnail a la izquierda (slot fijo aun si el cache aún no lo tiene
@@ -530,7 +539,9 @@ fn fila_capa(
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .children(vec![thumb_view, nombre, toggle, opd, opu, blend, elim])
+    .children(vec![
+        thumb_view, nombre, toggle, opd, opu, blend, subir, bajar, dup, elim,
+    ])
 }
 
 fn mini_btn(label: &str, msg: Msg, pal: &ButtonPalette) -> View<Msg> {
@@ -870,6 +881,25 @@ impl App for Tullpu {
                     c.blend = siguiente_blend(c.blend);
                 }
                 aplicar_y_recomponer(&mut model);
+            }
+            Msg::MoverArriba(id) => {
+                // Reordenar no toca dependencias por Uuid, así que basta
+                // recomponer — `regenerar_stale_con_ia` corre igual y es
+                // barato si nada está stale.
+                if model.lienzo.mover_arriba(id) {
+                    aplicar_y_recomponer(&mut model);
+                }
+            }
+            Msg::MoverAbajo(id) => {
+                if model.lienzo.mover_abajo(id) {
+                    aplicar_y_recomponer(&mut model);
+                }
+            }
+            Msg::Duplicar(id) => {
+                if let Some(nuevo) = model.lienzo.duplicar(id) {
+                    model.seleccionada = Some(nuevo);
+                    aplicar_y_recomponer(&mut model);
+                }
             }
             Msg::Eliminar(id) => {
                 model.lienzo.capas.retain(|c| c.id != id);
