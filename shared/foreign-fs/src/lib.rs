@@ -11,9 +11,10 @@
 //       criterio blob-plano vs índice. Si dos árboles tienen idéntico
 //       contenido, colapsan al MISMO hash raíz, vengan de donde vengan.
 //
-//    2. Un `LectorFs` concreto: el lector FAT (`fat`), que opera sobre un slice
-//       de bytes crudo —exactamente lo que wawa ve de un dispositivo de bloques
-//       sin montar—.
+//    2. Lectores `LectorFs` concretos: FAT12/16/32 (`fat`) y ext2/3/4 (`ext4`),
+//       cada uno sobre un slice de bytes crudo —exactamente lo que wawa ve de un
+//       dispositivo de bloques sin montar—. FAT cubre el USB/partición EFI;
+//       ext4 cubre la partición vieja de Linux del usuario.
 //
 //  El destino de los objetos lo decide un `Emisor`: en el host escribe
 //  `<hash>.obj`; in-cage llamaría a `sys_object_put`. El absorbedor sólo habla
@@ -26,6 +27,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+pub mod ext4;
 pub mod fat;
 
 /// Tamaño de trozo para archivos grandes. IDÉNTICO al host
@@ -49,8 +51,8 @@ pub enum FsError {
 
 /// Clase de una entrada de directorio en el FS de origen, ya normalizada a los
 /// modos del grafo. FAT no tiene ni bit de ejecución ni enlaces simbólicos, así
-/// que su lector sólo produce `Archivo`/`Directorio`; el modelo admite los
-/// otros para cuando se sume un lector ext4.
+/// que su lector sólo produce `Archivo`/`Directorio`; ext4 sí los preserva y su
+/// lector emite las cuatro clases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Clase {
     /// Archivo regular. `ejecutable` espeja el bit `x` de Unix (siempre `false`
