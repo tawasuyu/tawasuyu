@@ -31,6 +31,7 @@ use llimphi_ui::{App, Handle, View};
 use multimedia_audio_cpal::AudioSink;
 use multimedia_core::{AudioSource, FrameSource, TestCard, ToneSource};
 use multimedia_source_gif::GifSource;
+use multimedia_source_wav::WavSource;
 use parking_lot::Mutex;
 
 const TESTCARD_W: u32 = 480;
@@ -234,13 +235,14 @@ fn main() {
     };
     config_slot().set(cfg).ok();
 
-    // Audio: si MULTIMEDIA_MUTE está set, saltamos. Si no, abrimos un
-    // tono A4 contra el default output device. El AudioSink debe vivir
-    // hasta el exit — `cpal::Stream` no es `Sync`, así que no puede ir
-    // a un static; lo mantenemos en una local de `main` que sólo se
-    // dropea cuando el proceso termina.
+    // Audio: si MULTIMEDIA_MUTE está set, saltamos. Si no, elegimos
+    // fuente — MULTIMEDIA_WAV=path la activa, sino cae al ToneSource
+    // (A4). El AudioSink debe vivir hasta el exit — `cpal::Stream` no
+    // es `Sync`, así que no puede ir a un static; lo mantenemos en
+    // una local de `main` que sólo se dropea cuando el proceso
+    // termina.
     let _audio_sink = if std::env::var("MULTIMEDIA_MUTE").is_err() {
-        let source: Arc<Mutex<dyn AudioSource + Send>> = Arc::new(Mutex::new(ToneSource::a4()));
+        let source = audio_source_from_env();
         match AudioSink::open(source) {
             Ok(sink) => {
                 eprintln!(
@@ -260,4 +262,24 @@ fn main() {
     };
 
     llimphi_ui::run::<MultimediaApp>();
+}
+
+fn audio_source_from_env() -> Arc<Mutex<dyn AudioSource + Send>> {
+    if let Ok(path) = std::env::var("MULTIMEDIA_WAV") {
+        match WavSource::from_path(&path) {
+            Ok(wav) => {
+                eprintln!(
+                    "multimedia-app: wav {path} · {} ch · {} Hz · {:.1}s",
+                    wav.source_channels(),
+                    wav.source_sample_rate(),
+                    wav.duration_seconds(),
+                );
+                return Arc::new(Mutex::new(wav));
+            }
+            Err(e) => {
+                eprintln!("multimedia-app: no pude abrir WAV {path}: {e} — caigo a tono A4");
+            }
+        }
+    }
+    Arc::new(Mutex::new(ToneSource::a4()))
 }

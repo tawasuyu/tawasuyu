@@ -12,4 +12,5 @@ llimphi-ui = { path = "../../llimphi/llimphi-ui" }
 multimedia-audio-cpal = { path = "../multimedia-audio-cpal" }
 multimedia-core = { path = "../multimedia-core" }
 multimedia-source-gif = { path = "../multimedia-source-gif" }
+multimedia-source-wav = { path = "../multimedia-source-wav" }
 parking_lot = { workspace = true }
