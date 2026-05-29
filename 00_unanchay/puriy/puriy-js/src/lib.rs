@@ -656,6 +656,57 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         });
         delete globalThis.__puriy_elements[el.id];
     };
+    // Fase 7.20 — replaceWith(...nodes), before(...nodes), after(...nodes).
+    // DOM4 sibling-level mutation. Acepta mezcla de Elements sintéticos y
+    // strings (auto-text-node). No-op silencioso si el elemento no tiene
+    // parent (matchea spec).
+    el.replaceWith = function() {
+        if (!el._parent_id) return;
+        var parent = globalThis.__puriy_elements[el._parent_id];
+        if (!parent) return;
+        // Inserta cada arg antes de `el`, luego remueve `el`. Orden de
+        // args se preserva (insertBefore va en orden directo).
+        for (var i = 0; i < arguments.length; i++) {
+            var a = arguments[i];
+            var node = null;
+            if (typeof a === 'string') node = document.createTextNode(a);
+            else if (a && a._synthetic) node = a;
+            else continue;
+            parent.insertBefore(node, el);
+        }
+        el.remove();
+    };
+    el.before = function() {
+        if (!el._parent_id) return;
+        var parent = globalThis.__puriy_elements[el._parent_id];
+        if (!parent) return;
+        for (var i = 0; i < arguments.length; i++) {
+            var a = arguments[i];
+            var node = null;
+            if (typeof a === 'string') node = document.createTextNode(a);
+            else if (a && a._synthetic) node = a;
+            else continue;
+            parent.insertBefore(node, el);
+        }
+    };
+    el.after = function() {
+        if (!el._parent_id) return;
+        var parent = globalThis.__puriy_elements[el._parent_id];
+        if (!parent) return;
+        // Para preservar el orden de args en el output, hay que insertar
+        // antes del NEXT sibling del elemento. Si no hay nextSibling,
+        // appendChild en el parent.
+        var next = el.nextElementSibling;
+        for (var i = 0; i < arguments.length; i++) {
+            var a = arguments[i];
+            var node = null;
+            if (typeof a === 'string') node = document.createTextNode(a);
+            else if (a && a._synthetic) node = a;
+            else continue;
+            if (next) parent.insertBefore(node, next);
+            else parent.appendChild(node);
+        }
+    };
     // Fase 7.13 — el.click() dispara un click sintético programáticamente.
     // Reusamos __puriy_dispatch: bubblea por ancestros, ejecuta handlers
     // capture/bubble + on<type> property. preventDefault del handler NO
@@ -4933,5 +4984,75 @@ mod tests {
         let muts = rt.drain_dom_mutations();
         // Sin firstElementChild cae a appendChild.
         assert!(muts.iter().any(|m| m.kind == "appendChild"));
+    }
+
+    // ============= Fase 7.20 — replaceWith + before + after =============
+
+    #[test]
+    fn replace_with_inserta_y_remueve_el_original() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p", "div", ""), snap_with_parent("old", "span", "p")])
+            .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var o = document.getElementById('old'); \
+             o.replaceWith(document.createElement('section'), ' suelto');",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let inserts: Vec<_> = muts.iter().filter(|m| m.kind == "insertBefore").collect();
+        let removes: Vec<_> = muts.iter().filter(|m| m.kind == "removeChild").collect();
+        assert_eq!(inserts.len(), 2);
+        assert_eq!(removes.len(), 1);
+        assert_eq!(removes[0].value, "old");
+    }
+
+    #[test]
+    fn before_inserta_siblings_antes_del_elemento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p", "div", ""), snap_with_parent("center", "span", "p")])
+            .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var c = document.getElementById('center'); \
+             c.before('hola ', document.createElement('em'));",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let inserts: Vec<_> = muts.iter().filter(|m| m.kind == "insertBefore").collect();
+        assert_eq!(inserts.len(), 2);
+        assert_eq!(muts.iter().filter(|m| m.kind == "removeChild").count(), 0);
+    }
+
+    #[test]
+    fn after_sin_next_sibling_cae_a_append_child() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p", "div", ""), snap_with_parent("last", "span", "p")])
+            .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var l = document.getElementById('last'); \
+             l.after(document.createElement('hr'));",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert!(muts.iter().any(|m| m.kind == "appendChild"));
+    }
+
+    #[test]
+    fn before_after_replace_with_sin_parent_no_op() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("root", "div", "")]).expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var r = document.getElementById('root'); \
+             r.before('x'); r.after('y'); r.replaceWith('z');",
+        )
+        .expect("e");
+        assert!(rt.drain_dom_mutations().is_empty());
     }
 }
