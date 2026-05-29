@@ -2856,7 +2856,22 @@ fn extract_body_text(bt: &BoxTree) -> String {
 /// `true`, se trunca y empuja al stack — útil para Navigate; back/fwd/
 /// reload pasan `false`.
 fn start_load(m: &mut Model, url: String, push_history: bool, handle: &Handle<Msg>) {
+    let now_ms = m.start.elapsed().as_millis() as u64;
     let t = m.active_mut();
+    // Fase 7.41 — antes de pisar la URL, disparar `beforeunload` para que
+    // apps con formularios sin guardar / analytics puedan hacer cleanup
+    // (`window.addEventListener('beforeunload', fn)`). Las mutaciones DOM
+    // que el handler haga se aplican sobre la página vieja (se va a tirar
+    // a la basura, no importa). **Divergencia documentada**: el spec real
+    // exige confirmación al usuario si el handler setea `returnValue` o
+    // llama `preventDefault()`; acá no hay diálogo modal — siempre se
+    // navega.
+    if t.js.is_some() {
+        let (_, pending) = dispatch_window_js_event_on_tab(t, "beforeunload", now_ms);
+        for req in pending {
+            handle.dispatch(req);
+        }
+    }
     // El referer es la URL desde la que se navega — útil para que el
     // server sepa de dónde viene el click. Capturado ANTES de pisar t.url.
     let referer = if t.url == NEW_TAB_URL || t.url.is_empty() { None } else { Some(t.url.clone()) };
@@ -2911,7 +2926,14 @@ fn spawn_load(tab: TabId, gen: u64, url: String, referer: Option<String>, handle
 }
 
 fn start_load_post(m: &mut Model, url: String, body: String, handle: &Handle<Msg>) {
+    let now_ms = m.start.elapsed().as_millis() as u64;
     let t = m.active_mut();
+    if t.js.is_some() {
+        let (_, pending) = dispatch_window_js_event_on_tab(t, "beforeunload", now_ms);
+        for req in pending {
+            handle.dispatch(req);
+        }
+    }
     let referer = if t.url == NEW_TAB_URL || t.url.is_empty() { None } else { Some(t.url.clone()) };
     t.url = url.clone();
     t.addr.set_text(url.clone());
@@ -5495,6 +5517,38 @@ mod tests {
             }
         });
         assert!(found, "el handler debió mutar 'antes' a 'después'");
+    }
+
+    // ============= Fase 7.41 — beforeunload =============
+
+    #[test]
+    fn start_load_dispara_beforeunload_en_window() {
+        // Modelo con runtime + handler de beforeunload que setea flag.
+        let mut m = model_con_script(
+            "var beforeRan = false; \
+             window.addEventListener('beforeunload', function() { beforeRan = true; });",
+        );
+        // Verifica que el handler todavía no corrió.
+        let v = m.tabs[0]
+            .js
+            .as_mut()
+            .expect("rt")
+            .eval("beforeRan")
+            .expect("e");
+        assert_eq!(v, puriy_js::JsValue::Bool(false));
+        // Start_load dispatcha beforeunload antes de pisar la URL.
+        // El runtime cambia al cargar (porque start_load no destruye el
+        // runtime hasta Loaded), así que el flag debe ser visible justo
+        // después de start_load.
+        let h: Handle<Msg> = Handle::for_test();
+        start_load(&mut m, "about:test2".into(), false, &h);
+        let v = m.tabs[0]
+            .js
+            .as_mut()
+            .expect("rt")
+            .eval("beforeRan")
+            .expect("e");
+        assert_eq!(v, puriy_js::JsValue::Bool(true));
     }
 
     // ============= Fase 7.39 — window events =============

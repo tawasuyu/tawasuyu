@@ -109,29 +109,64 @@ pub enum UserEvent<Msg> {
 /// Asa al runtime de Llimphi. Clonable y enviable entre hilos: la usás para
 /// pedir cerrar la ventana o para lanzar trabajo (PAM, IO, etc.) que al
 /// terminar reentra con un Msg al `update`.
+///
+/// Tests pueden construir un handle "muerto" con [`Handle::for_test`]: los
+/// `dispatch`/`quit`/`spawn` siguen siendo seguros de llamar pero los
+/// `Msg` que generan no van a ningún lado (no hay event loop detrás).
 pub struct Handle<Msg: Send + 'static> {
-    proxy: EventLoopProxy<UserEvent<Msg>>,
+    inner: HandleInner<Msg>,
+}
+
+enum HandleInner<Msg: Send + 'static> {
+    Real(EventLoopProxy<UserEvent<Msg>>),
+    /// Handle de tests: drop silencioso de todos los dispatches. Permite
+    /// llamar funciones que toman `&Handle<Msg>` sin levantar un event
+    /// loop real (que en CI sin display tiraría).
+    Test,
 }
 
 impl<Msg: Send + 'static> Clone for Handle<Msg> {
     fn clone(&self) -> Self {
         Self {
-            proxy: self.proxy.clone(),
+            inner: match &self.inner {
+                HandleInner::Real(p) => HandleInner::Real(p.clone()),
+                HandleInner::Test => HandleInner::Test,
+            },
         }
     }
 }
 
 impl<Msg: Send + 'static> Handle<Msg> {
+    /// Construye un handle desactivado para tests — todos los dispatch
+    /// se descartan silenciosamente. Útil para probar funciones que toman
+    /// `&Handle<Msg>` sin levantar un event loop real (que en CI sin
+    /// display tiraría).
+    pub fn for_test() -> Self {
+        Self {
+            inner: HandleInner::Test,
+        }
+    }
+
     /// Cierra la ventana y termina el bucle. La transición en curso (si la
     /// hay) se completa antes de salir.
     pub fn quit(&self) {
-        let _ = self.proxy.send_event(UserEvent::Quit);
+        match &self.inner {
+            HandleInner::Real(p) => {
+                let _ = p.send_event(UserEvent::Quit);
+            }
+            HandleInner::Test => {}
+        }
     }
 
     /// Encola un Msg para procesarse en el próximo turno del bucle. Útil
     /// para que un callback externo reentre al update.
     pub fn dispatch(&self, msg: Msg) {
-        let _ = self.proxy.send_event(UserEvent::Msg(msg));
+        match &self.inner {
+            HandleInner::Real(p) => {
+                let _ = p.send_event(UserEvent::Msg(msg));
+            }
+            HandleInner::Test => {}
+        }
     }
 
     /// Lanza una closure en un hilo aparte; cuando devuelve `Msg`, el
@@ -141,11 +176,22 @@ impl<Msg: Send + 'static> Handle<Msg> {
     where
         F: FnOnce() -> Msg + Send + 'static,
     {
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            let msg = f();
-            let _ = proxy.send_event(UserEvent::Msg(msg));
-        });
+        match &self.inner {
+            HandleInner::Real(p) => {
+                let proxy = p.clone();
+                std::thread::spawn(move || {
+                    let msg = f();
+                    let _ = proxy.send_event(UserEvent::Msg(msg));
+                });
+            }
+            HandleInner::Test => {
+                // Corremos la closure igual (para no perder side-effects de
+                // tests que dependan de su side) pero el msg se descarta.
+                std::thread::spawn(move || {
+                    let _ = f();
+                });
+            }
+        }
     }
 
     /// Lanza un loop periódico en un hilo aparte: cada `period` invoca
@@ -163,14 +209,25 @@ impl<Msg: Send + 'static> Handle<Msg> {
     where
         F: Fn() -> Msg + Send + 'static,
     {
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(period);
-            if proxy.send_event(UserEvent::Msg(f())).is_err() {
-                // Event loop cerrado — el thread puede morir.
-                break;
+        match &self.inner {
+            HandleInner::Real(p) => {
+                let proxy = p.clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(period);
+                    if proxy.send_event(UserEvent::Msg(f())).is_err() {
+                        // Event loop cerrado — el thread puede morir.
+                        break;
+                    }
+                });
             }
-        });
+            HandleInner::Test => {
+                // Un thread vivo eternamente sin sumidero ni manera de
+                // pararlo sería un leak — en for_test simplemente no
+                // arrancamos el loop. Los tests que necesiten verificar
+                // periodic behaviour deben usar el callback directo.
+                let _ = f;
+            }
+        }
     }
 }
 
@@ -1834,7 +1891,7 @@ pub fn run<A: App>() {
         .expect("event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
     let handle = Handle {
-        proxy: event_loop.create_proxy(),
+        inner: HandleInner::Real(event_loop.create_proxy()),
     };
     let mut runtime: Runtime<A> = Runtime {
         handle,
