@@ -468,6 +468,29 @@ pub enum Msg {
     /// `details_open` actual, el msg es no-op (ej: re-render durante una
     /// carga nueva).
     ToggleDetails(usize),
+    /// Fase 7.31 — request HTTP iniciado por `fetch()` desde el JS. El
+    /// chrome lo recibe vía `apply_dom_mutations` (kind 'fetch') y spawn-ea
+    /// un worker que llama `puriy_engine::fetch::fetch_full`.
+    FetchRequest {
+        tab: TabId,
+        gen: u64,
+        fetch_id: u32,
+        method: String,
+        url: String,
+        body: Option<Vec<u8>>,
+        headers: Vec<(String, String)>,
+    },
+    /// Resultado del worker de fetch. Si `result` es `Ok`, llama
+    /// `JsRuntime::resolve_fetch` para disparar `.then()`; si `Err`,
+    /// `reject_fetch` para disparar `.catch()`. Mismo gen check que
+    /// otros Msg async — descarta si la pestaña fue cerrada o pisada
+    /// por otra navegación.
+    FetchComplete {
+        tab: TabId,
+        gen: u64,
+        fetch_id: u32,
+        result: Result<puriy_engine::FetchResponse, String>,
+    },
     /// Tick periódico del reactor JS — disparado por `Handle::spawn_periodic`
     /// cada `JS_POLL_PERIOD_MS`. Para cada pestaña con `JsRuntime` y timers
     /// vivos, avanza el reloj a `Model.start.elapsed_ms()` y corre los
@@ -727,7 +750,10 @@ impl App for Puriy {
                         t.js = None;
                         t.js_summary = JsSummary::default();
                         let now_ms = m.start.elapsed().as_millis() as u64;
-                        run_scripts_on_tab(t, &scripts, now_ms);
+                        let pending = run_scripts_on_tab(t, &scripts, now_ms);
+                        for req in pending {
+                            handle.dispatch(req);
+                        }
                         if t.js_summary.errors > 0 {
                             t.status =
                                 format!("{} · JS: {} log/{} err",
@@ -1066,11 +1092,55 @@ impl App for Puriy {
             }
             Msg::JsTick => {
                 let now_ms = m.start.elapsed().as_millis() as u64;
-                tick_js_runtimes(&mut m, now_ms);
+                for req in tick_js_runtimes(&mut m, now_ms) {
+                    handle.dispatch(req);
+                }
+            }
+            req @ Msg::FetchRequest { .. } => {
+                spawn_fetch(req, handle.clone());
+            }
+            Msg::FetchComplete { tab, gen, fetch_id, result } => {
+                let tab_idx = m.tabs.iter().position(|t| t.id == tab && t.gen == gen);
+                if let Some(idx) = tab_idx {
+                    if let Some(rt) = m.tabs[idx].js.as_mut() {
+                        let now_ms = m.start.elapsed().as_millis() as u64;
+                        let _ = rt.set_now_ms(now_ms);
+                        rt.set_fuel(puriy_js::DEFAULT_FUEL);
+                        let prev_stdout = rt.stdout().len();
+                        let prev_stderr = rt.stderr().len();
+                        match result {
+                            Ok(resp) => {
+                                let body_str = String::from_utf8_lossy(&resp.body).into_owned();
+                                let _ = rt.resolve_fetch(
+                                    fetch_id,
+                                    resp.status,
+                                    &resp.status_text,
+                                    &body_str,
+                                    &resp.headers,
+                                );
+                            }
+                            Err(err) => {
+                                let _ = rt.reject_fetch(fetch_id, &err);
+                            }
+                        }
+                        let new_stdout = rt.stdout();
+                        let new_stderr = rt.stderr();
+                        m.tabs[idx].js_summary.logs +=
+                            new_stdout[prev_stdout..].matches('\n').count();
+                        m.tabs[idx].js_summary.errors +=
+                            new_stderr[prev_stderr..].matches('\n').count();
+                        for next in apply_dom_mutations(&mut m.tabs[idx]) {
+                            spawn_fetch(next, handle.clone());
+                        }
+                    }
+                }
             }
             Msg::JsDispatchEvent { element_id, event_type, fallback } => {
                 let now_ms = m.start.elapsed().as_millis() as u64;
-                let result = dispatch_js_event(&mut m, &element_id, &event_type, now_ms);
+                let (result, pending) = dispatch_js_event(&mut m, &element_id, &event_type, now_ms);
+                for req in pending {
+                    handle.dispatch(req);
+                }
                 // Si el handler JS no llamó `event.preventDefault()` y
                 // hay un fallback (típicamente Navigate del `<a href>`),
                 // lo reenviamos al event loop para que el chrome lo
@@ -1123,13 +1193,14 @@ impl App for Puriy {
                     let value = select_value_at(m.active(), idx, opt);
                     let mut init = puriy_js::EventInit::default();
                     init.value = value;
-                    dispatch_js_event_with_init(
+                    let (_, pending) = dispatch_js_event_with_init(
                         &mut m,
                         &eid,
                         "change",
                         now_ms,
                         Some(init),
                     );
+                    for req in pending { handle.dispatch(req); }
                 }
             }
             Msg::ToggleCheckbox(idx) => {
@@ -1209,10 +1280,12 @@ impl App for Puriy {
                 }
                 let now_ms = m.start.elapsed().as_millis() as u64;
                 if let Some(eid) = prev_eid {
-                    dispatch_js_event(&mut m, &eid, "blur", now_ms);
+                    let (_, p) = dispatch_js_event(&mut m, &eid, "blur", now_ms);
+                    for req in p { handle.dispatch(req); }
                 }
                 if let Some(eid) = new_eid {
-                    dispatch_js_event(&mut m, &eid, "focus", now_ms);
+                    let (_, p) = dispatch_js_event(&mut m, &eid, "focus", now_ms);
+                    for req in p { handle.dispatch(req); }
                 }
             }
             Msg::FocusNext => {
@@ -1271,14 +1344,17 @@ impl App for Puriy {
                                 init.value = Some(input.text());
                             }
                         }
-                        dispatch_js_event_with_init(
-                            &mut m,
-                            &eid,
-                            "keydown",
-                            now_ms,
-                            Some(init),
-                        )
-                        .default_prevented
+                        {
+                            let (r, p) = dispatch_js_event_with_init(
+                                &mut m,
+                                &eid,
+                                "keydown",
+                                now_ms,
+                                Some(init),
+                            );
+                            for req in p { handle.dispatch(req); }
+                            r.default_prevented
+                        }
                     } else {
                         false
                     };
@@ -1306,13 +1382,14 @@ impl App for Puriy {
                             let now_ms = m.start.elapsed().as_millis() as u64;
                             let mut init = puriy_js::EventInit::default();
                             init.value = Some(v);
-                            dispatch_js_event_with_init(
+                            let (_, p) = dispatch_js_event_with_init(
                                 &mut m,
                                 &eid,
                                 "input",
                                 now_ms,
                                 Some(init),
                             );
+                            for req in p { handle.dispatch(req); }
                         }
                     }
                 }
@@ -2047,9 +2124,9 @@ fn run_scripts_on_tab(
     t: &mut TabState,
     scripts: &[puriy_engine::ScriptInfo],
     now_ms: u64,
-) {
+) -> Vec<Msg> {
     if scripts.is_empty() {
-        return;
+        return Vec::new();
     }
     // Body text — concatenación de las hojas de texto del box tree.
     // Snapshot a momento de Load; muta si la página re-renderiza pero
@@ -2065,13 +2142,13 @@ fn run_scripts_on_tab(
         .iter()
         .any(|s| s.inline.is_some() && !s.is_module);
     if !has_executable {
-        return;
+        return Vec::new();
     }
     let rt = match puriy_js::JsRuntime::new() {
         Ok(r) => Box::new(r),
         Err(_) => {
             t.js_summary.errors += 1;
-            return;
+            return Vec::new();
         }
     };
     // Snapshot de elementos con `id=` — el harness JS los expone via
@@ -2132,8 +2209,9 @@ fn run_scripts_on_tab(
     }
     // Aplica al box_tree cualquier mutación que los scripts iniciales
     // hayan hecho via `el.textContent = ...` (typeahead, contadores
-    // inicializados, sustituciones de placeholders, etc).
-    apply_dom_mutations(t);
+    // inicializados, sustituciones de placeholders, etc). Las
+    // mutaciones de fetch suben al caller para que dispatch.
+    apply_dom_mutations(t)
 }
 
 /// Walka el `BoxTree` y arma un `Vec<ElementSnapshot>` para cada nodo
@@ -2233,7 +2311,7 @@ fn dispatch_js_event(
     element_id: &str,
     event_type: &str,
     now_ms: u64,
-) -> puriy_js::DispatchResult {
+) -> (puriy_js::DispatchResult, Vec<Msg>) {
     dispatch_js_event_with_init(m, element_id, event_type, now_ms, None)
 }
 
@@ -2248,10 +2326,10 @@ fn dispatch_js_event_with_init(
     event_type: &str,
     now_ms: u64,
     init: Option<puriy_js::EventInit>,
-) -> puriy_js::DispatchResult {
+) -> (puriy_js::DispatchResult, Vec<Msg>) {
     let t = m.active_mut();
     let Some(rt) = t.js.as_mut() else {
-        return puriy_js::DispatchResult::default();
+        return (puriy_js::DispatchResult::default(), Vec::new());
     };
     // Fase 7.11 — refresh del fuel antes de cada dispatch. Cada evento
     // de usuario (click/keydown/focus/blur/change/input) es una unidad
@@ -2280,8 +2358,8 @@ fn dispatch_js_event_with_init(
             puriy_js::DispatchResult::default()
         }
     };
-    apply_dom_mutations(t);
-    result
+    let pending = apply_dom_mutations(t);
+    (result, pending)
 }
 
 /// Mapea un `KeyEvent` de Llimphi a un `EventInit` enriquecido con los
@@ -2367,7 +2445,8 @@ fn named_key_name(n: &llimphi_ui::NamedKey) -> String {
 ///
 /// Cada disparo nuevo de stdout/stderr se cuenta a `t.js_summary`,
 /// alineado con el conteo que hace `run_scripts_on_tab`.
-fn tick_js_runtimes(m: &mut Model, now_ms: u64) {
+fn tick_js_runtimes(m: &mut Model, now_ms: u64) -> Vec<Msg> {
+    let mut pending: Vec<Msg> = Vec::new();
     for t in m.tabs.iter_mut() {
         let Some(rt) = t.js.as_mut() else { continue };
         if rt.pending_timers() == 0 {
@@ -2392,8 +2471,9 @@ fn tick_js_runtimes(m: &mut Model, now_ms: u64) {
                 t.js_summary.errors += 1;
             }
         }
-        apply_dom_mutations(t);
+        pending.extend(apply_dom_mutations(t));
     }
+    pending
 }
 
 /// Drena el buffer de mutaciones del DOM del runtime de la pestaña y
@@ -2405,13 +2485,36 @@ fn tick_js_runtimes(m: &mut Model, now_ms: u64) {
 /// Mutaciones sobre ids que no existen en el árbol se silencian (el
 /// JS puede haber retenido un handle de una página anterior, o el id
 /// puede haber sido renombrado por un script DOM-mutating no soportado).
-fn apply_dom_mutations(t: &mut TabState) {
-    let Some(rt) = t.js.as_mut() else { return };
+/// Fase 7.31 — el return ahora es `Vec<Msg>`: lista de FetchRequest que
+/// el caller debe despachar (necesitan spawn de worker thread, que sólo
+/// el call site tiene cabling para hacer). Si el caller no tiene handle
+/// (ej. tests), puede ignorar el Vec. El resto de mutations se aplican
+/// in-place sin requerir el handle.
+fn apply_dom_mutations(t: &mut TabState) -> Vec<Msg> {
+    let mut out = Vec::new();
+    let Some(rt) = t.js.as_mut() else { return out };
     let muts = rt.drain_dom_mutations();
     if muts.is_empty() {
-        return;
+        return out;
     }
-    let Some(bt) = t.box_tree.as_mut() else { return };
+    // Procesamos los fetch ANTES de chequear box_tree — los fetch no
+    // requieren box_tree (operan a nivel runtime). Esto también
+    // habilita fetch durante el load inicial.
+    let mut other_muts = Vec::with_capacity(muts.len());
+    for m in muts {
+        if m.kind == "fetch" {
+            if let Some(req) = parse_fetch_payload(&m.value, t.id, t.gen) {
+                out.push(req);
+            }
+        } else {
+            other_muts.push(m);
+        }
+    }
+    let muts = other_muts;
+    if muts.is_empty() {
+        return out;
+    }
+    let Some(bt) = t.box_tree.as_mut() else { return out };
     for m in muts {
         if m.kind == "text" {
             bt.set_element_text_content(&m.id, &m.value);
@@ -2588,6 +2691,52 @@ fn apply_dom_mutations(t: &mut TabState) {
         }
         // Otros kinds (`classList`, ...) llegarán en fases siguientes.
     }
+    out
+}
+
+/// Fase 7.31 — parsea el payload del kind 'fetch' publicado por el JS.
+/// Formato: campos separados por U+001D — [id, method, url, has_body_flag,
+/// body, h_name1, h_val1, h_name2, h_val2, ...]. Devuelve `Msg::FetchRequest`
+/// o `None` si el payload es malformado.
+fn parse_fetch_payload(value: &str, tab: TabId, gen: u64) -> Option<Msg> {
+    let parts: Vec<&str> = value.split('\u{001D}').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    let fetch_id: u32 = parts[0].parse().ok()?;
+    let method = parts[1].to_string();
+    let url = parts[2].to_string();
+    let has_body = parts[3] == "1";
+    let body = if has_body {
+        Some(parts[4].as_bytes().to_vec())
+    } else {
+        None
+    };
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let mut i = 5;
+    while i + 1 < parts.len() {
+        headers.push((parts[i].to_string(), parts[i + 1].to_string()));
+        i += 2;
+    }
+    Some(Msg::FetchRequest { tab, gen, fetch_id, method, url, body, headers })
+}
+
+/// Spawn worker thread que ejecuta el fetch HTTP y devuelve
+/// `Msg::FetchComplete` al main loop. Mismo molde que `spawn_load`.
+fn spawn_fetch(req: Msg, handle: Handle<Msg>) {
+    let Msg::FetchRequest { tab, gen, fetch_id, method, url, body, headers } = req else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let result = puriy_engine::fetch::fetch_full(
+            &method,
+            &url,
+            body.as_deref(),
+            &headers,
+        )
+        .map_err(|e| e.to_string());
+        handle.dispatch(Msg::FetchComplete { tab, gen, fetch_id, result });
+    });
 }
 
 /// Devuelve el value (del option seleccionado) del `<select>` del slot
@@ -5404,7 +5553,7 @@ mod tests {
             "document.getElementById('a').onclick = function(e){ e.preventDefault(); }",
         )
         .expect("e");
-        let r = dispatch_js_event(&mut m, "a", "click", 0);
+        let (r, _) = dispatch_js_event(&mut m, "a", "click", 0);
         assert!(r.default_prevented);
         assert_eq!(r.count, 1);
     }
@@ -5453,7 +5602,7 @@ mod tests {
         .expect("e");
         rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
             .expect("e");
-        let r = dispatch_js_event(&mut m, "a", "click", 0);
+        let (r, _) = dispatch_js_event(&mut m, "a", "click", 0);
         assert!(!r.default_prevented);
         assert_eq!(r.count, 1);
     }

@@ -132,6 +132,105 @@ fn parse_max_age(cc: &str) -> Option<u64> {
     None
 }
 
+/// Fase 7.31 — request HTTP arbitrario para el `fetch()` JS. Devuelve
+/// status code + body + headers + final_url. NO usa cache (el JS fetch
+/// puede tener semánticas Cache-Control distintas; conservador
+/// no-cachear). Headers se filtran para no incluir Set-Cookie (las
+/// cookies se aplican aparte vía `crate::cookies`).
+#[derive(Debug, Clone)]
+pub struct FetchResponse {
+    pub status: u16,
+    pub status_text: String,
+    pub body: Vec<u8>,
+    pub headers: Vec<(String, String)>,
+    pub final_url: String,
+}
+
+/// Versión "full" del request HTTP para alimentar `fetch()` desde JS.
+/// Acepta method arbitrario (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS),
+/// body opcional y headers extra. Devuelve `FetchResponse` con status,
+/// headers, body. Errores de transporte se mapean a `FetchError::Transport`;
+/// status no-2xx **NO** se traduce a `Status` — se devuelve igual con el
+/// código y body, igual que `window.fetch` real (sólo rechaza Promise
+/// en errores de network, no por status HTTP).
+pub fn fetch_full(
+    method: &str,
+    url: &str,
+    body: Option<&[u8]>,
+    headers: &[(String, String)],
+) -> Result<FetchResponse, FetchError> {
+    let parsed = url::Url::parse(url).ok();
+    let host = parsed.as_ref().and_then(|u| u.host_str()).map(|s| s.to_string());
+    let method_upper = method.to_ascii_uppercase();
+    let mut req = match method_upper.as_str() {
+        "GET" => agent().get(url),
+        "POST" => agent().post(url),
+        "PUT" => agent().put(url),
+        "DELETE" => agent().delete(url),
+        "PATCH" => agent().request("PATCH", url),
+        "HEAD" => agent().head(url),
+        "OPTIONS" => agent().request("OPTIONS", url),
+        other => agent().request(other, url),
+    };
+    req = req.set("User-Agent", concat!("puriy/", env!("CARGO_PKG_VERSION")));
+    if let Some(h) = host.as_deref() {
+        if let Some(cookie_hdr) = crate::cookies::cookie_header(h) {
+            req = req.set("Cookie", &cookie_hdr);
+        }
+    }
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    // ureq mapea send/call según si hay body o no.
+    let result = match body {
+        Some(b) => req.send_bytes(b),
+        None => req.call(),
+    };
+    // En `fetch()` (spec) un status no-2xx NO rechaza la Promise — se
+    // devuelve igual con `response.ok = false`. ureq lo modela como
+    // `Error::Status` para conveniencia; lo desunwrappeamos.
+    let resp = match result {
+        Ok(r) => r,
+        Err(ureq::Error::Status(_code, r)) => r,
+        Err(ureq::Error::Transport(t)) => return Err(FetchError::Transport(t.to_string())),
+    };
+    let status = resp.status();
+    let status_text = resp.status_text().to_string();
+    let final_url = resp.get_url().to_string();
+    let header_names: Vec<String> = resp.headers_names();
+    let mut headers_out: Vec<(String, String)> = Vec::new();
+    for name in &header_names {
+        // Skip Set-Cookie del response visible — las cookies van por
+        // su propio canal (puriy-engine::cookies). Esto matchea spec:
+        // `Headers` del fetch normalmente NO expone Set-Cookie.
+        if name.eq_ignore_ascii_case("set-cookie") {
+            continue;
+        }
+        if let Some(v) = resp.header(name) {
+            headers_out.push((name.to_ascii_lowercase(), v.to_string()));
+        }
+    }
+    // Aplicar cookies del response (mismo molde que fetch_bytes_with_referer).
+    if let Some(h) = host.as_deref() {
+        for sc in resp.all("Set-Cookie") {
+            crate::cookies::put_set_cookie(h, sc);
+        }
+    }
+    let mut body_bytes = Vec::new();
+    use std::io::Read;
+    resp.into_reader()
+        .take(64 * 1024 * 1024)
+        .read_to_end(&mut body_bytes)
+        .map_err(|e| FetchError::Transport(e.to_string()))?;
+    Ok(FetchResponse {
+        status,
+        status_text,
+        body: body_bytes,
+        headers: headers_out,
+        final_url,
+    })
+}
+
 /// POST con body `application/x-www-form-urlencoded`. NO usa cache —
 /// los POST son no-idempotentes. Devuelve `(body, final_url)` del
 /// response, siguiendo redirects 3xx (ureq convierte 301/302/303 a GET

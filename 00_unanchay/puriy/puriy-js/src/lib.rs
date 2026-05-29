@@ -1585,6 +1585,203 @@ globalThis.scrollBy = function(dx, dy) {
         globalThis.__puriy_scroll_y + (Number(dy) || 0)
     );
 };
+// Fase 7.31 — fetch() async. Crea un Promise, registra los handlers
+// resolve/reject en `__puriy_fetch_pending[id]`, publica una mutación
+// `kind: 'fetch:<id>'` con el payload serializado, y devuelve el
+// Promise. Cuando el chrome termina el HTTP request, llama
+// `JsRuntime::resolve_fetch(id, response)` o `reject_fetch(id, msg)`
+// que disparan los `.then()`/`.catch()` del JS user code.
+globalThis.__puriy_fetch_next_id = 1;
+globalThis.__puriy_fetch_pending = {};
+globalThis.fetch = function(url, init) {
+    var id = globalThis.__puriy_fetch_next_id++;
+    var method = (init && init.method) ? String(init.method).toUpperCase() : 'GET';
+    var body = (init && init.body != null) ? String(init.body) : '';
+    var has_body = (init && init.body != null);
+    // Headers serializados como "namevaluename2value2..."
+    // — U+001F como Unit Separator (mismo sep que usa drain_dirty).
+    var hdr_pairs = [];
+    if (init && init.headers) {
+        if (init.headers instanceof globalThis.Headers) {
+            // Fase 7.33 — si es Headers class, iterar internal store.
+            for (var hk in init.headers._store) {
+                hdr_pairs.push(hk);
+                hdr_pairs.push(init.headers._store[hk]);
+            }
+        } else if (typeof init.headers === 'object') {
+            for (var k in init.headers) {
+                if (Object.prototype.hasOwnProperty.call(init.headers, k)) {
+                    hdr_pairs.push(k);
+                    hdr_pairs.push(String(init.headers[k]));
+                }
+            }
+        }
+    }
+    // Fase 7.34 — signal: si ya está aborted, reject inmediato.
+    if (init && init.signal && init.signal.aborted) {
+        return Promise.reject(new Error('AbortError: fetch aborted'));
+    }
+    var promise = new Promise(function(resolve, reject) {
+        globalThis.__puriy_fetch_pending[id] = {resolve: resolve, reject: reject};
+    });
+    // Si hay signal, registrar callback que llama reject_fetch al abortar.
+    if (init && init.signal) {
+        init.signal.addEventListener('abort', function() {
+            if (globalThis.__puriy_fetch_pending[id]) {
+                globalThis.__puriy_fetch_pending[id].reject(new Error('AbortError: fetch aborted'));
+                delete globalThis.__puriy_fetch_pending[id];
+            }
+        });
+    }
+    // Payload: campos separados por U+001D (Group Separator).
+    // [0] id, [1] method, [2] url, [3] body, [4] headers...
+    var payload = String(id) + '' + method + '' + String(url || '')
+                + '' + (has_body ? '1' : '0')
+                + '' + body
+                + '' + hdr_pairs.join('');
+    globalThis.__puriy_dirty.push({
+        id: '__window__',
+        kind: 'fetch',
+        value: payload
+    });
+    return promise;
+};
+// Fase 7.31 — Response class JS-puro. Construido por
+// `__puriy_fetch_resolve(id, status, statusText, body, headers)` que el
+// chrome llama cuando el HTTP termina. Methods: .text() y .json()
+// devuelven Promises (matchea spec). .headers expone una Headers-like
+// (Fase 7.33). Múltiples llamadas a .text()/.json() funcionan porque
+// guardamos _body string crudo (sin "body locked" todavía).
+globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) {
+    var headers = new globalThis.Headers();
+    if (hdrPairs) {
+        for (var i = 0; i + 1 < hdrPairs.length; i += 2) {
+            headers.set(hdrPairs[i], hdrPairs[i + 1]);
+        }
+    }
+    return {
+        status: status,
+        statusText: statusText,
+        ok: status >= 200 && status < 300,
+        url: '',
+        type: 'basic',
+        bodyUsed: false,
+        headers: headers,
+        _body: body,
+        text: function() { return Promise.resolve(this._body); },
+        json: function() {
+            try { return Promise.resolve(JSON.parse(this._body)); }
+            catch (e) { return Promise.reject(e); }
+        },
+        arrayBuffer: function() {
+            // Stub: devuelve un objeto pseudo-arrayBuffer con _body bytes
+            // mapeados a un Array de char codes. Apps que necesitan
+            // ArrayBuffer real verán divergencia; suficiente para JSON.
+            var len = this._body.length;
+            var buf = new ArrayBuffer(len);
+            var view = new Uint8Array(buf);
+            for (var i = 0; i < len; i++) view[i] = this._body.charCodeAt(i) & 0xff;
+            return Promise.resolve(buf);
+        }
+    };
+};
+// Fase 7.31 — resolve y reject los Promises pending. El chrome los
+// llama desde el handler de Msg::FetchComplete.
+globalThis.__puriy_fetch_resolve = function(id, status, statusText, body, hdrPairs) {
+    var pending = globalThis.__puriy_fetch_pending[id];
+    if (!pending) return;
+    delete globalThis.__puriy_fetch_pending[id];
+    var resp = globalThis.__puriy_make_response(status, statusText, body, hdrPairs);
+    pending.resolve(resp);
+};
+globalThis.__puriy_fetch_reject = function(id, msg) {
+    var pending = globalThis.__puriy_fetch_pending[id];
+    if (!pending) return;
+    delete globalThis.__puriy_fetch_pending[id];
+    pending.reject(new Error(String(msg)));
+};
+// Fase 7.33 — Headers class. Spec: case-insensitive keys, soporta
+// múltiples values por key (joined con ', ').
+globalThis.Headers = function(init) {
+    this._store = {};
+    if (init) {
+        if (init instanceof globalThis.Headers) {
+            for (var k in init._store) this._store[k] = init._store[k];
+        } else if (typeof init === 'object') {
+            for (var k2 in init) {
+                if (Object.prototype.hasOwnProperty.call(init, k2)) {
+                    this._store[String(k2).toLowerCase()] = String(init[k2]);
+                }
+            }
+        }
+    }
+};
+globalThis.Headers.prototype.get = function(name) {
+    var k = String(name).toLowerCase();
+    return Object.prototype.hasOwnProperty.call(this._store, k) ? this._store[k] : null;
+};
+globalThis.Headers.prototype.set = function(name, value) {
+    this._store[String(name).toLowerCase()] = String(value);
+};
+globalThis.Headers.prototype.append = function(name, value) {
+    var k = String(name).toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(this._store, k)) {
+        this._store[k] = this._store[k] + ', ' + String(value);
+    } else {
+        this._store[k] = String(value);
+    }
+};
+globalThis.Headers.prototype.has = function(name) {
+    return Object.prototype.hasOwnProperty.call(this._store, String(name).toLowerCase());
+};
+globalThis.Headers.prototype.delete = function(name) {
+    delete this._store[String(name).toLowerCase()];
+};
+globalThis.Headers.prototype.forEach = function(cb) {
+    for (var k in this._store) {
+        if (Object.prototype.hasOwnProperty.call(this._store, k)) {
+            cb(this._store[k], k, this);
+        }
+    }
+};
+globalThis.Headers.prototype.keys = function() {
+    return Object.keys(this._store);
+};
+// Fase 7.34 — AbortController + AbortSignal. Minimal: el signal lleva
+// `aborted: bool` y un addEventListener('abort', fn) que dispara cuando
+// .abort() se llama. fetch() chequea signal.aborted al inicio y registra
+// un listener si el signal está presente.
+globalThis.AbortController = function() {
+    var listeners = [];
+    var aborted = false;
+    this.signal = {
+        aborted: false,
+        reason: undefined,
+        addEventListener: function(type, fn) {
+            if (type === 'abort') listeners.push(fn);
+        },
+        removeEventListener: function(type, fn) {
+            if (type === 'abort') {
+                var i = listeners.indexOf(fn);
+                if (i >= 0) listeners.splice(i, 1);
+            }
+        },
+        throwIfAborted: function() {
+            if (this.aborted) throw new Error('AbortError');
+        }
+    };
+    var sig = this.signal;
+    this.abort = function(reason) {
+        if (aborted) return;
+        aborted = true;
+        sig.aborted = true;
+        sig.reason = reason;
+        for (var i = 0; i < listeners.length; i++) {
+            try { listeners[i](); }
+            catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+        }
+    };
+};
 // Fase 7.30 — getComputedStyle(el) stub. Spec: devuelve un
 // CSSStyleDeclaration con todos los propiedades computadas post-cascade
 // del CSS (UA stylesheet + author rules + inline). Acá no tenemos
@@ -1949,7 +2146,43 @@ impl JsRuntime {
         // wrapper Rust), no lo soltamos acá; pero en esta API plana
         // siempre podemos liberarlo porque decode copia los bytes.
         self.free_value(val)?;
+        // Fase 7.31 — drena los microtasks que el eval pudo haber
+        // dejado en cola (Promises resueltos, .then() callbacks, etc).
+        // Sin esto, `Promise.resolve(1).then(cb)` no corre cb antes de
+        // que el host vuelva al siguiente eval.
+        let _ = self.drain_pending_jobs();
         Ok(result)
+    }
+
+    /// Fase 7.31 — drena el microtask queue de QuickJS-NG ejecutando
+    /// todos los jobs pendientes (Promise callbacks, etc.) hasta que no
+    /// queden. Llamado automáticamente al final de cada `eval_raw`.
+    /// Errores dentro de los jobs van a stderr via el `__puriy_stderr`
+    /// del console (handlers de Promise rejection no implementados —
+    /// los unhandled rejections se silencian).
+    fn drain_pending_jobs(&mut self) -> Result<(), JsError> {
+        // `JS_ExecutePendingJob(rt, JSContext **pctx) -> int`:
+        // devuelve 1 si ejecutó un job, 0 si no había nada, <0 en error.
+        // El out-param pctx no lo usamos (sólo hay un context); pasamos
+        // un slot temporal.
+        let exec = self
+            .instance
+            .get_typed_func::<(i32, i32), i32>(&self.store, "JS_ExecutePendingJob")
+            .map_err(|e| JsError::Runtime(format!("falta JS_ExecutePendingJob: {e}")))?;
+        let slot = self.guest_alloc(4)?;
+        // Cap defensivo: ~10k microtasks por eval (cualquier app real
+        // hace muchos menos; un loop infinito de Promise.resolve()
+        // .then() podría agotarlo, pero ya tendría fuel agotado antes).
+        for _ in 0..10_000 {
+            let r = exec
+                .call(&mut self.store, (self.rt_ptr, slot))
+                .map_err(|e| classify_trap(e))?;
+            if r <= 0 {
+                break;
+            }
+        }
+        self.guest_free(slot)?;
+        Ok(())
     }
 
     /// Texto acumulado por `console.log` desde el último `clear_io` (o
@@ -2288,6 +2521,52 @@ impl JsRuntime {
             "globalThis.__puriy_scroll_x = {x}; globalThis.__puriy_scroll_y = {y};"
         );
         self.eval_raw(&script).map(|_| ())
+    }
+
+    /// Fase 7.31 — el chrome llama estas dos cuando un `fetch()` async
+    /// del JS termina (Msg::FetchComplete handler). `resolve_fetch`
+    /// crea un `Response` y dispara los `.then()`; `reject_fetch` tira
+    /// un `Error` que disparan `.catch()`.
+    ///
+    /// `headers` es un array plano `[name1, value1, name2, value2, ...]`
+    /// — más simple de serializar a JS literal que `Vec<(K, V)>` con
+    /// JSON.stringify. Names ya vienen lowercased desde `fetch_full`.
+    pub fn resolve_fetch(
+        &mut self,
+        id: u32,
+        status: u16,
+        status_text: &str,
+        body: &str,
+        headers: &[(String, String)],
+    ) -> Result<(), JsError> {
+        let mut hdr_arr = String::from("[");
+        for (i, (k, v)) in headers.iter().enumerate() {
+            if i > 0 {
+                hdr_arr.push(',');
+            }
+            hdr_arr.push_str(&js_string_literal(k));
+            hdr_arr.push(',');
+            hdr_arr.push_str(&js_string_literal(v));
+        }
+        hdr_arr.push(']');
+        let script = format!(
+            "globalThis.__puriy_fetch_resolve({id}, {status}, {st}, {body_lit}, {hdr_arr});",
+            id = id,
+            status = status,
+            st = js_string_literal(status_text),
+            body_lit = js_string_literal(body),
+            hdr_arr = hdr_arr,
+        );
+        self.eval(&script).map(|_| ())
+    }
+
+    pub fn reject_fetch(&mut self, id: u32, msg: &str) -> Result<(), JsError> {
+        let script = format!(
+            "globalThis.__puriy_fetch_reject({id}, {msg});",
+            id = id,
+            msg = js_string_literal(msg),
+        );
+        self.eval(&script).map(|_| ())
     }
 
     /// Fase 7.28 — sync de las dimensiones del viewport del chrome. El
@@ -6364,6 +6643,230 @@ mod tests {
         assert_eq!(v, JsValue::Bool(false));
         // null arg → false.
         let v = rt.eval("document.getElementById('root').contains(null)").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+    }
+
+    // ============= Fase 7.31 — fetch() async + Response =============
+
+    #[test]
+    fn fetch_devuelve_promise_y_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("var p = fetch('/api/x')").expect("e");
+        // Devuelve un Promise.
+        let v = rt.eval("p instanceof Promise").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "fetch");
+        assert_eq!(muts[0].id, "__window__");
+        // Payload tiene id=1, method=GET, url=/api/x, has_body=0, body="".
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[0], "1");
+        assert_eq!(parts[1], "GET");
+        assert_eq!(parts[2], "/api/x");
+        assert_eq!(parts[3], "0");
+        assert_eq!(parts[4], "");
+    }
+
+    #[test]
+    fn resolve_fetch_dispara_then_con_response_ok() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var done = false; var capturedStatus = null; var capturedText = null; \
+             fetch('/x').then(function(r) { \
+                capturedStatus = r.status; \
+                return r.text(); \
+             }).then(function(t) { capturedText = t; done = true; });",
+        )
+        .expect("e");
+        // Simular respuesta del chrome.
+        rt.resolve_fetch(1, 200, "OK", "hola mundo", &[]).expect("resolve");
+        let v = rt.eval("done").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("capturedStatus").expect("e");
+        assert_eq!(v, JsValue::Number(200.0));
+        let v = rt.eval("capturedText").expect("e");
+        assert_eq!(v, JsValue::String("hola mundo".into()));
+    }
+
+    #[test]
+    fn response_json_parsea_body_como_json() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var captured = null; \
+             fetch('/x').then(function(r) { return r.json(); }).then(function(j) { captured = j; });",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", r#"{"name":"sergio","n":42}"#, &[])
+            .expect("resolve");
+        let v = rt.eval("captured.name").expect("e");
+        assert_eq!(v, JsValue::String("sergio".into()));
+        let v = rt.eval("captured.n").expect("e");
+        assert_eq!(v, JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn response_ok_es_false_para_status_no_2xx() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var status = null; var ok = null; fetch('/x').then(function(r) { status = r.status; ok = r.ok; })").expect("e");
+        rt.resolve_fetch(1, 404, "Not Found", "", &[]).expect("resolve");
+        let v = rt.eval("status").expect("e");
+        assert_eq!(v, JsValue::Number(404.0));
+        let v = rt.eval("ok").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+    }
+
+    #[test]
+    fn reject_fetch_dispara_catch() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var err = null; fetch('/x').catch(function(e) { err = e.message; })")
+            .expect("e");
+        rt.reject_fetch(1, "network down").expect("reject");
+        let v = rt.eval("err").expect("e");
+        assert_eq!(v, JsValue::String("network down".into()));
+    }
+
+    #[test]
+    fn fetch_post_publica_method_y_body() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("fetch('/api', {method: 'POST', body: 'hola'})").expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[1], "POST");
+        assert_eq!(parts[3], "1");
+        assert_eq!(parts[4], "hola");
+    }
+
+    #[test]
+    fn fetch_con_headers_objeto() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "fetch('/api', {headers: {'X-Token': 'abc', 'Content-Type': 'text/plain'}})",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        // Headers van a partir del índice 5 en pares.
+        let mut hdr_map = std::collections::HashMap::new();
+        let mut i = 5;
+        while i + 1 < parts.len() {
+            hdr_map.insert(parts[i].to_string(), parts[i + 1].to_string());
+            i += 2;
+        }
+        assert_eq!(hdr_map.get("X-Token").map(|s| s.as_str()), Some("abc"));
+        assert_eq!(hdr_map.get("Content-Type").map(|s| s.as_str()), Some("text/plain"));
+    }
+
+    #[test]
+    fn fetch_con_headers_class() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var h = new Headers(); h.set('Authorization', 'Bearer 123'); \
+             fetch('/api', {headers: h})",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        // Headers class lowercases name al guardar.
+        assert!(parts.iter().any(|p| *p == "authorization"));
+        assert!(parts.iter().any(|p| *p == "Bearer 123"));
+    }
+
+    #[test]
+    fn response_headers_get_devuelve_value() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var ct = null; fetch('/x').then(function(r) { ct = r.headers.get('content-type'); })").expect("e");
+        let headers = vec![
+            ("content-type".to_string(), "application/json".to_string()),
+            ("x-foo".to_string(), "bar".to_string()),
+        ];
+        rt.resolve_fetch(1, 200, "OK", "{}", &headers).expect("r");
+        let v = rt.eval("ct").expect("e");
+        assert_eq!(v, JsValue::String("application/json".into()));
+    }
+
+    #[test]
+    fn abort_controller_signal_aborted_inicialmente_false() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var c = new AbortController()").expect("e");
+        let v = rt.eval("c.signal.aborted").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+        rt.eval("c.abort()").expect("e");
+        let v = rt.eval("c.signal.aborted").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_controller_abort_rechaza_fetch_pendiente() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var c = new AbortController(); var err = null; \
+             fetch('/x', {signal: c.signal}).catch(function(e) { err = e.message; }); \
+             c.abort();",
+        )
+        .expect("e");
+        let v = rt.eval("err").expect("e");
+        // El mensaje incluye 'AbortError'.
+        if let JsValue::String(s) = v {
+            assert!(s.contains("AbortError"), "msg: {s}");
+        } else {
+            panic!("expected string, got {v:?}");
+        }
+    }
+
+    #[test]
+    fn abort_signal_ya_aborted_rechaza_fetch_inmediato() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var c = new AbortController(); c.abort(); \
+             var err = null; \
+             fetch('/x', {signal: c.signal}).catch(function(e) { err = e.message; });",
+        )
+        .expect("e");
+        let v = rt.eval("err").expect("e");
+        if let JsValue::String(s) = v {
+            assert!(s.contains("AbortError"), "msg: {s}");
+        } else {
+            panic!("expected string");
+        }
+    }
+
+    #[test]
+    fn headers_class_api_basica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var h = new Headers({'X-Foo': 'bar'}); h.append('x-foo', 'baz'); \
+             h.set('Other', '1');",
+        )
+        .expect("e");
+        // get case-insensitive + multiple values joined.
+        let v = rt.eval("h.get('X-Foo')").expect("e");
+        assert_eq!(v, JsValue::String("bar, baz".into()));
+        let v = rt.eval("h.has('Other')").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("h.has('Missing')").expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+        // delete.
+        rt.eval("h.delete('Other')").expect("e");
+        let v = rt.eval("h.has('Other')").expect("e");
         assert_eq!(v, JsValue::Bool(false));
     }
 }
