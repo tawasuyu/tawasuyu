@@ -465,6 +465,12 @@ impl BoxTree {
     /// único en el árbol.
     pub fn append_child_to(&mut self, parent_id: &str, child: BoxNode) -> bool {
         if let Some(parent) = find_node_mut(&mut self.root, parent_id) {
+            // Fase 7.14 — heredar font/color/etc. del parent antes
+            // de insertar. Sin esto, los nodos sintéticos quedan con
+            // defaults (black/16px) ignorando el contexto visual del
+            // padre.
+            let mut child = child;
+            inherit_style_to_child(parent, &mut child);
             parent.children.push(child);
             true
         } else {
@@ -484,6 +490,68 @@ impl BoxTree {
             parent.children.len() < before
         } else {
             false
+        }
+    }
+
+    /// Inserta `child` antes del primer hijo directo de `parent_id`
+    /// cuyo `element_id == ref_id`. Si `ref_id` no se encuentra, hace
+    /// fallback a append. Devuelve `true` si encontró el parent.
+    /// Fase 7.14.
+    pub fn insert_child_before(
+        &mut self,
+        parent_id: &str,
+        child: BoxNode,
+        ref_id: &str,
+    ) -> bool {
+        if let Some(parent) = find_node_mut(&mut self.root, parent_id) {
+            let pos = parent
+                .children
+                .iter()
+                .position(|c| c.element_id.as_deref() == Some(ref_id));
+            let mut child = child;
+            inherit_style_to_child(parent, &mut child);
+            match pos {
+                Some(i) => parent.children.insert(i, child),
+                None => parent.children.push(child),
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Fase 7.14 — copia las propiedades CSS-heredables del padre al child
+/// sintético recién insertado, y propaga al text leaf interno si existe.
+/// Sin esto, los nodos creados por `createElement` quedan con defaults
+/// de `empty_root()` (color black, font_size 16px, etc.), ignorando el
+/// contexto visual del padre.
+///
+/// Heredables (CSS spec): `color`, `font_size`, `font_weight`,
+/// `font_style`, `font_family`, `line_height`, `text_align`,
+/// `text_decoration`, `white_space`, `text_transform`. NO heredables:
+/// `background`, `display`, `margin`, `padding`, `width`, etc.
+fn inherit_style_to_child(parent: &BoxNode, child: &mut BoxNode) {
+    child.color = parent.color;
+    child.font_size = parent.font_size;
+    child.font_weight = parent.font_weight;
+    child.font_style = parent.font_style;
+    child.font_family = parent.font_family.clone();
+    child.line_height = parent.line_height;
+    child.text_align = parent.text_align;
+    child.text_decoration = parent.text_decoration;
+    child.white_space = parent.white_space;
+    child.text_transform = parent.text_transform;
+    // Propagar al text leaf interno (primer hijo si es text node).
+    for c in child.children.iter_mut() {
+        if c.text.is_some() {
+            c.color = child.color;
+            c.font_size = child.font_size;
+            c.font_weight = child.font_weight;
+            c.font_style = child.font_style;
+            c.font_family = child.font_family.clone();
+            c.line_height = child.line_height;
+            c.text_decoration = child.text_decoration;
         }
     }
 }

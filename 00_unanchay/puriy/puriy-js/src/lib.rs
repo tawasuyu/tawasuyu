@@ -252,6 +252,42 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         enumerable: true,
         configurable: true
     });
+    // Fase 7.14 — previousElementSibling / nextElementSibling. Walk
+    // siblings (children del parent del elemento) y devuelve el
+    // anterior/siguiente. `null` si no hay parent o si el sibling no
+    // existe (primer/último child).
+    Object.defineProperty(el, 'previousElementSibling', {
+        get: function() {
+            if (!el._parent_id) return null;
+            var parent = globalThis.__puriy_elements[el._parent_id];
+            if (!parent) return null;
+            var sibs = parent.children;
+            for (var i = 0; i < sibs.length; i++) {
+                if (sibs[i]._id === el._id) {
+                    return i > 0 ? sibs[i - 1] : null;
+                }
+            }
+            return null;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(el, 'nextElementSibling', {
+        get: function() {
+            if (!el._parent_id) return null;
+            var parent = globalThis.__puriy_elements[el._parent_id];
+            if (!parent) return null;
+            var sibs = parent.children;
+            for (var i = 0; i < sibs.length; i++) {
+                if (sibs[i]._id === el._id) {
+                    return i + 1 < sibs.length ? sibs[i + 1] : null;
+                }
+            }
+            return null;
+        },
+        enumerable: true,
+        configurable: true
+    });
     // Fase 7.12 — el.id como property: get devuelve _id, set reindexa
     // en __puriy_elements (`d.id = 'modal'` después de createElement
     // hace que getElementById('modal') lo encuentre).
@@ -411,6 +447,46 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     // drain_dirty usa para top-level. Campos: tag, child_id, textContent,
     // classList-joined-by-space, value. Esto evita agregar serde_json
     // al chrome.
+    // Fase 7.14 — insertBefore(newChild, refChild). Si refChild es
+    // null/undefined, equivale a appendChild. Si refChild no es hijo
+    // de este parent, throw — matchea spec. Publica mutación
+    // `kind: "insertBefore"` con payload + ref_id usando U+001D.
+    el.insertBefore = function(newChild, refChild) {
+        if (!newChild || !newChild._synthetic) {
+            throw new Error('insertBefore: newChild debe venir de createElement');
+        }
+        if (newChild._inserted) {
+            throw new Error('insertBefore: newChild ya fue insertado');
+        }
+        // refChild null: equivale a appendChild.
+        if (refChild == null || refChild === null || typeof refChild === 'undefined') {
+            return el.appendChild(newChild);
+        }
+        // Validar que refChild sea hijo directo (mismo _parent_id).
+        if (refChild._parent_id !== el._id) {
+            throw new Error('insertBefore: refChild no es hijo del parent');
+        }
+        newChild._inserted = true;
+        newChild._parent_id = el._id;
+        var cls = (newChild._classList || []).join(' ');
+        // Payload: igual que appendChild + un campo extra al final con
+        // el ref_id. El chrome detecta el extra para elegir entre
+        // appendChild y insertBefore.
+        var payload = [
+            newChild.tagName,
+            newChild._id,
+            newChild._textContent || '',
+            cls,
+            newChild._value == null ? '' : String(newChild._value),
+            refChild._id
+        ].join('');
+        globalThis.__puriy_dirty.push({
+            id: el._id,
+            kind: 'insertBefore',
+            value: payload
+        });
+        return newChild;
+    };
     el.appendChild = function(child) {
         if (!child || !child._synthetic) {
             throw new Error('appendChild: child debe venir de createElement');
@@ -3414,6 +3490,115 @@ mod tests {
             .eval("document.getElementById('p').children[0].id")
             .expect("e");
         assert_eq!(v, JsValue::String("fresh".into()));
+    }
+
+    // ============= Fase 7.14 — sibling + insertBefore =============
+
+    #[test]
+    fn previous_next_element_sibling_recorren_hermanos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("a", "li", "p"),
+            snap_with_parent("b", "li", "p"),
+            snap_with_parent("c", "li", "p"),
+        ])
+        .expect("e");
+        let v = rt
+            .eval("document.getElementById('b').previousElementSibling.id")
+            .expect("e");
+        assert_eq!(v, JsValue::String("a".into()));
+        let v = rt
+            .eval("document.getElementById('b').nextElementSibling.id")
+            .expect("e");
+        assert_eq!(v, JsValue::String("c".into()));
+        // Bordes: primer y último.
+        let v = rt
+            .eval("document.getElementById('a').previousElementSibling")
+            .expect("e");
+        assert_eq!(v, JsValue::Null);
+        let v = rt
+            .eval("document.getElementById('c').nextElementSibling")
+            .expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn sibling_devuelve_null_sin_parent() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("solo", "div", "")]).expect("e");
+        let v = rt
+            .eval("document.getElementById('solo').previousElementSibling")
+            .expect("e");
+        assert_eq!(v, JsValue::Null);
+        let v = rt
+            .eval("document.getElementById('solo').nextElementSibling")
+            .expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn insert_before_publica_mutacion_con_ref_id() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("ref", "li", "p"),
+        ])
+        .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var li = document.createElement('li'); \
+             li.id = 'nuevo'; \
+             document.getElementById('p').insertBefore(li, document.getElementById('ref'));",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].id, "p");
+        assert_eq!(muts[0].kind, "insertBefore");
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts.len(), 6);
+        assert_eq!(parts[0], "li");
+        assert_eq!(parts[1], "nuevo");
+        assert_eq!(parts[5], "ref"); // ref_id
+    }
+
+    #[test]
+    fn insert_before_null_equivale_a_appendchild() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p", "ul", "")]).expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var li = document.createElement('li'); \
+             document.getElementById('p').insertBefore(li, null);",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        // null refChild → fallback a appendChild.
+        assert_eq!(muts[0].kind, "appendChild");
+    }
+
+    #[test]
+    fn insert_before_falla_si_ref_no_es_hijo() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p1", "ul", ""),
+            snap_with_parent("a", "li", "p1"),
+            snap("p2", "ul", ""),
+        ])
+        .expect("e");
+        let res = rt.eval(
+            "var li = document.createElement('li'); \
+             try { document.getElementById('p2').insertBefore(li, document.getElementById('a')); 'ok' } \
+             catch (e) { 'err' }",
+        );
+        assert_eq!(res.expect("e"), JsValue::String("err".into()));
     }
 
     #[test]

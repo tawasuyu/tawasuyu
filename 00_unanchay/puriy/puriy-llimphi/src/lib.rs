@@ -2196,6 +2196,27 @@ fn apply_dom_mutations(t: &mut TabState) {
                     puriy_engine::synthesize_box_node(tag, cid_opt, text, classes, value);
                 bt.append_child_to(&m.id, child);
             }
+        } else if m.kind == "insertBefore" {
+            // Fase 7.14: payload = mismo formato que appendChild más
+            // un 6º campo con ref_id (el id del sibling antes del cual
+            // insertar). Si ref_id no se encuentra, fallback a append.
+            let parts: Vec<&str> = m.value.split('\u{001D}').collect();
+            if parts.len() >= 6 {
+                let tag = parts[0];
+                let cid = parts[1];
+                let text = parts[2];
+                let classes: Vec<String> = parts[3]
+                    .split_whitespace()
+                    .filter(|p| !p.is_empty())
+                    .map(|p| p.to_string())
+                    .collect();
+                let value = if parts[4].is_empty() { None } else { Some(parts[4]) };
+                let ref_id = parts[5];
+                let cid_opt = if cid.is_empty() { None } else { Some(cid) };
+                let child =
+                    puriy_engine::synthesize_box_node(tag, cid_opt, text, classes, value);
+                bt.insert_child_before(&m.id, child, ref_id);
+            }
         } else if m.kind == "removeChild" {
             // Fase 7.12: value = id del child (synth_id o user-set id).
             bt.remove_child_by_id(&m.id, &m.value);
@@ -5312,6 +5333,142 @@ mod tests {
         });
         assert!(!a_exists);
         assert!(b_exists);
+    }
+
+    // ============= Fase 7.14 — insertBefore + herencia de estilos =============
+
+    #[test]
+    fn apply_insert_before_pone_child_antes_del_ref() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(
+            r#"<body><ul id="list"><li id="a">a</li><li id="b">b</li></ul></body>"#,
+        ));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[
+            puriy_js::ElementSnapshot {
+                id: "list".into(),
+                tag_name: "ul".into(),
+                text_content: String::new(),
+                class_list: Vec::new(),
+                value: None,
+                parent_id: None,
+                dataset: Vec::new(),
+            },
+            puriy_js::ElementSnapshot {
+                id: "a".into(),
+                tag_name: "li".into(),
+                text_content: "a".into(),
+                class_list: Vec::new(),
+                value: None,
+                parent_id: Some("list".into()),
+                dataset: Vec::new(),
+            },
+        ])
+        .expect("e");
+        rt.eval(
+            "var li = document.createElement('li'); \
+             li.id = 'mid'; \
+             li.textContent = 'mid'; \
+             document.getElementById('list').insertBefore(li, document.getElementById('a'));",
+        )
+        .expect("e");
+        apply_dom_mutations(t);
+        // Orden esperado en BoxTree: mid, a, b.
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut order: Vec<String> = Vec::new();
+        bt.walk(|b| {
+            if b.tag.as_deref() == Some("li") {
+                if let Some(id) = &b.element_id {
+                    order.push(id.clone());
+                }
+            }
+        });
+        assert_eq!(order, vec!["mid", "a", "b"]);
+    }
+
+    #[test]
+    fn apply_insert_before_ref_inexistente_hace_append() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><ul id="list"><li id="a">a</li></ul></body>"#));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[
+            puriy_js::ElementSnapshot {
+                id: "list".into(),
+                tag_name: "ul".into(),
+                text_content: String::new(),
+                class_list: Vec::new(),
+                value: None,
+                parent_id: None,
+                dataset: Vec::new(),
+            },
+        ])
+        .expect("e");
+        // El ref_id "fantasma" no existe — el chrome cae a append.
+        // Simulamos la mutación manualmente (saltea las validaciones JS).
+        rt.eval("globalThis.__puriy_dirty.push({id:'list',kind:'insertBefore',value:'li\u{001D}nuevo\u{001D}x\u{001D}\u{001D}\u{001D}fantasma'})")
+            .expect("e");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut order: Vec<String> = Vec::new();
+        bt.walk(|b| {
+            if b.tag.as_deref() == Some("li") {
+                if let Some(id) = &b.element_id {
+                    order.push(id.clone());
+                }
+            }
+        });
+        // 'nuevo' debe estar después de 'a' porque cae a append.
+        assert_eq!(order, vec!["a", "nuevo"]);
+    }
+
+    #[test]
+    fn append_child_hereda_color_y_font_size_del_parent() {
+        // Parent <div id=p> con style="color:red;font-size:24px" tiene
+        // esos valores en su BoxNode. Un <li> sintético appendChild
+        // debería heredar color rojo + font_size 24, en lugar de los
+        // defaults negros 16px.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(
+            r#"<body><div id="p" style="color: red; font-size: 24px"></div></body>"#,
+        ));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "p".into(),
+            tag_name: "div".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+        }])
+        .expect("e");
+        rt.eval(
+            "var s = document.createElement('span'); \
+             s.id = 'k'; \
+             s.textContent = 'hola'; \
+             document.getElementById('p').appendChild(s);",
+        )
+        .expect("e");
+        apply_dom_mutations(t);
+        // El <span id=k> sintético debe tener color y font_size del padre.
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("k") {
+                assert!(
+                    (b.font_size - 24.0).abs() < 0.01,
+                    "font_size esperado 24, got {}",
+                    b.font_size
+                );
+                // color: red (255,0,0) en el formato Color de engine.
+                assert_eq!((b.color.r, b.color.g, b.color.b), (255, 0, 0), "color esperado red");
+                found = true;
+            }
+        });
+        assert!(found);
     }
 
     #[test]
