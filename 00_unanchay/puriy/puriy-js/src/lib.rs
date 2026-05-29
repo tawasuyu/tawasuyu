@@ -170,12 +170,13 @@ globalThis.__puriy_tick = function(now) {
 const EVENTS_BOOTSTRAP: &str = r#"
 globalThis.__puriy_elements = {};
 globalThis.__puriy_dirty = [];
-globalThis.__puriy_make_element = function(id, tag, text, classes) {
+globalThis.__puriy_make_element = function(id, tag, text, classes, value) {
     var el = {
         id: id,
         tagName: tag,
         _textContent: text,
         _classList: classes || [],
+        _value: value == null ? '' : String(value),
         _listeners: {},
         addEventListener: function(type, fn) {
             if (!this._listeners[type]) this._listeners[type] = [];
@@ -187,6 +188,19 @@ globalThis.__puriy_make_element = function(id, tag, text, classes) {
             if (i >= 0) this._listeners[type].splice(i, 1);
         }
     };
+    // Fase 7.9 — el.value get/set. Get devuelve el mirror local que el
+    // chrome sincroniza vía init.value antes de cada dispatch. Set
+    // publica una mutación que el chrome aplica al TextInputState (para
+    // <input>/<textarea>) o al SelectState (para <select>).
+    Object.defineProperty(el, 'value', {
+        get: function() { return el._value; },
+        set: function(v) {
+            el._value = String(v);
+            globalThis.__puriy_dirty.push({id: el.id, kind: 'value', value: el._value});
+        },
+        enumerable: true,
+        configurable: true
+    });
     // className: getter/setter — refleja _classList. Permite leer el
     // string original ("foo bar") y mutarlo (split by space). Fase 7.8
     // no aplica el restyle (cambiar clases no re-corre la cascada CSS)
@@ -259,7 +273,7 @@ globalThis.__puriy_make_element = function(id, tag, text, classes) {
     });
     return el;
 };
-globalThis.__puriy_dispatch = function(id, type) {
+globalThis.__puriy_dispatch = function(id, type, init) {
     var el = globalThis.__puriy_elements[id];
     if (!el) return '0,0';
     // Construye el `event` object que se pasa a cada handler. Shape
@@ -275,6 +289,22 @@ globalThis.__puriy_dispatch = function(id, type) {
         preventDefault: function() { this.defaultPrevented = true; },
         stopPropagation: function() { this._stopped = true; }
     };
+    // Fase 7.9 — merge del init que el chrome publicó. Para keydown:
+    // {key, code, shiftKey, ctrlKey, altKey, metaKey}. Para change/input:
+    // {value} (también sincroniza el mirror el._value antes de invocar
+    // handlers para que `event.target.value` devuelva el current).
+    if (init) {
+        if (init.key !== undefined) event.key = init.key;
+        if (init.code !== undefined) event.code = init.code;
+        if (init.shiftKey !== undefined) event.shiftKey = init.shiftKey;
+        if (init.ctrlKey !== undefined) event.ctrlKey = init.ctrlKey;
+        if (init.altKey !== undefined) event.altKey = init.altKey;
+        if (init.metaKey !== undefined) event.metaKey = init.metaKey;
+        if (init.value !== undefined) {
+            event.value = init.value;
+            el._value = String(init.value);
+        }
+    }
     var count = 0;
     var onName = 'on' + type;
     if (typeof el[onName] === 'function') {
@@ -691,12 +721,19 @@ impl JsRuntime {
                 cls_arr.push_str(&js_string_literal(c));
             }
             cls_arr.push(']');
+            // Fase 7.9 — value: null si no aplica (no es input/select),
+            // sino string literal. El JS asigna el mirror local.
+            let value_arg = match &el.value {
+                Some(v) => js_string_literal(v),
+                None => "null".to_string(),
+            };
             script.push_str(&format!(
-                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls});\n",
+                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val});\n",
                 id = js_string_literal(&el.id),
                 tag = js_string_literal(&el.tag_name),
                 text = js_string_literal(&el.text_content),
                 cls = cls_arr,
+                val = value_arg,
             ));
         }
         // Reset del buffer de dirty para que mutaciones de la página
@@ -748,11 +785,17 @@ impl JsRuntime {
         &mut self,
         element_id: &str,
         event_type: &str,
+        init: Option<&EventInit>,
     ) -> Result<DispatchResult, JsError> {
+        let init_lit = match init {
+            Some(i) => i.to_js_literal(),
+            None => "null".to_string(),
+        };
         let script = format!(
-            "globalThis.__puriy_dispatch({id}, {type_})",
+            "globalThis.__puriy_dispatch({id}, {type_}, {init})",
             id = js_string_literal(element_id),
             type_ = js_string_literal(event_type),
+            init = init_lit,
         );
         let v = self.eval(&script)?;
         let s = match v {
@@ -1083,6 +1126,67 @@ pub struct ElementSnapshot {
     /// Clases CSS del elemento (atributo `class="a b c"` split por
     /// espacio). Para indexado en `querySelector('.foo')`.
     pub class_list: Vec<String>,
+    /// Value inicial — sólo poblado para `<input>` / `<textarea>` /
+    /// `<select>`. `None` significa que `el.value` arranca como `""` y
+    /// no se sincroniza desde el chrome. Fase 7.9.
+    pub value: Option<String>,
+}
+
+/// Init opcional para [`JsRuntime::dispatch_event`]. Lleva los campos
+/// estándar del DOM Event que el chrome conoce (key/code para keydown,
+/// modifiers para todos, value para change/input). Los `Option::None` se
+/// omiten del event object — JS verá `event.key === undefined`.
+///
+/// Fase 7.9 — antes los handlers recibían un event sin estos campos. La
+/// motivación es que un `keydown` handler pueda hacer `if (event.key ==
+/// 'Enter')` o `event.shiftKey` y que un `change` handler lea el value
+/// nuevo del input/select sin tener que `getElementById(...).value`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventInit {
+    pub key: Option<String>,
+    pub code: Option<String>,
+    pub shift_key: Option<bool>,
+    pub ctrl_key: Option<bool>,
+    pub alt_key: Option<bool>,
+    pub meta_key: Option<bool>,
+    /// Para `change`/`input` events: el valor actual del input/select.
+    /// El bootstrap JS también sincroniza `el._value` con esto antes de
+    /// invocar handlers — así `event.target.value` está fresco.
+    pub value: Option<String>,
+}
+
+impl EventInit {
+    /// Construye una expresión JS literal con los campos definidos.
+    /// Devuelve `"null"` si todos los campos son None (omite el arg).
+    pub fn to_js_literal(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(k) = &self.key {
+            parts.push(format!("key:{}", js_string_literal(k)));
+        }
+        if let Some(c) = &self.code {
+            parts.push(format!("code:{}", js_string_literal(c)));
+        }
+        if let Some(b) = self.shift_key {
+            parts.push(format!("shiftKey:{}", b));
+        }
+        if let Some(b) = self.ctrl_key {
+            parts.push(format!("ctrlKey:{}", b));
+        }
+        if let Some(b) = self.alt_key {
+            parts.push(format!("altKey:{}", b));
+        }
+        if let Some(b) = self.meta_key {
+            parts.push(format!("metaKey:{}", b));
+        }
+        if let Some(v) = &self.value {
+            parts.push(format!("value:{}", js_string_literal(v)));
+        }
+        if parts.is_empty() {
+            "null".to_string()
+        } else {
+            format!("{{{}}}", parts.join(","))
+        }
+    }
 }
 
 /// Resultado de [`JsRuntime::dispatch_event`]. `count` es cuántos
@@ -1879,6 +1983,7 @@ mod tests {
             tag_name: tag.into(),
             text_content: text.into(),
             class_list: Vec::new(),
+            value: None,
         }
     }
 
@@ -1888,6 +1993,17 @@ mod tests {
             tag_name: tag.into(),
             text_content: text.into(),
             class_list: vec![class.into()],
+            value: None,
+        }
+    }
+
+    fn snap_with_value(id: &str, tag: &str, value: &str) -> ElementSnapshot {
+        ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: Some(value.into()),
         }
     }
 
@@ -1984,7 +2100,7 @@ mod tests {
                 function(){ console.log('clicked') })",
         )
         .expect("e");
-        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
+        let r = rt.dispatch_event("btn", "click", None).expect("dispatch"); let count = r.count;
         assert_eq!(count, 1);
         assert_eq!(rt.stdout(), "clicked\n");
     }
@@ -1998,7 +2114,7 @@ mod tests {
             "document.getElementById('btn').onclick = function(){ console.log('on') }",
         )
         .expect("e");
-        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
+        let r = rt.dispatch_event("btn", "click", None).expect("dispatch"); let count = r.count;
         assert_eq!(count, 1);
         assert_eq!(rt.stdout(), "on\n");
     }
@@ -2016,7 +2132,7 @@ mod tests {
              el.addEventListener('click', function(){ console.log('listener') });",
         )
         .expect("e");
-        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
+        let r = rt.dispatch_event("btn", "click", None).expect("dispatch"); let count = r.count;
         assert_eq!(count, 2);
         assert_eq!(rt.stdout(), "property\nlistener\n");
     }
@@ -2026,7 +2142,7 @@ mod tests {
         let mut rt = JsRuntime::new().expect("rt");
         rt.set_document("t", "u", "b").expect("d");
         rt.set_elements(&[]).expect("e");
-        let r = rt.dispatch_event("fantasma", "click").expect("dispatch"); let count = r.count;
+        let r = rt.dispatch_event("fantasma", "click", None).expect("dispatch"); let count = r.count;
         assert_eq!(count, 0);
     }
 
@@ -2042,7 +2158,7 @@ mod tests {
              el.removeEventListener('click', f);",
         )
         .expect("e");
-        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
+        let r = rt.dispatch_event("btn", "click", None).expect("dispatch"); let count = r.count;
         assert_eq!(count, 0);
         assert!(rt.stdout().is_empty());
     }
@@ -2058,7 +2174,7 @@ mod tests {
              el.addEventListener('click', function(){ console.log('sigo') });",
         )
         .expect("e");
-        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
+        let r = rt.dispatch_event("btn", "click", None).expect("dispatch"); let count = r.count;
         assert_eq!(count, 2);
         assert_eq!(rt.stdout(), "sigo\n");
         assert!(rt.stderr().contains("boom"), "stderr: {:?}", rt.stderr());
@@ -2245,7 +2361,7 @@ mod tests {
              }",
         )
         .expect("e");
-        rt.dispatch_event("btn", "click").expect("dispatch");
+        rt.dispatch_event("btn", "click", None).expect("dispatch");
         assert_eq!(rt.stdout(), "click btn\n");
     }
 
@@ -2258,7 +2374,7 @@ mod tests {
             "document.getElementById('a').onclick = function(e){ e.preventDefault(); }",
         )
         .expect("e");
-        let r = rt.dispatch_event("a", "click").expect("dispatch");
+        let r = rt.dispatch_event("a", "click", None).expect("dispatch");
         assert_eq!(r.count, 1);
         assert!(r.default_prevented, "esperaba default_prevented=true");
     }
@@ -2272,7 +2388,7 @@ mod tests {
             "document.getElementById('a').onclick = function(){ /* no preventDefault */ }",
         )
         .expect("e");
-        let r = rt.dispatch_event("a", "click").expect("dispatch");
+        let r = rt.dispatch_event("a", "click", None).expect("dispatch");
         assert_eq!(r.count, 1);
         assert!(!r.default_prevented);
     }
@@ -2289,7 +2405,7 @@ mod tests {
              el.addEventListener('click', function(){ console.log('ran') });",
         )
         .expect("e");
-        let r = rt.dispatch_event("a", "click").expect("dispatch");
+        let r = rt.dispatch_event("a", "click", None).expect("dispatch");
         assert_eq!(r.count, 3, "los 3 listeners deben correr");
         assert!(r.default_prevented);
         assert_eq!(rt.stdout(), "ran\n");
@@ -2300,7 +2416,7 @@ mod tests {
         let mut rt = JsRuntime::new().expect("rt");
         rt.set_document("t", "u", "b").expect("d");
         rt.set_elements(&[]).expect("e");
-        let r = rt.dispatch_event("fantasma", "click").expect("dispatch");
+        let r = rt.dispatch_event("fantasma", "click", None).expect("dispatch");
         assert_eq!(r.count, 0);
         assert!(!r.default_prevented);
     }
@@ -2319,7 +2435,7 @@ mod tests {
             }",
         )
         .expect("e");
-        rt.dispatch_event("btn", "click").expect("dispatch");
+        rt.dispatch_event("btn", "click", None).expect("dispatch");
         // Aún no se disparó el timer.
         assert!(rt.stdout().is_empty());
         rt.tick(100).expect("tick");
@@ -2339,5 +2455,146 @@ mod tests {
         // hay fire.
         assert_eq!(rt.pending_timers(), 1);
         assert!(rt.stdout().is_empty());
+    }
+
+    // ============= Fase 7.9 — event.key/code + Element.value =============
+
+    #[test]
+    fn event_init_keydown_expone_key_y_code_al_handler() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("inp", "input", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('inp').onkeydown = function(ev){ \
+                console.log(ev.key + ':' + ev.code) \
+            }",
+        )
+        .expect("e");
+        let init = EventInit {
+            key: Some("Enter".into()),
+            code: Some("Enter".into()),
+            ..Default::default()
+        };
+        let r = rt.dispatch_event("inp", "keydown", Some(&init)).expect("d");
+        assert_eq!(r.count, 1);
+        assert_eq!(rt.stdout(), "Enter:Enter\n");
+    }
+
+    #[test]
+    fn event_init_modifiers_llegan_al_handler() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('x').onkeydown = function(ev){ \
+                console.log((ev.shiftKey?'S':'-')+(ev.ctrlKey?'C':'-')+(ev.altKey?'A':'-')) \
+            }",
+        )
+        .expect("e");
+        let init = EventInit {
+            shift_key: Some(true),
+            ctrl_key: Some(false),
+            alt_key: Some(true),
+            ..Default::default()
+        };
+        rt.dispatch_event("x", "keydown", Some(&init)).expect("d");
+        assert_eq!(rt.stdout(), "S-A\n");
+    }
+
+    #[test]
+    fn event_init_sin_init_no_define_key_code() {
+        // El comportamiento Fase 7.7 sigue vivo: si el chrome NO pasa
+        // init (o pasa None), los campos viejos del event siguen ahí
+        // pero `event.key` queda undefined.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('x').onclick = function(ev){ \
+                console.log(typeof ev.key) \
+            }",
+        )
+        .expect("e");
+        rt.dispatch_event("x", "click", None).expect("d");
+        assert_eq!(rt.stdout(), "undefined\n");
+    }
+
+    #[test]
+    fn event_init_value_sincroniza_el_value_antes_de_handlers() {
+        // El chrome pasa value="hola" → handler ve event.target.value
+        // === "hola" porque el bootstrap actualiza el._value.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_value("inp", "input", "viejo")])
+            .expect("e");
+        rt.eval(
+            "document.getElementById('inp').onchange = function(ev){ \
+                console.log(ev.target.value) \
+            }",
+        )
+        .expect("e");
+        let init = EventInit {
+            value: Some("nuevo".into()),
+            ..Default::default()
+        };
+        rt.dispatch_event("inp", "change", Some(&init)).expect("d");
+        assert_eq!(rt.stdout(), "nuevo\n");
+        // Tras el dispatch, el mirror local ya quedó actualizado.
+        let v = rt.eval("document.getElementById('inp').value").expect("e");
+        assert_eq!(v, JsValue::String("nuevo".into()));
+    }
+
+    #[test]
+    fn element_value_initial_se_lee_desde_snapshot() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_value("inp", "input", "hola")])
+            .expect("e");
+        let v = rt.eval("document.getElementById('inp').value").expect("e");
+        assert_eq!(v, JsValue::String("hola".into()));
+    }
+
+    #[test]
+    fn element_value_setter_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_value("inp", "input", "viejo")])
+            .expect("e");
+        assert!(rt.drain_dom_mutations().is_empty());
+        rt.eval("document.getElementById('inp').value = 'nuevo'")
+            .expect("set");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].id, "inp");
+        assert_eq!(muts[0].kind, "value");
+        assert_eq!(muts[0].value, "nuevo");
+    }
+
+    #[test]
+    fn element_value_sin_snapshot_devuelve_empty() {
+        // Si el snapshot vino con value: None (no es un input), el
+        // mirror local arranca como "".
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "texto")]).expect("e");
+        let v = rt.eval("document.getElementById('x').value").expect("e");
+        assert_eq!(v, JsValue::String(String::new()));
+    }
+
+    #[test]
+    fn event_init_to_js_literal_emite_objeto_o_null() {
+        let empty = EventInit::default();
+        assert_eq!(empty.to_js_literal(), "null");
+        let full = EventInit {
+            key: Some("a".into()),
+            shift_key: Some(true),
+            value: Some("v".into()),
+            ..Default::default()
+        };
+        let lit = full.to_js_literal();
+        assert!(lit.starts_with('{') && lit.ends_with('}'));
+        assert!(lit.contains("key:\"a\""));
+        assert!(lit.contains("shiftKey:true"));
+        assert!(lit.contains("value:\"v\""));
     }
 }

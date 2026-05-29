@@ -1068,7 +1068,20 @@ impl App for Puriy {
                     .flatten();
                 if let Some(eid) = eid {
                     let now_ms = m.start.elapsed().as_millis() as u64;
-                    dispatch_js_event(&mut m, &eid, "change", now_ms);
+                    // Fase 7.9 — pasar el value del option recién
+                    // seleccionado en el EventInit. Así el handler de
+                    // `change` lee `event.target.value` y obtiene el
+                    // value del option, no el label.
+                    let value = select_value_at(m.active(), idx, opt);
+                    let mut init = puriy_js::EventInit::default();
+                    init.value = value;
+                    dispatch_js_event_with_init(
+                        &mut m,
+                        &eid,
+                        "change",
+                        now_ms,
+                        Some(init),
+                    );
                 }
             }
             Msg::ToggleCheckbox(idx) => {
@@ -1199,7 +1212,25 @@ impl App for Puriy {
                     });
                     let prevented = if let Some(eid) = eid {
                         let now_ms = m.start.elapsed().as_millis() as u64;
-                        dispatch_js_event(&mut m, &eid, "keydown", now_ms).default_prevented
+                        // Fase 7.9 — enriquecer el event object con key/
+                        // code/modifiers + value actual del input. Así un
+                        // handler puede leer event.key === 'Enter' o
+                        // event.target.value antes de aplicar el keydown.
+                        let focused_idx = m.active().focused_input;
+                        let mut init = key_event_to_init(&e);
+                        if let Some(idx) = focused_idx {
+                            if let Some(input) = m.active().inputs.get(idx) {
+                                init.value = Some(input.text());
+                            }
+                        }
+                        dispatch_js_event_with_init(
+                            &mut m,
+                            &eid,
+                            "keydown",
+                            now_ms,
+                            Some(init),
+                        )
+                        .default_prevented
                     } else {
                         false
                     };
@@ -1876,11 +1907,26 @@ fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
         // walk del body pero scoped al nodo (no tenemos sub-walk en
         // BoxTree, así que reconstruimos in-line via build_text_of).
         let text_content = node_text_content(b);
+        // Fase 7.9 — value inicial para inputs/textareas/selects. El
+        // chrome puede sincronizar antes de cada dispatch vía
+        // EventInit.value, pero el snapshot inicial garantiza que
+        // `el.value` arranque con el contenido correcto.
+        let value = if b.input_kind.is_some() {
+            b.input_initial.clone().or_else(|| Some(String::new()))
+        } else if let Some(sel) = &b.select {
+            sel.options
+                .get(sel.initial)
+                .map(|opt| opt.value.clone())
+                .or_else(|| Some(String::new()))
+        } else {
+            None
+        };
         out.push(puriy_js::ElementSnapshot {
             id: id.clone(),
             tag_name,
             text_content,
             class_list: b.class_list.clone(),
+            value,
         });
     });
     out
@@ -1920,6 +1966,21 @@ fn dispatch_js_event(
     event_type: &str,
     now_ms: u64,
 ) -> puriy_js::DispatchResult {
+    dispatch_js_event_with_init(m, element_id, event_type, now_ms, None)
+}
+
+/// Fase 7.9 — variante con `EventInit` opcional. El init lleva los
+/// campos enriquecidos del DOM Event (key/code/modifiers para keydown,
+/// value para change/input). Si es `None`, el handler recibe el event
+/// "viejo" estilo Fase 7.6 (type/target/preventDefault) — backwards
+/// compatible.
+fn dispatch_js_event_with_init(
+    m: &mut Model,
+    element_id: &str,
+    event_type: &str,
+    now_ms: u64,
+    init: Option<puriy_js::EventInit>,
+) -> puriy_js::DispatchResult {
     let t = m.active_mut();
     let Some(rt) = t.js.as_mut() else {
         return puriy_js::DispatchResult::default();
@@ -1927,7 +1988,7 @@ fn dispatch_js_event(
     let _ = rt.set_now_ms(now_ms);
     let prev_stdout_len = rt.stdout().len();
     let prev_stderr_len = rt.stderr().len();
-    let result = match rt.dispatch_event(element_id, event_type) {
+    let result = match rt.dispatch_event(element_id, event_type, init.as_ref()) {
         Ok(r) => {
             let new_stdout = rt.stdout();
             let new_stderr = rt.stderr();
@@ -1942,6 +2003,77 @@ fn dispatch_js_event(
     };
     apply_dom_mutations(t);
     result
+}
+
+/// Mapea un `KeyEvent` de Llimphi a un `EventInit` enriquecido con los
+/// campos estándar del DOM keydown/keyup event.
+///
+/// - `event.key`: el "key value" — `e.text` cuando hay carácter
+///   imprimible (respeta modifiers + IME), o el nombre del NamedKey
+///   (`"Enter"`, `"ArrowLeft"`, etc.) para teclas no-imprimibles.
+/// - `event.code`: el "physical code". Llimphi no expone el código
+///   físico (winit lo tiene en `KeyEvent.physical_key` que no propagamos);
+///   por ahora replicamos `key` como aproximación. Suficiente para que
+///   handlers que filtran `if (e.code === 'Enter')` funcionen.
+/// - `event.shiftKey`/`ctrlKey`/`altKey`/`metaKey`: directos de los
+///   modifiers.
+fn key_event_to_init(e: &llimphi_ui::KeyEvent) -> puriy_js::EventInit {
+    let key = match &e.key {
+        llimphi_ui::Key::Character(s) => s.to_string(),
+        llimphi_ui::Key::Named(n) => named_key_name(n),
+        _ => e.text.clone().unwrap_or_default(),
+    };
+    puriy_js::EventInit {
+        key: Some(key.clone()),
+        code: Some(key),
+        shift_key: Some(e.modifiers.shift),
+        ctrl_key: Some(e.modifiers.ctrl),
+        alt_key: Some(e.modifiers.alt),
+        meta_key: Some(e.modifiers.meta),
+        value: None,
+    }
+}
+
+/// Nombre canónico de un `NamedKey` al estilo DOM (`"Enter"`,
+/// `"ArrowLeft"`, `"Escape"`, etc.). Cubre las teclas que un browser
+/// típico usa para keydown handlers. Para teclas no mapeadas, usa
+/// `{:?}` de Debug — degrada limpio sin perder información.
+fn named_key_name(n: &llimphi_ui::NamedKey) -> String {
+    use llimphi_ui::NamedKey;
+    match n {
+        NamedKey::Enter => "Enter".into(),
+        NamedKey::Escape => "Escape".into(),
+        NamedKey::Tab => "Tab".into(),
+        NamedKey::Backspace => "Backspace".into(),
+        NamedKey::Delete => "Delete".into(),
+        NamedKey::Space => " ".into(),
+        NamedKey::ArrowLeft => "ArrowLeft".into(),
+        NamedKey::ArrowRight => "ArrowRight".into(),
+        NamedKey::ArrowUp => "ArrowUp".into(),
+        NamedKey::ArrowDown => "ArrowDown".into(),
+        NamedKey::Home => "Home".into(),
+        NamedKey::End => "End".into(),
+        NamedKey::PageUp => "PageUp".into(),
+        NamedKey::PageDown => "PageDown".into(),
+        NamedKey::Shift => "Shift".into(),
+        NamedKey::Control => "Control".into(),
+        NamedKey::Alt => "Alt".into(),
+        NamedKey::Meta => "Meta".into(),
+        NamedKey::CapsLock => "CapsLock".into(),
+        NamedKey::F1 => "F1".into(),
+        NamedKey::F2 => "F2".into(),
+        NamedKey::F3 => "F3".into(),
+        NamedKey::F4 => "F4".into(),
+        NamedKey::F5 => "F5".into(),
+        NamedKey::F6 => "F6".into(),
+        NamedKey::F7 => "F7".into(),
+        NamedKey::F8 => "F8".into(),
+        NamedKey::F9 => "F9".into(),
+        NamedKey::F10 => "F10".into(),
+        NamedKey::F11 => "F11".into(),
+        NamedKey::F12 => "F12".into(),
+        other => format!("{:?}", other),
+    }
 }
 
 /// Avanza el reloj de cada `JsRuntime` vivo del Model al `now_ms` actual
@@ -2002,9 +2134,70 @@ fn apply_dom_mutations(t: &mut TabState) {
             // Fase 7.8: el.style.X = Y publica con kind = "style:X" (X
             // ya viene en kebab-case desde el harness JS).
             bt.set_element_style(&m.id, prop, &m.value);
+        } else if m.kind == "value" {
+            // Fase 7.9: el.value = X aplica al TextInputState (para
+            // <input>/<textarea>) o al SelectState (para <select>).
+            // Si el id matchea un input slot, set_text. Si matchea un
+            // select slot, busca el option con value == X y selecciónalo.
+            if let Some(slot) = t
+                .inputs_element_ids
+                .iter()
+                .position(|e| e.as_deref() == Some(m.id.as_str()))
+            {
+                if let Some(input) = t.inputs.get_mut(slot) {
+                    input.set_text(m.value.clone());
+                }
+            } else if let Some(slot) = t
+                .selects_element_ids
+                .iter()
+                .position(|e| e.as_deref() == Some(m.id.as_str()))
+            {
+                if let Some(opt_idx) = select_option_index_by_value(bt, slot, &m.value) {
+                    if let Some(s) = t.selects.get_mut(slot) {
+                        s.selected = opt_idx;
+                    }
+                }
+            }
         }
         // Otros kinds (`attr`, `classList`, ...) llegarán en fases siguientes.
     }
+}
+
+/// Devuelve el value (del option seleccionado) del `<select>` del slot
+/// `select_idx` cuando el option seleccionado es `opt_idx`. Walka el
+/// BoxTree contando selects en DFS, mismo orden que el populado en
+/// `Msg::Loaded`. None si el slot/opt no existe.
+fn select_value_at(t: &TabState, select_idx: usize, opt_idx: usize) -> Option<String> {
+    let bt = t.box_tree.as_ref()?;
+    let mut counter = 0usize;
+    let mut found: Option<String> = None;
+    bt.walk(|b| {
+        if let Some(s) = &b.select {
+            if counter == select_idx {
+                found = s.options.get(opt_idx).map(|o| o.value.clone());
+            }
+            counter += 1;
+        }
+    });
+    found
+}
+
+/// Busca el índice del option dentro del `<select>` del slot `select_idx`
+/// cuyo `value` coincide con `target` (case-sensitive, exact match).
+/// Walka el BoxTree contando selects en DFS. Devuelve None si no existe
+/// el slot o ningún option matchea.
+fn select_option_index_by_value(bt: &BoxTree, select_idx: usize, target: &str) -> Option<usize> {
+    let mut counter = 0usize;
+    let mut found: Option<usize> = None;
+    bt.walk(|b| {
+        if let Some(s) = &b.select {
+            if counter == select_idx {
+                found = s.options.iter().position(|o| o.value == target);
+            }
+            counter += 1;
+        }
+    });
+    found
 }
 
 /// Concatena las hojas de texto del box tree en un único string — el
@@ -4412,7 +4605,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "btn".into(),
             tag_name: "button".into(),
-            text_content: "click me".into(), class_list: Vec::new(),
+            text_content: "click me".into(), class_list: Vec::new(), value: None,
         }])
         .expect("set_elements");
         rt.eval(
@@ -4474,7 +4667,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "out".into(),
             tag_name: "div".into(),
-            text_content: "antes".into(), class_list: Vec::new(),
+            text_content: "antes".into(), class_list: Vec::new(), value: None,
         }])
         .expect("set_elements");
         rt.eval(
@@ -4506,7 +4699,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "clock".into(),
             tag_name: "span".into(),
-            text_content: "00:00".into(), class_list: Vec::new(),
+            text_content: "00:00".into(), class_list: Vec::new(), value: None,
         }])
         .expect("e");
         rt.set_now_ms(0).expect("now");
@@ -4564,6 +4757,7 @@ mod tests {
             tag_name: "div".into(),
             text_content: "".into(),
             class_list: Vec::new(),
+            value: None,
         }])
         .expect("e");
         rt.eval(
@@ -4602,7 +4796,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(),
+            text_content: "link".into(), class_list: Vec::new(), value: None,
         }])
         .expect("e");
         rt.eval(
@@ -4623,7 +4817,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "i".into(),
             tag_name: "input".into(),
-            text_content: "".into(), class_list: Vec::new(),
+            text_content: "".into(), class_list: Vec::new(), value: None,
         }])
         .expect("e");
         rt.eval(
@@ -4653,7 +4847,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(),
+            text_content: "link".into(), class_list: Vec::new(), value: None,
         }])
         .expect("e");
         rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
@@ -4672,5 +4866,184 @@ mod tests {
         let rt = m.tabs[0].js.as_ref().expect("rt");
         // stdout sigue siendo sólo el "boot" del script inicial.
         assert!(rt.stdout().contains("boot"));
+    }
+
+    // ============= Fase 7.9 — event.key + Element.value =============
+
+    #[test]
+    fn named_key_name_mapea_teclas_comunes() {
+        use llimphi_ui::NamedKey;
+        assert_eq!(named_key_name(&NamedKey::Enter), "Enter");
+        assert_eq!(named_key_name(&NamedKey::Escape), "Escape");
+        assert_eq!(named_key_name(&NamedKey::ArrowLeft), "ArrowLeft");
+        assert_eq!(named_key_name(&NamedKey::ArrowRight), "ArrowRight");
+        assert_eq!(named_key_name(&NamedKey::Tab), "Tab");
+        assert_eq!(named_key_name(&NamedKey::Backspace), "Backspace");
+        assert_eq!(named_key_name(&NamedKey::F5), "F5");
+    }
+
+    #[test]
+    fn key_event_to_init_extrae_caracter_y_modifiers() {
+        use llimphi_ui::{Key, KeyEvent, KeyState, Modifiers};
+        let e = KeyEvent {
+            key: Key::Character("a".into()),
+            state: KeyState::Pressed,
+            text: Some("a".into()),
+            modifiers: Modifiers {
+                shift: true,
+                ctrl: false,
+                alt: false,
+                meta: false,
+            },
+            repeat: false,
+        };
+        let init = key_event_to_init(&e);
+        assert_eq!(init.key.as_deref(), Some("a"));
+        assert_eq!(init.code.as_deref(), Some("a"));
+        assert_eq!(init.shift_key, Some(true));
+        assert_eq!(init.ctrl_key, Some(false));
+    }
+
+    #[test]
+    fn key_event_to_init_mapea_named_keys() {
+        use llimphi_ui::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
+        let e = KeyEvent {
+            key: Key::Named(NamedKey::ArrowDown),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: Modifiers::default(),
+            repeat: false,
+        };
+        let init = key_event_to_init(&e);
+        assert_eq!(init.key.as_deref(), Some("ArrowDown"));
+    }
+
+    #[test]
+    fn collect_element_snapshots_value_de_input_lleva_input_initial() {
+        let tree = parse(r#"<body><input id="email" value="hola@x.com"></body>"#);
+        let snaps = collect_element_snapshots(&tree);
+        let s = snaps.iter().find(|s| s.id == "email").expect("found");
+        assert_eq!(s.value.as_deref(), Some("hola@x.com"));
+    }
+
+    #[test]
+    fn collect_element_snapshots_value_de_select_lleva_option_seleccionado() {
+        let tree = parse(
+            r#"<body><select id="lang">
+                <option value="es">Español</option>
+                <option value="en" selected>English</option>
+            </select></body>"#,
+        );
+        let snaps = collect_element_snapshots(&tree);
+        let s = snaps.iter().find(|s| s.id == "lang").expect("found");
+        assert_eq!(s.value.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn collect_element_snapshots_value_es_none_para_div() {
+        let tree = parse(r#"<body><div id="x">hola</div></body>"#);
+        let snaps = collect_element_snapshots(&tree);
+        let s = snaps.iter().find(|s| s.id == "x").expect("found");
+        assert_eq!(s.value, None);
+    }
+
+    #[test]
+    fn apply_value_mutation_actualiza_text_input_state() {
+        // JS setea el.value = "nuevo" — apply_dom_mutations debe
+        // propagarlo al TextInputState del slot correspondiente.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><input id="x" value="viejo"></body>"#));
+        let mut s = TextInputState::new();
+        s.set_text("viejo".to_string());
+        t.inputs = vec![s];
+        t.inputs_element_ids = vec![Some("x".into())];
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "x".into(),
+            tag_name: "input".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: Some("viejo".into()),
+        }])
+        .expect("e");
+        rt.eval("document.getElementById('x').value = 'nuevo'")
+            .expect("e");
+        apply_dom_mutations(t);
+        assert_eq!(t.inputs[0].text(), "nuevo");
+    }
+
+    #[test]
+    fn apply_value_mutation_actualiza_select_state() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(
+            r#"<body><select id="lang">
+                <option value="es">Español</option>
+                <option value="en">English</option>
+            </select></body>"#,
+        ));
+        t.selects = vec![SelectState { selected: 0, open: false }];
+        t.selects_element_ids = vec![Some("lang".into())];
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "lang".into(),
+            tag_name: "select".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: Some("es".into()),
+        }])
+        .expect("e");
+        rt.eval("document.getElementById('lang').value = 'en'")
+            .expect("e");
+        apply_dom_mutations(t);
+        assert_eq!(t.selects[0].selected, 1);
+    }
+
+    #[test]
+    fn dispatch_keydown_pasa_key_real_al_handler() {
+        use llimphi_ui::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
+        let mut m = model_con_script("/* boot */");
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "i".into(),
+            tag_name: "input".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: Some(String::new()),
+        }])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('i').onkeydown = function(ev){ \
+                console.log(ev.key) \
+            }",
+        )
+        .expect("e");
+        let e = KeyEvent {
+            key: Key::Named(NamedKey::Enter),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: Modifiers::default(),
+            repeat: false,
+        };
+        let init = key_event_to_init(&e);
+        dispatch_js_event_with_init(&mut m, "i", "keydown", 0, Some(init));
+        let rt = m.tabs[0].js.as_ref().expect("rt");
+        assert!(rt.stdout().contains("Enter"), "stdout: {:?}", rt.stdout());
+    }
+
+    #[test]
+    fn select_value_at_devuelve_value_del_option() {
+        let tree = parse(
+            r#"<body><select id="lang">
+                <option value="es">Español</option>
+                <option value="en">English</option>
+            </select></body>"#,
+        );
+        let mut m = model_con_script("/* boot */");
+        m.tabs[0].box_tree = Some(tree);
+        assert_eq!(select_value_at(&m.tabs[0], 0, 1).as_deref(), Some("en"));
+        assert_eq!(select_value_at(&m.tabs[0], 0, 0).as_deref(), Some("es"));
+        assert_eq!(select_value_at(&m.tabs[0], 99, 0), None);
     }
 }
