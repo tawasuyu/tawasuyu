@@ -164,6 +164,7 @@ members = [
     "02_ruway/tullpu/tullpu-core",
     "02_ruway/tullpu/tullpu-render",
     "02_ruway/tullpu/tullpu-ops",
+    "02_ruway/tullpu/tullpu-app-llimphi",
     "02_ruway/ayni/ayni-core",
     "02_ruway/ayni/ayni-crypto",
     "02_ruway/ayni/ayni-sync",

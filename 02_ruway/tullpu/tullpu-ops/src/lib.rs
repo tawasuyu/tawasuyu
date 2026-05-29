@@ -13,7 +13,7 @@
 
 #![forbid(unsafe_code)]
 
-use image::{ImageBuffer, Rgba, RgbaImage};
+use image::{ImageBuffer, RgbaImage};
 use tullpu_core::{
     Frescura, Hash, Lienzo, OpLocal, OrigenCapa, TransformacionPixel,
 };
