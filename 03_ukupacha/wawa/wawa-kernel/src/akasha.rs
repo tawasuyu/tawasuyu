@@ -188,6 +188,39 @@ static RX_ANUNCIOS: AtomicU64 = AtomicU64::new(0);
 /// un autor agora, y la politica de "actualizar" la decide el userspace.
 static RX_ANUNCIOS_CANAL: AtomicU64 = AtomicU64::new(0);
 
+/// El ULTIMO anuncio de canal recibido, con su firma intacta. La capa-2 no
+/// garantiza orden ni unicidad; guardamos el mas reciente en una sola ranura
+/// y dejamos que el userspace (la app `mudanza`) lo lea por
+/// `sys_canal_anuncio`, se lo muestre al operador, y —si este acepta— pida
+/// re-anclar por `sys_canal_aceptar`. El kernel NO verifica la firma al
+/// recibir (no conoce aun el nombre del canal hasta que el objeto `Canal`
+/// llega via `ProveedorObjeto`); la verificacion soberana ocurre integra en
+/// `sys_canal_aceptar`. Esta ranura es solo el buzon de "hay una propuesta".
+static ULTIMO_ANUNCIO: Mutex<Option<AnuncioCanal>> = Mutex::new(None);
+
+/// Los campos firmados de un `MensajeAkasha::AnunciarCanal`, retenidos para
+/// que el userspace los recoja. Espeja el layout de 168 B que `sys_canal_anuncio`
+/// expone y que `agora-cli wawa publicar` escribe en `anuncio.bin`.
+#[derive(Clone, Copy)]
+pub struct AnuncioCanal {
+    /// Hash del objeto `format::Canal` (lleva el nombre + el historial firmado).
+    pub canal: Hash,
+    /// Hash del manifiesto que el autor recomienda anclar.
+    pub raiz: Hash,
+    /// Clave publica Ed25519 del autor del anuncio.
+    pub autor: [u8; 32],
+    /// Segundos UNIX de la recomendacion; parte del mensaje firmado.
+    pub timestamp: u64,
+    /// Firma Ed25519 sobre `format::mensaje_a_firmar(nombre, timestamp, raiz)`.
+    pub firma: [u8; 64],
+}
+
+/// Devuelve una copia del ultimo anuncio de canal recibido, o `None` si aun
+/// no llego ninguno. La toma `sys_canal_anuncio` para volcarla al userspace.
+pub fn ultimo_anuncio() -> Option<AnuncioCanal> {
+    *ULTIMO_ANUNCIO.lock()
+}
+
 /// Frames AoE emitidos en TX, por variante.
 static TX_SOLICITUDES: AtomicU64 = AtomicU64::new(0);
 static TX_PROVEEDORES: AtomicU64 = AtomicU64::new(0);
@@ -386,15 +419,22 @@ fn procesar(mensaje: MensajeAkasha, origen: Mac, nuestra: Mac) {
             RX_ANUNCIOS.fetch_add(1, Ordering::Relaxed);
             atender_anuncio(id, origen, nuestra);
         }
-        MensajeAkasha::AnunciarCanal { canal, raiz, autor, timestamp, firma: _ } => {
-            // El kernel NO verifica la firma ni decide si actualizar — esa es
-            // politica de userspace (la app `mudanza`, que conoce las
-            // suscripciones del usuario y la red de confianza agora). Aqui solo
-            // se ingesta el DAG: pedimos al emisor el objeto `Canal` y la raiz
-            // de manifiesto si no los tenemos. Cuando lleguen via
-            // `ProveedorObjeto`, el userspace los lee del grafo, verifica la
-            // firma, y propone re-anclar.
+        MensajeAkasha::AnunciarCanal { canal, raiz, autor, timestamp, firma } => {
+            // El kernel NO verifica la firma ni decide si actualizar al RECIBIR
+            // —no conoce el nombre del canal hasta que el objeto `Canal` llega—.
+            // Aqui ingesta el DAG (pide `Canal` y la raiz si faltan) Y retiene
+            // el anuncio en la ranura `ULTIMO_ANUNCIO` para que la app `mudanza`
+            // lo lea por `sys_canal_anuncio`. La verificacion soberana (anillo +
+            // firma canonica) y la re-ancla ocurren integras en `sys_canal_aceptar`
+            // cuando el operador acepta. Aqui solo anotamos "hay una propuesta".
             RX_ANUNCIOS_CANAL.fetch_add(1, Ordering::Relaxed);
+            *ULTIMO_ANUNCIO.lock() = Some(AnuncioCanal {
+                canal,
+                raiz,
+                autor,
+                timestamp,
+                firma,
+            });
             atender_anuncio_canal(canal, raiz, autor, timestamp, origen, nuestra);
         }
     }

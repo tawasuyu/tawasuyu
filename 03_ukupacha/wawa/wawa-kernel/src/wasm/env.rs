@@ -1744,6 +1744,85 @@ pub(crate) fn enlazar_capacidades(
             }
         },
     )?;
+
+    // --- CAPACIDAD 7d :: sys_canal_aceptar(raiz_ptr) -> i32 ---
+    // Fase 64 :: ACEPTA el ultimo `AnunciarCanal` recibido por Akasha y reancla
+    // el manifiesto a su raiz — la cara VIVA de `sys_manifiesto_proponer`. La
+    // app `mudanza` la invoca cuando el operador confirma una propuesta que vio
+    // por `sys_canal_anuncio`. El argumento es el hash de 32 B de la raiz que el
+    // operador ACEPTO; el kernel:
+    //
+    //   1. Lee la raiz aceptada de la memoria lineal de la app.
+    //   2. Toma el anuncio retenido (`akasha::ultimo_anuncio`). Si no hay, o si
+    //      su raiz no casa con la aceptada —un anuncio nuevo lo reemplazo entre
+    //      "mostrar" y "aceptar"—, cae con `Ausente` SIN tocar nada (cierra el
+    //      TOCTOU: el operador acepta EXACTAMENTE lo que vio).
+    //   3. Lee el objeto `Canal` del grafo para obtener su `nombre`. Confiar en
+    //      ese nombre es seguro: la firma del anuncio LO CUBRE (paso 4).
+    //   4. Verificacion SOBERANA: anillo `AGORA_AUTH_RING` + firma Ed25519
+    //      canonica sobre `mensaje_a_firmar(nombre, timestamp, raiz)`. Autor
+    //      ajeno -> `CapacidadInsuficiente`; firma forjada -> `AlmacenamientoFallo`.
+    //   5. El manifiesto recomendado debe estar ingestado (el demuxer ya lo
+    //      pidio al recibir el anuncio); si falta -> `Ausente`, reintentar.
+    //   6. Reancla atomica: una sola escritura del superbloque.
+    //
+    // GATEADA por PERMISO_RAIZ, igual que `sys_manifiesto_proponer`: misma
+    // autoridad. La diferencia es el ESQUEMA de firma (canonico del canal, no
+    // hash pelado) — por eso vive aparte y no reusa el sobre `ManifiestoFirmado`.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_canal_aceptar",
+        |caller: Caller<'_, ContextoCapacidades>, raiz_ptr: u32| -> Result<i32, Error> {
+            let memoria = obtener_memoria(&caller)?;
+            let mut raiz = [0u8; 32];
+            {
+                let m = memoria.data(&caller);
+                let crudo = rango(
+                    m,
+                    raiz_ptr,
+                    32,
+                    "WASM :: sys_canal_aceptar desbordo la memoria lineal",
+                )?;
+                raiz.copy_from_slice(crudo);
+            }
+            // El anuncio retenido debe existir Y casar la raiz aceptada.
+            let anuncio = match crate::akasha::ultimo_anuncio() {
+                Some(a) if a.raiz == raiz => a,
+                _ => return Ok(CodigoError::Ausente.como_i32()),
+            };
+            // Nombre del canal desde su objeto del grafo (la firma lo cubre).
+            let canal_obj = match crate::almacen::recuperar(&anuncio.canal) {
+                Ok(Some(o)) => o,
+                Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
+                Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            };
+            let canal = match format::Canal::deserializar(&canal_obj.datos) {
+                Ok(c) => c,
+                Err(_) => return Ok(CodigoError::Ausente.como_i32()),
+            };
+            // Verificacion soberana: anillo + firma canonica.
+            if let Err(err) = crate::claves::verificar_anuncio_canal(
+                &anuncio.autor,
+                &canal.nombre,
+                anuncio.timestamp,
+                &anuncio.raiz,
+                &anuncio.firma,
+            ) {
+                return Ok(err.como_i32());
+            }
+            // El manifiesto recomendado tiene que estar ingestado localmente.
+            match crate::almacen::recuperar(&anuncio.raiz) {
+                Ok(Some(_)) => {}
+                Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
+                Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            }
+            // Reancla atomica del manifiesto vivo.
+            match crate::almacen::fijar_manifiesto(anuncio.raiz) {
+                Ok(()) => Ok(CodigoError::Ok.como_i32()),
+                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            }
+        },
+    )?;
     } // PERMISO_RAIZ
 
     // --- CAPACIDAD 7c :: sys_grafo_compactar() -> i32 ---
@@ -2160,6 +2239,54 @@ pub(crate) fn enlazar_capacidades(
             let m = memoria.data_mut(&mut caller);
             m[salida as usize..salida as usize + paleta.len()].copy_from_slice(&paleta);
             Ok(CodigoError::Ok.como_i32())
+        },
+    )?;
+
+    // --- CAPACIDAD pasiva :: sys_canal_anuncio(salida, capacidad) -> i32 ---
+    // Fase 64 :: vuelca el ULTIMO `AnunciarCanal` recibido por Akasha a la
+    // memoria de la app, en un layout fijo de 168 B —idéntico al `anuncio.bin`
+    // que produce `agora-cli wawa publicar`—:
+    //
+    //   canal(32) | raiz(32) | autor(32) | timestamp_le(8) | firma(64)
+    //
+    // Retorno: 168 si habia un anuncio (bytes escritos), 0 si la ranura esta
+    // vacia, `CapacidadInsuficiente` si `capacidad` < 168. Lectura PASIVA: es
+    // dato publico de red, no muta nada; la app `mudanza` la sondea cada
+    // fotograma para descubrir propuestas. La decision de aceptar (y la
+    // verificacion soberana) viven en `sys_canal_aceptar`, gateada por RAIZ.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_canal_anuncio",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         salida: u32,
+         capacidad: u32|
+         -> Result<i32, Error> {
+            const LARGO: usize = 32 + 32 + 32 + 8 + 64; // 168
+            let Some(anuncio) = crate::akasha::ultimo_anuncio() else {
+                return Ok(0);
+            };
+            if (capacidad as usize) < LARGO {
+                return Ok(CodigoError::CapacidadInsuficiente.como_i32());
+            }
+            let mut buf = [0u8; LARGO];
+            buf[0..32].copy_from_slice(&anuncio.canal);
+            buf[32..64].copy_from_slice(&anuncio.raiz);
+            buf[64..96].copy_from_slice(&anuncio.autor);
+            buf[96..104].copy_from_slice(&anuncio.timestamp.to_le_bytes());
+            buf[104..168].copy_from_slice(&anuncio.firma);
+            let memoria = obtener_memoria(&caller)?;
+            {
+                let m = memoria.data(&caller);
+                rango(
+                    m,
+                    salida,
+                    LARGO,
+                    "WASM :: sys_canal_anuncio desbordo la memoria lineal",
+                )?;
+            }
+            let m = memoria.data_mut(&mut caller);
+            m[salida as usize..salida as usize + LARGO].copy_from_slice(&buf);
+            Ok(LARGO as i32)
         },
     )?;
 

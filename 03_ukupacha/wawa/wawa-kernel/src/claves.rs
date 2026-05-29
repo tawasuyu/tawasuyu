@@ -51,7 +51,7 @@
 
 use ed25519_compact::{PublicKey, Signature};
 
-use format::{CodigoError, CuadernoFirmado, ManifiestoFirmado};
+use format::{CodigoError, CuadernoFirmado, Hash, ManifiestoFirmado};
 
 /// FASE 41 :: ANILLO MULTI-AUTOR de identidades federadas del operador
 /// local. Una propuesta firmada por CUALQUIERA de las tres claves de
@@ -164,6 +164,38 @@ pub fn verificar_manifiesto_firmado(mf: &ManifiestoFirmado) -> Result<(), Codigo
     // no se preocupa por longitud; firmar el hash equivale a firmar el
     // payload entero —el hash es ya el resumen criptografico—.
     pk.verify(mf.manifiesto_hash, &sig)
+        .map_err(|_| CodigoError::AlmacenamientoFallo)
+}
+
+/// Verifica la AUTORIDAD de un `AnunciarCanal` recibido por Akasha (Fase 64).
+/// Es el espejo canonico de `verificar_manifiesto_firmado`: mismo orden
+/// estricto de fallos (anillo -> decodificacion -> firma), mismos codigos de
+/// retorno. La diferencia es el MENSAJE que se firma: aqui no son los 32 bytes
+/// del hash pelado sino el mensaje canonico `format::mensaje_a_firmar(nombre,
+/// timestamp, raiz)` —el mismo que produjo `agora_channel::firmar_raiz`—, que
+/// liga la firma al NOMBRE del canal y al INSTANTE: una firma valida en `dev`
+/// no se replica en `estable`, ni un anuncio viejo se revive con timestamp
+/// nuevo.
+///
+/// El `nombre` lo provee el llamante tras leerlo del objeto `Canal` del grafo;
+/// es SEGURO confiar en el nombre asi obtenido porque la firma LO CUBRE: si el
+/// llamante mintiera sobre el nombre, la verificacion fallaria. A diferencia
+/// del camino del hash pelado, este SI aloca un `Vec` temporal en
+/// `mensaje_a_firmar` —ocurre una sola vez, al aceptar; no es camino caliente—.
+pub fn verificar_anuncio_canal(
+    autor: &[u8; 32],
+    nombre: &str,
+    timestamp: u64,
+    raiz: &Hash,
+    firma: &[u8; 64],
+) -> Result<(), CodigoError> {
+    if !autor_en_anillo(autor) {
+        return Err(CodigoError::CapacidadInsuficiente);
+    }
+    let pk = PublicKey::from_slice(autor).map_err(|_| CodigoError::Ausente)?;
+    let sig = Signature::from_slice(firma).map_err(|_| CodigoError::Ausente)?;
+    let mensaje = format::mensaje_a_firmar(nombre, timestamp, raiz);
+    pk.verify(&mensaje, &sig)
         .map_err(|_| CodigoError::AlmacenamientoFallo)
 }
 
