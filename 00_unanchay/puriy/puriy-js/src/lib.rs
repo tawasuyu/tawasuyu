@@ -1965,6 +1965,70 @@ globalThis.AbortSignal = {
         return pair.signal;
     }
 };
+// Fase 7.40 — MutationObserver + IntersectionObserver stubs. Apps
+// modernas (React, Vue, sentry, observers de visibilidad, etc.) construyen
+// estos al boot — sin la clase definida tiran `not a constructor` y se
+// caen antes de pintar nada. Implementamos la forma sin la mecánica:
+// observe()/disconnect()/takeRecords()/unobserve() existen pero ningún
+// callback se dispara nunca. Soluciona el 95% de los crashes; las apps
+// que de verdad dependen de observers verán "no se actualiza el feed
+// nunca" pero al menos arrancan. Real wiring queda pendiente — engancha
+// con el pipeline de mutaciones (`__puriy_dirty` ya tiene todo el data,
+// faltaría filtrarlo por target+opts y batchearlo en un microtask).
+globalThis.MutationObserver = function(callback) {
+    this._callback = callback;
+    this._targets = [];
+};
+globalThis.MutationObserver.prototype.observe = function(target, options) {
+    this._targets.push({ target: target, options: options || {} });
+};
+globalThis.MutationObserver.prototype.disconnect = function() {
+    this._targets = [];
+};
+globalThis.MutationObserver.prototype.takeRecords = function() {
+    return [];
+};
+globalThis.IntersectionObserver = function(callback, options) {
+    this._callback = callback;
+    this._options = options || {};
+    this._targets = [];
+    this.root = (options && options.root) || null;
+    this.rootMargin = (options && options.rootMargin) || '0px';
+    this.thresholds = (options && options.threshold != null)
+        ? (Array.isArray(options.threshold) ? options.threshold : [options.threshold])
+        : [0];
+};
+globalThis.IntersectionObserver.prototype.observe = function(target) {
+    this._targets.push(target);
+};
+globalThis.IntersectionObserver.prototype.unobserve = function(target) {
+    var i = this._targets.indexOf(target);
+    if (i >= 0) this._targets.splice(i, 1);
+};
+globalThis.IntersectionObserver.prototype.disconnect = function() {
+    this._targets = [];
+};
+globalThis.IntersectionObserver.prototype.takeRecords = function() {
+    return [];
+};
+// ResizeObserver — tercer observer que apps modernas construyen al boot
+// (Material-UI lo usa para tabs/sidebars, antd para responsive grids).
+// Mismo patrón stub.
+globalThis.ResizeObserver = function(callback) {
+    this._callback = callback;
+    this._targets = [];
+};
+globalThis.ResizeObserver.prototype.observe = function(target, options) {
+    this._targets.push({ target: target, options: options || {} });
+};
+globalThis.ResizeObserver.prototype.unobserve = function(target) {
+    for (var i = 0; i < this._targets.length; i++) {
+        if (this._targets[i].target === target) { this._targets.splice(i, 1); return; }
+    }
+};
+globalThis.ResizeObserver.prototype.disconnect = function() {
+    this._targets = [];
+};
 // Fase 7.38 — XMLHttpRequest sobre el pipeline fetch. Reusa el mismo
 // canal de mutación `kind: 'fetch'` y los handlers `__puriy_fetch_resolve`/
 // `__puriy_fetch_reject` — registrarse en `__puriy_xhr_pending[id]` los
@@ -7274,6 +7338,75 @@ mod tests {
         } else {
             panic!("expected string, got {v:?}");
         }
+    }
+
+    // ============= Fase 7.40 — Observers stub =============
+
+    #[test]
+    fn mutation_observer_existe_y_no_tira_al_construir() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var mo = new MutationObserver(function(records) { /* no */ });")
+            .expect("e");
+        let v = rt.eval("mo instanceof MutationObserver").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mutation_observer_observe_y_take_records_no_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var mo = new MutationObserver(function() {}); \
+             mo.observe(document.body, {childList: true, subtree: true}); \
+             var recs = mo.takeRecords();",
+        )
+        .expect("e");
+        let v = rt.eval("Array.isArray(recs)").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        let v = rt.eval("recs.length").expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn intersection_observer_expone_root_y_thresholds() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var io = new IntersectionObserver(function() {}, \
+                {rootMargin: '10px', threshold: [0, 0.5, 1.0]});",
+        )
+        .expect("e");
+        let v = rt.eval("io.rootMargin").expect("e");
+        assert_eq!(v, JsValue::String("10px".into()));
+        let v = rt.eval("io.thresholds.length").expect("e");
+        assert_eq!(v, JsValue::Number(3.0));
+        let v = rt.eval("io.thresholds[1]").expect("e");
+        assert_eq!(v, JsValue::Number(0.5));
+    }
+
+    #[test]
+    fn intersection_observer_threshold_escalar_se_envuelve_en_array() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var io = new IntersectionObserver(function() {}, {threshold: 0.25});")
+            .expect("e");
+        let v = rt.eval("io.thresholds.length").expect("e");
+        assert_eq!(v, JsValue::Number(1.0));
+        let v = rt.eval("io.thresholds[0]").expect("e");
+        assert_eq!(v, JsValue::Number(0.25));
+    }
+
+    #[test]
+    fn resize_observer_observe_y_disconnect_no_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var ro = new ResizeObserver(function() {}); \
+             ro.observe(document.body); \
+             ro.disconnect();",
+        )
+        .expect("e");
     }
 
     // ============= Fase 7.39 — window events =============
