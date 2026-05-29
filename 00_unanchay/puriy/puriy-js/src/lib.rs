@@ -171,9 +171,16 @@ const EVENTS_BOOTSTRAP: &str = r#"
 globalThis.__puriy_elements = {};
 globalThis.__puriy_dirty = [];
 globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id, dataset_pairs, attribute_pairs) {
+    // Fase 7.17 — tag interno se guarda lowercase (matchea el formato
+    // del parser HTML5 + se usa en payloads de appendChild/insertBefore/
+    // replaceChild que el chrome rutea al `synthesize_box_node` con
+    // heurística por tag lowercase). El `tagName` exposed al user code
+    // se uppercasea via getter — spec del DOM: HTMLElement.tagName devuelve
+    // el tag en uppercase (`'DIV'`, `'BUTTON'`, etc.). Scripts que usan
+    // `if (el.tagName === 'INPUT')` ahora funcionan correctamente.
     var el = {
         _id: id,
-        tagName: tag,
+        _tagName: tag,
         _textContent: text,
         _classList: classes || [],
         _value: value == null ? '' : String(value),
@@ -207,6 +214,20 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             }
         }
     };
+    // Fase 7.17 — tagName / nodeName getters. Spec del DOM: para HTML
+    // elements ambos devuelven el tag en UPPERCASE. El _tagName interno
+    // se queda lowercase para que `querySelector('div')` (que lowercasea
+    // el selector) matchee y para los payloads del chrome.
+    Object.defineProperty(el, 'tagName', {
+        get: function() { return (el._tagName || '').toUpperCase(); },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(el, 'nodeName', {
+        get: function() { return (el._tagName || '').toUpperCase(); },
+        enumerable: true,
+        configurable: true
+    });
     // Fase 7.10 — parentElement como property que resuelve via
     // _parent_id contra __puriy_elements. Devuelve null si el
     // elemento no tiene ancestro registrado.
@@ -490,7 +511,7 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         // el ref_id. El chrome detecta el extra para elegir entre
         // appendChild y insertBefore.
         var payload = [
-            newChild.tagName,
+            newChild._tagName,
             newChild._id,
             newChild._textContent || '',
             cls,
@@ -518,7 +539,7 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         // raw Rust string — JS lo evalúa al char real al ejecutar).
         var cls = (child._classList || []).join(' ');
         var payload = [
-            child.tagName,
+            child._tagName,
             child.id,
             child._textContent || '',
             cls,
@@ -691,7 +712,153 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     el.blur = function() {
         globalThis.__puriy_dispatch(el._id, 'blur', null);
     };
+    // Fase 7.17 — hasAttributes(): bool. Devuelve true si el elemento
+    // tiene algún atributo presente entre los stores especiales
+    // (id/class/value/data-*) o el genérico (_attributes_store). Spec:
+    // patrón común para "vale la pena enumerar attrs" antes de un loop.
+    el.hasAttributes = function() {
+        if (el._id) return true;
+        if (el._classList && el._classList.length > 0) return true;
+        if (el._value !== '') return true;
+        for (var k in el._dataset_store) {
+            if (Object.prototype.hasOwnProperty.call(el._dataset_store, k)) return true;
+        }
+        for (var k2 in el._attributes_store) {
+            if (Object.prototype.hasOwnProperty.call(el._attributes_store, k2)) return true;
+        }
+        return false;
+    };
+    // Fase 7.17 — matches(selector): bool. Subset acotado del spec —
+    // soporta compound de simples (#id, .class, tag, [attr], [attr=v]).
+    // NO soporta combinadores (`>` `+` `~` espacio), `:hover`/`:focus`
+    // (sin estado), `:not(...)`, `:nth-*(...)`. Si el selector tiene
+    // alguno de esos, devuelve false silenciosamente (evita falsos
+    // positivos). Diseño deliberadamente conservador — los selectores
+    // CSS realmente complejos van por el StyleEngine en el chrome.
+    el.matches = function(selector) {
+        return globalThis.__puriy_matches_simple(el, selector);
+    };
+    // Fase 7.17 — closest(selector): walka self → parent → grandparent
+    // → ... devolviendo el primer elemento que matchea, o null si nada
+    // matchea hasta el root. Usado típicamente en event delegation:
+    // `e.target.closest('.menu-item')`.
+    el.closest = function(selector) {
+        var cur = el;
+        var hops = 0;
+        while (cur && hops < 64) {
+            if (globalThis.__puriy_matches_simple(cur, selector)) return cur;
+            if (!cur._parent_id) return null;
+            cur = globalThis.__puriy_elements[cur._parent_id] || null;
+            hops++;
+        }
+        return null;
+    };
     return el;
+};
+// Fase 7.17 — matcher en JS-puro. Acepta selector compound (un solo
+// "simple") como `#id`, `.class`, `tag`, `tag.class.foo[attr=v]`. NO
+// acepta combinadores ni pseudoclases — silenciosamente devuelve false
+// si los detecta. Tokenizer manual sobre bytes ASCII: identifica
+// prefijos `#`/`.`/letra y los segmentos `[attr]`/`[attr=v]`.
+globalThis.__puriy_matches_simple = function(el, selector) {
+    if (typeof selector !== 'string' || selector.length === 0) return false;
+    if (!el) return false;
+    // Rechazo rápido si trae combinadores / pseudoclases / not.
+    if (selector.indexOf(' ') >= 0) return false;
+    if (selector.indexOf('>') >= 0) return false;
+    if (selector.indexOf('+') >= 0) return false;
+    if (selector.indexOf('~') >= 0) return false;
+    if (selector.indexOf(':') >= 0) return false;
+    // Tokenizar en parts.
+    var parts = [];
+    var i = 0;
+    while (i < selector.length) {
+        var ch = selector.charAt(i);
+        if (ch === '#' || ch === '.') {
+            var j = i + 1;
+            while (j < selector.length) {
+                var c2 = selector.charAt(j);
+                if (c2 === '#' || c2 === '.' || c2 === '[') break;
+                j++;
+            }
+            parts.push(selector.slice(i, j));
+            i = j;
+        } else if (ch === '[') {
+            var k = selector.indexOf(']', i);
+            if (k < 0) return false;
+            parts.push(selector.slice(i, k + 1));
+            i = k + 1;
+        } else {
+            // Tag — sólo letras/dígitos (HTML tags).
+            var j2 = i;
+            while (j2 < selector.length) {
+                var c3 = selector.charAt(j2);
+                if (c3 === '#' || c3 === '.' || c3 === '[') break;
+                j2++;
+            }
+            parts.push(selector.slice(i, j2));
+            i = j2;
+        }
+    }
+    for (var p = 0; p < parts.length; p++) {
+        var t = parts[p];
+        if (t.length === 0) continue;
+        if (t.charAt(0) === '#') {
+            if (el._id !== t.slice(1)) return false;
+        } else if (t.charAt(0) === '.') {
+            if (!el._classList || el._classList.indexOf(t.slice(1)) < 0) return false;
+        } else if (t.charAt(0) === '[') {
+            // [attr] o [attr=value] (acepta value sin comillas o con
+            // comillas dobles/simples). NO soporta ^= $= *= (Fase
+            // futura — el matcher CSS del style engine sí los soporta
+            // pero acá no nos pidieron compatibilidad total).
+            var inner = t.slice(1, -1);
+            var eqIdx = inner.indexOf('=');
+            if (eqIdx < 0) {
+                // Sólo presencia.
+                if (!__puriy_has_attr(el, inner)) return false;
+            } else {
+                var name = inner.slice(0, eqIdx).toLowerCase();
+                var val = inner.slice(eqIdx + 1);
+                // Quitar comillas si están.
+                if (val.length >= 2) {
+                    var q = val.charAt(0);
+                    if ((q === '"' || q === '\'') && val.charAt(val.length - 1) === q) {
+                        val = val.slice(1, -1);
+                    }
+                }
+                if (__puriy_get_attr(el, name) !== val) return false;
+            }
+        } else {
+            // Tag — comparar lowercase con _tagName lowercase.
+            if ((el._tagName || '') !== t.toLowerCase()) return false;
+        }
+    }
+    return true;
+};
+// Helpers internos del matcher. Espejan la lógica de getAttribute pero
+// sin pasar por el dispatch fn-call por cada part del compound.
+globalThis.__puriy_has_attr = function(el, name) {
+    var n = name.toLowerCase();
+    if (n === 'id') return !!el._id;
+    if (n === 'class') return el._classList && el._classList.length > 0;
+    if (n === 'value') return el._value !== '';
+    if (n.indexOf('data-') === 0) {
+        return Object.prototype.hasOwnProperty.call(el._dataset_store, n.slice(5));
+    }
+    return Object.prototype.hasOwnProperty.call(el._attributes_store, n);
+};
+globalThis.__puriy_get_attr = function(el, name) {
+    var n = name.toLowerCase();
+    if (n === 'id') return el._id || '';
+    if (n === 'class') return (el._classList || []).join(' ');
+    if (n === 'value') return el._value || '';
+    if (n.indexOf('data-') === 0) {
+        var v = el._dataset_store[n.slice(5)];
+        return v == null ? '' : v;
+    }
+    var av = el._attributes_store[n];
+    return av == null ? '' : av;
 };
 globalThis.__puriy_dispatch = function(id, type, init) {
     var target = globalThis.__puriy_elements[id];
@@ -1146,7 +1313,7 @@ impl JsRuntime {
                 body: {{ textContent: {b}, innerHTML: {b} }}, \
                 createElement: function(tag) {{ \
                     var synth_id = '__synth_' + (++globalThis.__puriy_synth_counter); \
-                    var el = globalThis.__puriy_make_element(synth_id, String(tag), '', [], null, null, []); \
+                    var el = globalThis.__puriy_make_element(synth_id, String(tag).toLowerCase(), '', [], null, null, [], []); \
                     el._synthetic = true; \
                     el._inserted = false; \
                     el._parent_id = null; \
@@ -1166,7 +1333,7 @@ impl JsRuntime {
                         return null; \
                     }} \
                     var tag = sel.toLowerCase(); \
-                    for (var k in els) {{ if ((els[k].tagName || '').toLowerCase() === tag) return els[k]; }} \
+                    for (var k in els) {{ if ((els[k]._tagName || '') === tag) return els[k]; }} \
                     return null; \
                 }}, \
                 querySelectorAll: function(sel) {{ \
@@ -1180,7 +1347,7 @@ impl JsRuntime {
                         return out; \
                     }} \
                     var tag = sel.toLowerCase(); \
-                    for (var k in els) {{ if ((els[k].tagName || '').toLowerCase() === tag) out.push(els[k]); }} \
+                    for (var k in els) {{ if ((els[k]._tagName || '') === tag) out.push(els[k]); }} \
                     return out; \
                 }} \
             }}; \
@@ -2627,7 +2794,8 @@ mod tests {
         rt.set_document("t", "u", "b").expect("d");
         rt.set_elements(&[snap("hero", "h1", "Hola mundo")]).expect("e");
         let v = rt.eval("document.getElementById('hero').tagName").expect("e");
-        assert_eq!(v, JsValue::String("h1".into()));
+        // Fase 7.17 — tagName devuelve UPPERCASE (spec del DOM API).
+        assert_eq!(v, JsValue::String("H1".into()));
         let v = rt.eval("document.getElementById('hero').textContent").expect("e");
         assert_eq!(v, JsValue::String("Hola mundo".into()));
         let v = rt.eval("document.getElementById('inexistente')").expect("e");
@@ -3891,7 +4059,7 @@ mod tests {
         rt.eval("document.getElementById('old').setAttribute('id', 'nuevo')").expect("e");
         // getElementById('nuevo') ahora encuentra el elemento; 'old' es null.
         let v = rt.eval("document.getElementById('nuevo').tagName").expect("e");
-        assert_eq!(v, JsValue::String("div".into()));
+        assert_eq!(v, JsValue::String("DIV".into()));
         let v = rt.eval("document.getElementById('old')").expect("e");
         assert_eq!(v, JsValue::Null);
     }
@@ -4071,7 +4239,7 @@ mod tests {
         let v = rt
             .eval("var el = document.createElement('li'); el.tagName")
             .expect("e");
-        assert_eq!(v, JsValue::String("li".into()));
+        assert_eq!(v, JsValue::String("LI".into()));
         // _synthetic flag presente
         let v = rt.eval("el._synthetic").expect("e");
         assert_eq!(v, JsValue::Bool(true));
@@ -4244,5 +4412,143 @@ mod tests {
         assert!(rt.stdout().contains("cap:1"), "stdout: {:?}", rt.stdout());
         assert!(rt.stdout().contains("target:2"), "stdout: {:?}", rt.stdout());
         assert!(rt.stdout().contains("bubble:3"), "stdout: {:?}", rt.stdout());
+    }
+
+    // ============= Fase 7.17 — tagName UPPERCASE / matches / closest / hasAttributes =============
+
+    #[test]
+    fn tag_name_devuelve_uppercase() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", ""), snap("y", "input", "")])
+            .expect("e");
+        let v = rt.eval("document.getElementById('x').tagName").expect("e");
+        assert_eq!(v, JsValue::String("DIV".into()));
+        let v = rt.eval("document.getElementById('y').tagName").expect("e");
+        assert_eq!(v, JsValue::String("INPUT".into()));
+    }
+
+    #[test]
+    fn node_name_es_alias_de_tag_name() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "section", "")]).expect("e");
+        let v = rt.eval("document.getElementById('x').nodeName").expect("e");
+        assert_eq!(v, JsValue::String("SECTION".into()));
+    }
+
+    #[test]
+    fn query_selector_por_tag_sigue_matcheando_post_uppercase() {
+        // Aunque tagName devuelva UPPERCASE, el querySelector internamente
+        // compara contra _tagName lowercase — los selectores no necesitan
+        // case-change para seguir funcionando.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("hero", "section", "")]).expect("e");
+        let v = rt.eval("document.querySelector('section').id").expect("e");
+        assert_eq!(v, JsValue::String("hero".into()));
+    }
+
+    #[test]
+    fn matches_simple_id_class_tag() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "button", "")]).expect("e");
+        rt.eval("document.getElementById('x').className = 'btn primary'").expect("e");
+        let cases = &[
+            ("#x", true),
+            ("#z", false),
+            (".btn", true),
+            (".primary", true),
+            (".missing", false),
+            ("button", true),
+            ("div", false),
+        ];
+        for (sel, expected) in cases {
+            let v = rt
+                .eval(&format!("document.getElementById('x').matches('{}')", sel))
+                .expect("e");
+            assert_eq!(v, JsValue::Bool(*expected), "selector {}", sel);
+        }
+    }
+
+    #[test]
+    fn matches_compound_tag_class_id_attr() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_attrs("x", "a", &[
+            ("href", "/about"),
+            ("aria-current", "page"),
+        ])])
+        .expect("e");
+        rt.eval("document.getElementById('x').className = 'nav-link'")
+            .expect("e");
+        // Compound: tag + class + id + [attr=value]
+        let v = rt
+            .eval(r#"document.getElementById('x').matches('a.nav-link#x[href="/about"]')"#)
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        // [attr] sin value — sólo presencia.
+        let v = rt
+            .eval(r#"document.getElementById('x').matches('[aria-current]')"#)
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        // Falla si una sola parte no matchea.
+        let v = rt
+            .eval(r#"document.getElementById('x').matches('a.nav-link[href="/otro"]')"#)
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(false));
+    }
+
+    #[test]
+    fn matches_rechaza_combinadores_y_pseudoclases() {
+        // Spec del subset: si el selector tiene combinador o `:`, devuelve
+        // false silenciosamente (en vez de crash o falso positivo).
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_class("x", "div", "", "foo")]).expect("e");
+        let cases = &[".foo div", "div > .foo", "div + p", "div ~ p", ".foo:hover"];
+        for sel in cases {
+            let v = rt
+                .eval(&format!("document.getElementById('x').matches('{}')", sel))
+                .expect("e");
+            assert_eq!(v, JsValue::Bool(false), "selector {}", sel);
+        }
+    }
+
+    #[test]
+    fn closest_walka_ancestros_hasta_matchear() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("modal", "div", ""),
+            snap_with_parent("body", "section", "modal"),
+            snap_with_parent("btn", "button", "body"),
+        ])
+        .expect("e");
+        // self matchea (closest incluye self).
+        let v = rt.eval("document.getElementById('btn').closest('button').id").expect("e");
+        assert_eq!(v, JsValue::String("btn".into()));
+        // Sube hasta el ancestro.
+        let v = rt.eval("document.getElementById('btn').closest('#modal').id").expect("e");
+        assert_eq!(v, JsValue::String("modal".into()));
+        // No matchea ningún ancestro.
+        let v = rt.eval("document.getElementById('btn').closest('.inexistente')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn has_attributes_devuelve_true_si_hay_algun_attr() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("con_id", "div", ""),
+            snap_with_attrs("solo_attr", "a", &[("href", "/x")]),
+        ])
+        .expect("e");
+        let v = rt.eval("document.getElementById('con_id').hasAttributes()").expect("e");
+        assert_eq!(v, JsValue::Bool(true), "tiene id → true");
+        let v = rt.eval("document.getElementById('solo_attr').hasAttributes()").expect("e");
+        assert_eq!(v, JsValue::Bool(true), "tiene attrs → true");
     }
 }
