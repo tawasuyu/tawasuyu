@@ -54,6 +54,7 @@ pub fn count_badge_view<Msg: Clone + 'static>(count: u32, kind: BadgeKind) -> Vi
     let text = if count >= 100 { "99+".to_string() } else { count.to_string() };
     // Ancho proporcional al texto, con padding generoso.
     let w = (text.chars().count() as f32 * 6.5 + 10.0).max(BADGE_H);
+    let badge_radius = (BADGE_H * 0.5) as f64;
 
     View::new(Style {
         size: Size {
@@ -72,12 +73,35 @@ pub fn count_badge_view<Msg: Clone + 'static>(count: u32, kind: BadgeKind) -> Vi
         ..Default::default()
     })
     .fill(kind.bg())
-    .radius((BADGE_H * 0.5) as f64)
+    .radius(badge_radius)
+    .paint_with(move |scene, _ts, rect| {
+        // Gloss superior: blanco alpha 35 → 0 sobre la mitad de arriba.
+        // Da volumen de pill — el chip se lee como una superficie con
+        // luz cayendo, no como un rect plano. Match: button/splash —
+        // misma firma vertical descendente.
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+        use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let x0 = rect.x as f64;
+        let y0 = rect.y as f64;
+        let x1 = (rect.x + rect.w) as f64;
+        let y1 = (rect.y + rect.h) as f64;
+        let y_mid = y0 + (y1 - y0) * 0.5;
+        let rr = RoundedRect::new(x0, y0, x1, y1, badge_radius);
+        let top = Color::from_rgba8(255, 255, 255, 35);
+        let bot = Color::from_rgba8(255, 255, 255, 0);
+        let gradient = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y_mid))
+            .with_stops([top, bot].as_slice());
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &gradient, None, &rr);
+    })
     .text_aligned(text, FONT, kind.fg(), Alignment::Center)
 }
 
 /// Dot sin contenido — sólo color.
 pub fn dot_badge_view<Msg: Clone + 'static>(kind: BadgeKind) -> View<Msg> {
+    let dot_radius = DOT_R as f64;
     View::new(Style {
         size: Size {
             width: length(DOT_R * 2.0),
@@ -87,5 +111,26 @@ pub fn dot_badge_view<Msg: Clone + 'static>(kind: BadgeKind) -> View<Msg> {
         ..Default::default()
     })
     .fill(kind.bg())
-    .radius(DOT_R as f64)
+    .radius(dot_radius)
+    .paint_with(move |scene, _ts, rect| {
+        // Highlight radial chiquito en el cuadrante superior — lectura
+        // de esfera, no de círculo plano. El dot es 8px; el highlight
+        // ocupa ~3px centrado a 1/3 del top.
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.33) as f64;
+        let r = (rect.w as f64 * 0.18).max(1.0);
+        let highlight = Color::from_rgba8(255, 255, 255, 90);
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            highlight,
+            None,
+            &Circle::new((cx, cy), r),
+        );
+    })
 }

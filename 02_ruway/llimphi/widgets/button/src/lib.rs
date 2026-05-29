@@ -89,10 +89,36 @@ pub fn button_styled<Msg: Clone + 'static>(
     palette: &ButtonPalette,
     on_click: Msg,
 ) -> View<Msg> {
+    // Gloss superior: gradient blanco alpha 28 → 0 sobre la mitad de
+    // arriba. `paint_with` corre entre el fill (que respeta hover_fill)
+    // y el texto, así que la luz se suma al color de base sin sustituirlo
+    // — el hover sigue funcionando idéntico. El RoundedRect cubre el
+    // botón completo y `Extend::Pad` (default de peniko) deja la mitad
+    // inferior en alpha 0. Match: chrome/splash — superficie con luz
+    // descendente desde el edge superior.
+    let radius = palette.radius;
     View::new(style)
         .fill(palette.bg)
         .hover_fill(palette.bg_hover)
-        .radius(palette.radius)
+        .radius(radius)
+        .paint_with(move |scene, _ts, rect| {
+            use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+            use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+            if rect.w <= 0.0 || rect.h <= 0.0 {
+                return;
+            }
+            let x0 = rect.x as f64;
+            let y0 = rect.y as f64;
+            let x1 = (rect.x + rect.w) as f64;
+            let y1 = (rect.y + rect.h) as f64;
+            let y_mid = y0 + (y1 - y0) * 0.5;
+            let rr = RoundedRect::new(x0, y0, x1, y1, radius);
+            let top = Color::from_rgba8(255, 255, 255, 28);
+            let bot = Color::from_rgba8(255, 255, 255, 0);
+            let gradient = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y_mid))
+                .with_stops([top, bot].as_slice());
+            scene.fill(Fill::NonZero, Affine::IDENTITY, &gradient, None, &rr);
+        })
         .text_aligned(label.into(), 13.0, palette.fg, text_alignment)
         .on_click(on_click)
 }
