@@ -5812,6 +5812,57 @@ mod tests {
         assert_eq!(parts[4], "k=v+w");
     }
 
+    // ============= Fase 7.52 — TextEncoder / TextDecoder =============
+
+    #[test]
+    fn textencoder_encode_utf8_ascii_y_multibyte() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var e = new TextEncoder(); var a = e.encode('Añ'); \
+             var bytes = []; for (var i=0;i<a.length;i++) bytes.push(a[i]);",
+        )
+        .expect("e");
+        // 'A' = 0x41, 'ñ' = 0xC3 0xB1.
+        assert_eq!(rt.eval("bytes.join(',')").expect("e"), JsValue::String("65,195,177".into()));
+    }
+
+    #[test]
+    fn textencoder_encode_emoji_surrogate_pair() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var a = new TextEncoder().encode('😀'); \
+             var bytes = []; for (var i=0;i<a.length;i++) bytes.push(a[i]);",
+        )
+        .expect("e");
+        // U+1F600 → F0 9F 98 80.
+        assert_eq!(rt.eval("bytes.join(',')").expect("e"), JsValue::String("240,159,152,128".into()));
+    }
+
+    #[test]
+    fn textdecoder_decode_round_trip() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var s = 'Hola ñ 😀 mundo'; \
+             var bytes = new TextEncoder().encode(s); \
+             var back = new TextDecoder().decode(bytes); \
+             var ok = back === s;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn textdecoder_decode_desde_arraybuffer() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var buf = new ArrayBuffer(3); var v = new Uint8Array(buf); \
+             v[0]=72; v[1]=105; v[2]=33; \
+             var s = new TextDecoder().decode(buf);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("s").expect("e"), JsValue::String("Hi!".into()));
+    }
+
     // ============= Fase 7.37 — URL relativa contra base =============
 
     #[test]

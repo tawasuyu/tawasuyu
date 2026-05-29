@@ -13,6 +13,7 @@ mod streams;
 mod blob;
 mod objecturl;
 mod urlsearchparams;
+mod textcodec;
 mod fetch;
 mod headers;
 mod abort;
@@ -32,6 +33,7 @@ pub(crate) use streams::STREAMS_BOOTSTRAP;
 pub(crate) use blob::BLOB_BOOTSTRAP;
 pub(crate) use objecturl::OBJECT_URL_BOOTSTRAP;
 pub(crate) use urlsearchparams::URLSEARCHPARAMS_BOOTSTRAP;
+pub(crate) use textcodec::TEXTCODEC_BOOTSTRAP;
 pub(crate) use fetch::FETCH_BOOTSTRAP;
 pub(crate) use headers::HEADERS_BOOTSTRAP;
 pub(crate) use abort::ABORT_BOOTSTRAP;
@@ -53,6 +55,7 @@ pub(crate) const ALL: &[&str] = &[
     BLOB_BOOTSTRAP,
     OBJECT_URL_BOOTSTRAP,
     URLSEARCHPARAMS_BOOTSTRAP,
+    TEXTCODEC_BOOTSTRAP,
     FETCH_BOOTSTRAP,
     HEADERS_BOOTSTRAP,
     ABORT_BOOTSTRAP,
