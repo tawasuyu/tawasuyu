@@ -18,15 +18,16 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "ayni — UI Llimphi del chat soberano (P1): lista de mensajes + input, sobre EnlaceTcp"
+description = "ayni — UI Llimphi del chat soberano: conversación + gente (membresía/confianza) + adjuntos + recibos, sobre ayni-app"
 
 [[bin]]
 name = "ayni-llimphi"
 path = "src/main.rs"
 
 [dependencies]
-ayni-core = { path = "../ayni-core" }
-ayni-crypto = { path = "../ayni-crypto" }
-ayni-sync = { path = "../ayni-sync" }
+# La UI es un frontend delgado sobre el núcleo de aplicación compartido: el
+# transporte (TCP/minga), la persistencia, el cifrado, los adjuntos y la
+# confianza viven todos en `ayni-app`.
+ayni-app = { path = "../ayni-app" }
 llimphi-ui = { workspace = true }
 blake3 = { workspace = true }

@@ -1,0 +1,35 @@
+# =============================================================================
+#  ayni :: ayni-app — el núcleo de aplicación compartido (glue)
+# -----------------------------------------------------------------------------
+#  Toda la lógica viva del chat que NO es ni modelo puro (`ayni-core`) ni una
+#  cara concreta (`ayni-cli`/`ayni-llimphi`): abrir un transporte (TCP o minga,
+#  intercambiables), persistir el grafo (`ayni-store`, local-first), reconciliar
+#  por anti-entropía, cifrar 1:1, adjuntar objetos con su blob, y los hechos
+#  sociales de P7 (membresía, atestaciones, recibos simétricos).
+#
+#  Las UIs son frontends intercambiables sobre este núcleo agnóstico: el CLI y
+#  la GUI Llimphi comparten ESTE `Nucleo` y sólo difieren en cómo lo pintan y
+#  cómo capturan la intención del humano.
+# =============================================================================
+
+[package]
+name = "ayni-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "ayni — núcleo de aplicación compartido: transporte (TCP/minga) + persistencia + cifrado + adjuntos + confianza"
+
+[lib]
+doctest = false
+
+[dependencies]
+ayni-core = { path = "../ayni-core" }
+ayni-crypto = { path = "../ayni-crypto" }
+ayni-sync = { path = "../ayni-sync" }
+ayni-store = { path = "../ayni-store" }
+# El transporte P2P real (libp2p). Que viva aquí —y no en `ayni-sync`— mantiene
+# a `ayni-sync` ligero: la anti-entropía no necesita arrastrar todo libp2p.
+ayni-minga = { path = "../ayni-minga" }
+thiserror = { workspace = true }

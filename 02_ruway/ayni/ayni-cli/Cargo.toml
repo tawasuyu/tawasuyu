@@ -21,8 +21,8 @@ name = "ayni"
 path = "src/main.rs"
 
 [dependencies]
-ayni-core = { path = "../ayni-core" }
-ayni-crypto = { path = "../ayni-crypto" }
-ayni-sync = { path = "../ayni-sync" }
+# Mismo núcleo de aplicación que la GUI: transporte (TCP/minga), persistencia,
+# cifrado, adjuntos y confianza. El CLI sólo aporta la cara de terminal.
+ayni-app = { path = "../ayni-app" }
 clap = { workspace = true }
 blake3 = { workspace = true }

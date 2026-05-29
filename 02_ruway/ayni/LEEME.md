@@ -40,14 +40,43 @@ reproducible.
 | `ayni-sync`    | `Transporte` + `EnlaceTcp` + anti-entropía (diff Merkle)       | ✅ P3  |
 | `ayni-minga`   | `EnlaceMinga`: transporte P2P sobre libp2p (mismo trait `Transporte`) | ✅ P3 |
 | `ayni-store`   | persistencia del DAG + blobs de adjuntos (dedup) sobre sled    | ✅ P3/P5 |
-| `ayni-cli`     | chat headless de terminal (bin `ayni`)                         | ✅ P1  |
-| `ayni-llimphi` | UI Llimphi (frontend intercambiable sobre `ayni-core`)         | ✅ P1  |
+| `ayni-app`     | núcleo de aplicación: transporte (TCP/minga) + store + cifrado + adjuntos + confianza | ✅ |
+| `ayni-cli`     | chat de terminal (bin `ayni`), frontend delgado sobre `ayni-app` | ✅ P1+  |
+| `ayni-llimphi` | UI Llimphi COMPLETA: charla + gente (membresía/confianza) + adjuntos + recibos | ✅ |
 | `ayni-index`   | búsqueda semántica local (rimay embeddings + coseno)           | ✅ P4  |
 | `ayni-ai`      | multilienzo: traducir/resumir/tono vía pluma-llm (máquina propone) | ✅ P4 |
 
 La app de wawa (P6) vive aparte, en `03_ukupacha/wawa/apps/ayni` (módulo WASM
 sobre akasha), porque cruza la frontera del workspace bare-metal; reusa
 `ayni-core` por path, como `format`.
+
+### Cierre de cabos (post-P7)
+
+`ayni-app` recoge toda la lógica viva que no es modelo puro ni cara concreta, y
+las dos UIs (`ayni-cli` y `ayni-llimphi`) son frontends delgados sobre él:
+
+- **Transporte intercambiable EN LOS BINARIOS**: `--transporte tcp|minga`
+  (env `AYNI_TRANSPORTE`). `Enlace` unifica `EnlaceTcp` y `EnlaceMinga` (libp2p)
+  tras el trait `Transporte`; cambiar de cable no toca la lógica.
+- **Persistencia local-first cableada**: cada binario abre un store sled
+  (`--data`/`AYNI_DATA`, default `./ayni-<nombre>.db`) y CARGA la conversación
+  al arrancar — el hilo sigue donde quedó entre sesiones.
+- **Adjuntar (P5) con UX**: `/adjuntar <ruta>` lee el archivo, guarda el blob
+  (dedup), difunde la referencia viva `Adjunto`, y el blob se pide/sirve por
+  `Sobre::PedirBlob`/`Blob` automáticamente.
+- **Recibos simétricos**: toggle `recibos` (opt-in en ambos lados); cuando está
+  activo, el núcleo acusa los mensajes ajenos nuevos, y la UI muestra "✓N"
+  (cuántos vieron cada nodo) y "✓rx" junto a quien reciproca.
+- **GUI completa**: dos columnas (GENTE: miembros clicables, otros vistos,
+  acciones admitir/atestar/expulsar sobre el seleccionado, grafo de confianza;
+  CHARLA: hilo con scroll por rueda + recibos, compose con toggles de
+  cifrado/recibos, adjuntar y enviar; barra `/` con los comandos).
+
+**Genuinamente diferido** (deuda real, no fingida): **MLS de grupo** (forward/
+post-compromise secrecy con OpenMLS — sincronizar estado de grupo es un
+protocolo en sí; el canal de hoy es 1:1 sin PCS); **transporte sobre akasha
+dentro de wawa** (la app P6 es hoy single-author local; falta exponer la red del
+kernel al módulo); **NAT traversal** (deuda de `minga`, no de Ayni).
 
 `ayni-core` es `#![no_std] + alloc` **desde el día cero** — no parcheado
 después — para que el mismo núcleo viaje como app WASM dentro de wawa (P6) sin
