@@ -1,0 +1,36 @@
+# =============================================================================
+#  gop-probe — diagnostico UEFI de salidas graficas (GOP)
+# -----------------------------------------------------------------------------
+#  wawa hereda UN solo framebuffer del cargador (bootloader_api 0.11 ->
+#  BootInfo.framebuffer). Para que dos monitores sean posibles hace falta saber
+#  PRIMERO que expone el firmware: ¿un handle GraphicsOutput por monitor, o uno
+#  combinado? Eso solo se puede preguntar ANTES de ExitBootServices, en contexto
+#  UEFI — de ahi este .efi standalone, que se arranca desde la UEFI shell con
+#  los dos monitores conectados y reporta cuantos outputs hay y su resolucion.
+#
+#  Construir:
+#    cargo build -p gop-probe --target x86_64-unknown-uefi --release
+#  El .efi queda en target/x86_64-unknown-uefi/release/gop-probe.efi
+# =============================================================================
+[package]
+name = "gop-probe"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "Enumera los handles GraphicsOutput (GOP) del firmware y su resolucion — groundwork de multi-monitor en wawa."
+
+[[bin]]
+name = "gop-probe"
+path = "src/main.rs"
+
+# Sale del workspace del root: su target (x86_64-unknown-uefi) es no-std/no-host.
+# Workspace separado vacio — autosuficiente, igual que arje-loader.
+[workspace]
+
+[dependencies]
+uefi = { version = "0.35", features = ["panic_handler", "alloc", "global_allocator"] }
+log = "0.4"
+
+[profile.release]
+opt-level = "s"
+panic = "abort"

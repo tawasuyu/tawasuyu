@@ -20,7 +20,7 @@ members = ["wawa-boot"]
 # lo enlaza el kernel bare-metal como dependencia path. `format` se trasladó
 # a `shared/format/` en gioser y ya no vive aquí — el kernel y boot lo
 # referencian con `../../../shared/format`.
-exclude = ["wawa-kernel", "apps", "wawa-fs"]
+exclude = ["wawa-kernel", "apps", "wawa-fs", "gop-probe"]
 
 # -----------------------------------------------------------------------------
 #  Metadatos compartidos: cada miembro hereda esta identidad con `*.workspace`.
