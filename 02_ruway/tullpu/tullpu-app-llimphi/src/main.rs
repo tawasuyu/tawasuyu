@@ -75,6 +75,7 @@ enum Msg {
     Agregar(OpLocal),
     AgregarIa(OpPixel),
     Recargar,
+    ExportarPng,
 }
 
 // =============================================================================
@@ -472,7 +473,15 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         .text_aligned(s.to_string(), 11.0, theme.fg_muted, Alignment::Start)
     };
 
-    let mut hijos = vec![subtitulo("locales")];
+    // "salida" arriba de todo: no requiere selección, siempre activa.
+    let mut hijos = vec![subtitulo("salida")];
+    hijos.push(envolver_fila(button_view(
+        "💾 exportar PNG".to_string(),
+        &pal,
+        Msg::ExportarPng,
+    )));
+
+    hijos.push(subtitulo("locales"));
     hijos.push(envolver_fila(mk_local("+ Invertir", OpLocal::Invertir)));
     hijos.push(envolver_fila(mk_local(
         "+ Brillo +0.15",
@@ -733,6 +742,24 @@ impl App for Tullpu {
             }
             Msg::Recargar => {
                 aplicar_y_recomponer(&mut model);
+            }
+            Msg::ExportarPng => {
+                // Path en CWD con timestamp Unix — sin file picker (la app
+                // todavía no tiene). El usuario ve el path final en el
+                // header para `find` / `xdg-open` desde fuera.
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let ruta = std::path::PathBuf::from(format!("tullpu-export-{ts}.png"));
+                model.estado = match tullpu_render::exportar_png(
+                    &model.lienzo,
+                    &model.almacen,
+                    &ruta,
+                ) {
+                    Ok(_) => format!("exportado → {}", ruta.display()),
+                    Err(e) => format!("export falló: {e}"),
+                };
             }
         }
         model

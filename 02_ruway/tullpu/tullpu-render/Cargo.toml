@@ -11,3 +11,6 @@ description = "tullpu — compositor CPU top-down: recorre un GrafoDeCapas y fun
 tullpu-core = { path = "../tullpu-core" }
 image = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

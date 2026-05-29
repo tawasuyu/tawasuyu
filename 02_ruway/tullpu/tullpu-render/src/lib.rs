@@ -90,6 +90,8 @@ pub enum Error {
         esperado: usize,
         encontrado: usize,
     },
+    #[error("guardar imagen falló: {0}")]
+    Imagen(#[from] image::ImageError),
 }
 
 // =============================================================================
@@ -503,6 +505,24 @@ pub fn buffer_solido(w: u32, h: u32, color: [u8; 4]) -> Vec<u8> {
 /// Buffer máscara plano del valor dado.
 pub fn buffer_mascara(w: u32, h: u32, valor: u8) -> Vec<u8> {
     vec![valor; (w as usize) * (h as usize)]
+}
+
+// =============================================================================
+//  Export
+// =============================================================================
+
+/// Compone el lienzo y guarda el resultado como PNG en `ruta`. El formato lo
+/// deduce `image` por extensión — pasar un path `.png` para PNG, `.jpg` para
+/// JPEG, etc. Devuelve los píxeles compuestos (`width × height`) por si el
+/// caller los necesita además del archivo en disco.
+pub fn exportar_png(
+    l: &Lienzo,
+    fuente: &impl FuenteBuffers,
+    ruta: impl AsRef<std::path::Path>,
+) -> Result<RgbaImage, Error> {
+    let img = componer(l, fuente)?;
+    img.save(ruta.as_ref())?;
+    Ok(img)
 }
 
 // =============================================================================
@@ -1091,6 +1111,47 @@ mod tests {
         // Mismas opacidades, distintos Uuid (Capa::raster genera uno nuevo
         // cada vez). El patrón debe diferir.
         assert_ne!(a, b, "patrón Dissolve no debería repetirse entre Uuid distintos");
+    }
+
+    #[test]
+    fn exportar_png_guarda_archivo_valido() {
+        // Componer un lienzo 4×3 con dos capas y guardarlo a un PNG real;
+        // releer el PNG con `image` y verificar que los píxeles coinciden.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(4, 3, [10, 20, 30, 255]));
+        let top = alm.insertar(buffer_solido(4, 3, [200, 100, 50, 255]));
+        let mut l = Lienzo::nuevo(4, 3);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut c = Capa::raster("top", top);
+        c.opacidad = 0.5;
+        l.apilar(c);
+
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("salida.png");
+        let img_compuesto = super::exportar_png(&l, &alm, &ruta).unwrap();
+
+        assert!(ruta.exists(), "el archivo PNG debe existir");
+        let leido = image::open(&ruta).unwrap().to_rgba8();
+        assert_eq!(leido.width(), 4);
+        assert_eq!(leido.height(), 3);
+        assert_eq!(leido.as_raw(), img_compuesto.as_raw());
+    }
+
+    #[test]
+    fn exportar_png_propaga_error_de_compose() {
+        // Si el lienzo apunta a un buffer que no está en el almacén, el
+        // error de composición se propaga sin tocar el disco.
+        let l = {
+            let mut l = Lienzo::nuevo(2, 2);
+            l.apilar(Capa::raster("perdida", [42u8; 32]));
+            l
+        };
+        let alm = AlmacenEnMemoria::nuevo();
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("no-debe-existir.png");
+        let err = super::exportar_png(&l, &alm, &ruta).unwrap_err();
+        assert!(matches!(err, Error::BufferFaltante(_)));
+        assert!(!ruta.exists(), "no se debe crear el archivo si compose falla");
     }
 
     #[test]
