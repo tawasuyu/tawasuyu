@@ -15,6 +15,7 @@ image = { workspace = true }
 media-audio-cpal = { path = "../media-audio-cpal" }
 media-core = { path = "../media-core" }
 media-recorder-wav = { path = "../media-recorder-wav" }
+media-source-av1 = { path = "../media-source-av1" }
 foreign-av = { path = "../../../shared/foreign-av" }
 media-source-gif = { path = "../media-source-gif" }
 media-source-image = { path = "../media-source-image" }

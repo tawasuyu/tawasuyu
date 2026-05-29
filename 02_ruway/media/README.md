@@ -29,6 +29,7 @@ Mascota: un calcetín — guarda cosas, se pierde, abriga.
 | `media-source-wav`    | WAV (hound) → `AudioSource + Seekable`                               |
 | `media-source-mp3`    | MP3 (symphonia, sólo feature `mp3`) → `AudioSource + Seekable`       |
 | `shared/foreign-av`   | MP4/WebM/MKV/MOV/AVI/FLV via ffmpeg subprocess — 1 proceso por archivo (audio + video desde el mismo ffmpeg vía pipes dup'eados a fd 3/4). **Vive en `shared/foreign-*`** (regla dura #4: formatos ajenos por puente). Ofrece además `transcode_a_av1` (ingesta al formato nativo). |
+| `media-source-av1`    | **AV1 nativo** (puro-Rust, rav1d) sobre IVF → `FrameSource + Seekable`. Formato de video nativo de gioser; demux IVF + split OBU sin decoder. Ver su README. |
 | `media-source-gif`    | GIF animado (image) → `FrameSource + Seekable`                       |
 | `media-source-image`  | PNG/JPEG/WebP/BMP/TIFF (image) → `FrameSource` (frame único)         |
 | `media-audio-cpal`    | sink realtime sobre cpal (default output device)                     |

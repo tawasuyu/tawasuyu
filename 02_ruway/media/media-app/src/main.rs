@@ -191,6 +191,9 @@ enum VideoKind {
     Image,
     /// Video file decodificado por ffmpeg (mp4/webm/mkv/mov/avi/flv).
     Ffmpeg,
+    /// Video AV1 sobre IVF decodificado NATIVO (puro-Rust, rav1d) —
+    /// el formato de video nativo de gioser, sin pasar por ffmpeg.
+    Av1,
 }
 
 /// Path del archivo de video (GIF o imagen estática) cuando aplica.
@@ -760,6 +763,16 @@ fn build_video_source() -> Box<dyn FrameSource + Send> {
                 Ok(s) => Box::new(PausableVideo::new(s, p)),
                 Err(e) => {
                     eprintln!("media-app: ffmpeg video: {e} — caigo a testcard");
+                    new_testcard()
+                }
+            }
+        }
+        VideoKind::Av1 => {
+            let path = video_path_slot().get().expect("video path set");
+            match media_source_av1::Av1VideoSource::open(path) {
+                Ok(s) => Box::new(PausableVideo::new(s, p)),
+                Err(e) => {
+                    eprintln!("media-app: AV1 nativo {path:?}: {e} — caigo a testcard");
                     new_testcard()
                 }
             }
@@ -1751,6 +1764,7 @@ fn main() {
             {
                 Some("gif") => VideoKind::Gif,
                 Some("png" | "jpg" | "jpeg" | "webp" | "bmp" | "tiff") => VideoKind::Image,
+                Some("ivf") => VideoKind::Av1,
                 Some("mp4" | "webm" | "mkv" | "mov" | "avi" | "flv" | "m4v" | "ogv") => {
                     VideoKind::Ffmpeg
                 }
@@ -1766,6 +1780,7 @@ fn main() {
                 VideoKind::Gif => format!("gif {}", path.display()),
                 VideoKind::Image => format!("img {}", path.display()),
                 VideoKind::Ffmpeg => format!("video {}", path.display()),
+                VideoKind::Av1 => format!("av1 {}", path.display()),
                 VideoKind::Testcard => format!(
                     "testcard {TESTCARD_W}×{TESTCARD_H} @ {TESTCARD_FPS:.0} fps"
                 ),
