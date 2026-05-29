@@ -22,15 +22,19 @@ pub struct IntegratorParams {
 /// capture (Rust 2021), el closure paralelo captura cada *campo* del struct
 /// `Ptrs` por separado, no el struct entero — así que el `Sync` debe vivir en
 /// el tipo del campo.
+#[cfg(feature = "cpu")]
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 struct SyncPtr(*mut f32);
 // SAFETY: cada worker accede solo a su rango disjunto [w*chunk, (w+1)*chunk);
 // no hay aliasing mutable simultáneo entre workers. Es el mismo patrón
 // interno de `rayon::slice::ParallelSliceMut`.
+#[cfg(feature = "cpu")]
 unsafe impl Send for SyncPtr {}
+#[cfg(feature = "cpu")]
 unsafe impl Sync for SyncPtr {}
 
+#[cfg(feature = "cpu")]
 #[derive(Copy, Clone)]
 struct Ptrs {
     x:  SyncPtr, y:  SyncPtr, z:  SyncPtr,
@@ -134,6 +138,57 @@ pub fn finish_kick(world: &mut World, params: &IntegratorParams) {
     }
 }
 
+// ─── Backend WASM (single-thread, sin rayon) ─────────────────────────────────
+//
+// Mismo álgebra que la rama `cpu` pero recorriendo todas las partículas en un
+// solo bucle secuencial. No usa `SyncPtr` ni paraleliza por chunks: el target
+// `wasm32-unknown-unknown` no expone hilos de la plataforma y el reactor de
+// Wawa ejecuta este kernel single-thread. Misma corrección numérica que la
+// rama `cpu` (tests de equivalencia en `tests::wasm_matches_cpu`).
+
+#[cfg(all(feature = "wasm", not(feature = "cpu")))]
+pub fn kick_drift(
+    world: &mut World,
+    grid: &Grid3D,
+    params: &IntegratorParams,
+    outboxes: &mut [Outbox],
+) {
+    let n = world.len();
+    if n == 0 { return; }
+    let dt = params.dt;
+    let half_dt = 0.5 * dt;
+    // Bajo `wasm` los outboxes se concentran en el primero; el merge sigue
+    // siendo determinista porque solo escribimos en `outboxes[0]`.
+    let ob = outboxes.first_mut().expect("kick_drift necesita ≥1 outbox");
+
+    for i in 0..n {
+        let vx = world.vxs.0[i] + world.axs.0[i] * half_dt;
+        let vy = world.vys.0[i] + world.ays.0[i] * half_dt;
+        let vz = world.vzs.0[i] + world.azs.0[i] * half_dt;
+        let nx = world.xs.0[i] + vx * dt;
+        let ny = world.ys.0[i] + vy * dt;
+        let nz = world.zs.0[i] + vz * dt;
+        world.vxs.0[i] = vx; world.vys.0[i] = vy; world.vzs.0[i] = vz;
+        world.xs.0[i]  = nx; world.ys.0[i]  = ny; world.zs.0[i]  = nz;
+
+        let new_cell = grid.cell_of_pos(nx, ny, nz);
+        if new_cell != grid.cell_of[i] {
+            ob.push(Transfer { entity_idx: i as u32, dst: new_cell });
+        }
+    }
+}
+
+#[cfg(all(feature = "wasm", not(feature = "cpu")))]
+pub fn finish_kick(world: &mut World, params: &IntegratorParams) {
+    let half_dt = 0.5 * params.dt;
+    let n = world.len();
+    for i in 0..n {
+        world.vxs.0[i] += world.axs.0[i] * half_dt;
+        world.vys.0[i] += world.ays.0[i] * half_dt;
+        world.vzs.0[i] += world.azs.0[i] * half_dt;
+    }
+}
+
 /// Step completo de Velocity-Verlet. `compute_forces` recibe el `World` con
 /// las posiciones ya integradas y debe rellenar `world.axs/ays/azs` con la
 /// aceleración correspondiente a `x(t + dt)`.
@@ -162,21 +217,21 @@ pub fn velocity_verlet_step<F>(
         prev[..n].copy_from_slice(&cur[..n]);
     }
 
-    #[cfg(feature = "cpu")]
+    #[cfg(any(feature = "cpu", feature = "wasm"))]
     {
         kick_drift(world, grid, params, outboxes);
         grid.merge_transfers(outboxes);
         compute_forces(world, grid);
         finish_kick(world, params);
     }
-    #[cfg(not(feature = "cpu"))]
+    #[cfg(not(any(feature = "cpu", feature = "wasm")))]
     {
         let _ = (world, grid, params, outboxes, compute_forces);
-        unimplemented!("habilita feature `cpu` (rayon) o la futura `gpu`");
+        unimplemented!("habilita feature `cpu` (rayon), `wasm` (single-thread) o la futura `gpu`");
     }
 }
 
-#[cfg(all(test, feature = "cpu"))]
+#[cfg(all(test, any(feature = "cpu", feature = "wasm")))]
 mod tests {
     use super::*;
     use crate::Snapshot;

@@ -10,6 +10,7 @@
 //! Unidades: `ke` se pasa explícito para que el caller decida sistema (Gauss,
 //! SI, atómicas). No hay default mágico.
 
+#[cfg(feature = "cpu")]
 use rayon::prelude::*;
 use tinkuy_core::{Grid3D, World};
 
@@ -19,10 +20,13 @@ pub struct CoulombParams {
     pub cutoff: f32,
 }
 
+#[cfg(feature = "cpu")]
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 struct SyncPtr(*mut f32);
+#[cfg(feature = "cpu")]
 unsafe impl Send for SyncPtr {}
+#[cfg(feature = "cpu")]
 unsafe impl Sync for SyncPtr {}
 
 #[cfg(feature = "cpu")]
@@ -88,7 +92,55 @@ pub fn coulomb(world: &mut World, grid: &Grid3D, p: &CoulombParams) {
     });
 }
 
-#[cfg(all(test, feature = "cpu"))]
+// Variante single-thread para Wawa / wasm32. Misma semántica que la rama `cpu`.
+#[cfg(all(feature = "wasm", not(feature = "cpu")))]
+pub fn coulomb(world: &mut World, grid: &Grid3D, p: &CoulombParams) {
+    let n = world.len();
+    if n == 0 { return; }
+    debug_assert!(
+        grid.cell_size >= p.cutoff,
+        "cell_size ({}) < cutoff ({}) — vecinos posiblemente perdidos",
+        grid.cell_size, p.cutoff
+    );
+
+    let cutoff2 = p.cutoff * p.cutoff;
+    let ke = p.ke;
+
+    for i in 0..n {
+        let qi = world.charges.0[i];
+        if qi == 0.0 { continue; }
+        let xi = world.xs.0[i];
+        let yi = world.ys.0[i];
+        let zi = world.zs.0[i];
+        let cell_i = grid.cell_of[i];
+        let mut fx = 0.0f32;
+        let mut fy = 0.0f32;
+        let mut fz = 0.0f32;
+        grid.for_each_neighbor(cell_i, |j| {
+            if j == i { return; }
+            let qj = world.charges.0[j];
+            if qj == 0.0 { return; }
+            let dx = xi - world.xs.0[j];
+            let dy = yi - world.ys.0[j];
+            let dz = zi - world.zs.0[j];
+            let r2 = dx * dx + dy * dy + dz * dz;
+            if r2 > cutoff2 || r2 < 1.0e-12 { return; }
+            let inv_r = 1.0 / r2.sqrt();
+            let inv_r3 = inv_r * inv_r * inv_r;
+            let k = ke * qi * qj * inv_r3;
+            fx += k * dx;
+            fy += k * dy;
+            fz += k * dz;
+        });
+        let m = world.masses.0[i];
+        let inv_m = if m > 0.0 { 1.0 / m } else { 0.0 };
+        world.axs.0[i] += fx * inv_m;
+        world.ays.0[i] += fy * inv_m;
+        world.azs.0[i] += fz * inv_m;
+    }
+}
+
+#[cfg(all(test, any(feature = "cpu", feature = "wasm")))]
 mod tests {
     use super::*;
     use crate::lennard_jones::clear_accelerations;

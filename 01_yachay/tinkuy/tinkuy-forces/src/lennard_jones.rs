@@ -12,6 +12,7 @@
 //! Precondición: `grid.cell_size >= cutoff`. La grilla garantiza así que
 //! todas las interacciones dentro del radio caen en las 27 celdas vecinas.
 
+#[cfg(feature = "cpu")]
 use rayon::prelude::*;
 use tinkuy_core::{Grid3D, World};
 
@@ -33,12 +34,15 @@ pub fn clear_accelerations(world: &mut World) {
 }
 
 /// Newtype Send+Sync sobre *mut f32 (mismo patrón que en `integrator.rs`).
+#[cfg(feature = "cpu")]
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 struct SyncPtr(*mut f32);
 // SAFETY: cada partícula `i` solo es escrita por el worker que itera sobre `i`;
 // no hay aliasing mutable simultáneo.
+#[cfg(feature = "cpu")]
 unsafe impl Send for SyncPtr {}
+#[cfg(feature = "cpu")]
 unsafe impl Sync for SyncPtr {}
 
 #[cfg(feature = "cpu")]
@@ -103,7 +107,56 @@ pub fn lennard_jones(world: &mut World, grid: &Grid3D, p: &LjParams) {
     });
 }
 
-#[cfg(all(test, feature = "cpu"))]
+// Variante single-thread para Wawa / wasm32. Sin rayon, sin punteros crudos.
+// Misma corrección numérica que la rama `cpu` (válido porque la operación es
+// asociativa por índice destino y aquí no hay reducción cruzada).
+#[cfg(all(feature = "wasm", not(feature = "cpu")))]
+pub fn lennard_jones(world: &mut World, grid: &Grid3D, p: &LjParams) {
+    let n = world.len();
+    if n == 0 { return; }
+    debug_assert!(
+        grid.cell_size >= p.cutoff,
+        "cell_size ({}) < cutoff ({}) — vecinos posiblemente perdidos",
+        grid.cell_size, p.cutoff
+    );
+
+    let cutoff2 = p.cutoff * p.cutoff;
+    let sigma2  = p.sigma * p.sigma;
+    let eps     = p.epsilon;
+
+    for i in 0..n {
+        let xi = world.xs.0[i];
+        let yi = world.ys.0[i];
+        let zi = world.zs.0[i];
+        let cell_i = grid.cell_of[i];
+        let mut fx = 0.0f32;
+        let mut fy = 0.0f32;
+        let mut fz = 0.0f32;
+        grid.for_each_neighbor(cell_i, |j| {
+            if j == i { return; }
+            let dx = xi - world.xs.0[j];
+            let dy = yi - world.ys.0[j];
+            let dz = zi - world.zs.0[j];
+            let r2 = dx * dx + dy * dy + dz * dz;
+            if r2 > cutoff2 || r2 < 1.0e-12 { return; }
+            let inv_r2 = 1.0 / r2;
+            let sr2  = sigma2 * inv_r2;
+            let sr6  = sr2 * sr2 * sr2;
+            let sr12 = sr6 * sr6;
+            let f_over_r = 24.0 * eps * inv_r2 * (2.0 * sr12 - sr6);
+            fx += f_over_r * dx;
+            fy += f_over_r * dy;
+            fz += f_over_r * dz;
+        });
+        let m = world.masses.0[i];
+        let inv_m = if m > 0.0 { 1.0 / m } else { 0.0 };
+        world.axs.0[i] += fx * inv_m;
+        world.ays.0[i] += fy * inv_m;
+        world.azs.0[i] += fz * inv_m;
+    }
+}
+
+#[cfg(all(test, any(feature = "cpu", feature = "wasm")))]
 mod tests {
     use super::*;
 
