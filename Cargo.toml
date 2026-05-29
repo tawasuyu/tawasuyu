@@ -159,6 +159,7 @@ members = [
     "01_yachay/tinkuy/tinkuy-sim",
     "02_ruway/nada",
     "02_ruway/cards",
+    "02_ruway/ayni/ayni-core",
     "02_ruway/chasqui/card-admin",
     "02_ruway/chasqui/card-handshake",
     "02_ruway/chasqui/card-sidecar",

@@ -1,0 +1,49 @@
+# =============================================================================
+#  ayni :: ayni-core — el grafo de la conversación soberana
+# -----------------------------------------------------------------------------
+#  Ayni es chat persona-a-persona local-first: cada conversación es un DAG
+#  direccionado por contenido (no un log lineal), cada mensaje firmado por la
+#  identidad agora de su autor. Este núcleo define ESE grafo y nada más —
+#  los tipos, su (de)serialización postcard, el cálculo del id BLAKE3, y las
+#  operaciones de DAG (cabezas, raíces, orden topológico).
+#
+#  Es `#![no_std] + alloc` DESDE EL PRIMER DÍA (P0), no parcheado después: así
+#  el mismo núcleo viaja a wawa (P6, app WASM sobre akasha) sin reescribir el
+#  modelo. Por la misma razón es CRIPTO-AGNÓSTICO: la firma entra y se verifica
+#  por closure; las primitivas Ed25519/MLS viven en `ayni-crypto`, no aquí.
+#  Su única dependencia de dominio es `format` (Hash/AgoraId/Firma/hash) —
+#  el mismo núcleo no_std que comparten kernel, boot y akasha.
+# =============================================================================
+
+[package]
+name = "ayni-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "ayni — núcleo del grafo de conversación soberana: DAG de mensajes firmados, direccionado por contenido (no_std + alloc)"
+
+[lib]
+doctest = false
+
+[dependencies]
+# `format` aporta los tipos del grafo soberano (Hash, AgoraId, Firma) y la
+# función hash BLAKE3 canónica — la misma que usan kernel/boot/akasha, para que
+# un nodo Ayni se direccione idéntico en Linux y en wawa. Referenciado por path
+# cruzando la frontera del workspace (format está excluido del workspace raíz).
+format = { path = "../../../shared/format" }
+# serde + postcard en su forma no_std (sobre alloc): el mismo encoder binario
+# compacto del resto de la suite. NO se heredan del workspace porque las deps
+# del workspace arrastran `std`; aquí se fijan explícitas como en `format`.
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+# Firma Ed25519 = [u8; 64]; serde directo se detiene en 32 bytes. `serde-big-array`
+# cierra el hueco, igual que en `format`.
+serde-big-array = { version = "0.5", default-features = false }
+
+[dev-dependencies]
+# Sólo en tests: prueba que los closures de firma/verificación de `ayni-core`
+# componen con Ed25519 REAL (el que `ayni-crypto`/`agora` proveerán en runtime).
+# El núcleo de producción no enlaza ninguna primitiva criptográfica.
+ed25519-dalek = "2"
