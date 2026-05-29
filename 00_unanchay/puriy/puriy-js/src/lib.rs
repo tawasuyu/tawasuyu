@@ -1668,8 +1668,18 @@ globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) 
         bodyUsed: false,
         headers: headers,
         _body: body,
-        text: function() { return Promise.resolve(this._body); },
+        // Fase 7.35 — bodyUsed enforcement. Spec: tras consumir el body
+        // (.text()/.json()/.arrayBuffer()), bodyUsed pasa a true y un
+        // segundo intento rechaza con TypeError("body stream already read").
+        // Aplica también si el primer intento falló (JSON.parse roto).
+        text: function() {
+            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+            this.bodyUsed = true;
+            return Promise.resolve(this._body);
+        },
         json: function() {
+            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+            this.bodyUsed = true;
             try { return Promise.resolve(JSON.parse(this._body)); }
             catch (e) { return Promise.reject(e); }
         },
@@ -1677,6 +1687,8 @@ globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) 
             // Stub: devuelve un objeto pseudo-arrayBuffer con _body bytes
             // mapeados a un Array de char codes. Apps que necesitan
             // ArrayBuffer real verán divergencia; suficiente para JSON.
+            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+            this.bodyUsed = true;
             var len = this._body.length;
             var buf = new ArrayBuffer(len);
             var view = new Uint8Array(buf);
@@ -6868,5 +6880,56 @@ mod tests {
         rt.eval("h.delete('Other')").expect("e");
         let v = rt.eval("h.has('Other')").expect("e");
         assert_eq!(v, JsValue::Bool(false));
+    }
+
+    // ============= Fase 7.35 — bodyUsed enforcement =============
+
+    #[test]
+    fn body_used_pasa_a_true_tras_text() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var used = null; fetch('/x').then(function(r) { r.text(); used = r.bodyUsed; })")
+            .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "hola", &[]).expect("r");
+        let v = rt.eval("used").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn body_used_segunda_lectura_rechaza_con_type_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var err = null; \
+             fetch('/x').then(function(r) { r.text(); return r.text(); }) \
+                        .catch(function(e) { err = e.message; });",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "hola", &[]).expect("r");
+        let v = rt.eval("err").expect("e");
+        if let JsValue::String(s) = v {
+            assert!(s.contains("already read"), "msg: {s}");
+        } else {
+            panic!("expected string, got {v:?}");
+        }
+    }
+
+    #[test]
+    fn body_used_json_rechaza_text_posterior() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var err = null; \
+             fetch('/x').then(function(r) { return r.json().then(function() { return r.text(); }); }) \
+                        .catch(function(e) { err = e.message; });",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "{\"x\":1}", &[]).expect("r");
+        let v = rt.eval("err").expect("e");
+        if let JsValue::String(s) = v {
+            assert!(s.contains("already read"), "msg: {s}");
+        } else {
+            panic!("expected string");
+        }
     }
 }
