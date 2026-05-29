@@ -1,0 +1,40 @@
+# =============================================================================
+#  ayni :: ayni-crypto — la criptografía de la conversación soberana
+# -----------------------------------------------------------------------------
+#  `ayni-core` es deliberadamente cripto-agnóstico: firma y verifica por
+#  closure. ESTE crate provee esos closures, atando el grafo a la identidad
+#  real del proyecto — `agora` (Ed25519 + keystore cifrado Argon2id/ChaCha20).
+#
+#  Capas (por fase):
+#    * P1 (hoy): `firma` — cargar/crear la identidad del usuario y firmar el id
+#      de un nodo; verificar la firma de un autor. Sin red, sin cifrado de sesión.
+#    * P2: `canal` — E2EE 1:1 (cifrado de los payloads que viajan). La regla dura
+#      del repo manda: NO se hace cripto a mano; se componen primitivas auditadas.
+#
+#  No es `no_std`: `agora-keystore` y las primitivas de sesión usan `std`. El
+#  núcleo portable a wawa es `ayni-core`; la cripto de sesión vive host-side.
+# =============================================================================
+
+[package]
+name = "ayni-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "ayni — identidad y criptografía de la conversación: firma Ed25519 sobre agora + (P2) E2EE 1:1"
+
+[lib]
+doctest = false
+
+[dependencies]
+ayni-core = { path = "../ayni-core" }
+# Identidad federada del proyecto: Keypair Ed25519 (from_seed/sign) + verify.
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+# Almacén cifrado de seeds privadas (Argon2id + ChaCha20-Poly1305).
+agora-keystore = { path = "../../../03_ukupacha/agora/agora-keystore" }
+rand = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

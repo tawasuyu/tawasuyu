@@ -93,6 +93,31 @@ impl Conversacion {
         self.agregar(nodo)
     }
 
+    /// Fusiona OTRA conversación en ésta, insertando los nodos que falten. Como
+    /// dos pares con el mismo grafo calculan el mismo conjunto de ids, fusionar
+    /// es conmutativo e idempotente —la base de la convergencia sin servidor—.
+    /// Recorre `otra` en orden topológico para que los padres precedan a sus
+    /// hijos; devuelve los ids REALMENTE añadidos (los que esta conversación no
+    /// tenía), para que el llamador sepa qué hay de nuevo que pintar o notificar.
+    /// Un nodo de `otra` cuyo padre no esté ni aquí ni allí se omite en silencio
+    /// (grafo de origen incoherente) — el camino normal nunca lo produce.
+    pub fn fusionar(&mut self, otra: &Conversacion) -> Vec<Hash> {
+        let orden = otra
+            .orden_topologico()
+            .unwrap_or_else(|| otra.nodos.keys().copied().collect());
+        let mut nuevos = Vec::new();
+        for id in orden {
+            if let Some(nodo) = otra.nodos.get(&id) {
+                if !self.nodos.contains_key(&id) {
+                    if let Ok(id_ins) = self.agregar(nodo.clone()) {
+                        nuevos.push(id_ins);
+                    }
+                }
+            }
+        }
+        nuevos
+    }
+
     /// El nodo de un id, si está presente.
     pub fn obtener(&self, id: &Hash) -> Option<&MensajeNodo> {
         self.nodos.get(id)
@@ -116,6 +141,20 @@ impl Conversacion {
     /// Itera los nodos del grafo (en orden de id, por el `BTreeMap`).
     pub fn nodos(&self) -> impl Iterator<Item = (&Hash, &MensajeNodo)> {
         self.nodos.iter()
+    }
+
+    /// Una INSTANTÁNEA del grafo como lista de nodos en orden topológico —los
+    /// padres antes que sus hijos—. Es la forma que viaja por la red cuando un
+    /// peer vuelca su conversación entera a otro recién conectado, y la que
+    /// reconstruye un grafo idéntico al re-insertarla.
+    pub fn instantanea(&self) -> Vec<MensajeNodo> {
+        let orden = self
+            .orden_topologico()
+            .unwrap_or_else(|| self.nodos.keys().copied().collect());
+        orden
+            .iter()
+            .filter_map(|id| self.nodos.get(id).cloned())
+            .collect()
     }
 
     /// Las RAÍCES: nodos sin padres. En una conversación de un solo origen hay

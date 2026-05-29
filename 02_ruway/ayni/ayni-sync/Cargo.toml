@@ -1,0 +1,36 @@
+# =============================================================================
+#  ayni :: ayni-sync — el transporte de la conversación soberana
+# -----------------------------------------------------------------------------
+#  Lleva nodos firmados entre pares y fusiona los grafos hasta que convergen.
+#  El transporte es un TRAIT (`Transporte`) — intercambiable, igual que las UIs
+#  son frontends intercambiables sobre los `*-core`. P1 entrega `EnlaceTcp`:
+#  TCP LAN directo entre dos clientes, sin depender del daemon Init de chasqui
+#  (cuyo modelo es matchmaking app↔app, desproporcionado para chat humano).
+#  P3 sumará `EnlaceMinga` (P2P/DHT/store-forward) y, si hace falta, un puente
+#  sobre el bus chasqui — ambos como impls del MISMO trait.
+#
+#  La convergencia es CRDT-trivial gracias al núcleo: fusionar grafos es
+#  conmutativo e idempotente (dos pares con los mismos nodos calculan el mismo
+#  conjunto de ids). No hay "orden verdadero" que un servidor deba imponer.
+# =============================================================================
+
+[package]
+name = "ayni-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "ayni — transporte y sincronización del grafo de conversación: trait Transporte + TCP LAN + fusión verificada"
+
+[lib]
+doctest = false
+
+[dependencies]
+ayni-core = { path = "../ayni-core" }
+serde = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+ayni-crypto = { path = "../ayni-crypto" }

@@ -1,0 +1,28 @@
+# =============================================================================
+#  ayni :: ayni-cli — el chat soberano en la terminal
+# -----------------------------------------------------------------------------
+#  El binario headless que prueba el lazo vivo de P1 sin GPU: dos terminales,
+#  cada una una identidad, hablando por TCP LAN. Es el MVP feo-pero-sirve —
+#  escribís una línea, viaja firmada, el otro la ve y los grafos convergen—.
+#  La UI gráfica es `ayni-llimphi`; ésta es la prueba de fuego del transporte.
+# =============================================================================
+
+[package]
+name = "ayni-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "ayni — chat soberano en la terminal (P1): dos clientes por TCP LAN, mensajes firmados, grafos convergentes"
+
+[[bin]]
+name = "ayni"
+path = "src/main.rs"
+
+[dependencies]
+ayni-core = { path = "../ayni-core" }
+ayni-crypto = { path = "../ayni-crypto" }
+ayni-sync = { path = "../ayni-sync" }
+clap = { workspace = true }
+blake3 = { workspace = true }
