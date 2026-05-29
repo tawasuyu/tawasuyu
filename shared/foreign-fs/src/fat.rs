@@ -1,9 +1,11 @@
 // =============================================================================
-//  foreign-fs :: fat — lector FAT12/16/32 de sólo-lectura sobre bytes crudos
+//  foreign-fs :: fat — lector FAT12/16/32 de sólo-lectura sobre una `Fuente`
 // -----------------------------------------------------------------------------
-//  Opera sobre un `&[u8]` que ES la imagen del volumen —el dispositivo de
-//  bloques tal como wawa lo ve, SIN montar ni driver de FS del kernel—. Cero
-//  I/O, cero `std`: sólo aritmética de offsets sobre el slice.
+//  Opera sobre una `Fuente` de bloques —el dispositivo tal como wawa lo ve, SIN
+//  montar ni driver de FS del kernel—. No requiere tener todo el volumen en RAM:
+//  lee sólo lo que necesita (BPB, entradas de FAT, bloques de directorio, y la
+//  ventana de archivo pedida por `leer_archivo_en`). El host satisface la
+//  `Fuente` con un `&[u8]`; in-cage, con un syscall de lectura.
 //
 //  Cubre lo que un USB/partición EFI real trae: BPB clásico, tabla FAT, raíz
 //  fija (FAT12/16) o raíz en cadena de clusters (FAT32), entradas 8.3 con sus
@@ -13,9 +15,10 @@
 // =============================================================================
 
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{Clase, EntradaDir, FsError, LectorFs};
+use crate::{Clase, EntradaDir, Fuente, FsError, LectorFs};
 
 /// El sabor de FAT, decidido por el número de clusters de datos (algoritmo
 /// canónico de Microsoft): la ANCHURA de cada entrada de la tabla FAT y el
@@ -45,9 +48,9 @@ pub struct ManijaFat {
     tam: u32,
 }
 
-/// Lector de un volumen FAT montado sobre un slice de bytes.
-pub struct LectorFat<'a> {
-    datos: &'a [u8],
+/// Lector de un volumen FAT sobre una `Fuente`.
+pub struct LectorFat<F: Fuente> {
+    fuente: F,
     tipo: TipoFat,
     bps: usize,             // bytes por sector
     spc: usize,             // sectores por cluster
@@ -74,23 +77,26 @@ fn u32le(d: &[u8], off: usize) -> Result<u32, FsError> {
         .ok_or(FsError::MedioInvalido("BPB: lectura u32 fuera de rango"))
 }
 
-impl<'a> LectorFat<'a> {
+impl<F: Fuente> LectorFat<F> {
     /// Parsea el BPB y deja el lector listo. Rechaza un medio que no parezca
     /// FAT (sector/cluster no potencia de dos, FAT vacía, etc.) en vez de
     /// malinterpretar basura.
-    pub fn nuevo(datos: &'a [u8]) -> Result<Self, FsError> {
-        if datos.len() < 512 {
+    pub fn nuevo(fuente: F) -> Result<Self, FsError> {
+        if fuente.tamano() < 512 {
             return Err(FsError::MedioInvalido("medio más corto que un sector"));
         }
-        let bps = u16le(datos, 11)? as usize;
-        let spc = datos[13] as usize;
-        let rsvd = u16le(datos, 14)? as usize;
-        let num_fats = datos[16] as usize;
-        let root_ent_cnt = u16le(datos, 17)? as usize;
-        let tot_sec16 = u16le(datos, 19)? as usize;
-        let fat_sz16 = u16le(datos, 22)? as usize;
-        let tot_sec32 = u32le(datos, 32)? as usize;
-        let fat_sz32 = u32le(datos, 36)? as usize;
+        let mut bpb = [0u8; 512];
+        fuente.leer_en(0, &mut bpb)?;
+
+        let bps = u16le(&bpb, 11)? as usize;
+        let spc = bpb[13] as usize;
+        let rsvd = u16le(&bpb, 14)? as usize;
+        let num_fats = bpb[16] as usize;
+        let root_ent_cnt = u16le(&bpb, 17)? as usize;
+        let tot_sec16 = u16le(&bpb, 19)? as usize;
+        let fat_sz16 = u16le(&bpb, 22)? as usize;
+        let tot_sec32 = u32le(&bpb, 32)? as usize;
+        let fat_sz32 = u32le(&bpb, 36)? as usize;
 
         // Validaciones mínimas: bps potencia de dos en [512, 4096], spc
         // potencia de dos ≥1, al menos una FAT.
@@ -127,18 +133,18 @@ impl<'a> LectorFat<'a> {
         };
 
         let root_clus = if tipo == TipoFat::Fat32 {
-            u32le(datos, 44)?
+            u32le(&bpb, 44)?
         } else {
             0
         };
 
         // El medio debe contener al menos hasta el primer sector de datos.
-        if first_data_sector * bps > datos.len() {
+        if (first_data_sector * bps) as u64 > fuente.tamano() {
             return Err(FsError::MedioInvalido("medio truncado: falta área de datos"));
         }
 
         Ok(LectorFat {
-            datos,
+            fuente,
             tipo,
             bps,
             spc,
@@ -174,7 +180,9 @@ impl<'a> LectorFat<'a> {
         match self.tipo {
             TipoFat::Fat12 => {
                 let off = base + (n as usize) + (n as usize) / 2;
-                let raw = u16le(self.datos, off)?;
+                let mut b = [0u8; 2];
+                self.fuente.leer_en(off as u64, &mut b)?;
+                let raw = u16::from_le_bytes(b);
                 let val = if n & 1 == 0 { raw & 0x0FFF } else { raw >> 4 };
                 if val >= 0xFF8 || val == 0xFF7 {
                     Ok(None)
@@ -184,7 +192,9 @@ impl<'a> LectorFat<'a> {
             }
             TipoFat::Fat16 => {
                 let off = base + (n as usize) * 2;
-                let val = u16le(self.datos, off)?;
+                let mut b = [0u8; 2];
+                self.fuente.leer_en(off as u64, &mut b)?;
+                let val = u16::from_le_bytes(b);
                 if val >= 0xFFF8 || val == 0xFFF7 {
                     Ok(None)
                 } else {
@@ -193,7 +203,9 @@ impl<'a> LectorFat<'a> {
             }
             TipoFat::Fat32 => {
                 let off = base + (n as usize) * 4;
-                let val = u32le(self.datos, off)? & 0x0FFF_FFFF;
+                let mut b = [0u8; 4];
+                self.fuente.leer_en(off as u64, &mut b)?;
+                let val = u32::from_le_bytes(b) & 0x0FFF_FFFF;
                 if val >= 0x0FFF_FFF8 || val == 0x0FFF_FFF7 {
                     Ok(None)
                 } else {
@@ -203,51 +215,41 @@ impl<'a> LectorFat<'a> {
         }
     }
 
-    /// Recorre la cadena de clusters desde `inicio` y devuelve la lista de
-    /// clusters EN ORDEN. Aborta ante un cluster fuera de rango o un ciclo
-    /// (tope = total de clusters + 2): un FS corrupto no debe colgar el lector.
-    fn cadena(&self, inicio: u32) -> Result<Vec<u32>, FsError> {
-        let mut clusters = Vec::new();
+    /// Lee los bytes de una cadena de clusters en un `Vec`. Si `limite` está
+    /// presente, detiene la concatenación al alcanzarlo. Aborta ante un cluster
+    /// fuera de rango o un ciclo (tope = total de clusters + 2): un FS corrupto
+    /// no debe colgar el lector. Se usa para directorios (que se leen enteros);
+    /// el contenido de archivo va por `leer_archivo_en` (streaming, O(1) RAM).
+    fn leer_cadena(&self, inicio: u32, limite: Option<usize>) -> Result<Vec<u8>, FsError> {
+        let tam_cluster = self.spc * self.bps;
         let tope = self.count_of_clusters as usize + 2;
+        let mut salida = Vec::new();
         let mut actual = inicio;
+        let mut contados = 0usize;
         loop {
             if !self.cluster_valido(actual) {
                 return Err(FsError::Corrupto("cluster fuera de rango en la cadena"));
             }
-            clusters.push(actual);
-            if clusters.len() > tope {
+            let antes = salida.len();
+            salida.resize(antes + tam_cluster, 0);
+            self.fuente
+                .leer_en(self.offset_cluster(actual) as u64, &mut salida[antes..])?;
+            contados += 1;
+            if contados > tope {
                 return Err(FsError::Corrupto("ciclo en la cadena de clusters"));
             }
-            match self.siguiente_cluster(actual)? {
-                Some(sig) => actual = sig,
-                None => break,
-            }
-        }
-        Ok(clusters)
-    }
-
-    /// Lee los bytes de una cadena de clusters. Si `limite` está presente,
-    /// detiene la concatenación al alcanzarlo (tamaño exacto del archivo).
-    fn leer_cadena(&self, inicio: u32, limite: Option<usize>) -> Result<Vec<u8>, FsError> {
-        let tam_cluster = self.spc * self.bps;
-        let mut salida = Vec::new();
-        for c in self.cadena(inicio)? {
-            let off = self.offset_cluster(c);
-            let trozo = self
-                .datos
-                .get(off..off + tam_cluster)
-                .ok_or(FsError::Corrupto("cluster fuera del medio"))?;
-            salida.extend_from_slice(trozo);
             if let Some(lim) = limite {
                 if salida.len() >= lim {
                     salida.truncate(lim);
                     break;
                 }
             }
+            match self.siguiente_cluster(actual)? {
+                Some(sig) => actual = sig,
+                None => break,
+            }
         }
         if let Some(lim) = limite {
-            // La cadena puede ser más corta que el tamaño declarado en un FS
-            // corrupto; lo que haya es lo que hay (no inventamos ceros).
             salida.truncate(lim.min(salida.len()));
         }
         Ok(salida)
@@ -263,10 +265,9 @@ impl<'a> LectorFat<'a> {
                 let inicio_sector = self.rsvd + self.num_fats * self.fat_sz;
                 let off = inicio_sector * self.bps;
                 let len = self.root_dir_sectors * self.bps;
-                self.datos
-                    .get(off..off + len)
-                    .map(|s| s.to_vec())
-                    .ok_or(FsError::Corrupto("raíz fija fuera del medio"))
+                let mut buf = vec![0u8; len];
+                self.fuente.leer_en(off as u64, &mut buf)?;
+                Ok(buf)
             }
         }
     }
@@ -347,7 +348,7 @@ fn decodificar_lfn(unidades: &[u16]) -> String {
         .collect()
 }
 
-impl<'a> LectorFs for LectorFat<'a> {
+impl<F: Fuente> LectorFs for LectorFat<F> {
     type Manija = ManijaFat;
 
     fn raiz(&self) -> ManijaFat {
@@ -433,11 +434,64 @@ impl<'a> LectorFs for LectorFat<'a> {
         Ok(entradas)
     }
 
-    fn leer_archivo(&self, archivo: &ManijaFat) -> Result<Vec<u8>, FsError> {
-        match archivo.inicio {
-            Inicio::Vacio => Ok(Vec::new()),
-            Inicio::Cluster(c) => self.leer_cadena(c, Some(archivo.tam as usize)),
-            Inicio::RaizFija => Err(FsError::Corrupto("la raíz fija no es un archivo")),
+    fn tamano_archivo(&self, archivo: &ManijaFat) -> Result<u64, FsError> {
+        Ok(archivo.tam as u64)
+    }
+
+    fn leer_archivo_en(
+        &self,
+        archivo: &ManijaFat,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, FsError> {
+        let tam = archivo.tam as u64;
+        if offset >= tam || buf.is_empty() {
+            return Ok(0);
         }
+        let cluster_inicial = match archivo.inicio {
+            Inicio::Cluster(c) => c,
+            // Vacío o raíz fija: no es un archivo con datos.
+            _ => return Ok(0),
+        };
+        let cluster_size = (self.spc * self.bps) as u64;
+        let max = core::cmp::min(buf.len() as u64, tam - offset) as usize;
+
+        // Avanza por la cadena (sin materializarla: O(1) RAM) hasta el cluster
+        // que contiene `offset`, luego copia la ventana cruzando clusters.
+        let mut cluster = cluster_inicial;
+        let mut base = 0u64; // offset lógico del inicio de `cluster`
+        while base + cluster_size <= offset {
+            match self.siguiente_cluster(cluster)? {
+                Some(s) => {
+                    cluster = s;
+                    base += cluster_size;
+                }
+                None => return Ok(0),
+            }
+        }
+
+        let mut leido = 0usize;
+        loop {
+            if !self.cluster_valido(cluster) {
+                return Err(FsError::Corrupto("cluster fuera de rango al leer"));
+            }
+            let dentro = (offset + leido as u64 - base) as usize;
+            let disponible = cluster_size as usize - dentro;
+            let n = core::cmp::min(disponible, max - leido);
+            let off_bytes = self.offset_cluster(cluster) as u64 + dentro as u64;
+            self.fuente.leer_en(off_bytes, &mut buf[leido..leido + n])?;
+            leido += n;
+            if leido >= max {
+                break;
+            }
+            match self.siguiente_cluster(cluster)? {
+                Some(s) => {
+                    cluster = s;
+                    base += cluster_size;
+                }
+                None => break,
+            }
+        }
+        Ok(leido)
     }
 }

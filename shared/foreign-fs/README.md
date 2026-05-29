@@ -94,26 +94,34 @@ limpiamente si faltan; los unit no dependen de nada.
   tiene cobertura directa.
 - **NTFS / btrfs ausentes.** La visión es Linux→wawa, así que ext4 es la
   prioridad; NTFS (datos de Windows) sería otro `LectorFs` futuro.
-- **Lee cada archivo entero en RAM** (`leer_archivo -> Vec<u8>`). Bien para el
-  host; **no apto in-cage tal cual** (ver abajo).
+- **Directorios se leen enteros en RAM** (el contenido de ARCHIVO no — ver
+  abajo). Un directorio gigantesco (cientos de miles de entradas) materializa
+  su contenido; los casos reales (miles de entradas, decenas de KiB) caben de
+  sobra bajo el techo de 4 MiB.
 
-## Lo que falta para correr DENTRO de wawa (QEMU, gated)
+## Listo para in-cage (lado librería) + lo que falta (QEMU, gated)
 
-El núcleo lector+absorbedor está listo y probado host-side. Para que la
-absorción ocurra *dentro* de wawa (sin montar, sobre un dispositivo de bloque
-real) faltan tres piezas, todas en territorio bare-metal/QEMU (el autor corre la
-imagen):
+El núcleo lector+absorbedor está listo y probado host-side y **ya tiene la forma
+para correr in-cage**:
 
-1. **Fuente de bloques** — abstraer el medio detrás de un trait `Fuente { leer_en,
-   tamano }` en vez de `&[u8]`, para que los lectores corran sin tener todo el
-   dispositivo en RAM. El host la satisface con un `&[u8]`; in-cage, con un
-   syscall.
-2. **Absorbedor con memoria acotada** — leer el contenido de archivo en ventanas
-   de `TAMANO_TROZO` y emitir cada trozo, sin sostener el archivo entero
-   (techo de 4 MiB por app).
-3. **Syscall + app** — `sys_dispositivo_leer(lba, buf)` (gateado por un permiso
+1. ✅ **Fuente de bloques** — el medio vive detrás del trait `Fuente { leer_en,
+   tamano }` (no `&[u8]` fijo). El host lo satisface con `&[u8]` (blanket impl);
+   in-cage, con un syscall. Verificado: absorber por una `Fuente` arbitraria da
+   el mismo grafo que por `&[u8]` (`tests/fuente.rs`).
+2. ✅ **Absorbedor con memoria acotada** — el contenido de archivo se lee en
+   ventanas de `TAMANO_TROZO` (256 KiB) vía `leer_archivo_en` y se emite trozo a
+   trozo; la resolución lógico→físico (`bloque_logico` en ext4, recorrido de
+   cadena en FAT) navega a demanda con RAM O(1) por bloque. Verificado: absorber
+   un archivo de 2.5 MiB nunca pide a la `Fuente` más de un bloque (≤4 KiB) de
+   una vez (`tests/fuente.rs`).
+
+Falta la pieza bare-metal/QEMU (el autor corre la imagen):
+
+3. ⬜ **Syscall + app** — `sys_dispositivo_leer(lba, buf)` (gateado por un permiso
    nuevo) que exponga un segundo virtio-blk de sólo-lectura, y una app WASM
-   `absorbedor` que enchufe `foreign-fs` a ese syscall + `sys_object_put`.
+   `absorbedor` que implemente `Fuente` sobre ese syscall y `Emisor` sobre
+   `sys_object_put`, luego `sys_object_fijar_raiz`. Con las piezas 1 y 2 hechas,
+   esta app es un envoltorio delgado.
 
 Relacionado: el driver de bloque para hierro real (AHCI/NVMe) y el instalador
 USB son la fase 4 de la visión —el salto más caro—, y el punto donde la

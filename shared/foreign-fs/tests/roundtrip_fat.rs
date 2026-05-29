@@ -155,7 +155,7 @@ fn forjar_imagen_fat(src: &Path, mib: u64, flavor: u8, tmp: &Path) -> Vec<u8> {
 fn comparar(src: &Path, mib: u64, flavor: u8, tmp: &Path) {
     let bytes = forjar_imagen_fat(src, mib, flavor, tmp);
 
-    let lector = LectorFat::nuevo(&bytes)
+    let lector = LectorFat::nuevo(bytes.as_slice())
         .unwrap_or_else(|e| panic!("FAT{flavor}: BPB no parseó: {e:?}"));
     let mut emisor_fat = EmisorMemoria::nuevo();
     let raiz_fat = absorber(&lector, &mut emisor_fat)

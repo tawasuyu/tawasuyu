@@ -162,11 +162,11 @@ fn gpt_fat_y_ext_coinciden() {
     // absorber_particion == absorber la imagen FS suelta.
     let r_fat_std = {
         let mut e = EmisorMemoria::nuevo();
-        absorber(&LectorFat::nuevo(&fat).unwrap(), &mut e).unwrap()
+        absorber(&LectorFat::nuevo(fat.as_slice()).unwrap(), &mut e).unwrap()
     };
     let r_ext_std = {
         let mut e = EmisorMemoria::nuevo();
-        absorber(&LectorExt4::nuevo(&ext).unwrap(), &mut e).unwrap()
+        absorber(&LectorExt4::nuevo(ext.as_slice()).unwrap(), &mut e).unwrap()
     };
     let mut e1 = EmisorMemoria::nuevo();
     assert_eq!(absorber_particion(&datos, &parts[0], &mut e1).unwrap(), r_fat_std);
@@ -177,8 +177,8 @@ fn gpt_fat_y_ext_coinciden() {
     let mut e_dev = EmisorMemoria::nuevo();
     let raiz_dev = absorber_dispositivo(&datos, &mut e_dev).unwrap();
     let mut e_man = EmisorMemoria::nuevo();
-    let r_fat = absorber(&LectorFat::nuevo(&fat).unwrap(), &mut e_man).unwrap();
-    let r_ext = absorber(&LectorExt4::nuevo(&ext).unwrap(), &mut e_man).unwrap();
+    let r_fat = absorber(&LectorFat::nuevo(fat.as_slice()).unwrap(), &mut e_man).unwrap();
+    let r_ext = absorber(&LectorExt4::nuevo(ext.as_slice()).unwrap(), &mut e_man).unwrap();
     let top = format::objeto_arbol(vec![
         format::EntradaArbol { nombre: "particion1".into(), modo: format::ModoEntrada::Directorio, hash: r_fat },
         format::EntradaArbol { nombre: "particion2".into(), modo: format::ModoEntrada::Directorio, hash: r_ext },
@@ -216,7 +216,7 @@ fn mbr_una_particion_ext() {
 
     let r_std = {
         let mut e = EmisorMemoria::nuevo();
-        absorber(&LectorExt4::nuevo(&ext).unwrap(), &mut e).unwrap()
+        absorber(&LectorExt4::nuevo(ext.as_slice()).unwrap(), &mut e).unwrap()
     };
     let mut e = EmisorMemoria::nuevo();
     assert_eq!(absorber_particion(&datos, &parts[0], &mut e).unwrap(), r_std);

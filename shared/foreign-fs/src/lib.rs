@@ -50,6 +50,39 @@ pub enum FsError {
     Format(&'static str),
 }
 
+/// Una **fuente de bloques de sólo-lectura**: el medio (imagen/dispositivo)
+/// detrás de un acceso por offset. El host la satisface con un `&[u8]`
+/// (slice de la imagen completa en memoria); in-cage, con un syscall de lectura
+/// de bloque. Abstraerla así permite que los lectores corran SIN tener todo el
+/// dispositivo en RAM — leen lo que necesitan, cuando lo necesitan.
+pub trait Fuente {
+    /// Tamaño total del medio en bytes.
+    fn tamano(&self) -> u64;
+
+    /// Lee EXACTAMENTE `buf.len()` bytes desde `offset`. Error si la lectura se
+    /// sale del medio (a diferencia de un `read` POSIX, no hace short-read: o
+    /// llena el buffer o falla — los lectores ya acotan sus offsets).
+    fn leer_en(&self, offset: u64, buf: &mut [u8]) -> Result<(), FsError>;
+}
+
+/// El host: el medio es un slice ya residente. `leer_en` es un `copy_from_slice`.
+impl Fuente for &[u8] {
+    fn tamano(&self) -> u64 {
+        self.len() as u64
+    }
+    fn leer_en(&self, offset: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        let ini = offset as usize;
+        let fin = ini
+            .checked_add(buf.len())
+            .ok_or(FsError::Corrupto("offset de lectura desbordó"))?;
+        let src = self
+            .get(ini..fin)
+            .ok_or(FsError::Corrupto("lectura fuera del medio"))?;
+        buf.copy_from_slice(src);
+        Ok(())
+    }
+}
+
 /// Clase de una entrada de directorio en el FS de origen, ya normalizada a los
 /// modos del grafo. FAT no tiene ni bit de ejecución ni enlaces simbólicos, así
 /// que su lector sólo produce `Archivo`/`Directorio`; ext4 sí los preserva y su
@@ -88,8 +121,39 @@ pub trait LectorFs {
     /// irrelevante: el absorbedor reordena por nombre vía `objeto_arbol`.
     fn listar(&self, dir: &Self::Manija) -> Result<Vec<EntradaDir<Self::Manija>>, FsError>;
 
-    /// Lee el contenido completo de un archivo regular.
-    fn leer_archivo(&self, archivo: &Self::Manija) -> Result<Vec<u8>, FsError>;
+    /// Tamaño en bytes de un archivo regular.
+    fn tamano_archivo(&self, archivo: &Self::Manija) -> Result<u64, FsError>;
+
+    /// Lee hasta `buf.len()` bytes del archivo a partir de `offset`. Devuelve
+    /// cuántos copió (`0` = se alcanzó el fin). Es la primitiva de STREAMING:
+    /// permite absorber un archivo en ventanas sin sostenerlo entero en memoria
+    /// —la clave para correr in-cage bajo el techo de 4 MiB—. Una implementación
+    /// no necesita materializar la cadena/extents completos: lee sólo la ventana
+    /// pedida.
+    fn leer_archivo_en(
+        &self,
+        archivo: &Self::Manija,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, FsError>;
+
+    /// Lee el contenido COMPLETO de un archivo. Conveniencia sobre las
+    /// primitivas de streaming —cómoda en el host y para destinos de symlink
+    /// (pequeños)—; NO usar en el lazo de absorción de archivos grandes.
+    fn leer_archivo(&self, archivo: &Self::Manija) -> Result<Vec<u8>, FsError> {
+        let tam = self.tamano_archivo(archivo)? as usize;
+        let mut out = alloc::vec![0u8; tam];
+        let mut leido = 0;
+        while leido < tam {
+            let n = self.leer_archivo_en(archivo, leido as u64, &mut out[leido..])?;
+            if n == 0 {
+                break;
+            }
+            leido += n;
+        }
+        out.truncate(leido);
+        Ok(out)
+    }
 
     /// Lee el destino (ruta en UTF-8) de un enlace simbólico. FAT nunca lo
     /// invoca; un lector que no soporte symlinks puede devolver
@@ -137,8 +201,7 @@ fn absorber_dir<L: LectorFs, E: Emisor>(
                 (format::ModoEntrada::Directorio, hash)
             }
             Clase::Archivo { ejecutable } => {
-                let bytes = fs.leer_archivo(&ent.manija)?;
-                let hash = absorber_archivo(bytes, emisor)?;
+                let hash = absorber_archivo(fs, &ent.manija, emisor)?;
                 let modo = if ejecutable {
                     format::ModoEntrada::Ejecutable
                 } else {
@@ -158,16 +221,56 @@ fn absorber_dir<L: LectorFs, E: Emisor>(
 }
 
 /// Absorbe el contenido de un archivo: blob plano si cabe en un trozo, o un
-/// índice de trozos si es grande. Espejo EXACTO de `agora-cli::importar_archivo`.
-fn absorber_archivo<E: Emisor>(bytes: Vec<u8>, emisor: &mut E) -> Result<format::Hash, FsError> {
-    if bytes.len() <= TAMANO_TROZO {
-        return emisor.emitir(&format::objeto_blob(bytes));
+/// índice de trozos si es grande. Espejo EXACTO del troceado de
+/// `agora-cli::importar_archivo`, pero por STREAMING: lee el archivo en ventanas
+/// de `TAMANO_TROZO` vía `leer_archivo_en` y emite cada trozo al vuelo, así el
+/// pico de memoria es UN trozo (≤256 KiB) + la lista de hashes —nunca el archivo
+/// entero—. Es lo que vuelve viable la absorción in-cage bajo el techo de 4 MiB.
+fn absorber_archivo<L: LectorFs, E: Emisor>(
+    fs: &L,
+    archivo: &L::Manija,
+    emisor: &mut E,
+) -> Result<format::Hash, FsError> {
+    let tam = fs.tamano_archivo(archivo)? as usize;
+    if tam <= TAMANO_TROZO {
+        // Cabe en un blob plano: una sola lectura.
+        let datos = leer_rango(fs, archivo, 0, tam)?;
+        return emisor.emitir(&format::objeto_blob(datos));
     }
+    // Grande: trocear por streaming. Cada trozo se lee, se emite y se libera
+    // antes de leer el siguiente.
     let mut trozos: Vec<format::Hash> = Vec::new();
-    for trozo in bytes.chunks(TAMANO_TROZO) {
-        trozos.push(emisor.emitir(&format::objeto_blob(trozo.to_vec()))?);
+    let mut offset = 0usize;
+    while offset < tam {
+        let n = core::cmp::min(TAMANO_TROZO, tam - offset);
+        let datos = leer_rango(fs, archivo, offset as u64, n)?;
+        trozos.push(emisor.emitir(&format::objeto_blob(datos))?);
+        offset += n;
     }
     emisor.emitir(&format::objeto_blob_indice(trozos))
+}
+
+/// Lee `len` bytes de un archivo a partir de `offset` en un `Vec` fresco,
+/// rellenándolo con lecturas sucesivas hasta completar o tocar fin. Un fin
+/// prematuro (medio corrupto/cadena corta) trunca al tamaño leído en vez de
+/// inventar ceros.
+fn leer_rango<L: LectorFs>(
+    fs: &L,
+    archivo: &L::Manija,
+    offset: u64,
+    len: usize,
+) -> Result<Vec<u8>, FsError> {
+    let mut buf = alloc::vec![0u8; len];
+    let mut leido = 0;
+    while leido < len {
+        let n = fs.leer_archivo_en(archivo, offset + leido as u64, &mut buf[leido..])?;
+        if n == 0 {
+            break;
+        }
+        leido += n;
+    }
+    buf.truncate(leido);
+    Ok(buf)
 }
 
 /// Un `Emisor` que acumula los objetos en memoria, indexados por hash. Útil
@@ -271,9 +374,28 @@ mod tests {
                 _ => Err(FsError::Corrupto("listar sobre no-directorio")),
             }
         }
-        fn leer_archivo(&self, m: &Vec<usize>) -> Result<Vec<u8>, FsError> {
+        fn tamano_archivo(&self, m: &Vec<usize>) -> Result<u64, FsError> {
             match self.nodo(m) {
-                NodoMem::Archivo(b, _) => Ok(b.clone()),
+                NodoMem::Archivo(b, _) => Ok(b.len() as u64),
+                _ => Err(FsError::Corrupto("tamano de no-archivo")),
+            }
+        }
+        fn leer_archivo_en(
+            &self,
+            m: &Vec<usize>,
+            offset: u64,
+            buf: &mut [u8],
+        ) -> Result<usize, FsError> {
+            match self.nodo(m) {
+                NodoMem::Archivo(b, _) => {
+                    let o = offset as usize;
+                    if o >= b.len() {
+                        return Ok(0);
+                    }
+                    let n = core::cmp::min(buf.len(), b.len() - o);
+                    buf[..n].copy_from_slice(&b[o..o + n]);
+                    Ok(n)
+                }
                 _ => Err(FsError::Corrupto("leer no-archivo")),
             }
         }
@@ -323,18 +445,34 @@ mod tests {
         assert_eq!(e.len(), 4, "blob deduplicado + blob symlink + 2 árboles");
     }
 
+    /// Un FS sintético cuya raíz contiene UN archivo del tamaño dado — para
+    /// ejercitar el troceado por streaming del absorbedor.
+    fn fs_un_archivo(tam: usize) -> (FsMem, Vec<usize>) {
+        (
+            FsMem {
+                raiz: NodoMem::Dir(vec![(
+                    "f".into(),
+                    NodoMem::Archivo(vec![0u8; tam], false),
+                )]),
+            },
+            vec![0],
+        )
+    }
+
     #[test]
     fn troceado_en_el_limite() {
         // Exactamente TAMANO_TROZO → blob plano (1 objeto). Un byte más →
-        // índice + 2 trozos (3 objetos).
+        // índice + 2 trozos (3 objetos). El absorbedor lee por streaming, así
+        // que estos recuentos validan también que el límite se respeta.
+        let (fs, m) = fs_un_archivo(TAMANO_TROZO);
         let mut justo = EmisorMemoria::nuevo();
-        let h_justo = absorber_archivo(vec![0u8; TAMANO_TROZO], &mut justo).unwrap();
+        let h_justo = absorber_archivo(&fs, &m, &mut justo).unwrap();
         assert_eq!(justo.len(), 1, "en el límite es blob plano");
-        // El blob plano debe ser el propio objeto (sin hijos).
         assert!(justo.obtener(&h_justo).is_some());
 
+        let (fs, m) = fs_un_archivo(TAMANO_TROZO + 1);
         let mut grande = EmisorMemoria::nuevo();
-        absorber_archivo(vec![0u8; TAMANO_TROZO + 1], &mut grande).unwrap();
+        absorber_archivo(&fs, &m, &mut grande).unwrap();
         assert_eq!(grande.len(), 3, "pasado el límite: índice + 2 trozos");
     }
 }

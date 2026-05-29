@@ -149,7 +149,7 @@ fn ext4_arbol_grande_coincide_con_importar() {
     assert!(s.status.success(), "mke2fs: {}", String::from_utf8_lossy(&s.stderr));
 
     let bytes = fs::read(&img).unwrap();
-    let lector = LectorExt4::nuevo(&bytes).expect("superbloque");
+    let lector = LectorExt4::nuevo(bytes.as_slice()).expect("superbloque");
     let mut e_fs = EmisorMemoria::nuevo();
     let raiz_fs = absorber(&lector, &mut e_fs).expect("absorción");
 

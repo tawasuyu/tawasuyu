@@ -148,7 +148,7 @@ fn comparar(tipo: &str) {
     forjar_imagen(&src, tipo, &img);
 
     let bytes = fs::read(&img).unwrap();
-    let lector = LectorExt4::nuevo(&bytes)
+    let lector = LectorExt4::nuevo(bytes.as_slice())
         .unwrap_or_else(|e| panic!("{tipo}: superbloque no parseó: {e:?}"));
     let mut emisor_fs = EmisorMemoria::nuevo();
     let raiz_fs = absorber(&lector, &mut emisor_fs)
