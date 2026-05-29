@@ -125,6 +125,33 @@ globalThis.clearTimeout = function(id) {
     delete globalThis.__puriy_timers.queue[id];
 };
 globalThis.clearInterval = globalThis.clearTimeout;
+// Fase 7.23 — requestAnimationFrame / cancelAnimationFrame. Mapeo a
+// setTimeout 16ms (~60fps). El callback recibe `performance.now()`-ish
+// timestamp (en ms desde el inicio del runtime, igual que __puriy_now_ms).
+// Spec real: el browser sincroniza con el refresh rate del display y
+// pasa un DOMHighResTimeStamp; acá aproximamos con el clock del reactor.
+// id propio en `__puriy_raf` para no colisionar con setTimeout ids — así
+// `cancelAnimationFrame(rafId)` no afecta a un timeout con el mismo numero.
+globalThis.__puriy_raf = { next_id: 1, ids: {} };
+globalThis.requestAnimationFrame = function(cb) {
+    var raf_id = globalThis.__puriy_raf.next_id++;
+    var timer_id = globalThis.setTimeout(function() {
+        delete globalThis.__puriy_raf.ids[raf_id];
+        if (typeof cb === 'function') {
+            try { cb(globalThis.__puriy_now_ms || 0); }
+            catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+        }
+    }, 16);
+    globalThis.__puriy_raf.ids[raf_id] = timer_id;
+    return raf_id;
+};
+globalThis.cancelAnimationFrame = function(raf_id) {
+    var timer_id = globalThis.__puriy_raf.ids[raf_id];
+    if (timer_id) {
+        globalThis.clearTimeout(timer_id);
+        delete globalThis.__puriy_raf.ids[raf_id];
+    }
+};
 globalThis.__puriy_tick = function(now) {
     var q = globalThis.__puriy_timers.queue;
     var ids = Object.keys(q);
@@ -5199,6 +5226,52 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.23 — requestAnimationFrame =============
+
+    #[test]
+    fn request_animation_frame_dispara_al_proximo_tick_de_16ms() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("requestAnimationFrame(function(ts) { console.log('raf:' + ts) })")
+            .expect("e");
+        // Antes de tick: no se dispara.
+        assert_eq!(rt.stdout(), "");
+        // Tick a 15ms: no llega.
+        rt.tick(15).expect("tick15");
+        assert_eq!(rt.stdout(), "");
+        // Tick a 16ms: dispara.
+        rt.tick(16).expect("tick16");
+        assert_eq!(rt.stdout(), "raf:16\n");
+    }
+
+    #[test]
+    fn cancel_animation_frame_evita_el_disparo() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var id = requestAnimationFrame(function() { console.log('NO') }); \
+             cancelAnimationFrame(id);",
+        )
+        .expect("e");
+        rt.tick(100).expect("tick");
+        assert_eq!(rt.stdout(), "");
+    }
+
+    #[test]
+    fn raf_dispatch_dispara_callback_con_timestamp() {
+        // El callback recibe el now_ms como argumento — patrón típico de
+        // animation loop: `requestAnimationFrame(function(ts) { ... })`.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "requestAnimationFrame(function(ts) { console.log('ts:' + ts) });",
+        )
+        .expect("e");
+        rt.tick(50).expect("tick");
+        // El timestamp coincide con el now_ms del tick (50).
+        assert!(rt.stdout().contains("ts:50"), "stdout: {:?}", rt.stdout());
     }
 
     // ============= Fase 7.22 — localStorage + sessionStorage =============
