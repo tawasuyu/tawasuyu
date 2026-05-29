@@ -172,7 +172,7 @@ globalThis.__puriy_elements = {};
 globalThis.__puriy_dirty = [];
 globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id, dataset_pairs) {
     var el = {
-        id: id,
+        _id: id,
         tagName: tag,
         _textContent: text,
         _classList: classes || [],
@@ -206,6 +206,24 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         get: function() {
             if (!el._parent_id) return null;
             return globalThis.__puriy_elements[el._parent_id] || null;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    // Fase 7.12 — el.id como property: get devuelve _id, set reindexa
+    // en __puriy_elements (`d.id = 'modal'` después de createElement
+    // hace que getElementById('modal') lo encuentre).
+    Object.defineProperty(el, 'id', {
+        get: function() { return el._id; },
+        set: function(v) {
+            var newId = String(v);
+            if (el._id === newId) return;
+            // Mover el handle en el índice.
+            if (globalThis.__puriy_elements[el._id] === el) {
+                delete globalThis.__puriy_elements[el._id];
+            }
+            el._id = newId;
+            globalThis.__puriy_elements[newId] = el;
         },
         enumerable: true,
         configurable: true
@@ -252,6 +270,10 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         get: function() { return el._textContent; },
         set: function(v) {
             el._textContent = String(v);
+            // Fase 7.12 — elementos sintéticos no insertados aún:
+            // sólo actualizar mirror local. El appendChild posterior
+            // llevará el textContent en el payload.
+            if (el._synthetic && !el._inserted) return;
             globalThis.__puriy_dirty.push({id: el.id, kind: 'text', value: el._textContent});
         },
         enumerable: true,
@@ -264,6 +286,7 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             // parsear HTML interno). Suficiente para "label.innerHTML =
             // 'x'" pero NO para inyección de markup compleja.
             el._textContent = String(v);
+            if (el._synthetic && !el._inserted) return;
             globalThis.__puriy_dirty.push({id: el.id, kind: 'text', value: el._textContent});
         },
         enumerable: true,
@@ -338,6 +361,62 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             return true;
         }
     });
+    // Fase 7.12 — appendChild/removeChild/remove para mutación de
+    // estructura. appendChild requiere child sintético (creado via
+    // document.createElement). El value de la mutación es una
+    // representación delim del child usando U+001D (Group Separator)
+    // entre sub-fields — no colisiona con U+001E/U+001F que
+    // drain_dirty usa para top-level. Campos: tag, child_id, textContent,
+    // classList-joined-by-space, value. Esto evita agregar serde_json
+    // al chrome.
+    el.appendChild = function(child) {
+        if (!child || !child._synthetic) {
+            throw new Error('appendChild: child debe venir de createElement');
+        }
+        if (child._inserted) {
+            throw new Error('appendChild: child ya fue insertado');
+        }
+        child._inserted = true;
+        child._parent_id = el.id;
+        // El child puede tener id user-set; si no, usa el synth_id.
+        // Sep U+001D (Group Separator, JS string escape literal en el
+        // raw Rust string — JS lo evalúa al char real al ejecutar).
+        var cls = (child._classList || []).join(' ');
+        var payload = [
+            child.tagName,
+            child.id,
+            child._textContent || '',
+            cls,
+            child._value == null ? '' : String(child._value)
+        ].join('\u001D');
+        globalThis.__puriy_dirty.push({
+            id: el.id,
+            kind: 'appendChild',
+            value: payload
+        });
+        return child;
+    };
+    el.removeChild = function(child) {
+        if (!child || !child.id) {
+            throw new Error('removeChild: child sin id');
+        }
+        globalThis.__puriy_dirty.push({
+            id: el.id,
+            kind: 'removeChild',
+            value: child.id
+        });
+        delete globalThis.__puriy_elements[child.id];
+        return child;
+    };
+    el.remove = function() {
+        if (!el._parent_id) return; // root sin parent: no-op silencioso.
+        globalThis.__puriy_dirty.push({
+            id: el._parent_id,
+            kind: 'removeChild',
+            value: el.id
+        });
+        delete globalThis.__puriy_elements[el.id];
+    };
     return el;
 };
 globalThis.__puriy_dispatch = function(id, type, init) {
@@ -468,9 +547,12 @@ const DRAIN_IO: &str = "(function(){var s=globalThis.__puriy_stdout||'';var e=gl
 
 /// Fuel por defecto para un `eval` — pensado para scripts de página, no
 /// para SPAs pesadas. wasmi cobra fuel por cada instrucción ejecutada;
-/// 50M cubre eval típicos (parsing + arithmetic + console.log) con
-/// margen, pero corta loops infinitos en ~1s wall-clock.
-pub const DEFAULT_FUEL: u64 = 50_000_000;
+/// 100M cubre eval típicos (parsing + arithmetic + console.log + dispatch
+/// con capture phase + make_element con properties múltiples) con
+/// margen, pero corta loops infinitos en ~2s wall-clock. Subido de 50M
+/// en Fase 7.12 cuando el bootstrap con `id` property reindexable y la
+/// 3-fase dispatch lo exigió.
+pub const DEFAULT_FUEL: u64 = 100_000_000;
 
 /// Tags del enum interno de QuickJS — codificados en los bits 32..63 de
 /// cada `JSValue`. La discriminación de tipo se hace mirando estos bits.
@@ -766,11 +848,21 @@ impl JsRuntime {
         body_text: &str,
     ) -> Result<(), JsError> {
         let script = format!(
-            "globalThis.document = {{ \
+            "globalThis.__puriy_synth_counter = 0; \
+             globalThis.document = {{ \
                 title: {t}, \
                 URL: {u}, \
                 readyState: 'complete', \
                 body: {{ textContent: {b}, innerHTML: {b} }}, \
+                createElement: function(tag) {{ \
+                    var synth_id = '__synth_' + (++globalThis.__puriy_synth_counter); \
+                    var el = globalThis.__puriy_make_element(synth_id, String(tag), '', [], null, null, []); \
+                    el._synthetic = true; \
+                    el._inserted = false; \
+                    el._parent_id = null; \
+                    globalThis.__puriy_elements[synth_id] = el; \
+                    return el; \
+                }}, \
                 getElementById: function(id) {{ \
                     return (globalThis.__puriy_elements && globalThis.__puriy_elements[id]) || null; \
                 }}, \
@@ -3082,6 +3174,153 @@ mod tests {
         // Y el getter después del delete devuelve undefined.
         let v = rt.eval("document.getElementById('x').dataset.role").expect("e");
         assert_eq!(v, JsValue::Undefined);
+    }
+
+    // ============= Fase 7.12 — createElement + appendChild/remove =============
+
+    #[test]
+    fn create_element_devuelve_handle_sintetico() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        let v = rt
+            .eval("var el = document.createElement('li'); el.tagName")
+            .expect("e");
+        assert_eq!(v, JsValue::String("li".into()));
+        // _synthetic flag presente
+        let v = rt.eval("el._synthetic").expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+        // id auto-generado
+        let v = rt
+            .eval("el.id.indexOf('__synth_') === 0")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn create_element_se_registra_en_elements() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval("var el = document.createElement('div')").expect("e");
+        // Buscable via getElementById usando el synth id.
+        let v = rt
+            .eval("document.getElementById(el.id) === el")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn append_child_publica_mutacion_con_payload_delim() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("list", "ul", "")]).expect("e");
+        assert!(rt.drain_dom_mutations().is_empty());
+        rt.eval(
+            "var li = document.createElement('li'); \
+             li.textContent = 'hola'; \
+             document.getElementById('list').appendChild(li);",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].id, "list");
+        assert_eq!(muts[0].kind, "appendChild");
+        // Payload campos: tag, id, textContent, classes, value (separados
+        // por U+001D). Parser básico abajo.
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[0], "li");
+        assert!(parts[1].starts_with("__synth_"));
+        assert_eq!(parts[2], "hola");
+        assert_eq!(parts[3], "");
+        assert_eq!(parts[4], "");
+    }
+
+    #[test]
+    fn append_child_falla_si_child_no_es_sintetico() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("a", "div", ""), snap("b", "div", "")])
+            .expect("e");
+        let res = rt.eval(
+            "try { document.getElementById('a').appendChild(document.getElementById('b')); 'ok' } \
+             catch (e) { 'err' }",
+        );
+        assert_eq!(res.expect("e"), JsValue::String("err".into()));
+    }
+
+    #[test]
+    fn append_child_falla_si_ya_fue_insertado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p1", "ul", ""), snap("p2", "ul", "")])
+            .expect("e");
+        let res = rt.eval(
+            "var li = document.createElement('li'); \
+             document.getElementById('p1').appendChild(li); \
+             try { document.getElementById('p2').appendChild(li); 'ok' } \
+             catch (e) { 'err' }",
+        );
+        assert_eq!(res.expect("e"), JsValue::String("err".into()));
+    }
+
+    #[test]
+    fn remove_child_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("c", "li", "p"),
+        ])
+        .expect("e");
+        assert!(rt.drain_dom_mutations().is_empty());
+        rt.eval(
+            "document.getElementById('p').removeChild(document.getElementById('c'))",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].id, "p");
+        assert_eq!(muts[0].kind, "removeChild");
+        assert_eq!(muts[0].value, "c");
+    }
+
+    #[test]
+    fn el_remove_publica_mutacion_contra_parent() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("c", "li", "p"),
+        ])
+        .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval("document.getElementById('c').remove()").expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        // remove() publica contra el parent, no contra sí mismo.
+        assert_eq!(muts[0].id, "p");
+        assert_eq!(muts[0].kind, "removeChild");
+        assert_eq!(muts[0].value, "c");
+    }
+
+    #[test]
+    fn append_child_con_id_user_set_usa_ese_id() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p", "div", "")]).expect("e");
+        rt.eval(
+            "var d = document.createElement('div'); \
+             d.id = 'modal'; \
+             d._classList = ['big','center']; \
+             d._value = ''; \
+             document.getElementById('p').appendChild(d);",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        // El id en payload es 'modal' (user-set), no el synth_id.
+        assert_eq!(parts[1], "modal");
+        assert_eq!(parts[3], "big center");
     }
 
     #[test]

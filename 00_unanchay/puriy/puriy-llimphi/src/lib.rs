@@ -2174,6 +2174,31 @@ fn apply_dom_mutations(t: &mut TabState) {
             // Fase 7.8: el.style.X = Y publica con kind = "style:X" (X
             // ya viene en kebab-case desde el harness JS).
             bt.set_element_style(&m.id, prop, &m.value);
+        } else if m.kind == "appendChild" {
+            // Fase 7.12: el.appendChild(child) publica con kind =
+            // "appendChild", value = "tag<US>id<US>text<US>classes<US>value"
+            // donde <US> es U+001D (Group Separator). Construimos un
+            // BoxNode sintético via synthesize_box_node + push al
+            // parent.children.
+            let parts: Vec<&str> = m.value.split('\u{001D}').collect();
+            if parts.len() >= 5 {
+                let tag = parts[0];
+                let cid = parts[1];
+                let text = parts[2];
+                let classes: Vec<String> = parts[3]
+                    .split_whitespace()
+                    .filter(|p| !p.is_empty())
+                    .map(|p| p.to_string())
+                    .collect();
+                let value = if parts[4].is_empty() { None } else { Some(parts[4]) };
+                let cid_opt = if cid.is_empty() { None } else { Some(cid) };
+                let child =
+                    puriy_engine::synthesize_box_node(tag, cid_opt, text, classes, value);
+                bt.append_child_to(&m.id, child);
+            }
+        } else if m.kind == "removeChild" {
+            // Fase 7.12: value = id del child (synth_id o user-set id).
+            bt.remove_child_by_id(&m.id, &m.value);
         } else if let Some(key) = m.kind.strip_prefix("dataset:") {
             // Fase 7.11: el.dataset.fooBar = X publica con kind =
             // "dataset:foo-bar" (key ya viene kebab desde el harness JS).
@@ -5194,6 +5219,142 @@ mod tests {
             }
         });
         assert!(found, "data-role debería ser 'main' en el BoxTree");
+    }
+
+    // ============= Fase 7.12 — appendChild/removeChild =============
+
+    #[test]
+    fn apply_append_child_inserta_box_node_sintetico() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><ul id="list"></ul></body>"#));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "list".into(),
+            tag_name: "ul".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+        }])
+        .expect("e");
+        rt.eval(
+            "var li = document.createElement('li'); \
+             li.textContent = 'hola'; \
+             document.getElementById('list').appendChild(li);",
+        )
+        .expect("e");
+        apply_dom_mutations(t);
+        // El <ul id=list> ahora tiene un hijo extra que es <li>.
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut li_count = 0;
+        let mut text_found = false;
+        bt.walk(|b| {
+            if b.tag.as_deref() == Some("li") {
+                li_count += 1;
+                if let Some(c) = b.children.first() {
+                    if c.text.as_deref() == Some("hola") {
+                        text_found = true;
+                    }
+                }
+            }
+        });
+        assert_eq!(li_count, 1);
+        assert!(text_found, "el <li> debe tener un text leaf 'hola'");
+    }
+
+    #[test]
+    fn apply_remove_child_quita_box_node() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(
+            r#"<body><ul id="list"><li id="a">a</li><li id="b">b</li></ul></body>"#,
+        ));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[
+            puriy_js::ElementSnapshot {
+                id: "list".into(),
+                tag_name: "ul".into(),
+                text_content: String::new(),
+                class_list: Vec::new(),
+                value: None,
+                parent_id: None,
+                dataset: Vec::new(),
+            },
+            puriy_js::ElementSnapshot {
+                id: "a".into(),
+                tag_name: "li".into(),
+                text_content: "a".into(),
+                class_list: Vec::new(),
+                value: None,
+                parent_id: Some("list".into()),
+                dataset: Vec::new(),
+            },
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('list').removeChild(document.getElementById('a'))",
+        )
+        .expect("e");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().expect("bt");
+        // El <li id=a> ya no debería existir; el <li id=b> sí.
+        let mut a_exists = false;
+        let mut b_exists = false;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("a") {
+                a_exists = true;
+            }
+            if b.element_id.as_deref() == Some("b") {
+                b_exists = true;
+            }
+        });
+        assert!(!a_exists);
+        assert!(b_exists);
+    }
+
+    #[test]
+    fn append_child_y_textcontent_post_insercion() {
+        // appendChild + mutación de textContent después de insertar
+        // deberían actualizar el text leaf del BoxNode sintético.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><div id="p"></div></body>"#));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "p".into(),
+            tag_name: "div".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+        }])
+        .expect("e");
+        // textContent inicial via el payload del appendChild.
+        rt.eval(
+            "var d = document.createElement('span'); \
+             d.id = 'item1'; \
+             d.textContent = 'inicial'; \
+             document.getElementById('p').appendChild(d); \
+             document.getElementById('item1').textContent = 'actualizado';",
+        )
+        .expect("e");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().expect("bt");
+        // El text leaf bajo el span#item1 debe ser 'actualizado'.
+        let mut got = String::new();
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("item1") {
+                if let Some(c) = b.children.first() {
+                    if let Some(t) = &c.text {
+                        got = t.clone();
+                    }
+                }
+            }
+        });
+        assert_eq!(got, "actualizado");
     }
 
     #[test]

@@ -458,6 +458,102 @@ impl BoxTree {
     pub fn remove_element_dataset(&mut self, id: &str, key: &str) -> bool {
         set_dataset_inner(&mut self.root, id, key, None)
     }
+
+    /// Agrega `child` como último hijo del nodo `parent_id`. Fase 7.12.
+    /// Devuelve `true` si encontró el parent. El `child` viene sintético
+    /// (creado por `synthesize_box_node`); no se valida que su id sea
+    /// único en el árbol.
+    pub fn append_child_to(&mut self, parent_id: &str, child: BoxNode) -> bool {
+        if let Some(parent) = find_node_mut(&mut self.root, parent_id) {
+            parent.children.push(child);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Quita el primer descendiente con `element_id == child_id` que
+    /// sea hijo directo del nodo `parent_id`. Devuelve `true` si quitó
+    /// algo. Fase 7.12.
+    pub fn remove_child_by_id(&mut self, parent_id: &str, child_id: &str) -> bool {
+        if let Some(parent) = find_node_mut(&mut self.root, parent_id) {
+            let before = parent.children.len();
+            parent
+                .children
+                .retain(|c| c.element_id.as_deref() != Some(child_id));
+            parent.children.len() < before
+        } else {
+            false
+        }
+    }
+}
+
+/// Construye un `BoxNode` sintético para `el.appendChild(createElement(...))`.
+/// Inicializa con defaults de `empty_root()` y customiza tag/id/text/
+/// class_list/input_initial según los campos provenientes del payload
+/// JS. Display elegido por tag: bloques comunes (`div`/`p`/`h1..h6`/
+/// `ul`/`ol`/`li`/`section`/`article`/`header`/`footer`/`nav`/`main`)
+/// son block; el resto es inline. UA stylesheet no se re-aplica — los
+/// estilos se mantienen en defaults. Fase 7.12.
+pub fn synthesize_box_node(
+    tag: &str,
+    id: Option<&str>,
+    text_content: &str,
+    class_list: Vec<String>,
+    value: Option<&str>,
+) -> BoxNode {
+    let mut node = empty_root();
+    node.tag = Some(tag.to_string());
+    node.element_id = id.map(|s| s.to_string());
+    node.class_list = class_list;
+    // Display por tag — heurística simple (sin UA cascade). Suficiente
+    // para que appendChild de `<li>`, `<div>`, `<p>` rendere como bloque.
+    let display = match tag.to_ascii_lowercase().as_str() {
+        "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li"
+        | "section" | "article" | "header" | "footer" | "nav" | "main" | "aside"
+        | "blockquote" | "pre" | "table" | "tr" | "tbody" | "thead" | "tfoot"
+        | "figure" | "figcaption" | "address" | "hr" => Display::Block,
+        "br" => Display::Block,
+        "span" | "a" | "b" | "i" | "em" | "strong" | "small" | "code" | "u" | "s"
+        | "del" | "ins" | "mark" | "sub" | "sup" | "kbd" | "var" | "samp" | "abbr"
+        | "cite" | "q" | "time" | "label" => Display::Inline,
+        _ => Display::Block,
+    };
+    node.display = display;
+    // textContent: si es no-vacío, agregamos un text leaf como único
+    // hijo. Hereda font_size/color del nodo padre via cascade — pero
+    // como acá no corremos cascade, usamos los defaults.
+    if !text_content.is_empty() {
+        let mut leaf = empty_root();
+        leaf.display = Display::Inline;
+        leaf.tag = None;
+        leaf.text = Some(text_content.to_string());
+        leaf.font_size = node.font_size;
+        leaf.color = node.color;
+        node.children.push(leaf);
+    }
+    // input_initial para inputs con value pre-set.
+    if let Some(v) = value {
+        if !v.is_empty() {
+            node.input_initial = Some(v.to_string());
+        }
+    }
+    node
+}
+
+/// Busca el primer descendiente (incluyendo el root) con `element_id`
+/// igual a `target` y devuelve `&mut` a él. Pre-order DFS. None si no
+/// existe. Fase 7.12 — helper para mutaciones estructurales.
+fn find_node_mut<'a>(root: &'a mut BoxNode, target: &str) -> Option<&'a mut BoxNode> {
+    if root.element_id.as_deref() == Some(target) {
+        return Some(root);
+    }
+    for c in root.children.iter_mut() {
+        if let Some(found) = find_node_mut(c, target) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn set_dataset_inner(
