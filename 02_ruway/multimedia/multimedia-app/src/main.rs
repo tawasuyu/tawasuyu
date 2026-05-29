@@ -33,8 +33,12 @@
 //!
 //! El primer argumento posicional es el video; la extensión decide
 //! la fuente (`.gif` → anim, `.png/.jpg/.webp/.bmp/.tiff/.jpeg` →
-//! imagen fija). La pista de audio se elige con `MULTIMEDIA_WAV` o
-//! `MULTIMEDIA_MP3` — sin ninguna, suena un tono A4 sintético.
+//! imagen fija, `.mp4/.webm/.mkv/.mov/.avi/.flv/.m4v/.ogv` → video
+//! real vía ffmpeg subprocess). Cuando es video file, audio y video
+//! salen del MISMO ffmpeg via pipes dup'eados a fd 3/4 — un proceso
+//! por archivo, no dos. La pista de audio cuando NO hay video file
+//! se elige con `MULTIMEDIA_WAV` o `MULTIMEDIA_MP3` — sin ninguna,
+//! suena un tono A4 sintético.
 //!
 //! `MULTIMEDIA_MIX_TONE=0.25` (rango 0..1) superpone un tono A4 a esa
 //! ganancia sobre la fuente principal vía MixerAudio — demo del
@@ -68,6 +72,7 @@ use multimedia_core::{
     VolumeAudio, Waterfall,
 };
 use multimedia_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
+use multimedia_source_ffmpeg::{FfmpegAudioSource, FfmpegVideoSource, MediaSession};
 use multimedia_source_gif::GifSource;
 use multimedia_source_image::ImageSource;
 use multimedia_source_mp3::Mp3Source;
@@ -140,6 +145,8 @@ enum VideoKind {
     Testcard,
     Gif,
     Image,
+    /// Video file decodificado por ffmpeg (mp4/webm/mkv/mov/avi/flv).
+    Ffmpeg,
 }
 
 /// Path del archivo de video (GIF o imagen estática) cuando aplica.
@@ -195,6 +202,14 @@ fn subtitles_slot() -> &'static OnceLock<Option<SubtitleTrack>> {
     &SLOT
 }
 
+/// `MediaSession` compartida entre el FfmpegVideoSource del pipeline y
+/// el FfmpegAudioSource del Playlist cuando la fuente es un archivo de
+/// video. Un único proceso ffmpeg sirve ambos streams.
+fn ffmpeg_session_slot() -> &'static OnceLock<Option<MediaSession>> {
+    static SLOT: OnceLock<Option<MediaSession>> = OnceLock::new();
+    &SLOT
+}
+
 /// Adapter que comparte una fuente vía `Arc<Mutex<T>>` sin moverla.
 /// El cpal sink ve un `AudioSource` normal; otros consumidores (la UI
 /// para seek/position) pueden seguir hablando con el inner por la
@@ -214,6 +229,10 @@ impl<T: AudioSource> AudioSource for SharedAudio<T> {
 enum LoadedTrack {
     Wav(WavSource),
     Mp3(Mp3Source),
+    /// Audio extraído por ffmpeg desde un archivo de video. Comparte
+    /// `MediaSession` con el FfmpegVideoSource del pipeline — un solo
+    /// subprocess sirve ambos streams.
+    FfmpegAudio(FfmpegAudioSource),
 }
 
 impl LoadedTrack {
@@ -241,6 +260,10 @@ impl LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.set_speed(speed),
             LoadedTrack::Mp3(m) => m.set_speed(speed),
+            // FfmpegAudio: el binario ffmpeg no expone varispeed en
+            // tiempo real sin re-encoding; respawnear con -af atempo
+            // metería un salto cada vez. Por ahora no-op.
+            LoadedTrack::FfmpegAudio(_) => {}
         }
     }
 }
@@ -250,6 +273,7 @@ impl AudioSource for LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.fill(buf, sample_rate, channels),
             LoadedTrack::Mp3(m) => m.fill(buf, sample_rate, channels),
+            LoadedTrack::FfmpegAudio(a) => a.fill(buf, sample_rate, channels),
         }
     }
 }
@@ -259,18 +283,21 @@ impl Seekable for LoadedTrack {
         match self {
             LoadedTrack::Wav(w) => w.position(),
             LoadedTrack::Mp3(m) => m.position(),
+            LoadedTrack::FfmpegAudio(a) => a.position(),
         }
     }
     fn duration(&self) -> Option<Duration> {
         match self {
             LoadedTrack::Wav(w) => w.duration(),
             LoadedTrack::Mp3(m) => m.duration(),
+            LoadedTrack::FfmpegAudio(a) => a.duration(),
         }
     }
     fn seek_to(&mut self, pos: Duration) {
         match self {
             LoadedTrack::Wav(w) => w.seek_to(pos),
             LoadedTrack::Mp3(m) => m.seek_to(pos),
+            LoadedTrack::FfmpegAudio(a) => a.seek_to(pos),
         }
     }
 }
@@ -298,6 +325,19 @@ impl Playlist {
             current,
             speed: 1.0,
         })
+    }
+
+    /// Playlist de una sola pista construida desde un track ya
+    /// cargado (caso video file con FfmpegAudio). `tracks` queda con
+    /// el `path` correspondiente para etiquetado pero no se usa para
+    /// reload — prev/next quedan inertes con un solo elemento.
+    fn new_single(label_path: PathBuf, track: LoadedTrack) -> Self {
+        Self {
+            tracks: vec![label_path],
+            idx: 0,
+            current: track,
+            speed: 1.0,
+        }
     }
 
     fn track_path(&self) -> &std::path::Path {
@@ -479,6 +519,24 @@ fn build_video_source() -> Box<dyn FrameSource + Send> {
                     eprintln!(
                         "multimedia-app: error abriendo imagen {path:?}: {e} — caigo a testcard"
                     );
+                    new_testcard()
+                }
+            }
+        }
+        VideoKind::Ffmpeg => {
+            // El audio side ya consumió `audio_read` del session; el
+            // video pipe sigue disponible para nosotros.
+            match ffmpeg_session_slot()
+                .get()
+                .and_then(|o| o.as_ref())
+                .ok_or_else(|| "ffmpeg session no disponible".to_string())
+                .and_then(|s| {
+                    FfmpegVideoSource::from_session(s.clone())
+                        .map_err(|e| e.to_string())
+                }) {
+                Ok(s) => Box::new(PausableVideo::new(s, p)),
+                Err(e) => {
+                    eprintln!("multimedia-app: ffmpeg video: {e} — caigo a testcard");
                     new_testcard()
                 }
             }
@@ -1344,6 +1402,9 @@ fn main() {
             {
                 Some("gif") => VideoKind::Gif,
                 Some("png" | "jpg" | "jpeg" | "webp" | "bmp" | "tiff") => VideoKind::Image,
+                Some("mp4" | "webm" | "mkv" | "mov" | "avi" | "flv" | "m4v" | "ogv") => {
+                    VideoKind::Ffmpeg
+                }
                 other => {
                     eprintln!(
                         "multimedia-app: extensión {:?} no reconocida — caigo a testcard",
@@ -1355,6 +1416,7 @@ fn main() {
             let label = match kind {
                 VideoKind::Gif => format!("gif {}", path.display()),
                 VideoKind::Image => format!("img {}", path.display()),
+                VideoKind::Ffmpeg => format!("video {}", path.display()),
                 VideoKind::Testcard => format!(
                     "testcard {TESTCARD_W}×{TESTCARD_H} @ {TESTCARD_FPS:.0} fps"
                 ),
@@ -1370,6 +1432,30 @@ fn main() {
         },
     };
     config_slot().set(cfg).ok();
+
+    // Si el video es un archivo decodificado por ffmpeg, abrimos UNA
+    // session compartida antes que cualquier otra cosa — el audio del
+    // mismo archivo saldrá del MISMO subprocess via FfmpegAudioSource,
+    // no spawneamos un segundo ffmpeg sólo para el audio.
+    if let (Some(path), Some(VideoKind::Ffmpeg)) =
+        (video_path_slot().get(), config_slot().get().map(|c| c.kind))
+    {
+        match multimedia_source_ffmpeg::probe(path)
+            .and_then(MediaSession::open)
+        {
+            Ok(session) => {
+                eprintln!(
+                    "multimedia-app: ffmpeg session abierta ({})",
+                    path.display()
+                );
+                ffmpeg_session_slot().set(Some(session)).ok();
+            }
+            Err(e) => {
+                eprintln!("multimedia-app: ffmpeg session falló: {e}");
+                ffmpeg_session_slot().set(None).ok();
+            }
+        }
+    }
 
     // Subtítulos: MULTIMEDIA_SRT apunta al archivo .srt; si parsea OK
     // queda disponible para el subtitle_strip. Falla silenciosa con
@@ -1433,7 +1519,42 @@ fn main() {
 fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     let probe = AudioProbe::new(PROBE_CAPACITY);
 
-    // Prioridad de fuentes audio:
+    // Prioridad 0: si hay session ffmpeg (modo video file), el audio
+    // sale de ahí — mismo proceso que el video.
+    if let Some(Some(session)) = ffmpeg_session_slot().get() {
+        match FfmpegAudioSource::from_session(session.clone()) {
+            Ok(audio) => {
+                eprintln!(
+                    "multimedia-app: ffmpeg audio @ {} Hz · {} ch",
+                    audio.source_sample_rate(),
+                    audio.source_channels(),
+                );
+                let label = video_path_slot()
+                    .get()
+                    .cloned()
+                    .unwrap_or_else(|| PathBuf::from("video"));
+                let pl = Playlist::new_single(label, LoadedTrack::FfmpegAudio(audio));
+                let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(pl));
+                playlist_slot().set(Some(shared.clone())).ok();
+                let pausable = PausableAudio::new(
+                    Box::new(SharedAudio { inner: shared })
+                        as Box<dyn AudioSource + Send>,
+                    pause().clone(),
+                );
+                let voled = VolumeAudio::new(pausable, volume().clone());
+                let recorded = RecordedAudioSource::new(voled, recorder().clone());
+                let probed = ProbedAudioSource::new(recorded, probe.clone());
+                return (Arc::new(Mutex::new(probed)), probe);
+            }
+            Err(e) => {
+                eprintln!(
+                    "multimedia-app: ffmpeg audio falló ({e}) — sigo sin track audio"
+                );
+            }
+        }
+    }
+
+    // Prioridad de fuentes audio cuando no hay ffmpeg session:
     //   MULTIMEDIA_PLAYLIST=path (m3u simple, una línea por archivo, # = comentario)
     //   MULTIMEDIA_WAV=path
     //   MULTIMEDIA_MP3=path

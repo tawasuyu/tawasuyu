@@ -95,8 +95,13 @@ pub enum IntrospectRequest {
     PromoteCrystal { index: usize },
     /// Elimina una regla viva por id. Útil para revertir un promote.
     RemoveRule { id: Ulid },
-    /// Lista las últimas N entradas del audit log. limit=0 = todas.
-    ListAudit { limit: usize },
+    /// Lista las últimas N entradas del audit log que pasen el filtro.
+    /// limit=0 = todas las que matcheen; filter por defecto = identidad.
+    ListAudit {
+        limit: usize,
+        #[serde(default)]
+        filter: arje_brain_audit::audit::AuditFilter,
+    },
     /// Persiste todas las entries pendientes al CAS y actualiza el head
     /// pointer si el log lo tiene configurado.
     FlushAudit,
@@ -109,10 +114,14 @@ pub enum IntrospectRequest {
     /// Reconstruye el engine desde la cadena audit. Vacía engine y aplica
     /// PromoteCrystal/RemoveRule en orden cronológico.
     ReplayAudit,
-    /// Mantiene la conexión abierta y empuja cada `AuditEntry` nuevo en
-    /// frames `IntrospectResponse::AuditStreamFrame` hasta que el cliente
-    /// cierra. Tras esta request no se aceptan más requests en la misma conn.
-    StreamAudit,
+    /// Mantiene la conexión abierta y empuja cada `AuditEntry` nuevo que
+    /// pase el filtro en frames `IntrospectResponse::AuditStreamFrame`
+    /// hasta que el cliente cierra. Tras esta request no se aceptan más
+    /// requests en la misma conn. filter por defecto = identidad.
+    StreamAudit {
+        #[serde(default)]
+        filter: arje_brain_audit::audit::AuditFilter,
+    },
     /// Garbage-collect el CAS. Considera reachable: todo lo alcanzable desde
     /// el head del audit log. Cualquier blob extra (Wasm modules referenciados
     /// por Cards) debe haberse pasado en `extra_roots` por el caller.
@@ -223,8 +232,8 @@ impl IntrospectServer {
             debug!(?req, "introspect request");
 
             // StreamAudit toma posesión de la conn — no más requests aquí.
-            if matches!(req, IntrospectRequest::StreamAudit) {
-                return self.stream_audit(stream).await;
+            if let IntrospectRequest::StreamAudit { filter } = req {
+                return self.stream_audit(stream, filter).await;
             }
 
             let resp = self.dispatch(req).await;
@@ -235,13 +244,19 @@ impl IntrospectServer {
         }
     }
 
-    /// Modo streaming: subscribe al audit log y empuja cada entry como
-    /// frame `AuditStreamFrame`. La función retorna cuando el cliente
-    /// cierra (write falla) o el subscriber se desconecta.
-    async fn stream_audit(self: Arc<Self>, mut stream: UnixStream) -> anyhow::Result<()> {
+    /// Modo streaming: subscribe al audit log y empuja cada entry que pase
+    /// `filter` como frame `AuditStreamFrame`. La función retorna cuando el
+    /// cliente cierra (write falla) o el subscriber se desconecta. Entries
+    /// que no matchean se descartan en el productor — el cliente no las ve.
+    async fn stream_audit(
+        self: Arc<Self>,
+        mut stream: UnixStream,
+        filter: arje_brain_audit::audit::AuditFilter,
+    ) -> anyhow::Result<()> {
         let mut rx = self.state.audit.write().await.subscribe();
-        info!("audit stream client conectado");
+        info!(?filter, "audit stream client conectado");
         while let Some(entry) = rx.recv().await {
+            if !filter.matches(&entry) { continue; }
             let frame = IntrospectResponse::AuditStreamFrame(entry);
             let bytes = bincode::serialize(&frame)?;
             if stream.write_u32(bytes.len() as u32).await.is_err() { break; }
@@ -350,9 +365,11 @@ impl IntrospectServer {
                 }
                 IntrospectResponse::Removed(removed)
             }
-            IntrospectRequest::ListAudit { limit } => {
+            IntrospectRequest::ListAudit { limit, filter } => {
                 let audit = self.state.audit.read().await;
-                IntrospectResponse::AuditEntries(audit.recent(limit).cloned().collect())
+                let entries: Vec<_> = audit.recent_filtered(limit, &filter)
+                    .into_iter().cloned().collect();
+                IntrospectResponse::AuditEntries(entries)
             }
             IntrospectRequest::FlushAudit => {
                 let mut audit = self.state.audit.write().await;
@@ -376,7 +393,7 @@ impl IntrospectServer {
                 let report = arje_brain_audit::audit::verify_chain_from_cas(head);
                 IntrospectResponse::AuditVerified(report)
             }
-            IntrospectRequest::StreamAudit => {
+            IntrospectRequest::StreamAudit { .. } => {
                 // Inalcanzable por construcción: handle() detecta StreamAudit
                 // antes de llamar a dispatch(). Pero el match exige cubrir.
                 IntrospectResponse::Error(

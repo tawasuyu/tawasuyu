@@ -13,6 +13,7 @@ image = { workspace = true }
 multimedia-audio-cpal = { path = "../multimedia-audio-cpal" }
 multimedia-core = { path = "../multimedia-core" }
 multimedia-recorder-wav = { path = "../multimedia-recorder-wav" }
+multimedia-source-ffmpeg = { path = "../multimedia-source-ffmpeg" }
 multimedia-source-gif = { path = "../multimedia-source-gif" }
 multimedia-source-image = { path = "../multimedia-source-image" }
 multimedia-source-mp3 = { path = "../multimedia-source-mp3" }

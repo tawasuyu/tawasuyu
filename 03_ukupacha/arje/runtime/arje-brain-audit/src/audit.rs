@@ -54,6 +54,93 @@ pub enum AuditAction {
     },
 }
 
+/// Tag plano de un `AuditAction`, serializable y comparable sin payload.
+/// Los filtros se expresan en términos de esta tag — el payload de la
+/// acción es ruido para una query "muéstrame sólo los KillEnte".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AuditActionKind {
+    PromoteCrystal,
+    RemoveRule,
+    LoadRulesFile,
+    KillEnte,
+    SpawnCardFromDisk,
+    BrainInhibit,
+    PowerMgmt,
+}
+
+impl AuditActionKind {
+    /// Tag canónico en kebab-case. Es la forma esperada por el CLI:
+    /// `brainctl audit --kind kill-ente`. Estable en el tiempo —
+    /// no renombrar sin actualizar el parser.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PromoteCrystal => "promote-crystal",
+            Self::RemoveRule => "remove-rule",
+            Self::LoadRulesFile => "load-rules-file",
+            Self::KillEnte => "kill-ente",
+            Self::SpawnCardFromDisk => "spawn-card-from-disk",
+            Self::BrainInhibit => "brain-inhibit",
+            Self::PowerMgmt => "power-mgmt",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "promote-crystal" => Some(Self::PromoteCrystal),
+            "remove-rule" => Some(Self::RemoveRule),
+            "load-rules-file" => Some(Self::LoadRulesFile),
+            "kill-ente" => Some(Self::KillEnte),
+            "spawn-card-from-disk" => Some(Self::SpawnCardFromDisk),
+            "brain-inhibit" => Some(Self::BrainInhibit),
+            "power-mgmt" => Some(Self::PowerMgmt),
+            _ => None,
+        }
+    }
+}
+
+impl AuditAction {
+    pub fn kind(&self) -> AuditActionKind {
+        match self {
+            Self::PromoteCrystal { .. } => AuditActionKind::PromoteCrystal,
+            Self::RemoveRule { .. } => AuditActionKind::RemoveRule,
+            Self::LoadRulesFile { .. } => AuditActionKind::LoadRulesFile,
+            Self::KillEnte { .. } => AuditActionKind::KillEnte,
+            Self::SpawnCardFromDisk { .. } => AuditActionKind::SpawnCardFromDisk,
+            Self::BrainInhibit { .. } => AuditActionKind::BrainInhibit,
+            Self::PowerMgmt { .. } => AuditActionKind::PowerMgmt,
+        }
+    }
+}
+
+/// Predicado sobre `AuditEntry`. Vacío == identidad (todo pasa).
+/// Las dos coordenadas se combinan en AND: kind ∈ kinds && seq > since_seq.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuditFilter {
+    /// Si no está vacío, sólo entries cuya `action.kind()` pertenezca al set
+    /// pasan. Vacío = no filtra por kind (acepta todo).
+    pub kinds: Vec<AuditActionKind>,
+    /// Si Some(s), sólo entries con `seq > s` pasan — pensado para que un
+    /// cliente que ya tiene hasta seq=N pida "lo nuevo desde entonces" sin
+    /// re-recibir lo ya visto. None = no filtra por seq.
+    pub since_seq: Option<u64>,
+}
+
+impl AuditFilter {
+    pub fn matches(&self, entry: &AuditEntry) -> bool {
+        if let Some(s) = self.since_seq {
+            if entry.seq <= s { return false; }
+        }
+        if !self.kinds.is_empty() && !self.kinds.contains(&entry.action.kind()) {
+            return false;
+        }
+        true
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.kinds.is_empty() && self.since_seq.is_none()
+    }
+}
+
 pub struct AuditLog {
     entries: VecDeque<AuditEntry>,
     next_seq: u64,
@@ -132,6 +219,26 @@ impl AuditLog {
     pub fn recent(&self, limit: usize) -> impl Iterator<Item = &AuditEntry> {
         let n = if limit == 0 { self.entries.len() } else { limit.min(self.entries.len()) };
         self.entries.iter().skip(self.entries.len() - n)
+    }
+
+    /// Filtra primero, recorta después. El orden importa: si `cap` evictó
+    /// los entries que el filtro habría descartado igual, igual queremos
+    /// `limit` entries del *resultado* filtrado, no de la ventana cruda.
+    /// `limit = 0` devuelve todos los matches.
+    pub fn recent_filtered<'a>(
+        &'a self,
+        limit: usize,
+        filter: &'a AuditFilter,
+    ) -> Vec<&'a AuditEntry> {
+        let matched: Vec<&AuditEntry> = self.entries.iter()
+            .filter(|e| filter.matches(e))
+            .collect();
+        if limit == 0 || matched.len() <= limit {
+            matched
+        } else {
+            // Conservamos los más recientes: drop al frente.
+            matched[matched.len() - limit..].to_vec()
+        }
     }
 
     pub fn len(&self) -> usize { self.entries.len() }
@@ -548,6 +655,120 @@ mod tests {
             assert!(!ids.contains(&id2));
             assert!(ids.contains(&id3));
         });
+    }
+
+    // ---------- AuditFilter ----------
+
+    fn killente_action() -> AuditAction {
+        AuditAction::KillEnte { caller: Ulid::new(), target: Ulid::new(), signal: 15 }
+    }
+
+    fn powermgmt_action() -> AuditAction {
+        AuditAction::PowerMgmt {
+            caller: None, peer_pid: 42, kind: "reboot".into(), interactive: false,
+        }
+    }
+
+    #[test]
+    fn filter_identity_acepta_todo() {
+        let mut log = AuditLog::new();
+        log.append(AuditAction::RemoveRule { rule_id: Ulid::new() });
+        log.append(killente_action());
+        log.append(powermgmt_action());
+        let f = AuditFilter::default();
+        assert!(f.is_identity());
+        assert_eq!(log.recent_filtered(0, &f).len(), 3);
+    }
+
+    #[test]
+    fn filter_por_kind_unico() {
+        let mut log = AuditLog::new();
+        log.append(AuditAction::RemoveRule { rule_id: Ulid::new() });
+        log.append(killente_action());
+        log.append(powermgmt_action());
+        log.append(killente_action());
+        let f = AuditFilter { kinds: vec![AuditActionKind::KillEnte], since_seq: None };
+        let out = log.recent_filtered(0, &f);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|e| e.action.kind() == AuditActionKind::KillEnte));
+    }
+
+    #[test]
+    fn filter_por_kinds_multiples() {
+        let mut log = AuditLog::new();
+        log.append(AuditAction::RemoveRule { rule_id: Ulid::new() }); // pasa
+        log.append(killente_action()); // pasa
+        log.append(powermgmt_action()); // descarta
+        log.append(AuditAction::BrainInhibit { reason: "x".into() }); // descarta
+        let f = AuditFilter {
+            kinds: vec![AuditActionKind::RemoveRule, AuditActionKind::KillEnte],
+            since_seq: None,
+        };
+        let out = log.recent_filtered(0, &f);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn filter_since_seq_estricto() {
+        let mut log = AuditLog::new();
+        for _ in 0..5 {
+            log.append(AuditAction::RemoveRule { rule_id: Ulid::new() });
+        }
+        // since_seq = 2 → seq > 2, es decir seq ∈ {3, 4}
+        let f = AuditFilter { kinds: vec![], since_seq: Some(2) };
+        let out = log.recent_filtered(0, &f);
+        let seqs: Vec<u64> = out.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, vec![3, 4]);
+    }
+
+    #[test]
+    fn filter_combina_kind_y_since_seq() {
+        let mut log = AuditLog::new();
+        log.append(AuditAction::RemoveRule { rule_id: Ulid::new() }); // seq=0, RR
+        log.append(killente_action());                                  // seq=1, KE — descarta (seq)
+        log.append(AuditAction::RemoveRule { rule_id: Ulid::new() }); // seq=2, RR — descarta (seq)
+        log.append(killente_action());                                  // seq=3, KE ✓
+        log.append(AuditAction::RemoveRule { rule_id: Ulid::new() }); // seq=4, RR — descarta (kind)
+        log.append(killente_action());                                  // seq=5, KE ✓
+        let f = AuditFilter {
+            kinds: vec![AuditActionKind::KillEnte],
+            since_seq: Some(2),
+        };
+        let out = log.recent_filtered(0, &f);
+        let seqs: Vec<u64> = out.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, vec![3, 5]);
+    }
+
+    #[test]
+    fn filter_respeta_limit_sobre_resultado_filtrado() {
+        let mut log = AuditLog::new();
+        // 6 KillEnte intercalados con 6 RemoveRule. Filtramos KE, pedimos limit=3.
+        for _ in 0..6 {
+            log.append(AuditAction::RemoveRule { rule_id: Ulid::new() });
+            log.append(killente_action());
+        }
+        let f = AuditFilter { kinds: vec![AuditActionKind::KillEnte], since_seq: None };
+        let out = log.recent_filtered(3, &f);
+        assert_eq!(out.len(), 3);
+        // Los 3 KE más recientes son seq 7, 9, 11 (cada KE va detrás de su RR).
+        let seqs: Vec<u64> = out.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, vec![7, 9, 11]);
+    }
+
+    #[test]
+    fn action_kind_str_round_trip_cubre_todas() {
+        for k in [
+            AuditActionKind::PromoteCrystal,
+            AuditActionKind::RemoveRule,
+            AuditActionKind::LoadRulesFile,
+            AuditActionKind::KillEnte,
+            AuditActionKind::SpawnCardFromDisk,
+            AuditActionKind::BrainInhibit,
+            AuditActionKind::PowerMgmt,
+        ] {
+            assert_eq!(AuditActionKind::parse(k.as_str()), Some(k));
+        }
+        assert_eq!(AuditActionKind::parse("desconocido"), None);
     }
 
     #[test]

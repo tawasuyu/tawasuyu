@@ -6,10 +6,16 @@
 //!   cargo run --example brainctl -p ente-brain -- top 10
 //!   cargo run --example brainctl -p ente-brain -- crystals
 //!   cargo run --example brainctl -p ente-brain -- crystal-json 0
+//!   cargo run --example brainctl -p ente-brain -- audit 50 --kind kill-ente --kind power-mgmt
+//!   cargo run --example brainctl -p ente-brain -- stream-audit --kind kill-ente --since-seq 1000
+//!
+//! Filtros válidos (--kind): promote-crystal | remove-rule | load-rules-file
+//!                           kill-ente | spawn-card-from-disk | brain-inhibit | power-mgmt
 //!
 //! Path del socket: $ENTE_BRAIN_SOCK o $XDG_RUNTIME_DIR/ente-brain.sock
 
 use arje_brain::introspect::{call, IntrospectRequest, IntrospectResponse};
+use arje_brain_audit::audit::{AuditActionKind, AuditFilter};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -31,7 +37,8 @@ async fn main() -> anyhow::Result<()> {
     // Comando especial: streaming. Mantiene la conn abierta y lee frames
     // hasta Ctrl-C o EOF del servidor.
     if cmd == "stream-audit" || cmd == "stream" {
-        return run_stream_audit(socket_path()).await;
+        let filter = parse_filter(&args[2..])?;
+        return run_stream_audit(socket_path(), filter).await;
     }
 
     let req = match cmd {
@@ -56,8 +63,16 @@ async fn main() -> anyhow::Result<()> {
             IntrospectRequest::RemoveRule { id }
         }
         "audit" => {
-            let limit: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(20);
-            IntrospectRequest::ListAudit { limit }
+            // arg 2 puede ser el limit numérico, o el primer flag — si es flag,
+            // limit cae a default 20 y todo args[2..] se parsea como filtro.
+            let (limit, filter_args) = match args.get(2) {
+                Some(s) if s.parse::<usize>().is_ok() => {
+                    (s.parse().unwrap(), &args[3..])
+                }
+                _ => (20usize, &args[2..]),
+            };
+            let filter = parse_filter(filter_args)?;
+            IntrospectRequest::ListAudit { limit, filter }
         }
         "flush-audit" => IntrospectRequest::FlushAudit,
         "audit-verify" | "verify" => IntrospectRequest::VerifyAudit,
@@ -193,9 +208,9 @@ fn hex_long(sha: [u8; 32]) -> String {
     sha.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-async fn run_stream_audit(path: PathBuf) -> anyhow::Result<()> {
+async fn run_stream_audit(path: PathBuf, filter: AuditFilter) -> anyhow::Result<()> {
     let mut stream = UnixStream::connect(&path).await?;
-    let req = IntrospectRequest::StreamAudit;
+    let req = IntrospectRequest::StreamAudit { filter };
     let buf = bincode::serialize(&req)?;
     stream.write_u32(buf.len() as u32).await?;
     stream.write_all(&buf).await?;
@@ -228,6 +243,35 @@ async fn run_stream_audit(path: PathBuf) -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// Parsea pares `--kind <tag>` (repetible) y `--since-seq <N>` en orden libre.
+/// Falla con error claro si una flag aparece sin valor o el tag no se reconoce —
+/// preferible a un filtro silenciosamente vacío.
+fn parse_filter(args: &[String]) -> anyhow::Result<AuditFilter> {
+    let mut filter = AuditFilter::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--kind" => {
+                let v = args.get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--kind requiere un tag"))?;
+                let kind = AuditActionKind::parse(v)
+                    .ok_or_else(|| anyhow::anyhow!("--kind desconocido: {v}"))?;
+                filter.kinds.push(kind);
+                i += 2;
+            }
+            "--since-seq" => {
+                let v = args.get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--since-seq requiere un número"))?;
+                filter.since_seq = Some(v.parse()
+                    .map_err(|e| anyhow::anyhow!("--since-seq inválido: {e}"))?);
+                i += 2;
+            }
+            other => anyhow::bail!("flag desconocido: {other}"),
+        }
+    }
+    Ok(filter)
 }
 
 #[allow(dead_code)]
