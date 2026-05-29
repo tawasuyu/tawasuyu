@@ -62,6 +62,15 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 /// Convive en el mismo nodo con `/minga/sync/1.0.0` sin colisión.
 pub const GOSSIP_PROTOCOL: StreamProtocol = StreamProtocol::new("/agora/gossip/1.0.0");
 
+/// Clave DHT bajo la que un nodo anuncia que sirve gossip de ágora.
+/// Distinta del `StreamProtocol` (que es para dial directo) — esta es
+/// la consulta `find_providers(GOSSIP_DHT_KEY)` para descubrirlos.
+///
+/// El prefijo `agora-gossip:` separa el namespace del de minga
+/// (`code:`/`card:`) para que peer de minga no responda a queries de
+/// ágora y viceversa, aunque comparten Kademlia.
+pub const GOSSIP_DHT_KEY: &[u8] = b"agora-gossip:1.0.0";
+
 /// Cota dura del tamaño de un frame (16 MB) — protege al receptor
 /// contra peers maliciosos o bugs que intenten allocar gigas. Igual
 /// al `MAX_FRAME_SIZE` de minga.
@@ -181,6 +190,40 @@ impl AgoraNet {
     /// (cuántos tokens le quedan a un peer, qué config se está usando).
     pub fn rate_limiter(&self) -> Option<Arc<rate_limit::RateLimiter>> {
         self.limiter.clone()
+    }
+
+    /// Anuncia en el DHT que este nodo provee gossip de ágora bajo
+    /// `GOSSIP_DHT_KEY`. Es la mitad anunciante de #3 del backlog
+    /// post-T: hasta hoy un peer nuevo necesitaba multiaddrs explícitas
+    /// para sumarse al gossip. Tras esta llamada, otros nodos pueden
+    /// hacer [`Self::descubrir_peers_gossip`] y caer en `sync_with`
+    /// sin coordinación previa.
+    ///
+    /// Idempotente; llamar varias veces no rompe. Para retirar el
+    /// anuncio (al apagar el daemon, p. ej.) usar
+    /// [`Self::dejar_de_anunciar_gossip`].
+    pub fn anunciar_gossip(&self) {
+        self.net.start_providing(GOSSIP_DHT_KEY);
+    }
+
+    /// Retira el anuncio DHT — los peers remotos lo verán expirar por
+    /// TTL, los locales lo borran al instante. Pareja de
+    /// [`Self::anunciar_gossip`]; útil en shutdown explícito.
+    pub fn dejar_de_anunciar_gossip(&self) {
+        self.net.stop_providing(GOSSIP_DHT_KEY);
+    }
+
+    /// Pregunta al DHT por nodos que anunciaron servir gossip. Lista
+    /// vacía si nadie respondió o si todavía no hay peers en el routing
+    /// table (correr `add_dht_peer` con bootstraps primero).
+    ///
+    /// El propio `PeerId` se filtra del resultado — no tiene sentido
+    /// gossipear con uno mismo y `sync_with(self)` cuelga.
+    pub async fn descubrir_peers_gossip(&self) -> Vec<PeerId> {
+        let mut peers = self.net.find_providers(GOSSIP_DHT_KEY).await;
+        let me = self.net.peer_id;
+        peers.retain(|p| *p != me);
+        peers
     }
 
     pub fn peer_id(&self) -> PeerId {
@@ -941,6 +984,42 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         loop_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn anunciar_y_descubrir_peers_gossip_via_dht() {
+        // Bob anuncia GOSSIP_DHT_KEY; Alice lo descubre vía DHT sin
+        // pasarle multiaddrs. La red entera es bootstrap mutuo: cada
+        // uno conoce al otro como peer Kademlia inicial.
+        let alice = AgoraNet::standalone(TrustGraph::new()).expect("alice");
+        let bob = AgoraNet::standalone(TrustGraph::new()).expect("bob");
+
+        let bob_pid = bob.peer_id();
+        let alice_pid = alice.peer_id();
+        let bob_listen = bob.listen("/ip4/127.0.0.1/tcp/0".parse().unwrap()).await;
+        let alice_listen = alice.listen("/ip4/127.0.0.1/tcp/0".parse().unwrap()).await;
+
+        // Bootstrap recíproco — sin esto Kademlia no tiene routing table.
+        alice.add_dht_peer(bob_pid, bob_listen.clone());
+        bob.add_dht_peer(alice_pid, alice_listen);
+
+        bob.anunciar_gossip();
+
+        // El record de provider tarda en propagarse — reintentamos.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let peers = alice.descubrir_peers_gossip().await;
+            if peers.contains(&bob_pid) {
+                // Verificamos que Alice misma no aparezca en su propio
+                // resultado — descubrir_peers_gossip filtra self.
+                assert!(!peers.contains(&alice_pid));
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("alice no descubrió a bob en el DHT; peers={peers:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
     }
 
     #[tokio::test]

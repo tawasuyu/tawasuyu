@@ -22,7 +22,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use agora_core::{AgoraError, Attestation, Identity};
@@ -32,6 +32,12 @@ use thiserror::Error;
 
 /// Versión actual del esquema en disco.
 pub const SCHEMA: u32 = 1;
+
+/// Magic prefix del formato postcard binario. Distingue al snapshot
+/// nuevo del JSON legacy sin tocar el layout JSON existente — `load`
+/// detecta uno u otro por los primeros bytes del archivo. Cuatro bytes
+/// ASCII para que `file <ruta>` los muestre legibles.
+pub const POSTCARD_MAGIC: &[u8; 4] = b"AGRP";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -71,7 +77,8 @@ fn snapshot_of(g: &TrustGraph) -> GraphSnapshot {
     }
 }
 
-/// Guarda el grafo de forma atómica (tmp → fsync → rename).
+/// Guarda el grafo de forma atómica (tmp → fsync → rename) en formato
+/// JSON legible — el default histórico, retrocompat.
 pub fn save(ruta: &Path, graph: &TrustGraph) -> Result<()> {
     let env = Envelope { schema: SCHEMA, graph: snapshot_of(graph) };
 
@@ -80,6 +87,33 @@ pub fn save(ruta: &Path, graph: &TrustGraph) -> Result<()> {
         let f = File::create(&tmp)?;
         let mut w = BufWriter::new(f);
         serde_json::to_writer_pretty(&mut w, &env)?;
+        w.flush()?;
+        w.into_inner()
+            .map_err(|e| std::io::Error::other(e.to_string()))?
+            .sync_all()?;
+    }
+    fs::rename(&tmp, ruta)?;
+    Ok(())
+}
+
+/// Variante binaria: el mismo `Envelope` serializado con postcard,
+/// precedido del prefijo `POSTCARD_MAGIC` para que [`load`] lo distinga
+/// del JSON legacy. ~3–5× más chico que el JSON en grafos densos; útil
+/// como apuesta default cuando un repo de ágora va por miles de
+/// atestaciones.
+///
+/// El archivo no es legible con `cat` — para inspección manual usar
+/// [`save`] o pasar el binario por una herramienta postcard.
+pub fn save_postcard(ruta: &Path, graph: &TrustGraph) -> Result<()> {
+    let env = Envelope { schema: SCHEMA, graph: snapshot_of(graph) };
+    let body = postcard::to_allocvec(&env)?;
+
+    let tmp = tmp_path(ruta);
+    {
+        let f = File::create(&tmp)?;
+        let mut w = BufWriter::new(f);
+        w.write_all(POSTCARD_MAGIC)?;
+        w.write_all(&body)?;
         w.flush()?;
         w.into_inner()
             .map_err(|e| std::io::Error::other(e.to_string()))?
@@ -105,8 +139,7 @@ pub fn save(ruta: &Path, graph: &TrustGraph) -> Result<()> {
 /// expone en el resultado — pasar por [`replay_log`] si hace falta.
 pub fn load(ruta: &Path) -> Result<TrustGraph> {
     let mut g = if ruta.exists() {
-        let f = File::open(ruta)?;
-        let env: Envelope = serde_json::from_reader(BufReader::new(f))?;
+        let env = read_envelope(ruta)?;
         if env.schema != SCHEMA {
             return Err(Error::SchemaDesconocida { found: env.schema });
         }
@@ -208,6 +241,20 @@ pub fn compact(ruta: &Path, graph: &TrustGraph) -> Result<()> {
         fs::remove_file(&log)?;
     }
     Ok(())
+}
+
+/// Lee `ruta` y deserializa el `Envelope` detectando el formato. El
+/// magic `POSTCARD_MAGIC` al inicio activa el branch postcard; cualquier
+/// otra cosa cae al branch JSON legacy.
+fn read_envelope(ruta: &Path) -> Result<Envelope> {
+    let mut f = File::open(ruta)?;
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes)?;
+    if bytes.len() >= POSTCARD_MAGIC.len() && &bytes[..POSTCARD_MAGIC.len()] == POSTCARD_MAGIC {
+        Ok(postcard::from_bytes(&bytes[POSTCARD_MAGIC.len()..])?)
+    } else {
+        Ok(serde_json::from_slice(&bytes)?)
+    }
 }
 
 fn log_path(ruta: &Path) -> PathBuf {
@@ -417,6 +464,65 @@ mod tests {
         // No registramos identidades en el grafo durante el replay
         // (el log sólo lleva atestaciones, no identidades).
         assert_eq!(cargado.identity_count(), 0);
+    }
+
+    #[test]
+    fn save_postcard_y_load_roundtrip() {
+        // save_postcard escribe binario; load autodetecta y devuelve un
+        // grafo idéntico. JSON y postcard son intercambiables como
+        // backend de persistencia.
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("agora.bin");
+        let (original, _) = graph_ejemplo();
+        save_postcard(&ruta, &original).unwrap();
+
+        // El primer bytes del archivo deben ser el magic.
+        let bytes = std::fs::read(&ruta).unwrap();
+        assert_eq!(&bytes[..4], POSTCARD_MAGIC, "magic AGRP al inicio");
+
+        let cargado = load(&ruta).unwrap();
+        assert_eq!(cargado.identity_count(), original.identity_count());
+        assert_eq!(cargado.attestation_count(), original.attestation_count());
+    }
+
+    #[test]
+    fn load_autodetecta_json_y_postcard() {
+        let dir = tempfile::tempdir().unwrap();
+        let (g, _) = graph_ejemplo();
+
+        let json_path = dir.path().join("legacy.json");
+        save(&json_path, &g).unwrap();
+        let from_json = load(&json_path).unwrap();
+
+        let bin_path = dir.path().join("nuevo.bin");
+        save_postcard(&bin_path, &g).unwrap();
+        let from_bin = load(&bin_path).unwrap();
+
+        assert_eq!(from_json.identity_count(), from_bin.identity_count());
+        assert_eq!(
+            from_json.attestation_count(),
+            from_bin.attestation_count()
+        );
+    }
+
+    #[test]
+    fn postcard_es_significativamente_mas_chico_que_json() {
+        // No nos casamos con un ratio exacto — depende de la
+        // densidad del grafo y del pretty-print del JSON — pero sí
+        // exigimos un improvement visible (>1.5×) en el caso de
+        // prueba, que es lo que vendería el cambio de formato.
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("a.json");
+        let bin_path = dir.path().join("a.bin");
+        let (g, _) = graph_ejemplo();
+        save(&json_path, &g).unwrap();
+        save_postcard(&bin_path, &g).unwrap();
+        let json_size = std::fs::metadata(&json_path).unwrap().len();
+        let bin_size = std::fs::metadata(&bin_path).unwrap().len();
+        assert!(
+            (bin_size as f64) * 1.5 <= json_size as f64,
+            "esperaba postcard < json/1.5; json={json_size} bin={bin_size}"
+        );
     }
 
     #[test]
