@@ -18,11 +18,37 @@
 //! - Pila de capas raster: nombre, blend mode, opacidad, visibilidad y RGBA.
 //! - Mapeo conservador de [`psd::BlendMode`] a [`tullpu_core::ModoFusion`].
 //!
+//! ## Grupos / folders (aplanados)
+//!
+//! `tullpu-core::Lienzo` es una lista plana de capas. PSD permite grupos
+//! anidados con sus propias propiedades (visibilidad, opacidad, blend).
+//! Para no inventar un modelo de árbol en `tullpu-core` para este puente, el
+//! bridge **aplana** la jerarquía y propaga las propiedades del grupo a sus
+//! hijas:
+//!
+//! - El nombre de la capa importada lleva la ruta completa, separada por `/`:
+//!   `"raíz/sub/hoja"`.
+//! - La **visibilidad efectiva** es el AND lógico de `visible` de la capa y
+//!   de todos los grupos por encima (un grupo invisible esconde todas sus
+//!   hojas).
+//! - La **opacidad efectiva** es el producto de la opacidad de la capa por
+//!   la de cada grupo (todas como `[0,1]`).
+//! - El **blend de la capa** se preserva. Si algún grupo en la cadena tiene
+//!   blend distinto de `Normal`/`PassThrough`, el bridge lo registra en
+//!   `informe.grupos_con_blend_propio` — modelarlo fielmente requeriría
+//!   rasterizar el grupo a una capa intermedia (no este puente).
+//!
+//! Esta aproximación es **exacta** cuando todos los grupos están en
+//! `Normal`/`PassThrough` (el caso por defecto en Photoshop). Para los demás
+//! casos el render visual diverge, pero queda anotado en el informe para que
+//! la UI lo señale al usuario.
+//!
 //! ## Qué NO se porta (todavía)
 //!
 //! - Máscaras de capa (PSD las codifica por canal separado; el modelo de
 //!   tullpu las soporta como hash aparte — el bridge no las extrae aún).
-//! - Grupos / folders. Las capas hijas aparecen, los nodos folder se ignoran.
+//! - Blend de grupo distinto de `Normal`/`PassThrough` (se aplana y se
+//!   anota; ver arriba).
 //! - Clipping masks, layer styles, smart objects, ajustes (curvas, niveles…).
 //!
 //! Catálogo de blend modes Photoshop completo (28 discriminantes upstream):
@@ -50,7 +76,7 @@
 
 use std::collections::HashMap;
 
-use psd::{Psd, PsdError};
+use psd::{Psd, PsdError, PsdGroup};
 use thiserror::Error;
 use tullpu_core::{hash_bytes, Capa, Hash, Lienzo, ModoFusion};
 
@@ -78,6 +104,13 @@ pub struct InformeImportacion {
     /// [`ModoFusion`] y se forzaron a [`ModoFusion::Normal`]. Pares
     /// `(nombre_capa, blend_original_debug)`.
     pub caidas_a_normal: Vec<(String, String)>,
+    /// Cantidad de grupos / folders detectados en el PSD. El bridge los
+    /// aplana; este número es informativo para que la UI lo muestre.
+    pub grupos_detectados: usize,
+    /// Grupos cuyo blend mode efectivo no es Normal ni PassThrough — el
+    /// bridge no rasteriza grupos, así que ese blend no se respeta. Pares
+    /// `(ruta_grupo, blend_original_debug)`.
+    pub grupos_con_blend_propio: Vec<(String, String)>,
 }
 
 /// Errores del import. Se mantiene chico: o falla parsear el PSD, o el
@@ -105,6 +138,12 @@ impl From<PsdError> for ImportPsdError {
 /// Construye el [`Lienzo`] con sus capas en orden visual (índice 0 = fondo),
 /// hashea cada buffer Rgba8 con BLAKE3 y deduplica: si dos capas comparten
 /// pixel data exacta, comparten hash y entrada en `buffers`.
+///
+/// Si el PSD tiene grupos, se aplanan: el nombre lleva la ruta jerárquica
+/// (`"raíz/sub/hoja"`), la opacidad multiplica las de los grupos por encima,
+/// y la visibilidad se anula si cualquier grupo de la cadena está oculto.
+/// Ver el doc del módulo para los casos límite (blend de grupo distinto de
+/// Normal/PassThrough).
 pub fn importar_psd(bytes: &[u8]) -> Result<DocumentoPsdImportado, ImportPsdError> {
     let psd = Psd::from_bytes(bytes)?;
     let width = psd.width();
@@ -114,9 +153,18 @@ pub fn importar_psd(bytes: &[u8]) -> Result<DocumentoPsdImportado, ImportPsdErro
         return Err(ImportPsdError::SinCapas);
     }
 
+    let grupos = psd.groups();
     let mut lienzo = Lienzo::nuevo(width, height);
     let mut buffers: HashMap<Hash, Vec<u8>> = HashMap::new();
     let mut informe = InformeImportacion::default();
+    informe.grupos_detectados = grupos.len();
+
+    // Pre-computamos la cadena efectiva (path + propiedades) por grupo,
+    // memoizando: cada grupo se resuelve a lo sumo una vez aunque tenga
+    // varias capas adentro.
+    let mut cache_cadenas: HashMap<u32, CadenaGrupo> = HashMap::new();
+    let mut grupos_blend_reportados: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
 
     let esperado = (width as usize) * (height as usize) * 4;
 
@@ -147,16 +195,39 @@ pub fn importar_psd(bytes: &[u8]) -> Result<DocumentoPsdImportado, ImportPsdErro
         // valores (cosa que sería un breaking change explícito).
         let blend_disc = layer.blend_mode() as u32;
         let (blend, degradado) = mapear_blend(blend_disc);
+
+        // Resolvemos la cadena de grupos por encima de esta capa (si está
+        // adentro de alguno) — memoizada por id de grupo.
+        let cadena = match layer.parent_id() {
+            Some(gid) => cadena_de_grupo(
+                gid,
+                grupos,
+                &mut cache_cadenas,
+                &mut informe,
+                &mut grupos_blend_reportados,
+            ),
+            None => CadenaGrupo::raiz(),
+        };
+
+        let nombre_efectivo = if cadena.ruta.is_empty() {
+            layer.name().to_string()
+        } else {
+            format!("{}/{}", cadena.ruta, layer.name())
+        };
+        let opacidad_capa = layer.opacity() as f32 / 255.0;
+        let visible_capa = layer.visible();
+
         if degradado {
-            informe
-                .caidas_a_normal
-                .push((layer.name().to_string(), nombre_blend(blend_disc).to_string()));
+            informe.caidas_a_normal.push((
+                nombre_efectivo.clone(),
+                nombre_blend(blend_disc).to_string(),
+            ));
         }
 
-        let mut capa = Capa::raster(layer.name(), hash);
+        let mut capa = Capa::raster(&nombre_efectivo, hash);
         capa.blend = blend;
-        capa.opacidad = layer.opacity() as f32 / 255.0;
-        capa.visible = layer.visible();
+        capa.opacidad = (opacidad_capa * cadena.opacidad).clamp(0.0, 1.0);
+        capa.visible = visible_capa && cadena.visible;
         lienzo.apilar(capa);
     }
 
@@ -167,6 +238,78 @@ pub fn importar_psd(bytes: &[u8]) -> Result<DocumentoPsdImportado, ImportPsdErro
         buffers,
         informe,
     })
+}
+
+/// Propiedades acumuladas de una cadena de grupos (los ancestros de una
+/// capa, de raíz a hoja). Calculada una vez por grupo y memoizada.
+#[derive(Debug, Clone)]
+struct CadenaGrupo {
+    /// Ruta separada por `/`, vacía si la capa está en la raíz.
+    ruta: String,
+    /// Producto de opacidades de todos los grupos en la cadena. `1.0` en raíz.
+    opacidad: f32,
+    /// AND lógico de `visible` de los grupos. `true` en raíz.
+    visible: bool,
+}
+
+impl CadenaGrupo {
+    fn raiz() -> Self {
+        Self {
+            ruta: String::new(),
+            opacidad: 1.0,
+            visible: true,
+        }
+    }
+}
+
+/// Resuelve recursivamente la cadena de un grupo, memoizando. Si encuentra
+/// un grupo con blend distinto de Normal/PassThrough lo anota en el informe
+/// (una sola vez por grupo).
+fn cadena_de_grupo(
+    gid: u32,
+    grupos: &HashMap<u32, PsdGroup>,
+    cache: &mut HashMap<u32, CadenaGrupo>,
+    informe: &mut InformeImportacion,
+    reportados: &mut std::collections::HashSet<u32>,
+) -> CadenaGrupo {
+    if let Some(c) = cache.get(&gid) {
+        return c.clone();
+    }
+    let Some(grupo) = grupos.get(&gid) else {
+        // El PSD referenció un grupo que no existe en el mapa — defensa.
+        return CadenaGrupo::raiz();
+    };
+    // Cadena del padre (recursión memoizada).
+    let padre = match grupo.parent_id() {
+        Some(pid) => cadena_de_grupo(pid, grupos, cache, informe, reportados),
+        None => CadenaGrupo::raiz(),
+    };
+
+    let nombre = grupo.name();
+    let ruta = if padre.ruta.is_empty() {
+        nombre.to_string()
+    } else {
+        format!("{}/{}", padre.ruta, nombre)
+    };
+    let opacidad = padre.opacidad * (grupo.opacity() as f32 / 255.0);
+    let visible = padre.visible && grupo.visible();
+
+    // El blend del grupo PSD sólo se respeta para Normal/PassThrough — el
+    // resto requeriría rasterizar el grupo y se reporta como divergencia.
+    let blend_disc = grupo.blend_mode() as u32;
+    if blend_disc != NORMAL && blend_disc != PASS_THROUGH && reportados.insert(gid) {
+        informe
+            .grupos_con_blend_propio
+            .push((ruta.clone(), nombre_blend(blend_disc).to_string()));
+    }
+
+    let cadena = CadenaGrupo {
+        ruta,
+        opacidad: opacidad.clamp(0.0, 1.0),
+        visible,
+    };
+    cache.insert(gid, cadena.clone());
+    cadena
 }
 
 // =============================================================================
@@ -296,6 +439,18 @@ mod tests {
 
     /// PSD `green-1x1.psd` del mismo corpus. 1×1 píxel, una sola capa verde.
     const FIXTURE_UNA_CAPA: &[u8] = include_bytes!("../tests/fixtures/green-1x1.psd");
+
+    /// 1×1, un grupo con una capa adentro.
+    const FIXTURE_GRUPO_UNA_CAPA: &[u8] =
+        include_bytes!("../tests/fixtures/group-one-layer.psd");
+
+    /// 1×1, grupo anidado en otro grupo, una capa en el subgrupo.
+    const FIXTURE_GRUPOS_ANIDADOS: &[u8] =
+        include_bytes!("../tests/fixtures/groups-nested.psd");
+
+    /// 1×1, dos grupos hermanos, cada uno con una capa adentro.
+    const FIXTURE_GRUPOS_HERMANOS: &[u8] =
+        include_bytes!("../tests/fixtures/groups-siblings.psd");
 
     #[test]
     fn bytes_basura_dan_error_de_parseo() {
@@ -436,6 +591,94 @@ mod tests {
         assert_eq!(nombre_blend(LUMINOSITY), "Luminosity");
         assert_eq!(nombre_blend(DARKER_COLOR), "DarkerColor");
         assert_eq!(nombre_blend(DISSOLVE), "Dissolve");
+    }
+
+    #[test]
+    fn grupo_una_capa_aplana_con_path_jerarquico() {
+        // Un solo grupo con una capa adentro: el nombre debe quedar como
+        // "Grupo/Capa" y `grupos_detectados == 1`.
+        let imp = importar_psd(FIXTURE_GRUPO_UNA_CAPA).unwrap();
+        assert_eq!(imp.lienzo.capas.len(), 1, "1 capa hoja");
+        assert_eq!(imp.informe.grupos_detectados, 1);
+        assert!(imp.informe.grupos_con_blend_propio.is_empty());
+
+        let nombre = &imp.lienzo.capas[0].nombre;
+        assert!(
+            nombre.contains('/'),
+            "el path debe ser jerárquico, fue '{}'",
+            nombre
+        );
+        // No queremos doble-slash ni "/" inicial.
+        assert!(!nombre.starts_with('/'));
+        assert!(!nombre.contains("//"));
+    }
+
+    #[test]
+    fn grupos_anidados_concatenan_path() {
+        // Grupo dentro de grupo, una capa en el subgrupo. El path debe
+        // contener al menos dos `/` (raíz/sub/hoja → al menos 2 separadores).
+        let imp = importar_psd(FIXTURE_GRUPOS_ANIDADOS).unwrap();
+        assert_eq!(imp.lienzo.capas.len(), 1, "1 capa hoja");
+        // `psd.groups()` cuenta nodos; para este fixture upstream son 2.
+        assert_eq!(imp.informe.grupos_detectados, 2);
+
+        let nombre = &imp.lienzo.capas[0].nombre;
+        let segmentos: Vec<&str> = nombre.split('/').collect();
+        assert!(
+            segmentos.len() >= 3,
+            "path con al menos raíz/sub/hoja, fue '{}'",
+            nombre
+        );
+    }
+
+    #[test]
+    fn grupos_hermanos_no_se_mezclan_en_paths() {
+        // Dos grupos hermanos, una capa en cada uno. Los paths deben tener
+        // raíces distintas (no anidación entre ellos).
+        let imp = importar_psd(FIXTURE_GRUPOS_HERMANOS).unwrap();
+        assert_eq!(imp.lienzo.capas.len(), 2, "2 capas hoja");
+        assert_eq!(imp.informe.grupos_detectados, 2);
+
+        let raices: std::collections::HashSet<&str> = imp
+            .lienzo
+            .capas
+            .iter()
+            .map(|c| c.nombre.split('/').next().unwrap())
+            .collect();
+        assert_eq!(
+            raices.len(),
+            2,
+            "los hermanos deben tener raíces distintas, fueron {:?}",
+            raices
+        );
+    }
+
+    #[test]
+    fn propiedades_efectivas_quedan_en_rango() {
+        // Sanity: opacidad ∈ [0,1] aún tras propagación; visible es boolean
+        // limpio. Aplica al fixture anidado (más capas de multiplicación).
+        let imp = importar_psd(FIXTURE_GRUPOS_ANIDADOS).unwrap();
+        for capa in &imp.lienzo.capas {
+            assert!(
+                (0.0..=1.0).contains(&capa.opacidad),
+                "opacidad fuera de rango: {}",
+                capa.opacidad
+            );
+        }
+    }
+
+    #[test]
+    fn psd_sin_grupos_no_introduce_path() {
+        // Regresión: si no hay grupos, los nombres deben quedar pelados.
+        let imp = importar_psd(FIXTURE_DOS_CAPAS).unwrap();
+        assert_eq!(imp.informe.grupos_detectados, 0);
+        for capa in &imp.lienzo.capas {
+            assert!(
+                !capa.nombre.contains('/'),
+                "capa sin grupo no debe tener '/' en el nombre, fue '{}'",
+                capa.nombre
+            );
+        }
     }
 
     #[test]
