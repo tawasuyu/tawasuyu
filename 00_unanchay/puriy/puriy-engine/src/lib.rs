@@ -35,13 +35,14 @@ pub use boxes::{
     PathCmd, SelectInfo, SelectOption, SvgPrim, SvgScene,
 };
 pub use dom::{DomTree, MetaRefresh, ScriptInfo};
-pub use fetch::{fetch, FetchError};
+pub use fetch::{fetch, fetch_full, FetchError, FetchResponse};
 pub use style::{
-    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, ContentItem, FlexDirection,
-    FlexWrap, FontStyle, GradientStop, GridTrackSize, JustifyContent, LengthVal, LinearGradient,
-    Outline, Overflow, PointerEvents, Position, PseudoElement, Sides, StyleEngine, TextAlign,
-    TextDecorationLine, TextShadow, TextTransform, Transform, VerticalAlign, Viewport, Visibility,
-    WhiteSpace, DEFAULT_VIEWPORT,
+    AlignItems, AlignSelf, AnimationBinding, AnimationDirection, AnimationFillMode,
+    AnimationIterations, BoxShadow, BoxSizing, ComputedStyle, ContentItem, EasingFunction,
+    FlexDirection, FlexWrap, FontStyle, GradientStop, GridTrackSize, JustifyContent, KeyframeStep,
+    Keyframes, LengthVal, LinearGradient, Outline, Overflow, PointerEvents, Position,
+    PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine, TextShadow, TextTransform,
+    Transform, TransitionBinding, VerticalAlign, Viewport, Visibility, WhiteSpace, DEFAULT_VIEWPORT,
 };
 
 /// Pipeline completo del navegador. Sin estado mutable — cada `load`

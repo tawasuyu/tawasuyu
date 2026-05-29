@@ -431,6 +431,111 @@ pub enum GridTrackSize {
     Fr(f32),
 }
 
+/// Función de easing de una `transition`/`animation`. El runtime de
+/// tween (Fase B4+, todavía NO implementado) la usaría para mapear el
+/// progreso lineal `t∈[0,1]` al progreso efectivo. Por ahora sólo se
+/// parsea y se guarda en `ComputedStyle` — no anima nada.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EasingFunction {
+    Linear,
+    Ease,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    /// `step-start` ≡ `steps(1, start)`.
+    StepStart,
+    /// `step-end` ≡ `steps(1, end)`.
+    StepEnd,
+    /// `cubic-bezier(x1, y1, x2, y2)` — los dos puntos de control.
+    CubicBezier(f32, f32, f32, f32),
+    /// `steps(n, jump-term)`. `jump_start=true` ⇒ `steps(n, start)`
+    /// (salto al inicio del intervalo); `false` ⇒ `steps(n, end)`.
+    Steps(u32, bool),
+}
+
+impl Default for EasingFunction {
+    fn default() -> Self {
+        // CSS spec: el default de `transition-timing-function` y
+        // `animation-timing-function` es `ease`.
+        EasingFunction::Ease
+    }
+}
+
+/// Número de iteraciones de una animación (`animation-iteration-count`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnimationIterations {
+    Count(f32),
+    Infinite,
+}
+
+/// `animation-direction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationDirection {
+    Normal,
+    Reverse,
+    Alternate,
+    AlternateReverse,
+}
+
+/// `animation-fill-mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationFillMode {
+    None,
+    Forwards,
+    Backwards,
+    Both,
+}
+
+/// `animation: <name> <duration> <timing> <delay> <iteration> <direction>
+/// <fill>` colapsado en una sola binding. `play-state` se ignora. Si el
+/// shorthand lista varias animaciones separadas por coma nos quedamos con
+/// la primera (el runtime de tween todavía no existe — Fase B4+). Los
+/// tokens se clasifican por forma, no por posición, así que el orden
+/// laxo del wild (`animation: spin 2s linear infinite`) se tolera.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimationBinding {
+    pub name: String,
+    /// Duración en segundos.
+    pub duration_s: f32,
+    pub timing: EasingFunction,
+    /// Retardo en segundos.
+    pub delay_s: f32,
+    pub iterations: AnimationIterations,
+    pub direction: AnimationDirection,
+    pub fill_mode: AnimationFillMode,
+}
+
+/// `transition: <property> <duration> <timing> <delay>`. Una lista
+/// separada por coma produce varios bindings. `property` queda como
+/// string cruda (`opacity`, `transform`, `all`...) — el matching contra
+/// las propiedades animables real lo hará el runtime de tween (Fase B4+).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransitionBinding {
+    pub property: String,
+    pub duration_s: f32,
+    pub timing: EasingFunction,
+    pub delay_s: f32,
+}
+
+/// Un paso de un `@keyframes`: el offset normalizado en el timeline
+/// (`from` = 0.0, `to` = 1.0, `50%` = 0.5) + las declaraciones crudas
+/// (`prop`, `value`) que aplican en ese punto. Guardamos los pares SIN
+/// parsear porque el runtime de animación (Fase B4+) todavía no existe;
+/// cuando llegue, los re-parseará con la maquinaria de `Decl` para
+/// derivar el overlay interpolado entre pasos.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframeStep {
+    pub offset: f32,
+    pub declarations: Vec<(String, String)>,
+}
+
+/// Definición de un `@keyframes name { ... }`. Los pasos quedan ordenados
+/// por `offset` ascendente.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Keyframes {
+    pub steps: Vec<KeyframeStep>,
+}
+
 /// Viewport asumido por el parser para resolver unidades `vw`/`vh`/
 /// `vmin`/`vmax` y para evaluar `@media` queries. Por ahora es
 /// constante (1280×800 — desktop típico). Cuando puriy soporte resize
@@ -601,6 +706,11 @@ pub struct StyleEngine {
     /// compute-time). Scope cascade real queda para una iteración futura
     /// — :root cubre el 80% de los usos en el wild.
     vars: HashMap<String, String>,
+    /// Definiciones `@keyframes name { ... }` recogidas de todos los
+    /// stylesheets. Las consumiría el runtime de animación (Fase B4+, aún
+    /// no implementado) cruzando el `name` de un `AnimationBinding` con
+    /// esta tabla. Hoy sólo se parsean y se exponen vía [`Self::keyframes`].
+    keyframes: HashMap<String, Keyframes>,
 }
 
 impl StyleEngine {
@@ -617,10 +727,25 @@ impl StyleEngine {
             let cleaned = strip_comments(&sheet);
             extract_root_vars(&cleaned, &mut vars);
         }
+        // Segunda pasada: recoger `@keyframes` de todos los stylesheets.
+        // Son globales (no caen en la cascada por selector), así que un
+        // mapa name→def plano alcanza; conflictos los gana el último.
+        let mut keyframes: HashMap<String, Keyframes> = HashMap::new();
+        for sheet in dom.collect_inline_stylesheets() {
+            let cleaned = strip_comments(&sheet);
+            extract_keyframes(&cleaned, &mut keyframes);
+        }
         for sheet in dom.collect_inline_stylesheets() {
             rules.extend(parse_stylesheet(&sheet, &vars));
         }
-        Self { rules, vars }
+        Self { rules, vars, keyframes }
+    }
+
+    /// Tabla de `@keyframes` parseados (name → definición). Vacía si el
+    /// documento no declara animaciones. El runtime de tween (Fase B4+)
+    /// la cruzará con `ComputedStyle::animation`; hoy es sólo lectura.
+    pub fn keyframes(&self) -> &HashMap<String, Keyframes> {
+        &self.keyframes
     }
 
     /// Computa el estilo de un nodo Element. Aplica en orden: UA →
@@ -1982,6 +2107,120 @@ fn extract_root_vars(css: &str, vars: &mut HashMap<String, String>) {
             }
         }
     }
+}
+
+/// Pasada análoga a [`extract_root_vars`] pero para `@keyframes`. Escanea
+/// el CSS crudo buscando `@keyframes name { ... }` (también los prefijos
+/// vendor `@-webkit-keyframes` / `@-moz-keyframes`) y los acumula en el
+/// mapa. Conflictos (mismo `name` en dos sitios) los gana el último.
+fn extract_keyframes(css: &str, out: &mut HashMap<String, Keyframes>) {
+    // `to_ascii_lowercase` preserva el largo en bytes (ASCII case sólo),
+    // así que los índices del lowercase indexan el `css` original sin
+    // desfase — necesario para conservar el case del `name` y los values.
+    let lower = css.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find('@') {
+        let at = from + rel;
+        let lrest = &lower[at..];
+        let prefix = if lrest.starts_with("@keyframes") {
+            "@keyframes"
+        } else if lrest.starts_with("@-webkit-keyframes") {
+            "@-webkit-keyframes"
+        } else if lrest.starts_with("@-moz-keyframes") {
+            "@-moz-keyframes"
+        } else {
+            from = at + 1;
+            continue;
+        };
+        let after = &css[at + prefix.len()..];
+        let Some(brace_rel) = after.find('{') else { break };
+        let name = after[..brace_rel]
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
+        let body_start = at + prefix.len() + brace_rel + 1;
+        let Some(close) = matching_close_brace(&css[body_start..]) else {
+            break;
+        };
+        let body = &css[body_start..body_start + close];
+        from = body_start + close + 1;
+        if name.is_empty() {
+            continue;
+        }
+        let kf = parse_keyframes_body(body);
+        if !kf.steps.is_empty() {
+            out.insert(name, kf);
+        }
+    }
+}
+
+/// Parsea el cuerpo de un `@keyframes`: una secuencia de bloques
+/// `selector { decls }` donde `selector` es una lista de offsets
+/// (`from`/`to`/`N%`) separados por coma. Los pasos quedan ordenados por
+/// offset ascendente.
+fn parse_keyframes_body(body: &str) -> Keyframes {
+    let mut steps: Vec<KeyframeStep> = Vec::new();
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < body.len() {
+        while i < body.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        if i >= body.len() {
+            break;
+        }
+        let Some(brace) = body[i..].find('{') else { break };
+        let selector_raw = body[i..i + brace].trim();
+        let inner_start = i + brace + 1;
+        let Some(close) = matching_close_brace(&body[inner_start..]) else {
+            break;
+        };
+        let inner = &body[inner_start..inner_start + close];
+        i = inner_start + close + 1;
+        let decls = parse_keyframe_declarations(inner);
+        if decls.is_empty() {
+            continue;
+        }
+        for tok in selector_raw.split(',') {
+            if let Some(offset) = parse_keyframe_offset(tok.trim()) {
+                steps.push(KeyframeStep { offset, declarations: decls.clone() });
+            }
+        }
+    }
+    steps.sort_by(|a, b| {
+        a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Keyframes { steps }
+}
+
+/// `from` → 0.0, `to` → 1.0, `N%` → N/100. Cualquier otra cosa → None.
+fn parse_keyframe_offset(tok: &str) -> Option<f32> {
+    let t = tok.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "from" => Some(0.0),
+        "to" => Some(1.0),
+        _ => t.strip_suffix('%').and_then(|n| n.trim().parse::<f32>().ok()).map(|p| p / 100.0),
+    }
+}
+
+/// Pares `prop: value` crudos del cuerpo de un keyframe. No sustituye
+/// `var(...)` ni valida la propiedad — eso lo hará el runtime de tween
+/// cuando exista (Fase B4+).
+fn parse_keyframe_declarations(inner: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for chunk in inner.split(';') {
+        let Some((prop, value)) = chunk.split_once(':') else {
+            continue;
+        };
+        let prop = prop.trim();
+        let value = value.trim();
+        if prop.is_empty() || value.is_empty() {
+            continue;
+        }
+        out.push((prop.to_ascii_lowercase(), value.to_string()));
+    }
+    out
 }
 
 /// Reemplaza `var(--name)` y `var(--name, fallback)` en `value` por el
@@ -5968,6 +6207,82 @@ line2</pre></body></html>"#;
         </style></head><body><p>x</p></body></html>"#;
         let dom = DomTree::parse(html);
         let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
+    }
+
+    // === Fase B1: @keyframes ===
+
+    #[test]
+    fn keyframes_from_to_se_parsean() {
+        let html = r#"<html><head><style>
+            @keyframes fade {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let kf = eng.keyframes().get("fade").expect("keyframes fade ausente");
+        assert_eq!(kf.steps.len(), 2);
+        assert_eq!(kf.steps[0].offset, 0.0);
+        assert_eq!(kf.steps[0].declarations, vec![("opacity".into(), "0".into())]);
+        assert_eq!(kf.steps[1].offset, 1.0);
+        assert_eq!(kf.steps[1].declarations, vec![("opacity".into(), "1".into())]);
+    }
+
+    #[test]
+    fn keyframes_porcentajes_y_orden() {
+        // Pasos declarados fuera de orden deben quedar ordenados por offset.
+        let html = r#"<html><head><style>
+            @keyframes slide {
+                100% { left: 100px; }
+                0% { left: 0px; }
+                50% { left: 40px; top: 10px; }
+            }
+        </style></head><body></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let kf = eng.keyframes().get("slide").unwrap();
+        let offsets: Vec<f32> = kf.steps.iter().map(|s| s.offset).collect();
+        assert_eq!(offsets, vec![0.0, 0.5, 1.0]);
+        // El paso del 50% conserva las dos declaraciones en orden.
+        assert_eq!(
+            kf.steps[1].declarations,
+            vec![("left".into(), "40px".into()), ("top".into(), "10px".into())]
+        );
+    }
+
+    #[test]
+    fn keyframes_selector_multiple_comparte_decls() {
+        // `0%, 100% { ... }` genera dos pasos con las mismas decls.
+        let html = r#"<html><head><style>
+            @keyframes pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.2); }
+            }
+        </style></head><body></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let kf = eng.keyframes().get("pulse").unwrap();
+        assert_eq!(kf.steps.len(), 3);
+        assert_eq!(kf.steps[0].offset, 0.0);
+        assert_eq!(kf.steps[2].offset, 1.0);
+        assert_eq!(kf.steps[0].declarations, kf.steps[2].declarations);
+    }
+
+    #[test]
+    fn keyframes_prefijo_vendor_y_no_rompe_reglas_normales() {
+        // `@-webkit-keyframes` se captura igual; y las reglas normales
+        // alrededor del at-rule siguen aplicándose.
+        let html = r#"<html><head><style>
+            p { color: red; }
+            @-webkit-keyframes spin { from { opacity: 0 } to { opacity: 1 } }
+            p { color: green; }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        assert!(eng.keyframes().contains_key("spin"));
         let p = dom.find("p").unwrap();
         assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
     }
