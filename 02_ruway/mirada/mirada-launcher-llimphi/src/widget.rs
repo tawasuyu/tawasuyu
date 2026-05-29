@@ -23,6 +23,17 @@ pub enum Msg {
     QuakeSubmit,
     /// Resultado de una llamada a IA (texto o mensaje de error).
     QuakeIaResult(Result<String, String>),
+    /// Foco al input de la shuma_bar (toggle del overlay full).
+    ShumaToggle,
+    /// Carácter al input de la shuma_bar.
+    ShumaChar(char),
+    /// Backspace en shuma_bar.
+    ShumaBackspace,
+    /// Enter en shuma_bar — ejecuta el comando.
+    ShumaSubmit,
+    /// Resultado de un comando shell ejecutado por shuma_bar
+    /// (stdout o mensaje de error).
+    ShumaResult(Result<String, String>),
     /// Cerrar la app.
     Quit,
 }

@@ -64,7 +64,28 @@ pub struct PanelConfig {
     /// superior-izquierda del área libre.
     #[serde(default)]
     pub floating: Vec<FloatingCard>,
+    /// Barra inferior opcional. Pensada para alojar un único widget
+    /// grande tipo launcher (e.g. `shuma_bar`) o varios que se
+    /// distribuyen con flex.
+    #[serde(default)]
+    pub bottom: Option<BottomBar>,
 }
+
+/// Barra inferior — sin slots, lista de widgets que se distribuyen
+/// horizontalmente con flex_grow=1 cada uno (un único widget ocupa todo).
+#[derive(Debug, Clone, Deserialize)]
+pub struct BottomBar {
+    #[serde(default = "default_bottom_height")]
+    pub height: f32,
+    /// Si `true`, la barra se autoesconde y aparece al hover/hotkey.
+    /// Defer — por ahora el campo se acepta pero no afecta render.
+    #[serde(default)]
+    pub autohide: bool,
+    #[serde(default)]
+    pub widgets: Vec<WidgetSpec>,
+}
+
+fn default_bottom_height() -> f32 { 40.0 }
 
 /// Una tarjeta posicionada en píxeles dentro del área libre.
 #[derive(Debug, Clone, Deserialize)]
@@ -133,6 +154,7 @@ impl Default for PanelConfig {
                 },
             ],
             floating: Vec::new(),
+            bottom: None,
         }
     }
 }
@@ -241,6 +263,26 @@ mod tests {
     fn general_defaults_timezone_auto() {
         let cfg = Config::default();
         assert_eq!(cfg.general.timezone, "auto");
+    }
+
+    #[test]
+    fn parses_bottom_bar_with_shuma() {
+        let src = r#"
+            [panel.bottom]
+            height = 48
+            autohide = false
+
+            [[panel.bottom.widgets]]
+            kind = "shuma_bar"
+            placeholder = "› shuma"
+        "#;
+        let cfg: Config = toml::from_str(src).unwrap();
+        let b = cfg.panel.bottom.expect("debe haber bottom bar");
+        assert_eq!(b.height, 48.0);
+        assert!(!b.autohide);
+        assert_eq!(b.widgets.len(), 1);
+        assert_eq!(b.widgets[0].kind, "shuma_bar");
+        assert_eq!(b.widgets[0].str_prop("placeholder", "?"), "› shuma");
     }
 
     #[test]

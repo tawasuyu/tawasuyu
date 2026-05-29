@@ -55,7 +55,19 @@ kind   = "quake_input"
 hotkey = "F12"
 placeholder = "› preguntá, lanzá, navegá"
 
-# Tarjetas flotantes estilo conky (debajo de la barra, posición absoluta)
+# Barra inferior — el lugar natural para el shuma_bar (un solo widget
+# grande que ocupa todo el ancho).
+[panel.bottom]
+height   = 44
+autohide = false       # defer
+
+[[panel.bottom.widgets]]
+kind        = "shuma_bar"
+placeholder = "› shuma"
+prompt      = "›"
+hotkey      = "F11"
+
+# Tarjetas flotantes estilo conky (debajo de la barra superior, posición absoluta)
 [[panel.floating]]
 x = 40
 y = 80
@@ -86,6 +98,20 @@ Mientras espera la respuesta IA, el overlay muestra `…pensando`. La
 respuesta queda visible hasta que el usuario cierra (Esc) o lanza otro
 prompt.
 
+## Shuma bar (barra inferior con shell)
+
+A diferencia del quake (que apunta a IA por default), el `shuma_bar` es
+un input grande pensado para vivir solo en la barra inferior y ocupar
+casi todo el ancho. Su submit va siempre a `sh -c <cmd>` y captura
+`stdout`+`stderr`; al hacer click o `hotkey` se abre un overlay grande
+(900×420) con header `shuma — shell del escritorio`, el input arriba y
+el output del último comando abajo (hasta 4096 chars, después se trunca
+con `…`).
+
+Cuando el overlay del shuma está abierto, **gana** sobre el del quake —
+toda tecla entra al shuma. `Esc` lo cierra y limpia el output. Útil para
+"lanzar y ver" sin levantar otra ventana.
+
 ## Widgets
 
 | kind          | qué muestra                                  | props relevantes                  |
@@ -97,6 +123,7 @@ prompt.
 | `ram_meter`   | uso de RAM desde `/proc/meminfo`             | —                                 |
 | `cpu_meter`   | uso de CPU desde delta `/proc/stat`          | —                                 |
 | `quake_input` | input toggleable estilo Quake/Spotlight      | `hotkey = "F12"`, `placeholder`   |
+| `shuma_bar`   | barra de shell (input grande + overlay con stdout) | `hotkey`, `placeholder`, `prompt` |
 
 Kinds desconocidos no rompen la barra — caen a un placeholder `?<kind>`.
 

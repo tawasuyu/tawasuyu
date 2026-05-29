@@ -12,9 +12,10 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::View;
 
-use crate::config::{FloatingCard, PanelConfig};
+use crate::config::{BottomBar, FloatingCard, PanelConfig};
 use crate::widget::{Msg, Widget};
 use crate::widgets::quake::QuakeInput;
+use crate::widgets::shuma_bar::ShumaBar;
 
 /// Direcciona el panel según `position`.
 pub fn flex_dir(pos: &str) -> FlexDirection {
@@ -24,8 +25,8 @@ pub fn flex_dir(pos: &str) -> FlexDirection {
     }
 }
 
-/// Construye el `View<Msg>` raíz: ventana → barra arriba → área libre con
-/// tarjetas flotantes (estilo conky) en sus posiciones absolutas.
+/// Construye el `View<Msg>` raíz: barra superior → área libre → barra
+/// inferior (si hay). El área libre puede hospedar tarjetas flotantes.
 pub fn build(
     cfg: &PanelConfig,
     theme: &Theme,
@@ -33,6 +34,7 @@ pub fn build(
     center: &[Box<dyn Widget>],
     right: &[Box<dyn Widget>],
     floating: &[(FloatingCard, Vec<Box<dyn Widget>>)],
+    bottom: Option<(&BottomBar, &[Box<dyn Widget>])>,
 ) -> View<Msg> {
     let dir = flex_dir(&cfg.position);
 
@@ -115,9 +117,47 @@ pub fn build(
         ..Default::default()
     };
 
-    // Si la barra va abajo, invertimos el orden.
-    let bar_at_top = !matches!(cfg.position.as_str(), "bottom");
-    let children = if bar_at_top { vec![bar, free_area] } else { vec![free_area, bar] };
+    // Barra inferior (opcional). Si autohide está activado, defer:
+    // por ahora la pintamos siempre.
+    let bottom_bar: Option<View<Msg>> = bottom.map(|(bc, ws)| {
+        let items: Vec<View<Msg>> = ws
+            .iter()
+            .map(|w| {
+                // Si el widget es un ShumaBar, usamos su vista "colapsada"
+                // (que es la barra in-place). El resto se pinta normal.
+                if let Some(s) = w.as_any().downcast_ref::<ShumaBar>() {
+                    s.collapsed_view(theme)
+                } else {
+                    w.view(theme)
+                }
+            })
+            .collect();
+
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: length(bc.height) },
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(4.0_f32),
+                bottom: length(4.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::FlexStart),
+            gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel_alt)
+        .children(items)
+    });
+
+    // Si la barra principal va abajo, invertimos su orden con el área
+    // libre. La bottom_bar siempre va al fondo.
+    let main_at_top = !matches!(cfg.position.as_str(), "bottom");
+    let mut children = if main_at_top { vec![bar, free_area] } else { vec![free_area, bar] };
+    if let Some(b) = bottom_bar {
+        children.push(b);
+    }
 
     View::new(root_style).fill(theme.bg_app).children(children)
 }
@@ -165,8 +205,9 @@ fn card_view(card: &FloatingCard, widgets: &[Box<dyn Widget>], theme: &Theme) ->
     .children(children)
 }
 
-/// Devuelve el overlay del primer `QuakeInput` que esté abierto, o
-/// `None` si no hay ninguno activo.
+/// Devuelve el overlay del primer widget abierto que tenga uno
+/// (QuakeInput o ShumaBar). Si ambos están abiertos, gana el primero
+/// que aparezca en la iteración.
 pub fn overlay_view<'a>(
     theme: &Theme,
     widgets: impl Iterator<Item = &'a Box<dyn Widget>>,
@@ -174,6 +215,11 @@ pub fn overlay_view<'a>(
     for w in widgets {
         if let Some(q) = w.as_any().downcast_ref::<QuakeInput>() {
             if let Some(v) = q.overlay(theme) {
+                return Some(v);
+            }
+        }
+        if let Some(s) = w.as_any().downcast_ref::<ShumaBar>() {
+            if let Some(v) = s.overlay(theme) {
                 return Some(v);
             }
         }

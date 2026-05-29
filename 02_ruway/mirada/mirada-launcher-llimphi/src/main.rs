@@ -11,6 +11,7 @@ use mirada_launcher_llimphi::widget::{Msg, Widget};
 use mirada_launcher_llimphi::widgets;
 use mirada_launcher_llimphi::widgets::clock::TzMode;
 use mirada_launcher_llimphi::widgets::quake::{ask_ia_blocking, QuakeInput, SubmitKind};
+use mirada_launcher_llimphi::widgets::shuma_bar::{run_shell_blocking, ShumaBar};
 
 struct Model {
     theme: Theme,
@@ -20,6 +21,8 @@ struct Model {
     right: Vec<Box<dyn Widget>>,
     /// Tarjetas flotantes (esquemas + widgets vivos en paralelo).
     floating: Vec<(FloatingCard, Vec<Box<dyn Widget>>)>,
+    /// Widgets de la barra inferior (vacío si no hay bottom bar).
+    bottom: Vec<Box<dyn Widget>>,
 }
 
 impl Model {
@@ -29,6 +32,7 @@ impl Model {
             .chain(self.center.iter_mut())
             .chain(self.right.iter_mut())
             .chain(self.floating.iter_mut().flat_map(|(_, ws)| ws.iter_mut()))
+            .chain(self.bottom.iter_mut())
     }
 
     fn each_widget(&self) -> impl Iterator<Item = &Box<dyn Widget>> {
@@ -37,6 +41,7 @@ impl Model {
             .chain(self.center.iter())
             .chain(self.right.iter())
             .chain(self.floating.iter().flat_map(|(_, ws)| ws.iter()))
+            .chain(self.bottom.iter())
     }
 
     fn route_to_quake(&mut self, msg: &Msg) {
@@ -45,6 +50,24 @@ impl Model {
                 q.apply(msg);
             }
         }
+    }
+
+    fn route_to_shuma(&mut self, msg: &Msg) {
+        for w in self.each_widget_mut() {
+            if let Some(s) = w.as_any_mut().downcast_mut::<ShumaBar>() {
+                s.apply(msg);
+            }
+        }
+    }
+
+    /// `true` si algún `ShumaBar` está abierto. Análogo a `quake_open`.
+    fn shuma_open(&self) -> bool {
+        self.each_widget().any(|w| {
+            w.as_any()
+                .downcast_ref::<ShumaBar>()
+                .map(|s| s.open)
+                .unwrap_or(false)
+        })
     }
 
     /// `true` si algún `QuakeInput` está abierto. Cuando lo está, Esc
@@ -88,10 +111,16 @@ impl App for LauncherApp {
                 (card.clone(), ws)
             })
             .collect();
+        let bottom = cfg
+            .panel
+            .bottom
+            .as_ref()
+            .map(|b| b.widgets.iter().map(|s| widgets::build(s, &ctx)).collect())
+            .unwrap_or_default();
 
         handle.spawn_periodic(Duration::from_secs(1), || Msg::Tick);
 
-        Model { theme: Theme::dark(), cfg, left, center, right, floating }
+        Model { theme: Theme::dark(), cfg, left, center, right, floating, bottom }
     }
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -153,11 +182,46 @@ impl App for LauncherApp {
             | Msg::QuakeIaResult(_) => {
                 model.route_to_quake(&msg);
             }
+            Msg::ShumaSubmit => {
+                // Tomar buffer del primer ShumaBar abierto.
+                let mut taken: Option<String> = None;
+                for w in model.each_widget_mut() {
+                    if let Some(s) = w.as_any_mut().downcast_mut::<ShumaBar>() {
+                        if s.open && !s.buffer.is_empty() {
+                            taken = Some(s.take_buffer());
+                            break;
+                        }
+                    }
+                }
+                if let Some(cmd) = taken {
+                    for w in model.each_widget_mut() {
+                        if let Some(s) = w.as_any_mut().downcast_mut::<ShumaBar>() {
+                            if s.open {
+                                s.mark_pending();
+                                break;
+                            }
+                        }
+                    }
+                    handle.spawn(move || Msg::ShumaResult(run_shell_blocking(&cmd)));
+                }
+            }
+            Msg::ShumaToggle
+            | Msg::ShumaChar(_)
+            | Msg::ShumaBackspace
+            | Msg::ShumaResult(_) => {
+                model.route_to_shuma(&msg);
+            }
         }
         model
     }
 
     fn view(model: &Model) -> View<Msg> {
+        let bottom = model
+            .cfg
+            .panel
+            .bottom
+            .as_ref()
+            .map(|b| (b, model.bottom.as_slice()));
         panel::build(
             &model.cfg.panel,
             &model.theme,
@@ -165,6 +229,7 @@ impl App for LauncherApp {
             &model.center,
             &model.right,
             &model.floating,
+            bottom,
         )
     }
 
@@ -186,14 +251,20 @@ impl App for LauncherApp {
         // Como no chequeamos estado aquí, dejamos que `route_to_quake`
         // lo filtre: si no está abierto, el Msg llega y el quake lo
         // ignora.
-        // 2) si el quake está abierto, las teclas estándar van a él.
-        //    Si no, Esc cierra la app (Backspace/Enter quedan inertes).
-        let quake_open = model.quake_open();
+        // 2) Routing por estado de overlays. La shuma_bar tiene precedencia
+        //    sobre quake si ambos están abiertos.
+        let shuma_open = model.shuma_open();
+        let quake_open = !shuma_open && model.quake_open();
+
         match &event.key {
+            Key::Named(NamedKey::Escape) if shuma_open => Some(Msg::ShumaToggle),
             Key::Named(NamedKey::Escape) if quake_open => Some(Msg::QuakeToggle),
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
+            Key::Named(NamedKey::Backspace) if shuma_open => Some(Msg::ShumaBackspace),
             Key::Named(NamedKey::Backspace) if quake_open => Some(Msg::QuakeBackspace),
+            Key::Named(NamedKey::Enter) if shuma_open => Some(Msg::ShumaSubmit),
             Key::Named(NamedKey::Enter) if quake_open => Some(Msg::QuakeSubmit),
+            Key::Character(s) if shuma_open => s.chars().next().map(Msg::ShumaChar),
             Key::Character(s) if quake_open => s.chars().next().map(Msg::QuakeChar),
             _ => None,
         }
