@@ -11,6 +11,8 @@
 
 use ayni_core::{AgoraId, Conversacion, Firma, Hash, MensajeNodo};
 
+use crate::Sobre;
+
 /// Acumula nodos entrantes y los inserta en una [`Conversacion`] en cuanto sus
 /// padres están presentes, verificando cada firma antes de admitirlos.
 #[derive(Default)]
@@ -70,6 +72,81 @@ impl Fusionador {
             }
         }
         self.drenar(conv)
+    }
+
+    /// Los ids de PADRES que algún nodo pendiente espera y que aún no están en
+    /// el grafo (ni son, ellos mismos, otro pendiente). Son exactamente los
+    /// eslabones que hay que PEDIR al peer para que la reconciliación avance.
+    pub fn padres_faltantes(&self, conv: &Conversacion) -> Vec<Hash> {
+        use std::collections::BTreeSet;
+        let en_espera: BTreeSet<Hash> = self.pendientes.iter().map(|n| n.id()).collect();
+        let mut faltan = BTreeSet::new();
+        for nodo in &self.pendientes {
+            for p in nodo.padres() {
+                if !conv.contiene(p) && !en_espera.contains(p) {
+                    faltan.insert(*p);
+                }
+            }
+        }
+        faltan.into_iter().collect()
+    }
+
+    /// Procesa un [`Sobre`] de anti-entropía contra la conversación y devuelve
+    /// `(ids_nuevos, respuestas)`: los nodos que entraron al grafo (para pintar)
+    /// y los sobres a devolver AL MISMO peer para que la reconciliación siga.
+    /// El `Sobre::Hola` no es asunto del fusionador (lo maneja la app, que tiene
+    /// la cripto) — aquí se ignora.
+    ///
+    /// El baile completo: A anuncia `Cabezas`; B pide las que le faltan
+    /// (`Pedir`); A las entrega (`Entrega`); al insertarlas, B descubre padres
+    /// ausentes y los pide; A entrega… hasta que B tiene todo el cono causal.
+    /// Sólo viajan los nodos que de verdad faltaban.
+    pub fn procesar(
+        &mut self,
+        conv: &mut Conversacion,
+        sobre: Sobre,
+        verificar: impl Fn(&AgoraId, &Hash, &Firma) -> bool + Copy,
+    ) -> (Vec<Hash>, Vec<Sobre>) {
+        match sobre {
+            Sobre::Hola { .. } => (Vec::new(), Vec::new()),
+            Sobre::Cabezas(ids) => {
+                let faltan: Vec<Hash> = ids.into_iter().filter(|h| !conv.contiene(h)).collect();
+                let resp = if faltan.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Sobre::Pedir(faltan)]
+                };
+                (Vec::new(), resp)
+            }
+            Sobre::Pedir(ids) => {
+                let nodos: Vec<MensajeNodo> =
+                    ids.iter().filter_map(|h| conv.obtener(h).cloned()).collect();
+                let resp = if nodos.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Sobre::Entrega(nodos)]
+                };
+                (Vec::new(), resp)
+            }
+            Sobre::Entrega(nodos) => {
+                let nuevos = self.aplicar_lote(conv, nodos, verificar);
+                (nuevos, self.pedir_padres(conv))
+            }
+            Sobre::Nodo(nodo) => {
+                let nuevos = self.aplicar_nodo(conv, nodo, verificar);
+                (nuevos, self.pedir_padres(conv))
+            }
+        }
+    }
+
+    /// Envuelve [`padres_faltantes`](Self::padres_faltantes) en un `Pedir`, o nada.
+    fn pedir_padres(&self, conv: &Conversacion) -> Vec<Sobre> {
+        let faltan = self.padres_faltantes(conv);
+        if faltan.is_empty() {
+            Vec::new()
+        } else {
+            vec![Sobre::Pedir(faltan)]
+        }
     }
 
     /// Reintenta insertar los pendientes hasta que una pasada completa no añada

@@ -4,14 +4,20 @@
 //  Mueve nodos firmados entre pares y fusiona sus grafos hasta converger. El
 //  transporte es un TRAIT —intercambiable—; P1 entrega `EnlaceTcp` (LAN directo).
 //
-//  Protocolo de cable (`Sobre`), deliberadamente mínimo para el MVP:
-//    * `Grafo(Vec<MensajeNodo>)` — al conectar, cada par vuelca su conversación
-//      entera. Como fusionar es idempotente, repetir nodos no cuesta corrección.
-//    * `Nodo(MensajeNodo)` — en caliente, cada mensaje nuevo se difunde suelto.
+//  Protocolo de cable (`Sobre`) — anti-entropía sobre el DAG (P3):
+//    * `Hola{x25519}` — saludo + clave pública de cifrado (P2).
+//    * `Cabezas(Vec<Hash>)` — "mi frontera". Al conectar, cada par anuncia sus
+//      cabezas; el otro pide sólo las que le faltan. Es el diff de Merkle del DAG:
+//      SÓLO viaja lo que falta, no el grafo entero.
+//    * `Pedir(Vec<Hash>)` / `Entrega(Vec<MensajeNodo>)` — el receptor pide ids
+//      ausentes; el emisor entrega esos nodos. Al recibirlos, sus padres ausentes
+//      se piden a su vez: la reconciliación CAMINA el DAG hacia atrás, trayendo
+//      sólo los eslabones que faltan, en O(profundidad) idas y vueltas.
+//    * `Nodo(MensajeNodo)` — en caliente, cada mensaje nuevo se difunde suelto;
+//      si al receptor le falta un padre, lo pide y se autorrepara.
 //
-//  El diff de Merkle (mandar SÓLO lo que falta, en vez del grafo entero) y el
-//  store-and-forward sobre minga son P3 — aquí basta el volcado completo, que
-//  para un hilo de chat es barato y obviamente correcto.
+//  El protocolo es transport-agnóstico: cuando exista `EnlaceMinga` (libp2p P2P
+//  + DHT + NAT traversal), esta misma anti-entropía viaja sobre él sin cambios.
 // =============================================================================
 
 mod fusion;
@@ -20,7 +26,7 @@ mod tcp;
 pub use fusion::Fusionador;
 pub use tcp::EnlaceTcp;
 
-pub use ayni_core::{Conversacion, MensajeNodo};
+pub use ayni_core::{Conversacion, Hash, MensajeNodo};
 
 use serde::{Deserialize, Serialize};
 
@@ -38,9 +44,13 @@ pub enum Sobre {
     /// alguno —una clave pública es, por definición, pública—; sólo evita un
     /// directorio externo para el intercambio de claves de cifrado.
     Hola { x25519: [u8; 32] },
-    /// Volcado del grafo completo del emisor — su instantánea en orden
-    /// topológico. Se manda al establecer la conexión para ponerse al día.
-    Grafo(Vec<MensajeNodo>),
+    /// Anti-entropía: las cabezas (frontera) del emisor. El receptor pide las
+    /// que le falten. Es el diff de Merkle del DAG — sólo viaja lo que falta.
+    Cabezas(Vec<Hash>),
+    /// El receptor pide al emisor estos nodos (por id), que no tiene.
+    Pedir(Vec<Hash>),
+    /// El emisor entrega los nodos pedidos. Sus padres ausentes se piden a su vez.
+    Entrega(Vec<MensajeNodo>),
     /// Un nodo nuevo, difundido en caliente apenas su autor lo redacta. Su carga
     /// puede ser texto plano o `Carga::Cifrado` — al transporte le da igual.
     Nodo(MensajeNodo),
@@ -86,165 +96,182 @@ pub enum ErrorSync {
     PeerDesconocido,
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ayni_core::{Carga, Conversacion};
     use ayni_crypto::{verificar_firma, Identidad};
     use std::sync::mpsc::Receiver;
-    use std::time::Duration;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
-    /// Drena eventos hasta ver un `Conectado` (o expira). Asegura que el peer
-    /// está registrado antes de difundir —el registro del lado aceptante ocurre
-    /// en un hilo, así que esperamos su señal en vez de adivinar un sleep—.
-    fn esperar_conectado(rx: &Receiver<EventoRed>) {
-        let plazo = Duration::from_secs(2);
-        loop {
-            match rx.recv_timeout(plazo).expect("timeout esperando Conectado") {
-                EventoRed::Conectado(_) => return,
-                _ => continue,
+    /// El estado de un peer: su grafo + su fusionador.
+    type Estado = Arc<Mutex<(Conversacion, Fusionador)>>;
+
+    fn estado_vacio() -> Estado {
+        Arc::new(Mutex::new((Conversacion::nueva(), Fusionador::nuevo())))
+    }
+
+    /// Lanza el "pump" de red de un peer —exactamente como la app real—: al
+    /// conectar anuncia sus cabezas; ante cada sobre, corre la anti-entropía y
+    /// devuelve al mismo peer los sobres que pida la reconciliación.
+    fn lanzar_pump(enlace: Arc<EnlaceTcp>, rx: Receiver<EventoRed>, estado: Estado) {
+        std::thread::spawn(move || {
+            for ev in rx {
+                match ev {
+                    EventoRed::Conectado(peer) => {
+                        let cabezas = estado.lock().unwrap().0.cabezas();
+                        let _ = enlace.enviar(&peer, &Sobre::Cabezas(cabezas));
+                    }
+                    EventoRed::Desconectado(_) => {}
+                    EventoRed::Sobre(peer, sobre) => {
+                        let respuestas = {
+                            let mut g = estado.lock().unwrap();
+                            let (conv, fus) = &mut *g;
+                            fus.procesar(conv, sobre, verificar_firma).1
+                        };
+                        for r in respuestas {
+                            let _ = enlace.enviar(&peer, &r);
+                        }
+                    }
+                }
             }
+        });
+    }
+
+    /// Espera (con plazo) a que el grafo de un peer alcance `objetivo` nodos.
+    fn esperar_len(estado: &Estado, objetivo: usize) {
+        let limite = Instant::now() + Duration::from_secs(3);
+        loop {
+            if estado.lock().unwrap().0.len() >= objetivo {
+                return;
+            }
+            if Instant::now() > limite {
+                panic!(
+                    "timeout: grafo en {} de {} nodos",
+                    estado.lock().unwrap().0.len(),
+                    objetivo
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
-    /// Drena eventos durante un rato, aplicando cada sobre al grafo via el
-    /// fusionador, hasta que el grafo alcanza `objetivo` nodos (o expira).
-    fn sincronizar_hasta(
-        rx: &Receiver<EventoRed>,
-        conv: &mut Conversacion,
-        fus: &mut Fusionador,
-        objetivo: usize,
-    ) {
-        let plazo = Duration::from_secs(2);
-        while conv.len() < objetivo {
-            match rx.recv_timeout(plazo) {
-                Ok(EventoRed::Sobre(_, Sobre::Nodo(n))) => {
-                    fus.aplicar_nodo(conv, n, verificar_firma);
-                }
-                Ok(EventoRed::Sobre(_, Sobre::Grafo(nodos))) => {
-                    fus.aplicar_lote(conv, nodos, verificar_firma);
-                }
-                Ok(_) => continue,
-                Err(_) => panic!("timeout: grafo en {} de {} nodos", conv.len(), objetivo),
-            }
-        }
+    /// Redacta+firma+inserta un texto en el estado de un peer y lo difunde.
+    fn publicar(estado: &Estado, enlace: &EnlaceTcp, ident: &Identidad, texto: &str, ts: u64) {
+        let nodo = {
+            let mut g = estado.lock().unwrap();
+            let nodo = g
+                .0
+                .redactar(ident.agora_id(), Carga::Texto(texto.into()), ts, |id| ident.firmar(id));
+            g.0.agregar(nodo.clone()).unwrap();
+            nodo
+        };
+        enlace.difundir(&Sobre::Nodo(nodo)).unwrap();
     }
 
     #[test]
-    fn dos_clientes_convergen_por_tcp_loopback() {
-        // --- identidades ---
+    fn dos_clientes_convergen_por_anti_entropia() {
         let alicia = Identidad::desde_semilla([1u8; 32], "Alicia");
         let beto = Identidad::desde_semilla([2u8; 32], "Beto");
 
-        // --- grafos locales y enlaces ---
-        let mut conv_a = Conversacion::nueva();
-        let mut conv_b = Conversacion::nueva();
-        let mut fus_a = Fusionador::nuevo();
-        let mut fus_b = Fusionador::nuevo();
+        let est_a = estado_vacio();
+        let est_b = estado_vacio();
+
+        // Alicia escribe DOS mensajes ANTES de que Beto exista —probará que la
+        // anti-entropía al conectar pone a Beto al día sin volcar nada de más—.
+        let (enlace_a, rx_a) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        let enlace_a = Arc::new(enlace_a);
+        publicar(&est_a, &enlace_a, &alicia, "hola Beto", 1);
+        publicar(&est_a, &enlace_a, &alicia, "¿andás?", 2);
+
+        let (enlace_b, rx_b) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        let enlace_b = Arc::new(enlace_b);
+
+        lanzar_pump(enlace_a.clone(), rx_a, est_a.clone());
+        lanzar_pump(enlace_b.clone(), rx_b, est_b.clone());
+
+        // Beto se conecta; la anti-entropía corre sola por los pumps.
+        enlace_b.conectar(&enlace_a.direccion_local().to_string()).unwrap();
+        esperar_len(&est_b, 2);
+        assert!(est_b.lock().unwrap().0.verificar_firmas(verificar_firma).is_ok());
+
+        // Beto responde EN CALIENTE; Alicia converge a 3.
+        publicar(&est_b, &enlace_b, &beto, "acá ando", 3);
+        esperar_len(&est_a, 3);
+
+        // Convergencia total: mismo orden topológico en ambos, sin servidor.
+        let orden_a = est_a.lock().unwrap().0.orden_topologico();
+        let orden_b = est_b.lock().unwrap().0.orden_topologico();
+        assert_eq!(orden_a, orden_b, "los dos pares convergen al mismo hilo");
+    }
+
+    #[test]
+    fn anti_entropia_camina_el_dag_hacia_atras() {
+        // Beto se conecta cuando Alicia ya tiene una CADENA de 5 mensajes. La
+        // reconciliación debe traer toda la cadena pidiendo padres hacia atrás.
+        let alicia = Identidad::desde_semilla([1u8; 32], "Alicia");
+        let est_a = estado_vacio();
+        let est_b = estado_vacio();
 
         let (enlace_a, rx_a) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        let enlace_a = Arc::new(enlace_a);
+        for i in 0..5 {
+            publicar(&est_a, &enlace_a, &alicia, &format!("msg {i}"), i);
+        }
         let (enlace_b, rx_b) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        let enlace_b = Arc::new(enlace_b);
 
-        // Alicia escribe DOS mensajes ANTES de que Beto se conecte: probará que
-        // el volcado de grafo al conectar pone a Beto al día.
-        let n1 = conv_a.redactar(alicia.agora_id(), Carga::Texto("hola Beto".into()), 1, |id| {
-            alicia.firmar(id)
-        });
-        conv_a.agregar(n1).unwrap();
-        let n2 = conv_a.redactar(alicia.agora_id(), Carga::Texto("¿andás?".into()), 2, |id| {
-            alicia.firmar(id)
-        });
-        conv_a.agregar(n2).unwrap();
-        assert_eq!(conv_a.len(), 2);
+        lanzar_pump(enlace_a.clone(), rx_a, est_a.clone());
+        lanzar_pump(enlace_b.clone(), rx_b, est_b.clone());
 
-        // Beto se conecta a Alicia.
-        let addr_a = enlace_a.direccion_local().to_string();
-        enlace_b.conectar(&addr_a).unwrap();
-
-        // Ambos lados ven Conectado; al verlo, vuelcan su grafo al otro.
-        esperar_conectado(&rx_a); // Alicia ve a Beto
-        esperar_conectado(&rx_b); // Beto ve a Alicia
-        enlace_a.difundir(&Sobre::Grafo(conv_a.instantanea())).unwrap();
-        enlace_b.difundir(&Sobre::Grafo(conv_b.instantanea())).unwrap();
-
-        // Beto se pone al día con los 2 mensajes de Alicia.
-        sincronizar_hasta(&rx_b, &mut conv_b, &mut fus_b, 2);
-        assert_eq!(conv_b.len(), 2, "Beto recibió el grafo de Alicia al conectar");
-        assert!(conv_b.verificar_firmas(verificar_firma).is_ok(), "firmas válidas");
-
-        // Ahora Beto responde EN CALIENTE; se difunde suelto.
-        let r = conv_b.redactar(beto.agora_id(), Carga::Texto("acá ando".into()), 3, |id| {
-            beto.firmar(id)
-        });
-        conv_b.agregar(r).unwrap();
-        enlace_b.difundir(&Sobre::Nodo(conv_b.instantanea().pop().unwrap())).unwrap();
-
-        // Alicia recibe la respuesta de Beto: converge a 3 nodos.
-        sincronizar_hasta(&rx_a, &mut conv_a, &mut fus_a, 3);
-        assert_eq!(conv_a.len(), 3, "Alicia recibió la respuesta en caliente de Beto");
-
-        // Convergencia: ambos calculan EL MISMO orden topológico (sin servidor).
-        assert_eq!(conv_a.len(), conv_b.len());
-        assert_eq!(
-            conv_a.orden_topologico(),
-            conv_b.orden_topologico(),
-            "los dos pares convergen al mismo hilo"
-        );
+        enlace_b.conectar(&enlace_a.direccion_local().to_string()).unwrap();
+        esperar_len(&est_b, 5);
+        assert_eq!(est_b.lock().unwrap().0.len(), 5, "cadena completa reconciliada");
+        assert_eq!(est_b.lock().unwrap().1.pendientes(), 0, "sin pendientes huérfanos");
     }
 
     #[test]
     fn lazo_e2ee_sobre_tcp_el_transporte_no_ve_el_claro() {
-        use ayni_core::Carga;
-
         let alicia = Identidad::desde_semilla([1u8; 32], "Alicia");
         let beto = Identidad::desde_semilla([2u8; 32], "Beto");
-
-        // Cada uno deriva el canal 1:1 desde la clave pública X25519 del otro.
         let canal_a = alicia.canal_con(&beto.clave_publica_x25519());
         let canal_b = beto.canal_con(&alicia.clave_publica_x25519());
 
-        let mut conv_a = Conversacion::nueva();
-        let mut conv_b = Conversacion::nueva();
-        let mut fus_b = Fusionador::nuevo();
-
-        let (enlace_a, _rx_a) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        let est_a = estado_vacio();
+        let est_b = estado_vacio();
+        let (enlace_a, rx_a) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        let enlace_a = Arc::new(enlace_a);
         let (enlace_b, rx_b) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        let enlace_b = Arc::new(enlace_b);
+        lanzar_pump(enlace_a.clone(), rx_a, est_a.clone());
+        lanzar_pump(enlace_b.clone(), rx_b, est_b.clone());
         enlace_b.conectar(&enlace_a.direccion_local().to_string()).unwrap();
-        esperar_conectado(&rx_b);
 
-        // Alicia CIFRA el claro, lo mete en un nodo firmado, y lo difunde.
+        // Alicia CIFRA y difunde un nodo firmado.
         let secreto = "esto sólo lo lee Beto";
         let cifrado = canal_a.cifrar(secreto.as_bytes());
-        let nodo = conv_a.redactar(alicia.agora_id(), Carga::Cifrado(cifrado), 1, |id| {
-            alicia.firmar(id)
-        });
-        conv_a.agregar(nodo).unwrap();
-        let en_cable = conv_a.instantanea().pop().unwrap();
-
-        // Lo que viaja por el cable NO contiene el claro.
-        let bytes_cable = postcard::to_allocvec(&Sobre::Nodo(en_cable.clone())).unwrap();
-        let ventana: Vec<u8> = bytes_cable.clone();
+        let nodo = {
+            let mut g = est_a.lock().unwrap();
+            let n = g.0.redactar(alicia.agora_id(), Carga::Cifrado(cifrado), 1, |id| alicia.firmar(id));
+            g.0.agregar(n.clone()).unwrap();
+            n
+        };
+        // lo que viaja por el cable NO contiene el claro.
+        let bytes_cable = postcard::to_allocvec(&Sobre::Nodo(nodo.clone())).unwrap();
         assert!(
-            !contiene_subcadena(&ventana, secreto.as_bytes()),
+            !bytes_cable.windows(secreto.len()).any(|w| w == secreto.as_bytes()),
             "el claro NO debe aparecer en los bytes del cable"
         );
+        enlace_a.difundir(&Sobre::Nodo(nodo)).unwrap();
 
-        enlace_a.difundir(&Sobre::Nodo(en_cable)).unwrap();
-        sincronizar_hasta(&rx_b, &mut conv_b, &mut fus_b, 1);
-
-        // Beto verifica autoría (pública) y descifra (sólo él puede).
-        let recibido = conv_b.instantanea().pop().unwrap();
-        assert!(recibido.verificar(verificar_firma), "autoría de Alicia, verificable");
+        esperar_len(&est_b, 1);
+        let recibido = est_b.lock().unwrap().0.instantanea().pop().unwrap();
+        assert!(recibido.verificar(verificar_firma), "autoría de Alicia verificable");
         assert_eq!(recibido.contenido.carga.texto(), None, "el nodo no trae claro");
-        let claro = canal_b
-            .descifrar(recibido.contenido.carga.cifrado().unwrap())
-            .unwrap();
+        let claro = canal_b.descifrar(recibido.contenido.carga.cifrado().unwrap()).unwrap();
         assert_eq!(claro, secreto.as_bytes(), "Beto recupera el claro E2EE");
-    }
-
-    /// ¿Aparece `aguja` como subcadena contigua de `pajar`?
-    fn contiene_subcadena(pajar: &[u8], aguja: &[u8]) -> bool {
-        pajar.windows(aguja.len()).any(|w| w == aguja)
     }
 
     #[test]
@@ -253,8 +280,6 @@ mod tests {
         let impostor = Identidad::desde_semilla([9u8; 32], "Impostor");
         let mut conv = Conversacion::nueva();
         let mut fus = Fusionador::nuevo();
-
-        // nodo atribuido a Alicia pero firmado por el impostor:
         let contenido = ayni_core::Contenido::nuevo(
             alicia.agora_id(),
             Vec::new(),
@@ -262,7 +287,6 @@ mod tests {
             1,
         );
         let falso = MensajeNodo::sellar(contenido, |id| impostor.firmar(id));
-
         let anadidos = fus.aplicar_nodo(&mut conv, falso, verificar_firma);
         assert!(anadidos.is_empty(), "el nodo de firma inválida no entra");
         assert_eq!(conv.len(), 0);

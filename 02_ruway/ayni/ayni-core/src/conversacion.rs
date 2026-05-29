@@ -41,6 +41,35 @@ impl Conversacion {
         }
     }
 
+    /// Reconstruye una conversación desde una lista de nodos en CUALQUIER orden
+    /// (p. ej. lo que devuelve un store al cargar de disco). Inserta con reintento
+    /// hasta el punto fijo, de modo que un hijo que aparezca antes que su padre
+    /// se acomode igual. NO verifica firmas —asume nodos de una fuente de
+    /// confianza (el propio disco); para nodos de la red, pasar por el
+    /// `Fusionador` de `ayni-sync`, que sí verifica—.
+    pub fn desde_nodos(nodos: impl IntoIterator<Item = MensajeNodo>) -> Self {
+        let mut conv = Conversacion::nueva();
+        let mut espera: Vec<MensajeNodo> = nodos.into_iter().collect();
+        loop {
+            let mut progreso = false;
+            let mut quedan = Vec::with_capacity(espera.len());
+            for nodo in core::mem::take(&mut espera) {
+                if nodo.padres().iter().all(|p| conv.nodos.contains_key(p)) {
+                    if conv.agregar(nodo).is_ok() {
+                        progreso = true;
+                    }
+                } else {
+                    quedan.push(nodo);
+                }
+            }
+            espera = quedan;
+            if !progreso || espera.is_empty() {
+                break;
+            }
+        }
+        conv
+    }
+
     /// Inserta un nodo en el grafo tras validar su INTEGRIDAD ESTRUCTURAL:
     /// versión conocida y todos sus padres ya presentes. NO valida la firma
     /// —eso es [`Conversacion::verificar_firmas`], que necesita cripto que este

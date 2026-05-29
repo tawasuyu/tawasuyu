@@ -89,15 +89,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for evento in rx {
                 match evento {
                     EventoRed::Conectado(peer) => {
-                        // saludar (clave X25519) + volcar nuestro grafo.
+                        // saludar (clave X25519) + anunciar cabezas (anti-entropía).
                         let _ = enlace.enviar(
                             &peer,
                             &Sobre::Hola {
                                 x25519: yo.clave_publica_x25519(),
                             },
                         );
-                        let instantanea = estado.lock().unwrap().conv.instantanea();
-                        let _ = enlace.enviar(&peer, &Sobre::Grafo(instantanea));
+                        let cabezas = estado.lock().unwrap().conv.cabezas();
+                        let _ = enlace.enviar(&peer, &Sobre::Cabezas(cabezas));
                         eprintln!("· peer conectado: {}", peer.0);
                     }
                     EventoRed::Desconectado(peer) => {
@@ -107,18 +107,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         estado.lock().unwrap().canal = Some(yo.canal_con(&x25519));
                         eprintln!("· canal E2EE disponible con el peer");
                     }
-                    EventoRed::Sobre(_, sobre) => {
-                        let mut e = estado.lock().unwrap();
-                        let Estado { conv, fus, canal } = &mut *e;
-                        let nuevos = match sobre {
-                            Sobre::Nodo(n) => fus.aplicar_nodo(conv, n, verificar_firma),
-                            Sobre::Grafo(ns) => fus.aplicar_lote(conv, ns, verificar_firma),
-                            Sobre::Hola { .. } => unreachable!(),
+                    EventoRed::Sobre(peer, sobre) => {
+                        // anti-entropía: procesar, responder pedidos, imprimir lo nuevo.
+                        let (lineas, respuestas) = {
+                            let mut e = estado.lock().unwrap();
+                            let Estado { conv, fus, canal } = &mut *e;
+                            let (nuevos, resp) = fus.procesar(conv, sobre, verificar_firma);
+                            let lineas: Vec<String> = nuevos
+                                .iter()
+                                .filter_map(|id| conv.obtener(id))
+                                .map(|n| formatear(n, canal.as_ref()))
+                                .collect();
+                            (lineas, resp)
                         };
-                        for id in &nuevos {
-                            if let Some(nodo) = conv.obtener(id) {
-                                imprimir(nodo, canal.as_ref());
-                            }
+                        for r in respuestas {
+                            let _ = enlace.enviar(&peer, &r);
+                        }
+                        for l in lineas {
+                            println!("{l}");
                         }
                     }
                 }
@@ -151,9 +157,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Pinta un nodo entrante: prefijo del autor + texto (descifrando si hace falta
-/// y hay canal).
-fn imprimir(nodo: &MensajeNodo, canal: Option<&CanalSeguro>) {
+/// Formatea un nodo entrante: `[autor] texto` (descifrando si hace falta y hay
+/// canal).
+fn formatear(nodo: &MensajeNodo, canal: Option<&CanalSeguro>) -> String {
     let autor = hex_corto(nodo.autor());
     let texto = match &nodo.contenido.carga {
         Carga::Texto(t) => t.clone(),
@@ -165,7 +171,7 @@ fn imprimir(nodo: &MensajeNodo, canal: Option<&CanalSeguro>) {
             None => "‹cifrado: sin canal›".into(),
         },
     };
-    println!("[{autor}] {texto}");
+    format!("[{autor}] {texto}")
 }
 
 /// Los primeros 3 bytes de un identificador, en hex.

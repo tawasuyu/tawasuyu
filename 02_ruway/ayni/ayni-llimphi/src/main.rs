@@ -147,7 +147,7 @@ impl App for Ayni {
             }
             Msg::Red(evento) => match evento {
                 EventoRed::Conectado(peer) => {
-                    // saludar (clave X25519) + poner al día con nuestro grafo.
+                    // saludar (clave X25519) + anunciar cabezas (anti-entropía).
                     let _ = model.enlace.enviar(
                         &peer,
                         &Sobre::Hola {
@@ -156,22 +156,20 @@ impl App for Ayni {
                     );
                     let _ = model
                         .enlace
-                        .enviar(&peer, &Sobre::Grafo(model.conv.instantanea()));
+                        .enviar(&peer, &Sobre::Cabezas(model.conv.cabezas()));
                 }
                 EventoRed::Desconectado(_) => {}
                 EventoRed::Sobre(_, Sobre::Hola { x25519 }) => {
                     model.canal = Some(model.identidad.canal_con(&x25519));
                 }
-                EventoRed::Sobre(_, sobre) => {
-                    let Modelo { conv, fus, .. } = &mut model;
-                    match sobre {
-                        Sobre::Nodo(n) => {
-                            fus.aplicar_nodo(conv, n, verificar_firma);
-                        }
-                        Sobre::Grafo(ns) => {
-                            fus.aplicar_lote(conv, ns, verificar_firma);
-                        }
-                        Sobre::Hola { .. } => {}
+                EventoRed::Sobre(peer, sobre) => {
+                    // anti-entropía: procesar y devolver al peer lo que pida.
+                    let respuestas = {
+                        let Modelo { conv, fus, .. } = &mut model;
+                        fus.procesar(conv, sobre, verificar_firma).1
+                    };
+                    for r in respuestas {
+                        let _ = model.enlace.enviar(&peer, &r);
                     }
                 }
             },
