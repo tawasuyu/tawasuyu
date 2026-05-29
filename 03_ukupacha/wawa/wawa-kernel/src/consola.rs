@@ -747,8 +747,13 @@ impl Consola {
     /// lo recibe en cada volcado, asi que el puntero esta siempre encima.
     pub(crate) fn presentar(&mut self) {
         self.pantalla.presentar(&self.lienzo);
-        if let Some((x, y)) = crate::drivers::raton::posicion() {
-            self.pantalla.estampar_puntero(x, y);
+        // FASE 62 :: con cursor por HARDWARE el host compone el puntero en su
+        // propio plano — estamparlo aqui pintaria un SEGUNDO cursor sobre el
+        // lienzo. Solo se estampa por software cuando el hardware no lo gobierna.
+        if !crate::drivers::gpu::cursor_hardware() {
+            if let Some((x, y)) = crate::drivers::raton::posicion() {
+                self.pantalla.estampar_puntero(x, y);
+            }
         }
         // FASE 60 :: si el kernel gobierna un scanout virtio-gpu, el lienzo y
         // el puntero ya escritos viven en memoria del huesped; el `flush` los
@@ -762,9 +767,14 @@ impl Consola {
     /// framebuffer sigue intacto. Esta es la primitiva del camino rapido.
     pub(crate) fn presentar_region(&mut self, region: RegionPantalla) {
         self.pantalla.presentar_region(&self.lienzo, region);
-        if let Some((x, y)) = crate::drivers::raton::posicion() {
-            if region_solapa(region, sprite_puntero_rect(x, y)) {
-                self.pantalla.estampar_puntero(x, y);
+        // FASE 62 :: el cursor por hardware vive en su propio plano del host; no
+        // se re-estampa por software (lo haria doble). Sin el, el blit por region
+        // pudo borrar el sprite, asi que se vuelve a sellar si lo solapa.
+        if !crate::drivers::gpu::cursor_hardware() {
+            if let Some((x, y)) = crate::drivers::raton::posicion() {
+                if region_solapa(region, sprite_puntero_rect(x, y)) {
+                    self.pantalla.estampar_puntero(x, y);
+                }
             }
         }
         // FASE 60 :: volcar al anfitrion lo recien blitteado. El blit GUEST fue

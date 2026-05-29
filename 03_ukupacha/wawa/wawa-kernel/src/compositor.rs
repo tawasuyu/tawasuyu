@@ -1744,7 +1744,18 @@ pub fn refrescar_puntero() {
         return;
     }
     if PUNTERO_REFRESCADO.swap(actual, Ordering::Relaxed) != actual {
-        crate::consola::refrescar();
+        // FASE 62 :: si el kernel gobierna un cursor por HARDWARE, mover el
+        // puntero es un comando diminuto en la cola de cursor del virtio-gpu —el
+        // host lo compone sobre el scanout en un plano aparte—, no un volcado de
+        // pantalla entera. Esa es la cura del lag del puntero: la respuesta deja
+        // de estar atada al coste de re-presentar el lienzo cada fotograma.
+        if crate::drivers::gpu::cursor_hardware() {
+            let x = actual & 0xFFFF;
+            let y = actual >> 16;
+            crate::drivers::gpu::mover_cursor(x, y);
+        } else {
+            crate::consola::refrescar();
+        }
     }
 }
 

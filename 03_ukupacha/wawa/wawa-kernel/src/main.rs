@@ -783,6 +783,19 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     codificar(pantalla.format, Color::FATAL_CARMESI),
                 );
                 traza("gpu :: scanout en posesion del kernel");
+                // FASE 62 :: subir el cursor por hardware. El puntero pasa a un
+                // plano que el host compone sobre el scanout: moverlo ya no
+                // fuerza un volcado de pantalla entera —la cura del lag—. Su
+                // punto caliente es el vertice noroeste de la flecha (0,0). Si
+                // el dispositivo lo rechaza, el puntero recae al estampado por
+                // software sin romper nada.
+                match drivers::gpu::instalar_cursor(&grafico::cursor_bgra_64(), 0, 0) {
+                    Ok(()) => traza("gpu :: cursor por hardware vivo"),
+                    Err(motivo) => {
+                        let _ = writeln!(baliza::Serie, "gpu :: cursor hw omitido :: {motivo}");
+                        traza("gpu :: cursor por hardware OMITIDO (estampado software)");
+                    }
+                }
             }
             Err(motivo) => {
                 let _ = writeln!(baliza::Serie, "gpu :: {motivo} (fallback framebuffer GOP)");

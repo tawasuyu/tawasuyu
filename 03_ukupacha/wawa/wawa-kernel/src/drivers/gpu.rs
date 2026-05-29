@@ -23,6 +23,8 @@
 //  —el escritorio sigue, solo que no lo gobierna el kernel—.
 // =============================================================================
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use spin::{Mutex, Once};
 use virtio_drivers::device::gpu::VirtIOGpu;
 use virtio_drivers::transport::pci::bus::{Command, DeviceFunction, PciRoot};
@@ -52,6 +54,13 @@ unsafe impl Send for Gpu {}
 
 /// El adaptador global de renaser. Se monta una sola vez, en `montar`.
 static GPU: Once<Mutex<Gpu>> = Once::new();
+
+/// ¿Esta vivo el cursor por HARDWARE? Lo enciende `instalar_cursor` con exito.
+/// Mientras este `true`, el compositor NO estampa el puntero por software en el
+/// framebuffer (lo compone el host en un plano aparte) y los movimientos del
+/// raton viajan por `mover_cursor` —un comando diminuto en la cola de cursor—
+/// en vez de forzar un `presentar` de pantalla entera.
+static CURSOR_HW: AtomicBool = AtomicBool::new(false);
 
 /// Lo que `montar` entrega al kernel para que construya su `Pantalla` sobre el
 /// scanout que ahora gobierna: el framebuffer DMA del huesped y su geometria.
@@ -152,6 +161,44 @@ pub fn disponible() -> bool {
 pub fn presentar() {
     if let Some(gpu) = GPU.get() {
         let _ = gpu.lock().0.flush();
+    }
+}
+
+/// FASE 62 :: instala el CURSOR POR HARDWARE. Sube `imagen` (64×64 B8G8R8A8) al
+/// recurso de cursor del dispositivo y lo posa en el origen con su punto caliente
+/// en `(hot_x, hot_y)`. A partir de aqui el host (QEMU) compone el puntero sobre
+/// el scanout en un plano propio: moverlo es un comando en la cola de cursor, sin
+/// tocar el framebuffer ni hacer flush — la cura del lag del puntero. Si falla
+/// —sin GPU, recurso rechazado—, devuelve `Err` y `CURSOR_HW` queda en `false`:
+/// el puntero recae limpiamente en el estampado por software.
+pub fn instalar_cursor(imagen: &[u8], hot_x: u32, hot_y: u32) -> Result<(), &'static str> {
+    let gpu = GPU.get().ok_or("virtio-gpu no gobernado por el kernel")?;
+    gpu.lock()
+        .0
+        .setup_cursor(imagen, 0, 0, hot_x, hot_y)
+        .map_err(|_| "virtio-gpu rechazo el recurso de cursor")?;
+    CURSOR_HW.store(true, Ordering::Release);
+    Ok(())
+}
+
+/// ¿Gobierna el kernel un cursor por hardware vivo? Lo consultan el compositor
+/// (para no estampar el puntero por software) y `refrescar_puntero` (para mover
+/// el plano de cursor en vez de re-presentar la pantalla).
+pub fn cursor_hardware() -> bool {
+    CURSOR_HW.load(Ordering::Acquire)
+}
+
+/// Mueve el cursor por hardware a `(x, y)` en pixeles del scanout. Es un comando
+/// `MOVE_CURSOR` en la cola de cursor —~24 bytes, sin transferir framebuffer—, de
+/// modo que el puntero sigue al raton con latencia de ida-y-vuelta de cola, no de
+/// fotograma del compositor. No-op si no hay cursor por hardware. Un fallo del
+/// comando se ignora: un movimiento perdido lo corrige el siguiente.
+pub fn mover_cursor(x: usize, y: usize) {
+    if !CURSOR_HW.load(Ordering::Acquire) {
+        return;
+    }
+    if let Some(gpu) = GPU.get() {
+        let _ = gpu.lock().0.move_cursor(x as u32, y as u32);
     }
 }
 

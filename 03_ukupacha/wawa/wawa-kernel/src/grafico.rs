@@ -481,6 +481,36 @@ const PUNTERO: [&[u8; PUNTERO_ANCHO]; 18] = [
     b"......###...",
 ];
 
+/// Lado del recurso de cursor por hardware de virtio-gpu: un cuadrado fijo de
+/// 64×64 px (lo exige `CURSOR_RECT` de la crate). El sprite del puntero —12×18—
+/// se ancla en su esquina noroeste; el resto queda transparente.
+pub(crate) const CURSOR_HW_LADO: usize = 64;
+
+/// Renderiza el sprite del puntero (`PUNTERO`) en un buffer 64×64 en formato
+/// B8G8R8A8 (el unico que el recurso de cursor de virtio-gpu admite), listo para
+/// `gpu::instalar_cursor`. Asi el cursor por HARDWARE comparte la misma flecha
+/// que el estampado por software, sin duplicar el dibujo. Pixeles `#` van al
+/// borde oscuro, `*` al relleno claro, el resto transparente (alpha 0). El
+/// vertice de la flecha (0,0) es el punto caliente. Bytes en orden B,G,R,A —
+/// la A=0 marca transparencia, A=0xFF opacidad.
+pub(crate) fn cursor_bgra_64() -> alloc::vec::Vec<u8> {
+    const BORDE: [u8; 4] = [0x18, 0x12, 0x10, 0xFF];
+    const RELLENO: [u8; 4] = [0xF8, 0xF2, 0xF0, 0xFF];
+    let mut imagen = alloc::vec![0u8; CURSOR_HW_LADO * CURSOR_HW_LADO * 4];
+    for (fila, linea) in PUNTERO.iter().enumerate() {
+        for (col, &celda) in linea.iter().enumerate() {
+            let bgra = match celda {
+                b'#' => BORDE,
+                b'*' => RELLENO,
+                _ => continue,
+            };
+            let base = (fila * CURSOR_HW_LADO + col) * 4;
+            imagen[base..base + 4].copy_from_slice(&bgra);
+        }
+    }
+    imagen
+}
+
 impl Pantalla {
     /// Estampa el sprite del puntero del raton sobre el framebuffer, con su
     /// vertice en (x, y). El sprite se recorta con firmeza a los limites de la
