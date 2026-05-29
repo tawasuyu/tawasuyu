@@ -19,6 +19,7 @@ tullpu-ops = { path = "../tullpu-ops" }
 pixel-verbo-core = { path = "../pixel-verbo-core" }
 pixel-verbo-mock = { path = "../pixel-verbo-mock" }
 pixel-verbo-daemon = { path = "../pixel-verbo-daemon" }
+foreign-psd = { path = "../../../shared/foreign-psd" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }

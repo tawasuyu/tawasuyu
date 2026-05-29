@@ -130,18 +130,67 @@ fn resolver_proveedor() -> (Box<dyn Proveedor>, String) {
     }
 }
 
-fn inicializar() -> Model {
+/// Decide cómo materializar el path recibido por CLI según extensión:
+/// `.psd` → import multi-capa via `foreign-psd`; el resto cae al loader PNG
+/// existente y se convierte en una capa raster única. Devuelve el lienzo
+/// armado, su almacén poblado, el `Uuid` que la UI debe seleccionar al
+/// arrancar y una etiqueta corta para el header.
+fn cargar_arg(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMemoria, Uuid, String)> {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_lowercase);
+    match ext.as_deref() {
+        Some("psd") => cargar_psd(path),
+        _ => cargar_png_como_capa(path),
+    }
+}
+
+fn cargar_png_como_capa(
+    path: &std::path::Path,
+) -> Option<(Lienzo, AlmacenEnMemoria, Uuid, String)> {
+    let (w, h, bytes) = cargar_png(path)?;
     let mut almacen = AlmacenEnMemoria::nuevo();
-    let arg = std::env::args().nth(1).map(PathBuf::from);
-    let (w, h, bytes) = match arg.as_ref().and_then(|p| cargar_png(p)) {
-        Some(triple) => triple,
-        None => (W, H, buffer_gradiente()),
-    };
     let hash = almacen.insertar(bytes);
     let mut lienzo = Lienzo::nuevo(w, h);
     let fondo = Capa::raster("fondo", hash);
-    let id_fondo = fondo.id;
+    let id = fondo.id;
     lienzo.apilar(fondo);
+    Some((lienzo, almacen, id, format!("png cargado · {}×{}", w, h)))
+}
+
+fn cargar_psd(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMemoria, Uuid, String)> {
+    let bytes = std::fs::read(path).ok()?;
+    let imp = match foreign_psd::importar_psd(&bytes) {
+        Ok(imp) => imp,
+        Err(e) => {
+            eprintln!("tullpu: error importando '{}': {e}", path.display());
+            return None;
+        }
+    };
+    // Vuelco todos los buffers (uno por capa, dedup ya hecho por hash) al
+    // almacén de la app — `tullpu-render::componer` los va a pedir por hash.
+    let mut almacen = AlmacenEnMemoria::nuevo();
+    almacen.buffers.extend(imp.buffers);
+    let n_capas = imp.lienzo.capas.len();
+    let n_degradadas = imp.informe.caidas_a_normal.len();
+    // El primer Uuid (fondo) sirve como selección inicial — si el PSD vino
+    // vacío (foreign-psd ya lo rechaza, pero por defensa), caemos a default.
+    let id = imp.lienzo.capas.first()?.id;
+    let etiqueta = if n_degradadas == 0 {
+        format!("psd · {} capas", n_capas)
+    } else {
+        format!("psd · {} capas ({} a Normal)", n_capas, n_degradadas)
+    };
+    Some((imp.lienzo, almacen, id, etiqueta))
+}
+
+fn inicializar() -> Model {
+    let arg = std::env::args().nth(1).map(PathBuf::from);
+    let (lienzo, almacen, id_inicial, estado) = arg
+        .as_ref()
+        .and_then(|p| cargar_arg(p))
+        .unwrap_or_else(lienzo_default);
 
     let (proveedor, proveedor_etiqueta) = resolver_proveedor();
 
@@ -149,12 +198,22 @@ fn inicializar() -> Model {
     Model {
         lienzo,
         almacen,
-        seleccionada: Some(id_fondo),
+        seleccionada: Some(id_inicial),
         imagen,
-        estado: "listo".into(),
+        estado,
         proveedor,
         proveedor_etiqueta,
     }
+}
+
+fn lienzo_default() -> (Lienzo, AlmacenEnMemoria, Uuid, String) {
+    let mut almacen = AlmacenEnMemoria::nuevo();
+    let hash = almacen.insertar(buffer_gradiente());
+    let mut lienzo = Lienzo::nuevo(W, H);
+    let fondo = Capa::raster("fondo", hash);
+    let id = fondo.id;
+    lienzo.apilar(fondo);
+    (lienzo, almacen, id, "listo · gradiente demo".into())
 }
 
 fn recomponer(l: &Lienzo, alm: &impl FuenteBuffers) -> Option<Image> {
