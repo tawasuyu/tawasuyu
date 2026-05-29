@@ -258,6 +258,30 @@ del primer shell encontrado a todas las instancias canvas con
 `Msg::SyncGraph(graph)`. El lienzo refleja al instante el flujo de la
 sesión (3 tests nuevos en `shell` + 1 en `canvas`).
 
+**Adiós al Quake-drawer (2026-05-29, tercer bloque).** El chasis dejó
+de ser una imitación del launcher overlay y volvió a ser app standalone
+normal: tabs siempre visibles, sin F12, sin Esc-cierra-drawer, sin
+overlay absoluto sobre el escritorio. Eso vive en
+`mirada-launcher-llimphi`. Cambios concretos:
+
+- `Model`: `drawer_tabs` → `tabs`, `active_drawer_tab` → `active_tab`,
+  fuera `drawer_open` y `drawer_trigger`.
+- `Msg`: fuera `ToggleDrawer`, `CloseDrawer`, `SelectDrawerTab` →
+  queda `SelectTab(usize)`.
+- `Slot::DrawerTab(usize)` → `Slot::Tab(usize)`.
+- `on_key` ya no atrapa F12 ni Esc; `forward_key_to_focused_shell`
+  prioriza `Slot::Main` y cae al `tabs[active_tab]`.
+- `render_main_area` se simplificó: si el shumarc declara `[main]`,
+  ocupa todo el área (sin tabs ni monitores). Si no, tabs + splitter
+  con monitores a la derecha. No hay más `Position::Absolute` ni
+  capas overlay.
+- shumarc TOML: `[[drawer.tabs]]` → `[[tabs]]`, fuera `[drawer.trigger]`.
+- `parse_binding` + `matches_key` + `tests_bindings` (todo para
+  reconocer el shortcut de toggle drawer) borrados.
+- i18n: `shuma-empty-no-drawer-tabs`/`-compat` renombrados a
+  `shuma-empty-no-tabs`/`-compat`; `shuma-empty-no-main` y el hint que
+  mencionaba "F12 abre el drawer" eliminados.
+
 **Canvas clickeable (2026-05-29, segundo bloque).** Las cajas del
 lienzo responden al click vía `on_click_at` + `hit_test_box`: el
 primer click enfoca el `%cN` (borde 3.5 px en lugar de 2.0), el

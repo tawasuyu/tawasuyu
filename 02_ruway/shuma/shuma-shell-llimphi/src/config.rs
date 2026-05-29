@@ -15,36 +15,34 @@
 //! module = "command-bar"
 //!
 //! [main]
-//! module = "matilda"
+//! module = "matilda"   # opcional: si está, ocupa toda el área
 //! source = { kind = "local" }
-//! inventory = "/etc/matilda/local.json"   # opcional; default = ejemplo
+//! inventory = "/etc/matilda/local.json"
 //!
-//! [[drawer.tabs]]
+//! [[tabs]]
 //! id = "shell"
 //! source = { kind = "local" }
 //! label = "Shell"
 //!
-//! [[drawer.tabs]]
+//! [[tabs]]
 //! id = "matilda"
 //! source = { kind = "remote", host = "edge-1", user = "ops" }
 //! label = "edge-1"
 //! inventory = "/etc/matilda/edge-1.json"
-//!
-//! [drawer.trigger]
-//! key = "F12"
-//! hover = false
-//! height_fraction = 0.4
 //! ```
 //!
 //! Defaults aplicables:
-//! - Sin `[topbar]` → launcher (demo entries).
+//! - Sin `[topbar]` → launcher (lee `$XDG_CONFIG_HOME/shuma/apps/`).
 //! - Sin `[bottombar]` → command-bar local.
-//! - Sin `[main]` → vacío (placeholder).
-//! - Sin `[[drawer.tabs]]` → shell + matilda locales.
-//! - Sin `[drawer.trigger]` → F12, no hover, 40 %.
+//! - Sin `[main]` → tabs cubren el área (con monitores a la derecha).
+//! - Sin `[[tabs]]` → shell + lienzo + matilda locales.
+//!
+//! El chasis ya no es un Quake-drawer — shuma es la app standalone
+//! "normal" del workspace. La metáfora overlay/F12 vive en
+//! `mirada-launcher-llimphi`, no acá.
 
 use serde::Deserialize;
-use shuma_module::{DrawerTrigger, Source};
+use shuma_module::Source;
 use std::path::{Path, PathBuf};
 
 /// Una entrada simple "qué módulo + opciones" para los slots TopBar/
@@ -66,10 +64,11 @@ pub struct SlotEntry {
     pub inventory: Option<PathBuf>,
 }
 
-/// Una entrada del array `[[drawer.tabs]]`. Mismo shape pero con el
-/// `id` separado del campo `module` por convención del shumarc.
+/// Una entrada del array `[[tabs]]`. Mismo shape que [`SlotEntry`]
+/// pero con el `id` separado del campo `module` por convención del
+/// shumarc.
 #[derive(Debug, Clone, Deserialize)]
-pub struct DrawerTabEntry {
+pub struct TabEntry {
     /// `id` del módulo a activar como tab.
     pub id: String,
     #[serde(default)]
@@ -82,20 +81,12 @@ pub struct DrawerTabEntry {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct DrawerSection {
-    #[serde(default)]
-    pub tabs: Vec<DrawerTabEntry>,
-    #[serde(default)]
-    pub trigger: Option<DrawerTrigger>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
 pub struct ShumaConfig {
     pub topbar: Option<SlotEntry>,
     pub bottombar: Option<SlotEntry>,
     pub main: Option<SlotEntry>,
     #[serde(default)]
-    pub drawer: DrawerSection,
+    pub tabs: Vec<TabEntry>,
 }
 
 impl ShumaConfig {
@@ -152,7 +143,7 @@ mod tests {
         let d = tempdir().unwrap();
         let c = ShumaConfig::load(&d.path().join("nope.toml"));
         assert!(c.topbar.is_none());
-        assert!(c.drawer.tabs.is_empty());
+        assert!(c.tabs.is_empty());
     }
 
     #[test]
@@ -173,20 +164,15 @@ module = "matilda"
 source = { kind = "local" }
 label = "Servidores"
 
-[[drawer.tabs]]
+[[tabs]]
 id = "shell"
 source = { kind = "local" }
 label = "Shell"
 
-[[drawer.tabs]]
+[[tabs]]
 id = "matilda"
 source = { kind = "remote", host = "edge-1.example", user = "deploy" }
 label = "edge-1"
-
-[drawer.trigger]
-key = "F11"
-hover = true
-height_fraction = 0.5
 "#,
         )
         .unwrap();
@@ -197,19 +183,15 @@ height_fraction = 0.5
         let main = c.main.unwrap();
         assert_eq!(main.module, "matilda");
         assert_eq!(main.label.as_deref(), Some("Servidores"));
-        assert_eq!(c.drawer.tabs.len(), 2);
-        assert_eq!(c.drawer.tabs[0].id, "shell");
-        match &c.drawer.tabs[1].source {
+        assert_eq!(c.tabs.len(), 2);
+        assert_eq!(c.tabs[0].id, "shell");
+        match &c.tabs[1].source {
             Source::Remote { host, user, .. } => {
                 assert_eq!(host, "edge-1.example");
                 assert_eq!(user, "deploy");
             }
             _ => panic!("expected Remote"),
         }
-        let t = c.drawer.trigger.unwrap();
-        assert_eq!(t.key.as_deref(), Some("F11"));
-        assert!(t.hover);
-        assert!((t.height_fraction - 0.5).abs() < 1e-6);
     }
 
     #[test]
@@ -222,7 +204,7 @@ height_fraction = 0.5
     }
 
     #[test]
-    fn inventory_field_parses_on_main_and_drawer_tabs() {
+    fn inventory_field_parses_on_main_and_tabs() {
         let d = tempdir().unwrap();
         let path = d.path().join("p.toml");
         std::fs::write(
@@ -232,7 +214,7 @@ height_fraction = 0.5
 module = "matilda"
 inventory = "/etc/matilda/edge.json"
 
-[[drawer.tabs]]
+[[tabs]]
 id = "matilda"
 inventory = "/etc/matilda/edge2.json"
 "#,
@@ -244,7 +226,7 @@ inventory = "/etc/matilda/edge2.json"
             Some(std::path::Path::new("/etc/matilda/edge.json"))
         );
         assert_eq!(
-            c.drawer.tabs[0].inventory.as_deref(),
+            c.tabs[0].inventory.as_deref(),
             Some(std::path::Path::new("/etc/matilda/edge2.json"))
         );
     }
@@ -265,7 +247,6 @@ module = "shell"
         assert!(c.topbar.is_none());
         assert!(c.bottombar.is_none());
         assert_eq!(c.main.as_ref().unwrap().module, "shell");
-        assert!(c.drawer.tabs.is_empty());
-        assert!(c.drawer.trigger.is_none());
+        assert!(c.tabs.is_empty());
     }
 }
