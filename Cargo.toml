@@ -191,6 +191,7 @@ members = [
     "02_ruway/llimphi/llimphi-ui",
     "02_ruway/llimphi/llimphi-motion",
     "02_ruway/llimphi/llimphi-icons",
+    "02_ruway/llimphi/llimphi-gallery",
     "02_ruway/llimphi/llimphi-gpu-bench",
     "02_ruway/llimphi/android/clear-screen-android",
     "02_ruway/llimphi/android/vello-hello-android",
@@ -211,6 +212,13 @@ members = [
     "02_ruway/llimphi/widgets/status-bar",
     "02_ruway/llimphi/widgets/shortcuts-help",
     "02_ruway/llimphi/widgets/splash",
+    "02_ruway/llimphi/widgets/switch",
+    "02_ruway/llimphi/widgets/segmented",
+    "02_ruway/llimphi/widgets/breadcrumb",
+    "02_ruway/llimphi/widgets/badge",
+    "02_ruway/llimphi/widgets/avatar",
+    "02_ruway/llimphi/widgets/skeleton",
+    "02_ruway/llimphi/widgets/field",
     "02_ruway/llimphi/widgets/list",
     "02_ruway/llimphi/widgets/slider",
     "02_ruway/llimphi/widgets/splitter",
@@ -579,6 +587,15 @@ llimphi-widget-empty = { path = "02_ruway/llimphi/widgets/empty" }
 llimphi-widget-status-bar = { path = "02_ruway/llimphi/widgets/status-bar" }
 llimphi-widget-shortcuts-help = { path = "02_ruway/llimphi/widgets/shortcuts-help" }
 llimphi-widget-splash = { path = "02_ruway/llimphi/widgets/splash" }
+# Controles de formulario y signaling (switch, segmented, breadcrumb,
+# badge, avatar, skeleton, field).
+llimphi-widget-switch = { path = "02_ruway/llimphi/widgets/switch" }
+llimphi-widget-segmented = { path = "02_ruway/llimphi/widgets/segmented" }
+llimphi-widget-breadcrumb = { path = "02_ruway/llimphi/widgets/breadcrumb" }
+llimphi-widget-badge = { path = "02_ruway/llimphi/widgets/badge" }
+llimphi-widget-avatar = { path = "02_ruway/llimphi/widgets/avatar" }
+llimphi-widget-skeleton = { path = "02_ruway/llimphi/widgets/skeleton" }
+llimphi-widget-field = { path = "02_ruway/llimphi/widgets/field" }
 # Abstracción Selector — host (paths) + wawa (khipus).
 llimphi-module-selector = { path = "02_ruway/llimphi/modules/selector" }
 

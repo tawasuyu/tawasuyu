@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-avatar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-avatar — círculo de identidad con inicial sobre color generado del hash del nombre. Determinista (mismo nombre → mismo color) y tonal (paleta limitada para que no choque)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

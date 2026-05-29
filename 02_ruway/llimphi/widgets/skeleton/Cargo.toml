@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-skeleton"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-skeleton — bloque animado con shimmer para placeholders de contenido en carga. Alternativa a spinner cuando se conoce la forma del contenido (lista de N items, card con título+texto+imagen)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
