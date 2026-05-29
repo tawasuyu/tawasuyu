@@ -221,10 +221,16 @@ fn quadrant_cell<Msg: Clone + 'static>(
     })
     .children(vec![name, gloss]);
 
-    // El cuadrante de fondo es un rect coloreado con el accent del
-    // cuadrante a baja intensidad — el text fg_text sobresale.
-    let bg = with_alpha8(quad.color, 30);
+    // Fondo del cuadrante con gradient vertical en el color semántico:
+    // alpha 50 arriba → alpha 12 abajo. Da volumen al cuadrante (más
+    // intenso cerca del accent strip del top) y un efecto "halo descendente"
+    // que ayuda a leer la cruz andina como cuatro luces que emergen del
+    // centro. Antes: alpha 30 uniforme.
     let border = with_alpha8(quad.color, 90);
+    let bg_top = with_alpha8(quad.color, 50);
+    let bg_bot = with_alpha8(quad.color, 12);
+
+    let cell_radius = llimphi_theme::radius::MD;
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -235,13 +241,28 @@ fn quadrant_cell<Msg: Clone + 'static>(
         flex_grow: 1.0,
         ..Default::default()
     })
-    .fill(bg)
-    .radius(llimphi_theme::radius::MD)
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+        use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let x0 = rect.x as f64;
+        let y0 = rect.y as f64;
+        let x1 = (rect.x + rect.w) as f64;
+        let y1 = (rect.y + rect.h) as f64;
+        let rr = RoundedRect::new(x0, y0, x1, y1, cell_radius);
+        let gradient = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y1))
+            .with_stops([bg_top, bg_bot].as_slice());
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &gradient, None, &rr);
+    })
+    .radius(cell_radius)
+    .clip(true)
     .alpha(progress)
-    // Borde sutil — wrapper de 1px más grande tras el fill. Por
-    // simplicidad lo omitimos en favor del fill alpha + acento de texto.
     .children(vec![
-        // Línea accent superior — 2px del color del cuadrante.
+        // Línea accent superior — 2px del color del cuadrante a alta
+        // intensidad, ancla del gradiente que cae.
         View::new(Style {
             size: Size {
                 width: percent(1.0_f32),

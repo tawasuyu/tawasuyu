@@ -90,6 +90,9 @@ const TOAST_H: f32 = 44.0;
 const ICON_BOX: f32 = 24.0;
 const GAP: f32 = 8.0;
 const MARGIN: f32 = 16.0;
+/// Ancho del "rail" de severidad en el edge izquierdo. 3px es el sweet
+/// spot — visible al pasar sin chocar con el icono. Look Linear/Slack.
+const RAIL_W: f32 = 3.0;
 
 /// Apila los toasts en la esquina bottom-right del viewport. `on_click`
 /// se construye por toast vía `make_dismiss(id)`. Devuelve un `View`
@@ -149,6 +152,20 @@ fn single_toast_view<Msg: Clone + 'static>(toast: &Toast, on_dismiss: Msg) -> Vi
     let fg = toast.kind.fg();
     let icon = toast.kind.icon();
 
+    // Rail de severidad: stripe del color fg semántico (más brillante
+    // que el bg) en el edge izquierdo. Visible al pasar el ojo sin
+    // chocar con el icono — refuerza la severidad para usuarios que ya
+    // están mirando a otra parte de la UI.
+    let rail = View::new(Style {
+        size: Size {
+            width: length(RAIL_W),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(fg);
+
     let icon_cell = View::new(Style {
         size: Size {
             width: length(ICON_BOX),
@@ -177,8 +194,10 @@ fn single_toast_view<Msg: Clone + 'static>(toast: &Toast, on_dismiss: Msg) -> Vi
             height: length(TOAST_H),
         },
         align_items: Some(AlignItems::Center),
+        // El rail vive en el edge — sin padding-left propio para que
+        // pegue al borde; el padding del contenido arranca después.
         padding: Rect {
-            left: length(12.0_f32),
+            left: length(0.0_f32),
             right: length(12.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
@@ -192,8 +211,9 @@ fn single_toast_view<Msg: Clone + 'static>(toast: &Toast, on_dismiss: Msg) -> Vi
     })
     .fill(bg)
     .radius(radius::MD)
+    .clip(true)
     .on_click(on_dismiss)
-    .children(vec![icon_cell, text])
+    .children(vec![rail, icon_cell, text])
 }
 
 /// Helper de construcción para uso inmediato:
