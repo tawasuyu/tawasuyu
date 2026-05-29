@@ -1,16 +1,30 @@
 # nakui-ui-llimphi
 
-> Shell de UI de [nakui](../README.md): selector de vista + panel.
+> Shell de la metainterfaz de [nakui](../README.md): la app del ERP, manejada enteramente por manifiestos `module.json`.
 
-Wrapper que monta sobre el mismo `Engine` cualquiera de las tres vistas (matriz / grafo / formulario) y permite switchear entre ellas con un click. Comparten estado: editar en matriz se refleja en grafo en vivo. Sirve como app principal de nakui.
+Carga cards UiModule desde un directorio y monta un shell Llimphi (sidebar de módulos + menú + área principal) sobre un `NakuiBackend` (event log + replay + snapshot + auto-compact + executors Rhai). Todo el ciclo CRUD corre contra el event log — no hace falta CLI/tests para mutar.
+
+Cuatro vistas meta-driven, paridad con el widget GPUI borrado `nahual-widget-meta-form`:
+
+- **List** — filas reales del store, búsqueda por `search_in`, orden clickeando el header de columna (asc→desc→sin), paginación, editar/borrar por fila, `👁` a la ficha, `+ Nuevo` y export CSV de las filas filtradas/ordenadas.
+- **Form** — un input por `FieldKind` (text/multiline/number/date/boolean/select/entity_ref/auto_id) con foco de teclado; el submit dispara `SeedEntity`, una edición (`update` con delta) o un `Morphism`. Los `EntityRef` se validan antes de escribir.
+- **Detail** — la ficha de un record (← Volver / ✎ Editar), sus campos con refs resueltas a un label legible, y listas de records relacionados (back-references vía `via_field`).
+- **Dashboard** — una grilla de tarjetas de KPI que computan `Count`/`Sum`/`GroupBy` (`compute_metric`) con `ValueFormat` y filtros.
 
 ## Uso
 
 ```sh
+# default: ./nakui-modules en el cwd
 cargo run --release -p nakui-ui-llimphi
+
+# apuntando al demo incluido (clientes + órdenes)
+NAKUI_MODULES_DIR=01_yachay/nakui/nakui-ui-llimphi/examples/nakui-modules \
+  cargo run --release -p nakui-ui-llimphi
 ```
+
+Env: `NAKUI_MODULES_DIR` (dir de módulos), `NAKUI_EVENT_LOG` (ruta del WAL), `NAKUI_SNAPSHOT_THRESHOLD` (auto-compact).
 
 ## Deps
 
-- [`nakui-core`](../nakui-core/README.md), [`nakui-sheet-llimphi`](../nakui-sheet-llimphi/README.md), [`nakui-explorer-llimphi`](../nakui-explorer-llimphi/README.md)
-- [`llimphi-ui`](../../../02_ruway/llimphi/)
+- [`nakui-core`](../nakui-core/README.md) (`NakuiBackend`), [`nahual-meta-schema`](../../../02_ruway/nahual/libs/meta-schema/), [`nahual-meta-runtime`](../../../02_ruway/nahual/libs/meta-runtime/), [`cards`](../../../02_ruway/cards/)
+- [`llimphi-ui`](../../../02_ruway/llimphi/) + widgets `field` / `button` / `text-input` / `banner` / `list` / `app-header`
