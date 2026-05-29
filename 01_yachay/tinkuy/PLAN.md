@@ -49,8 +49,8 @@ Meta: `tinkuy-core` ejecutable dentro de Wawa userspace como app WASM.
 
 Meta: definir fuerzas y condiciones iniciales sin recompilar Rust.
 
-- **D1** Gramática mínima (`tinkuy-dsl`): vars (r, ε, σ, q_i, q_j, m_i), ops aritméticos, pow, 1/r. Sin lambdas, sin control de flujo.
-- **D2** Lexer + Pratt parser → AST → bytecode stack-machine (`u8` opcodes, constantes en pool). Sin allocs en eval.
+- **D1** ✅ Crate `tinkuy-dsl` (`#![no_std] + alloc`) con gramática mínima: vars (`r, r2, eps, sigma, qi, qj, mi, mj, dx, dy, dz`), ops aritméticos, funciones `pow/inv/sqrt`. Lexer + parser Pratt → AST (`Expr::{Num,Var,Neg,Bin,Call}`). Errores tipados (`ParseError`). Tests 12/12 con LJ, Coulomb, Hooke, precedencias, aridad. Compila a wasm32-unknown-unknown.
+- **D2** Compilador `Expr → Bytecode` post-order. `Op` opcodes (`Const`, `LoadVar`, `Add/Sub/Mul/Div/Neg`, `Pow/Inv/Sqrt`); `consts: Vec<f32>`. `eval_with_stack(bc, &VarBindings, &mut [f32]) -> f32` con stack pre-alocado por el caller (cero allocs en hot). Profundidad máxima calculada en compile-time.
 - **D3** `BytecodeForce: Force` enchufable a `World`. Eval por pareja (i, j) en neighbor-list igual que LJ/Coulomb.
 - **D4** Optimizador: const-fold + reconocimiento de patrones comunes (`1/r²`, `(σ/r)⁶`). Meta: ≥50% de la velocidad de LJ nativo en bench de 100k partículas.
 - **D5** Ejemplos en `tinkuy-dsl/examples/`: `lj.tnk`, `coulomb.tnk`, `hooke.tnk`.

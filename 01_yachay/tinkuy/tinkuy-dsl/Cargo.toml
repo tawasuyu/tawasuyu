@@ -1,0 +1,17 @@
+[package]
+name = "tinkuy-dsl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tinkuy — DSL matemático para describir fuerzas pairwise sin recompilar Rust. Capa 3 del roadmap: lexer + parser Pratt → AST → (D2) bytecode stack-machine sin allocs en eval."
+
+[features]
+default = []
+# Habilita `std` para reportes de error más amigables (Display con líneas).
+# Sin esta feature el crate es `#![no_std] + extern crate alloc;` y compila a
+# wasm32-unknown-unknown.
+std = []
+
+[dependencies]
