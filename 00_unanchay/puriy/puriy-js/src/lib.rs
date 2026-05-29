@@ -170,7 +170,7 @@ globalThis.__puriy_tick = function(now) {
 const EVENTS_BOOTSTRAP: &str = r#"
 globalThis.__puriy_elements = {};
 globalThis.__puriy_dirty = [];
-globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id) {
+globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id, dataset_pairs) {
     var el = {
         id: id,
         tagName: tag,
@@ -179,14 +179,24 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         _value: value == null ? '' : String(value),
         _parent_id: parent_id == null ? null : String(parent_id),
         _listeners: {},
-        addEventListener: function(type, fn) {
-            if (!this._listeners[type]) this._listeners[type] = [];
-            this._listeners[type].push(fn);
+        _capture_listeners: {},
+        addEventListener: function(type, fn, options) {
+            // Fase 7.11 — options puede ser `true` (shorthand para
+            // capture) o `{capture: true}`. Otros campos (once, passive,
+            // signal) se ignoran por ahora.
+            var capture = options === true ||
+                          (options && typeof options === 'object' && options.capture === true);
+            var store = capture ? this._capture_listeners : this._listeners;
+            if (!store[type]) store[type] = [];
+            store[type].push(fn);
         },
-        removeEventListener: function(type, fn) {
-            if (!this._listeners[type]) return;
-            var i = this._listeners[type].indexOf(fn);
-            if (i >= 0) this._listeners[type].splice(i, 1);
+        removeEventListener: function(type, fn, options) {
+            var capture = options === true ||
+                          (options && typeof options === 'object' && options.capture === true);
+            var store = capture ? this._capture_listeners : this._listeners;
+            if (!store[type]) return;
+            var i = store[type].indexOf(fn);
+            if (i >= 0) store[type].splice(i, 1);
         }
     };
     // Fase 7.10 — parentElement como property que resuelve via
@@ -283,6 +293,51 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             return target[prop];
         }
     });
+    // Fase 7.11 — el.dataset. Spec: `data-foo-bar` → `el.dataset.fooBar`
+    // (kebab del HTML → camelCase del JS). Storage interno usa kebab
+    // (matchea el suffix que el chrome publica/aplica).
+    el._dataset_store = {};
+    if (dataset_pairs) {
+        for (var di = 0; di < dataset_pairs.length; di++) {
+            el._dataset_store[dataset_pairs[di][0]] = dataset_pairs[di][1];
+        }
+    }
+    el.dataset = new Proxy(el._dataset_store, {
+        get: function(target, prop) {
+            if (typeof prop !== 'string') return undefined;
+            // camelCase → kebab para lookup en el store.
+            var kebab = prop.replace(/[A-Z]/g, function(m) {
+                return '-' + m.toLowerCase();
+            });
+            return target[kebab];
+        },
+        set: function(target, prop, value) {
+            if (typeof prop !== 'string') return true;
+            var kebab = prop.replace(/[A-Z]/g, function(m) {
+                return '-' + m.toLowerCase();
+            });
+            target[kebab] = String(value);
+            globalThis.__puriy_dirty.push({
+                id: el.id,
+                kind: 'dataset:' + kebab,
+                value: String(value)
+            });
+            return true;
+        },
+        deleteProperty: function(target, prop) {
+            if (typeof prop !== 'string') return true;
+            var kebab = prop.replace(/[A-Z]/g, function(m) {
+                return '-' + m.toLowerCase();
+            });
+            delete target[kebab];
+            globalThis.__puriy_dirty.push({
+                id: el.id,
+                kind: 'dataset-remove:' + kebab,
+                value: ''
+            });
+            return true;
+        }
+    });
     return el;
 };
 globalThis.__puriy_dispatch = function(id, type, init) {
@@ -321,35 +376,69 @@ globalThis.__puriy_dispatch = function(id, type, init) {
     }
     var count = 0;
     var onName = 'on' + type;
-    // Fase 7.10 — visited guard para defensa contra ciclos (parent_id
-    // mal poblado por el chrome no debería pasar, pero un infinite
-    // bubble agotaría el fuel del runtime). Max 64 niveles cubre
-    // cualquier DOM real.
+    // Fase 7.11 — construir cadena de ancestros (root → target). El
+    // visited guard cuida ciclos de _parent_id (Fase 7.10). Max 64
+    // niveles cubre cualquier DOM real.
+    var chain = [target];
     var visited = {};
-    var current = target;
+    visited[target.id] = true;
+    var cur = target;
     var depth = 0;
-    while (current && !event._stopped && depth < 64) {
-        if (visited[current.id]) break;
-        visited[current.id] = true;
-        event.currentTarget = current;
-        if (typeof current[onName] === 'function') {
+    while (cur && cur._parent_id && depth < 64) {
+        var next = globalThis.__puriy_elements[cur._parent_id];
+        if (!next || visited[next.id]) break;
+        visited[next.id] = true;
+        chain.push(next);
+        cur = next;
+        depth++;
+    }
+    // Helper local: invoca todos los handlers del tipo en cada listener
+    // map (on<type> property + listeners del map). Devuelve si seguir.
+    function invoke(node, store) {
+        var ls = store && store[type];
+        if (!ls) return;
+        var arr = ls.slice();
+        for (var i = 0; i < arr.length; i++) {
             count++;
-            try { current[onName].call(current, event); }
+            try { arr[i].call(node, event); }
+            catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+            if (event._stopped) return;
+        }
+    }
+    // (1) Capture phase: del ancestro más lejano al hijo del target,
+    // sólo capture listeners. event.eventPhase = 1 ('CAPTURING_PHASE').
+    event.eventPhase = 1;
+    for (var i = chain.length - 1; i > 0; i--) {
+        if (event._stopped) break;
+        event.currentTarget = chain[i];
+        invoke(chain[i], chain[i]._capture_listeners);
+    }
+    // (2) Target phase: ambos capture y bubble + on<type> property.
+    // event.eventPhase = 2 ('AT_TARGET').
+    if (!event._stopped) {
+        event.eventPhase = 2;
+        event.currentTarget = target;
+        invoke(target, target._capture_listeners);
+        if (!event._stopped && typeof target[onName] === 'function') {
+            count++;
+            try { target[onName].call(target, event); }
             catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
         }
-        var ls = current._listeners && current._listeners[type];
-        if (ls) {
-            var arr = ls.slice();
-            for (var i = 0; i < arr.length; i++) {
-                count++;
-                try { arr[i].call(current, event); }
-                catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-            }
+        if (!event._stopped) invoke(target, target._listeners);
+    }
+    // (3) Bubble phase: del hijo del target al ancestro más lejano,
+    // sólo bubble listeners + on<type> property. eventPhase = 3.
+    event.eventPhase = 3;
+    for (var j = 1; j < chain.length; j++) {
+        if (event._stopped) break;
+        event.currentTarget = chain[j];
+        if (typeof chain[j][onName] === 'function') {
+            count++;
+            try { chain[j][onName].call(chain[j], event); }
+            catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+            if (event._stopped) break;
         }
-        // Sube al ancestro. parent_id null detiene el bubble.
-        if (!current._parent_id) break;
-        current = globalThis.__puriy_elements[current._parent_id] || null;
-        depth++;
+        invoke(chain[j], chain[j]._listeners);
     }
     return count + ',' + (event.defaultPrevented ? '1' : '0');
 };
@@ -763,14 +852,30 @@ impl JsRuntime {
                 Some(p) => js_string_literal(p),
                 None => "null".to_string(),
             };
+            // Fase 7.11 — dataset: array de [key, value] pairs como
+            // JSON literal. El make_element lo transforma a objeto
+            // indexable por el dataset proxy.
+            let mut ds_arr = String::from("[");
+            for (i, (k, v)) in el.dataset.iter().enumerate() {
+                if i > 0 {
+                    ds_arr.push(',');
+                }
+                ds_arr.push('[');
+                ds_arr.push_str(&js_string_literal(k));
+                ds_arr.push(',');
+                ds_arr.push_str(&js_string_literal(v));
+                ds_arr.push(']');
+            }
+            ds_arr.push(']');
             script.push_str(&format!(
-                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val}, {parent});\n",
+                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val}, {parent}, {ds});\n",
                 id = js_string_literal(&el.id),
                 tag = js_string_literal(&el.tag_name),
                 text = js_string_literal(&el.text_content),
                 cls = cls_arr,
                 val = value_arg,
                 parent = parent_arg,
+                ds = ds_arr,
             ));
         }
         // Reset del buffer de dirty para que mutaciones de la página
@@ -1173,6 +1278,11 @@ pub struct ElementSnapshot {
     /// `event.currentTarget` por la cadena de ancestros hasta
     /// `stopPropagation()` o llegar al root. Fase 7.10.
     pub parent_id: Option<String>,
+    /// Atributos `data-*` del elemento, como `(suffix, value)` —
+    /// `suffix` SIN el prefijo `data-`, preservando case original.
+    /// Pasado al `el.dataset` proxy: `el.dataset.fooBar` se mapea al
+    /// suffix `foo-bar` (kebab → camel en JS). Fase 7.11.
+    pub dataset: Vec<(String, String)>,
 }
 
 /// Init opcional para [`JsRuntime::dispatch_event`]. Lleva los campos
@@ -2028,6 +2138,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
+            dataset: Vec::new(),
         }
     }
 
@@ -2039,6 +2150,7 @@ mod tests {
             class_list: vec![class.into()],
             value: None,
             parent_id: None,
+            dataset: Vec::new(),
         }
     }
 
@@ -2050,6 +2162,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some(value.into()),
             parent_id: None,
+            dataset: Vec::new(),
         }
     }
 
@@ -2061,6 +2174,19 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: Some(parent_id.into()),
+            dataset: Vec::new(),
+        }
+    }
+
+    fn snap_with_dataset(id: &str, tag: &str, dataset: &[(&str, &str)]) -> ElementSnapshot {
+        ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: dataset.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
         }
     }
 
@@ -2800,5 +2926,198 @@ mod tests {
         let r = rt.dispatch_event("x", "click", None).expect("d");
         assert_eq!(r.count, 1);
         assert_eq!(rt.stdout(), "once\n");
+    }
+
+    // ============= Fase 7.11 — capture phase =============
+
+    #[test]
+    fn capture_phase_corre_antes_que_bubble() {
+        // <outer><inner><btn/></inner></outer>
+        // capture listener en outer corre PRIMERO, antes que el handler
+        // del target y antes que cualquier bubble.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("inner", "div", "outer"),
+            snap_with_parent("btn", "button", "inner"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('outer').addEventListener('click', \
+                function(){ console.log('outerCAPTURE') }, true); \
+             document.getElementById('inner').addEventListener('click', \
+                function(){ console.log('innerCAPTURE') }, {capture:true}); \
+             document.getElementById('btn').onclick = function(){ console.log('btnTARGET') }; \
+             document.getElementById('outer').onclick = function(){ console.log('outerBUBBLE') };",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("btn", "click", None).expect("d");
+        // Orden esperado: outerCAPTURE → innerCAPTURE → btnTARGET → outerBUBBLE.
+        assert_eq!(r.count, 4);
+        assert_eq!(
+            rt.stdout(),
+            "outerCAPTURE\ninnerCAPTURE\nbtnTARGET\nouterBUBBLE\n"
+        );
+    }
+
+    #[test]
+    fn capture_listener_puede_stop_propagation() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('outer').addEventListener('click', \
+                function(e){ console.log('CAP'); e.stopPropagation(); }, true); \
+             document.getElementById('btn').onclick = function(){ console.log('BTN') };",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("btn", "click", None).expect("d");
+        // El capture stopPropagation evita target Y bubble.
+        assert_eq!(r.count, 1);
+        assert_eq!(rt.stdout(), "CAP\n");
+    }
+
+    #[test]
+    fn capture_true_shorthand_funciona() {
+        // addEventListener(type, fn, true) — sin objeto options.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('outer').addEventListener('click', \
+                function(){ console.log('cap') }, true);",
+        )
+        .expect("e");
+        rt.dispatch_event("btn", "click", None).expect("d");
+        assert_eq!(rt.stdout(), "cap\n");
+    }
+
+    #[test]
+    fn remove_event_listener_distingue_capture_de_bubble() {
+        // Registrar el MISMO fn en capture Y bubble. removeEventListener
+        // sin options sólo borra el bubble; el capture sigue activo.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "var f = function(){ console.log('x') }; \
+             var o = document.getElementById('outer'); \
+             o.addEventListener('click', f, true); \
+             o.addEventListener('click', f, false); \
+             o.removeEventListener('click', f); \
+             document.getElementById('btn').onclick = function(){ console.log('b') };",
+        )
+        .expect("e");
+        rt.dispatch_event("btn", "click", None).expect("d");
+        // El capture sigue corriendo (no se removió); el bubble fue
+        // removido — orden: capture x, target b.
+        assert_eq!(rt.stdout(), "x\nb\n");
+    }
+
+    // ============= Fase 7.11 — el.dataset =============
+
+    #[test]
+    fn dataset_initial_se_lee_camelcase() {
+        // data-foo-bar="hola" → el.dataset.fooBar === "hola"
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_dataset("x", "div", &[("foo-bar", "hola")])])
+            .expect("e");
+        let v = rt.eval("document.getElementById('x').dataset.fooBar").expect("e");
+        assert_eq!(v, JsValue::String("hola".into()));
+    }
+
+    #[test]
+    fn dataset_setter_publica_mutacion_con_kebab_key() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        assert!(rt.drain_dom_mutations().is_empty());
+        rt.eval("document.getElementById('x').dataset.fooBar = 'nuevo'")
+            .expect("set");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].id, "x");
+        // El kind incluye el key en kebab (foo-bar), no en camelCase.
+        assert_eq!(muts[0].kind, "dataset:foo-bar");
+        assert_eq!(muts[0].value, "nuevo");
+    }
+
+    #[test]
+    fn dataset_set_simple_se_lee_back() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval("document.getElementById('x').dataset.role = 'banner'")
+            .expect("e");
+        let v = rt.eval("document.getElementById('x').dataset.role").expect("e");
+        assert_eq!(v, JsValue::String("banner".into()));
+    }
+
+    #[test]
+    fn dataset_delete_publica_mutacion_remove() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_dataset("x", "div", &[("role", "main")])])
+            .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval("delete document.getElementById('x').dataset.role")
+            .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "dataset-remove:role");
+        // Y el getter después del delete devuelve undefined.
+        let v = rt.eval("document.getElementById('x').dataset.role").expect("e");
+        assert_eq!(v, JsValue::Undefined);
+    }
+
+    #[test]
+    fn dataset_inexistente_devuelve_undefined() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        let v = rt
+            .eval("document.getElementById('x').dataset.nada")
+            .expect("e");
+        assert_eq!(v, JsValue::Undefined);
+    }
+
+    #[test]
+    fn event_phase_refleja_la_etapa_actual() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("outer", "div", ""),
+            snap_with_parent("btn", "button", "outer"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('outer').addEventListener('click', \
+                function(e){ console.log('cap:' + e.eventPhase) }, true); \
+             document.getElementById('btn').onclick = function(e){ \
+                console.log('target:' + e.eventPhase) \
+            }; \
+             document.getElementById('outer').onclick = function(e){ \
+                console.log('bubble:' + e.eventPhase) \
+            };",
+        )
+        .expect("e");
+        rt.dispatch_event("btn", "click", None).expect("d");
+        assert!(rt.stdout().contains("cap:1"), "stdout: {:?}", rt.stdout());
+        assert!(rt.stdout().contains("target:2"), "stdout: {:?}", rt.stdout());
+        assert!(rt.stdout().contains("bubble:3"), "stdout: {:?}", rt.stdout());
     }
 }

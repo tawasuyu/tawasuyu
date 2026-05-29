@@ -238,6 +238,11 @@ pub struct BoxNode {
     /// pueda indexar elementos por class y soportar `querySelector('.foo')`
     /// — Fase 7.8.
     pub class_list: Vec<String>,
+    /// Atributos `data-*` del elemento — el sufijo después de `data-`
+    /// como key (sin transformar) y el valor del atributo. Para que
+    /// `el.dataset.foo` desde JS funcione — Fase 7.11. Vacío para
+    /// nodos sin data attrs.
+    pub dataset: Vec<(String, String)>,
 }
 
 /// Escena SVG minimal: lista de primitivas + viewBox opcional.
@@ -440,6 +445,40 @@ impl BoxTree {
     pub fn set_element_style(&mut self, id: &str, prop: &str, value: &str) -> bool {
         set_element_style_inner(&mut self.root, id, prop, value)
     }
+
+    /// Setea / actualiza un atributo `data-<key>` del nodo `id`. `key`
+    /// va sin el prefijo `data-`. Devuelve `true` si encontró el nodo.
+    /// Fase 7.11 — `el.dataset.foo = 'bar'` publica esta mutación.
+    pub fn set_element_dataset(&mut self, id: &str, key: &str, value: &str) -> bool {
+        set_dataset_inner(&mut self.root, id, key, Some(value))
+    }
+
+    /// Borra el atributo `data-<key>` del nodo `id`. Devuelve `true` si
+    /// encontró el nodo (haya o no existido la key). Fase 7.11.
+    pub fn remove_element_dataset(&mut self, id: &str, key: &str) -> bool {
+        set_dataset_inner(&mut self.root, id, key, None)
+    }
+}
+
+fn set_dataset_inner(
+    node: &mut BoxNode,
+    target: &str,
+    key: &str,
+    value: Option<&str>,
+) -> bool {
+    if node.element_id.as_deref() == Some(target) {
+        node.dataset.retain(|(k, _)| k != key);
+        if let Some(v) = value {
+            node.dataset.push((key.to_string(), v.to_string()));
+        }
+        return true;
+    }
+    for c in node.children.iter_mut() {
+        if set_dataset_inner(c, target, key, value) {
+            return true;
+        }
+    }
+    false
 }
 
 fn set_element_style_inner(
@@ -1187,6 +1226,7 @@ fn empty_root() -> BoxNode {
         svg: None,
         element_id: None,
         class_list: Vec::new(),
+        dataset: Vec::new(),
     }
 }
 
@@ -1554,6 +1594,7 @@ fn build_node(
                             .collect()
                     })
                     .unwrap_or_default(),
+                dataset: dom::attrs_with_prefix(node, "data-"),
             })
         }
         NodeData::Text { contents } => {
@@ -1669,6 +1710,7 @@ fn build_node(
         svg: None,
         element_id: None,
         class_list: Vec::new(),
+        dataset: Vec::new(),
             })
         }
     }
@@ -1754,6 +1796,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         svg: None,
         element_id: None,
         class_list: Vec::new(),
+        dataset: Vec::new(),
     }
 }
 

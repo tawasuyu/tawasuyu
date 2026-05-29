@@ -1948,6 +1948,7 @@ fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
                 class_list: b.class_list.clone(),
                 value,
                 parent_id: parent_id.map(String::from),
+                dataset: b.dataset.clone(),
             });
         }
         // Si yo tengo id, los hijos me ven como su parent. Si no, los
@@ -2015,6 +2016,12 @@ fn dispatch_js_event_with_init(
     let Some(rt) = t.js.as_mut() else {
         return puriy_js::DispatchResult::default();
     };
+    // Fase 7.11 — refresh del fuel antes de cada dispatch. Cada evento
+    // de usuario (click/keydown/focus/blur/change/input) es una unidad
+    // independiente: que un dispatch anterior haya consumido fuel no
+    // debe limitar al siguiente. El cap por evento sigue siendo
+    // DEFAULT_FUEL (50M) — corta loops infinitos dentro de un handler.
+    rt.set_fuel(puriy_js::DEFAULT_FUEL);
     let _ = rt.set_now_ms(now_ms);
     let prev_stdout_len = rt.stdout().len();
     let prev_stderr_len = rt.stderr().len();
@@ -2124,6 +2131,9 @@ fn tick_js_runtimes(m: &mut Model, now_ms: u64) {
         if rt.pending_timers() == 0 {
             continue;
         }
+        // Fase 7.11 — refresh del fuel por tick. Cada tick es una unidad
+        // independiente al estilo del event loop; no acumulamos cap.
+        rt.set_fuel(puriy_js::DEFAULT_FUEL);
         let prev_stdout_len = rt.stdout().len();
         let prev_stderr_len = rt.stderr().len();
         match rt.tick(now_ms) {
@@ -2164,6 +2174,14 @@ fn apply_dom_mutations(t: &mut TabState) {
             // Fase 7.8: el.style.X = Y publica con kind = "style:X" (X
             // ya viene en kebab-case desde el harness JS).
             bt.set_element_style(&m.id, prop, &m.value);
+        } else if let Some(key) = m.kind.strip_prefix("dataset:") {
+            // Fase 7.11: el.dataset.fooBar = X publica con kind =
+            // "dataset:foo-bar" (key ya viene kebab desde el harness JS).
+            bt.set_element_dataset(&m.id, key, &m.value);
+        } else if let Some(key) = m.kind.strip_prefix("dataset-remove:") {
+            // Fase 7.11: delete el.dataset.fooBar publica con kind =
+            // "dataset-remove:foo-bar".
+            bt.remove_element_dataset(&m.id, key);
         } else if m.kind == "value" {
             // Fase 7.9: el.value = X aplica al TextInputState (para
             // <input>/<textarea>) o al SelectState (para <select>).
@@ -4635,7 +4653,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "btn".into(),
             tag_name: "button".into(),
-            text_content: "click me".into(), class_list: Vec::new(), value: None, parent_id: None,
+            text_content: "click me".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
         }])
         .expect("set_elements");
         rt.eval(
@@ -4697,7 +4715,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "out".into(),
             tag_name: "div".into(),
-            text_content: "antes".into(), class_list: Vec::new(), value: None, parent_id: None,
+            text_content: "antes".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
         }])
         .expect("set_elements");
         rt.eval(
@@ -4729,7 +4747,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "clock".into(),
             tag_name: "span".into(),
-            text_content: "00:00".into(), class_list: Vec::new(), value: None, parent_id: None,
+            text_content: "00:00".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
         }])
         .expect("e");
         rt.set_now_ms(0).expect("now");
@@ -4789,6 +4807,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
+            dataset: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -4827,7 +4846,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None,
+            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -4848,7 +4867,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "i".into(),
             tag_name: "input".into(),
-            text_content: "".into(), class_list: Vec::new(), value: None, parent_id: None,
+            text_content: "".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -4878,7 +4897,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None,
+            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(),
         }])
         .expect("e");
         rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
@@ -4997,6 +5016,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some("viejo".into()),
             parent_id: None,
+            dataset: Vec::new(),
         }])
         .expect("e");
         rt.eval("document.getElementById('x').value = 'nuevo'")
@@ -5025,6 +5045,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some("es".into()),
             parent_id: None,
+            dataset: Vec::new(),
         }])
         .expect("e");
         rt.eval("document.getElementById('lang').value = 'en'")
@@ -5045,6 +5066,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some(String::new()),
             parent_id: None,
+            dataset: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -5128,5 +5150,80 @@ mod tests {
         assert_eq!(a.parent_id, None);
         assert_eq!(b.parent_id.as_deref(), Some("a"));
         assert_eq!(c.parent_id.as_deref(), Some("b"));
+    }
+
+    // ============= Fase 7.11 — dataset =============
+
+    #[test]
+    fn collect_element_snapshots_pobla_dataset() {
+        let tree =
+            parse(r#"<body><div id="x" data-role="banner" data-id-key="42">x</div></body>"#);
+        let snaps = collect_element_snapshots(&tree);
+        let s = snaps.iter().find(|s| s.id == "x").expect("found");
+        // El suffix preserva case del HTML; el value tal cual.
+        assert!(s.dataset.iter().any(|(k, v)| k == "role" && v == "banner"));
+        assert!(s.dataset.iter().any(|(k, v)| k == "id-key" && v == "42"));
+    }
+
+    #[test]
+    fn apply_dataset_mutation_actualiza_box_tree() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><div id="x">y</div></body>"#));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "x".into(),
+            tag_name: "div".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+        }])
+        .expect("e");
+        rt.eval("document.getElementById('x').dataset.role = 'main'")
+            .expect("e");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("x") {
+                if b.dataset.iter().any(|(k, v)| k == "role" && v == "main") {
+                    found = true;
+                }
+            }
+        });
+        assert!(found, "data-role debería ser 'main' en el BoxTree");
+    }
+
+    #[test]
+    fn apply_dataset_remove_mutation_quita_la_key() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><div id="x" data-role="main">y</div></body>"#));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "x".into(),
+            tag_name: "div".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: vec![("role".into(), "main".into())],
+        }])
+        .expect("e");
+        rt.eval("delete document.getElementById('x').dataset.role")
+            .expect("e");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut still_there = false;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("x") {
+                if b.dataset.iter().any(|(k, _)| k == "role") {
+                    still_there = true;
+                }
+            }
+        });
+        assert!(!still_there, "data-role no debería existir tras el delete");
     }
 }
