@@ -30,6 +30,10 @@ use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 /// Paleta del modal.
 #[derive(Debug, Clone, Copy)]
 pub struct ModalPalette {
+    /// Color del scrim. El alpha se usa como **promedio** del vignette
+    /// radial: el centro (debajo del panel) queda ~25% más claro y las
+    /// esquinas ~40% más oscuras, manteniendo la densidad media igual a
+    /// lo que pidió el caller. Esto focaliza al modal sin "encerrarlo".
     pub scrim: Color,
     /// Firma visual del panel — gradient sutil + hairline accent en el
     /// top edge. La que vuelve consistente el "look gioser" en todos
@@ -228,6 +232,7 @@ pub fn modal_view<Msg: Clone + 'static>(spec: ModalSpec<Msg>) -> View<Msg> {
     .clip(true)
     .children(vec![header, separator, body_wrap, buttons_row]);
 
+    let scrim_base = palette.scrim;
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -235,7 +240,37 @@ pub fn modal_view<Msg: Clone + 'static>(spec: ModalSpec<Msg>) -> View<Msg> {
         },
         ..Default::default()
     })
-    .fill(palette.scrim)
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, Rect as KurboRect};
+        use llimphi_ui::llimphi_raster::peniko::{color::AlphaColor, Fill, Gradient};
+
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        // Vignette: el centro toma alpha = base * 0.75 (más translúcido,
+        // deja ver lo que hay detrás del modal); las esquinas alpha =
+        // base * 1.4 (más sólido, oscurece los bordes). El promedio
+        // visual queda cerca de `base` original, así la densidad pedida
+        // por el caller se preserva.
+        let [r, g, b, base_a] = scrim_base.components;
+        let inner: Color =
+            AlphaColor::new([r, g, b, (base_a * 0.75).clamp(0.0, 1.0)]);
+        let outer: Color =
+            AlphaColor::new([r, g, b, (base_a * 1.4).clamp(0.0, 1.0)]);
+
+        let cx = rect.x as f64 + rect.w as f64 * 0.5;
+        let cy = rect.y as f64 + rect.h as f64 * 0.5;
+        let diag_half = (((rect.w as f64).powi(2) + (rect.h as f64).powi(2)).sqrt() * 0.5) as f32;
+        let gradient = Gradient::new_radial(Point::new(cx, cy), diag_half)
+            .with_stops([inner, outer].as_slice());
+        let full = KurboRect::new(
+            rect.x as f64,
+            rect.y as f64,
+            (rect.x + rect.w) as f64,
+            (rect.y + rect.h) as f64,
+        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &gradient, None, &full);
+    })
     .on_click(on_dismiss)
     .children(vec![panel])
 }
