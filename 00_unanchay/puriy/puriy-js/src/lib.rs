@@ -211,14 +211,25 @@ globalThis.__puriy_make_element = function(id, tag, text) {
 };
 globalThis.__puriy_dispatch = function(id, type) {
     var el = globalThis.__puriy_elements[id];
-    if (!el) return 0;
-    // count = cuántos handlers se DISPARARON, hayan o no tirado. El
-    // chrome lo usa para decidir fallback (count==0 => default action).
+    if (!el) return '0,0';
+    // Construye el `event` object que se pasa a cada handler. Shape
+    // esencial: type/target/currentTarget + preventDefault/stopPropagation.
+    // Sin propagation real porque Fase 7.x no bubble-ea — `_stopped` se
+    // traga silenciosamente (no hay padre que continúe).
+    var event = {
+        type: type,
+        target: el,
+        currentTarget: el,
+        defaultPrevented: false,
+        _stopped: false,
+        preventDefault: function() { this.defaultPrevented = true; },
+        stopPropagation: function() { this._stopped = true; }
+    };
     var count = 0;
     var onName = 'on' + type;
     if (typeof el[onName] === 'function') {
         count++;
-        try { el[onName](); }
+        try { el[onName].call(el, event); }
         catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
     }
     var ls = el._listeners && el._listeners[type];
@@ -226,11 +237,11 @@ globalThis.__puriy_dispatch = function(id, type) {
         var arr = ls.slice();
         for (var i = 0; i < arr.length; i++) {
             count++;
-            try { arr[i](); }
+            try { arr[i].call(el, event); }
             catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
         }
     }
-    return count;
+    return count + ',' + (event.defaultPrevented ? '1' : '0');
 };
 globalThis.__puriy_drain_dirty = function() {
     var arr = globalThis.__puriy_dirty;
@@ -662,16 +673,24 @@ impl JsRuntime {
         &mut self,
         element_id: &str,
         event_type: &str,
-    ) -> Result<u32, JsError> {
+    ) -> Result<DispatchResult, JsError> {
         let script = format!(
             "globalThis.__puriy_dispatch({id}, {type_})",
             id = js_string_literal(element_id),
             type_ = js_string_literal(event_type),
         );
         let v = self.eval(&script)?;
-        Ok(match v {
-            JsValue::Number(n) if n >= 0.0 => n as u32,
-            _ => 0,
+        let s = match v {
+            JsValue::String(s) => s,
+            _ => return Ok(DispatchResult::default()),
+        };
+        // Formato "count,prevented" donde prevented es 0 o 1.
+        let mut parts = s.splitn(2, ',');
+        let count: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let default_prevented = parts.next() == Some("1");
+        Ok(DispatchResult {
+            count,
+            default_prevented,
         })
     }
 
@@ -984,6 +1003,17 @@ pub struct ElementSnapshot {
     pub id: String,
     pub tag_name: String,
     pub text_content: String,
+}
+
+/// Resultado de [`JsRuntime::dispatch_event`]. `count` es cuántos
+/// handlers corrieron (suma de `on<type>` + listeners). `default_prevented`
+/// es `true` si algún handler llamó `event.preventDefault()` — el chrome
+/// lo usa para decidir si correr la default action (ej. navegar el link
+/// asociado a `<a>` que tiene un handler de click).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DispatchResult {
+    pub count: u32,
+    pub default_prevented: bool,
 }
 
 /// Mutación del DOM publicada por un setter JS (`textContent`,
@@ -1806,7 +1836,7 @@ mod tests {
                 function(){ console.log('clicked') })",
         )
         .expect("e");
-        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
         assert_eq!(count, 1);
         assert_eq!(rt.stdout(), "clicked\n");
     }
@@ -1820,7 +1850,7 @@ mod tests {
             "document.getElementById('btn').onclick = function(){ console.log('on') }",
         )
         .expect("e");
-        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
         assert_eq!(count, 1);
         assert_eq!(rt.stdout(), "on\n");
     }
@@ -1838,7 +1868,7 @@ mod tests {
              el.addEventListener('click', function(){ console.log('listener') });",
         )
         .expect("e");
-        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
         assert_eq!(count, 2);
         assert_eq!(rt.stdout(), "property\nlistener\n");
     }
@@ -1848,7 +1878,7 @@ mod tests {
         let mut rt = JsRuntime::new().expect("rt");
         rt.set_document("t", "u", "b").expect("d");
         rt.set_elements(&[]).expect("e");
-        let count = rt.dispatch_event("fantasma", "click").expect("dispatch");
+        let r = rt.dispatch_event("fantasma", "click").expect("dispatch"); let count = r.count;
         assert_eq!(count, 0);
     }
 
@@ -1864,7 +1894,7 @@ mod tests {
              el.removeEventListener('click', f);",
         )
         .expect("e");
-        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
         assert_eq!(count, 0);
         assert!(rt.stdout().is_empty());
     }
@@ -1880,7 +1910,7 @@ mod tests {
              el.addEventListener('click', function(){ console.log('sigo') });",
         )
         .expect("e");
-        let count = rt.dispatch_event("btn", "click").expect("dispatch");
+        let r = rt.dispatch_event("btn", "click").expect("dispatch"); let count = r.count;
         assert_eq!(count, 2);
         assert_eq!(rt.stdout(), "sigo\n");
         assert!(rt.stderr().contains("boom"), "stderr: {:?}", rt.stderr());
@@ -2016,6 +2046,77 @@ mod tests {
         let muts = rt.drain_dom_mutations();
         assert_eq!(muts.len(), 1);
         assert_eq!(muts[0].value, "línea1\nlínea2\t\"foo\"");
+    }
+
+    #[test]
+    fn handler_recibe_event_object_con_type_y_target() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "x")]).expect("e");
+        rt.eval(
+            "document.getElementById('btn').onclick = function(e){ \
+                console.log(e.type + ' ' + e.target.id); \
+             }",
+        )
+        .expect("e");
+        rt.dispatch_event("btn", "click").expect("dispatch");
+        assert_eq!(rt.stdout(), "click btn\n");
+    }
+
+    #[test]
+    fn prevent_default_lo_reporta_dispatch_result() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("a", "a", "link")]).expect("e");
+        rt.eval(
+            "document.getElementById('a').onclick = function(e){ e.preventDefault(); }",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("a", "click").expect("dispatch");
+        assert_eq!(r.count, 1);
+        assert!(r.default_prevented, "esperaba default_prevented=true");
+    }
+
+    #[test]
+    fn sin_prevent_default_dispatch_result_lo_marca_falso() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("a", "a", "link")]).expect("e");
+        rt.eval(
+            "document.getElementById('a').onclick = function(){ /* no preventDefault */ }",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("a", "click").expect("dispatch");
+        assert_eq!(r.count, 1);
+        assert!(!r.default_prevented);
+    }
+
+    #[test]
+    fn prevent_default_de_un_handler_no_se_pierde_aunque_otros_no_lo_llamen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("a", "a", "link")]).expect("e");
+        rt.eval(
+            "var el = document.getElementById('a'); \
+             el.addEventListener('click', function(){ /* nada */ }); \
+             el.addEventListener('click', function(e){ e.preventDefault(); }); \
+             el.addEventListener('click', function(){ console.log('ran') });",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("a", "click").expect("dispatch");
+        assert_eq!(r.count, 3, "los 3 listeners deben correr");
+        assert!(r.default_prevented);
+        assert_eq!(rt.stdout(), "ran\n");
+    }
+
+    #[test]
+    fn dispatch_result_default_para_id_inexistente() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[]).expect("e");
+        let r = rt.dispatch_event("fantasma", "click").expect("dispatch");
+        assert_eq!(r.count, 0);
+        assert!(!r.default_prevented);
     }
 
     #[test]

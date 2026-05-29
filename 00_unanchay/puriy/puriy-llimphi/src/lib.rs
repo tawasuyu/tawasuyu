@@ -408,14 +408,18 @@ pub enum Msg {
     JsTick,
     /// Dispatch de un evento JS sobre el elemento `element_id` de la
     /// pestaña activa. El chrome arma este msg cuando el usuario hace
-    /// click sobre un nodo con `id=` que no tiene otra acción nativa
-    /// (link/download/submit). El handler llama
-    /// `dispatch_event(element_id, event_type)` sobre el runtime de la
-    /// pestaña activa. `event_type` típicamente "click" — armado por el
-    /// chrome, no por el usuario.
+    /// click/key/etc. sobre un nodo con `id=`. El handler llama
+    /// `dispatch_event(element_id, event_type)` sobre el runtime; si el
+    /// JS NO llamó `event.preventDefault()`, dispatcha `fallback`
+    /// (típicamente un `Navigate` para `<a href>` con id).
+    ///
+    /// `fallback = None` significa "no default action" (`<button>`,
+    /// `<div>` sin link). `fallback = Some(...)` cohabita link/handler
+    /// para `<a id href>` — Fase 7.6.
     JsDispatchEvent {
         element_id: String,
         event_type: String,
+        fallback: Option<Box<Msg>>,
     },
 }
 
@@ -1001,9 +1005,19 @@ impl App for Puriy {
                 let now_ms = m.start.elapsed().as_millis() as u64;
                 tick_js_runtimes(&mut m, now_ms);
             }
-            Msg::JsDispatchEvent { element_id, event_type } => {
+            Msg::JsDispatchEvent { element_id, event_type, fallback } => {
                 let now_ms = m.start.elapsed().as_millis() as u64;
-                dispatch_js_event(&mut m, &element_id, &event_type, now_ms);
+                let result = dispatch_js_event(&mut m, &element_id, &event_type, now_ms);
+                // Si el handler JS no llamó `event.preventDefault()` y
+                // hay un fallback (típicamente Navigate del `<a href>`),
+                // lo reenviamos al event loop para que el chrome lo
+                // procese normalmente. `dispatch` despacha el msg en el
+                // próximo iteración de update.
+                if !result.default_prevented {
+                    if let Some(fb) = fallback {
+                        handle.dispatch(*fb);
+                    }
+                }
             }
             Msg::PanelFilterKey(e) => {
                 m.panel_filter.apply_key(&e);
@@ -1828,24 +1842,34 @@ fn node_text_content(b: &BoxNode) -> String {
 /// no aplica fallback al default action (los `<a>` con id+link ya
 /// navegan por el path nativo, este msg sólo se arma para elementos
 /// sin link).
-fn dispatch_js_event(m: &mut Model, element_id: &str, event_type: &str, now_ms: u64) {
+fn dispatch_js_event(
+    m: &mut Model,
+    element_id: &str,
+    event_type: &str,
+    now_ms: u64,
+) -> puriy_js::DispatchResult {
     let t = m.active_mut();
-    let Some(rt) = t.js.as_mut() else { return };
+    let Some(rt) = t.js.as_mut() else {
+        return puriy_js::DispatchResult::default();
+    };
     let _ = rt.set_now_ms(now_ms);
     let prev_stdout_len = rt.stdout().len();
     let prev_stderr_len = rt.stderr().len();
-    match rt.dispatch_event(element_id, event_type) {
-        Ok(_count) => {
+    let result = match rt.dispatch_event(element_id, event_type) {
+        Ok(r) => {
             let new_stdout = rt.stdout();
             let new_stderr = rt.stderr();
             t.js_summary.logs += new_stdout[prev_stdout_len..].matches('\n').count();
             t.js_summary.errors += new_stderr[prev_stderr_len..].matches('\n').count();
+            r
         }
         Err(_) => {
             t.js_summary.errors += 1;
+            puriy_js::DispatchResult::default()
         }
-    }
+    };
     apply_dom_mutations(t);
+    result
 }
 
 /// Avanza el reloj de cada `JsRuntime` vivo del Model al `now_ms` actual
@@ -2429,7 +2453,7 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             // `<a download>` descarga el target en lugar de navegar. El
             // filename hint queda en `b.link_download` (String vacío =
             // usar nombre del path).
-            let msg = if let Some(filename_hint) = &b.link_download {
+            let native_msg = if let Some(filename_hint) = &b.link_download {
                 Msg::DownloadLink {
                     url: target.clone(),
                     filename_hint: filename_hint.clone(),
@@ -2439,8 +2463,25 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             } else {
                 Msg::Navigate(target.clone())
             };
+            // Fase 7.6 — cohabitación link+handler: si el `<a>` tiene
+            // `id=`, despachamos el evento JS PRIMERO y la navegación
+            // queda como fallback. El handler puede llamar
+            // `event.preventDefault()` para cancelar la nav.
+            let click_msg = if let Some(eid) = &b.element_id {
+                if !eid.is_empty() {
+                    Msg::JsDispatchEvent {
+                        element_id: eid.clone(),
+                        event_type: "click".into(),
+                        fallback: Some(Box::new(native_msg.clone())),
+                    }
+                } else {
+                    native_msg.clone()
+                }
+            } else {
+                native_msg.clone()
+            };
             view = view
-                .on_click(msg)
+                .on_click(click_msg)
                 .on_middle_click(Msg::NavigateNewTab(target.clone()))
                 .on_pointer_enter(Msg::HoverLink(Some(target.clone())))
                 .on_pointer_leave(Msg::HoverLink(None));
@@ -2448,18 +2489,12 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     } else if let Some(eid) = &b.element_id {
         // Elemento con `id=` y sin link/download/submit nativo: si JS
         // registró handlers para 'click', el chrome los dispara. Sin
-        // handlers, `dispatch_event` devuelve 0 y nada pasa — el evento
-        // no propaga al default action (no hay default action para un
-        // `<div id=>`/`<button id=>` puro).
-        //
-        // Limitación de Fase 7.5b: nodos `<a href=... id=...>` siguen
-        // navegando por el path nativo del rama anterior; los handlers
-        // JS sobre ellos no se disparan. preventDefault y la cohabitación
-        // navigate+handler quedan para una fase posterior.
+        // handlers, `dispatch_event` devuelve count=0 y nada pasa.
         if pe_active && !eid.is_empty() && !matches!(b.display, Display::None) {
             view = view.on_click(Msg::JsDispatchEvent {
                 element_id: eid.clone(),
                 event_type: "click".into(),
+                fallback: None,
             });
         }
     }
@@ -4417,6 +4452,42 @@ mod tests {
             }
         });
         assert!(found, "tick debió aplicar la mutación del setTimeout");
+    }
+
+    #[test]
+    fn dispatch_event_devuelve_default_prevented_cuando_corresponde() {
+        let mut m = model_con_script("/* boot */");
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "a".into(),
+            tag_name: "a".into(),
+            text_content: "link".into(),
+        }])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('a').onclick = function(e){ e.preventDefault(); }",
+        )
+        .expect("e");
+        let r = dispatch_js_event(&mut m, "a", "click", 0);
+        assert!(r.default_prevented);
+        assert_eq!(r.count, 1);
+    }
+
+    #[test]
+    fn dispatch_event_sin_prevent_default_devuelve_false() {
+        let mut m = model_con_script("/* boot */");
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "a".into(),
+            tag_name: "a".into(),
+            text_content: "link".into(),
+        }])
+        .expect("e");
+        rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
+            .expect("e");
+        let r = dispatch_js_event(&mut m, "a", "click", 0);
+        assert!(!r.default_prevented);
+        assert_eq!(r.count, 1);
     }
 
     #[test]
