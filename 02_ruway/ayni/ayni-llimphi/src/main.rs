@@ -16,7 +16,7 @@ use std::env;
 use std::sync::Arc;
 
 use ayni_core::{AgoraId, Carga, Conversacion};
-use ayni_crypto::{verificar_firma, Identidad};
+use ayni_crypto::{verificar_firma, CanalSeguro, Identidad};
 use ayni_sync::{EnlaceTcp, EventoRed, Fusionador, Sobre, Transporte};
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, Dimension, FlexDirection, Size, Style};
@@ -45,6 +45,10 @@ struct Modelo {
     identidad: Identidad,
     enlace: Arc<EnlaceTcp>,
     nombre: String,
+    /// Canal E2EE con el peer, tras intercambiar claves X25519 (P2).
+    canal: Option<CanalSeguro>,
+    /// ¿Cifrar los mensajes salientes? (env AYNI_CIFRAR).
+    cifrar: bool,
 }
 
 struct Ayni;
@@ -93,6 +97,8 @@ impl App for Ayni {
             identidad,
             enlace,
             nombre,
+            canal: None,
+            cifrar: env::var("AYNI_CIFRAR").is_ok(),
         }
     }
 
@@ -126,7 +132,12 @@ impl App for Ayni {
                 let texto = model.entrada.trim().to_string();
                 if !texto.is_empty() {
                     let autor = model.identidad.agora_id();
-                    let nodo = model.conv.redactar(autor, Carga::Texto(texto), 0, |id| {
+                    // cifrar si está activo y ya hay canal; si no, texto plano.
+                    let carga = match (model.cifrar, &model.canal) {
+                        (true, Some(canal)) => Carga::Cifrado(canal.cifrar(texto.as_bytes())),
+                        _ => Carga::Texto(texto),
+                    };
+                    let nodo = model.conv.redactar(autor, carga, 0, |id| {
                         model.identidad.firmar(id)
                     });
                     model.conv.agregar(nodo.clone()).ok();
@@ -136,12 +147,21 @@ impl App for Ayni {
             }
             Msg::Red(evento) => match evento {
                 EventoRed::Conectado(peer) => {
-                    // poner al día al recién llegado con nuestro grafo.
+                    // saludar (clave X25519) + poner al día con nuestro grafo.
+                    let _ = model.enlace.enviar(
+                        &peer,
+                        &Sobre::Hola {
+                            x25519: model.identidad.clave_publica_x25519(),
+                        },
+                    );
                     let _ = model
                         .enlace
                         .enviar(&peer, &Sobre::Grafo(model.conv.instantanea()));
                 }
                 EventoRed::Desconectado(_) => {}
+                EventoRed::Sobre(_, Sobre::Hola { x25519 }) => {
+                    model.canal = Some(model.identidad.canal_con(&x25519));
+                }
                 EventoRed::Sobre(_, sobre) => {
                     let Modelo { conv, fus, .. } = &mut model;
                     match sobre {
@@ -151,6 +171,7 @@ impl App for Ayni {
                         Sobre::Grafo(ns) => {
                             fus.aplicar_lote(conv, ns, verificar_firma);
                         }
+                        Sobre::Hola { .. } => {}
                     }
                 }
             },
@@ -180,10 +201,15 @@ impl App for Ayni {
         .fill(fondo_barra)
         .text_aligned(
             format!(
-                "ayni · {} [{}] · {} peer(es)",
+                "ayni · {} [{}] · {} peer(es){}",
                 model.nombre,
                 hex_corto(&yo),
-                model.enlace.num_peers()
+                model.enlace.num_peers(),
+                match (model.cifrar, model.canal.is_some()) {
+                    (true, true) => " · 🔒 E2EE",
+                    (true, false) => " · 🔓 esperando clave",
+                    _ => "",
+                }
             ),
             15.0,
             texto_claro,
@@ -197,11 +223,18 @@ impl App for Ayni {
         for nodo in &nodos[desde..] {
             let propio = *nodo.autor() == yo;
             let color = if propio { mio } else { ajeno };
-            let etiqueta = format!(
-                "[{}] {}",
-                hex_corto(nodo.autor()),
-                nodo.contenido.carga.texto().unwrap_or("‹no-texto›")
-            );
+            // descifrar para mostrar si la carga viene cifrada y hay canal.
+            let texto = match &nodo.contenido.carga {
+                Carga::Texto(t) => t.clone(),
+                Carga::Cifrado(blob) => match &model.canal {
+                    Some(c) => c
+                        .descifrar(blob)
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_else(|_| "‹cifrado›".into()),
+                    None => "‹cifrado›".into(),
+                },
+            };
+            let etiqueta = format!("[{}] {}", hex_corto(nodo.autor()), texto);
             filas.push(
                 View::new(Style {
                     size: Size {

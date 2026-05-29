@@ -23,6 +23,11 @@ use crate::ErrorCripto;
 pub struct Identidad {
     keypair: Keypair,
     nombre: String,
+    /// La semilla de 32 bytes que engendra el par. Se retiene (en memoria, como
+    /// la clave privada) porque de ella se deriva TAMBIÉN el par X25519 del
+    /// cifrado E2EE (ver [`Identidad::clave_publica_x25519`]): una sola raíz
+    /// para firmar y cifrar.
+    seed: [u8; 32],
 }
 
 impl Identidad {
@@ -45,6 +50,7 @@ impl Identidad {
         Identidad {
             keypair: Keypair::from_seed(seed),
             nombre: nombre.into(),
+            seed,
         }
     }
 
@@ -101,6 +107,20 @@ impl Identidad {
     /// y [`ayni_core::Conversacion::redactar`] esperan: pasar `|id| ident.firmar(id)`.
     pub fn firmar(&self, id: &Hash) -> Firma {
         self.keypair.sign(id)
+    }
+
+    /// La clave pública X25519 de esta identidad (derivada de la misma semilla
+    /// agora). Es lo que se publica a un par para que pueda abrirle un canal
+    /// cifrado — el análogo de cifrado del `agora_id` de firma.
+    pub fn clave_publica_x25519(&self) -> [u8; 32] {
+        crate::canal::publico_x25519(&self.seed)
+    }
+
+    /// Abre un [`CanalSeguro`] 1:1 con otro, dada su clave pública X25519. Ambos
+    /// extremos derivan la MISMA clave de canal sin intercambiar secretos (X25519
+    /// es simétrico). Lo que viaje por ese canal sólo lo lee el otro extremo.
+    pub fn canal_con(&self, su_publico_x25519: &[u8; 32]) -> crate::CanalSeguro {
+        crate::CanalSeguro::derivar(&crate::canal::secreto_x25519(&self.seed), su_publico_x25519)
     }
 }
 

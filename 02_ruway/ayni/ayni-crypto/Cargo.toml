@@ -35,6 +35,15 @@ agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
 agora-keystore = { path = "../../../03_ukupacha/agora/agora-keystore" }
 rand = { workspace = true }
 thiserror = { workspace = true }
+# === E2EE 1:1 (P2) — primitivas auditadas, NADA de cripto a mano ===
+# X25519 (ECDH) para el acuerdo de clave; HKDF-SHA256 para derivar la clave de
+# canal; ChaCha20-Poly1305 (ya en el workspace) para el AEAD. Construcción
+# estándar static-static DH (estilo libsodium box) — confidencialidad +
+# integridad. Forward-secrecy/PCS llegan con MLS (diferido).
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hkdf = "0.12"
+sha2 = { workspace = true }
+chacha20poly1305 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

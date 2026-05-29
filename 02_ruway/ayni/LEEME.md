@@ -36,7 +36,7 @@ reproducible.
 | crate          | rol                                                            | estado |
 |----------------|----------------------------------------------------------------|--------|
 | `ayni-core`    | DAG de mensajes firmados, direccionado por contenido (no_std)  | ✅ P0  |
-| `ayni-crypto`  | firma Ed25519 sobre agora ✅; (P2) E2EE 1:1                    | ✅ P1  |
+| `ayni-crypto`  | firma Ed25519 sobre agora ✅ + E2EE 1:1 (X25519/HKDF/ChaCha) ✅ | ✅ P2  |
 | `ayni-sync`    | trait `Transporte` + `EnlaceTcp` (LAN) ✅; (P3) minga/chasqui  | ✅ P1  |
 | `ayni-cli`     | chat headless de terminal (bin `ayni`)                         | ✅ P1  |
 | `ayni-llimphi` | UI Llimphi (frontend intercambiable sobre `ayni-core`)         | ✅ P1  |
@@ -62,7 +62,19 @@ y se verifica por *closure*; las primitivas Ed25519/MLS viven en `ayni-crypto`.
   `ayni-llimphi` (UI MVP). El transporte es TCP directo, no el daemon brahman de
   chasqui (matchmaking app↔app, desproporcionado para chat humano); minga/chasqui
   serán impls del mismo trait en P3.
-- **P2 — E2EE**: MLS 1:1 (`ayni-crypto::canal`). *(en curso)*
+- **P2 — E2EE 1:1** ✅ *(hecho)*: `ayni-crypto::canal` — `CanalSeguro` con
+  X25519 (ECDH) + HKDF-SHA256 + ChaCha20-Poly1305, sólo primitivas auditadas
+  (no cripto a mano). El par X25519 deriva de la **misma semilla agora** que la
+  firma; la clave pública se intercambia al conectar (`Sobre::Hola`). El claro
+  va en `Carga::Cifrado` *dentro* del contenido firmado → el **E2EE es ortogonal
+  al transporte** (la red mueve ciphertext sin enterarse) y la autoría sigue
+  siendo pública. Test prueba que el claro NO aparece en los bytes del cable;
+  chat cifrado verificado vivo (CLI/UI con `--cifrar`).
+  **Diferido a una fase posterior:** MLS (RFC 9420, OpenMLS) para chat de GRUPO
+  y forward-secrecy/post-compromise — su valor exige sincronizar estado de grupo
+  (Welcome/commits/epochs) sobre el transporte, que es un protocolo en sí mismo.
+  `CanalSeguro` es el seam donde MLS entrará. El canal de hoy es static-static
+  (estilo `crypto_box`): confidencialidad + integridad 1:1, sin PCS.
 - **P3 — sin servidor** *(HITO)*: sync P2P minga, DHT, store-and-forward.
 - **P4 — inteligencia local**: búsqueda rimay + traducir-al-llegar / resumen.
 - **P5 — cross-app**: adjuntar objetos del grafo (pluma/khipu/cosmos vivos).

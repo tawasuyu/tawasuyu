@@ -41,14 +41,33 @@ pub const VERSION_NODO: u32 = 1;
 pub enum Carga {
     /// Un mensaje de texto plano (UTF-8). La carga de base de P0.
     Texto(String),
+    /// Carga CIFRADA extremo-a-extremo: el blob AEAD opaco —`nonce || ciphertext`—
+    /// que produce `ayni-crypto::CanalSeguro` (P2). El grafo, el id y la firma
+    /// operan sobre ESTE ciphertext, así que integridad y autoría siguen intactas
+    /// y públicamente verificables; la confidencialidad la añade el cifrado y sólo
+    /// el destinatario del canal recupera el claro. Por eso el E2EE es ORTOGONAL
+    /// al transporte: la red mueve un nodo con carga `Cifrado` sin enterarse de
+    /// que lo es —no hay nada que adaptar aguas abajo—.
+    Cifrado(Vec<u8>),
 }
 
 impl Carga {
-    /// Vista del texto cuando la carga ES texto — conveniencia para la UI y la
-    /// indexación semántica (P4) sin destripar el `enum` en cada sitio.
+    /// Vista del texto cuando la carga ES texto plano — conveniencia para la UI
+    /// y la indexación semántica (P4) sin destripar el `enum` en cada sitio.
+    /// Una carga `Cifrado` devuelve `None`: hay que descifrarla antes.
     pub fn texto(&self) -> Option<&str> {
         match self {
             Carga::Texto(t) => Some(t),
+            Carga::Cifrado(_) => None,
+        }
+    }
+
+    /// El blob AEAD cuando la carga está cifrada — lo que `CanalSeguro::descifrar`
+    /// consume. `None` si la carga es texto plano.
+    pub fn cifrado(&self) -> Option<&[u8]> {
+        match self {
+            Carga::Cifrado(b) => Some(b),
+            Carga::Texto(_) => None,
         }
     }
 }

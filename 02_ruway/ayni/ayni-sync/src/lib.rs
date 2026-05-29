@@ -33,10 +33,16 @@ pub struct PeerId(pub String);
 /// Lo que viaja por el cable entre dos pares de Ayni.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Sobre {
+    /// Saludo de presentación al conectar: la clave pública X25519 del emisor,
+    /// para que el otro pueda abrirle un canal E2EE 1:1 (P2). No lleva secreto
+    /// alguno —una clave pública es, por definición, pública—; sólo evita un
+    /// directorio externo para el intercambio de claves de cifrado.
+    Hola { x25519: [u8; 32] },
     /// Volcado del grafo completo del emisor — su instantánea en orden
     /// topológico. Se manda al establecer la conexión para ponerse al día.
     Grafo(Vec<MensajeNodo>),
-    /// Un nodo nuevo, difundido en caliente apenas su autor lo redacta.
+    /// Un nodo nuevo, difundido en caliente apenas su autor lo redacta. Su carga
+    /// puede ser texto plano o `Carga::Cifrado` — al transporte le da igual.
     Nodo(MensajeNodo),
 }
 
@@ -184,6 +190,61 @@ mod tests {
             conv_b.orden_topologico(),
             "los dos pares convergen al mismo hilo"
         );
+    }
+
+    #[test]
+    fn lazo_e2ee_sobre_tcp_el_transporte_no_ve_el_claro() {
+        use ayni_core::Carga;
+
+        let alicia = Identidad::desde_semilla([1u8; 32], "Alicia");
+        let beto = Identidad::desde_semilla([2u8; 32], "Beto");
+
+        // Cada uno deriva el canal 1:1 desde la clave pública X25519 del otro.
+        let canal_a = alicia.canal_con(&beto.clave_publica_x25519());
+        let canal_b = beto.canal_con(&alicia.clave_publica_x25519());
+
+        let mut conv_a = Conversacion::nueva();
+        let mut conv_b = Conversacion::nueva();
+        let mut fus_b = Fusionador::nuevo();
+
+        let (enlace_a, _rx_a) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        let (enlace_b, rx_b) = EnlaceTcp::escuchar("127.0.0.1:0").unwrap();
+        enlace_b.conectar(&enlace_a.direccion_local().to_string()).unwrap();
+        esperar_conectado(&rx_b);
+
+        // Alicia CIFRA el claro, lo mete en un nodo firmado, y lo difunde.
+        let secreto = "esto sólo lo lee Beto";
+        let cifrado = canal_a.cifrar(secreto.as_bytes());
+        let nodo = conv_a.redactar(alicia.agora_id(), Carga::Cifrado(cifrado), 1, |id| {
+            alicia.firmar(id)
+        });
+        conv_a.agregar(nodo).unwrap();
+        let en_cable = conv_a.instantanea().pop().unwrap();
+
+        // Lo que viaja por el cable NO contiene el claro.
+        let bytes_cable = postcard::to_allocvec(&Sobre::Nodo(en_cable.clone())).unwrap();
+        let ventana: Vec<u8> = bytes_cable.clone();
+        assert!(
+            !contiene_subcadena(&ventana, secreto.as_bytes()),
+            "el claro NO debe aparecer en los bytes del cable"
+        );
+
+        enlace_a.difundir(&Sobre::Nodo(en_cable)).unwrap();
+        sincronizar_hasta(&rx_b, &mut conv_b, &mut fus_b, 1);
+
+        // Beto verifica autoría (pública) y descifra (sólo él puede).
+        let recibido = conv_b.instantanea().pop().unwrap();
+        assert!(recibido.verificar(verificar_firma), "autoría de Alicia, verificable");
+        assert_eq!(recibido.contenido.carga.texto(), None, "el nodo no trae claro");
+        let claro = canal_b
+            .descifrar(recibido.contenido.carga.cifrado().unwrap())
+            .unwrap();
+        assert_eq!(claro, secreto.as_bytes(), "Beto recupera el claro E2EE");
+    }
+
+    /// ¿Aparece `aguja` como subcadena contigua de `pajar`?
+    fn contiene_subcadena(pajar: &[u8], aguja: &[u8]) -> bool {
+        pajar.windows(aguja.len()).any(|w| w == aguja)
     }
 
     #[test]
