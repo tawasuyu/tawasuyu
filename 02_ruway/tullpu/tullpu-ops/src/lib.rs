@@ -6,16 +6,19 @@
 //! la maneja el orquestador [`regenerar_stale`], que recorre el lienzo en
 //! orden topológico y ejecuta cada capa derivada cuya madre está fresca.
 //!
-//! El catálogo arranca con operaciones deterministas en proceso. Las ops IA
-//! (`TransformacionPixel::Ia`) se delegarán a `pixel-verbo-daemon` por
-//! socket Unix —fase 5 del SDD—; este crate las reconoce pero no las
-//! ejecuta.
+//! Las ops IA (`TransformacionPixel::Ia`) se delegan a un proveedor que
+//! implementa `pixel_verbo_core::Proveedor` — el mock determinista en
+//! tests/dev, el `ClienteBloqueante` del daemon en producción.
+//! [`regenerar_stale_con_ia`] es la variante con proveedor; la versión
+//! básica [`regenerar_stale`] mantiene el comportamiento de saltar las
+//! Ia (útil cuando el daemon no está disponible).
 
 #![forbid(unsafe_code)]
 
 use image::{ImageBuffer, RgbaImage};
+use pixel_verbo_core::{Imagen, OpPixel, Proveedor};
 use tullpu_core::{
-    Frescura, Hash, Lienzo, OpLocal, OrigenCapa, TransformacionPixel,
+    Capa, Frescura, Hash, Lienzo, OpLocal, OrigenCapa, TransformacionPixel,
 };
 use tullpu_render::{AlmacenEnMemoria, FuenteBuffers};
 
@@ -31,6 +34,19 @@ pub enum Error {
     Tamanio { esperado: usize, encontrado: usize },
     #[error("operación IA '{modelo}' no la ejecuta este crate — la sirve pixel-verbo-daemon")]
     IaNoSoportada { modelo: String },
+    #[error("op IA: el proveedor devolvió un error: {0}")]
+    IaProveedor(String),
+    #[error("params de op IA mal formados (postcard): {0}")]
+    IaParams(String),
+    #[error(
+        "op IA devolvió dimensiones inesperadas: esperaba {ancho_esp}×{alto_esp}, vino {ancho}×{alto}"
+    )]
+    IaDimension {
+        ancho_esp: u32,
+        alto_esp: u32,
+        ancho: u32,
+        alto: u32,
+    },
 }
 
 // =============================================================================
@@ -285,6 +301,138 @@ pub fn regenerar_stale(
 }
 
 // =============================================================================
+//  Puente con pixel-verbo: codificar/decodificar OpPixel en params
+// =============================================================================
+
+/// Nombre canónico de modelo que tullpu usa al crear capas Ia "del mock".
+/// Es el mismo string que devuelve `ProveedorMock::nuevo().model_id()`,
+/// repetido aquí para que tullpu-ops no dependa de pixel-verbo-mock.
+pub const MODELO_MOCK: &str = "pixel-verbo-mock-v0";
+
+/// Construye una [`TransformacionPixel::Ia`] desde una [`OpPixel`],
+/// codificando la op en `params` con postcard. `modelo` es el nombre del
+/// proveedor que la app quiere usar para esta capa — en runtime el
+/// orquestador no lo verifica (un proveedor incompatible se manifestará
+/// como error del proveedor), pero queda guardado para el render del
+/// grafo en UI y para una validación futura.
+pub fn transformacion_ia(modelo: impl Into<String>, op: &OpPixel) -> TransformacionPixel {
+    let prompt = prompt_de_op(op);
+    let params = postcard::to_allocvec(op)
+        .expect("OpPixel siempre serializa: enum cerrado sin floats no-finitos");
+    TransformacionPixel::Ia {
+        modelo: modelo.into(),
+        prompt,
+        params,
+    }
+}
+
+/// Decodifica la [`OpPixel`] que viaja en los `params` de una
+/// `TransformacionPixel::Ia`.
+pub fn op_pixel_desde_params(params: &[u8]) -> Result<OpPixel, Error> {
+    postcard::from_bytes(params).map_err(|e| Error::IaParams(e.to_string()))
+}
+
+fn prompt_de_op(op: &OpPixel) -> Option<String> {
+    match op {
+        OpPixel::Segmentar { prompt } | OpPixel::Inpaint { prompt } => prompt.clone(),
+        OpPixel::Restyle { prompt } | OpPixel::Generar { prompt, .. } => Some(prompt.clone()),
+    }
+}
+
+// =============================================================================
+//  Orquestador con proveedor IA
+// =============================================================================
+
+/// Como [`regenerar_stale`] pero acepta un proveedor de píxel para
+/// ejecutar las capas `TransformacionPixel::Ia`. Locales y IA se
+/// despachan en el mismo orden topológico — una capa IA puede depender
+/// de la salida de una local, y viceversa.
+///
+/// Validaciones de dimensión: se exige que el output del proveedor mida
+/// igual que el lienzo (mismo invariante que las locales). El caller que
+/// quiera ops con cambio de resolución (upscale) debe redimensionar el
+/// lienzo y propagar stale aguas abajo, no relajar este invariante.
+pub fn regenerar_stale_con_ia(
+    l: &mut Lienzo,
+    alm: &mut AlmacenEnMemoria,
+    proveedor: &dyn Proveedor,
+) -> Result<Vec<Capa>, Error> {
+    let orden = l.orden_regeneracion();
+    let mut regeneradas = Vec::new();
+    let w = l.width;
+    let h = l.height;
+
+    for id in orden {
+        let (madre_id, op) = {
+            let capa = match l.capa(id) {
+                Some(c) => c,
+                None => continue,
+            };
+            match &capa.origen {
+                OrigenCapa::Derivada {
+                    madre,
+                    op,
+                    estado: Frescura::Stale,
+                } => (*madre, op.clone()),
+                _ => continue,
+            }
+        };
+
+        let salida = match op {
+            TransformacionPixel::Local(o) => {
+                let madre_hash = l
+                    .capa(madre_id)
+                    .ok_or(Error::BufferFaltante([0u8; 32]))?
+                    .contenido;
+                let src = alm
+                    .obtener(madre_hash)
+                    .ok_or(Error::BufferFaltante(madre_hash))?
+                    .to_vec();
+                aplicar_op_local(&o, &src, w, h)?
+            }
+            TransformacionPixel::Ia {
+                modelo: _, params, ..
+            } => {
+                let op_pixel = op_pixel_desde_params(&params)?;
+                let entrada = if op_pixel.requiere_entrada() {
+                    let madre_hash = l
+                        .capa(madre_id)
+                        .ok_or(Error::BufferFaltante([0u8; 32]))?
+                        .contenido;
+                    let bytes = alm
+                        .obtener(madre_hash)
+                        .ok_or(Error::BufferFaltante(madre_hash))?
+                        .to_vec();
+                    Some(Imagen { ancho: w, alto: h, bytes })
+                } else {
+                    None
+                };
+                let img = proveedor
+                    .aplicar(&op_pixel, entrada)
+                    .map_err(|e| Error::IaProveedor(e.to_string()))?;
+                if img.ancho != w || img.alto != h {
+                    return Err(Error::IaDimension {
+                        ancho_esp: w,
+                        alto_esp: h,
+                        ancho: img.ancho,
+                        alto: img.alto,
+                    });
+                }
+                img.bytes
+            }
+        };
+
+        let nuevo_hash = alm.insertar(salida);
+        l.marcar_fresca(id, nuevo_hash);
+        if let Some(c) = l.capa(id) {
+            regeneradas.push(c.clone());
+        }
+    }
+
+    Ok(regeneradas)
+}
+
+// =============================================================================
 //  Tests
 // =============================================================================
 
@@ -528,5 +676,119 @@ mod tests {
         let regen = regenerar_stale(&mut l, &mut alm).unwrap();
         assert!(regen.is_empty(), "Ia no la ejecuta este crate");
         assert!(l.capa(id_b).unwrap().esta_stale());
+    }
+
+    #[test]
+    fn regenerar_stale_con_ia_despacha_al_proveedor() {
+        use pixel_verbo_mock::ProveedorMock;
+
+        // A (raster) → B (Ia::Restyle prompt="tropical")
+        let mut alm = AlmacenEnMemoria::nuevo();
+        // El input debe tener saturación > 0 — un gris puro queda
+        // invariante ante un shift de matiz HSL.
+        let h_a = alm.insertar(buffer_solido(2, 2, [200, 80, 40, 255]));
+
+        let mut l = Lienzo::nuevo(2, 2);
+        let a = Capa::raster("a", h_a);
+        let id_a = a.id;
+        l.apilar(a);
+
+        let op = OpPixel::Restyle {
+            prompt: "tropical".into(),
+        };
+        let trans = transformacion_ia(MODELO_MOCK, &op);
+        let b = Capa::derivada("ia-restyle", id_a, trans, [0u8; 32]);
+        let id_b = b.id;
+        l.apilar(b);
+
+        let prov = ProveedorMock::nuevo();
+        let regen = regenerar_stale_con_ia(&mut l, &mut alm, &prov).unwrap();
+        assert_eq!(regen.len(), 1);
+        assert!(!l.capa(id_b).unwrap().esta_stale());
+
+        // El hash de B debe diferir del de A — Restyle "tropical" no es
+        // identidad sobre un gris saturado bajo (un gris seguirá siendo
+        // gris por shift de matiz, pero el helper de hash usa el output
+        // entero; usamos un color con saturación para evidenciar el
+        // cambio).
+        let h_a2 = l.capa(id_a).unwrap().contenido;
+        let h_b = l.capa(id_b).unwrap().contenido;
+        assert_ne!(h_a2, h_b, "Restyle debe modificar al menos un canal");
+    }
+
+    #[test]
+    fn regenerar_stale_con_ia_generar_no_requiere_entrada() {
+        use pixel_verbo_mock::ProveedorMock;
+
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let h_a = alm.insertar(buffer_solido(4, 4, [0, 0, 0, 255]));
+
+        let mut l = Lienzo::nuevo(4, 4);
+        let a = Capa::raster("a", h_a);
+        let id_a = a.id;
+        l.apilar(a);
+
+        // Generar ignora la entrada — pero seguimos exigiendo una madre
+        // por la topología del DAG. El proveedor mock genera un
+        // gradiente del tamaño del lienzo.
+        let op = OpPixel::Generar {
+            prompt: "atardecer".into(),
+            ancho: 4,
+            alto: 4,
+        };
+        let trans = transformacion_ia(MODELO_MOCK, &op);
+        let b = Capa::derivada("ia-generar", id_a, trans, [0u8; 32]);
+        let id_b = b.id;
+        l.apilar(b);
+
+        let prov = ProveedorMock::nuevo();
+        regenerar_stale_con_ia(&mut l, &mut alm, &prov).unwrap();
+        assert!(!l.capa(id_b).unwrap().esta_stale());
+
+        let h_b = l.capa(id_b).unwrap().contenido;
+        let bytes = alm.obtener(h_b).unwrap();
+        assert_eq!(bytes.len(), 4 * 4 * 4);
+    }
+
+    #[test]
+    fn regenerar_stale_con_ia_dimension_invalida_es_error() {
+        // Si el proveedor devuelve un tamaño distinto al lienzo, fallamos.
+        // Construimos un Generar con dims mentidas vs lienzo.
+        use pixel_verbo_mock::ProveedorMock;
+
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let h_a = alm.insertar(buffer_solido(2, 2, [0, 0, 0, 255]));
+
+        let mut l = Lienzo::nuevo(2, 2);
+        let a = Capa::raster("a", h_a);
+        let id_a = a.id;
+        l.apilar(a);
+
+        let op = OpPixel::Generar {
+            prompt: "x".into(),
+            ancho: 8,
+            alto: 8, // ≠ lienzo
+        };
+        let trans = transformacion_ia(MODELO_MOCK, &op);
+        let b = Capa::derivada("ia-malformada", id_a, trans, [0u8; 32]);
+        l.apilar(b);
+
+        let prov = ProveedorMock::nuevo();
+        let err = regenerar_stale_con_ia(&mut l, &mut alm, &prov).unwrap_err();
+        assert!(matches!(err, Error::IaDimension { .. }));
+    }
+
+    #[test]
+    fn params_postcard_roundtrip() {
+        let op = OpPixel::Restyle {
+            prompt: "frío".into(),
+        };
+        let trans = transformacion_ia(MODELO_MOCK, &op);
+        let params = match &trans {
+            TransformacionPixel::Ia { params, .. } => params.clone(),
+            _ => panic!(),
+        };
+        let dec = op_pixel_desde_params(&params).unwrap();
+        assert_eq!(dec, op);
     }
 }

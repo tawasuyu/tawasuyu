@@ -10,5 +10,10 @@ description = "tullpu — catálogo de operaciones locales (deterministas en pro
 [dependencies]
 tullpu-core = { path = "../tullpu-core" }
 tullpu-render = { path = "../tullpu-render" }
+pixel-verbo-core = { path = "../pixel-verbo-core" }
 image = { workspace = true }
 thiserror = { workspace = true }
+postcard = { workspace = true }
+
+[dev-dependencies]
+pixel-verbo-mock = { path = "../pixel-verbo-mock" }

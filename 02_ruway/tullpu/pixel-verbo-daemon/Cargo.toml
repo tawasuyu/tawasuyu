@@ -1,0 +1,17 @@
+[package]
+name = "pixel-verbo-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pixel-verbo — daemon multi-cliente: sirve cualquier Proveedor sobre un socket Unix; ClienteBloqueante lo consume desde otro proceso. Un modelo cargado, N procesos. Sin tokio: std::thread por conexión."
+
+[dependencies]
+pixel-verbo-core = { path = "../pixel-verbo-core" }
+serde = { workspace = true, features = ["derive"] }
+postcard = { workspace = true }
+
+[dev-dependencies]
+pixel-verbo-mock = { path = "../pixel-verbo-mock" }

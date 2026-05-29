@@ -1,0 +1,12 @@
+[package]
+name = "pixel-verbo-mock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pixel-verbo — proveedor determinista (sin modelo real) que cumple el trait Proveedor. Útil para desarrollo, tests y desbloquear consumidores antes de tener un modelo de píxel cargado."
+
+[dependencies]
+pixel-verbo-core = { path = "../pixel-verbo-core" }

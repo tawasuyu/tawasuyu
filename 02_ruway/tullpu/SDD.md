@@ -86,11 +86,11 @@ Una capa derivada que queda *stale* (su madre cambió) pinta la conexión puntea
 
 ## Fases de forja
 
-1. **`tullpu-core`** — Capa, GrafoDeCapas, modos de fusión, serialización a `Objeto`. Testeable con `cargo test` sin gráficos.
-2. **`tullpu-render`** — compositor top-down CPU → buffer Rgba8. Hito: cargar 3 capas PNG y componerlas a un PNG de salida correcto.
-3. **`tullpu-app-llimphi`** — lienzo + panel de capas + grafo sobre `llimphi-widget-nodegraph`. Requiere `llimphi-surface` (ver §6.quinquies) para el lienzo vivo.
-4. **`tullpu-ops` locales** — brush, ajustes, máscaras como nodos derivados con *stale tracking*.
-5. **`pixel-verbo-daemon` + `tullpu-ops` IA** — segmentar/inpaint/upscale/generar como `TransformacionPixel::Ia`.
+1. **`tullpu-core`** ✓ — Capa, GrafoDeCapas, modos de fusión, serialización a `Objeto`. Testeable con `cargo test` sin gráficos.
+2. **`tullpu-render`** ✓ — compositor top-down CPU → buffer Rgba8. Hito: cargar 3 capas PNG y componerlas a un PNG de salida correcto.
+3. **`tullpu-app-llimphi`** ✓ (MVP) — lienzo + panel de capas + paleta. Botón clicable por capa; lienzo central pinta `peniko::Image`. Pendiente: nodegraph sobre `llimphi-widget-nodegraph` cuando llegue `llimphi-surface`.
+4. **`tullpu-ops` locales** ✓ — invertir/brillo/contraste/niveles/blur/opacidad/saturación/tonalidad como nodos derivados con *stale tracking*.
+5. **`pixel-verbo-daemon` + `tullpu-ops` IA** ✓ — `pixel-verbo-{core,mock,daemon,daemon-bin}`; `regenerar_stale_con_ia` cablea `TransformacionPixel::Ia` al `Proveedor`. Mock determinista (segmentar/inpaint/restyle/generar). Daemon `std::thread`-por-conexión, cliente bloqueante. La app resuelve daemon→mock al arranque y lo muestra en el header. Pendiente: proveedor ONNX real (segment-anything, restyle, upscale), tiling para imágenes grandes.
 6. **`shared/foreign-psd`** — import Photoshop → grafo de capas (2 sem post-MVP, ver §6.ter).
 
 **Estimación gruesa** (de `PLAN.md` §6.ter): tullpu base 3-4 meses · foreign-psd 2 sem post-tullpu.

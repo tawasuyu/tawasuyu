@@ -1,26 +1,32 @@
 //! `tullpu` — app de escritorio Llimphi: lienzo central + panel de capas +
-//! paleta de operaciones. MVP del editor de imágenes por capas IA-able.
+//! paleta de operaciones (locales e IA). MVP del editor de imágenes por
+//! capas IA-able.
 //!
 //! Layout:
 //!
 //! ```text
 //! ┌───────────────────────────────────────────────────────────┐
-//! │ header: dimensiones · estado                              │
+//! │ header: dimensiones · proveedor IA · estado               │
 //! ├──────────────┬─────────────────────────────┬──────────────┤
-//! │ capas        │                             │ operaciones  │
+//! │ capas        │                             │ locales      │
 //! │  • fondo     │        LIENZO compuesto     │  + Invertir  │
 //! │  • inversión │        (peniko::Image)      │  + Brillo+   │
-//! │  • brillo    │                             │  + Contraste │
-//! │              │                             │  + Saturación│
-//! │ [+ raster]   │                             │  + Tonalidad │
+//! │  • brillo    │                             │  …           │
+//! │              │                             │ IA           │
+//! │ [+ raster]   │                             │  + Restyle   │
+//! │              │                             │  + Segmentar │
+//! │              │                             │  + Inpaint   │
+//! │              │                             │  + Generar   │
 //! └──────────────┴─────────────────────────────┴──────────────┘
 //! ```
 //!
 //! Cada panel de capa es un botón clicable que la selecciona; el panel
 //! derecho aplica una op nueva como capa derivada de la seleccionada.
-//! Cada cambio dispara `regenerar_stale` + `componer` síncronamente —
-//! para imágenes grandes habrá que mover esto a un worker, pero el MVP
-//! corre fluido con el gradiente 512×320 que sembramos al arranque.
+//! Las ops IA se delegan al [`pixel_verbo_core::Proveedor`] que la app
+//! resuelve al arranque: si encuentra el daemon `pixel-verbo-daemon` en
+//! `$XDG_RUNTIME_DIR/pixel-verbo.sock` lo usa; si no, cae al `ProveedorMock`
+//! en proceso — así el botón "Generar" igual funciona sin daemon corriendo.
+//! Cada cambio dispara `regenerar_stale_con_ia` + `componer` sincrónicamente.
 
 #![forbid(unsafe_code)]
 
@@ -35,10 +41,13 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
 use llimphi_widget_button::{button_styled, button_view, ButtonPalette};
 
+use pixel_verbo_core::{OpPixel, Proveedor};
+use pixel_verbo_daemon::ClienteBloqueante;
+use pixel_verbo_mock::ProveedorMock;
 use tullpu_core::{
     Capa, Frescura, Lienzo, ModoFusion, OpLocal, OrigenCapa, TransformacionPixel,
 };
-use tullpu_ops::regenerar_stale;
+use tullpu_ops::{regenerar_stale_con_ia, transformacion_ia};
 use tullpu_render::{componer, AlmacenEnMemoria, FuenteBuffers};
 use uuid::Uuid;
 
@@ -52,6 +61,8 @@ struct Model {
     seleccionada: Option<Uuid>,
     imagen: Option<Image>,
     estado: String,
+    proveedor: Box<dyn Proveedor>,
+    proveedor_etiqueta: String,
 }
 
 #[derive(Clone)]
@@ -62,6 +73,7 @@ enum Msg {
     CiclarBlend(Uuid),
     Eliminar(Uuid),
     Agregar(OpLocal),
+    AgregarIa(OpPixel),
     Recargar,
 }
 
@@ -93,6 +105,30 @@ fn cargar_png(path: &std::path::Path) -> Option<(u32, u32, Vec<u8>)> {
     Some((w, h, rgba.into_raw()))
 }
 
+fn socket_pixel_verbo() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(xdg).join("pixel-verbo.sock");
+    }
+    PathBuf::from("/tmp/pixel-verbo.sock")
+}
+
+/// Intenta hablar con el daemon; si no responde, cae al mock. La elección
+/// queda visible en el header — el usuario sabe contra qué está pegando.
+fn resolver_proveedor() -> (Box<dyn Proveedor>, String) {
+    let sock = socket_pixel_verbo();
+    match ClienteBloqueante::conectar(&sock) {
+        Ok(cli) => {
+            let etiqueta = format!("daemon {} @ {}", cli.model_id(), sock.display());
+            (Box::new(cli), etiqueta)
+        }
+        Err(_) => {
+            let mock = ProveedorMock::nuevo();
+            let etiqueta = format!("mock {}", mock.model_id());
+            (Box::new(mock), etiqueta)
+        }
+    }
+}
+
 fn inicializar() -> Model {
     let mut almacen = AlmacenEnMemoria::nuevo();
     let arg = std::env::args().nth(1).map(PathBuf::from);
@@ -106,6 +142,8 @@ fn inicializar() -> Model {
     let id_fondo = fondo.id;
     lienzo.apilar(fondo);
 
+    let (proveedor, proveedor_etiqueta) = resolver_proveedor();
+
     let imagen = recomponer(&lienzo, &almacen);
     Model {
         lienzo,
@@ -113,6 +151,8 @@ fn inicializar() -> Model {
         seleccionada: Some(id_fondo),
         imagen,
         estado: "listo".into(),
+        proveedor,
+        proveedor_etiqueta,
     }
 }
 
@@ -124,7 +164,11 @@ fn recomponer(l: &Lienzo, alm: &impl FuenteBuffers) -> Option<Image> {
 }
 
 fn aplicar_y_recomponer(model: &mut Model) {
-    match regenerar_stale(&mut model.lienzo, &mut model.almacen) {
+    match regenerar_stale_con_ia(
+        &mut model.lienzo,
+        &mut model.almacen,
+        model.proveedor.as_ref(),
+    ) {
         Ok(regen) => {
             model.estado = if regen.is_empty() {
                 "listo".into()
@@ -176,9 +220,14 @@ fn etiqueta_blend(b: ModoFusion) -> &'static str {
 //  Vista
 // =============================================================================
 
-fn header(theme: &llimphi_theme::Theme, lienzo: &Lienzo, estado: &str) -> View<Msg> {
+fn header(
+    theme: &llimphi_theme::Theme,
+    lienzo: &Lienzo,
+    estado: &str,
+    proveedor_etiqueta: &str,
+) -> View<Msg> {
     let titulo = format!(
-        "tullpu · {}×{} · {} capas · {estado}",
+        "tullpu · {}×{} · {} capas · IA: {proveedor_etiqueta} · {estado}",
         lienzo.width,
         lienzo.height,
         lienzo.capas.len()
@@ -355,64 +404,106 @@ fn panel_capas(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
 fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     let pal = ButtonPalette::from_theme(theme);
     let bloqueado = model.seleccionada.is_none();
-    let mk = |label: &str, op: OpLocal| -> View<Msg> {
+    let mk_local = |label: &str, op: OpLocal| -> View<Msg> {
         let msg = if bloqueado { Msg::Recargar } else { Msg::Agregar(op) };
         button_view(label.to_string(), &pal, msg)
     };
-    let titulo = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(22.0_f32),
-        },
-        padding: Rect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
-            top: length(4.0_f32),
-            bottom: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .text_aligned("operaciones".to_string(), 11.0, theme.fg_muted, Alignment::Start);
-    let mut hijos = vec![titulo];
-    hijos.push(envolver_fila(mk("+ Invertir", OpLocal::Invertir)));
-    hijos.push(envolver_fila(mk(
+    let mk_ia = |label: &str, op: OpPixel| -> View<Msg> {
+        let msg = if bloqueado {
+            Msg::Recargar
+        } else {
+            Msg::AgregarIa(op)
+        };
+        button_view(label.to_string(), &pal, msg)
+    };
+
+    let subtitulo = |s: &str| {
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(22.0_f32),
+            },
+            padding: Rect {
+                left: length(10.0_f32),
+                right: length(10.0_f32),
+                top: length(8.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(s.to_string(), 11.0, theme.fg_muted, Alignment::Start)
+    };
+
+    let mut hijos = vec![subtitulo("locales")];
+    hijos.push(envolver_fila(mk_local("+ Invertir", OpLocal::Invertir)));
+    hijos.push(envolver_fila(mk_local(
         "+ Brillo +0.15",
         OpLocal::Brillo { delta: 0.15 },
     )));
-    hijos.push(envolver_fila(mk(
+    hijos.push(envolver_fila(mk_local(
         "+ Brillo −0.15",
         OpLocal::Brillo { delta: -0.15 },
     )));
-    hijos.push(envolver_fila(mk(
+    hijos.push(envolver_fila(mk_local(
         "+ Contraste ×1.3",
         OpLocal::Contraste { factor: 1.3 },
     )));
-    hijos.push(envolver_fila(mk(
+    hijos.push(envolver_fila(mk_local(
         "+ Contraste ×0.7",
         OpLocal::Contraste { factor: 0.7 },
     )));
-    hijos.push(envolver_fila(mk(
+    hijos.push(envolver_fila(mk_local(
         "+ Saturación ×0.0",
         OpLocal::Saturacion { factor: 0.0 },
     )));
-    hijos.push(envolver_fila(mk(
+    hijos.push(envolver_fila(mk_local(
         "+ Saturación ×1.5",
         OpLocal::Saturacion { factor: 1.5 },
     )));
-    hijos.push(envolver_fila(mk(
+    hijos.push(envolver_fila(mk_local(
         "+ Tonalidad 90°",
         OpLocal::Tonalidad { grados: 90.0 },
     )));
-    hijos.push(envolver_fila(mk(
+    hijos.push(envolver_fila(mk_local(
         "+ Blur radio 4",
         OpLocal::Blur { radio: 4.0 },
     )));
-    hijos.push(envolver_fila(mk(
+    hijos.push(envolver_fila(mk_local(
         "+ Niveles 0.1–0.9 γ1.2",
         OpLocal::Niveles {
             entrada_min: 0.1,
             entrada_max: 0.9,
             gamma: 1.2,
+        },
+    )));
+
+    hijos.push(subtitulo("ia"));
+    hijos.push(envolver_fila(mk_ia(
+        "+ Restyle 'tropical'",
+        OpPixel::Restyle {
+            prompt: "tropical".into(),
+        },
+    )));
+    hijos.push(envolver_fila(mk_ia(
+        "+ Restyle 'frío'",
+        OpPixel::Restyle {
+            prompt: "frío".into(),
+        },
+    )));
+    hijos.push(envolver_fila(mk_ia(
+        "+ Segmentar centro",
+        OpPixel::Segmentar { prompt: None },
+    )));
+    hijos.push(envolver_fila(mk_ia(
+        "+ Inpaint huecos",
+        OpPixel::Inpaint { prompt: None },
+    )));
+    hijos.push(envolver_fila(mk_ia(
+        "+ Generar 'atardecer'",
+        OpPixel::Generar {
+            prompt: "atardecer".into(),
+            ancho: model.lienzo.width,
+            alto: model.lienzo.height,
         },
     )));
 
@@ -443,7 +534,7 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(220.0_f32),
+            width: length(240.0_f32),
             height: percent(1.0_f32),
         },
         padding: Rect {
@@ -590,6 +681,18 @@ impl App for Tullpu {
                     aplicar_y_recomponer(&mut model);
                 }
             }
+            Msg::AgregarIa(op) => {
+                if let Some(madre_id) = model.seleccionada {
+                    let modelo = model.proveedor.model_id().name.clone();
+                    let nombre = format!("ia:{}", op.etiqueta());
+                    let trans = transformacion_ia(modelo, &op);
+                    let nueva = Capa::derivada(nombre, madre_id, trans, [0u8; 32]);
+                    let nuevo_id = nueva.id;
+                    model.lienzo.apilar(nueva);
+                    model.seleccionada = Some(nuevo_id);
+                    aplicar_y_recomponer(&mut model);
+                }
+            }
             Msg::Recargar => {
                 aplicar_y_recomponer(&mut model);
             }
@@ -599,7 +702,12 @@ impl App for Tullpu {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = llimphi_theme::Theme::dark();
-        let cabecera = header(&theme, &model.lienzo, &model.estado);
+        let cabecera = header(
+            &theme,
+            &model.lienzo,
+            &model.estado,
+            &model.proveedor_etiqueta,
+        );
         let centro = View::new(Style {
             flex_direction: FlexDirection::Row,
             flex_grow: 1.0,
