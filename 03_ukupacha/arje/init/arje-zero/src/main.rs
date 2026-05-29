@@ -951,3 +951,101 @@ fn setup_brahman_policy() -> (
 
     (Some(policy), watcher)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ulid::Ulid;
+
+    fn peer() -> PeerCreds {
+        PeerCreds { pid: 1234, uid: 0, gid: 0 }
+    }
+
+    #[test]
+    fn audit_killente_solo_con_caller_autenticado() {
+        let target = Ulid::new();
+        let caller = Ulid::new();
+        let req = BusRequest::KillEnte { target, signal: 15 };
+        // Sin caller — KillEnte requiere auth en bus_mediator, no se audita
+        // intención si no hay identidad que registrar.
+        assert!(bus_request_to_audit(&peer(), &None, &req).is_none());
+        // Con caller — emite KillEnte capturando los tres campos.
+        let entry = bus_request_to_audit(&peer(), &Some(caller), &req).expect("audita");
+        match entry {
+            AuditAction::KillEnte { caller: c, target: t, signal } => {
+                assert_eq!(c, caller);
+                assert_eq!(t, target);
+                assert_eq!(signal, 15);
+            }
+            other => panic!("esperaba KillEnte, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_spawncardfromdisk_solo_con_caller() {
+        let caller = Ulid::new();
+        let req = BusRequest::SpawnCardFromDisk { name: "foo".into() };
+        assert!(bus_request_to_audit(&peer(), &None, &req).is_none());
+        let entry = bus_request_to_audit(&peer(), &Some(caller), &req).expect("audita");
+        match entry {
+            AuditAction::SpawnCardFromDisk { caller: c, name } => {
+                assert_eq!(c, caller);
+                assert_eq!(name, "foo");
+            }
+            other => panic!("esperaba SpawnCardFromDisk, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_powermgmt_acepta_anonimo() {
+        // Power-mgmt no requiere auth en el grafo, por lo que el anonimato
+        // también es información — debe auditarse igual.
+        let req = BusRequest::PowerOff { interactive: true };
+        let entry = bus_request_to_audit(&peer(), &None, &req).expect("audita");
+        match entry {
+            AuditAction::PowerMgmt { caller, peer_pid, kind, interactive } => {
+                assert_eq!(caller, None);
+                assert_eq!(peer_pid, 1234);
+                assert_eq!(kind, "PowerOff");
+                assert!(interactive);
+            }
+            other => panic!("esperaba PowerMgmt, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_power_mgmt_distingue_los_cuatro_kinds() {
+        for (req, expected) in [
+            (BusRequest::PowerOff { interactive: false }, "PowerOff"),
+            (BusRequest::Reboot { interactive: false }, "Reboot"),
+            (BusRequest::Suspend { interactive: false }, "Suspend"),
+            (BusRequest::Hibernate { interactive: false }, "Hibernate"),
+        ] {
+            let entry = bus_request_to_audit(&peer(), &None, &req).expect("audita");
+            match entry {
+                AuditAction::PowerMgmt { kind, .. } => assert_eq!(kind, expected),
+                other => panic!("esperaba PowerMgmt({expected}), fue {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn audit_acciones_routine_no_se_auditan() {
+        // Announce, ListEntes, Invoke, UpdateCapabilities son routine —
+        // emitirlas como audit metería ruido sin valor histórico.
+        for req in [
+            BusRequest::Announce { capabilities: vec![] },
+            BusRequest::ListEntes,
+            BusRequest::Invoke {
+                cap: arje_card::Capability::Journal,
+                blob: vec![],
+            },
+            BusRequest::UpdateCapabilities { adds: vec![], removes: vec![] },
+        ] {
+            assert!(
+                bus_request_to_audit(&peer(), &Some(Ulid::new()), &req).is_none(),
+                "routine no debería auditarse: {req:?}"
+            );
+        }
+    }
+}

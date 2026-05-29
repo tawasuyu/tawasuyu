@@ -199,3 +199,53 @@ impl EnteGraph {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::backoff_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn backoff_attempt_uno_devuelve_initial() {
+        let initial = Duration::from_millis(100);
+        let max = Duration::from_secs(60);
+        assert_eq!(backoff_delay(initial, max, 1), initial);
+    }
+
+    #[test]
+    fn backoff_duplica_por_intento_hasta_max() {
+        let initial = Duration::from_millis(100);
+        let max = Duration::from_secs(60);
+        assert_eq!(backoff_delay(initial, max, 1), Duration::from_millis(100));
+        assert_eq!(backoff_delay(initial, max, 2), Duration::from_millis(200));
+        assert_eq!(backoff_delay(initial, max, 3), Duration::from_millis(400));
+        assert_eq!(backoff_delay(initial, max, 4), Duration::from_millis(800));
+    }
+
+    #[test]
+    fn backoff_satura_en_max() {
+        let initial = Duration::from_millis(100);
+        let max = Duration::from_secs(1);
+        // En el intento donde initial*2^n excede max, debe quedarse en max.
+        // 100ms * 2^10 = 102.4s; clampeado a 1s.
+        assert_eq!(backoff_delay(initial, max, 10), max);
+        assert_eq!(backoff_delay(initial, max, 30), max);
+    }
+
+    #[test]
+    fn backoff_attempts_extremos_no_panican() {
+        let initial = Duration::from_millis(1);
+        let max = Duration::from_secs(60);
+        // u32::MAX no debe overflowear (shift cap a 31).
+        assert_eq!(backoff_delay(initial, max, u32::MAX), max);
+    }
+
+    #[test]
+    fn backoff_attempt_cero_es_un_intento() {
+        // attempts=0 nunca debe llegar (sería un primer spawn, no reintento).
+        // Si llegara, no debe panicar — saturating_sub deja shift en 0.
+        let initial = Duration::from_millis(50);
+        let max = Duration::from_secs(60);
+        assert_eq!(backoff_delay(initial, max, 0), initial);
+    }
+}
