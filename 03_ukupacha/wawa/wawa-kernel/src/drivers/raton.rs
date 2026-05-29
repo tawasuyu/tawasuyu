@@ -161,8 +161,19 @@ pub fn init(ancho: usize, alto: usize) {
     comando_8042(0x60);
     escribir_datos(config);
 
-    // Al raton: valores por defecto y, despues, reportar movimiento.
+    // Al raton: valores por defecto.
     comando_raton(0xF6);
+
+    // Subir la TASA DE MUESTREO a 200 paquetes/s: `0xF3` (set sample rate)
+    // seguido del dato `200`. El default del PS/2 son 100/s —10 ms entre
+    // paquetes—; a 200/s son 5 ms, la mitad de latencia del puntero. Es la
+    // diferencia entre un cursor a saltos y uno fluido EN METAL. En un firmware
+    // que emula el i8042 sobre USB legacy el valor puede ignorarse o acotarse —
+    // pedirlo no hace daño y, donde se honra, se nota.
+    comando_raton(0xF3);
+    comando_raton(200);
+
+    // Y, por fin, reportar movimiento.
     comando_raton(0xF4);
 
     vaciar();
@@ -253,6 +264,16 @@ fn comprometer(x: usize, y: usize, botones: u8) {
             });
         }
     }
+
+    // REDIBUJAR EL PUNTERO AQUI MISMO, sin esperar al proximo tic del compositor
+    // (PIT 100 Hz = 10 ms). Llamado desde `procesar` corre en contexto de IRQ12,
+    // al ritmo del sample rate del PS/2 (200 Hz = 5 ms): el cursor sigue al raton
+    // en vez de saltar entre tics. `refrescar_puntero` es seguro en IRQ —usa
+    // atomicos y `try_lock` sobre la consola, saliendo en silencio si esta
+    // tomada; el proximo paquete reintenta—. Tambien lo llama la tableta
+    // (`actualizar_desde_tableta`) desde el reactor, igual de seguro. Es la cura
+    // del cursor a saltos en metal que los docstrings prometian sin cablear.
+    crate::compositor::refrescar_puntero();
 }
 
 /// FASE 61 :: punto de entrada del driver de tableta virtio-input. Publica una

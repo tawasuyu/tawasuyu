@@ -121,10 +121,13 @@ pub fn agendar(secuencia: &[(u32, u32)]) {
         crate::drivers::sonido::agendar(secuencia);
         return;
     }
-    let mut cola = SECUENCIA.lock();
-    for &(frec, dur) in secuencia {
-        cola.push_back((frec, dur));
-    }
+    // EN METAL SIN tarjeta de sonido la unica salida fisica es la BOCINA del
+    // PIT —el pitido seco del buzzer de placa, el de los PCs sin corneta—. Las
+    // VOCES DEL KERNEL (bienvenida, lanzar, cerrar, desalojo) no valen ese
+    // ruido: se SILENCIAN cuando no hay audio real. Sin esto, cada arranque y
+    // cada `Alt+N` disparan el buzzer. La bocina queda reservada para lo que una
+    // app pida explicitamente via `sys_tono` (camino `tono`, no este).
+    let _ = secuencia;
 }
 
 /// ¿Esta el kernel sonando una nota suya? Mientras dure, las llamadas de los
