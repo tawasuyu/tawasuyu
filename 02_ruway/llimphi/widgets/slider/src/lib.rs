@@ -132,6 +132,7 @@ where
     .text_aligned(label.into(), 12.0, palette.fg_label, Alignment::Start);
 
     // Track draggable: fill = track bg, hijo = porción rellena (accent).
+    let filled_radius = palette.radius;
     let filled = View::new(Style {
         size: Size {
             width: percent(ratio),
@@ -140,7 +141,29 @@ where
         ..Default::default()
     })
     .fill(palette.track_filled)
-    .radius(palette.radius);
+    .radius(filled_radius)
+    .paint_with(move |scene, _ts, rect| {
+        // Gloss superior sobre la stripe accent — la barra se lee como
+        // luz que avanza, no como rect plano. Mismo patrón button/progress
+        // (P6/P7). Alpha bajo (40) porque el track es muy delgado (6px
+        // default) y un sheen fuerte le mete glitter.
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+        use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let x0 = rect.x as f64;
+        let y0 = rect.y as f64;
+        let x1 = (rect.x + rect.w) as f64;
+        let y1 = (rect.y + rect.h) as f64;
+        let y_mid = y0 + (y1 - y0) * 0.5;
+        let rr = RoundedRect::new(x0, y0, x1, y1, filled_radius);
+        let top = Color::from_rgba8(255, 255, 255, 40);
+        let bot = Color::from_rgba8(255, 255, 255, 0);
+        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y_mid))
+            .with_stops([top, bot].as_slice());
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
+    });
 
     let track = View::new(Style {
         size: Size {

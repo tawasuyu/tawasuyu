@@ -28,6 +28,7 @@ pub fn linear_progress_view<Msg: Clone + 'static>(
     height_px: f32,
 ) -> View<Msg> {
     let p = progress.clamp(0.0, 1.0);
+    let fill_radius = radius::XS;
     let fill = View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -43,7 +44,28 @@ pub fn linear_progress_view<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(fill_color)
-    .radius(radius::XS);
+    .radius(fill_radius)
+    .paint_with(move |scene, _ts, rect| {
+        // Gloss superior sobre la porción rellena — la barra deja de
+        // leerse como un rect plano y se siente como una luz que avanza.
+        // Mismo patrón que button/badge (P6).
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+        use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let x0 = rect.x as f64;
+        let y0 = rect.y as f64;
+        let x1 = (rect.x + rect.w) as f64;
+        let y1 = (rect.y + rect.h) as f64;
+        let y_mid = y0 + (y1 - y0) * 0.5;
+        let rr = RoundedRect::new(x0, y0, x1, y1, fill_radius);
+        let top = Color::from_rgba8(255, 255, 255, 50);
+        let bot = Color::from_rgba8(255, 255, 255, 0);
+        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y_mid))
+            .with_stops([top, bot].as_slice());
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
+    });
 
     View::new(Style {
         flex_direction: FlexDirection::Row,

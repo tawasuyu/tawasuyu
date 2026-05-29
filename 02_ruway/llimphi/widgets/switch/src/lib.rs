@@ -81,8 +81,30 @@ pub fn switch_view<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(palette.thumb)
-    .radius(THUMB_R as f64);
+    .radius(THUMB_R as f64)
+    .paint_with(move |scene, _ts, rect| {
+        // Highlight radial pequeño en cuadrante superior — el thumb se
+        // lee como esfera, no como círculo plano. Mismo patrón que el
+        // dot del badge (P6).
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.32) as f64;
+        let r = (rect.w as f64 * 0.18).max(1.0);
+        let highlight = Color::from_rgba8(255, 255, 255, 70);
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            highlight,
+            None,
+            &Circle::new((cx, cy), r),
+        );
+    });
 
+    let track_radius = (TRACK_H * 0.5) as f64;
     View::new(Style {
         size: Size {
             width: length(TRACK_W),
@@ -91,7 +113,28 @@ pub fn switch_view<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(track_color)
-    .radius((TRACK_H * 0.5) as f64)
+    .radius(track_radius)
+    .paint_with(move |scene, _ts, rect| {
+        // Gloss superior en el track — pill con luz cayendo desde arriba.
+        // El track interpola color (off/on) en el fill, el gloss queda
+        // estable encima en ambos estados.
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+        use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let x0 = rect.x as f64;
+        let y0 = rect.y as f64;
+        let x1 = (rect.x + rect.w) as f64;
+        let y1 = (rect.y + rect.h) as f64;
+        let y_mid = y0 + (y1 - y0) * 0.5;
+        let rr = RoundedRect::new(x0, y0, x1, y1, track_radius);
+        let top = Color::from_rgba8(255, 255, 255, 28);
+        let bot = Color::from_rgba8(255, 255, 255, 0);
+        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y_mid))
+            .with_stops([top, bot].as_slice());
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
+    })
     .on_click(on_toggle)
     .children(vec![thumb])
 }
