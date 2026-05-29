@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-panel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-panel — firma visual transversal: gradiente vertical casi imperceptible + hairline accent en el top edge. Helper paint_with + wrapper panel_view. La capa que vuelve reconocible al sistema sin cargar."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

@@ -33,3 +33,4 @@ llimphi-widget-badge = { workspace = true }
 llimphi-widget-avatar = { workspace = true }
 llimphi-widget-skeleton = { workspace = true }
 llimphi-widget-field = { workspace = true }
+llimphi-widget-panel = { workspace = true }

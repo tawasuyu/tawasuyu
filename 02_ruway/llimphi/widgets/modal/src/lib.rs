@@ -25,12 +25,16 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_theme::{alpha, radius, Theme};
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 /// Paleta del modal.
 #[derive(Debug, Clone, Copy)]
 pub struct ModalPalette {
     pub scrim: Color,
-    pub bg: Color,
+    /// Firma visual del panel — gradient sutil + hairline accent en el
+    /// top edge. La que vuelve consistente el "look gioser" en todos
+    /// los modales y overlays.
+    pub panel: PanelStyle,
     pub border: Color,
     pub fg_title: Color,
     pub fg_text: Color,
@@ -47,7 +51,7 @@ impl ModalPalette {
     pub fn from_theme(t: &Theme) -> Self {
         Self {
             scrim: Color::from_rgba8(0, 0, 0, alpha::SCRIM),
-            bg: t.bg_panel,
+            panel: PanelStyle::from_theme_large(t),
             border: t.border,
             fg_title: t.fg_text,
             fg_text: t.fg_muted,
@@ -219,8 +223,8 @@ pub fn modal_view<Msg: Clone + 'static>(spec: ModalSpec<Msg>) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .fill(palette.bg)
-    .radius(radius::LG)
+    .paint_with(panel_signature_painter(palette.panel))
+    .radius(palette.panel.radius)
     .clip(true)
     .children(vec![header, separator, body_wrap, buttons_row]);
 

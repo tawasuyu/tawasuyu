@@ -18,12 +18,14 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_theme::{alpha, radius, Theme};
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 /// Paleta del overlay.
 #[derive(Debug, Clone, Copy)]
 pub struct ShortcutsHelpPalette {
     pub scrim: Color,
-    pub bg: Color,
+    /// Firma del panel (gradient + hairline accent en top edge).
+    pub panel: PanelStyle,
     pub border: Color,
     pub fg_title: Color,
     pub fg_group: Color,
@@ -36,7 +38,7 @@ impl ShortcutsHelpPalette {
     pub fn from_theme(t: &Theme) -> Self {
         Self {
             scrim: Color::from_rgba8(0, 0, 0, alpha::SCRIM),
-            bg: t.bg_panel,
+            panel: PanelStyle::from_theme_large(t),
             border: t.border,
             fg_title: t.fg_text,
             fg_group: t.accent,
@@ -155,8 +157,8 @@ pub fn shortcuts_help_view<Msg: Clone + 'static>(spec: ShortcutsHelpSpec<Msg>) -
         },
         ..Default::default()
     })
-    .fill(palette.bg)
-    .radius(radius::LG)
+    .paint_with(panel_signature_painter(palette.panel))
+    .radius(palette.panel.radius)
     .clip(true)
     .children(vec![header, body]);
 

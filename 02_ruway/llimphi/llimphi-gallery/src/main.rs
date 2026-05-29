@@ -24,7 +24,6 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 
 use llimphi_icons::{icon_view, Icon};
-use llimphi_motion::motion;
 use llimphi_theme::Theme;
 
 use llimphi_widget_avatar::avatar_view;
@@ -33,6 +32,7 @@ use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
 use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_field::{field_view, FieldPalette, FieldSpec};
 use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 use llimphi_widget_progress::{linear_progress_view, radial_progress_view};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_shortcuts_help::{
@@ -532,6 +532,7 @@ fn section_title(text: &str) -> View<Msg> {
 }
 
 fn panel_view(children: Vec<View<Msg>>, theme: &Theme) -> View<Msg> {
+    let style = PanelStyle::from_theme(theme);
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -551,8 +552,8 @@ fn panel_view(children: Vec<View<Msg>>, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
-    .radius(llimphi_theme::radius::MD)
+    .paint_with(panel_signature_painter(style))
+    .radius(style.radius)
     .clip(true)
     .children(children)
 }

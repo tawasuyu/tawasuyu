@@ -10,3 +10,4 @@ description = "llimphi-widget-modal — diálogo genérico (título + body arbit
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-panel = { workspace = true }
