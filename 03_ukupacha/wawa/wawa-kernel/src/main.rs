@@ -189,6 +189,11 @@ async fn tarea_compositor() {
         // mismo sumidero que el PS/2, de modo que `atender_raton` los procese
         // sin distinguir origen. No-op si no se monto tableta.
         drivers::tableta::atender();
+        // FASE X3 :: polear el raton USB HID — drena su endpoint de interrupcion
+        // sin bloquear y entrega los deltas al mismo sumidero que el PS/2 y la
+        // tableta. No-op si no hay raton USB. Va ANTES de `atender_raton` para
+        // que los clics de este fotograma se procesen en el acto.
+        drivers::xhci::controlador::atender_raton_hid();
         // FASE 13 :: atender los eventos del raton (clic-para-enfocar y
         // arrastre de flotantes), y refrescar el puntero si se movio en una
         // vuelta tranquila en que ninguna app pinto.
@@ -962,6 +967,27 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
     traza("sonido :: listo");
+
+    // --- 6.95. FASE X2/X3 :: montar el controlador USB (XHCI) y, si hay un
+    //           raton USB HID conectado, configurarlo. Para maquinas cuyo UEFI
+    //           NO emula el raton USB sobre el i8042 (el trackpad PS/2 anda pero
+    //           el raton USB no llega): este es el camino NATIVO al puntero. NO
+    //           es critico — sin XHCI o sin raton USB el arranque sigue con
+    //           PS/2/tableta. El raton USB se polea por fotograma desde el
+    //           reactor (`atender_raton_hid`), aun no por IRQ. ---
+    match drivers::xhci::controlador::montar() {
+        Ok(caps) => {
+            let _ = writeln!(
+                baliza::Serie,
+                "xhci :: montado :: version={:#06x} slots={} puertos={}",
+                caps.version, caps.max_slots, caps.max_puertos,
+            );
+        }
+        Err(motivo) => {
+            let _ = writeln!(baliza::Serie, "xhci :: {motivo} (sin USB nativo)");
+        }
+    }
+    traza("xhci :: listo");
 
     // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
     //        GRAFO. El kernel ya no empotra los modulos WASM: lee el

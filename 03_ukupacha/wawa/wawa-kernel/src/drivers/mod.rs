@@ -39,3 +39,7 @@ pub mod serial;
 // Espeja la API de `serial` pero enrutado por el mismo transporte que
 // gobierna virtio-blk y virtio-net.
 pub mod consola_virtio;
+// Fase X2/X3 :: controlador host USB (XHCI) sobre PCI + driver del raton USB
+// HID (boot protocol) por su endpoint de interrupcion. Para maquinas cuyo UEFI
+// no emula el raton USB sobre el i8042 — el camino nativo hacia el puntero.
+pub mod xhci;

@@ -67,6 +67,14 @@ wasmi = { version = "1.0", default-features = false, features = ["hash-collectio
 # `virtio-drivers` bare-metal: el kernel implementa su `trait Hal` para el DMA.
 virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
 
+# --- Capa X (USB) :: controlador host xHCI sobre PCIe ---
+# `xhci` da definiciones tipadas de los registros del controlador (capability,
+# operational, runtime, doorbell) + TRBs + Slot/EP/Input Context. La logica de
+# enumeracion de puertos, gestion de slots, control/bulk transfers y SCSI
+# sobre Bulk-Only Transport vive en `drivers/xhci/` — esta crate solo provee
+# los tipos del estandar, no el driver.
+xhci = "0.9"
+
 # --- Fase 6.1c / 7b :: el grafo de objetos direccionado por contenido ---
 # El format del grafo —tipos, (de)serializacion postcard, hash BLAKE3, trazado
 # de registros del log— vive en la crate `format`, un nucleo `no_std`

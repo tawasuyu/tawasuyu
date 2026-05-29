@@ -286,6 +286,25 @@ pub fn actualizar_desde_tableta(x: usize, y: usize, botones: u8) {
     comprometer(x, y, botones);
 }
 
+/// FASE X3 :: punto de entrada del driver de raton USB HID (`xhci::hid`). El
+/// reporte boot del raton trae deltas RELATIVOS (igual que el PS/2, pero ya
+/// con Y hacia abajo como la pantalla), no posicion absoluta. Integra el delta
+/// contra la posicion actual, acota a la pantalla y reusa el sumidero comun.
+///
+/// Corre en contexto COOPERATIVO (el reactor lo polea por fotograma), no en
+/// IRQ — `comprometer` y su redibujo de puntero son seguros aqui. Si ANCHO/ALTO
+/// aun no se fijaron (raton::init no corrio), sale sin tocar nada.
+pub fn aplicar_delta_relativo(dx: i32, dy: i32, botones: u8) {
+    let ancho = ANCHO.load(Ordering::Relaxed) as i32;
+    let alto = ALTO.load(Ordering::Relaxed) as i32;
+    if ancho == 0 || alto == 0 {
+        return;
+    }
+    let x = (RATON_X.load(Ordering::Relaxed) as i32 + dx).clamp(0, ancho - 1) as usize;
+    let y = (RATON_Y.load(Ordering::Relaxed) as i32 + dy).clamp(0, alto - 1) as usize;
+    comprometer(x, y, botones);
+}
+
 // =============================================================================
 //  Consulta — para la consola (puntero) y el compositor (eventos)
 // =============================================================================
