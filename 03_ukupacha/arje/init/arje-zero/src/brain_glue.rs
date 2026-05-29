@@ -77,15 +77,16 @@ fn subject_info_for(graph: &EnteGraph, id: Ulid) -> SubjectInfo {
 /// `ActionSink` que enruta acciones del cerebro al bucle primordial.
 pub struct GraphSink {
     pub graph_tx: mpsc::Sender<GraphEvent>,
-    pub requester: Ulid,
 }
 
 impl ActionSink for GraphSink {
     fn spawn(&self, card_blob: &str) {
-        // El blob es JSON de EntityCard.
+        // El blob es JSON de EntityCard. Usamos BrainSpawn (no SpawnRequest)
+        // para que el grafo pueda filtrar por inhibición — restart y genesis
+        // siguen usando SpawnRequest y no se ven afectados.
         match serde_json::from_str::<arje_card::EntityCard>(card_blob) {
             Ok(card) => {
-                let evt = GraphEvent::SpawnRequest { card, requester: self.requester };
+                let evt = GraphEvent::BrainSpawn { card };
                 if self.graph_tx.try_send(evt).is_err() {
                     warn!("brain spawn: graph_tx lleno o cerrado");
                 }
@@ -109,10 +110,10 @@ impl ActionSink for GraphSink {
     }
 
     fn inhibit(&self, reason: &str) {
-        // No hay semántica de inhibición en el grafo todavía — el cerebro la
-        // emite, el sink la registra para auditoría. Cualquier consumidor del
-        // log puede correlacionar con grants/forwards subsiguientes.
-        warn!(%reason, "brain inhibit recibido (sin sumidero estructural)");
+        let evt = GraphEvent::BrainInhibit { reason: reason.to_string() };
+        if self.graph_tx.try_send(evt).is_err() {
+            warn!(%reason, "brain inhibit: graph_tx lleno o cerrado");
+        }
     }
 }
 

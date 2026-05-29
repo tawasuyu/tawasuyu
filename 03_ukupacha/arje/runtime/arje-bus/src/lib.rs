@@ -91,6 +91,13 @@ pub enum BusRequest {
         adds: Vec<Capability>,
         removes: Vec<Capability>,
     },
+
+    /// Enviar una señal POSIX a un Ente del fractal. Requiere identidad
+    /// autenticada del caller — el shim systemd1 lo usa para implementar
+    /// `KillUnit`. arje-zero arbitra: lookup del Ulid, captura del PID y
+    /// `kill(pid, signal)`. Sólo Entes con `Payload::Native|Legacy` son
+    /// matables (los Virtual y los Wasm responden NotApplicable).
+    KillEnte { target: Ulid, signal: i32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

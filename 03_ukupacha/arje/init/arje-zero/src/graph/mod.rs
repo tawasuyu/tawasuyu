@@ -20,6 +20,7 @@ use arje_bus::{BusMessage, BusResponse};
 use arje_card::{Capability, EntityCard};
 use nix::unistd::Pid;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use ulid::Ulid;
 
@@ -52,6 +53,28 @@ pub struct EnteGraph {
     /// Invokes forwardeados pendientes de respuesta del proveedor.
     pub(in crate::graph) pending_invokes: HashMap<u64, oneshot::Sender<BusResponse>>,
     pub(in crate::graph) next_invoke_seq: u64,
+    /// Estado de supervisión por `card.label`. Sobrevive a la rotación de
+    /// Ulid del Restart — el "thread" de identidad es el label, no el id.
+    pub(in crate::graph) restart_state: HashMap<String, RestartState>,
+    /// Inhibiciones declaradas por el cerebro. Key: reason. Value: instante
+    /// de expiración. Cualquier acción escalatoria (power-mgmt, BrainInvoke,
+    /// BrainNotify, BrainSpawn) se descarta mientras el set no esté vacío.
+    pub(in crate::graph) inhibits: BTreeMap<String, Instant>,
+}
+
+/// TTL fijo para inhibiciones del cerebro. Suficiente largo para cubrir un
+/// período de turbulencia (30s) sin perpetuar el estado si el cerebro deja
+/// de re-afirmar la regla.
+pub(in crate::graph) const INHIBIT_TTL: std::time::Duration =
+    std::time::Duration::from_secs(30);
+
+#[derive(Default, Debug)]
+pub(in crate::graph) struct RestartState {
+    /// Intentos consecutivos cortos. Se resetea cuando un Ente vive el
+    /// suficiente tiempo para considerarse estable (≥ `max` de su Supervision).
+    pub attempts: u32,
+    /// Instante en que el último spawn arrancó. None = nunca encarnado.
+    pub last_started_at: Option<Instant>,
 }
 
 pub(in crate::graph) struct Incarnated {
@@ -137,6 +160,8 @@ impl EnteGraph {
             bus_connections: HashMap::new(),
             pending_invokes: HashMap::new(),
             next_invoke_seq: 0,
+            restart_state: HashMap::new(),
+            inhibits: BTreeMap::new(),
         };
         // El Ente #0 se inscribe a sí mismo como proveedor de las capacidades
         // que su Card declara — sólo así los hijos pueden requerirlas.
@@ -156,12 +181,6 @@ impl EnteGraph {
     /// para hidratar `SubjectInfo` sin clonar todo el mapa.
     pub fn peek_card(&self, id: &Ulid) -> Option<&EntityCard> {
         self.incarnated.get(id).map(|i| &i.card)
-    }
-
-    /// Identidad de la Semilla. Usado como `requester` para spawns generados
-    /// por reglas auto-cristalizadas (única identidad con Capability::Spawn).
-    pub fn seed_id(&self) -> Ulid {
-        self.seed.id
     }
 
     /// Captura el estado live como snapshot serializable. Excluye la Semilla

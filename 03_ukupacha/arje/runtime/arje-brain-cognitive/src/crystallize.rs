@@ -174,18 +174,18 @@ pub fn detect_pattern_crystals(obs: &Observer, params: &PatternParams) -> Vec<Pa
     let now = Instant::now();
     for (kind, &count) in obs.marginals() {
         let last_seen = obs.last_seen_marginal(kind);
+        let first_seen = obs.first_seen_marginal(kind);
         // ---- Burst ----
         if count >= params.burst_min_count {
-            // Aproximación: si vimos `count` eventos hasta `last_seen`, y el
-            // primer evento sucedió en algún momento del window, la freq es
-            // count / window_age. Sin tiempo del primer evento, usamos
-            // last_seen → now como denominador (subestima freq) o asumimos
-            // ventana fija de 60s. Usamos la última como aproximación.
-            let elapsed = last_seen
-                .map(|t| now.saturating_duration_since(t).as_secs_f64().max(0.001))
+            // Frecuencia honesta = count / (now - first_seen). Cubre el
+            // ancho real de la ventana observada en lugar del rabo final
+            // (que da freq inflada artificialmente alta cuando los eventos
+            // están agrupados al inicio). Si no hay first_seen disponible
+            // (Observer restaurado desde snapshot, kind sin historial
+            // estable) cae a 60s — la heurística previa.
+            let elapsed = first_seen
+                .map(|t| now.saturating_duration_since(t).as_secs_f64())
                 .unwrap_or(60.0);
-            // Estimación conservadora: count / max(window_age, 1s).
-            // Si tenemos histograma, podríamos refinar — TODO.
             let freq = count as f64 / elapsed.max(1.0);
             if freq >= params.burst_min_freq_hz {
                 out.push(PatternCrystal::Burst {

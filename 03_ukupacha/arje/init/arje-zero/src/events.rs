@@ -47,6 +47,15 @@ pub enum GraphEvent {
     /// Invoke a la interfaz `BRAIN_NOTIFY_IFACE` del proveedor. Si el Ente
     /// no tiene conexión al bus, se descarta con warn.
     BrainNotify { target_id: Ulid, message: String },
+    /// Spawn originado por el cerebro. Separado de `SpawnRequest` para que
+    /// las políticas de inhibición puedan filtrarlo sin tocar genesis ni
+    /// restart, que son reliability baseline, no escalación.
+    BrainSpawn { card: EntityCard },
+    /// Inhibición declarada por el cerebro: mientras el set no se vacíe
+    /// (entries con TTL), el grafo deniega power-mgmt del bus y descarta
+    /// nuevas acciones cerebrales (Invoke/Notify/Spawn). Restart de Entes
+    /// muertos sigue ocurriendo — es baseline, no escalación.
+    BrainInhibit { reason: String },
     Shutdown { reason: ShutdownReason },
 }
 

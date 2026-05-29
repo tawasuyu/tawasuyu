@@ -492,9 +492,6 @@ async fn primordial_loop(
     spawn_brain_introspect(brain.clone());
     let brain_sink = brain_glue::GraphSink {
         graph_tx: graph_tx.clone(),
-        // Spawns auto-disparados desde reglas usan la identidad de la Semilla
-        // (único Ente con Capability::Spawn por construcción).
-        requester: graph.seed_id(),
     };
 
     // Demo automático del forwarding (sólo dev, sólo si el binario existe).
@@ -586,6 +583,12 @@ async fn dispatch_graph_event(
         }
         GraphEvent::BrainNotify { target_id, message } => {
             graph.forward_brain_notify(target_id, message).await;
+        }
+        GraphEvent::BrainSpawn { card } => {
+            graph.forward_brain_spawn(card).await;
+        }
+        GraphEvent::BrainInhibit { reason } => {
+            graph.apply_brain_inhibit(reason);
         }
         GraphEvent::Shutdown { reason } => {
             warn!(?reason, "shutdown del fractal");

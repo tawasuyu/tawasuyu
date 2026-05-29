@@ -7,9 +7,18 @@ use super::{EnteGraph, Incarnated};
 use crate::events::{ExitStatus, GraphEvent};
 use arje_bus::{BusMessage, BusPayload, BusRequest};
 use arje_card::{Capability, EntityCard, Payload, Supervision};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use ulid::Ulid;
+
+/// Backoff exponencial con cap. attempts=1 → initial, attempts=2 → initial*2,
+/// hasta que se satura en `max`. attempts=0 nunca pasa por aquí (sería un
+/// primer spawn, no un reintento).
+fn backoff_delay(initial: Duration, max: Duration, attempts: u32) -> Duration {
+    let shift = attempts.saturating_sub(1).min(31);
+    initial.saturating_mul(1u32 << shift).min(max)
+}
 
 impl EnteGraph {
     /// Encarna las dependencias declaradas en la Semilla. Único punto donde
@@ -84,6 +93,15 @@ impl EnteGraph {
             self.children.entry(parent).or_default().push(card.id);
         }
         info!(label = %card.label, ?pid, lineage = ?card.lineage, "Ente encarnado");
+        // Sello de tiempo para el supervisor: marca el inicio del "intento"
+        // actual. Si el Ente sobrevive ≥ Supervision::max, el contador de
+        // reintentos se reseteará en on_death.
+        if matches!(card.supervision, Supervision::Restart { .. }) {
+            self.restart_state
+                .entry(card.label.clone())
+                .or_default()
+                .last_started_at = Some(Instant::now());
+        }
         self.incarnated.insert(card.id, Incarnated {
             card, pid,
             dynamic_provides: std::collections::BTreeSet::new(),
@@ -95,7 +113,7 @@ impl EnteGraph {
         &mut self,
         id: Ulid,
         status: ExitStatus,
-        _tx: &mpsc::Sender<GraphEvent>,
+        tx: &mpsc::Sender<GraphEvent>,
     ) {
         let Some(inc) = self.incarnated.remove(&id) else { return };
         if let Some(p) = inc.pid {
@@ -110,13 +128,42 @@ impl EnteGraph {
         info!(label = %inc.card.label, ?status, "Ente disuelto");
 
         match inc.card.supervision.clone() {
-            Supervision::Restart { initial, max: _ } => {
-                // Backoff exponencial: TODO real con timer del runtime.
-                tokio::time::sleep(initial).await;
+            Supervision::Restart { initial, max } => {
+                // Política: si el Ente sobrevivió al menos `max` (su propio
+                // cap de backoff), lo consideramos estable y reseteamos el
+                // contador. Si murió antes, lo incrementamos.
+                let st = self.restart_state.entry(inc.card.label.clone()).or_default();
+                let uptime = st.last_started_at.map(|t| t.elapsed());
+                let attempts = match uptime {
+                    Some(u) if u >= max => {
+                        st.attempts = 1;
+                        1
+                    }
+                    _ => {
+                        st.attempts = st.attempts.saturating_add(1);
+                        st.attempts
+                    }
+                };
+                let delay = backoff_delay(initial, max, attempts);
+                info!(
+                    label = %inc.card.label, attempts, delay_ms = delay.as_millis() as u64,
+                    "Restart programado"
+                );
+                // No bloquear el bucle primordial: el restart vuelve como
+                // SpawnRequest tras el delay. El requester es la Semilla
+                // (autorizada para Capability::Spawn).
                 let new_card = EntityCard { id: Ulid::new(), ..inc.card };
-                if let Err(e) = self.authorize_and_spawn(new_card, self.seed.id).await {
-                    warn!(?e, "restart falló");
-                }
+                let tx = tx.clone();
+                let requester = self.seed.id;
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    if tx.send(GraphEvent::SpawnRequest { card: new_card, requester })
+                        .await
+                        .is_err()
+                    {
+                        warn!("restart: graph_tx cerrado, abortando reintento");
+                    }
+                });
             }
             Supervision::OneShot => {}
             Supervision::Delegate => {

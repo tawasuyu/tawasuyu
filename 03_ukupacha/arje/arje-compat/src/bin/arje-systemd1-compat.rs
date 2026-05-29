@@ -165,11 +165,38 @@ impl SystemdManager {
         Ok(path.into())
     }
 
-    async fn kill_unit(&self, name: String, _who: String, _signal: i32) -> fdo::Result<()> {
-        warn!(%name, "KillUnit rechazado — no implementado");
-        Err(fdo::Error::NotSupported(
-            "KillUnit: enviar señales a una Card por nombre de unit no está implementado".into(),
-        ))
+    async fn kill_unit(&self, name: String, _who: String, signal: i32) -> fdo::Result<()> {
+        // Mapeo: unit ↔ Ente cuyo label coincide con el prefijo (sin .service).
+        // Reusa ListEntes para resolver el Ulid; luego forwardea KillEnte al
+        // bus interno, que aplica la señal en el PID real.
+        let entes = match query_list_entes().await {
+            Some(es) => es,
+            None => {
+                warn!(%name, "KillUnit: no se pudo consultar el bus");
+                return Err(fdo::Error::Failed("bus interno no disponible".into()));
+            }
+        };
+        let target = entes
+            .into_iter()
+            .find(|e| format!("{}.service", e.label) == name)
+            .ok_or_else(|| fdo::Error::Failed(format!("Unit {name} no encontrada")))?;
+        let mut client = BusClient::from_env().await
+            .map_err(|e| fdo::Error::Failed(format!("bus connect: {e}")))?;
+        match client.call(BusRequest::KillEnte { target: target.id, signal }).await {
+            Ok(BusResponse::Ok) => {
+                info!(%name, ulid = %target.id, signal, "KillUnit aplicado");
+                Ok(())
+            }
+            Ok(BusResponse::Error(e)) => {
+                warn!(%name, %e, "KillUnit rechazado por el bus");
+                Err(fdo::Error::Failed(e))
+            }
+            Ok(other) => {
+                warn!(%name, ?other, "KillUnit respuesta inesperada");
+                Err(fdo::Error::Failed("respuesta inesperada del bus".into()))
+            }
+            Err(e) => Err(fdo::Error::Failed(format!("bus call: {e}"))),
+        }
     }
 
     async fn subscribe(&self) -> fdo::Result<()> { Ok(()) }

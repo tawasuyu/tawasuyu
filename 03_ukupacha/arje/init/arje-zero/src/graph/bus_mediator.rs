@@ -7,9 +7,10 @@
 //!   - Tracking de invokes en vuelo (`pending_invokes` por seq)
 //!   - Cleanup en cierre de conexión
 
-use super::{EnteGraph, SERVER_SEQ_FLAG};
+use super::{EnteGraph, INHIBIT_TTL, SERVER_SEQ_FLAG};
 use arje_bus::{BusMessage, BusPayload, BusRequest, BusResponse, EnteInfo, PeerCreds};
 use arje_card::Capability;
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 use ulid::Ulid;
@@ -24,7 +25,9 @@ use ulid::Ulid;
 fn requires_auth(req: &BusRequest) -> bool {
     matches!(
         req,
-        BusRequest::Announce { .. } | BusRequest::UpdateCapabilities { .. }
+        BusRequest::Announce { .. }
+            | BusRequest::UpdateCapabilities { .. }
+            | BusRequest::KillEnte { .. }
     )
 }
 
@@ -88,20 +91,40 @@ impl EnteGraph {
                 let _ = reply.send(BusResponse::Entes(entes));
             }
             BusRequest::PowerOff { interactive } => {
-                info!(?from_authenticated, interactive, peer_pid = peer.pid, "PowerOff via bus");
-                let _ = reply.send(BusResponse::Ok);
+                if let Some(reasons) = self.inhibit_block_reason() {
+                    warn!(?from_authenticated, ?reasons, "PowerOff denegado por inhibición");
+                    let _ = reply.send(BusResponse::Error(format!("inhibited: {reasons}")));
+                } else {
+                    info!(?from_authenticated, interactive, peer_pid = peer.pid, "PowerOff via bus");
+                    let _ = reply.send(BusResponse::Ok);
+                }
             }
             BusRequest::Reboot { interactive } => {
-                info!(?from_authenticated, interactive, "Reboot via bus");
-                let _ = reply.send(BusResponse::Ok);
+                if let Some(reasons) = self.inhibit_block_reason() {
+                    warn!(?from_authenticated, ?reasons, "Reboot denegado por inhibición");
+                    let _ = reply.send(BusResponse::Error(format!("inhibited: {reasons}")));
+                } else {
+                    info!(?from_authenticated, interactive, "Reboot via bus");
+                    let _ = reply.send(BusResponse::Ok);
+                }
             }
             BusRequest::Suspend { interactive } => {
-                info!(?from_authenticated, interactive, "Suspend via bus");
-                let _ = reply.send(BusResponse::Ok);
+                if let Some(reasons) = self.inhibit_block_reason() {
+                    warn!(?from_authenticated, ?reasons, "Suspend denegado por inhibición");
+                    let _ = reply.send(BusResponse::Error(format!("inhibited: {reasons}")));
+                } else {
+                    info!(?from_authenticated, interactive, "Suspend via bus");
+                    let _ = reply.send(BusResponse::Ok);
+                }
             }
             BusRequest::Hibernate { interactive } => {
-                info!(?from_authenticated, interactive, "Hibernate via bus");
-                let _ = reply.send(BusResponse::Ok);
+                if let Some(reasons) = self.inhibit_block_reason() {
+                    warn!(?from_authenticated, ?reasons, "Hibernate denegado por inhibición");
+                    let _ = reply.send(BusResponse::Error(format!("inhibited: {reasons}")));
+                } else {
+                    info!(?from_authenticated, interactive, "Hibernate via bus");
+                    let _ = reply.send(BusResponse::Ok);
+                }
             }
             BusRequest::Invoke { cap, blob } => {
                 self.forward_invoke(from_authenticated, cap, blob, reply).await;
@@ -111,7 +134,40 @@ impl EnteGraph {
                 self.apply_capability_update(id, adds, removes);
                 let _ = reply.send(BusResponse::Ok);
             }
+            BusRequest::KillEnte { target, signal } => {
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = self.kill_ente(caller, target, signal);
+                let _ = reply.send(resp);
+            }
         }
+    }
+
+    /// Envía `signal` al PID del Ente target. La autorización ya fue verificada
+    /// vía SO_PEERCRED (caller tiene identidad en el grafo); políticas más
+    /// finas (caller==parent, capability::Kill explícita) se aplicarán cuando
+    /// existan — por ahora cualquier Ente autenticado puede pedir kill.
+    fn kill_ente(&mut self, caller: Ulid, target: Ulid, signal: i32) -> BusResponse {
+        let Some(inc) = self.incarnated.get(&target) else {
+            warn!(%caller, %target, "KillEnte: target no existe en el grafo");
+            return BusResponse::Error(format!("ente {target} no existe"));
+        };
+        let Some(pid) = inc.pid else {
+            warn!(%caller, %target, label = %inc.card.label, "KillEnte: target sin PID (Virtual o Wasm)");
+            return BusResponse::Error(format!("ente {target} no es matable (sin PID)"));
+        };
+        let sig = match nix::sys::signal::Signal::try_from(signal) {
+            Ok(s) => s,
+            Err(_) => {
+                warn!(%caller, %target, signal, "KillEnte: signal inválido");
+                return BusResponse::Error(format!("signal {signal} inválido"));
+            }
+        };
+        info!(%caller, %target, label = %inc.card.label, pid = pid.as_raw(), ?sig, "KillEnte");
+        if let Err(e) = nix::sys::signal::kill(pid, sig) {
+            warn!(?e, "KillEnte: kill(2) falló");
+            return BusResponse::Error(format!("kill: {e}"));
+        }
+        BusResponse::Ok
     }
 
     /// Muta `dynamic_provides` del Ente y actualiza el índice global de
@@ -243,6 +299,10 @@ impl EnteGraph {
     /// retornar a un peer del bus — la decisión vivió en proceso). Si no hay
     /// proveedor invokable o el canal está saturado, se registra warn.
     pub async fn forward_brain_invoke(&mut self, cap: Capability, blob: Vec<u8>) {
+        if let Some(reasons) = self.inhibit_block_reason() {
+            warn!(?cap, ?reasons, "brain invoke descartado por inhibición");
+            return;
+        }
         let Some(provider_id) = self.pick_invokable_provider(&cap) else {
             warn!(?cap, "brain invoke: sin proveedor invokable, descartado");
             return;
@@ -267,6 +327,10 @@ impl EnteGraph {
     /// Invoke contra `BRAIN_NOTIFY_IFACE`. Es la única vía de comunicación
     /// directa (no por capacidad anónima) que ofrece el cerebro.
     pub async fn forward_brain_notify(&mut self, target_id: Ulid, message: String) {
+        if let Some(reasons) = self.inhibit_block_reason() {
+            warn!(%target_id, ?reasons, "brain notify descartado por inhibición");
+            return;
+        }
         let Some(outbound) = self.bus_connections.get(&target_id).cloned() else {
             warn!(%target_id, "brain notify: target sin conexión al bus, descartado");
             return;
@@ -286,6 +350,47 @@ impl EnteGraph {
         };
         if outbound.send(msg).await.is_err() {
             warn!(seq, %target_id, "brain notify: outbound cerrado");
+        }
+    }
+
+    /// Spawn originado por el cerebro. A diferencia de `SpawnRequest`
+    /// (genesis, restart, Spawn-capability) este pasa por el filtro de
+    /// inhibición — si la regla del cerebro entró en distress, el grafo
+    /// no acepta más expansión hasta que el TTL vence.
+    pub async fn forward_brain_spawn(&mut self, card: arje_card::EntityCard) {
+        if let Some(reasons) = self.inhibit_block_reason() {
+            warn!(label = %card.label, ?reasons, "brain spawn descartado por inhibición");
+            return;
+        }
+        let seed_id = self.seed.id;
+        if let Err(e) = self.authorize_and_spawn(card, seed_id).await {
+            warn!(?e, "brain spawn falló");
+        }
+    }
+
+    /// Aplica una inhibición declarada por el cerebro. Si la razón ya existe,
+    /// extiende su TTL — semántica idempotente y "re-affirmable".
+    pub fn apply_brain_inhibit(&mut self, reason: String) {
+        let expires = Instant::now() + INHIBIT_TTL;
+        let was_new = self.inhibits.insert(reason.clone(), expires).is_none();
+        if was_new {
+            info!(%reason, ttl_secs = INHIBIT_TTL.as_secs(), "inhibición activada");
+        } else {
+            debug!(%reason, "inhibición re-afirmada");
+        }
+    }
+
+    /// Si hay inhibiciones vivas, devuelve un string con las razones para
+    /// los mensajes de error. También purga las expiradas como side effect.
+    /// `None` significa "puede proceder".
+    pub(in crate::graph) fn inhibit_block_reason(&mut self) -> Option<String> {
+        let now = Instant::now();
+        self.inhibits.retain(|_, exp| *exp > now);
+        if self.inhibits.is_empty() {
+            None
+        } else {
+            let reasons: Vec<&str> = self.inhibits.keys().map(|s| s.as_str()).collect();
+            Some(reasons.join(", "))
         }
     }
 }

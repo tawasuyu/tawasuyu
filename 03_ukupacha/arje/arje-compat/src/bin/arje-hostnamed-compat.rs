@@ -5,8 +5,11 @@
 //! se rompen aunque el sistema funcione.
 //!
 //! Read-only properties: leemos /etc/hostname, /etc/os-release, uname().
-//! Set* methods: log + forward al bus interno (no aplicamos cambios reales
-//! en el stub — un siguiente paso es persistir a /etc/* y rehash).
+//! Set* methods: persisten en disco — SetHostname al kernel (transient),
+//! SetStaticHostname a /etc/hostname, el resto (PrettyHostname, IconName,
+//! Chassis, Deployment, Location) a /etc/machine-info — todo atomic_write.
+//! Pendiente: emitir PropertiesChanged tras cada setter (los consumidores
+//! zbus no se enteran del cambio hasta reconectar).
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
@@ -177,6 +180,11 @@ impl HostnameManager {
         }
         atomic_write("/etc/hostname", format!("{name}\n").as_bytes())
             .map_err(|e| fdo::Error::Failed(format!("write /etc/hostname: {e}")))?;
+        // El static hostname sustituye conceptualmente al transient — si
+        // quedó cacheado desde un SetHostname previo, lo descartamos para
+        // que el property `hostname` resuelva contra el nuevo static (o el
+        // gethostname() del kernel si éste también se actualizó).
+        *self.transient_hostname.lock().unwrap() = None;
         info!(%name, "SetStaticHostname → /etc/hostname");
         Ok(())
     }

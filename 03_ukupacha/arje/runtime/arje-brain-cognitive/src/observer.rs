@@ -89,6 +89,12 @@ pub struct Observer {
     /// time-decay (modo tradicional).
     last_seen_marginal: HashMap<EventKind, Instant>,
     last_seen_cooccur: HashMap<(EventKind, EventKind), Instant>,
+    /// First-seen timestamps. Set en el primer `record()` de un kind y
+    /// nunca actualizados — sirven para estimar la frecuencia "verdadera"
+    /// de un Burst como `count / (now - first_seen)` en vez de la
+    /// subestimación con `last_seen → now`. Volátiles: no portables vía
+    /// snapshot (se re-establecen en `now` al restaurar).
+    first_seen_marginal: HashMap<EventKind, Instant>,
     /// Half-life del decay exponencial en segundos. None = sin decay
     /// (las consultas devuelven los counts crudos).
     half_life_secs: Option<f64>,
@@ -110,6 +116,7 @@ impl Observer {
             total: 0,
             last_seen_marginal: HashMap::new(),
             last_seen_cooccur: HashMap::new(),
+            first_seen_marginal: HashMap::new(),
             half_life_secs: None,
             gap_histograms: HashMap::new(),
             dirty_marginal: std::collections::HashSet::new(),
@@ -152,6 +159,7 @@ impl Observer {
 
         *self.marginal.entry(kind.clone()).or_insert(0) += 1;
         self.last_seen_marginal.insert(kind.clone(), now);
+        self.first_seen_marginal.entry(kind.clone()).or_insert(now);
         self.dirty_marginal.insert(kind);
         self.total += 1;
     }
@@ -243,6 +251,13 @@ impl Observer {
     /// desde snapshot (los Instants no portables se descartan).
     pub fn last_seen_marginal(&self, kind: &EventKind) -> Option<Instant> {
         self.last_seen_marginal.get(kind).copied()
+    }
+
+    /// Primera vez que se vio un kind. Volátil: tras restore se re-sintetiza
+    /// en `now` (lo mismo que last_seen). Sirve para estimar frecuencia
+    /// honesta de Burst sin la subestimación de usar `last_seen → now`.
+    pub fn first_seen_marginal(&self, kind: &EventKind) -> Option<Instant> {
+        self.first_seen_marginal.get(kind).copied()
     }
     pub fn cooccurrences(&self) -> &HashMap<(EventKind, EventKind), u64> { &self.cooccur }
     pub fn total(&self) -> u64 { self.total }
@@ -338,6 +353,7 @@ impl Observer {
         // Incremental merge.
         for (k, v) in delta.marginal {
             self.last_seen_marginal.insert(k.clone(), now);
+            self.first_seen_marginal.entry(k.clone()).or_insert(now);
             self.marginal.insert(k, v);
         }
         for (a, b, c) in delta.cooccur {
@@ -358,8 +374,10 @@ impl Observer {
         let now = Instant::now();
         let mut marginal = HashMap::new();
         let mut last_seen_marginal = HashMap::new();
+        let mut first_seen_marginal = HashMap::new();
         for (k, v) in snap.marginal {
             last_seen_marginal.insert(k.clone(), now);
+            first_seen_marginal.insert(k.clone(), now);
             marginal.insert(k, v);
         }
         let mut cooccur = HashMap::new();
@@ -379,6 +397,7 @@ impl Observer {
             total: snap.total,
             last_seen_marginal,
             last_seen_cooccur,
+            first_seen_marginal,
             half_life_secs: snap.half_life_secs,
             gap_histograms,
             dirty_marginal: std::collections::HashSet::new(),
