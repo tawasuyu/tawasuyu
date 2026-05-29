@@ -59,7 +59,7 @@ Meta: definir fuerzas y condiciones iniciales sin recompilar Rust.
 
 Meta: editar fuerzas y escenas como grafo Llimphi.
 
-- **E1** Crate `tinkuy-llimphi` con `llimphi-ui::App`. Layout obligatorio: panel único con tiles draggables (visor 3D · panel fuerzas · observables · scrubber snapshots). [[feedback_panel_tiles_draggables]].
+- **E1** ✅ Crate `tinkuy-llimphi` con `llimphi-ui::App`. Panel único en `tiled_view_reorderable_cols(2)` con cuatro tiles draggables: visor (placeholder hasta E3), fuerzas (ε/σ/cutoff/dt/N + flag pausa), observables (step/t/KE/T/|p|/CID[..8]), snapshots (ring de 12 CIDs). Driver tinkuy-core en el hilo de UI: `Handle::spawn_periodic(33 ms, || Msg::Tick)` desde `init`; el `update` avanza 4 pasos de Velocity-Verlet + LJ + walls por tick (≈120 steps/s con N=64) y refresca observables. Atajos: `Space` pausa, `r` reset. `cargo check -p tinkuy-llimphi --example tinkuy_demo` y `cargo check --workspace` verdes. [[feedback_panel_tiles_draggables]] [[feedback_mvp_ugly_first]].
 - **E2** Grafo de fuerzas sobre `llimphi-widget-nodegraph`: nodos vars + ops + salida F_ij. Compila a bytecode DSL (capa 3).
 - **E3** Visor 3D mínimo: `View::paint_with(Scene)` pinta partículas como puntos coloreados por |v|. Proyección ortográfica; sin cámara orbital en MVP.
 - **E4** Timeline de CIDs: cada `--snapshot-every` añade una entrada; click → carga el estado y rebobina el sim.

@@ -1,0 +1,19 @@
+[package]
+name = "tinkuy-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tinkuy — frontend Llimphi del motor de partículas. E1 del roadmap: panel único con tiles draggables (visor 3D · fuerzas · observables · scrubber snapshots). Driver tinkuy-core en el hilo de UI con un Msg::Tick periódico."
+
+[dependencies]
+llimphi-ui           = { workspace = true }
+llimphi-theme        = { workspace = true }
+llimphi-widget-tiled = { workspace = true }
+tinkuy-core   = { path = "../tinkuy-core" }
+tinkuy-forces = { path = "../tinkuy-forces" }
+
+[[example]]
+name = "tinkuy_demo"
+path = "examples/tinkuy_demo.rs"
