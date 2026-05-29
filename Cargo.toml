@@ -233,6 +233,8 @@ members = [
     "02_ruway/multimedia/multimedia-core",
     "02_ruway/multimedia/multimedia-recorder-wav",
     "02_ruway/multimedia/multimedia-source-gif",
+    "02_ruway/multimedia/multimedia-source-image",
+    "02_ruway/multimedia/multimedia-source-mp3",
     "02_ruway/multimedia/multimedia-source-wav",
     "02_ruway/nahual/libs/meta-runtime",
     "02_ruway/nahual/libs/meta-schema",
@@ -686,3 +688,10 @@ cpal = "0.15"
 # entero (8/16/24/32) y float (32). Suficiente para abrir samples y
 # stems de prueba sin meter ffmpeg/symphonia.
 hound = "3.5"
+
+# === multimedia-source-mp3 (decoder MP3 vía symphonia) ===
+# symphonia es una colección de decoders puro-Rust mantenida; con sólo
+# las features `mp3` + `isomp4` arrastra lo mínimo para reproducir un
+# MP3 desde disco. Sin features extra: nada de aac/flac/opus/vorbis
+# para no inflar el target.
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }

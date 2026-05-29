@@ -26,7 +26,15 @@
 //! Corre con:
 //!   `cargo run -p multimedia-app --release`
 //!   `cargo run -p multimedia-app --release -- /ruta/al/anim.gif`
+//!   `cargo run -p multimedia-app --release -- /ruta/foto.png`
+//!   `MULTIMEDIA_WAV=/ruta/clip.wav cargo run -p multimedia-app --release`
+//!   `MULTIMEDIA_MP3=/ruta/cancion.mp3 cargo run -p multimedia-app --release`
 //!   `MULTIMEDIA_MUTE=1 cargo run -p multimedia-app --release`
+//!
+//! El primer argumento posicional es el video; la extensión decide
+//! la fuente (`.gif` → anim, `.png/.jpg/.webp/.bmp/.tiff/.jpeg` →
+//! imagen fija). La pista de audio se elige con `MULTIMEDIA_WAV` o
+//! `MULTIMEDIA_MP3` — sin ninguna, suena un tono A4 sintético.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -49,6 +57,8 @@ use multimedia_core::{
 };
 use multimedia_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use multimedia_source_gif::GifSource;
+use multimedia_source_image::ImageSource;
+use multimedia_source_mp3::Mp3Source;
 use multimedia_source_wav::WavSource;
 use parking_lot::Mutex;
 
@@ -103,12 +113,19 @@ fn pipeline_slot() -> &'static OnceLock<Pipeline> {
 
 struct Config {
     label: String,
-    init_source: fn() -> Box<dyn FrameSource + Send>,
-    // El path del GIF (si aplica) viaja por otro static — fn pointers
-    // no capturan, así que `init_source` lo lee de `gif_path_slot`.
+    kind: VideoKind,
 }
 
-fn gif_path_slot() -> &'static OnceLock<PathBuf> {
+#[derive(Clone, Copy)]
+enum VideoKind {
+    Testcard,
+    Gif,
+    Image,
+}
+
+/// Path del archivo de video (GIF o imagen estática) cuando aplica.
+/// Vacío para Testcard.
+fn video_path_slot() -> &'static OnceLock<PathBuf> {
     static SLOT: OnceLock<PathBuf> = OnceLock::new();
     &SLOT
 }
@@ -144,12 +161,11 @@ fn volume() -> &'static Volume {
     SLOT.get_or_init(|| Volume::new(1.0))
 }
 
-/// Handle al [`WavSource`] activo (si la fuente es WAV) para poder
-/// llamar `seek_to`/`position`/`duration` desde la UI. `None` con
-/// otras fuentes (tono A4, fallback) — en ese caso los botones de
-/// seek quedan apagados.
-fn wav_handle_slot() -> &'static OnceLock<Option<Arc<Mutex<WavSource>>>> {
-    static SLOT: OnceLock<Option<Arc<Mutex<WavSource>>>> = OnceLock::new();
+/// Handle a la fuente audio cuando es `Seekable` (WAV o MP3). `None`
+/// si la activa es tono A4 o no hay sink — en ese caso los botones
+/// de seek quedan apagados.
+fn seekable_handle_slot() -> &'static OnceLock<Option<Arc<Mutex<dyn Seekable + Send>>>> {
+    static SLOT: OnceLock<Option<Arc<Mutex<dyn Seekable + Send>>>> = OnceLock::new();
     &SLOT
 }
 
@@ -167,18 +183,19 @@ impl<T: AudioSource> AudioSource for SharedAudio<T> {
     }
 }
 
-/// Mueve la posición del WAV activo en `delta_secs` (negativo = atrás)
-/// con wrap módulo duration. No-op si no hay WAV cargado.
+/// Mueve la posición de la fuente audio Seekable activa en
+/// `delta_secs` (negativo = atrás) con wrap módulo duration. No-op si
+/// la fuente actual no es seekable (tono A4).
 fn seek_audio_by(delta_secs: i64) {
-    let Some(handle) = wav_handle_slot().get().and_then(|o| o.as_ref()) else {
+    let Some(handle) = seekable_handle_slot().get().and_then(|o| o.as_ref()) else {
         return;
     };
-    let mut wav = handle.lock();
-    let dur = wav.duration().unwrap_or(Duration::from_secs(1));
+    let mut src = handle.lock();
+    let dur = src.duration().unwrap_or(Duration::from_secs(1));
     let dur_s = dur.as_secs_f64().max(0.001);
-    let cur_s = wav.position().as_secs_f64();
+    let cur_s = src.position().as_secs_f64();
     let new_s = (cur_s + delta_secs as f64).rem_euclid(dur_s);
-    wav.seek_to(Duration::from_secs_f64(new_s));
+    src.seek_to(Duration::from_secs_f64(new_s));
 }
 
 /// Formatea una duración como `M:SS`. Para tracks de menos de una
@@ -205,27 +222,45 @@ fn new_testcard() -> Box<dyn FrameSource + Send> {
     ))
 }
 
-fn new_gif() -> Box<dyn FrameSource + Send> {
-    let path = gif_path_slot().get().expect("gif path set");
-    match GifSource::from_path(path) {
-        Ok(s) => Box::new(PausableVideo::new(s, pause().clone())),
-        Err(e) => {
-            eprintln!("multimedia-app: error abriendo GIF {path:?}: {e} — caigo a testcard");
-            new_testcard()
+fn build_video_source() -> Box<dyn FrameSource + Send> {
+    let cfg = config_slot().get().expect("config set");
+    let p = pause().clone();
+    match cfg.kind {
+        VideoKind::Testcard => new_testcard(),
+        VideoKind::Gif => {
+            let path = video_path_slot().get().expect("video path set");
+            match GifSource::from_path(path) {
+                Ok(s) => Box::new(PausableVideo::new(s, p)),
+                Err(e) => {
+                    eprintln!(
+                        "multimedia-app: error abriendo GIF {path:?}: {e} — caigo a testcard"
+                    );
+                    new_testcard()
+                }
+            }
+        }
+        VideoKind::Image => {
+            let path = video_path_slot().get().expect("video path set");
+            match ImageSource::from_path(path) {
+                Ok(s) => Box::new(PausableVideo::new(s, p)),
+                Err(e) => {
+                    eprintln!(
+                        "multimedia-app: error abriendo imagen {path:?}: {e} — caigo a testcard"
+                    );
+                    new_testcard()
+                }
+            }
         }
     }
 }
 
 fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'static Pipeline {
-    pipeline_slot().get_or_init(|| {
-        let cfg = config_slot().get().expect("config set");
-        Pipeline {
-            surface: ExternalSurface::new(device, queue),
-            source: Mutex::new((cfg.init_source)()),
-            buf: Mutex::new(Vec::new()),
-            last_dim: Mutex::new((0, 0)),
-            last_tick: Mutex::new(Instant::now()),
-        }
+    pipeline_slot().get_or_init(|| Pipeline {
+        surface: ExternalSurface::new(device, queue),
+        source: Mutex::new(build_video_source()),
+        buf: Mutex::new(Vec::new()),
+        last_dim: Mutex::new((0, 0)),
+        last_tick: Mutex::new(Instant::now()),
     })
 }
 
@@ -358,7 +393,10 @@ impl App for MultimediaApp {
             Msg::Snapshot,
         );
 
-        let seekable = wav_handle_slot().get().and_then(|o| o.as_ref()).is_some();
+        let seekable = seekable_handle_slot()
+            .get()
+            .and_then(|o| o.as_ref())
+            .is_some();
         let seek_bg = if seekable {
             Color::from_rgba8(55, 65, 80, 255)
         } else {
@@ -480,13 +518,13 @@ impl App for MultimediaApp {
         })
         .children(vec![waveform_panel(), spectrum_panel()]);
 
-        let time_label = wav_handle_slot()
+        let time_label = seekable_handle_slot()
             .get()
             .and_then(|o| o.as_ref())
             .map(|h| {
-                let w = h.lock();
-                let pos = w.position();
-                let dur = w.duration().unwrap_or(Duration::ZERO);
+                let s = h.lock();
+                let pos = s.position();
+                let dur = s.duration().unwrap_or(Duration::ZERO);
                 format!(" · {} / {}", fmt_secs(pos), fmt_secs(dur))
             })
             .unwrap_or_default();
@@ -880,16 +918,37 @@ fn main() {
     let cfg = match args.first() {
         Some(path) => {
             let path = PathBuf::from(path);
-            let label = format!("gif {}", path.display());
-            gif_path_slot().set(path).ok();
-            Config {
-                label,
-                init_source: new_gif,
+            let kind = match path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("gif") => VideoKind::Gif,
+                Some("png" | "jpg" | "jpeg" | "webp" | "bmp" | "tiff") => VideoKind::Image,
+                other => {
+                    eprintln!(
+                        "multimedia-app: extensión {:?} no reconocida — caigo a testcard",
+                        other
+                    );
+                    VideoKind::Testcard
+                }
+            };
+            let label = match kind {
+                VideoKind::Gif => format!("gif {}", path.display()),
+                VideoKind::Image => format!("img {}", path.display()),
+                VideoKind::Testcard => format!(
+                    "testcard {TESTCARD_W}×{TESTCARD_H} @ {TESTCARD_FPS:.0} fps"
+                ),
+            };
+            if !matches!(kind, VideoKind::Testcard) {
+                video_path_slot().set(path).ok();
             }
+            Config { label, kind }
         }
         None => Config {
             label: format!("testcard {TESTCARD_W}×{TESTCARD_H} @ {TESTCARD_FPS:.0} fps"),
-            init_source: new_testcard,
+            kind: VideoKind::Testcard,
         },
     };
     config_slot().set(cfg).ok();
@@ -928,6 +987,8 @@ fn main() {
 
 fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     let probe = AudioProbe::new(PROBE_CAPACITY);
+
+    // Prioridad: WAV → MP3 → tono A4.
     let inner: Box<dyn AudioSource + Send> = if let Ok(path) = std::env::var("MULTIMEDIA_WAV") {
         match WavSource::from_path(&path) {
             Ok(wav) => {
@@ -937,21 +998,39 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
                     wav.source_sample_rate(),
                     wav.duration_seconds(),
                 );
-                // Compartido: la cadena del sink se queda con un
-                // Arc clonado, y el slot expone el otro lado para
-                // los handlers de seek de la UI.
-                let shared = Arc::new(Mutex::new(wav));
-                wav_handle_slot().set(Some(shared.clone())).ok();
+                let shared: Arc<Mutex<WavSource>> = Arc::new(Mutex::new(wav));
+                let seek_ref: Arc<Mutex<dyn Seekable + Send>> = shared.clone();
+                seekable_handle_slot().set(Some(seek_ref)).ok();
                 Box::new(SharedAudio { inner: shared })
             }
             Err(e) => {
                 eprintln!("multimedia-app: no pude abrir WAV {path}: {e} — caigo a tono A4");
-                wav_handle_slot().set(None).ok();
+                seekable_handle_slot().set(None).ok();
+                Box::new(ToneSource::a4())
+            }
+        }
+    } else if let Ok(path) = std::env::var("MULTIMEDIA_MP3") {
+        match Mp3Source::from_path(&path) {
+            Ok(mp3) => {
+                eprintln!(
+                    "multimedia-app: mp3 {path} · {} ch · {} Hz · {:.1}s",
+                    mp3.source_channels(),
+                    mp3.source_sample_rate(),
+                    mp3.duration_seconds(),
+                );
+                let shared: Arc<Mutex<Mp3Source>> = Arc::new(Mutex::new(mp3));
+                let seek_ref: Arc<Mutex<dyn Seekable + Send>> = shared.clone();
+                seekable_handle_slot().set(Some(seek_ref)).ok();
+                Box::new(SharedAudio { inner: shared })
+            }
+            Err(e) => {
+                eprintln!("multimedia-app: no pude abrir MP3 {path}: {e} — caigo a tono A4");
+                seekable_handle_slot().set(None).ok();
                 Box::new(ToneSource::a4())
             }
         }
     } else {
-        wav_handle_slot().set(None).ok();
+        seekable_handle_slot().set(None).ok();
         Box::new(ToneSource::a4())
     };
     // Orden: Pausable envuelve al productor (silencio cuando pausado);
