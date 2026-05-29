@@ -280,4 +280,34 @@ mod tests {
             bc_raw.code.len(), bc_opt.code.len()
         );
     }
+
+    /// Defensa contra regresión: que el optimize no infle el pool de
+    /// constantes en ninguna de las fórmulas canónicas del bench. Si un día
+    /// alguien agrega una regla que rompe esto (porque pierde el dedupe o
+    /// genera nuevos `Num` no consolidados), el test grita.
+    #[test]
+    fn optimize_never_grows_const_pool_on_canonical_formulas() {
+        use crate::compile;
+        let cases: &[(&str, &str)] = &[
+            ("lj",      "24 * eps * (2 * pow(sigma / r, 12) - pow(sigma / r, 6)) * inv(r2)"),
+            ("coulomb", "qi * qj * inv(r2) * sqrt(r2)"),
+            ("hooke",   "-100.0 * (r - 1.5)"),
+        ];
+        for (name, src) in cases {
+            let raw = parse(src).unwrap();
+            let opt = optimize(raw.clone());
+            let bc_raw = compile(&raw).unwrap();
+            let bc_opt = compile(&opt).unwrap();
+            assert!(
+                bc_opt.consts.len() <= bc_raw.consts.len(),
+                "{name}: optimize creció pool de consts {} → {}",
+                bc_raw.consts.len(), bc_opt.consts.len()
+            );
+            assert!(
+                bc_opt.code.len() <= bc_raw.code.len(),
+                "{name}: optimize creció code {} → {}",
+                bc_raw.code.len(), bc_opt.code.len()
+            );
+        }
+    }
 }

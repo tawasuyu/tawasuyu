@@ -23,9 +23,9 @@ cargo run --release -p tinkuy-sim -- --particles 100000 --ticks 1000
 |---|---|
 | [`tinkuy-core`](tinkuy-core/README.md) | ECS SoA + Grid3D + Velocity-Verlet. |
 | [`tinkuy-forces`](tinkuy-forces/README.md) | Force catalog (Lennard-Jones, Coulomb, ...). |
-| [`tinkuy-abi`](tinkuy-abi/) | Flat C-friendly ABI used by the WASM cdylib. |
-| [`tinkuy-dsl`](tinkuy-dsl/) | Math DSL: Pratt parser → AST → bytecode + optimizer (see `benches/optimize.rs` for numbers). |
-| [`tinkuy-llimphi`](tinkuy-llimphi/) | Llimphi UI: tiled panels, 3D viewer, visual node graph, snapshot rewind. |
+| [`tinkuy-abi`](tinkuy-abi/README.md) | Flat C-friendly ABI used by the WASM cdylib. |
+| [`tinkuy-dsl`](tinkuy-dsl/README.md) | Math DSL: Pratt parser → AST → bytecode + optimizer (see `benches/optimize.rs` for numbers). |
+| [`tinkuy-llimphi`](tinkuy-llimphi/README.md) | Llimphi UI: tiled panels, 3D viewer, visual node graph, snapshot rewind. |
 | [`tinkuy-sim`](tinkuy-sim/README.md) | CLI: runs simulation, dumps snapshots. |
 
 ## Considerations
