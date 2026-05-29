@@ -818,7 +818,9 @@ impl App for Puriy {
                 // pisada por otra navegación manual (gen counter).
                 if let Some(idx) = m.tab_idx(tab) {
                     if m.tabs[idx].gen == gen {
-                        m.active = idx;
+                        if idx != m.active {
+                            switch_active_tab(&mut m, idx);
+                        }
                         let target = url.unwrap_or_else(|| m.tabs[idx].url.clone());
                         return Self::update(m, Msg::Navigate(target), handle);
                     }
@@ -921,7 +923,8 @@ impl App for Puriy {
                 tab.gen = 1;
                 spawn_load(tab.id, tab.gen, target, referer, handle.clone());
                 m.tabs.push(tab);
-                m.active = m.tabs.len() - 1;
+                let new_idx = m.tabs.len() - 1;
+                switch_active_tab(&mut m, new_idx);
                 m.panel = None;
                 m.panel_filter.clear();
             }
@@ -978,7 +981,8 @@ impl App for Puriy {
                 t.status = "nueva pestaña".into();
                 t.box_tree = None;
                 m.tabs.push(t);
-                m.active = m.tabs.len() - 1;
+                let new_idx = m.tabs.len() - 1;
+                switch_active_tab(&mut m, new_idx);
                 m.active_mut().addr_focused = true;
             }
             Msg::CloseTab(idx) => {
@@ -990,22 +994,34 @@ impl App for Puriy {
                     m.tabs.push(t);
                     m.active = 0;
                 } else if m.active >= m.tabs.len() {
+                    // El active quedó out-of-bounds — apuntar al último.
+                    // No usamos switch_active_tab porque no hay tab "vieja"
+                    // a marcar hidden (la borramos arriba).
                     m.active = m.tabs.len() - 1;
+                    if let Some(rt) = m.tabs[m.active].js.as_mut() {
+                        let _ = rt.set_visibility(false);
+                    }
                 }
             }
             Msg::SelectTab(idx) => {
-                if idx < m.tabs.len() {
-                    m.active = idx;
+                if idx < m.tabs.len() && idx != m.active {
+                    switch_active_tab(&mut m, idx);
                 }
             }
             Msg::NextTab => {
                 if !m.tabs.is_empty() {
-                    m.active = (m.active + 1) % m.tabs.len();
+                    let next = (m.active + 1) % m.tabs.len();
+                    if next != m.active {
+                        switch_active_tab(&mut m, next);
+                    }
                 }
             }
             Msg::PrevTab => {
                 if !m.tabs.is_empty() {
-                    m.active = (m.active + m.tabs.len() - 1) % m.tabs.len();
+                    let prev = (m.active + m.tabs.len() - 1) % m.tabs.len();
+                    if prev != m.active {
+                        switch_active_tab(&mut m, prev);
+                    }
                 }
             }
             Msg::Bookmark => {
@@ -2381,6 +2397,24 @@ fn dispatch_js_event_with_init(
     };
     let pending = apply_dom_mutations(t);
     (result, pending)
+}
+
+/// Fase 7.42 — cambia la pestaña activa, marcando la vieja como hidden y
+/// la nueva como visible (dispatcha `'visibilitychange'` en cada una vía
+/// `set_visibility`). Apps que pausan video / polling / animation al
+/// background ven el evento sin necesidad de cabling especial en el msg.
+fn switch_active_tab(m: &mut Model, new_idx: usize) {
+    let prev_idx = m.active;
+    if prev_idx == new_idx {
+        return;
+    }
+    if let Some(rt) = m.tabs[prev_idx].js.as_mut() {
+        let _ = rt.set_visibility(true);
+    }
+    m.active = new_idx;
+    if let Some(rt) = m.tabs[new_idx].js.as_mut() {
+        let _ = rt.set_visibility(false);
+    }
 }
 
 /// Fase 7.39 — dispatcha un evento sobre `window` (no sobre un elemento)
@@ -5517,6 +5551,57 @@ mod tests {
             }
         });
         assert!(found, "el handler debió mutar 'antes' a 'después'");
+    }
+
+    // ============= Fase 7.42 — Page Visibility =============
+
+    #[test]
+    fn switch_active_tab_marca_hidden_la_vieja_y_dispatcha() {
+        // Tab 0 con runtime + handler visibilitychange. Tab 1 sin runtime
+        // (about:blank). SelectTab(1) debería marcar tab[0] como hidden y
+        // disparar el handler.
+        let mut m = model_con_script(
+            "var got = null; \
+             window.addEventListener('visibilitychange', function() { \
+                got = document.visibilityState; \
+             });",
+        );
+        m.tabs.push(TabState::new("about:tab2".into()));
+        // Disparo SelectTab(1) — usa el helper directamente, no el msg.
+        switch_active_tab(&mut m, 1);
+        assert_eq!(m.active, 1);
+        // El handler de tab[0] debe haber visto el cambio a 'hidden'.
+        let v = m.tabs[0].js.as_mut().expect("rt").eval("got").expect("e");
+        assert_eq!(v, puriy_js::JsValue::String("hidden".into()));
+        let v = m.tabs[0]
+            .js
+            .as_mut()
+            .expect("rt")
+            .eval("document.hidden")
+            .expect("e");
+        assert_eq!(v, puriy_js::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn switch_active_tab_marca_visible_la_nueva() {
+        // Toggle ida-y-vuelta sobre el mismo tab con runtime: el handler
+        // ve hidden cuando dejamos de ser activos y visible cuando volvemos.
+        let mut m = model_con_script(
+            "var states = []; \
+             window.addEventListener('visibilitychange', function() { \
+                states.push(document.visibilityState); \
+             });",
+        );
+        m.tabs.push(TabState::new("about:tab2".into()));
+        switch_active_tab(&mut m, 1); // tab 0 → hidden
+        switch_active_tab(&mut m, 0); // tab 0 → visible
+        let v = m.tabs[0]
+            .js
+            .as_mut()
+            .expect("rt")
+            .eval("states.join(',')")
+            .expect("e");
+        assert_eq!(v, puriy_js::JsValue::String("hidden,visible".into()));
     }
 
     // ============= Fase 7.41 — beforeunload =============

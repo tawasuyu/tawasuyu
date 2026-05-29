@@ -1965,6 +1965,25 @@ globalThis.AbortSignal = {
         return pair.signal;
     }
 };
+// Fase 7.42 — Page Visibility API. document.hidden + document.visibilityState
+// ('visible'/'hidden') + 'visibilitychange' event. Apps usan esto para pausar
+// videos/polling/animaciones cuando la pestaña pasa a background. El bootstrap
+// inicializa todos los tabs como visible; el chrome llama `set_visibility(true)`
+// sobre el runtime de la tab que pasa a background y `set_visibility(false)`
+// sobre el que pasa a foreground — el helper dispatcha `'visibilitychange'`
+// al window (spec lo dispatcha al document pero bubblea; nuestros listeners
+// están sobre window).
+globalThis.__puriy_set_visibility = function(hidden) {
+    var newState = hidden ? 'hidden' : 'visible';
+    var prev = globalThis.document && globalThis.document.visibilityState;
+    if (globalThis.document) {
+        globalThis.document.hidden = !!hidden;
+        globalThis.document.visibilityState = newState;
+    }
+    if (prev !== newState) {
+        globalThis.__puriy_dispatch_window('visibilitychange', null);
+    }
+};
 // Fase 7.40 — MutationObserver + IntersectionObserver stubs. Apps
 // modernas (React, Vue, sentry, observers de visibilidad, etc.) construyen
 // estos al boot — sin la clase definida tiran `not a constructor` y se
@@ -2655,6 +2674,8 @@ impl JsRuntime {
                 title: {t}, \
                 URL: {u}, \
                 readyState: 'complete', \
+                hidden: false, \
+                visibilityState: 'visible', \
                 body: {{ textContent: {b}, innerHTML: {b} }}, \
                 createElement: function(tag) {{ \
                     var synth_id = '__synth_' + (++globalThis.__puriy_synth_counter); \
@@ -2904,6 +2925,19 @@ impl JsRuntime {
             count,
             default_prevented,
         })
+    }
+
+    /// Fase 7.42 — setea `document.hidden`/`document.visibilityState` y,
+    /// si el state cambió, dispatcha `'visibilitychange'` al window.
+    /// El chrome llama esto cuando una pestaña pasa a foreground/background
+    /// (tabs visibles vs ocultas). Apps que polean datos o reproducen
+    /// videos usan el event para pausar/reanudar.
+    pub fn set_visibility(&mut self, hidden: bool) -> Result<(), JsError> {
+        let script = format!(
+            "globalThis.__puriy_set_visibility({});",
+            if hidden { "true" } else { "false" }
+        );
+        self.eval(&script).map(|_| ())
     }
 
     /// Fase 7.39 — dispatcha un evento sobre `window` (no sobre un
@@ -7338,6 +7372,68 @@ mod tests {
         } else {
             panic!("expected string, got {v:?}");
         }
+    }
+
+    // ============= Fase 7.42 — Page Visibility =============
+
+    #[test]
+    fn visibility_inicial_es_visible() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        assert_eq!(rt.eval("document.hidden").expect("e"), JsValue::Bool(false));
+        assert_eq!(
+            rt.eval("document.visibilityState").expect("e"),
+            JsValue::String("visible".into())
+        );
+    }
+
+    #[test]
+    fn set_visibility_true_actualiza_hidden_y_state() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_visibility(true).expect("hide");
+        assert_eq!(rt.eval("document.hidden").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("document.visibilityState").expect("e"),
+            JsValue::String("hidden".into())
+        );
+    }
+
+    #[test]
+    fn set_visibility_dispara_visibilitychange() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var states = []; \
+             window.addEventListener('visibilitychange', function() { \
+                states.push(document.visibilityState); \
+             });",
+        )
+        .expect("e");
+        rt.set_visibility(true).expect("hide");
+        rt.set_visibility(false).expect("show");
+        let v = rt.eval("states.join(',')").expect("e");
+        assert_eq!(v, JsValue::String("hidden,visible".into()));
+    }
+
+    #[test]
+    fn set_visibility_idempotente_no_dispara_cuando_no_cambia() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var n = 0; \
+             window.addEventListener('visibilitychange', function() { n++; });",
+        )
+        .expect("e");
+        // Ya está visible: setear visible de nuevo no debe disparar.
+        rt.set_visibility(false).expect("show");
+        rt.set_visibility(false).expect("show");
+        let v = rt.eval("n").expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+        rt.set_visibility(true).expect("hide");
+        rt.set_visibility(true).expect("hide");
+        let v = rt.eval("n").expect("e");
+        assert_eq!(v, JsValue::Number(1.0));
     }
 
     // ============= Fase 7.40 — Observers stub =============
