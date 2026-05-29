@@ -404,6 +404,50 @@ impl BoxTree {
         let mut acc = 0.0_f32;
         find_y_inner(&self.root, id, &mut acc)
     }
+
+    /// Reemplaza el contenido de texto del subárbol del nodo con
+    /// `element_id == id` por `new_text`. Implementa el caso simple de
+    /// `el.textContent = X` desde JS:
+    ///
+    /// 1. Si el nodo target tiene `.text` directo, se reemplaza.
+    /// 2. Sino, se reemplaza el PRIMER text leaf en orden DFS del
+    ///    subárbol; los hijos no-text quedan intactos.
+    /// 3. Si no hay text leaves, no se hace nada (Fase 7.5c — caso raro;
+    ///    requeriría sintetizar un nuevo BoxNode con estilo del padre).
+    ///
+    /// Devuelve `true` si se aplicó la mutación, `false` si no se
+    /// encontró el id o no había text leaves. Spec real de `textContent`
+    /// es "reemplazar TODO el subárbol con un único text node"; nuestra
+    /// aproximación cubre el 90% de los usos reales (clocks, contadores,
+    /// banners) sin un refactor del modelo del box tree.
+    pub fn set_element_text_content(&mut self, id: &str, new_text: &str) -> bool {
+        replace_text_content(&mut self.root, id, new_text)
+    }
+}
+
+fn replace_text_content(node: &mut BoxNode, target: &str, new_text: &str) -> bool {
+    if node.element_id.as_deref() == Some(target) {
+        return replace_first_text_leaf(node, new_text);
+    }
+    for c in node.children.iter_mut() {
+        if replace_text_content(c, target, new_text) {
+            return true;
+        }
+    }
+    false
+}
+
+fn replace_first_text_leaf(node: &mut BoxNode, new_text: &str) -> bool {
+    if node.text.is_some() {
+        node.text = Some(new_text.to_string());
+        return true;
+    }
+    for c in node.children.iter_mut() {
+        if replace_first_text_leaf(c, new_text) {
+            return true;
+        }
+    }
+    false
 }
 
 fn find_y_inner(b: &BoxNode, target: &str, acc: &mut f32) -> Option<f32> {
@@ -3155,5 +3199,49 @@ mod tests {
             }
         });
         assert!(found_space, "el espacio dentro de <span> debería preservarse");
+    }
+
+    #[test]
+    fn set_element_text_content_reemplaza_hoja() {
+        let html = r#"<html><body><h1 id="hero">Hola</h1></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        let ok = doc.box_tree.set_element_text_content("hero", "Adiós");
+        assert!(ok);
+        // Verificar que la hoja de texto se actualizó.
+        let mut found = false;
+        doc.box_tree.walk(|b| {
+            if b.text.as_deref() == Some("Adiós") {
+                found = true;
+            }
+        });
+        assert!(found, "no se encontró 'Adiós' en el árbol post-mutación");
+    }
+
+    #[test]
+    fn set_element_text_content_no_encuentra_id_devuelve_false() {
+        let html = r#"<html><body><p>x</p></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        let ok = doc.box_tree.set_element_text_content("fantasma", "x");
+        assert!(!ok);
+    }
+
+    #[test]
+    fn set_element_text_content_reemplaza_primer_leaf_no_los_demas() {
+        let html = r#"<html><body><div id="d"><span>uno</span><span>dos</span></div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        let ok = doc.box_tree.set_element_text_content("d", "X");
+        assert!(ok);
+        let mut texts = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if !t.trim().is_empty() {
+                    texts.push(t.clone());
+                }
+            }
+        });
+        // El primer text leaf "uno" pasa a "X"; "dos" sigue intacto.
+        assert!(texts.contains(&"X".to_string()), "texts: {texts:?}");
+        assert!(texts.contains(&"dos".to_string()), "texts: {texts:?}");
+        assert!(!texts.contains(&"uno".to_string()), "texts: {texts:?}");
     }
 }

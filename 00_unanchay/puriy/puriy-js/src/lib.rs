@@ -169,6 +169,46 @@ globalThis.__puriy_tick = function(now) {
 /// que el chrome decida si fallback al behavior default).
 const EVENTS_BOOTSTRAP: &str = r#"
 globalThis.__puriy_elements = {};
+globalThis.__puriy_dirty = [];
+globalThis.__puriy_make_element = function(id, tag, text) {
+    var el = {
+        id: id,
+        tagName: tag,
+        _textContent: text,
+        _listeners: {},
+        addEventListener: function(type, fn) {
+            if (!this._listeners[type]) this._listeners[type] = [];
+            this._listeners[type].push(fn);
+        },
+        removeEventListener: function(type, fn) {
+            if (!this._listeners[type]) return;
+            var i = this._listeners[type].indexOf(fn);
+            if (i >= 0) this._listeners[type].splice(i, 1);
+        }
+    };
+    Object.defineProperty(el, 'textContent', {
+        get: function() { return el._textContent; },
+        set: function(v) {
+            el._textContent = String(v);
+            globalThis.__puriy_dirty.push({id: el.id, kind: 'text', value: el._textContent});
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(el, 'innerHTML', {
+        get: function() { return el._textContent; },
+        set: function(v) {
+            // Fase 7.5c: innerHTML se trata como textContent (sin
+            // parsear HTML interno). Suficiente para "label.innerHTML =
+            // 'x'" pero NO para inyección de markup compleja.
+            el._textContent = String(v);
+            globalThis.__puriy_dirty.push({id: el.id, kind: 'text', value: el._textContent});
+        },
+        enumerable: true,
+        configurable: true
+    });
+    return el;
+};
 globalThis.__puriy_dispatch = function(id, type) {
     var el = globalThis.__puriy_elements[id];
     if (!el) return 0;
@@ -191,6 +231,20 @@ globalThis.__puriy_dispatch = function(id, type) {
         }
     }
     return count;
+};
+globalThis.__puriy_drain_dirty = function() {
+    var arr = globalThis.__puriy_dirty;
+    globalThis.__puriy_dirty = [];
+    if (arr.length === 0) return '';
+    // Codificación delim-based para evitar serializar JSON desde el
+    // host: U+001E (Record Separator) separa campos, U+001F (Unit
+    // Separator) separa entries. Ninguno aparece en texto normal.
+    var lines = [];
+    for (var i = 0; i < arr.length; i++) {
+        var m = arr[i];
+        lines.push(m.id + '\u001E' + m.kind + '\u001E' + m.value);
+    }
+    return lines.join('\u001F');
 };
 "#;
 
@@ -543,32 +597,56 @@ impl JsRuntime {
     /// más ricos requerirán un index secundario por classname/tag.
     pub fn set_elements(&mut self, elements: &[ElementSnapshot]) -> Result<(), JsError> {
         // Construir el script en una sola pasada — un eval por entrada
-        // sería ~N evals para una página con N elementos id.
+        // sería ~N evals para una página con N elementos id. Cada
+        // elemento se delega a `__puriy_make_element` (definido en
+        // EVENTS_BOOTSTRAP) que arma el objeto con getter/setter de
+        // `textContent`/`innerHTML` que publica a `__puriy_dirty`.
         let mut script = String::from("globalThis.__puriy_elements = {};\n");
         for el in elements {
-            let id_lit = js_string_literal(&el.id);
             script.push_str(&format!(
-                "globalThis.__puriy_elements[{id}] = {{ \
-                    id: {id}, \
-                    tagName: {tag}, \
-                    textContent: {text}, \
-                    _listeners: {{}}, \
-                    addEventListener: function(type, fn) {{ \
-                        if (!this._listeners[type]) this._listeners[type] = []; \
-                        this._listeners[type].push(fn); \
-                    }}, \
-                    removeEventListener: function(type, fn) {{ \
-                        if (!this._listeners[type]) return; \
-                        var i = this._listeners[type].indexOf(fn); \
-                        if (i >= 0) this._listeners[type].splice(i, 1); \
-                    }} \
-                }};\n",
-                id = id_lit,
+                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text});\n",
+                id = js_string_literal(&el.id),
                 tag = js_string_literal(&el.tag_name),
                 text = js_string_literal(&el.text_content),
             ));
         }
+        // Limpiamos también el buffer de dirty para no arrastrar
+        // mutaciones de la página anterior — los setters se llaman al
+        // crear los elementos? No, el constructor sólo asigna
+        // `_textContent` directamente, no llama el setter. Igual lo
+        // reseteamos por defensa.
+        script.push_str("globalThis.__puriy_dirty = [];\n");
         self.eval_raw(&script).map(|_| ())
+    }
+
+    /// Drena el buffer de mutaciones del DOM acumulado por los setters
+    /// JS de `textContent` / `innerHTML` desde el último drain. Devuelve
+    /// un `Vec<DomMutation>` en orden de aplicación. El chrome las
+    /// aplica al `BoxTree` y re-renderiza.
+    ///
+    /// Pensado para llamarse después de cada `eval()` / `tick()` /
+    /// `dispatch_event()`. Idempotente: dos drains seguidos sin
+    /// operaciones intermedias devuelven `[]`.
+    pub fn drain_dom_mutations(&mut self) -> Vec<DomMutation> {
+        let s = match self.eval("globalThis.__puriy_drain_dirty()") {
+            Ok(JsValue::String(s)) => s,
+            _ => return Vec::new(),
+        };
+        if s.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for entry in s.split('\u{001F}') {
+            let mut parts = entry.splitn(3, '\u{001E}');
+            let id = parts.next().unwrap_or("").to_string();
+            let kind = parts.next().unwrap_or("").to_string();
+            let value = parts.next().unwrap_or("").to_string();
+            if id.is_empty() {
+                continue;
+            }
+            out.push(DomMutation { id, kind, value });
+        }
+        out
     }
 
     /// Dispara los handlers `on<event_type>` y cada listener
@@ -906,6 +984,22 @@ pub struct ElementSnapshot {
     pub id: String,
     pub tag_name: String,
     pub text_content: String,
+}
+
+/// Mutación del DOM publicada por un setter JS (`textContent`,
+/// `innerHTML`) y drenada por [`JsRuntime::drain_dom_mutations`]. El
+/// chrome la aplica al `BoxTree` y re-renderiza.
+///
+/// `kind` identifica qué propiedad cambió:
+/// - `"text"` — `textContent` o `innerHTML`. `value` es el nuevo string.
+///
+/// Fase 7.5c sólo soporta `text`; futuras fases agregarán `style`,
+/// `attr`, `addChild`/`removeChild`, etc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomMutation {
+    pub id: String,
+    pub kind: String,
+    pub value: String,
 }
 
 /// Errores devueltos por el runtime.
@@ -1813,6 +1907,115 @@ mod tests {
             rt.eval("document.getElementById('b').textContent").expect("e"),
             JsValue::String("dos".into())
         );
+    }
+
+    #[test]
+    fn set_text_content_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("hero", "h1", "viejo")]).expect("e");
+        // Antes del setter, no hay mutaciones.
+        assert!(rt.drain_dom_mutations().is_empty());
+        rt.eval("document.getElementById('hero').textContent = 'nuevo'")
+            .expect("set");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].id, "hero");
+        assert_eq!(muts[0].kind, "text");
+        assert_eq!(muts[0].value, "nuevo");
+    }
+
+    #[test]
+    fn set_inner_html_se_trata_como_text_content() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "a")]).expect("e");
+        rt.eval("document.getElementById('x').innerHTML = '<b>raw</b>'")
+            .expect("set");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "text");
+        assert_eq!(muts[0].value, "<b>raw</b>");
+    }
+
+    #[test]
+    fn drain_es_idempotente() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "a")]).expect("e");
+        rt.eval("document.getElementById('x').textContent = 'b'")
+            .expect("e");
+        let first = rt.drain_dom_mutations();
+        assert_eq!(first.len(), 1);
+        let second = rt.drain_dom_mutations();
+        assert!(second.is_empty(), "segundo drain debe estar vacío");
+    }
+
+    #[test]
+    fn multiples_mutaciones_ordenadas() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("a", "div", "x"),
+            snap("b", "div", "y"),
+        ])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('a').textContent = 'A1'; \
+             document.getElementById('b').textContent = 'B1'; \
+             document.getElementById('a').textContent = 'A2';",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 3);
+        assert_eq!(muts[0].id, "a");
+        assert_eq!(muts[0].value, "A1");
+        assert_eq!(muts[1].id, "b");
+        assert_eq!(muts[1].value, "B1");
+        assert_eq!(muts[2].id, "a");
+        assert_eq!(muts[2].value, "A2");
+    }
+
+    #[test]
+    fn text_content_get_devuelve_el_valor_actualizado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "inicial")]).expect("e");
+        rt.eval("document.getElementById('x').textContent = 'actualizado'")
+            .expect("set");
+        let v = rt.eval("document.getElementById('x').textContent").expect("get");
+        assert_eq!(v, JsValue::String("actualizado".into()));
+    }
+
+    #[test]
+    fn set_elements_resetea_el_buffer_dirty() {
+        // Si una página recarga, las mutaciones pendientes de la
+        // página anterior NO deben filtrarse.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "a")]).expect("e");
+        rt.eval("document.getElementById('x').textContent = 'b'")
+            .expect("e");
+        // Page recarga: nuevo snapshot — el buffer debe quedar vacío.
+        rt.set_elements(&[snap("y", "div", "z")]).expect("e2");
+        let muts = rt.drain_dom_mutations();
+        assert!(muts.is_empty(), "mutación previa fugó: {muts:?}");
+    }
+
+    #[test]
+    fn mutacion_con_caracteres_especiales_se_preserva() {
+        // RS/US son nuestros delimiters — el value puede contener
+        // newlines, comillas, etc. sin romper la decodificación.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval(
+            "document.getElementById('x').textContent = 'línea1\\nlínea2\\t\"foo\"'",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].value, "línea1\nlínea2\t\"foo\"");
     }
 
     #[test]

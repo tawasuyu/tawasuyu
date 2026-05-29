@@ -1765,6 +1765,10 @@ fn run_scripts_on_tab(
         prev_stdout_len = new_stdout.len();
         prev_stderr_len = new_stderr.len();
     }
+    // Aplica al box_tree cualquier mutación que los scripts iniciales
+    // hayan hecho via `el.textContent = ...` (typeahead, contadores
+    // inicializados, sustituciones de placeholders, etc).
+    apply_dom_mutations(t);
 }
 
 /// Walka el `BoxTree` y arma un `Vec<ElementSnapshot>` para cada nodo
@@ -1841,6 +1845,7 @@ fn dispatch_js_event(m: &mut Model, element_id: &str, event_type: &str, now_ms: 
             t.js_summary.errors += 1;
         }
     }
+    apply_dom_mutations(t);
 }
 
 /// Avanza el reloj de cada `JsRuntime` vivo del Model al `now_ms` actual
@@ -1874,6 +1879,31 @@ fn tick_js_runtimes(m: &mut Model, now_ms: u64) {
                 t.js_summary.errors += 1;
             }
         }
+        apply_dom_mutations(t);
+    }
+}
+
+/// Drena el buffer de mutaciones del DOM del runtime de la pestaña y
+/// las aplica al `box_tree`. Llamado después de cada operación que
+/// pueda haber escrito a `textContent`/`innerHTML` (run_scripts,
+/// dispatch_event, tick). Si no hay mutaciones, retorna sin tocar el
+/// árbol — costo: un eval mini que devuelve `''`.
+///
+/// Mutaciones sobre ids que no existen en el árbol se silencian (el
+/// JS puede haber retenido un handle de una página anterior, o el id
+/// puede haber sido renombrado por un script DOM-mutating no soportado).
+fn apply_dom_mutations(t: &mut TabState) {
+    let Some(rt) = t.js.as_mut() else { return };
+    let muts = rt.drain_dom_mutations();
+    if muts.is_empty() {
+        return;
+    }
+    let Some(bt) = t.box_tree.as_mut() else { return };
+    for m in muts {
+        if m.kind == "text" {
+            bt.set_element_text_content(&m.id, &m.value);
+        }
+        // Otros kinds (`style`, `attr`, ...) llegarán en fases siguientes.
     }
 }
 
@@ -4288,6 +4318,105 @@ mod tests {
         );
         let rt = m.tabs[0].js.as_ref().expect("rt");
         assert!(rt.stdout().contains("clicked"), "stdout: {:?}", rt.stdout());
+    }
+
+    #[test]
+    fn run_scripts_aplica_text_content_mutations_al_box_tree() {
+        // Un script de carga muta textContent — el box_tree debe
+        // reflejarlo cuando el chrome chequea las hojas de texto.
+        let mut t = TabState::new("about:test".into());
+        t.title = "T".into();
+        t.url = "about:test".into();
+        t.box_tree = Some(parse(
+            r#"<body><h1 id="hero">viejo</h1></body>"#,
+        ));
+        let scripts = vec![puriy_engine::ScriptInfo {
+            src: None,
+            inline: Some(
+                "document.getElementById('hero').textContent = 'nuevo'".into(),
+            ),
+            type_attr: None,
+            is_module: false,
+            defer: false,
+            async_: false,
+        }];
+        run_scripts_on_tab(&mut t, &scripts, 0);
+        let bt = t.box_tree.as_ref().expect("box_tree");
+        let mut found_new = false;
+        let mut found_old = false;
+        bt.walk(|b| {
+            if b.text.as_deref() == Some("nuevo") { found_new = true; }
+            if b.text.as_deref() == Some("viejo") { found_old = true; }
+        });
+        assert!(found_new, "esperaba ver 'nuevo' tras la mutación");
+        assert!(!found_old, "'viejo' debería haberse reemplazado");
+    }
+
+    #[test]
+    fn dispatch_event_aplica_mutaciones_post_click() {
+        // Handler de click muta textContent — al despachar el click, el
+        // box_tree debe quedar actualizado.
+        let mut m = model_con_script("/* boot */");
+        // El runtime existe (boot lo creó). Registramos un elemento +
+        // handler que muta textContent del mismo elemento.
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "out".into(),
+            tag_name: "div".into(),
+            text_content: "antes".into(),
+        }])
+        .expect("set_elements");
+        rt.eval(
+            "document.getElementById('out').onclick = function(){ \
+                document.getElementById('out').textContent = 'después'; \
+             }",
+        )
+        .expect("e");
+        // Reemplazo manual del box_tree para tener un nodo con
+        // element_id='out' que pueda mutarse.
+        m.tabs[0].box_tree = Some(parse(
+            r#"<body><div id="out">antes</div></body>"#,
+        ));
+        dispatch_js_event(&mut m, "out", "click", 0);
+        let bt = m.tabs[0].box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.text.as_deref() == Some("después") {
+                found = true;
+            }
+        });
+        assert!(found, "el handler debió mutar 'antes' a 'después'");
+    }
+
+    #[test]
+    fn tick_aplica_mutaciones_de_settimeout() {
+        let mut m = model_con_script("/* boot */");
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "clock".into(),
+            tag_name: "span".into(),
+            text_content: "00:00".into(),
+        }])
+        .expect("e");
+        rt.set_now_ms(0).expect("now");
+        rt.eval(
+            "setTimeout(function(){ \
+                document.getElementById('clock').textContent = '10:00'; \
+             }, 50)",
+        )
+        .expect("e");
+        m.tabs[0].box_tree = Some(parse(
+            r#"<body><span id="clock">00:00</span></body>"#,
+        ));
+        tick_js_runtimes(&mut m, 100);
+        let bt = m.tabs[0].box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.text.as_deref() == Some("10:00") {
+                found = true;
+            }
+        });
+        assert!(found, "tick debió aplicar la mutación del setTimeout");
     }
 
     #[test]
