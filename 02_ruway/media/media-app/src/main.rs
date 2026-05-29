@@ -102,6 +102,45 @@ enum Msg {
     CycleSpeed,
     CycleRepeat,
     ToggleShuffle,
+    /// Swap dos tiles del grid reorderable. `from`/`to` son índices
+    /// sobre `Model::tile_order`.
+    SwapTile { from: usize, to: usize },
+}
+
+/// Tiles del grid reorderable bajo el canvas. El orden por defecto
+/// agrupa por afinidad: transporte/volumen/playlist arriba (cosas que
+/// el usuario toca seguido), recorder/visores abajo. El usuario los
+/// arrastra de la title bar para reorganizar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TileId {
+    Transport,
+    Volume,
+    Playlist,
+    Recorder,
+    Waveform,
+    Waterfall,
+}
+
+const DEFAULT_TILE_ORDER: &[TileId] = &[
+    TileId::Transport,
+    TileId::Volume,
+    TileId::Playlist,
+    TileId::Recorder,
+    TileId::Waveform,
+    TileId::Waterfall,
+];
+
+impl TileId {
+    fn label(self) -> &'static str {
+        match self {
+            TileId::Transport => "transport",
+            TileId::Volume => "volume",
+            TileId::Playlist => "playlist",
+            TileId::Recorder => "recorder",
+            TileId::Waveform => "waveform",
+            TileId::Waterfall => "waterfall",
+        }
+    }
 }
 
 const VOLUME_STEP: f32 = 0.1;
@@ -114,6 +153,9 @@ const SPEED_STEPS: &[f32] = &[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 struct Model {
     frames: u64,
     started_at: Instant,
+    /// Orden actual de los tiles del grid de controles. Drag-to-swap
+    /// vía `Msg::SwapTile` lo permuta in-place.
+    tile_order: Vec<TileId>,
 }
 
 struct Pipeline {
@@ -750,6 +792,7 @@ impl App for MediaApp {
         Model {
             frames: 0,
             started_at: Instant::now(),
+            tile_order: DEFAULT_TILE_ORDER.to_vec(),
         }
     }
 
@@ -759,6 +802,13 @@ impl App for MediaApp {
                 frames: model.frames.wrapping_add(1),
                 ..model
             },
+            Msg::SwapTile { from, to } => {
+                let mut m = model;
+                if from != to && from < m.tile_order.len() && to < m.tile_order.len() {
+                    m.tile_order.swap(from, to);
+                }
+                m
+            }
             Msg::TogglePause => {
                 pause().toggle();
                 model
@@ -868,152 +918,12 @@ impl App for MediaApp {
         let secs = model.started_at.elapsed().as_secs_f32().max(0.001);
         let fps = model.frames as f32 / secs;
 
-        let paused = pause().is_paused();
-        let pause_btn = chip_button(
-            if paused { "play" } else { "pause" },
-            if paused {
-                Color::from_rgba8(60, 140, 90, 255)
-            } else {
-                Color::from_rgba8(55, 65, 80, 255)
-            },
-            Color::from_rgba8(220, 230, 245, 255),
-            Msg::TogglePause,
-        );
-
-        let recording = recorder().is_recording();
-        let rec_btn = chip_button(
-            if recording { "stop" } else { "rec" },
-            if recording {
-                Color::from_rgba8(200, 65, 65, 255)
-            } else {
-                Color::from_rgba8(55, 65, 80, 255)
-            },
-            Color::from_rgba8(245, 235, 235, 255),
-            Msg::ToggleRecord,
-        );
-
-        let snap_btn = chip_button(
-            "snap",
-            Color::from_rgba8(55, 65, 80, 255),
-            Color::from_rgba8(220, 230, 245, 255),
-            Msg::Snapshot,
-        );
-
-        let seekable = playlist_slot()
-            .get()
-            .and_then(|o| o.as_ref())
-            .is_some();
-        let seek_bg = if seekable {
-            Color::from_rgba8(55, 65, 80, 255)
-        } else {
-            // Apagado: gris oscuro para señalizar "no aplica".
-            Color::from_rgba8(40, 46, 56, 255)
-        };
-        let seek_fg = if seekable {
-            Color::from_rgba8(220, 230, 245, 255)
-        } else {
-            Color::from_rgba8(100, 110, 125, 255)
-        };
-        let back_btn = chip_button("«5s", seek_bg, seek_fg, Msg::SeekBack);
-        let fwd_btn = chip_button("5s»", seek_bg, seek_fg, Msg::SeekFwd);
-
-        let playlist_active = playlist_slot()
-            .get()
-            .and_then(|o| o.as_ref())
-            .map(|h| h.lock().len() > 1)
-            .unwrap_or(false);
-        let pl_bg = if playlist_active {
-            Color::from_rgba8(55, 65, 80, 255)
-        } else {
-            Color::from_rgba8(40, 46, 56, 255)
-        };
-        let pl_fg = if playlist_active {
-            Color::from_rgba8(220, 230, 245, 255)
-        } else {
-            Color::from_rgba8(100, 110, 125, 255)
-        };
-        let prev_btn = chip_button("⟨trk", pl_bg, pl_fg, Msg::PrevTrack);
-        let next_btn = chip_button("trk⟩", pl_bg, pl_fg, Msg::NextTrack);
-
-        let current_speed = playlist_slot()
-            .get()
-            .and_then(|o| o.as_ref())
-            .map(|h| h.lock().current_speed())
-            .unwrap_or(1.0);
-        let speed_label = format!("{:.2}×", current_speed);
-        let speed_bg = if seekable {
-            Color::from_rgba8(55, 65, 80, 255)
-        } else {
-            Color::from_rgba8(40, 46, 56, 255)
-        };
-        let speed_fg = if seekable {
-            Color::from_rgba8(220, 230, 245, 255)
-        } else {
-            Color::from_rgba8(100, 110, 125, 255)
-        };
-        let speed_btn = chip_button(&speed_label, speed_bg, speed_fg, Msg::CycleSpeed);
-
-        let (repeat_label, shuffle_on) = playlist_slot()
-            .get()
-            .and_then(|o| o.as_ref())
-            .map(|h| {
-                let pl = h.lock();
-                (pl.repeat_mode().label(), pl.shuffle_on())
-            })
-            .unwrap_or(("rep-", false));
-        let loop_bg = if seekable {
-            Color::from_rgba8(55, 65, 80, 255)
-        } else {
-            Color::from_rgba8(40, 46, 56, 255)
-        };
-        let loop_fg = if seekable {
-            Color::from_rgba8(220, 230, 245, 255)
-        } else {
-            Color::from_rgba8(100, 110, 125, 255)
-        };
-        let loop_btn = chip_button(repeat_label, loop_bg, loop_fg, Msg::CycleRepeat);
-        let shuf_bg = if shuffle_on {
-            Color::from_rgba8(60, 110, 150, 255)
-        } else {
-            loop_bg
-        };
-        let shuf_btn = chip_button(
-            if shuffle_on { "shuf!" } else { "shuf-" },
-            shuf_bg,
-            loop_fg,
-            Msg::ToggleShuffle,
-        );
-
-        let vol_label = format!("vol {:.0}%", (volume().get() * 100.0).round());
-        let vol_text = View::new(Style {
-            size: Size {
-                width: length(82.0_f32),
-                height: length(36.0_f32),
-            },
-            justify_content: Some(JustifyContent::Center),
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text(vol_label, 13.0, Color::from_rgba8(180, 195, 215, 255));
-        let vol_dn = chip_button(
-            "vol−",
-            Color::from_rgba8(55, 65, 80, 255),
-            Color::from_rgba8(220, 230, 245, 255),
-            Msg::VolDown,
-        );
-        let vol_up = chip_button(
-            "vol+",
-            Color::from_rgba8(55, 65, 80, 255),
-            Color::from_rgba8(220, 230, 245, 255),
-            Msg::VolUp,
-        );
-
+        // --- Hero: canvas de video con título overlay arriba ---
         let title_text = View::new(Style {
             size: Size {
-                width: auto(),
-                height: percent(1.0_f32),
+                width: percent(1.0_f32),
+                height: length(36.0_f32),
             },
-            flex_grow: 1.0,
             justify_content: Some(JustifyContent::Center),
             align_items: Some(AlignItems::Center),
             ..Default::default()
@@ -1024,79 +934,62 @@ impl App for MediaApp {
             Color::from_rgba8(220, 230, 245, 255),
         );
 
-        let title = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(44.0_f32),
-            },
-            gap: Size {
-                width: length(12.0_f32),
-                height: length(0.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .children(vec![
-            prev_btn,
-            pause_btn,
-            next_btn,
-            rec_btn,
-            snap_btn,
-            back_btn,
-            fwd_btn,
-            speed_btn,
-            loop_btn,
-            shuf_btn,
-            title_text,
-            vol_dn,
-            vol_text,
-            vol_up,
-            meters_panel(),
-        ]);
-
-        let canvas_style = Style {
+        let canvas = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
                 height: auto(),
             },
             flex_grow: 1.0,
             ..Default::default()
+        })
+        .fill(Color::from_rgba8(10, 12, 18, 255))
+        .radius(10.0)
+        .gpu_paint_with(move |device, queue, encoder, view, rect, viewport| {
+            let pipe = pipeline_for(device, queue);
+            let mut last = pipe.last_tick.lock();
+            let now = Instant::now();
+            let dt = now - *last;
+            *last = now;
+            let mut buf = pipe.buf.lock();
+            if let Some((w, h)) = pipe.source.lock().tick(dt, &mut buf) {
+                pipe.surface.upload(&buf, w, h);
+                *pipe.last_dim.lock() = (w, h);
+            }
+            drop(buf);
+            pipe.surface.blit(queue, encoder, view, rect, viewport);
+        });
+
+        let subs_strip = subtitle_strip();
+
+        // --- Grilla reorderable de controles + visores ---
+        // 3 cols × 2 rows; el orden lo decide el usuario arrastrando
+        // por la title bar. Default `[Transport, Volume, Playlist,
+        // Recorder, Waveform, Waterfall]`.
+        use llimphi_widget_tiled::{
+            tiled_view_reorderable_cols, TileSpec, TiledPalette,
         };
-
-        let canvas = View::new(canvas_style)
-            .fill(Color::from_rgba8(10, 12, 18, 255))
-            .radius(10.0)
-            .gpu_paint_with(move |device, queue, encoder, view, rect, viewport| {
-                let pipe = pipeline_for(device, queue);
-                let mut last = pipe.last_tick.lock();
-                let now = Instant::now();
-                let dt = now - *last;
-                *last = now;
-                let mut buf = pipe.buf.lock();
-                if let Some((w, h)) = pipe.source.lock().tick(dt, &mut buf) {
-                    pipe.surface.upload(&buf, w, h);
-                    *pipe.last_dim.lock() = (w, h);
-                }
-                drop(buf);
-                pipe.surface.blit(queue, encoder, view, rect, viewport);
-            });
-
-        let visor_row = View::new(Style {
-            flex_direction: FlexDirection::Row,
+        let palette = TiledPalette::from_theme(&llimphi_theme::Theme::dark());
+        let tiles: Vec<TileSpec<Msg>> = model
+            .tile_order
+            .iter()
+            .map(|&id| TileSpec {
+                label: id.label().into(),
+                content: tile_content(id),
+            })
+            .collect();
+        let tile_grid = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
-                height: length(96.0_f32),
-            },
-            gap: Size {
-                width: length(10.0_f32),
-                height: length(0.0_f32),
+                height: length(220.0_f32),
             },
             ..Default::default()
         })
-        .children(vec![waveform_panel(), waterfall_panel()]);
-
-        let subs_strip = subtitle_strip();
+        .children(vec![tiled_view_reorderable_cols(
+            tiles,
+            3,
+            |from, to| Some(Msg::SwapTile { from, to }),
+            &palette,
+        )]);
 
         let time_label = playlist_slot()
             .get()
@@ -1116,7 +1009,7 @@ impl App for MediaApp {
         let footer = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
-                height: length(28.0_f32),
+                height: length(24.0_f32),
             },
             justify_content: Some(JustifyContent::Center),
             align_items: Some(AlignItems::Center),
@@ -1124,7 +1017,7 @@ impl App for MediaApp {
         })
         .text(
             format!("ticks {} · ui ≈ {fps:.1} fps{time_label}", model.frames),
-            14.0,
+            13.0,
             Color::from_rgba8(150, 165, 185, 255),
         );
 
@@ -1136,19 +1029,242 @@ impl App for MediaApp {
             },
             gap: Size {
                 width: length(0.0_f32),
-                height: length(12.0_f32),
+                height: length(10.0_f32),
             },
             padding: TaffyRect {
-                left: length(24.0_f32),
-                right: length(24.0_f32),
-                top: length(16.0_f32),
-                bottom: length(16.0_f32),
+                left: length(16.0_f32),
+                right: length(16.0_f32),
+                top: length(12.0_f32),
+                bottom: length(12.0_f32),
             },
             ..Default::default()
         })
         .fill(Color::from_rgba8(22, 26, 34, 255))
-        .children(vec![title, canvas, subs_strip, visor_row, footer])
+        .children(vec![title_text, canvas, subs_strip, tile_grid, footer])
     }
+}
+
+/// Despacha por TileId al builder concreto. Cada tile arma su propio
+/// contenido — controles co-localizados con la info que afectan.
+fn tile_content(id: TileId) -> View<Msg> {
+    match id {
+        TileId::Transport => transport_tile(),
+        TileId::Volume => volume_tile(),
+        TileId::Playlist => playlist_tile(),
+        TileId::Recorder => recorder_tile(),
+        TileId::Waveform => waveform_panel(),
+        TileId::Waterfall => waterfall_panel(),
+    }
+}
+
+/// Tile de transporte: prev/play-pause/next + back/fwd 5s. Los chips
+/// de track se apagan si no hay playlist.
+fn transport_tile() -> View<Msg> {
+    let paused = pause().is_paused();
+    let pause_btn = chip_button(
+        if paused { "play" } else { "pause" },
+        if paused {
+            Color::from_rgba8(60, 140, 90, 255)
+        } else {
+            Color::from_rgba8(55, 65, 80, 255)
+        },
+        Color::from_rgba8(220, 230, 245, 255),
+        Msg::TogglePause,
+    );
+
+    let playlist_active = playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .map(|h| h.lock().len() > 1)
+        .unwrap_or(false);
+    let pl_bg = if playlist_active {
+        Color::from_rgba8(55, 65, 80, 255)
+    } else {
+        Color::from_rgba8(40, 46, 56, 255)
+    };
+    let pl_fg = if playlist_active {
+        Color::from_rgba8(220, 230, 245, 255)
+    } else {
+        Color::from_rgba8(100, 110, 125, 255)
+    };
+    let prev_btn = chip_button("⟨trk", pl_bg, pl_fg, Msg::PrevTrack);
+    let next_btn = chip_button("trk⟩", pl_bg, pl_fg, Msg::NextTrack);
+
+    let seekable = playlist_slot().get().and_then(|o| o.as_ref()).is_some();
+    let seek_bg = if seekable {
+        Color::from_rgba8(55, 65, 80, 255)
+    } else {
+        Color::from_rgba8(40, 46, 56, 255)
+    };
+    let seek_fg = if seekable {
+        Color::from_rgba8(220, 230, 245, 255)
+    } else {
+        Color::from_rgba8(100, 110, 125, 255)
+    };
+    let back_btn = chip_button("«5s", seek_bg, seek_fg, Msg::SeekBack);
+    let fwd_btn = chip_button("5s»", seek_bg, seek_fg, Msg::SeekFwd);
+
+    tile_chip_grid(vec![prev_btn, pause_btn, next_btn, back_btn, fwd_btn])
+}
+
+/// Tile de volumen: vol-/vol+ con el porcentaje al medio y la barra
+/// de peak/RMS abajo. La info (los medidores) está pegada al control
+/// (vol+/-) — el usuario ve el efecto del slider sin saltar de tile.
+fn volume_tile() -> View<Msg> {
+    let vol_label = format!("vol {:.0}%", (volume().get() * 100.0).round());
+    let vol_text = View::new(Style {
+        size: Size {
+            width: length(76.0_f32),
+            height: length(36.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(vol_label, 13.0, Color::from_rgba8(180, 195, 215, 255));
+    let vol_dn = chip_button(
+        "vol−",
+        Color::from_rgba8(55, 65, 80, 255),
+        Color::from_rgba8(220, 230, 245, 255),
+        Msg::VolDown,
+    );
+    let vol_up = chip_button(
+        "vol+",
+        Color::from_rgba8(55, 65, 80, 255),
+        Color::from_rgba8(220, 230, 245, 255),
+        Msg::VolUp,
+    );
+
+    let row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(40.0_f32),
+        },
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![vol_dn, vol_text, vol_up]);
+
+    let meters = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(48.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![meters_panel()]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![row, meters])
+}
+
+/// Tile de playlist: repeat/shuffle/speed. Los tres están apagados si
+/// no hay playlist activa.
+fn playlist_tile() -> View<Msg> {
+    let seekable = playlist_slot().get().and_then(|o| o.as_ref()).is_some();
+    let bg_on = Color::from_rgba8(55, 65, 80, 255);
+    let bg_off = Color::from_rgba8(40, 46, 56, 255);
+    let fg_on = Color::from_rgba8(220, 230, 245, 255);
+    let fg_off = Color::from_rgba8(100, 110, 125, 255);
+    let bg = if seekable { bg_on } else { bg_off };
+    let fg = if seekable { fg_on } else { fg_off };
+
+    let current_speed = playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .map(|h| h.lock().current_speed())
+        .unwrap_or(1.0);
+    let speed_label = format!("{:.2}×", current_speed);
+    let speed_btn = chip_button(&speed_label, bg, fg, Msg::CycleSpeed);
+
+    let (repeat_label, shuffle_on) = playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .map(|h| {
+            let pl = h.lock();
+            (pl.repeat_mode().label(), pl.shuffle_on())
+        })
+        .unwrap_or(("rep-", false));
+    let loop_btn = chip_button(repeat_label, bg, fg, Msg::CycleRepeat);
+    let shuf_bg = if shuffle_on {
+        Color::from_rgba8(60, 110, 150, 255)
+    } else {
+        bg
+    };
+    let shuf_btn = chip_button(
+        if shuffle_on { "shuf!" } else { "shuf-" },
+        shuf_bg,
+        fg,
+        Msg::ToggleShuffle,
+    );
+
+    tile_chip_grid(vec![loop_btn, shuf_btn, speed_btn])
+}
+
+/// Tile de captura: rec + snap. Cuando `rec` está activo el chip se
+/// pinta en rojo y dice `stop`.
+fn recorder_tile() -> View<Msg> {
+    let recording = recorder().is_recording();
+    let rec_btn = chip_button(
+        if recording { "stop" } else { "rec" },
+        if recording {
+            Color::from_rgba8(200, 65, 65, 255)
+        } else {
+            Color::from_rgba8(55, 65, 80, 255)
+        },
+        Color::from_rgba8(245, 235, 235, 255),
+        Msg::ToggleRecord,
+    );
+    let snap_btn = chip_button(
+        "snap",
+        Color::from_rgba8(55, 65, 80, 255),
+        Color::from_rgba8(220, 230, 245, 255),
+        Msg::Snapshot,
+    );
+    tile_chip_grid(vec![rec_btn, snap_btn])
+}
+
+/// Layout helper: fila de chips centrada vertical y horizontalmente
+/// dentro del cuerpo del tile. Lo comparten los tiles de transport,
+/// playlist y recorder — toman lo que el tiled les dé y centran.
+fn tile_chip_grid(chips: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        // Wrap permite que si la columna se hace estrecha los chips
+        // bajen de fila en vez de cortarse.
+        flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
+        ..Default::default()
+    })
+    .children(chips)
 }
 
 /// Franja debajo del canvas que muestra el cue de subtítulo activo

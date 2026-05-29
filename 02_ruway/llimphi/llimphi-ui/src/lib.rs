@@ -406,6 +406,16 @@ pub struct View<Msg> {
     pub on_pointer_enter: Option<Msg>,
     /// Msg a emitir cuando el cursor sale del rect del nodo.
     pub on_pointer_leave: Option<Msg>,
+    /// Opacidad multiplicada sobre TODO el subtree (este nodo + hijos),
+    /// en `[0.0, 1.0]`. Se realiza con `scene.push_layer(Mix::Normal, a, …)`
+    /// alrededor del rect del nodo: el subárbol se rasteriza en una capa
+    /// intermedia y se compone al alfa indicado contra lo que ya hay
+    /// detrás. `None` = sin capa (caso de la abrumadora mayoría de
+    /// nodos). Útil para fade-in/out de overlays, ghosts mientras se
+    /// arrastra, modales que aparecen, panels "vidrio". Note que la
+    /// composición tiene costo (allocate + blit), por lo que sólo
+    /// poblar este slot cuando hace falta — no es un atributo gratis.
+    pub alpha: Option<f32>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -433,12 +443,24 @@ impl<Msg> View<Msg> {
             on_drop: None,
             drop_hover_fill: None,
             clip: false,
+            alpha: None,
             children: Vec::new(),
         }
     }
 
     pub fn fill(mut self, color: Color) -> Self {
         self.fill = Some(color);
+        self
+    }
+
+    /// Opacidad uniforme aplicada a este nodo y todos sus descendientes
+    /// vía `scene.push_layer(Mix::Normal, a, …)`. Pensado para fade-in/out
+    /// de overlays, toasts y modales sin tener que tunear el alpha de
+    /// cada color del subtree. Valores fuera de `[0.0, 1.0]` se clampean.
+    /// Hace que el subtree se componga en una capa intermedia — usar sólo
+    /// cuando sea necesario (no es gratuito).
+    pub fn alpha(mut self, a: f32) -> Self {
+        self.alpha = Some(a.clamp(0.0, 1.0));
         self
     }
 
@@ -741,6 +763,7 @@ struct MountedNode<Msg> {
     clip: bool,
     on_pointer_enter: Option<Msg>,
     on_pointer_leave: Option<Msg>,
+    alpha: Option<f32>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.
@@ -783,6 +806,7 @@ fn mount_recursive<Msg: Clone>(
         clip,
         on_pointer_enter,
         on_pointer_leave,
+        alpha,
         children,
     } = v;
     let parent_idx = out.len();
@@ -808,6 +832,7 @@ fn mount_recursive<Msg: Clone>(
         clip,
         on_pointer_enter,
         on_pointer_leave,
+        alpha,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());
@@ -832,15 +857,18 @@ fn paint<Msg>(
     hover_idx: Option<usize>,
     drop_hover_idx: Option<usize>,
 ) {
-    // Stack de subtree_end de los nodos con `clip = true` que están
-    // activos. Cuando el índice del próximo nodo cruza el top, pop_layer.
-    let mut clip_stack: Vec<usize> = Vec::new();
+    // Stack de subtree_end de los `push_layer` activos (clip y/o alpha).
+    // Vello requiere pop_layer en orden LIFO estricto, así que mantenemos
+    // un único stack común y popeamos en el orden en que se pushearon.
+    // Dos entradas con el mismo `subtree_end` (alpha + clip sobre el
+    // mismo nodo) se cierran en el orden inverso al push.
+    let mut layer_stack: Vec<usize> = Vec::new();
     for (idx, node) in mounted.nodes.iter().enumerate() {
-        // Cierre de clips que ya quedaron atrás (idx ≥ subtree_end).
-        while let Some(&end) = clip_stack.last() {
+        // Cierre de capas que ya quedaron atrás (idx ≥ subtree_end).
+        while let Some(&end) = layer_stack.last() {
             if idx >= end {
                 scene.pop_layer();
-                clip_stack.pop();
+                layer_stack.pop();
             } else {
                 break;
             }
@@ -848,6 +876,24 @@ fn paint<Msg>(
         let Some(r) = computed.get(node.id) else {
             continue;
         };
+        // Alpha de subtree: push ANTES de cualquier paint de este nodo
+        // para que fill/text/image/painter/children entren en la misma
+        // capa y se compongan juntos al alfa indicado. Si el nodo tiene
+        // hijos, su `subtree_end > idx + 1` y la capa permanece abierta
+        // hasta que el loop alcance el primer índice fuera del subárbol.
+        // Para nodos hoja con alpha el push y el pop son consecutivos —
+        // funcionalmente equivalente a multiplicar el alpha del fill,
+        // pero permite usar el mismo API sin distinguir hoja vs rama.
+        if let Some(a) = node.alpha {
+            let rect = KurboRect::new(
+                r.x as f64,
+                r.y as f64,
+                (r.x + r.w) as f64,
+                (r.y + r.h) as f64,
+            );
+            scene.push_layer(Mix::Normal, a, Affine::IDENTITY, &rect);
+            layer_stack.push(node.subtree_end);
+        }
         // Prioridad de pintura: drop-hover (drag activo) > hover normal >
         // fill base. Solo aplica el override si el slot correspondiente
         // está poblado; el siguiente cae como fallback.
@@ -944,11 +990,11 @@ fn paint<Msg>(
                 (r.y + r.h) as f64,
             );
             scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &clip_rect);
-            clip_stack.push(node.subtree_end);
+            layer_stack.push(node.subtree_end);
         }
     }
-    // Cerrá clips que llegaron al final de la lista sin pop intermedio.
-    while clip_stack.pop().is_some() {
+    // Cerrá capas (clip + alpha) que llegaron al final sin pop intermedio.
+    while layer_stack.pop().is_some() {
         scene.pop_layer();
     }
 }

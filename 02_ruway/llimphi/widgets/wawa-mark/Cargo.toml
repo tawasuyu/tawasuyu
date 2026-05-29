@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-wawa-mark"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-wawa-mark — sello vectorial de wawa: rombo con degradado azul índigo → púrpura profundo + 'W' implícita en trazo blanco continuo + Merkle Core luminoso en la sutura. Sin tipografía, todo geometría."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

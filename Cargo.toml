@@ -188,6 +188,7 @@ members = [
     "02_ruway/llimphi/llimphi-theme",
     "02_ruway/llimphi/llimphi-surface",
     "02_ruway/llimphi/llimphi-ui",
+    "02_ruway/llimphi/llimphi-motion",
     "02_ruway/llimphi/llimphi-gpu-bench",
     "02_ruway/llimphi/android/clear-screen-android",
     "02_ruway/llimphi/android/vello-hello-android",
@@ -198,6 +199,7 @@ members = [
     "02_ruway/llimphi/widgets/card",
     "02_ruway/llimphi/widgets/context-menu",
     "02_ruway/llimphi/widgets/gallery",
+    "02_ruway/llimphi/widgets/wawa-mark",
     "02_ruway/llimphi/widgets/list",
     "02_ruway/llimphi/widgets/slider",
     "02_ruway/llimphi/widgets/splitter",
@@ -520,6 +522,8 @@ parley = "0.4"
 llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 # Paleta semántica compartida por las apps y los widgets.
 llimphi-theme = { path = "02_ruway/llimphi/llimphi-theme" }
+# Tweens y helpers de animación sobre el bucle Elm.
+llimphi-motion = { path = "02_ruway/llimphi/llimphi-motion" }
 # Widgets reusables sobre llimphi-ui — uno por crate.
 llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }
 llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }
@@ -548,6 +552,8 @@ llimphi-widget-text-input = { path = "02_ruway/llimphi/widgets/text-input" }
 llimphi-widget-tiled = { path = "02_ruway/llimphi/widgets/tiled" }
 llimphi-widget-nodegraph = { path = "02_ruway/llimphi/widgets/nodegraph" }
 llimphi-widget-tree = { path = "02_ruway/llimphi/widgets/tree" }
+# Sello vectorial wawa (rombo + W implícita + Merkle Core).
+llimphi-widget-wawa-mark = { path = "02_ruway/llimphi/widgets/wawa-mark" }
 
 # === Filesystem helpers ===
 directories = "5"

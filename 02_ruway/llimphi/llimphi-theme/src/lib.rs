@@ -18,6 +18,91 @@
 
 pub use llimphi_raster::peniko::Color;
 
+use std::time::Duration;
+
+// =====================================================================
+// Tokens transversales — motion, alpha, radius
+// =====================================================================
+//
+// Los widgets de elegancia (tooltip, toast, modal, spinner, splash, …)
+// comparten **duraciones**, **alphas** y **radios** para que el sistema
+// se sienta uno solo. Cada token es `const`: las apps pueden referenciar
+// `motion::NORMAL`/`alpha::SCRIM` directamente, o tomarlos del `Theme`
+// vía `theme.motion()` / `theme.alpha()` / `theme.radius()` cuando una
+// future variante por preset lo requiera.
+
+/// Duraciones canónicas (segundo nivel: rítmico, no nervioso, no
+/// soporífero). Los widgets eligen `FAST` para microinteracciones
+/// (hover, focus), `NORMAL` para transiciones principales (toast entrar,
+/// modal abrir) y `SLOW` para énfasis o entradas dramáticas (splash de
+/// boot).
+pub mod motion {
+    use super::Duration;
+
+    pub const FAST: Duration = Duration::from_millis(80);
+    pub const NORMAL: Duration = Duration::from_millis(160);
+    pub const SLOW: Duration = Duration::from_millis(320);
+
+    /// Easing estándar — cubic-out. Energía inicial, asentamiento suave.
+    /// La gran mayoría de transiciones de salida / aparición.
+    #[inline]
+    pub fn ease_out_cubic(t: f32) -> f32 {
+        let inv = 1.0 - t.clamp(0.0, 1.0);
+        1.0 - inv * inv * inv
+    }
+
+    /// Easing énfasis — cubic-in-out. Para movimientos que cruzan la
+    /// pantalla y necesitan acentuar el centro (modales, splashes).
+    #[inline]
+    pub fn ease_in_out_cubic(t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        if t < 0.5 {
+            4.0 * t * t * t
+        } else {
+            let f = -2.0 * t + 2.0;
+            1.0 - f * f * f / 2.0
+        }
+    }
+
+    /// Lineal — no es elegante pero a veces es lo correcto (barra de
+    /// progreso, valores numéricos crudos).
+    #[inline]
+    pub fn linear(t: f32) -> f32 {
+        t.clamp(0.0, 1.0)
+    }
+}
+
+/// Valores de opacidad alfa (0–255) para capas semánticas. Usar siempre
+/// que se quiera *transparencia coherente*. El widget que improvisa su
+/// propio alpha rompe la firma visual.
+pub mod alpha {
+    /// Scrim que cubre la app cuando hay overlay (menú/modal/picker).
+    /// Apaga el fondo lo justo para que el overlay tenga jerarquía,
+    /// sin ocultar contexto.
+    pub const SCRIM: u8 = 64;
+
+    /// Tinte aplicado a un panel "vidrio" sobre fondo activo (tooltip,
+    /// status hint). Casi opaco pero deja respirar.
+    pub const GLASS_PANEL: u8 = 232;
+
+    /// Elementos deshabilitados — visibles pero con menos peso.
+    pub const DISABLED: u8 = 140;
+
+    /// Hint sutil (text watermark, ghost) — apenas legible.
+    pub const HINT: u8 = 96;
+}
+
+/// Radios de esquina canónicos. La elegancia se construye en escalera:
+/// `XS` para chips e inputs, `SM` para botones, `MD` para paneles,
+/// `LG` para superficies grandes (toast, modal, card destacada).
+pub mod radius {
+    pub const XS: f64 = 2.0;
+    pub const SM: f64 = 4.0;
+    pub const MD: f64 = 8.0;
+    pub const LG: f64 = 12.0;
+    pub const XL: f64 = 20.0;
+}
+
 /// Paleta de la app. Slots semánticos que cubren los casos comunes
 /// (fondo, texto, hover, foco, acento). Los widgets reusables toman su
 /// `Palette` específico desde acá vía `Palette::from_theme(&theme)`.
