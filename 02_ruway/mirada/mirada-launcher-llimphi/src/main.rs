@@ -9,6 +9,7 @@ use mirada_launcher_llimphi::config::Config;
 use mirada_launcher_llimphi::panel;
 use mirada_launcher_llimphi::widget::{Msg, Widget};
 use mirada_launcher_llimphi::widgets;
+use mirada_launcher_llimphi::widgets::clock::TzMode;
 use mirada_launcher_llimphi::widgets::quake::QuakeInput;
 
 struct Model {
@@ -20,13 +21,18 @@ struct Model {
 }
 
 impl Model {
-    /// Recorre los tres slots dando acceso mutable a cada widget — uso
-    /// fundamental: `tick` periódico + rutear `Msg`s al quake.
     fn each_widget_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn Widget>> {
         self.left
             .iter_mut()
             .chain(self.center.iter_mut())
             .chain(self.right.iter_mut())
+    }
+
+    fn each_widget(&self) -> impl Iterator<Item = &Box<dyn Widget>> {
+        self.left
+            .iter()
+            .chain(self.center.iter())
+            .chain(self.right.iter())
     }
 
     fn route_to_quake(&mut self, msg: &Msg) {
@@ -35,6 +41,17 @@ impl Model {
                 q.apply(msg);
             }
         }
+    }
+
+    /// `true` si algún `QuakeInput` está abierto. Cuando lo está, Esc
+    /// lo cierra; cuando no, Esc cierra la app.
+    fn quake_open(&self) -> bool {
+        self.each_widget().any(|w| {
+            w.as_any()
+                .downcast_ref::<QuakeInput>()
+                .map(|q| q.open)
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -52,9 +69,12 @@ impl App for LauncherApp {
 
     fn init(handle: &Handle<Msg>) -> Model {
         let cfg = Config::load_or_default();
-        let left = cfg.panel.left.iter().map(widgets::build).collect();
-        let center = cfg.panel.center.iter().map(widgets::build).collect();
-        let right = cfg.panel.right.iter().map(widgets::build).collect();
+        let ctx = widgets::BuildCtx {
+            tz: TzMode::from_config(&cfg.general.timezone),
+        };
+        let left = cfg.panel.left.iter().map(|s| widgets::build(s, &ctx)).collect();
+        let center = cfg.panel.center.iter().map(|s| widgets::build(s, &ctx)).collect();
+        let right = cfg.panel.right.iter().map(|s| widgets::build(s, &ctx)).collect();
 
         handle.spawn_periodic(Duration::from_secs(1), || Msg::Tick);
 
@@ -89,16 +109,29 @@ impl App for LauncherApp {
         )
     }
 
-    fn on_key(_model: &Model, event: &KeyEvent) -> Option<Msg> {
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
         }
+        // 1) hotkeys declarados por los widgets (quake_input.hotkey, etc.)
+        for w in model.each_widget() {
+            if let Some(msg) = w.try_key(event) {
+                return Some(msg);
+            }
+        }
+        // 2) routing implícito del input quake mientras esté abierto.
+        // Como no chequeamos estado aquí, dejamos que `route_to_quake`
+        // lo filtre: si no está abierto, el Msg llega y el quake lo
+        // ignora.
+        // 2) si el quake está abierto, las teclas estándar van a él.
+        //    Si no, Esc cierra la app (Backspace/Enter quedan inertes).
+        let quake_open = model.quake_open();
         match &event.key {
-            Key::Named(NamedKey::F12) => Some(Msg::QuakeToggle),
+            Key::Named(NamedKey::Escape) if quake_open => Some(Msg::QuakeToggle),
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
-            Key::Named(NamedKey::Backspace) => Some(Msg::QuakeBackspace),
-            Key::Named(NamedKey::Enter) => Some(Msg::QuakeSubmit),
-            Key::Character(s) => s.chars().next().map(Msg::QuakeChar),
+            Key::Named(NamedKey::Backspace) if quake_open => Some(Msg::QuakeBackspace),
+            Key::Named(NamedKey::Enter) if quake_open => Some(Msg::QuakeSubmit),
+            Key::Character(s) if quake_open => s.chars().next().map(Msg::QuakeChar),
             _ => None,
         }
     }

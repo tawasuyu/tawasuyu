@@ -29,6 +29,7 @@ impl CpuMeter {
 
 impl Widget for CpuMeter {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any { self }
 
     fn tick(&mut self) {
         let Some((total, idle)) = read_cpu_total() else { return };

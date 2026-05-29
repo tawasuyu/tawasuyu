@@ -5,6 +5,7 @@
 //! (cómo se pinta dentro de la barra). El panel los agrupa en left/center/right.
 
 pub mod config;
+pub mod keys;
 pub mod panel;
 pub mod widget;
 pub mod widgets;

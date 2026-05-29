@@ -12,8 +12,31 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default)]
+    pub general: GeneralConfig,
+    #[serde(default)]
     pub panel: PanelConfig,
 }
+
+/// Settings transversales a todos los widgets: zona horaria, etc. NTP
+/// sync no se implementa acá — es responsabilidad del SO (en wawa, un
+/// daemon de akasha; en Linux, systemd-timesyncd / chrony).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GeneralConfig {
+    /// "auto" detecta del sistema (`TZ` env / `/etc/timezone` /
+    /// `/etc/localtime`). Si auto falla, cae a UTC.
+    /// Acepta también nombres IANA (`America/Lima`) cuando chrono-tz
+    /// esté disponible; en MVP sólo procesamos "auto" y "UTC".
+    #[serde(default = "default_timezone")]
+    pub timezone: String,
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self { timezone: default_timezone() }
+    }
+}
+
+fn default_timezone() -> String { "auto".into() }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PanelConfig {
@@ -61,7 +84,7 @@ impl WidgetSpec {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { panel: PanelConfig::default() }
+        Self { general: GeneralConfig::default(), panel: PanelConfig::default() }
     }
 }
 
@@ -75,9 +98,19 @@ impl Default for PanelConfig {
             left: vec![WidgetSpec { kind: "clock".into(), props: HashMap::new() }],
             center: vec![],
             right: vec![
+                WidgetSpec { kind: "brightness".into(), props: HashMap::new() },
+                WidgetSpec { kind: "volume".into(), props: HashMap::new() },
+                WidgetSpec { kind: "clipboard".into(), props: HashMap::new() },
                 WidgetSpec { kind: "ram_meter".into(), props: HashMap::new() },
                 WidgetSpec { kind: "cpu_meter".into(), props: HashMap::new() },
-                WidgetSpec { kind: "quake_input".into(), props: HashMap::new() },
+                WidgetSpec {
+                    kind: "quake_input".into(),
+                    props: [(
+                        "hotkey".to_string(),
+                        toml::Value::String("F12".to_string()),
+                    )]
+                    .into(),
+                },
             ],
         }
     }
@@ -132,9 +165,25 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.panel.position, "top");
         assert_eq!(cfg.panel.left[0].kind, "clock");
-        assert!(cfg.panel.right.iter().any(|w| w.kind == "ram_meter"));
-        assert!(cfg.panel.right.iter().any(|w| w.kind == "cpu_meter"));
-        assert!(cfg.panel.right.iter().any(|w| w.kind == "quake_input"));
+        for kind in ["brightness", "volume", "clipboard", "ram_meter", "cpu_meter", "quake_input"] {
+            assert!(
+                cfg.panel.right.iter().any(|w| w.kind == kind),
+                "default no incluye widget {kind}",
+            );
+        }
+    }
+
+    #[test]
+    fn quake_default_carries_f12_hotkey() {
+        let cfg = Config::default();
+        let q = cfg.panel.right.iter().find(|w| w.kind == "quake_input").unwrap();
+        assert_eq!(q.str_prop("hotkey", "?"), "F12");
+    }
+
+    #[test]
+    fn general_defaults_timezone_auto() {
+        let cfg = Config::default();
+        assert_eq!(cfg.general.timezone, "auto");
     }
 
     #[test]

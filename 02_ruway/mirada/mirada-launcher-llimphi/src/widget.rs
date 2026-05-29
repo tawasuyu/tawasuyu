@@ -5,7 +5,7 @@
 //! `Vec<Box<dyn Widget>>` por slot (left/center/right).
 
 use llimphi_theme::Theme;
-use llimphi_ui::View;
+use llimphi_ui::{KeyEvent, View};
 
 /// Mensajes que la app entiende. Los widgets que reaccionan a input los
 /// emiten desde su `view()` o desde `on_key` del App.
@@ -40,4 +40,15 @@ pub trait Widget: Send + 'static {
     /// Acceso `Any` para downcast a un widget concreto cuando la app
     /// necesita mutarlo con un mensaje específico.
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// Acceso `Any` de sólo lectura — para que la app loop pueda
+    /// preguntar sobre estado interno sin tener que abrirlo como mut
+    /// (p. ej. "¿está abierto el quake?").
+    fn as_any(&self) -> &dyn std::any::Any;
+    /// Si el widget reconoce esta tecla (vía su prop `hotkey` o lógica
+    /// interna), devuelve el `Msg` a despachar. Default: nada. La app
+    /// loop consulta todos los widgets antes de hacer su routing
+    /// estándar (input al quake si está abierto, etc.).
+    fn try_key(&self, _event: &KeyEvent) -> Option<Msg> {
+        None
+    }
 }

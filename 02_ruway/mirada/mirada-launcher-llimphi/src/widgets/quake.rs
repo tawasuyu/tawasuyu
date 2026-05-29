@@ -11,9 +11,10 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, AlignItems, FlexDirection, JustifyContent, Size, Style},
     Rect,
 };
-use llimphi_ui::View;
+use llimphi_ui::{KeyEvent, KeyState, View};
 
 use crate::config::WidgetSpec;
+use crate::keys;
 use crate::widget::{Msg, Widget};
 
 pub struct QuakeInput {
@@ -22,6 +23,9 @@ pub struct QuakeInput {
     pub placeholder: String,
     pub width_open: f32,
     pub width_closed: f32,
+    /// Etiqueta del hotkey leída del TOML (p. ej. "F12"). Vacío =
+    /// sin hotkey (el widget se abre por click).
+    pub hotkey: String,
 }
 
 impl QuakeInput {
@@ -29,12 +33,14 @@ impl QuakeInput {
         let placeholder = spec.str_prop("placeholder", "› preguntá, lanzá, navegá").to_string();
         let width_open = spec.float_prop("width_open", 360.0) as f32;
         let width_closed = spec.float_prop("width_closed", 140.0) as f32;
+        let hotkey = spec.str_prop("hotkey", "").to_string();
         Self {
             open: false,
             buffer: String::new(),
             placeholder,
             width_open,
             width_closed,
+            hotkey,
         }
     }
 
@@ -71,6 +77,17 @@ impl QuakeInput {
 
 impl Widget for QuakeInput {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any { self }
+
+    fn try_key(&self, event: &KeyEvent) -> Option<Msg> {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        if !self.hotkey.is_empty() && keys::matches(&self.hotkey, &event.key) {
+            return Some(Msg::QuakeToggle);
+        }
+        None
+    }
 
     fn view(&self, theme: &Theme) -> View<Msg> {
         let (label, color, bg) = if self.open {

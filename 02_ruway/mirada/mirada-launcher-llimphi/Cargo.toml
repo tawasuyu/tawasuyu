@@ -20,3 +20,4 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
+chrono = { workspace = true }
