@@ -233,12 +233,18 @@ fn preparar_disco_objetos() -> Result<(), String> {
     Ok(())
 }
 
-/// Lee el bytecode `.wasm` de una app de genesis desde `kernel/assets/`. La
-/// ruta se ancla al directorio de ESTE crate —no al de trabajo—: el
+/// Lee el bytecode `.wasm` de una app de genesis desde `wawa-kernel/assets/`.
+/// La ruta se ancla al directorio de ESTE crate —no al de trabajo—: el
 /// constructor funciona se invoque desde donde se invoque.
+///
+/// FASE 64 :: corregido de `../kernel/assets` (stale del rename
+/// `kernel`->`wawa-kernel`; ese path no existia y dependia de un symlink
+/// local sin trackear) a `../wawa-kernel/assets`, el directorio real donde
+/// `build-pluma.sh` consolida todos los `.wasm`. Sin esto, re-sembrar el
+/// disco (necesario para tomar una app recien recompilada) fallaba.
 fn leer_wasm(archivo: &str) -> Result<Vec<u8>, String> {
     let ruta = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../kernel/assets")
+        .join("../wawa-kernel/assets")
         .join(archivo);
     std::fs::read(&ruta)
         .map_err(|e| format!("no se pudo leer el bytecode «{}»: {e}", ruta.display()))
