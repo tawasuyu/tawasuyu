@@ -344,6 +344,16 @@ pub struct RenderConfig {
     /// mundo 3D. Cosmético total — Doom clásico no tiene sombras, el
     /// renderer software pinta sprites flotando sobre el piso.
     pub sprite_shadows: bool,
+    /// **Fase 3.22 — luz dinámica del muzzle flash**. Intensidad actual
+    /// (0.0 = nada, 1.0 = pico) del destello de boca de arma que
+    /// ilumina el mundo alrededor del jugador. El host lo settea cada
+    /// frame: pico 1.0 cuando el snapshot tiene `FF_FULLBRIGHT` activo
+    /// en `weapon` o `weapon_flash`, decae a 0 en `MUZZLE_DECAY_SECS`.
+    /// Aplica un boost cálido (amarillo-blanco) sobre paredes, pisos,
+    /// techos y sprites dentro de `MUZZLE_RADIUS_WORLD` unidades del
+    /// jugador. Doom clásico cicla la PLAYPAL completa; esta es la
+    /// modernización por sector/depth.
+    pub muzzle_glow_alpha: f32,
 }
 
 impl Default for RenderConfig {
@@ -361,8 +371,83 @@ impl Default for RenderConfig {
             vignette: 0.55,
             hud: true,
             sprite_shadows: true,
+            muzzle_glow_alpha: 0.0,
         }
     }
+}
+
+// =====================================================================
+// Fase 3.22 — Muzzle world light
+// =====================================================================
+//
+// El destello del arma del jugador (`FF_FULLBRIGHT` en `psprites[]`) emite
+// un boost cálido que ilumina paredes, pisos, techos y sprites en un
+// disco alrededor del jugador. Modela el "fogonazo del cañón" que en
+// Doom original sólo afectaba la PLAYPAL global — acá lo hacemos
+// world-light: las superficies cercanas reciben un tinte amarillento que
+// decae con `distance² / RADIUS²`. La intensidad `cfg.muzzle_glow_alpha`
+// viene del host y decae con el tiempo.
+
+/// Radio de influencia del fogonazo, en unidades Doom. ~6 cells de 64
+/// → habitación pequeña entera, pasillo medio.
+const MUZZLE_RADIUS_WORLD: f32 = 384.0;
+/// Boost de shade en el centro (player position) con `alpha=1.0`. Se
+/// suma al shade base, capeado a 1.0 — paredes oscuras quedan visibles
+/// durante el flash sin "blow out" las claras.
+const MUZZLE_BOOST_PEAK: f32 = 0.55;
+/// Tinte cálido amarillo-blanco del fogonazo, en RGB 0..255.
+const MUZZLE_TINT_RGB: (u8, u8, u8) = (255, 220, 140);
+
+/// Devuelve el boost de luz del muzzle flash para un punto en cam-space
+/// (player está en `(0, 0)`). Cae con distancia² hasta `MUZZLE_RADIUS_WORLD`.
+fn muzzle_boost_cam(x_cam: f32, y_cam: f32, alpha: f32) -> f32 {
+    if alpha <= 0.0 {
+        return 0.0;
+    }
+    let d2 = x_cam * x_cam + y_cam * y_cam;
+    let r2 = MUZZLE_RADIUS_WORLD * MUZZLE_RADIUS_WORLD;
+    if d2 >= r2 {
+        return 0.0;
+    }
+    let f = 1.0 - d2 / r2;
+    (f * f * alpha * MUZZLE_BOOST_PEAK).clamp(0.0, MUZZLE_BOOST_PEAK)
+}
+
+/// Suma aditivamente el tinte cálido `MUZZLE_TINT_RGB · boost` al color
+/// base, preservando alpha. Boost ≤ 0 ⇒ no-op.
+fn apply_muzzle_tint(c: Color, boost: f32) -> Color {
+    if boost <= 0.0 {
+        return c;
+    }
+    let [r, g, b, a] = c.to_rgba8().to_u8_array();
+    let add_r = (MUZZLE_TINT_RGB.0 as f32 * boost) as u32;
+    let add_g = (MUZZLE_TINT_RGB.1 as f32 * boost) as u32;
+    let add_b = (MUZZLE_TINT_RGB.2 as f32 * boost) as u32;
+    Color::from_rgba8(
+        (r as u32 + add_r).min(255) as u8,
+        (g as u32 + add_g).min(255) as u8,
+        (b as u32 + add_b).min(255) as u8,
+        a,
+    )
+}
+
+/// Multiplicador per-canal para tintar el patch del sprite cuando el
+/// muzzle flash está activo. Devuelve `(shade·tint_r, shade·tint_g,
+/// shade·tint_b)` con `tint = 1 + boost · MUZZLE_TINT/255` clampeado.
+/// Cuando `boost = 0` devuelve `[shade, shade, shade]` — equivalente al
+/// shading grayscale histórico.
+fn sprite_shade_with_muzzle(shade: f32, boost: f32) -> [f32; 3] {
+    if boost <= 0.0 {
+        return [shade, shade, shade];
+    }
+    let tr = 1.0 + boost * (MUZZLE_TINT_RGB.0 as f32 / 255.0);
+    let tg = 1.0 + boost * (MUZZLE_TINT_RGB.1 as f32 / 255.0);
+    let tb = 1.0 + boost * (MUZZLE_TINT_RGB.2 as f32 / 255.0);
+    [
+        (shade * tr).clamp(0.0, 1.0),
+        (shade * tg).clamp(0.0, 1.0),
+        (shade * tb).clamp(0.0, 1.0),
+    ]
 }
 
 // =====================================================================
@@ -777,6 +862,9 @@ fn gather_wall(
     let mid_x = (x1 + x2) * 0.5;
     let mid_y = (y1 + y2) * 0.5;
     let depth = (mid_x * mid_x + mid_y * mid_y).sqrt();
+    // Fase 3.22: boost del muzzle flash en el midpoint de la pared.
+    // Cae con distancia² desde el jugador (en cam-space player = origen).
+    let muzzle_boost = muzzle_boost_cam(mid_x, mid_y, cfg.muzzle_glow_alpha);
 
     // -----------------------------------------------------------------
     // Floor & ceiling strips ("fake floor") — fallback de 3.1 cuando no
@@ -804,7 +892,7 @@ fn gather_wall(
             path.close_path();
             out.push(Renderable {
                 depth: depth + 0.5,
-                color: floor_color(near_sec, depth, cfg),
+                color: apply_muzzle_tint(floor_color(near_sec, depth, cfg), muzzle_boost),
                 path,
                 kind: RenderKind::Fill,
             });
@@ -819,7 +907,10 @@ fn gather_wall(
             path.close_path();
             out.push(Renderable {
                 depth: depth + 0.5,
-                color: ceiling_color(near_sec, depth, cfg, snap.sky_pic),
+                color: apply_muzzle_tint(
+                    ceiling_color(near_sec, depth, cfg, snap.sky_pic),
+                    muzzle_boost,
+                ),
                 path,
                 kind: RenderKind::Fill,
             });
@@ -951,12 +1042,32 @@ fn gather_wall(
             // Overlay de shade: una sola fill sobre todo el slab —
             // no hace falta strip-per-strip porque shade es constante
             // sobre la slab al mismo depth.
-            let shade = shade_for(sec.light_level, depth, cfg);
-            if shade < 0.95 {
-                let alpha = ((1.0 - shade) * 255.0) as u8;
+            //
+            // Fase 3.22: el muzzle boost levanta `shade` aditivamente
+            // (clamp ≤ 1.0) y, si queda boost residual, emitimos un
+            // segundo overlay aditivo amarillo para sumar el tinte
+            // cálido sobre la textura.
+            let base_shade = shade_for(sec.light_level, depth, cfg);
+            let lit_shade = (base_shade + muzzle_boost).clamp(0.0, 1.0);
+            if lit_shade < 0.95 {
+                let alpha = ((1.0 - lit_shade) * 255.0) as u8;
                 out.push(Renderable {
                     depth: depth - 0.001,
                     color: Color::from_rgba8(0, 0, 0, alpha),
+                    path: path.clone(),
+                    kind: RenderKind::Fill,
+                });
+            }
+            if muzzle_boost > 0.02 {
+                let a = (muzzle_boost * 180.0).clamp(0.0, 180.0) as u8;
+                out.push(Renderable {
+                    depth: depth - 0.002,
+                    color: Color::from_rgba8(
+                        MUZZLE_TINT_RGB.0,
+                        MUZZLE_TINT_RGB.1,
+                        MUZZLE_TINT_RGB.2,
+                        a,
+                    ),
                     path,
                     kind: RenderKind::Fill,
                 });
@@ -980,7 +1091,10 @@ fn gather_wall(
                 p.close_path();
                 out.push(Renderable {
                     depth,
-                    color: wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
+                    color: apply_muzzle_tint(
+                        wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
+                        muzzle_boost,
+                    ),
                     path: p,
                     kind: RenderKind::Fill,
                 });
@@ -1256,17 +1370,18 @@ fn gather_subsector_planes(
     // Centroide euclidiano del polígono en cámara — necesario para
     // calcular el shade (fog + light dropoff) que depende de la distancia
     // real al observador, no del BSP order.
-    let shade_depth = {
+    let (centroid_cx, centroid_cy) = {
         let (mut cx_sum, mut cy_sum) = (0.0_f32, 0.0_f32);
         for &(x, y) in &clipped {
             cx_sum += x;
             cy_sum += y;
         }
         let n = clipped.len() as f32;
-        let cx = cx_sum / n;
-        let cy = cy_sum / n;
-        (cx * cx + cy * cy).sqrt()
+        (cx_sum / n, cy_sum / n)
     };
+    let shade_depth = (centroid_cx * centroid_cx + centroid_cy * centroid_cy).sqrt();
+    // Fase 3.22: muzzle boost en el centroide del plano (en cam-space).
+    let muzzle_boost = muzzle_boost_cam(centroid_cx, centroid_cy, cfg.muzzle_glow_alpha);
     // Depth para painter's sort:
     // - Con BSP (Fase 3.13), usamos el depth asignado por la travesía
     //   back-to-front del árbol — orden correcto Doom, elimina glitches
@@ -1368,13 +1483,32 @@ fn gather_subsector_planes(
                         // Usa `shade_depth` euclidiano (no `depth` BSP-derived)
                         // porque fog/light dropoff dependen de la distancia
                         // real al jugador.
-                        let shade = shade_for(sec.light_level, shade_depth, cfg)
+                        //
+                        // Fase 3.22: el muzzle boost levanta el `shade`
+                        // (reduce el overlay oscuro) + emite un overlay
+                        // amarillo aditivo sobre la textura.
+                        let base_shade = shade_for(sec.light_level, shade_depth, cfg)
                             * if is_floor { 0.92 } else { 0.85 };
-                        if shade < 0.95 {
-                            let alpha = ((1.0 - shade) * 255.0).clamp(0.0, 255.0) as u8;
+                        let lit_shade = (base_shade + muzzle_boost).clamp(0.0, 1.0);
+                        if lit_shade < 0.95 {
+                            let alpha = ((1.0 - lit_shade) * 255.0).clamp(0.0, 255.0) as u8;
                             out.push(Renderable {
                                 depth: depth + 0.999,
                                 color: Color::from_rgba8(0, 0, 0, alpha),
+                                path: path.clone(),
+                                kind: RenderKind::Fill,
+                            });
+                        }
+                        if muzzle_boost > 0.02 {
+                            let a = (muzzle_boost * 180.0).clamp(0.0, 180.0) as u8;
+                            out.push(Renderable {
+                                depth: depth + 0.998,
+                                color: Color::from_rgba8(
+                                    MUZZLE_TINT_RGB.0,
+                                    MUZZLE_TINT_RGB.1,
+                                    MUZZLE_TINT_RGB.2,
+                                    a,
+                                ),
                                 path,
                                 kind: RenderKind::Fill,
                             });
@@ -1392,7 +1526,7 @@ fn gather_subsector_planes(
         };
         out.push(Renderable {
             depth: depth + 1.0,
-            color,
+            color: apply_muzzle_tint(color, muzzle_boost),
             path,
             kind: RenderKind::Fill,
         });
@@ -1645,7 +1779,14 @@ fn gather_sprite(
             } else {
                 shade_for(light, depth, cfg)
             };
-            let img = make_tinted_sprite_image(&patch, shade);
+            // Fase 3.22: si el muzzle flash está activo y el sprite está
+            // dentro del radio, sumamos un tinte cálido per-canal. Sprites
+            // full-bright (proyectiles, fire frames) ya estaban a luz plena
+            // y reciben el tinte amarillo sin saturarse — `sprite_shade_with_muzzle`
+            // clampea ≤ 1.0 por canal.
+            let muzzle_boost = muzzle_boost_cam(x_cam, y_cam, cfg.muzzle_glow_alpha);
+            let shade_rgb = sprite_shade_with_muzzle(shade, muzzle_boost);
+            let img = make_tinted_sprite_image_rgb(&patch, shade_rgb);
             // Mirror = pintamos espejado: scale_x negativo + corrimiento.
             let xform = if mirror {
                 Affine::translate((br.x, tl.y)) * Affine::scale_non_uniform(-sx, sy)
@@ -1676,9 +1817,10 @@ fn gather_sprite(
     path.line_to(tr);
     path.line_to(br);
     path.close_path();
+    let boost = muzzle_boost_cam(x_cam, y_cam, cfg.muzzle_glow_alpha);
     out.push(Renderable {
         depth,
-        color: sprite_color(sprite, sec, depth, cfg),
+        color: apply_muzzle_tint(sprite_color(sprite, sec, depth, cfg), boost),
         path,
         kind: RenderKind::Fill,
     });
@@ -1692,17 +1834,30 @@ fn make_tinted_sprite_image(
     patch: &supay_wad::Patch,
     shade: f32,
 ) -> llimphi_ui::llimphi_raster::peniko::Image {
+    make_tinted_sprite_image_rgb(patch, [shade, shade, shade])
+}
+
+/// Variante per-canal: cada componente RGB se multiplica por su tint
+/// individual. Usada por el muzzle flash (Fase 3.22) para tintar
+/// amarillo cálido los sprites cercanos al destello del arma. Default
+/// equivalente a `[shade, shade, shade]` = grayscale shading.
+fn make_tinted_sprite_image_rgb(
+    patch: &supay_wad::Patch,
+    tint: [f32; 3],
+) -> llimphi_ui::llimphi_raster::peniko::Image {
     use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
-    let s = shade.clamp(0.05, 1.0);
-    let tinted: Vec<u8> = if (s - 1.0).abs() < 1e-3 {
-        // Fast path full-bright: clonamos sin transformar.
+    let tr = tint[0].clamp(0.05, 1.0);
+    let tg = tint[1].clamp(0.05, 1.0);
+    let tb = tint[2].clamp(0.05, 1.0);
+    let identity = (tr - 1.0).abs() < 1e-3 && (tg - 1.0).abs() < 1e-3 && (tb - 1.0).abs() < 1e-3;
+    let tinted: Vec<u8> = if identity {
         patch.rgba.clone()
     } else {
         let mut out = Vec::with_capacity(patch.rgba.len());
         for chunk in patch.rgba.chunks_exact(4) {
-            out.push(((chunk[0] as f32) * s) as u8);
-            out.push(((chunk[1] as f32) * s) as u8);
-            out.push(((chunk[2] as f32) * s) as u8);
+            out.push(((chunk[0] as f32) * tr) as u8);
+            out.push(((chunk[1] as f32) * tg) as u8);
+            out.push(((chunk[2] as f32) * tb) as u8);
             out.push(chunk[3]);
         }
         out
@@ -3379,5 +3534,94 @@ mod tests {
         // de walls/sprites con depths euclidianos.
         assert!(d0 > BSP_DEPTH_BASE);
         assert!(d1 > BSP_DEPTH_BASE);
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.22: muzzle world light
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn muzzle_boost_zero_when_alpha_zero() {
+        // alpha = 0 ⇒ no hay fogonazo, boost = 0 sin importar la posición.
+        assert_eq!(muzzle_boost_cam(0.0, 0.0, 0.0), 0.0);
+        assert_eq!(muzzle_boost_cam(50.0, 30.0, 0.0), 0.0);
+        // alpha negativo (no debería pasar pero defensivo) ⇒ 0.
+        assert_eq!(muzzle_boost_cam(0.0, 0.0, -0.5), 0.0);
+    }
+
+    #[test]
+    fn muzzle_boost_zero_outside_radius() {
+        // distancia² > RADIUS² → boost 0. Tomamos el doble del radio.
+        let r = MUZZLE_RADIUS_WORLD;
+        assert_eq!(muzzle_boost_cam(r * 2.0, 0.0, 1.0), 0.0);
+        assert_eq!(muzzle_boost_cam(0.0, r * 1.5, 1.0), 0.0);
+        // Justo en el límite también es 0 (>= radius).
+        assert_eq!(muzzle_boost_cam(r, 0.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn muzzle_boost_peak_at_center_with_full_alpha() {
+        // En (0, 0) con alpha=1 el boost alcanza MUZZLE_BOOST_PEAK exacto.
+        let b = muzzle_boost_cam(0.0, 0.0, 1.0);
+        assert!((b - MUZZLE_BOOST_PEAK).abs() < 1e-5, "expected peak, got {b}");
+    }
+
+    #[test]
+    fn muzzle_boost_falls_off_with_distance_squared() {
+        // Falloff quadrático: comparando r/4 vs r/2 (mismo eje), el
+        // boost a r/4 debe ser estrictamente mayor que a r/2, y la
+        // diferencia no debe ser lineal.
+        let r = MUZZLE_RADIUS_WORLD;
+        let b_close = muzzle_boost_cam(r * 0.25, 0.0, 1.0);
+        let b_mid = muzzle_boost_cam(r * 0.5, 0.0, 1.0);
+        let b_far = muzzle_boost_cam(r * 0.75, 0.0, 1.0);
+        assert!(b_close > b_mid);
+        assert!(b_mid > b_far);
+        // Quadrático: el ratio close/mid debe ser > 1.5 (lineal sería ~1.5).
+        // Con (1 - d²/r²)² obtenemos: (1-1/16)² ≈ 0.879 vs (1-1/4)² ≈ 0.563.
+        // Ratio ≈ 1.56. Verificamos > 1.4 con margen.
+        assert!(b_close / b_mid > 1.4, "ratio {} too low", b_close / b_mid);
+    }
+
+    #[test]
+    fn apply_muzzle_tint_warms_color() {
+        // Base gris medio + boost positivo ⇒ los canales R y G suben más
+        // que B (tint cálido amarillo-blanco). Alpha preservada.
+        let base = Color::from_rgba8(100, 100, 100, 255);
+        let warm = apply_muzzle_tint(base, 0.3);
+        let [r, g, b, a] = warm.to_rgba8().to_u8_array();
+        assert_eq!(a, 255, "alpha preserved");
+        assert!(r > 100 && g > 100 && b > 100, "all channels boosted");
+        assert!(r >= g, "red ≥ green tint shape");
+        assert!(g > b, "yellow tint: green > blue");
+    }
+
+    #[test]
+    fn apply_muzzle_tint_zero_is_identity() {
+        // boost ≤ 0 ⇒ retorna el color sin cambio. Fast path.
+        let base = Color::from_rgba8(77, 188, 222, 200);
+        let same = apply_muzzle_tint(base, 0.0);
+        assert_eq!(same.to_rgba8().to_u8_array(), [77, 188, 222, 200]);
+        let same2 = apply_muzzle_tint(base, -0.5);
+        assert_eq!(same2.to_rgba8().to_u8_array(), [77, 188, 222, 200]);
+    }
+
+    #[test]
+    fn sprite_shade_with_muzzle_zero_is_grayscale() {
+        // boost = 0 ⇒ idéntico al shading grayscale histórico.
+        let s = sprite_shade_with_muzzle(0.6, 0.0);
+        assert_eq!(s, [0.6, 0.6, 0.6]);
+    }
+
+    #[test]
+    fn sprite_shade_with_muzzle_warm_when_boost_positive() {
+        // boost > 0 ⇒ R/G suben más que B respecto al shading uniforme.
+        let s = sprite_shade_with_muzzle(0.5, 0.4);
+        // El tint es (255, 220, 140) / 255 ≈ (1.0, 0.86, 0.55).
+        // Multiplicador per-canal: 1 + 0.4 · tint. Red ≥ green > blue.
+        assert!(s[0] >= s[1], "R ≥ G");
+        assert!(s[1] > s[2], "G > B");
+        // Todos los canales clampean ≤ 1.0.
+        assert!(s[0] <= 1.0 && s[1] <= 1.0 && s[2] <= 1.0);
     }
 }

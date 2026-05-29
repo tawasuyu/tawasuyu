@@ -129,7 +129,19 @@ struct Model {
     show_hud: bool,
     /// Fase 3.21: sombras de mobjs en el piso on/off (F7). Default on.
     sprite_shadows: bool,
+    /// Fase 3.22: muzzle world light on/off (F8). Default on.
+    muzzle_world_light: bool,
+    /// Fase 3.22: instante del último frame `FF_FULLBRIGHT` detectado
+    /// en `weapon` o `weapon_flash`. `None` ⇒ nunca disparó / ya decayó.
+    /// El alpha del boost se computa cada frame como
+    /// `max(0, 1 - elapsed/MUZZLE_DECAY_SECS)`.
+    muzzle_glow_at: Option<Instant>,
 }
+
+/// Tiempo de decaimiento del fogonazo del arma — el boost cae de 1.0 a 0
+/// en este intervalo. ~160 ms cubre 5-6 ticks Doom (35 Hz), suficiente
+/// para que se lea como "destello" sin durar demasiado.
+const MUZZLE_DECAY_SECS: f32 = 0.16;
 
 /// Pasos del cicle F5 para la viñeta — off / sutil (default) / fuerte.
 const VIGNETTE_STEPS: [f32; 3] = [0.0, 0.55, 0.9];
@@ -165,6 +177,8 @@ enum Msg {
     ToggleHud,
     /// Fase 3.21: alterna sombras de sprites en el piso (F7).
     ToggleSpriteShadows,
+    /// Fase 3.22: alterna el muzzle world light (F8).
+    ToggleMuzzleLight,
     Quit,
 }
 
@@ -224,6 +238,8 @@ impl App for Supay {
             vignette_strength: VIGNETTE_STEPS[1],
             show_hud: true,
             sprite_shadows: true,
+            muzzle_world_light: true,
+            muzzle_glow_at: None,
         }
     }
 
@@ -249,6 +265,9 @@ impl App for Supay {
             }
             if matches!(&e.key, Key::Named(NamedKey::F7)) {
                 return Some(Msg::ToggleSpriteShadows);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F8)) {
+                return Some(Msg::ToggleMuzzleLight);
             }
             // Fase 3.17: mouse-look cosmético. PageUp = mirar arriba,
             // PageDown = mirar abajo, Home = resetear horizonte. No pasan
@@ -303,6 +322,18 @@ impl App for Supay {
                         }
                     }
                 }
+                // Fase 3.22: detectamos un fogonazo del arma vía bit
+                // FF_FULLBRIGHT (0x80) en `weapon.frame` (pistol fire
+                // frame "PISGB") o `weapon_flash.frame` (chaingun/plasma/
+                // BFG/shotgun, que usan el slot ps_flash). Cuando lo
+                // vemos, resetamos `muzzle_glow_at` para que el render
+                // calcule el alpha del boost por elapsed.
+                let weapon_bright = snap.weapon.active && (snap.weapon.frame & 0x80) != 0;
+                let flash_bright =
+                    snap.weapon_flash.active && (snap.weapon_flash.frame & 0x80) != 0;
+                if weapon_bright || flash_bright {
+                    m.muzzle_glow_at = Some(Instant::now());
+                }
                 m.snapshots.push(snap);
                 m.last_tick_at = Instant::now();
             }
@@ -350,6 +381,13 @@ impl App for Supay {
             Msg::ToggleSpriteShadows => {
                 m.sprite_shadows = !m.sprite_shadows;
             }
+            Msg::ToggleMuzzleLight => {
+                m.muzzle_world_light = !m.muzzle_world_light;
+                if !m.muzzle_world_light {
+                    // Apagar limpio: que el siguiente render vea alpha=0.
+                    m.muzzle_glow_at = None;
+                }
+            }
         }
         m
     }
@@ -374,6 +412,10 @@ impl App for Supay {
                     vignette: model.vignette_strength,
                     hud: model.show_hud,
                     sprite_shadows: model.sprite_shadows,
+                    // Fase 3.22: alpha del muzzle decae linealmente desde
+                    // el último fogonazo. Cuando el toggle está apagado
+                    // o nunca disparó, alpha=0 ⇒ render no aplica boost.
+                    muzzle_glow_alpha: muzzle_alpha_now(model),
                     ..RenderConfig::default()
                 },
             )),
@@ -390,6 +432,20 @@ impl App for Supay {
         .fill(COLOR_BG_ABYSS)
         .children(vec![header, body, footer])
     }
+}
+
+/// Fase 3.22: alpha actual del muzzle world light, computada por
+/// `(1 - elapsed/MUZZLE_DECAY_SECS).max(0)`. Devuelve 0 cuando el
+/// toggle está apagado o no hubo fogonazo reciente.
+fn muzzle_alpha_now(model: &Model) -> f32 {
+    if !model.muzzle_world_light {
+        return 0.0;
+    }
+    let Some(t0) = model.muzzle_glow_at else {
+        return 0.0;
+    };
+    let elapsed = t0.elapsed().as_secs_f32();
+    (1.0 - elapsed / MUZZLE_DECAY_SECS).clamp(0.0, 1.0)
 }
 
 // =====================================================================
@@ -419,7 +475,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.21 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.22 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,
