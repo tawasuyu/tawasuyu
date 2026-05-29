@@ -18,6 +18,11 @@
 //! muteado, la franja queda en silencio (línea recta) — el visor no
 //! depende del sink.
 //!
+//! Captura: dos botones en el row del título toman fotos del estado
+//! actual. `rec` arma/cierra una grabación WAV (PCM 16) del stream
+//! audio en el cwd; `snap` escribe un PNG con el frame de video
+//! pendiente. Pausa silencia/congela ambos taps a la vez.
+//!
 //! Corre con:
 //!   `cargo run -p multimedia-app --release`
 //!   `cargo run -p multimedia-app --release -- /ruta/al/anim.gif`
@@ -42,6 +47,7 @@ use multimedia_core::{
     AudioProbe, AudioSource, FrameSource, Levels, Pause, PausableAudio, PausableVideo,
     ProbedAudioSource, Spectrum, TestCard, ToneSource,
 };
+use multimedia_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use multimedia_source_gif::GifSource;
 use multimedia_source_wav::WavSource;
 use parking_lot::Mutex;
@@ -58,6 +64,8 @@ const PROBE_CAPACITY: usize = 8192;
 enum Msg {
     Tick,
     TogglePause,
+    ToggleRecord,
+    Snapshot,
 }
 
 struct Model {
@@ -69,6 +77,10 @@ struct Pipeline {
     surface: ExternalSurface,
     source: Mutex<Box<dyn FrameSource + Send>>,
     buf: Mutex<Vec<u8>>,
+    /// Última dimensión `(w, h)` que emitió la fuente. `(0, 0)` hasta
+    /// el primer tick exitoso. Lo lee el handler de Snapshot para
+    /// armar el `ImageBuffer`.
+    last_dim: Mutex<(u32, u32)>,
     last_tick: Mutex<Instant>,
 }
 
@@ -109,6 +121,25 @@ fn pause() -> &'static Pause {
     SLOT.get_or_init(Pause::new)
 }
 
+/// Handle compartido del recorder WAV. Cuando `is_recording()` es
+/// false, el wrapper `RecordedAudioSource` es transparente; al
+/// armarlo desde la UI empieza a copiar cada bloque del stream a
+/// disco.
+fn recorder() -> &'static WavRecorder {
+    static SLOT: OnceLock<WavRecorder> = OnceLock::new();
+    SLOT.get_or_init(WavRecorder::new)
+}
+
+/// Path de snapshot único por segundo, en el cwd: `multimedia-snap-N.png`.
+fn default_snapshot_path() -> PathBuf {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    PathBuf::from(format!("multimedia-snap-{secs}.png"))
+}
+
 fn new_testcard() -> Box<dyn FrameSource + Send> {
     Box::new(PausableVideo::new(
         TestCard::new(TESTCARD_W, TESTCARD_H, TESTCARD_FPS),
@@ -134,6 +165,7 @@ fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'static Pipeline
             surface: ExternalSurface::new(device, queue),
             source: Mutex::new((cfg.init_source)()),
             buf: Mutex::new(Vec::new()),
+            last_dim: Mutex::new((0, 0)),
             last_tick: Mutex::new(Instant::now()),
         }
     })
@@ -167,6 +199,52 @@ impl App for MultimediaApp {
                 pause().toggle();
                 model
             }
+            Msg::ToggleRecord => {
+                let rec = recorder();
+                if rec.is_recording() {
+                    match rec.stop() {
+                        Ok(p) => eprintln!(
+                            "multimedia-app: recording cerrada en {}",
+                            p.display()
+                        ),
+                        Err(e) => eprintln!("multimedia-app: stop recording: {e}"),
+                    }
+                } else {
+                    let path = default_recording_path(".");
+                    match rec.start(&path) {
+                        Ok(p) => eprintln!("multimedia-app: grabando en {}", p.display()),
+                        Err(e) => eprintln!("multimedia-app: start recording: {e}"),
+                    }
+                }
+                model
+            }
+            Msg::Snapshot => {
+                if let Some(pipe) = pipeline_slot().get() {
+                    let (w, h) = *pipe.last_dim.lock();
+                    let buf = pipe.buf.lock().clone();
+                    let expected = (w as usize) * (h as usize) * 4;
+                    if w == 0 || h == 0 || buf.len() != expected {
+                        eprintln!("multimedia-app: no hay frame para snapshot todavía");
+                    } else {
+                        let path = default_snapshot_path();
+                        match image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(w, h, buf) {
+                            Some(img) => match img.save(&path) {
+                                Ok(()) => eprintln!(
+                                    "multimedia-app: snapshot {}×{} guardado en {}",
+                                    w,
+                                    h,
+                                    path.display()
+                                ),
+                                Err(e) => eprintln!("multimedia-app: save snapshot: {e}"),
+                            },
+                            None => eprintln!("multimedia-app: buf inconsistente para snapshot"),
+                        }
+                    }
+                } else {
+                    eprintln!("multimedia-app: pipeline aún no montada");
+                }
+                model
+            }
         }
     }
 
@@ -176,33 +254,35 @@ impl App for MultimediaApp {
         let fps = model.frames as f32 / secs;
 
         let paused = pause().is_paused();
-        let (glyph, btn_bg, btn_fg) = if paused {
-            (
-                "play",
-                Color::from_rgba8(60, 140, 90, 255),
-                Color::from_rgba8(235, 250, 240, 255),
-            )
-        } else {
-            (
-                "pause",
-                Color::from_rgba8(55, 65, 80, 255),
-                Color::from_rgba8(220, 230, 245, 255),
-            )
-        };
-        let pause_btn = View::new(Style {
-            size: Size {
-                width: length(72.0_f32),
-                height: length(36.0_f32),
+        let pause_btn = chip_button(
+            if paused { "play" } else { "pause" },
+            if paused {
+                Color::from_rgba8(60, 140, 90, 255)
+            } else {
+                Color::from_rgba8(55, 65, 80, 255)
             },
-            justify_content: Some(JustifyContent::Center),
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .fill(btn_bg)
-        .hover_fill(Color::from_rgba8(80, 100, 130, 255))
-        .radius(8.0)
-        .text(glyph.to_string(), 16.0, btn_fg)
-        .on_click(Msg::TogglePause);
+            Color::from_rgba8(220, 230, 245, 255),
+            Msg::TogglePause,
+        );
+
+        let recording = recorder().is_recording();
+        let rec_btn = chip_button(
+            if recording { "stop" } else { "rec" },
+            if recording {
+                Color::from_rgba8(200, 65, 65, 255)
+            } else {
+                Color::from_rgba8(55, 65, 80, 255)
+            },
+            Color::from_rgba8(245, 235, 235, 255),
+            Msg::ToggleRecord,
+        );
+
+        let snap_btn = chip_button(
+            "snap",
+            Color::from_rgba8(55, 65, 80, 255),
+            Color::from_rgba8(220, 230, 245, 255),
+            Msg::Snapshot,
+        );
 
         let title_text = View::new(Style {
             size: Size {
@@ -233,7 +313,7 @@ impl App for MultimediaApp {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .children(vec![pause_btn, title_text, meters_panel()]);
+        .children(vec![pause_btn, rec_btn, snap_btn, title_text, meters_panel()]);
 
         let canvas_style = Style {
             size: Size {
@@ -256,6 +336,7 @@ impl App for MultimediaApp {
                 let mut buf = pipe.buf.lock();
                 if let Some((w, h)) = pipe.source.lock().tick(dt, &mut buf) {
                     pipe.surface.upload(&buf, w, h);
+                    *pipe.last_dim.lock() = (w, h);
                 }
                 drop(buf);
                 pipe.surface.blit(queue, encoder, view, rect, viewport);
@@ -419,6 +500,25 @@ fn waveform_panel<Msg: 'static>() -> View<Msg> {
             &path,
         );
     })
+}
+
+/// Botón compacto del row del título: tamaño fijo, hover azulado y
+/// click manda `msg`. Centra el texto vertical y horizontalmente.
+fn chip_button(label: &str, bg: Color, fg: Color, msg: Msg) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(64.0_f32),
+            height: length(36.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(Color::from_rgba8(80, 100, 130, 255))
+    .radius(8.0)
+    .text(label.to_string(), 15.0, fg)
+    .on_click(msg)
 }
 
 /// Strip de medidores peak + RMS para el row del título. Dos barras
@@ -713,10 +813,12 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     } else {
         Box::new(ToneSource::a4())
     };
-    // Orden: Pausable envuelve al productor (silencio cuando pausado),
-    // y luego Probed lo tapea — así el visor también queda en silencio
-    // mientras dura la pausa.
+    // Orden: Pausable envuelve al productor (silencio cuando pausado);
+    // Recorded captura ese mismo flujo (graba el silencio durante la
+    // pausa, igual que lo escucha el sink); Probed tapea afuera para
+    // que el visor refleje lo que realmente se reproduce.
     let pausable = PausableAudio::new(inner, pause().clone());
-    let probed = ProbedAudioSource::new(pausable, probe.clone());
+    let recorded = RecordedAudioSource::new(pausable, recorder().clone());
+    let probed = ProbedAudioSource::new(recorded, probe.clone());
     (Arc::new(Mutex::new(probed)), probe)
 }
