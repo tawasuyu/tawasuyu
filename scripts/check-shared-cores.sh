@@ -34,6 +34,7 @@ NUCLEOS=(
     "mirada-layout|02_ruway/mirada/mirada-layout"
     "forth-emisor|shared/forth-emisor"
     "pluma-notebook-core|00_unanchay/pluma/pluma-notebook-core"
+    "foreign-fs|shared/foreign-fs"
 )
 
 # Colores del informe — silenciados si la salida no es una TTY.

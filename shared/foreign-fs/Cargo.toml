@@ -1,0 +1,34 @@
+# =============================================================================
+#  gioser :: foreign-fs — puente de sistemas de archivos ajenos al grafo
+# -----------------------------------------------------------------------------
+#  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
+#  nunca al núcleo de las apps. Este crate LEE un sistema de archivos extranjero
+#  (hoy FAT12/16/32) directamente sobre un slice de bytes —lo que wawa ve de un
+#  dispositivo de bloques crudo, SIN montar— y lo ABSORBE al grafo direccionado
+#  por contenido nativo (BLAKE3 + DAG + postcard) produciendo objetos
+#  byte-idénticos a los que emite `agora-cli wawa importar` en el host.
+#
+#  Es el gemelo in-cage de la importación host-side: el camino para que wawa
+#  trague un USB/partición vieja DESDE DENTRO, sin driver de FS del kernel.
+#
+#  `#![no_std] + alloc`: viaja al kernel bare-metal y, eventualmente, corre como
+#  app WASM in-cage. Por eso fija sus versiones explícitamente (como `format`),
+#  sin herencia del workspace, y enlaza `format` por `path`.
+# =============================================================================
+
+[package]
+name = "foreign-fs"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+authors = ["Sergio <gerencia@jlsoltech.com>"]
+description = "gioser :: puente de sistemas de archivos ajenos (FAT) al grafo de objetos"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+# La única verdad del format del grafo. Por `path`: cruza la frontera bare-metal
+# igual que lo hace el kernel.
+format = { path = "../format" }

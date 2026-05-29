@@ -331,6 +331,7 @@ members = [
     "shared/card/card-core",
     "shared/card/card-net",
     "shared/card/card-wit",
+    "shared/foreign-fs",
     "shared/format",
     "shared/forth-emisor",
     "shared/rimay-localize",
