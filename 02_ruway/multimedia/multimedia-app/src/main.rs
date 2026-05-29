@@ -38,7 +38,8 @@ use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::{App, Handle, View};
 use multimedia_audio_cpal::AudioSink;
 use multimedia_core::{
-    AudioProbe, AudioSource, FrameSource, ProbedAudioSource, Spectrum, TestCard, ToneSource,
+    AudioProbe, AudioSource, FrameSource, Pause, PausableAudio, PausableVideo,
+    ProbedAudioSource, Spectrum, TestCard, ToneSource,
 };
 use multimedia_source_gif::GifSource;
 use multimedia_source_wav::WavSource;
@@ -55,6 +56,7 @@ const PROBE_CAPACITY: usize = 8192;
 #[derive(Clone)]
 enum Msg {
     Tick,
+    TogglePause,
 }
 
 struct Model {
@@ -99,14 +101,24 @@ fn audio_probe_slot() -> &'static OnceLock<Option<AudioProbe>> {
     &SLOT
 }
 
+/// Handle de pausa compartido por audio y video. Se materializa antes
+/// de armar las fuentes para poder pasarlo a los wrappers Pausable*.
+fn pause() -> &'static Pause {
+    static SLOT: OnceLock<Pause> = OnceLock::new();
+    SLOT.get_or_init(Pause::new)
+}
+
 fn new_testcard() -> Box<dyn FrameSource + Send> {
-    Box::new(TestCard::new(TESTCARD_W, TESTCARD_H, TESTCARD_FPS))
+    Box::new(PausableVideo::new(
+        TestCard::new(TESTCARD_W, TESTCARD_H, TESTCARD_FPS),
+        pause().clone(),
+    ))
 }
 
 fn new_gif() -> Box<dyn FrameSource + Send> {
     let path = gif_path_slot().get().expect("gif path set");
     match GifSource::from_path(path) {
-        Ok(s) => Box::new(s),
+        Ok(s) => Box::new(PausableVideo::new(s, pause().clone())),
         Err(e) => {
             eprintln!("multimedia-app: error abriendo GIF {path:?}: {e} — caigo a testcard");
             new_testcard()
@@ -150,6 +162,10 @@ impl App for MultimediaApp {
                 frames: model.frames.wrapping_add(1),
                 ..model
             },
+            Msg::TogglePause => {
+                pause().toggle();
+                model
+            }
         }
     }
 
@@ -158,11 +174,41 @@ impl App for MultimediaApp {
         let secs = model.started_at.elapsed().as_secs_f32().max(0.001);
         let fps = model.frames as f32 / secs;
 
-        let title = View::new(Style {
+        let paused = pause().is_paused();
+        let (glyph, btn_bg, btn_fg) = if paused {
+            (
+                "play",
+                Color::from_rgba8(60, 140, 90, 255),
+                Color::from_rgba8(235, 250, 240, 255),
+            )
+        } else {
+            (
+                "pause",
+                Color::from_rgba8(55, 65, 80, 255),
+                Color::from_rgba8(220, 230, 245, 255),
+            )
+        };
+        let pause_btn = View::new(Style {
             size: Size {
-                width: percent(1.0_f32),
-                height: length(44.0_f32),
+                width: length(72.0_f32),
+                height: length(36.0_f32),
             },
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(btn_bg)
+        .hover_fill(Color::from_rgba8(80, 100, 130, 255))
+        .radius(8.0)
+        .text(glyph.to_string(), 16.0, btn_fg)
+        .on_click(Msg::TogglePause);
+
+        let title_text = View::new(Style {
+            size: Size {
+                width: auto(),
+                height: percent(1.0_f32),
+            },
+            flex_grow: 1.0,
             justify_content: Some(JustifyContent::Center),
             align_items: Some(AlignItems::Center),
             ..Default::default()
@@ -172,6 +218,21 @@ impl App for MultimediaApp {
             22.0,
             Color::from_rgba8(220, 230, 245, 255),
         );
+
+        let title = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(44.0_f32),
+            },
+            gap: Size {
+                width: length(12.0_f32),
+                height: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![pause_btn, title_text]);
 
         let canvas_style = Style {
             size: Size {
@@ -511,6 +572,10 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     } else {
         Box::new(ToneSource::a4())
     };
-    let probed = ProbedAudioSource::new(inner, probe.clone());
+    // Orden: Pausable envuelve al productor (silencio cuando pausado),
+    // y luego Probed lo tapea — así el visor también queda en silencio
+    // mientras dura la pausa.
+    let pausable = PausableAudio::new(inner, pause().clone());
+    let probed = ProbedAudioSource::new(pausable, probe.clone());
     (Arc::new(Mutex::new(probed)), probe)
 }

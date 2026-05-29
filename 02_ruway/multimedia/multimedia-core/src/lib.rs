@@ -19,6 +19,7 @@
 //! gstreamer, v4l2, cpal…) vivan en crates `multimedia-source-*` o
 //! `multimedia-audio-*` que impl los traits.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,6 +33,15 @@ use std::time::Duration;
 /// entre llamadas para evitar realocs.
 pub trait FrameSource {
     fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)>;
+}
+
+// Reenvío para `Box<dyn FrameSource ...>`. Igual que el de
+// `AudioSource`: permite componer wrappers (`PausableVideo<Box<dyn
+// FrameSource + Send>>`) sin re-implementar el trait.
+impl<T: FrameSource + ?Sized> FrameSource for Box<T> {
+    fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        (**self).tick(dt, buf)
+    }
 }
 
 /// Generador procedural: gradiente animado + círculo que rebota.
@@ -447,5 +457,93 @@ impl Spectrum {
             let prev = self.mags[i] * self.release;
             self.mags[i] = if mag > prev { mag } else { prev };
         }
+    }
+}
+
+// ============================================================
+// Pause — transport mínimo compartido entre fuentes
+// ============================================================
+
+/// Handle compartido de pausa. Es `Clone` barato (sólo un `Arc`); una
+/// instancia puede manejar simultáneamente la pausa de un
+/// [`PausableAudio`] y un [`PausableVideo`] (o varios) para que el
+/// usuario congele todo con un toggle. La UI sólo necesita conservar
+/// una copia para mostrar el estado y emitir `toggle()`.
+#[derive(Clone, Default)]
+pub struct Pause {
+    flag: Arc<AtomicBool>,
+}
+
+impl Pause {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
+    }
+
+    pub fn pause(&self) {
+        self.flag.store(true, Ordering::Relaxed);
+    }
+
+    pub fn resume(&self) {
+        self.flag.store(false, Ordering::Relaxed);
+    }
+
+    /// Invierte el estado y devuelve el nuevo valor (true = pausado).
+    pub fn toggle(&self) -> bool {
+        // fetch_xor con `true` invierte el bit y devuelve el ANTERIOR;
+        // el nuevo es la negación.
+        !self.flag.fetch_xor(true, Ordering::Relaxed)
+    }
+}
+
+/// Wrapper de [`AudioSource`] que en pausa rellena con silencio (no
+/// llama al inner). El cursor / fase del inner queda intacto — al
+/// reanudar sigue donde estaba.
+pub struct PausableAudio<S> {
+    inner: S,
+    pause: Pause,
+}
+
+impl<S> PausableAudio<S> {
+    pub fn new(inner: S, pause: Pause) -> Self {
+        Self { inner, pause }
+    }
+}
+
+impl<S: AudioSource> AudioSource for PausableAudio<S> {
+    fn fill(&mut self, buf: &mut [f32], sample_rate: u32, channels: u16) {
+        if self.pause.is_paused() {
+            for s in buf.iter_mut() {
+                *s = 0.0;
+            }
+            return;
+        }
+        self.inner.fill(buf, sample_rate, channels);
+    }
+}
+
+/// Wrapper de [`FrameSource`] que en pausa devuelve `None` y no avanza
+/// el tiempo interno del inner. El consumidor (que mantiene el último
+/// frame en una textura) verá la imagen congelada.
+pub struct PausableVideo<S> {
+    inner: S,
+    pause: Pause,
+}
+
+impl<S> PausableVideo<S> {
+    pub fn new(inner: S, pause: Pause) -> Self {
+        Self { inner, pause }
+    }
+}
+
+impl<S: FrameSource> FrameSource for PausableVideo<S> {
+    fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        if self.pause.is_paused() {
+            return None;
+        }
+        self.inner.tick(dt, buf)
     }
 }
