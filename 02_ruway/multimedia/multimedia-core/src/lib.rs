@@ -547,3 +547,91 @@ impl<S: FrameSource> FrameSource for PausableVideo<S> {
         self.inner.tick(dt, buf)
     }
 }
+
+// ============================================================
+// Levels — medidor peak + RMS sobre snapshots de audio
+// ============================================================
+
+/// Niveles instantáneos del stream: pico absoluto y RMS, ambos
+/// normalizados a [0, 1] sobre el mono fold del snapshot. Mantiene
+/// suavizado attack-inmediato + release-exponencial entre llamadas
+/// (igual filosofía que [`Spectrum`]) para que las barras del visor
+/// no titilen.
+#[derive(Clone, Copy)]
+pub struct Levels {
+    peak: f32,
+    rms: f32,
+    release: f32,
+}
+
+impl Default for Levels {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Levels {
+    pub fn new() -> Self {
+        Self {
+            peak: 0.0,
+            rms: 0.0,
+            release: 0.82,
+        }
+    }
+
+    pub fn set_release(&mut self, release: f32) {
+        self.release = release.clamp(0.0, 0.99);
+    }
+
+    pub fn peak(&self) -> f32 {
+        self.peak
+    }
+
+    pub fn rms(&self) -> f32 {
+        self.rms
+    }
+
+    /// Procesa un snapshot intercalado y actualiza los niveles. El
+    /// mono fold es promedio simple de canales; el RMS es sqrt(media
+    /// de cuadrados) sobre los frames mono. Con `samples` vacío sólo
+    /// aplica el release.
+    pub fn analyze(&mut self, samples: &[f32], channels: u16) {
+        let ch = channels.max(1) as usize;
+        let frames = samples.len() / ch;
+        if frames == 0 {
+            self.peak *= self.release;
+            self.rms *= self.release;
+            return;
+        }
+        let inv_ch = 1.0 / ch as f32;
+        let mut peak_inst = 0.0_f32;
+        let mut sq_acc = 0.0_f32;
+        for f in 0..frames {
+            let mut s = 0.0_f32;
+            for c in 0..ch {
+                s += samples[f * ch + c];
+            }
+            let mono = s * inv_ch;
+            let abs = mono.abs();
+            if abs > peak_inst {
+                peak_inst = abs;
+            }
+            sq_acc += mono * mono;
+        }
+        let rms_inst = (sq_acc / frames as f32).sqrt();
+
+        // Attack inmediato, release exponencial.
+        let prev_peak = self.peak * self.release;
+        self.peak = if peak_inst > prev_peak {
+            peak_inst.min(1.0)
+        } else {
+            prev_peak
+        };
+        let prev_rms = self.rms * self.release;
+        self.rms = if rms_inst > prev_rms {
+            rms_inst.min(1.0)
+        } else {
+            prev_rms
+        };
+    }
+}

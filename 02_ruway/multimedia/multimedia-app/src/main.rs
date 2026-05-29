@@ -35,10 +35,11 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
+use llimphi_ui::llimphi_text::{self, TextBlock};
 use llimphi_ui::{App, Handle, View};
 use multimedia_audio_cpal::AudioSink;
 use multimedia_core::{
-    AudioProbe, AudioSource, FrameSource, Pause, PausableAudio, PausableVideo,
+    AudioProbe, AudioSource, FrameSource, Levels, Pause, PausableAudio, PausableVideo,
     ProbedAudioSource, Spectrum, TestCard, ToneSource,
 };
 use multimedia_source_gif::GifSource;
@@ -232,7 +233,7 @@ impl App for MultimediaApp {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .children(vec![pause_btn, title_text]);
+        .children(vec![pause_btn, title_text, meters_panel()]);
 
         let canvas_style = Style {
             size: Size {
@@ -418,6 +419,146 @@ fn waveform_panel<Msg: 'static>() -> View<Msg> {
             &path,
         );
     })
+}
+
+/// Strip de medidores peak + RMS para el row del título. Dos barras
+/// horizontales apiladas (peak arriba, RMS abajo) con etiqueta corta
+/// a la izquierda. El color de la barra desplaza de verde a rojo
+/// pasados los -6 dBFS — pista visual de saturación.
+fn meters_panel<Msg: 'static>() -> View<Msg> {
+    let probe = audio_probe_slot().get().cloned().flatten();
+    let scratch: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let levels: Arc<Mutex<Levels>> = Arc::new(Mutex::new(Levels::new()));
+    let track_bg = Color::from_rgba8(34, 40, 52, 255);
+    let label_color = Color::from_rgba8(150, 165, 185, 255);
+    let off_color = Color::from_rgba8(80, 92, 110, 255);
+
+    View::new(Style {
+        size: Size {
+            width: length(160.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .paint_with(move |scene, ts, rect| {
+        if rect.w <= 4.0 || rect.h <= 4.0 {
+            return;
+        }
+        let label_w: f32 = 36.0;
+        let bar_h: f32 = 8.0;
+        let gap_y: f32 = 6.0;
+        let inner_x = rect.x;
+        let inner_y = rect.y + (rect.h - (bar_h * 2.0 + gap_y)) * 0.5;
+        let bars_x = inner_x + label_w;
+        let bars_w = (rect.w - label_w).max(1.0);
+
+        // Etiquetas — texto via Typesetter para mantener consistencia.
+        let pk_label = TextBlock::simple(
+            "PK",
+            11.0,
+            label_color,
+            (inner_x as f64, (inner_y - 3.0) as f64),
+        );
+        llimphi_text::draw_block(scene, ts, &pk_label);
+        let rms_label = TextBlock::simple(
+            "RMS",
+            11.0,
+            label_color,
+            (inner_x as f64, (inner_y + bar_h + gap_y - 3.0) as f64),
+        );
+        llimphi_text::draw_block(scene, ts, &rms_label);
+
+        // Tracks (fondo).
+        let pk_track = KurboRect::new(
+            bars_x as f64,
+            inner_y as f64,
+            (bars_x + bars_w) as f64,
+            (inner_y + bar_h) as f64,
+        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, track_bg, None, &pk_track);
+        let rms_y = inner_y + bar_h + gap_y;
+        let rms_track = KurboRect::new(
+            bars_x as f64,
+            rms_y as f64,
+            (bars_x + bars_w) as f64,
+            (rms_y + bar_h) as f64,
+        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, track_bg, None, &rms_track);
+
+        let Some(probe) = probe.as_ref() else {
+            // Sin probe: marca tenue al fondo de cada barra para que
+            // se sepa que está apagado.
+            let pk_off = KurboRect::new(
+                bars_x as f64,
+                (inner_y + bar_h - 1.0) as f64,
+                (bars_x + bars_w) as f64,
+                (inner_y + bar_h) as f64,
+            );
+            scene.fill(Fill::NonZero, Affine::IDENTITY, off_color, None, &pk_off);
+            let rms_off = KurboRect::new(
+                bars_x as f64,
+                (rms_y + bar_h - 1.0) as f64,
+                (bars_x + bars_w) as f64,
+                (rms_y + bar_h) as f64,
+            );
+            scene.fill(Fill::NonZero, Affine::IDENTITY, off_color, None, &rms_off);
+            return;
+        };
+
+        let mut snap = scratch.lock();
+        let (_sr, channels) = probe.snapshot(&mut snap);
+        let mut levels = levels.lock();
+        levels.analyze(&snap, channels);
+        let pk = levels.peak();
+        let rms = levels.rms();
+
+        let pk_w = (pk.clamp(0.0, 1.0) * bars_w).max(0.0);
+        let rms_w = (rms.clamp(0.0, 1.0) * bars_w).max(0.0);
+
+        if pk_w > 0.0 {
+            let pk_fill = KurboRect::new(
+                bars_x as f64,
+                inner_y as f64,
+                (bars_x + pk_w) as f64,
+                (inner_y + bar_h) as f64,
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                level_color(pk),
+                None,
+                &pk_fill,
+            );
+        }
+        if rms_w > 0.0 {
+            let rms_fill = KurboRect::new(
+                bars_x as f64,
+                rms_y as f64,
+                (bars_x + rms_w) as f64,
+                (rms_y + bar_h) as f64,
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                level_color(rms),
+                None,
+                &rms_fill,
+            );
+        }
+    })
+}
+
+/// Gradiente verde → ámbar → rojo según el nivel. Cambio a ámbar
+/// alrededor de 0.5 (-6 dBFS) y a rojo cerca de full scale.
+fn level_color(v: f32) -> Color {
+    let v = v.clamp(0.0, 1.0);
+    if v < 0.5 {
+        Color::from_rgba8(110, 220, 140, 255)
+    } else if v < 0.85 {
+        Color::from_rgba8(230, 200, 90, 255)
+    } else {
+        Color::from_rgba8(240, 95, 95, 255)
+    }
 }
 
 /// Panel de espectro: banco Goertzel sobre el probe + barras log
