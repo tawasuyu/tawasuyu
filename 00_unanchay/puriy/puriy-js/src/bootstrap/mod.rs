@@ -9,6 +9,7 @@ mod event_class;
 mod window_scroll;
 mod window_events;
 mod url;
+mod streams;
 mod fetch;
 mod headers;
 mod abort;
@@ -24,6 +25,7 @@ pub(crate) use event_class::EVENT_CLASS_BOOTSTRAP;
 pub(crate) use window_scroll::WINDOW_SCROLL_BOOTSTRAP;
 pub(crate) use window_events::WINDOW_EVENTS_BOOTSTRAP;
 pub(crate) use url::URL_BOOTSTRAP;
+pub(crate) use streams::STREAMS_BOOTSTRAP;
 pub(crate) use fetch::FETCH_BOOTSTRAP;
 pub(crate) use headers::HEADERS_BOOTSTRAP;
 pub(crate) use abort::ABORT_BOOTSTRAP;
@@ -41,6 +43,7 @@ pub(crate) const ALL: &[&str] = &[
     WINDOW_SCROLL_BOOTSTRAP,
     WINDOW_EVENTS_BOOTSTRAP,
     URL_BOOTSTRAP,
+    STREAMS_BOOTSTRAP,
     FETCH_BOOTSTRAP,
     HEADERS_BOOTSTRAP,
     ABORT_BOOTSTRAP,

@@ -5644,4 +5644,168 @@ mod tests {
             panic!("expected string");
         }
     }
+
+    // === Fase 7.45 — ReadableStream ===
+
+    #[test]
+    fn readable_stream_existe_y_es_constructor() {
+        let mut rt = JsRuntime::new().expect("rt");
+        let v = rt.eval("typeof ReadableStream").expect("e");
+        assert_eq!(v, JsValue::String("function".into()));
+        let v = rt
+            .eval("new ReadableStream({}) instanceof ReadableStream")
+            .expect("e");
+        assert_eq!(v, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_enqueue_y_read_devuelve_chunk_luego_done() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var chunk = null; var done2 = null; \
+             var s = new ReadableStream({ start: function(c) { c.enqueue('hola'); c.close(); } }); \
+             var rd = s.getReader(); \
+             rd.read().then(function(r) { chunk = r.value; \
+                rd.read().then(function(r2) { done2 = r2.done; }); });",
+        )
+        .expect("e");
+        // drain_pending_jobs ya corrió dentro de eval — leer los globals.
+        assert_eq!(rt.eval("chunk").expect("e"), JsValue::String("hola".into()));
+        assert_eq!(rt.eval("done2").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_getreader_dos_veces_tira_locked() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; var s = new ReadableStream({}); s.getReader(); \
+             try { s.getReader(); } catch (e) { err = e.message; }",
+        )
+        .expect("e");
+        let v = rt.eval("err").expect("e");
+        if let JsValue::String(s) = v {
+            assert!(s.contains("locked"), "msg: {s}");
+        } else {
+            panic!("expected string, got {v:?}");
+        }
+        assert_eq!(rt.eval("s.locked").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_pull_se_llama_lazy_al_leer() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; var vals = []; \
+             var s = new ReadableStream({ pull: function(c) { \
+                 n++; if (n <= 2) c.enqueue(n); else c.close(); } }); \
+             var rd = s.getReader(); \
+             rd.read().then(function(a) { vals.push(a.value); \
+                rd.read().then(function(b) { vals.push(b.value); \
+                   rd.read().then(function(d) { vals.push(d.done ? 'fin' : '?'); }); }); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("vals[0]").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("vals[1]").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("vals[2]").expect("e"), JsValue::String("fin".into()));
+    }
+
+    #[test]
+    fn readable_stream_cancel_resuelve_y_llama_underlying_cancel() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var canceledWith = null; var resolved = false; \
+             var s = new ReadableStream({ cancel: function(reason) { canceledWith = reason; } }); \
+             s.cancel('porque si').then(function() { resolved = true; });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("canceledWith").expect("e"),
+            JsValue::String("porque si".into())
+        );
+        assert_eq!(rt.eval("resolved").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_tee_alimenta_dos_branches() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var a = null; var b = null; \
+             var s = new ReadableStream({ start: function(c) { c.enqueue('X'); c.close(); } }); \
+             var pair = s.tee(); \
+             pair[0].getReader().read().then(function(r) { a = r.value; }); \
+             pair[1].getReader().read().then(function(r) { b = r.value; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("a").expect("e"), JsValue::String("X".into()));
+        assert_eq!(rt.eval("b").expect("e"), JsValue::String("X".into()));
+    }
+
+    #[test]
+    fn response_body_es_readable_stream() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var isStream = null; var same = null; \
+             fetch('/x').then(function(r) { isStream = r.body instanceof ReadableStream; \
+                same = (r.body === r.body); });",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "payload", &[]).expect("r");
+        assert_eq!(rt.eval("isStream").expect("e"), JsValue::Bool(true));
+        // El spec exige identidad: r.body === r.body (getter cacheado).
+        assert_eq!(rt.eval("same").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_read_devuelve_bytes_del_body() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var bytes = null; var done2 = null; \
+             fetch('/x').then(function(r) { var rd = r.body.getReader(); \
+                rd.read().then(function(a) { bytes = Array.from(a.value); \
+                   rd.read().then(function(c) { done2 = c.done; }); }); });",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "AB", &[]).expect("r");
+        // 'A' = 65, 'B' = 66.
+        assert_eq!(rt.eval("bytes[0]").expect("e"), JsValue::Number(65.0));
+        assert_eq!(rt.eval("bytes[1]").expect("e"), JsValue::Number(66.0));
+        assert_eq!(rt.eval("done2").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_leido_marca_body_used_y_text_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.eval(
+            "var err = null; \
+             fetch('/x').then(function(r) { var rd = r.body.getReader(); \
+                rd.read().then(function() { \
+                   r.text().catch(function(e) { err = e.message; }); }); });",
+        )
+        .expect("e");
+        rt.resolve_fetch(1, 200, "OK", "datos", &[]).expect("r");
+        let v = rt.eval("err").expect("e");
+        if let JsValue::String(s) = v {
+            assert!(s.contains("already read"), "msg: {s}");
+        } else {
+            panic!("expected string, got {v:?}");
+        }
+    }
+
+    #[test]
+    fn readable_stream_async_iterator_recorre_chunks() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var collected = []; \
+             var s = new ReadableStream({ start: function(c) { \
+                 c.enqueue('a'); c.enqueue('b'); c.enqueue('c'); c.close(); } }); \
+             (async function() { for await (const ch of s) { collected.push(ch); } })();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("collected.length").expect("e"), JsValue::Number(3.0));
+        assert_eq!(rt.eval("collected[0]").expect("e"), JsValue::String("a".into()));
+        assert_eq!(rt.eval("collected[2]").expect("e"), JsValue::String("c".into()));
+    }
 }

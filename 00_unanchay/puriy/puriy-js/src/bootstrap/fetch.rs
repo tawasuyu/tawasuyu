@@ -76,7 +76,7 @@ globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) 
             headers.set(hdrPairs[i], hdrPairs[i + 1]);
         }
     }
-    return {
+    var resp = {
         status: status,
         statusText: statusText,
         ok: status >= 200 && status < 300,
@@ -85,6 +85,7 @@ globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) 
         bodyUsed: false,
         headers: headers,
         _body: body,
+        _bodyStream: null,
         // Fase 7.35 — bodyUsed enforcement. Spec: tras consumir el body
         // (.text()/.json()/.arrayBuffer()), bodyUsed pasa a true y un
         // segundo intento rechaza con TypeError("body stream already read").
@@ -113,6 +114,34 @@ globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) 
             return Promise.resolve(buf);
         }
     };
+    // Fase 7.45 — `response.body` como ReadableStream. Getter lazy: el
+    // stream se construye la primera vez que se accede y se cachea (el
+    // spec exige que `r.body === r.body`). Leer el chunk marca
+    // `bodyUsed = true`, así un `.text()` posterior rechaza (y viceversa:
+    // si `.text()` ya consumió, leer el stream entrega done sin re-emitir).
+    Object.defineProperty(resp, 'body', {
+        get: function() {
+            if (this._bodyStream) return this._bodyStream;
+            var self = this;
+            var emitted = false;
+            this._bodyStream = new globalThis.ReadableStream({
+                pull: function(controller) {
+                    if (emitted || self.bodyUsed) {
+                        controller.close();
+                        return;
+                    }
+                    emitted = true;
+                    self.bodyUsed = true;
+                    var len = self._body.length;
+                    var view = new Uint8Array(len);
+                    for (var i = 0; i < len; i++) view[i] = self._body.charCodeAt(i) & 0xff;
+                    controller.enqueue(view);
+                }
+            });
+            return this._bodyStream;
+        }
+    });
+    return resp;
 };
 // Fase 7.31 — resolve y reject los Promises pending. El chrome los
 // llama desde el handler de Msg::FetchComplete.
