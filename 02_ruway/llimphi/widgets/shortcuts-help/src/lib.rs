@@ -221,6 +221,7 @@ fn entry_view<Msg: Clone + 'static>(
         Alignment::Start,
     );
 
+    let key_radius = radius::XS;
     let keys = View::new(Style {
         size: Size {
             width: length(140.0_f32),
@@ -238,7 +239,29 @@ fn entry_view<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(palette.bg_key)
-    .radius(radius::XS)
+    .radius(key_radius)
+    .paint_with(move |scene, _ts, rect| {
+        // Gloss superior — el chip de teclado se lee como tecla con
+        // luz cayendo desde el top, no como rect plano. Mismo patrón
+        // que button (P6) — todo chip clicable o tipo-tecla comparte
+        // la firma.
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+        use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let x0 = rect.x as f64;
+        let y0 = rect.y as f64;
+        let x1 = (rect.x + rect.w) as f64;
+        let y1 = (rect.y + rect.h) as f64;
+        let y_mid = y0 + (y1 - y0) * 0.5;
+        let rr = RoundedRect::new(x0, y0, x1, y1, key_radius);
+        let top = Color::from_rgba8(255, 255, 255, 28);
+        let bot = Color::from_rgba8(255, 255, 255, 0);
+        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y_mid))
+            .with_stops([top, bot].as_slice());
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
+    })
     .text_aligned(entry.keys.clone(), ENTRY_FONT - 1.0, palette.fg_key, Alignment::End);
 
     View::new(Style {

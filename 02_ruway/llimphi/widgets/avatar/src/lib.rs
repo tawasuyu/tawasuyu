@@ -44,6 +44,28 @@ pub fn avatar_view<Msg: Clone + 'static>(name: &str, size_px: f32) -> View<Msg> 
     })
     .fill(bg)
     .radius((size_px * 0.5) as f64)
+    .paint_with(move |scene, _ts, rect| {
+        // Highlight radial en el cuadrante superior — el avatar se lee
+        // como esfera. paint_with corre entre el fill y la inicial, así
+        // que la luz se suma al color del nombre sin tapar el texto.
+        // Mismo patrón dot-badge / switch-thumb (P6/P7).
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.30) as f64;
+        let r = (rect.w as f64 * 0.18).max(1.0);
+        let highlight = Color::from_rgba8(255, 255, 255, 60);
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            highlight,
+            None,
+            &Circle::new((cx, cy), r),
+        );
+    })
     .text_aligned(initial.to_string(), font, fg, Alignment::Center)
 }
 
