@@ -36,6 +36,12 @@ extern "C" {
     fn sys_config_idioma() -> u32;
     fn sys_config_paleta(salida: u32) -> i32;
     fn sys_manifiesto_proponer(mf_ptr: u32, mf_len: u32) -> i32;
+    /// Fase 64 :: vuelca el ultimo `AnunciarCanal` recibido (168 B fijos:
+    /// canal|raiz|autor|timestamp_le|firma) o 0 si no hay. Lectura pasiva.
+    fn sys_canal_anuncio(salida: u32, capacidad: u32) -> i32;
+    /// Fase 64 :: acepta el anuncio retenido cuya raiz casa con `raiz_ptr` y
+    /// reancla el manifiesto. El kernel re-verifica anillo + firma canonica.
+    fn sys_canal_aceptar(raiz_ptr: u32) -> i32;
 }
 
 /// Sobre demo embebido en el binario. Forjado por
@@ -69,6 +75,17 @@ static mut ULTIMO_CODIGO: i32 = i32::MIN;
 /// Sentinel que rotula "el sobre fallo localmente, no llame al kernel".
 const VERIFICACION_LOCAL_FALLO: i32 = -100;
 
+/// Layout fijo del anuncio que `sys_canal_anuncio` vuelca: 168 bytes.
+const LARGO_ANUNCIO: usize = 168;
+
+/// Buzon del ultimo anuncio de canal recibido por red. `HAY_ANUNCIO` dice si
+/// `ANUNCIO` trae datos vigentes este fotograma; `ANUNCIO_RAIZ` es la raiz
+/// extraida (bytes 32..64), copiada aparte para pasar su puntero al syscall
+/// de aceptacion.
+static mut ANUNCIO: [u8; LARGO_ANUNCIO] = [0; LARGO_ANUNCIO];
+static mut HAY_ANUNCIO: bool = false;
+static mut ANUNCIO_RAIZ: [u8; 32] = [0; 32];
+
 #[no_mangle]
 pub extern "C" fn init() {
     refrescar_contexto();
@@ -95,6 +112,24 @@ fn refrescar_contexto() {
     let idioma = unsafe { sys_config_idioma() } as u16;
     unsafe { IDIOMA = idioma };
     let _ = unsafe { sys_config_paleta(core::ptr::addr_of_mut!(PALETA) as u32) };
+
+    // Sondear la red por un anuncio de canal en vivo. 168 => hay propuesta;
+    // 0 => buzon vacio. Copiamos su raiz aparte para el syscall de aceptacion.
+    let n = unsafe {
+        sys_canal_anuncio(
+            core::ptr::addr_of_mut!(ANUNCIO) as u32,
+            LARGO_ANUNCIO as u32,
+        )
+    };
+    if n == LARGO_ANUNCIO as i32 {
+        unsafe {
+            HAY_ANUNCIO = true;
+            let a = &*core::ptr::addr_of!(ANUNCIO);
+            (*core::ptr::addr_of_mut!(ANUNCIO_RAIZ)).copy_from_slice(&a[32..64]);
+        }
+    } else {
+        unsafe { HAY_ANUNCIO = false };
+    }
 }
 
 /// Parsea el sobre demo a sus tres campos sin allocar — postcard de
@@ -105,6 +140,21 @@ fn refrescar_contexto() {
 /// lo entrega al kernel. Si la verificacion local falla, NO se llama al
 /// syscall — la UI muestra "VERIFICACION LOCAL FALLO" sin quemar un trap.
 fn probar_reancla() {
+    // Camino VIVO (Fase 64): si hay un anuncio de canal en red, aceptarlo. El
+    // kernel re-verifica anillo + firma canonica y reancla; aqui solo pasamos
+    // la raiz que el operador vio (cierra el TOCTOU contra un anuncio que se
+    // reemplace entre mostrar y aceptar). Toda la criptografia vive en el
+    // kernel para este camino —el anuncio no es un sobre `ManifiestoFirmado`
+    // de hash pelado, sino una firma canonica que el kernel sabe verificar—.
+    if unsafe { HAY_ANUNCIO } {
+        let codigo = unsafe { sys_canal_aceptar(core::ptr::addr_of!(ANUNCIO_RAIZ) as u32) };
+        unsafe { ULTIMO_CODIGO = codigo };
+        return;
+    }
+
+    // Camino DEMO (legacy): sin anuncio en red, probamos el sobre horneado por
+    // el camino del hash pelado (`sys_manifiesto_proponer`), con verificacion
+    // local previa. Util para ejercitar la cadena offline sin red.
     use ed25519_compact::{PublicKey, Signature};
 
     let bytes: &[u8; 128] = PROPUESTA_DEMO;
@@ -161,14 +211,29 @@ fn pintar() {
     dibujar_texto(lienzo, b"MUDANZA", 16, 8, 2, acento);
     rellenar_rect(lienzo, 0, 32, ANCHO, 2, acento);
 
-    // Cuerpo: explicacion + estado.
+    // Cuerpo: modo (red vivo vs demo) + estado.
     let mut y = 48;
-    dibujar_texto(lienzo, b"SOBRE CRYPTO ED25519", 16, y, 1, tinta);
-    y += 12;
-    dibujar_texto(lienzo, b"KERNEL VERIFICA FIRMA LOCAL", 16, y, 1, tinta);
-    y += 18;
-    dibujar_texto(lienzo, b"SPACE PARA PROBAR REANCLA", 16, y, 1, acento);
-    y += 22;
+    if unsafe { HAY_ANUNCIO } {
+        dibujar_texto(lienzo, b"PROPUESTA EN RED (AKASHA)", 16, y, 1, acento);
+        y += 12;
+        // Raiz recomendada: primeros 4 bytes en hex.
+        let raiz = unsafe { ANUNCIO_RAIZ };
+        let mut linea = [b' '; 16];
+        linea[..6].copy_from_slice(b"RAIZ: ");
+        let hx = hex8(&raiz[..4]);
+        linea[6..14].copy_from_slice(&hx);
+        dibujar_texto(lienzo, &linea[..14], 16, y, 1, tinta);
+        y += 18;
+        dibujar_texto(lienzo, b"SPACE PARA ACEPTAR", 16, y, 1, acento);
+        y += 22;
+    } else {
+        dibujar_texto(lienzo, b"SIN ANUNCIO EN RED", 16, y, 1, tinta);
+        y += 12;
+        dibujar_texto(lienzo, b"SPACE PRUEBA SOBRE DEMO", 16, y, 1, secundario);
+        y += 18;
+        dibujar_texto(lienzo, b"ESPERANDO PUBLICAR", 16, y, 1, acento);
+        y += 22;
+    }
 
     // Resultado del ultimo intento.
     let ult = unsafe { ULTIMO_CODIGO };
@@ -206,7 +271,7 @@ fn pintar() {
     let mut pie = [b' '; 16];
     pie[0] = ((idioma & 0xFF) as u8).to_ascii_uppercase();
     pie[1] = (((idioma >> 8) & 0xFF) as u8).to_ascii_uppercase();
-    let cola = b"   FASE 25";
+    let cola = b"   FASE 64";
     pie[2..2 + cola.len()].copy_from_slice(cola);
     dibujar_texto(lienzo, &pie[..2 + cola.len()], 16, pie_y + 2, 1, tinta);
 }
@@ -233,6 +298,18 @@ fn rellenar_rect(lienzo: &mut [u32], x: usize, y: usize, w: usize, h: usize, col
             lienzo[base + col] = color;
         }
     }
+}
+
+/// Convierte hasta 4 bytes en 8 caracteres hex ASCII MAYUSCULAS (la mini-fuente
+/// solo trae A-F en mayuscula). Sin asignacion.
+fn hex8(bytes: &[u8]) -> [u8; 8] {
+    const DIG: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = [b'0'; 8];
+    for (i, &b) in bytes.iter().take(4).enumerate() {
+        out[i * 2] = DIG[(b >> 4) as usize];
+        out[i * 2 + 1] = DIG[(b & 0x0F) as usize];
+    }
+    out
 }
 
 /// Formatea un i32 corto (entre -9 y 99) en ASCII decimal sin asignacion.
