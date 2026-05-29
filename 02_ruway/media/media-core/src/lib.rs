@@ -1394,6 +1394,154 @@ impl SubtitleTrack {
         }
         Ok(Self::new(cues))
     }
+
+    /// Parsea un cuerpo WebVTT — el formato de subtítulos nativo de la
+    /// web (par del stack WebM + AV1 + Opus). Tolerante igual que
+    /// [`Self::parse_srt`]: salta bloques malformados y devuelve `Err`
+    /// sólo si no quedó ningún cue.
+    ///
+    /// Diferencias con SRT que cubre el parser:
+    /// - Cabecera `WEBVTT` (con texto opcional en la misma línea) que
+    ///   se descarta, más el BOM `\u{FEFF}` si está presente.
+    /// - Bloques `NOTE`, `STYLE` y `REGION` que se ignoran enteros.
+    /// - Identificador de cue opcional (línea previa al timing sin
+    ///   `-->`) que se descarta.
+    /// - Timestamps `MM:SS.mmm` (sin hora) además de `HH:MM:SS.mmm`.
+    /// - Ajustes de posición tras el timestamp final
+    ///   (`line:0 position:50%`…) que se ignoran.
+    /// - Etiquetas en línea (`<b>`, `<i>`, `<c.foo>`, timestamps
+    ///   `<00:00:01.000>`) que se eliminan, y entidades HTML comunes
+    ///   (`&amp;` `&lt;` `&gt;` `&nbsp;` `&lrm;` `&rlm;`) que se
+    ///   decodifican — queda texto plano listo para pintar.
+    pub fn parse_webvtt(text: &str) -> Result<Self, String> {
+        let mut cues: Vec<SubtitleCue> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+
+        // Normalizamos line endings y quitamos el BOM si está.
+        let text = text
+            .trim_start_matches('\u{FEFF}')
+            .replace("\r\n", "\n")
+            .replace('\r', "\n");
+
+        for (i, block) in text.split("\n\n").enumerate() {
+            let block = block.trim_matches('\n');
+            if block.is_empty() {
+                continue;
+            }
+            // La cabecera WEBVTT vive en el primer bloque; el cue (si lo
+            // hay pegado a ella) viene tras un \n, así que sólo
+            // descartamos esa línea, no el bloque entero.
+            let block = if i == 0 && block.starts_with("WEBVTT") {
+                match block.split_once('\n') {
+                    Some((_, rest)) => rest.trim_matches('\n'),
+                    None => continue, // bloque era sólo la cabecera
+                }
+            } else {
+                block
+            };
+            // Bloques de metadatos que no son cues.
+            let head = block.lines().next().unwrap_or("").trim_start();
+            if head == "NOTE"
+                || head.starts_with("NOTE ")
+                || head == "STYLE"
+                || head == "REGION"
+            {
+                continue;
+            }
+
+            let mut lines = block.lines();
+            let first = match lines.next() {
+                Some(l) => l.trim(),
+                None => continue,
+            };
+            // Identificador de cue opcional: si la primera línea no
+            // tiene `-->`, es el id y la siguiente es el timing.
+            let timing_line = if first.contains("-->") {
+                first
+            } else {
+                match lines.next() {
+                    Some(l) => l.trim(),
+                    None => {
+                        warnings.push(format!("bloque {i}: falta línea de timing"));
+                        continue;
+                    }
+                }
+            };
+            let (start, end) = match parse_vtt_timing_line(timing_line) {
+                Ok(t) => t,
+                Err(e) => {
+                    warnings.push(format!("bloque {i}: timing '{timing_line}' — {e}"));
+                    continue;
+                }
+            };
+            let rest: Vec<&str> = lines.collect();
+            let raw = rest.join("\n");
+            let text = strip_vtt_markup(&raw).trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            cues.push(SubtitleCue { start, end, text });
+        }
+        if cues.is_empty() {
+            return Err(format!(
+                "ningún cue válido en el WebVTT (avisos: {})",
+                warnings.join(" · ")
+            ));
+        }
+        Ok(Self::new(cues))
+    }
+
+    /// Autodetecta SRT vs WebVTT por la cabecera `WEBVTT` (tras un BOM
+    /// opcional) y delega al parser correspondiente. Lo que usa el
+    /// consumidor cuando no sabe el formato de antemano.
+    pub fn parse_subtitles(text: &str) -> Result<Self, String> {
+        let head = text.trim_start_matches('\u{FEFF}').trim_start();
+        if head.starts_with("WEBVTT") {
+            Self::parse_webvtt(text)
+        } else {
+            Self::parse_srt(text)
+        }
+    }
+}
+
+/// Timing WebVTT: como el de SRT pero el lado derecho puede arrastrar
+/// ajustes de posición tras el timestamp (`... --> 00:00:03.000 line:0
+/// position:50%`). Tomamos sólo el primer token de cada lado.
+fn parse_vtt_timing_line(s: &str) -> Result<(Duration, Duration), String> {
+    let parts: Vec<&str> = s.split("-->").map(str::trim).collect();
+    if parts.len() != 2 {
+        return Err("esperaba 'MM:SS.mmm --> MM:SS.mmm'".into());
+    }
+    // El primer token whitespace-separado es el timestamp; el resto
+    // (settings del cue) se ignora.
+    let start_tok = parts[0].split_whitespace().next().unwrap_or(parts[0]);
+    let end_tok = parts[1].split_whitespace().next().unwrap_or(parts[1]);
+    let start = parse_timestamp(start_tok)?;
+    let end = parse_timestamp(end_tok)?;
+    Ok((start, end))
+}
+
+/// Elimina las etiquetas en línea de WebVTT (`<b>`, `<i>`, `<c.foo>`,
+/// timestamps `<00:00:01.000>`, etc.) y decodifica las entidades HTML
+/// comunes — deja texto plano para pintar. No es un parser HTML: sólo
+/// borra todo lo que está entre `<` y `>`.
+fn strip_vtt_markup(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut depth = 0u32;
+    for ch in s.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .replace("&lrm;", "")
+        .replace("&rlm;", "")
 }
 
 fn parse_timing_line(s: &str) -> Result<(Duration, Duration), String> {
@@ -1407,25 +1555,28 @@ fn parse_timing_line(s: &str) -> Result<(Duration, Duration), String> {
 }
 
 fn parse_timestamp(s: &str) -> Result<Duration, String> {
-    // Acepta HH:MM:SS,mmm o HH:MM:SS.mmm. Trim para tolerar espacios.
+    // Acepta HH:MM:SS,mmm o HH:MM:SS.mmm (SRT) y MM:SS.mmm (WebVTT
+    // omite la hora cuando es 0). Trim para tolerar espacios.
     let s = s.trim();
     let (hms, ms_part) = match s.rsplit_once(',').or_else(|| s.rsplit_once('.')) {
         Some(p) => p,
         None => (s, "0"),
     };
     let hms_parts: Vec<&str> = hms.split(':').collect();
-    if hms_parts.len() != 3 {
-        return Err(format!("timestamp inválido '{s}'"));
-    }
-    let h: u64 = hms_parts[0]
-        .parse()
-        .map_err(|_| format!("hora inválida en '{s}'"))?;
-    let m: u64 = hms_parts[1]
-        .parse()
-        .map_err(|_| format!("minuto inválido en '{s}'"))?;
-    let sec: u64 = hms_parts[2]
-        .parse()
-        .map_err(|_| format!("segundo inválido en '{s}'"))?;
+    // 3 partes = HH:MM:SS ; 2 partes = MM:SS (la hora es implícita 0).
+    let (h, m, sec) = match hms_parts.as_slice() {
+        [hh, mm, ss] => (
+            hh.parse::<u64>().map_err(|_| format!("hora inválida en '{s}'"))?,
+            mm.parse::<u64>().map_err(|_| format!("minuto inválido en '{s}'"))?,
+            ss.parse::<u64>().map_err(|_| format!("segundo inválido en '{s}'"))?,
+        ),
+        [mm, ss] => (
+            0,
+            mm.parse::<u64>().map_err(|_| format!("minuto inválido en '{s}'"))?,
+            ss.parse::<u64>().map_err(|_| format!("segundo inválido en '{s}'"))?,
+        ),
+        _ => return Err(format!("timestamp inválido '{s}'")),
+    };
     let ms: u64 = ms_part
         .parse()
         .map_err(|_| format!("ms inválidos en '{s}'"))?;
@@ -1507,5 +1658,98 @@ mod tests_subtitles {
         // Sólo el segundo bloque entra.
         assert_eq!(track.len(), 1);
         assert_eq!(track.cues()[0].text, "válido");
+    }
+
+    // --- WebVTT ---
+
+    #[test]
+    fn parse_simple_webvtt() {
+        let src = "WEBVTT\n\
+            \n\
+            00:00:01.000 --> 00:00:03.500\n\
+            Hola mundo\n\
+            \n\
+            00:00:04.000 --> 00:00:06.000\n\
+            Segunda línea\n";
+        let track = SubtitleTrack::parse_webvtt(src).unwrap();
+        assert_eq!(track.len(), 2);
+        assert_eq!(track.cues()[0].text, "Hola mundo");
+        assert_eq!(track.cues()[0].start, Duration::from_millis(1000));
+        assert_eq!(track.cues()[0].end, Duration::from_millis(3500));
+    }
+
+    #[test]
+    fn webvtt_mm_ss_timestamp() {
+        // WebVTT permite omitir la hora cuando es 0.
+        let src = "WEBVTT\n\n01:02.500 --> 01:05.000\nbreve\n";
+        let track = SubtitleTrack::parse_webvtt(src).unwrap();
+        assert_eq!(track.cues()[0].start, Duration::from_millis(62_500));
+        assert_eq!(track.cues()[0].end, Duration::from_millis(65_000));
+    }
+
+    #[test]
+    fn webvtt_cue_id_and_settings_ignored() {
+        let src = "WEBVTT\n\
+            \n\
+            intro\n\
+            00:00:01.000 --> 00:00:03.000 line:0 position:50% align:start\n\
+            con ajustes\n";
+        let track = SubtitleTrack::parse_webvtt(src).unwrap();
+        assert_eq!(track.len(), 1);
+        assert_eq!(track.cues()[0].text, "con ajustes");
+        assert_eq!(track.cues()[0].end, Duration::from_millis(3000));
+    }
+
+    #[test]
+    fn webvtt_note_style_region_skipped() {
+        let src = "WEBVTT\n\
+            \n\
+            NOTE este bloque es un comentario\n\
+            que ocupa varias líneas\n\
+            \n\
+            STYLE\n\
+            ::cue { color: yellow }\n\
+            \n\
+            00:00:01.000 --> 00:00:02.000\n\
+            sólo este cuenta\n";
+        let track = SubtitleTrack::parse_webvtt(src).unwrap();
+        assert_eq!(track.len(), 1);
+        assert_eq!(track.cues()[0].text, "sólo este cuenta");
+    }
+
+    #[test]
+    fn webvtt_strips_inline_tags_and_entities() {
+        let src = "WEBVTT\n\
+            \n\
+            00:00:01.000 --> 00:00:02.000\n\
+            <c.loud>Hola</c> <b>mundo</b> <00:00:01.500>cruel & feo\n";
+        let track = SubtitleTrack::parse_webvtt(src).unwrap();
+        assert_eq!(track.cues()[0].text, "Hola mundo cruel & feo");
+    }
+
+    #[test]
+    fn webvtt_header_with_trailing_text() {
+        // La cabecera puede llevar texto y el primer cue venir pegado.
+        let src = "WEBVTT - Mi película\n\
+            \n\
+            00:00:01.000 --> 00:00:02.000\n\
+            primero\n";
+        let track = SubtitleTrack::parse_webvtt(src).unwrap();
+        assert_eq!(track.len(), 1);
+        assert_eq!(track.cues()[0].text, "primero");
+    }
+
+    #[test]
+    fn parse_subtitles_autodetects() {
+        let vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nvtt\n";
+        let srt = "1\n00:00:01,000 --> 00:00:02,000\nsrt\n";
+        assert_eq!(SubtitleTrack::parse_subtitles(vtt).unwrap().cues()[0].text, "vtt");
+        assert_eq!(SubtitleTrack::parse_subtitles(srt).unwrap().cues()[0].text, "srt");
+    }
+
+    #[test]
+    fn empty_webvtt_fails() {
+        let err = SubtitleTrack::parse_webvtt("WEBVTT\n").unwrap_err();
+        assert!(err.contains("cue"));
     }
 }

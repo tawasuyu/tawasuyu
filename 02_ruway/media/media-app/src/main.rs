@@ -243,8 +243,8 @@ fn playlist_slot() -> &'static OnceLock<Option<Arc<Mutex<Playlist>>>> {
     &SLOT
 }
 
-/// Pista de subtítulos cargada, si MEDIA_SRT apuntó a un SRT
-/// válido. Se consulta por timestamp del seekable_handle activo.
+/// Pista de subtítulos cargada, si MEDIA_SRT/MEDIA_VTT apuntó a un
+/// archivo válido. Se consulta por timestamp del seekable_handle activo.
 fn subtitles_slot() -> &'static OnceLock<Option<SubtitleTrack>> {
     static SLOT: OnceLock<Option<SubtitleTrack>> = OnceLock::new();
     &SLOT
@@ -1835,12 +1835,13 @@ fn main() {
         }
     }
 
-    // Subtítulos: MEDIA_SRT apunta al archivo .srt; si parsea OK
-    // queda disponible para el subtitle_strip. Falla silenciosa con
-    // log en stderr — la app sigue funcionando sin subs.
-    let subs = match std::env::var("MEDIA_SRT") {
+    // Subtítulos: MEDIA_SRT o MEDIA_VTT apuntan al archivo; el parser
+    // autodetecta SRT vs WebVTT por la cabecera, así que ambas envs son
+    // intercambiables (gana MEDIA_SRT si las dos están). Falla
+    // silenciosa con log en stderr — la app sigue sin subs.
+    let subs = match std::env::var("MEDIA_SRT").or_else(|_| std::env::var("MEDIA_VTT")) {
         Ok(path) => match std::fs::read_to_string(&path) {
-            Ok(body) => match SubtitleTrack::parse_srt(&body) {
+            Ok(body) => match SubtitleTrack::parse_subtitles(&body) {
                 Ok(t) => {
                     eprintln!(
                         "media-app: subtitles {path} · {} cues",
@@ -1849,12 +1850,12 @@ fn main() {
                     Some(t)
                 }
                 Err(e) => {
-                    eprintln!("media-app: SRT inválido ({e})");
+                    eprintln!("media-app: subtítulos inválidos ({e})");
                     None
                 }
             },
             Err(e) => {
-                eprintln!("media-app: no pude leer SRT {path}: {e}");
+                eprintln!("media-app: no pude leer subtítulos {path}: {e}");
                 None
             }
         },

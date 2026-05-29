@@ -95,10 +95,18 @@ session respawnea por seek. Unix-only por ahora.
 | `Levels`    | snapshot                             | peak + RMS suavizados                        |
 | `Spectrum`  | snapshot + bandas log                | magnitudes por banda (Goertzel)              |
 | `Waterfall` | snapshot + bandas log + filas        | grid 2D historial (newest-first)             |
-| `SubtitleTrack` | parser SRT + query por timestamp | cue activo (sincronizado al seekable handle) |
+| `SubtitleTrack` | parser SRT **+ WebVTT** (autodetecta por cabecera) + query por timestamp | cue activo (sincronizado al seekable handle) |
 
 Todas tienen attack-inmediato + release-exponencial donde aplica para
 que las barras no titilen entre frames.
+
+`SubtitleTrack` lee **SRT y WebVTT** — `parse_subtitles` autodetecta por
+la cabecera `WEBVTT` y delega. WebVTT es el subtítulo nativo de la web,
+par del stack abierto WebM + AV1 + Opus: el parser descarta cabecera,
+bloques `NOTE`/`STYLE`/`REGION` e identificadores de cue, acepta
+timestamps `MM:SS.mmm` sin hora, ignora los ajustes de posición
+(`line:`/`position:`…) y limpia las etiquetas en línea (`<b>`, `<c.foo>`,
+timestamps `<…>`) + entidades HTML comunes — deja texto plano.
 
 ## Playlist + Transport
 
@@ -116,7 +124,7 @@ persiste entre cambios.
 | `MEDIA_WAV=path`        | usa un WAV como fuente principal de audio             |
 | `MEDIA_MP3=path`        | usa un MP3 como fuente principal (WAV gana si ambas)  |
 | `MEDIA_PLAYLIST=m3u`    | carga lista m3u simple (una línea por archivo, `#` = comentario, paths relativos al archivo) |
-| `MEDIA_SRT=path`        | carga subtítulos SRT sincronizados al playback        |
+| `MEDIA_SRT=path` / `MEDIA_VTT=path` | carga subtítulos SRT o WebVTT (autodetecta por cabecera) sincronizados al playback |
 | `MEDIA_MUTE=1`          | no abre sink cpal (visor sigue, sin sonido)           |
 | `MEDIA_MIX_TONE=g`      | superpone tono A4 a ganancia `g` (0..1) vía MixerAudio|
 
