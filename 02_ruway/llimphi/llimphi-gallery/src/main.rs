@@ -13,6 +13,7 @@
 //! - `?`: abre/cierra el overlay de atajos
 //! - Esc: cierra overlay activo
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use llimphi_ui::llimphi_layout::taffy::{
@@ -29,6 +30,10 @@ use llimphi_theme::Theme;
 use llimphi_widget_avatar::avatar_view;
 use llimphi_widget_badge::{count_badge_view, dot_badge_view, BadgeKind};
 use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
+use llimphi_widget_card::{card_view, CardOptions, CardPalette};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
 use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_field::{field_view, FieldPalette, FieldSpec};
 use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
@@ -62,6 +67,9 @@ enum Msg {
     CloseModal,
     ConfirmModal,
     ToggleShortcuts,
+    OpenContextMenu,
+    CloseContextMenu,
+    ContextMenuPick(usize),
 }
 
 struct Model {
@@ -74,6 +82,12 @@ struct Model {
     modal_open: bool,
     shortcuts_open: bool,
     viewport: (f32, f32),
+    /// Anchor del context-menu si está abierto. None = cerrado.
+    menu_open: Option<(f32, f32)>,
+    /// Item resaltado del menú (`usize::MAX` = ninguno, estado inicial).
+    menu_active: usize,
+    /// Última opción elegida del menú — se muestra como toast.
+    menu_last_pick: Option<String>,
 }
 
 struct Gallery;
@@ -104,6 +118,9 @@ impl App for Gallery {
             modal_open: false,
             shortcuts_open: false,
             viewport: (1280.0, 800.0),
+            menu_open: None,
+            menu_active: usize::MAX,
+            menu_last_pick: None,
         }
     }
 
@@ -142,6 +159,33 @@ impl App for Gallery {
             Msg::CloseModal => m.modal_open = false,
             Msg::ConfirmModal => m.modal_open = false,
             Msg::ToggleShortcuts => m.shortcuts_open = !m.shortcuts_open,
+            Msg::OpenContextMenu => {
+                // Posición fija razonable — el botón está en la columna
+                // derecha; abrir el menú con anchor relativo al
+                // viewport mantiene la demo predecible aunque la
+                // ventana cambie de tamaño.
+                m.menu_open = Some((m.viewport.0 * 0.72, m.viewport.1 * 0.55));
+                m.menu_active = usize::MAX;
+            }
+            Msg::CloseContextMenu => {
+                m.menu_open = None;
+                m.menu_active = usize::MAX;
+            }
+            Msg::ContextMenuPick(idx) => {
+                let labels = ["Copiar", "Cortar", "Pegar", "", "Eliminar"];
+                let label = labels.get(idx).copied().unwrap_or("?");
+                m.menu_last_pick = Some(label.to_string());
+                m.menu_open = None;
+                m.menu_active = usize::MAX;
+                // Confirmación visible.
+                let id = m.next_toast_id;
+                m.next_toast_id += 1;
+                m.toasts.push(Toast::info(
+                    id,
+                    format!("Menú → {label}"),
+                    Duration::from_secs(3),
+                ));
+            }
         }
         m
     }
@@ -254,6 +298,26 @@ impl App for Gallery {
                 viewport: model.viewport,
                 on_dismiss: Msg::ToggleShortcuts,
                 palette: ShortcutsHelpPalette::from_theme(&theme),
+            }));
+        }
+        if let Some(anchor) = model.menu_open {
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor,
+                viewport: model.viewport,
+                header: Some("Lienzo".into()),
+                items: vec![
+                    ContextMenuItem::action("Copiar").with_shortcut("Ctrl+C"),
+                    ContextMenuItem::action("Cortar").with_shortcut("Ctrl+X"),
+                    ContextMenuItem::action("Pegar").with_shortcut("Ctrl+V").disabled(),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::action("Eliminar")
+                        .with_shortcut("Del")
+                        .destructive(),
+                ],
+                active: model.menu_active,
+                on_pick: Arc::new(Msg::ContextMenuPick),
+                on_dismiss: Msg::CloseContextMenu,
+                palette: ContextMenuPalette::from_theme(&theme),
             }));
         }
         if !model.toasts.is_empty() {
@@ -504,6 +568,63 @@ fn column_right(_model: &Model, theme: &Theme) -> View<Msg> {
     children.push(spacer_v(10.0));
     children.push(skeleton_box_view::<Msg>(percent_to_px(0.9, 360.0), 60.0, &palette));
 
+    children.push(section_title("Cards"));
+    // Dos cards apilados: el primero con la firma (gradient sutil +
+    // hairline en el top), el segundo con `accent` lateral y fill plano.
+    // Para apreciar la firma hay que mirar de cerca: el ojo registra
+    // "tallado" sin saber por qué.
+    let card_palette = CardPalette::from_theme(theme);
+    children.push(card_view(
+        vec![
+            text_line("Documento — multilienzo", 13.0, theme.fg_text),
+            text_line("3 cuerpos · 412 átomos · BLAKE3 verificado", 11.0, theme.fg_muted),
+        ],
+        CardOptions::with_signature(theme),
+        &card_palette,
+    ));
+    children.push(spacer_v(8.0));
+    children.push(card_view(
+        vec![
+            text_line("Build pasó — wawa-kernel", 13.0, theme.fg_text),
+            text_line("x86_64-unknown-none · 1.42s · 0 warnings", 11.0, theme.fg_muted),
+        ],
+        CardOptions {
+            accent: Some(Color::from_rgba8(110, 200, 130, 255)),
+            ..Default::default()
+        },
+        &card_palette,
+    ));
+
+    children.push(section_title("Menú contextual"));
+    children.push(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(32.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            padding: Rect {
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_button)
+        .hover_fill(theme.bg_button_hover)
+        .radius(llimphi_theme::radius::SM)
+        .text_aligned(
+            "Mostrar menú".to_string(),
+            12.0,
+            theme.fg_text,
+            Alignment::Center,
+        )
+        .on_click(Msg::OpenContextMenu),
+    );
+
     children.push(section_title("Iconografía"));
     children.push(icon_grid(theme));
 
@@ -513,6 +634,17 @@ fn column_right(_model: &Model, theme: &Theme) -> View<Msg> {
 // ---------------------------------------------------------------------
 // Helpers de composición
 // ---------------------------------------------------------------------
+
+fn text_line(text: &str, size: f32, color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(size + 6.0),
+        },
+        ..Default::default()
+    })
+    .text_aligned(text.to_string(), size, color, Alignment::Start)
+}
 
 fn section_title(text: &str) -> View<Msg> {
     View::new(Style {

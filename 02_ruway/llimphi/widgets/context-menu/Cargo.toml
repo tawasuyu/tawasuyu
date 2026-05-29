@@ -10,3 +10,4 @@ description = "llimphi-widget-context-menu — menú contextual gioser: panel ne
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-panel = { workspace = true }

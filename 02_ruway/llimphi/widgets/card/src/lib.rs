@@ -16,6 +16,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 #[derive(Debug, Clone, Copy)]
 pub struct CardPalette {
@@ -42,6 +43,12 @@ pub struct CardOptions {
     pub padding: f32,
     pub gap: f32,
     pub radius: f64,
+    /// Firma visual del panel (gradient sutil + hairline accent en el
+    /// top). `Some(style)` reemplaza el fill plano del body por el
+    /// painter de la firma — usar para cards prominentes (dashboards,
+    /// timeline entries grandes) donde se nota el "tallado". `None`
+    /// mantiene el fill sólido del `CardPalette` (default).
+    pub signature: Option<PanelStyle>,
 }
 
 impl Default for CardOptions {
@@ -51,6 +58,23 @@ impl Default for CardOptions {
             padding: 12.0,
             gap: 4.0,
             radius: 4.0,
+            signature: None,
+        }
+    }
+}
+
+impl CardOptions {
+    /// Variante con firma visual derivada del theme. El `radius` del
+    /// card se alinea al del `PanelStyle` para que la silueta del
+    /// gradiente coincida con las esquinas del nodo.
+    pub fn with_signature(t: &llimphi_theme::Theme) -> Self {
+        let style = PanelStyle::from_theme(t);
+        Self {
+            accent: None,
+            padding: 12.0,
+            gap: 4.0,
+            radius: style.radius,
+            signature: Some(style),
         }
     }
 }
@@ -64,7 +88,7 @@ pub fn card_view<Msg: Clone + 'static>(
     palette: &CardPalette,
 ) -> View<Msg> {
     let pad = opts.padding;
-    let body = View::new(Style {
+    let body_style = Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
@@ -82,10 +106,19 @@ pub fn card_view<Msg: Clone + 'static>(
             height: length(opts.gap),
         },
         ..Default::default()
-    })
-    .fill(palette.bg)
-    .radius(opts.radius)
-    .children(children);
+    };
+    let body = if let Some(style) = opts.signature {
+        View::new(body_style)
+            .paint_with(panel_signature_painter(style))
+            .radius(opts.radius)
+            .clip(true)
+            .children(children)
+    } else {
+        View::new(body_style)
+            .fill(palette.bg)
+            .radius(opts.radius)
+            .children(children)
+    };
 
     let Some(accent) = opts.accent else {
         return body;

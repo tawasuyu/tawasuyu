@@ -39,6 +39,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 /// Paleta del menú. Pensada para una app dark; los defaults usan
 /// negro + blanco + un acento (override por la app). Las apps con
@@ -76,6 +77,10 @@ pub struct ContextMenuPalette {
     /// el menú está abierto. Usualmente RGBA con alpha bajo (~0.25)
     /// para apagar suavemente el árbol principal sin ocultarlo.
     pub scrim: Color,
+    /// Firma visual del panel — gradiente vertical sutil. Sin hairline
+    /// top (la firma transversal del menú es la barra accent vertical
+    /// a la izquierda, no es necesario competir con el hairline).
+    pub panel: PanelStyle,
 }
 
 impl ContextMenuPalette {
@@ -84,6 +89,12 @@ impl ContextMenuPalette {
     /// oscuro; el texto invertido en la fila activa asume que el
     /// accent es claro respecto al panel.
     pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
+        // El menú usa `bg_app` como fondo (un grado más oscuro que
+        // `bg_panel`) para diferenciarse del panel padre — sobre eso
+        // armamos un PanelStyle a mano que respeta esa elección.
+        let mut panel = PanelStyle::neutral(t);
+        panel.bg_base = t.bg_app;
+        panel.radius = 0.0; // el menú no tiene esquinas redondeadas
         Self {
             bg_panel: t.bg_app,
             bg_active: t.accent,
@@ -97,6 +108,7 @@ impl ContextMenuPalette {
             border: t.border,
             separator: t.border,
             scrim: Color::from_rgba8(0, 0, 0, 64),
+            panel,
         }
     }
 }
@@ -268,6 +280,9 @@ pub fn context_menu_view<Msg: Clone + 'static>(spec: ContextMenuSpec<Msg>) -> Vi
         .fill(palette.accent),
         // Contenedor de los items (deja 1px al borde derecho/inf
         // /superior para que el `palette.border` del padre se vea).
+        // El fondo es el gradiente sutil del PanelStyle — los items
+        // que antes pintaban `bg_panel` sólido ahora son transparentes
+        // para dejar pasar el gradient.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             flex_grow: 1.0,
@@ -279,7 +294,7 @@ pub fn context_menu_view<Msg: Clone + 'static>(spec: ContextMenuSpec<Msg>) -> Vi
             },
             ..Default::default()
         })
-        .fill(palette.bg_panel)
+        .paint_with(panel_signature_painter(palette.panel))
         .children(children),
     ]);
 
@@ -298,6 +313,9 @@ pub fn context_menu_view<Msg: Clone + 'static>(spec: ContextMenuSpec<Msg>) -> Vi
 }
 
 fn header_view<Msg: Clone + 'static>(text: String, palette: &ContextMenuPalette) -> View<Msg> {
+    // Sin `.fill(...)` — deja transparente el header para que el
+    // gradiente del contenedor de items se vea continuo de arriba a
+    // abajo. Antes pintaba `bg_panel` sólido y tapaba el gradient.
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -312,7 +330,6 @@ fn header_view<Msg: Clone + 'static>(text: String, palette: &ContextMenuPalette)
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(palette.bg_panel)
     // Header en uppercase tiny — la convención brutalista de "esto
     // no es una opción, es el contexto". Letter-spacing lo simulamos
     // expandiendo a mayúsculas: parley no soporta letter-spacing
@@ -332,14 +349,18 @@ fn item_view<Msg: Clone + 'static>(
         return separator_view(palette);
     }
 
-    let (bg, fg, fg_short) = if !item.enabled {
-        (palette.bg_panel, palette.fg_disabled, palette.fg_disabled)
+    // `bg = None` significa "dejar transparente y mostrar el gradient
+    // del panel contenedor". Sólo el estado activo pinta un fill
+    // sólido (el accent), porque queremos que el highlight sea
+    // inequívoco — no debe mezclarse con el gradient.
+    let (bg, fg, fg_short): (Option<Color>, Color, Color) = if !item.enabled {
+        (None, palette.fg_disabled, palette.fg_disabled)
     } else if is_active {
-        (palette.bg_active, palette.fg_active, palette.fg_active)
+        (Some(palette.bg_active), palette.fg_active, palette.fg_active)
     } else if item.destructive {
-        (palette.bg_panel, palette.fg_destructive, palette.fg_shortcut)
+        (None, palette.fg_destructive, palette.fg_shortcut)
     } else {
-        (palette.bg_panel, palette.fg_text, palette.fg_shortcut)
+        (None, palette.fg_text, palette.fg_shortcut)
     };
 
     // Label a la izquierda — flex-grow 1 para que empuje al shortcut
@@ -386,8 +407,10 @@ fn item_view<Msg: Clone + 'static>(
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(bg)
     .children(row_children);
+    if let Some(bg) = bg {
+        row = row.fill(bg);
+    }
 
     if item.enabled {
         // Hover = mismo look que active. El usuario nunca se confunde
@@ -400,9 +423,8 @@ fn item_view<Msg: Clone + 'static>(
 }
 
 fn separator_view<Msg: Clone + 'static>(palette: &ContextMenuPalette) -> View<Msg> {
-    // Container con el bg del panel; adentro, una línea horizontal
-    // centrada al 60% del ancho. Margen vertical sobrante = padding
-    // arriba/abajo para que la línea quede en el centro óptico.
+    // Container transparente — el gradient del panel pasa a través.
+    // Adentro, una línea horizontal centrada al 60% del ancho.
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -413,7 +435,6 @@ fn separator_view<Msg: Clone + 'static>(palette: &ContextMenuPalette) -> View<Ms
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(palette.bg_panel)
     .children(vec![View::new(Style {
         size: Size {
             width: percent(0.6_f32),

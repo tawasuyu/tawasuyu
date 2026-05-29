@@ -137,9 +137,7 @@ pub fn stat_card_view<Msg: Clone + 'static>(
         children,
         CardOptions {
             accent: Some(accent),
-            padding: 12.0,
-            gap: 4.0,
-            radius: 4.0,
+            ..Default::default()
         },
         &CardPalette { bg: palette.bg },
     )

@@ -10,3 +10,4 @@ description = "llimphi-widget-card — container card-shape con padding consiste
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-panel = { workspace = true }

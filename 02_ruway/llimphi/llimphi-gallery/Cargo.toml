@@ -34,3 +34,5 @@ llimphi-widget-avatar = { workspace = true }
 llimphi-widget-skeleton = { workspace = true }
 llimphi-widget-field = { workspace = true }
 llimphi-widget-panel = { workspace = true }
+llimphi-widget-card = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
