@@ -294,7 +294,7 @@ globalThis.__puriy_tick = function(now) {
 const EVENTS_BOOTSTRAP: &str = r#"
 globalThis.__puriy_elements = {};
 globalThis.__puriy_dirty = [];
-globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id, dataset_pairs, attribute_pairs) {
+globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent_id, dataset_pairs, attribute_pairs, dfs_index) {
     // Fase 7.17 — tag interno se guarda lowercase (matchea el formato
     // del parser HTML5 + se usa en payloads de appendChild/insertBefore/
     // replaceChild que el chrome rutea al `synthesize_box_node` con
@@ -306,6 +306,7 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         _id: id,
         _tagName: tag,
         _textContent: text,
+        _dfs_index: dfs_index || 0,
         _classList: classes || [],
         _value: value == null ? '' : String(value),
         _parent_id: parent_id == null ? null : String(parent_id),
@@ -888,6 +889,37 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         },
         configurable: true
     });
+    // Fase 7.29 — getBoundingClientRect(). Spec real: devuelve un
+    // DOMRect con top/left/right/bottom/width/height/x/y en coords del
+    // viewport (descontando scroll). Acá heurístico:
+    //   - top    = (dfs_index - 1) × 30 - scrollY (cada elemento ocupa
+    //              ~30px en orden DFS, viewport-relative).
+    //   - left   = 0 (sin info de columnas / flex / grid).
+    //   - width  = full innerWidth si tag es block; ~100 si es inline
+    //              chico (span/a/b/i/em/etc.).
+    //   - height = 30 (estimación standard).
+    // Lo suficiente para "está en viewport" / lazy load checks. No es
+    // posición exacta — taffy layout vive sólo en frame render, no
+    // accesible desde JS sin sync por elemento (caro).
+    el.getBoundingClientRect = function() {
+        var inlineTags = {span:1, a:1, b:1, i:1, em:1, strong:1, small:1,
+                          code:1, u:1, s:1, mark:1, sub:1, sup:1, kbd:1};
+        var w = inlineTags[el._tagName] ? 100 : (globalThis.__puriy_inner_width || 1024);
+        var h = 30;
+        var top = (el._dfs_index > 0 ? (el._dfs_index - 1) * 30 : 0)
+                  - (globalThis.__puriy_scroll_y || 0);
+        var left = 0;
+        return {
+            top: top, left: left,
+            right: left + w, bottom: top + h,
+            width: w, height: h,
+            x: left, y: top,
+            toJSON: function() {
+                return {top: top, left: left, right: left + w, bottom: top + h,
+                        width: w, height: h, x: left, y: top};
+            }
+        };
+    };
     // Fase 7.25 — dispatchEvent(event). Acepta un Event/CustomEvent ya
     // construido y lo rutea por capture/target/bubble (delega a
     // __puriy_dispatch_event). Devuelve `!event.defaultPrevented` (true
@@ -2100,7 +2132,7 @@ impl JsRuntime {
             }
             attr_arr.push(']');
             script.push_str(&format!(
-                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val}, {parent}, {ds}, {attrs});\n",
+                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls}, {val}, {parent}, {ds}, {attrs}, {dfs});\n",
                 id = js_string_literal(&el.id),
                 tag = js_string_literal(&el.tag_name),
                 text = js_string_literal(&el.text_content),
@@ -2109,6 +2141,7 @@ impl JsRuntime {
                 parent = parent_arg,
                 ds = ds_arr,
                 attrs = attr_arr,
+                dfs = el.dfs_index,
             ));
         }
         // Reset del buffer de dirty para que mutaciones de la página
@@ -2546,6 +2579,12 @@ pub struct ElementSnapshot {
     /// estén capturados por una rama especial (`id`/`class`/`value`/
     /// `data-*`). Fase 7.16.
     pub attributes: Vec<(String, String)>,
+    /// Índice 1-based del elemento en DFS pre-order del BoxTree. Habilita
+    /// `getBoundingClientRect` heurístico (top = (dfs_index - 1) × 30 -
+    /// scrollY). Fase 7.29. Para elementos sintéticos creados post-load
+    /// (via createElement), el snapshot inicial no los incluye; el JS
+    /// asume `_dfs_index = 0` y devuelve rect en {0, 0}.
+    pub dfs_index: u32,
 }
 
 /// Init opcional para [`JsRuntime::dispatch_event`]. Lleva los campos
@@ -3403,6 +3442,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }
     }
 
@@ -3416,6 +3456,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }
     }
 
@@ -3429,6 +3470,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }
     }
 
@@ -3442,6 +3484,7 @@ mod tests {
             parent_id: Some(parent_id.into()),
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }
     }
 
@@ -3462,6 +3505,7 @@ mod tests {
             parent_id: None,
             dataset: dataset.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             attributes,
+            dfs_index: 0,
         }
     }
 
@@ -3475,6 +3519,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: attrs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            dfs_index: 0,
         }
     }
 
@@ -4710,6 +4755,7 @@ mod tests {
             parent_id: None,
             dataset: vec![("role".into(), "main".into())],
             attributes: vec![("data-role".into(), "main".into())],
+            dfs_index: 0,
         }])
         .expect("e");
         let v = rt.eval("document.getElementById('x').getAttribute('id')").expect("e");
@@ -4786,6 +4832,7 @@ mod tests {
             parent_id: None,
             dataset: vec![("role".into(), "main".into())],
             attributes: vec![("data-role".into(), "main".into())],
+            dfs_index: 0,
         }])
         .expect("e");
         rt.drain_dom_mutations();
@@ -5288,6 +5335,7 @@ mod tests {
                 ("href".into(), "/x".into()),
                 ("aria-current".into(), "page".into()),
             ],
+            dfs_index: 0,
         }])
         .expect("e");
         let v = rt.eval("document.getElementById('x').attributes.length").expect("e");
@@ -5343,6 +5391,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: vec![("href".into(), "/x".into())],
+            dfs_index: 0,
         }])
         .expect("e");
         let v = rt.eval("document.getElementById('x').outerHTML").expect("e");
@@ -5368,6 +5417,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: vec![("src".into(), "/foo.png".into())],
+            dfs_index: 0,
         }])
         .expect("e");
         let v = rt.eval("document.getElementById('i').outerHTML").expect("e");
@@ -5557,6 +5607,7 @@ mod tests {
                 ("data-track".into(), "hero".into()),
                 ("href".into(), "/x".into()),
             ],
+            dfs_index: 0,
         }])
         .expect("e");
         rt.eval("var c = document.getElementById('src').cloneNode(false)").expect("e");
@@ -5602,6 +5653,79 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.29 — getBoundingClientRect heurístico =============
+
+    fn snap_with_dfs(id: &str, tag: &str, dfs: u32) -> ElementSnapshot {
+        ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+            dfs_index: dfs,
+        }
+    }
+
+    #[test]
+    fn get_bounding_client_rect_devuelve_top_left_width_height() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_dfs("x", "div", 3)]).expect("e");
+        let v = rt
+            .eval("var r = document.getElementById('x').getBoundingClientRect(); r.top")
+            .expect("e");
+        // top = (3 - 1) * 30 - scrollY(0) = 60
+        assert_eq!(v, JsValue::Number(60.0));
+        let v = rt.eval("r.height").expect("e");
+        assert_eq!(v, JsValue::Number(30.0));
+        let v = rt.eval("r.left").expect("e");
+        assert_eq!(v, JsValue::Number(0.0));
+        // width = innerWidth para tag block.
+        let v = rt.eval("r.width").expect("e");
+        assert_eq!(v, JsValue::Number(1024.0));
+        let v = rt.eval("r.right").expect("e");
+        assert_eq!(v, JsValue::Number(1024.0));
+        let v = rt.eval("r.bottom").expect("e");
+        assert_eq!(v, JsValue::Number(90.0));
+    }
+
+    #[test]
+    fn get_bounding_client_rect_descuenta_scroll_y() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_dfs("x", "div", 5)]).expect("e");
+        rt.set_scroll(0.0, 100.0).expect("scroll");
+        // top = (5-1) * 30 - 100 = 20
+        let v = rt
+            .eval("document.getElementById('x').getBoundingClientRect().top")
+            .expect("e");
+        assert_eq!(v, JsValue::Number(20.0));
+    }
+
+    #[test]
+    fn get_bounding_client_rect_inline_tag_es_100_wide() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_dfs("s", "span", 1)]).expect("e");
+        let v = rt
+            .eval("document.getElementById('s').getBoundingClientRect().width")
+            .expect("e");
+        assert_eq!(v, JsValue::Number(100.0));
+    }
+
+    #[test]
+    fn collect_element_snapshots_pobla_dfs_index() {
+        // Verificado vía set_elements + chequear que dfs_index llega al JS.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_dfs("x", "div", 42)]).expect("e");
+        let v = rt.eval("document.getElementById('x')._dfs_index").expect("e");
+        assert_eq!(v, JsValue::Number(42.0));
     }
 
     // ============= Fase 7.28 — sync chrome→JS scroll + innerWidth/Height =============

@@ -1932,12 +1932,20 @@ fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
     // Fase 7.10 — walk recursivo manual para que cada elemento conozca
     // el id de su ancestro Element más cercano con id=. `bt.walk(|b|)`
     // no propaga contexto del parent, así que usamos rec con stack.
-    fn rec(b: &BoxNode, parent_id: Option<&str>, out: &mut Vec<puriy_js::ElementSnapshot>) {
+    // Fase 7.29 — además contamos DFS pre-order para `dfs_index`, que
+    // alimenta `getBoundingClientRect` heurístico (top = (idx-1) × 30).
+    fn rec(
+        b: &BoxNode,
+        parent_id: Option<&str>,
+        counter: &mut u32,
+        out: &mut Vec<puriy_js::ElementSnapshot>,
+    ) {
+        *counter += 1;
+        let my_dfs = *counter;
         let my_id_opt = b.element_id.as_deref().filter(|s| !s.is_empty());
         if let Some(id) = my_id_opt {
             let tag_name = b.tag.clone().unwrap_or_default();
             let text_content = node_text_content(b);
-            // Fase 7.9 — value inicial para inputs/textareas/selects.
             let value = if b.input_kind.is_some() {
                 b.input_initial.clone().or_else(|| Some(String::new()))
             } else if let Some(sel) = &b.select {
@@ -1948,11 +1956,6 @@ fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
             } else {
                 None
             };
-            // Fase 7.16 — dataset filtra los attrs por prefijo data-,
-            // preservando el suffix sin prefijo (kebab) como key. attributes
-            // lleva el set completo (data-*, aria-*, href, src, role, etc.)
-            // con names lowercased — alimenta el _attributes_store del JS
-            // para `el.getAttribute(name)` genérico.
             let dataset = b
                 .dataset()
                 .into_iter()
@@ -1967,17 +1970,16 @@ fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
                 parent_id: parent_id.map(String::from),
                 dataset,
                 attributes: b.attributes.clone(),
+                dfs_index: my_dfs,
             });
         }
-        // Si yo tengo id, los hijos me ven como su parent. Si no, los
-        // hijos heredan mi parent_id — saltamos elementos sin id en la
-        // cadena (matchea el modelo que JS sólo conoce elementos con id).
         let next_parent = my_id_opt.or(parent_id);
         for c in &b.children {
-            rec(c, next_parent, out);
+            rec(c, next_parent, counter, out);
         }
     }
-    rec(&bt.root, None, &mut out);
+    let mut counter: u32 = 0;
+    rec(&bt.root, None, &mut counter, &mut out);
     out
 }
 
@@ -4813,7 +4815,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "btn".into(),
             tag_name: "button".into(),
-            text_content: "click me".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
+            text_content: "click me".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("set_elements");
         rt.eval(
@@ -4875,7 +4877,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "out".into(),
             tag_name: "div".into(),
-            text_content: "antes".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
+            text_content: "antes".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("set_elements");
         rt.eval(
@@ -4907,7 +4909,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "clock".into(),
             tag_name: "span".into(),
-            text_content: "00:00".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
+            text_content: "00:00".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.set_now_ms(0).expect("now");
@@ -4967,7 +4969,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(), attributes: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval(
@@ -5006,7 +5008,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
+            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval(
@@ -5027,7 +5029,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "i".into(),
             tag_name: "input".into(),
-            text_content: "".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
+            text_content: "".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval(
@@ -5057,7 +5059,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(),
+            text_content: "link".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
@@ -5176,7 +5178,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some("viejo".into()),
             parent_id: None,
-            dataset: Vec::new(), attributes: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval("document.getElementById('x').value = 'nuevo'")
@@ -5205,7 +5207,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some("es".into()),
             parent_id: None,
-            dataset: Vec::new(), attributes: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval("document.getElementById('lang').value = 'en'")
@@ -5226,7 +5228,7 @@ mod tests {
             class_list: Vec::new(),
             value: Some(String::new()),
             parent_id: None,
-            dataset: Vec::new(), attributes: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval(
@@ -5338,7 +5340,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(), attributes: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval("document.getElementById('x').dataset.role = 'main'")
@@ -5371,7 +5373,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(), attributes: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval(
@@ -5415,7 +5417,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: None,
-                dataset: Vec::new(), attributes: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
             },
             puriy_js::ElementSnapshot {
                 id: "a".into(),
@@ -5424,7 +5426,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: Some("list".into()),
-                dataset: Vec::new(), attributes: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
             },
         ])
         .expect("e");
@@ -5467,7 +5469,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: None,
-                dataset: Vec::new(), attributes: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
             },
             puriy_js::ElementSnapshot {
                 id: "a".into(),
@@ -5476,7 +5478,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: Some("list".into()),
-                dataset: Vec::new(), attributes: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
             },
         ])
         .expect("e");
@@ -5515,7 +5517,7 @@ mod tests {
                 class_list: Vec::new(),
                 value: None,
                 parent_id: None,
-                dataset: Vec::new(), attributes: Vec::new(),
+                dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
             },
         ])
         .expect("e");
@@ -5556,7 +5558,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(), attributes: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         rt.eval(
@@ -5600,7 +5602,7 @@ mod tests {
             class_list: Vec::new(),
             value: None,
             parent_id: None,
-            dataset: Vec::new(), attributes: Vec::new(),
+            dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
         }])
         .expect("e");
         // textContent inicial via el payload del appendChild.
@@ -5643,6 +5645,7 @@ mod tests {
             parent_id: None,
             dataset: vec![("role".into(), "main".into())],
             attributes: vec![("data-role".into(), "main".into())],
+            dfs_index: 0,
         }])
         .expect("e");
         rt.eval("delete document.getElementById('x').dataset.role")
@@ -5694,6 +5697,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }])
         .expect("e");
         rt.eval("document.getElementById('x').setAttribute('aria-label', 'main')")
@@ -5726,6 +5730,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: vec![("href".into(), "/old".into())],
+            dfs_index: 0,
         }])
         .expect("e");
         rt.eval("document.getElementById('x').removeAttribute('href')").expect("e");
@@ -5765,6 +5770,7 @@ mod tests {
                 parent_id: None,
                 dataset: Vec::new(),
                 attributes: Vec::new(),
+                dfs_index: 0,
             },
             puriy_js::ElementSnapshot {
                 id: "pw".into(),
@@ -5775,6 +5781,7 @@ mod tests {
                 parent_id: None,
                 dataset: Vec::new(),
                 attributes: Vec::new(),
+                dfs_index: 0,
             },
         ])
         .expect("e");
@@ -5799,6 +5806,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }])
         .expect("e");
         rt.eval("document.getElementById('btn').focus()").expect("e");
@@ -5824,6 +5832,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }])
         .expect("e");
         rt.eval("document.getElementById('user').blur()").expect("e");
@@ -5848,6 +5857,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }])
         .expect("e");
         rt.eval(
@@ -5892,6 +5902,7 @@ mod tests {
                 parent_id: None,
                 dataset: Vec::new(),
                 attributes: Vec::new(),
+                dfs_index: 0,
             },
         ])
         .expect("e");
@@ -5917,6 +5928,7 @@ mod tests {
             parent_id: None,
             dataset: Vec::new(),
             attributes: Vec::new(),
+            dfs_index: 0,
         }])
         .expect("e");
         // Disparamos scrollIntoView contra un id que NO está en el box_tree.
