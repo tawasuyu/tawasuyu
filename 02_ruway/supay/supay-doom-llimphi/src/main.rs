@@ -127,6 +127,8 @@ struct Model {
     /// FPS sin status bar visible se siente "incompleto". Pero algunos
     /// jugadores prefieren la inmersión sin chrome — el toggle queda.
     show_hud: bool,
+    /// Fase 3.21: sombras de mobjs en el piso on/off (F7). Default on.
+    sprite_shadows: bool,
 }
 
 /// Pasos del cicle F5 para la viñeta — off / sutil (default) / fuerte.
@@ -161,6 +163,8 @@ enum Msg {
     CycleVignette,
     /// Fase 3.20: alterna el HUD inferior (F6).
     ToggleHud,
+    /// Fase 3.21: alterna sombras de sprites en el piso (F7).
+    ToggleSpriteShadows,
     Quit,
 }
 
@@ -219,6 +223,7 @@ impl App for Supay {
             show_crosshair: true,
             vignette_strength: VIGNETTE_STEPS[1],
             show_hud: true,
+            sprite_shadows: true,
         }
     }
 
@@ -241,6 +246,9 @@ impl App for Supay {
             }
             if matches!(&e.key, Key::Named(NamedKey::F6)) {
                 return Some(Msg::ToggleHud);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F7)) {
+                return Some(Msg::ToggleSpriteShadows);
             }
             // Fase 3.17: mouse-look cosmético. PageUp = mirar arriba,
             // PageDown = mirar abajo, Home = resetear horizonte. No pasan
@@ -339,6 +347,9 @@ impl App for Supay {
             Msg::ToggleHud => {
                 m.show_hud = !m.show_hud;
             }
+            Msg::ToggleSpriteShadows => {
+                m.sprite_shadows = !m.sprite_shadows;
+            }
         }
         m
     }
@@ -362,6 +373,7 @@ impl App for Supay {
                     crosshair: model.show_crosshair,
                     vignette: model.vignette_strength,
                     hud: model.show_hud,
+                    sprite_shadows: model.sprite_shadows,
                     ..RenderConfig::default()
                 },
             )),
@@ -407,7 +419,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.20 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.21 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

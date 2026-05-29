@@ -338,6 +338,12 @@ pub struct RenderConfig {
     /// clásica de Doom (320×32 al pie del FB): mismos datos, layout
     /// "tile-by-tile" co-locado con la imagen 3D.
     pub hud: bool,
+    /// **Fase 3.21 — sombras de mobjs en el piso**. Si `true`, cada
+    /// sprite proyecta un disco oscuro semi-transparente en el plano
+    /// del sector donde está parado, dándole sensación de peso al
+    /// mundo 3D. Cosmético total — Doom clásico no tiene sombras, el
+    /// renderer software pinta sprites flotando sobre el piso.
+    pub sprite_shadows: bool,
 }
 
 impl Default for RenderConfig {
@@ -354,6 +360,7 @@ impl Default for RenderConfig {
             crosshair: true,
             vignette: 0.55,
             hud: true,
+            sprite_shadows: true,
         }
     }
 }
@@ -1468,8 +1475,107 @@ fn clip_near(poly: &[(f32, f32)], near: f32) -> Vec<(f32, f32)> {
 }
 
 // =====================================================================
-// Sprites
+// Sprites + sombras (Fase 3.21)
 // =====================================================================
+
+/// Pinta un disco oscuro en el plano del piso bajo el sprite. Lo
+/// aproximamos con un dodecágono CCW en world-space, transformamos a
+/// cam-space, clipeamos al near plane (2D) y proyectamos cada vértice
+/// con la cámara perspectiva. El resultado es una elipse natural en
+/// pantalla — más alargada cuanto más cerca del jugador, casi línea
+/// en la distancia.
+///
+/// El radio en world units viene del atlas si está disponible (mitad
+/// del width del patch del frame actual, escalado por 0.55 para que la
+/// sombra no exceda el ancho del sprite). Sin atlas usa
+/// `cfg.sprite_half_width`.
+///
+/// La depth se pone `sprite_depth + 0.5` para que el shadow se pinte
+/// **justo antes** del sprite en el orden back-to-front (painter's),
+/// quedando bajo los pies del mobj pero encima del piso del sector.
+#[allow(clippy::too_many_arguments)]
+fn gather_sprite_shadow(
+    out: &mut Vec<Renderable>,
+    sprite: &SpriteSnap,
+    sec: Option<&SectorSnap>,
+    cam: &Camera,
+    proj: &Projection,
+    cfg: &RenderConfig,
+    sprite_x_cam: f32,
+    floor: f32,
+    sprite_depth: f32,
+) {
+    // Radio en world units. Si tenemos el patch decodificado del atlas
+    // usamos su mitad de width — así un enemigo grande (caco/baron) tira
+    // sombra más ancha que un imp.
+    let radius = if let Some(atlas) = cfg.atlas.as_ref() {
+        let angle = compute_display_angle(sprite.x, sprite.y, sprite.angle, cam.px, cam.py);
+        atlas
+            .sprite_patch(sprite.sprite, sprite.frame, angle)
+            .map(|(p, _)| (p.width as f32) * 0.55 * 0.5)
+            .unwrap_or(cfg.sprite_half_width)
+    } else {
+        cfg.sprite_half_width
+    };
+    if radius <= 0.0 {
+        return;
+    }
+    // Dodecágono en world space alrededor de (sprite.x, sprite.y).
+    // CCW; los puntos viven todos en Z = floor.
+    const N: usize = 12;
+    let z_cam = floor - cam.view_z;
+    let mut poly_cam: [(f32, f32); N] = [(0.0, 0.0); N];
+    let twopi = std::f32::consts::TAU;
+    // Pequeño achatamiento: la sombra es 100% radius en eje view-perpendicular
+    // y 60% en eje view-paralelo (eje X_cam). Doom-monsters paran sobre
+    // sus pies redondos, pero al verlos *desde* el jugador la huella
+    // visual queda más como elipse — quedan más naturales así.
+    let rx = radius * 0.6;
+    let ry = radius;
+    for i in 0..N {
+        let theta = (i as f32) / (N as f32) * twopi;
+        // Generamos en world coords con orientación alineada al world XY.
+        let wx = sprite.x + theta.cos() * rx;
+        let wy = sprite.y + theta.sin() * ry;
+        poly_cam[i] = cam.to_cam_2d(wx, wy);
+    }
+    let clipped = clip_near(&poly_cam, cfg.near);
+    if clipped.len() < 3 {
+        return;
+    }
+    let mut path = BezPath::new();
+    let mut first = true;
+    for (xc, yc) in &clipped {
+        let p = proj.project(*xc, *yc, z_cam);
+        if !p.x.is_finite() || !p.y.is_finite() {
+            return;
+        }
+        if first {
+            path.move_to(p);
+            first = false;
+        } else {
+            path.line_to(p);
+        }
+    }
+    path.close_path();
+    // Tinte: negro con alpha modulado por la luz del sector. Sectores
+    // muy oscuros (cuartos sin iluminar) atenúan la sombra — no tiene
+    // sentido pintar una mancha negra sobre piso ya casi negro. Fog
+    // distante también la diluye.
+    let light = sec.map(|s| s.light_level).unwrap_or(192) as f32 / 255.0;
+    let fog = 1.0 - (sprite_x_cam / cfg.far_fog).clamp(0.0, 1.0);
+    let alpha = (0.42 * light * fog).clamp(0.0, 0.55);
+    let a = (alpha * 255.0) as u8;
+    if a < 4 {
+        return;
+    }
+    out.push(Renderable {
+        depth: sprite_depth + 0.5,
+        color: Color::from_rgba8(0, 0, 0, a),
+        path,
+        kind: RenderKind::Fill,
+    });
+}
 
 fn gather_sprite(
     out: &mut Vec<Renderable>,
@@ -1486,6 +1592,14 @@ fn gather_sprite(
     let sec = snap.sectors.get(sprite.sector as usize);
     let floor = sec.map(|s| s.floor_height).unwrap_or(0.0);
     let depth = (x_cam * x_cam + y_cam * y_cam).sqrt();
+
+    // Fase 3.21: sombra circular en el plano del piso bajo el sprite.
+    // Va siempre — texturizado o fallback — antes de pushear el sprite
+    // mismo. `gather_sprite_shadow` decide su tamaño usando el patch
+    // del atlas (si está) o `cfg.sprite_half_width` como fallback.
+    if cfg.sprite_shadows {
+        gather_sprite_shadow(out, sprite, sec, cam, proj, cfg, x_cam, floor, depth);
+    }
 
     // ---- Camino texturizado: hay atlas + patch decodificado ----
     if let Some(atlas) = cfg.atlas.as_ref() {
