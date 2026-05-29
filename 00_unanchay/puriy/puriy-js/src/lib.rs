@@ -213,6 +213,12 @@ impl JsRuntime {
         for chunk in bootstrap::ALL {
             rt.eval_raw(chunk)?;
         }
+        // Recargá el fuel: el costo de parsear/evaluar los bootstraps (hoy
+        // ~170M sólo en compilar todos los módulos) NO debe contar contra el
+        // presupuesto del caller. `fuel` es "por sesión de página", no
+        // "lifetime incluyendo bootstrap" — así agregar módulos nuevos no
+        // recorta el budget de los evals reales.
+        rt.set_fuel(fuel);
         Ok(rt)
     }
 
@@ -5744,6 +5750,66 @@ mod tests {
         )
         .expect("e");
         assert_eq!(rt.eval("distintas").expect("e"), JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.51 — URLSearchParams =============
+
+    #[test]
+    fn usp_parsea_string_y_get() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new URLSearchParams('?a=1&b=hola+mundo&a=2');").expect("e");
+        assert_eq!(rt.eval("p.get('a')").expect("e"), JsValue::String("1".into()));
+        assert_eq!(rt.eval("p.get('b')").expect("e"), JsValue::String("hola mundo".into()));
+        assert_eq!(rt.eval("p.getAll('a').join(',')").expect("e"), JsValue::String("1,2".into()));
+        assert_eq!(rt.eval("p.has('b')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("p.has('z')").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn usp_set_reemplaza_y_append_agrega() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var p = new URLSearchParams('a=1&a=2&b=3'); \
+             p.set('a', '9'); p.append('c', '4');",
+        )
+        .expect("e");
+        // set deja una sola 'a'.
+        assert_eq!(rt.eval("p.getAll('a').join(',')").expect("e"), JsValue::String("9".into()));
+        assert_eq!(rt.eval("p.get('c')").expect("e"), JsValue::String("4".into()));
+    }
+
+    #[test]
+    fn usp_tostring_encoda_form_urlencoded() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new URLSearchParams(); p.append('q', 'a b&c'); p.append('x', 'ñ');").expect("e");
+        // espacio → '+', '&' → %26, 'ñ' → %C3%B1 (UTF-8).
+        assert_eq!(
+            rt.eval("p.toString()").expect("e"),
+            JsValue::String("q=a+b%26c&x=%C3%B1".into())
+        );
+    }
+
+    #[test]
+    fn usp_construye_desde_objeto_y_itera() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var p = new URLSearchParams({ a: '1', b: '2' }); \
+             var seq = []; for (var pair of p) { seq.push(pair[0] + '=' + pair[1]); }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("seq.join('&')").expect("e"), JsValue::String("a=1&b=2".into()));
+    }
+
+    #[test]
+    fn usp_como_body_de_fetch_se_serializa() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("fetch('/api', { method: 'POST', body: new URLSearchParams({ k: 'v w' }) });").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        // [3] has_body, [4] body string.
+        assert_eq!(parts[4], "k=v+w");
     }
 
     // ============= Fase 7.37 — URL relativa contra base =============
