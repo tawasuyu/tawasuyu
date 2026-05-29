@@ -49,9 +49,12 @@ sync
 
 paso "creando GPT + una ESP FAT32 de 100 MiB"
 # sfdisk re-lee la tabla solo y es determinista. Campo: start(default 2048),
-# size=100M, type=U (EFI System), bootable(*).
+# size=100M, type=U (EFI System). SIN el flag bootable(*): en GPT ese flag pone
+# el atributo «Legacy BIOS Bootable», que hace que algunos firmwares intenten
+# arrancar la ESP por CSM/legacy (no tiene boot sector) y se CUELGUEN. Para
+# UEFI basta el tipo EFI System; el flag legacy estorba.
 echo 'label: gpt
-,100M,U,*' | sfdisk --quiet --wipe always "$DEV"
+,100M,U' | sfdisk --quiet --wipe always "$DEV"
 sync
 partprobe "$DEV" 2>/dev/null || true
 udevadm settle 2>/dev/null || true
