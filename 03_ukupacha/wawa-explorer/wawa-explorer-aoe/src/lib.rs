@@ -72,9 +72,10 @@ pub struct EstadisticasServir {
     /// Pedidos de objetos que no teníamos (`id` desconocido) — ruido normal
     /// del cable, no un error.
     pub ignorados: u64,
-    /// Pedidos de objetos que SÍ teníamos pero superan `MAX_PAYLOAD_AKASHA`
-    /// y no caben en un frame — pendiente de chunking.
-    pub omitidos_grandes: u64,
+    /// Objetos grandes (> `MAX_FRAGMENTO_DATOS`) servidos PARTIDOS en varios
+    /// `ProveedorFragmento` (Fase 65). El kernel los reensambla y verifica el
+    /// hash sobre el objeto entero.
+    pub fragmentados: u64,
 }
 
 /// Cliente conectado a una interfaz Ethernet específica.
@@ -178,13 +179,11 @@ impl ClienteAoE {
     /// solicitante. Es el lado servidor del pull AoE — lo que permite a una
     /// wawa corriendo absorber el grafo de un release recién publicado.
     ///
-    /// LÍMITE DE FRAME: un objeto cuyo payload serializado supere
-    /// `akasha::MAX_PAYLOAD_AKASHA` (1486 B) NO cabe en un frame de capa-2 y se
-    /// OMITE (contado en [`EstadisticasServir::omitidos_grandes`]). Hoy un
-    /// `.wasm` real (rimay 3.3 KiB, pluma 11 KiB) excede ese techo; el chunking
-    /// —partir un objeto grande en un árbol de trozos < 1486 B y reensamblarlo
-    /// en el kernel— es el hito siguiente. Apps muy chicas y el canal/manifiesto
-    /// (si caben) ya viajan por este camino.
+    /// OBJETOS GRANDES (Fase 65): un objeto cuyo payload supere
+    /// `akasha::MAX_FRAGMENTO_DATOS` (1024 B) se sirve PARTIDO en varios
+    /// `ProveedorFragmento`; el kernel los reensambla y verifica el hash sobre
+    /// el objeto entero. Así un `.wasm` real (rimay 3.3 KiB, pluma 11 KiB) ya
+    /// viaja. Se cuenta en [`EstadisticasServir::fragmentados`].
     ///
     /// Bloquea el hilo durante `duracion`. Devuelve cuántos pedidos sirvió,
     /// ignoró (id desconocido) y omitió (demasiado grande).
@@ -217,20 +216,36 @@ impl ClienteAoE {
                             stats.ignorados += 1;
                             continue;
                         };
-                        let frame = match componer_frame(
-                            self.my_mac,
-                            origen,
-                            &MensajeAkasha::ProveedorObjeto(id, datos.clone()),
-                        ) {
-                            Ok(f) => f,
-                            Err(_) => {
-                                // Objeto más grande que un frame de capa-2.
-                                stats.omitidos_grandes += 1;
-                                continue;
+                        if datos.len() > akasha::MAX_FRAGMENTO_DATOS {
+                            // Objeto grande: partirlo en `ProveedorFragmento`. El
+                            // kernel reensambla y verifica el hash sobre el todo.
+                            let total = akasha::total_fragmentos(datos.len());
+                            for (i, trozo) in datos.chunks(akasha::MAX_FRAGMENTO_DATOS).enumerate()
+                            {
+                                let frame = componer_frame(
+                                    self.my_mac,
+                                    origen,
+                                    &MensajeAkasha::ProveedorFragmento {
+                                        id,
+                                        indice: i as u16,
+                                        total,
+                                        datos: trozo.to_vec(),
+                                    },
+                                )
+                                .map_err(Error::Aoe)?;
+                                enviar_frame(&self.fd, self.ifindex, origen, &frame)?;
                             }
-                        };
-                        enviar_frame(&self.fd, self.ifindex, origen, &frame)?;
-                        stats.servidos += 1;
+                            stats.fragmentados += 1;
+                        } else {
+                            let frame = componer_frame(
+                                self.my_mac,
+                                origen,
+                                &MensajeAkasha::ProveedorObjeto(id, datos.clone()),
+                            )
+                            .map_err(Error::Aoe)?;
+                            enviar_frame(&self.fd, self.ifindex, origen, &frame)?;
+                            stats.servidos += 1;
+                        }
                     }
                 }
                 Err(e)
@@ -562,6 +577,27 @@ mod tests {
         let t = Duration::from_millis(500);
         let p = presupuesto_por_intento(t, 1);
         assert_eq!(p, t);
+    }
+
+    #[test]
+    fn fragmentar_y_reensamblar_roundtrip_via_akasha() {
+        // Verifica end-to-end el contrato de chunking que `servir` (emisor) y
+        // el kernel (receptor) comparten: partir como hace `servir` y reensamblar
+        // como hace el kernel devuelve EXACTAMENTE el payload original.
+        let payload: Vec<u8> = (0..5000u32).map(|i| (i * 31 + 7) as u8).collect();
+        let id: ObjectId = *blake3::hash(&payload).as_bytes();
+        let total = akasha::total_fragmentos(payload.len());
+        assert!(total > 1, "el payload debe requerir varios fragmentos");
+
+        let mut re = akasha::Reensamblador::nuevo();
+        let mut completo = None;
+        for (i, trozo) in payload.chunks(akasha::MAX_FRAGMENTO_DATOS).enumerate() {
+            completo = re.ingerir(id, i as u16, total, trozo);
+        }
+        let recon = completo.expect("reensamblado completo");
+        assert_eq!(recon, payload);
+        // El hash del reensamblado casa con el id — lo que el kernel re-verifica.
+        assert_eq!(*blake3::hash(&recon).as_bytes(), id);
     }
 
     #[test]

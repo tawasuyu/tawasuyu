@@ -1040,7 +1040,7 @@ fn wawa_publicar(como: &str, spec_path: &Path, salida: &Path) -> CliResult<()> {
     let mut grandes = 0usize;
     for obj in &release.objetos {
         fs::write(salida.join(format!("{}.obj", hex_de(&obj.hash))), &obj.payload)?;
-        if obj.payload.len() > akasha_max_payload() {
+        if obj.payload.len() > umbral_fragmento() {
             grandes += 1;
         }
     }
@@ -1068,10 +1068,9 @@ fn wawa_publicar(como: &str, spec_path: &Path, salida: &Path) -> CliResult<()> {
     println!("  autor (pubkey) : {}", hex_de(&release.autor));
     if grandes > 0 {
         println!();
-        println!("  AVISO: {grandes} objeto(s) superan 1486 B (MAX_PAYLOAD_AKASHA).");
-        println!("  No caben en un frame de capa-2 — `servir_release` los OMITIRÁ");
-        println!("  hasta que exista chunking. El bundle en disco SÍ los contiene");
-        println!("  (sirve para sembrar un disco de objetos directamente).");
+        println!("  NOTA: {grandes} objeto(s) superan 1024 B; `servir_release` los");
+        println!("  enviará PARTIDOS en ProveedorFragmento y el kernel los reensambla");
+        println!("  (Fase 65). El .wasm grande viaja completo.");
     }
     println!();
     println!("Difundir + servir en vivo a una wawa en la misma red L2:");
@@ -1082,12 +1081,12 @@ fn wawa_publicar(como: &str, spec_path: &Path, salida: &Path) -> CliResult<()> {
     Ok(())
 }
 
-/// El techo de payload de un frame AoE (`akasha::MAX_PAYLOAD_AKASHA`),
-/// replicado como constante local para no acoplar `agora-cli` al crate
-/// `akasha` del kernel sólo por un número. Si aquél cambia, este aviso
-/// quedaría desfasado — es sólo un AVISO, no una verdad de protocolo.
-fn akasha_max_payload() -> usize {
-    1486
+/// Umbral a partir del cual `servir_release` parte un objeto en fragmentos
+/// (`akasha::MAX_FRAGMENTO_DATOS`), replicado como constante local para no
+/// acoplar `agora-cli` al crate `akasha` del kernel sólo por un número. Si
+/// aquél cambia, este aviso queda desfasado — es sólo un AVISO informativo.
+fn umbral_fragmento() -> usize {
+    1024
 }
 
 fn grafo_resumen() -> CliResult<()> {

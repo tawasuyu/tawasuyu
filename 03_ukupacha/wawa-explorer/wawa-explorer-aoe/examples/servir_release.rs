@@ -18,8 +18,9 @@
 //! el release (su baliza serial lo confirma) y el operador haya aceptado en
 //! `mudanza`.
 //!
-//! LÍMITE: objetos > 1486 B (MAX_PAYLOAD_AKASHA) no caben en un frame y se
-//! OMITEN — `publicar` ya avisa cuáles. El chunking es el hito siguiente.
+//! Objetos grandes (> 1024 B) se sirven PARTIDOS en `ProveedorFragmento`
+//! (Fase 65); el kernel los reensambla y verifica el hash sobre el todo. Así
+//! un `.wasm` real (rimay, pluma) ya viaja completo.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -90,11 +91,11 @@ fn main() {
         let restante = total.saturating_sub(inicio.elapsed());
         match cliente.servir(&objetos, restante.min(Duration::from_secs(5))) {
             Ok(stats) => {
-                servidos += stats.servidos;
-                if stats.servidos > 0 || stats.omitidos_grandes > 0 {
+                servidos += stats.servidos + stats.fragmentados;
+                if stats.servidos > 0 || stats.fragmentados > 0 {
                     println!(
-                        "  +{} servidos, {} ignorados, {} OMITIDOS por tamaño (acum servidos={})",
-                        stats.servidos, stats.ignorados, stats.omitidos_grandes, servidos
+                        "  +{} servidos, +{} fragmentados (grandes), {} ignorados (acum={})",
+                        stats.servidos, stats.fragmentados, stats.ignorados, servidos
                     );
                 }
             }
