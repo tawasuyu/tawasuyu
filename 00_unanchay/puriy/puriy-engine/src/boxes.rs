@@ -233,6 +233,11 @@ pub struct BoxNode {
     /// Some("foo")` y scrollea hasta él). `None` para nodos sin id y
     /// para nodos sintéticos (markers, wrappers Document, hojas Text).
     pub element_id: Option<String>,
+    /// Clases CSS del nodo (atributo `class="a b c"` split por espacio).
+    /// Vacío para nodos sin clase. Para que el snapshot pasado a `puriy-js`
+    /// pueda indexar elementos por class y soportar `querySelector('.foo')`
+    /// — Fase 7.8.
+    pub class_list: Vec<String>,
 }
 
 /// Escena SVG minimal: lista de primitivas + viewBox opcional.
@@ -423,6 +428,166 @@ impl BoxTree {
     pub fn set_element_text_content(&mut self, id: &str, new_text: &str) -> bool {
         replace_text_content(&mut self.root, id, new_text)
     }
+
+    /// Aplica una mutación de estilo (proveniente de `el.style.X = Y`)
+    /// al nodo con `element_id == id`. `prop` en kebab-case (`color`,
+    /// `background-color`, `display`, `font-size`, `visibility`).
+    ///
+    /// Devuelve `true` si la mutación se aplicó. Props desconocidas o
+    /// values no parseables devuelven `false` (silencioso — los setters
+    /// JS publican igual; el chrome aplica sólo lo que sabe). Subset
+    /// limitado a propósito; ampliar cuando aparezcan casos reales.
+    pub fn set_element_style(&mut self, id: &str, prop: &str, value: &str) -> bool {
+        set_element_style_inner(&mut self.root, id, prop, value)
+    }
+}
+
+fn set_element_style_inner(
+    node: &mut BoxNode,
+    target: &str,
+    prop: &str,
+    value: &str,
+) -> bool {
+    if node.element_id.as_deref() == Some(target) {
+        return apply_style_to_node(node, prop, value);
+    }
+    for c in node.children.iter_mut() {
+        if set_element_style_inner(c, target, prop, value) {
+            return true;
+        }
+    }
+    false
+}
+
+fn apply_style_to_node(node: &mut BoxNode, prop: &str, value: &str) -> bool {
+    let val = value.trim();
+    match prop {
+        "color" => {
+            if let Some(c) = parse_simple_color(val) {
+                node.color = c;
+                propagate_text_color(node, c);
+                return true;
+            }
+        }
+        "background" | "background-color" => {
+            if val.eq_ignore_ascii_case("none") || val.eq_ignore_ascii_case("transparent") {
+                node.background = None;
+                return true;
+            }
+            if let Some(c) = parse_simple_color(val) {
+                node.background = Some(c);
+                return true;
+            }
+        }
+        "display" => {
+            let d = match val.to_ascii_lowercase().as_str() {
+                "none" => Some(Display::None),
+                "block" => Some(Display::Block),
+                "inline" => Some(Display::Inline),
+                "inline-block" => Some(Display::InlineBlock),
+                "flex" => Some(Display::Flex),
+                "grid" => Some(Display::Grid),
+                _ => None,
+            };
+            if let Some(d) = d {
+                node.display = d;
+                return true;
+            }
+        }
+        "font-size" => {
+            if let Some(px) = parse_px(val) {
+                node.font_size = px;
+                propagate_font_size(node, px);
+                return true;
+            }
+        }
+        "visibility" => {
+            // Aproximación: hidden → display:none (perdemos el espacio
+            // reservado; spec real lo mantiene). Suficiente para toggle
+            // show/hide del 90% de los casos.
+            if val.eq_ignore_ascii_case("hidden") {
+                node.display = Display::None;
+                return true;
+            }
+            if val.eq_ignore_ascii_case("visible") {
+                return true; // no-op por ahora
+            }
+        }
+        _ => {}
+    }
+    false
+}
+
+fn propagate_text_color(node: &mut BoxNode, c: Color) {
+    if node.text.is_some() {
+        node.color = c;
+    }
+    for child in node.children.iter_mut() {
+        propagate_text_color(child, c);
+    }
+}
+
+fn propagate_font_size(node: &mut BoxNode, size: f32) {
+    if node.text.is_some() {
+        node.font_size = size;
+    }
+    for child in node.children.iter_mut() {
+        propagate_font_size(child, size);
+    }
+}
+
+/// Parser mínimo de colores para `el.style.X = Y`. Acepta: `#rgb`,
+/// `#rrggbb`, palabras CSS comunes (red, blue, green, black, white,
+/// gray, yellow, orange, pink, purple, cyan, magenta, transparent).
+fn parse_simple_color(s: &str) -> Option<Color> {
+    let s = s.trim();
+    if let Some(hex) = s.strip_prefix('#') {
+        return parse_hex_color(hex);
+    }
+    let lower = s.to_ascii_lowercase();
+    let (r, g, b) = match lower.as_str() {
+        "black" => (0, 0, 0),
+        "white" => (255, 255, 255),
+        "red" => (255, 0, 0),
+        "green" => (0, 128, 0),
+        "blue" => (0, 0, 255),
+        "yellow" => (255, 255, 0),
+        "orange" => (255, 165, 0),
+        "pink" => (255, 192, 203),
+        "purple" => (128, 0, 128),
+        "cyan" | "aqua" => (0, 255, 255),
+        "magenta" | "fuchsia" => (255, 0, 255),
+        "gray" | "grey" => (128, 128, 128),
+        "lightgray" | "lightgrey" => (211, 211, 211),
+        "darkgray" | "darkgrey" => (169, 169, 169),
+        _ => return None,
+    };
+    Some(Color { r, g, b, a: 255 })
+}
+
+fn parse_hex_color(hex: &str) -> Option<Color> {
+    let h = hex.trim();
+    match h.len() {
+        3 => {
+            let r = u8::from_str_radix(&h[0..1].repeat(2), 16).ok()?;
+            let g = u8::from_str_radix(&h[1..2].repeat(2), 16).ok()?;
+            let b = u8::from_str_radix(&h[2..3].repeat(2), 16).ok()?;
+            Some(Color { r, g, b, a: 255 })
+        }
+        6 => {
+            let r = u8::from_str_radix(&h[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&h[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&h[4..6], 16).ok()?;
+            Some(Color { r, g, b, a: 255 })
+        }
+        _ => None,
+    }
+}
+
+fn parse_px(s: &str) -> Option<f32> {
+    let t = s.trim();
+    let stripped = t.strip_suffix("px").unwrap_or(t);
+    stripped.trim().parse::<f32>().ok()
 }
 
 fn replace_text_content(node: &mut BoxNode, target: &str, new_text: &str) -> bool {
@@ -1021,6 +1186,7 @@ fn empty_root() -> BoxNode {
         select: None,
         svg: None,
         element_id: None,
+        class_list: Vec::new(),
     }
 }
 
@@ -1380,6 +1546,14 @@ fn build_node(
                 select,
                 svg,
                 element_id: dom::attr(node, "id").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+                class_list: dom::attr(node, "class")
+                    .map(|s| {
+                        s.split_whitespace()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| p.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             })
         }
         NodeData::Text { contents } => {
@@ -1494,6 +1668,7 @@ fn build_node(
         select: None,
         svg: None,
         element_id: None,
+        class_list: Vec::new(),
             })
         }
     }
@@ -1578,6 +1753,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         select: None,
         svg: None,
         element_id: None,
+        class_list: Vec::new(),
     }
 }
 
@@ -2203,6 +2379,7 @@ impl ComputedStyle {
 
 #[cfg(test)]
 mod tests {
+    use super::Display;
     use crate::Engine;
 
     #[test]
@@ -3223,6 +3400,72 @@ mod tests {
         let mut doc = Engine::new().load_html("about:t", html);
         let ok = doc.box_tree.set_element_text_content("fantasma", "x");
         assert!(!ok);
+    }
+
+    #[test]
+    fn set_element_style_color_actualiza_text_leaves() {
+        let html = r#"<html><body><h1 id="h">hola</h1></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        let ok = doc.box_tree.set_element_style("h", "color", "red");
+        assert!(ok);
+        // El leaf de texto debe haber heredado el color rojo.
+        let mut color_changed = false;
+        doc.box_tree.walk(|b| {
+            if b.text.as_deref() == Some("hola") {
+                if b.color.r == 255 && b.color.g == 0 && b.color.b == 0 {
+                    color_changed = true;
+                }
+            }
+        });
+        assert!(color_changed);
+    }
+
+    #[test]
+    fn set_element_style_background_hex() {
+        let html = r#"<html><body><div id="d">x</div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        assert!(doc.box_tree.set_element_style("d", "background", "#abc"));
+        let mut bg_set = false;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("d") {
+                if let Some(c) = b.background {
+                    if c.r == 0xaa && c.g == 0xbb && c.b == 0xcc {
+                        bg_set = true;
+                    }
+                }
+            }
+        });
+        assert!(bg_set);
+    }
+
+    #[test]
+    fn set_element_style_display_none_oculta() {
+        let html = r#"<html><body><div id="d">x</div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        assert!(doc.box_tree.set_element_style("d", "display", "none"));
+        let mut hidden = false;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("d") {
+                if matches!(b.display, Display::None) {
+                    hidden = true;
+                }
+            }
+        });
+        assert!(hidden);
+    }
+
+    #[test]
+    fn set_element_style_prop_desconocida_devuelve_false() {
+        let html = r#"<html><body><div id="d">x</div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        assert!(!doc.box_tree.set_element_style("d", "transform", "rotate(45deg)"));
+    }
+
+    #[test]
+    fn set_element_style_id_inexistente_devuelve_false() {
+        let html = r#"<html><body><p>x</p></body></html>"#;
+        let mut doc = Engine::new().load_html("about:t", html);
+        assert!(!doc.box_tree.set_element_style("fantasma", "color", "red"));
     }
 
     #[test]

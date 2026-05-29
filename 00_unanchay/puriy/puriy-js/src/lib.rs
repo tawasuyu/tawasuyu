@@ -170,11 +170,12 @@ globalThis.__puriy_tick = function(now) {
 const EVENTS_BOOTSTRAP: &str = r#"
 globalThis.__puriy_elements = {};
 globalThis.__puriy_dirty = [];
-globalThis.__puriy_make_element = function(id, tag, text) {
+globalThis.__puriy_make_element = function(id, tag, text, classes) {
     var el = {
         id: id,
         tagName: tag,
         _textContent: text,
+        _classList: classes || [],
         _listeners: {},
         addEventListener: function(type, fn) {
             if (!this._listeners[type]) this._listeners[type] = [];
@@ -184,6 +185,31 @@ globalThis.__puriy_make_element = function(id, tag, text) {
             if (!this._listeners[type]) return;
             var i = this._listeners[type].indexOf(fn);
             if (i >= 0) this._listeners[type].splice(i, 1);
+        }
+    };
+    // className: getter/setter — refleja _classList. Permite leer el
+    // string original ("foo bar") y mutarlo (split by space). Fase 7.8
+    // no aplica el restyle (cambiar clases no re-corre la cascada CSS)
+    // pero sí mantiene el lado JS sincronizado.
+    Object.defineProperty(el, 'className', {
+        get: function() { return el._classList.join(' '); },
+        set: function(v) {
+            el._classList = String(v).split(/\s+/).filter(function(s) { return s.length > 0; });
+        },
+        enumerable: true,
+        configurable: true
+    });
+    el.classList = {
+        contains: function(c) { return el._classList.indexOf(c) >= 0; },
+        add: function(c) { if (el._classList.indexOf(c) < 0) el._classList.push(c); },
+        remove: function(c) {
+            var i = el._classList.indexOf(c);
+            if (i >= 0) el._classList.splice(i, 1);
+        },
+        toggle: function(c) {
+            var i = el._classList.indexOf(c);
+            if (i >= 0) { el._classList.splice(i, 1); return false; }
+            else { el._classList.push(c); return true; }
         }
     };
     Object.defineProperty(el, 'textContent', {
@@ -206,6 +232,30 @@ globalThis.__puriy_make_element = function(id, tag, text) {
         },
         enumerable: true,
         configurable: true
+    });
+    // Fase 7.8 — el.style con setter que publica mutaciones de estilo
+    // al chrome. Usamos un Proxy para capturar cualquier `el.style.X = Y`
+    // sin tener que enumerar las propiedades. QuickJS-NG soporta Proxy
+    // (ES2015+).
+    el.style = new Proxy({}, {
+        set: function(target, prop, value) {
+            target[prop] = value;
+            // Normalizamos camelCase a kebab-case: backgroundColor →
+            // background-color. CSS spec acepta ambos pero los setters
+            // JS usan camelCase predominantemente.
+            var kebab = String(prop).replace(/([A-Z])/g, function(m) {
+                return '-' + m.toLowerCase();
+            });
+            globalThis.__puriy_dirty.push({
+                id: el.id,
+                kind: 'style:' + kebab,
+                value: String(value)
+            });
+            return true;
+        },
+        get: function(target, prop) {
+            return target[prop];
+        }
     });
     return el;
 };
@@ -576,13 +626,32 @@ impl JsRuntime {
                     return (globalThis.__puriy_elements && globalThis.__puriy_elements[id]) || null; \
                 }}, \
                 querySelector: function(sel) {{ \
-                    if (typeof sel === 'string' && sel.charAt(0) === '#') {{ \
-                        var id = sel.slice(1); \
-                        return (globalThis.__puriy_elements && globalThis.__puriy_elements[id]) || null; \
+                    var els = globalThis.__puriy_elements || {{}}; \
+                    if (typeof sel !== 'string') return null; \
+                    if (sel.charAt(0) === '#') {{ return els[sel.slice(1)] || null; }} \
+                    if (sel.charAt(0) === '.') {{ \
+                        var cls = sel.slice(1); \
+                        for (var k in els) {{ if (els[k]._classList && els[k]._classList.indexOf(cls) >= 0) return els[k]; }} \
+                        return null; \
                     }} \
+                    var tag = sel.toLowerCase(); \
+                    for (var k in els) {{ if ((els[k].tagName || '').toLowerCase() === tag) return els[k]; }} \
                     return null; \
                 }}, \
-                querySelectorAll: function(_sel) {{ return []; }} \
+                querySelectorAll: function(sel) {{ \
+                    var els = globalThis.__puriy_elements || {{}}; \
+                    var out = []; \
+                    if (typeof sel !== 'string') return out; \
+                    if (sel.charAt(0) === '#') {{ var e = els[sel.slice(1)]; return e ? [e] : []; }} \
+                    if (sel.charAt(0) === '.') {{ \
+                        var cls = sel.slice(1); \
+                        for (var k in els) {{ if (els[k]._classList && els[k]._classList.indexOf(cls) >= 0) out.push(els[k]); }} \
+                        return out; \
+                    }} \
+                    var tag = sel.toLowerCase(); \
+                    for (var k in els) {{ if ((els[k].tagName || '').toLowerCase() === tag) out.push(els[k]); }} \
+                    return out; \
+                }} \
             }}; \
             globalThis.window = globalThis; \
             globalThis.location = {{ href: {u}, toString: function() {{ return {u}; }} }};",
@@ -607,25 +676,31 @@ impl JsRuntime {
     /// Fase 7.5b sólo elementos con `id=` se exponen; selectores CSS
     /// más ricos requerirán un index secundario por classname/tag.
     pub fn set_elements(&mut self, elements: &[ElementSnapshot]) -> Result<(), JsError> {
-        // Construir el script en una sola pasada — un eval por entrada
-        // sería ~N evals para una página con N elementos id. Cada
-        // elemento se delega a `__puriy_make_element` (definido en
-        // EVENTS_BOOTSTRAP) que arma el objeto con getter/setter de
-        // `textContent`/`innerHTML` que publica a `__puriy_dirty`.
+        // Construir el script en una sola pasada. Cada elemento se
+        // delega a `__puriy_make_element` (en EVENTS_BOOTSTRAP) que
+        // arma getters/setters de textContent/innerHTML/style.
         let mut script = String::from("globalThis.__puriy_elements = {};\n");
         for el in elements {
+            // class_list serializado como JSON array para que el JS
+            // pueda iterar / Array.prototype.includes.
+            let mut cls_arr = String::from("[");
+            for (i, c) in el.class_list.iter().enumerate() {
+                if i > 0 {
+                    cls_arr.push(',');
+                }
+                cls_arr.push_str(&js_string_literal(c));
+            }
+            cls_arr.push(']');
             script.push_str(&format!(
-                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text});\n",
+                "globalThis.__puriy_elements[{id}] = globalThis.__puriy_make_element({id}, {tag}, {text}, {cls});\n",
                 id = js_string_literal(&el.id),
                 tag = js_string_literal(&el.tag_name),
                 text = js_string_literal(&el.text_content),
+                cls = cls_arr,
             ));
         }
-        // Limpiamos también el buffer de dirty para no arrastrar
-        // mutaciones de la página anterior — los setters se llaman al
-        // crear los elementos? No, el constructor sólo asigna
-        // `_textContent` directamente, no llama el setter. Igual lo
-        // reseteamos por defensa.
+        // Reset del buffer de dirty para que mutaciones de la página
+        // anterior no fugan al box_tree nuevo.
         script.push_str("globalThis.__puriy_dirty = [];\n");
         self.eval_raw(&script).map(|_| ())
     }
@@ -994,15 +1069,20 @@ pub struct TickResult {
 }
 
 /// Snapshot de un elemento del DOM al momento del load. Pasado por el
-/// chrome a [`JsRuntime::set_elements`] para que `getElementById` y los
-/// event handlers funcionen. Fase 7.5b sólo expone los elementos con
-/// `id=` (matchea `getElementById`); selectores CSS más complejos
-/// requerirán un índice secundario.
+/// chrome a [`JsRuntime::set_elements`] para que `getElementById`,
+/// `querySelector` y los event handlers funcionen.
+///
+/// Fase 7.8 expone también `class_list` para soportar selectores
+/// `.class` y `tag.class` desde `querySelector`. Sólo elementos con
+/// `id=` se exponen (sigue siendo el handle primario).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElementSnapshot {
     pub id: String,
     pub tag_name: String,
     pub text_content: String,
+    /// Clases CSS del elemento (atributo `class="a b c"` split por
+    /// espacio). Para indexado en `querySelector('.foo')`.
+    pub class_list: Vec<String>,
 }
 
 /// Resultado de [`JsRuntime::dispatch_event`]. `count` es cuántos
@@ -1798,6 +1878,16 @@ mod tests {
             id: id.into(),
             tag_name: tag.into(),
             text_content: text.into(),
+            class_list: Vec::new(),
+        }
+    }
+
+    fn snap_with_class(id: &str, tag: &str, text: &str, class: &str) -> ElementSnapshot {
+        ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: text.into(),
+            class_list: vec![class.into()],
         }
     }
 
@@ -1812,6 +1902,64 @@ mod tests {
         assert_eq!(v, JsValue::String("Hola mundo".into()));
         let v = rt.eval("document.getElementById('inexistente')").expect("e");
         assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn query_selector_class_busca_por_classlist() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("x", "div", "uno"),
+            snap_with_class("y", "div", "dos", "foo"),
+        ])
+        .expect("e");
+        let v = rt.eval("document.querySelector('.foo').id").expect("e");
+        assert_eq!(v, JsValue::String("y".into()));
+        let v = rt.eval("document.querySelector('.bar')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn query_selector_tag_busca_por_tagname() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("h", "h1", "título"),
+            snap("p", "p", "párrafo"),
+        ])
+        .expect("e");
+        let v = rt.eval("document.querySelector('p').id").expect("e");
+        assert_eq!(v, JsValue::String("p".into()));
+        let v = rt.eval("document.querySelector('h1').id").expect("e");
+        assert_eq!(v, JsValue::String("h".into()));
+        let v = rt.eval("document.querySelector('span')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn classlist_add_remove_toggle_contains() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_class("x", "div", "", "foo")]).expect("e");
+        assert_eq!(
+            rt.eval("document.getElementById('x').classList.contains('foo')").expect("e"),
+            JsValue::Bool(true)
+        );
+        rt.eval("document.getElementById('x').classList.add('bar')").expect("e");
+        assert_eq!(
+            rt.eval("document.getElementById('x').classList.contains('bar')").expect("e"),
+            JsValue::Bool(true)
+        );
+        rt.eval("document.getElementById('x').classList.remove('foo')").expect("e");
+        assert_eq!(
+            rt.eval("document.getElementById('x').classList.contains('foo')").expect("e"),
+            JsValue::Bool(false)
+        );
+        rt.eval("document.getElementById('x').classList.toggle('baz')").expect("e");
+        assert_eq!(
+            rt.eval("document.getElementById('x').classList.contains('baz')").expect("e"),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
@@ -2030,6 +2178,44 @@ mod tests {
         rt.set_elements(&[snap("y", "div", "z")]).expect("e2");
         let muts = rt.drain_dom_mutations();
         assert!(muts.is_empty(), "mutación previa fugó: {muts:?}");
+    }
+
+    #[test]
+    fn set_style_color_publica_mutacion_style() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval("document.getElementById('x').style.color = 'red'")
+            .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].id, "x");
+        assert_eq!(muts[0].kind, "style:color");
+        assert_eq!(muts[0].value, "red");
+    }
+
+    #[test]
+    fn set_style_camel_case_se_convierte_a_kebab() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval("document.getElementById('x').style.backgroundColor = 'blue'")
+            .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "style:background-color");
+        assert_eq!(muts[0].value, "blue");
+    }
+
+    #[test]
+    fn style_get_devuelve_el_valor_seteado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.eval("document.getElementById('x').style.color = 'green'")
+            .expect("e");
+        let v = rt.eval("document.getElementById('x').style.color").expect("get");
+        assert_eq!(v, JsValue::String("green".into()));
     }
 
     #[test]

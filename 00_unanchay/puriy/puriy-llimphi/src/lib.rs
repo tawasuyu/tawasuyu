@@ -1880,6 +1880,7 @@ fn collect_element_snapshots(bt: &BoxTree) -> Vec<puriy_js::ElementSnapshot> {
             id: id.clone(),
             tag_name,
             text_content,
+            class_list: b.class_list.clone(),
         });
     });
     out
@@ -1997,8 +1998,12 @@ fn apply_dom_mutations(t: &mut TabState) {
     for m in muts {
         if m.kind == "text" {
             bt.set_element_text_content(&m.id, &m.value);
+        } else if let Some(prop) = m.kind.strip_prefix("style:") {
+            // Fase 7.8: el.style.X = Y publica con kind = "style:X" (X
+            // ya viene en kebab-case desde el harness JS).
+            bt.set_element_style(&m.id, prop, &m.value);
         }
-        // Otros kinds (`style`, `attr`, ...) llegarán en fases siguientes.
+        // Otros kinds (`attr`, `classList`, ...) llegarán en fases siguientes.
     }
 }
 
@@ -4407,7 +4412,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "btn".into(),
             tag_name: "button".into(),
-            text_content: "click me".into(),
+            text_content: "click me".into(), class_list: Vec::new(),
         }])
         .expect("set_elements");
         rt.eval(
@@ -4469,7 +4474,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "out".into(),
             tag_name: "div".into(),
-            text_content: "antes".into(),
+            text_content: "antes".into(), class_list: Vec::new(),
         }])
         .expect("set_elements");
         rt.eval(
@@ -4501,7 +4506,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "clock".into(),
             tag_name: "span".into(),
-            text_content: "00:00".into(),
+            text_content: "00:00".into(), class_list: Vec::new(),
         }])
         .expect("e");
         rt.set_now_ms(0).expect("now");
@@ -4526,13 +4531,78 @@ mod tests {
     }
 
     #[test]
+    fn apply_style_color_actualiza_box_tree_post_script() {
+        let mut t = TabState::new("about:test".into());
+        t.title = "T".into();
+        t.url = "about:test".into();
+        t.box_tree = Some(parse(r#"<body><h1 id="h">hola</h1></body>"#));
+        let scripts = vec![puriy_engine::ScriptInfo {
+            src: None,
+            inline: Some("document.getElementById('h').style.color = '#ff0000'".into()),
+            type_attr: None,
+            is_module: false,
+            defer: false,
+            async_: false,
+        }];
+        run_scripts_on_tab(&mut t, &scripts, 0);
+        let bt = t.box_tree.as_ref().expect("bt");
+        let mut red_leaf = false;
+        bt.walk(|b| {
+            if b.text.as_deref() == Some("hola") && b.color.r == 255 && b.color.g == 0 && b.color.b == 0 {
+                red_leaf = true;
+            }
+        });
+        assert!(red_leaf, "el text leaf debió quedar rojo");
+    }
+
+    #[test]
+    fn apply_style_display_none_oculta_post_dispatch() {
+        let mut m = model_con_script("/* boot */");
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "panel".into(),
+            tag_name: "div".into(),
+            text_content: "".into(),
+            class_list: Vec::new(),
+        }])
+        .expect("e");
+        rt.eval(
+            "document.getElementById('panel').onclick = function(){ \
+                document.getElementById('panel').style.display = 'none'; \
+             }",
+        )
+        .expect("e");
+        m.tabs[0].box_tree = Some(parse(r#"<body><div id="panel">x</div></body>"#));
+        dispatch_js_event(&mut m, "panel", "click", 0);
+        let bt = m.tabs[0].box_tree.as_ref().expect("bt");
+        let mut hidden = false;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("panel") {
+                if matches!(b.display, puriy_engine::Display::None) {
+                    hidden = true;
+                }
+            }
+        });
+        assert!(hidden);
+    }
+
+    #[test]
+    fn collect_element_snapshots_propaga_class_list() {
+        let tree = parse(r#"<div><h1 id="hero" class="title big">x</h1></div>"#);
+        let snaps = collect_element_snapshots(&tree);
+        assert_eq!(snaps.len(), 1);
+        assert!(snaps[0].class_list.contains(&"title".to_string()));
+        assert!(snaps[0].class_list.contains(&"big".to_string()));
+    }
+
+    #[test]
     fn dispatch_event_devuelve_default_prevented_cuando_corresponde() {
         let mut m = model_con_script("/* boot */");
         let rt = m.tabs[0].js.as_mut().expect("rt");
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(),
+            text_content: "link".into(), class_list: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -4553,7 +4623,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "i".into(),
             tag_name: "input".into(),
-            text_content: "".into(),
+            text_content: "".into(), class_list: Vec::new(),
         }])
         .expect("e");
         rt.eval(
@@ -4583,7 +4653,7 @@ mod tests {
         rt.set_elements(&[puriy_js::ElementSnapshot {
             id: "a".into(),
             tag_name: "a".into(),
-            text_content: "link".into(),
+            text_content: "link".into(), class_list: Vec::new(),
         }])
         .expect("e");
         rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
