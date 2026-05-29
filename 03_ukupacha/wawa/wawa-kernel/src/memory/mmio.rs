@@ -35,6 +35,24 @@ static OFFSET_FISICO: AtomicU64 = AtomicU64::new(0);
 /// sola vez, antes de cualquier llamada a `mapear`.
 static MAPEADOR: Once<Mutex<OffsetPageTable<'static>>> = Once::new();
 
+/// Accesor al mapeador global de paginas. `memory::cache` lo reusa para
+/// remapear el framebuffer como Write-Combining sin alocar marcos nuevos
+/// (solo cambia flags de PTEs ya mapeadas por el bootloader). Devuelve
+/// `None` si `init` aun no se invoco.
+pub fn mapeador() -> Option<&'static Mutex<OffsetPageTable<'static>>> {
+    MAPEADOR.get()
+}
+
+/// Traduce una direccion fisica a su virtual en el mapeo lineal que el
+/// cargador dejo activo. Para una pagina ya mapeada (sea por el cargador o
+/// por `mapear`), `fisica + offset_fisico` es la imagen virtual valida.
+/// Si `init` no se invoco, devuelve `fisica` —el offset es cero, que es
+/// invalido como puntero pero solo se llega aqui si el bug de orden de
+/// arranque ya nos hundio—.
+pub fn a_virtual(fisica: u64) -> u64 {
+    fisica + OFFSET_FISICO.load(Ordering::Relaxed)
+}
+
 /// Funda el mapeador: localiza la tabla L4 activa (via CR3) y la envuelve en un
 /// `OffsetPageTable` que aprovecha el mapeo de memoria fisica del cargador. A
 /// partir de aqui `mapear` puede abrir paginas nuevas en la tabla.

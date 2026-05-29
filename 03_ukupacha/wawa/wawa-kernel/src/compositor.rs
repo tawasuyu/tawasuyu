@@ -610,6 +610,16 @@ pub fn atender_mandos() {
             // para confirmar nodos_vivos / muertos / sectores recuperados.
             Mando::CompactarGrafo => {
                 use core::fmt::Write;
+                // CAPA R :: en modo ramdisk el grafo es read-only; compactar
+                // solo provocaria un `Err("ramdisk :: read-only")`. Cortamos
+                // antes con una traza honesta en vez de fingir una pasada.
+                if crate::drivers::disco::es_ramdisk() {
+                    let _ = writeln!(
+                        crate::baliza::Serie,
+                        "gc :: manual (Alt+G) :: omitido :: ramdisk read-only",
+                    );
+                    continue;
+                }
                 match crate::almacen::compactar() {
                     Ok(stats) => {
                         let _ = writeln!(
@@ -1735,28 +1745,110 @@ fn empacar_puntero() -> usize {
     }
 }
 
-/// Si el puntero se ha movido desde la ultima presentacion del compositor, le
-/// pide a la consola un volcado fresco —para reestampar el puntero en su
-/// nuevo lugar—. La invoca la tarea del compositor cada fotograma.
+/// Sprite del puntero: ancho y alto en pixeles. Debe coincidir con
+/// `grafico::PUNTERO` (12×18). Si el sprite cambia de tamano, ajustar aqui.
+const SPRITE_ANCHO: usize = 12;
+const SPRITE_ALTO: usize = 18;
+
+/// Refresca el sprite del puntero cuando su posicion atomica difiere de la
+/// ultima pintada. Seguro en CUALQUIER contexto — incluso dentro de la IRQ12
+/// del raton — porque toma la consola con `try_lock`: si esta ocupada, sale
+/// en silencio y el siguiente disparo (sea otro paquete del raton o el
+/// proximo tic del compositor) reintentara. La posicion vive en atomicos
+/// (`drivers::raton::RATON_X/Y`), asi que nunca se pierde un movimiento —
+/// solo se acumula hasta el proximo refresco exitoso.
+///
+/// PRINCIPIO :: «el lienzo HACE de save-under» (grafico.rs, Fase 13). El
+/// puntero vive solo en el framebuffer, no en el lienzo; blitear el lienzo
+/// sobre la region anterior borra el cursor viejo sin save-under explicito.
+/// `presentar_region` re-estampa el cursor SOLO si su rect actual intersecta
+/// la region — asi blitear el rect nuevo deja el cursor pintado alli.
+///
+/// Costo: dos blits de 12×18 = 216 px (~864 bytes) cada uno por movimiento.
+/// Comparado con el `presentar()` completo (memcpy 1920×1080×4 ≈ 8 MiB) que
+/// se hacia antes: factor ~10 000× menos memoria tocada por refresh.
+///
+/// LATENCIA :: invocado desde la IRQ12 del raton (drivers::raton::procesar),
+/// el cursor se redibuja al ritmo del sample rate del PS/2 (200 Hz = 5 ms)
+/// en lugar del PIT del compositor (100 Hz = 10 ms). Es la diferencia entre
+/// «el cursor salta entre tics» y «movimiento fluido».
 pub fn refrescar_puntero() {
+    // Fast path sin lock: si nada cambio, salir antes de tomar la consola.
     let actual = empacar_puntero();
     if actual == usize::MAX {
         return;
     }
-    if PUNTERO_REFRESCADO.swap(actual, Ordering::Relaxed) != actual {
-        // FASE 62 :: si el kernel gobierna un cursor por HARDWARE, mover el
-        // puntero es un comando diminuto en la cola de cursor del virtio-gpu —el
-        // host lo compone sobre el scanout en un plano aparte—, no un volcado de
-        // pantalla entera. Esa es la cura del lag del puntero: la respuesta deja
-        // de estar atada al coste de re-presentar el lienzo cada fotograma.
-        if crate::drivers::gpu::cursor_hardware() {
+    // FASE 62 :: si el kernel gobierna un cursor por HARDWARE (virtio-gpu),
+    // mover el puntero es un comando diminuto en la cola de cursor —el host lo
+    // compone en un plano aparte—, no un volcado de pantalla entera. Es la via
+    // optima cuando hay virtio-gpu (QEMU, o metal con GPU virtio).
+    if crate::drivers::gpu::cursor_hardware() {
+        if PUNTERO_REFRESCADO.swap(actual, Ordering::Relaxed) != actual {
             let x = actual & 0xFFFF;
             let y = actual >> 16;
             crate::drivers::gpu::mover_cursor(x, y);
-        } else {
-            crate::consola::refrescar();
         }
+        return;
     }
+
+    // En metal real SIN virtio-gpu el cursor es por SOFTWARE: dirty-region de
+    // 12×18 sobre el framebuffer GOP, sin re-presentar la pantalla entera. Es la
+    // cura del lag del puntero EN METAL, donde el cursor por hardware no existe
+    // (antes de Fase 62 aqui se hacia `consola::refrescar()` = present completo).
+    if PUNTERO_REFRESCADO.load(Ordering::Relaxed) == actual {
+        return;
+    }
+
+    // Tomar la consola con `try_lock`. Desde IRQ12 esto evita el deadlock
+    // contra el compositor mid-recomponer; desde la tarea del compositor
+    // jamas falla porque solo otra IRQ puede arrebatarsela brevemente.
+    let consola = match crate::consola::CONSOLA.get() {
+        Some(c) => c,
+        None => return,
+    };
+    let mut consola = match consola.try_lock() {
+        Some(g) => g,
+        None => return,
+    };
+
+    // Re-leer dentro del lock para minimizar la ventana entre lectura y
+    // pintado — el raton se mueve mientras peleamos por el cerrojo.
+    let actual = empacar_puntero();
+    if actual == usize::MAX {
+        return;
+    }
+    let previo = PUNTERO_REFRESCADO.load(Ordering::Relaxed);
+    if previo == actual {
+        return;
+    }
+
+    // Borrar el sprite viejo: blit del lienzo (save-under) en su rect.
+    if previo != usize::MAX {
+        let x_prev = previo & 0xFFFF;
+        let y_prev = previo >> 16;
+        consola.presentar_region(RegionPantalla {
+            x: x_prev,
+            y: y_prev,
+            ancho: SPRITE_ANCHO,
+            alto: SPRITE_ALTO,
+        });
+    }
+
+    // Estampar el sprite en la nueva posicion: `presentar_region` re-estampa
+    // el cursor porque su rect actual (raton::posicion) cae dentro.
+    let x = actual & 0xFFFF;
+    let y = actual >> 16;
+    consola.presentar_region(RegionPantalla {
+        x,
+        y,
+        ancho: SPRITE_ANCHO,
+        alto: SPRITE_ALTO,
+    });
+
+    // Solo avanzar el marcador cuando ambos blits se hicieron — asi un
+    // fallo de lock no deja PUNTERO_REFRESCADO mintiendo sobre el estado
+    // del framebuffer.
+    PUNTERO_REFRESCADO.store(actual, Ordering::Relaxed);
 }
 
 // =============================================================================

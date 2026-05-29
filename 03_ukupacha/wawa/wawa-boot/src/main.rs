@@ -67,8 +67,47 @@ fn main() {
     }
 }
 
-/// Ejecuta, en orden, las operaciones de la Fase 1.5.
+/// Los modos de operacion del orquestador, elegidos por el primer argumento
+/// de linea de comando. El DEFAULT (sin flags) es el bucle de desarrollo de
+/// siempre — forjar y arrancar en QEMU; `--forjar`/`--install` son la CAPA R:
+/// el grafo viaja DENTRO de la imagen como ramdisk para correr en metal sin
+/// virtio-blk.
+enum Modo {
+    /// Forja la imagen SIN ramdisk y la arranca en QEMU con virtio-blk
+    /// persistente. Los argumentos extra se reenvian a QEMU. (default)
+    Qemu,
+    /// Forja la imagen CON ramdisk embebido y se detiene — lista para flashear
+    /// a un USB a mano. (`--forjar`)
+    Forjar,
+    /// Forja la imagen CON ramdisk y la escribe en un dispositivo de bloque
+    /// real, tras triple confirmacion. (`--install /dev/sdX`)
+    Instalar(String),
+}
+
+/// Lee el modo del primer flag reconocido. Todo lo que no sea `--forjar` /
+/// `--install` se considera argumento de QEMU (`-display none`, `-d int`, …).
+fn parsear_modo() -> Result<Modo, String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--forjar" => return Ok(Modo::Forjar),
+            "--install" | "--instalar" => {
+                let dispositivo = args.next().ok_or_else(|| {
+                    "--install requiere un dispositivo de bloque, p.ej. --install /dev/sda"
+                        .to_string()
+                })?;
+                return Ok(Modo::Instalar(dispositivo));
+            }
+            _ => {}
+        }
+    }
+    Ok(Modo::Qemu)
+}
+
+/// Ejecuta, en orden, las operaciones de la Fase 1.5 segun el modo.
 fn orquestar() -> Result<(), String> {
+    let modo = parsear_modo()?;
+
     // --- 1. Localizar el artefacto del kernel. ---
     let kernel = Path::new(KERNEL_ELF);
     if !kernel.is_file() {
@@ -80,19 +119,112 @@ fn orquestar() -> Result<(), String> {
     }
     println!("[renaser/boot] kernel localizado :: {}", kernel.display());
 
-    // --- 2. Fusionar kernel + cargador UEFI en una imagen de disco. ---
-    let imagen = ruta_imagen(kernel);
-    println!("[renaser/boot] forjando imagen UEFI :: {}", imagen.display());
-    bootloader::UefiBoot::new(kernel)
-        .create_disk_image(&imagen)
-        .map_err(|e| format!("la crate `bootloader` no pudo crear la imagen UEFI: {e:?}"))?;
-
-    // --- 3. Garantizar —y, si es virgen, SEMBRAR— el disco de objetos. ---
+    // --- 2. Sembrar el disco de objetos PRIMERO. Es a la vez la fuente del
+    //        ramdisk (camino metal) y el drive virtio-blk (camino QEMU); por
+    //        eso `set_ramdisk` mas abajo necesita que el archivo ya exista. ---
     preparar_disco_objetos()?;
 
-    // --- 4. Lanzar QEMU sobre esa imagen. ---
-    let ovmf = localizar_ovmf()?;
-    lanzar_qemu(&imagen, &ovmf)
+    // --- 3. Forjar la imagen UEFI segun el modo y despacharla. ---
+    let imagen = ruta_imagen(kernel);
+    match modo {
+        Modo::Qemu => {
+            // Sin ramdisk: el kernel monta virtio-blk con persistencia real.
+            forjar_imagen(kernel, &imagen, false)?;
+            let ovmf = localizar_ovmf()?;
+            lanzar_qemu(&imagen, &ovmf)
+        }
+        Modo::Forjar => {
+            // Con ramdisk: el grafo viaja DENTRO de la imagen, sin depender de
+            // virtio-blk (que no existe en metal).
+            forjar_imagen(kernel, &imagen, true)?;
+            println!(
+                "\n[renaser/boot] imagen con ramdisk lista :: {0}\n  \
+                 flashea a un USB con:\n    \
+                 sudo dd if={0} of=/dev/sdX bs=4M conv=fsync status=progress\n  \
+                 (o `cargo run -p boot -- --install /dev/sdX` para la version asistida)",
+                imagen.display(),
+            );
+            Ok(())
+        }
+        Modo::Instalar(dispositivo) => {
+            forjar_imagen(kernel, &imagen, true)?;
+            instalar_en_dispositivo(&imagen, &dispositivo)
+        }
+    }
+}
+
+/// Forja la imagen de disco UEFI fusionando kernel + cargador. Si
+/// `con_ramdisk`, embebe `target/disk.img` (el grafo sembrado) como ramdisk:
+/// el cargador lo carga en RAM y se lo expone al kernel via `BootInfo.ramdisk_*`.
+fn forjar_imagen(kernel: &Path, imagen: &Path, con_ramdisk: bool) -> Result<(), String> {
+    println!(
+        "[renaser/boot] forjando imagen UEFI{} :: {}",
+        if con_ramdisk { " (con ramdisk)" } else { "" },
+        imagen.display(),
+    );
+    let mut constructor = bootloader::UefiBoot::new(kernel);
+    if con_ramdisk {
+        constructor.set_ramdisk(Path::new(NOMBRE_DISCO));
+    }
+    constructor
+        .create_disk_image(imagen)
+        .map_err(|e| format!("la crate `bootloader` no pudo crear la imagen UEFI: {e:?}"))?;
+    Ok(())
+}
+
+/// Escribe la imagen forjada en un dispositivo de bloque real. Por la gravedad
+/// de la operacion —DESTRUYE todo dato previo— exige TRIPLE confirmacion
+/// interactiva antes de invocar `sudo dd`.
+fn instalar_en_dispositivo(imagen: &Path, dispositivo: &str) -> Result<(), String> {
+    use std::io::{BufRead, Write as _};
+
+    if !Path::new(dispositivo).exists() {
+        return Err(format!("el dispositivo «{dispositivo}» no existe"));
+    }
+
+    // Mostrar el dispositivo para que el operador confirme con los ojos.
+    println!("\n\x1b[1;31m[renaser/boot] INSTALACION EN HARDWARE REAL\x1b[0m");
+    let _ = Command::new("lsblk")
+        .args(["-o", "NAME,SIZE,MODEL,TRAN,MOUNTPOINT", dispositivo])
+        .status();
+    println!("\nEsto SOBRESCRIBE por completo «{dispositivo}». Todo dato previo se PIERDE.\n");
+
+    let stdin = std::io::stdin();
+    let preguntas = [
+        format!("1/3 — ¿«{dispositivo}» es el USB correcto? escribe «si»: "),
+        "2/3 — ¿entiendes que se BORRARA todo su contenido? escribe «borrar»: ".to_string(),
+        format!("3/3 — reescribe el dispositivo completo para confirmar («{dispositivo}»): "),
+    ];
+    let esperadas = ["si", "borrar", dispositivo];
+    for (pregunta, esperada) in preguntas.iter().zip(esperadas.iter()) {
+        print!("{pregunta}");
+        std::io::stdout().flush().ok();
+        let mut linea = String::new();
+        stdin
+            .lock()
+            .read_line(&mut linea)
+            .map_err(|e| format!("no se pudo leer la confirmacion: {e}"))?;
+        if linea.trim() != *esperada {
+            return Err("instalacion abortada: la confirmacion no coincide".to_string());
+        }
+    }
+
+    println!("\n[renaser/boot] escribiendo con `sudo dd` (puede pedir tu contraseña)…");
+    let estado = Command::new("sudo")
+        .arg("dd")
+        .arg(format!("if={}", imagen.display()))
+        .arg(format!("of={dispositivo}"))
+        .arg("bs=4M")
+        .arg("conv=fsync")
+        .arg("status=progress")
+        .status()
+        .map_err(|e| format!("no se pudo invocar `sudo dd`: {e}"))?;
+    if !estado.success() {
+        return Err(format!("`dd` termino con estado anomalo: {estado}"));
+    }
+    let _ = Command::new("sync").status();
+    println!("\n[renaser/boot] ✓ wawa instalado en «{dispositivo}». Reinicia y arranca desde el USB.");
+    Ok(())
 }
 
 // =============================================================================

@@ -723,6 +723,32 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         region_dma,
     );
 
+    // --- 1.5. CAPA R :: ramdisk. Cuando `wawa-boot` forja la imagen con
+    //          `set_ramdisk(disk.img)`, el cargador carga el grafo entero en
+    //          RAM y nos pasa su direccion+longitud por `BootInfo.ramdisk_*`.
+    //          Lo registramos AQUI, antes de `informar_almacen`, para que
+    //          `drivers::disco::montar` derive al slice en vez de sondear el bus
+    //          PCI (no hay virtio-blk en metal). Si el cargador no embebio
+    //          ramdisk (camino QEMU), `ramdisk_addr` es None y el almacen sigue
+    //          contra virtio-blk con persistencia. El slice es `'static`: el
+    //          cargador no reusa esa RAM y nadie la libera. ---
+    if let Some(addr) = boot_info.ramdisk_addr.into_option() {
+        let len = boot_info.ramdisk_len as usize;
+        if len > 0 {
+            // SEGURIDAD: el cargador mapeo `[addr, addr+len)` y garantiza que
+            // perdura mientras viva el kernel; nadie mas escribe ese rango.
+            let datos = unsafe { core::slice::from_raw_parts(addr as *const u8, len) };
+            drivers::disco::establecer_ramdisk(datos);
+            let _ = writeln!(
+                baliza::Serie,
+                "ramdisk :: registrado :: addr={:#x} len={} ({} sectores)",
+                addr,
+                len,
+                len / 512,
+            );
+        }
+    }
+
     // --- 2. Encender la baliza: la red de seguridad visual va primero. ---
     BALIZA_PANICO.encender(
         &pantalla,
@@ -752,6 +778,20 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     if let Some(offset) = offset_fisico {
         memory::mmio::init(offset);
         traza("mmio :: mapeador fundado");
+
+        // --- 4.5b. Framebuffer Write-Combining en metal real. El bootloader
+        //          mapea el GOP como WB-cached; en hardware fisico eso causa
+        //          parpadeo (el scanout LCD ve pixeles viejos hasta el evict de
+        //          cache) y lentitud (la polucion de cache mata al resto del
+        //          kernel). Reprogramar IA32_PAT (slot 4 = WC) y remarcar las PTE
+        //          del framebuffer lo cura. En QEMU es inocuo: el "framebuffer"
+        //          es RAM coherente. Va ANTES de cualquier `presentar()` y
+        //          mientras `pantalla` aun es el GOP — si virtio-gpu toma el
+        //          scanout despues (Fase 60), esa memoria es DMA del kernel y no
+        //          necesita el remap. Ver memory/cache.rs. ---
+        memory::cache::init_pat();
+        memory::cache::marcar_wc(pantalla.base as u64, info.byte_len);
+        traza("cache :: framebuffer GOP remarcado WC");
     }
 
     // --- 4.6. FASE 60 :: fundar la arena de marcos DMA y, sobre ella, TOMAR

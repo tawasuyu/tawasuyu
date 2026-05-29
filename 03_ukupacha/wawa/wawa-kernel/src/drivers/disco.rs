@@ -52,6 +52,53 @@ const VIRTIO_BLK_IDS: [u16; 2] = [0x1001, 0x1042];
 pub const TAM_SECTOR: usize = SECTOR_SIZE;
 
 // =============================================================================
+//  RAMDISK :: EL GRAFO EMBEBIDO EN LA IMAGEN UEFI
+// -----------------------------------------------------------------------------
+//  Cuando `wawa-boot` forja la imagen UEFI con `set_ramdisk(disk.img)`, el
+//  cargador deja el blob entero en RAM antes de saltar al kernel y nos pasa
+//  su direccion+longitud por `BootInfo.ramdisk_*`. `kernel_main` lo recoge
+//  y llama `establecer_ramdisk(slice)` ANTES de `montar()`. En adelante toda
+//  E/S de bloques se sirve por memcpy contra ese slice — sin PCI, sin DMA,
+//  sin IRQ —. Es el camino que permite arrancar wawa desde un USB tonto sin
+//  driver XHCI/USB-MS escrito todavia.
+//
+//  Limitaciones deliberadas del v1:
+//    * Lecturas: memcpy directo desde el slice. Coste O(n) sin colas.
+//    * Escrituras: NO se aceptan — el slice es read-only y el grafo se
+//      congela al hornearlo en la imagen. `escribir_sectores` devuelve
+//      `Err("ramdisk read-only")` para que las apps que asumen
+//      persistencia (cronista, pluma, mudanza) muestren su baliza en
+//      lugar de mentir silenciosamente.
+//    * Sin GC: el log no crece, no hay basura que aspirar.
+//
+//  El COW en heap (escrituras a un overlay volatil, lecturas de overlay
+//  primero, slice como fallback) es una iteracion posterior — hoy lo
+//  importante es que el escritorio arranque en metal con su Genesis.
+// =============================================================================
+
+/// El slice del ramdisk si esta presente. Una vez fijado, `montar`,
+/// `leer_sectores` y `escribir_sectores` derivan a la ruta ramdisk antes de
+/// tocar el bus PCI. Vida `'static` porque la memoria viene del bootloader y
+/// vive lo que vive el kernel.
+static RAMDISK_DATOS: Once<&'static [u8]> = Once::new();
+
+/// Registra el slice del ramdisk que el bootloader cargo en RAM. Se invoca
+/// UNA sola vez desde `kernel_main`, antes de `disco::montar()`, cuando
+/// `BootInfo.ramdisk_addr` esta presente.
+///
+/// Idempotente: llamadas posteriores se ignoran (`Once::call_once`).
+pub fn establecer_ramdisk(datos: &'static [u8]) {
+    RAMDISK_DATOS.call_once(|| datos);
+}
+
+/// `true` si el almacen va a hablar contra el ramdisk en lugar del bus PCI.
+/// Util para que `almacen` y el compositor desactiven el GC y eviten gastar
+/// E/S en un dispositivo read-only.
+pub fn es_ramdisk() -> bool {
+    RAMDISK_DATOS.get().is_some()
+}
+
+// =============================================================================
 //  EL OFFSET DE MEMORIA FISICA Y EL ASIGNADOR DE MARCOS
 // =============================================================================
 
@@ -209,6 +256,28 @@ pub fn asignar_marco_para_tabla() -> Option<u64> {
     ASIGNADOR.get()?.lock().asignar(1)
 }
 
+/// Asigna `paginas` marcos fisicos contiguos de 4 KiB y devuelve la direccion
+/// fisica del primero. Sin pánico — devuelve `None` si la arena esta exhausta
+/// o no fundada. Los marcos se entregan SIN limpiar a cero; el caller decide
+/// si zero-fill segun necesite (DCBAA y rings xHCI lo necesitan).
+///
+/// Pensado para drivers que necesitan buferes DMA pequenos (rings xHCI,
+/// estructuras de contexto, ERST). Para DMA gigante o IRQ-driven, considerar
+/// si conviene crear un asignador dedicado fuera de la arena de virtio-blk.
+#[allow(dead_code)]
+pub fn asignar_paginas_dma(paginas: usize) -> Option<u64> {
+    ASIGNADOR.get()?.lock().asignar(paginas)
+}
+
+/// Devuelve a la arena `paginas` marcos contiguos que arrancan en `fisica`.
+/// Reverso de `asignar_paginas_dma`.
+#[allow(dead_code)]
+pub fn liberar_paginas_dma(fisica: u64, paginas: usize) {
+    if let Some(asignador) = ASIGNADOR.get() {
+        asignador.lock().liberar(fisica, paginas);
+    }
+}
+
 /// Traduce una direccion fisica a la virtual que el kernel puede desreferenciar.
 fn a_virtual(fisica: u64) -> *mut u8 {
     (fisica + OFFSET_FISICO.load(Ordering::Relaxed)) as *mut u8
@@ -328,7 +397,19 @@ static WAKER_DISCO: Mutex<Option<Waker>> = Mutex::new(None);
 /// `Mutex` global. Descubre ademas su linea de IRQ, registra el manejador y
 /// abre la linea en el PIC: desde aqui el disco puede interrumpir. Devuelve la
 /// capacidad del disco en sectores. Toda falla se devuelve como `Err`.
+///
+/// Atajo de ramdisk: si `establecer_ramdisk` se invoco antes (camino metal,
+/// USB tonto), `montar` corta antes de enumerar PCI y devuelve la capacidad
+/// derivada del tamano del slice. El bus PCI sigue activo para el resto
+/// (`virtio-console`, `virtio-net`), pero el disco no se enumera.
 pub fn montar() -> Result<u64, &'static str> {
+    if let Some(&datos) = RAMDISK_DATOS.get() {
+        let capacidad = (datos.len() / TAM_SECTOR) as u64;
+        if capacidad < 2 {
+            return Err("ramdisk demasiado pequeño para un grafo");
+        }
+        return Ok(capacidad);
+    }
     let mut raiz = PciRoot::new(CamPuertos);
 
     // 1. Localizar el primer disco virtio-blk recorriendo el bus.
@@ -532,9 +613,22 @@ impl Future for EsperaDisco {
     }
 }
 
-/// Prepara la LECTURA asincrona de `n_sectores` sectores desde `sector`. El
-/// `Future` que devuelve no toca el disco hasta que se le sondea.
-pub fn leer_bloques(sector: u64, n_sectores: usize) -> EsperaDisco {
+/// Prepara la LECTURA ASINCRONA de `n_sectores` sectores desde `sector`. En
+/// modo virtio-blk devuelve un `Future` que envia la peticion y cede; la IRQ
+/// del disco lo reanudara. En modo ramdisk corta de inmediato con memcpy del
+/// slice y resuelve ya — el `.await` retorna sin ceder.
+pub async fn leer_bloques(sector: u64, n_sectores: usize) -> Result<Vec<u8>, &'static str> {
+    if let Some(&datos) = RAMDISK_DATOS.get() {
+        let off = (sector as usize).checked_mul(TAM_SECTOR)
+            .ok_or("ramdisk :: offset desbordado")?;
+        let len = n_sectores.checked_mul(TAM_SECTOR)
+            .ok_or("ramdisk :: longitud desbordada")?;
+        let fin = off.checked_add(len).ok_or("ramdisk :: rango desbordado")?;
+        if fin > datos.len() {
+            return Err("ramdisk :: lectura fuera de rango");
+        }
+        return Ok(datos[off..fin].to_vec());
+    }
     EsperaDisco {
         req: Box::new(BlkReq::default()),
         resp: Box::new(BlkResp::default()),
@@ -543,11 +637,23 @@ pub fn leer_bloques(sector: u64, n_sectores: usize) -> EsperaDisco {
         es_escritura: false,
         token: None,
     }
+    .await
 }
 
-/// Prepara la ESCRITURA asincrona de `datos` a partir de `sector`. La longitud
-/// de `datos` debe ser multiplo de un sector.
-pub fn escribir_bloques(sector: u64, datos: Vec<u8>) -> EsperaDisco {
+/// Prepara la ESCRITURA ASINCRONA de `datos` a partir de `sector`. En modo
+/// ramdisk rechaza con traza visible (ver `escribir_sectores` para la
+/// justificacion). La longitud de `datos` debe ser multiplo de un sector.
+pub async fn escribir_bloques(sector: u64, datos: Vec<u8>) -> Result<Vec<u8>, &'static str> {
+    if RAMDISK_DATOS.get().is_some() {
+        use core::fmt::Write;
+        let _ = writeln!(
+            crate::baliza::Serie,
+            "ramdisk :: escritura async rechazada :: sector={} bytes={}",
+            sector,
+            datos.len(),
+        );
+        return Err("ramdisk :: read-only");
+    }
     EsperaDisco {
         req: Box::new(BlkReq::default()),
         resp: Box::new(BlkResp::default()),
@@ -556,6 +662,7 @@ pub fn escribir_bloques(sector: u64, datos: Vec<u8>) -> EsperaDisco {
         es_escritura: true,
         token: None,
     }
+    .await
 }
 
 // =============================================================================
@@ -591,9 +698,20 @@ fn bloquear_en<F: Future>(futuro: F) -> F::Output {
 }
 
 /// Lee `buf.len() / 512` sectores consecutivos a partir de `sector`. Sincrono:
-/// construido sobre la maquinaria asincrona via `bloquear_en`. El bufer debe
-/// medir un multiplo entero de un sector.
+/// construido sobre la maquinaria asincrona via `bloquear_en` para virtio-blk,
+/// o por memcpy directo desde el slice si el ramdisk esta fijado.
 pub fn leer_sectores(sector: u64, buf: &mut [u8]) -> Result<(), &'static str> {
+    if let Some(&datos) = RAMDISK_DATOS.get() {
+        let off = (sector as usize).checked_mul(TAM_SECTOR)
+            .ok_or("ramdisk :: offset desbordado")?;
+        let fin = off.checked_add(buf.len())
+            .ok_or("ramdisk :: rango desbordado")?;
+        if fin > datos.len() {
+            return Err("ramdisk :: lectura fuera de rango");
+        }
+        buf.copy_from_slice(&datos[off..fin]);
+        return Ok(());
+    }
     let datos = bloquear_en(leer_bloques(sector, buf.len() / TAM_SECTOR))?;
     buf.copy_from_slice(&datos);
     Ok(())
@@ -601,6 +719,23 @@ pub fn leer_sectores(sector: u64, buf: &mut [u8]) -> Result<(), &'static str> {
 
 /// Escribe `buf.len() / 512` sectores consecutivos a partir de `sector`.
 /// Sincrono, sobre la misma maquinaria asincrona.
+///
+/// Si el almacen vive sobre el ramdisk, las escrituras son rechazadas con
+/// traza visible —el slice del bootloader es read-only y las apps que
+/// asumen persistencia deben enterarse para mostrar su baliza, no para
+/// avanzar como si nada—. El COW en heap volatil (overlay de escrituras
+/// que viven el uptime y se evaporan al reboot) llegara cuando deje de
+/// ser un pretexto y se necesite de verdad.
 pub fn escribir_sectores(sector: u64, buf: &[u8]) -> Result<(), &'static str> {
+    if RAMDISK_DATOS.get().is_some() {
+        use core::fmt::Write;
+        let _ = writeln!(
+            crate::baliza::Serie,
+            "ramdisk :: escritura rechazada :: sector={} bytes={}",
+            sector,
+            buf.len(),
+        );
+        return Err("ramdisk :: read-only");
+    }
     bloquear_en(escribir_bloques(sector, buf.to_vec())).map(|_| ())
 }
