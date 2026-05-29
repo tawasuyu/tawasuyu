@@ -104,6 +104,35 @@ enum WawaOp {
         #[arg(long)]
         salida: PathBuf,
     },
+    /// Fase 64 :: empaqueta un release de wawa COMPLETO a partir de un spec
+    /// JSON que lista todas las apps (cada una con su `.wasm` compilado,
+    /// región, fuel y permisos). Construye el grafo —objetos de bytecode +
+    /// manifiesto + canal—, lo firma con `--como`, y escribe a `--salida/`:
+    ///
+    ///   - `<hash>.obj`              un archivo por objeto del grafo
+    ///   - `anuncio.bin`            168 B: canal|raiz|autor|timestamp_le|firma
+    ///   - `manifiesto_firmado.bin` 128 B: el sobre de `sys_manifiesto_proponer`
+    ///
+    /// El directorio resultante lo difunde y sirve por AoE el example
+    /// `servir_release` de `wawa-explorer-aoe`. Es la mitad "fragua" del lazo
+    /// Rust→wawa en vivo: compilás, esto empaqueta y firma, wawa absorbe.
+    ///
+    /// Spec JSON:
+    ///   {"canal":"dev","apps":[
+    ///     {"nombre":"hola","wasm":"app.wasm","region":[100,120,480,560],
+    ///      "fuel":2000000,"permisos":0}]}
+    Publicar {
+        /// Identidad firmante (debe estar en el keystore local). Para que
+        /// wawa la acepte, su pubkey debe vivir en `AGORA_AUTH_RING`.
+        #[arg(long)]
+        como: String,
+        /// Path al spec JSON del release.
+        #[arg(long)]
+        spec: PathBuf,
+        /// Directorio de salida (se crea si no existe).
+        #[arg(long)]
+        salida: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -358,6 +387,10 @@ enum Error {
     Canal(&'static str),
     #[error("agora-channel: {0}")]
     AgoraChannel(agora_channel::CanalError),
+    #[error("release: {0}")]
+    Release(String),
+    #[error("spec JSON: {0}")]
+    Spec(String),
 }
 
 type CliResult<T> = std::result::Result<T, Error>;
@@ -470,6 +503,7 @@ fn run(cmd: Cmd) -> CliResult<()> {
             CanalOp::Mostrar { archivo } => canal_mostrar(&archivo),
         },
         Cmd::Wawa { op } => match op {
+            WawaOp::Publicar { como, spec, salida } => wawa_publicar(&como, &spec, &salida),
             WawaOp::ForjarClave { name } => wawa_forjar_clave(&name),
             WawaOp::ForjarPropuesta { como, hash, salida } => {
                 wawa_forjar_propuesta(&como, &hash, &salida)
@@ -921,6 +955,139 @@ fn wawa_forjar_propuesta(como: &str, hash_hex: &str, salida: &Path) -> CliResult
     println!("la verifica en userspace OK y el kernel responde con");
     println!("CapacidadInsuficiente.");
     Ok(())
+}
+
+/// El spec JSON de un release: el canal + el conjunto COMPLETO de apps. Es lo
+/// que un humano o Claude escribe a mano — la cara legible del manifiesto.
+#[derive(serde::Deserialize)]
+struct SpecRelease {
+    #[serde(default = "canal_por_defecto")]
+    canal: String,
+    apps: Vec<SpecApp>,
+}
+
+fn canal_por_defecto() -> String {
+    "dev".to_string()
+}
+
+/// Una app dentro del spec. `wasm` es la ruta al `.wasm` ya compilado
+/// (relativa al directorio del spec si no es absoluta).
+#[derive(serde::Deserialize)]
+struct SpecApp {
+    nombre: String,
+    wasm: String,
+    /// `[x, y, ancho, alto]` del lienzo natural.
+    region: [u32; 4],
+    #[serde(default = "techo_por_defecto")]
+    techo_memoria: u32,
+    fuel: u32,
+    #[serde(default)]
+    permisos: u32,
+}
+
+fn techo_por_defecto() -> u32 {
+    4 * 1024 * 1024
+}
+
+/// `agora-cli wawa publicar` — la mitad "fragua" del lazo Rust→wawa en vivo.
+fn wawa_publicar(como: &str, spec_path: &Path, salida: &Path) -> CliResult<()> {
+    let s = Sesion::abrir()?;
+    let como_id = s.resolver_id(como)?;
+    let kp = s.cargar_keypair(como_id)?;
+
+    let texto = fs::read_to_string(spec_path)?;
+    let spec: SpecRelease =
+        serde_json::from_str(&texto).map_err(|e| Error::Spec(e.to_string()))?;
+    if spec.apps.is_empty() {
+        return Err(Error::Spec("el spec no lista ninguna app".to_string()));
+    }
+
+    // Los `.wasm` se resuelven relativos al directorio del spec si no son
+    // rutas absolutas — así el spec es portable junto a sus binarios.
+    let base_dir = spec_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut apps = Vec::with_capacity(spec.apps.len());
+    for a in &spec.apps {
+        let p = Path::new(&a.wasm);
+        let wasm_path = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base_dir.join(p)
+        };
+        let bytecode = fs::read(&wasm_path).map_err(|e| {
+            Error::Spec(format!("no pude leer {}: {e}", wasm_path.display()))
+        })?;
+        apps.push(agora_channel::AppSpec {
+            nombre: a.nombre.clone(),
+            bytecode,
+            region: (a.region[0], a.region[1], a.region[2], a.region[3]),
+            techo_memoria: a.techo_memoria,
+            fuel_fotograma: a.fuel,
+            permisos: a.permisos,
+        });
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let release = agora_channel::construir_release(&apps, &kp, &spec.canal, timestamp)
+        .map_err(|e| Error::Release(e.to_string()))?;
+
+    fs::create_dir_all(salida)?;
+
+    // 1. Un archivo por objeto del grafo: `<hash>.obj`.
+    let mut grandes = 0usize;
+    for obj in &release.objetos {
+        fs::write(salida.join(format!("{}.obj", hex_de(&obj.hash))), &obj.payload)?;
+        if obj.payload.len() > akasha_max_payload() {
+            grandes += 1;
+        }
+    }
+
+    // 2. anuncio.bin — 168 B raw: canal|raiz|autor|timestamp_le(8)|firma(64).
+    //    Layout fijo para que `servir_release` lo lea sin postcard.
+    let mut anuncio = Vec::with_capacity(168);
+    anuncio.extend_from_slice(&release.canal);
+    anuncio.extend_from_slice(&release.manifiesto);
+    anuncio.extend_from_slice(&release.autor);
+    anuncio.extend_from_slice(&release.timestamp.to_le_bytes());
+    anuncio.extend_from_slice(&release.firma_anuncio);
+    fs::write(salida.join("anuncio.bin"), &anuncio)?;
+
+    // 3. manifiesto_firmado.bin — 128 B, el sobre de sys_manifiesto_proponer
+    //    (compatible con el camino `mudanza` que hornea propuesta_demo.bin).
+    let mf = release.manifiesto_firmado.serializar().map_err(Error::Canal)?;
+    fs::write(salida.join("manifiesto_firmado.bin"), &mf)?;
+
+    println!("release «{}» empaquetado → {}", spec.canal, salida.display());
+    println!("  apps           : {}", apps.len());
+    println!("  objetos        : {}", release.objetos.len());
+    println!("  manifiesto     : {}", hex_de(&release.manifiesto));
+    println!("  canal          : {}", hex_de(&release.canal));
+    println!("  autor (pubkey) : {}", hex_de(&release.autor));
+    if grandes > 0 {
+        println!();
+        println!("  AVISO: {grandes} objeto(s) superan 1486 B (MAX_PAYLOAD_AKASHA).");
+        println!("  No caben en un frame de capa-2 — `servir_release` los OMITIRÁ");
+        println!("  hasta que exista chunking. El bundle en disco SÍ los contiene");
+        println!("  (sirve para sembrar un disco de objetos directamente).");
+    }
+    println!();
+    println!("Difundir + servir en vivo a una wawa en la misma red L2:");
+    println!(
+        "  sudo -E cargo run -p wawa-explorer-aoe --example servir_release -- <iface> {}",
+        salida.display()
+    );
+    Ok(())
+}
+
+/// El techo de payload de un frame AoE (`akasha::MAX_PAYLOAD_AKASHA`),
+/// replicado como constante local para no acoplar `agora-cli` al crate
+/// `akasha` del kernel sólo por un número. Si aquél cambia, este aviso
+/// quedaría desfasado — es sólo un AVISO, no una verdad de protocolo.
+fn akasha_max_payload() -> usize {
+    1486
 }
 
 fn grafo_resumen() -> CliResult<()> {
