@@ -734,6 +734,42 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
             else parent.appendChild(node);
         }
     };
+    // Fase 7.24 — replaceChildren(...nodes). Borra TODOS los children
+    // Element conocidos del padre y agrega los nuevos. Walking via
+    // __puriy_elements buscando los que tienen _parent_id === el._id —
+    // sólo borra elementos CON id (text nodes intermedios del documento
+    // original no están exposed, divergencia explícita del spec).
+    el.replaceChildren = function() {
+        // Snapshot de children antes de mutar (el loop de borrado los
+        // saca del store, podría romper la iteración).
+        var existing = [];
+        var els = globalThis.__puriy_elements || {};
+        for (var k in els) {
+            if (els[k]._parent_id === el._id) existing.push(els[k]);
+        }
+        for (var i = 0; i < existing.length; i++) {
+            el.removeChild(existing[i]);
+        }
+        // Append los nuevos (mismo molde que `append`).
+        for (var j = 0; j < arguments.length; j++) {
+            var a = arguments[j];
+            if (typeof a === 'string') el.appendChild(document.createTextNode(a));
+            else if (a && a._synthetic) el.appendChild(a);
+        }
+    };
+    // Fase 7.24 — scrollIntoView(). Publica mutación al chrome para
+    // que mueva `scroll_y` del tab a la posición aproximada del
+    // elemento. Heurística DFS-order × 30px en el chrome — sin layout
+    // exacto, pero monotónico (elementos más profundos en el tree
+    // quedan más abajo). El método NO acepta options (alignToTop/
+    // smooth/etc.) por ahora.
+    el.scrollIntoView = function() {
+        globalThis.__puriy_dirty.push({
+            id: el._id,
+            kind: 'scrollIntoView',
+            value: ''
+        });
+    };
     // Fase 7.21 — cloneNode(deep). Crea un Element sintético nuevo con
     // mismo tag/textContent/className/value y copia data-*/atributos
     // genéricos. `deep === true` (o cualquier truthy) en el spec real
@@ -5226,6 +5262,57 @@ mod tests {
             .eval("var a = document.getElementById('a'); a.contains(a)")
             .expect("e");
         assert_eq!(v, JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.24 — replaceChildren + scrollIntoView =============
+
+    #[test]
+    fn replace_children_borra_existentes_y_agrega_nuevos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("a", "li", "p"),
+            snap_with_parent("b", "li", "p"),
+        ])
+        .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var p = document.getElementById('p'); \
+             p.replaceChildren(document.createElement('li'), document.createElement('li'));",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let removes: Vec<_> = muts.iter().filter(|m| m.kind == "removeChild").collect();
+        let appends: Vec<_> = muts.iter().filter(|m| m.kind == "appendChild").collect();
+        assert_eq!(removes.len(), 2, "removeChild para a y b");
+        assert_eq!(appends.len(), 2, "appendChild para los dos nuevos");
+    }
+
+    #[test]
+    fn replace_children_vacio_solo_borra() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("p", "ul", ""), snap_with_parent("a", "li", "p")])
+            .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval("document.getElementById('p').replaceChildren()").expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.iter().filter(|m| m.kind == "removeChild").count(), 1);
+        assert_eq!(muts.iter().filter(|m| m.kind == "appendChild").count(), 0);
+    }
+
+    #[test]
+    fn scroll_into_view_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("target", "div", "")]).expect("e");
+        rt.drain_dom_mutations();
+        rt.eval("document.getElementById('target').scrollIntoView()").expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "scrollIntoView");
+        assert_eq!(muts[0].id, "target");
     }
 
     // ============= Fase 7.23 — requestAnimationFrame =============

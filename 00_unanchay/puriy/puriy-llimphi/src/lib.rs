@@ -2298,6 +2298,26 @@ fn apply_dom_mutations(t: &mut TabState) {
                     t.focused_input = None;
                 }
             }
+        } else if m.kind == "scrollIntoView" {
+            // Fase 7.24: scroll heurístico DFS-order × 30px. Sin layout
+            // taffy exacto (vive sólo en frame render), aproximamos la
+            // posición del element_id contando elementos en DFS pre-order.
+            // Monotónico — elementos más profundos quedan más abajo, lo
+            // que matchea la intuición de "scrollIntoView".
+            let mut count: u32 = 0;
+            let mut found_at: Option<u32> = None;
+            bt.walk(|b| {
+                if found_at.is_some() {
+                    return;
+                }
+                count += 1;
+                if b.element_id.as_deref() == Some(m.id.as_str()) {
+                    found_at = Some(count);
+                }
+            });
+            if let Some(pos) = found_at {
+                t.scroll_y = (pos.saturating_sub(1) as f32) * 30.0;
+            }
         }
         // Otros kinds (`classList`, ...) llegarán en fases siguientes.
     }
@@ -5800,5 +5820,64 @@ mod tests {
             }
         });
         assert!(found, "parent debe tener text leaf 'Hola mundo' como hijo");
+    }
+
+    // ============= Fase 7.24 — scrollIntoView chrome-side =============
+
+    #[test]
+    fn apply_scroll_into_view_setea_scroll_y_por_dfs_order() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        // Tree con varios elementos para que la posición DFS varíe.
+        t.box_tree = Some(parse(
+            r#"<body><div id="top">top</div><div id="mid">mid</div><div id="bot">bottom</div></body>"#,
+        ));
+        t.scroll_y = 0.0;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[
+            puriy_js::ElementSnapshot {
+                id: "bot".into(),
+                tag_name: "div".into(),
+                text_content: String::new(),
+                class_list: Vec::new(),
+                value: None,
+                parent_id: None,
+                dataset: Vec::new(),
+                attributes: Vec::new(),
+            },
+        ])
+        .expect("e");
+        rt.eval("document.getElementById('bot').scrollIntoView()").expect("e");
+        apply_dom_mutations(t);
+        // bot está más profundo en el DFS pre-order que top/mid → scroll_y > 0.
+        assert!(t.scroll_y > 0.0, "scroll_y debería avanzar hacia el elemento (got {})", t.scroll_y);
+    }
+
+    #[test]
+    fn apply_scroll_into_view_id_inexistente_no_modifica_scroll() {
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(r#"<body><div id="x">x</div></body>"#));
+        t.scroll_y = 42.0;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "x".into(),
+            tag_name: "div".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+        }])
+        .expect("e");
+        // Disparamos scrollIntoView contra un id que NO está en el box_tree.
+        // El JS sí publica la mutación (no valida); el chrome la silencia.
+        rt.eval(
+            "globalThis.__puriy_dirty.push({id: 'fantasma', kind: 'scrollIntoView', value: ''});",
+        )
+        .expect("e");
+        apply_dom_mutations(t);
+        assert_eq!(t.scroll_y, 42.0, "scroll no debe moverse para id inexistente");
     }
 }
