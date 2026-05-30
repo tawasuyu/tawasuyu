@@ -6260,4 +6260,46 @@ mod tests {
         assert_eq!(rt.eval("collected[0]").expect("e"), JsValue::String("a".into()));
         assert_eq!(rt.eval("collected[2]").expect("e"), JsValue::String("c".into()));
     }
+
+    // ============= Fase 7.54 — FormData =============
+
+    #[test]
+    fn formdata_append_get_getall() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var f = new FormData(); f.append('a', '1'); f.append('a', '2'); f.append('b', 'x');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("f.get('a')").expect("e"), JsValue::String("1".into()));
+        assert_eq!(rt.eval("f.getAll('a').join(',')").expect("e"), JsValue::String("1,2".into()));
+        assert_eq!(rt.eval("f.has('b')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("f.get('z')").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn formdata_set_reemplaza_y_delete() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var f = new FormData(); f.append('a', '1'); f.append('a', '2'); \
+             f.set('a', '9'); f.append('b', 'y'); f.delete('b');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("f.getAll('a').join(',')").expect("e"), JsValue::String("9".into()));
+        assert_eq!(rt.eval("f.has('b')").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn formdata_itera_y_acepta_blob() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var f = new FormData(); f.append('k', 'v'); \
+             f.append('file', new Blob(['hola']), 'a.txt'); \
+             var seq = []; for (var p of f) { seq.push(p[0]); } \
+             var blobOk = f.get('file') instanceof Blob;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("seq.join(',')").expect("e"), JsValue::String("k,file".into()));
+        assert_eq!(rt.eval("blobOk").expect("e"), JsValue::Bool(true));
+    }
+
 }
