@@ -22,14 +22,15 @@
 //! cuando lleguen más visores y un AppBus con `EntityType`, el registro
 //! crece por tabla sin tocar el resto del shell.
 //!
-//! Hoy embebe cuatro visores in-process — texto (fallback universal),
-//! imagen, video (AV1 nativo, con play/pausa por `Space`) y card
-//! (`shared/card` presentada por campos) — todos ruteados por
-//! `viewer_registry::pick` sobre el `lens`/`mime` discernido.
+//! Hoy embebe cinco visores in-process — texto (fallback universal),
+//! imagen, video (AV1 nativo), audio (WAV/MP3/FLAC/Opus/Vorbis por cpal,
+//! con espectro en vivo) y card (`shared/card` presentada por campos) —
+//! todos ruteados por `viewer_registry::pick` sobre el `lens`/`mime`
+//! discernido. `Space` hace play/pausa del video o audio activo.
 //!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
-//! - Otros containers (Tabs, Tiled) y visores de audio / PDF nativo.
+//! - Otros containers (Tabs, Tiled) y un reader PDF nativo.
 //! - AppBus: el viewer recibe el path directo desde el modelo. Cuando
 //!   tengamos un bus, el shell publica `EntitySelected` y los viewers
 //!   se suscriben.
@@ -66,6 +67,9 @@ use nahual_video_viewer_llimphi::{
 use nahual_card_viewer_llimphi::{
     card_viewer_view, load_card, CardPreview, CardViewerPalette,
 };
+use nahual_audio_viewer_llimphi::{
+    audio_viewer_view, AudioViewerPalette, AudioViewerState,
+};
 use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
@@ -82,12 +86,14 @@ enum PreviewPane {
     Text(PreviewState),
     Image(ImagePreviewState),
     Video(VideoViewerState),
+    Audio(AudioViewerState),
     Card(CardPreview),
 }
 
-/// Cadencia del avance de video (~30 Hz). `spawn_periodic` la dispara
-/// siempre; el `update` sólo tickea si el panel derecho es un video.
-const VIDEO_TICK: Duration = Duration::from_millis(33);
+/// Cadencia del avance de los visores con reloj (video, audio) ~30 Hz.
+/// `spawn_periodic` la dispara siempre; el `update` sólo tickea el panel
+/// derecho cuando es de los que avanzan.
+const FRAME_TICK: Duration = Duration::from_millis(33);
 
 struct Model {
     explorer: FileExplorerState,
@@ -114,10 +120,10 @@ enum Msg {
     ResizeList(f32),
     /// El bus `wawa-config` publicó una versión nueva.
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
-    /// Pulso de reloj del reproductor de video (~30 Hz).
-    VideoTick,
-    /// Espacio: play/pausa cuando el panel derecho es un video.
-    ToggleVideoPlay,
+    /// Pulso de reloj de los visores con transporte (video/audio, ~30 Hz).
+    Tick,
+    /// Espacio: play/pausa del panel derecho si es video o audio.
+    TogglePlay,
 }
 
 struct Shell;
@@ -144,10 +150,10 @@ impl App for Shell {
         })
         .map_err(|e| eprintln!("nahual-shell · wawa-config watcher: {e}"))
         .ok();
-        // El reproductor de video necesita un reloj externo: cada pulso
-        // avanza la fuente un frame. Es barato cuando no hay video abierto
-        // (el update sale temprano si el panel no es Video).
-        handle.spawn_periodic(VIDEO_TICK, || Msg::VideoTick);
+        // Los visores con transporte (video, audio) necesitan un reloj
+        // externo: cada pulso avanza un frame / refresca el espectro. Es
+        // barato cuando el panel no avanza (el update sale temprano).
+        handle.spawn_periodic(FRAME_TICK, || Msg::Tick);
         Model {
             explorer: FileExplorerState::new(cwd),
             list_width: 400.0,
@@ -167,7 +173,7 @@ impl App for Shell {
             Key::Named(NamedKey::ArrowDown) => Some(Msg::Down),
             Key::Named(NamedKey::Enter) => Some(Msg::OpenSelected),
             Key::Named(NamedKey::Backspace) => Some(Msg::Parent),
-            Key::Named(NamedKey::Space) => Some(Msg::ToggleVideoPlay),
+            Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
             _ => None,
         }
     }
@@ -235,16 +241,18 @@ impl App for Shell {
                 // nahual-shell no usa rimay_localize hoy; si en el
                 // futuro lo hace, agregar el set_locale acá.
             }
-            Msg::VideoTick => {
-                if let PreviewPane::Video(state) = &mut m.preview {
-                    state.tick(VIDEO_TICK);
+            Msg::Tick => match &mut m.preview {
+                PreviewPane::Video(state) => {
+                    state.tick(FRAME_TICK);
                 }
-            }
-            Msg::ToggleVideoPlay => {
-                if let PreviewPane::Video(state) = &mut m.preview {
-                    state.toggle_play();
-                }
-            }
+                PreviewPane::Audio(state) => state.tick(FRAME_TICK),
+                _ => {}
+            },
+            Msg::TogglePlay => match &mut m.preview {
+                PreviewPane::Video(state) => state.toggle_play(),
+                PreviewPane::Audio(state) => state.toggle_play(),
+                _ => {}
+            },
         }
         m
     }
@@ -255,6 +263,7 @@ impl App for Shell {
         let text_palette = TextViewerPalette::from_theme(&theme);
         let image_palette = ImageViewerPalette::from_theme(&theme);
         let video_palette = VideoViewerPalette::from_theme(&theme);
+        let audio_palette = AudioViewerPalette::from_theme(&theme);
         let card_palette = CardViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = file_explorer_view::<Msg, _>(
@@ -279,6 +288,7 @@ impl App for Shell {
                 &image_palette,
             ),
             PreviewPane::Video(state) => video_viewer_view::<Msg>(state, &video_palette),
+            PreviewPane::Audio(state) => audio_viewer_view::<Msg>(state, &audio_palette),
             PreviewPane::Card(state) => {
                 card_viewer_view::<Msg>(state, model.preview_of.as_deref(), &card_palette)
             }
@@ -376,6 +386,7 @@ fn load_for(path: &Path) -> PreviewPane {
     match viewer_registry::pick(discernment.as_ref()) {
         ViewerKind::Image => PreviewPane::Image(load_image(path, DEFAULT_IMAGE_BYTES_MAX)),
         ViewerKind::Video => PreviewPane::Video(open_video(path)),
+        ViewerKind::Audio => PreviewPane::Audio(AudioViewerState::open(path)),
         ViewerKind::Card => PreviewPane::Card(load_card(path)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
     }

@@ -24,6 +24,9 @@ pub enum ViewerKind {
     /// Reproductor de video (`nahual-video-viewer-llimphi`); abre
     /// WebM/MKV (AV1) e IVF con el decoder nativo puro-Rust.
     Video,
+    /// Reproductor de audio (`nahual-audio-viewer-llimphi`); WAV/MP3/
+    /// FLAC/Opus/Vorbis por cpal, con espectro en vivo.
+    Audio,
     /// Visor estructurado de Cards (`nahual-card-viewer-llimphi`); pinta
     /// los campos de una `shared/card` en vez del JSON crudo.
     Card,
@@ -35,9 +38,9 @@ pub enum ViewerKind {
 /// Elige el visor para un discernimiento. La regla, en orden:
 ///
 /// 1. Si el `lens` lo dice explícitamente (`gallery` → imagen,
-///    `video` → reproductor, `card` → visor de cards).
-/// 2. Si el `mime` arranca con `image/` o `video/` (cubre formatos que
-///    magic-bytes detecta sin asignar lens).
+///    `video` → reproductor, `audio` → audio, `card` → visor de cards).
+/// 2. Si el `mime` arranca con `image/`, `video/` o `audio/` (cubre
+///    formatos que magic-bytes detecta sin asignar lens).
 /// 3. Fallback a texto — el visor que nunca falla feo.
 ///
 /// Un `None` (no se pudo discernir, p.ej. archivo ilegible) cae a texto.
@@ -48,12 +51,14 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
     match d.lens.as_deref() {
         Some("gallery") => return ViewerKind::Image,
         Some("video") => return ViewerKind::Video,
+        Some("audio") => return ViewerKind::Audio,
         Some("card") => return ViewerKind::Card,
         _ => {}
     }
     match d.mime.as_deref() {
         Some(m) if m.starts_with("image/") => return ViewerKind::Image,
         Some(m) if m.starts_with("video/") => return ViewerKind::Video,
+        Some(m) if m.starts_with("audio/") => return ViewerKind::Audio,
         _ => {}
     }
     ViewerKind::Text
@@ -91,6 +96,12 @@ mod tests {
     #[test]
     fn mime_video_sin_lens_va_a_video() {
         assert_eq!(pick(Some(&disc(None, Some("video/x-ivf")))), ViewerKind::Video);
+    }
+
+    #[test]
+    fn audio_lens_y_mime_van_a_audio() {
+        assert_eq!(pick(Some(&disc(Some("audio"), Some("audio/wav")))), ViewerKind::Audio);
+        assert_eq!(pick(Some(&disc(None, Some("audio/mpeg")))), ViewerKind::Audio);
     }
 
     #[test]

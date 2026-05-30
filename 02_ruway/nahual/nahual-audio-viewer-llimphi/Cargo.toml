@@ -1,0 +1,25 @@
+[package]
+name = "nahual-audio-viewer-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-audio-viewer-llimphi — reproductor/visor de audio sobre Llimphi. Decodifica WAV/MP3/FLAC/Opus/Vorbis (media-source-*), reproduce por cpal (media-audio-cpal) y pinta un espectro log-band en vivo vía AudioProbe + Spectrum. Quinto visor del shell nahual."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+media-core = { path = "../../media/media-core" }
+media-audio-cpal = { path = "../../media/media-audio-cpal" }
+media-source-wav = { path = "../../media/media-source-wav" }
+media-source-mp3 = { path = "../../media/media-source-mp3" }
+media-source-flac = { path = "../../media/media-source-flac" }
+media-source-opus = { path = "../../media/media-source-opus" }
+media-source-vorbis = { path = "../../media/media-source-vorbis" }
+parking_lot = { workspace = true }
+
+[[example]]
+name = "audio_viewer_demo"
+path = "examples/audio_viewer_demo.rs"

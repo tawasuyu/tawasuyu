@@ -109,10 +109,21 @@ impl Discerner for MagicBytes {
             x if x.starts_with(b"GIF87a") || x.starts_with(b"GIF89a") => {
                 Some(d("gif", "image/gif", Some("gallery")))
             }
-            // RIFF .... WEBP — imagen WebP (RIFF con FourCC "WEBP" en off 8).
+            // RIFF: el FourCC en off 8 distingue WebP (imagen) de WAVE (audio).
             x if x.len() >= 12 && x.starts_with(b"RIFF") && &x[8..12] == b"WEBP" => {
                 Some(d("webp", "image/webp", Some("gallery")))
             }
+            x if x.len() >= 12 && x.starts_with(b"RIFF") && &x[8..12] == b"WAVE" => {
+                Some(d("wav", "audio/wav", Some("audio")))
+            }
+            // FLAC — audio sin pérdida ("fLaC").
+            x if x.starts_with(b"fLaC") => Some(d("flac", "audio/flac", Some("audio"))),
+            // Ogg — contenedor de Vorbis u Opus ("OggS"). El visor elige
+            // decoder por extensión (.ogg/.oga vs .opus).
+            x if x.starts_with(b"OggS") => Some(d("ogg", "audio/ogg", Some("audio"))),
+            // MP3 con tag ID3v2 al inicio. El frame-sync crudo (0xFFEx) es
+            // ambiguo con otros streams, así que sólo capturamos ID3.
+            x if x.starts_with(b"ID3") => Some(d("mp3", "audio/mpeg", Some("audio"))),
             // EBML — contenedor Matroska/WebM. Lo tratamos como video; el
             // visor (media-source-webm) toma el track AV1. .mka (audio-only)
             // caería igual acá, pero el visor lo reporta como "sin video".
@@ -294,6 +305,28 @@ mod tests {
         let r = discern(b"DKIF\x00\x00\x20\x00AV01").unwrap();
         assert_eq!(r.mime.as_deref(), Some("video/x-ivf"));
         assert_eq!(r.lens.as_deref(), Some("video"));
+    }
+
+    #[test]
+    fn wav_riff_detected_como_audio() {
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&[0x24, 0x08, 0x00, 0x00]); // chunk size
+        bytes.extend_from_slice(b"WAVE");
+        let r = discern(&bytes).unwrap();
+        assert_eq!(r.mime.as_deref(), Some("audio/wav"));
+        assert_eq!(r.lens.as_deref(), Some("audio"));
+    }
+
+    #[test]
+    fn flac_y_ogg_detectados_como_audio() {
+        assert_eq!(
+            discern(b"fLaC\x00\x00\x00\x22").unwrap().lens.as_deref(),
+            Some("audio")
+        );
+        assert_eq!(
+            discern(b"OggS\x00\x02\x00\x00").unwrap().mime.as_deref(),
+            Some("audio/ogg")
+        );
     }
 
     #[test]
