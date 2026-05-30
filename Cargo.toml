@@ -397,6 +397,7 @@ members = [
     "03_ukupacha/wawa-explorer/wawa-explorer-aoe",
     "03_ukupacha/wawa-explorer/wawa-explorer-core",
     "03_ukupacha/wawa-explorer/wawa-explorer-llimphi",
+    "shared/app-bus",
     "shared/auth/auth-core",
     "shared/card/card-core",
     "shared/card/card-net",
