@@ -141,6 +141,12 @@ struct Model {
     /// los conectados directamente). Off vuelve al 3.22 (ilumina todo lo
     /// que está dentro del radio, ignorando paredes).
     muzzle_occlusion: bool,
+    /// Fase 3.26: luces dinámicas desde mobjs FF_FULLBRIGHT on/off (F10).
+    /// Default on — proyectiles (imp fireball, plasma, rocket, BFG),
+    /// puffs de impacto y frames de explosión irradian un boost cálido
+    /// sobre paredes/pisos/techos/sprites cercanos. Off vuelve al 3.25
+    /// (sólo el muzzle del jugador ilumina el mundo).
+    world_lights_enabled: bool,
 }
 
 /// Tiempo de decaimiento del fogonazo del arma — el boost cae de 1.0 a 0
@@ -186,6 +192,8 @@ enum Msg {
     ToggleMuzzleLight,
     /// Fase 3.23: alterna la oclusión sectorial del muzzle (F9).
     ToggleMuzzleOcclusion,
+    /// Fase 3.26: alterna las world lights de mobjs FF_FULLBRIGHT (F10).
+    ToggleWorldLights,
     Quit,
 }
 
@@ -248,6 +256,7 @@ impl App for Supay {
             muzzle_world_light: true,
             muzzle_glow_at: None,
             muzzle_occlusion: true,
+            world_lights_enabled: true,
         }
     }
 
@@ -279,6 +288,9 @@ impl App for Supay {
             }
             if matches!(&e.key, Key::Named(NamedKey::F9)) {
                 return Some(Msg::ToggleMuzzleOcclusion);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F10)) {
+                return Some(Msg::ToggleWorldLights);
             }
             // Fase 3.17: mouse-look cosmético. PageUp = mirar arriba,
             // PageDown = mirar abajo, Home = resetear horizonte. No pasan
@@ -402,6 +414,9 @@ impl App for Supay {
             Msg::ToggleMuzzleOcclusion => {
                 m.muzzle_occlusion = !m.muzzle_occlusion;
             }
+            Msg::ToggleWorldLights => {
+                m.world_lights_enabled = !m.world_lights_enabled;
+            }
         }
         m
     }
@@ -432,6 +447,8 @@ impl App for Supay {
                     muzzle_glow_alpha: muzzle_alpha_now(model),
                     // Fase 3.23: oclusión sectorial del muzzle. Default on.
                     muzzle_occlusion: model.muzzle_occlusion,
+                    // Fase 3.26: luces dinámicas desde mobjs FF_FULLBRIGHT.
+                    world_lights_enabled: model.world_lights_enabled,
                     ..RenderConfig::default()
                 },
             )),
@@ -491,7 +508,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.25 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.26 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

@@ -364,6 +364,16 @@ pub struct RenderConfig {
     /// comportamiento 3.22 (boost ignora paredes). En stub sin BSP el
     /// flag no aplica — el renderer ilumina todo igual.
     pub muzzle_occlusion: bool,
+    /// **Fase 3.26 — luces dinámicas desde mobjs full-bright**. Si
+    /// `true`, los sprites con bit `FF_FULLBRIGHT` (proyectiles,
+    /// puffs, frames de explosión, fog) emiten una luz puntual cálida
+    /// que ilumina paredes, pisos, techos y sprites cercanos (radio
+    /// `WORLD_LIGHT_RADIUS_WORLD = 192`, mitad del muzzle). Sumadas al
+    /// boost del muzzle (clamp ≤ `MUZZLE_BOOST_PEAK`). Doom clásico
+    /// no irradia luz desde proyectiles — esta es modernización pura.
+    /// Sin gating por oclusión: las luces son efímeras (1-30 ticks),
+    /// el leak fugaz a través de paredes es invisible en práctica.
+    pub world_lights_enabled: bool,
 }
 
 impl Default for RenderConfig {
@@ -383,6 +393,7 @@ impl Default for RenderConfig {
             sprite_shadows: true,
             muzzle_glow_alpha: 0.0,
             muzzle_occlusion: true,
+            world_lights_enabled: true,
         }
     }
 }
@@ -589,6 +600,140 @@ fn muzzle_boost_gated(
 }
 
 // =====================================================================
+// Fase 3.26 — World point lights desde FF_FULLBRIGHT mobjs
+// =====================================================================
+//
+// Doom marca varios mobjs con `FF_FULLBRIGHT` (bit 7 del frame): proyectiles
+// en vuelo (imp fireballs, plasma, BFG, rocket), muzzle puffs, frames de
+// explosión de barriles, BFG splash, teleport fog. Estos sprites ya se
+// pintaban a luz plena desde 3.11 (sprite-side), pero **no irradiaban luz
+// al mundo**: un fireball pasando por un cuarto oscuro dejaba el cuarto
+// oscuro. Modernización: tratamos cada mobj FF_FULLBRIGHT como una fuente
+// puntual con la misma maquinaria del muzzle (tinte cálido, falloff
+// cuadrático, sumado al shade base). El muzzle del jugador queda como un
+// caso particular anclado en el origen del cam-space.
+//
+// La diferencia clave vs. muzzle: estas luces están en posiciones
+// arbitrarias del mundo, no en el player. Por eso no se les aplica el
+// `lit_sectors` set (que se computa relativo al cuarto del jugador). Se
+// gatean sólo por radio. El radio chico (mitad que muzzle) limita el leak
+// natural a través de paredes; los mobjs FF_FULLBRIGHT en Doom son
+// efímeros (1-30 ticks), así que un leak fugaz es invisible en práctica.
+
+/// Radio de influencia de una luz puntual del mundo, en unidades Doom.
+/// Más chico que `MUZZLE_RADIUS_WORLD` porque la "fuerza" de un fireball
+/// o un puff es muy inferior al fogonazo cercano de un arma en mano.
+const WORLD_LIGHT_RADIUS_WORLD: f32 = 192.0;
+/// Peak del boost en el centro de una luz puntual con `alpha=1.0`.
+/// Menor que `MUZZLE_BOOST_PEAK` (0.55) — el sumado de varias luces
+/// puede acercarse al peak del muzzle, pero una sola no debería
+/// "blow out" la escena.
+const WORLD_LIGHT_PEAK: f32 = 0.40;
+/// Cap del número de world lights consideradas por frame. Cubrimos los
+/// proyectiles + puffs + explosiones simultáneas razonables sin pagar
+/// O(surfaces · lights) descontrolado. 8 cubre escenarios típicos
+/// (cyberdemon spam, BFG en cluster), el resto se descarta por
+/// distancia.
+const MAX_WORLD_LIGHTS: usize = 8;
+
+#[derive(Clone, Copy, Debug)]
+struct WorldLight {
+    /// Posición en cam-space (forward, right).
+    x_cam: f32,
+    y_cam: f32,
+    /// Sector "dueño" del mobj — se conserva por si una fase futura
+    /// quiere agregar gating per-light (BFS local) sin recomputar
+    /// `subsector_at_point`.
+    #[allow(dead_code)]
+    sector: u32,
+}
+
+/// Recolecta las luces puntuales del mundo del snapshot: cada sprite
+/// con bit `FF_FULLBRIGHT` (0x80) en su frame contribuye una luz en su
+/// posición. Sprites con `sector == NO_SECTOR` se descartan (sin
+/// referencia válida). Se transforman a cam-space y se queda con los
+/// `MAX_WORLD_LIGHTS` más cercanos al jugador (origen del cam-space).
+///
+/// Costo: O(sprites + N·log N) por frame con N ≈ sprites; en mapas Doom
+/// el número de sprites visibles es <60, despreciable.
+fn gather_world_lights(snap: &SceneSnapshot, cam: &Camera) -> Vec<WorldLight> {
+    let mut lights: Vec<(f32, WorldLight)> = snap
+        .sprites
+        .iter()
+        .filter(|s| (s.frame & 0x80) != 0 && s.sector != NO_SECTOR)
+        .map(|s| {
+            let (x_cam, y_cam) = cam.to_cam_2d(s.x, s.y);
+            let d2 = x_cam * x_cam + y_cam * y_cam;
+            (
+                d2,
+                WorldLight {
+                    x_cam,
+                    y_cam,
+                    sector: s.sector,
+                },
+            )
+        })
+        .filter(|(d2, _)| *d2 < WORLD_LIGHT_RADIUS_WORLD * WORLD_LIGHT_RADIUS_WORLD * 4.0)
+        .collect();
+    if lights.len() > MAX_WORLD_LIGHTS {
+        lights.select_nth_unstable_by(MAX_WORLD_LIGHTS, |a, b| {
+            a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        lights.truncate(MAX_WORLD_LIGHTS);
+    }
+    lights.into_iter().map(|(_, l)| l).collect()
+}
+
+/// Suma de boosts de todas las world lights en un punto cam-space.
+/// Cada luz contribuye `f²·PEAK` con `f = 1 - d²/r²`, clampeado al
+/// peak del muzzle (no superar el destello del arma propia es un
+/// invariante del sistema — el flash debe seguir siendo el efecto
+/// dominante).
+fn world_lights_boost_cam(x_cam: f32, y_cam: f32, lights: &[WorldLight]) -> f32 {
+    if lights.is_empty() {
+        return 0.0;
+    }
+    let r2 = WORLD_LIGHT_RADIUS_WORLD * WORLD_LIGHT_RADIUS_WORLD;
+    let mut sum = 0.0_f32;
+    for l in lights {
+        let dx = x_cam - l.x_cam;
+        let dy = y_cam - l.y_cam;
+        let d2 = dx * dx + dy * dy;
+        if d2 >= r2 {
+            continue;
+        }
+        let f = 1.0 - d2 / r2;
+        sum += f * f * WORLD_LIGHT_PEAK;
+        if sum >= MUZZLE_BOOST_PEAK {
+            return MUZZLE_BOOST_PEAK;
+        }
+    }
+    sum.min(MUZZLE_BOOST_PEAK)
+}
+
+/// Boost combinado (muzzle + world lights) en un punto cam-space. El
+/// muzzle se gatea por `lit_sectors` (Fase 3.23-3.25); las world lights
+/// sólo por radio. La suma se clampea a `MUZZLE_BOOST_PEAK` para
+/// preservar el invariante "el fogonazo nunca debe sentirse más débil
+/// que un proyectil distante".
+fn combined_boost_cam(
+    x_cam: f32,
+    y_cam: f32,
+    muzzle_alpha: f32,
+    surf_sector: u32,
+    lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
+) -> f32 {
+    let muzzle = muzzle_boost_gated(
+        muzzle_boost_cam(x_cam, y_cam, muzzle_alpha),
+        surf_sector,
+        lit_sectors,
+    );
+    let wl = world_lights_boost_cam(x_cam, y_cam, world_lights);
+    (muzzle + wl).clamp(0.0, MUZZLE_BOOST_PEAK)
+}
+
+// =====================================================================
 // API pública
 // =====================================================================
 
@@ -687,6 +832,17 @@ fn render_frame(
         };
     let lit_ref = lit_sectors.as_ref();
 
+    // Fase 3.26: recolectamos las luces puntuales del mundo desde sprites
+    // FF_FULLBRIGHT. Lista cacheada por frame, hasta MAX_WORLD_LIGHTS
+    // ordenados por cercanía al jugador. Si el toggle está apagado, queda
+    // vacía y el plumbing pasa a no-op (rama temprana en `world_lights_boost_cam`).
+    let world_lights: Vec<WorldLight> = if cfg.world_lights_enabled {
+        gather_world_lights(snap, &cam)
+    } else {
+        Vec::new()
+    };
+    let world_lights_ref: &[WorldLight] = &world_lights;
+
     let cap = snap.walls.len() * (cfg.wall_bands as usize * 2 + 2)
         + snap.subsectors.len() * 2
         + snap.sprites.len();
@@ -705,6 +861,7 @@ fn render_frame(
                 cfg,
                 bsp_depth,
                 lit_ref,
+                world_lights_ref,
             );
         }
     }
@@ -720,10 +877,20 @@ fn render_frame(
             cfg,
             use_subsectors,
             lit_ref,
+            world_lights_ref,
         );
     }
     for sprite in snap.sprites.iter() {
-        gather_sprite(&mut renderables, sprite, snap, &cam, &proj, cfg, lit_ref);
+        gather_sprite(
+            &mut renderables,
+            sprite,
+            snap,
+            &cam,
+            &proj,
+            cfg,
+            lit_ref,
+            world_lights_ref,
+        );
     }
     renderables.sort_by(|a, b| {
         b.depth
@@ -932,6 +1099,7 @@ fn gather_wall(
     cfg: &RenderConfig,
     skip_fake_floor: bool,
     lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
 ) {
     // Front/back side por convención Doom.
     let cross = (wall.x2 - wall.x1) * (cam.py - wall.y1)
@@ -1021,8 +1189,18 @@ fn gather_wall(
     // miramos). Si ese sector no está en el lit set (cuarto inalcanzable
     // desde el player por linedef two-sided directo), el boost se anula
     // — la pared queda como en escena base, sin tinte cálido.
-    let muzzle_boost_raw = muzzle_boost_cam(mid_x, mid_y, cfg.muzzle_glow_alpha);
-    let muzzle_boost = muzzle_boost_gated(muzzle_boost_raw, near_idx, lit_sectors);
+    // Fase 3.26: sumamos también las world lights de mobjs FF_FULLBRIGHT
+    // cercanos al midpoint. El nombre `muzzle_boost` se conserva por
+    // legibilidad downstream — la fuente del tinte cálido ahora es
+    // "muzzle + proyectiles + explosiones" combinados.
+    let muzzle_boost = combined_boost_cam(
+        mid_x,
+        mid_y,
+        cfg.muzzle_glow_alpha,
+        near_idx,
+        lit_sectors,
+        world_lights,
+    );
 
     // -----------------------------------------------------------------
     // Floor & ceiling strips ("fake floor") — fallback de 3.1 cuando no
@@ -1461,6 +1639,7 @@ fn walk_bsp(nodes: &[NodeSnap], child: u16, view_x: f32, view_y: f32, out: &mut 
     walk_bsp(nodes, near_child, view_x, view_y, out);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gather_subsector_planes(
     out: &mut Vec<Renderable>,
     sub: &SubsectorSnap,
@@ -1471,6 +1650,7 @@ fn gather_subsector_planes(
     cfg: &RenderConfig,
     bsp_depth_override: Option<f32>,
     lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
 ) {
     if sub.num_segs < 2 {
         return;
@@ -1542,8 +1722,15 @@ fn gather_subsector_planes(
     // Fase 3.22: muzzle boost en el centroide del plano (en cam-space).
     // Fase 3.23: gateado por `sub.sector` — si el subsector no está en
     // el cuarto del player ni en uno vecino directo, no recibe tinte.
-    let muzzle_boost_raw = muzzle_boost_cam(centroid_cx, centroid_cy, cfg.muzzle_glow_alpha);
-    let muzzle_boost = muzzle_boost_gated(muzzle_boost_raw, sub.sector, lit_sectors);
+    // Fase 3.26: + boost de las world lights cercanas al centroide.
+    let muzzle_boost = combined_boost_cam(
+        centroid_cx,
+        centroid_cy,
+        cfg.muzzle_glow_alpha,
+        sub.sector,
+        lit_sectors,
+        world_lights,
+    );
     // Depth para painter's sort:
     // - Con BSP (Fase 3.13), usamos el depth asignado por la travesía
     //   back-to-front del árbol — orden correcto Doom, elimina glitches
@@ -1873,6 +2060,7 @@ fn gather_sprite_shadow(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gather_sprite(
     out: &mut Vec<Renderable>,
     sprite: &SpriteSnap,
@@ -1881,6 +2069,7 @@ fn gather_sprite(
     proj: &Projection,
     cfg: &RenderConfig,
     lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
 ) {
     let (x_cam, y_cam) = cam.to_cam_2d(sprite.x, sprite.y);
     if x_cam < cfg.near {
@@ -1950,9 +2139,16 @@ fn gather_sprite(
             // Fase 3.23: gateado por `sprite.sector` — un imp atrás de una
             // pared sólida no se ilumina aunque la distancia euclidiana
             // del player lo alcance.
-            let muzzle_boost_raw = muzzle_boost_cam(x_cam, y_cam, cfg.muzzle_glow_alpha);
-            let muzzle_boost =
-                muzzle_boost_gated(muzzle_boost_raw, sprite.sector, lit_sectors);
+            // Fase 3.26: el sprite también recibe boost de las world
+            // lights (mobjs FF_FULLBRIGHT cercanos), sumado al muzzle.
+            let muzzle_boost = combined_boost_cam(
+                x_cam,
+                y_cam,
+                cfg.muzzle_glow_alpha,
+                sprite.sector,
+                lit_sectors,
+                world_lights,
+            );
             let shade_rgb = sprite_shade_with_muzzle(shade, muzzle_boost);
             let img = make_tinted_sprite_image_rgb(&patch, shade_rgb);
             // Mirror = pintamos espejado: scale_x negativo + corrimiento.
@@ -1985,8 +2181,15 @@ fn gather_sprite(
     path.line_to(tr);
     path.line_to(br);
     path.close_path();
-    let boost_raw = muzzle_boost_cam(x_cam, y_cam, cfg.muzzle_glow_alpha);
-    let boost = muzzle_boost_gated(boost_raw, sprite.sector, lit_sectors);
+    // Fase 3.26: fallback (sin patch del WAD) también combina muzzle + world lights.
+    let boost = combined_boost_cam(
+        x_cam,
+        y_cam,
+        cfg.muzzle_glow_alpha,
+        sprite.sector,
+        lit_sectors,
+        world_lights,
+    );
     out.push(Renderable {
         depth,
         color: apply_muzzle_tint(sprite_color(sprite, sec, depth, cfg), boost),
@@ -4120,6 +4323,160 @@ mod tests {
         assert!(
             lit.contains(&2),
             "sec 2 lit via entry-chaining (cumulative=350 < 384) — sin el chain caería"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.26: world point lights desde FF_FULLBRIGHT mobjs
+    // -----------------------------------------------------------------
+
+    /// Sprite helper para los tests de world lights.
+    fn fb_sprite(x: f32, y: f32, frame: u8, sector: u32) -> SpriteSnap {
+        SpriteSnap {
+            x,
+            y,
+            z: 0.0,
+            angle: 0.0,
+            sprite: 0,
+            frame,
+            sector,
+        }
+    }
+
+    #[test]
+    fn world_lights_boost_zero_with_empty_list() {
+        // Sin lights, el boost siempre es 0 en cualquier punto.
+        assert_eq!(world_lights_boost_cam(0.0, 0.0, &[]), 0.0);
+        assert_eq!(world_lights_boost_cam(100.0, -200.0, &[]), 0.0);
+    }
+
+    #[test]
+    fn world_lights_boost_peak_at_center_with_single_light() {
+        // Una sola luz en (0,0); evaluamos el boost exactamente en (0,0).
+        // f = 1 - 0/r² = 1 ⇒ boost = 1 · 1 · PEAK.
+        let lights = vec![WorldLight {
+            x_cam: 0.0,
+            y_cam: 0.0,
+            sector: 0,
+        }];
+        let b = world_lights_boost_cam(0.0, 0.0, &lights);
+        assert!(
+            (b - WORLD_LIGHT_PEAK).abs() < 1e-5,
+            "esperado peak {}, dió {}",
+            WORLD_LIGHT_PEAK,
+            b
+        );
+    }
+
+    #[test]
+    fn world_lights_boost_zero_outside_radius() {
+        // Luz al borde y más allá del radio ⇒ boost 0.
+        let lights = vec![WorldLight {
+            x_cam: 0.0,
+            y_cam: 0.0,
+            sector: 0,
+        }];
+        let r = WORLD_LIGHT_RADIUS_WORLD;
+        assert_eq!(world_lights_boost_cam(r, 0.0, &lights), 0.0);
+        assert_eq!(world_lights_boost_cam(0.0, r * 1.5, &lights), 0.0);
+        assert_eq!(world_lights_boost_cam(-r * 2.0, 0.0, &lights), 0.0);
+    }
+
+    #[test]
+    fn world_lights_boost_falls_off_with_distance_squared() {
+        // En d=r/2 ⇒ f = 1 - 0.25 = 0.75 ⇒ boost = 0.5625 · PEAK.
+        // En d=r/4 ⇒ f = 1 - 1/16 = 0.9375 ⇒ boost = 0.879 · PEAK.
+        // El ratio close/mid > 1.4 verifica la caída cuadrática.
+        let lights = vec![WorldLight {
+            x_cam: 0.0,
+            y_cam: 0.0,
+            sector: 0,
+        }];
+        let close = world_lights_boost_cam(WORLD_LIGHT_RADIUS_WORLD * 0.25, 0.0, &lights);
+        let mid = world_lights_boost_cam(WORLD_LIGHT_RADIUS_WORLD * 0.5, 0.0, &lights);
+        assert!(close > mid, "más cerca ⇒ más boost");
+        assert!(
+            close / mid > 1.4,
+            "ratio close/mid {} debería superar 1.4 (cuadrático)",
+            close / mid
+        );
+    }
+
+    #[test]
+    fn world_lights_boost_sums_multiple_sources_clamped_to_muzzle_peak() {
+        // Dos luces colocadas exactamente en el mismo punto ⇒ suma de
+        // contribuciones, pero clampeada al peak del muzzle (invariante:
+        // el fogonazo del arma no debe quedar dominado por proyectiles).
+        let lights = vec![
+            WorldLight { x_cam: 0.0, y_cam: 0.0, sector: 0 },
+            WorldLight { x_cam: 0.0, y_cam: 0.0, sector: 1 },
+        ];
+        let b = world_lights_boost_cam(0.0, 0.0, &lights);
+        // Sin clamp serían 2 × PEAK = 0.8; con clamp = MUZZLE_BOOST_PEAK.
+        assert!(b <= MUZZLE_BOOST_PEAK + 1e-5);
+        assert!(b > WORLD_LIGHT_PEAK, "suma debería superar PEAK individual");
+    }
+
+    #[test]
+    fn gather_world_lights_filters_non_fullbright() {
+        // Snapshot con dos sprites: uno full-bright (frame con bit 7),
+        // uno normal. Sólo el primero entra al lit set.
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sprites = Arc::from(vec![
+            fb_sprite(64.0, 0.0, 0x82, 0),  // FF_FULLBRIGHT
+            fb_sprite(128.0, 0.0, 0x02, 0), // sin bit 7
+        ]);
+        let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
+        let lights = gather_world_lights(&snap, &cam);
+        assert_eq!(lights.len(), 1, "sólo el sprite FF_FULLBRIGHT cuenta");
+    }
+
+    #[test]
+    fn gather_world_lights_skips_no_sector_and_caps_to_max() {
+        // 20 sprites FF_FULLBRIGHT ⇒ se truncan a MAX_WORLD_LIGHTS.
+        // Uno con NO_SECTOR queda excluido siempre.
+        let mut sprites: Vec<SpriteSnap> = (0..20)
+            .map(|i| fb_sprite(50.0 + i as f32 * 5.0, 0.0, 0x80, (i as u32) % 4))
+            .collect();
+        sprites.push(fb_sprite(0.0, 0.0, 0x80, NO_SECTOR));
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sprites = Arc::from(sprites);
+        let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
+        let lights = gather_world_lights(&snap, &cam);
+        assert_eq!(
+            lights.len(),
+            MAX_WORLD_LIGHTS,
+            "truncado a {} aunque haya más",
+            MAX_WORLD_LIGHTS
+        );
+        // El sprite con NO_SECTOR no debería estar; los de cap son los más
+        // cercanos al player (origen). El más cercano (i=0 a 50 units) sí
+        // debería entrar — verificamos por presencia de un x cercano.
+        let min_dx = lights
+            .iter()
+            .map(|l| l.x_cam.abs())
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            min_dx < 60.0,
+            "el más cercano (i=0 a 50 u) debe estar entre los seleccionados"
+        );
+    }
+
+    #[test]
+    fn combined_boost_clamps_to_muzzle_peak_when_muzzle_and_lights_overlap() {
+        // Muzzle peak (alpha=1, surface en origen) + luz coincidente:
+        // suma sin clamp = 0.55 + 0.40 = 0.95; con clamp = 0.55.
+        let lights = vec![WorldLight {
+            x_cam: 0.0,
+            y_cam: 0.0,
+            sector: 0,
+        }];
+        let b = combined_boost_cam(0.0, 0.0, 1.0, 0, None, &lights);
+        assert!(
+            (b - MUZZLE_BOOST_PEAK).abs() < 1e-5,
+            "esperado peak {}, dió {}",
+            MUZZLE_BOOST_PEAK,
+            b
         );
     }
 }
