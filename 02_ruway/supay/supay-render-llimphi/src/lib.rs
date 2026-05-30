@@ -468,28 +468,38 @@ fn sprite_shade_with_muzzle(shade: f32, boost: f32) -> [f32; 3] {
 /// el flash debería alcanzar el siguiente cuarto a través de una puerta
 /// abierta sin necesidad de R_CheckSight completo. >2 hops empieza a
 /// "filtrar" luz por geometrías retorcidas sin agregar valor visual; el
-/// radio físico (`MUZZLE_RADIUS_WORLD`) ya cortaría antes en la mayoría.
+/// radio cumulativo (`MUZZLE_RADIUS_WORLD`) ya cortaría antes en la
+/// mayoría de los casos.
 const MUZZLE_BFS_MAX_HOPS: usize = 2;
 
-/// Fase 3.23 (BFS desde 3.24) — conjunto de sectores que reciben el
-/// muzzle boost.
+/// Fase 3.25 — conjunto de sectores que reciben el muzzle boost,
+/// computado por relajación tipo Dijkstra sobre **caminos acumulativos**
+/// player→midpoint(W₁)→midpoint(W₂)→…, no por chequeo per-bridge contra
+/// el centro del jugador.
 ///
-/// El destello del arma sólo ilumina superficies dentro del cuarto
-/// donde está parado el jugador y los cuartos alcanzables a `≤
-/// MUZZLE_BFS_MAX_HOPS` linedefs two-sided **cuyos midpoints están
-/// dentro de `MUZZLE_RADIUS_WORLD`** del jugador. Esto extiende la
-/// adyacencia simple de 3.23 a 2 niveles cuando la geometría lo
-/// permite (puertas en cadena, balcones), pero descarta paredes lejanas
-/// que serían un "puente" físicamente irrelevante.
+/// El destello del arma sólo ilumina superficies del cuarto donde está
+/// parado el jugador y de los cuartos alcanzables a `≤
+/// MUZZLE_BFS_MAX_HOPS` linedefs two-sided **cuya distancia total
+/// recorrida por la cadena de bridge walls** esté dentro de
+/// `MUZZLE_RADIUS_WORLD`. Cada sector cachea el midpoint del último
+/// bridge wall por el que se entró — el siguiente hop se mide desde ese
+/// punto, no desde el jugador. Eso modela mejor "hasta dónde llegaría
+/// la luz si tuviera que atravesar cada puerta en orden", y corta
+/// correctamente en U-shapes/L-shapes donde un sector distante quedaba
+/// visualmente lit en 3.24 aunque su camino real fuera más largo que
+/// el disco del flash.
 ///
-/// Una pared sólida entre medio corta la luz — el muzzle ya no "ilumina
-/// a través de la pared" como en 3.22, y la propagación se queda en el
-/// vecino directo si el siguiente bridge wall está fuera del radio
-/// (3.24 sobre 3.23).
+/// La relajación de Dijkstra-lite también garantiza que si un sector
+/// es alcanzable por dos caminos, gana el más corto — el "entry point"
+/// queda fijado al midpoint del camino más corto encontrado.
 ///
-/// La heurística es barata: O(walls · hops) por frame. Cubre los casos
-/// típicos de Doom (cuarto + sus vecinos + vecinos-del-vecino conexos)
-/// sin exponer subsector-id por sprite ni hacer raycasts.
+/// Una pared sólida entre medio sigue cortando la luz — sin two-sided
+/// no hay arista en el grafo.
+///
+/// La heurística es O(walls · hops · sectores_visitados) por frame. En
+/// E1M1 (~400 walls × 2 hops × <16 sectores visitados) ≈ 13k checks/s
+/// cuando el flash está activo (<5 % del tiempo). Sin alocaciones extra
+/// significativas.
 ///
 /// Devuelve `None` cuando no hay BSP (modo stub o mapa pre-carga); en
 /// ese caso el caller debe asumir "todo lit" y aplicar el comportamiento
@@ -501,44 +511,64 @@ fn compute_muzzle_lit_sectors(snap: &SceneSnapshot) -> Option<HashSet<u32>> {
     let player_ss = subsector_at_point(&snap.nodes, snap.player.x, snap.player.y)?;
     let ss = snap.subsectors.get(player_ss as usize)?;
     let player_sec = ss.sector;
-    let mut lit: HashSet<u32> = HashSet::with_capacity(16);
-    lit.insert(player_sec);
-    let r2 = MUZZLE_RADIUS_WORLD * MUZZLE_RADIUS_WORLD;
-    let mut frontier: Vec<u32> = vec![player_sec];
-    for _ in 0..MUZZLE_BFS_MAX_HOPS {
-        let mut next_frontier: Vec<u32> = Vec::new();
+    let r = MUZZLE_RADIUS_WORLD;
+    // Estado por sector visitado: distancia cumulativa mínima desde el
+    // jugador y midpoint del bridge wall por el que entró (queda como
+    // origen de los hops siguientes). El sector del player tiene dist=0
+    // y entry=posición real del jugador.
+    let mut dist: HashMap<u32, f32> = HashMap::with_capacity(16);
+    let mut entry: HashMap<u32, (f32, f32)> = HashMap::with_capacity(16);
+    let mut hops: HashMap<u32, usize> = HashMap::with_capacity(16);
+    dist.insert(player_sec, 0.0);
+    entry.insert(player_sec, (snap.player.x, snap.player.y));
+    hops.insert(player_sec, 0);
+    // Cola de trabajo. No es un BinaryHeap real porque el set típico es
+    // <16 sectores; un Vec con relajación re-inserta y deja que la
+    // condición `better` filtre lo redundante. Suficiente y sin deps.
+    let mut queue: Vec<u32> = vec![player_sec];
+    while let Some(sec) = queue.pop() {
+        let d_sec = dist[&sec];
+        let (ex, ey) = entry[&sec];
+        let h_sec = hops[&sec];
+        if h_sec >= MUZZLE_BFS_MAX_HOPS {
+            continue;
+        }
         for wall in snap.walls.iter() {
             if wall.back_sector == NO_SECTOR {
                 continue;
             }
-            // Filtrado por radio físico: si el midpoint de la pared
-            // que serviría de "puente" está fuera del disco del muzzle,
-            // no propagamos. Evita iluminar habitaciones colgadas al
-            // final de pasillos largos que técnicamente vecinean pero
-            // quedan oscuras en la práctica.
-            let mx = (wall.x1 + wall.x2) * 0.5;
-            let my = (wall.y1 + wall.y2) * 0.5;
-            let dx = mx - snap.player.x;
-            let dy = my - snap.player.y;
-            if dx * dx + dy * dy > r2 {
+            let other_sec = if wall.front_sector == sec {
+                wall.back_sector
+            } else if wall.back_sector == sec {
+                wall.front_sector
+            } else {
+                continue;
+            };
+            if other_sec == sec {
                 continue;
             }
-            let a = wall.front_sector;
-            let b = wall.back_sector;
-            let in_a = frontier.contains(&a);
-            let in_b = frontier.contains(&b);
-            if in_a && !in_b && lit.insert(b) {
-                next_frontier.push(b);
-            } else if in_b && !in_a && lit.insert(a) {
-                next_frontier.push(a);
+            let mx = (wall.x1 + wall.x2) * 0.5;
+            let my = (wall.y1 + wall.y2) * 0.5;
+            let dx = mx - ex;
+            let dy = my - ey;
+            let hop_d = (dx * dx + dy * dy).sqrt();
+            let new_d = d_sec + hop_d;
+            if new_d > r {
+                continue;
+            }
+            let better = match dist.get(&other_sec) {
+                Some(&existing) => new_d < existing,
+                None => true,
+            };
+            if better {
+                dist.insert(other_sec, new_d);
+                entry.insert(other_sec, (mx, my));
+                hops.insert(other_sec, h_sec + 1);
+                queue.push(other_sec);
             }
         }
-        if next_frontier.is_empty() {
-            break;
-        }
-        frontier = next_frontier;
     }
-    Some(lit)
+    Some(dist.into_keys().collect())
 }
 
 /// Gate del muzzle boost por sector cuando la oclusión está activa.
@@ -3966,6 +3996,130 @@ mod tests {
         assert!(
             !lit.contains(&5),
             "vecino directo con bridge wall fuera de MUZZLE_RADIUS no entra al lit"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.25: radio cumulativo por hop (Dijkstra-lite)
+    // -----------------------------------------------------------------
+
+    /// L-shape: dos paredes alineadas en codo donde el chequeo
+    /// per-bridge contra el player (3.24) aprobaría ambas, pero el
+    /// camino acumulativo player→W01→W12 supera el radio.
+    ///
+    /// - Player en (-10, 0) ⇒ subsector 0 ⇒ sector 0.
+    /// - W01 midpoint (200, 0): dist desde player = 210 < 384.
+    /// - W12 midpoint (200, 200): dist desde player ≈ 290 < 384 (3.24 lo aceptaba).
+    /// - Cumulativo: 210 (player→W01) + 200 (W01→W12) = 410 > 384.
+    ///   3.25 corta el camino y deja sec 2 fuera del lit set.
+    fn snap_with_l_shape() -> SceneSnapshot {
+        let mk_sector = || SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 160,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sectors = Arc::from(vec![mk_sector(), mk_sector(), mk_sector()]);
+        snap.subsectors = Arc::from(vec![
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+            SubsectorSnap { sector: 1, first_seg: 0, num_segs: 0 },
+        ]);
+        snap.nodes = Arc::from(simple_two_leaf_bsp());
+        snap.player.x = -10.0;
+        snap.player.y = 0.0;
+
+        let wall = |fs: u32, bs: u32, mx: f32, my: f32| WallSeg {
+            x1: mx,
+            y1: my,
+            x2: mx,
+            y2: my,
+            front_sector: fs,
+            back_sector: bs,
+            flags: 0,
+            textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
+        };
+        snap.walls = Arc::from(vec![
+            wall(0, 1, 200.0, 0.0),   // hop1 cumulative = 210
+            wall(1, 2, 200.0, 200.0), // hop2 cumulative = 410 > 384
+        ]);
+        snap
+    }
+
+    #[test]
+    fn lit_sectors_cumulative_path_cuts_when_sum_exceeds_radius() {
+        // 3.25 vs 3.24: ambos walls pasarían el chequeo per-bridge contra
+        // el player (290 y 210 < 384), pero el camino real acumulado
+        // recorre 410 unidades — fuera del radio. Sec 2 se excluye.
+        let snap = snap_with_l_shape();
+        let lit = compute_muzzle_lit_sectors(&snap).expect("BSP disponible");
+        assert!(lit.contains(&0), "player sector siempre lit");
+        assert!(lit.contains(&1), "vecino directo dentro del radio");
+        assert!(
+            !lit.contains(&2),
+            "L-shape: camino acumulativo 410 > 384 corta antes de sec 2"
+        );
+    }
+
+    /// Cadena donde cada hop suma poco al anterior aunque los midpoints
+    /// estén lejos del jugador. Sólo es alcanzable correctamente si el
+    /// algoritmo usa el midpoint del bridge previo como entry point del
+    /// siguiente hop (no la posición del player).
+    fn snap_with_chained_entry_points() -> SceneSnapshot {
+        let mk_sector = || SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 160,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sectors = Arc::from(vec![mk_sector(), mk_sector(), mk_sector()]);
+        snap.subsectors = Arc::from(vec![
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+            SubsectorSnap { sector: 1, first_seg: 0, num_segs: 0 },
+        ]);
+        snap.nodes = Arc::from(simple_two_leaf_bsp());
+        snap.player.x = 0.0;
+        snap.player.y = 0.0;
+
+        let wall = |fs: u32, bs: u32, mx: f32, my: f32| WallSeg {
+            x1: mx,
+            y1: my,
+            x2: mx,
+            y2: my,
+            front_sector: fs,
+            back_sector: bs,
+            flags: 0,
+            textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
+        };
+        // W01 mid (300, 0). hop_d = 300.
+        // W12 mid (300, 50).
+        //   - Si entry = (300, 0) (W01 mid): hop_d = 50. cumulativo sec2 = 350 < 384.
+        //   - Si entry = (0, 0) (player): hop_d ≈ 304. cumulativo sec2 ≈ 604 > 384.
+        snap.walls = Arc::from(vec![
+            wall(0, 1, 300.0, 0.0),
+            wall(1, 2, 300.0, 50.0),
+        ]);
+        snap
+    }
+
+    #[test]
+    fn lit_sectors_cumulative_uses_wall_midpoint_as_entry() {
+        // Si el algoritmo siempre midiera desde el player, sec 2 caería
+        // fuera (cumulative ≈ 604). Con entry chaining (3.25), sec 2 entra
+        // (cumulative = 350 < 384).
+        let snap = snap_with_chained_entry_points();
+        let lit = compute_muzzle_lit_sectors(&snap).expect("BSP disponible");
+        assert!(lit.contains(&1), "sec 1 lit (cumulative=300)");
+        assert!(
+            lit.contains(&2),
+            "sec 2 lit via entry-chaining (cumulative=350 < 384) — sin el chain caería"
         );
     }
 }
