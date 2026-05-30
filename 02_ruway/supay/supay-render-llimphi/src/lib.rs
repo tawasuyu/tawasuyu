@@ -434,6 +434,17 @@ pub struct RenderConfig {
     /// emite el propio sprite del arma, no hay normal de mobj que la
     /// module).
     pub sprite_rim_directional: bool,
+    /// **Fase 3.32 — rim direccional para paredes**. Si `true`, cada
+    /// pared usa su normal (perpendicular al lineseg, orientada toward
+    /// camera) para atenuar el aporte de world lights por `cos(θ)`. Una
+    /// antorcha justo frente a la pared (luz "de frente") tinta al 100 %;
+    /// una al costado (rasante) cae al 50 %; una efectivamente "detrás"
+    /// de la pared cae al piso [`WALL_RIM_AMBIENT_FLOOR`] — modela el
+    /// bounce indirecto cuando una linedef two-sided permite atravesar
+    /// el muzzle/world-light a un sector vecino y el ángulo de rasante
+    /// queda extremo. El muzzle queda omni (como en 3.30/3.31). Cuando
+    /// `false`, vuelve al path omni 3.27/3.29 — backwards-compat.
+    pub wall_rim_directional: bool,
 }
 
 impl Default for RenderConfig {
@@ -458,6 +469,7 @@ impl Default for RenderConfig {
             weapon_rim_light: true,
             weapon_rim_directional: true,
             sprite_rim_directional: true,
+            wall_rim_directional: true,
         }
     }
 }
@@ -1245,6 +1257,143 @@ fn combined_boost_rgb_sprite_cam(
     ]
 }
 
+// =====================================================================
+// Fase 3.32 — Rim direccional para paredes (BRDF aproximado)
+// =====================================================================
+//
+// Cada pared tiene una normal bien definida: perpendicular a la dirección
+// del lineseg, orientada hacia el lado del frente — el que mira la cámara.
+// El cosine de la normal contra la dirección a cada world light da la
+// atenuación BRDF clásica (Lambert sin shadow term). Una antorcha en
+// línea perpendicular a la pared (apuntando directo) la tinta al 100 %;
+// una rasante (incidencia oblicua) al 50 %; una que efectivamente quedó
+// "detrás" del plano de la pared (cuando un two-sided permite que la luz
+// la alcance desde la cara opuesta) cae al piso ambient.
+//
+// El muzzle queda fuera del cosine — emana del jugador, y en walls que
+// quedan "frente a vos" (las únicas visibles tras el back-face cull) el
+// cosine sería ≥ 0 igual; agregarlo sólo dimearía las paredes oblicuas
+// donde el muzzle ya está modelado en la simulación clásica como omni.
+// Mantener esa convención preserva la lectura "el fogonazo cubre todo
+// el cono delante del jugador".
+
+const WALL_RIM_AMBIENT_FLOOR: f32 = 0.3;
+
+/// Boost RGB de world lights en una superficie de pared (`x_surf`,
+/// `y_surf` en cam-space), atenuado por el cosine entre la normal de
+/// la pared (orientada toward camera) y la dirección a cada luz. Con
+/// `directional=false` cae al path omni 3.27/3.29. La normal se pasa
+/// ya en cam-space y ya orientada al frente — el caller resuelve la
+/// orientación una sola vez (usando la convención de back-face cull
+/// de la fase 3.0).
+fn world_lights_boost_rgb_for_wall_cam(
+    x_surf: f32,
+    y_surf: f32,
+    surf_sector: u32,
+    lights: &[WorldLight],
+    wall_normal: (f32, f32),
+    directional: bool,
+) -> BoostRgb {
+    if !directional {
+        return world_lights_boost_rgb_cam(x_surf, y_surf, surf_sector, lights);
+    }
+    if lights.is_empty() {
+        return ZERO_BOOST;
+    }
+    let r2 = WORLD_LIGHT_RADIUS_WORLD * WORLD_LIGHT_RADIUS_WORLD;
+    let peak = WORLD_LIGHT_PEAK;
+    let (nx, ny) = wall_normal;
+    let mut sum = [0.0_f32; 3];
+    for l in lights {
+        if let Some(set) = l.lit_sectors.as_deref() {
+            if !set.contains(&surf_sector) {
+                continue;
+            }
+        }
+        let dx = l.x_cam - x_surf;
+        let dy = l.y_cam - y_surf;
+        let d2 = dx * dx + dy * dy;
+        if d2 >= r2 {
+            continue;
+        }
+        let f = 1.0 - d2 / r2;
+        let att = if d2 < 1e-6 {
+            1.0
+        } else {
+            let inv_d = d2.sqrt().recip();
+            let cos_theta = nx * dx * inv_d + ny * dy * inv_d;
+            (0.5 + 0.5 * cos_theta).max(WALL_RIM_AMBIENT_FLOOR)
+        };
+        let amount = f * f * peak * att;
+        let t = rgb_to_norm(l.tint_rgb);
+        sum[0] += amount * t[0];
+        sum[1] += amount * t[1];
+        sum[2] += amount * t[2];
+    }
+    [
+        sum[0].min(MUZZLE_BOOST_PEAK),
+        sum[1].min(MUZZLE_BOOST_PEAK),
+        sum[2].min(MUZZLE_BOOST_PEAK),
+    ]
+}
+
+/// Versión wall del boost combinado: muzzle (omni, anclado al jugador)
+/// + world lights atenuadas por la normal de la pared.
+fn combined_boost_rgb_wall_cam(
+    x_cam: f32,
+    y_cam: f32,
+    muzzle_alpha: f32,
+    surf_sector: u32,
+    lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
+    wall_normal: (f32, f32),
+    directional: bool,
+) -> BoostRgb {
+    let m = muzzle_boost_gated_rgb(
+        muzzle_boost_rgb_cam(x_cam, y_cam, muzzle_alpha),
+        surf_sector,
+        lit_sectors,
+    );
+    let w = world_lights_boost_rgb_for_wall_cam(
+        x_cam,
+        y_cam,
+        surf_sector,
+        world_lights,
+        wall_normal,
+        directional,
+    );
+    [
+        (m[0] + w[0]).min(MUZZLE_BOOST_PEAK),
+        (m[1] + w[1]).min(MUZZLE_BOOST_PEAK),
+        (m[2] + w[2]).min(MUZZLE_BOOST_PEAK),
+    ]
+}
+
+/// Resuelve la normal cam-space de una pared dada sus dos endpoints en
+/// cam-space (`(x1, y1)`, `(x2, y2)`) y el midpoint. Devuelve la
+/// componente perpendicular orientada toward camera (origen del
+/// cam-space): de las dos perpendiculares posibles, pickea la que tiene
+/// `dot(n, mid) < 0` (mid apunta del origen al midpoint, la normal
+/// inversa apunta hacia la cámara). Devuelve `(0, 0)` si la longitud
+/// del segmento es despreciable — degenerado, el caller debería caer
+/// al path omni.
+fn wall_normal_cam(x1: f32, y1: f32, x2: f32, y2: f32, mid_x: f32, mid_y: f32) -> (f32, f32) {
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-6 {
+        return (0.0, 0.0);
+    }
+    let inv_len = len2.sqrt().recip();
+    let (n1x, n1y) = (-dy * inv_len, dx * inv_len);
+    // dot(n1, mid). Si negativo, n1 ya apunta toward camera.
+    if n1x * mid_x + n1y * mid_y < 0.0 {
+        (n1x, n1y)
+    } else {
+        (-n1x, -n1y)
+    }
+}
+
 /// Suma aditivamente el boost RGB a un color base, preservando alpha.
 /// Reemplaza a `apply_muzzle_tint` (scalar+yellow-fixed) en el render
 /// loop. Cero boost ⇒ identidad.
@@ -1787,13 +1936,19 @@ fn gather_wall(
     // antorcha teñida). El scalar `boost_scalar = max(boost_rgb)` se
     // usa donde necesitamos una magnitud única (overlay alpha del
     // shading darkness).
-    let boost_rgb = combined_boost_rgb_cam(
+    // Fase 3.32: rim direccional. La normal cam-space de la pared
+    // (perpendicular al lineseg, toward camera) modula el aporte de
+    // cada world light por cos(θ). Muzzle queda omni.
+    let wall_normal = wall_normal_cam(x1, y1, x2, y2, mid_x, mid_y);
+    let boost_rgb = combined_boost_rgb_wall_cam(
         mid_x,
         mid_y,
         cfg.muzzle_glow_alpha,
         near_idx,
         lit_sectors,
         world_lights,
+        wall_normal,
+        cfg.wall_rim_directional,
     );
     let boost_scalar = boost_max(boost_rgb);
 
@@ -5638,5 +5793,107 @@ mod tests {
         // Y debería coincidir con el omni (porque caemos al fallback).
         let omni = world_lights_boost_rgb_for_sprite_cam(0.0, 0.0, NO_SECTOR, &lights, false);
         assert_eq!(dir, omni, "degenerado ⇒ fallback omni");
+    }
+
+    // =================================================================
+    // Fase 3.32 — Rim direccional para paredes
+    // =================================================================
+
+    #[test]
+    fn wall_normal_cam_orients_toward_camera() {
+        // Pared horizontal a la derecha del player: endpoints (100, -50)
+        // y (100, 50). Midpoint (100, 0). Normal candidates ±(1, 0) (no
+        // ±(0, 1) — ojo: perpendicular a la dirección (0, 100)).
+        // La que apunta toward camera (origen) es (-1, 0).
+        let n = wall_normal_cam(100.0, -50.0, 100.0, 50.0, 100.0, 0.0);
+        assert!((n.0 - (-1.0)).abs() < 1e-5, "nx debe ser -1: {}", n.0);
+        assert!(n.1.abs() < 1e-5, "ny debe ser ~0: {}", n.1);
+    }
+
+    #[test]
+    fn wall_normal_cam_degenerate_zero_length() {
+        // Pared degenerada (endpoints idénticos) ⇒ (0, 0). El caller
+        // debería caer al path omni.
+        let n = wall_normal_cam(50.0, 50.0, 50.0, 50.0, 50.0, 50.0);
+        assert_eq!(n, (0.0, 0.0));
+    }
+
+    #[test]
+    fn wall_rim_directional_perpendicular_light_full_intensity() {
+        // Pared a x=100, normal toward camera = (-1, 0). Luz frente a la
+        // pared sobre el eje normal: cam-space (50, 0) — perpendicular
+        // directo al plano. Direction surf→light = (-50, 0)/50 = (-1, 0).
+        // cos(theta) = dot(normal, dir) = (-1)·(-1) + 0 = 1 ⇒ att=1.
+        let white = (255, 255, 255);
+        let lights = [rim_light(50.0, 0.0, white)];
+        let n = (-1.0, 0.0);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, true);
+        for ch in 0..3 {
+            assert!(
+                (omni[ch] - dir[ch]).abs() < 1e-5,
+                "luz perpendicular ⇒ direccional ≈ omni: canal {}", ch
+            );
+        }
+    }
+
+    #[test]
+    fn wall_rim_directional_grazing_uses_half() {
+        // Pared a x=100, normal (-1, 0). Luz sobre el plano de la
+        // pared: cam-space (100, 30) — paralela al lineseg. Direction
+        // surf→light = (0, 30)/30 = (0, 1). cos = (-1)·0 + 0·1 = 0
+        // ⇒ att = 0.5.
+        let white = (255, 255, 255);
+        let lights = [rim_light(100.0, 30.0, white)];
+        let n = (-1.0, 0.0);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, true);
+        for ch in 0..3 {
+            if omni[ch] > 0.01 {
+                let ratio = dir[ch] / omni[ch];
+                assert!(
+                    (ratio - 0.5).abs() < 1e-4,
+                    "rasante debería ser 0.5: canal {} ratio {}", ch, ratio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wall_rim_directional_back_light_falls_to_floor() {
+        // Pared a x=100, normal (-1, 0). Luz "detrás" de la pared
+        // (lejos de la cámara): cam-space (150, 0). Direction surf→light
+        // = (50, 0)/50 = (1, 0). cos = (-1)·1 = -1 ⇒ att=floor (0.3).
+        let white = (255, 255, 255);
+        let lights = [rim_light(150.0, 0.0, white)];
+        let n = (-1.0, 0.0);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, true);
+        for ch in 0..3 {
+            if omni[ch] > 0.01 {
+                let ratio = dir[ch] / omni[ch];
+                assert!(
+                    (ratio - WALL_RIM_AMBIENT_FLOOR).abs() < 1e-4,
+                    "back-light ⇒ piso ambient: canal {} ratio {}", ch, ratio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wall_rim_directional_disabled_equals_omni() {
+        // Toggle off ⇒ direccional debe coincidir con `world_lights_boost_rgb_cam`
+        // para múltiples luces en distintas direcciones.
+        let red = (255, 130, 60);
+        let blue = (110, 160, 255);
+        let lights = [
+            rim_light(50.0, 0.0, red),
+            rim_light(100.0, 40.0, blue),
+            rim_light(150.0, -20.0, (255, 240, 200)),
+        ];
+        let n = (-1.0, 0.0);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
+        let baseline = world_lights_boost_rgb_cam(100.0, 0.0, NO_SECTOR, &lights);
+        assert_eq!(omni, baseline, "directional=false ⇒ bit-identical al 3.29");
     }
 }
