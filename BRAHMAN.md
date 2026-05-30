@@ -89,6 +89,11 @@ FASE 1  Decidir sobre WIT/WASM (Capa 3 muerta).  ✓ HECHA (2026-05-30): card-wi
         contrato agnóstico real. No se borró (parser funcional, reversible).   [decisión cerrada]
 FASE 2a nahual viewer_registry → Cards: visores se registran por (lens,mime,priority),
         el shell despacha vía broker.  REALIZA "widgets hablan por Brahman".            [refactor medio]
+        ◑ PASO 1 HECHO (2026-05-30): viewer_registry ahora es DATA-DRIVEN — tabla de
+          ViewerCard{kind,lenses,mime_prefixes,mime_exact,priority:card_core::Priority};
+          pick() rankea por especificidad+Priority (mismo modelo que el broker). 17 tests verde.
+          Agregar visor = agregar fila. registry() es la costura: hoy estática, mañana del broker.
+        PASO 2 PENDIENTE: poblar registry() desde card-discovery/broker (visores out-of-process).
 FASE 2b agora personas → discovery por DhtKey::Persona.  REALIZA "gente entra a la espina". [refactor medio]
 FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Cards;
         nahual-shell = front universal.  VISIÓN ORIGINAL REALIZADA.                     [visión realizada]

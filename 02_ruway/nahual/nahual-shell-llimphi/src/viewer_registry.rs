@@ -1,19 +1,30 @@
-//! Registro de visores — el germen del "open-with universal".
+//! Registro de visores — el "open-with universal", ahora dirigido por datos.
 //!
 //! Toma el [`Discernment`] que `shuma-discern` produce sobre una muestra
 //! del archivo (detección por **contenido**, no por extensión) y lo
 //! despacha al [`ViewerKind`] que sabe pintar esa naturaleza de dato.
 //!
-//! Hoy el shell embebe sólo dos visores (texto / imagen), así que la tabla
-//! es corta; pero la forma es la correcta: cuando lleguen más visores
-//! (database, deck, reader nativo de PDF, card) se agregan filas acá sin
-//! tocar el resto del shell. La decisión deja de vivir en un `match ext`
-//! y pasa a ser una función de la semántica discernida — el `lens` que ya
-//! comparten chasqui (`dominant_lens`) y shuma-discern.
+//! ## La tabla es una Card, no un `match`
 //!
-//! Cuando exista un `AppBus` con `EntityType` y visores fuera de proceso,
-//! este registro se vuelve su tabla de ruteo: `lens`/`mime` → handler.
+//! Cada visor se describe como un [`ViewerCard`]: qué `lens` acepta, qué
+//! `mime` (prefijo o exacto) cubre, y con qué [`Priority`] compite. La
+//! decisión NO vive en ramas de control sino en [`registry`], una tabla de
+//! datos. Agregar un visor = agregar una fila. Esto es la "Capa 2" de
+//! Brahman a nivel de UI (ver `/BRAHMAN.md`, Fase 2a): el `lens` es el mismo
+//! `presentation_hint` que `card_core::DataFacet` comparte con chasqui
+//! (`dominant_lens`) y shuma-discern, y `Priority` es el mismo tiebreaker
+//! que usa `chasqui-broker` para rankear productores.
+//!
+//! ## La costura hacia el AppBus
+//!
+//! Hoy [`registry`] devuelve una tabla estática y los visores viven
+//! in-process. Cuando exista el AppBus (visores fuera de proceso), esta
+//! función pasa a poblarse desde el broker / `card-discovery`: cada visor
+//! publica una `Card` con su `(lens, mime, priority)` y `pick` rankea
+//! exactamente igual. El algoritmo de matching no cambia — sólo el origen
+//! de las filas.
 
+use card_core::Priority;
 use shuma_discern::Discernment;
 
 /// Qué visor del shell pinta el panel derecho.
@@ -53,54 +64,164 @@ pub enum ViewerKind {
     Text,
 }
 
-/// Elige el visor para un discernimiento. La regla, en orden:
+/// Descripción declarativa de un visor: qué naturaleza de dato cubre y con
+/// qué prioridad compite. Es el equivalente UI de una `card_core::Card` de
+/// tipo `Data` cuyo `presentation_hint` (lens) y `mime` declaran qué sabe
+/// pintar. Bajo el AppBus, estas filas vendrían del broker; hoy son
+/// estáticas (ver [`registry`]).
+#[derive(Debug, Clone, Copy)]
+pub struct ViewerCard {
+    /// Visor concreto que se monta si esta fila gana.
+    pub kind: ViewerKind,
+    /// Lenses (`presentation_hint`) que el visor reclama. Match exacto.
+    pub lenses: &'static [&'static str],
+    /// Prefijos de `mime` que cubre (p. ej. `"image/"`).
+    pub mime_prefixes: &'static [&'static str],
+    /// `mime` exactos que cubre (p. ej. `"application/zip"`).
+    pub mime_exact: &'static [&'static str],
+    /// Prioridad de desempate cuando más de un visor matchea con la misma
+    /// especificidad. Mismo orden que usa el broker (`Low<Normal<High<Critical`).
+    pub priority: Priority,
+}
+
+/// Tabla de ruteo: un [`ViewerCard`] por visor montado en el shell.
 ///
-/// 1. Si el `lens` lo dice explícitamente (`gallery` → imagen,
-///    `video` → reproductor, `audio` → audio, `card` → visor de cards,
-///    `tree` → árbol JSON/TOML).
-/// 2. Si el `mime` arranca con `image/`, `video/` o `audio/` (cubre
-///    formatos que magic-bytes detecta sin asignar lens).
-/// 3. Fallback a texto — el visor que nunca falla feo.
+/// El orden importa sólo como desempate final (especificidad y `Priority`
+/// mandan primero). `Text` NO está acá: es el fallback explícito de [`pick`]
+/// cuando ninguna fila matchea.
+pub fn registry() -> &'static [ViewerCard] {
+    use Priority::Normal;
+    &[
+        ViewerCard {
+            kind: ViewerKind::Image,
+            lenses: &["gallery"],
+            mime_prefixes: &["image/"],
+            mime_exact: &[],
+            priority: Normal,
+        },
+        ViewerCard {
+            kind: ViewerKind::Video,
+            lenses: &["video"],
+            mime_prefixes: &["video/"],
+            mime_exact: &[],
+            priority: Normal,
+        },
+        ViewerCard {
+            kind: ViewerKind::Audio,
+            lenses: &["audio"],
+            mime_prefixes: &["audio/"],
+            mime_exact: &[],
+            priority: Normal,
+        },
+        ViewerCard {
+            kind: ViewerKind::Card,
+            lenses: &["card"],
+            mime_prefixes: &[],
+            mime_exact: &[],
+            priority: Normal,
+        },
+        ViewerCard {
+            kind: ViewerKind::Tree,
+            lenses: &["tree"],
+            mime_prefixes: &[],
+            mime_exact: &[],
+            priority: Normal,
+        },
+        ViewerCard {
+            kind: ViewerKind::Table,
+            lenses: &["table"],
+            mime_prefixes: &[],
+            mime_exact: &[],
+            priority: Normal,
+        },
+        ViewerCard {
+            kind: ViewerKind::Markdown,
+            lenses: &["markdown"],
+            mime_prefixes: &[],
+            mime_exact: &[],
+            priority: Normal,
+        },
+        ViewerCard {
+            kind: ViewerKind::Font,
+            lenses: &["font"],
+            mime_prefixes: &[],
+            mime_exact: &[],
+            priority: Normal,
+        },
+        // Contenedores: un comprimido se lista (entradas) en vez de volcarse.
+        // ZIP cubre .jar/.apk/.epub/OOXML; gzip se asume envolviendo un tar.
+        ViewerCard {
+            kind: ViewerKind::Archive,
+            lenses: &[],
+            mime_prefixes: &[],
+            mime_exact: &["application/zip", "application/x-tar", "application/gzip"],
+            priority: Normal,
+        },
+        // Binarios que shuma detecta por magic-bytes sin lens y que ningún
+        // visor rico cubre: un dump hex es mejor que "(binario — sin preview)".
+        ViewerCard {
+            kind: ViewerKind::Hex,
+            lenses: &[],
+            mime_prefixes: &[],
+            mime_exact: &["application/x-executable", "application/wasm"],
+            priority: Normal,
+        },
+    ]
+}
+
+/// Especificidad de un match: a mayor número, más concreta la coincidencia.
+/// El orden replica el de la versión hardcoded previa: `lens` manda sobre
+/// `mime` exacto, y éste sobre el prefijo de `mime`.
+const SCORE_LENS: u8 = 3;
+const SCORE_MIME_EXACT: u8 = 2;
+const SCORE_MIME_PREFIX: u8 = 1;
+const SCORE_NONE: u8 = 0;
+
+fn score(card: &ViewerCard, d: &Discernment) -> u8 {
+    if let Some(lens) = d.lens.as_deref() {
+        if card.lenses.contains(&lens) {
+            return SCORE_LENS;
+        }
+    }
+    if let Some(mime) = d.mime.as_deref() {
+        if card.mime_exact.contains(&mime) {
+            return SCORE_MIME_EXACT;
+        }
+        if card.mime_prefixes.iter().any(|p| mime.starts_with(p)) {
+            return SCORE_MIME_PREFIX;
+        }
+    }
+    SCORE_NONE
+}
+
+/// Elige el visor para un discernimiento consultando [`registry`].
+///
+/// Reglas, en orden:
+/// 1. Caso especial GIF: shuma lo marca `gallery` (es imagen), pero un GIF
+///    animado se ve mejor reproducido. Va al video viewer (que acepta su
+///    `FrameSource` y lo anima en loop; un GIF de un frame se ve estático).
+/// 2. Match por la tabla: gana la fila con mayor especificidad
+///    (`lens` > `mime` exacto > prefijo de `mime`), desempatada por
+///    `Priority` y, en última instancia, por orden en la tabla.
+/// 3. Fallback a [`ViewerKind::Text`] — el visor que nunca falla feo.
 ///
 /// Un `None` (no se pudo discernir, p.ej. archivo ilegible) cae a texto.
 pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
     let Some(d) = discernment else {
         return ViewerKind::Text;
     };
-    // GIF: shuma lo marca `gallery` (es una imagen), pero un GIF animado
-    // se ve mejor reproducido. El video viewer acepta su `FrameSource` y
-    // lo anima en loop; un GIF de un solo frame se ve igual que estático.
     if d.mime.as_deref() == Some("image/gif") {
         return ViewerKind::Video;
     }
-    match d.lens.as_deref() {
-        Some("gallery") => return ViewerKind::Image,
-        Some("video") => return ViewerKind::Video,
-        Some("audio") => return ViewerKind::Audio,
-        Some("card") => return ViewerKind::Card,
-        Some("tree") => return ViewerKind::Tree,
-        Some("table") => return ViewerKind::Table,
-        Some("markdown") => return ViewerKind::Markdown,
-        Some("font") => return ViewerKind::Font,
-        _ => {}
-    }
-    match d.mime.as_deref() {
-        Some(m) if m.starts_with("image/") => return ViewerKind::Image,
-        Some(m) if m.starts_with("video/") => return ViewerKind::Video,
-        Some(m) if m.starts_with("audio/") => return ViewerKind::Audio,
-        // Binarios que shuma detecta por magic-bytes (sin lens) pero que
-        // ningún visor "rico" cubre: un dump hex es mejor que el text
-        // viewer diciendo "(binario — sin preview)".
-        // Un archivo comprimido es un contenedor: listamos sus entradas en
-        // vez del hex. ZIP (+jar/apk/epub/OOXML), tar y gzip (que asumimos
-        // envuelve un tar) van al archive viewer.
-        Some("application/zip" | "application/x-tar" | "application/gzip") => {
-            return ViewerKind::Archive
-        }
-        Some("application/x-executable" | "application/wasm") => return ViewerKind::Hex,
-        _ => {}
-    }
-    ViewerKind::Text
+    registry()
+        .iter()
+        .map(|card| (score(card, d), card))
+        .filter(|(s, _)| *s > SCORE_NONE)
+        // mayor especificidad, luego mayor Priority; el orden de la tabla
+        // queda como desempate estable.
+        .max_by_key(|(s, card)| (*s, card.priority))
+        .map(|(_, card)| card.kind)
+        .unwrap_or(ViewerKind::Text)
 }
 
 #[cfg(test)]
@@ -196,5 +317,24 @@ mod tests {
     #[test]
     fn sin_discernimiento_cae_a_texto() {
         assert_eq!(pick(None), ViewerKind::Text);
+    }
+
+    #[test]
+    fn lens_gana_sobre_mime_prefijo() {
+        // lens explícito (especificidad 3) debe ganar aunque el mime también
+        // matchee un prefijo de otro visor distinto.
+        assert_eq!(pick(Some(&disc(Some("tree"), Some("image/png")))), ViewerKind::Tree);
+    }
+
+    #[test]
+    fn cada_kind_de_la_tabla_es_alcanzable_por_su_lens() {
+        // garantía de cobertura: ninguna fila queda muerta.
+        for card in registry() {
+            if let Some(&lens) = card.lenses.first() {
+                assert_eq!(pick(Some(&disc(Some(lens), None))), card.kind);
+            } else if let Some(&mime) = card.mime_exact.first() {
+                assert_eq!(pick(Some(&disc(None, Some(mime)))), card.kind);
+            }
+        }
     }
 }
