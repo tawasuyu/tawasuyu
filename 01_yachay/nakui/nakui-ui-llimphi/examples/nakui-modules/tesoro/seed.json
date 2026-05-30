@@ -1,0 +1,30 @@
+{
+  "seed": [
+    {
+      "entity": "Caja",
+      "records": [
+        { "handle": "principal", "data": { "nombre": "Caja principal", "saldo": 5000, "estado": "abierta" } },
+        { "handle": "banco",     "data": { "nombre": "Cuenta banco",   "saldo": 12000, "estado": "abierta" } }
+      ]
+    },
+    {
+      "entity": "Movimiento",
+      "records": [
+        { "data": { "caja": "@banco",     "concepto": "Cobro factura ACME",  "tipo": "ingreso", "monto": 4200,  "fecha": "2026-01-09" } },
+        { "data": { "caja": "@principal", "concepto": "Venta mostrador",     "tipo": "ingreso", "monto": 800,   "fecha": "2026-01-14" } },
+        { "data": { "caja": "@principal", "concepto": "Compra insumos",      "tipo": "egreso",  "monto": -1300, "fecha": "2026-01-18" } },
+        { "data": { "caja": "@banco",     "concepto": "Sueldos enero",       "tipo": "egreso",  "monto": -3600, "fecha": "2026-01-30" } },
+        { "data": { "caja": "@banco",     "concepto": "Cobro factura Stark", "tipo": "ingreso", "monto": 5100,  "fecha": "2026-02-06" } },
+        { "data": { "caja": "@principal", "concepto": "Venta mostrador",     "tipo": "ingreso", "monto": 950,   "fecha": "2026-02-12" } },
+        { "data": { "caja": "@principal", "concepto": "Alquiler local",      "tipo": "egreso",  "monto": -2000, "fecha": "2026-02-15" } },
+        { "data": { "caja": "@banco",     "concepto": "Sueldos febrero",     "tipo": "egreso",  "monto": -3600, "fecha": "2026-02-28" } },
+        { "data": { "caja": "@banco",     "concepto": "Cobro factura Hooli", "tipo": "ingreso", "monto": 2300,  "fecha": "2026-03-04" } },
+        { "data": { "caja": "@principal", "concepto": "Compra equipo",       "tipo": "egreso",  "monto": -4500, "fecha": "2026-03-10" } },
+        { "data": { "caja": "@principal", "concepto": "Venta mostrador",     "tipo": "ingreso", "monto": 1100,  "fecha": "2026-03-21" } },
+        { "data": { "caja": "@banco",     "concepto": "Sueldos marzo",       "tipo": "egreso",  "monto": -3600, "fecha": "2026-03-30" } },
+        { "data": { "caja": "@banco",     "concepto": "Cobro factura Wonka",  "tipo": "ingreso", "monto": 6800, "fecha": "2026-04-08" } },
+        { "data": { "caja": "@principal", "concepto": "Servicios y luz",     "tipo": "egreso",  "monto": -900,  "fecha": "2026-04-16" } }
+      ]
+    }
+  ]
+}

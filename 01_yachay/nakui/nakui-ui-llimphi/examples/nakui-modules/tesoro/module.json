@@ -1,7 +1,7 @@
 {
   "id": "tesoro",
   "label": "Tesorería",
-  "description": "Demo de la vista grafo: el DAG de morfismos de un módulo nakui (flujo de datos entre tokens leídos/escritos)",
+  "description": "Cajas + movimientos fechados: tablero de flujo y saldo acumulado, ficha 360 de caja, y la vista grafo del DAG de morfismos del módulo nakui.",
   "nakui_module_dir": "nakui",
   "entities": [
     { "name": "Caja", "label": "Caja", "fields": [] },
@@ -9,11 +9,111 @@
     { "name": "Asiento", "label": "Asiento", "fields": [] }
   ],
   "menu": [
-    { "label": "Flujo de morfismos", "view": "flujo" },
+    { "label": "Tablero", "view": "tablero" },
+    { "label": "Reporte", "view": "reporte" },
     { "label": "Cajas", "view": "cajas_list" },
-    { "label": "+ Caja", "view": "cajas_form" }
+    { "label": "+ Caja", "view": "cajas_form" },
+    { "label": "Movimientos", "view": "movimientos_list" },
+    { "label": "+ Movimiento", "view": "movimientos_form" },
+    { "label": "Flujo de morfismos", "view": "flujo" }
   ],
   "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Tesorería",
+      "subtitle": "Flujo de caja y saldo acumulado — el monto lleva signo (negativo = egreso).",
+      "cards": [
+        {
+          "label": "Movimientos",
+          "entity": "Movimiento",
+          "metric": { "kind": "count" }
+        },
+        {
+          "label": "Saldo neto",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum", "field": "monto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Ingresos",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum", "field": "monto" },
+          "filter": { "field": "tipo", "equals": "ingreso" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Egresos",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum", "field": "monto" },
+          "filter": { "field": "tipo", "equals": "egreso" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Flujo mensual neto",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "monto" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns",
+          "bucket": "month"
+        },
+        {
+          "label": "Saldo acumulado",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "monto" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "line",
+          "bucket": "month",
+          "cumulative": true
+        },
+        {
+          "label": "Movimientos por tipo",
+          "entity": "Movimiento",
+          "metric": { "kind": "group_by", "field": "tipo" },
+          "chart": "donut"
+        },
+        {
+          "label": "Ingresos y egresos por mes",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum_by_series", "group": "fecha", "series": "tipo", "value": "monto" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns",
+          "bucket": "month"
+        }
+      ]
+    },
+    "reporte": {
+      "kind": "report",
+      "title": "Reporte de tesorería",
+      "subtitle": "Resumen ejecutivo — exportable a Markdown",
+      "toggles": [
+        { "label": "Solo egresos", "entity": "Movimiento", "filter": { "field": "tipo", "equals": "egreso" } }
+      ],
+      "cards": [
+        {
+          "label": "Saldo neto",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum", "field": "monto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Flujo mensual neto",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "monto" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns",
+          "bucket": "month"
+        },
+        {
+          "label": "Saldo acumulado",
+          "entity": "Movimiento",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "monto" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "line",
+          "bucket": "month",
+          "cumulative": true
+        }
+      ]
+    },
     "flujo": {
       "kind": "graph",
       "title": "Flujo de morfismos",
@@ -23,9 +123,11 @@
       "kind": "list",
       "title": "Cajas",
       "entity": "Caja",
+      "row_detail": "caja_detail",
       "search_in": ["estado"],
       "columns": [
-        { "field": "saldo", "label": "Saldo", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "nombre", "label": "Nombre" },
+        { "field": "saldo", "label": "Saldo inicial", "format": { "kind": "currency", "symbol": "$" } },
         { "field": "estado", "label": "Estado" }
       ]
     },
@@ -35,7 +137,8 @@
       "entity": "Caja",
       "fields": [
         { "name": "id", "label": "Id", "kind": "auto_id" },
-        { "name": "saldo", "label": "Saldo", "kind": "number", "required": true },
+        { "name": "nombre", "label": "Nombre", "kind": "text", "required": true },
+        { "name": "saldo", "label": "Saldo inicial", "kind": "number", "required": true },
         {
           "name": "estado",
           "label": "Estado",
@@ -47,6 +150,94 @@
         }
       ],
       "on_submit": { "kind": "seed_entity", "entity": "Caja", "next_view": "cajas_list" }
+    },
+    "caja_detail": {
+      "kind": "detail",
+      "title": "Ficha de caja",
+      "entity": "Caja",
+      "fields": [
+        { "field": "nombre", "label": "Nombre" },
+        { "field": "saldo", "label": "Saldo inicial", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "estado", "label": "Estado" }
+      ],
+      "related": [
+        {
+          "title": "Movimientos de la caja",
+          "entity": "Movimiento",
+          "via_field": "caja",
+          "columns": [
+            { "field": "fecha", "label": "Fecha" },
+            { "field": "concepto", "label": "Concepto" },
+            { "field": "tipo", "label": "Tipo" },
+            { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } }
+          ]
+        }
+      ],
+      "metrics": [
+        {
+          "label": "Movimientos",
+          "entity": "Movimiento",
+          "via_field": "caja",
+          "metric": { "kind": "count" }
+        },
+        {
+          "label": "Saldo neto",
+          "entity": "Movimiento",
+          "via_field": "caja",
+          "metric": { "kind": "sum", "field": "monto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Ingresos",
+          "entity": "Movimiento",
+          "via_field": "caja",
+          "metric": { "kind": "sum", "field": "monto" },
+          "filter": { "field": "tipo", "equals": "ingreso" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Egresos",
+          "entity": "Movimiento",
+          "via_field": "caja",
+          "metric": { "kind": "sum", "field": "monto" },
+          "filter": { "field": "tipo", "equals": "egreso" },
+          "format": { "kind": "currency", "symbol": "$" }
+        }
+      ]
+    },
+    "movimientos_list": {
+      "kind": "list",
+      "title": "Movimientos",
+      "entity": "Movimiento",
+      "search_in": ["concepto", "tipo"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "caja", "label": "Caja", "ref_entity": "Caja" },
+        { "field": "concepto", "label": "Concepto" },
+        { "field": "tipo", "label": "Tipo" },
+        { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } }
+      ]
+    },
+    "movimientos_form": {
+      "kind": "form",
+      "title": "Movimiento",
+      "entity": "Movimiento",
+      "fields": [
+        { "name": "caja", "label": "Caja", "kind": "entity_ref", "ref_entity": "Caja", "required": true, "help": "Elegí una caja existente" },
+        { "name": "concepto", "label": "Concepto", "kind": "text", "required": true },
+        {
+          "name": "tipo",
+          "label": "Tipo",
+          "kind": "select",
+          "options": [
+            { "value": "ingreso", "label": "Ingreso" },
+            { "value": "egreso", "label": "Egreso" }
+          ]
+        },
+        { "name": "monto", "label": "Monto", "kind": "number", "required": true, "help": "Negativo para un egreso" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false, "help": "YYYY-MM-DD" }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Movimiento", "next_view": "movimientos_list" }
     }
   }
 }

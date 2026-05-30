@@ -26,7 +26,7 @@ fn loads_demo_modules() {
     assert_eq!(
         ids,
         vec!["tesoro", "ventas"],
-        "se esperaban los módulos demo 'tesoro' (vista grafo) y 'ventas'"
+        "se esperaban los módulos demo 'tesoro' (tesorería) y 'ventas'"
     );
 }
 
