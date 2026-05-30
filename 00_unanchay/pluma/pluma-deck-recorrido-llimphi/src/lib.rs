@@ -122,6 +122,9 @@ const TEXTO_TENUE: Color = Color::from_rgba8(186, 194, 210, 225);
 // Camino narrativo: línea punteada que une los marcos en orden de la ruta,
 // pintada por detrás de los marcos. Acento tenue para no robar protagonismo.
 const RUTA: Color = Color::from_rgba8(120, 180, 255, 120);
+// Realce del marco seleccionado en autoría — ámbar, distinto del acento azul
+// del paso actual, para que selección y "paso actual" se distingan de un vistazo.
+const SELECCION: Color = Color::from_rgba8(255, 196, 92, 255);
 // HUD "paso X / N": píldora sobria abajo-centro, en espacio de pantalla.
 const HUD_FONDO: Color = Color::from_rgba8(12, 14, 20, 190);
 const HUD_TEXTO: Color = Color::from_rgba8(205, 212, 226, 235);
@@ -130,6 +133,20 @@ const HUD_TEXTO: Color = Color::from_rgba8(205, 212, 226, 235);
 /// panel. `Msg` es libre: el caller suele colgarle un `.draggable(...)` para
 /// el pan — esta función no lo impone para no fijar el tipo de mensaje.
 pub fn recorrido_view<Msg: 'static>(rec: &Recorrido, state: &RecorridoState) -> View<Msg> {
+    vista(rec, state, None)
+}
+
+/// Igual que [`recorrido_view`] pero realzando el marco `seleccionado` (autoría):
+/// se pinta con un borde de selección distinto del acento del paso actual.
+pub fn recorrido_view_editor<Msg: 'static>(
+    rec: &Recorrido,
+    state: &RecorridoState,
+    seleccionado: Option<MarcoId>,
+) -> View<Msg> {
+    vista(rec, state, seleccionado)
+}
+
+fn vista<Msg: 'static>(rec: &Recorrido, state: &RecorridoState, seleccionado: Option<MarcoId>) -> View<Msg> {
     // Precocinamos cada marco a una `Pintura` ligera (texto clonado, imagen
     // resuelta a peniko::Image cacheada) para no clonar bytes ni re-decodificar
     // por frame, y para que el closure `Send + Sync` sobreviva sin los bytes.
@@ -165,7 +182,7 @@ pub fn recorrido_view<Msg: 'static>(rec: &Recorrido, state: &RecorridoState) -> 
     .fill(FONDO)
     .paint_with(move |scene, ts, rect: PaintRect| {
         panel_set(to_rect(rect));
-        pintar(scene, ts, rect, &pinturas, &ruta, paso_id, &camara);
+        pintar(scene, ts, rect, &pinturas, &ruta, paso_id, seleccionado, &camara);
         pintar_hud(scene, ts, rect, paso, n_pasos);
     })
 }
@@ -192,6 +209,7 @@ fn pintar(
     marcos: &[MarcoPintura],
     ruta: &[(f64, f64)],
     paso_id: Option<MarcoId>,
+    seleccionado: Option<MarcoId>,
     cam: &Camara,
 ) {
     if rect.w <= 0.0 || rect.h <= 0.0 {
@@ -235,6 +253,13 @@ fn pintar(
         let actual = paso_id == Some(m.id);
         let (grosor, color) = if actual { (3.0, MARCO_ACENTO) } else { (1.0, MARCO_BORDE) };
         scene.stroke(&Stroke::new(grosor), xf, color, None, &kr);
+
+        // Realce de selección (autoría): borde ámbar punteado por encima, así se
+        // distingue del acento azul del paso actual aunque coincidan.
+        if seleccionado == Some(m.id) {
+            let sel = Stroke::new(2.5).with_dashes(0.0, [7.0, 5.0]);
+            scene.stroke(&sel, xf, SELECCION, None, &kr);
+        }
 
         // El texto se pinta en el **espacio local del marco** (origen en su
         // esquina sup-izq, ejes alineados al marco, 1 unidad = 1 px de pantalla),

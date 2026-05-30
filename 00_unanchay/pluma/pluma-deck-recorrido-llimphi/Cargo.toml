@@ -22,4 +22,4 @@ image = { workspace = true }
 # demo dogfoodea en vez de su antiguo glue inline.
 pluma-md = { path = "../pluma-md" }
 pluma-core = { path = "../pluma-core" }
-pluma-deck-core = { path = "../pluma-deck-core", features = ["pluma"] }
+pluma-deck-core = { path = "../pluma-deck-core", features = ["pluma", "serde"] }
