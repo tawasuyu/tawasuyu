@@ -35,8 +35,10 @@
 //!     drill-down a la lista de esa entity filtrada al grupo (por el
 //!     valor real, aunque la fila muestre el label resuelto). El campo
 //!     `chart` de la card elige cómo se pinta el desglose: barras ASCII
-//!     (default), torta (`pie`) o dona (`donut`) —sectores proporcionales
-//!     con leyenda de color + porcentaje, también clickeable para drill—.
+//!     (default), torta (`pie`) / dona (`donut`) —sectores proporcionales
+//!     con leyenda de color + porcentaje—, o columnas (`columns`) / línea
+//!     (`line`) —para series ordenadas, con eje cero y soporte de valores
+//!     negativos—. La leyenda siempre es clickeable para drill-down.
 //!   - `Report`: los mismos agregados que un tablero, dispuestos como
 //!     documento de una columna (título + subtítulo) con botón
 //!     "Exportar (.md)" que vuelca el reporte completo a Markdown.
@@ -68,7 +70,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle as KurboCircle, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
@@ -2501,6 +2503,84 @@ fn wedge_path(cx: f64, cy: f64, r: f64, inner: f64, a0: f64, a1: f64) -> BezPath
     p
 }
 
+/// Canvas de un gráfico de columnas (o de línea si `line`) sobre el
+/// desglose `series` (valor + color por grupo, en el orden del
+/// desglose). El eje cero se traza con `axis`; la línea que une los
+/// puntos usa `accent`, y cada columna/punto va con el color de su
+/// grupo —el mismo de su fila de leyenda—. Soporta valores negativos:
+/// el eje cero se posiciona dentro del rango y las columnas crecen
+/// hacia arriba o abajo según el signo.
+fn plot_canvas(series: Vec<(f64, Color)>, line: bool, axis: Color, accent: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(128.0),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect: PaintRect| {
+        if series.is_empty() {
+            return;
+        }
+        let pad = 6.0_f64;
+        let x0 = rect.x as f64 + pad;
+        let x1 = (rect.x + rect.w) as f64 - pad;
+        let y0 = rect.y as f64 + pad;
+        let y1 = (rect.y + rect.h) as f64 - pad;
+        let w = (x1 - x0).max(1.0);
+        let h = (y1 - y0).max(1.0);
+        // El rango siempre incluye el cero, para que el eje base tenga
+        // sentido y las columnas arranquen de ahí.
+        let lo = series.iter().map(|(v, _)| *v).fold(0.0_f64, f64::min);
+        let hi = series.iter().map(|(v, _)| *v).fold(0.0_f64, f64::max);
+        let range = (hi - lo).max(1e-9);
+        let y_of = |v: f64| y0 + (hi - v) / range * h;
+        let zero_y = y_of(0.0);
+
+        // Eje cero.
+        let mut axis_path = BezPath::new();
+        axis_path.move_to((x0, zero_y));
+        axis_path.line_to((x1, zero_y));
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, axis, None, &axis_path);
+
+        let n = series.len();
+        let slot = w / n as f64;
+        if line {
+            let mut path = BezPath::new();
+            for (i, (v, _)) in series.iter().enumerate() {
+                let cx = x0 + slot * (i as f64 + 0.5);
+                let pt = (cx, y_of(*v));
+                if i == 0 {
+                    path.move_to(pt);
+                } else {
+                    path.line_to(pt);
+                }
+            }
+            scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, accent, None, &path);
+            for (i, (v, color)) in series.iter().enumerate() {
+                let cx = x0 + slot * (i as f64 + 0.5);
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    *color,
+                    None,
+                    &KurboCircle::new((cx, y_of(*v)), 3.0),
+                );
+            }
+        } else {
+            let bw = (slot * 0.7).max(1.0);
+            for (i, (v, color)) in series.iter().enumerate() {
+                let cx = x0 + slot * (i as f64 + 0.5);
+                let yv = y_of(*v);
+                let (top, bot) = if yv <= zero_y { (yv, zero_y) } else { (zero_y, yv) };
+                let r = KurboRect::new(cx - bw / 2.0, top, cx + bw / 2.0, bot);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &r);
+            }
+        }
+    })
+}
+
 /// Fila de leyenda de un gráfico: cuadradito de color + etiqueta +
 /// valor (con porcentaje). Clickeable (drill-down) si `on_drill`.
 fn legend_row(
@@ -2787,6 +2867,23 @@ fn dashboard_card(
                         chart_color(i),
                         key.clone(),
                         format!("{disp} · {pct:.0}%"),
+                        drill_msg(i),
+                        theme,
+                    ));
+                }
+            } else if matches!(chart, ChartKind::Columns | ChartKind::Line) {
+                let line = matches!(chart, ChartKind::Line);
+                let series: Vec<(f64, Color)> = items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, m, _))| (*m, chart_color(i)))
+                    .collect();
+                children.push(plot_canvas(series, line, theme.border, theme.accent));
+                for (i, (key, _, disp)) in items.iter().enumerate() {
+                    children.push(legend_row(
+                        chart_color(i),
+                        key.clone(),
+                        disp.clone(),
                         drill_msg(i),
                         theme,
                     ));

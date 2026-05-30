@@ -277,6 +277,12 @@ pub enum ChartKind {
     Pie,
     /// Como `Pie` pero con el centro hueco (anillo).
     Donut,
+    /// Columnas verticales, una por grupo (en el orden del desglose).
+    /// Apto para series ordenadas (p.ej. ingresos por mes).
+    Columns,
+    /// Línea que une los valores de cada grupo, con un punto por grupo.
+    /// Pensado para tendencias sobre un eje ordenado.
+    Line,
 }
 
 /// El agregado que computa una [`DashboardCard`].
@@ -1048,6 +1054,18 @@ mod tests {
         .unwrap();
         assert_eq!(pie.chart, ChartKind::Pie);
         assert_eq!(ChartKind::default(), ChartKind::Bars);
+
+        // Columns y Line también parsean en snake_case.
+        for (raw, want) in [("columns", ChartKind::Columns), ("line", ChartKind::Line)] {
+            let c: DashboardCard = serde_json::from_value(serde_json::json!({
+                "label": "x",
+                "entity": "orders",
+                "metric": { "kind": "sum_by", "group": "mes", "value": "monto" },
+                "chart": raw
+            }))
+            .unwrap();
+            assert_eq!(c.chart, want);
+        }
     }
 
     #[test]

@@ -170,7 +170,8 @@
           "format": {
             "kind": "currency",
             "symbol": "$"
-          }
+          },
+          "chart": "columns"
         },
         {
           "label": "Clientes por plan",
