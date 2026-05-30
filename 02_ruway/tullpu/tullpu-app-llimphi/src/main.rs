@@ -238,6 +238,11 @@ enum Msg {
         rw: f32,
         rh: f32,
     },
+    /// Agrega una capa raster nueva del tamaño del lienzo llena con
+    /// `color_picked` (o gris medio si no hay color leído). Cierra el
+    /// loop pick→use: pickeás un color con el cuentagotas, después
+    /// "+ relleno" aparece como capa nueva encima de la seleccionada.
+    AgregarRelleno,
 }
 
 // =============================================================================
@@ -1124,9 +1129,24 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         Msg::CambiarHerramienta(Herramienta::Cuentagotas),
     )));
 
-    // "entrada": abrir el fuzzy picker para agregar una capa nueva
-    // desde un PNG/JPEG del workspace. No requiere selección — siempre activo.
+    // "entrada": agregar una capa nueva. Dos vías: relleno sólido del
+    // color del cuentagotas, o fuzzy picker de un archivo del workspace.
+    // Ninguna requiere selección — siempre activas.
     hijos.push(subtitulo("entrada"));
+    // Botón de relleno: muestra el color que va a usar. Si no hay color
+    // leído por el cuentagotas, dice "gris" (el RELLENO_DEFAULT).
+    let etiqueta_color = match model.color_picked {
+        Some(c) => format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]),
+        None => "gris".to_string(),
+    };
+    hijos.push(envolver_fila(button_view(
+        format!(
+            "+ relleno {} ({}×{})",
+            etiqueta_color, model.lienzo.width, model.lienzo.height,
+        ),
+        &pal,
+        Msg::AgregarRelleno,
+    )));
     hijos.push(envolver_fila(button_view(
         format!(
             "📂 capa desde archivo · {} candidatos · Ctrl+P",
@@ -1741,6 +1761,11 @@ impl App for Tullpu {
                 model.herramienta = h;
                 model.estado = format!("herramienta · {}", h.etiqueta());
             }
+            Msg::AgregarRelleno => {
+                if agregar_capa_relleno(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2117,6 +2142,51 @@ fn agregar_capa_desde_archivo(model: &mut Model, path: &Path) -> bool {
     };
     aplicar_y_recomponer(model);
     model.estado = format!("agregada capa '{}'{}", nombre, ajuste);
+    true
+}
+
+/// Color de fallback cuando el cuentagotas todavía no leyó nada — un
+/// gris medio opaco es el "neutro" que típicamente se usa como base.
+const RELLENO_DEFAULT: [u8; 4] = [128, 128, 128, 255];
+
+/// Construye un buffer Rgba8 de `w × h` lleno con `rgba`. Pura. Salvo
+/// errores de overflow (improbables en tamaños sanos), el `w * h * 4`
+/// nunca pasa de unos MB para los lienzos típicos de tullpu.
+fn buffer_relleno(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let mut v = Vec::with_capacity((w as usize) * (h as usize) * 4);
+    for _ in 0..(w as usize * h as usize) {
+        v.extend_from_slice(&rgba);
+    }
+    v
+}
+
+/// Apila una capa raster nueva del tamaño del lienzo llena con el
+/// color leído por el cuentagotas (o `RELLENO_DEFAULT` si todavía no
+/// hay color). Devuelve siempre `true` — no hay vía de error (el buffer
+/// se construye en RAM, sin I/O). Inserción justo encima de la
+/// seleccionada, mismo contrato que `agregar_capa_desde_archivo`.
+fn agregar_capa_relleno(model: &mut Model) -> bool {
+    let rgba = model.color_picked.unwrap_or(RELLENO_DEFAULT);
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let buffer = buffer_relleno(w, h, rgba);
+    let hash = model.almacen.insertar(buffer);
+    let nombre = format!(
+        "relleno #{:02X}{:02X}{:02X}",
+        rgba[0], rgba[1], rgba[2]
+    );
+    let nueva = Capa::raster(nombre.clone(), hash);
+    let nuevo_id = nueva.id;
+    match model
+        .seleccionada
+        .and_then(|id| model.lienzo.capas.iter().position(|c| c.id == id))
+    {
+        Some(idx) => model.lienzo.capas.insert(idx + 1, nueva),
+        None => model.lienzo.apilar(nueva),
+    }
+    model.seleccionada = Some(nuevo_id);
+    aplicar_y_recomponer(model);
+    model.estado = format!("agregada '{}'", nombre);
     true
 }
 
@@ -2928,6 +2998,137 @@ mod tests {
             &ev_char("i", Modifiers { alt: true, ..Default::default() })
         )
         .is_none());
+    }
+
+    // ---- Fase 26: capa de relleno sólido ------------------------------------
+
+    #[test]
+    fn buffer_relleno_tiene_tamano_y_patron_correctos() {
+        let buf = buffer_relleno(3, 2, [10, 20, 30, 40]);
+        // 3×2 píxeles × 4 bytes/px = 24 bytes.
+        assert_eq!(buf.len(), 24);
+        // Cada cuádruple es el RGBA pedido — sin gaps.
+        for cuadruple in buf.chunks_exact(4) {
+            assert_eq!(cuadruple, &[10, 20, 30, 40]);
+        }
+    }
+
+    #[test]
+    fn agregar_capa_relleno_default_cuando_no_hay_color_picked() {
+        // Sin color leído, debe usar RELLENO_DEFAULT (gris medio).
+        let mut model = modelo_minimo();
+        assert!(model.color_picked.is_none());
+        let n_antes = model.lienzo.capas.len();
+        agregar_capa_relleno(&mut model);
+        assert_eq!(model.lienzo.capas.len(), n_antes + 1);
+        let nueva = model.lienzo.capas.last().unwrap();
+        assert!(
+            nueva.nombre.starts_with("relleno #")
+                && nueva.nombre.contains("808080"),
+            "nombre {} debe llevar el hex del default",
+            nueva.nombre
+        );
+    }
+
+    #[test]
+    fn agregar_capa_relleno_usa_color_picked_si_existe() {
+        let mut model = modelo_minimo();
+        model.color_picked = Some([200, 100, 50, 255]);
+        agregar_capa_relleno(&mut model);
+        let nueva = model.lienzo.capas.last().unwrap();
+        assert!(
+            nueva.nombre.contains("C86432"),
+            "nombre {} debe llevar el hex del picked",
+            nueva.nombre
+        );
+    }
+
+    #[test]
+    fn agregar_capa_relleno_dos_veces_mismo_color_comparte_hash() {
+        // Content-addressing: dos rellenos del mismo color al mismo lienzo
+        // producen el mismo Hash y comparten el slot del almacén — no
+        // duplican RAM. Las capas tienen Uuid distinto pero contenido = ptr
+        // al mismo buffer.
+        let mut model = modelo_minimo();
+        model.color_picked = Some([42, 42, 42, 255]);
+        agregar_capa_relleno(&mut model);
+        let h1 = match model.lienzo.capas.last().unwrap().origen {
+            tullpu_core::OrigenCapa::Raster => model
+                .lienzo
+                .capas
+                .last()
+                .unwrap()
+                .contenido,
+            _ => panic!("esperaba raster"),
+        };
+        agregar_capa_relleno(&mut model);
+        let h2 = match model.lienzo.capas.last().unwrap().origen {
+            tullpu_core::OrigenCapa::Raster => model
+                .lienzo
+                .capas
+                .last()
+                .unwrap()
+                .contenido,
+            _ => panic!("esperaba raster"),
+        };
+        assert_eq!(h1, h2, "mismo color → mismo hash (dedup)");
+        // Pero los Uuid son distintos: son capas independientes.
+        let n = model.lienzo.capas.len();
+        assert_ne!(
+            model.lienzo.capas[n - 1].id,
+            model.lienzo.capas[n - 2].id
+        );
+    }
+
+    #[test]
+    fn agregar_capa_relleno_se_inserta_encima_de_la_seleccionada() {
+        // Si hay selección, la capa nueva queda en idx_sel + 1.
+        let mut model = modelo_minimo();
+        let sel = model.seleccionada.unwrap();
+        let idx_sel = model
+            .lienzo
+            .capas
+            .iter()
+            .position(|c| c.id == sel)
+            .unwrap();
+        // Agrego una capa B "vieja" para tener una vecina arriba de sel.
+        let hash_b = model.almacen.insertar(vec![9u8; 4 * 4 * 4]);
+        let cap_b = Capa::raster("vieja", hash_b);
+        model.lienzo.apilar(cap_b);
+        // Ahora reapunto la selección a sel y agrego el relleno: debe
+        // quedar entre sel y "vieja", no al tope.
+        model.seleccionada = Some(sel);
+        agregar_capa_relleno(&mut model);
+        let nueva_idx = model
+            .lienzo
+            .capas
+            .iter()
+            .position(|c| c.nombre.starts_with("relleno"))
+            .unwrap();
+        assert_eq!(nueva_idx, idx_sel + 1, "encima de la seleccionada");
+        // Y "vieja" pasó a estar arriba del relleno (idx mayor).
+        let vieja_idx = model
+            .lienzo
+            .capas
+            .iter()
+            .position(|c| c.nombre == "vieja")
+            .unwrap();
+        assert!(vieja_idx > nueva_idx);
+    }
+
+    #[test]
+    fn msg_agregar_relleno_dispatcha_y_snapshotea() {
+        // El flujo entero por el update: el historial crece, el lienzo
+        // tiene una capa más, y un Undo lo deshace.
+        let mut model = modelo_minimo();
+        let n_antes = model.lienzo.capas.len();
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(model, Msg::AgregarRelleno, &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), n_antes + 1);
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        // Undo lo revierte.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), n_antes);
     }
 
     #[test]
