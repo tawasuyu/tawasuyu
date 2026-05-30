@@ -48,6 +48,8 @@
 //! - `Ctrl+A`         — seleccionar todo el lienzo
 //! - `g`              — herramienta balde (flood fill); click rellena la
 //!   región contigua con el color activo (acotado a la selección)
+//! - `p`              — herramienta pincel; drag pinta un trazo a mano
+//!   alzada con el color activo (acotado a la selección)
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
 //!
@@ -644,6 +646,79 @@ impl App for Tullpu {
                 } else {
                     model.estado = "balde · fuera de la imagen".into();
                 }
+            }
+            Msg::IniciarTrazo { lx, ly, rw, rh } => {
+                if let Some((ix, iy)) = local_a_imagen(
+                    lx,
+                    ly,
+                    rw,
+                    rh,
+                    model.lienzo.width,
+                    model.lienzo.height,
+                    model.factor_zoom,
+                    model.pan_x,
+                    model.pan_y,
+                ) {
+                    let cx = ix.floor() as i32;
+                    let cy = iy.floor() as i32;
+                    model.pincel_drag = Some(PincelDrag {
+                        cur_lx: lx,
+                        cur_ly: ly,
+                        rw,
+                        rh,
+                        last_ix: cx,
+                        last_iy: cy,
+                    });
+                    if pincel_punto_en_capa(&mut model, cx, cy, RADIO_PINCEL) {
+                        let etiqueta = model.seleccionada.map(|i| (i, "pincel"));
+                        pushear_snapshot(&mut model, etiqueta);
+                    }
+                }
+            }
+            Msg::ContinuarTrazo { dx, dy } => {
+                if let Some(pd) = model.pincel_drag.as_mut() {
+                    pd.cur_lx += dx;
+                    pd.cur_ly += dy;
+                    let pd = *pd;
+                    if let Some((ix, iy)) = local_a_imagen(
+                        pd.cur_lx,
+                        pd.cur_ly,
+                        pd.rw,
+                        pd.rh,
+                        model.lienzo.width,
+                        model.lienzo.height,
+                        model.factor_zoom,
+                        model.pan_x,
+                        model.pan_y,
+                    ) {
+                        let nx = ix.floor() as i32;
+                        let ny = iy.floor() as i32;
+                        if pincel_segmento_en_capa(
+                            &mut model,
+                            pd.last_ix,
+                            pd.last_iy,
+                            nx,
+                            ny,
+                            RADIO_PINCEL,
+                        ) {
+                            let etiqueta =
+                                model.seleccionada.map(|i| (i, "pincel"));
+                            pushear_snapshot(&mut model, etiqueta);
+                        }
+                        // Avanzar el último punto aunque el segmento no
+                        // cambiara (p.ej. pintar sobre el mismo color):
+                        // el trazo sigue desde donde está el cursor.
+                        if let Some(p) = model.pincel_drag.as_mut() {
+                            p.last_ix = nx;
+                            p.last_iy = ny;
+                        }
+                    }
+                }
+            }
+            Msg::FinalizarTrazo => {
+                model.pincel_drag = None;
+                // Cortar el coalesce: el próximo trazo es un Undo aparte.
+                model.ultima_etiqueta_snapshot = None;
             }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app

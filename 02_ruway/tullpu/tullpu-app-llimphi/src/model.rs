@@ -94,6 +94,9 @@ pub(crate) struct Model {
     /// mutuamente a `seleccion_drag` (un press entra a uno u otro según
     /// caiga dentro o fuera de la selección vigente).
     pub(crate) mover_drag: Option<MoverDrag>,
+    /// Estado del trazo del pincel mientras se sostiene el click. `None`
+    /// fuera de un trazo.
+    pub(crate) pincel_drag: Option<PincelDrag>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -115,6 +118,9 @@ pub(crate) enum Herramienta {
     /// clickeado con el color activo, sobre la capa raster seleccionada.
     /// Si hay selección, el relleno queda acotado al rect.
     Balde,
+    /// Drag sobre el lienzo pinta un trazo a mano alzada con el color
+    /// activo sobre la capa raster seleccionada (acotado a la selección).
+    Pincel,
 }
 
 impl Herramienta {
@@ -124,6 +130,7 @@ impl Herramienta {
             Herramienta::Cuentagotas => "cuentagotas",
             Herramienta::Marco => "marco",
             Herramienta::Balde => "balde",
+            Herramienta::Pincel => "pincel",
         }
     }
 }
@@ -192,6 +199,25 @@ pub(crate) struct MoverDrag {
     pub(crate) aplicado_ix: i32,
     pub(crate) aplicado_iy: i32,
 }
+
+/// Estado intermedio mientras el usuario pinta un trazo a mano alzada
+/// con el pincel. `cur_l*` es la posición local actual (acumulando los
+/// `dx, dy` de cada Move); `last_i*` el último punto YA pintado en
+/// coords-imagen, para interpolar el segmento hasta el punto nuevo y no
+/// dejar huecos cuando el cursor se mueve rápido. `rw, rh` se capturan
+/// al inicio para que un resize mid-trazo no descoloque la conversión.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PincelDrag {
+    pub(crate) cur_lx: f32,
+    pub(crate) cur_ly: f32,
+    pub(crate) rw: f32,
+    pub(crate) rh: f32,
+    pub(crate) last_ix: i32,
+    pub(crate) last_iy: i32,
+}
+
+/// Radio del pincel en px-imagen (disco lleno; diámetro ≈ `2·r+1`).
+pub(crate) const RADIO_PINCEL: i32 = 3;
 
 /// Multiplicador por tick de wheel. 1.1 ≈ +10%, un escalón cómodo. El
 /// factor entra como `factor_zoom *= base.powf(-delta.y)` (delta.y > 0 es
@@ -370,6 +396,15 @@ pub(crate) enum Msg {
     /// `rw, rh` son las dims del panel del lienzo (para la conversión
     /// local→imagen). Acotado a `model.seleccion` si la hay.
     RellenarFlood { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Press con la herramienta Pincel: arranca un trazo estampando un
+    /// disco en el píxel local `(lx, ly)`.
+    IniciarTrazo { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Move del trazo: acumula `(dx, dy)` y pinta el segmento desde el
+    /// último punto hasta el nuevo.
+    ContinuarTrazo { dx: f32, dy: f32 },
+    /// End del trazo: cierra el `pincel_drag` y corta el coalesce para
+    /// que el próximo trazo sea un Undo independiente.
+    FinalizarTrazo,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

@@ -632,6 +632,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Balde),
     )));
+    let etiqueta_pincel = if model.herramienta == Herramienta::Pincel {
+        "● pincel (p)"
+    } else {
+        "○ pincel (p)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_pincel.to_string(),
+        if model.herramienta == Herramienta::Pincel {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Pincel),
+    )));
     // Gestión de la selección: seleccionar todo + expandir/contraer el
     // rect. La etiqueta de "todo" muestra las dims del lienzo.
     hijos.push(envolver_fila(button_view(
@@ -1127,6 +1141,14 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                 Herramienta::Balde => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
                     Some(Msg::RellenarFlood { lx, ly, rw, rh })
                 }),
+                Herramienta::Pincel => cuerpo_paint
+                    .on_click_at(|lx, ly, rw, rh| {
+                        Some(Msg::IniciarTrazo { lx, ly, rw, rh })
+                    })
+                    .draggable_at(|fase, dx, dy, _lx0, _ly0| match fase {
+                        DragPhase::Move => Some(Msg::ContinuarTrazo { dx, dy }),
+                        DragPhase::End => Some(Msg::FinalizarTrazo),
+                    }),
             }
         }
         None => View::new(Style {

@@ -880,6 +880,139 @@ pub(crate) fn rellenar_flood_en_capa(
     true
 }
 
+/// Estampa un disco lleno de radio `radio` (en px) centrado en `(cx, cy)`
+/// con `color` (reemplazo directo, no alpha) sobre un buffer Rgba8
+/// `w × h`. Recorta al canvas y, si `bounds` es `Some`, al rect half-open
+/// (los píxeles fuera no se tocan). Pinta donde `dx² + dy² ≤ radio²`.
+/// Pura (muta `buf` in situ). `cx, cy` pueden caer fuera: sólo entra lo
+/// que intersecta.
+pub(crate) fn estampar_disco(
+    buf: &mut [u8],
+    w: u32,
+    h: u32,
+    cx: i32,
+    cy: i32,
+    radio: i32,
+    color: [u8; 4],
+    bounds: Option<(u32, u32, u32, u32)>,
+) {
+    let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
+    let bx1 = bx1.min(w) as i32;
+    let by1 = by1.min(h) as i32;
+    let bx0 = bx0 as i32;
+    let by0 = by0 as i32;
+    let r2 = radio * radio;
+    for dy in -radio..=radio {
+        let y = cy + dy;
+        if y < by0 || y >= by1 {
+            continue;
+        }
+        for dx in -radio..=radio {
+            let x = cx + dx;
+            if x < bx0 || x >= bx1 {
+                continue;
+            }
+            if dx * dx + dy * dy <= r2 {
+                let i = ((y as usize) * w as usize + x as usize) * 4;
+                buf[i..i + 4].copy_from_slice(&color);
+            }
+        }
+    }
+}
+
+/// Estampa discos a lo largo del segmento `(x0, y0) → (x1, y1)`, uno por
+/// cada paso entero del eje más largo, de modo que el trazo quede
+/// continuo (sin huecos para `radio ≥ 1`). Pura (muta `buf`).
+pub(crate) fn trazar_linea_pincel(
+    buf: &mut [u8],
+    w: u32,
+    h: u32,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    radio: i32,
+    color: [u8; 4],
+    bounds: Option<(u32, u32, u32, u32)>,
+) {
+    let n = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+    for k in 0..=n {
+        let t = k as f32 / n as f32;
+        let x = x0 + ((x1 - x0) as f32 * t).round() as i32;
+        let y = y0 + ((y1 - y0) as f32 * t).round() as i32;
+        estampar_disco(buf, w, h, x, y, radio, color, bounds);
+    }
+}
+
+/// Cableado común de las ops del pincel: valida capa raster seleccionada,
+/// resuelve color activo + bounds de selección, clona el buffer, aplica
+/// `dibujar`, y si cambió el hash repunta la capa + propaga stale +
+/// recompone. Devuelve `true` si hubo cambio efectivo.
+fn pincel_aplicar(
+    model: &mut Model,
+    dibujar: impl FnOnce(&mut Vec<u8>, u32, u32, [u8; 4], Option<(u32, u32, u32, u32)>),
+) -> bool {
+    let Some(id) = model.seleccionada else {
+        return false;
+    };
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    if !matches!(capa.origen, OrigenCapa::Raster) {
+        model.estado =
+            "la capa seleccionada es derivada — usá la raster madre".into();
+        return false;
+    }
+    let hash_actual = capa.contenido;
+    let color = model.color_picked.unwrap_or(RELLENO_DEFAULT);
+    let bounds = model.seleccion.map(|r| (r.x0, r.y0, r.x1, r.y1));
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let Some(src) = model.almacen.obtener(hash_actual) else {
+        return false;
+    };
+    let mut buf = src.to_vec();
+    dibujar(&mut buf, w, h, color, bounds);
+    let new_hash = model.almacen.insertar(buf);
+    if new_hash == hash_actual {
+        return false;
+    }
+    if let Some(capa_mut) = model.lienzo.capa_mut(id) {
+        capa_mut.contenido = new_hash;
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+    true
+}
+
+/// Estampa un disco del pincel en `(cx, cy)` sobre la capa raster
+/// seleccionada (inicio de trazo). Ver [`pincel_aplicar`].
+pub(crate) fn pincel_punto_en_capa(
+    model: &mut Model,
+    cx: i32,
+    cy: i32,
+    radio: i32,
+) -> bool {
+    pincel_aplicar(model, |buf, w, h, color, bounds| {
+        estampar_disco(buf, w, h, cx, cy, radio, color, bounds)
+    })
+}
+
+/// Pinta el segmento `(x0,y0) → (x1,y1)` del pincel sobre la capa raster
+/// seleccionada (continuación de trazo). Ver [`pincel_aplicar`].
+pub(crate) fn pincel_segmento_en_capa(
+    model: &mut Model,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    radio: i32,
+) -> bool {
+    pincel_aplicar(model, |buf, w, h, color, bounds| {
+        trazar_linea_pincel(buf, w, h, x0, y0, x1, y1, radio, color, bounds)
+    })
+}
+
 /// Compone (alpha src-over, Rgba8 NO premultiplicado) un `clip` de
 /// `clip_w × clip_h` sobre `dst` (`dst_w × dst_h`) con la esquina
 /// superior izquierda en el offset CON SIGNO `(dx, dy)`. Los píxeles del

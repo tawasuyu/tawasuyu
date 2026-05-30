@@ -65,6 +65,7 @@
             seleccion: None,
             seleccion_drag: None,
             mover_drag: None,
+            pincel_drag: None,
             portapapeles: None,
         }
     }
@@ -3971,5 +3972,157 @@
         assert!(matches!(
             hotkey_a_msg(&m, &ev_char("g", Modifiers::default())),
             Some(Msg::CambiarHerramienta(Herramienta::Balde))
+        ));
+    }
+
+    // ---- Fase 45: pincel a mano alzada ----------------------------------
+
+    #[test]
+    fn estampar_disco_pinta_circulo_y_respeta_radio() {
+        // Lienzo 5×5 transparente; disco radio 1 en el centro (2,2) →
+        // cruz de 5 píxeles (centro + 4 ortogonales), esquinas no.
+        let mut buf = vec![0u8; 5 * 5 * 4];
+        let c = [255, 0, 0, 255];
+        estampar_disco(&mut buf, 5, 5, 2, 2, 1, c, None);
+        let pix = |x: usize, y: usize| {
+            let i = (y * 5 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        assert_eq!(pix(2, 2), c); // centro
+        assert_eq!(pix(1, 2), c); // izquierda
+        assert_eq!(pix(3, 2), c); // derecha
+        assert_eq!(pix(2, 1), c); // arriba
+        assert_eq!(pix(2, 3), c); // abajo
+        // Esquina del bounding box (dx=1,dy=1 → 2 > r²=1) NO pintada.
+        assert_eq!(pix(1, 1), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn estampar_disco_recorta_al_canvas_y_a_bounds() {
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        let c = [9, 9, 9, 255];
+        // Centro en la esquina (0,0), radio 2 → sólo entra el cuadrante
+        // dentro del canvas.
+        estampar_disco(&mut buf, 4, 4, 0, 0, 2, c, None);
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        assert_eq!(pix(0, 0), c);
+        assert_eq!(pix(1, 0), c);
+        assert_eq!(pix(0, 1), c);
+        // Con bounds (0,0,1,1) sólo el píxel (0,0) puede pintarse.
+        let mut buf2 = vec![0u8; 4 * 4 * 4];
+        estampar_disco(&mut buf2, 4, 4, 0, 0, 2, c, Some((0, 0, 1, 1)));
+        let pix2 = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [buf2[i], buf2[i + 1], buf2[i + 2], buf2[i + 3]]
+        };
+        assert_eq!(pix2(0, 0), c);
+        assert_eq!(pix2(1, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn trazar_linea_pincel_es_continua_sin_huecos() {
+        // Línea horizontal de (0,2) a (7,2) con radio 0 (un píxel por
+        // paso) sobre lienzo 8×5 → toda la fila 2 pintada.
+        let mut buf = vec![0u8; 8 * 5 * 4];
+        let c = [1, 2, 3, 255];
+        trazar_linea_pincel(&mut buf, 8, 5, 0, 2, 7, 2, 0, c, None);
+        for x in 0..8usize {
+            let i = (2 * 8 + x) * 4;
+            assert_eq!(&buf[i..i + 4], &c, "hueco en x={}", x);
+        }
+        // Fila vecina intacta.
+        let i = (1 * 8 + 3) * 4;
+        assert_eq!(&buf[i..i + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn pincel_punto_en_capa_pinta_raster_y_rechaza_derivada() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        model.color_picked = Some([255, 0, 0, 255]);
+        aplicar_y_recomponer(&mut model);
+        // Disco radio 0 en (1,1).
+        let ok = pincel_punto_en_capa(&mut model, 1, 1, 0);
+        assert!(ok);
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let i = (1 * 4 + 1) * 4;
+        assert_eq!(&bp[i..i + 4], &[255, 0, 0, 255]);
+
+        // Derivada: rechazo.
+        let capa = model.lienzo.capa_mut(id).unwrap();
+        capa.origen = OrigenCapa::Derivada {
+            madre: Uuid::new_v4(),
+            op: TransformacionPixel::Local(OpLocal::Invertir),
+            estado: Frescura::Fresca,
+        };
+        assert!(!pincel_punto_en_capa(&mut model, 2, 2, 0));
+        assert!(model.estado.contains("derivada"));
+    }
+
+    #[test]
+    fn trazo_completo_coalesce_a_un_undo_y_finalizar_corta_la_cadena() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 8 * 8 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let mut lienzo = Lienzo::nuevo(8, 8);
+        lienzo.apilar(cap);
+        model.lienzo = lienzo;
+        model.seleccionada = Some(id);
+        model.color_picked = Some([0, 0, 0, 255]);
+        aplicar_y_recomponer(&mut model);
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        // Trazo: press en (1,1) + 3 moves → debe coalescer a 1 entrada.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarTrazo { lx: 1.0, ly: 1.0, rw: 8.0, rh: 8.0 },
+            &Handle::for_test(),
+        );
+        for k in 1..=3 {
+            let _ = k;
+            model = <Tullpu as App>::update(
+                model,
+                Msg::ContinuarTrazo { dx: 1.0, dy: 0.0 },
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(model.historial.len(), 2); // inicial + 1 trazo coalescido
+        model = <Tullpu as App>::update(
+            model,
+            Msg::FinalizarTrazo,
+            &Handle::for_test(),
+        );
+        assert!(model.pincel_drag.is_none());
+        assert!(model.ultima_etiqueta_snapshot.is_none());
+        // Un segundo trazo arranca entrada NUEVA (la cadena se cortó).
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarTrazo { lx: 5.0, ly: 5.0, rw: 8.0, rh: 8.0 },
+            &Handle::for_test(),
+        );
+        assert_eq!(model.historial.len(), 3);
+        // Un Undo deshace sólo el segundo trazo.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.cursor_historial, 1);
+    }
+
+    #[test]
+    fn hotkey_p_emite_cambiar_a_pincel() {
+        let m = modelo_minimo();
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("p", Modifiers::default())),
+            Some(Msg::CambiarHerramienta(Herramienta::Pincel))
         ));
     }
