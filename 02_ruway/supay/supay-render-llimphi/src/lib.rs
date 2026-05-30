@@ -492,6 +492,17 @@ pub struct RenderConfig {
     /// densidad de muestreo). Default `false` ⇒ comportamiento 3.42
     /// bit-equivalente. Sólo afecta al path texturizado.
     pub wall_vertical_gradient: bool,
+    /// **Fase 3.44 — gradiente de profundidad para pisos/techos**. Si
+    /// `true`, el shading/tinte del plano texturizado se pinta con un
+    /// `Gradient` lineal de Vello a lo largo del eje near→far (vértice
+    /// más cercano al jugador → vértice más lejano) en lugar de un
+    /// overlay uniforme computado al centroide. El boost y el fog se
+    /// muestrean en ambos extremos: la parte del piso cercana al jugador
+    /// queda más clara (menos fog + más pool de luz del muzzle/proyectil)
+    /// y la lejana más oscura. Reusa los mismos helpers que el gradiente
+    /// vertical de walls (3.43). Default `false` ⇒ overlay uniforme 3.33
+    /// bit-equivalente. Sólo afecta al path texturizado de planos.
+    pub plane_depth_gradient: bool,
 }
 
 impl Default for RenderConfig {
@@ -521,6 +532,7 @@ impl Default for RenderConfig {
             muzzle_brdf: false,
             wall_vertical_bands: 1,
             wall_vertical_gradient: false,
+            plane_depth_gradient: false,
         }
     }
 }
@@ -1823,6 +1835,30 @@ fn wall_tint_gradient_stops(samples: &[(f32, BoostRgb)]) -> Option<Vec<(f32, Col
     }
 }
 
+/// **Fase 3.44** — devuelve `(idx_near, idx_far)`: los índices del
+/// vértice más cercano y más lejano al observador (origen cam-space) por
+/// distancia euclidiana². Eje del gradiente de profundidad de planos.
+/// `None` si hay menos de 2 vértices.
+fn plane_near_far_indices(clipped: &[(f32, f32)]) -> Option<(usize, usize)> {
+    if clipped.len() < 2 {
+        return None;
+    }
+    let (mut i_near, mut i_far) = (0usize, 0usize);
+    let (mut d_near, mut d_far) = (f32::INFINITY, f32::NEG_INFINITY);
+    for (i, &(x, y)) in clipped.iter().enumerate() {
+        let d = x * x + y * y;
+        if d < d_near {
+            d_near = d;
+            i_near = i;
+        }
+        if d > d_far {
+            d_far = d;
+            i_far = i;
+        }
+    }
+    Some((i_near, i_far))
+}
+
 // =====================================================================
 // API pública
 // =====================================================================
@@ -3093,6 +3129,68 @@ fn gather_subsector_planes(
                         }
                     }
                     if any_drawn {
+                        let base_factor = if is_floor { 0.92 } else { 0.85 };
+                        // Fase 3.44: gradiente de profundidad near→far.
+                        // En lugar de un overlay uniforme al centroide,
+                        // muestreamos fog + boost en el vértice más
+                        // cercano y el más lejano al jugador, y dejamos
+                        // que Vello interpole. La parte del piso a tus
+                        // pies queda más clara (menos fog + pool de luz);
+                        // la lejana, más oscura. Reusa los helpers del
+                        // gradiente vertical de walls (3.43).
+                        if cfg.plane_depth_gradient {
+                            if let Some((i_near, i_far)) = plane_near_far_indices(&clipped) {
+                                use llimphi_ui::llimphi_raster::peniko::Gradient;
+                                let start = screen_pts[i_near];
+                                let end = screen_pts[i_far];
+                                let mut dark = Vec::with_capacity(2);
+                                let mut tint = Vec::with_capacity(2);
+                                for (off, idx) in [(0.0_f32, i_near), (1.0_f32, i_far)] {
+                                    let (vx, vy) = clipped[idx];
+                                    let vdepth = (vx * vx + vy * vy).sqrt();
+                                    let vb = combined_boost_rgb_plane_cam(
+                                        vx,
+                                        vy,
+                                        z_surf_cam,
+                                        cfg.muzzle_glow_alpha,
+                                        sub.sector,
+                                        lit_sectors,
+                                        world_lights,
+                                        n_z,
+                                        cfg.plane_rim_directional,
+                                        cfg.muzzle_brdf,
+                                    );
+                                    let vshade =
+                                        shade_for(sec.light_level, vdepth, cfg) * base_factor;
+                                    // Pasamos el lit-shade completo como
+                                    // "boost_scalar" con base 0 ⇒ el
+                                    // helper computa alpha = (1 - lit)·255.
+                                    let lit = (vshade + boost_max(vb)).clamp(0.0, 1.0);
+                                    dark.push((off, lit));
+                                    tint.push((off, vb));
+                                }
+                                let dstops = wall_darkness_gradient_stops(0.0, &dark);
+                                let dgrad = Gradient::new_linear(start, end)
+                                    .with_stops(dstops.as_slice());
+                                out.push(Renderable {
+                                    depth: depth + 0.999,
+                                    color: Color::WHITE,
+                                    path: path.clone(),
+                                    kind: RenderKind::GradientFill { gradient: dgrad },
+                                });
+                                if let Some(tstops) = wall_tint_gradient_stops(&tint) {
+                                    let tgrad = Gradient::new_linear(start, end)
+                                        .with_stops(tstops.as_slice());
+                                    out.push(Renderable {
+                                        depth: depth + 0.998,
+                                        color: Color::WHITE,
+                                        path,
+                                        kind: RenderKind::GradientFill { gradient: tgrad },
+                                    });
+                                }
+                                return;
+                            }
+                        }
                         // Shade overlay sobre el polígono entero
                         // (shade es constante por plano — no necesita
                         // ser per-triangle). Mismo truco que walls.
@@ -3104,7 +3202,7 @@ fn gather_subsector_planes(
                         // (reduce el overlay oscuro) + emite un overlay
                         // amarillo aditivo sobre la textura.
                         let base_shade = shade_for(sec.light_level, shade_depth, cfg)
-                            * if is_floor { 0.92 } else { 0.85 };
+                            * base_factor;
                         let lit_shade = (base_shade + boost_scalar).clamp(0.0, 1.0);
                         if lit_shade < 0.95 {
                             let alpha = ((1.0 - lit_shade) * 255.0).clamp(0.0, 255.0) as u8;
@@ -6991,6 +7089,49 @@ mod tests {
         // single overlay) queda intacto.
         let cfg = RenderConfig::default();
         assert!(!cfg.wall_vertical_gradient);
+    }
+
+    // =================================================================
+    // Fase 3.44 — Gradiente de profundidad para pisos/techos
+    // =================================================================
+
+    #[test]
+    fn plane_near_far_picks_closest_and_farthest() {
+        // Polígono con vértices a distintas distancias del origen
+        // cam-space. near = el de menor d², far = el de mayor.
+        let poly = [(10.0_f32, 0.0), (100.0, 0.0), (50.0, 50.0), (5.0, 2.0)];
+        let (i_near, i_far) = plane_near_far_indices(&poly).expect("4 vértices");
+        assert_eq!(i_near, 3, "(5,2) es el más cercano");
+        assert_eq!(i_far, 1, "(100,0) es el más lejano");
+    }
+
+    #[test]
+    fn plane_near_far_none_with_under_two_verts() {
+        assert!(plane_near_far_indices(&[]).is_none());
+        assert!(plane_near_far_indices(&[(1.0, 1.0)]).is_none());
+    }
+
+    #[test]
+    fn plane_depth_gradient_near_brighter_than_far() {
+        // Reusa wall_darkness_gradient_stops con base_shade=0 y el
+        // lit-shade completo por sample. Cerca (offset 0) más iluminado
+        // ⇒ menos opaco que lejos (offset 1).
+        let near_lit = 0.85_f32; // poco fog, cerca del jugador
+        let far_lit = 0.30_f32; // mucho fog, lejos
+        let stops = wall_darkness_gradient_stops(0.0, &[(0.0, near_lit), (1.0, far_lit)]);
+        let a_near = stops[0].1.to_rgba8().to_u8_array()[3];
+        let a_far = stops[1].1.to_rgba8().to_u8_array()[3];
+        assert!(
+            a_near < a_far,
+            "near menos oscuro que far: a_near={} a_far={}",
+            a_near, a_far
+        );
+    }
+
+    #[test]
+    fn plane_depth_gradient_default_off() {
+        let cfg = RenderConfig::default();
+        assert!(!cfg.plane_depth_gradient);
     }
 
     // =================================================================

@@ -475,6 +475,12 @@ impl App for Supay {
                     // activamos en el host porque es estrictamente mejor.
                     wall_vertical_bands: 4,
                     wall_vertical_gradient: true,
+                    // Fase 3.44: gradiente de profundidad para pisos/techos
+                    // — la parte cercana al jugador queda más clara (menos
+                    // fog + pool de luz del muzzle/proyectil), la lejana
+                    // más oscura. Mismo criterio que walls: default de
+                    // librería off (bit-exact), on en el host.
+                    plane_depth_gradient: true,
                     ..RenderConfig::default()
                 },
             )),
@@ -534,7 +540,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.43 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.44 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,
