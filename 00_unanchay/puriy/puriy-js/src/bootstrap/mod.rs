@@ -52,6 +52,9 @@ mod storage_event;
 mod permissions;
 mod notification;
 mod geolocation;
+mod clipboard;
+mod share;
+mod matchmedia;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -104,6 +107,9 @@ pub(crate) use storage_event::STORAGE_EVENT_BOOTSTRAP;
 pub(crate) use permissions::PERMISSIONS_BOOTSTRAP;
 pub(crate) use notification::NOTIFICATION_BOOTSTRAP;
 pub(crate) use geolocation::GEOLOCATION_BOOTSTRAP;
+pub(crate) use clipboard::CLIPBOARD_BOOTSTRAP;
+pub(crate) use share::SHARE_BOOTSTRAP;
+pub(crate) use matchmedia::MATCHMEDIA_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -158,5 +164,8 @@ pub(crate) const ALL: &[&str] = &[
     PERMISSIONS_BOOTSTRAP,
     NOTIFICATION_BOOTSTRAP,
     GEOLOCATION_BOOTSTRAP,
+    CLIPBOARD_BOOTSTRAP,
+    SHARE_BOOTSTRAP,
+    MATCHMEDIA_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

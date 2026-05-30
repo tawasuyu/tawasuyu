@@ -8370,4 +8370,143 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("code").expect("e"), JsValue::String("1:true".into()));
     }
+
+    // ---- Fase 7.96 — Clipboard API ----
+
+    #[test]
+    fn clipboard_write_text_y_read_text_round_trip() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var done = false; navigator.clipboard.writeText('hola').then(function() { done = true; });")
+            .expect("e");
+        assert_eq!(rt.eval("done").expect("e"), JsValue::Bool(true));
+        rt.eval("var got = null; navigator.clipboard.readText().then(function(t) { got = t; });")
+            .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("hola".into()));
+        // writeText publica una mutación clipboard al chrome.
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'clipboard' && d.value === 'writeText:hola'; })")
+                .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn clipboard_set_clipboard_sincroniza_desde_el_chrome() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_clipboard('copiado afuera');").expect("e");
+        rt.eval("var got = null; navigator.clipboard.readText().then(function(t) { got = t; });")
+            .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("copiado afuera".into()));
+    }
+
+    #[test]
+    fn clipboard_item_write_y_read_con_blob() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var item = new ClipboardItem({ 'text/plain': new Blob(['desde item'], { type: 'text/plain' }) }); \
+             navigator.clipboard.write([item]);",
+        )
+        .expect("e");
+        rt.eval(
+            "var leido = null; \
+             navigator.clipboard.read() \
+                 .then(function(items) { return items[0].getType('text/plain'); }) \
+                 .then(function(b) { return b.text(); }) \
+                 .then(function(t) { leido = t; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("leido").expect("e"), JsValue::String("desde item".into()));
+        assert_eq!(
+            rt.eval("new ClipboardItem({ 'text/plain': 'x' }).types[0]").expect("e"),
+            JsValue::String("text/plain".into())
+        );
+    }
+
+    // ---- Fase 7.97 — Web Share API ----
+
+    #[test]
+    fn share_can_share_evalua_los_datos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("navigator.canShare({ url: 'https://x' })").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.canShare({ text: 'hola' })").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.canShare({})").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("navigator.canShare()").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn share_publica_mutacion_y_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ok = false; \
+             navigator.share({ title: 'T', url: 'https://x' }).then(function() { ok = true; });",
+        )
+        .expect("e");
+        // share publica al chrome y queda pendiente (no resuelve sola).
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(false));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'share'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+        // El chrome resuelve la hoja de share.
+        rt.eval("__puriy_share_resolve(1);").expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn share_reject_rechaza_con_dom_exception() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.share({ text: 'hola' }).catch(function(e) { errName = e.name; }); \
+             __puriy_share_reject(1, 'AbortError', 'cancelado');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("AbortError".into()));
+    }
+
+    // ---- Fase 7.98 — matchMedia / MediaQueryList ----
+
+    #[test]
+    fn match_media_devuelve_mql_con_matches_default_false() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var mql = matchMedia('(prefers-color-scheme: dark)');").expect("e");
+        assert_eq!(
+            rt.eval("mql.media").expect("e"),
+            JsValue::String("(prefers-color-scheme: dark)".into())
+        );
+        assert_eq!(rt.eval("mql.matches").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("mql instanceof EventTarget").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_media_match_flippea_y_dispara_change() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var cambios = []; \
+             var mql = matchMedia('(max-width: 600px)'); \
+             mql.onchange = function(e) { cambios.push(e.matches); }; \
+             mql.addEventListener('change', function(e) { cambios.push('lst:' + e.matches); }); \
+             __puriy_set_media_match('(max-width: 600px)', true);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("mql.matches").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("cambios.join(',')").expect("e"), JsValue::String("true,lst:true".into()));
+    }
+
+    #[test]
+    fn match_media_add_listener_legacy_recibe_change() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var mql = matchMedia('print'); \
+             var fn = function() { n++; }; \
+             mql.addListener(fn); \
+             __puriy_set_media_match('print', true); \
+             mql.removeListener(fn); \
+             __puriy_set_media_match('print', false);",
+        )
+        .expect("e");
+        // El listener corrió una sola vez (se quitó antes del segundo cambio).
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+    }
 }
