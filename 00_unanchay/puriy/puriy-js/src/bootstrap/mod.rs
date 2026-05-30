@@ -5,6 +5,7 @@
 mod console;
 mod timers;
 mod microtask;
+mod performance;
 mod dom_events;
 mod event_class;
 mod domexception;
@@ -38,6 +39,7 @@ mod computed_style;
 pub(crate) use console::CONSOLE_BOOTSTRAP;
 pub(crate) use timers::TIMERS_BOOTSTRAP;
 pub(crate) use microtask::MICROTASK_BOOTSTRAP;
+pub(crate) use performance::PERFORMANCE_BOOTSTRAP;
 pub(crate) use dom_events::DOM_EVENTS_BOOTSTRAP;
 pub(crate) use event_class::EVENT_CLASS_BOOTSTRAP;
 pub(crate) use domexception::DOMEXCEPTION_BOOTSTRAP;
@@ -73,6 +75,7 @@ pub(crate) const ALL: &[&str] = &[
     CONSOLE_BOOTSTRAP,
     TIMERS_BOOTSTRAP,
     MICROTASK_BOOTSTRAP,
+    PERFORMANCE_BOOTSTRAP,
     DOM_EVENTS_BOOTSTRAP,
     EVENT_CLASS_BOOTSTRAP,
     DOMEXCEPTION_BOOTSTRAP,

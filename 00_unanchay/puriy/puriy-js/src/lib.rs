@@ -7237,4 +7237,26 @@ mod tests {
         // clone() preserva el flag.
         assert_eq!(rt.eval("dc").expect("e"), JsValue::Bool(true));
     }
+
+    // ===== Fase 7.74 — performance.now() / timeOrigin =====
+
+    #[test]
+    fn performance_now_y_time_origin() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(123).expect("now");
+        rt.eval("var t = performance.now(); var o = performance.timeOrigin; var esNum = typeof t === 'number';")
+            .expect("e");
+        assert_eq!(rt.eval("t").expect("e"), JsValue::Number(123.0));
+        assert_eq!(rt.eval("o").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("esNum").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_now_avanza_con_el_reloj() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_now_ms(0).expect("now0");
+        assert_eq!(rt.eval("performance.now()").expect("e"), JsValue::Number(0.0));
+        rt.set_now_ms(500).expect("now500");
+        assert_eq!(rt.eval("performance.now()").expect("e"), JsValue::Number(500.0));
+    }
 }
