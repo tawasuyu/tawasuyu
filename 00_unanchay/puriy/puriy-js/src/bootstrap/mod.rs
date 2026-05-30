@@ -13,6 +13,7 @@ mod streams;
 mod blob;
 mod objecturl;
 mod urlsearchparams;
+mod urlclass;
 mod textcodec;
 mod base64;
 mod formdata;
@@ -38,6 +39,7 @@ pub(crate) use streams::STREAMS_BOOTSTRAP;
 pub(crate) use blob::BLOB_BOOTSTRAP;
 pub(crate) use objecturl::OBJECT_URL_BOOTSTRAP;
 pub(crate) use urlsearchparams::URLSEARCHPARAMS_BOOTSTRAP;
+pub(crate) use urlclass::URLCLASS_BOOTSTRAP;
 pub(crate) use textcodec::TEXTCODEC_BOOTSTRAP;
 pub(crate) use base64::BASE64_BOOTSTRAP;
 pub(crate) use formdata::FORMDATA_BOOTSTRAP;
@@ -65,6 +67,7 @@ pub(crate) const ALL: &[&str] = &[
     BLOB_BOOTSTRAP,
     OBJECT_URL_BOOTSTRAP,
     URLSEARCHPARAMS_BOOTSTRAP,
+    URLCLASS_BOOTSTRAP,
     TEXTCODEC_BOOTSTRAP,
     BASE64_BOOTSTRAP,
     FORMDATA_BOOTSTRAP,

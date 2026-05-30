@@ -6475,4 +6475,83 @@ mod tests {
         let headers = parts[5..].join("\u{001D}");
         assert!(headers.contains("multipart/form-data; boundary="));
     }
+
+    // ============= Fase 7.58 — new URL(url, base) =============
+
+    #[test]
+    fn url_constructor_parsea_componentes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var u = new URL('https://user:pass@host.com:8080/a/b?x=1&y=2#frag');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("u.protocol").expect("e"), JsValue::String("https:".into()));
+        assert_eq!(rt.eval("u.hostname").expect("e"), JsValue::String("host.com".into()));
+        assert_eq!(rt.eval("u.port").expect("e"), JsValue::String("8080".into()));
+        assert_eq!(rt.eval("u.host").expect("e"), JsValue::String("host.com:8080".into()));
+        assert_eq!(rt.eval("u.username").expect("e"), JsValue::String("user".into()));
+        assert_eq!(rt.eval("u.password").expect("e"), JsValue::String("pass".into()));
+        assert_eq!(rt.eval("u.pathname").expect("e"), JsValue::String("/a/b".into()));
+        assert_eq!(rt.eval("u.search").expect("e"), JsValue::String("?x=1&y=2".into()));
+        assert_eq!(rt.eval("u.hash").expect("e"), JsValue::String("#frag".into()));
+        assert_eq!(rt.eval("u.origin").expect("e"), JsValue::String("https://host.com:8080".into()));
+        assert_eq!(rt.eval("u.searchParams.get('y')").expect("e"), JsValue::String("2".into()));
+    }
+
+    #[test]
+    fn url_constructor_resuelve_relativa_con_base() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var u = new URL('/api?q=1', 'https://example.com/dir/page.html');")
+            .expect("e");
+        assert_eq!(
+            rt.eval("u.href").expect("e"),
+            JsValue::String("https://example.com/api?q=1".into())
+        );
+        // Relativa de path con colapso de `..` (reusa __puriy_normalize_path).
+        rt.eval("var u2 = new URL('../x.json', 'https://example.com/a/b/page.html');")
+            .expect("e");
+        assert_eq!(
+            rt.eval("u2.href").expect("e"),
+            JsValue::String("https://example.com/a/x.json".into())
+        );
+    }
+
+    #[test]
+    fn url_searchparams_modifica_href() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var u = new URL('https://h.com/p?a=1'); u.searchParams.set('a', '9'); \
+             u.searchParams.append('b', '2');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("u.search").expect("e"), JsValue::String("?a=9&b=2".into()));
+        assert_eq!(
+            rt.eval("u.href").expect("e"),
+            JsValue::String("https://h.com/p?a=9&b=2".into())
+        );
+    }
+
+    #[test]
+    fn url_constructor_sin_scheme_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var threw = false; try { new URL('/no-base'); } catch (e) { threw = true; }")
+            .expect("e");
+        assert_eq!(rt.eval("threw").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn url_estaticos_object_url_se_preservan() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var b = new Blob(['z']); var ou = URL.createObjectURL(b); \
+             var resuelto = globalThis.__puriy_resolve_blob_url(ou) === b; \
+             URL.revokeObjectURL(ou); \
+             var tras = globalThis.__puriy_resolve_blob_url(ou) === null; \
+             var esConstructor = typeof URL === 'function';",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("resuelto").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("tras").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("esConstructor").expect("e"), JsValue::Bool(true));
+    }
 }
