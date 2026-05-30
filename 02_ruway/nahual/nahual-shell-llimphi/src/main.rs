@@ -15,10 +15,12 @@
 //!   `nahual-text-viewer-llimphi`, ≤ 256 KB, UTF-8 sin null bytes).
 //! - Splitter draggable.
 //!
-//! El viewer se elige por extensión (PNG/JPG/JPEG → image, resto →
-//! text con fallback a "binario"). Esto es deliberadamente tosco:
-//! cuando exista un `MimeRegistry` o un AppBus con `EntityType`,
-//! pasará a usar eso.
+//! El viewer se elige por **contenido**, no por extensión:
+//! `viewer_registry::pick` despacha el `Discernment` de `shuma-discern`
+//! (magic-bytes, JSON/TOML/Card probe, UTF-8) al visor que sabe pintar
+//! esa naturaleza de dato. Es el germen del "open-with universal":
+//! cuando lleguen más visores y un AppBus con `EntityType`, el registro
+//! crece por tabla sin tocar el resto del shell.
 //!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
@@ -28,6 +30,9 @@
 //!   se suscriben.
 
 use std::path::{Path, PathBuf};
+
+mod viewer_registry;
+use viewer_registry::ViewerKind;
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
@@ -309,18 +314,41 @@ fn refresh_preview(m: &mut Model) {
     m.preview_of = Some(path);
 }
 
-/// Decide qué viewer usar según la extensión del path y dispara la
-/// carga sync. PNG/JPG/JPEG → image viewer; cualquier otro → text
-/// viewer (que ya degrada a "binario" si no es UTF-8).
+/// Decide qué viewer usar discerniendo el **contenido** del archivo (no
+/// la extensión) y dispara la carga sync. Lee una muestra del header,
+/// la pasa por `shuma-discern`, y `viewer_registry::pick` elige el visor.
+/// Un .png con la extensión equivocada ahora se abre igual como imagen;
+/// un archivo ilegible cae al text viewer (que degrada a "binario").
 fn load_for(path: &Path) -> PreviewPane {
-    let ext = path
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("png") | Some("jpg") | Some("jpeg") => {
-            PreviewPane::Image(load_image(path, DEFAULT_IMAGE_BYTES_MAX))
-        }
-        _ => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
+    let sample = read_header_sample(path, DISCERN_SAMPLE_BYTES);
+    let pipeline = shuma_discern::DiscernPipeline::default();
+    let hint = shuma_discern::Hint {
+        path: path.to_str(),
+        size_total: std::fs::metadata(path).ok().map(|m| m.len()),
+    };
+    let discernment = sample
+        .as_deref()
+        .and_then(|s| pipeline.discern(s, &hint));
+
+    match viewer_registry::pick(discernment.as_ref()) {
+        ViewerKind::Image => PreviewPane::Image(load_image(path, DEFAULT_IMAGE_BYTES_MAX)),
+        ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
     }
+}
+
+/// Cuántos bytes del header alcanzan a `shuma-discern`. Los magic-bytes y
+/// el arranque de JSON/TOML viven en los primeros KB; no hace falta leer
+/// el archivo entero sólo para elegir visor.
+const DISCERN_SAMPLE_BYTES: usize = 8 * 1024;
+
+/// Lee hasta `max` bytes del inicio del archivo para discernir su tipo.
+/// `None` si no se puede abrir/leer — el caller lo trata como "sin
+/// discernimiento" y cae al text viewer.
+fn read_header_sample(path: &Path, max: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; max];
+    let n = f.read(&mut buf).ok()?;
+    buf.truncate(n);
+    Some(buf)
 }
