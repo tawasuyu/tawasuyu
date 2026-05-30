@@ -17,8 +17,8 @@
 pub mod env;
 
 use wasmi::{
-    CompilationMode, Config, Engine, Linker, Memory, Module, Store, StoreLimitsBuilder, TrapCode,
-    TypedFunc,
+    CompilationMode, Config, Engine, ExternType, Linker, Memory, Module, Store, StoreLimitsBuilder,
+    TrapCode, TypedFunc,
 };
 
 use crate::grafico::Color;
@@ -486,4 +486,97 @@ impl Drop for AplicacionWasm {
         // bloque vuelve al kernel tan limpio como nacio—.
         self.memoria.data_mut(&mut self.almacen).fill(0);
     }
+}
+
+// =============================================================================
+//  Validacion de un manifiesto ANTES de reanclar (Fase 67)
+// -----------------------------------------------------------------------------
+//  `sys_manifiesto_proponer` y `sys_canal_aceptar` verifican firma + presencia
+//  del objeto-manifiesto, pero hasta aqui NO comprobaban que los bytecodes que
+//  el manifiesto referencia estuvieran presentes ni que fueran WASM cargable.
+//  Reanclar a un manifiesto cuyas apps no instancian dejaria el proximo
+//  arranque sin esas ventanas —o en un bucle de fallo de carga—; un anuncio
+//  firmado por una llave del anillo pero con un `.wasm` corrupto (o un objeto
+//  ausente porque la cascada del DAG aun no convergio) bastaria para ladrillar
+//  el escritorio. Esta es la ultima compuerta antes de `fijar_manifiesto`.
+// =============================================================================
+
+/// Magia de un modulo WASM: `\0asm`. Filtro barato antes de invocar al parser.
+const WASM_MAGIA: [u8; 4] = [0x00, 0x61, 0x73, 0x6D];
+
+/// Valida que un manifiesto sea INSTANCIABLE: su objeto existe y deserializa, y
+/// CADA bytecode que referencia esta presente en el grafo Y es WASM bien formado
+/// que expone el ABI de fotograma que el cargador exige (`init`, `tick`, y la
+/// `memory` exportada). Es exactamente lo que `AplicacionWasm::cargar` necesita
+/// para no fallar con `FallaApp::Carga` al arrancar la app — rechazarlo aqui,
+/// antes de mover el superbloque, evita ladrillar el escritorio.
+///
+/// No instancia ni ejecuta `init` (eso tiene efectos y exige el Store + linker
+/// completos): `Module::new` parsea + valida tipos/secciones, e inspeccionar
+/// `exports()` confirma la superficie del ABI sin levantar la jaula.
+///
+/// Devuelve `Ok(())` si el manifiesto es seguro de reanclar, o un `CodigoError`:
+///   - `Ausente`               — el objeto-manifiesto, su deserializacion, o un
+///                               bytecode referenciado faltan del grafo local.
+///   - `AlmacenamientoFallo`   — el almacen erro al recuperar un objeto.
+///   - `CapacidadInsuficiente` — un bytecode no es WASM cargable (magia, parseo
+///                               o ABI ausente).
+pub fn validar_manifiesto_instanciable(
+    manifiesto_hash: &format::Hash,
+) -> Result<(), format::CodigoError> {
+    use format::CodigoError;
+
+    let obj = match crate::almacen::recuperar(manifiesto_hash) {
+        Ok(Some(o)) => o,
+        Ok(None) => return Err(CodigoError::Ausente),
+        Err(_) => return Err(CodigoError::AlmacenamientoFallo),
+    };
+    let manifiesto = match format::Manifiesto::deserializar(&obj.datos) {
+        Ok(m) => m,
+        Err(_) => return Err(CodigoError::Ausente),
+    };
+
+    // Un motor de validacion compartido por todos los bytecodes del manifiesto:
+    // sin `consume_fuel` (no ejecutamos), compilacion anticipada (parsea y
+    // valida tipos ahora). Crearlo una vez evita re-armarlo por app.
+    let mut config = Config::default();
+    config.compilation_mode(CompilationMode::Eager);
+    let motor = Engine::new(&config);
+
+    for app in &manifiesto.apps {
+        let bc = match crate::almacen::recuperar(&app.bytecode) {
+            Ok(Some(o)) => o,
+            Ok(None) => return Err(CodigoError::Ausente),
+            Err(_) => return Err(CodigoError::AlmacenamientoFallo),
+        };
+        if !es_wasm_cargable(&motor, &bc.datos) {
+            return Err(CodigoError::CapacidadInsuficiente);
+        }
+    }
+    Ok(())
+}
+
+/// `true` si `bytecode` empieza con la magia WASM, parsea con `wasmi` Y expone
+/// el ABI de fotograma que `cargar` resuelve: funciones `init` y `tick` y la
+/// `memory` exportada. Mismo parser que la carga real, sin instanciar.
+fn es_wasm_cargable(motor: &Engine, bytecode: &[u8]) -> bool {
+    if bytecode.len() < 8 || bytecode[..4] != WASM_MAGIA {
+        return false;
+    }
+    let modulo = match Module::new(motor, bytecode) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let mut tiene_init = false;
+    let mut tiene_tick = false;
+    let mut tiene_memoria = false;
+    for exp in modulo.exports() {
+        match exp.name() {
+            "init" if matches!(exp.ty(), ExternType::Func(_)) => tiene_init = true,
+            "tick" if matches!(exp.ty(), ExternType::Func(_)) => tiene_tick = true,
+            "memory" if matches!(exp.ty(), ExternType::Memory(_)) => tiene_memoria = true,
+            _ => {}
+        }
+    }
+    tiene_init && tiene_tick && tiene_memoria
 }

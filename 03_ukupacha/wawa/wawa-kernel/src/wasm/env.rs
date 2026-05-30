@@ -1735,6 +1735,14 @@ pub(crate) fn enlazar_capacidades(
                 Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
                 Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             }
+            // Ultima compuerta: el manifiesto debe ser INSTANCIABLE —cada
+            // bytecode presente y WASM cargable con el ABI de fotograma—. Un
+            // sobre firmado por el anillo pero que apunte a un `.wasm` corrupto
+            // (o cuya cascada del DAG aun no trajo todos los bytecodes)
+            // ladrillaria el proximo arranque; lo rechazamos sin mover la raiz.
+            if let Err(err) = crate::wasm::validar_manifiesto_instanciable(&mf.manifiesto_hash) {
+                return Ok(err.como_i32());
+            }
             // Reancla atomica del manifiesto: el superbloque queda apuntando
             // a la propuesta verificada. El proximo fotograma —y todo
             // arranque ulterior— veran el nuevo userspace.
@@ -1815,6 +1823,13 @@ pub(crate) fn enlazar_capacidades(
                 Ok(Some(_)) => {}
                 Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
                 Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            }
+            // Misma compuerta que `sys_manifiesto_proponer`: el manifiesto
+            // aceptado debe ser instanciable (bytecodes presentes y WASM
+            // cargable) antes de mover el superbloque. La cascada del DAG pudo
+            // no haber convergido aun; en ese caso `Ausente` y mudanza reintenta.
+            if let Err(err) = crate::wasm::validar_manifiesto_instanciable(&anuncio.raiz) {
+                return Ok(err.como_i32());
             }
             // Reancla atomica del manifiesto vivo.
             match crate::almacen::fijar_manifiesto(anuncio.raiz) {
