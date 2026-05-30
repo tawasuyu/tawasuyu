@@ -7064,4 +7064,36 @@ mod tests {
         assert_eq!(rt.eval("orden.join(',')").expect("e"), JsValue::String("start,load,end".into()));
         assert_eq!(rt.eval("tira").expect("e"), JsValue::Bool(true));
     }
+
+    // ============= Fase 7.70 — queueMicrotask =============
+
+    #[test]
+    fn queue_microtask_corre_callback() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var corrio = false; queueMicrotask(function() { corrio = true; });")
+            .expect("e");
+        assert_eq!(rt.eval("corrio").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn queue_microtask_preserva_fifo_con_promesas() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var orden = []; \
+             queueMicrotask(function() { orden.push('a'); }); \
+             Promise.resolve().then(function() { orden.push('b'); }); \
+             queueMicrotask(function() { orden.push('c'); });",
+        )
+        .expect("e");
+        // Las tres microtasks corren en orden de encolado (FIFO).
+        assert_eq!(rt.eval("orden.join(',')").expect("e"), JsValue::String("a,b,c".into()));
+    }
+
+    #[test]
+    fn queue_microtask_no_funcion_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var tira = false; try { queueMicrotask(123); } catch (e) { tira = true; }")
+            .expect("e");
+        assert_eq!(rt.eval("tira").expect("e"), JsValue::Bool(true));
+    }
 }

@@ -4,6 +4,7 @@
 
 mod console;
 mod timers;
+mod microtask;
 mod dom_events;
 mod event_class;
 mod window_scroll;
@@ -35,6 +36,7 @@ mod computed_style;
 
 pub(crate) use console::CONSOLE_BOOTSTRAP;
 pub(crate) use timers::TIMERS_BOOTSTRAP;
+pub(crate) use microtask::MICROTASK_BOOTSTRAP;
 pub(crate) use dom_events::DOM_EVENTS_BOOTSTRAP;
 pub(crate) use event_class::EVENT_CLASS_BOOTSTRAP;
 pub(crate) use window_scroll::WINDOW_SCROLL_BOOTSTRAP;
@@ -68,6 +70,7 @@ pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 pub(crate) const ALL: &[&str] = &[
     CONSOLE_BOOTSTRAP,
     TIMERS_BOOTSTRAP,
+    MICROTASK_BOOTSTRAP,
     DOM_EVENTS_BOOTSTRAP,
     EVENT_CLASS_BOOTSTRAP,
     WINDOW_SCROLL_BOOTSTRAP,
