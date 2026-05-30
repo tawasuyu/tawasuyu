@@ -70,6 +70,9 @@ mod credentials;
 mod badging;
 mod deviceorientation;
 mod payment;
+mod speech;
+mod storageaccess;
+mod eyedropper;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -140,6 +143,9 @@ pub(crate) use credentials::CREDENTIALS_BOOTSTRAP;
 pub(crate) use badging::BADGING_BOOTSTRAP;
 pub(crate) use deviceorientation::DEVICE_ORIENTATION_BOOTSTRAP;
 pub(crate) use payment::PAYMENT_BOOTSTRAP;
+pub(crate) use speech::SPEECH_BOOTSTRAP;
+pub(crate) use storageaccess::STORAGE_ACCESS_BOOTSTRAP;
+pub(crate) use eyedropper::EYEDROPPER_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -212,5 +218,8 @@ pub(crate) const ALL: &[&str] = &[
     BADGING_BOOTSTRAP,
     DEVICE_ORIENTATION_BOOTSTRAP,
     PAYMENT_BOOTSTRAP,
+    SPEECH_BOOTSTRAP,
+    STORAGE_ACCESS_BOOTSTRAP,
+    EYEDROPPER_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

@@ -9221,4 +9221,195 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("errName").expect("e"), JsValue::String("AbortError".into()));
     }
+
+    // ---- Fase 7.114 — Web Speech (SpeechSynthesis) ----
+
+    #[test]
+    fn speech_synthesis_existe_y_utterance_defaults() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof speechSynthesis").expect("e"), JsValue::String("object".into()));
+        assert_eq!(
+            rt.eval("typeof SpeechSynthesisUtterance").expect("e"),
+            JsValue::String("function".into())
+        );
+        rt.eval("var u = new SpeechSynthesisUtterance('hola');").expect("e");
+        assert_eq!(rt.eval("u.text").expect("e"), JsValue::String("hola".into()));
+        assert_eq!(rt.eval("u.rate").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn speech_speak_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("speechSynthesis.speak(new SpeechSynthesisUtterance('decir esto'));").expect("e");
+        assert_eq!(
+            rt.eval(
+                "var v = __puriy_dirty.filter(function(d) { return d.kind === 'speak'; }); \
+                 JSON.parse(v[v.length - 1].value).text",
+            )
+            .expect("e"),
+            JsValue::String("decir esto".into())
+        );
+    }
+
+    #[test]
+    fn speech_speak_dispara_start_y_end_via_tick() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var log = []; \
+             var u = new SpeechSynthesisUtterance('frase'); \
+             u.onstart = function() { log.push('start'); }; \
+             u.onend = function() { log.push('end'); }; \
+             speechSynthesis.speak(u);",
+        )
+        .expect("e");
+        // start y end están encadenados por setTimeout(0) → dos ticks los drenan.
+        rt.tick(0).expect("tick");
+        rt.tick(0).expect("tick");
+        assert_eq!(rt.eval("log.join(',')").expect("e"), JsValue::String("start,end".into()));
+    }
+
+    #[test]
+    fn speech_speak_rechaza_no_utterance() {
+        let mut rt = JsRuntime::new().expect("rt");
+        let r = rt.eval(
+            "var msg = 'ok'; \
+             try { speechSynthesis.speak('texto-plano'); } catch (e) { msg = e.constructor.name; } msg",
+        );
+        assert_eq!(r.expect("e"), JsValue::String("TypeError".into()));
+    }
+
+    #[test]
+    fn speech_get_voices_y_set_voices_dispara_voiceschanged() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("speechSynthesis.getVoices().length").expect("e"), JsValue::Number(0.0));
+        rt.eval("var fired = false; speechSynthesis.onvoiceschanged = function() { fired = true; };")
+            .expect("e");
+        rt.eval("__puriy_set_voices([{ name: 'Voz', lang: 'es-ES' }]);").expect("e");
+        assert_eq!(rt.eval("fired").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("speechSynthesis.getVoices().length").expect("e"), JsValue::Number(1.0));
+        assert_eq!(
+            rt.eval("speechSynthesis.getVoices()[0].name").expect("e"),
+            JsValue::String("Voz".into())
+        );
+    }
+
+    #[test]
+    fn speech_cancel_limpia_la_cola() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("speechSynthesis.speak(new SpeechSynthesisUtterance('a')); speechSynthesis.cancel();")
+            .expect("e");
+        assert_eq!(rt.eval("__puriy_speech_queue.length").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("speechSynthesis.speaking").expect("e"), JsValue::Bool(false));
+    }
+
+    // ---- Fase 7.115 — Storage Access API ----
+
+    #[test]
+    fn storage_access_existe_y_has_arranca_false() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof document.requestStorageAccess").expect("e"),
+            JsValue::String("function".into())
+        );
+        rt.eval("var got = null; document.hasStorageAccess().then(function(v) { got = v; });")
+            .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn storage_access_request_rechaza_sin_permiso_y_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             document.requestStorageAccess().catch(function(e) { errName = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotAllowedError".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'storage-access'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn storage_access_request_resuelve_con_permiso() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_storage_access_permission(true);").expect("e");
+        rt.eval(
+            "var ok = false; document.requestStorageAccess().then(function() { ok = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        // Tras conceder, hasStorageAccess refleja el flag granted.
+        rt.eval("var got = null; document.hasStorageAccess().then(function(v) { got = v; });")
+            .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn storage_access_negar_resetea_granted() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_storage_access_permission(true);").expect("e");
+        rt.eval("document.requestStorageAccess();").expect("e");
+        rt.eval("__puriy_set_storage_access_permission(false);").expect("e");
+        rt.eval("var got = null; document.hasStorageAccess().then(function(v) { got = v; });")
+            .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::Bool(false));
+    }
+
+    // ---- Fase 7.116 — EyeDropper API ----
+
+    #[test]
+    fn eyedropper_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof EyeDropper").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn eyedropper_open_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("new EyeDropper().open();").expect("e");
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'eyedropper'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn eyedropper_resuelve_con_color() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var hex = null; \
+             new EyeDropper().open().then(function(r) { hex = r.sRGBHex; }); \
+             var id = globalThis.__puriy_eyedropper_next_id - 1; \
+             __puriy_eyedropper_resolve(id, '#ff8800');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("hex").expect("e"), JsValue::String("#ff8800".into()));
+    }
+
+    #[test]
+    fn eyedropper_rechaza_al_cancelar() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             new EyeDropper().open().catch(function(e) { errName = e.name; }); \
+             var id = globalThis.__puriy_eyedropper_next_id - 1; \
+             __puriy_eyedropper_reject(id);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("AbortError".into()));
+    }
+
+    #[test]
+    fn eyedropper_signal_ya_abortada_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             var ac = new AbortController(); ac.abort(); \
+             new EyeDropper().open({ signal: ac.signal }).catch(function(e) { errName = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("AbortError".into()));
+    }
 }
