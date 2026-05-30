@@ -34,6 +34,8 @@ mod fetch;
 mod navigator;
 mod websocket;
 mod eventsource;
+mod broadcastchannel;
+mod messagechannel;
 mod headers;
 mod abort;
 mod visibility;
@@ -73,6 +75,8 @@ pub(crate) use fetch::FETCH_BOOTSTRAP;
 pub(crate) use navigator::NAVIGATOR_BOOTSTRAP;
 pub(crate) use websocket::WEBSOCKET_BOOTSTRAP;
 pub(crate) use eventsource::EVENTSOURCE_BOOTSTRAP;
+pub(crate) use broadcastchannel::BROADCAST_CHANNEL_BOOTSTRAP;
+pub(crate) use messagechannel::MESSAGE_CHANNEL_BOOTSTRAP;
 pub(crate) use headers::HEADERS_BOOTSTRAP;
 pub(crate) use abort::ABORT_BOOTSTRAP;
 pub(crate) use visibility::VISIBILITY_BOOTSTRAP;
@@ -114,6 +118,8 @@ pub(crate) const ALL: &[&str] = &[
     NAVIGATOR_BOOTSTRAP,
     WEBSOCKET_BOOTSTRAP,
     EVENTSOURCE_BOOTSTRAP,
+    BROADCAST_CHANNEL_BOOTSTRAP,
+    MESSAGE_CHANNEL_BOOTSTRAP,
     HEADERS_BOOTSTRAP,
     ABORT_BOOTSTRAP,
     VISIBILITY_BOOTSTRAP,

@@ -7624,4 +7624,122 @@ mod tests {
         });
         assert!(cierre.is_some());
     }
+
+    // ---- Fase 7.80 — BroadcastChannel ----
+
+    #[test]
+    fn broadcast_channel_entrega_a_otros_no_al_emisor() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var aGot = false, bData = null, cData = null; \
+             var a = new BroadcastChannel('sala'); \
+             var b = new BroadcastChannel('sala'); \
+             var c = new BroadcastChannel('otra'); \
+             a.onmessage = function() { aGot = true; }; \
+             b.onmessage = function(e) { bData = e.data; }; \
+             c.onmessage = function(e) { cData = e.data; }; \
+             a.postMessage('hola');",
+        )
+        .expect("e");
+        // El emisor NO recibe su propio mensaje.
+        assert_eq!(rt.eval("aGot").expect("e"), JsValue::Bool(false));
+        // Otro canal del mismo name sí.
+        assert_eq!(rt.eval("bData").expect("e"), JsValue::String("hola".into()));
+        // Un canal de otro name no recibe nada.
+        assert_eq!(rt.eval("cData").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn broadcast_channel_close_deja_de_recibir_y_tira_post_close() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var a = new BroadcastChannel('x'); \
+             var b = new BroadcastChannel('x'); \
+             b.onmessage = function() { n++; }; \
+             a.postMessage('uno'); \
+             b.close(); \
+             a.postMessage('dos'); \
+             var tiro = false; \
+             try { b.postMessage('z'); } catch (e) { tiro = (e.name === 'InvalidStateError'); }",
+        )
+        .expect("e");
+        // b recibió sólo el primero; tras close() no recibe más.
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+        // postMessage sobre un canal cerrado tira InvalidStateError.
+        assert_eq!(rt.eval("tiro").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn broadcast_channel_addeventlistener_y_es_eventtarget() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var vistos = []; \
+             var a = new BroadcastChannel('g'); \
+             var b = new BroadcastChannel('g'); \
+             var esET = (a instanceof EventTarget); \
+             b.addEventListener('message', function(e) { vistos.push(e.data); }); \
+             a.postMessage('m1'); \
+             a.postMessage('m2');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("esET").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("vistos.length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("vistos[0]").expect("e"), JsValue::String("m1".into()));
+        assert_eq!(rt.eval("vistos[1]").expect("e"), JsValue::String("m2".into()));
+    }
+
+    // ---- Fase 7.81 — MessageChannel + MessagePort ----
+
+    #[test]
+    fn message_channel_ida_y_vuelta_via_onmessage() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var got = null, back = null; \
+             var mc = new MessageChannel(); \
+             mc.port2.onmessage = function(e) { got = e.data; }; \
+             mc.port1.onmessage = function(e) { back = e.data; }; \
+             mc.port1.postMessage('ida'); \
+             mc.port2.postMessage('vuelta');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("ida".into()));
+        assert_eq!(rt.eval("back").expect("e"), JsValue::String("vuelta".into()));
+    }
+
+    #[test]
+    fn message_channel_mensajes_pre_start_se_encolan() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var recibidos = []; \
+             var mc = new MessageChannel(); \
+             mc.port1.postMessage('a'); \
+             mc.port1.postMessage('b'); \
+             mc.port2.onmessage = function(e) { recibidos.push(e.data); };",
+        )
+        .expect("e");
+        // Encolados antes de arrancar port2; al setear onmessage (start
+        // implícito) se entregan en orden.
+        assert_eq!(rt.eval("recibidos.length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("recibidos[0]").expect("e"), JsValue::String("a".into()));
+        assert_eq!(rt.eval("recibidos[1]").expect("e"), JsValue::String("b".into()));
+    }
+
+    #[test]
+    fn message_channel_close_corta_entrega_y_es_eventtarget() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var mc = new MessageChannel(); \
+             var esET = (mc.port1 instanceof EventTarget); \
+             mc.port2.onmessage = function() { n++; }; \
+             mc.port1.postMessage('uno'); \
+             mc.port2.close(); \
+             mc.port1.postMessage('dos');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("esET").expect("e"), JsValue::Bool(true));
+        // Tras close() en port2, port1.postMessage es no-op.
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+    }
 }
