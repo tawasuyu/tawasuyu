@@ -725,6 +725,146 @@ pub(crate) fn pegar_portapapeles(model: &mut Model) -> bool {
     true
 }
 
+/// Compone (alpha src-over, Rgba8 NO premultiplicado) un `clip` de
+/// `clip_w × clip_h` sobre `dst` (`dst_w × dst_h`) con la esquina
+/// superior izquierda en el offset CON SIGNO `(dx, dy)`. Los píxeles del
+/// clip que caen fuera de `dst` se descartan. A diferencia de
+/// [`componer_clip_en_canvas`] (que parte de un lienzo fresco y pisa),
+/// éste preserva y compone sobre el contenido previo de `dst` — sirve
+/// para "dejar caer" píxeles movidos encima de lo que ya hay. Pura.
+pub(crate) fn blit_alpha_sobre(
+    dst: &[u8],
+    dst_w: u32,
+    dst_h: u32,
+    clip: &[u8],
+    clip_w: u32,
+    clip_h: u32,
+    dx: i32,
+    dy: i32,
+) -> Vec<u8> {
+    let mut out = dst.to_vec();
+    let dw = dst_w as i32;
+    let dh = dst_h as i32;
+    let cw = clip_w as usize;
+    for cy in 0..clip_h as i32 {
+        let ty = dy + cy;
+        if ty < 0 || ty >= dh {
+            continue;
+        }
+        for cx in 0..clip_w as i32 {
+            let tx = dx + cx;
+            if tx < 0 || tx >= dw {
+                continue;
+            }
+            let si = ((cy as usize) * cw + cx as usize) * 4;
+            let di = ((ty as usize) * dst_w as usize + tx as usize) * 4;
+            let sa = clip[si + 3] as u32;
+            if sa == 0 {
+                continue; // píxel del clip totalmente transparente
+            }
+            if sa == 255 {
+                out[di..di + 4].copy_from_slice(&clip[si..si + 4]);
+                continue;
+            }
+            // src-over no premultiplicado, con redondeo entero /255.
+            let da = out[di + 3] as u32;
+            let da_eff = da * (255 - sa) / 255;
+            let oa = sa + da_eff;
+            for k in 0..3 {
+                let sc = clip[si + k] as u32;
+                let dc = out[di + k] as u32;
+                let num = sc * sa + dc * da_eff;
+                out[di + k] = if oa == 0 { 0 } else { (num / oa) as u8 };
+            }
+            out[di + 3] = oa as u8;
+        }
+    }
+    out
+}
+
+/// Mueve los píxeles del rect de `model.seleccion` por el offset con
+/// signo `(dx, dy)` dentro de la capa raster seleccionada: extrae el
+/// contenido del rect, lo borra de su posición original y lo recompone
+/// (alpha src-over) en el destino, recortando lo que salga del lienzo.
+/// La selección sigue al contenido (trasladada y clampeada). No-op si:
+/// no hay selección/capa, la capa es derivada, área cero tras clampear,
+/// o el movimiento no cambia el buffer (mismo hash — delta cero o todo
+/// fuera del lienzo).
+pub(crate) fn mover_pixeles_seleccion(
+    model: &mut Model,
+    dx: i32,
+    dy: i32,
+) -> bool {
+    let Some(rect) = model.seleccion else {
+        model.estado = "no hay selección — `r` y arrastrar".into();
+        return false;
+    };
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let x0 = rect.x0.min(w);
+    let y0 = rect.y0.min(h);
+    let x1 = rect.x1.min(w);
+    let y1 = rect.y1.min(h);
+    if x1 <= x0 || y1 <= y0 {
+        model.estado = "selección fuera del lienzo".into();
+        return false;
+    }
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    if !matches!(capa.origen, OrigenCapa::Raster) {
+        model.estado =
+            "la capa seleccionada es derivada — usá la raster madre".into();
+        return false;
+    }
+    let hash_actual = capa.contenido;
+    let Some(src) = model.almacen.obtener(hash_actual) else {
+        return false;
+    };
+    let src = src.to_vec();
+    // Levantar el contenido del rect, borrarlo de su lugar, recomponerlo
+    // en el destino.
+    let (sub, _) = recortar_subbuffer(&src, w, x0, y0, x1, y1);
+    let limpio = limpiar_rect_en_buffer(&src, w, x0, y0, x1, y1);
+    let nuevo = blit_alpha_sobre(
+        &limpio,
+        w,
+        h,
+        &sub,
+        x1 - x0,
+        y1 - y0,
+        x0 as i32 + dx,
+        y0 as i32 + dy,
+    );
+    let new_hash = model.almacen.insertar(nuevo);
+    if new_hash == hash_actual {
+        model.estado = "movimiento sin efecto".into();
+        return false;
+    }
+    if let Some(capa_mut) = model.lienzo.capa_mut(id) {
+        capa_mut.contenido = new_hash;
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+    // La selección sigue al contenido: trasladar el rect y clampear al
+    // lienzo (half-open). Si quedó fuera por completo, se limpia.
+    let nx0 = (x0 as i32 + dx).clamp(0, w as i32) as u32;
+    let ny0 = (y0 as i32 + dy).clamp(0, h as i32) as u32;
+    let nx1 = (x1 as i32 + dx).clamp(0, w as i32) as u32;
+    let ny1 = (y1 as i32 + dy).clamp(0, h as i32) as u32;
+    model.seleccion = if nx1 > nx0 && ny1 > ny0 {
+        Some(RectImagen { x0: nx0, y0: ny0, x1: nx1, y1: ny1 })
+    } else {
+        None
+    };
+    model.estado = format!("movida selección ({:+}, {:+})", dx, dy);
+    true
+}
+
 /// Aplica una transformación de buffer al rect de `model.seleccion`
 /// dentro de la capa raster seleccionada, compartiendo toda la
 /// validación y el cableado entre limpiar (Fase 37) y rellenar

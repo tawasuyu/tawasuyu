@@ -36,6 +36,15 @@ pub(crate) fn extension_export(f: FormatoExport) -> &'static str {
 /// - `[` / `]` → bump opacidad ∓0.1
 /// - `Ctrl+S` → export PNG, `Ctrl+Shift+S` → WebP
 /// - `Ctrl+Z` → undo, `Ctrl+Shift+Z` o `Ctrl+Y` → redo (globales)
+/// Paso del nudge de la selección: 10 px con Shift, 1 px sin él.
+pub(crate) fn paso_nudge(shift: bool) -> i32 {
+    if shift {
+        10
+    } else {
+        1
+    }
+}
+
 pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
     use llimphi_ui::KeyState;
     if event.state != KeyState::Pressed {
@@ -180,6 +189,21 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         }
         Key::Character(s) if !m.ctrl && !m.alt && s == "]" => {
             Some(Msg::BumpOpacidad(id, 0.1))
+        }
+        // Flechas: nudge del contenido de la selección 1 px (10 px con
+        // Shift). Sólo con selección activa; sin ella las flechas no
+        // hacen nada acá (no hay scroll de capas que mover).
+        Key::Named(NamedKey::ArrowLeft) if model.seleccion.is_some() => {
+            Some(Msg::MoverSeleccion { dx: -paso_nudge(m.shift), dy: 0 })
+        }
+        Key::Named(NamedKey::ArrowRight) if model.seleccion.is_some() => {
+            Some(Msg::MoverSeleccion { dx: paso_nudge(m.shift), dy: 0 })
+        }
+        Key::Named(NamedKey::ArrowUp) if model.seleccion.is_some() => {
+            Some(Msg::MoverSeleccion { dx: 0, dy: -paso_nudge(m.shift) })
+        }
+        Key::Named(NamedKey::ArrowDown) if model.seleccion.is_some() => {
+            Some(Msg::MoverSeleccion { dx: 0, dy: paso_nudge(m.shift) })
         }
         _ => None,
     }

@@ -318,6 +318,15 @@ pub(crate) enum Msg {
     /// clampeado para que entre. Inserta encima de la seleccionada y la
     /// selecciona. No-op si el portapapeles está vacío.
     PegarPortapapeles,
+    /// Mueve los píxeles del rect de `model.seleccion` por el offset con
+    /// signo `(dx, dy)` (en coords-imagen) dentro de la capa raster
+    /// seleccionada: levanta el contenido del rect, lo borra de su lugar
+    /// y lo recompone (alpha src-over) en el destino, recortando lo que
+    /// salga del lienzo. La selección sigue al contenido. No-op si no hay
+    /// selección/capa, la capa es derivada, o el movimiento no cambia
+    /// nada (delta cero o todo fuera del lienzo). Snapshots coalescen por
+    /// capa — una ráfaga de flechas = un solo Undo.
+    MoverSeleccion { dx: i32, dy: i32 },
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

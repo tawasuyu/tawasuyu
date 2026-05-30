@@ -780,6 +780,32 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         &pal,
         Msg::PegarPortapapeles,
     )));
+    // Mover el contenido de la selección (nudge). Botones de 1 px
+    // co-locados; las flechas del teclado nudgean igual (Shift = 10 px).
+    hijos.push(subtitulo("mover selección · ←↑↓→"));
+    hijos.push(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(26.0_f32),
+            },
+            padding: Rect {
+                left: length(2.0_f32),
+                right: length(2.0_f32),
+                top: length(1.0_f32),
+                bottom: length(1.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![
+            mini_btn("◀", Msg::MoverSeleccion { dx: -1, dy: 0 }, &pal),
+            mini_btn("▲", Msg::MoverSeleccion { dx: 0, dy: -1 }, &pal),
+            mini_btn("▼", Msg::MoverSeleccion { dx: 0, dy: 1 }, &pal),
+            mini_btn("▶", Msg::MoverSeleccion { dx: 1, dy: 0 }, &pal),
+        ]),
+    );
 
     // "salida": no requiere selección, siempre activa.
     hijos.push(subtitulo("salida"));

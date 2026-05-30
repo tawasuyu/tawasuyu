@@ -45,6 +45,8 @@
 //! - `Ctrl+C` / `Ctrl+X` — copiar / cortar el rect de la selección al
 //!   portapapeles interno
 //! - `Ctrl+V`         — pegar el portapapeles como capa nueva
+//! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
+//!   (10 px con `Shift`) dentro de la capa raster
 //! - `F2`             — renombrar capa in-situ (Enter confirma · Esc cancela)
 //! - `V`              — toggle visibilidad
 //! - `B` / `Shift+B`  — ciclar blend forward / reverse
@@ -466,6 +468,17 @@ impl App for Tullpu {
             Msg::PegarPortapapeles => {
                 if pegar_portapapeles(&mut model) {
                     pushear_snapshot(&mut model, None);
+                }
+            }
+            Msg::MoverSeleccion { dx, dy } => {
+                // Coalesce por capa: una ráfaga de flechas (o nudges
+                // sucesivos) colapsa a un solo Undo, como el drag de
+                // opacidad. Captura el id ANTES de mover (mover puede
+                // dejar la selección fuera, pero la capa no cambia).
+                let id = model.seleccionada;
+                if mover_pixeles_seleccion(&mut model, dx, dy) {
+                    let etiqueta = id.map(|i| (i, "mover_sel"));
+                    pushear_snapshot(&mut model, etiqueta);
                 }
             }
             Msg::RecogerColor { lx, ly, rw, rh } => {
@@ -4007,6 +4020,238 @@ mod tests {
         assert_eq!(model.lienzo.capas.len(), 2);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), 1);
+    }
+
+    // ---- Fase 41: mover los píxeles de la selección (nudge) -------------
+
+    #[test]
+    fn paso_nudge_es_10_con_shift_y_1_sin_el() {
+        assert_eq!(paso_nudge(false), 1);
+        assert_eq!(paso_nudge(true), 10);
+    }
+
+    #[test]
+    fn blit_alpha_sobre_opaco_pisa_y_transparente_no_borra() {
+        // dst 3×1 rojo opaco; clip 2×1 con [verde opaco, transparente].
+        let dst = vec![255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+        let clip = vec![0, 255, 0, 255, 9, 9, 9, 0];
+        let out = blit_alpha_sobre(&dst, 3, 1, &clip, 2, 1, 1, 0);
+        // (0): intacto rojo.
+        assert_eq!(out[0..4], [255, 0, 0, 255]);
+        // (1): verde opaco pisó.
+        assert_eq!(out[4..8], [0, 255, 0, 255]);
+        // (2): clip transparente → dst rojo intacto (no borró).
+        assert_eq!(out[8..12], [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn blit_alpha_sobre_semitransparente_compone() {
+        // dst negro opaco; clip blanco a 50% alfa → gris ~ medio.
+        let dst = vec![0, 0, 0, 255];
+        let clip = vec![255, 255, 255, 128];
+        let out = blit_alpha_sobre(&dst, 1, 1, &clip, 1, 1, 0, 0);
+        // alfa salida = 128 + 255*(127)/255 = 128 + 127 = 255.
+        assert_eq!(out[3], 255);
+        // color ~ (255*128 + 0) / 255 ≈ 128.
+        assert!((out[0] as i32 - 128).abs() <= 2, "got {}", out[0]);
+    }
+
+    #[test]
+    fn blit_alpha_recorta_offset_negativo_y_fuera() {
+        // clip 2×2 opaco con offset (-1,-1) sobre dst 2×2 → sólo el
+        // píxel (0,0) del dst recibe el píxel (1,1) del clip.
+        let dst = vec![0u8; 2 * 2 * 4];
+        let clip: Vec<u8> = (0..4u8).flat_map(|i| [i, i, i, 255]).collect();
+        let out = blit_alpha_sobre(&dst, 2, 2, &clip, 2, 2, -1, -1);
+        // clip (1,1) = índice 3 → valor 3.
+        assert_eq!(out[0..4], [3, 3, 3, 255]);
+        // El resto del dst sin tocar.
+        assert_eq!(out[4..8], [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn mover_seleccion_sin_seleccion_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let ok = mover_pixeles_seleccion(&mut model, 1, 0);
+        assert!(!ok);
+        assert!(model.estado.contains("no hay selección"));
+    }
+
+    #[test]
+    fn mover_seleccion_sobre_derivada_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let id = model.seleccionada.unwrap();
+        let capa = model.lienzo.capa_mut(id).unwrap();
+        capa.origen = OrigenCapa::Derivada {
+            madre: Uuid::new_v4(),
+            op: TransformacionPixel::Local(OpLocal::Invertir),
+            estado: Frescura::Fresca,
+        };
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let ok = mover_pixeles_seleccion(&mut model, 1, 0);
+        assert!(!ok);
+        assert!(model.estado.contains("derivada"));
+    }
+
+    #[test]
+    fn mover_seleccion_traslada_contenido_y_deja_transparencia() {
+        // Lienzo 4×4 transparente; un bloque 2×2 opaco en la esquina
+        // (0,0). Selección sobre ese bloque; lo movemos +2,+2.
+        let mut model = modelo_minimo();
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        for y in 0..2 {
+            for x in 0..2 {
+                let i = (y * 4 + x) * 4;
+                buf[i..i + 4].copy_from_slice(&[200, 100, 50, 255]);
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("bloque", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+
+        let ok = mover_pixeles_seleccion(&mut model, 2, 2);
+        assert!(ok);
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [bp[i], bp[i + 1], bp[i + 2], bp[i + 3]]
+        };
+        // El origen (0,0) quedó transparente (se levantó el contenido).
+        assert_eq!(pix(0, 0), [0, 0, 0, 0]);
+        assert_eq!(pix(1, 1), [0, 0, 0, 0]);
+        // El bloque aterrizó en (2,2)..(4,4).
+        assert_eq!(pix(2, 2), [200, 100, 50, 255]);
+        assert_eq!(pix(3, 3), [200, 100, 50, 255]);
+        // La selección siguió al contenido.
+        assert_eq!(
+            model.seleccion,
+            Some(RectImagen { x0: 2, y0: 2, x1: 4, y1: 4 })
+        );
+    }
+
+    #[test]
+    fn mover_seleccion_parcialmente_fuera_recorta_y_seleccion_clampea() {
+        // Bloque 2×2 en (2,2); movemos +2,+2 en lienzo 4×4 → la mitad
+        // se va del lienzo, sólo entra el píxel que cae en (4-?)...
+        // en realidad (2,2)->(4,4) cae TODO fuera salvo nada; usamos
+        // +1,+1 para que entre parcialmente.
+        let mut model = modelo_minimo();
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        for y in 2..4 {
+            for x in 2..4 {
+                let i = (y * 4 + x) * 4;
+                buf[i..i + 4].copy_from_slice(&[10, 20, 30, 255]);
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("b", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 2, y0: 2, x1: 4, y1: 4 });
+
+        let ok = mover_pixeles_seleccion(&mut model, 1, 1);
+        assert!(ok);
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [bp[i], bp[i + 1], bp[i + 2], bp[i + 3]]
+        };
+        // El origen se limpió.
+        assert_eq!(pix(2, 2), [0, 0, 0, 0]);
+        // Sólo el píxel que cae en (3,3) sobrevive (el resto se fue del
+        // lienzo).
+        assert_eq!(pix(3, 3), [10, 20, 30, 255]);
+        // La selección se clampeó a (3,3)..(4,4).
+        assert_eq!(
+            model.seleccion,
+            Some(RectImagen { x0: 3, y0: 3, x1: 4, y1: 4 })
+        );
+    }
+
+    #[test]
+    fn mover_seleccion_delta_cero_es_no_op() {
+        let mut model = modelo_minimo();
+        let buf = vec![200u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("b", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let ok = mover_pixeles_seleccion(&mut model, 0, 0);
+        assert!(!ok);
+        assert!(model.estado.contains("sin efecto"));
+    }
+
+    #[test]
+    fn hotkey_flechas_emiten_mover_con_paso_y_signo_correctos() {
+        let mut m = modelo_minimo();
+        // Sin selección, las flechas no emiten MoverSeleccion.
+        let s = hotkey_a_msg(&m, &ev_named(NamedKey::ArrowLeft, Modifiers::default()));
+        assert!(!matches!(s, Some(Msg::MoverSeleccion { .. })));
+        // Con selección: cada flecha con su signo, Shift = 10.
+        m.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_named(NamedKey::ArrowLeft, Modifiers::default())),
+            Some(Msg::MoverSeleccion { dx: -1, dy: 0 })
+        ));
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_named(NamedKey::ArrowRight, Modifiers::default())),
+            Some(Msg::MoverSeleccion { dx: 1, dy: 0 })
+        ));
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_named(NamedKey::ArrowUp, Modifiers::default())),
+            Some(Msg::MoverSeleccion { dx: 0, dy: -1 })
+        ));
+        let shift = Modifiers { shift: true, ..Default::default() };
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_named(NamedKey::ArrowDown, shift)),
+            Some(Msg::MoverSeleccion { dx: 0, dy: 10 })
+        ));
+    }
+
+    #[test]
+    fn msg_mover_seleccion_coalesce_y_undo_restaura() {
+        let mut model = modelo_minimo();
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        buf[0..4].copy_from_slice(&[200, 100, 50, 255]);
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let hash_inicial = h;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 1, y1: 1 });
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        // Tres nudges seguidos coalescen a una sola entrada.
+        for _ in 0..3 {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::MoverSeleccion { dx: 1, dy: 0 },
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(model.historial.len(), 2); // inicial + 1 coalescida
+        // Un solo Undo restaura el hash original de la capa.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
     }
 
     #[test]
