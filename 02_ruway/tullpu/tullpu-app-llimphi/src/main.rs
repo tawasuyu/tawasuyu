@@ -27,6 +27,20 @@
 //! `$XDG_RUNTIME_DIR/pixel-verbo.sock` lo usa; si no, cae al `ProveedorMock`
 //! en proceso — así el botón "Generar" igual funciona sin daemon corriendo.
 //! Cada cambio dispara `regenerar_stale_con_ia` + `componer` sincrónicamente.
+//!
+//! ## Hotkeys
+//!
+//! Actúan sobre la capa seleccionada (excepto los de export/picker que son
+//! globales). Si el picker está abierto las teclas van al filtro, no acá.
+//!
+//! - `Ctrl+P`         — abre fuzzy file picker para agregar capa
+//! - `Delete` / `Backspace` — eliminar capa
+//! - `Ctrl+D`         — duplicar capa
+//! - `F2`             — renombrar capa in-situ (Enter confirma · Esc cancela)
+//! - `V`              — toggle visibilidad
+//! - `B` / `Shift+B`  — ciclar blend forward / reverse
+//! - `[` / `]`        — opacidad ∓0.1
+//! - `Ctrl+S` / `Ctrl+Shift+S` — exportar PNG / WebP
 
 #![forbid(unsafe_code)]
 
@@ -42,9 +56,10 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, DragPhase, Handle, KeyEvent, View};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, NamedKey, View};
 use llimphi_widget_button::{button_styled, button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use pixel_verbo_core::{OpPixel, Proveedor};
 use pixel_verbo_daemon::ClienteBloqueante;
@@ -80,6 +95,10 @@ struct Model {
     imagenes_disponibles: Vec<PathBuf>,
     /// Estado del fuzzy picker. `None` cuando está cerrado.
     picker: Option<PickerState>,
+    /// Renombrado in-situ. `Some((uuid, input))` durante la edición —
+    /// la fila correspondiente pinta el text-input en vez del botón de
+    /// nombre. F2 entra, Enter confirma, Escape cancela.
+    renombrando: Option<(Uuid, TextInputState)>,
 }
 
 #[derive(Clone)]
@@ -88,6 +107,7 @@ enum Msg {
     ToggleVisible(Uuid),
     BumpOpacidad(Uuid, f32),
     CiclarBlend(Uuid),
+    CiclarBlendInverso(Uuid),
     MoverArriba(Uuid),
     MoverAbajo(Uuid),
     Duplicar(Uuid),
@@ -98,6 +118,10 @@ enum Msg {
     Exportar(FormatoExport),
     Picker(PickerMsg),
     FileDrop(PathBuf),
+    IniciarRenombrar(Uuid),
+    TeclaRenombrar(KeyEvent),
+    ConfirmarRenombrar,
+    CancelarRenombrar,
 }
 
 // =============================================================================
@@ -292,6 +316,7 @@ fn inicializar() -> Model {
         raiz,
         imagenes_disponibles,
         picker: None,
+        renombrando: None,
     };
     sincronizar_thumbs(&mut model);
     model
@@ -444,36 +469,52 @@ fn thumbnail_de_buffer(
 //  Ciclar blend modes (no hay dropdown todavía — clic cicla)
 // =============================================================================
 
+/// Ciclo canónico de blend modes (orden Photoshop: Normal → catálogo
+/// completo → Disolver → Normal). Lo declaramos una vez y derivamos
+/// `siguiente_blend` y `blend_anterior` indexando, así Shift+B y B son
+/// trivialmente inversos sin dos `match` paralelos que se desincronicen.
+const CICLO_BLEND: &[ModoFusion] = &[
+    ModoFusion::Normal,
+    ModoFusion::Multiplicar,
+    ModoFusion::Pantalla,
+    ModoFusion::Superponer,
+    ModoFusion::Aclarar,
+    ModoFusion::Oscurecer,
+    ModoFusion::Diferencia,
+    ModoFusion::Aditivo,
+    ModoFusion::SubExpQuemado,
+    ModoFusion::SubLinealQuemado,
+    ModoFusion::SobreExpAclarado,
+    ModoFusion::LuzFuerte,
+    ModoFusion::LuzSuave,
+    ModoFusion::LuzViva,
+    ModoFusion::LuzLineal,
+    ModoFusion::LuzPunto,
+    ModoFusion::MezclaDura,
+    ModoFusion::Exclusion,
+    ModoFusion::Resta,
+    ModoFusion::Division,
+    ModoFusion::HslTono,
+    ModoFusion::HslSaturacion,
+    ModoFusion::HslColor,
+    ModoFusion::HslLuminosidad,
+    ModoFusion::ColorMasOscuro,
+    ModoFusion::ColorMasClaro,
+    ModoFusion::Disolver,
+];
+
+fn indice_blend(b: ModoFusion) -> usize {
+    CICLO_BLEND.iter().position(|m| *m == b).unwrap_or(0)
+}
+
 fn siguiente_blend(b: ModoFusion) -> ModoFusion {
-    match b {
-        ModoFusion::Normal => ModoFusion::Multiplicar,
-        ModoFusion::Multiplicar => ModoFusion::Pantalla,
-        ModoFusion::Pantalla => ModoFusion::Superponer,
-        ModoFusion::Superponer => ModoFusion::Aclarar,
-        ModoFusion::Aclarar => ModoFusion::Oscurecer,
-        ModoFusion::Oscurecer => ModoFusion::Diferencia,
-        ModoFusion::Diferencia => ModoFusion::Aditivo,
-        ModoFusion::Aditivo => ModoFusion::SubExpQuemado,
-        ModoFusion::SubExpQuemado => ModoFusion::SubLinealQuemado,
-        ModoFusion::SubLinealQuemado => ModoFusion::SobreExpAclarado,
-        ModoFusion::SobreExpAclarado => ModoFusion::LuzFuerte,
-        ModoFusion::LuzFuerte => ModoFusion::LuzSuave,
-        ModoFusion::LuzSuave => ModoFusion::LuzViva,
-        ModoFusion::LuzViva => ModoFusion::LuzLineal,
-        ModoFusion::LuzLineal => ModoFusion::LuzPunto,
-        ModoFusion::LuzPunto => ModoFusion::MezclaDura,
-        ModoFusion::MezclaDura => ModoFusion::Exclusion,
-        ModoFusion::Exclusion => ModoFusion::Resta,
-        ModoFusion::Resta => ModoFusion::Division,
-        ModoFusion::Division => ModoFusion::HslTono,
-        ModoFusion::HslTono => ModoFusion::HslSaturacion,
-        ModoFusion::HslSaturacion => ModoFusion::HslColor,
-        ModoFusion::HslColor => ModoFusion::HslLuminosidad,
-        ModoFusion::HslLuminosidad => ModoFusion::ColorMasOscuro,
-        ModoFusion::ColorMasOscuro => ModoFusion::ColorMasClaro,
-        ModoFusion::ColorMasClaro => ModoFusion::Disolver,
-        ModoFusion::Disolver => ModoFusion::Normal,
-    }
+    let i = indice_blend(b);
+    CICLO_BLEND[(i + 1) % CICLO_BLEND.len()]
+}
+
+fn blend_anterior(b: ModoFusion) -> ModoFusion {
+    let i = indice_blend(b);
+    CICLO_BLEND[(i + CICLO_BLEND.len() - 1) % CICLO_BLEND.len()]
 }
 
 fn etiqueta_blend(b: ModoFusion) -> &'static str {
@@ -547,6 +588,7 @@ fn fila_capa(
     capa: &Capa,
     seleccionada: bool,
     thumb: Option<&Image>,
+    renombrando_input: Option<&TextInputState>,
 ) -> View<Msg> {
     let btn_pal = ButtonPalette::from_theme(theme);
     let nombre_op = match &capa.origen {
@@ -577,33 +619,65 @@ fn fila_capa(
         theme.fg_muted
     };
 
-    // Botón principal: selección de la capa, ocupa la mayor parte de la fila.
-    let nombre = button_styled(
-        etiqueta,
-        Style {
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(26.0_f32),
+    // Si esta capa está siendo renombrada, el bloque del nombre cambia a
+    // un text-input enfocado. El resto de los micro-controles (toggle,
+    // slider, blend, mover, dup, elim) sigue activo — no bloqueamos el
+    // resto de la fila durante la edición porque el modal de teclado ya
+    // routea los keypress al input.
+    let nombre: View<Msg> = match renombrando_input {
+        Some(input) => {
+            let tp = TextInputPalette::from_theme(theme);
+            View::new(Style {
+                flex_grow: 1.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(26.0_f32),
+                },
+                padding: Rect {
+                    left: length(2.0_f32),
+                    right: length(2.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![text_input_view(
+                input,
+                "nuevo nombre…",
+                true,
+                &tp,
+                // Click sobre el input cancela cualquier otra interacción
+                // ambigua re-foqueando la edición sobre la misma capa.
+                Msg::IniciarRenombrar(capa.id),
+            )])
+        }
+        None => button_styled(
+            etiqueta,
+            Style {
+                flex_grow: 1.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(26.0_f32),
+                },
+                padding: Rect {
+                    left: length(10.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
             },
-            padding: Rect {
-                left: length(10.0_f32),
-                right: length(8.0_f32),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
+            Alignment::Start,
+            &ButtonPalette {
+                bg: fila_bg,
+                bg_hover: theme.bg_button_hover,
+                fg,
+                radius: 4.0,
             },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        },
-        Alignment::Start,
-        &ButtonPalette {
-            bg: fila_bg,
-            bg_hover: theme.bg_button_hover,
-            fg,
-            radius: 4.0,
-        },
-        Msg::Seleccionar(capa.id),
-    );
+            Msg::Seleccionar(capa.id),
+        ),
+    };
 
     // Botones de control compactos a la derecha.
     let toggle = mini_btn(if capa.visible { "👁" } else { "—" }, Msg::ToggleVisible(capa.id), &btn_pal);
@@ -737,7 +811,12 @@ fn panel_capas(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     for capa in model.lienzo.capas.iter().rev() {
         let sel = model.seleccionada == Some(capa.id);
         let thumb = model.thumbs.get(&capa.contenido);
-        hijos.push(fila_capa(theme, capa, sel, thumb));
+        let renombrando = model
+            .renombrando
+            .as_ref()
+            .filter(|(id, _)| *id == capa.id)
+            .map(|(_, input)| input);
+        hijos.push(fila_capa(theme, capa, sel, thumb, renombrando));
     }
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -1042,6 +1121,12 @@ impl App for Tullpu {
                 }
                 aplicar_y_recomponer(&mut model);
             }
+            Msg::CiclarBlendInverso(id) => {
+                if let Some(c) = model.lienzo.capa_mut(id) {
+                    c.blend = blend_anterior(c.blend);
+                }
+                aplicar_y_recomponer(&mut model);
+            }
             Msg::MoverArriba(id) => {
                 // Reordenar no toca dependencias por Uuid, así que basta
                 // recomponer — `regenerar_stale_con_ia` corre igual y es
@@ -1103,6 +1188,38 @@ impl App for Tullpu {
             }
             Msg::Picker(pm) => {
                 model = aplicar_picker(model, pm);
+            }
+            Msg::IniciarRenombrar(id) => {
+                // Pre-cargar el text-input con el nombre actual para que
+                // editar sea "tocar el final" en vez de "borrar todo y
+                // tipear de nuevo".
+                if let Some(c) = model.lienzo.capas.iter().find(|c| c.id == id) {
+                    let mut input = TextInputState::new();
+                    input.set_text(c.nombre.clone());
+                    model.renombrando = Some((id, input));
+                    model.seleccionada = Some(id);
+                    model.estado = "renombrando · Enter confirma · Esc cancela".into();
+                }
+            }
+            Msg::TeclaRenombrar(ev) => {
+                if let Some((_, input)) = model.renombrando.as_mut() {
+                    input.apply_key(&ev);
+                }
+            }
+            Msg::ConfirmarRenombrar => {
+                if let Some((id, input)) = model.renombrando.take() {
+                    let nuevo = input.text();
+                    if !nuevo.trim().is_empty() {
+                        if let Some(c) = model.lienzo.capa_mut(id) {
+                            c.nombre = nuevo;
+                        }
+                    }
+                    model.estado = "listo".into();
+                }
+            }
+            Msg::CancelarRenombrar => {
+                model.renombrando = None;
+                model.estado = "listo".into();
             }
             Msg::FileDrop(path) => {
                 // Drag&drop OS-level: reusamos exactamente el mismo path
@@ -1179,6 +1296,7 @@ impl App for Tullpu {
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        use llimphi_ui::KeyState;
         // Picker abierto: el módulo decide qué hacer con cada tecla
         // (input, navegación, apply, escape). Tiene prioridad sobre los
         // atajos globales para que escribir en el filtro no abra otro popup.
@@ -1188,11 +1306,24 @@ impl App for Tullpu {
             }
             return None;
         }
+        // Renombrando una capa: las teclas van al text-input, salvo Enter
+        // (confirma) y Escape (cancela). Mismo patrón que el picker: el
+        // modo modal absorbe los atajos globales.
+        if model.renombrando.is_some() {
+            if event.state == KeyState::Pressed {
+                match &event.key {
+                    Key::Named(NamedKey::Enter) => return Some(Msg::ConfirmarRenombrar),
+                    Key::Named(NamedKey::Escape) => return Some(Msg::CancelarRenombrar),
+                    _ => {}
+                }
+            }
+            return Some(Msg::TeclaRenombrar(event.clone()));
+        }
         // Ctrl+P abre el fuzzy picker (mismo atajo que nada y VS Code).
         if picker::open_shortcut(event) {
             return Some(Msg::Picker(PickerMsg::Open));
         }
-        None
+        hotkey_a_msg(model, event)
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -1247,6 +1378,72 @@ fn op_etiqueta(op: &OpLocal) -> &'static str {
         OpLocal::Opacidad { .. } => "opacidad",
         OpLocal::Saturacion { .. } => "saturación",
         OpLocal::Tonalidad { .. } => "tonalidad",
+    }
+}
+
+// =============================================================================
+//  Hotkeys — atajos globales que actúan sobre la capa seleccionada
+// =============================================================================
+
+/// Traduce un `KeyEvent` a un `Msg` según el catálogo de atajos. Se asume
+/// que el llamante ya descartó el caso "picker abierto" — acá routeamos
+/// libremente sobre el modelo principal. Función pura para que el test
+/// pueda cubrir el dispatch sin levantar la app.
+///
+/// Catálogo:
+/// - `Delete` / `Backspace` → eliminar capa seleccionada
+/// - `Ctrl+D` → duplicar
+/// - `V` → toggle visibilidad
+/// - `B` → ciclar blend forward, `Shift+B` ciclar reverse
+/// - `[` / `]` → bump opacidad ∓0.1
+/// - `Ctrl+S` → export PNG, `Ctrl+Shift+S` → WebP
+/// - `Ctrl+Z` reservado para futuro undo (no implementado todavía)
+fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
+    use llimphi_ui::KeyState;
+    if event.state != KeyState::Pressed {
+        return None;
+    }
+    let m = event.modifiers;
+    // Atajos globales (no requieren selección).
+    match &event.key {
+        Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("s") => {
+            return Some(Msg::Exportar(FormatoExport::Png));
+        }
+        Key::Character(s) if m.ctrl && m.shift && s.eq_ignore_ascii_case("s") => {
+            return Some(Msg::Exportar(FormatoExport::Webp));
+        }
+        _ => {}
+    }
+    // El resto opera sobre la capa seleccionada.
+    let id = model.seleccionada?;
+    match &event.key {
+        Key::Named(NamedKey::F2) => Some(Msg::IniciarRenombrar(id)),
+        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) if !m.ctrl => {
+            Some(Msg::Eliminar(id))
+        }
+        Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("d") => {
+            Some(Msg::Duplicar(id))
+        }
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("v") => {
+            Some(Msg::ToggleVisible(id))
+        }
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("b") => {
+            // El cycle inverso se distingue por shift; sin shift es forward.
+            // Reutilizamos `CiclarBlend` para forward; para reverse emitimos
+            // un mensaje propio que el update conoce.
+            if m.shift {
+                Some(Msg::CiclarBlendInverso(id))
+            } else {
+                Some(Msg::CiclarBlend(id))
+            }
+        }
+        Key::Character(s) if !m.ctrl && !m.alt && s == "[" => {
+            Some(Msg::BumpOpacidad(id, -0.1))
+        }
+        Key::Character(s) if !m.ctrl && !m.alt && s == "]" => {
+            Some(Msg::BumpOpacidad(id, 0.1))
+        }
+        _ => None,
     }
 }
 
@@ -1337,6 +1534,260 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use llimphi_ui::{KeyState, Modifiers};
+
+    fn ev_char(s: &str, mods: Modifiers) -> KeyEvent {
+        KeyEvent {
+            key: Key::Character(s.into()),
+            state: KeyState::Pressed,
+            text: Some(s.to_string()),
+            modifiers: mods,
+            repeat: false,
+        }
+    }
+    fn ev_named(k: NamedKey, mods: Modifiers) -> KeyEvent {
+        KeyEvent {
+            key: Key::Named(k),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: mods,
+            repeat: false,
+        }
+    }
+    fn modelo_minimo() -> Model {
+        // Lienzo 4×4 con una capa raster, picker cerrado.
+        let mut almacen = AlmacenEnMemoria::nuevo();
+        let hash = almacen.insertar(vec![0u8; 4 * 4 * 4]);
+        let mut lienzo = Lienzo::nuevo(4, 4);
+        let cap = Capa::raster("c", hash);
+        let id = cap.id;
+        lienzo.apilar(cap);
+        Model {
+            lienzo,
+            almacen,
+            seleccionada: Some(id),
+            imagen: None,
+            estado: "test".into(),
+            proveedor: Box::new(pixel_verbo_mock::ProveedorMock::nuevo()),
+            proveedor_etiqueta: "test".into(),
+            thumbs: HashMap::new(),
+            raiz: PathBuf::from("/"),
+            imagenes_disponibles: Vec::new(),
+            picker: None,
+            renombrando: None,
+        }
+    }
+
+    #[test]
+    fn blend_anterior_es_inverso_de_siguiente() {
+        // Probar 5 modos elegidos a lo largo del ciclo para confirmar
+        // que las dos funciones realmente son inversas — protege contra
+        // que alguien agregue un modo al `siguiente` y se olvide del otro
+        // (ahora son derivados del mismo `CICLO_BLEND` así que es
+        // imposible, pero el test guarda la invariante).
+        for &m in [
+            ModoFusion::Normal,
+            ModoFusion::Multiplicar,
+            ModoFusion::LuzSuave,
+            ModoFusion::HslColor,
+            ModoFusion::Disolver,
+        ]
+        .iter()
+        {
+            assert_eq!(blend_anterior(siguiente_blend(m)), m);
+            assert_eq!(siguiente_blend(blend_anterior(m)), m);
+        }
+        // El ciclo debe rotar exactamente con la cantidad de variantes:
+        // aplicar `siguiente` CICLO_BLEND.len() veces es la identidad.
+        let mut x = ModoFusion::Normal;
+        for _ in 0..CICLO_BLEND.len() {
+            x = siguiente_blend(x);
+        }
+        assert_eq!(x, ModoFusion::Normal);
+    }
+
+    #[test]
+    fn hotkey_delete_elimina_capa_seleccionada() {
+        let m = modelo_minimo();
+        let id = m.seleccionada.unwrap();
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Delete, Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::Eliminar(x)) if x == id));
+    }
+
+    #[test]
+    fn hotkey_ctrl_d_duplica() {
+        let m = modelo_minimo();
+        let id = m.seleccionada.unwrap();
+        let mods = Modifiers { ctrl: true, ..Default::default() };
+        let msg = hotkey_a_msg(&m, &ev_char("d", mods));
+        assert!(matches!(msg, Some(Msg::Duplicar(x)) if x == id));
+    }
+
+    #[test]
+    fn hotkey_v_toggle_visible() {
+        let m = modelo_minimo();
+        let id = m.seleccionada.unwrap();
+        let msg = hotkey_a_msg(&m, &ev_char("v", Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::ToggleVisible(x)) if x == id));
+    }
+
+    #[test]
+    fn hotkey_b_y_shift_b_son_inversos_de_dispatch() {
+        let m = modelo_minimo();
+        let id = m.seleccionada.unwrap();
+        let fwd = hotkey_a_msg(&m, &ev_char("b", Modifiers::default()));
+        assert!(matches!(fwd, Some(Msg::CiclarBlend(x)) if x == id));
+        let bwd = hotkey_a_msg(
+            &m,
+            &ev_char("b", Modifiers { shift: true, ..Default::default() }),
+        );
+        assert!(matches!(bwd, Some(Msg::CiclarBlendInverso(x)) if x == id));
+    }
+
+    #[test]
+    fn hotkey_brackets_bump_opacidad_signo_correcto() {
+        let m = modelo_minimo();
+        let id = m.seleccionada.unwrap();
+        let baja = hotkey_a_msg(&m, &ev_char("[", Modifiers::default()));
+        let sube = hotkey_a_msg(&m, &ev_char("]", Modifiers::default()));
+        match baja {
+            Some(Msg::BumpOpacidad(x, d)) if x == id && (d + 0.1).abs() < 1e-6 => {}
+            other => panic!("[ no dió −0.1: {other:?}", other = other.is_some()),
+        }
+        match sube {
+            Some(Msg::BumpOpacidad(x, d)) if x == id && (d - 0.1).abs() < 1e-6 => {}
+            other => panic!("] no dió +0.1: {other:?}", other = other.is_some()),
+        }
+    }
+
+    #[test]
+    fn hotkey_ctrl_s_y_ctrl_shift_s_exportan_distinto_formato() {
+        let m = modelo_minimo();
+        let png = hotkey_a_msg(
+            &m,
+            &ev_char("s", Modifiers { ctrl: true, ..Default::default() }),
+        );
+        assert!(matches!(png, Some(Msg::Exportar(FormatoExport::Png))));
+        let webp = hotkey_a_msg(
+            &m,
+            &ev_char(
+                "s",
+                Modifiers { ctrl: true, shift: true, ..Default::default() },
+            ),
+        );
+        assert!(matches!(webp, Some(Msg::Exportar(FormatoExport::Webp))));
+    }
+
+    #[test]
+    fn hotkey_sin_seleccion_no_dispara_msg_de_capa() {
+        let mut m = modelo_minimo();
+        m.seleccionada = None;
+        // Sin selección, Delete/V/B/[]/Ctrl+D no producen nada.
+        for ev in [
+            ev_named(NamedKey::Delete, Modifiers::default()),
+            ev_char("v", Modifiers::default()),
+            ev_char("b", Modifiers::default()),
+            ev_char("[", Modifiers::default()),
+            ev_char("]", Modifiers::default()),
+            ev_char("d", Modifiers { ctrl: true, ..Default::default() }),
+        ] {
+            assert!(hotkey_a_msg(&m, &ev).is_none());
+        }
+        // Pero Ctrl+S sí — exporta el lienzo entero, no depende de capa.
+        let png = hotkey_a_msg(
+            &m,
+            &ev_char("s", Modifiers { ctrl: true, ..Default::default() }),
+        );
+        assert!(matches!(png, Some(Msg::Exportar(FormatoExport::Png))));
+    }
+
+    #[test]
+    fn hotkey_f2_inicia_renombrado() {
+        let m = modelo_minimo();
+        let id = m.seleccionada.unwrap();
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::F2, Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::IniciarRenombrar(x)) if x == id));
+    }
+
+    #[test]
+    fn renombrar_precarga_nombre_y_lo_actualiza_en_confirmar() {
+        // Simulo el flujo entero del update sin la UI: IniciarRenombrar
+        // crea el TextInputState con el nombre actual; las teclas lo
+        // editan; Confirmar lo escribe a la capa.
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        // Renombrar a "fondo nuevo" — la app pone el nombre actual y el
+        // user va al final y tipea. Acá lo simplifico: set_text directo.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarRenombrar(id),
+            &Handle::for_test(),
+        );
+        assert!(model.renombrando.is_some());
+        // El input arranca con el nombre actual de la capa.
+        let (_, input) = model.renombrando.as_ref().unwrap();
+        assert_eq!(input.text(), "c");
+        // Edito directamente vía set_text — equivale a borrar + tipear.
+        if let Some((_, input)) = model.renombrando.as_mut() {
+            input.set_text("fondo nuevo");
+        }
+        model = <Tullpu as App>::update(model, Msg::ConfirmarRenombrar, &Handle::for_test());
+        assert!(model.renombrando.is_none());
+        assert_eq!(
+            model.lienzo.capas.iter().find(|c| c.id == id).unwrap().nombre,
+            "fondo nuevo"
+        );
+    }
+
+    #[test]
+    fn cancelar_renombrado_no_cambia_el_nombre() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let nombre_original = model
+            .lienzo
+            .capas
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .nombre
+            .clone();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarRenombrar(id),
+            &Handle::for_test(),
+        );
+        if let Some((_, input)) = model.renombrando.as_mut() {
+            input.set_text("intento descartado");
+        }
+        model = <Tullpu as App>::update(model, Msg::CancelarRenombrar, &Handle::for_test());
+        assert!(model.renombrando.is_none());
+        assert_eq!(
+            model.lienzo.capas.iter().find(|c| c.id == id).unwrap().nombre,
+            nombre_original
+        );
+    }
+
+    #[test]
+    fn confirmar_renombrado_vacio_no_pisa_el_nombre() {
+        // Un input vacío al confirmar no es un nombre válido (rompería
+        // la UX — la fila quedaría sin etiqueta). El update lo descarta y
+        // mantiene el nombre original.
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarRenombrar(id),
+            &Handle::for_test(),
+        );
+        if let Some((_, input)) = model.renombrando.as_mut() {
+            input.set_text("   ");
+        }
+        model = <Tullpu as App>::update(model, Msg::ConfirmarRenombrar, &Handle::for_test());
+        assert_eq!(
+            model.lienzo.capas.iter().find(|c| c.id == id).unwrap().nombre,
+            "c"
+        );
+    }
 
     #[test]
     fn ajustar_dims_iguales_devuelve_sin_tocar() {

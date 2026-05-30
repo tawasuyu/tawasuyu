@@ -24,6 +24,7 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-slider = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
 llimphi-module-file-picker = { workspace = true }
 image = { workspace = true }
 uuid = { workspace = true }
