@@ -109,6 +109,18 @@ impl Discerner for MagicBytes {
             x if x.starts_with(b"GIF87a") || x.starts_with(b"GIF89a") => {
                 Some(d("gif", "image/gif", Some("gallery")))
             }
+            // RIFF .... WEBP — imagen WebP (RIFF con FourCC "WEBP" en off 8).
+            x if x.len() >= 12 && x.starts_with(b"RIFF") && &x[8..12] == b"WEBP" => {
+                Some(d("webp", "image/webp", Some("gallery")))
+            }
+            // EBML — contenedor Matroska/WebM. Lo tratamos como video; el
+            // visor (media-source-webm) toma el track AV1. .mka (audio-only)
+            // caería igual acá, pero el visor lo reporta como "sin video".
+            x if x.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) => {
+                Some(d("webm", "video/webm", Some("video")))
+            }
+            // IVF — contenedor crudo de un stream AV1/VP9 ("DKIF").
+            x if x.starts_with(b"DKIF") => Some(d("ivf", "video/x-ivf", Some("video"))),
             _ => None,
         }
     }
@@ -266,6 +278,22 @@ mod tests {
         let r = discern(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0]).unwrap();
         assert_eq!(r.mime.as_deref(), Some("image/png"));
         assert!(r.confidence > 0.9);
+    }
+
+    #[test]
+    fn webm_ebml_detected_como_video() {
+        let mut bytes = vec![0x1A, 0x45, 0xDF, 0xA3];
+        bytes.extend_from_slice(b"\x01\x00\x00\x00\x00\x00\x00\x1f");
+        let r = discern(&bytes).unwrap();
+        assert_eq!(r.mime.as_deref(), Some("video/webm"));
+        assert_eq!(r.lens.as_deref(), Some("video"));
+    }
+
+    #[test]
+    fn ivf_detected_como_video() {
+        let r = discern(b"DKIF\x00\x00\x20\x00AV01").unwrap();
+        assert_eq!(r.mime.as_deref(), Some("video/x-ivf"));
+        assert_eq!(r.lens.as_deref(), Some("video"));
     }
 
     #[test]

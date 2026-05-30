@@ -30,6 +30,7 @@
 //!   se suscriben.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 mod viewer_registry;
 use viewer_registry::ViewerKind;
@@ -54,22 +55,30 @@ use nahual_text_viewer_llimphi::{
     load_preview, text_viewer_view, PreviewState, TextViewerPalette,
     DEFAULT_PREVIEW_BYTES_MAX,
 };
+use nahual_video_viewer_llimphi::{
+    video_viewer_view, VideoViewerPalette, VideoViewerState,
+};
 use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
     llimphi_ui::run::<Shell>();
 }
 
-/// Qué viewer pinta el panel derecho. Se decide por extensión del
-/// path seleccionado en [`detect_kind`]; los archivos sin match
-/// caen como `Text` y el text viewer los muestra como binarios si
-/// no son UTF-8 — es un fallback razonable que pasa por la guard
-/// existente de `load_preview`.
+/// Qué viewer pinta el panel derecho. Lo decide [`viewer_registry::pick`]
+/// sobre el `Discernment` del **contenido** (no la extensión); los
+/// archivos sin match caen como `Text` y el text viewer los muestra como
+/// binarios si no son UTF-8 — fallback que pasa por la guard de
+/// `load_preview`.
 enum PreviewPane {
     Empty,
     Text(PreviewState),
     Image(ImagePreviewState),
+    Video(VideoViewerState),
 }
+
+/// Cadencia del avance de video (~30 Hz). `spawn_periodic` la dispara
+/// siempre; el `update` sólo tickea si el panel derecho es un video.
+const VIDEO_TICK: Duration = Duration::from_millis(33);
 
 struct Model {
     explorer: FileExplorerState,
@@ -96,6 +105,8 @@ enum Msg {
     ResizeList(f32),
     /// El bus `wawa-config` publicó una versión nueva.
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
+    /// Pulso de reloj del reproductor de video (~30 Hz).
+    VideoTick,
 }
 
 struct Shell;
@@ -122,6 +133,10 @@ impl App for Shell {
         })
         .map_err(|e| eprintln!("nahual-shell · wawa-config watcher: {e}"))
         .ok();
+        // El reproductor de video necesita un reloj externo: cada pulso
+        // avanza la fuente un frame. Es barato cuando no hay video abierto
+        // (el update sale temprano si el panel no es Video).
+        handle.spawn_periodic(VIDEO_TICK, || Msg::VideoTick);
         Model {
             explorer: FileExplorerState::new(cwd),
             list_width: 400.0,
@@ -208,6 +223,11 @@ impl App for Shell {
                 // nahual-shell no usa rimay_localize hoy; si en el
                 // futuro lo hace, agregar el set_locale acá.
             }
+            Msg::VideoTick => {
+                if let PreviewPane::Video(state) = &mut m.preview {
+                    state.tick(VIDEO_TICK);
+                }
+            }
         }
         m
     }
@@ -217,6 +237,7 @@ impl App for Shell {
         let splitter_palette = SplitterPalette::from_theme(&theme);
         let text_palette = TextViewerPalette::from_theme(&theme);
         let image_palette = ImageViewerPalette::from_theme(&theme);
+        let video_palette = VideoViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = file_explorer_view::<Msg, _>(
             &model.explorer,
@@ -239,6 +260,7 @@ impl App for Shell {
                 model.preview_of.as_deref(),
                 &image_palette,
             ),
+            PreviewPane::Video(state) => video_viewer_view::<Msg>(state, &video_palette),
         };
 
         let body = splitter_two(
@@ -332,7 +354,24 @@ fn load_for(path: &Path) -> PreviewPane {
 
     match viewer_registry::pick(discernment.as_ref()) {
         ViewerKind::Image => PreviewPane::Image(load_image(path, DEFAULT_IMAGE_BYTES_MAX)),
+        ViewerKind::Video => PreviewPane::Video(open_video(path)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
+    }
+}
+
+/// Abre un archivo de video con el constructor adecuado del visor. El
+/// contenido ya se discernió como video; acá la extensión sólo decide
+/// el *demuxer*: WebM/MKV (EBML) van por `media-source-webm`, el resto
+/// (incluido `.ivf`) por el path AV1 crudo. Si la extensión miente, el
+/// visor cae a estado de error y lo muestra en su header.
+fn open_video(path: &Path) -> VideoViewerState {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("webm" | "mkv") => VideoViewerState::open_webm(path),
+        _ => VideoViewerState::open_av1(path),
     }
 }
 

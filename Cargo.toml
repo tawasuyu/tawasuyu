@@ -670,6 +670,7 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 # ============================================================
 nahual-text-viewer-llimphi = { path = "02_ruway/nahual/nahual-text-viewer-llimphi" }
 nahual-image-viewer-llimphi = { path = "02_ruway/nahual/nahual-image-viewer-llimphi" }
+nahual-video-viewer-llimphi = { path = "02_ruway/nahual/nahual-video-viewer-llimphi" }
 nahual-file-explorer-llimphi = { path = "02_ruway/nahual/nahual-file-explorer-llimphi" }
 
 # ============================================================

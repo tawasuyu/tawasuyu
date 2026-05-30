@@ -21,6 +21,9 @@ use shuma_discern::Discernment;
 pub enum ViewerKind {
     /// Visor de imágenes (`nahual-image-viewer-llimphi`).
     Image,
+    /// Reproductor de video (`nahual-video-viewer-llimphi`); abre
+    /// WebM/MKV (AV1) e IVF con el decoder nativo puro-Rust.
+    Video,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
@@ -28,9 +31,10 @@ pub enum ViewerKind {
 
 /// Elige el visor para un discernimiento. La regla, en orden:
 ///
-/// 1. Si el `lens` lo dice explícitamente (`gallery` → imagen).
-/// 2. Si el `mime` arranca con `image/` (cubre formatos que magic-bytes
-///    detecta sin asignar lens).
+/// 1. Si el `lens` lo dice explícitamente (`gallery` → imagen,
+///    `video` → reproductor).
+/// 2. Si el `mime` arranca con `image/` o `video/` (cubre formatos que
+///    magic-bytes detecta sin asignar lens).
 /// 3. Fallback a texto — el visor que nunca falla feo.
 ///
 /// Un `None` (no se pudo discernir, p.ej. archivo ilegible) cae a texto.
@@ -38,15 +42,15 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
     let Some(d) = discernment else {
         return ViewerKind::Text;
     };
-    if matches!(d.lens.as_deref(), Some("gallery")) {
-        return ViewerKind::Image;
+    match d.lens.as_deref() {
+        Some("gallery") => return ViewerKind::Image,
+        Some("video") => return ViewerKind::Video,
+        _ => {}
     }
-    if d
-        .mime
-        .as_deref()
-        .is_some_and(|m| m.starts_with("image/"))
-    {
-        return ViewerKind::Image;
+    match d.mime.as_deref() {
+        Some(m) if m.starts_with("image/") => return ViewerKind::Image,
+        Some(m) if m.starts_with("video/") => return ViewerKind::Video,
+        _ => {}
     }
     ViewerKind::Text
 }
@@ -73,6 +77,16 @@ mod tests {
     #[test]
     fn mime_image_sin_lens_va_a_imagen() {
         assert_eq!(pick(Some(&disc(None, Some("image/webp")))), ViewerKind::Image);
+    }
+
+    #[test]
+    fn video_lens_va_a_video() {
+        assert_eq!(pick(Some(&disc(Some("video"), Some("video/webm")))), ViewerKind::Video);
+    }
+
+    #[test]
+    fn mime_video_sin_lens_va_a_video() {
+        assert_eq!(pick(Some(&disc(None, Some("video/x-ivf")))), ViewerKind::Video);
     }
 
     #[test]
