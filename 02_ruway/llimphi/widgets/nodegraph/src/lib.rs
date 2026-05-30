@@ -73,6 +73,17 @@ pub struct Wire {
     pub to_input: PinIdx,
 }
 
+/// Tinte opcional de un nodo resaltado. Cada campo `Some` sobrescribe
+/// el color correspondiente de la paleta global para *ese* nodo; los
+/// `None` heredan la paleta. Sirve para que el caller marque un subgrafo
+/// (p.ej. el cono afectado por un morfismo) sin tocar el resto.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NodeTint {
+    pub bg_node: Option<Color>,
+    pub bg_title: Option<Color>,
+    pub fg_title: Option<Color>,
+}
+
 /// Paleta del lienzo. Hereda del [`llimphi_theme::Theme`] semántico.
 #[derive(Debug, Clone, Copy)]
 pub struct NodegraphPalette {
@@ -238,23 +249,60 @@ where
         Fn(NodeId, PinIdx, NodeId, PinIdx) -> Option<Msg> + Send + Sync + 'static,
     FRight: Fn(NodeId) -> Option<Msg>,
 {
+    nodegraph_view_styled(
+        nodes,
+        wires,
+        palette,
+        metrics,
+        on_drag_node,
+        on_connect,
+        on_right_click_node,
+        None,
+        None,
+    )
+}
+
+/// Variante con realce: además de los handlers, acepta dos closures de
+/// estilo evaluados en construcción —`node_tint(id)` tiñe nodos puntuales
+/// y `wire_tint(&Wire)` recolorea cables— para que el caller marque un
+/// subgrafo (cono afectado, ruta crítica, celda con error…) sin tocar la
+/// paleta global. Ambos `None` = render idéntico a [`nodegraph_view`].
+#[allow(clippy::too_many_arguments)]
+pub fn nodegraph_view_styled<Msg, FDrag, FConnect, FRight>(
+    nodes: &[NodeSpec],
+    wires: &[Wire],
+    palette: &NodegraphPalette,
+    metrics: &NodegraphMetrics,
+    on_drag_node: FDrag,
+    on_connect: FConnect,
+    on_right_click_node: Option<FRight>,
+    node_tint: Option<&dyn Fn(NodeId) -> Option<NodeTint>>,
+    wire_tint: Option<&dyn Fn(&Wire) -> Option<Color>>,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    FDrag: Fn(NodeId, DragPhase, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    FConnect:
+        Fn(NodeId, PinIdx, NodeId, PinIdx) -> Option<Msg> + Send + Sync + 'static,
+    FRight: Fn(NodeId) -> Option<Msg>,
+{
     let on_drag: DragNodeFn<Msg> = Arc::new(on_drag_node);
     let on_connect: ConnectFn<Msg> = Arc::new(on_connect);
 
-    let wires_pre = precompute_wires(nodes, wires, metrics);
-    let wire_color = palette.wire;
+    let painted = precompute_wires(nodes, wires, metrics, palette.wire, wire_tint);
     let stroke_px = metrics.wire_stroke;
 
     let mut children: Vec<View<Msg>> = Vec::with_capacity(nodes.len() + 1);
 
     // Capa 0 — cables (van detrás de los nodos).
-    children.push(wires_layer(wires_pre, wire_color, stroke_px));
+    children.push(wires_layer(painted, stroke_px));
 
     // Capa 1..N — nodos.
     for node in nodes {
         let right_click_msg = on_right_click_node
             .as_ref()
             .and_then(|f| f(node.id));
+        let tint = node_tint.and_then(|f| f(node.id));
         children.push(node_view(
             node,
             palette,
@@ -262,6 +310,7 @@ where
             &on_drag,
             &on_connect,
             right_click_msg,
+            tint,
         ));
     }
 
@@ -283,12 +332,15 @@ struct WirePainted {
     y1: f32,
     x2: f32,
     y2: f32,
+    color: Color,
 }
 
 fn precompute_wires(
     nodes: &[NodeSpec],
     wires: &[Wire],
     metrics: &NodegraphMetrics,
+    default_color: Color,
+    wire_tint: Option<&dyn Fn(&Wire) -> Option<Color>>,
 ) -> Vec<WirePainted> {
     let mut out = Vec::with_capacity(wires.len());
     for w in wires {
@@ -299,13 +351,20 @@ fn precompute_wires(
             let y1 = metrics.output_pin_y(a.y, w.from_output);
             let x2 = b.x;
             let y2 = metrics.input_pin_y(b.y, w.to_input);
-            out.push(WirePainted { x1, y1, x2, y2 });
+            let color = wire_tint.and_then(|f| f(w)).unwrap_or(default_color);
+            out.push(WirePainted {
+                x1,
+                y1,
+                x2,
+                y2,
+                color,
+            });
         }
     }
     out
 }
 
-fn wires_layer<Msg>(wires: Vec<WirePainted>, color: Color, stroke_px: f32) -> View<Msg>
+fn wires_layer<Msg>(wires: Vec<WirePainted>, stroke_px: f32) -> View<Msg>
 where
     Msg: Clone + 'static,
 {
@@ -339,7 +398,7 @@ where
             let mut path = BezPath::new();
             path.move_to((x1, y1));
             path.curve_to((x1 + dx, y1), (x2 - dx, y2), (x2, y2));
-            scene.stroke(&stroke, Affine::IDENTITY, color, None, &path);
+            scene.stroke(&stroke, Affine::IDENTITY, w.color, None, &path);
         }
     })
 }
@@ -351,6 +410,7 @@ fn node_view<Msg>(
     on_drag: &DragNodeFn<Msg>,
     on_connect: &ConnectFn<Msg>,
     on_right_click_msg: Option<Msg>,
+    tint: Option<NodeTint>,
 ) -> View<Msg>
 where
     Msg: Clone + Send + Sync + 'static,
@@ -358,6 +418,12 @@ where
     let n_in = node.inputs.len();
     let n_out = node.outputs.len();
     let height = metrics.node_height(n_in, n_out);
+
+    // Colores efectivos: el tinte sobrescribe la paleta por-campo.
+    let tint = tint.unwrap_or_default();
+    let bg_node = tint.bg_node.unwrap_or(palette.bg_node);
+    let bg_title = tint.bg_title.unwrap_or(palette.bg_title);
+    let fg_title = tint.fg_title.unwrap_or(palette.fg_title);
 
     let node_id = node.id;
     let drag = on_drag.clone();
@@ -375,11 +441,11 @@ where
         },
         ..Default::default()
     })
-    .fill(palette.bg_title)
+    .fill(bg_title)
     .text_aligned(
         node.label.clone(),
         metrics.title_text_size,
-        palette.fg_title,
+        fg_title,
         Alignment::Start,
     )
     .draggable(move |phase, dx, dy| (drag)(node_id, phase, dx, dy));
@@ -441,7 +507,7 @@ where
         },
         ..Default::default()
     })
-    .fill(palette.bg_node)
+    .fill(bg_node)
     .radius(metrics.node_radius)
     .children(vec![title_bar, pin_layer])
 }
@@ -613,7 +679,7 @@ mod tests {
             to_input: 0,
         }];
         let m = NodegraphMetrics::default();
-        let pre = precompute_wires(&nodes, &wires, &m);
+        let pre = precompute_wires(&nodes, &wires, &m, Color::from_rgba8(0,0,0,255), None);
         assert!(pre.is_empty());
     }
 
@@ -644,7 +710,7 @@ mod tests {
             to_input: 0,
         }];
         let m = NodegraphMetrics::default();
-        let pre = precompute_wires(&nodes, &wires, &m);
+        let pre = precompute_wires(&nodes, &wires, &m, Color::from_rgba8(0,0,0,255), None);
         assert_eq!(pre.len(), 1);
         assert!((pre[0].x1 - m.node_width).abs() < 1e-3);
         assert!((pre[0].x2 - 200.0).abs() < 1e-3);

@@ -75,7 +75,7 @@ use llimphi_widget_field::{field_view, FieldPalette, FieldSpec as FieldWidgetSpe
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_nodegraph::{
-    nodegraph_view, NodeId, NodeSpec, NodegraphMetrics, NodegraphPalette, Wire,
+    nodegraph_view_styled, NodeId, NodeSpec, NodeTint, NodegraphMetrics, NodegraphPalette, Wire,
 };
 
 use nahual_meta_runtime::{
@@ -192,6 +192,12 @@ enum Msg {
         dx: f32,
         dy: f32,
     },
+    /// Click-derecho sobre un morfismo en la vista grafo: selecciona/
+    /// deselecciona para resaltar su cono de dependencias.
+    SelectGraphNode {
+        mod_idx: usize,
+        id: NodeId,
+    },
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -269,6 +275,10 @@ struct Model {
     /// `(mod_idx, node_id)`. Vacío = layout automático por rango
     /// topológico; al arrastrar un nodo se fija su `(x, y)` acá.
     graph_pos: BTreeMap<(usize, NodeId), (f32, f32)>,
+    /// Morfismo seleccionado en la vista grafo (`mod_idx`, `node_id`).
+    /// Click-derecho lo fija y resalta su cono (aguas arriba + abajo);
+    /// volver a clickearlo lo limpia.
+    graph_selected: Option<(usize, NodeId)>,
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
@@ -405,6 +415,7 @@ impl App for NakuiApp {
             report_filters: BTreeSet::new(),
             drill: None,
             graph_pos: BTreeMap::new(),
+            graph_selected: None,
         }
     }
 
@@ -680,6 +691,14 @@ impl App for NakuiApp {
                     (mod_idx, id),
                     ((base.0 + dx).max(0.0), (base.1 + dy).max(0.0)),
                 );
+            }
+            Msg::SelectGraphNode { mod_idx, id } => {
+                // Toggle: re-clickear el mismo nodo limpia la selección.
+                m.graph_selected = if m.graph_selected == Some((mod_idx, id)) {
+                    None
+                } else {
+                    Some((mod_idx, id))
+                };
             }
         }
         m
@@ -1321,16 +1340,89 @@ fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, theme: &Them
 
     let palette = NodegraphPalette::from_theme(theme);
     let metrics = NodegraphMetrics::default();
-    let canvas = nodegraph_view(
+
+    // Selección activa (si el morfismo seleccionado pertenece a este
+    // módulo y sigue existiendo) y su cono: nodos aguas abajo (lo que
+    // el morfismo afecta) y aguas arriba (de lo que depende).
+    let selected: Option<NodeId> = match model.graph_selected {
+        Some((mi, id)) if mi == mod_idx && (id as usize) < nodes.len() => Some(id),
+        _ => None,
+    };
+    let cone = selected.map(|sel| graph_cone(sel, &wires, nodes.len()));
+
+    // Tintes derivados del tema (el cono se pinta sólo si hay selección).
+    let sel_tint = NodeTint {
+        bg_node: Some(theme.bg_selected),
+        bg_title: Some(theme.accent),
+        fg_title: Some(theme.bg_app),
+    };
+    let down_tint = NodeTint {
+        bg_node: Some(Color::from_rgba8(40, 33, 18, 255)),
+        bg_title: Some(Color::from_rgba8(150, 110, 30, 255)),
+        fg_title: Some(theme.fg_text),
+    };
+    let up_tint = NodeTint {
+        bg_node: Some(Color::from_rgba8(16, 30, 36, 255)),
+        bg_title: Some(Color::from_rgba8(30, 100, 120, 255)),
+        fg_title: Some(theme.fg_text),
+    };
+    let dim_tint = NodeTint {
+        bg_node: Some(theme.bg_panel_alt),
+        bg_title: Some(theme.bg_panel_alt),
+        fg_title: Some(theme.fg_placeholder),
+    };
+    let wire_hot = theme.accent;
+    let wire_dim = theme.border;
+
+    let node_tint_fn = |id: NodeId| -> Option<NodeTint> {
+        let sel = selected?;
+        let (down, up) = cone.as_ref()?;
+        if id == sel {
+            Some(sel_tint)
+        } else if down.contains(&id) {
+            Some(down_tint)
+        } else if up.contains(&id) {
+            Some(up_tint)
+        } else {
+            Some(dim_tint)
+        }
+    };
+    // Un cable se resalta si ambos extremos están en el cono resaltado
+    // (selección ∪ aguas arriba ∪ aguas abajo); el resto se atenúa.
+    let wire_tint_fn = |w: &Wire| -> Option<Color> {
+        let sel = selected?;
+        let (down, up) = cone.as_ref()?;
+        let lit = |n: NodeId| n == sel || down.contains(&n) || up.contains(&n);
+        Some(if lit(w.from_node) && lit(w.to_node) {
+            wire_hot
+        } else {
+            wire_dim
+        })
+    };
+
+    let (node_tint, wire_tint): (
+        Option<&dyn Fn(NodeId) -> Option<NodeTint>>,
+        Option<&dyn Fn(&Wire) -> Option<Color>>,
+    ) = if selected.is_some() {
+        (Some(&node_tint_fn), Some(&wire_tint_fn))
+    } else {
+        (None, None)
+    };
+
+    let canvas = nodegraph_view_styled(
         &nodes,
         &wires,
         &palette,
         &metrics,
-        // Arrastre de nodo: el delta se integra en `update`.
+        // Arrastre de nodo (botón izquierdo): el delta se integra en `update`.
         move |id, _phase: DragPhase, dx, dy| Some(Msg::DragGraphNode { mod_idx, id, dx, dy }),
         // El grafo de morfismos es read-only: no se crean cables a mano
         // (las aristas las dicta el manifest, no la UI).
         |_fn, _fp, _tn, _tp| None,
+        // Click-derecho sobre la barra de título: selecciona el cono.
+        Some(move |id: NodeId| Some(Msg::SelectGraphNode { mod_idx, id })),
+        node_tint,
+        wire_tint,
     );
 
     let n_nodes = data.nodes.len();
@@ -1343,13 +1435,16 @@ fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, theme: &Them
     if let Some(sub) = &gv.subtitle {
         header.push(text_line(sub.clone(), 11.0, theme.fg_muted));
     }
-    header.push(text_line(
-        format!(
-            "{n_nodes} morfismos · {n_edges} aristas de flujo — arrastrá un nodo por su barra de título para reorganizar."
+    let hint = match selected {
+        Some(id) => format!(
+            "{n_nodes} morfismos · {n_edges} aristas — resaltando el cono de «{}» (ámbar = afecta · turquesa = depende); click-derecho de nuevo para limpiar.",
+            nodes[id as usize].label
         ),
-        11.0,
-        theme.fg_muted,
-    ));
+        None => format!(
+            "{n_nodes} morfismos · {n_edges} aristas de flujo — arrastrá (botón izq.) para reorganizar; click-derecho sobre un morfismo resalta su cono."
+        ),
+    };
+    header.push(text_line(hint, 11.0, theme.fg_muted));
 
     // Lienzo dentro de una caja flex-grow para que ocupe el alto
     // restante bajo el encabezado.
@@ -1440,6 +1535,40 @@ fn graph_base_pos(model: &Model, mod_idx: usize, id: NodeId) -> (f32, f32) {
             .unwrap_or((GRAPH_ORIGIN_X, GRAPH_ORIGIN_Y)),
         None => (GRAPH_ORIGIN_X, GRAPH_ORIGIN_Y),
     }
+}
+
+/// Cono de dependencias de `sel` sobre el grafo dado por `wires` (con
+/// `n` nodos cuyos `NodeId` son `0..n`). Devuelve `(aguas_abajo,
+/// aguas_arriba)`: los nodos alcanzables siguiendo las aristas hacia
+/// adelante (lo que `sel` afecta) y hacia atrás (de lo que depende). El
+/// propio `sel` no se incluye en ninguno de los dos conjuntos.
+fn graph_cone(
+    sel: NodeId,
+    wires: &[Wire],
+    n: usize,
+) -> (BTreeSet<NodeId>, BTreeSet<NodeId>) {
+    let mut down_adj: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    let mut up_adj: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    for w in wires {
+        let (f, t) = (w.from_node as usize, w.to_node as usize);
+        if f < n && t < n {
+            down_adj[f].push(w.to_node);
+            up_adj[t].push(w.from_node);
+        }
+    }
+    let reach = |adj: &Vec<Vec<NodeId>>| -> BTreeSet<NodeId> {
+        let mut seen: BTreeSet<NodeId> = BTreeSet::new();
+        let mut stack = vec![sel];
+        while let Some(cur) = stack.pop() {
+            for &nx in &adj[cur as usize] {
+                if nx != sel && seen.insert(nx) {
+                    stack.push(nx);
+                }
+            }
+        }
+        seen
+    };
+    (reach(&down_adj), reach(&up_adj))
 }
 
 /// Vista `List`: filas reales del store con columnas del manifest,
@@ -3418,5 +3547,33 @@ mod tests {
         assert_eq!(value_to_raw(&json!(true)), "true");
         assert_eq!(value_to_raw(&json!(42)), "42");
         assert_eq!(value_to_raw(&Value::Null), "");
+    }
+
+    #[test]
+    fn graph_cone_separates_downstream_and_upstream() {
+        // Topología del demo `tesoro`:
+        //   1→2 (Movimiento), 2→3, 2→4 (Caja.saldo), 3→4 (Asiento).
+        // Nodo 0 (abrir_caja) queda aislado.
+        let w = |from_node: NodeId, to_node: NodeId| Wire {
+            from_node,
+            from_output: 0,
+            to_node,
+            to_input: 0,
+        };
+        let wires = vec![w(1, 2), w(2, 3), w(2, 4), w(3, 4)];
+
+        // Cono de aplicar_movimiento (2): afecta a 3 y 4; depende de 1.
+        let (down, up) = graph_cone(2, &wires, 5);
+        assert_eq!(down.into_iter().collect::<Vec<_>>(), vec![3, 4]);
+        assert_eq!(up.into_iter().collect::<Vec<_>>(), vec![1]);
+
+        // Cono de cerrar_periodo (4): hoja, depende de 1,2,3; no afecta a nadie.
+        let (down, up) = graph_cone(4, &wires, 5);
+        assert!(down.is_empty());
+        assert_eq!(up.into_iter().collect::<Vec<_>>(), vec![1, 2, 3]);
+
+        // Nodo aislado (0): cono vacío en ambas direcciones.
+        let (down, up) = graph_cone(0, &wires, 5);
+        assert!(down.is_empty() && up.is_empty());
     }
 }
