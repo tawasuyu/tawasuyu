@@ -23,6 +23,8 @@ mod filereader;
 mod objecturl;
 mod urlsearchparams;
 mod urlclass;
+mod location;
+mod history;
 mod textcodec;
 mod base64;
 mod crypto;
@@ -34,6 +36,7 @@ mod response;
 mod request;
 mod fetch;
 mod navigator;
+mod connection;
 mod websocket;
 mod eventsource;
 mod broadcastchannel;
@@ -66,6 +69,8 @@ pub(crate) use filereader::FILEREADER_BOOTSTRAP;
 pub(crate) use objecturl::OBJECT_URL_BOOTSTRAP;
 pub(crate) use urlsearchparams::URLSEARCHPARAMS_BOOTSTRAP;
 pub(crate) use urlclass::URLCLASS_BOOTSTRAP;
+pub(crate) use location::LOCATION_BOOTSTRAP;
+pub(crate) use history::HISTORY_BOOTSTRAP;
 pub(crate) use textcodec::TEXTCODEC_BOOTSTRAP;
 pub(crate) use base64::BASE64_BOOTSTRAP;
 pub(crate) use crypto::CRYPTO_BOOTSTRAP;
@@ -77,6 +82,7 @@ pub(crate) use response::RESPONSE_BOOTSTRAP;
 pub(crate) use request::REQUEST_BOOTSTRAP;
 pub(crate) use fetch::FETCH_BOOTSTRAP;
 pub(crate) use navigator::NAVIGATOR_BOOTSTRAP;
+pub(crate) use connection::CONNECTION_BOOTSTRAP;
 pub(crate) use websocket::WEBSOCKET_BOOTSTRAP;
 pub(crate) use eventsource::EVENTSOURCE_BOOTSTRAP;
 pub(crate) use broadcastchannel::BROADCAST_CHANNEL_BOOTSTRAP;
@@ -111,6 +117,8 @@ pub(crate) const ALL: &[&str] = &[
     OBJECT_URL_BOOTSTRAP,
     URLSEARCHPARAMS_BOOTSTRAP,
     URLCLASS_BOOTSTRAP,
+    LOCATION_BOOTSTRAP,
+    HISTORY_BOOTSTRAP,
     TEXTCODEC_BOOTSTRAP,
     BASE64_BOOTSTRAP,
     CRYPTO_BOOTSTRAP,
@@ -122,6 +130,7 @@ pub(crate) const ALL: &[&str] = &[
     REQUEST_BOOTSTRAP,
     FETCH_BOOTSTRAP,
     NAVIGATOR_BOOTSTRAP,
+    CONNECTION_BOOTSTRAP,
     WEBSOCKET_BOOTSTRAP,
     EVENTSOURCE_BOOTSTRAP,
     BROADCAST_CHANNEL_BOOTSTRAP,

@@ -467,7 +467,10 @@ impl JsRuntime {
                 }} \
             }}; \
             globalThis.window = globalThis; \
-            globalThis.location = {{ href: {u}, toString: function() {{ return {u}; }} }}; \
+            /* Fase 7.87 — Location real (pathname/search/hash/origin + setters). \
+             * Fallback al objeto plano si la URL no parsea (p. ej. about:). */ \
+            try {{ globalThis.location = globalThis.__puriy_make_location({u}); }} \
+            catch (e) {{ globalThis.location = {{ href: {u}, toString: function() {{ return {u}; }} }}; }} \
             /* Fase 7.22 — localStorage + sessionStorage.\n             * In-memory por ahora — no persiste entre sesiones. Cuando\n             * aparezca caso real con datos que deben sobrevivir un\n             * reload, persistir localStorage en `$profile_dir/storage/`\n             * con keys URL-scoped (mismo origen). sessionStorage queda\n             * in-memory siempre (matchea spec — borrar al cerrar tab).\n             * Sin Proxy magic — la spec acepta `localStorage.foo` con\n             * setter property pero usar `setItem('foo', ...)` cubre el\n             * 95% del uso real. */ \
             globalThis.__puriy_make_storage = function() {{ \
                 var store = {{}}; \
@@ -7945,5 +7948,161 @@ mod tests {
         // Arranca online; setear online de nuevo no dispara nada.
         assert_eq!(rt.eval("r").expect("e"), JsValue::Bool(false));
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
+
+    // ---- Fase 7.87 — Location object ----
+
+    #[test]
+    fn location_componentes_se_parsean() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/a/b?q=1#frag", "b").expect("d");
+        assert_eq!(rt.eval("location.protocol").expect("e"), JsValue::String("https:".into()));
+        assert_eq!(rt.eval("location.host").expect("e"), JsValue::String("example.com".into()));
+        assert_eq!(rt.eval("location.pathname").expect("e"), JsValue::String("/a/b".into()));
+        assert_eq!(rt.eval("location.search").expect("e"), JsValue::String("?q=1".into()));
+        assert_eq!(rt.eval("location.hash").expect("e"), JsValue::String("#frag".into()));
+        assert_eq!(
+            rt.eval("location.origin").expect("e"),
+            JsValue::String("https://example.com".into())
+        );
+    }
+
+    #[test]
+    fn location_hash_setter_dispara_hashchange_sin_navegar() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/p", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var ev = null; \
+             addEventListener('hashchange', function(e) { ev = e.newURL; }); \
+             location.hash = 'seccion';",
+        )
+        .expect("e");
+        // hash normaliza con '#', dispara hashchange, location.hash refleja.
+        assert_eq!(rt.eval("location.hash").expect("e"), JsValue::String("#seccion".into()));
+        assert_eq!(
+            rt.eval("ev").expect("e"),
+            JsValue::String("https://example.com/p#seccion".into())
+        );
+        // same-document: NO publica navegación al chrome.
+        let muts = rt.drain_dom_mutations();
+        assert!(muts.iter().all(|m| m.kind != "navigate"));
+    }
+
+    #[test]
+    fn location_assign_publica_navegacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/p", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("location.assign('/otra')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let nav = muts.iter().find(|m| m.kind == "navigate").expect("entry navigate");
+        let parts: Vec<&str> = nav.value.split('\u{001D}').collect();
+        assert_eq!(parts[0], "push");
+        assert_eq!(parts[1], "https://example.com/otra");
+        // location.href se actualiza de inmediato (spec).
+        assert_eq!(
+            rt.eval("location.href").expect("e"),
+            JsValue::String("https://example.com/otra".into())
+        );
+    }
+
+    // ---- Fase 7.88 — History API ----
+
+    #[test]
+    fn history_pushstate_actualiza_length_state_y_location() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        let base = rt.eval("history.length").expect("e");
+        let base = if let JsValue::Number(n) = base { n } else { 0.0 };
+        rt.eval(
+            "history.pushState({page:1}, '', '/uno'); \
+             history.pushState({page:2}, '', '/dos');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("history.length").expect("e"), JsValue::Number(base + 2.0));
+        assert_eq!(rt.eval("history.state.page").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("location.pathname").expect("e"), JsValue::String("/dos".into()));
+    }
+
+    #[test]
+    fn history_back_dispara_popstate_con_state_previo() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var seq = []; \
+             addEventListener('popstate', function(e) { seq.push(e.state ? e.state.page : -1); }); \
+             history.pushState({page:1}, '', '/uno'); \
+             history.pushState({page:2}, '', '/dos'); \
+             history.back();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("seq.length").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("seq[0]").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("location.pathname").expect("e"), JsValue::String("/uno".into()));
+        assert_eq!(rt.eval("history.state.page").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn history_replacestate_no_crece_pila_ni_dispara_popstate() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        let base = rt.eval("history.length").expect("e");
+        rt.eval(
+            "var n = 0; addEventListener('popstate', function() { n++; }); \
+             history.replaceState({r:1}, '', '/reemplazo');",
+        )
+        .expect("e");
+        // replaceState pisa el entry actual: misma longitud, sin popstate.
+        assert_eq!(rt.eval("history.length").expect("e"), base);
+        assert_eq!(rt.eval("history.state.r").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("location.pathname").expect("e"), JsValue::String("/reemplazo".into()));
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
+
+    // ---- Fase 7.89 — navigator.connection (NetworkInformation) ----
+
+    #[test]
+    fn connection_props_y_es_eventtarget() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("navigator.connection.effectiveType").expect("e"),
+            JsValue::String("4g".into())
+        );
+        assert_eq!(
+            rt.eval("typeof navigator.connection.rtt").expect("e"),
+            JsValue::String("number".into())
+        );
+        assert_eq!(rt.eval("navigator.connection.saveData").expect("e"), JsValue::Bool(false));
+        assert_eq!(
+            rt.eval("navigator.connection instanceof EventTarget").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("navigator.mozConnection === navigator.connection").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn set_connection_actualiza_y_dispara_change() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var seq = []; \
+             navigator.connection.onchange = function() { seq.push('on:' + navigator.connection.effectiveType); }; \
+             navigator.connection.addEventListener('change', function() { seq.push('al:' + navigator.connection.saveData); }); \
+             var r = __puriy_set_connection({ effectiveType: '2g', saveData: true, rtt: 300 });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("r").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("navigator.connection.effectiveType").expect("e"),
+            JsValue::String("2g".into())
+        );
+        assert_eq!(rt.eval("navigator.connection.rtt").expect("e"), JsValue::Number(300.0));
+        // onchange (handler) + addEventListener('change') corren ambos, en orden.
+        assert_eq!(rt.eval("seq.length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("seq[0]").expect("e"), JsValue::String("on:2g".into()));
+        assert_eq!(rt.eval("seq[1]").expect("e"), JsValue::String("al:true".into()));
     }
 }
