@@ -210,14 +210,20 @@ impl JsRuntime {
         // → window events → headers/abort/fetch/xhr → visibility →
         // observers → computed style). Para agregar features grandes,
         // preferí UN módulo nuevo a engordar uno existente.
+        // Fase 7.59 — recargá el fuel ANTES de cada módulo: el presupuesto de
+        // bootstrap pasa a ser "por módulo", no "cumulativo". Antes (Fase 7.53)
+        // los ~170M de compilar todos los módulos contra un único budget de
+        // 200M dejaban poco margen, y cada módulo nuevo (urlclass, body…)
+        // acercaba el total al cap → `JsRuntime::new()` reventaba con OutOfFuel.
+        // Con recarga per-módulo agregar módulos ya nunca recorta el bootstrap;
+        // un loop infinito DENTRO de un módulo igual se corta (cada uno tiene su
+        // cap de `fuel`).
         for chunk in bootstrap::ALL {
+            rt.set_fuel(fuel);
             rt.eval_raw(chunk)?;
         }
-        // Recargá el fuel: el costo de parsear/evaluar los bootstraps (hoy
-        // ~170M sólo en compilar todos los módulos) NO debe contar contra el
-        // presupuesto del caller. `fuel` es "por sesión de página", no
-        // "lifetime incluyendo bootstrap" — así agregar módulos nuevos no
-        // recorta el budget de los evals reales.
+        // Recargá el fuel final: el costo de los bootstraps NO debe contar
+        // contra el presupuesto del caller. `fuel` es "por sesión de página".
         rt.set_fuel(fuel);
         Ok(rt)
     }
@@ -6553,5 +6559,48 @@ mod tests {
         assert_eq!(rt.eval("resuelto").expect("e"), JsValue::Bool(true));
         assert_eq!(rt.eval("tras").expect("e"), JsValue::Bool(true));
         assert_eq!(rt.eval("esConstructor").expect("e"), JsValue::Bool(true));
+    }
+
+    // ============= Fase 7.59 — Headers iterable completo =============
+
+    #[test]
+    fn headers_entries_y_symbol_iterator() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var h = new Headers({ 'Content-Type': 'text/html', 'X-Foo': 'bar' }); \
+             var seq = []; for (var pair of h) { seq.push(pair[0] + '=' + pair[1]); }",
+        )
+        .expect("e");
+        // Iteración ordenada por nombre (lowercased): content-type < x-foo.
+        assert_eq!(
+            rt.eval("seq.join('&')").expect("e"),
+            JsValue::String("content-type=text/html&x-foo=bar".into())
+        );
+    }
+
+    #[test]
+    fn headers_values_y_spread() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var h = new Headers(); h.set('a', '1'); h.set('b', '2'); \
+             var vals = []; var it = h.values(); var n = it.next(); \
+             while (!n.done) { vals.push(n.value); n = it.next(); } \
+             var pares = [...h].length;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("vals.join(',')").expect("e"), JsValue::String("1,2".into()));
+        assert_eq!(rt.eval("pares").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn headers_alimenta_urlsearchparams() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var h = new Headers({ 'x': '1', 'y': '2' }); \
+             var p = new URLSearchParams(h); var s = p.toString();",
+        )
+        .expect("e");
+        // URLSearchParams consume el iterable de pares de Headers.
+        assert_eq!(rt.eval("s").expect("e"), JsValue::String("x=1&y=2".into()));
     }
 }

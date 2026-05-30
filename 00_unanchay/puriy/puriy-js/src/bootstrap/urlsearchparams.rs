@@ -46,6 +46,14 @@ globalThis.URLSearchParams = function(init) {
         for (var m = 0; m < init.length; m++) {
             this._list.push([String(init[m][0]), String(init[m][1])]);
         }
+    } else if (typeof init === 'object' && typeof init[Symbol.iterator] === 'function') {
+        // Fase 7.59 — cualquier iterable de pares (Headers, FormData, Map…).
+        var it = init[Symbol.iterator]();
+        var step = it.next();
+        while (!step.done) {
+            this._list.push([String(step.value[0]), String(step.value[1])]);
+            step = it.next();
+        }
     } else if (typeof init === 'object') {
         for (var key in init) {
             if (Object.prototype.hasOwnProperty.call(init, key)) {
