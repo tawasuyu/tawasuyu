@@ -970,6 +970,58 @@ pub fn mensaje_capacidad(bytecode: &Hash, permisos: Permisos) -> [u8; 36] {
     m
 }
 
+/// Dominio de separacion del mensaje de ROTACION de clave. Un byte canonico de
+/// rotacion jamas colisiona con uno de revocacion ni con un claim del grafo.
+pub const DOM_ROTACION_CLAVE: &[u8] = b"agora-key-rotation\x01";
+
+/// Dominio de separacion del mensaje de REVOCACION de clave.
+pub const DOM_REVOCACION_CLAVE: &[u8] = b"agora-revocation\x01";
+
+/// Compone el mensaje canonico de una ROTACION de clave (handoff voluntario
+/// vieja->nueva): `DOM || old(32) || new(32) || issued_at_le(8)`. Tamanos fijos,
+/// sin prefijos de largo; el dominio lo separa de otros records. Es la unica
+/// verdad del payload firmable de una rotacion — `agora-core::KeyRotation` lo
+/// compone por aqui y el kernel lo espeja sobre estos mismos bytes (ver
+/// `agora/SDD-rotacion-revocacion.md` §2.1).
+pub fn mensaje_rotacion_clave(old_key: &[u8; 32], new_key: &[u8; 32], issued_at: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(DOM_ROTACION_CLAVE.len() + 72);
+    out.extend_from_slice(DOM_ROTACION_CLAVE);
+    out.extend_from_slice(old_key);
+    out.extend_from_slice(new_key);
+    out.extend_from_slice(&issued_at.to_le_bytes());
+    out
+}
+
+/// Compone el mensaje canonico de una REVOCACION de clave:
+/// `DOM || target(32) || [motivo] || issued_at_le(8) || tag || [expires_le(8)]`,
+/// donde `tag` es `0` si `expires_at` es `None` y `1` si es `Some` (para que
+/// `None` y `Some(0)` no colisionen). El `motivo` es el discriminante estable de
+/// `agora-core::RevReason` (0=Compromised, 1=Retired, 2=Superseded) — entra en la
+/// firma para que no se pueda "ascender" un retiro a compromiso sin re-firmar.
+/// Unica verdad del payload firmable de una revocacion: `agora-core::Revocation`
+/// lo compone por aqui y el kernel lo espeja en `claves::verificar_revocacion`
+/// (ver `agora/SDD-rotacion-revocacion.md` §2.2 y §4).
+pub fn mensaje_revocacion_clave(
+    target_key: &[u8; 32],
+    motivo: u8,
+    issued_at: u64,
+    expires_at: Option<u64>,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(DOM_REVOCACION_CLAVE.len() + 50);
+    out.extend_from_slice(DOM_REVOCACION_CLAVE);
+    out.extend_from_slice(target_key);
+    out.push(motivo);
+    out.extend_from_slice(&issued_at.to_le_bytes());
+    match expires_at {
+        None => out.push(0),
+        Some(t) => {
+            out.push(1);
+            out.extend_from_slice(&t.to_le_bytes());
+        }
+    }
+    out
+}
+
 /// Permisos EFECTIVOS de una app: la INTERSECCION de lo que su `EntradaApp` del
 /// manifiesto DECLARA y lo que una [`ConcesionCapacidad`] valida CONCEDE para su
 /// bytecode. El manifiesto no puede escalar un binario mas alla de su concesion
@@ -1754,6 +1806,43 @@ mod pruebas {
         assert_ne!(m1, mensaje_capacidad(&otro, PERMISO_RED));
         // Distintos permisos => distinto mensaje: subir un bit invalida la firma.
         assert_ne!(m1, mensaje_capacidad(&bc, PERMISO_RED | PERMISO_RAIZ));
+    }
+
+    #[test]
+    fn mensaje_rotacion_clave_layout_y_dominio() {
+        let vieja = [0x11; 32];
+        let nueva = [0x22; 32];
+        let m = mensaje_rotacion_clave(&vieja, &nueva, 0x0A0B0C0D);
+        // Layout: DOM || old(32) || new(32) || issued_at_le(8).
+        assert_eq!(&m[..DOM_ROTACION_CLAVE.len()], DOM_ROTACION_CLAVE);
+        let p = DOM_ROTACION_CLAVE.len();
+        assert_eq!(&m[p..p + 32], &vieja);
+        assert_eq!(&m[p + 32..p + 64], &nueva);
+        assert_eq!(&m[p + 64..], &0x0A0B0C0Du64.to_le_bytes());
+        // Distinto timestamp => distinto canonico (no se revive una rotacion vieja).
+        assert_ne!(m, mensaje_rotacion_clave(&vieja, &nueva, 0x0A0B0C0E));
+    }
+
+    #[test]
+    fn mensaje_revocacion_clave_distingue_motivo_y_no_colisiona_none_some_cero() {
+        let target = [0x99; 32];
+        // El motivo entra en el canonico: no se "asciende" un retiro a compromiso.
+        let comprometida = mensaje_revocacion_clave(&target, 0, 5, None);
+        let retirada = mensaje_revocacion_clave(&target, 1, 5, None);
+        assert_ne!(comprometida, retirada);
+        // Layout permanente: DOM || target(32) || [motivo] || issued_le(8) || 0.
+        let p = DOM_REVOCACION_CLAVE.len();
+        assert_eq!(&comprometida[..p], DOM_REVOCACION_CLAVE);
+        assert_eq!(&comprometida[p..p + 32], &target);
+        assert_eq!(comprometida[p + 32], 0u8);
+        assert_eq!(&comprometida[p + 33..p + 41], &5u64.to_le_bytes());
+        assert_eq!(*comprometida.last().unwrap(), 0u8); // tag None
+        // `None` y `Some(0)` no colisionan: el tag los separa.
+        let none = mensaje_revocacion_clave(&target, 1, 5, None);
+        let some_cero = mensaje_revocacion_clave(&target, 1, 5, Some(0));
+        assert_ne!(none, some_cero);
+        assert_eq!(*some_cero.last().unwrap(), 0u8); // ultimo byte de 0u64 LE
+        assert_eq!(some_cero[p + 41], 1u8); // tag Some
     }
 
     #[test]

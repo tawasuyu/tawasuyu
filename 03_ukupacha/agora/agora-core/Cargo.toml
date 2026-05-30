@@ -12,6 +12,9 @@ ed25519-dalek = { workspace = true }
 blake3 = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Fuente unica de verdad de los bytes canonicos firmables (rotacion/revocacion):
+# los compone `format` y el kernel los espeja sobre los MISMOS bytes.
+format = { path = "../../../shared/format" }
 
 [dev-dependencies]
 postcard = { workspace = true }

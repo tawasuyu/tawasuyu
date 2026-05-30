@@ -223,6 +223,115 @@ pub fn verificar_cuaderno_firmado(cf: &CuadernoFirmado) -> Result<(), CodigoErro
         .map_err(|_| CodigoError::AlmacenamientoFallo)
 }
 
+/// Motivo `Compromised` de una revocacion (discriminante estable, espejo de
+/// `agora_core::RevReason::Compromised`). La clave se filtro / esta en manos
+/// hostiles: la revocacion es PERMANENTE y la clave NO puede revocarse a si
+/// misma (el atacante tambien la tiene), de modo que su propia firma NO cuenta
+/// para el quorum cuando es ella la `objetivo`.
+pub const MOTIVO_COMPROMETIDA: u8 = 0;
+/// Motivo `Retired`: retiro voluntario, sin compromiso.
+#[allow(dead_code)]
+pub const MOTIVO_RETIRADA: u8 = 1;
+/// Motivo `Superseded`: reemplazada por una sucesora via rotacion.
+#[allow(dead_code)]
+pub const MOTIVO_SUCEDIDA: u8 = 2;
+
+/// Verifica una REVOCACION de clave firmada por el [`AGORA_AUTH_RING`]
+/// (SDD-rotacion-revocacion §2.2 y §4). Es el espejo en Ring 0 de
+/// `agora_core::Revocation::verify` sobre los MISMOS bytes canonicos que
+/// `format::mensaje_revocacion_clave` define, con la autoridad fijada al anillo
+/// del kernel: una revocacion vale si la respaldan `min` firmantes DISTINTOS del
+/// anillo (quorum M-of-N), no `min` claves cualesquiera.
+///
+/// Plano de CONTROL, no social: aqui el set autorizador es SIEMPRE el anillo
+/// grabado en `.rodata` — no hay set de guardianes pluggable. Sirve al
+/// "overlay de revocacion" del kernel (§4): una clave del propio anillo que se
+/// filtra se deniega ENTRE reflasheos sin esperar al reflash, porque el RESTO
+/// del anillo la revoca por quorum.
+///
+/// Reglas que espeja del modelo:
+///   * Cada firmante cuenta UNA sola vez aunque repita su firma (se acreditan
+///     SLOTS distintos del anillo, no firmas) — anti-inflado del conteo.
+///   * Un firmante cuya pubkey NO habita el anillo no cuenta (autoridad
+///     restringida al anillo), igual que `verify_threshold_in`.
+///   * Si el motivo es `Compromised`, la propia `objetivo` NO cuenta para el
+///     quorum aunque este en el anillo: una clave comprometida no se revoca a
+///     si misma. Para retiro/sucesion voluntarios si podria (el caller del
+///     plano social lo decide; en control la diferencia es inocua porque la
+///     revocacion la firma el resto del anillo de todos modos).
+///
+/// Codigos de retorno, en orden: `CapacidadInsuficiente` si no se reune el
+/// quorum (ningun match, firmas forjadas, o menos de `min` slots distintos);
+/// `Ok(())` si `>= min` slots del anillo respaldan el canonico. El llamante
+/// decide el efecto (sembrar el overlay, denegar `objetivo` en `autor_en_anillo`).
+///
+/// COLD PATH: compone un `Vec` canonico una vez (igual que `verificar_anuncio_
+/// canal`); la verificacion `ed25519-compact` por firma es zero-alloc.
+///
+/// ESTADO (2026-05-30): SOBERANO Y TESTEABLE, aun NO cableado al punto de carga.
+/// Igual que `verificar_concesion_capacidad` antes de la Fase 67, el verificador
+/// existe y es correcto pero todavia no gobierna: falta el "overlay en carga"
+/// del SDD §4 — anclar la lista de revocaciones como el manifiesto (superbloque),
+/// re-verificarla FRESH en cada arranque, y que `autor_en_anillo` exija ademas
+/// que la clave NO este revocada-activa-a-`now`. Eso pide extender el superbloque
+/// y una fuente de tiempo unix (el kernel hoy lleva ticks PIT, no wall-clock).
+#[allow(dead_code)]
+pub fn verificar_revocacion(
+    objetivo: &[u8; 32],
+    motivo: u8,
+    emitida_en: u64,
+    vence_en: Option<u64>,
+    firmantes: &[(&[u8; 32], &[u8; 64])],
+    min: usize,
+) -> Result<(), CodigoError> {
+    let mensaje = format::mensaje_revocacion_clave(objetivo, motivo, emitida_en, vence_en);
+    // Bitmask de slots del anillo ya acreditados — un slot cuenta una sola vez,
+    // sin importar cuantas firmas repetidas traiga el sobre.
+    let mut acreditados: u32 = 0;
+    for (pk_bytes, firma_bytes) in firmantes.iter() {
+        // La clave comprometida no respalda su propia revocacion permanente.
+        if motivo == MOTIVO_COMPROMETIDA && *pk_bytes == objetivo {
+            continue;
+        }
+        let Some(slot) = indice_en_anillo(pk_bytes) else {
+            continue; // firmante fuera del anillo: sin autoridad de control
+        };
+        if acreditados & (1 << slot) != 0 {
+            continue; // este slot ya cuenta
+        }
+        let (Ok(pk), Ok(sig)) = (
+            PublicKey::from_slice(*pk_bytes),
+            Signature::from_slice(*firma_bytes),
+        ) else {
+            continue; // bytes mal formados: no acredita
+        };
+        if pk.verify(&mensaje, &sig).is_ok() {
+            acreditados |= 1 << slot;
+        }
+    }
+    if (acreditados.count_ones() as usize) >= min {
+        Ok(())
+    } else {
+        Err(CodigoError::CapacidadInsuficiente)
+    }
+}
+
+/// Indice del slot del [`AGORA_AUTH_RING`] que iguala `clave`, o `None` si no
+/// habita el anillo. Gemela de [`autor_en_anillo`] pero devuelve el slot, que
+/// `verificar_revocacion` necesita para contar firmantes DISTINTOS por slot.
+#[inline]
+#[allow(dead_code)]
+fn indice_en_anillo(clave: &[u8; 32]) -> Option<usize> {
+    let mut i = 0;
+    while i < AGORA_AUTH_RING.len() {
+        if *clave == AGORA_AUTH_RING[i] {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Verifica una [`ConcesionCapacidad`] (Fase 67 / WAWA §14.1.3): el binding
 /// firmado "este bytecode puede usar estos permisos". Mismo orden estricto de
 /// fallos que sus gemelos (anillo -> decodificacion -> firma) y mismos codigos.

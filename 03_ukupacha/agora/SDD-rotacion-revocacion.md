@@ -118,5 +118,21 @@ contra reflash malicioso del kernel (frontera física fuera de alcance).
    append-log queda para las atestaciones, camino caliente), `serde(default)` ⇒
    sin corte de formato (SCHEMA 1). `load` re-verifica firma (doble en rotación,
    integridad en revocación; el umbral M-of-N es del consumidor, no del store).
-4. `wawa-kernel/src/claves.rs` — espejo `verificar_revocacion` + overlay en carga.
+3.bis ✅ Bytes canónicos a `format` (fuente única): `mensaje_rotacion_clave` +
+   `mensaje_revocacion_clave` viven en `shared/format` (no_std + alloc, junto a
+   `mensaje_a_firmar`/`mensaje_capacidad`). `agora-core::{KeyRotation,Revocation}
+   ::canonical_bytes` DELEGAN ahí ⇒ kernel y userspace firman/verifican EXACTAMENTE
+   los mismos bytes por construcción, no por convención.
+4. `wawa-kernel/src/claves.rs`:
+   - ✅ 4a. Espejo `verificar_revocacion(objetivo, motivo, emitida_en, vence_en,
+     firmantes, min)` — M-of-N contra `AGORA_AUTH_RING` (slots distintos por
+     bitmask, anti-inflado del conteo), `Compromised` excluye al `objetivo` (no se
+     revoca a sí misma), zero-alloc salvo el canónico (camino frío). SOBERANO Y
+     TESTEABLE, aún NO cableado — igual que `verificar_concesion_capacidad` antes
+     de la Fase 67.
+   - ⏳ 4b. Overlay en carga: anclar la lista de revocaciones como el manifiesto
+     (superbloque), re-verificarla FRESH en cada arranque, y que `autor_en_anillo`
+     exija además que la clave NO esté revocada-activa-a-`now`. BLOQUEADO por dos
+     decisiones de diseño: extender el formato del superbloque (campo overlay_raíz)
+     y una fuente de tiempo unix en el kernel (hoy lleva ticks PIT, no wall-clock).
 5. `agora-cli` — `identidad rotar` / `identidad revocar` (M-of-N) / `wawa revocar`.

@@ -40,10 +40,6 @@ mod sig_serde {
 //  Rotación
 // =============================================================================
 
-/// Dominio de separación del mensaje de rotación. Que un byte canónico de
-/// rotación jamás colisione con uno de revocación ni con un claim.
-const DOM_ROTACION: &[u8] = b"agora-key-rotation\x01";
-
 /// Una rotación de clave: la identidad detrás de `old_key` declara que su clave
 /// pasa a ser `new_key`. Doble-firmada para probar posesión de AMBAS.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,14 +61,10 @@ pub struct KeyRotation {
 
 impl KeyRotation {
     /// El mensaje exacto que ambas claves firman. Tamaños fijos ⇒ sin prefijos
-    /// de largo; el dominio separa de otros records.
+    /// de largo; el dominio separa de otros records. La composición la hace
+    /// `format::mensaje_rotacion_clave` — la MISMA verdad que el kernel espeja.
     pub fn canonical_bytes(old_key: &[u8; 32], new_key: &[u8; 32], issued_at: u64) -> Vec<u8> {
-        let mut out = Vec::with_capacity(DOM_ROTACION.len() + 72);
-        out.extend_from_slice(DOM_ROTACION);
-        out.extend_from_slice(old_key);
-        out.extend_from_slice(new_key);
-        out.extend_from_slice(&issued_at.to_le_bytes());
-        out
+        format::mensaje_rotacion_clave(old_key, new_key, issued_at)
     }
 
     /// Forja una rotación firmando el canónico con la clave vieja y la nueva.
@@ -112,9 +104,6 @@ impl KeyRotation {
 // =============================================================================
 //  Revocación
 // =============================================================================
-
-/// Dominio de separación del mensaje de revocación.
-const DOM_REVOCACION: &[u8] = b"agora-revocation\x01";
 
 /// Por qué se revoca una clave. El discriminante entra en el canónico: cambiar
 /// el motivo invalida la firma (no se puede "ascender" un retiro a compromiso).
@@ -160,26 +149,16 @@ pub struct Revocation {
 
 impl Revocation {
     /// El mensaje canónico que el quórum firma. `expires_at` viaja con un tag
-    /// (0 = none, 1 = some) para que `None` y `Some(0)` no colisionen.
+    /// (0 = none, 1 = some) para que `None` y `Some(0)` no colisionen. La
+    /// composición la hace `format::mensaje_revocacion_clave` — la MISMA verdad
+    /// que el kernel espeja en `claves::verificar_revocacion`.
     pub fn canonical_bytes(
         target_key: &[u8; 32],
         reason: RevReason,
         issued_at: u64,
         expires_at: Option<u64>,
     ) -> Vec<u8> {
-        let mut out = Vec::with_capacity(DOM_REVOCACION.len() + 50);
-        out.extend_from_slice(DOM_REVOCACION);
-        out.extend_from_slice(target_key);
-        out.push(reason.byte());
-        out.extend_from_slice(&issued_at.to_le_bytes());
-        match expires_at {
-            None => out.push(0),
-            Some(t) => {
-                out.push(1);
-                out.extend_from_slice(&t.to_le_bytes());
-            }
-        }
-        out
+        format::mensaje_revocacion_clave(target_key, reason.byte(), issued_at, expires_at)
     }
 
     /// Forja una revocación haciendo que cada `authorizer` firme el canónico.
