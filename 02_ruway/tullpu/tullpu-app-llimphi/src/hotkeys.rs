@@ -103,6 +103,10 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("p") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Pincel));
         }
+        // `e` = borrador (goma).
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("e") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Borrador));
+        }
         // Esc limpia la selección (si hay) — global porque no compite
         // con otros modales: cuando picker está abierto o se está
         // renombrando, este `hotkey_a_msg` no se invoca (los modales
@@ -197,11 +201,21 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
                 Some(Msg::CiclarBlend(id))
             }
         }
+        // `[` / `]`: con herramienta de trazo ajustan el radio del pincel
+        // (convención Photoshop); si no, la opacidad de la capa.
         Key::Character(s) if !m.ctrl && !m.alt && s == "[" => {
-            Some(Msg::BumpOpacidad(id, -0.1))
+            if model.herramienta.es_trazo() {
+                Some(Msg::BumpRadioPincel(-1))
+            } else {
+                Some(Msg::BumpOpacidad(id, -0.1))
+            }
         }
         Key::Character(s) if !m.ctrl && !m.alt && s == "]" => {
-            Some(Msg::BumpOpacidad(id, 0.1))
+            if model.herramienta.es_trazo() {
+                Some(Msg::BumpRadioPincel(1))
+            } else {
+                Some(Msg::BumpOpacidad(id, 0.1))
+            }
         }
         // Flechas: nudge del contenido de la selección 1 px (10 px con
         // Shift). Sólo con selección activa; sin ella las flechas no

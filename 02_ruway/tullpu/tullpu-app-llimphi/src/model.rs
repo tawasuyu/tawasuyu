@@ -97,6 +97,9 @@ pub(crate) struct Model {
     /// Estado del trazo del pincel mientras se sostiene el click. `None`
     /// fuera de un trazo.
     pub(crate) pincel_drag: Option<PincelDrag>,
+    /// Radio actual del pincel/borrador en px-imagen. Ajustable con
+    /// `[`/`]` (cuando la herramienta es de trazo) o los botones del panel.
+    pub(crate) radio_pincel: i32,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -121,6 +124,8 @@ pub(crate) enum Herramienta {
     /// Drag sobre el lienzo pinta un trazo a mano alzada con el color
     /// activo sobre la capa raster seleccionada (acotado a la selección).
     Pincel,
+    /// Como `Pincel` pero borra (alfa=0) en vez de pintar.
+    Borrador,
 }
 
 impl Herramienta {
@@ -131,7 +136,14 @@ impl Herramienta {
             Herramienta::Marco => "marco",
             Herramienta::Balde => "balde",
             Herramienta::Pincel => "pincel",
+            Herramienta::Borrador => "borrador",
         }
+    }
+
+    /// `true` para las herramientas de trazo (pincel y borrador), que
+    /// comparten el cableado de drag y el control de radio.
+    pub(crate) fn es_trazo(self) -> bool {
+        matches!(self, Herramienta::Pincel | Herramienta::Borrador)
     }
 }
 
@@ -216,8 +228,10 @@ pub(crate) struct PincelDrag {
     pub(crate) last_iy: i32,
 }
 
-/// Radio del pincel en px-imagen (disco lleno; diámetro ≈ `2·r+1`).
+/// Radio inicial del pincel en px-imagen (disco lleno; diámetro ≈ `2·r+1`).
 pub(crate) const RADIO_PINCEL: i32 = 3;
+/// Tope del radio ajustable (radio 0 = 1 px; 64 = disco de 129 px).
+pub(crate) const RADIO_PINCEL_MAX: i32 = 64;
 
 /// Multiplicador por tick de wheel. 1.1 ≈ +10%, un escalón cómodo. El
 /// factor entra como `factor_zoom *= base.powf(-delta.y)` (delta.y > 0 es
@@ -405,6 +419,9 @@ pub(crate) enum Msg {
     /// End del trazo: cierra el `pincel_drag` y corta el coalesce para
     /// que el próximo trazo sea un Undo independiente.
     FinalizarTrazo,
+    /// Ajusta el radio del pincel/borrador en `delta` px, clampeado a
+    /// `[0, RADIO_PINCEL_MAX]`. No toca el lienzo ni el historial.
+    BumpRadioPincel(i32),
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

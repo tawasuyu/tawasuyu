@@ -881,11 +881,12 @@ pub(crate) fn rellenar_flood_en_capa(
 }
 
 /// Estampa un disco lleno de radio `radio` (en px) centrado en `(cx, cy)`
-/// con `color` (reemplazo directo, no alpha) sobre un buffer Rgba8
-/// `w × h`. Recorta al canvas y, si `bounds` es `Some`, al rect half-open
-/// (los píxeles fuera no se tocan). Pinta donde `dx² + dy² ≤ radio²`.
-/// Pura (muta `buf` in situ). `cx, cy` pueden caer fuera: sólo entra lo
-/// que intersecta.
+/// sobre un buffer Rgba8 `w × h`. Si `borrar`, pone `[0,0,0,0]` (goma);
+/// si no, compone `color` con alpha src-over ([`mezclar_src_over`]) — así
+/// un color opaco pisa y uno semitransparente deja trazo translúcido.
+/// Recorta al canvas y, si `bounds` es `Some`, al rect half-open. Pinta
+/// donde `dx² + dy² ≤ radio²`. Pura (muta `buf`); `cx, cy` pueden caer
+/// fuera (sólo entra lo que intersecta).
 pub(crate) fn estampar_disco(
     buf: &mut [u8],
     w: u32,
@@ -894,6 +895,7 @@ pub(crate) fn estampar_disco(
     cy: i32,
     radio: i32,
     color: [u8; 4],
+    borrar: bool,
     bounds: Option<(u32, u32, u32, u32)>,
 ) {
     let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
@@ -914,7 +916,11 @@ pub(crate) fn estampar_disco(
             }
             if dx * dx + dy * dy <= r2 {
                 let i = ((y as usize) * w as usize + x as usize) * 4;
-                buf[i..i + 4].copy_from_slice(&color);
+                if borrar {
+                    buf[i..i + 4].copy_from_slice(&[0, 0, 0, 0]);
+                } else {
+                    mezclar_src_over(&mut buf[i..i + 4], color);
+                }
             }
         }
     }
@@ -922,7 +928,9 @@ pub(crate) fn estampar_disco(
 
 /// Estampa discos a lo largo del segmento `(x0, y0) → (x1, y1)`, uno por
 /// cada paso entero del eje más largo, de modo que el trazo quede
-/// continuo (sin huecos para `radio ≥ 1`). Pura (muta `buf`).
+/// continuo (sin huecos para `radio ≥ 1`). Pura (muta `buf`). Ver
+/// [`estampar_disco`] para `borrar`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn trazar_linea_pincel(
     buf: &mut [u8],
     w: u32,
@@ -933,6 +941,7 @@ pub(crate) fn trazar_linea_pincel(
     y1: i32,
     radio: i32,
     color: [u8; 4],
+    borrar: bool,
     bounds: Option<(u32, u32, u32, u32)>,
 ) {
     let n = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
@@ -940,7 +949,7 @@ pub(crate) fn trazar_linea_pincel(
         let t = k as f32 / n as f32;
         let x = x0 + ((x1 - x0) as f32 * t).round() as i32;
         let y = y0 + ((y1 - y0) as f32 * t).round() as i32;
-        estampar_disco(buf, w, h, x, y, radio, color, bounds);
+        estampar_disco(buf, w, h, x, y, radio, color, borrar, bounds);
     }
 }
 
@@ -986,20 +995,23 @@ fn pincel_aplicar(
 }
 
 /// Estampa un disco del pincel en `(cx, cy)` sobre la capa raster
-/// seleccionada (inicio de trazo). Ver [`pincel_aplicar`].
+/// seleccionada (inicio de trazo). `borrar` → goma. Ver [`pincel_aplicar`].
 pub(crate) fn pincel_punto_en_capa(
     model: &mut Model,
     cx: i32,
     cy: i32,
     radio: i32,
+    borrar: bool,
 ) -> bool {
     pincel_aplicar(model, |buf, w, h, color, bounds| {
-        estampar_disco(buf, w, h, cx, cy, radio, color, bounds)
+        estampar_disco(buf, w, h, cx, cy, radio, color, borrar, bounds)
     })
 }
 
 /// Pinta el segmento `(x0,y0) → (x1,y1)` del pincel sobre la capa raster
-/// seleccionada (continuación de trazo). Ver [`pincel_aplicar`].
+/// seleccionada (continuación de trazo). `borrar` → goma. Ver
+/// [`pincel_aplicar`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pincel_segmento_en_capa(
     model: &mut Model,
     x0: i32,
@@ -1007,9 +1019,10 @@ pub(crate) fn pincel_segmento_en_capa(
     x1: i32,
     y1: i32,
     radio: i32,
+    borrar: bool,
 ) -> bool {
     pincel_aplicar(model, |buf, w, h, color, bounds| {
-        trazar_linea_pincel(buf, w, h, x0, y0, x1, y1, radio, color, bounds)
+        trazar_linea_pincel(buf, w, h, x0, y0, x1, y1, radio, color, borrar, bounds)
     })
 }
 
@@ -1046,28 +1059,35 @@ pub(crate) fn blit_alpha_sobre(
             }
             let si = ((cy as usize) * cw + cx as usize) * 4;
             let di = ((ty as usize) * dst_w as usize + tx as usize) * 4;
-            let sa = clip[si + 3] as u32;
-            if sa == 0 {
-                continue; // píxel del clip totalmente transparente
-            }
-            if sa == 255 {
-                out[di..di + 4].copy_from_slice(&clip[si..si + 4]);
-                continue;
-            }
-            // src-over no premultiplicado, con redondeo entero /255.
-            let da = out[di + 3] as u32;
-            let da_eff = da * (255 - sa) / 255;
-            let oa = sa + da_eff;
-            for k in 0..3 {
-                let sc = clip[si + k] as u32;
-                let dc = out[di + k] as u32;
-                let num = sc * sa + dc * da_eff;
-                out[di + k] = if oa == 0 { 0 } else { (num / oa) as u8 };
-            }
-            out[di + 3] = oa as u8;
+            let src = [clip[si], clip[si + 1], clip[si + 2], clip[si + 3]];
+            mezclar_src_over(&mut out[di..di + 4], src);
         }
     }
     out
+}
+
+/// Compone `src` (Rgba8 NO premultiplicado) sobre el píxel destino
+/// `dst` (slice de 4 bytes) con la fórmula src-over, redondeo entero
+/// `/255`. Fast-path: alfa 0 no hace nada, alfa 255 pisa. Pura sobre el
+/// slice. Es el núcleo compartido por `blit_alpha_sobre` (Fase 41) y el
+/// pincel con alpha (Fase 46).
+pub(crate) fn mezclar_src_over(dst: &mut [u8], src: [u8; 4]) {
+    let sa = src[3] as u32;
+    if sa == 0 {
+        return;
+    }
+    if sa == 255 {
+        dst.copy_from_slice(&src);
+        return;
+    }
+    let da = dst[3] as u32;
+    let da_eff = da * (255 - sa) / 255;
+    let oa = sa + da_eff;
+    for k in 0..3 {
+        let num = src[k] as u32 * sa + dst[k] as u32 * da_eff;
+        dst[k] = if oa == 0 { 0 } else { (num / oa) as u8 };
+    }
+    dst[3] = oa as u8;
 }
 
 /// Mueve los píxeles del rect de `model.seleccion` por el offset con

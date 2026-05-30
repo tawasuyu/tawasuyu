@@ -50,6 +50,8 @@
 //!   región contigua con el color activo (acotado a la selección)
 //! - `p`              — herramienta pincel; drag pinta un trazo a mano
 //!   alzada con el color activo (acotado a la selección)
+//! - `e`              — herramienta borrador (goma): drag borra (alfa=0)
+//! - `[` / `]`        — con pincel/borrador, ∓1 al radio; si no, opacidad
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
 //!
@@ -59,7 +61,6 @@
 //! - `F2`             — renombrar capa in-situ (Enter confirma · Esc cancela)
 //! - `V`              — toggle visibilidad
 //! - `B` / `Shift+B`  — ciclar blend forward / reverse
-//! - `[` / `]`        — opacidad ∓0.1
 //! - `Ctrl+Z` / `Ctrl+Shift+Z` (o `Ctrl+Y`) — undo / redo
 //! - `Ctrl+S` / `Ctrl+Shift+S` — exportar PNG / WebP
 
@@ -669,7 +670,9 @@ impl App for Tullpu {
                         last_ix: cx,
                         last_iy: cy,
                     });
-                    if pincel_punto_en_capa(&mut model, cx, cy, RADIO_PINCEL) {
+                    let borrar = model.herramienta == Herramienta::Borrador;
+                    let radio = model.radio_pincel;
+                    if pincel_punto_en_capa(&mut model, cx, cy, radio, borrar) {
                         let etiqueta = model.seleccionada.map(|i| (i, "pincel"));
                         pushear_snapshot(&mut model, etiqueta);
                     }
@@ -693,13 +696,16 @@ impl App for Tullpu {
                     ) {
                         let nx = ix.floor() as i32;
                         let ny = iy.floor() as i32;
+                        let borrar = model.herramienta == Herramienta::Borrador;
+                        let radio = model.radio_pincel;
                         if pincel_segmento_en_capa(
                             &mut model,
                             pd.last_ix,
                             pd.last_iy,
                             nx,
                             ny,
-                            RADIO_PINCEL,
+                            radio,
+                            borrar,
                         ) {
                             let etiqueta =
                                 model.seleccionada.map(|i| (i, "pincel"));
@@ -719,6 +725,12 @@ impl App for Tullpu {
                 model.pincel_drag = None;
                 // Cortar el coalesce: el próximo trazo es un Undo aparte.
                 model.ultima_etiqueta_snapshot = None;
+            }
+            Msg::BumpRadioPincel(delta) => {
+                model.radio_pincel =
+                    (model.radio_pincel + delta).clamp(0, RADIO_PINCEL_MAX);
+                model.estado =
+                    format!("radio pincel {} px", model.radio_pincel * 2 + 1);
             }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app

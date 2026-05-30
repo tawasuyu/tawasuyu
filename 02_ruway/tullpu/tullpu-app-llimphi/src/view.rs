@@ -646,6 +646,52 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Pincel),
     )));
+    let etiqueta_borrador = if model.herramienta == Herramienta::Borrador {
+        "● borrador (e)"
+    } else {
+        "○ borrador (e)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_borrador.to_string(),
+        if model.herramienta == Herramienta::Borrador {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Borrador),
+    )));
+    // Control de radio: sólo visible con herramienta de trazo activa
+    // (co-locado con lo que afecta). Diámetro = 2·r+1.
+    if model.herramienta.es_trazo() {
+        hijos.push(envolver_fila(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(26.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .children(vec![
+                mini_btn("−", Msg::BumpRadioPincel(-1), &pal),
+                mini_btn("+", Msg::BumpRadioPincel(1), &pal),
+                View::new(Style {
+                    flex_grow: 1.0,
+                    ..Default::default()
+                })
+                .text(
+                    format!(
+                        "  ⌀ {} px (r={})",
+                        model.radio_pincel * 2 + 1,
+                        model.radio_pincel
+                    ),
+                    12.0,
+                    theme.fg_muted,
+                ),
+            ]),
+        ));
+    }
     // Gestión de la selección: seleccionar todo + expandir/contraer el
     // rect. La etiqueta de "todo" muestra las dims del lienzo.
     hijos.push(envolver_fila(button_view(
@@ -1141,7 +1187,7 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                 Herramienta::Balde => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
                     Some(Msg::RellenarFlood { lx, ly, rw, rh })
                 }),
-                Herramienta::Pincel => cuerpo_paint
+                Herramienta::Pincel | Herramienta::Borrador => cuerpo_paint
                     .on_click_at(|lx, ly, rw, rh| {
                         Some(Msg::IniciarTrazo { lx, ly, rw, rh })
                     })

@@ -66,6 +66,7 @@
             seleccion_drag: None,
             mover_drag: None,
             pincel_drag: None,
+            radio_pincel: RADIO_PINCEL,
             portapapeles: None,
         }
     }
@@ -1085,9 +1086,13 @@
         let mods = Modifiers { ctrl: true, ..Default::default() };
         let msg = hotkey_a_msg(&model, &ev_char("e", mods));
         assert!(matches!(msg, Some(Msg::Combinar(x)) if x == id_a));
-        // Sin Ctrl, la `e` suelta no debe disparar nada.
+        // Sin Ctrl, la `e` suelta cambia a la herramienta borrador
+        // (Fase 46) — antes era no-op.
         let msg2 = hotkey_a_msg(&model, &ev_char("e", Modifiers::default()));
-        assert!(msg2.is_none());
+        assert!(matches!(
+            msg2,
+            Some(Msg::CambiarHerramienta(Herramienta::Borrador))
+        ));
     }
 
     // ---- Fase 28: aplanar visibles (merge visible) ---------------------------
@@ -3983,7 +3988,7 @@
         // cruz de 5 píxeles (centro + 4 ortogonales), esquinas no.
         let mut buf = vec![0u8; 5 * 5 * 4];
         let c = [255, 0, 0, 255];
-        estampar_disco(&mut buf, 5, 5, 2, 2, 1, c, None);
+        estampar_disco(&mut buf, 5, 5, 2, 2, 1, c, false, None);
         let pix = |x: usize, y: usize| {
             let i = (y * 5 + x) * 4;
             [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
@@ -4003,7 +4008,7 @@
         let c = [9, 9, 9, 255];
         // Centro en la esquina (0,0), radio 2 → sólo entra el cuadrante
         // dentro del canvas.
-        estampar_disco(&mut buf, 4, 4, 0, 0, 2, c, None);
+        estampar_disco(&mut buf, 4, 4, 0, 0, 2, c, false, None);
         let pix = |x: usize, y: usize| {
             let i = (y * 4 + x) * 4;
             [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
@@ -4013,7 +4018,7 @@
         assert_eq!(pix(0, 1), c);
         // Con bounds (0,0,1,1) sólo el píxel (0,0) puede pintarse.
         let mut buf2 = vec![0u8; 4 * 4 * 4];
-        estampar_disco(&mut buf2, 4, 4, 0, 0, 2, c, Some((0, 0, 1, 1)));
+        estampar_disco(&mut buf2, 4, 4, 0, 0, 2, c, false, Some((0, 0, 1, 1)));
         let pix2 = |x: usize, y: usize| {
             let i = (y * 4 + x) * 4;
             [buf2[i], buf2[i + 1], buf2[i + 2], buf2[i + 3]]
@@ -4028,7 +4033,7 @@
         // paso) sobre lienzo 8×5 → toda la fila 2 pintada.
         let mut buf = vec![0u8; 8 * 5 * 4];
         let c = [1, 2, 3, 255];
-        trazar_linea_pincel(&mut buf, 8, 5, 0, 2, 7, 2, 0, c, None);
+        trazar_linea_pincel(&mut buf, 8, 5, 0, 2, 7, 2, 0, c, false, None);
         for x in 0..8usize {
             let i = (2 * 8 + x) * 4;
             assert_eq!(&buf[i..i + 4], &c, "hueco en x={}", x);
@@ -4051,7 +4056,7 @@
         model.color_picked = Some([255, 0, 0, 255]);
         aplicar_y_recomponer(&mut model);
         // Disco radio 0 en (1,1).
-        let ok = pincel_punto_en_capa(&mut model, 1, 1, 0);
+        let ok = pincel_punto_en_capa(&mut model, 1, 1, 0, false);
         assert!(ok);
         let nh = model.lienzo.capa(id).unwrap().contenido;
         let bp = model.almacen.obtener(nh).unwrap();
@@ -4065,7 +4070,7 @@
             op: TransformacionPixel::Local(OpLocal::Invertir),
             estado: Frescura::Fresca,
         };
-        assert!(!pincel_punto_en_capa(&mut model, 2, 2, 0));
+        assert!(!pincel_punto_en_capa(&mut model, 2, 2, 0, false));
         assert!(model.estado.contains("derivada"));
     }
 
@@ -4125,4 +4130,130 @@
             hotkey_a_msg(&m, &ev_char("p", Modifiers::default())),
             Some(Msg::CambiarHerramienta(Herramienta::Pincel))
         ));
+    }
+
+    // ---- Fase 46: pincel pro (radio ajustable + borrador + alpha) -------
+
+    #[test]
+    fn mezclar_src_over_opaco_pisa_transparente_no_toca_semi_compone() {
+        // Opaco pisa.
+        let mut d = [10, 20, 30, 255];
+        mezclar_src_over(&mut d, [200, 100, 50, 255]);
+        assert_eq!(d, [200, 100, 50, 255]);
+        // Transparente no toca.
+        let mut d = [10, 20, 30, 255];
+        mezclar_src_over(&mut d, [9, 9, 9, 0]);
+        assert_eq!(d, [10, 20, 30, 255]);
+        // Blanco 50% sobre negro opaco → gris medio, alfa 255.
+        let mut d = [0, 0, 0, 255];
+        mezclar_src_over(&mut d, [255, 255, 255, 128]);
+        assert_eq!(d[3], 255);
+        assert!((d[0] as i32 - 128).abs() <= 2, "got {}", d[0]);
+    }
+
+    #[test]
+    fn estampar_disco_borrar_pone_alfa_cero() {
+        let mut buf = vec![255u8; 5 * 5 * 4]; // todo opaco blanco
+        estampar_disco(&mut buf, 5, 5, 2, 2, 1, [0, 0, 0, 0], true, None);
+        let pix = |x: usize, y: usize| {
+            let i = (y * 5 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        // Centro borrado.
+        assert_eq!(pix(2, 2), [0, 0, 0, 0]);
+        assert_eq!(pix(1, 2), [0, 0, 0, 0]);
+        // Esquina fuera del disco intacta.
+        assert_eq!(pix(0, 0), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn estampar_disco_color_semitransparente_compone() {
+        // Disco radio 0 (sólo el centro) con color 50% sobre fondo negro.
+        let mut buf = vec![0u8, 0, 0, 255]; // 1 píxel negro opaco
+        // Ajustar buffer a 1×1.
+        estampar_disco(&mut buf, 1, 1, 0, 0, 0, [255, 255, 255, 128], false, None);
+        assert_eq!(buf[3], 255);
+        assert!((buf[0] as i32 - 128).abs() <= 2);
+    }
+
+    #[test]
+    fn bump_radio_pincel_clampa() {
+        let mut model = modelo_minimo();
+        model.radio_pincel = 0;
+        model = <Tullpu as App>::update(
+            model,
+            Msg::BumpRadioPincel(-5),
+            &Handle::for_test(),
+        );
+        assert_eq!(model.radio_pincel, 0); // no baja de 0
+        model = <Tullpu as App>::update(
+            model,
+            Msg::BumpRadioPincel(100),
+            &Handle::for_test(),
+        );
+        assert_eq!(model.radio_pincel, RADIO_PINCEL_MAX); // tope
+    }
+
+    #[test]
+    fn hotkey_e_emite_borrador() {
+        let m = modelo_minimo();
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("e", Modifiers::default())),
+            Some(Msg::CambiarHerramienta(Herramienta::Borrador))
+        ));
+    }
+
+    #[test]
+    fn hotkey_brackets_contextual_radio_vs_opacidad() {
+        let mut m = modelo_minimo();
+        // Con herramienta Mover (no trazo) → opacidad.
+        m.herramienta = Herramienta::Mover;
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("]", Modifiers::default())),
+            Some(Msg::BumpOpacidad(_, _))
+        ));
+        // Con Pincel → radio.
+        m.herramienta = Herramienta::Pincel;
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("]", Modifiers::default())),
+            Some(Msg::BumpRadioPincel(1))
+        ));
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("[", Modifiers::default())),
+            Some(Msg::BumpRadioPincel(-1))
+        ));
+        // Borrador también es de trazo.
+        m.herramienta = Herramienta::Borrador;
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("]", Modifiers::default())),
+            Some(Msg::BumpRadioPincel(1))
+        ));
+    }
+
+    #[test]
+    fn borrador_via_trazo_borra_pixeles() {
+        let mut model = modelo_minimo();
+        let buf = vec![255u8; 4 * 4 * 4]; // todo opaco
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let mut lienzo = Lienzo::nuevo(4, 4);
+        lienzo.apilar(cap);
+        model.lienzo = lienzo;
+        model.seleccionada = Some(id);
+        model.herramienta = Herramienta::Borrador;
+        model.radio_pincel = 0;
+        aplicar_y_recomponer(&mut model);
+        // Trazo de borrador en (1,1).
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarTrazo { lx: 1.0, ly: 1.0, rw: 4.0, rh: 4.0 },
+            &Handle::for_test(),
+        );
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let i = (1 * 4 + 1) * 4;
+        assert_eq!(&bp[i..i + 4], &[0, 0, 0, 0]); // borrado
+        // Vecino sin tocar.
+        assert_eq!(&bp[0..4], &[255, 255, 255, 255]);
     }
