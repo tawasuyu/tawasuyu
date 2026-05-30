@@ -335,6 +335,15 @@ pub struct Decal {
     /// un charco. Tiene prioridad sobre `tangent`. `false` ⇒ pared
     /// (tangente) o billboard.
     pub horizontal: bool,
+    /// **Fase 3.52** — recorte horizontal del decal de pared a su lineseg.
+    /// Offsets firmados `(s_min, s_max)` en unidades mundo a lo largo de
+    /// la [`Decal::tangent`], medidos desde el centro del decal hasta los
+    /// dos extremos del segmento donde impactó. El renderer recorta la
+    /// extensión horizontal del quad a `[s_min.max(-r), s_max.min(r)]`,
+    /// evitando que el decal sangre más allá del borde de la pared (la
+    /// esquina). `None` ⇒ sin recorte (billboard, charco, o pared sin
+    /// span resuelto) — comportamiento 3.51.
+    pub wall_span: Option<(f32, f32)>,
 }
 
 /// Parámetros del renderer.
@@ -3585,6 +3594,17 @@ fn gather_decals(
         }
         let r = d.radius;
         let cz = d.z - cam.view_z;
+        // Fase 3.49/3.52: resolvemos el sector del decal una sola vez (BSP
+        // point query) — lo reusan el shading + boost (3.49-3.51) y el
+        // recorte vertical al rango [floor, ceiling] del sector (3.52).
+        let sector = if snap.nodes.is_empty() {
+            None
+        } else {
+            subsector_at_point(&snap.nodes, d.x, d.y)
+                .and_then(|ss| snap.subsectors.get(ss as usize))
+                .map(|ss| ss.sector)
+        };
+        let sector_snap = sector.and_then(|s| snap.sectors.get(s as usize));
         // Fase 3.47: si hay tangente de pared, el quad yace **plano**
         // sobre el lineseg (eje horizontal = tangente mundo, vertical =
         // +Z) — se ve en perspectiva, no de cara a la cámara. Sin
@@ -3606,18 +3626,40 @@ fn gather_decals(
                 project_xy(-r, r),
             ]
         } else if tx != 0.0 || ty != 0.0 {
-            // Esquinas en mundo: centro ± r·tangente (horizontal) y
-            // ± r en Z (vertical). Cada una se transforma a cámara y
-            // se proyecta — el quad queda con la inclinación de la pared.
+            // Esquinas en mundo: centro ± tangente (horizontal) y ± Z
+            // (vertical). Cada una se transforma a cámara y se proyecta —
+            // el quad queda con la inclinación de la pared.
+            //
+            // Fase 3.52: recortamos la extensión horizontal al span del
+            // lineseg (`wall_span`) y la vertical al rango [floor, ceiling]
+            // del sector, para que el decal no sangre más allá del borde
+            // de la pared (la esquina) ni del piso/techo. Sin span / sin
+            // sector ⇒ ± r como en 3.51.
+            let (s_lo, s_hi) = match d.wall_span {
+                Some((mn, mx)) => (mn.max(-r), mx.min(r)),
+                None => (-r, r),
+            };
+            let (dz_lo, dz_hi) = match sector_snap {
+                Some(s) => {
+                    let floor_cam = s.floor_height - cam.view_z;
+                    let ceil_cam = s.ceiling_height - cam.view_z;
+                    ((floor_cam - cz).max(-r), (ceil_cam - cz).min(r))
+                }
+                None => (-r, r),
+            };
+            // Recorte completo ⇒ quad vacío: lo saltamos.
+            if s_hi <= s_lo || dz_hi <= dz_lo {
+                continue;
+            }
             let project_world = |sx: f32, dz: f32| -> Point {
                 let (wcx, wcy) = cam.to_cam_2d(d.x + tx * sx, d.y + ty * sx);
                 proj.project(wcx, wcy, cz + dz)
             };
             [
-                project_world(-r, r),
-                project_world(r, r),
-                project_world(r, -r),
-                project_world(-r, -r),
+                project_world(s_lo, dz_hi),
+                project_world(s_hi, dz_hi),
+                project_world(s_hi, dz_lo),
+                project_world(s_lo, dz_lo),
             ]
         } else {
             [
@@ -3639,16 +3681,12 @@ fn gather_decals(
         let col = if snap.nodes.is_empty() {
             Color::from_rgba8(d.color.0, d.color.1, d.color.2, a)
         } else {
-            let sec = subsector_at_point(&snap.nodes, d.x, d.y)
-                .and_then(|ss| snap.subsectors.get(ss as usize))
-                .map(|ss| ss.sector);
-            let light = sec
-                .and_then(|s| snap.sectors.get(s as usize))
+            let light = sector_snap
                 .map(|s| s.light_level)
                 .unwrap_or(DEFAULT_PLAYER_LIGHT);
             let (sr, sg, sb) = shade_rgb(d.color, shade_for(light, depth, cfg));
             let base = Color::from_rgba8(sr, sg, sb, a);
-            let surf_sector = sec.unwrap_or(NO_SECTOR);
+            let surf_sector = sector.unwrap_or(NO_SECTOR);
             let z_surf_cam = d.z - cam.view_z;
             // Fase 3.51: el boost se direcciona por la normal de la
             // superficie donde yace el decal — un scorch en pared rasante
@@ -3661,8 +3699,7 @@ fn gather_decals(
             let boost = if cfg.decal_rim_directional && d.horizontal {
                 // Charco: normal +Z (piso) o -Z (techo) según a qué plano
                 // del sector está más pegado el decal.
-                let n_z = sec
-                    .and_then(|s| snap.sectors.get(s as usize))
+                let n_z = sector_snap
                     .map(|s| {
                         if (d.z - s.floor_height).abs() <= (d.z - s.ceiling_height).abs() {
                             1.0
@@ -7534,6 +7571,7 @@ mod tests {
                 alpha: 1.0,
                 tangent: (0.0, 0.0),
                 horizontal: false,
+                wall_span: None,
             }],
             ..Default::default()
         };
@@ -7556,6 +7594,7 @@ mod tests {
                 alpha: 1.0,
                 tangent: (0.0, 0.0),
                 horizontal: false,
+                wall_span: None,
             }],
             ..Default::default()
         };
@@ -7577,6 +7616,7 @@ mod tests {
                 alpha: 0.0, // ya desvanecido
                 tangent: (0.0, 0.0),
                 horizontal: false,
+                wall_span: None,
             }],
             ..Default::default()
         };
@@ -7598,6 +7638,7 @@ mod tests {
                 alpha: 0.5,
                 tangent: (0.0, 0.0),
                 horizontal: false,
+                wall_span: None,
             }],
             ..Default::default()
         };
@@ -7623,6 +7664,7 @@ mod tests {
                 alpha: 1.0,
                 tangent: (0.0, 0.0),
                 horizontal: false,
+                wall_span: None,
             }],
             ..Default::default()
         };
@@ -7650,6 +7692,7 @@ mod tests {
                     alpha: 1.0,
                     tangent,
                     horizontal: false,
+                    wall_span: None,
                 }],
                 ..Default::default()
             };
@@ -7702,6 +7745,7 @@ mod tests {
                 alpha: 1.0,
                 tangent: (0.0, 0.0),
                 horizontal: true,
+                wall_span: None,
             }],
             ..Default::default()
         };
@@ -7779,6 +7823,7 @@ mod tests {
             alpha: 1.0,
             tangent: (0.0, 0.0),
             horizontal: false,
+            wall_span: None,
         };
         let cfg = RenderConfig {
             decals: vec![decal],
@@ -7846,6 +7891,7 @@ mod tests {
                 alpha: 1.0,
                 tangent: (0.0, 1.0), // muro a lo largo de Y ⇒ normal ±X
                 horizontal: false,
+                wall_span: None,
             }],
             ..Default::default()
         };
@@ -7871,6 +7917,53 @@ mod tests {
             "luz encarada tinta más que rasante: head={} graze={}",
             g_head, g_graze
         );
+    }
+
+    #[test]
+    fn decal_wall_span_clips_horizontal_extent() {
+        // Fase 3.52: un decal de pared con `wall_span` más angosto que
+        // `[-r, r]` produce un quad más angosto en pantalla — recortado al
+        // borde del lineseg en vez de sangrar más allá de la esquina.
+        let (cam, proj) = decal_test_setup();
+        let width = |span: Option<(f32, f32)>| -> f64 {
+            let cfg = RenderConfig {
+                decals: vec![Decal {
+                    x: 100.0,
+                    y: 0.0,
+                    z: 40.0,
+                    radius: 8.0,
+                    color: (24, 21, 18),
+                    alpha: 1.0,
+                    tangent: (0.0, 1.0), // muro a lo largo de Y
+                    horizontal: false,
+                    wall_span: span,
+                }],
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj, None, &[]);
+            assert_eq!(out.len(), 1);
+            let xs: Vec<f64> = out[0]
+                .path
+                .elements()
+                .iter()
+                .filter_map(|e| match e {
+                    llimphi_ui::llimphi_raster::kurbo::PathEl::MoveTo(p)
+                    | llimphi_ui::llimphi_raster::kurbo::PathEl::LineTo(p) => Some(p.x),
+                    _ => None,
+                })
+                .collect();
+            xs.iter().cloned().fold(f64::MIN, f64::max)
+                - xs.iter().cloned().fold(f64::MAX, f64::min)
+        };
+        let full = width(None); // sin recorte: ± r = 16 u de ancho
+        let clipped = width(Some((-2.0, 3.0))); // recortado a 5 u
+        assert!(
+            clipped < full * 0.6,
+            "wall_span recorta el ancho del quad: full={} clipped={}",
+            full, clipped
+        );
+        assert!(clipped > 0.0, "quad recortado sigue teniendo área");
     }
 
     // =================================================================

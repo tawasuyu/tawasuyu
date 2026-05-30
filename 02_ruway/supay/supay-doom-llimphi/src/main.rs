@@ -192,15 +192,27 @@ struct HostDecal {
     tangent: (f32, f32),
     /// Fase 3.48: impacto contra piso/techo ⇒ charco horizontal.
     horizontal: bool,
+    /// Fase 3.52: span del lineseg impactado (offsets firmados a lo largo
+    /// de la tangente hasta sus extremos) para recortar el decal al borde
+    /// de la pared. `None` ⇒ billboard / charco / sin span.
+    wall_span: Option<(f32, f32)>,
 }
 
-/// Fase 3.47: tangente unitaria del lineseg más cercano a `(x, y)`
-/// dentro de `max_dist`. `(0, 0)` si ninguna pared está cerca (sangre en
-/// el aire) ⇒ el renderer cae al billboard. Sirve para apoyar el decal
-/// plano sobre la superficie impactada.
-fn nearest_wall_tangent(walls: &[WallSeg], x: f32, y: f32, max_dist: f32) -> (f32, f32) {
+/// Fase 3.47/3.52: tangente unitaria del lineseg más cercano a `(x, y)`
+/// dentro de `max_dist`, junto con el **span** del segmento — offsets
+/// firmados `(s_min, s_max)` a lo largo de la tangente desde el impacto
+/// hasta los dos extremos del lineseg. El renderer usa el span para
+/// recortar el decal al borde de la pared (Fase 3.52). Devuelve
+/// `((0, 0), None)` si ninguna pared está cerca (sangre en el aire) ⇒ el
+/// renderer cae al billboard.
+fn nearest_wall_seg(
+    walls: &[WallSeg],
+    x: f32,
+    y: f32,
+    max_dist: f32,
+) -> ((f32, f32), Option<(f32, f32)>) {
     let mut best_d2 = max_dist * max_dist;
-    let mut best = (0.0_f32, 0.0_f32);
+    let mut best = ((0.0_f32, 0.0_f32), None);
     for w in walls {
         let dx = w.x2 - w.x1;
         let dy = w.y2 - w.y1;
@@ -215,7 +227,13 @@ fn nearest_wall_tangent(walls: &[WallSeg], x: f32, y: f32, max_dist: f32) -> (f3
         if d2 < best_d2 {
             best_d2 = d2;
             let inv = len2.sqrt().recip();
-            best = (dx * inv, dy * inv);
+            let (tx, ty) = (dx * inv, dy * inv);
+            // Offsets a lo largo de la tangente desde el impacto a cada
+            // extremo. Como la tangente apunta de v1 a v2, `s_to_v1 ≤
+            // s_to_v2` siempre ⇒ par (min, max).
+            let s_to_v1 = (w.x1 - x) * tx + (w.y1 - y) * ty;
+            let s_to_v2 = (w.x2 - x) * tx + (w.y2 - y) * ty;
+            best = ((tx, ty), Some((s_to_v1, s_to_v2)));
         }
     }
     best
@@ -516,10 +534,10 @@ impl App for Supay {
                         z <= s.floor_height + DECAL_PLANE_SNAP
                             || z >= s.ceiling_height - DECAL_PLANE_SNAP
                     });
-                    let tangent = if horizontal {
-                        (0.0, 0.0)
+                    let (tangent, wall_span) = if horizontal {
+                        ((0.0, 0.0), None)
                     } else {
-                        nearest_wall_tangent(&snap.walls, x, y, DECAL_WALL_SNAP_DIST)
+                        nearest_wall_seg(&snap.walls, x, y, DECAL_WALL_SNAP_DIST)
                     };
                     m.decals.push(HostDecal {
                         x,
@@ -530,6 +548,7 @@ impl App for Supay {
                         radius,
                         tangent,
                         horizontal,
+                        wall_span,
                     });
                 }
                 m.prev_impacts = impacts.iter().map(|&(x, y, _, _, _)| (x, y)).collect();
@@ -660,6 +679,7 @@ impl App for Supay {
                             alpha: d.ttl as f32 / DECAL_TTL as f32,
                             tangent: d.tangent,
                             horizontal: d.horizontal,
+                            wall_span: d.wall_span,
                         })
                         .collect(),
                     ..RenderConfig::default()
@@ -721,7 +741,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.51 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.52 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,
