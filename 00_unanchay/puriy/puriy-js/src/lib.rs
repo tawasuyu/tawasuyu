@@ -7259,4 +7259,84 @@ mod tests {
         rt.set_now_ms(500).expect("now500");
         assert_eq!(rt.eval("performance.now()").expect("e"), JsValue::Number(500.0));
     }
+
+    // ===== Fase 7.75 — crypto.subtle.digest (SHA-256 / SHA-1) =====
+
+    // Helper JS para hexear un ArrayBuffer en una global `hex`.
+    const HEX_HELPER: &str = "function __hex(buf){var v=new Uint8Array(buf),s='';\
+        for(var i=0;i<v.length;i++){var h=v[i].toString(16);if(h.length<2)h='0'+h;s+=h;}return s;}";
+
+    #[test]
+    fn subtle_digest_sha256_vectores() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(HEX_HELPER).expect("helper");
+        // Un SHA-256 cuesta ~100M de fuel (interpretado sobre wasmi), así que
+        // cada digest va en su propio eval con el fuel recargado antes.
+        rt.eval(
+            "var hAbc = null; \
+             crypto.subtle.digest('SHA-256', new TextEncoder().encode('abc')) \
+                 .then(function(b) { hAbc = __hex(b); });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("hAbc").expect("e"),
+            JsValue::String("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into())
+        );
+        rt.set_fuel(DEFAULT_FUEL);
+        rt.eval(
+            "var hEmpty = null; \
+             crypto.subtle.digest('SHA-256', new Uint8Array([])) \
+                 .then(function(b) { hEmpty = __hex(b); });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("hEmpty").expect("e"),
+            JsValue::String("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into())
+        );
+    }
+
+    #[test]
+    fn subtle_digest_sha1_vector() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(HEX_HELPER).expect("helper");
+        rt.eval(
+            "var h = null; \
+             crypto.subtle.digest('SHA-1', new TextEncoder().encode('abc')) \
+                 .then(function(b) { h = __hex(b); });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("h").expect("e"),
+            JsValue::String("a9993e364706816aba3e25717850c26c9cd0d89d".into())
+        );
+    }
+
+    #[test]
+    fn subtle_digest_acepta_objeto_algoritmo_y_rechaza_no_soportado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(HEX_HELPER).expect("helper");
+        rt.eval(
+            "var hObj = null, rechazo = null, rechazoData = null; \
+             crypto.subtle.digest({ name: 'SHA-256' }, new TextEncoder().encode('abc')) \
+                 .then(function(b) { hObj = __hex(b); }); \
+             crypto.subtle.digest('SHA-512', new Uint8Array([1])) \
+                 .then(function() {}, function(e) { rechazo = String(e); }); \
+             crypto.subtle.digest('SHA-256', 'soy un string') \
+                 .then(function() {}, function(e) { rechazoData = String(e); });",
+        )
+        .expect("e");
+        // El algoritmo como objeto {name} también funciona.
+        assert_eq!(
+            rt.eval("hObj").expect("e"),
+            JsValue::String("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into())
+        );
+        match rt.eval("rechazo").expect("e") {
+            JsValue::String(s) => assert!(s.contains("NotSupportedError"), "fue {s}"),
+            other => panic!("esperaba rechazo, fue {other:?}"),
+        }
+        match rt.eval("rechazoData").expect("e") {
+            JsValue::String(s) => assert!(s.contains("BufferSource"), "fue {s}"),
+            other => panic!("esperaba rechazo de data, fue {other:?}"),
+        }
+    }
 }
