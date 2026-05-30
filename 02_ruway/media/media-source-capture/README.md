@@ -74,6 +74,15 @@ mismo núcleo. `GetImage` copia el framebuffer por el socket cada frame
 (MVP); MIT-SHM (memoria compartida) es la optimización natural cuando
 duela.
 
+El loop completo pantalla→`.webm` (sin ffmpeg) está como ejemplo
+ejecutable:
+
+```bash
+# graba 5s de pantalla a pantalla.webm (AV1 nativo). Necesita $DISPLAY.
+cargo run -p media-source-capture --example grabar_pantalla \
+    --features screen --release -- 5 pantalla.webm 30
+```
+
 La conversión de pixel-formats (`convert`) es **pura y testeable sin
 ningún dispositivo** — vive separada de los backends. Soporta `YUYV`
 (YUV 4:2:2, BT.601 limited range — la convención v4l2), `MJPG` (vía el

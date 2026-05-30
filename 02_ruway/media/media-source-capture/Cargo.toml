@@ -38,3 +38,9 @@ x11rb = { version = "0.13", optional = true }
 
 [dev-dependencies]
 media-recorder-webm = { path = "../media-recorder-webm" }
+
+# Demo del loop pantalla→.webm. Sólo compila con la feature `screen`
+# activa (necesita x11rb); el build por default lo ignora.
+[[example]]
+name = "grabar_pantalla"
+required-features = ["screen"]
