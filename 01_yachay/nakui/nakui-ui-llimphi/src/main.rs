@@ -202,12 +202,16 @@ enum Msg {
     /// Limpia el filtro de drill-down activo.
     ClearDrill,
     /// Arrastre de un nodo en la vista grafo: integra el delta del cursor
-    /// sobre la posición acumulada del nodo `id` del módulo `mod_idx`.
+    /// sobre la posición acumulada del morfismo. La clave es estable
+    /// (`module_id` + nombre del morfismo) para que la posición sobreviva
+    /// reordenamientos y reinicios; `end` marca el fin del arrastre (se
+    /// persiste el layout al soltar).
     DragGraphNode {
-        mod_idx: usize,
-        id: NodeId,
+        module_id: String,
+        morphism: String,
         dx: f32,
         dy: f32,
+        end: bool,
     },
     /// Click-derecho sobre un morfismo en la vista grafo: selecciona/
     /// deselecciona para resaltar su cono de dependencias.
@@ -288,10 +292,14 @@ struct Model {
     /// se navega a la lista de esa entity filtrada a ese grupo. La lista
     /// aplica el filtro y muestra un chip para limpiarlo.
     drill: Option<DrillFilter>,
-    /// Posiciones override de los nodos de la vista grafo, por
-    /// `(mod_idx, node_id)`. Vacío = layout automático por rango
-    /// topológico; al arrastrar un nodo se fija su `(x, y)` acá.
-    graph_pos: BTreeMap<(usize, NodeId), (f32, f32)>,
+    /// Posiciones override de los nodos de la vista grafo, por clave
+    /// estable `(module_id, nombre_morfismo)`. Vacío = layout automático
+    /// por rango topológico; al arrastrar un nodo se fija su `(x, y)` acá
+    /// y se persiste a `layout_path` al soltar.
+    graph_pos: BTreeMap<(String, String), (f32, f32)>,
+    /// Sidecar JSON donde persiste `graph_pos` entre arranques (junto al
+    /// event log: `<log>.layout.json`).
+    layout_path: PathBuf,
     /// Morfismo seleccionado en la vista grafo (`mod_idx`, `node_id`).
     /// Click-derecho lo fija y resalta su cono (aguas arriba + abajo);
     /// volver a clickearlo lo limpia.
@@ -398,6 +406,8 @@ impl App for NakuiApp {
         let log_path = std::env::var("NAKUI_EVENT_LOG")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("nakui-ui-state.jsonl"));
+        // Sidecar del layout del grafo (posiciones de nodos), junto al log.
+        let layout_path = log_path.with_extension("layout.json");
         let snapshot_threshold: usize = std::env::var("NAKUI_SNAPSHOT_THRESHOLD")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -443,7 +453,8 @@ impl App for NakuiApp {
             list_page: 0,
             report_filters: BTreeSet::new(),
             drill: None,
-            graph_pos: BTreeMap::new(),
+            graph_pos: load_graph_layout(&layout_path),
+            layout_path,
             graph_selected: None,
         }
     }
@@ -703,23 +714,27 @@ impl App for NakuiApp {
                 m.drill = None;
             }
             Msg::DragGraphNode {
-                mod_idx,
-                id,
+                module_id,
+                morphism,
                 dx,
                 dy,
+                end,
             } => {
                 // El delta llega ya integrado por evento; partimos de la
                 // posición actual (override previo o la base del layout)
                 // y la desplazamos, clampeada a coordenadas no-negativas.
+                let key = (module_id.clone(), morphism.clone());
                 let base = m
                     .graph_pos
-                    .get(&(mod_idx, id))
+                    .get(&key)
                     .copied()
-                    .unwrap_or_else(|| graph_base_pos(&m, mod_idx, id));
-                m.graph_pos.insert(
-                    (mod_idx, id),
-                    ((base.0 + dx).max(0.0), (base.1 + dy).max(0.0)),
-                );
+                    .unwrap_or_else(|| graph_base_pos(&m, &module_id, &morphism));
+                m.graph_pos
+                    .insert(key, ((base.0 + dx).max(0.0), (base.1 + dy).max(0.0)));
+                // Al soltar, persistir el layout (no en cada delta).
+                if end {
+                    save_graph_layout(&m.graph_pos, &m.layout_path);
+                }
             }
             Msg::SelectGraphNode { mod_idx, id } => {
                 // Toggle: re-clickear el mismo nodo limpia la selección.
@@ -1281,7 +1296,9 @@ const GRAPH_ROW_STEP: f32 = 130.0;
 /// entrada son los tokens que lee y los de salida los que escribe; cada
 /// par escritura→lectura del mismo token es un cable. El layout base es
 /// por rango (profundidad de flujo de datos); el usuario puede arrastrar
-/// nodos y sus posiciones se fijan en `model.graph_pos`.
+/// nodos y sus posiciones se fijan en `model.graph_pos` (clave estable
+/// `(module_id, morfismo)`) y se persisten al sidecar al soltar, así
+/// sobreviven a reinicios.
 fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, theme: &Theme) -> View<Msg> {
     let module = &model.modules[mod_idx];
     let data = model
@@ -1328,7 +1345,7 @@ fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, theme: &Them
             let id = i as NodeId;
             let (x, y) = model
                 .graph_pos
-                .get(&(mod_idx, id))
+                .get(&(module.id.clone(), n.name.clone()))
                 .copied()
                 .unwrap_or(base[i]);
             NodeSpec {
@@ -1438,13 +1455,27 @@ fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, theme: &Them
         (None, None)
     };
 
+    // Capturas estables para la closure de arrastre (clave de persistencia).
+    let drag_module_id = module.id.clone();
+    let node_names: Vec<String> = data.nodes.iter().map(|n| n.name.clone()).collect();
+
     let canvas = nodegraph_view_styled(
         &nodes,
         &wires,
         &palette,
         &metrics,
-        // Arrastre de nodo (botón izquierdo): el delta se integra en `update`.
-        move |id, _phase: DragPhase, dx, dy| Some(Msg::DragGraphNode { mod_idx, id, dx, dy }),
+        // Arrastre de nodo (botón izquierdo): el delta se integra en `update`;
+        // al soltar (`End`) se persiste el layout.
+        move |id, phase: DragPhase, dx, dy| {
+            let morphism = node_names.get(id as usize)?.clone();
+            Some(Msg::DragGraphNode {
+                module_id: drag_module_id.clone(),
+                morphism,
+                dx,
+                dy,
+                end: matches!(phase, DragPhase::End),
+            })
+        },
         // El grafo de morfismos es read-only: no se crean cables a mano
         // (las aristas las dicta el manifest, no la UI).
         |_fn, _fp, _tn, _tp| None,
@@ -1550,20 +1581,20 @@ fn graph_layout(data: &MorphismGraphData) -> Vec<(f32, f32)> {
 /// Posición base de un nodo del grafo (sin override de drag), recomputada
 /// desde el executor del módulo. La usa `update` para integrar el primer
 /// delta de un arrastre sobre la posición correcta del layout.
-fn graph_base_pos(model: &Model, mod_idx: usize, id: NodeId) -> (f32, f32) {
-    let module = &model.modules[mod_idx];
-    let data = model
+fn graph_base_pos(model: &Model, module_id: &str, morphism: &str) -> (f32, f32) {
+    let fallback = (GRAPH_ORIGIN_X, GRAPH_ORIGIN_Y);
+    let Some(data) = model
         .backend
         .lock()
         .ok()
-        .and_then(|b| b.morphism_graph(&module.id));
-    match data {
-        Some(d) => graph_layout(&d)
-            .get(id as usize)
-            .copied()
-            .unwrap_or((GRAPH_ORIGIN_X, GRAPH_ORIGIN_Y)),
-        None => (GRAPH_ORIGIN_X, GRAPH_ORIGIN_Y),
-    }
+        .and_then(|b| b.morphism_graph(module_id))
+    else {
+        return fallback;
+    };
+    let Some(idx) = data.nodes.iter().position(|n| n.name == morphism) else {
+        return fallback;
+    };
+    graph_layout(&data).get(idx).copied().unwrap_or(fallback)
 }
 
 /// Cono de dependencias de `sel` sobre el grafo dado por `wires` (con
@@ -3757,6 +3788,45 @@ fn seed_demo_data(
     (total > 0).then(|| format!("sembré datos de ejemplo: {}", entities_seeded.join(", ")))
 }
 
+/// Carga el sidecar del layout del grafo (posiciones de nodos por
+/// `(module_id, morfismo)`). Formato: array de `{module, morphism, x,
+/// y}`. Ausente/ilegible → mapa vacío (layout automático).
+fn load_graph_layout(path: &std::path::Path) -> BTreeMap<(String, String), (f32, f32)> {
+    let mut out = BTreeMap::new();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    let Ok(arr) = serde_json::from_str::<Vec<Value>>(&text) else {
+        return out;
+    };
+    for e in arr {
+        let (Some(m), Some(f), Some(x), Some(y)) = (
+            e.get("module").and_then(Value::as_str),
+            e.get("morphism").and_then(Value::as_str),
+            e.get("x").and_then(Value::as_f64),
+            e.get("y").and_then(Value::as_f64),
+        ) else {
+            continue;
+        };
+        out.insert((m.to_string(), f.to_string()), (x as f32, y as f32));
+    }
+    out
+}
+
+/// Persiste el layout del grafo al sidecar. Errores de IO se ignoran
+/// (perder un layout no es fatal — se recae al automático).
+fn save_graph_layout(pos: &BTreeMap<(String, String), (f32, f32)>, path: &std::path::Path) {
+    let arr: Vec<Value> = pos
+        .iter()
+        .map(|((m, f), (x, y))| {
+            serde_json::json!({ "module": m, "morphism": f, "x": x, "y": y })
+        })
+        .collect();
+    if let Ok(text) = serde_json::to_string_pretty(&arr) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
 fn main() {
     rimay_localize::init();
     llimphi_ui::run::<NakuiApp>();
@@ -3817,6 +3887,29 @@ mod tests {
             store.load("customer", id_b),
             Some(json!({"name": "Globex"}))
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// El layout del grafo round-trippea por el sidecar JSON (claves
+    /// estables `(module_id, morfismo)`), y un archivo ausente da mapa
+    /// vacío.
+    #[test]
+    fn graph_layout_round_trips_through_sidecar() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+
+        // Archivo ausente → vacío.
+        assert!(load_graph_layout(&path).is_empty());
+
+        let mut pos: BTreeMap<(String, String), (f32, f32)> = BTreeMap::new();
+        pos.insert(("ventas".into(), "calcular_total".into()), (120.0, 40.0));
+        pos.insert(("ventas".into(), "marcar_pagado".into()), (300.5, 180.25));
+        save_graph_layout(&pos, &path);
+
+        let loaded = load_graph_layout(&path);
+        assert_eq!(loaded, pos);
 
         let _ = std::fs::remove_file(&path);
     }
