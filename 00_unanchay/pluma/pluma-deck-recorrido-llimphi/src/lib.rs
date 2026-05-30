@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Mix};
-use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment, TextBlock};
+use llimphi_ui::llimphi_text::{draw_layout, layout_block, measurement, Alignment, TextBlock};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::{PaintRect, View};
 
@@ -27,6 +27,9 @@ use pluma_deck_core::{Camara, ContenidoMarco, Recorrido, RecorridoState, Rect};
 
 /// Base del zoom por "clic" de rueda (igual criterio que tullpu: `1.1`).
 pub const ZOOM_BASE: f64 = 1.1;
+
+type Scene = llimphi_ui::llimphi_raster::vello::Scene;
+type Ts = llimphi_ui::llimphi_text::Typesetter;
 
 // ---- Side-channel del rect del panel -------------------------------------
 //
@@ -63,6 +66,7 @@ const MARCO_FONDO: Color = Color::from_rgba8(38, 42, 56, 255);
 const MARCO_BORDE: Color = Color::from_rgba8(80, 86, 104, 255);
 const MARCO_ACENTO: Color = Color::from_rgba8(120, 180, 255, 255);
 const TEXTO: Color = Color::from_rgba8(225, 230, 240, 235);
+const TEXTO_TENUE: Color = Color::from_rgba8(186, 194, 210, 225);
 
 /// Nodo a pantalla completa que pinta el recorrido y registra el rect del
 /// panel. `Msg` es libre: el caller suele colgarle un `.draggable(...)` para
@@ -139,32 +143,109 @@ fn pintar(
         let (grosor, color) = if actual { (3.0, MARCO_ACENTO) } else { (1.0, MARCO_BORDE) };
         scene.stroke(&Stroke::new(grosor), xf, color, None, &kr);
 
-        // Etiqueta: centrada en el centro de pantalla del marco. Tamaño escala
-        // con el zoom (clamp para que siga legible muy lejos / muy cerca).
-        if let ContenidoMarco::Etiqueta(t) = &m.contenido {
-            if t.is_empty() {
-                continue;
+        // El contenido decide cómo se pinta: etiqueta = una línea centrada;
+        // texto = título + párrafos fluidos desde la esquina, clipeados al marco.
+        match &m.contenido {
+            ContenidoMarco::Etiqueta(t) if !t.is_empty() => {
+                pintar_etiqueta(scene, ts, cam, panel, m, t);
             }
-            let (sx, sy) = cam.world_to_screen((mcx, mcy), panel);
-            let ancho_px = (m.rect.w * cam.zoom) as f32;
-            if ancho_px < 12.0 {
-                continue; // demasiado chico para texto
+            ContenidoMarco::Texto { titulo, parrafos } => {
+                pintar_texto(scene, ts, cam, panel, m, titulo.as_deref(), parrafos);
             }
-            let size_px = ((16.0 * cam.zoom) as f32).clamp(9.0, 40.0);
-            let block = TextBlock {
-                text: t,
-                size_px,
-                color: TEXTO,
-                origin: (sx - ancho_px as f64 * 0.5, sy - size_px as f64 * 0.6),
-                max_width: Some(ancho_px),
-                alignment: Alignment::Center,
-                line_height: 1.2,
-                italic: false,
-                font_family: None,
-            };
-            let layout = layout_block(ts, &block);
-            draw_layout(scene, &layout, block.color, block.origin);
+            _ => {}
         }
+    }
+
+    scene.pop_layer();
+}
+
+/// Etiqueta de una línea centrada en el centro de pantalla del marco. El
+/// tamaño escala con el zoom (clamp para que siga legible lejos/cerca).
+fn pintar_etiqueta(scene: &mut Scene, ts: &mut Ts, cam: &Camara, panel: Rect, m: &pluma_deck_core::Marco, t: &str) {
+    let (mcx, mcy) = m.rect.centro();
+    let ancho_px = (m.rect.w * cam.zoom) as f32;
+    if ancho_px < 12.0 {
+        return; // demasiado chico para texto
+    }
+    let (sx, sy) = cam.world_to_screen((mcx, mcy), panel);
+    let size_px = ((16.0 * cam.zoom) as f32).clamp(9.0, 40.0);
+    let block = TextBlock {
+        text: t,
+        size_px,
+        color: TEXTO,
+        origin: (sx - ancho_px as f64 * 0.5, sy - size_px as f64 * 0.6),
+        max_width: Some(ancho_px),
+        alignment: Alignment::Center,
+        line_height: 1.2,
+        italic: false,
+        font_family: None,
+    };
+    let layout = layout_block(ts, &block);
+    draw_layout(scene, &layout, block.color, block.origin);
+}
+
+/// Contenido de "slide": título (si hay) + párrafos, fluidos desde la esquina
+/// superior-izquierda del marco, clipeados a su rect de pantalla. El apilado
+/// usa la altura medida del título (sin rotación: apto para marcos rectos).
+fn pintar_texto(
+    scene: &mut Scene,
+    ts: &mut Ts,
+    cam: &Camara,
+    panel: Rect,
+    m: &pluma_deck_core::Marco,
+    titulo: Option<&str>,
+    parrafos: &[String],
+) {
+    let (sx, sy) = cam.world_to_screen((m.rect.x, m.rect.y), panel);
+    let w_px = (m.rect.w * cam.zoom) as f32;
+    let h_px = (m.rect.h * cam.zoom) as f32;
+    if w_px < 40.0 || h_px < 24.0 {
+        return; // demasiado chico para texto fluido
+    }
+    let pad = ((12.0 * cam.zoom) as f32).clamp(5.0, 22.0);
+    let inner_w = (w_px - 2.0 * pad).max(8.0);
+    let left = sx + pad as f64;
+    let mut y = sy + pad as f64;
+
+    // Clip al rect de pantalla del marco para que el texto no se derrame.
+    let clip = KurboRect::new(sx, sy, sx + w_px as f64, sy + h_px as f64);
+    scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &clip);
+
+    if let Some(tt) = titulo.filter(|s| !s.is_empty()) {
+        let size = ((22.0 * cam.zoom) as f32).clamp(12.0, 46.0);
+        let block = TextBlock {
+            text: tt,
+            size_px: size,
+            color: TEXTO,
+            origin: (left, y),
+            max_width: Some(inner_w),
+            alignment: Alignment::Start,
+            line_height: 1.15,
+            italic: false,
+            font_family: None,
+        };
+        let layout = layout_block(ts, &block);
+        let medida = measurement(&layout);
+        draw_layout(scene, &layout, TEXTO, (left, y));
+        y += medida.height as f64 + ((10.0 * cam.zoom) as f32).clamp(4.0, 18.0) as f64;
+    }
+
+    if !parrafos.is_empty() {
+        let cuerpo = parrafos.join("\n\n");
+        let size = ((15.0 * cam.zoom) as f32).clamp(9.0, 32.0);
+        let block = TextBlock {
+            text: &cuerpo,
+            size_px: size,
+            color: TEXTO_TENUE,
+            origin: (left, y),
+            max_width: Some(inner_w),
+            alignment: Alignment::Start,
+            line_height: 1.35,
+            italic: false,
+            font_family: None,
+        };
+        let layout = layout_block(ts, &block);
+        draw_layout(scene, &layout, TEXTO_TENUE, (left, y));
     }
 
     scene.pop_layer();

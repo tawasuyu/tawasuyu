@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
-use pluma_deck_core::{ContenidoMarco, Marco, Recorrido, RecorridoState, Rect};
+use pluma_deck_core::{ContenidoMarco, Marco, Recorrido, RecorridoState, Rect, RejillaOpts};
 use pluma_deck_recorrido_llimphi::{dentro, panel_actual, recorrido_view, ZOOM_BASE};
 
 /// Panel inicial supuesto antes del primer paint (= `initial_size`), para
@@ -49,40 +49,51 @@ impl App for Demo {
     }
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
-        let mut rec = Recorrido::new();
-        // Cinco marcos esparcidos por el lienzo a distintas escalas/giros.
-        rec.agregar_marco(Marco::new(
-            1,
-            Rect::new(0.0, 0.0, 600.0, 360.0),
-            ContenidoMarco::Etiqueta("gioser · presentaciones espaciales".into()),
-        ));
-        rec.agregar_marco(Marco::new(
-            2,
-            Rect::new(900.0, -200.0, 300.0, 200.0),
-            ContenidoMarco::Etiqueta("un lienzo infinito".into()),
-        ));
-        rec.agregar_marco(
-            Marco::new(
-                3,
-                Rect::new(1100.0, 400.0, 220.0, 220.0),
-                ContenidoMarco::Etiqueta("la cámara vuela".into()),
-            )
-            .con_giro(0.18),
+        // Seis "slides" con contenido real (título + párrafos), auto-colocados
+        // en rejilla por en_rejilla; la ruta los recorre en orden de lectura.
+        let slide = |t: &str, ps: &[&str]| ContenidoMarco::Texto {
+            titulo: Some(t.into()),
+            parrafos: ps.iter().map(|s| s.to_string()).collect(),
+        };
+        let contenidos = vec![
+            slide(
+                "Presentaciones espaciales",
+                &[
+                    "Tipo Prezi: un lienzo infinito en vez de una pila de diapositivas.",
+                    "La cámara vuela entre marcos haciendo zoom y paneo — el recorrido ES la narrativa.",
+                ],
+            ),
+            slide(
+                "Un solo material",
+                &[
+                    "Cada marco vive en coordenadas de mundo; el orden de los pasos define el guion.",
+                    "El strip lineal de pluma-deck es el caso degenerado de esto.",
+                ],
+            ),
+            slide(
+                "Zoom narrativo",
+                &["Alejarse muestra el mapa completo; acercarse, el detalle.", "El zoom se interpola en espacio logarítmico para un vuelo natural."],
+            ),
+            slide(
+                "Contenido nativo",
+                &["El contenido es agnóstico (título + párrafos).", "Un adaptador mapea un cuerpo o subgrafo de pluma a estos marcos."],
+            ),
+            slide(
+                "Controles",
+                &["Flechas / Espacio / Enter: volar al paso.", "Rueda: zoom-a-cursor.  Arrastrar: paneo libre."],
+            ),
+            slide("Fin", &["Esto es la Fase 3a del §6.sexies en marcha."]),
+        ];
+        let mut rec = Recorrido::en_rejilla(
+            contenidos,
+            RejillaOpts { cols: 3, marco_w: 660.0, marco_h: 420.0, gap_x: 240.0, gap_y: 200.0 },
         );
-        rec.agregar_marco(Marco::new(
-            4,
-            Rect::new(-400.0, 600.0, 800.0, 240.0),
-            ContenidoMarco::Etiqueta("zoom narrativo, no diapositivas".into()),
-        ));
+        // Un par de marcos sueltos con giro para lucir la libertad espacial.
+        let id_a = (rec.marcos.len() + 1) as u64;
         rec.agregar_marco(
-            Marco::new(
-                5,
-                Rect::new(300.0, 1100.0, 160.0, 120.0),
-                ContenidoMarco::Etiqueta("fin".into()),
-            )
-            .con_giro(-0.1),
+            Marco::new(id_a, Rect::new(-520.0, 760.0, 300.0, 200.0), ContenidoMarco::Etiqueta("← lienzo infinito →".into()))
+                .con_giro(-0.12),
         );
-        rec.pasos = vec![1, 2, 3, 4, 5];
 
         let mut state = RecorridoState::new();
         state.saltar_a_paso(&rec, 0, PANEL_INICIAL);
