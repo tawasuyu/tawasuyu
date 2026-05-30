@@ -143,6 +143,22 @@
           },
           "chart": "line",
           "bucket": "month"
+        },
+        {
+          "label": "Facturación por mes y estado de pago",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum_by_series",
+            "group": "fecha",
+            "series": "pagado",
+            "value": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          },
+          "chart": "columns",
+          "bucket": "month"
         }
       ]
     },
@@ -214,6 +230,22 @@
             "symbol": "$"
           },
           "chart": "columns",
+          "bucket": "month"
+        },
+        {
+          "label": "Facturación por mes y estado de pago",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum_by_series",
+            "group": "fecha",
+            "series": "pagado",
+            "value": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          },
+          "chart": "line",
           "bucket": "month"
         }
       ],

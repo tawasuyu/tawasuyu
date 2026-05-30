@@ -362,6 +362,16 @@ pub enum Metric {
     /// Promedio de `value` por cada valor distinto de `group`
     /// ("ticket promedio por plan").
     AvgBy { group: String, value: String },
+    /// Suma de `value` por cada combinación de `group` × `series` — un
+    /// desglose de **dos dimensiones** ("facturación por mes, por
+    /// plan"). El eje principal es `group` (x); cada valor distinto de
+    /// `series` es una serie sobre ese eje. Se renderiza como
+    /// multi-línea o columnas agrupadas.
+    SumBySeries {
+        group: String,
+        series: String,
+        value: String,
+    },
 }
 
 /// Operador de comparación de un [`CardFilter`].

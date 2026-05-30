@@ -20,6 +20,16 @@ pub enum MetricResult {
     /// `SumBy` / `AvgBy`. Se formatea con el `ValueFormat` de la
     /// tarjeta (p.ej. moneda), a diferencia del conteo de `Breakdown`.
     ValueBreakdown(Vec<(String, f64)>),
+    /// Desglose de **dos dimensiones** — `SumBySeries`. `groups` es el
+    /// eje principal (x), ordenado; `series` es una lista de
+    /// `(etiqueta_serie, valores)` donde `valores[i]` es el agregado de
+    /// esa serie en `groups[i]` (0.0 si no hay datos). Cada serie queda
+    /// alineada 1:1 con `groups`. Las series se ordenan por su total
+    /// descendente.
+    MultiBreakdown {
+        groups: Vec<String>,
+        series: Vec<(String, Vec<f64>)>,
+    },
 }
 
 /// Computa el agregado de una tarjeta sobre `records`, aplicando el
@@ -92,7 +102,64 @@ pub fn compute_metric(
         Metric::AvgBy { group, value } => {
             MetricResult::ValueBreakdown(grouped_aggregate(records, &passes, group, value, true))
         }
+        Metric::SumBySeries {
+            group,
+            series,
+            value,
+        } => series_aggregate(records, &passes, group, series, value),
     }
+}
+
+/// Acumula `value` por cada combinación de `group` × `series`,
+/// devolviendo un [`MetricResult::MultiBreakdown`]: el eje `groups`
+/// ordenado por total descendente y, por cada serie, sus valores
+/// alineados 1:1 con `groups` (0.0 donde no hay datos). Las series
+/// también se ordenan por total descendente.
+fn series_aggregate(
+    records: &[(Uuid, Value)],
+    passes: &impl Fn(&Value) -> bool,
+    group: &str,
+    series: &str,
+    value: &str,
+) -> MetricResult {
+    // (grupo, serie) → suma.
+    let mut acc: BTreeMap<(String, String), f64> = BTreeMap::new();
+    // Totales para ordenar ejes.
+    let mut group_total: BTreeMap<String, f64> = BTreeMap::new();
+    let mut series_total: BTreeMap<String, f64> = BTreeMap::new();
+    for (_, v) in records.iter().filter(|(_, v)| passes(v)) {
+        let Some(n) = v.get(value).and_then(Value::as_f64) else {
+            continue;
+        };
+        let g = field_as_text(v, group).unwrap_or_else(|| "(vacío)".to_string());
+        let s = field_as_text(v, series).unwrap_or_else(|| "(vacío)".to_string());
+        *acc.entry((g.clone(), s.clone())).or_default() += n;
+        *group_total.entry(g).or_default() += n;
+        *series_total.entry(s).or_default() += n;
+    }
+    // Ejes ordenados por total desc, empates por nombre.
+    let rank = |m: BTreeMap<String, f64>| -> Vec<String> {
+        let mut v: Vec<(String, f64)> = m.into_iter().collect();
+        v.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        v.into_iter().map(|(k, _)| k).collect()
+    };
+    let groups = rank(group_total);
+    let series_keys = rank(series_total);
+    let series: Vec<(String, Vec<f64>)> = series_keys
+        .into_iter()
+        .map(|s| {
+            let row = groups
+                .iter()
+                .map(|g| acc.get(&(g.clone(), s.clone())).copied().unwrap_or(0.0))
+                .collect();
+            (s, row)
+        })
+        .collect();
+    MetricResult::MultiBreakdown { groups, series }
 }
 
 /// Acumula `value` por cada valor distinto de `group`, devolviendo la
@@ -216,6 +283,30 @@ pub fn breakdown_to_csv(
                 vec![k.clone(), n]
             })
             .collect(),
+        // Matriz: una columna por serie. `value_header` se ignora — los
+        // encabezados de valor son los nombres de las series.
+        MetricResult::MultiBreakdown { groups, series } => {
+            let mut headers = vec![group_header.to_string()];
+            headers.extend(series.iter().map(|(name, _)| name.clone()));
+            let rows: Vec<Vec<String>> = groups
+                .iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    let mut row = vec![g.clone()];
+                    for (_, vals) in series {
+                        let v = vals.get(i).copied().unwrap_or(0.0);
+                        let n = if v.fract() == 0.0 {
+                            format!("{}", v as i64)
+                        } else {
+                            v.to_string()
+                        };
+                        row.push(n);
+                    }
+                    row
+                })
+                .collect();
+            return Some(crate::csv::to_csv(&headers, &rows));
+        }
         MetricResult::Scalar(_) => return None,
     };
     Some(crate::csv::to_csv(
@@ -261,6 +352,7 @@ pub fn limit_breakdown(result: &mut MetricResult, limit: usize, additive: bool) 
             rows.push((OTROS_LABEL.to_string(), value));
             true
         }
+        // El recorte top-N no aplica a desgloses de dos dimensiones.
         _ => false,
     }
 }
@@ -295,6 +387,16 @@ pub fn sort_breakdown_by_key(result: &mut MetricResult) {
     match result {
         MetricResult::Breakdown(rows) => rows.sort_by(|a, b| a.0.cmp(&b.0)),
         MetricResult::ValueBreakdown(rows) => rows.sort_by(|a, b| a.0.cmp(&b.0)),
+        // Reordena el eje `groups` por clave y permuta cada serie con la
+        // misma permutación, manteniendo la alineación 1:1.
+        MetricResult::MultiBreakdown { groups, series } => {
+            let mut perm: Vec<usize> = (0..groups.len()).collect();
+            perm.sort_by(|&a, &b| groups[a].cmp(&groups[b]));
+            *groups = perm.iter().map(|&i| groups[i].clone()).collect();
+            for (_, vals) in series.iter_mut() {
+                *vals = perm.iter().map(|&i| vals[i]).collect();
+            }
+        }
         MetricResult::Scalar(_) => {}
     }
 }
@@ -599,6 +701,73 @@ mod tests {
                 ("ACME".to_string(), 1500.0),
             ])
         );
+    }
+
+    #[test]
+    fn sum_by_series_builds_aligned_matrix() {
+        let rs = recs(&[
+            json!({"mes": "2026-01", "plan": "pro", "monto": 100}),
+            json!({"mes": "2026-01", "plan": "free", "monto": 30}),
+            json!({"mes": "2026-02", "plan": "pro", "monto": 200}),
+            // free no factura en feb → 0.0 alineado.
+        ]);
+        let r = compute_metric(
+            &Metric::SumBySeries {
+                group: "mes".into(),
+                series: "plan".into(),
+                value: "monto".into(),
+            },
+            None,
+            &rs,
+        );
+        // groups por total desc: feb(200) > ene(130). series por total
+        // desc: pro(300) > free(30).
+        assert_eq!(
+            r,
+            MetricResult::MultiBreakdown {
+                groups: vec!["2026-02".into(), "2026-01".into()],
+                series: vec![
+                    ("pro".into(), vec![200.0, 100.0]),
+                    ("free".into(), vec![0.0, 30.0]),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn sort_multi_breakdown_permutes_series() {
+        let mut r = MetricResult::MultiBreakdown {
+            groups: vec!["2026-02".into(), "2026-01".into()],
+            series: vec![
+                ("pro".into(), vec![200.0, 100.0]),
+                ("free".into(), vec![0.0, 30.0]),
+            ],
+        };
+        sort_breakdown_by_key(&mut r);
+        // groups cronológicos; cada serie sigue la misma permutación.
+        assert_eq!(
+            r,
+            MetricResult::MultiBreakdown {
+                groups: vec!["2026-01".into(), "2026-02".into()],
+                series: vec![
+                    ("pro".into(), vec![100.0, 200.0]),
+                    ("free".into(), vec![30.0, 0.0]),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn multi_breakdown_csv_is_a_matrix() {
+        let r = MetricResult::MultiBreakdown {
+            groups: vec!["2026-01".into(), "2026-02".into()],
+            series: vec![
+                ("pro".into(), vec![100.0, 200.0]),
+                ("free".into(), vec![30.0, 0.0]),
+            ],
+        };
+        let csv = breakdown_to_csv(&r, "Mes", "ignorado").unwrap();
+        assert_eq!(csv, "Mes,pro,free\n2026-01,100,30\n2026-02,200,0\n");
     }
 
     #[test]

@@ -2424,6 +2424,12 @@ fn resolve_breakdown_keys(
                 *k = resolve(k);
             }
         }
+        // Resuelve las claves del eje principal (`groups`) si son refs.
+        MetricResult::MultiBreakdown { groups, .. } => {
+            for g in groups.iter_mut() {
+                *g = resolve(g);
+            }
+        }
         MetricResult::Scalar(_) => {}
     }
 }
@@ -2511,7 +2517,9 @@ fn metric_group_field(metric: &nahual_meta_schema::Metric) -> Option<&str> {
     use nahual_meta_schema::Metric;
     match metric {
         Metric::GroupBy { field } => Some(field),
-        Metric::SumBy { group, .. } | Metric::AvgBy { group, .. } => Some(group),
+        Metric::SumBy { group, .. }
+        | Metric::AvgBy { group, .. }
+        | Metric::SumBySeries { group, .. } => Some(group),
         _ => None,
     }
 }
@@ -2599,6 +2607,8 @@ fn breakdown_display(result: &MetricResult, fmt: &ValueFormat) -> Vec<(String, f
                 (k.clone(), *v, format_value(Some(&value), fmt))
             })
             .collect(),
+        // Multi-serie se pinta con su propio camino (`multi_chart`).
+        MetricResult::MultiBreakdown { .. } => Vec::new(),
         MetricResult::Scalar(_) => Vec::new(),
     }
 }
@@ -2753,6 +2763,94 @@ fn plot_canvas(series: Vec<(f64, Color)>, line: bool, axis: Color, accent: Color
     })
 }
 
+/// Canvas multi-serie sobre un eje común de `n_groups` posiciones: cada
+/// `(valores, color)` es una serie alineada 1:1 con los grupos. Con
+/// `line` cada serie es una polilínea con puntos; si no, columnas
+/// **agrupadas** (las series se reparten el ancho del slot de cada
+/// grupo, lado a lado). El rango siempre incluye el cero (eje base).
+fn multi_plot_canvas(
+    n_groups: usize,
+    series: Vec<(Vec<f64>, Color)>,
+    line: bool,
+    axis: Color,
+) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(128.0),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect: PaintRect| {
+        if n_groups == 0 || series.is_empty() {
+            return;
+        }
+        let pad = 6.0_f64;
+        let x0 = rect.x as f64 + pad;
+        let x1 = (rect.x + rect.w) as f64 - pad;
+        let y0 = rect.y as f64 + pad;
+        let y1 = (rect.y + rect.h) as f64 - pad;
+        let w = (x1 - x0).max(1.0);
+        let h = (y1 - y0).max(1.0);
+        let all = || series.iter().flat_map(|(v, _)| v.iter().copied());
+        let lo = all().fold(0.0_f64, f64::min);
+        let hi = all().fold(0.0_f64, f64::max);
+        let range = (hi - lo).max(1e-9);
+        let y_of = |v: f64| y0 + (hi - v) / range * h;
+        let zero_y = y_of(0.0);
+
+        let mut axis_path = BezPath::new();
+        axis_path.move_to((x0, zero_y));
+        axis_path.line_to((x1, zero_y));
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, axis, None, &axis_path);
+
+        let slot = w / n_groups as f64;
+        if line {
+            for (vals, color) in &series {
+                let mut path = BezPath::new();
+                for (i, v) in vals.iter().enumerate() {
+                    let cx = x0 + slot * (i as f64 + 0.5);
+                    let pt = (cx, y_of(*v));
+                    if i == 0 {
+                        path.move_to(pt);
+                    } else {
+                        path.line_to(pt);
+                    }
+                }
+                scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, *color, None, &path);
+                for (i, v) in vals.iter().enumerate() {
+                    let cx = x0 + slot * (i as f64 + 0.5);
+                    scene.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        *color,
+                        None,
+                        &KurboCircle::new((cx, y_of(*v)), 3.0),
+                    );
+                }
+            }
+        } else {
+            // Columnas agrupadas: el 80% central del slot se reparte
+            // entre las series, lado a lado.
+            let ns = series.len();
+            let group_w = slot * 0.8;
+            let bw = (group_w / ns as f64).max(1.0);
+            for i in 0..n_groups {
+                let gstart = x0 + slot * i as f64 + (slot - group_w) / 2.0;
+                for (s, (vals, color)) in series.iter().enumerate() {
+                    let v = vals.get(i).copied().unwrap_or(0.0);
+                    let yv = y_of(v);
+                    let (top, bot) = if yv <= zero_y { (yv, zero_y) } else { (zero_y, yv) };
+                    let bx = gstart + bw * s as f64;
+                    let r = KurboRect::new(bx, top, bx + bw * 0.9, bot);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &r);
+                }
+            }
+        }
+    })
+}
+
 /// Fila de leyenda de un gráfico: cuadradito de color + etiqueta +
 /// valor (con porcentaje). Clickeable (drill-down) si `on_drill`.
 fn legend_row(
@@ -2801,6 +2899,8 @@ fn breakdown_raw_keys(result: &MetricResult) -> Vec<String> {
     match result {
         MetricResult::Breakdown(rows) => rows.iter().map(|(k, _)| k.clone()).collect(),
         MetricResult::ValueBreakdown(rows) => rows.iter().map(|(k, _)| k.clone()).collect(),
+        // Multi-serie no es navegable (drill ambiguo entre group y serie).
+        MetricResult::MultiBreakdown { .. } => Vec::new(),
         MetricResult::Scalar(_) => Vec::new(),
     }
 }
@@ -2908,7 +3008,9 @@ fn active_toggle_labels(model: &Model, view_key: &str, rv: &ReportView) -> Vec<S
 fn is_breakdown(r: &MetricResult) -> bool {
     matches!(
         r,
-        MetricResult::Breakdown(_) | MetricResult::ValueBreakdown(_)
+        MetricResult::Breakdown(_)
+            | MetricResult::ValueBreakdown(_)
+            | MetricResult::MultiBreakdown { .. }
     )
 }
 
@@ -3091,6 +3193,45 @@ fn dashboard_card(
                         disp.clone(),
                         value_w,
                         drill_msg(i),
+                        theme,
+                    ));
+                }
+            }
+        }
+        // Desglose de dos dimensiones (`SumBySeries`): multi-línea o
+        // columnas agrupadas. Una serie por color; leyenda con el total
+        // de cada serie; caption con el orden de los grupos (eje x).
+        MetricResult::MultiBreakdown { groups, series } => {
+            if groups.is_empty() || series.is_empty() {
+                children.push(text_line("(sin datos)".into(), 11.0, theme.fg_muted));
+            } else {
+                let line = matches!(chart, ChartKind::Line);
+                let plot_series: Vec<(Vec<f64>, Color)> = series
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, vals))| (vals.clone(), chart_color(i)))
+                    .collect();
+                children.push(multi_plot_canvas(
+                    groups.len(),
+                    plot_series,
+                    line,
+                    theme.border,
+                ));
+                // Caption: el eje x (grupos en orden).
+                children.push(text_line(groups.join("  ·  "), 10.0, theme.fg_muted));
+                // Leyenda: total de cada serie.
+                for (i, (name, vals)) in series.iter().enumerate() {
+                    let total: f64 = vals.iter().sum();
+                    let value = if total.fract() == 0.0 {
+                        Value::from(total as i64)
+                    } else {
+                        Value::from(total)
+                    };
+                    children.push(legend_row(
+                        chart_color(i),
+                        name.clone(),
+                        format_value(Some(&value), fmt),
+                        None,
                         theme,
                     ));
                 }
@@ -3295,6 +3436,32 @@ fn report_markdown(model: &Model, module: &Module, view_key: &str, rv: &ReportVi
                         md_escape(k),
                         format_value(Some(&value), &card.format)
                     ));
+                }
+                out.push('\n');
+            }
+            // Tabla matriz: una columna por serie.
+            MetricResult::MultiBreakdown { groups, series } => {
+                out.push_str("| Grupo |");
+                let mut sep = String::from("|---|");
+                for (name, _) in series {
+                    out.push_str(&format!(" {} |", md_escape(name)));
+                    sep.push_str("---:|");
+                }
+                out.push('\n');
+                out.push_str(&sep);
+                out.push('\n');
+                for (i, g) in groups.iter().enumerate() {
+                    out.push_str(&format!("| {} |", md_escape(g)));
+                    for (_, vals) in series {
+                        let v = vals.get(i).copied().unwrap_or(0.0);
+                        let value = if v.fract() == 0.0 {
+                            Value::from(v as i64)
+                        } else {
+                            Value::from(v)
+                        };
+                        out.push_str(&format!(" {} |", format_value(Some(&value), &card.format)));
+                    }
+                    out.push('\n');
                 }
                 out.push('\n');
             }
