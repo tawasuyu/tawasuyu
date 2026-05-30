@@ -27,8 +27,8 @@
 //! con espectro en vivo), card (`shared/card` presentada por campos),
 //! tree (árbol JSON/TOML indentado), hex (dump de binarios), table
 //! (CSV/TSV alineado), markdown (`.md` renderizado con encabezados,
-//! listas, código y citas) y archive (listado de ZIP y su familia
-//! .jar/.apk/.epub/OOXML) — todos ruteados por `viewer_registry::pick`
+//! listas, código y citas) y archive (listado de ZIP/tar/tar.gz; ZIP
+//! cubre .jar/.apk/.epub/OOXML) — todos ruteados por `viewer_registry::pick`
 //! sobre el `lens`/`mime` discernido. `Space` hace play/pausa del video
 //! o audio.
 //!

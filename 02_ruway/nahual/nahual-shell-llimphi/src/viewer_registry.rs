@@ -41,9 +41,9 @@ pub enum ViewerKind {
     /// Markdown renderizado (`nahual-markdown-viewer-llimphi`); encabezados,
     /// listas, código y citas con estilo en vez de la sintaxis cruda.
     Markdown,
-    /// Listado de un ZIP (`nahual-archive-viewer-llimphi`); muestra las
-    /// entradas (nombre/tamaño/ratio) en vez del volcado hex. Cubre la
-    /// familia ZIP entera: .jar/.apk/.epub/.docx/.xlsx/.pptx.
+    /// Listado de un archivo comprimido (`nahual-archive-viewer-llimphi`);
+    /// muestra las entradas (nombre/tamaño/ratio) en vez del volcado hex.
+    /// Cubre ZIP (y .jar/.apk/.epub/OOXML), tar y tar.gz.
     Archive,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
@@ -87,14 +87,13 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
         // Binarios que shuma detecta por magic-bytes (sin lens) pero que
         // ningún visor "rico" cubre: un dump hex es mejor que el text
         // viewer diciendo "(binario — sin preview)".
-        // Un ZIP es un contenedor: listamos sus entradas en vez del hex.
-        // Cubre .zip y toda la familia basada en ZIP (jar/apk/epub/OOXML).
-        Some("application/zip") => return ViewerKind::Archive,
-        Some(
-            "application/x-executable"
-            | "application/wasm"
-            | "application/gzip",
-        ) => return ViewerKind::Hex,
+        // Un archivo comprimido es un contenedor: listamos sus entradas en
+        // vez del hex. ZIP (+jar/apk/epub/OOXML), tar y gzip (que asumimos
+        // envuelve un tar) van al archive viewer.
+        Some("application/zip" | "application/x-tar" | "application/gzip") => {
+            return ViewerKind::Archive
+        }
+        Some("application/x-executable" | "application/wasm") => return ViewerKind::Hex,
         _ => {}
     }
     ViewerKind::Text
@@ -166,12 +165,13 @@ mod tests {
     fn binarios_van_a_hex() {
         assert_eq!(pick(Some(&disc(None, Some("application/x-executable")))), ViewerKind::Hex);
         assert_eq!(pick(Some(&disc(None, Some("application/wasm")))), ViewerKind::Hex);
-        assert_eq!(pick(Some(&disc(None, Some("application/gzip")))), ViewerKind::Hex);
     }
 
     #[test]
-    fn zip_va_a_archive() {
+    fn comprimidos_van_a_archive() {
         assert_eq!(pick(Some(&disc(None, Some("application/zip")))), ViewerKind::Archive);
+        assert_eq!(pick(Some(&disc(None, Some("application/x-tar")))), ViewerKind::Archive);
+        assert_eq!(pick(Some(&disc(None, Some("application/gzip")))), ViewerKind::Archive);
     }
 
     #[test]

@@ -1,15 +1,19 @@
-//! `nahual-archive-viewer-llimphi` — visor de archivos ZIP.
+//! `nahual-archive-viewer-llimphi` — visor de archivos comprimidos.
 //!
-//! Décimo visor del shell meta-app. Un `.zip` lo detecta `shuma-discern`
-//! por su magic `PK\x03\x04`, pero hasta ahora caía al **hex viewer** —
-//! que vuelca bytes ilegibles. Un ZIP es un *contenedor*: lo útil es ver
-//! qué hay **dentro**, no su entropía. Este visor lee el directorio
-//! central (sin descomprimir) y lista cada entrada con su tamaño y ratio
-//! de compresión.
+//! Décimo visor del shell meta-app. Un `.zip`/`.tar`/`.tar.gz` lo detecta
+//! `shuma-discern` por su magic, pero hasta ahora caían al **hex viewer**
+//! (o al texto) — bytes ilegibles. Un archivo comprimido es un
+//! *contenedor*: lo útil es ver qué hay **dentro**, no su entropía. Este
+//! visor lista cada entrada con su tamaño (y, para ZIP, su ratio).
 //!
-//! Cubre además la familia entera basada en ZIP — `.jar`, `.apk`, `.epub`,
-//! y los ofimáticos OOXML (`.docx`/`.xlsx`/`.pptx`) son ZIPs, así que
-//! abrirlos acá muestra su estructura interna (p.ej. `word/document.xml`).
+//! Soporta tres formatos, decidido por el **contenido** (no la extensión):
+//! - **ZIP** (`PK`): lee el directorio central con `by_index_raw`, sin
+//!   descomprimir. Cubre la familia entera — `.jar`/`.apk`/`.epub` y los
+//!   ofimáticos OOXML (`.docx`/`.xlsx`/`.pptx`) son ZIPs.
+//! - **tar** (`ustar` en off 257): recorre los headers en streaming.
+//! - **tar.gz** (`1f 8b`): descomprime en streaming con `flate2` y recorre
+//!   el tar interno; salta los datos de cada entrada (sólo lee headers),
+//!   así no carga el archivo entero en memoria.
 //!
 //! Patrón fino de los otros viewers: carga sync en [`load_archive`],
 //! render en [`archive_viewer_view`]. No conoce el AppBus: el caller
@@ -18,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::io::Read;
 use std::path::Path;
 
 use llimphi_ui::llimphi_layout::taffy::{
@@ -46,12 +51,22 @@ pub struct ArchiveEntry {
     pub compressed: u64,
 }
 
+/// Qué formato de contenedor se abrió. Cambia cómo se rotula el resumen
+/// (el ratio de compresión sólo tiene sentido por-entrada en ZIP).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveKind {
+    Zip,
+    Tar,
+    TarGz,
+}
+
 /// Resumen + listado de un archivo abierto.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveListing {
+    pub kind: ArchiveKind,
     pub entries: Vec<ArchiveEntry>,
-    /// Total de entradas en el archivo (puede superar a `entries.len()`
-    /// si se truncó en [`MAX_ENTRIES`]).
+    /// Total de entradas listadas. Para ZIP es el total real del archivo;
+    /// para tar/tar.gz (streaming) es lo que alcanzamos a leer.
     pub total_entries: usize,
     pub total_size: u64,
     pub total_compressed: u64,
@@ -71,10 +86,46 @@ pub enum ArchivePreview {
     Error(String),
 }
 
-/// Abre el ZIP y lee su directorio central. No descomprime nada: usa
+/// Abre el archivo, olfatea su magic y despacha al lister del formato. La
+/// detección es por **contenido**: `PK` → ZIP, `ustar` en off 257 → tar,
+/// `1f 8b` → gzip (que asumimos envuelve un tar).
+pub fn load_archive(path: &Path) -> ArchivePreview {
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => return ArchivePreview::Error(e.to_string()),
+    };
+    // 512 bytes alcanzan para el magic de ZIP/gzip (off 0) y el de tar
+    // (off 257); es además el tamaño de un header tar.
+    let mut head = [0u8; 512];
+    let n = match file.read(&mut head) {
+        Ok(n) => n,
+        Err(e) => return ArchivePreview::Error(e.to_string()),
+    };
+    let head = &head[..n];
+
+    if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
+        // ZIP necesita el directorio central (al final): reabrimos por path.
+        return load_zip(path);
+    }
+    if head.len() >= 262 && &head[257..262] == b"ustar" {
+        return match std::fs::File::open(path) {
+            Ok(f) => list_tar(f, ArchiveKind::Tar),
+            Err(e) => ArchivePreview::Error(e.to_string()),
+        };
+    }
+    if head.starts_with(&[0x1F, 0x8B]) {
+        return match std::fs::File::open(path) {
+            Ok(f) => list_tar(flate2::read::GzDecoder::new(f), ArchiveKind::TarGz),
+            Err(e) => ArchivePreview::Error(e.to_string()),
+        };
+    }
+    ArchivePreview::Error("formato de archivo no reconocido".to_string())
+}
+
+/// Lee el directorio central de un ZIP. No descomprime nada: usa
 /// `by_index_raw`, que sólo lee los headers (metadata), así que es barato
 /// aun para archivos grandes y no necesita el backend de compresión.
-pub fn load_archive(path: &Path) -> ArchivePreview {
+fn load_zip(path: &Path) -> ArchivePreview {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => return ArchivePreview::Error(e.to_string()),
@@ -104,6 +155,7 @@ pub fn load_archive(path: &Path) -> ArchivePreview {
         }
     }
     ArchivePreview::Listing(ArchiveListing {
+        kind: ArchiveKind::Zip,
         truncated: entries.len() < total_entries,
         entries,
         total_entries,
@@ -112,22 +164,81 @@ pub fn load_archive(path: &Path) -> ArchivePreview {
     })
 }
 
+/// Recorre los headers de un tar (posiblemente envuelto en un decoder gzip
+/// en streaming). `tar::Archive::entries` salta los datos de cada entrada,
+/// así que no carga el archivo entero en memoria. tar no comprime
+/// por-entrada, así que `compressed == size`.
+fn list_tar<R: Read>(reader: R, kind: ArchiveKind) -> ArchivePreview {
+    let mut archive = tar::Archive::new(reader);
+    let iter = match archive.entries() {
+        Ok(it) => it,
+        Err(e) => return ArchivePreview::Error(e.to_string()),
+    };
+    let mut entries = Vec::new();
+    let mut total_size = 0u64;
+    let mut truncated = false;
+    for item in iter {
+        let entry = match item {
+            Ok(e) => e,
+            Err(e) => return ArchivePreview::Error(e.to_string()),
+        };
+        let size = entry.header().size().unwrap_or(0);
+        total_size = total_size.saturating_add(size);
+        if entries.len() >= MAX_ENTRIES {
+            truncated = true;
+            break;
+        }
+        let is_dir = entry.header().entry_type().is_dir();
+        let name = entry
+            .path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "(nombre ilegible)".to_string());
+        entries.push(ArchiveEntry { name, is_dir, size, compressed: size });
+    }
+    ArchivePreview::Listing(ArchiveListing {
+        kind,
+        total_entries: entries.len(),
+        total_size,
+        total_compressed: total_size,
+        truncated,
+        entries,
+    })
+}
+
 /// Renderiza el listado a un bloque de texto monoespaciado: una línea por
 /// entrada con `tamaño  ratio  nombre`. Las carpetas se marcan con `/`.
 fn render_listing(l: &ArchiveListing) -> String {
     let mut out = String::new();
-    let ratio = if l.total_size > 0 {
-        100 - (l.total_compressed * 100 / l.total_size).min(100)
-    } else {
-        0
-    };
-    out.push_str(&format!(
-        "{} entradas · {} → {} ({}% ahorro)\n",
-        l.total_entries,
-        fmt_bytes(l.total_size),
-        fmt_bytes(l.total_compressed),
-        ratio,
-    ));
+    match l.kind {
+        ArchiveKind::Zip => {
+            let ratio = if l.total_size > 0 {
+                100 - (l.total_compressed * 100 / l.total_size).min(100)
+            } else {
+                0
+            };
+            out.push_str(&format!(
+                "zip · {} entradas · {} → {} ({}% ahorro)\n",
+                l.total_entries,
+                fmt_bytes(l.total_size),
+                fmt_bytes(l.total_compressed),
+                ratio,
+            ));
+        }
+        ArchiveKind::Tar => {
+            out.push_str(&format!(
+                "tar · {} entradas · {} (sin compresión)\n",
+                l.total_entries,
+                fmt_bytes(l.total_size),
+            ));
+        }
+        ArchiveKind::TarGz => {
+            out.push_str(&format!(
+                "tar.gz · {} entradas · {} sin comprimir\n",
+                l.total_entries,
+                fmt_bytes(l.total_size),
+            ));
+        }
+    }
     out.push_str("────────────────────────────────────────\n");
     for e in &l.entries {
         let name = if e.is_dir {
@@ -138,20 +249,26 @@ fn render_listing(l: &ArchiveListing) -> String {
         let name = ellipsize_left(&name, MAX_NAME);
         if e.is_dir {
             out.push_str(&format!("{:>10}         {}\n", "—", name));
-        } else {
+        } else if l.kind == ArchiveKind::Zip {
+            // El ratio por-entrada sólo tiene sentido en ZIP (compresión
+            // por archivo). En tar todos los datos están sin comprimir.
             let r = if e.size > 0 {
                 format!("{}%", 100 - (e.compressed * 100 / e.size).min(100))
             } else {
                 "—".to_string()
             };
             out.push_str(&format!("{:>10}  {:>5}  {}\n", fmt_bytes(e.size), r, name));
+        } else {
+            out.push_str(&format!("{:>10}         {}\n", fmt_bytes(e.size), name));
         }
     }
     if l.truncated {
-        out.push_str(&format!(
-            "… ({} entradas más sin listar)\n",
-            l.total_entries - l.entries.len()
-        ));
+        let suffix = if l.kind == ArchiveKind::Zip {
+            format!("{} entradas más sin listar", l.total_entries - l.entries.len())
+        } else {
+            "hay más entradas sin listar".to_string()
+        };
+        out.push_str(&format!("… ({suffix})\n"));
     }
     out
 }
@@ -225,7 +342,7 @@ where
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| p.display().to_string())
         ),
-        None => "(seleccioná un ZIP)".to_string(),
+        None => "(seleccioná un ZIP/tar/tar.gz)".to_string(),
     };
 
     let header = View::new(Style {
@@ -321,6 +438,7 @@ mod tests {
     #[test]
     fn listing_resume_y_lista() {
         let l = ArchiveListing {
+            kind: ArchiveKind::Zip,
             entries: vec![
                 ArchiveEntry { name: "dir/".into(), is_dir: true, size: 0, compressed: 0 },
                 ArchiveEntry { name: "a.txt".into(), is_dir: false, size: 1000, compressed: 400 },
@@ -335,6 +453,56 @@ mod tests {
         assert!(out.contains("60% ahorro")); // 1 - 400/1000
         assert!(out.contains("a.txt"));
         assert!(out.contains("dir/"));
+    }
+
+    /// Construye un tar en memoria con dos entradas.
+    fn tar_de_prueba() -> Vec<u8> {
+        let mut b = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(5);
+        h.set_mode(0o644);
+        b.append_data(&mut h, "hola.txt", &b"hello"[..]).unwrap();
+        let mut h2 = tar::Header::new_gnu();
+        h2.set_size(3);
+        h2.set_mode(0o644);
+        b.append_data(&mut h2, "dir/x.bin", &b"abc"[..]).unwrap();
+        b.into_inner().unwrap()
+    }
+
+    #[test]
+    fn lista_tar_en_memoria() {
+        let data = tar_de_prueba();
+        match list_tar(&data[..], ArchiveKind::Tar) {
+            ArchivePreview::Listing(l) => {
+                assert_eq!(l.kind, ArchiveKind::Tar);
+                assert_eq!(l.total_entries, 2);
+                assert_eq!(l.total_size, 8);
+                assert!(l.entries.iter().any(|e| e.name == "hola.txt" && e.size == 5));
+                assert!(l.entries.iter().any(|e| e.name == "dir/x.bin"));
+            }
+            other => panic!("esperaba Listing, obtuve {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lista_tar_gz_descomprimiendo() {
+        use std::io::Write;
+        let tar = tar_de_prueba();
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&tar).unwrap();
+        let gz = enc.finish().unwrap();
+        // Lo escribimos a disco y lo abrimos por load_archive (sniff real).
+        let tmp = std::env::temp_dir().join("nahual-archive-viewer-test.tar.gz");
+        std::fs::write(&tmp, &gz).unwrap();
+        match load_archive(&tmp) {
+            ArchivePreview::Listing(l) => {
+                assert_eq!(l.kind, ArchiveKind::TarGz);
+                assert_eq!(l.total_entries, 2);
+                assert_eq!(l.total_size, 8);
+            }
+            other => panic!("esperaba Listing TarGz, obtuve {other:?}"),
+        }
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

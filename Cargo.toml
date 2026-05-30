@@ -676,8 +676,11 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 
 # === Archivos comprimidos (nahual archive viewer) ===
 # Sólo listamos el directorio central (nombres/tamaños); no descomprimimos,
-# por eso default-features=false alcanza.
+# por eso default-features=false alcanza para ZIP. Para tar.gz sí
+# descomprimimos en streaming con flate2 (ya declarado arriba), saltando
+# los datos de cada entrada — sólo leemos headers.
 zip = { version = "2.4", default-features = false }
+tar = { version = "0.4", default-features = false }
 
 # ============================================================
 # Intra-workspace deps de nahual (referenciadas por workspace = true)

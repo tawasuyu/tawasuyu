@@ -107,6 +107,13 @@ impl Discerner for MagicBytes {
             x if x.starts_with(b"PK\x03\x04") || x.starts_with(b"PK\x05\x06") => {
                 Some(d("zip", "application/zip", None))
             }
+            // tar — el magic "ustar" no está al inicio sino en el offset
+            // 257 del primer header (POSIX y GNU lo escriben ahí). Como la
+            // muestra son 8 KB, el offset cae dentro. Sin esto, un .tar
+            // (texto en sus primeros 257 bytes) caería al text viewer.
+            x if x.len() >= 262 && &x[257..262] == b"ustar" => {
+                Some(d("tar", "application/x-tar", None))
+            }
             x if x.starts_with(b"GIF87a") || x.starts_with(b"GIF89a") => {
                 Some(d("gif", "image/gif", Some("gallery")))
             }
@@ -339,6 +346,18 @@ mod tests {
         let r = discern(b"DKIF\x00\x00\x20\x00AV01").unwrap();
         assert_eq!(r.mime.as_deref(), Some("video/x-ivf"));
         assert_eq!(r.lens.as_deref(), Some("video"));
+    }
+
+    #[test]
+    fn tar_detectado_por_ustar_en_offset_257() {
+        // Un header tar: nombre + relleno hasta el offset 257 donde va el
+        // magic "ustar". Los primeros bytes son texto (el nombre), así que
+        // sin el chequeo de offset caería al text viewer.
+        let mut bytes = vec![0u8; 512];
+        bytes[..8].copy_from_slice(b"file.txt");
+        bytes[257..262].copy_from_slice(b"ustar");
+        let r = discern(&bytes).unwrap();
+        assert_eq!(r.mime.as_deref(), Some("application/x-tar"));
     }
 
     #[test]

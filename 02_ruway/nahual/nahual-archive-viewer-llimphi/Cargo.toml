@@ -6,9 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "nahual-archive-viewer-llimphi — visor de archivos ZIP sobre Llimphi. Lista el directorio central (nombres, tamaño, ratio de compresión) en vez del volcado hex; cubre .zip y la familia basada en ZIP (.jar/.apk/.epub/.docx/.xlsx/.pptx). Décimo visor del shell nahual."
+description = "nahual-archive-viewer-llimphi — visor de archivos comprimidos sobre Llimphi. Lista las entradas (nombres, tamaño, ratio) de ZIP (y su familia .jar/.apk/.epub/.docx/.xlsx/.pptx), tar y tar.gz en vez del volcado hex. Décimo visor del shell nahual."
 
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 zip = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
