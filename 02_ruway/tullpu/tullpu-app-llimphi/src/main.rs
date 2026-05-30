@@ -45,6 +45,7 @@
 //! - `Ctrl+C` / `Ctrl+X` — copiar / cortar el rect de la selección al
 //!   portapapeles interno
 //! - `Ctrl+V`         — pegar el portapapeles como capa nueva
+//! - `Ctrl+A`         — seleccionar todo el lienzo
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
 //!
@@ -516,6 +517,32 @@ impl App for Tullpu {
                 model.seleccion = None;
                 model.seleccion_drag = None;
                 model.estado = "selección limpia".into();
+            }
+            Msg::SeleccionarTodo => {
+                let w = model.lienzo.width;
+                let h = model.lienzo.height;
+                if w > 0 && h > 0 {
+                    model.seleccion =
+                        Some(RectImagen { x0: 0, y0: 0, x1: w, y1: h });
+                    model.seleccion_drag = None;
+                    model.mover_drag = None;
+                    model.estado = format!("seleccionado todo ({}×{})", w, h);
+                }
+            }
+            Msg::ExpandirSeleccion(delta) => {
+                if let Some(rect) = model.seleccion {
+                    let w = model.lienzo.width;
+                    let h = model.lienzo.height;
+                    model.seleccion = expandir_rect(rect, delta, w, h);
+                    model.estado = match model.seleccion {
+                        Some(r) => {
+                            format!("selección {}×{}", r.x1 - r.x0, r.y1 - r.y0)
+                        }
+                        None => "selección colapsada — limpia".into(),
+                    };
+                } else {
+                    model.estado = "no hay selección que ajustar".into();
+                }
             }
             Msg::RecortarASeleccion => {
                 if recortar_lienzo_a_seleccion(&mut model) {
@@ -4432,6 +4459,102 @@ mod tests {
             &Handle::for_test(),
         );
         assert!(model.mover_drag.is_none());
+    }
+
+    // ---- Fase 43: gestión de la selección (todo + expandir/contraer) ----
+
+    #[test]
+    fn expandir_rect_crece_y_clampea_al_lienzo() {
+        let r = RectImagen { x0: 2, y0: 2, x1: 4, y1: 4 };
+        // +1 por lado → (1,1)..(5,5).
+        let e = expandir_rect(r, 1, 8, 8).unwrap();
+        assert_eq!(e, RectImagen { x0: 1, y0: 1, x1: 5, y1: 5 });
+        // +10 satura a los bordes del lienzo 8×8.
+        let e = expandir_rect(r, 10, 8, 8).unwrap();
+        assert_eq!(e, RectImagen { x0: 0, y0: 0, x1: 8, y1: 8 });
+    }
+
+    #[test]
+    fn expandir_rect_contrae_y_colapsa_a_none() {
+        let r = RectImagen { x0: 2, y0: 2, x1: 4, y1: 4 };
+        // −1 por lado → (3,3)..(3,3) = área cero → None.
+        assert!(expandir_rect(r, -1, 8, 8).is_none());
+        // Un rect más grande contrae sin colapsar.
+        let g = RectImagen { x0: 1, y0: 1, x1: 7, y1: 7 };
+        let c = expandir_rect(g, -2, 8, 8).unwrap();
+        assert_eq!(c, RectImagen { x0: 3, y0: 3, x1: 5, y1: 5 });
+    }
+
+    #[test]
+    fn seleccionar_todo_cubre_el_lienzo_y_limpia_drags() {
+        let mut model = modelo_minimo();
+        model.seleccion_drag = Some(SeleccionDrag {
+            ancla_ix: 0,
+            ancla_iy: 0,
+            cur_lx: 0.0,
+            cur_ly: 0.0,
+            rw: 4.0,
+            rh: 4.0,
+        });
+        model = <Tullpu as App>::update(
+            model,
+            Msg::SeleccionarTodo,
+            &Handle::for_test(),
+        );
+        assert_eq!(
+            model.seleccion,
+            Some(RectImagen { x0: 0, y0: 0, x1: 4, y1: 4 })
+        );
+        assert!(model.seleccion_drag.is_none());
+    }
+
+    #[test]
+    fn hotkey_ctrl_a_emite_seleccionar_todo() {
+        let m = modelo_minimo();
+        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("a", ctrl)),
+            Some(Msg::SeleccionarTodo)
+        ));
+    }
+
+    #[test]
+    fn expandir_seleccion_dispatcha_y_no_toca_historial() {
+        let mut model = modelo_minimo();
+        model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::ExpandirSeleccion(1),
+            &Handle::for_test(),
+        );
+        // La selección no vive en el DAG → el historial no cambia.
+        assert_eq!(model.historial.len(), hist_antes);
+        assert_eq!(
+            model.seleccion,
+            Some(RectImagen { x0: 0, y0: 0, x1: 4, y1: 4 })
+        );
+        // Contraer más de la cuenta colapsa a None.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::ExpandirSeleccion(-3),
+            &Handle::for_test(),
+        );
+        assert!(model.seleccion.is_none());
+        assert!(model.estado.contains("colapsada"));
+    }
+
+    #[test]
+    fn expandir_seleccion_sin_seleccion_es_no_op() {
+        let mut model = modelo_minimo();
+        model.seleccion = None;
+        model = <Tullpu as App>::update(
+            model,
+            Msg::ExpandirSeleccion(1),
+            &Handle::for_test(),
+        );
+        assert!(model.seleccion.is_none());
+        assert!(model.estado.contains("no hay selección"));
     }
 
     #[test]

@@ -352,6 +352,14 @@ pub(crate) enum Msg {
     /// nada (delta cero o todo fuera del lienzo). Snapshots coalescen por
     /// capa — una ráfaga de flechas = un solo Undo.
     MoverSeleccion { dx: i32, dy: i32 },
+    /// Arma una selección que cubre el lienzo entero (`(0,0)..(w,h)`).
+    /// No toca píxeles ni el historial. No-op si el lienzo es degenerado.
+    SeleccionarTodo,
+    /// Expande (`delta > 0`) o contrae (`delta < 0`) el rect de
+    /// `model.seleccion` `delta` px por cada lado, clampeando al lienzo.
+    /// Si la contracción colapsa el rect, limpia la selección. No toca
+    /// píxeles ni el historial.
+    ExpandirSeleccion(i32),
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

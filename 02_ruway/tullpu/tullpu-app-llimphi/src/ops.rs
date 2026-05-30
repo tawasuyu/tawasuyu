@@ -725,6 +725,33 @@ pub(crate) fn pegar_portapapeles(model: &mut Model) -> bool {
     true
 }
 
+/// Expande (`delta > 0`) o contrae (`delta < 0`) un rect half-open
+/// `delta` px por cada lado, clampeando al lienzo `w × h`. Devuelve
+/// `None` si el resultado colapsa (área cero — típico al contraer un
+/// rect chico). Pura. La selección no vive en el DAG, así que esto no
+/// toca el almacén ni el historial.
+pub(crate) fn expandir_rect(
+    rect: RectImagen,
+    delta: i32,
+    w: u32,
+    h: u32,
+) -> Option<RectImagen> {
+    let x0 = (rect.x0 as i32 - delta).clamp(0, w as i32);
+    let y0 = (rect.y0 as i32 - delta).clamp(0, h as i32);
+    let x1 = (rect.x1 as i32 + delta).clamp(0, w as i32);
+    let y1 = (rect.y1 as i32 + delta).clamp(0, h as i32);
+    if x1 > x0 && y1 > y0 {
+        Some(RectImagen {
+            x0: x0 as u32,
+            y0: y0 as u32,
+            x1: x1 as u32,
+            y1: y1 as u32,
+        })
+    } else {
+        None
+    }
+}
+
 /// Compone (alpha src-over, Rgba8 NO premultiplicado) un `clip` de
 /// `clip_w × clip_h` sobre `dst` (`dst_w × dst_h`) con la esquina
 /// superior izquierda en el offset CON SIGNO `(dx, dy)`. Los píxeles del

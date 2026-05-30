@@ -68,6 +68,11 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("y") => {
             return Some(Msg::Redo);
         }
+        // Ctrl+A = seleccionar todo el lienzo. Global: no depende de la
+        // capa, arma un marquee que cubre el canvas entero.
+        Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("a") => {
+            return Some(Msg::SeleccionarTodo);
+        }
         // Ctrl+Shift+E = aplanar visibles (Photoshop "Merge Visible").
         // Global: no requiere selección — opera sobre todo el lienzo.
         Key::Character(s) if m.ctrl && m.shift && s.eq_ignore_ascii_case("e") => {

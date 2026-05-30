@@ -618,6 +618,39 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Marco),
     )));
+    // Gestión de la selección: seleccionar todo + expandir/contraer el
+    // rect. La etiqueta de "todo" muestra las dims del lienzo.
+    hijos.push(envolver_fila(button_view(
+        format!(
+            "▣ seleccionar todo ({}×{}) · Ctrl+A",
+            model.lienzo.width, model.lienzo.height
+        ),
+        &pal,
+        Msg::SeleccionarTodo,
+    )));
+    hijos.push(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(26.0_f32),
+            },
+            padding: Rect {
+                left: length(2.0_f32),
+                right: length(2.0_f32),
+                top: length(1.0_f32),
+                bottom: length(1.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![
+            mini_btn("⊖ −1", Msg::ExpandirSeleccion(-1), &pal),
+            mini_btn("⊕ +1", Msg::ExpandirSeleccion(1), &pal),
+            mini_btn("⊕ +10", Msg::ExpandirSeleccion(10), &pal),
+            mini_btn("✕ sel", Msg::LimpiarSeleccion, &pal),
+        ]),
+    );
 
     // "parámetros": sliders en vivo si la capa seleccionada es una
     // derivada con OpLocal parametrizable. Sólo aparece cuando aplica
