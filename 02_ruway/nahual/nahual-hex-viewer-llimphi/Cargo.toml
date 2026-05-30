@@ -1,0 +1,13 @@
+[package]
+name = "nahual-hex-viewer-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-hex-viewer-llimphi — visor hex/ASCII sobre Llimphi. Vuelca los primeros KB de un binario (ELF/wasm/gzip/zip…) como `offset  hex  |ascii|` en fuente monoespaciada. Séptimo visor del shell nahual; convierte el '(binario — sin preview)' del text viewer en algo inspeccionable."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

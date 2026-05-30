@@ -33,6 +33,9 @@ pub enum ViewerKind {
     /// Visor de árbol JSON/TOML (`nahual-tree-viewer-llimphi`); indenta
     /// la estructura, legible aun para JSON minificado.
     Tree,
+    /// Volcado hex/ASCII (`nahual-hex-viewer-llimphi`) para binarios que
+    /// shuma reconoce pero no tienen visor propio (ELF/wasm/gzip/zip).
+    Hex,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
@@ -64,6 +67,15 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
         Some(m) if m.starts_with("image/") => return ViewerKind::Image,
         Some(m) if m.starts_with("video/") => return ViewerKind::Video,
         Some(m) if m.starts_with("audio/") => return ViewerKind::Audio,
+        // Binarios que shuma detecta por magic-bytes (sin lens) pero que
+        // ningún visor "rico" cubre: un dump hex es mejor que el text
+        // viewer diciendo "(binario — sin preview)".
+        Some(
+            "application/x-executable"
+            | "application/wasm"
+            | "application/gzip"
+            | "application/zip",
+        ) => return ViewerKind::Hex,
         _ => {}
     }
     ViewerKind::Text
@@ -118,6 +130,13 @@ mod tests {
     fn tree_lens_va_a_tree() {
         assert_eq!(pick(Some(&disc(Some("tree"), Some("application/json")))), ViewerKind::Tree);
         assert_eq!(pick(Some(&disc(Some("tree"), Some("application/toml")))), ViewerKind::Tree);
+    }
+
+    #[test]
+    fn binarios_van_a_hex() {
+        assert_eq!(pick(Some(&disc(None, Some("application/x-executable")))), ViewerKind::Hex);
+        assert_eq!(pick(Some(&disc(None, Some("application/wasm")))), ViewerKind::Hex);
+        assert_eq!(pick(Some(&disc(None, Some("application/zip")))), ViewerKind::Hex);
     }
 
     #[test]

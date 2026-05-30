@@ -22,12 +22,12 @@
 //! cuando lleguen más visores y un AppBus con `EntityType`, el registro
 //! crece por tabla sin tocar el resto del shell.
 //!
-//! Hoy embebe seis visores in-process — texto (fallback universal),
+//! Hoy embebe siete visores in-process — texto (fallback universal),
 //! imagen, video (AV1 nativo), audio (WAV/MP3/FLAC/Opus/Vorbis por cpal,
-//! con espectro en vivo), card (`shared/card` presentada por campos) y
-//! tree (árbol JSON/TOML indentado) — todos ruteados por
-//! `viewer_registry::pick` sobre el `lens`/`mime` discernido. `Space`
-//! hace play/pausa del video o audio activo.
+//! con espectro en vivo), card (`shared/card` presentada por campos),
+//! tree (árbol JSON/TOML indentado) y hex (dump de binarios) — todos
+//! ruteados por `viewer_registry::pick` sobre el `lens`/`mime`
+//! discernido. `Space` hace play/pausa del video o audio activo.
 //!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
@@ -74,6 +74,9 @@ use nahual_audio_viewer_llimphi::{
 use nahual_tree_viewer_llimphi::{
     load_tree, tree_viewer_view, TreePreview, TreeViewerPalette, DEFAULT_TREE_BYTES_MAX,
 };
+use nahual_hex_viewer_llimphi::{
+    hex_viewer_view, load_hex, HexPreview, HexViewerPalette, DEFAULT_HEX_BYTES_MAX,
+};
 use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
@@ -93,6 +96,7 @@ enum PreviewPane {
     Audio(AudioViewerState),
     Card(CardPreview),
     Tree(TreePreview),
+    Hex(HexPreview),
 }
 
 /// Cadencia del avance de los visores con reloj (video, audio) ~30 Hz.
@@ -271,6 +275,7 @@ impl App for Shell {
         let audio_palette = AudioViewerPalette::from_theme(&theme);
         let card_palette = CardViewerPalette::from_theme(&theme);
         let tree_palette = TreeViewerPalette::from_theme(&theme);
+        let hex_palette = HexViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = file_explorer_view::<Msg, _>(
             &model.explorer,
@@ -300,6 +305,9 @@ impl App for Shell {
             }
             PreviewPane::Tree(state) => {
                 tree_viewer_view::<Msg>(state, model.preview_of.as_deref(), &tree_palette)
+            }
+            PreviewPane::Hex(state) => {
+                hex_viewer_view::<Msg>(state, model.preview_of.as_deref(), &hex_palette)
             }
         };
 
@@ -398,6 +406,7 @@ fn load_for(path: &Path) -> PreviewPane {
         ViewerKind::Audio => PreviewPane::Audio(AudioViewerState::open(path)),
         ViewerKind::Card => PreviewPane::Card(load_card(path)),
         ViewerKind::Tree => PreviewPane::Tree(load_tree(path, DEFAULT_TREE_BYTES_MAX)),
+        ViewerKind::Hex => PreviewPane::Hex(load_hex(path, DEFAULT_HEX_BYTES_MAX)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
     }
 }
