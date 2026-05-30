@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "media/source-capture — captura en vivo (cámara v4l2 · pantalla X11) como FrameSource. Núcleo puro de conversión de pixel-formats + slot latest-frame reusable; backends detrás de features opt-in."
+description = "media/source-capture — captura en vivo: cámara v4l2 · pantalla X11 (FrameSource) + micrófono cpal (AudioSource). Núcleos puros (conversión de pixel-formats + ring de audio) reusables; backends detrás de features opt-in."
 
 [features]
 # Núcleo puro (convert + LiveSource/LiveSink) por default — sin deps de
@@ -22,6 +22,10 @@ camera = ["dep:v4l"]
 # habla el protocolo X11 por socket, sin lib C). Compila en cualquier lado;
 # correr necesita un servidor X (`$DISPLAY`). Wayland sería otro backend.
 screen = ["dep:x11rb"]
+# Backend de micrófono vía cpal (ALSA/CoreAudio). OPT-IN como los demás
+# backends de hardware. El núcleo `live_audio` (ring + drain) es puro y
+# siempre compila; sólo este backend necesita cpal + un input device real.
+mic = ["dep:cpal"]
 
 [dependencies]
 media-core = { path = "../media-core" }
@@ -36,6 +40,9 @@ v4l = { version = "0.14", optional = true }
 # por default, sin enlazar libX11/libxcb).
 x11rb = { version = "0.13", optional = true }
 
+# Backend micrófono: cpal (mismo que el sink de salida `media-audio-cpal`).
+cpal = { workspace = true, optional = true }
+
 [dev-dependencies]
 media-recorder-webm = { path = "../media-recorder-webm" }
 
@@ -44,3 +51,8 @@ media-recorder-webm = { path = "../media-recorder-webm" }
 [[example]]
 name = "grabar_pantalla"
 required-features = ["screen"]
+
+# Demo screencast con audio: pantalla + micrófono → .webm AV1+Opus.
+[[example]]
+name = "grabar_pantalla_audio"
+required-features = ["screen", "mic"]

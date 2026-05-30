@@ -26,8 +26,20 @@
 //!   interno marca el ritmo. Cumple la promesa "cámara hoy, pantalla
 //!   mañana sin crate nuevo" reusando el mismo núcleo `LiveSource`.
 //!
-//! La conversión de pixel-formats ([`convert`]) es pura y testeable sin
-//! ningún dispositivo — vive separada de los backends.
+//! Y el lado del **audio**, en espejo:
+//!
+//! - [`AudioLiveSink`] / [`AudioLiveSource`] ([`live_audio`]) — núcleo
+//!   agnóstico para sonido en vivo. A diferencia del video (que descarta
+//!   frames viejos), el audio necesita continuidad: el slot es un **ring
+//!   buffer** que se drena en orden, con relleno de silencio en underrun.
+//! - [`MicSource`] — backend de micrófono cpal (feature `mic`, opt-in).
+//!   El callback del input device empuja muestras al `AudioLiveSink`; la
+//!   fuente las entrega como cualquier `AudioSource`. Alimenta a
+//!   `media-recorder-webm` (track Opus) — pantalla + mic → screencast.
+//!
+//! La conversión de pixel-formats ([`convert`]) y el ring de audio
+//! ([`live_audio`]) son puros y testeables sin ningún dispositivo —
+//! viven separados de los backends.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,6 +50,9 @@ use media_core::FrameSource;
 pub mod convert;
 pub use convert::PixelFormat;
 
+pub mod live_audio;
+pub use live_audio::{audio_channel, AudioLiveSink, AudioLiveSource};
+
 #[cfg(feature = "camera")]
 mod camera;
 #[cfg(feature = "camera")]
@@ -47,6 +62,11 @@ pub use camera::{CameraOptions, CameraSource, CaptureError};
 mod screen;
 #[cfg(feature = "screen")]
 pub use screen::{ScreenError, ScreenOptions, ScreenSource};
+
+#[cfg(feature = "mic")]
+mod mic;
+#[cfg(feature = "mic")]
+pub use mic::{MicError, MicOptions, MicSource};
 
 /// Estado compartido entre [`LiveSink`] (escribe) y [`LiveSource`]
 /// (lee). El `version` se incrementa cada vez que el sink deja un

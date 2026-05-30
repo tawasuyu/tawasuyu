@@ -75,12 +75,16 @@ mismo núcleo. `GetImage` copia el framebuffer por el socket cada frame
 duela.
 
 El loop completo pantalla→`.webm` (sin ffmpeg) está como ejemplo
-ejecutable:
+ejecutable, en dos variantes:
 
 ```bash
-# graba 5s de pantalla a pantalla.webm (AV1 nativo). Necesita $DISPLAY.
+# sólo pantalla (AV1). Necesita $DISPLAY.
 cargo run -p media-source-capture --example grabar_pantalla \
     --features screen --release -- 5 pantalla.webm 30
+
+# pantalla + micrófono (AV1+Opus). Necesita $DISPLAY + input device.
+cargo run -p media-source-capture --example grabar_pantalla_audio \
+    --features "screen mic" --release -- 5 pantalla.webm 30
 ```
 
 La conversión de pixel-formats (`convert`) es **pura y testeable sin
@@ -88,6 +92,31 @@ ningún dispositivo** — vive separada de los backends. Soporta `YUYV`
 (YUV 4:2:2, BT.601 limited range — la convención v4l2), `MJPG` (vía el
 crate `image`), `RGB3`, `BGR3` y los empaquetados de 32-bit de X11
 (`Bgrx32` little-endian / `Xrgb32` big-endian, padding ignorado).
+
+### Lado del audio — `AudioLiveSink`/`AudioLiveSource` + `MicSource`
+
+El espejo de audio del núcleo en vivo. La diferencia con el video es la
+disciplina: un frame viejo se descarta (queremos el ahora), pero el
+audio **no se descarta** — el slot es un **ring buffer** que se drena
+en orden (`AudioSource::fill`), rellenando con silencio en underrun. El
+ring está acotado (~4 s): si el consumidor se cuelga, se descarta lo más
+viejo y se cuenta el overrun, en vez de crecer sin límite.
+
+`MicSource` (feature `mic`, opt-in) abre el input device default por
+cpal y empuja las muestras al `AudioLiveSink` desde el callback
+realtime. Pide **48 kHz** (rate nativo de Opus) para que el recorder no
+degrade; un device que sólo da 44.1 kHz graba video-solo.
+
+```rust
+use media_source_capture::{ScreenSource, MicSource};
+
+let scr = ScreenSource::open_default()?;   // video: FrameSource
+let mic = MicSource::open_default()?;       // audio: AudioSource (48 kHz)
+// ambos → media-recorder-webm → screencast .webm AV1+Opus nativo.
+```
+
+El loop completo pantalla+mic→`.webm` está en el ejemplo
+`grabar_pantalla_audio` (abajo).
 
 ## Por qué los backends son opt-in
 
@@ -101,23 +130,28 @@ queda opt-in: es un backend de sistema (necesita un servidor X) y no
 toda plataforma lo quiere.
 
 ```bash
-cargo test  -p media-source-capture                   # núcleo puro (15 tests) + integración (2)
+cargo test  -p media-source-capture                   # núcleo puro (20 tests) + integración (2)
 cargo check -p media-source-capture --features camera # backend v4l2 (necesita libclang)
 cargo check -p media-source-capture --features screen # backend X11 (x11rb, puro-Rust)
+cargo check -p media-source-capture --features mic    # backend micrófono (cpal)
 ```
 
 `camera` compila donde haya cabeceras `videodev2` + `libclang` y
-**correr** necesita un `/dev/videoN` real; `screen` compila en
-cualquier lado y correr necesita un `$DISPLAY`. En ambos la capa de
-backend es fina y la lógica testeable (conversión + slot latest-frame)
-vive fuera — igual que `media-audio-cpal` necesita un sink de sonido
-para sonar pero no para compilar.
+**correr** necesita un `/dev/videoN` real; `screen` compila en cualquier
+lado y correr necesita un `$DISPLAY`; `mic` necesita un input device.
+En todos la capa de backend es fina y la lógica testeable (conversión +
+slots latest-frame / ring de audio) vive fuera — igual que
+`media-audio-cpal` necesita un sink de sonido para sonar pero no para
+compilar.
 
 ## Tests
 
 - `convert::tests` — round-trips de conversión (YUYV gris/rojo, RGB/BGR,
   los 32-bit de X11 `Bgrx32`/`Xrgb32` con padding ignorado, rechazo de
   buffers truncados, mapeo de FourCC).
+- `live_audio::tests` — ring de audio: drena en orden, underrun rellena
+  silencio, fill parcial mantiene continuidad, overrun descarta lo viejo
+  y lo cuenta, detección de huérfano.
 - `lib::tests` — contrato del `LiveSource`: empieza vacío, emite sólo
   frames nuevos, descarta intermedios, detecta huérfano.
 - `tests/captura_a_webm.rs` — el loop estrella sin hardware: `LiveSink`
