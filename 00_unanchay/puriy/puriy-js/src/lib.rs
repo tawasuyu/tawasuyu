@@ -6849,4 +6849,65 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("threw").expect("e"), JsValue::Bool(true));
     }
+
+    // ============= Fase 7.65 — structuredClone =============
+
+    #[test]
+    fn structured_clone_copia_profunda_independiente() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var orig = { a: 1, b: { c: [1, 2, 3] } }; \
+             var copia = structuredClone(orig); \
+             orig.b.c[0] = 99; orig.a = 7; \
+             var sigueUno = copia.a === 1; \
+             var arrIntacto = copia.b.c.join(',') === '1,2,3'; \
+             var distintoRef = copia.b !== orig.b;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("sigueUno").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("arrIntacto").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("distintoRef").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_preserva_refs_compartidas_y_ciclos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var hijo = { v: 1 }; var orig = { x: hijo, y: hijo }; \
+             orig.self = orig; \
+             var c = structuredClone(orig); \
+             var refCompartida = c.x === c.y; \
+             var cicloOk = c.self === c; \
+             var noAliasOriginal = c.x !== hijo;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("refCompartida").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("cicloOk").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("noAliasOriginal").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_tipos_especiales_y_funcion_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var orig = { \
+                 d: new Date(1000), \
+                 m: new Map([['k', 1]]), \
+                 s: new Set([4, 5]), \
+                 ta: new Uint8Array([7, 8, 9]) }; \
+             var c = structuredClone(orig); \
+             var dateOk = (c.d instanceof Date) && c.d.getTime() === 1000 && c.d !== orig.d; \
+             var mapOk = (c.m instanceof Map) && c.m.get('k') === 1 && c.m !== orig.m; \
+             var setOk = (c.s instanceof Set) && c.s.has(5) && c.s !== orig.s; \
+             var taOk = (c.ta instanceof Uint8Array) && c.ta[1] === 8 && c.ta !== orig.ta; \
+             var fnTira = false; \
+             try { structuredClone(function() {}); } catch (e) { fnTira = true; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("dateOk").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("mapOk").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("setOk").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("taOk").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("fnTira").expect("e"), JsValue::Bool(true));
+    }
 }

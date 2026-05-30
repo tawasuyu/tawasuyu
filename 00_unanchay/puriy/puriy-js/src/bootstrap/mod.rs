@@ -18,6 +18,7 @@ mod urlclass;
 mod textcodec;
 mod base64;
 mod crypto;
+mod structuredclone;
 mod formdata;
 mod body;
 mod response;
@@ -46,6 +47,7 @@ pub(crate) use urlclass::URLCLASS_BOOTSTRAP;
 pub(crate) use textcodec::TEXTCODEC_BOOTSTRAP;
 pub(crate) use base64::BASE64_BOOTSTRAP;
 pub(crate) use crypto::CRYPTO_BOOTSTRAP;
+pub(crate) use structuredclone::STRUCTURED_CLONE_BOOTSTRAP;
 pub(crate) use formdata::FORMDATA_BOOTSTRAP;
 pub(crate) use body::BODY_BOOTSTRAP;
 pub(crate) use response::RESPONSE_BOOTSTRAP;
@@ -76,6 +78,7 @@ pub(crate) const ALL: &[&str] = &[
     TEXTCODEC_BOOTSTRAP,
     BASE64_BOOTSTRAP,
     CRYPTO_BOOTSTRAP,
+    STRUCTURED_CLONE_BOOTSTRAP,
     FORMDATA_BOOTSTRAP,
     BODY_BOOTSTRAP,
     RESPONSE_BOOTSTRAP,
