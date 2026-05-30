@@ -59,6 +59,22 @@ impl Marco {
     pub fn fit(&self, panel: Rect) -> Camara {
         Camara::fit(self.rect, self.rot_rad, panel)
     }
+
+    /// `true` si el punto de mundo `p` cae dentro del marco, considerando su
+    /// giro propio (deshace la rotación con que se dibuja antes del aabb test).
+    pub fn contiene(&self, p: (f64, f64)) -> bool {
+        let (cx, cy) = self.rect.centro();
+        // Inversa de la rotación de dibujo: local = centro + R(-rot)·(p-centro).
+        let (s, c) = (-self.rot_rad).sin_cos();
+        let dx = p.0 - cx;
+        let dy = p.1 - cy;
+        let lx = dx * c - dy * s + cx;
+        let ly = dx * s + dy * c + cy;
+        lx >= self.rect.x
+            && lx <= self.rect.x + self.rect.w
+            && ly >= self.rect.y
+            && ly <= self.rect.y + self.rect.h
+    }
 }
 
 /// Lienzo + ruta narrativa. `pasos` es una secuencia de `MarcoId` (puede
@@ -82,6 +98,21 @@ impl Recorrido {
 
     pub fn marco(&self, id: MarcoId) -> Option<&Marco> {
         self.marcos.iter().find(|m| m.id == id)
+    }
+
+    /// Marco bajo un punto de mundo, si hay — el de más arriba (último
+    /// dibujado) gana cuando se solapan. Para hit-test de autoría.
+    pub fn marco_en_punto(&self, p: (f64, f64)) -> Option<MarcoId> {
+        self.marcos.iter().rev().find(|m| m.contiene(p)).map(|m| m.id)
+    }
+
+    /// Traslada el marco `id` por un delta de mundo `(dx, dy)`. No-op si el id
+    /// no existe. Para arrastrar marcos en modo edición.
+    pub fn mover_marco(&mut self, id: MarcoId, dx: f64, dy: f64) {
+        if let Some(m) = self.marcos.iter_mut().find(|m| m.id == id) {
+            m.rect.x += dx;
+            m.rect.y += dy;
+        }
     }
 
     /// Marco al que apunta el paso `idx` (resolviendo el id contra `marcos`).
@@ -300,6 +331,43 @@ mod tests {
         assert_eq!(rec.marco(1).unwrap().rect, Rect::new(0.0, 0.0, 100.0, 50.0));
         assert_eq!(rec.marco(2).unwrap().rect, Rect::new(120.0, 0.0, 100.0, 50.0));
         assert_eq!(rec.marco(3).unwrap().rect, Rect::new(0.0, 60.0, 100.0, 50.0));
+    }
+
+    #[test]
+    fn marco_en_punto_devuelve_el_de_arriba() {
+        let r = recorrido_demo();
+        // Punto dentro del marco 1 (0,0,400,300).
+        assert_eq!(r.marco_en_punto((10.0, 10.0)), Some(1));
+        // Punto dentro del marco 2 (2000,0,200,150).
+        assert_eq!(r.marco_en_punto((2050.0, 50.0)), Some(2));
+        // Punto en el vacío.
+        assert_eq!(r.marco_en_punto((-500.0, -500.0)), None);
+    }
+
+    #[test]
+    fn marco_en_punto_respeta_giro() {
+        let mut r = Recorrido::new();
+        // Marco cuadrado centrado en (0,0), girado 45°.
+        r.agregar_marco(
+            Marco::new(7, Rect::new(-50.0, -50.0, 100.0, 100.0), ContenidoMarco::Vacio)
+                .con_giro(std::f64::consts::FRAC_PI_4),
+        );
+        // El centro siempre está dentro.
+        assert_eq!(r.marco_en_punto((0.0, 0.0)), Some(7));
+        // Una esquina del aabb sin girar (49,49) queda FUERA del cuadrado girado
+        // (su semidiagonal es ~70.7, pero el lado rotado pasa antes por los ejes).
+        assert_eq!(r.marco_en_punto((49.0, 49.0)), None);
+        // Sobre el eje X a distancia 60 < semidiagonal: dentro del rombo.
+        assert_eq!(r.marco_en_punto((60.0, 0.0)), Some(7));
+    }
+
+    #[test]
+    fn mover_marco_traslada_el_rect() {
+        let mut r = recorrido_demo();
+        r.mover_marco(1, 100.0, -40.0);
+        assert_eq!(r.marco(1).unwrap().rect, Rect::new(100.0, -40.0, 400.0, 300.0));
+        // Id inexistente: no-op.
+        r.mover_marco(999, 1.0, 1.0);
     }
 
     #[test]

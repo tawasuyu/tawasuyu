@@ -120,12 +120,18 @@ impl Camara {
         self.centro = (ancla.0 - wx, ancla.1 - wy);
     }
 
+    /// Convierte un delta de pantalla (px) en su delta de mundo equivalente,
+    /// deshaciendo zoom + giro. Útil para mover un objeto siguiendo al cursor
+    /// (`objeto += delta`) o para panear (`centro -= delta`).
+    pub fn delta_pantalla_a_mundo(&self, dx: f64, dy: f64) -> (f64, f64) {
+        let (s, c) = self.rot_rad.sin_cos();
+        ((dx * c - dy * s) / self.zoom, (dx * s + dy * c) / self.zoom)
+    }
+
     /// Paneo: arrastra el contenido `(dx, dy)` px de pantalla. El punto de
     /// mundo bajo el cursor sigue al dedo.
     pub fn pan(&mut self, dx: f64, dy: f64) {
-        let (s, c) = self.rot_rad.sin_cos();
-        let wx = (dx * c - dy * s) / self.zoom;
-        let wy = (dx * s + dy * c) / self.zoom;
+        let (wx, wy) = self.delta_pantalla_a_mundo(dx, dy);
         self.centro = (self.centro.0 - wx, self.centro.1 - wy);
     }
 
