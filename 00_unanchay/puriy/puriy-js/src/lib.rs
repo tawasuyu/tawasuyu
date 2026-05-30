@@ -6800,4 +6800,53 @@ mod tests {
         assert_eq!(rt.eval("k").expect("e"), JsValue::String("v".into()));
         assert_eq!(rt.eval("n").expect("e"), JsValue::String("7".into()));
     }
+
+    // ===== Fase 7.64 — crypto.getRandomValues / crypto.randomUUID =====
+
+    #[test]
+    fn crypto_random_uuid_formato_y_unicidad() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var u = crypto.randomUUID(); \
+             var re = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/; \
+             var ok = re.test(u); \
+             var distintos = crypto.randomUUID() !== crypto.randomUUID();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("distintos").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn crypto_get_random_values_llena_y_devuelve_la_misma() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var a = new Uint8Array(16); var ret = crypto.getRandomValues(a); \
+             var mismaRef = ret === a; var len = a.length; \
+             var enRango = true; var algunoNoCero = false; \
+             for (var i = 0; i < a.length; i++) { \
+                 if (a[i] < 0 || a[i] > 255 || (a[i] | 0) !== a[i]) enRango = false; \
+                 if (a[i] !== 0) algunoNoCero = true; \
+             }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("mismaRef").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("len").expect("e"), JsValue::Number(16.0));
+        assert_eq!(rt.eval("enRango").expect("e"), JsValue::Bool(true));
+        // Prob. de los 16 bytes en cero es ~256^-16; en la práctica nunca.
+        assert_eq!(rt.eval("algunoNoCero").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn crypto_get_random_values_excede_cuota_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // El chequeo de cuota (65536 bytes) ocurre ANTES del loop de llenado,
+        // así que evaluar 65537 elementos tira sin gastar fuel en el fill.
+        rt.eval(
+            "var threw = false; \
+             try { crypto.getRandomValues(new Uint8Array(65537)); } catch (e) { threw = true; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("threw").expect("e"), JsValue::Bool(true));
+    }
 }
