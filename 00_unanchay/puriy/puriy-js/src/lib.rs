@@ -6746,4 +6746,58 @@ mod tests {
             JsValue::String("a=1; Path=/, b=2; HttpOnly".into())
         );
     }
+
+    // ===== Fase 7.63 — Response.formData / Request.formData =====
+
+    #[test]
+    fn response_formdata_urlencoded() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = new Response('a=1&a=2&b=x', { \
+                 headers: { 'content-type': 'application/x-www-form-urlencoded' } }); \
+             var na = null, nb = null, all = null; \
+             r.formData().then(function(fd) { \
+                 na = fd.get('a'); all = fd.getAll('a').join(','); nb = fd.get('b'); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("na").expect("e"), JsValue::String("1".into()));
+        assert_eq!(rt.eval("all").expect("e"), JsValue::String("1,2".into()));
+        assert_eq!(rt.eval("nb").expect("e"), JsValue::String("x".into()));
+    }
+
+    #[test]
+    fn response_formdata_multipart_round_trip() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var f = new FormData(); f.append('campo', 'valor'); \
+             f.append('archivo', new Blob(['hola'], { type: 'text/plain' }), 'a.txt'); \
+             var ser = globalThis.__puriy_serialize_body(f); \
+             var r = new Response(ser.text, { headers: { 'content-type': ser.contentType } }); \
+             var campo = null, esFile = null, nm = null, contenido = null; \
+             r.formData().then(function(fd) { \
+                 campo = fd.get('campo'); \
+                 var a = fd.get('archivo'); esFile = a instanceof File; nm = a.name; \
+                 a.text().then(function(t) { contenido = t; }); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("campo").expect("e"), JsValue::String("valor".into()));
+        assert_eq!(rt.eval("esFile").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("nm").expect("e"), JsValue::String("a.txt".into()));
+        assert_eq!(rt.eval("contenido").expect("e"), JsValue::String("hola".into()));
+    }
+
+    #[test]
+    fn request_formdata_parsea_urlencoded() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var req = new Request('https://e.com', { method: 'POST', \
+                 headers: { 'content-type': 'application/x-www-form-urlencoded' }, \
+                 body: 'k=v&n=7' }); \
+             var k = null, n = null; \
+             req.formData().then(function(fd) { k = fd.get('k'); n = fd.get('n'); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("k").expect("e"), JsValue::String("v".into()));
+        assert_eq!(rt.eval("n").expect("e"), JsValue::String("7".into()));
+    }
 }

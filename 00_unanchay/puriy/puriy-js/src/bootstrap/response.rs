@@ -69,6 +69,14 @@ globalThis.Response.prototype.blob = function() {
         type: this.headers.get('content-type') || ''
     }));
 };
+globalThis.Response.prototype.formData = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+    this.bodyUsed = true;
+    try {
+        return Promise.resolve(
+            globalThis.__puriy_parse_form_body(this._body, this.headers.get('content-type')));
+    } catch (e) { return Promise.reject(e); }
+};
 globalThis.Response.prototype.clone = function() {
     if (this.bodyUsed) throw new TypeError('Response body is already used');
     var r = new globalThis.Response(this._body, {

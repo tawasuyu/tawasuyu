@@ -46,6 +46,15 @@ globalThis.Request.prototype.arrayBuffer = function() {
     for (var i = 0; i < s.length; i++) view[i] = s.charCodeAt(i) & 0xff;
     return Promise.resolve(buf);
 };
+globalThis.Request.prototype.formData = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+    this.bodyUsed = true;
+    try {
+        var text = globalThis.__puriy_body_to_string(this._body);
+        return Promise.resolve(
+            globalThis.__puriy_parse_form_body(text, this.headers.get('content-type')));
+    } catch (e) { return Promise.reject(e); }
+};
 globalThis.Request.prototype.clone = function() {
     if (this.bodyUsed) throw new TypeError('Request body is already used');
     return new globalThis.Request(this);

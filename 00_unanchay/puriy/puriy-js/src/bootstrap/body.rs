@@ -75,4 +75,60 @@ globalThis.__puriy_apply_content_type = function(hdrPairs, contentType) {
     hdrPairs.push(contentType);
     return hdrPairs;
 };
+// Fase 7.63 — inverso del serializer: parsea un body crudo a un FormData
+// según el Content-Type. Usado por `Response.formData()` / `Request.formData()`.
+//   - application/x-www-form-urlencoded → vía URLSearchParams (cada par append).
+//   - multipart/form-data; boundary=… → parte por el delimitador, lee el
+//     Content-Disposition (name/filename) y el Content-Type de cada part; los
+//     parts con filename se envuelven en Blob (FormData luego los hace File).
+//   - cualquier otro Content-Type → TypeError (spec).
+globalThis.__puriy_parse_form_body = function(text, contentType) {
+    contentType = String(contentType || '');
+    var ct = contentType.toLowerCase();
+    var fd = new globalThis.FormData();
+    if (ct.indexOf('application/x-www-form-urlencoded') === 0) {
+        var usp = new globalThis.URLSearchParams(text);
+        usp.forEach(function(v, k) { fd.append(k, v); });
+        return fd;
+    }
+    if (ct.indexOf('multipart/form-data') === 0) {
+        var bm = /boundary=("?)([^";]+)\1/i.exec(contentType);
+        if (!bm) throw new TypeError('multipart/form-data sin boundary');
+        var delim = '--' + bm[2];
+        var chunks = text.split(delim);
+        for (var i = 0; i < chunks.length; i++) {
+            var part = chunks[i];
+            // Saltea el preámbulo ('') y el epílogo del cierre ('--\r\n');
+            // los parts reales arrancan con el CRLF que sigue al delimitador.
+            if (part === '' || part.substring(0, 2) === '--') continue;
+            if (part.substring(0, 2) === '\r\n') part = part.substring(2);
+            var sep = part.indexOf('\r\n\r\n');
+            if (sep < 0) continue;
+            var rawHeaders = part.substring(0, sep);
+            var body = part.substring(sep + 4);
+            // El body cierra con el CRLF previo al próximo delimitador.
+            if (body.substring(body.length - 2) === '\r\n') body = body.substring(0, body.length - 2);
+            var name = null, filename = null, partCT = '';
+            var hlines = rawHeaders.split('\r\n');
+            for (var h = 0; h < hlines.length; h++) {
+                var line = hlines[h];
+                var low = line.toLowerCase();
+                if (low.indexOf('content-disposition:') === 0) {
+                    var nm = /name="([^"]*)"/i.exec(line); if (nm) name = nm[1];
+                    var fm = /filename="([^"]*)"/i.exec(line); if (fm) filename = fm[1];
+                } else if (low.indexOf('content-type:') === 0) {
+                    partCT = line.substring(line.indexOf(':') + 1).replace(/^\s+|\s+$/g, '');
+                }
+            }
+            if (name == null) continue;
+            if (filename != null) {
+                fd.append(name, new globalThis.Blob([body], { type: partCT }), filename);
+            } else {
+                fd.append(name, body);
+            }
+        }
+        return fd;
+    }
+    throw new TypeError('Could not parse content as FormData');
+};
 "#;
