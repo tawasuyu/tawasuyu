@@ -39,6 +39,8 @@ pub const ZOOM_BASE: f64 = 1.1;
 /// pixel ronda ±100 por muesca, así que dividir por esto da ~1 notch por muesca
 /// y a la vez deja que el pinch de trackpad (deltas chicos) zoomee proporcional.
 const WHEEL_NORM: f64 = 100.0;
+/// Permanencia por defecto del modo presentador, en ms (espejo de `DWELL_S`).
+pub const DWELL_MS: i32 = 2500;
 
 /// Curva del vuelo entre pasos (misma que el strip lineal: salida suave).
 const EASE_VUELO: &str = "cubic-bezier(0.22, 0.61, 0.36, 1)";
@@ -56,6 +58,10 @@ struct Inner {
     /// `Some((x,y))` = paneando desde esa última posición de pointer.
     arrastrando: Option<(f64, f64)>,
     on_change: Option<Box<dyn FnMut(usize)>>,
+    /// Handle del `setInterval` del modo presentador (autoplay), si está activo.
+    autoplay_id: Option<i32>,
+    /// Closure del intervalo — se guarda para mantenerla viva mientras corre.
+    autoplay_cb: Option<Closure<dyn FnMut()>>,
 }
 
 impl RecorridoWeb {
@@ -78,7 +84,14 @@ impl RecorridoWeb {
         let panel = panel_de(&viewport);
         state.saltar_a_paso(&rec, 0, panel);
 
-        let inner = Rc::new(RefCell::new(Inner { rec, state, arrastrando: None, on_change: None }));
+        let inner = Rc::new(RefCell::new(Inner {
+            rec,
+            state,
+            arrastrando: None,
+            on_change: None,
+            autoplay_id: None,
+            autoplay_cb: None,
+        }));
         aplicar_camara(&mundo, &inner.borrow().state.camara, panel, false);
 
         let this = Self { viewport, mundo, inner };
@@ -180,6 +193,62 @@ impl RecorridoWeb {
         recorrido_a_html(titulo, &marcos)
     }
 
+    /// `true` si el modo presentador (autoplay) está corriendo.
+    pub fn autoplay_activo(&self) -> bool {
+        self.inner.borrow().autoplay_id.is_some()
+    }
+
+    /// Arranca el modo presentador: cada `dur_paso + dwell_ms` avanza un paso
+    /// solo (vuelve al inicio al llegar al final). Cancela cualquier autoplay
+    /// previo. Espejo vivo del `setInterval` del HTML exportado.
+    pub fn iniciar_autoplay(&self, dwell_ms: i32) {
+        self.detener_autoplay();
+        let Some(window) = web_sys::window() else { return };
+        let this = self.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let (paso, n) = {
+                let i = this.inner.borrow();
+                (i.state.paso, i.rec.n_pasos())
+            };
+            if n == 0 {
+                return;
+            }
+            this.goto(if paso + 1 < n { paso + 1 } else { 0 }, true);
+        });
+        let periodo = (DURACION_PASO_S * 1000.0) as i32 + dwell_ms.max(0);
+        if let Ok(id) = window.set_interval_with_callback_and_timeout_and_arguments_0(
+            cb.as_ref().unchecked_ref(),
+            periodo,
+        ) {
+            let mut i = self.inner.borrow_mut();
+            i.autoplay_id = Some(id);
+            i.autoplay_cb = Some(cb);
+        }
+    }
+
+    /// Detiene el modo presentador (no-op si no estaba activo).
+    pub fn detener_autoplay(&self) {
+        let mut i = self.inner.borrow_mut();
+        if let Some(id) = i.autoplay_id.take() {
+            if let Some(w) = web_sys::window() {
+                w.clear_interval_with_handle(id);
+            }
+        }
+        i.autoplay_cb = None;
+    }
+
+    /// Alterna el modo presentador con el dwell por defecto. Devuelve el nuevo
+    /// estado (`true` = corriendo).
+    pub fn toggle_autoplay(&self) -> bool {
+        if self.autoplay_activo() {
+            self.detener_autoplay();
+            false
+        } else {
+            self.iniciar_autoplay(DWELL_MS);
+            true
+        }
+    }
+
     pub fn on_change<F: FnMut(usize) + 'static>(&self, cb: F) {
         self.inner.borrow_mut().on_change = Some(Box::new(cb));
     }
@@ -265,6 +334,10 @@ impl RecorridoWeb {
                 "ArrowLeft" | "ArrowUp" => this.anterior(),
                 "Home" | "Escape" => {
                     this.vista_general();
+                    true
+                }
+                "p" | "P" => {
+                    this.toggle_autoplay();
                     true
                 }
                 _ => return,
