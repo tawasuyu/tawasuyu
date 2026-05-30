@@ -153,7 +153,49 @@ struct Model {
     /// al 3.27 (arma sólo recibe el `light_level` del sector como
     /// shading scalar).
     weapon_rim_light: bool,
+    /// Fase 3.46: decals efímeros de impacto. Se siembran cuando un
+    /// sprite PUFF (bala contra pared) o BLUD (sangre) aparece nuevo, y
+    /// se desvanecen con la edad.
+    decals: Vec<HostDecal>,
+    /// Clasificación cacheada de spritenums → tipo de decal (sólo PUFF
+    /// y BLUD producen marca; el resto no). Resuelto vía `sprite_name`
+    /// la primera vez que se ve cada spritenum.
+    decal_kind: std::collections::HashMap<u16, DecalKind>,
+    /// Spritenums ya clasificados (evita reconsultar `sprite_name`).
+    checked_decal_spritenums: std::collections::HashSet<u16>,
+    /// Posiciones XY de los sprites de impacto vistos el tick anterior —
+    /// dedup posicional para no sembrar un decal por tick mientras el
+    /// puff vive (≈4 ticks).
+    prev_impacts: Vec<(f32, f32)>,
 }
+
+/// Fase 3.46: tipo de marca de impacto.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DecalKind {
+    /// Scorch oscuro de bala contra superficie (PUFF).
+    Scorch,
+    /// Splat de sangre (BLUD).
+    Blood,
+}
+
+/// Fase 3.46: marca persistida en el host con su edad. El `alpha` que
+/// recibe el renderer se computa de `ttl / DECAL_TTL`.
+struct HostDecal {
+    x: f32,
+    y: f32,
+    z: f32,
+    ttl: u32,
+    color: (u8, u8, u8),
+    radius: f32,
+}
+
+/// Vida de un decal en ticks (35 Hz). ~6 s antes de desvanecerse.
+const DECAL_TTL: u32 = 210;
+/// Máximo de decals vivos; al llenarse, se descarta el más viejo.
+const MAX_DECALS: usize = 64;
+/// Radio² (unidades²) para el dedup posicional de impactos entre ticks.
+/// ~12 u de radio — puffs de un mismo ráfaga cercanos colapsan a uno.
+const DECAL_DEDUP_EPS2: f32 = 144.0;
 
 /// Tiempo de decaimiento del fogonazo del arma — el boost cae de 1.0 a 0
 /// en este intervalo. ~160 ms cubre 5-6 ticks Doom (35 Hz), suficiente
@@ -266,6 +308,10 @@ impl App for Supay {
             muzzle_occlusion: true,
             world_lights_enabled: true,
             weapon_rim_light: true,
+            decals: Vec::new(),
+            decal_kind: std::collections::HashMap::new(),
+            checked_decal_spritenums: std::collections::HashSet::new(),
+            prev_impacts: Vec::new(),
         }
     }
 
@@ -369,6 +415,66 @@ impl App for Supay {
                 if weapon_bright || flash_bright {
                     m.muzzle_glow_at = Some(Instant::now());
                 }
+                // Fase 3.46: decals de impacto. (1) clasificamos cada
+                // spritenum nuevo (PUFF→scorch, BLUD→sangre) una sola vez.
+                for spr in snap.sprites.iter() {
+                    if m.checked_decal_spritenums.insert(spr.sprite) {
+                        if let Some(name) = m.engine.sprite_name(spr.sprite) {
+                            let up = name.to_ascii_uppercase();
+                            let kind = if up == "PUFF" {
+                                Some(DecalKind::Scorch)
+                            } else if up == "BLUD" {
+                                Some(DecalKind::Blood)
+                            } else {
+                                None
+                            };
+                            if let Some(k) = kind {
+                                m.decal_kind.insert(spr.sprite, k);
+                            }
+                        }
+                    }
+                }
+                // (2) posiciones de impacto presentes este tick.
+                let impacts: Vec<(f32, f32, f32, DecalKind)> = snap
+                    .sprites
+                    .iter()
+                    .filter_map(|spr| {
+                        m.decal_kind.get(&spr.sprite).map(|&k| (spr.x, spr.y, spr.z, k))
+                    })
+                    .collect();
+                // (3) envejecer los decals vivos.
+                m.decals.retain_mut(|d| {
+                    d.ttl = d.ttl.saturating_sub(1);
+                    d.ttl > 0
+                });
+                // (4) sembrar los impactos nuevos (no vistos el tick
+                // anterior, dedup posicional).
+                for &(x, y, z, k) in &impacts {
+                    let is_new = !m.prev_impacts.iter().any(|&(px, py)| {
+                        let dx = px - x;
+                        let dy = py - y;
+                        dx * dx + dy * dy < DECAL_DEDUP_EPS2
+                    });
+                    if !is_new {
+                        continue;
+                    }
+                    if m.decals.len() >= MAX_DECALS {
+                        m.decals.remove(0);
+                    }
+                    let (color, radius) = match k {
+                        DecalKind::Scorch => ((24, 21, 18), 5.0),
+                        DecalKind::Blood => ((104, 12, 12), 5.0),
+                    };
+                    m.decals.push(HostDecal {
+                        x,
+                        y,
+                        z,
+                        ttl: DECAL_TTL,
+                        color,
+                        radius,
+                    });
+                }
+                m.prev_impacts = impacts.iter().map(|&(x, y, _, _)| (x, y)).collect();
                 m.snapshots.push(snap);
                 m.last_tick_at = Instant::now();
             }
@@ -481,6 +587,21 @@ impl App for Supay {
                     // más oscura. Mismo criterio que walls: default de
                     // librería off (bit-exact), on en el host.
                     plane_depth_gradient: true,
+                    // Fase 3.46: pasamos los decals vivos con su alpha
+                    // ya computado del fade (ttl/DECAL_TTL). El renderer
+                    // los dibuja como billboards z-ordenados.
+                    decals: model
+                        .decals
+                        .iter()
+                        .map(|d| supay_render_llimphi::Decal {
+                            x: d.x,
+                            y: d.y,
+                            z: d.z,
+                            radius: d.radius,
+                            color: d.color,
+                            alpha: d.ttl as f32 / DECAL_TTL as f32,
+                        })
+                        .collect(),
                     ..RenderConfig::default()
                 },
             )),
@@ -540,7 +661,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.45 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.46 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

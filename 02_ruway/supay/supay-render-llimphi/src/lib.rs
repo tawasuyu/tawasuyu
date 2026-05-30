@@ -306,6 +306,26 @@ impl WadAtlas {
     }
 }
 
+/// **Fase 3.46** — marca efímera en el mundo (scorch de bala, splat de
+/// sangre). El host la detecta a partir de los sprites de impacto del
+/// motor (PUFF / BLUD), la persiste con un fade y la pasa al renderer
+/// por [`RenderConfig::decals`] cada frame con su `alpha` ya computado.
+/// El renderer la dibuja como un billboard pequeño camera-facing,
+/// z-ordenado con la escena (lo ocluyen las paredes que estén delante).
+#[derive(Clone, Copy, Debug)]
+pub struct Decal {
+    /// Posición mundo del impacto (la del mobj PUFF/BLUD que lo originó).
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    /// Medio-tamaño en unidades mundo del quad.
+    pub radius: f32,
+    /// Color RGB de la marca (scorch oscuro, sangre roja).
+    pub color: (u8, u8, u8),
+    /// Opacidad 0..1 — el host la decae con la edad del decal.
+    pub alpha: f32,
+}
+
 /// Parámetros del renderer.
 #[derive(Clone, Debug)]
 pub struct RenderConfig {
@@ -503,6 +523,12 @@ pub struct RenderConfig {
     /// vertical de walls (3.43). Default `false` ⇒ overlay uniforme 3.33
     /// bit-equivalente. Sólo afecta al path texturizado de planos.
     pub plane_depth_gradient: bool,
+    /// **Fase 3.46 — decals efímeros de impacto**. Lista de marcas
+    /// (scorch / sangre) que el host detecta de los sprites de impacto
+    /// del motor y mantiene con su fade. Vacía por default ⇒ sin decals
+    /// (modo stub, o el host no las alimenta). Se reconstruye cada frame;
+    /// el renderer las dibuja como billboards camera-facing z-ordenados.
+    pub decals: Vec<Decal>,
 }
 
 impl Default for RenderConfig {
@@ -533,6 +559,7 @@ impl Default for RenderConfig {
             wall_vertical_bands: 1,
             wall_vertical_gradient: false,
             plane_depth_gradient: false,
+            decals: Vec::new(),
         }
     }
 }
@@ -2034,6 +2061,11 @@ fn render_frame(
             world_lights_ref,
         );
     }
+    // Fase 3.46: decals de impacto (host state). Camera-facing quads
+    // pequeños, z-ordenados con el resto de la escena.
+    if !cfg.decals.is_empty() {
+        gather_decals(&mut renderables, cfg, &cam, &proj);
+    }
     renderables.sort_by(|a, b| {
         b.depth
             .partial_cmp(&a.depth)
@@ -3474,6 +3506,47 @@ fn gather_sprite_shadow(
         path,
         kind: RenderKind::Fill,
     });
+}
+
+/// **Fase 3.46** — proyecta cada decal del host como un quad pequeño
+/// camera-facing. Mismo modelo de billboard que los sprites: a una
+/// profundidad `x_cam` constante el quad es axis-aligned en pantalla.
+/// `+y_cam` = izquierda, `+z` = arriba (convención de `gather_sprite`).
+/// El depth se sesga `-0.5` para que la marca quede apenas delante de la
+/// pared/piso donde impactó, sin z-fight.
+fn gather_decals(out: &mut Vec<Renderable>, cfg: &RenderConfig, cam: &Camera, proj: &Projection) {
+    for d in &cfg.decals {
+        let a = (d.alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        if a == 0 {
+            continue;
+        }
+        let (x_cam, y_cam) = cam.to_cam_2d(d.x, d.y);
+        if x_cam < cfg.near {
+            continue;
+        }
+        let cz = d.z - cam.view_z;
+        let r = d.radius;
+        let tl = proj.project(x_cam, y_cam + r, cz + r);
+        let tr = proj.project(x_cam, y_cam - r, cz + r);
+        let br = proj.project(x_cam, y_cam - r, cz - r);
+        let bl = proj.project(x_cam, y_cam + r, cz - r);
+        if !(tl.x.is_finite() && br.x.is_finite()) {
+            continue;
+        }
+        let depth = (x_cam * x_cam + y_cam * y_cam).sqrt();
+        let mut path = BezPath::new();
+        path.move_to(tl);
+        path.line_to(tr);
+        path.line_to(br);
+        path.line_to(bl);
+        path.close_path();
+        out.push(Renderable {
+            depth: depth - 0.5,
+            color: Color::from_rgba8(d.color.0, d.color.1, d.color.2, a),
+            path,
+            kind: RenderKind::Fill,
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7246,6 +7319,121 @@ mod tests {
         for w in offs.windows(2) {
             assert!(w[1] > w[0]);
         }
+    }
+
+    // =================================================================
+    // Fase 3.46 — Decals efímeros de impacto
+    // =================================================================
+
+    fn decal_test_setup() -> (Camera, Projection) {
+        let cam = Camera::new(0.0, 0.0, 41.0, 0.0); // mira hacia +X
+        let rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        (cam, Projection::new(rect, 75_f32.to_radians()))
+    }
+
+    #[test]
+    fn decal_in_front_produces_one_renderable() {
+        let (cam, proj) = decal_test_setup();
+        let cfg = RenderConfig {
+            decals: vec![Decal {
+                x: 100.0,
+                y: 0.0,
+                z: 40.0,
+                radius: 5.0,
+                color: (24, 21, 18),
+                alpha: 1.0,
+            }],
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        gather_decals(&mut out, &cfg, &cam, &proj);
+        assert_eq!(out.len(), 1, "decal al frente ⇒ 1 quad");
+        assert!(matches!(out[0].kind, RenderKind::Fill));
+    }
+
+    #[test]
+    fn decal_behind_camera_is_culled() {
+        let (cam, proj) = decal_test_setup();
+        let cfg = RenderConfig {
+            decals: vec![Decal {
+                x: -100.0, // detrás (x_cam < near)
+                y: 0.0,
+                z: 40.0,
+                radius: 5.0,
+                color: (24, 21, 18),
+                alpha: 1.0,
+            }],
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        gather_decals(&mut out, &cfg, &cam, &proj);
+        assert!(out.is_empty(), "decal detrás de la cámara se descarta");
+    }
+
+    #[test]
+    fn decal_zero_alpha_is_skipped() {
+        let (cam, proj) = decal_test_setup();
+        let cfg = RenderConfig {
+            decals: vec![Decal {
+                x: 100.0,
+                y: 0.0,
+                z: 40.0,
+                radius: 5.0,
+                color: (24, 21, 18),
+                alpha: 0.0, // ya desvanecido
+            }],
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        gather_decals(&mut out, &cfg, &cam, &proj);
+        assert!(out.is_empty(), "alpha 0 ⇒ no se dibuja");
+    }
+
+    #[test]
+    fn decal_alpha_maps_to_color_alpha_channel() {
+        let (cam, proj) = decal_test_setup();
+        let cfg = RenderConfig {
+            decals: vec![Decal {
+                x: 100.0,
+                y: 0.0,
+                z: 40.0,
+                radius: 5.0,
+                color: (100, 10, 10),
+                alpha: 0.5,
+            }],
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        gather_decals(&mut out, &cfg, &cam, &proj);
+        assert_eq!(out.len(), 1);
+        let a = out[0].color.to_rgba8().to_u8_array()[3];
+        assert!((a as i32 - 127).abs() <= 1, "alpha 0.5 ⇒ ~127, got {}", a);
+    }
+
+    #[test]
+    fn decal_depth_sits_in_front_of_its_surface() {
+        // El depth se sesga -0.5 respecto a la distancia euclidiana
+        // del impacto ⇒ se dibuja delante de la pared a esa distancia.
+        let (cam, proj) = decal_test_setup();
+        let cfg = RenderConfig {
+            decals: vec![Decal {
+                x: 100.0,
+                y: 0.0,
+                z: 40.0,
+                radius: 5.0,
+                color: (24, 21, 18),
+                alpha: 1.0,
+            }],
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        gather_decals(&mut out, &cfg, &cam, &proj);
+        assert!((out[0].depth - (100.0 - 0.5)).abs() < 1e-3, "depth = dist - 0.5");
     }
 
     // =================================================================
