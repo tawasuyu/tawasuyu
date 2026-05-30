@@ -561,6 +561,14 @@ pub struct RenderConfig {
     /// `false` (o sin BSP), cae al boost omni 3.50 bit-equivalente. Sólo
     /// afecta al tinte de los decals.
     pub decal_rim_directional: bool,
+    /// **Fase 3.53 — recorte del charco al recinto de paredes**. Si
+    /// `true`, el quad de un decal horizontal (charco de piso/techo) se
+    /// recorta a las paredes (linedefs) que lo bordean dentro de su radio,
+    /// manteniendo el lado del centro — una mancha de sangre junto a un
+    /// muro deja de treparlo o cruzar al cuarto vecino. Cuando `false` (o
+    /// sin paredes en el snapshot, modo stub) el charco se dibuja como el
+    /// quad completo de 3.48. Sólo afecta a los decals `horizontal`.
+    pub decal_clip_walls: bool,
 }
 
 impl Default for RenderConfig {
@@ -593,6 +601,7 @@ impl Default for RenderConfig {
             plane_depth_gradient: false,
             decals: Vec::new(),
             decal_rim_directional: true,
+            decal_clip_walls: true,
         }
     }
 }
@@ -3462,6 +3471,83 @@ fn clip_near(poly: &[(f32, f32)], near: f32) -> Vec<(f32, f32)> {
     out
 }
 
+/// **Fase 3.53** — Sutherland-Hodgman contra un semiplano `n·(p − a) ≥ 0`
+/// en 2D mundo. Se mantienen los vértices del lado positivo de la normal
+/// `n` (no necesita ser unitaria); las aristas que cruzan el borde se
+/// intersectan paramétricamente. Usado para recortar el charco horizontal
+/// a las paredes que lo bordean.
+fn clip_half_plane(poly: &[(f32, f32)], a: (f32, f32), n: (f32, f32)) -> Vec<(f32, f32)> {
+    if poly.is_empty() {
+        return Vec::new();
+    }
+    let dist = |p: (f32, f32)| n.0 * (p.0 - a.0) + n.1 * (p.1 - a.1);
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(poly.len() + 2);
+    let len = poly.len();
+    for i in 0..len {
+        let curr = poly[i];
+        let prev = poly[if i == 0 { len - 1 } else { i - 1 }];
+        let dc = dist(curr);
+        let dp = dist(prev);
+        let lerp = |t: f32| (prev.0 + (curr.0 - prev.0) * t, prev.1 + (curr.1 - prev.1) * t);
+        match (dp >= 0.0, dc >= 0.0) {
+            (true, true) => out.push(curr),
+            (true, false) => out.push(lerp(dp / (dp - dc))),
+            (false, true) => {
+                out.push(lerp(dp / (dp - dc)));
+                out.push(curr);
+            }
+            (false, false) => {}
+        }
+    }
+    out
+}
+
+/// **Fase 3.53** — recorta el polígono del charco (en XY mundo) a las
+/// paredes que efectivamente alcanza, manteniendo siempre el lado donde
+/// está el centro. Cada pared cuyo punto más cercano al centro cae dentro
+/// del radio `r` aporta un semiplano (su línea infinita, normal orientada
+/// hacia el centro). El resultado es la intersección convexa local — una
+/// mancha de sangre junto a un muro deja de treparlo o cruzar al cuarto
+/// vecino. Las paredes que el charco no toca no recortan. Sin paredes,
+/// devuelve el polígono intacto (modo stub ⇒ comportamiento 3.48).
+fn clip_decal_to_walls(
+    quad: &[(f32, f32)],
+    walls: &[WallSeg],
+    cx: f32,
+    cy: f32,
+    r: f32,
+) -> Vec<(f32, f32)> {
+    let mut poly = quad.to_vec();
+    let r2 = r * r;
+    for w in walls {
+        let dx = w.x2 - w.x1;
+        let dy = w.y2 - w.y1;
+        let len2 = dx * dx + dy * dy;
+        if len2 < 1e-6 {
+            continue;
+        }
+        // Punto más cercano del segmento al centro: sólo las paredes que
+        // el charco realmente alcanza recortan (evita que la línea de un
+        // muro lejano corte en cuartos no convexos).
+        let t = (((cx - w.x1) * dx + (cy - w.y1) * dy) / len2).clamp(0.0, 1.0);
+        let px = w.x1 + t * dx;
+        let py = w.y1 + t * dy;
+        if (px - cx) * (px - cx) + (py - cy) * (py - cy) > r2 {
+            continue;
+        }
+        // Normal del muro orientada hacia el centro.
+        let mut n = (-dy, dx);
+        if n.0 * (cx - w.x1) + n.1 * (cy - w.y1) < 0.0 {
+            n = (dy, -dx);
+        }
+        poly = clip_half_plane(&poly, (w.x1, w.y1), n);
+        if poly.len() < 3 {
+            break;
+        }
+    }
+    poly
+}
+
 // =====================================================================
 // Sprites + sombras (Fase 3.21)
 // =====================================================================
@@ -3611,20 +3697,37 @@ fn gather_decals(
         // tangente, billboard 3.46 (a `cx_cam` constante el quad es
         // axis-aligned en pantalla).
         let (tx, ty) = d.tangent;
-        let corners: [Point; 4] = if d.horizontal {
+        let corners: Vec<Point> = if d.horizontal {
             // Fase 3.48: charco horizontal — ejes en el plano XY mundo a
             // `z` constante. El quad se ve en perspectiva sobre el piso
             // (o bajo el techo).
-            let project_xy = |dx: f32, dy: f32| -> Point {
-                let (wcx, wcy) = cam.to_cam_2d(d.x + dx, d.y + dy);
-                proj.project(wcx, wcy, cz)
+            //
+            // Fase 3.53: recortamos el quad a las paredes que lo bordean
+            // (`clip_decal_to_walls`) — una mancha junto a un muro deja de
+            // treparlo o cruzar al cuarto vecino. Sin paredes (modo stub) o
+            // con el toggle off ⇒ quad completo como en 3.48.
+            let quad = [
+                (d.x - r, d.y - r),
+                (d.x + r, d.y - r),
+                (d.x + r, d.y + r),
+                (d.x - r, d.y + r),
+            ];
+            let world = if cfg.decal_clip_walls && !snap.walls.is_empty() {
+                let clipped = clip_decal_to_walls(&quad, &snap.walls, d.x, d.y, r);
+                if clipped.len() < 3 {
+                    continue;
+                }
+                clipped
+            } else {
+                quad.to_vec()
             };
-            [
-                project_xy(-r, -r),
-                project_xy(r, -r),
-                project_xy(r, r),
-                project_xy(-r, r),
-            ]
+            world
+                .iter()
+                .map(|&(wx, wy)| {
+                    let (wcx, wcy) = cam.to_cam_2d(wx, wy);
+                    proj.project(wcx, wcy, cz)
+                })
+                .collect()
         } else if tx != 0.0 || ty != 0.0 {
             // Esquinas en mundo: centro ± tangente (horizontal) y ± Z
             // (vertical). Cada una se transforma a cámara y se proyecta —
@@ -3655,14 +3758,14 @@ fn gather_decals(
                 let (wcx, wcy) = cam.to_cam_2d(d.x + tx * sx, d.y + ty * sx);
                 proj.project(wcx, wcy, cz + dz)
             };
-            [
+            vec![
                 project_world(s_lo, dz_hi),
                 project_world(s_hi, dz_hi),
                 project_world(s_hi, dz_lo),
                 project_world(s_lo, dz_lo),
             ]
         } else {
-            [
+            vec![
                 proj.project(cx_cam, cy_cam + r, cz + r),
                 proj.project(cx_cam, cy_cam - r, cz + r),
                 proj.project(cx_cam, cy_cam - r, cz - r),
@@ -7964,6 +8067,53 @@ mod tests {
             full, clipped
         );
         assert!(clipped > 0.0, "quad recortado sigue teniendo área");
+    }
+
+    #[test]
+    fn clip_half_plane_keeps_positive_side() {
+        // Fase 3.53: cuadrado unidad recortado por el semiplano `x ≥ 0`
+        // (normal (1,0), borde por el origen) ⇒ todos los vértices x ≥ 0.
+        let square = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let out = clip_half_plane(&square, (0.0, 0.0), (1.0, 0.0));
+        assert!(out.len() >= 3, "queda un polígono con área");
+        assert!(
+            out.iter().all(|&(x, _)| x >= -1e-5),
+            "ningún vértice del lado negativo: {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn clip_decal_to_walls_keeps_center_side_and_ignores_far_walls() {
+        // Fase 3.53: un charco en (0,0) r=5 junto a un muro vertical en
+        // x=2 (lo alcanza: dist 2 ≤ 5) ⇒ recorta al lado del centro
+        // (x ≤ 2). Un muro lejano en x=100 (fuera del radio) no recorta.
+        let mk_wall = |x1, y1, x2, y2| WallSeg {
+            x1, y1, x2, y2,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+            textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
+        };
+        let quad = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
+        // Muro cercano: recorta a x ≤ 2.
+        let near_wall = [mk_wall(2.0, -10.0, 2.0, 10.0)];
+        let clipped = clip_decal_to_walls(&quad, &near_wall, 0.0, 0.0, 5.0);
+        assert!(clipped.len() >= 3, "queda polígono");
+        assert!(
+            clipped.iter().all(|&(x, _)| x <= 2.0 + 1e-4),
+            "recortado al lado del centro (x ≤ 2): {:?}",
+            clipped
+        );
+        let max_x = clipped.iter().map(|&(x, _)| x).fold(f32::MIN, f32::max);
+        assert!((max_x - 2.0).abs() < 1e-3, "el borde llega justo al muro");
+        // Muro lejano: no recorta ⇒ quad intacto (llega a x=5).
+        let far_wall = [mk_wall(100.0, -10.0, 100.0, 10.0)];
+        let untouched = clip_decal_to_walls(&quad, &far_wall, 0.0, 0.0, 5.0);
+        let max_x_far = untouched.iter().map(|&(x, _)| x).fold(f32::MIN, f32::max);
+        assert!((max_x_far - 5.0).abs() < 1e-3, "muro lejano no recorta");
     }
 
     // =================================================================
