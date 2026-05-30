@@ -9412,4 +9412,187 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("errName").expect("e"), JsValue::String("AbortError".into()));
     }
+
+    // ---- Fase 7.117 — Idle Detection API ----
+    #[test]
+    fn idle_detector_existe() {
+        let rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof IdleDetector").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn idle_request_permission_default_denied() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var perm = null; IdleDetector.requestPermission().then(function(p){ perm = p; });",
+        )
+        .expect("e");
+        // Permiso por defecto: denegado.
+        assert_eq!(rt.eval("perm").expect("e"), JsValue::String("denied".into()));
+    }
+
+    #[test]
+    fn idle_start_rechaza_sin_permiso() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; new IdleDetector().start({ threshold: 60000 }).catch(function(e){ err = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("err").expect("e"),
+            JsValue::String("NotAllowedError".into())
+        );
+    }
+
+    #[test]
+    fn idle_start_resuelve_con_permiso_y_publica_mutacion() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_idle_grant(); \
+             var d = new IdleDetector(); var estado = null; \
+             d.start({ threshold: 60000 }).then(function(){ estado = d.userState; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("estado").expect("e"), JsValue::String("active".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(m){ return m.kind === 'idle-start'; })")
+                .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn idle_change_dispara_evento() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_idle_grant(); \
+             var d = new IdleDetector(); var got = null; \
+             d.addEventListener('change', function(){ got = d.userState; }); \
+             d.start({ threshold: 60000 }); \
+             __puriy_idle_set('idle', 'locked');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("idle".into()));
+    }
+
+    // ---- Fase 7.118 — Contact Picker API ----
+    #[test]
+    fn contacts_existe_y_select_es_funcion() {
+        let rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof navigator.contacts.select").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn contacts_get_properties_incluye_email() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var props = null; navigator.contacts.getProperties().then(function(p){ props = p.join(','); });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("props.indexOf('email') >= 0").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn contacts_select_publica_mutacion_y_resuelve() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var nombre = null; \
+             navigator.contacts.select(['name', 'email']).then(function(r){ nombre = r[0].name[0]; }); \
+             var id = globalThis.__puriy_contacts_next_id - 1; \
+             __puriy_contacts_resolve(id, [{ name: ['Ana'], email: ['a@x.io'] }]);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nombre").expect("e"), JsValue::String("Ana".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(m){ return m.kind === 'contacts-select'; })")
+                .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn contacts_select_cancelar_rechaza_abort() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; \
+             navigator.contacts.select(['name']).catch(function(e){ err = e.name; }); \
+             var id = globalThis.__puriy_contacts_next_id - 1; \
+             __puriy_contacts_reject(id);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("AbortError".into()));
+    }
+
+    // ---- Fase 7.119 — Web MIDI API ----
+    #[test]
+    fn midi_request_es_funcion() {
+        let rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof navigator.requestMIDIAccess").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn midi_request_rechaza_sin_permiso() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; navigator.requestMIDIAccess().catch(function(e){ err = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("err").expect("e"),
+            JsValue::String("NotAllowedError".into())
+        );
+    }
+
+    #[test]
+    fn midi_access_tiene_mapas() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_midi_grant(); var ok = false; \
+             navigator.requestMIDIAccess().then(function(a){ ok = (a.inputs instanceof Map) && (a.outputs instanceof Map); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn midi_add_port_puebla_inputs() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_midi_grant(); var nombre = null; \
+             navigator.requestMIDIAccess().then(function(a){ \
+                __puriy_midi_add_port({ id: 'in1', name: 'Teclado' }, 'input'); \
+                nombre = a.inputs.get('in1').name; \
+             });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nombre").expect("e"), JsValue::String("Teclado".into()));
+    }
+
+    #[test]
+    fn midi_message_dispara_evento() {
+        let rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_midi_grant(); var got = 0; \
+             navigator.requestMIDIAccess().then(function(a){ \
+                __puriy_midi_add_port({ id: 'in1', name: 'T' }, 'input'); \
+                var p = a.inputs.get('in1'); \
+                p.addEventListener('midimessage', function(e){ got = e.data[0]; }); \
+                __puriy_midi_message('in1', [144, 60, 127]); \
+             });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::Number(144.0));
+    }
 }

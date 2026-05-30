@@ -73,6 +73,9 @@ mod payment;
 mod speech;
 mod storageaccess;
 mod eyedropper;
+mod idledetector;
+mod contacts;
+mod midi;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -146,6 +149,9 @@ pub(crate) use payment::PAYMENT_BOOTSTRAP;
 pub(crate) use speech::SPEECH_BOOTSTRAP;
 pub(crate) use storageaccess::STORAGE_ACCESS_BOOTSTRAP;
 pub(crate) use eyedropper::EYEDROPPER_BOOTSTRAP;
+pub(crate) use idledetector::IDLEDETECTOR_BOOTSTRAP;
+pub(crate) use contacts::CONTACTS_BOOTSTRAP;
+pub(crate) use midi::MIDI_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -221,5 +227,8 @@ pub(crate) const ALL: &[&str] = &[
     SPEECH_BOOTSTRAP,
     STORAGE_ACCESS_BOOTSTRAP,
     EYEDROPPER_BOOTSTRAP,
+    IDLEDETECTOR_BOOTSTRAP,
+    CONTACTS_BOOTSTRAP,
+    MIDI_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
