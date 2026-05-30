@@ -6,9 +6,32 @@
 ```yaml
 DOMINIO: agora
 CUADRANTE: 03_ukupacha (RAÍZ)
-TESIS: plaza pública federada — confianza sin autoridad central, sin registro, sin moderación
-PARADIGMA: web-of-trust criptográfica donde el VEREDICTO no es propiedad del grafo sino del LECTOR
-TAMAÑO: 9 crates, ~8.3 KLoC puro Rust
+TESIS: raíz de confianza EJECUTABLE de un SO soberano. Responde dos preguntas del kernel wawa:
+       (1) ¿quién puede empujar una imagen del sistema?  (2) ¿qué bytecode puede tocar el hardware?
+       NO es una red social ni una "plaza pública" a escala humanidad — eso es el sustrato, no el producto.
+PARADIGMA: firma Ed25519 que viaja CON el dato (release / concesión), verificada idéntica en host (dalek)
+           y en bare-metal (compact). El veredicto se computa por-LECTOR vía TrustPolicy; en el plano de
+           control el "lector" es el kernel y el set de firmantes es CURADO (anillo), no abierto.
+TAMAÑO: 9 crates, ~8.6 KLoC puro Rust
+```
+
+## Encuadre honesto (límites duros — leer antes de soñar escala)
+
+```
+LÍMITE-1  IdentityId = BLAKE3(pubkey). Crear identidad = generar un keypair. COSTO CERO.
+          No hay PoW, stake, ni puzzle (verificado: grep vacío en agora-core/agora-graph).
+LÍMITE-2  third_party() = atestadores_distintos − self. Luego `min_third_party = N` se DERROTA
+          generando N claves. En un grafo ABIERTO no es defensa anti-Sybil; es decoración —
+          a menos que los atestadores estén ellos mismos vetados (el problema que la WoT nunca resolvió).
+LÍMITE-3  La WoT a escala masiva tiene 30 años de cementerio (PGP). La causa no fue la cripto:
+          fue el bootstrap de confianza + la carga cognitiva del veredicto-por-lector. agora hereda
+          ESE fracaso si se vende como red social. No se "arregla" — se vuelve IRRELEVANTE en el
+          encuadre de abajo.
+CONSECUENCIA  El uso PORTANTE no es humano y no es abierto: es el plano de control de wawa, donde el
+              set de firmantes lo controlás vos (AGORA_AUTH_RING) y el "consenso" es la intersección
+              que toma el kernel. Ahí Sybil no existe porque no hay registro abierto que sybilear.
+              La maquinaria por-lector (TrustPolicy, identidad fractal, gossip) queda intacta en el
+              código y sirve igual; lo que cambia es a QUÉ apuntamos con ella.
 ```
 
 ## Modelo conceptual (la idea-fuerza)
@@ -109,20 +132,32 @@ HECHO (A→T cerrado 2026-05-28..29):
   ✓ bridge canal wawa + mudanza con verify real · UI Llimphi tiles+watcher · CLI prefix-match · multisig M-of-N
   ✓ wawa host-side: agora-cli wawa {forjar-clave, publicar, anunciar(AoE L2)}
 
-ASPIRA_A (pendientes, orden valor/riesgo):
-  #9  ROTACIÓN de clave: atestación "cambio-de-clave: vieja→nueva" firmada por AMBAS pubkeys
-      (hoy: seed comprometida ⇒ abandonar identidad — sin continuidad)
-  #10 REVOCACIÓN: distinguir "no atestiguó hoy" de "fue comprometida" — el TrustGraph aún NO lo modela
-  #1  DAEMON mudanza completo: faltan sys_red_recibir(filtro) + sys_grafo_pedir(hash) en kernel + UI aceptar/rechazar
-  #2  BRIDGE Akasha-over-Ether ↔ host: crate nuevo agora-akasha-bridge (raw socket + EtherType propio)
-  WAWA.md §14.1.3: TABLA DE CAPACIDADES POR HASH-DE-BYTECODE
-      — derivar permisos de firma(hash_bytecode, permisos) en vez de declararlos en EntradaApp
-      — frontera física de capacidades, no tabla de permisos
+YA HECHO que el snapshot viejo daba por pendiente (verificado en disco 2026-05-30):
+  ✓ PRIMITIVOS de capacidad por hash-de-bytecode: agora-channel::{firmar_capacidad, verificar_capacidad}
+    firman/verifican la firma Ed25519 sobre format::mensaje_capacidad(bytecode, permisos)=[u8;36].
+  ✓ ESPEJO KERNEL de la concesión: wawa-kernel/src/claves.rs::verificar_concesion_capacidad (zero-alloc).
+  ✓ format::ConcesionCapacidad + permisos_efectivos (intersección manifiesto ∩ concesión).
+  => §14.1.3 NO es "tabla por construir": el sobre y los dos verificadores existen. Lo que falta es el CABLEADO.
+
+ASPIRA_A (pendientes, REORDENADO por valor desbloqueado — no por riesgo teórico):
+  #1  CABLEAR §14.1.3 en el enlace de capacidades del kernel: que el linker derive los permisos
+      efectivos de la ConcesionCapacidad verificada (intersección con EntradaApp) en vez de leer
+      EntradaApp a secas. Es lo más cerca de terminado y lo más diferenciador (frontera física, no
+      tabla de permisos). Convierte agora de "mensajería de confianza" en "cargador de capacidades".
+  #2  DAEMON mudanza completo: faltan sys_red_recibir(filtro) + sys_grafo_pedir(hash) en kernel +
+      UI aceptar/rechazar. Sin esto el control de release es demo host-side; con esto wawa toma el silicio.
+  #3  BRIDGE Akasha-over-Ether ↔ host: crate nuevo agora-akasha-bridge (raw socket + EtherType propio).
+      Dos máquinas con un cable se instalan SO mutuamente sin IP/DHCP/DNS — el demo que se ve y se entiende.
+  #4  ROTACIÓN / REVOCACIÓN de clave (juntas): atestación "cambio-de-clave: vieja→nueva" firmada por
+      AMBAS pubkeys + vector de revocación con caducidad estricta. Necesarias ANTES de que exista un set
+      de releasers > 1, no antes. Hoy sos vos con una seed; si se compromete, regenerás.
 
 NORTE_ARQUITECTÓNICO:
-  agora pasa de "red de confianza entre personas" a "raíz de confianza ejecutable de un SO soberano":
-  identidad → atestación → política-por-lector → release firmado → capacidad derivada de firma → ejecución gateada en kernel.
-  El mismo Ed25519 que dice "esta persona es quién dice" termina diciendo "este bytecode puede tocar la red".
+  agora NO es "red de confianza entre personas". Es la raíz de confianza ejecutable de un SO soberano:
+  identidad → release firmado → capacidad derivada de firma sobre (hash_bytecode, permisos) → ejecución
+  gateada en kernel por intersección. El mismo Ed25519 que podría decir "esta persona es quién dice"
+  acá dice algo más duro y verificable: "este bytecode exacto puede tocar la red". El grafo social y la
+  TrustPolicy por-lector son el sustrato de bootstrap; el producto es el plano de control de wawa.
 ```
 
 ## Relaciones (mapa de dependencias inter-dominio)
@@ -137,9 +172,12 @@ wawa     : consumidor final — agora es su plano de control de identidad/releas
 
 ---
 
-**Síntesis de una línea para otra IA:** agora es una web-of-trust Ed25519 fractal y
-transport-agnóstica donde el veredicto se computa por-lector vía `TrustPolicy` negociada
-(no por consenso global), construida en capas puras (cripto → grafo → gossip anti-entropía →
-persistencia → libp2p), que aspira a convertirse en la **raíz de confianza ejecutable** del SO
-bare-metal wawa — propagando releases firmados por AoE y, en su norte, derivando capacidades de
-ejecución directamente de firmas sobre `(hash_bytecode, permisos)`.
+**Síntesis de una línea para otra IA:** agora es la **raíz de confianza ejecutable** del SO bare-metal
+wawa — su plano de control de identidad/release/capacidad. La maquinaria es una WoT Ed25519 fractal,
+transport-agnóstica y por-lector (`TrustPolicy`, no consenso global), construida en capas puras
+(cripto → grafo → gossip anti-entropía → persistencia → libp2p); pero su uso PORTANTE no es social a
+escala humanidad (eso es WoT abierta y Sybil-vulnerable: identidad gratis ⇒ `min_third_party` no defiende):
+es firmar releases (propagados por AoE) y conceder capacidades por `(hash_bytecode, permisos)` que el
+kernel honra por intersección contra un anillo CURADO de firmantes. Los primitivos host+kernel ya existen
+(`firmar/verificar_capacidad` ⟷ `verificar_concesion_capacidad`); lo pendiente es cablear la derivación
+de permisos efectivos en el enlace de capacidades del kernel.
