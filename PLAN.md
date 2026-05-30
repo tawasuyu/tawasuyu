@@ -272,6 +272,32 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 
 **Nota hardware**: wgpu no expone Vulkan Video hoy → el decode arranca en CPU (rav1d es threaded y rinde). `media-core` deja el hook para frame-ya-en-GPU cuando el camino madure.
 
+## 6.sexies Hito — Pluma: presentaciones espaciales (deck-recorrido, tipo Prezi)
+
+**Visión** (2026-05-30): hoy una presentación en gioser es lineal — `pluma-deck-core` es una **máquina de drag/snap horizontal** (strip 1D de páginas) que `pluma-deck-web` pega al DOM. Falta el modelo **espacial tipo Prezi**: un **lienzo infinito** donde los marcos viven en coordenadas de mundo (posición + tamaño + rotación) y la presentación es un **recorrido** — una ruta ordenada que la cámara vuela animando zoom/pan/giro de marco en marco. El zoom narrativo (alejarse para ver el mapa completo, acercarse a un detalle) es la unidad expresiva, no la diapositiva.
+
+**Decisión** (2026-05-30): **no crate nuevo** — se extiende `pluma-deck-core` con un segundo modo `Recorrido` (lienzo 2D) junto al `DeckState` (strip 1D) existente. El strip lineal queda como **caso degenerado** del recorrido (marcos del mismo tamaño en fila, zoom=1, sin giro). Respeta regla #1 (un dominio = un crate raíz) y regla #2 (core agnóstico, frontend intercambiable).
+
+**Base ya existente que se reusa:**
+- `pluma-deck-core::DeckState` (138 LOC): el patrón "máquina de estados de gesto sin DOM/sin render" que el modo `Recorrido` imita — el host traduce pointer/wheel → eventos del core, el core decide.
+- **Zoom/pan resuelto en tullpu**, hoy *inline* en `tullpu-app-llimphi/src/main.rs` (~5770 LOC): `factor_zoom`/`pan_x`/`pan_y`, `ZOOM_BASE=1.1`/`ZOOM_MIN=0.05`/`ZOOM_MAX=32.0`, **zoom-a-cursor** (el píxel bajo el cursor queda fijo al hacer wheel, `main.rs:267`). El modo `Recorrido` extrae esa matemática a `pluma-deck-core::Camara` — primer consumidor reusable; tullpu/pineal podrían adoptarla después.
+- `pluma-render-plan` (`Documento → OperRender`): para pintar contenido pluma real dentro de cada marco sin que el modelo sepa quién lo pinta.
+- `pluma-deck-web` (binding DOM `translate3d`) como espejo del futuro frontend espacial.
+
+**Modelo de datos** (en `pluma-deck-core`, agnóstico, testeable):
+- `Camara { centro: (f64,f64), zoom: f64, rot_rad: f64 }` + `world_to_screen` / `screen_to_world` / `zoom_a_cursor(mult, rect, cursor)` / `pan(dx,dy)` / `fit_marco(&Marco, rect_panel) -> Camara` / `interpolar(a, b, t, ease)`.
+- `Marco { id, rect_mundo: Rect, rot_rad, contenido: ContenidoMarco }` — `ContenidoMarco` referencia un subgrafo de átomos / un cuerpo / una imagen / una página de deck.
+- `Recorrido { pasos: Vec<MarcoId>, idx: usize }` — orden narrativo; `siguiente()/anterior()` devuelven `(Camara objetivo, duracion)` para que el host anime.
+- `RecorridoState`: máquina de interacción libre (drag = pan, wheel = zoom-a-cursor) **+** reproducción guiada (flechas avanzan por `pasos` con cámara interpolada). Análoga a `DeckState`.
+
+**Fases (orden por dependencia):**
+1. **`pluma-deck-core::{camara, recorrido}`** — `Camara` + math (zoom-a-cursor, pan, fit, interpolar con easing) + `Marco`/`Recorrido`/`RecorridoState` + máquina libre/guiada. Cero render, cero DOM. Tests unitarios (invarianza zoom-a-cursor, snap de pasos, clamp de zoom, round-trip world↔screen). *Esta es la pieza con sustancia.*
+2. **Frontend Llimphi** (`pluma-deck-recorrido-llimphi` o módulo en `pluma-editor-llimphi`) — canvas `View::paint_with` que aplica el transform de `Camara` y pinta cada `Marco` (rects+labels placeholder primero); wheel→zoom-a-cursor, drag→pan, flechas→paso con animación vía `Handle::spawn_periodic`. Demo `recorrido_demo`.
+3. **Contenido real** — meter cuerpo/subgrafo/imagen dentro del marco vía `pluma-render-plan`; autoría: colocar/mover marcos y definir el orden de la ruta.
+4. **Frontend web** (opcional, post-Llimphi) — `pluma-deck-web` espejo espacial + export, cuando se quiera publicar a navegador.
+
+**Relación con foreign-pptx** (§6.ter): `.pptx` importa al modo lineal (`pluma-deck`); el modo `Recorrido` es el ciudadano nativo sin equivalente office — es donde gioser supera a PowerPoint, no donde lo imita.
+
 ## 7. Repos legacy
 
 `~/legacy/{brahman, eternal, dominium}` — arqueología local. Espejos remotos en gitea siguen como respaldo (no se borran).
