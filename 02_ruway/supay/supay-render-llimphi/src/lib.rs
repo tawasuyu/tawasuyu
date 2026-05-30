@@ -3113,13 +3113,12 @@ fn gather_sprite(
     // Fase 3.35: punto de muestreo vertical para BRDF 3D — base del
     // billboard relativo al ojo del jugador.
     // Fase 3.38: subimos el sample al **centro** vertical del billboard
-    // (`+ cfg.sprite_height * 0.5`). Para mobjs altos (cyberdemon ~110 u,
-    // baron ~64 u) la diferencia entre floor y center es significativa —
-    // una antorcha a media altura ahora "ve" al imp con cosine fuerte
-    // en lugar de marginal, y un proyectil al ras del piso lo back-lightea
-    // más realísticamente porque la cara visible del billboard se mide
-    // desde su centro, no desde sus pies. Compatible bit-exact con 3.35
-    // cuando `cfg.sprite_height = 0`.
+    // (`+ cfg.sprite_height * 0.5`). Default usado por el path fallback
+    // (sin atlas / patch missing) — el cfg.sprite_height es estimado.
+    // Fase 3.39: el path texturizado override este sample con la altura
+    // **real** del patch del WAD (`(z_top + z_bot) * 0.5`), por mobj.
+    // Un cyberdemon (~110 u) y un PUFF (~16 u) ahora tienen sample
+    // points distintos — más fiel a su geometría real.
     let z_surf_cam = sprite.z - cam.view_z + cfg.sprite_height * 0.5;
 
     // Fase 3.21: sombra circular en el plano del piso bajo el sprite.
@@ -3189,10 +3188,17 @@ fn gather_sprite(
             // Fase 3.31: opcionalmente direccional — luces detrás del
             // sprite back-lightean (cara visible apagada con piso
             // ambient), luces frontales tintan al 100 %.
+            // Fase 3.39: sample point en el **centro real** del billboard
+            // texturizado usando `(z_top + z_bot) * 0.5`. Reemplaza al
+            // estimate basado en `cfg.sprite_height` que sigue vigente
+            // para el fallback. Mobj alto (cyberdemon h=110) ⇒ centro
+            // a 55 u sobre floor; PUFF (h=16) ⇒ 8 u. Cada uno recibe el
+            // cosine BRDF apropiado para su tamaño.
+            let z_surf_cam_textured = ((z_top + z_bot) * 0.5) as f32;
             let boost_rgb = combined_boost_rgb_sprite_cam(
                 x_cam,
                 y_cam,
-                z_surf_cam,
+                z_surf_cam_textured,
                 cfg.muzzle_glow_alpha,
                 sprite.sector,
                 lit_sectors,
@@ -6767,6 +6773,87 @@ mod tests {
         let a = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, z_surf_335, NO_SECTOR, &lights, true);
         let b = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, z_surf_338, NO_SECTOR, &lights, true);
         assert_eq!(a, b, "sprite_height=0 ⇒ 3.38 == 3.35");
+    }
+
+    // =================================================================
+    // Fase 3.39 — Sprite sample con patch.height real (textured path)
+    // =================================================================
+
+    /// Centro vertical del billboard en cam-space dado el `floor` (z del
+    /// sector), `topoffset` del patch, su altura `h`, y `view_z` del
+    /// jugador. Equivale a `((z_top + z_bot) * 0.5)` que usa el path
+    /// texturizado (Fase 3.39).
+    fn billboard_center_z_cam(floor: f32, topoffset: f32, h: f32, view_z: f32) -> f32 {
+        let z_top = floor + topoffset - view_z;
+        let z_bot = floor + topoffset - h - view_z;
+        (z_top + z_bot) * 0.5
+    }
+
+    #[test]
+    fn billboard_center_imp_at_floor() {
+        // Imp típico: TROOA1 patch h≈56, topoffset≈48. Imp parado en
+        // floor=0, view_z=40. Centro = floor + to - h/2 - view_z =
+        // 0 + 48 - 28 - 40 = -20. Es decir, 20 unidades debajo del eye —
+        // consistente con un mobj de altura 56 parado en piso 0 con ojo
+        // a 40, centro a 8 absoluto.
+        let z = billboard_center_z_cam(0.0, 48.0, 56.0, 40.0);
+        assert!((z - (-20.0)).abs() < 1e-3, "centro esperado -20, got {}", z);
+    }
+
+    #[test]
+    fn billboard_center_cyberdemon_taller_than_imp_estimate() {
+        // Cyberdemon: patch h≈110, topoffset≈110 (estimado). Comparamos
+        // contra el sample cfg.sprite_height=56 default. El centro real
+        // del cyberdemon queda **más alto** que el estimate.
+        let real_cyber = billboard_center_z_cam(0.0, 110.0, 110.0, 40.0);
+        let estimate_56 = 0.0_f32 - 40.0 + 56.0 * 0.5; // 3.38 fallback
+        assert!(
+            real_cyber > estimate_56,
+            "cyberdemon real ({}) debería estar arriba del estimate ({})",
+            real_cyber, estimate_56
+        );
+    }
+
+    #[test]
+    fn billboard_center_puff_lower_than_imp_estimate() {
+        // PUFF: patch h≈16, topoffset≈16. Centro real del puff queda
+        // **más abajo** que el estimate cfg.sprite_height=56. El bullet
+        // puff es chiquito y queda apoyado al techo del impacto.
+        let real_puff = billboard_center_z_cam(64.0, 16.0, 16.0, 40.0);
+        let estimate_56 = 64.0_f32 - 40.0 + 56.0 * 0.5; // 3.38 fallback con sprite.z=64
+        assert!(
+            real_puff < estimate_56,
+            "puff real ({}) debería estar abajo del estimate ({})",
+            real_puff, estimate_56
+        );
+    }
+
+    #[test]
+    fn billboard_center_uses_patch_height_for_brdf() {
+        // Verificación que el sample con patch real impacta el BRDF.
+        // Cyberdemon h=110 a XY=200, floor=0, view_z=40 ⇒ centro=15.
+        // Luz a XY=(100, 0) z_cam=10 (cerca del centro real).
+        // Sample real (z_surf=15) ⇒ dz=-5 ⇒ cos casi puro XY.
+        // Sample 3.38 estimate (z_surf=-12) ⇒ dz=+22 ⇒ cos rasante.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 100.0, y_cam: 0.0, z_cam: 10.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let real_cyber_z = billboard_center_z_cam(0.0, 110.0, 110.0, 40.0); // 15
+        let estimate_z = 0.0_f32 - 40.0 + 56.0 * 0.5;                          // -12
+        let b_real = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, real_cyber_z, NO_SECTOR, &lights, true);
+        let b_estimate = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, estimate_z, NO_SECTOR, &lights, true);
+        // El sample real debería dar diferente boost (la luz está al
+        // nivel del centro real, no del estimate). Diferencia positiva
+        // significa la fase 3.39 cambia el rendering.
+        let mut any_diff = false;
+        for ch in 0..3 {
+            if (b_real[ch] - b_estimate[ch]).abs() > 1e-4 {
+                any_diff = true;
+            }
+        }
+        assert!(any_diff, "patch.height real debería producir boost diferente al estimate");
     }
 
     #[test]
