@@ -1,8 +1,22 @@
-//! Vista core — máquina de estados agnóstica del deck horizontal.
+//! Deck core — máquinas de estado agnósticas para presentar, en dos modos:
 //!
-//! Lógica pura: dados los eventos crudos de pointer (coords + viewport width
-//! + n_pages) decide cuándo arrancar drag horizontal, cuánto trasladar el
-//! strip y a qué página snapear al soltar. Sin DOM, sin wasm-bindgen.
+//! - **Lineal** ([`DeckState`], este archivo): strip horizontal de páginas con
+//!   drag/snap. Dados los eventos crudos de pointer (coords + viewport width
+//!   + n_pages) decide cuándo arrancar drag horizontal, cuánto trasladar el
+//!   strip y a qué página snapear al soltar.
+//! - **Espacial** ([`recorrido`], tipo Prezi): lienzo 2D infinito con marcos en
+//!   coordenadas de mundo y una ruta de cámara ([`camara::Camara`]) que vuela
+//!   entre ellos con zoom/pan/giro. El modo lineal es su caso degenerado.
+//!
+//! Todo agnóstico: sin DOM, sin wasm-bindgen, sin render.
+
+pub mod camara;
+pub mod recorrido;
+
+pub use camara::{Camara, Ease, Rect, FIT_MARGEN, ZOOM_MAX, ZOOM_MIN};
+pub use recorrido::{
+    ContenidoMarco, Marco, MarcoId, Recorrido, RecorridoState, DURACION_PASO_S,
+};
 
 /// Umbral en pixels para confirmar gesto horizontal vs vertical.
 pub const DRAG_DECISION_PX: f64 = 8.0;

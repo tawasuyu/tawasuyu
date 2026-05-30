@@ -1,0 +1,313 @@
+//! Modo `Recorrido` — presentación espacial sobre lienzo infinito (tipo Prezi).
+//!
+//! Un `Recorrido` coloca `Marco`s en coordenadas de mundo y define una **ruta**
+//! ordenada (`pasos`) que la cámara recorre: avanzar un paso encuadra el marco
+//! destino animando zoom/pan/giro desde la cámara actual. Entre pasos el usuario
+//! puede volar libre (drag = pan, wheel = zoom-a-cursor).
+//!
+//! El strip lineal de [`crate::DeckState`] es el caso degenerado: marcos del
+//! mismo tamaño en fila, zoom fijo, sin giro. Aquí el lienzo es 2D.
+//!
+//! Como toda pieza `*-core` del repo, esto es una máquina de estados pura: el
+//! host traduce pointer/wheel/teclado → llamadas, y tick'ea la animación con
+//! [`RecorridoState::avanzar`]; no hay render ni reloj propio.
+
+use crate::camara::{Camara, Ease, Rect};
+
+/// Duración por defecto del vuelo entre dos pasos, en segundos.
+pub const DURACION_PASO_S: f64 = 0.8;
+
+pub type MarcoId = u64;
+
+/// Qué pinta el host dentro de un marco. El core es agnóstico: guarda una
+/// referencia o etiqueta y deja la resolución (cuerpo, subgrafo de átomos,
+/// imagen, página de deck) al frontend vía `pluma-render-plan` u otro.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum ContenidoMarco {
+    #[default]
+    Vacio,
+    /// Texto plano — placeholder de autoría / títulos de sección.
+    Etiqueta(String),
+    /// Referencia opaca que el host resuelve (hash BLAKE3, id de cuerpo, ruta…).
+    Ref(String),
+}
+
+/// Un marco colocado en el lienzo: su rectángulo en coordenadas de mundo, su
+/// giro propio y su contenido.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Marco {
+    pub id: MarcoId,
+    pub rect: Rect,
+    pub rot_rad: f64,
+    pub contenido: ContenidoMarco,
+}
+
+impl Marco {
+    pub fn new(id: MarcoId, rect: Rect, contenido: ContenidoMarco) -> Self {
+        Self { id, rect, rot_rad: 0.0, contenido }
+    }
+
+    pub fn con_giro(mut self, rot_rad: f64) -> Self {
+        self.rot_rad = rot_rad;
+        self
+    }
+
+    /// Cámara que encuadra este marco en `panel`.
+    pub fn fit(&self, panel: Rect) -> Camara {
+        Camara::fit(self.rect, self.rot_rad, panel)
+    }
+}
+
+/// Lienzo + ruta narrativa. `pasos` es una secuencia de `MarcoId` (puede
+/// repetir un marco, saltarse otros, o recorrerlos en cualquier orden).
+#[derive(Clone, Debug, Default)]
+pub struct Recorrido {
+    pub marcos: Vec<Marco>,
+    pub pasos: Vec<MarcoId>,
+}
+
+impl Recorrido {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn agregar_marco(&mut self, marco: Marco) -> MarcoId {
+        let id = marco.id;
+        self.marcos.push(marco);
+        id
+    }
+
+    pub fn marco(&self, id: MarcoId) -> Option<&Marco> {
+        self.marcos.iter().find(|m| m.id == id)
+    }
+
+    /// Marco al que apunta el paso `idx` (resolviendo el id contra `marcos`).
+    pub fn marco_en_paso(&self, idx: usize) -> Option<&Marco> {
+        self.pasos.get(idx).and_then(|id| self.marco(*id))
+    }
+
+    pub fn n_pasos(&self) -> usize {
+        self.pasos.len()
+    }
+}
+
+/// Animación de cámara en curso entre dos encuadres.
+#[derive(Clone, Copy, Debug)]
+struct Vuelo {
+    desde: Camara,
+    hasta: Camara,
+    /// Tiempo transcurrido / duración total, en segundos.
+    t: f64,
+    dur: f64,
+    ease: Ease,
+}
+
+/// Máquina de interacción del recorrido: cámara viva + paso actual + vuelo en
+/// curso + estado de arrastre para el paneo libre.
+#[derive(Clone, Debug)]
+pub struct RecorridoState {
+    pub camara: Camara,
+    /// Índice del paso actual dentro de `Recorrido::pasos`.
+    pub paso: usize,
+    vuelo: Option<Vuelo>,
+    arrastre: Option<(f64, f64)>,
+}
+
+impl Default for RecorridoState {
+    fn default() -> Self {
+        Self { camara: Camara::default(), paso: 0, vuelo: None, arrastre: None }
+    }
+}
+
+impl RecorridoState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `true` si hay un vuelo de cámara animándose.
+    pub fn animando(&self) -> bool {
+        self.vuelo.is_some()
+    }
+
+    // ---- Roam libre -------------------------------------------------------
+
+    /// Inicio de arrastre para panear. Cancela cualquier vuelo en curso (el
+    /// usuario toma el control manual).
+    pub fn pointer_down(&mut self, x: f64, y: f64) {
+        self.vuelo = None;
+        self.arrastre = Some((x, y));
+    }
+
+    /// Movimiento de puntero: si hay arrastre activo, panea la cámara por el
+    /// delta y devuelve `true` (el host debe repintar).
+    pub fn pointer_move(&mut self, x: f64, y: f64) -> bool {
+        let Some((px, py)) = self.arrastre else { return false };
+        self.camara.pan(x - px, y - py);
+        self.arrastre = Some((x, y));
+        true
+    }
+
+    pub fn pointer_up(&mut self) {
+        self.arrastre = None;
+    }
+
+    /// Wheel: zoom-a-cursor inmediato. Cancela el vuelo (control manual).
+    pub fn wheel(&mut self, mult: f64, cursor: (f64, f64), panel: Rect) {
+        self.vuelo = None;
+        self.camara.zoom_a_cursor(mult, cursor, panel);
+    }
+
+    // ---- Reproducción guiada ---------------------------------------------
+
+    /// Arranca un vuelo desde la cámara actual hasta encuadrar el paso `idx`.
+    /// No hace nada si el índice o su marco no existen. Fija `paso = idx`.
+    pub fn ir_a_paso(&mut self, rec: &Recorrido, idx: usize, panel: Rect) {
+        let Some(marco) = rec.marco_en_paso(idx) else { return };
+        self.paso = idx;
+        self.iniciar_vuelo(marco.fit(panel), DURACION_PASO_S);
+    }
+
+    /// Avanza al paso siguiente (clamp al final). Devuelve `true` si arrancó
+    /// un vuelo nuevo.
+    pub fn siguiente(&mut self, rec: &Recorrido, panel: Rect) -> bool {
+        if rec.n_pasos() == 0 || self.paso + 1 >= rec.n_pasos() {
+            return false;
+        }
+        self.ir_a_paso(rec, self.paso + 1, panel);
+        true
+    }
+
+    /// Retrocede al paso anterior (clamp en 0). Devuelve `true` si arrancó un
+    /// vuelo nuevo.
+    pub fn anterior(&mut self, rec: &Recorrido, panel: Rect) -> bool {
+        if self.paso == 0 {
+            return false;
+        }
+        self.ir_a_paso(rec, self.paso - 1, panel);
+        true
+    }
+
+    /// Salto instantáneo (sin vuelo) al encuadre del paso `idx` — útil para
+    /// reposicionar tras un resize, o para "jump to" sin animación.
+    pub fn saltar_a_paso(&mut self, rec: &Recorrido, idx: usize, panel: Rect) {
+        let Some(marco) = rec.marco_en_paso(idx) else { return };
+        self.paso = idx;
+        self.vuelo = None;
+        self.camara = marco.fit(panel);
+    }
+
+    fn iniciar_vuelo(&mut self, hasta: Camara, dur: f64) {
+        if dur <= 0.0 {
+            self.camara = hasta;
+            self.vuelo = None;
+            return;
+        }
+        self.vuelo = Some(Vuelo { desde: self.camara, hasta, t: 0.0, dur, ease: Ease::default() });
+    }
+
+    /// Avanza la animación `dt` segundos. Devuelve `true` mientras siga
+    /// animando (el host repite el tick); `false` cuando ya no hay vuelo.
+    /// El host la llama desde un timer (p. ej. `Handle::spawn_periodic`).
+    pub fn avanzar(&mut self, dt: f64) -> bool {
+        let Some(mut v) = self.vuelo else { return false };
+        v.t += dt;
+        if v.t >= v.dur {
+            self.camara = v.hasta;
+            self.vuelo = None;
+            return false;
+        }
+        self.camara = Camara::interpolar(&v.desde, &v.hasta, v.t / v.dur, v.ease);
+        self.vuelo = Some(v);
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PANEL: Rect = Rect { x: 0.0, y: 0.0, w: 800.0, h: 600.0 };
+
+    fn recorrido_demo() -> Recorrido {
+        let mut r = Recorrido::new();
+        r.agregar_marco(Marco::new(1, Rect::new(0.0, 0.0, 400.0, 300.0), ContenidoMarco::Etiqueta("a".into())));
+        r.agregar_marco(Marco::new(2, Rect::new(2000.0, 0.0, 200.0, 150.0), ContenidoMarco::Etiqueta("b".into())));
+        r.agregar_marco(Marco::new(3, Rect::new(1000.0, 1000.0, 800.0, 600.0), ContenidoMarco::Etiqueta("c".into())));
+        r.pasos = vec![1, 2, 3];
+        r
+    }
+
+    #[test]
+    fn marco_en_paso_resuelve_id() {
+        let r = recorrido_demo();
+        assert_eq!(r.marco_en_paso(1).unwrap().id, 2);
+        assert!(r.marco_en_paso(9).is_none());
+    }
+
+    #[test]
+    fn pan_libre_mueve_y_cancela_vuelo() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        s.ir_a_paso(&r, 1, PANEL);
+        assert!(s.animando());
+        s.pointer_down(100.0, 100.0);
+        assert!(!s.animando(), "el drag cancela el vuelo");
+        assert!(s.pointer_move(130.0, 100.0));
+        s.pointer_up();
+        assert!(!s.pointer_move(200.0, 200.0), "sin arrastre no panea");
+    }
+
+    #[test]
+    fn wheel_hace_zoom_y_cancela_vuelo() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        s.ir_a_paso(&r, 1, PANEL);
+        let z = s.camara.zoom;
+        s.wheel(1.1, (400.0, 300.0), PANEL);
+        assert!(!s.animando());
+        assert!((s.camara.zoom - z * 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn siguiente_y_anterior_respetan_bordes() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        assert!(!s.anterior(&r, PANEL), "ya en el primero");
+        assert!(s.siguiente(&r, PANEL));
+        assert_eq!(s.paso, 1);
+        assert!(s.siguiente(&r, PANEL));
+        assert_eq!(s.paso, 2);
+        assert!(!s.siguiente(&r, PANEL), "ya en el último");
+        assert!(s.anterior(&r, PANEL));
+        assert_eq!(s.paso, 1);
+    }
+
+    #[test]
+    fn avanzar_completa_el_vuelo_y_aterriza_exacto() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        s.ir_a_paso(&r, 2, PANEL);
+        let objetivo = r.marco_en_paso(2).unwrap().fit(PANEL);
+        // Tickea en pasos hasta que el vuelo termina.
+        let mut iter = 0;
+        while s.avanzar(0.1) {
+            iter += 1;
+            assert!(iter < 1000, "el vuelo no converge");
+        }
+        // Al terminar aterriza EXACTAMENTE en el encuadre objetivo.
+        assert_eq!(s.camara, objetivo);
+        assert!(!s.animando());
+        // Un avanzar extra no hace nada.
+        assert!(!s.avanzar(0.1));
+    }
+
+    #[test]
+    fn saltar_a_paso_es_instantaneo() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        s.saltar_a_paso(&r, 2, PANEL);
+        assert!(!s.animando());
+        assert_eq!(s.paso, 2);
+        assert_eq!(s.camara, r.marco_en_paso(2).unwrap().fit(PANEL));
+    }
+}
