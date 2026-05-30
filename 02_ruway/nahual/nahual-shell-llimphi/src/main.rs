@@ -22,9 +22,14 @@
 //! cuando lleguen más visores y un AppBus con `EntityType`, el registro
 //! crece por tabla sin tocar el resto del shell.
 //!
+//! Hoy embebe cuatro visores in-process — texto (fallback universal),
+//! imagen, video (AV1 nativo, con play/pausa por `Space`) y card
+//! (`shared/card` presentada por campos) — todos ruteados por
+//! `viewer_registry::pick` sobre el `lens`/`mime` discernido.
+//!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
-//! - Otros containers (Tabs, Tiled) y otro viewer (Database).
+//! - Otros containers (Tabs, Tiled) y visores de audio / PDF nativo.
 //! - AppBus: el viewer recibe el path directo desde el modelo. Cuando
 //!   tengamos un bus, el shell publica `EntitySelected` y los viewers
 //!   se suscriben.
@@ -58,6 +63,9 @@ use nahual_text_viewer_llimphi::{
 use nahual_video_viewer_llimphi::{
     video_viewer_view, VideoViewerPalette, VideoViewerState,
 };
+use nahual_card_viewer_llimphi::{
+    card_viewer_view, load_card, CardPreview, CardViewerPalette,
+};
 use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
@@ -74,6 +82,7 @@ enum PreviewPane {
     Text(PreviewState),
     Image(ImagePreviewState),
     Video(VideoViewerState),
+    Card(CardPreview),
 }
 
 /// Cadencia del avance de video (~30 Hz). `spawn_periodic` la dispara
@@ -107,6 +116,8 @@ enum Msg {
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
     /// Pulso de reloj del reproductor de video (~30 Hz).
     VideoTick,
+    /// Espacio: play/pausa cuando el panel derecho es un video.
+    ToggleVideoPlay,
 }
 
 struct Shell;
@@ -156,6 +167,7 @@ impl App for Shell {
             Key::Named(NamedKey::ArrowDown) => Some(Msg::Down),
             Key::Named(NamedKey::Enter) => Some(Msg::OpenSelected),
             Key::Named(NamedKey::Backspace) => Some(Msg::Parent),
+            Key::Named(NamedKey::Space) => Some(Msg::ToggleVideoPlay),
             _ => None,
         }
     }
@@ -228,6 +240,11 @@ impl App for Shell {
                     state.tick(VIDEO_TICK);
                 }
             }
+            Msg::ToggleVideoPlay => {
+                if let PreviewPane::Video(state) = &mut m.preview {
+                    state.toggle_play();
+                }
+            }
         }
         m
     }
@@ -238,6 +255,7 @@ impl App for Shell {
         let text_palette = TextViewerPalette::from_theme(&theme);
         let image_palette = ImageViewerPalette::from_theme(&theme);
         let video_palette = VideoViewerPalette::from_theme(&theme);
+        let card_palette = CardViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = file_explorer_view::<Msg, _>(
             &model.explorer,
@@ -261,6 +279,9 @@ impl App for Shell {
                 &image_palette,
             ),
             PreviewPane::Video(state) => video_viewer_view::<Msg>(state, &video_palette),
+            PreviewPane::Card(state) => {
+                card_viewer_view::<Msg>(state, model.preview_of.as_deref(), &card_palette)
+            }
         };
 
         let body = splitter_two(
@@ -355,6 +376,7 @@ fn load_for(path: &Path) -> PreviewPane {
     match viewer_registry::pick(discernment.as_ref()) {
         ViewerKind::Image => PreviewPane::Image(load_image(path, DEFAULT_IMAGE_BYTES_MAX)),
         ViewerKind::Video => PreviewPane::Video(open_video(path)),
+        ViewerKind::Card => PreviewPane::Card(load_card(path)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
     }
 }

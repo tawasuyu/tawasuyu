@@ -24,6 +24,9 @@ pub enum ViewerKind {
     /// Reproductor de video (`nahual-video-viewer-llimphi`); abre
     /// WebM/MKV (AV1) e IVF con el decoder nativo puro-Rust.
     Video,
+    /// Visor estructurado de Cards (`nahual-card-viewer-llimphi`); pinta
+    /// los campos de una `shared/card` en vez del JSON crudo.
+    Card,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
@@ -32,7 +35,7 @@ pub enum ViewerKind {
 /// Elige el visor para un discernimiento. La regla, en orden:
 ///
 /// 1. Si el `lens` lo dice explícitamente (`gallery` → imagen,
-///    `video` → reproductor).
+///    `video` → reproductor, `card` → visor de cards).
 /// 2. Si el `mime` arranca con `image/` o `video/` (cubre formatos que
 ///    magic-bytes detecta sin asignar lens).
 /// 3. Fallback a texto — el visor que nunca falla feo.
@@ -45,6 +48,7 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
     match d.lens.as_deref() {
         Some("gallery") => return ViewerKind::Image,
         Some("video") => return ViewerKind::Video,
+        Some("card") => return ViewerKind::Card,
         _ => {}
     }
     match d.mime.as_deref() {
@@ -87,6 +91,11 @@ mod tests {
     #[test]
     fn mime_video_sin_lens_va_a_video() {
         assert_eq!(pick(Some(&disc(None, Some("video/x-ivf")))), ViewerKind::Video);
+    }
+
+    #[test]
+    fn card_lens_va_a_card() {
+        assert_eq!(pick(Some(&disc(Some("card"), Some("application/json")))), ViewerKind::Card);
     }
 
     #[test]

@@ -256,6 +256,7 @@ members = [
     "02_ruway/nahual/nahual-image-viewer-llimphi",
     "02_ruway/nahual/nahual-text-viewer-llimphi",
     "02_ruway/nahual/nahual-video-viewer-llimphi",
+    "02_ruway/nahual/nahual-card-viewer-llimphi",
     "02_ruway/mirada/asistente-puente",
     "02_ruway/mirada/mirada-app-llimphi",
     "02_ruway/mirada/mirada-asistente-llimphi",
@@ -672,6 +673,7 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 nahual-text-viewer-llimphi = { path = "02_ruway/nahual/nahual-text-viewer-llimphi" }
 nahual-image-viewer-llimphi = { path = "02_ruway/nahual/nahual-image-viewer-llimphi" }
 nahual-video-viewer-llimphi = { path = "02_ruway/nahual/nahual-video-viewer-llimphi" }
+nahual-card-viewer-llimphi = { path = "02_ruway/nahual/nahual-card-viewer-llimphi" }
 nahual-file-explorer-llimphi = { path = "02_ruway/nahual/nahual-file-explorer-llimphi" }
 
 # ============================================================
