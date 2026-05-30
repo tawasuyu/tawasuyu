@@ -52,7 +52,7 @@ use llimphi_module_file_picker::{
     self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
-use llimphi_ui::llimphi_raster::peniko::Mix;
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Mix};
 use llimphi_ui::PaintRect;
 use llimphi_ui::WheelDelta;
 use llimphi_ui::Modifiers;
@@ -141,6 +141,12 @@ struct Model {
     /// compuesto). `None` hasta que el usuario clickee con la
     /// herramienta `Cuentagotas` activa.
     color_picked: Option<[u8; 4]>,
+    /// Histograma RGB del composite vigente — 256 bins por canal.
+    /// Se recomputa en `aplicar_y_recomponer` cada vez que cambia el
+    /// `model.imagen`. El painter de la sección "histograma" lee esto
+    /// directamente (clone del array) en cada frame. `None` cuando
+    /// todavía no hay composite.
+    histograma: Option<[[u32; 256]; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -515,8 +521,14 @@ fn inicializar() -> Model {
         pan_y: 0.0,
         herramienta: Herramienta::Mover,
         color_picked: None,
+        histograma: None,
     };
     sincronizar_thumbs(&mut model);
+    // Cómputo inicial del histograma desde el composite recién armado.
+    model.histograma = model
+        .imagen
+        .as_ref()
+        .map(|img| histograma_rgb(img.data.data()));
     model
 }
 
@@ -612,6 +624,12 @@ fn aplicar_y_recomponer(model: &mut Model) {
         Some(img) => model.imagen = Some(img),
         None => model.estado = "error compositor".into(),
     }
+    // Recompute histograma desde el nuevo composite. Es O(W*H) — para
+    // un 4 MP el costo es despreciable comparado con `componer`.
+    model.histograma = model
+        .imagen
+        .as_ref()
+        .map(|img| histograma_rgb(img.data.data()));
     sincronizar_thumbs(model);
 }
 
@@ -1074,6 +1092,73 @@ fn slider_pal_parametros(theme: &llimphi_theme::Theme) -> SliderPalette {
     p
 }
 
+/// Construye la vista del histograma RGB: 256 columnas verticales por
+/// canal, normalizadas por el pico global (max sobre los 3 canales).
+/// Cada canal se pinta en su color con alfa parcial para que se
+/// superpongan legibles. Si `histograma` es `None` o todo cero,
+/// devuelve un placeholder gris vacío. Altura fija (`HIST_ALTO`) — el
+/// ancho lo decide el layout.
+const HIST_ALTO: f32 = 72.0;
+fn vista_histograma(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
+    // Sólo necesitamos un Copy del array (768 bytes) para meterlo en
+    // el closure del painter — barato.
+    let hist = model.histograma;
+    let bg = theme.bg_input;
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(HIST_ALTO),
+        },
+        ..Default::default()
+    })
+    .fill(bg)
+    .paint_with(move |scene, _ts, r| {
+        let Some(hist) = hist else {
+            return;
+        };
+        // Pico global para normalizar. Si todos los canales son 0 (caso
+        // borde: lienzo 0×0), nada que dibujar.
+        let max: u32 = hist
+            .iter()
+            .flat_map(|canal| canal.iter().copied())
+            .max()
+            .unwrap_or(0);
+        if max == 0 || r.w <= 0.0 || r.h <= 0.0 {
+            return;
+        }
+        let max = max as f32;
+        // Cada bin ocupa una franja vertical de ancho `bin_w` >= 1 px.
+        // Si el ancho del nodo no llega a 256, comprimimos varios bins
+        // por columna sumándolos (sin perder precisión); si sobra,
+        // estiramos. Implementación simple: una columna por bin.
+        let bin_w = r.w as f64 / 256.0;
+        // Tres pasadas, una por canal. Pintamos rect por bin con altura
+        // proporcional a count/max. Alfa < 255 para que se vean
+        // superpuestos.
+        let colores = [
+            Color::from_rgba8(220, 60, 60, 180),  // R
+            Color::from_rgba8(60, 200, 80, 180),  // G
+            Color::from_rgba8(80, 120, 230, 180), // B
+        ];
+        for (canal_idx, color) in colores.iter().enumerate() {
+            for v in 0..256 {
+                let count = hist[canal_idx][v] as f32;
+                let h_norm = (count / max).clamp(0.0, 1.0);
+                let bar_h = (h_norm as f64) * (r.h as f64);
+                if bar_h <= 0.0 {
+                    continue;
+                }
+                let x0 = r.x as f64 + v as f64 * bin_w;
+                let x1 = x0 + bin_w.max(1.0);
+                let y0 = (r.y + r.h) as f64 - bar_h;
+                let y1 = (r.y + r.h) as f64;
+                let rect = KurboRect::new(x0, y0, x1, y1);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &rect);
+            }
+        }
+    })
+}
+
 /// Si la capa seleccionada es una derivada con un `OpLocal`
 /// parametrizable, devuelve los rows con los sliders en vivo
 /// (`label`, slider escalado al rango del parámetro, drag → `Msg::AjustarParametro`).
@@ -1347,6 +1432,13 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     if let Some(rows) = sliders_parametros_capa(theme, model) {
         hijos.push(subtitulo("parámetros"));
         hijos.extend(rows.into_iter().map(envolver_fila));
+    }
+
+    // "histograma": chart RGB del composite vigente. Sólo se renderiza
+    // si hay imagen ya recompuesta (caso típico al arrancar la app).
+    if model.histograma.is_some() {
+        hijos.push(subtitulo("histograma"));
+        hijos.push(vista_histograma(theme, model));
     }
 
     // "entrada": agregar una capa nueva. Dos vías: relleno sólido del
@@ -2534,6 +2626,22 @@ fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     true
 }
 
+/// Cuenta cuántos píxeles tiene cada valor 0..255 en cada canal RGB de
+/// un buffer Rgba8. El alfa se ignora (no se incluye como canal y no se
+/// usa para ponderar — un píxel con alfa=0 cuenta igual que uno
+/// opaco). Devuelve `[[count_r, count_g, count_b]; 256]` pero
+/// estructurado al revés para acceso eficiente: `out[c][v]` = cantidad
+/// de píxeles donde el canal `c` (0=R, 1=G, 2=B) vale `v`. Pura.
+fn histograma_rgb(data: &[u8]) -> [[u32; 256]; 3] {
+    let mut out = [[0u32; 256]; 3];
+    for px in data.chunks_exact(4) {
+        out[0][px[0] as usize] += 1;
+        out[1][px[1] as usize] += 1;
+        out[2][px[2] as usize] += 1;
+    }
+    out
+}
+
 /// Mutador in-place del parámetro de una capa derivada con `OpLocal`
 /// parametrizable. Aplica `dv` (delta en unidades del parámetro,
 /// emitido por el slider) al campo correspondiente con clamp al rango
@@ -2946,6 +3054,7 @@ mod tests {
             pan_y: 0.0,
             herramienta: Herramienta::Mover,
             color_picked: None,
+            histograma: None,
         }
     }
 
@@ -4892,6 +5001,104 @@ mod tests {
             hist_antes + 2,
             "min y max coalesce por separado"
         );
+    }
+
+    // ---- Fase 34: histograma RGB --------------------------------------------
+
+    #[test]
+    fn histograma_de_buffer_uniforme_concentra_todo_en_un_bin() {
+        // 16 píxeles todos (50, 100, 200, 255). El histograma debe
+        // mostrar 16 en R[50], G[100], B[200] y 0 en todo lo demás.
+        let buf = buffer_relleno(4, 4, [50, 100, 200, 255]);
+        let h = histograma_rgb(&buf);
+        for v in 0..256 {
+            let esperado_r = if v == 50 { 16 } else { 0 };
+            let esperado_g = if v == 100 { 16 } else { 0 };
+            let esperado_b = if v == 200 { 16 } else { 0 };
+            assert_eq!(h[0][v], esperado_r, "R[{v}]");
+            assert_eq!(h[1][v], esperado_g, "G[{v}]");
+            assert_eq!(h[2][v], esperado_b, "B[{v}]");
+        }
+    }
+
+    #[test]
+    fn histograma_ignora_alfa() {
+        // Mismo valor RGB en dos píxeles, uno con alfa=0 y otro con
+        // alfa=255. El histograma cuenta los dos: alfa no afecta el
+        // conteo.
+        let buf = vec![
+            50, 100, 200, 0,   // alfa cero
+            50, 100, 200, 255, // alfa máximo
+        ];
+        let h = histograma_rgb(&buf);
+        assert_eq!(h[0][50], 2);
+        assert_eq!(h[1][100], 2);
+        assert_eq!(h[2][200], 2);
+    }
+
+    #[test]
+    fn histograma_gradiente_distribuye_bins() {
+        // 256 píxeles con R variando 0..255 linealmente, G y B fijos.
+        // El histograma de R debe tener exactamente 1 en cada bin.
+        let mut buf = Vec::with_capacity(256 * 4);
+        for v in 0..256u32 {
+            buf.extend_from_slice(&[v as u8, 99, 33, 255]);
+        }
+        let h = histograma_rgb(&buf);
+        for v in 0..256 {
+            assert_eq!(h[0][v], 1, "R[{v}]");
+        }
+        // G[99] = 256 (todos los píxeles), G en otros bins = 0.
+        assert_eq!(h[1][99], 256);
+        for v in 0..256 {
+            if v != 99 {
+                assert_eq!(h[1][v], 0);
+            }
+        }
+        assert_eq!(h[2][33], 256);
+    }
+
+    #[test]
+    fn histograma_buffer_vacio_es_todo_cero() {
+        let h = histograma_rgb(&[]);
+        for canal in 0..3 {
+            for v in 0..256 {
+                assert_eq!(h[canal][v], 0);
+            }
+        }
+    }
+
+    #[test]
+    fn aplicar_y_recomponer_actualiza_histograma() {
+        // El cache se refresca dentro de aplicar_y_recomponer.
+        let mut model = modelo_minimo();
+        assert!(model.histograma.is_none());
+        aplicar_y_recomponer(&mut model);
+        let h = model.histograma.expect("histograma debe existir");
+        // El modelo mínimo tiene un buffer 4×4 a ceros → todos los
+        // canales tienen 16 píxeles en el bin 0.
+        assert_eq!(h[0][0], 16);
+        assert_eq!(h[1][0], 16);
+        assert_eq!(h[2][0], 16);
+    }
+
+    #[test]
+    fn agregar_capa_recompone_y_actualiza_histograma() {
+        // Después de agregar un relleno con color picked, el histograma
+        // del composite debe reflejar el color predominante.
+        let mut model = modelo_minimo();
+        model.color_picked = Some([200, 100, 50, 255]);
+        agregar_capa_relleno(&mut model);
+        // El composite = relleno opaco encima de la capa base → la base
+        // queda cubierta. Todos los píxeles del composite son
+        // (200, 100, 50).
+        let h = model.histograma.unwrap();
+        let total: u32 = h[0].iter().sum();
+        // 4×4 = 16 píxeles.
+        assert_eq!(total, 16);
+        assert_eq!(h[0][200], 16);
+        assert_eq!(h[1][100], 16);
+        assert_eq!(h[2][50], 16);
     }
 
     #[test]
