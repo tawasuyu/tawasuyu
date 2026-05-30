@@ -1,0 +1,22 @@
+[package]
+name = "pluma-deck-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "App de presentaciones espaciales (modo Recorrido, tipo Prezi): abre .deck/.md, presenta, autorea y guarda. Frontend Llimphi sobre pluma-deck-core."
+
+[[bin]]
+name = "pluma-deck"
+path = "src/main.rs"
+
+[dependencies]
+# Modelo + cámara + ruta + autoría + persistencia (postcard) + adaptador pluma.
+pluma-deck-core = { path = "../pluma-deck-core", features = ["pluma", "serde"] }
+# Frontend Llimphi (pintura + vistas presentar/editar).
+pluma-deck-recorrido-llimphi = { path = "../pluma-deck-recorrido-llimphi" }
+# Para abrir documentos markdown reales → Recorrido vía el adaptador del core.
+pluma-md = { path = "../pluma-md" }
+llimphi-ui = { workspace = true }
