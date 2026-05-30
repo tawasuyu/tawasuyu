@@ -1,10 +1,13 @@
 # SDD — Tabla de capacidades por bytecode hash (WAWA §14.1.3)
 
-> Estado: **enforcement CABLEADO (2026-05-30)** · `VERSION_MANIFIESTO 4→5`,
-> `EntradaApp.concesion`, intersección viva en el punto de carga del kernel y
-> emisión de concesiones en el camino de release host. Resta solo la **ceremonia
-> de génesis** (firmar offline las concesiones de las apps génesis con permisos
-> gateados) — un paso del operador, no de código, validable en QEMU. Este
+> Estado: **enforcement + seam de génesis CABLEADOS (2026-05-30)** ·
+> `VERSION_MANIFIESTO 4→5`, `EntradaApp.concesion`, intersección viva en el punto
+> de carga del kernel, emisión de concesiones en el camino de release host Y
+> `wawa-boot::sembrar_concesion` anclando las `*.cap.obj` del directorio de assets
+> (§3.3). Resta solo el **paso del operador**: forjar offline las concesiones de
+> las apps génesis con permisos gateados (`agora-cli wawa concesion`) y dejarlas
+> en `wawa-kernel/assets/concesiones/` — sin ellas, `None ⇒ declarados` (rollout
+> escalonado §3.6) mantiene el génesis booteando. Validable en QEMU. Este
 > documento es la fuente autoritativa del modelo; cuando difiera con `WAWA.md`
 > §14.1.3, manda este.
 
@@ -146,12 +149,20 @@ génesis se forjan **fuera de banda** y se embeben:
    firma `(hash, permisos)` y emite la concesión envuelta en un `Objeto` del
    grafo. `--permisos` acepta máscara (`0x4`) o nombres (`RED,RAIZ`).
 2. Esas concesiones se siembran como objetos del grafo y sus hashes se ponen en
-   el campo `concesion` de cada `EntradaApp` del manifiesto génesis. **FALTA EL
-   SEAM EN `boot`:** que `sembrar_grafo` lea las `*.cap.obj` de un directorio de
-   assets (mapeadas por nombre de app), las ancle como objetos y rellene
-   `EntradaApp.concesion`. Hoy `boot` siembra `concesion: None` para todas (no
-   se puede compilar `boot` en sandbox — la valida el operador en QEMU, por eso
-   no se cableó a ciegas).
+   el campo `concesion` de cada `EntradaApp` del manifiesto génesis. **SEAM
+   CABLEADO (2026-05-30):** `wawa-boot::sembrar_grafo` llama a `sembrar_concesion`
+   para cada app con `permisos != 0`; ésta lee
+   `wawa-kernel/assets/concesiones/<nombre>.cap.obj` (el payload que escribe
+   `agora-cli wawa concesion --salida`), **verifica que `concesion.bytecode ==`
+   el hash del objeto-bytecode que el génesis acaba de grabar** (guarda dura: una
+   concesión para otro `.wasm` aborta la siembra con mensaje accionable), la ancla
+   como objeto del grafo (dedup por contenido vía `BTreeSet<Hash>`), la cuelga del
+   manifiesto (alcanzable por el MARK del GC) y rellena `EntradaApp.concesion =
+   Some(hash)`. **Ausencia de archivo ⇒ `None`**, sin error: cero cambio de
+   comportamiento hasta que el operador provisione el directorio — por eso fue
+   seguro cablearlo sin poder compilar `boot` en sandbox (lo valida en QEMU).
+   Aviso blando si la concesión no cubre todos los `permisos` declarados (la
+   intersección del kernel recortaría capacidades).
 3. Apps sin permisos gateados (`permisos == 0`): `concesion: None`, sin ceremonia.
 
 ### 3.4 Back-compat / migración

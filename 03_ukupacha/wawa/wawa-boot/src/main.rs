@@ -24,7 +24,7 @@
 //  preferimos un error claro a un arranque silencioso hacia la nada.
 // =============================================================================
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,8 +33,8 @@ use std::process::Command;
 // enlaza el kernel. Gracias a el, lo que `boot` siembra y lo que el kernel lee
 // es, byte a byte, el mismo idioma.
 use format::{
-    EntradaApp, Hash, Manifiesto, Objeto, SuperBloque, MAGIA, MAX_OBJETO, TAM_SECTOR,
-    VERSION_MANIFIESTO, VERSION_SUPERBLOQUE,
+    ConcesionCapacidad, EntradaApp, Hash, Manifiesto, Objeto, SuperBloque, MAGIA, MAX_OBJETO,
+    TAM_SECTOR, VERSION_MANIFIESTO, VERSION_SUPERBLOQUE,
 };
 
 /// Ruta del ELF del kernel, ya compilado para `x86_64-unknown-none`.
@@ -401,6 +401,92 @@ fn leer_wasm(archivo: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("no se pudo leer el bytecode «{}»: {e}", ruta.display()))
 }
 
+/// Lee, si existe, el objeto-concesion forjado fuera de banda para una app de
+/// genesis: `wawa-kernel/assets/concesiones/<nombre>.cap.obj` (el payload
+/// postcard de un `Objeto{datos:ConcesionCapacidad, hijos:[]}` que escribe
+/// `agora-cli wawa concesion --salida`). Ausencia NO es error —es el caso comun
+/// hasta que el operador complete la ceremonia §3.3—: devuelve `None`.
+fn leer_concesion(nombre: &str) -> Result<Option<Vec<u8>>, String> {
+    let ruta = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../wawa-kernel/assets/concesiones")
+        .join(format!("{nombre}.cap.obj"));
+    match std::fs::read(&ruta) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!(
+            "no se pudo leer la concesion «{}»: {e}",
+            ruta.display()
+        )),
+    }
+}
+
+/// Ancla la concesion de capacidad de una app de genesis, si el operador la
+/// forjo. Verifica que la concesion firme EXACTAMENTE el objeto-bytecode que el
+/// genesis acaba de grabar (`concesion.bytecode == bytecode`) —una concesion para
+/// otro `.wasm` jamas se cuela—, la graba como objeto del grafo (dedup por
+/// contenido) y la cuelga del manifiesto para que el MARK del GC la alcance.
+/// Devuelve el hash a poner en `EntradaApp.concesion`, o `None` si no hay archivo.
+fn sembrar_concesion(
+    nombre: &str,
+    bytecode: Hash,
+    permisos: u32,
+    log: &mut Vec<u8>,
+    cursor: &mut u64,
+    hijos: &mut Vec<Hash>,
+    ancladas: &mut BTreeSet<Hash>,
+) -> Result<Option<Hash>, String> {
+    let payload = match leer_concesion(nombre)? {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    // El archivo es un `Objeto` del grafo cuyo payload es la `ConcesionCapacidad`.
+    let objeto = Objeto::deserializar(&payload)
+        .map_err(|e| format!("la concesion de «{nombre}» no es un Objeto valido: {e}"))?;
+    let concesion = ConcesionCapacidad::deserializar(&objeto.datos)
+        .map_err(|e| format!("la concesion de «{nombre}» es ilegible: {e}"))?;
+
+    // GUARDA DURA: la firma cubre el bytecode. Si la app se recompilo sin
+    // re-forjar la concesion, los hashes divergen y la concesion ya no aplica —
+    // el kernel la rechazaria en silencio (efectivos = 0). Lo cazamos AQUI, en
+    // voz alta, antes de sellar un disco que arrancaria una app castrada.
+    if concesion.bytecode != bytecode {
+        return Err(format!(
+            "la concesion de «{nombre}» firma OTRO bytecode\n  \
+             objeto-bytecode del genesis : {}\n  \
+             cubierto por la concesion   : {}\n  \
+             (¿se recompilo el .wasm sin re-forjar la concesion con `agora-cli wawa concesion`?)",
+            hex_corto(&bytecode),
+            hex_corto(&concesion.bytecode),
+        ));
+    }
+
+    // Sanidad blanda: el kernel INTERSECTA (efectivos = declarados ∩ concedidos).
+    // Si la concesion no cubre algun bit declarado, la app correra con MENOS de
+    // lo que el manifiesto pide. No es un error —es el modelo— pero conviene avisar.
+    if concesion.permisos & permisos != permisos {
+        eprintln!(
+            "[renaser/boot] aviso: «{nombre}» declara permisos {permisos:#x} pero su \
+             concesion solo concede {:#x} — la interseccion recortara capacidades",
+            concesion.permisos,
+        );
+    }
+
+    // Anclar (una sola vez por contenido) y colgar del manifiesto.
+    let hash = format::hash(&payload);
+    if ancladas.insert(hash) {
+        anexar_objeto(log, cursor, &payload)?;
+        hijos.push(hash);
+    }
+    Ok(Some(hash))
+}
+
+/// Los primeros 8 bytes de un hash en hex — suficiente para distinguir objetos
+/// en un mensaje de diagnostico sin volcar los 32 bytes completos.
+fn hex_corto(hash: &Hash) -> String {
+    hash.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
 /// Anexa un objeto al log: compone su registro `[longitud][payload][relleno]`,
 /// lo añade a la imagen y avanza el cursor. Devuelve el hash del objeto — su
 /// identidad en el grafo direccionado por contenido.
@@ -434,6 +520,9 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
     let mut hash_de: BTreeMap<&str, Hash> = BTreeMap::new();
     let mut hijos_manifiesto: Vec<Hash> = Vec::new();
     let mut apps: Vec<EntradaApp> = Vec::new();
+    // Concesiones de capacidad ya ancladas (dedup por contenido): dos apps con
+    // el mismo bytecode + permisos + firmante comparten un unico objeto-concesion.
+    let mut concesiones: BTreeSet<Hash> = BTreeSet::new();
 
     for app in &GENESIS {
         let bytecode = match hash_de.get(app.archivo) {
@@ -449,6 +538,28 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
                 hash
             }
         };
+        // SEAM de la ceremonia §14.1.3 (SDD-capacidades §3.3). `boot` NO tiene
+        // clave privada —la seed del `AGORA_AUTH_RING` vive offline con el
+        // operador—, asi que NO firma concesiones aqui. Pero SI ancla las que el
+        // operador forjo fuera de banda (`agora-cli wawa concesion`) y dejo en
+        // `wawa-kernel/assets/concesiones/<nombre>.cap.obj`. Solo se buscan para
+        // apps con permisos gateados; las de `permisos == 0` no necesitan
+        // ceremonia. Si no hay archivo, `None` ⇒ el rollout escalonado (SDD §3.6)
+        // honra `permisos` tal cual: cero cambio de comportamiento sin provisionar.
+        let concesion = if app.permisos != 0 {
+            sembrar_concesion(
+                app.nombre,
+                bytecode,
+                app.permisos,
+                &mut log,
+                &mut cursor,
+                &mut hijos_manifiesto,
+                &mut concesiones,
+            )?
+        } else {
+            None
+        };
+
         let (x, y, ancho, alto) = app.region;
         apps.push(EntradaApp {
             nombre: app.nombre.to_string(),
@@ -461,14 +572,7 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
             fuel_fotograma: app.fuel,
             estado: None,
             permisos: app.permisos,
-            // SEAM de la ceremonia §14.1.3: `boot` NO tiene clave privada (la
-            // seed del `AGORA_AUTH_RING` vive offline con el operador), asi que
-            // NO puede firmar una `ConcesionCapacidad` aqui. El genesis nace sin
-            // techo per-bytecode (`None`): el kernel honra `permisos` tal cual.
-            // Cuando el operador forje concesiones offline (`agora-cli wawa
-            // concesion`, contra el hash determinista del objeto-bytecode) y las
-            // siembre, este `None` pasara a `Some(hash)`. Ver SDD-capacidades §3.3.
-            concesion: None,
+            concesion,
         });
     }
 
@@ -483,8 +587,9 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
     let man_payload = man_objeto.serializar().map_err(|e| e.to_string())?;
     let hash_manifiesto = anexar_objeto(&mut log, &mut cursor, &man_payload)?;
 
-    // El grafo sembrado: un objeto por cada `.wasm` unico, mas el manifiesto.
-    let objetos = hash_de.len() + 1;
+    // El grafo sembrado: un objeto por cada `.wasm` unico, uno por cada
+    // concesion de capacidad anclada, mas el manifiesto.
+    let objetos = hash_de.len() + concesiones.len() + 1;
 
     // --- 3. El superbloque: el ancla del grafo, en el sector 0. `raiz` queda
     //        vacia —el userspace la fija; `manifiesto` apunta a la genesis. ---
