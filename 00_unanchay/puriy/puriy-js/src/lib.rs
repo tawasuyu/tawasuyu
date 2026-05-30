@@ -9416,7 +9416,7 @@ mod tests {
     // ---- Fase 7.117 — Idle Detection API ----
     #[test]
     fn idle_detector_existe() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         assert_eq!(
             rt.eval("typeof IdleDetector").expect("e"),
             JsValue::String("function".into())
@@ -9425,7 +9425,7 @@ mod tests {
 
     #[test]
     fn idle_request_permission_default_denied() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "var perm = null; IdleDetector.requestPermission().then(function(p){ perm = p; });",
         )
@@ -9436,7 +9436,7 @@ mod tests {
 
     #[test]
     fn idle_start_rechaza_sin_permiso() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "var err = null; new IdleDetector().start({ threshold: 60000 }).catch(function(e){ err = e.name; });",
         )
@@ -9449,7 +9449,7 @@ mod tests {
 
     #[test]
     fn idle_start_resuelve_con_permiso_y_publica_mutacion() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "__puriy_idle_grant(); \
              var d = new IdleDetector(); var estado = null; \
@@ -9466,7 +9466,7 @@ mod tests {
 
     #[test]
     fn idle_change_dispara_evento() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "__puriy_idle_grant(); \
              var d = new IdleDetector(); var got = null; \
@@ -9481,7 +9481,7 @@ mod tests {
     // ---- Fase 7.118 — Contact Picker API ----
     #[test]
     fn contacts_existe_y_select_es_funcion() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         assert_eq!(
             rt.eval("typeof navigator.contacts.select").expect("e"),
             JsValue::String("function".into())
@@ -9490,7 +9490,7 @@ mod tests {
 
     #[test]
     fn contacts_get_properties_incluye_email() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "var props = null; navigator.contacts.getProperties().then(function(p){ props = p.join(','); });",
         )
@@ -9503,7 +9503,7 @@ mod tests {
 
     #[test]
     fn contacts_select_publica_mutacion_y_resuelve() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "var nombre = null; \
              navigator.contacts.select(['name', 'email']).then(function(r){ nombre = r[0].name[0]; }); \
@@ -9521,7 +9521,7 @@ mod tests {
 
     #[test]
     fn contacts_select_cancelar_rechaza_abort() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "var err = null; \
              navigator.contacts.select(['name']).catch(function(e){ err = e.name; }); \
@@ -9535,7 +9535,7 @@ mod tests {
     // ---- Fase 7.119 — Web MIDI API ----
     #[test]
     fn midi_request_es_funcion() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         assert_eq!(
             rt.eval("typeof navigator.requestMIDIAccess").expect("e"),
             JsValue::String("function".into())
@@ -9544,7 +9544,7 @@ mod tests {
 
     #[test]
     fn midi_request_rechaza_sin_permiso() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "var err = null; navigator.requestMIDIAccess().catch(function(e){ err = e.name; });",
         )
@@ -9557,7 +9557,7 @@ mod tests {
 
     #[test]
     fn midi_access_tiene_mapas() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "__puriy_midi_grant(); var ok = false; \
              navigator.requestMIDIAccess().then(function(a){ ok = (a.inputs instanceof Map) && (a.outputs instanceof Map); });",
@@ -9568,7 +9568,7 @@ mod tests {
 
     #[test]
     fn midi_add_port_puebla_inputs() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "__puriy_midi_grant(); var nombre = null; \
              navigator.requestMIDIAccess().then(function(a){ \
@@ -9582,7 +9582,7 @@ mod tests {
 
     #[test]
     fn midi_message_dispara_evento() {
-        let rt = JsRuntime::new().expect("rt");
+        let mut rt = JsRuntime::new().expect("rt");
         rt.eval(
             "__puriy_midi_grant(); var got = 0; \
              navigator.requestMIDIAccess().then(function(a){ \
