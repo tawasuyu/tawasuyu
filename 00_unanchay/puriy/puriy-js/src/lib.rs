@@ -6653,4 +6653,48 @@ mod tests {
         assert_eq!(rt.eval("nm").expect("e"), JsValue::String("d.txt".into()));
         assert_eq!(rt.eval("planoEsString").expect("e"), JsValue::Bool(true));
     }
+
+    // ============= Fase 7.61 — URL.parse / URL.canParse =============
+
+    #[test]
+    fn url_parse_devuelve_url_o_null() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ok = URL.parse('https://example.com/a?x=1'); \
+             var host = ok ? ok.hostname : null; var path = ok ? ok.pathname : null; \
+             var malo = URL.parse('/sin-base'); var esNull = malo === null;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("host").expect("e"), JsValue::String("example.com".into()));
+        assert_eq!(rt.eval("path").expect("e"), JsValue::String("/a".into()));
+        assert_eq!(rt.eval("esNull").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn url_parse_resuelve_relativa_con_base() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var u = URL.parse('../x.json', 'https://example.com/a/b/page.html'); \
+             var href = u ? u.href : null;",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("href").expect("e"),
+            JsValue::String("https://example.com/a/x.json".into())
+        );
+    }
+
+    #[test]
+    fn url_can_parse_da_booleano() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var bueno = URL.canParse('https://example.com'); \
+             var conBase = URL.canParse('/p', 'https://example.com'); \
+             var malo = URL.canParse('/sin-base');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("bueno").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("conBase").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("malo").expect("e"), JsValue::Bool(false));
+    }
 }

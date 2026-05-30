@@ -85,6 +85,19 @@ pub(crate) const URLCLASS_BOOTSTRAP: &str = r#"
     URL.prototype.toString = function() { return this.href; };
     URL.prototype.toJSON = function() { return this.href; };
 
+    // Fase 7.61 — estáticos no-lanzantes del spec WHATWG (adiciones recientes).
+    // `URL.parse(url, base)` devuelve una URL o `null` en vez de tirar; es el
+    // idiom moderno para "intentá parsear sin try/catch". `URL.canParse` da el
+    // booleano equivalente. Ambos delegan en el constructor.
+    URL.parse = function(url, base) {
+        try { return new URL(url, base); }
+        catch (e) { return null; }
+    };
+    URL.canParse = function(url, base) {
+        try { new URL(url, base); return true; }
+        catch (e) { return false; }
+    };
+
     if (prevCreate) URL.createObjectURL = prevCreate;
     if (prevRevoke) URL.revokeObjectURL = prevRevoke;
     globalThis.URL = URL;
