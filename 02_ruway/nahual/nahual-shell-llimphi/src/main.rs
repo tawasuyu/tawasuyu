@@ -22,11 +22,12 @@
 //! cuando lleguen más visores y un AppBus con `EntityType`, el registro
 //! crece por tabla sin tocar el resto del shell.
 //!
-//! Hoy embebe cinco visores in-process — texto (fallback universal),
+//! Hoy embebe seis visores in-process — texto (fallback universal),
 //! imagen, video (AV1 nativo), audio (WAV/MP3/FLAC/Opus/Vorbis por cpal,
-//! con espectro en vivo) y card (`shared/card` presentada por campos) —
-//! todos ruteados por `viewer_registry::pick` sobre el `lens`/`mime`
-//! discernido. `Space` hace play/pausa del video o audio activo.
+//! con espectro en vivo), card (`shared/card` presentada por campos) y
+//! tree (árbol JSON/TOML indentado) — todos ruteados por
+//! `viewer_registry::pick` sobre el `lens`/`mime` discernido. `Space`
+//! hace play/pausa del video o audio activo.
 //!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
@@ -70,6 +71,9 @@ use nahual_card_viewer_llimphi::{
 use nahual_audio_viewer_llimphi::{
     audio_viewer_view, AudioViewerPalette, AudioViewerState,
 };
+use nahual_tree_viewer_llimphi::{
+    load_tree, tree_viewer_view, TreePreview, TreeViewerPalette, DEFAULT_TREE_BYTES_MAX,
+};
 use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
@@ -88,6 +92,7 @@ enum PreviewPane {
     Video(VideoViewerState),
     Audio(AudioViewerState),
     Card(CardPreview),
+    Tree(TreePreview),
 }
 
 /// Cadencia del avance de los visores con reloj (video, audio) ~30 Hz.
@@ -265,6 +270,7 @@ impl App for Shell {
         let video_palette = VideoViewerPalette::from_theme(&theme);
         let audio_palette = AudioViewerPalette::from_theme(&theme);
         let card_palette = CardViewerPalette::from_theme(&theme);
+        let tree_palette = TreeViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = file_explorer_view::<Msg, _>(
             &model.explorer,
@@ -291,6 +297,9 @@ impl App for Shell {
             PreviewPane::Audio(state) => audio_viewer_view::<Msg>(state, &audio_palette),
             PreviewPane::Card(state) => {
                 card_viewer_view::<Msg>(state, model.preview_of.as_deref(), &card_palette)
+            }
+            PreviewPane::Tree(state) => {
+                tree_viewer_view::<Msg>(state, model.preview_of.as_deref(), &tree_palette)
             }
         };
 
@@ -388,6 +397,7 @@ fn load_for(path: &Path) -> PreviewPane {
         ViewerKind::Video => PreviewPane::Video(open_video(path)),
         ViewerKind::Audio => PreviewPane::Audio(AudioViewerState::open(path)),
         ViewerKind::Card => PreviewPane::Card(load_card(path)),
+        ViewerKind::Tree => PreviewPane::Tree(load_tree(path, DEFAULT_TREE_BYTES_MAX)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
     }
 }

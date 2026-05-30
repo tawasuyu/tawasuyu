@@ -30,6 +30,9 @@ pub enum ViewerKind {
     /// Visor estructurado de Cards (`nahual-card-viewer-llimphi`); pinta
     /// los campos de una `shared/card` en vez del JSON crudo.
     Card,
+    /// Visor de árbol JSON/TOML (`nahual-tree-viewer-llimphi`); indenta
+    /// la estructura, legible aun para JSON minificado.
+    Tree,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
@@ -38,7 +41,8 @@ pub enum ViewerKind {
 /// Elige el visor para un discernimiento. La regla, en orden:
 ///
 /// 1. Si el `lens` lo dice explícitamente (`gallery` → imagen,
-///    `video` → reproductor, `audio` → audio, `card` → visor de cards).
+///    `video` → reproductor, `audio` → audio, `card` → visor de cards,
+///    `tree` → árbol JSON/TOML).
 /// 2. Si el `mime` arranca con `image/`, `video/` o `audio/` (cubre
 ///    formatos que magic-bytes detecta sin asignar lens).
 /// 3. Fallback a texto — el visor que nunca falla feo.
@@ -53,6 +57,7 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
         Some("video") => return ViewerKind::Video,
         Some("audio") => return ViewerKind::Audio,
         Some("card") => return ViewerKind::Card,
+        Some("tree") => return ViewerKind::Tree,
         _ => {}
     }
     match d.mime.as_deref() {
@@ -107,6 +112,12 @@ mod tests {
     #[test]
     fn card_lens_va_a_card() {
         assert_eq!(pick(Some(&disc(Some("card"), Some("application/json")))), ViewerKind::Card);
+    }
+
+    #[test]
+    fn tree_lens_va_a_tree() {
+        assert_eq!(pick(Some(&disc(Some("tree"), Some("application/json")))), ViewerKind::Tree);
+        assert_eq!(pick(Some(&disc(Some("tree"), Some("application/toml")))), ViewerKind::Tree);
     }
 
     #[test]

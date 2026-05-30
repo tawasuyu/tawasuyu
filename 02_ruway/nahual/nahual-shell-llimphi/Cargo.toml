@@ -22,6 +22,7 @@ nahual-image-viewer-llimphi = { workspace = true }
 nahual-video-viewer-llimphi = { workspace = true }
 nahual-audio-viewer-llimphi = { workspace = true }
 nahual-card-viewer-llimphi = { workspace = true }
+nahual-tree-viewer-llimphi = { workspace = true }
 nahual-text-viewer-llimphi = { workspace = true }
 shuma-discern = { path = "../../shuma/sandbox/shuma-discern" }
 wawa-config = { path = "../../../shared/wawa-config" }
