@@ -19,11 +19,13 @@
 pub mod attest;
 pub mod claim;
 pub mod identity;
+pub mod lifecycle;
 pub mod multisig;
 
 pub use attest::Attestation;
 pub use claim::Claim;
 pub use identity::{verify_signature, Identity, IdentityId, IdentityKind, Keypair};
+pub use lifecycle::{KeyRotation, RevReason, Revocation};
 pub use multisig::{MultiSigError, MultiSigVerdict, MultiSignature, SingleSig};
 
 /// Falla de una operación de identidad o atestación.
