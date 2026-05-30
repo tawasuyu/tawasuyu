@@ -1,442 +1,11 @@
-//! Bridge real: `cosmos_model::Chart` → cosmos_astrology → [`RenderModel`].
-//!
-//! La sesión de efemérides VSOP2013 es **compartida globalmente** vía
-//! `OnceLock` — abrirla cuesta unos cuantos ms (carga de las series en
-//! memoria), y como es read-only se puede leer en paralelo desde varios
-//! cómputos.
+//! Construcción de capas/overlays del `RenderModel` y resúmenes de aspectos.
 
-use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use super::*;
 
-use cosmos_astrology::{
-    all_lots, composite, directed_longitude, find_aspects, find_synastry_aspects, next_return,
-    primary_direction::PrimaryDirection, secondary_progression, solar_arc_true, topocentric_ecliptic,
-    Aspect, AspectKind as EAspectKind, BirthData, BodySet, ChartConfig,
-    DirectionKey as EDirectionKey, HouseSystem as EHouseSystem, Houses as EHouses, NatalChart,
-    OrbTable, Zodiac as EZodiac,
-};
-use cosmos_sky::{Ayanamsha, Body, EphemerisSession, Instant as ESInstant, Observer, SessionConfig};
-
-use cosmos_model::{Chart, HouseSystem, StoredChartConfig, Zodiac};
-
-use crate::dignity::essential_dignity;
-use crate::{
-    compute_gr_triggers, AspectSummary, EngineError, Geometry, Glyph, GrDirection, Layer,
-    LayerKind, LineSeg, OverlayMeta, RenderModel, UranianGroup,
-};
-
-// =====================================================================
-// Sesión global cacheada
-// =====================================================================
-
-static SESSION: OnceLock<EphemerisSession> = OnceLock::new();
-
-fn session() -> Result<&'static EphemerisSession, EngineError> {
-    if let Some(s) = SESSION.get() {
-        return Ok(s);
-    }
-    let opened = EphemerisSession::open(SessionConfig::vsop2013())
-        .map_err(|e| EngineError::Eternal(format!("EphemerisSession::open: {:?}", e)))?;
-    // Si otro thread ya pobló la celda mientras abríamos, el set_once
-    // falla silenciosamente — usamos el que quedó dentro.
-    let _ = SESSION.set(opened);
-    Ok(SESSION.get().expect("session was just set"))
-}
-
-// =====================================================================
-// Traducciones Stored* → eternal
-// =====================================================================
-
-fn map_house_system(h: HouseSystem) -> EHouseSystem {
-    match h {
-        HouseSystem::Placidus => EHouseSystem::Placidus,
-        HouseSystem::Koch => EHouseSystem::Koch,
-        HouseSystem::Regiomontanus => EHouseSystem::Regiomontanus,
-        HouseSystem::Campanus => EHouseSystem::Campanus,
-        HouseSystem::Porphyry => EHouseSystem::Porphyry,
-        HouseSystem::Equal => EHouseSystem::Equal,
-        HouseSystem::WholeSign => EHouseSystem::WholeSign,
-    }
-}
-
-fn map_zodiac(z: Zodiac, ayanamsha_hint: Option<&str>) -> EZodiac {
-    match z {
-        Zodiac::Tropical => EZodiac::Tropical,
-        Zodiac::Sidereal => {
-            let mode = match ayanamsha_hint.unwrap_or("lahiri").to_ascii_lowercase().as_str() {
-                "fagan_bradley" | "fagan-bradley" | "faganbradley" => Ayanamsha::FaganBradley,
-                "raman" => Ayanamsha::Raman,
-                "krishnamurti" => Ayanamsha::Krishnamurti,
-                "de_luce" | "deluce" => Ayanamsha::DeLuce,
-                "djwhal_khul" | "djwhalkhul" => Ayanamsha::DjwhalKhul,
-                "ushashashi" => Ayanamsha::Ushashashi,
-                "yukteshwar" => Ayanamsha::Yukteshwar,
-                _ => Ayanamsha::Lahiri,
-            };
-            EZodiac::Sidereal(mode)
-        }
-        // Dracónico aún no soportado en eternal — caemos a tropical por
-        // ahora; cuando eternal lo agregue, lo cableamos acá.
-        Zodiac::Draconic => EZodiac::Tropical,
-    }
-}
-
-fn map_body_set(cfg: &StoredChartConfig) -> BodySet {
-    let mut bodies: Vec<Body> = Vec::new();
-    for name in &cfg.bodies {
-        if let Some(b) = map_body(name) {
-            bodies.push(b);
-        }
-    }
-    if bodies.is_empty() {
-        // Default razonable si el config vino vacío.
-        return BodySet::classical_modern();
-    }
-    let mut set = BodySet {
-        bodies,
-        include_south_node: cfg.include_south_node,
-    };
-    if cfg.include_lilith {
-        set = set.with_lilith();
-    }
-    if cfg.include_main_belt_asteroids {
-        set = set.with_main_belt_asteroids();
-    }
-    set
-}
-
-fn map_body(name: &str) -> Option<Body> {
-    Some(match name.to_ascii_lowercase().as_str() {
-        "sun" => Body::Sun,
-        "moon" => Body::Moon,
-        "mercury" => Body::Mercury,
-        "venus" => Body::Venus,
-        "mars" => Body::Mars,
-        "jupiter" => Body::Jupiter,
-        "saturn" => Body::Saturn,
-        "uranus" => Body::Uranus,
-        "neptune" => Body::Neptune,
-        "pluto" => Body::Pluto,
-        "mean_node" | "meannode" => Body::MeanNode,
-        "true_node" | "truenode" => Body::TrueNode,
-        "mean_lilith" | "lilith" => Body::MeanLilith,
-        "true_lilith" => Body::TrueLilith,
-        "ceres" => Body::Ceres,
-        "pallas" => Body::Pallas,
-        "juno" => Body::Juno,
-        "vesta" => Body::Vesta,
-        _ => return None,
-    })
-}
-
-pub(crate) fn body_symbol(b: Body) -> &'static str {
-    match b {
-        Body::Sun => "sun",
-        Body::Moon => "moon",
-        Body::Mercury => "mercury",
-        Body::Venus => "venus",
-        Body::Mars => "mars",
-        Body::Jupiter => "jupiter",
-        Body::Saturn => "saturn",
-        Body::Uranus => "uranus",
-        Body::Neptune => "neptune",
-        Body::Pluto => "pluto",
-        Body::MeanNode => "north_node",
-        Body::TrueNode => "north_node",
-        Body::MeanLilith => "lilith",
-        Body::TrueLilith => "lilith",
-        Body::Ceres => "ceres",
-        Body::Pallas => "pallas",
-        Body::Juno => "juno",
-        Body::Vesta => "vesta",
-        Body::Chiron => "chiron",
-        Body::Pholus => "chiron",
-        Body::Eris => "chiron",
-        Body::Sedna => "chiron",
-        // `Body` es `#[non_exhaustive]` — cualquier cuerpo nuevo
-        // upstream cae al símbolo de fallback hasta que lo cableemos.
-        _ => "custom",
-    }
-}
-
-fn aspect_kind_id(k: EAspectKind) -> &'static str {
-    match k {
-        EAspectKind::Conjunction => "conjunction",
-        EAspectKind::Opposition => "opposition",
-        EAspectKind::Trine => "trine",
-        EAspectKind::Square => "square",
-        EAspectKind::Sextile => "sextile",
-        EAspectKind::Quincunx => "quincunx",
-        EAspectKind::SemiSextile => "semi_sextile",
-        EAspectKind::SemiSquare => "semi_square",
-        EAspectKind::Sesquiquadrate => "sesquiquadrate",
-        EAspectKind::Quintile => "quintile",
-        EAspectKind::BiQuintile => "biquintile",
-        EAspectKind::Septile => "septile",
-    }
-}
-
-// =====================================================================
-// compute()
-// =====================================================================
-
-/// Construye los tipos eternales (`BirthData`, `ChartConfig`) desde el
-/// `Chart` agnóstico, aplicando el offset temporal. Devuelve también el
-/// `Observer` y la `ChartConfig` para reusar en pipelines extendidas
-/// (transits, sinastría) sin re-traducir.
-fn build_eternal_inputs(
-    chart: &Chart,
-    offset_seconds: i64,
-) -> Result<(BirthData, ChartConfig, Observer), EngineError> {
-    chart.validate()?;
-    let bd = &chart.birth_data;
-    let base_instant = ESInstant::from_civil_local(
-        bd.year,
-        u8::try_from(bd.month).map_err(|_| {
-            EngineError::Eternal(format!("mes fuera de u8: {}", bd.month))
-        })?,
-        u8::try_from(bd.day).map_err(|_| {
-            EngineError::Eternal(format!("día fuera de u8: {}", bd.day))
-        })?,
-        u8::try_from(bd.hour).map_err(|_| {
-            EngineError::Eternal(format!("hora fuera de u8: {}", bd.hour))
-        })?,
-        u8::try_from(bd.minute).map_err(|_| {
-            EngineError::Eternal(format!("minuto fuera de u8: {}", bd.minute))
-        })?,
-        bd.second,
-        bd.tz_offset_minutes,
-    )
-    .map_err(|e| EngineError::Eternal(format!("Instant::from_civil_local: {:?}", e)))?;
-
-    // Microajuste temporal en SEGUNDOS — el rectificador automático
-    // barre la hora candidata con resolución de segundo.
-    let instant = if offset_seconds == 0 {
-        base_instant
-    } else {
-        let shifted_utc = base_instant.utc().add_seconds(offset_seconds as f64);
-        ESInstant::from_utc(shifted_utc)
-    };
-
-    let observer = Observer::from_degrees(bd.latitude_deg, bd.longitude_deg, bd.altitude_m);
-    let mut birth_e = BirthData::new(instant, observer);
-    if let Some(name) = &bd.subject_name {
-        birth_e = birth_e.with_name(name.clone());
-    }
-    let config_e = ChartConfig {
-        house_system: map_house_system(chart.config.house_system),
-        zodiac: map_zodiac(chart.config.zodiac, chart.config.ayanamsha.as_deref()),
-        bodies: map_body_set(&chart.config),
-        include_horizon: false,
-    };
-    Ok((birth_e, config_e, observer))
-}
-
-/// Computa la `NatalChart` consultando primero el LRU cache global.
-/// Útil para pipelines compuestas (transits, sinastría, composite) que
-/// computan la misma carta natal del partner en cada render — bajo
-/// drag de sliders se llama decenas de veces seguidas con inputs
-/// idénticos.
-///
-/// La clave incluye todos los campos de `StoredBirthData` y
-/// `StoredChartConfig` que afectan el cómputo; editar la carta invalida
-/// automáticamente la entrada.
-pub(crate) fn compute_natal_chart(
-    chart: &Chart,
-    offset_seconds: i64,
-) -> Result<(Arc<NatalChart>, ChartConfig, Observer), EngineError> {
-    let (birth_e, config_e, observer) = build_eternal_inputs(chart, offset_seconds)?;
-    let key = crate::natal_cache::key_for(&chart.birth_data, &chart.config, offset_seconds);
-    if let Some(cached) = crate::natal_cache::get(key) {
-        return Ok((cached, config_e, observer));
-    }
-    let session = session()?;
-    let natal = NatalChart::compute(&birth_e, &config_e, session)
-        .map_err(|e| EngineError::Eternal(format!("NatalChart::compute: {:?}", e)))?;
-    let arc = Arc::new(natal);
-    crate::natal_cache::insert(key, arc.clone());
-    Ok((arc, config_e, observer))
-}
-
-/// Composición principal: natal + overlays pedidos. Es la función que
-/// `lib::compose` delega cuando el feature `eternal-bridge` está activo.
-pub fn compose(
-    chart: &Chart,
-    offset_minutes: i64,
-    requests: &[crate::PipelineRequest],
-    natal_options: &crate::NatalOptions,
-) -> Result<RenderModel, EngineError> {
-    let t0 = Instant::now();
-    // `compute_natal_chart` trabaja en segundos; `compose` recibe el
-    // offset en minutos (el scrub del jog-dial, la API pública).
-    let (natal, config_e, observer) = compute_natal_chart(chart, offset_minutes * 60)?;
-    let orb_table = build_orb_table(natal_options.orb_multiplier);
-    let all_aspects = find_aspects(&natal, &orb_table);
-    let aspects: Vec<Aspect> = all_aspects
-        .into_iter()
-        .filter(|a| {
-            let is_major = EAspectKind::MAJORS.contains(&a.kind);
-            (is_major && natal_options.show_majors)
-                || (!is_major && natal_options.show_minors)
-        })
-        .collect();
-    let mut render = build_render_model(chart, &natal, &aspects, t0);
-    if natal_options.show_dignities {
-        annotate_dignities(&natal, &mut render);
-    }
-    populate_natal_aspect_summary(&aspects, &mut render);
-
-    // Carta armónica: re-renderiza los cuerpos natales en su armónico
-    // de orden N y recomputa sus aspectos. Se aplica antes de los
-    // overlays — éstos quedan en coordenadas natales (la armónica es
-    // un análisis de la carta natal pura).
-    crate::apply_harmonic(&mut render, natal_options.harmonic);
-
-    for req in requests {
-        match req {
-            crate::PipelineRequest::Transit => {
-                build_transit_overlay(&natal, &config_e, observer, ESInstant::now(), &mut render)?;
-                push_overlay_meta(&mut render, "transit", "Tránsito ahora".into());
-            }
-            crate::PipelineRequest::SecondaryProgression { target_age_years } => {
-                build_progression_overlay(&natal, *target_age_years, &mut render)?;
-                push_overlay_meta(
-                    &mut render,
-                    "progression",
-                    format!("Progresión {:.1}a", target_age_years),
-                );
-            }
-            crate::PipelineRequest::SolarArc { target_age_years } => {
-                build_solar_arc_overlay(&natal, *target_age_years, &mut render)?;
-                push_overlay_meta(
-                    &mut render,
-                    "solar_arc",
-                    format!("Solar Arc {:.1}a", target_age_years),
-                );
-            }
-            crate::PipelineRequest::Synastry { partner_chart } => {
-                let partner_label = partner_chart.label.clone();
-                build_synastry_overlay(&natal, partner_chart, &mut render)?;
-                push_overlay_meta(
-                    &mut render,
-                    "synastry",
-                    format!("Sinastría · {}", partner_label),
-                );
-            }
-            crate::PipelineRequest::Midpoints => {
-                build_midpoints_overlay(&natal, &mut render);
-                push_overlay_meta(&mut render, "midpoints", "Midpoints ☉/☽".into());
-            }
-            crate::PipelineRequest::PlanetaryReturn {
-                body,
-                target_age_years,
-                shift_days,
-            } => {
-                let body_e = map_body(body).ok_or_else(|| {
-                    EngineError::Eternal(format!(
-                        "body desconocido para planetary return: {}",
-                        body
-                    ))
-                })?;
-                build_planetary_return_overlay(
-                    &natal,
-                    &config_e,
-                    observer,
-                    body_e,
-                    *target_age_years,
-                    *shift_days,
-                    &mut render,
-                )?;
-                let shift_label = if *shift_days == 0 {
-                    String::new()
-                } else {
-                    format!(" {:+}d", shift_days)
-                };
-                push_overlay_meta(
-                    &mut render,
-                    "planetary_return",
-                    format!("{} return {:.0}a{}", body_e.name(), target_age_years, shift_label),
-                );
-            }
-            crate::PipelineRequest::Composite { partner_chart } => {
-                let partner_label = partner_chart.label.clone();
-                build_composite_overlay(&natal, partner_chart, &mut render)?;
-                push_overlay_meta(
-                    &mut render,
-                    "composite",
-                    format!("Composite · {}", partner_label),
-                );
-            }
-            crate::PipelineRequest::Uranian => {
-                build_uranian_groups(&natal, &mut render);
-                let n = render.uranian_groups.len();
-                push_overlay_meta(
-                    &mut render,
-                    "uranian",
-                    if n == 0 {
-                        "Uraniano · sin ejes".into()
-                    } else {
-                        format!("Uraniano · {} ejes", n)
-                    },
-                );
-            }
-            crate::PipelineRequest::Lots => {
-                let count = build_lots_overlay(&natal, &mut render)?;
-                push_overlay_meta(&mut render, "lots", format!("Lots · {}", count));
-            }
-            crate::PipelineRequest::FixedStars => {
-                let count = build_fixed_stars_overlay(chart, &mut render);
-                push_overlay_meta(
-                    &mut render,
-                    "fixed_stars",
-                    format!("Estrellas fijas · {}", count),
-                );
-            }
-            crate::PipelineRequest::Topocentric => {
-                build_topocentric_overlay(&natal, &mut render)?;
-                push_overlay_meta(
-                    &mut render,
-                    "topocentric",
-                    "Topocéntrico (Polich-Page)".into(),
-                );
-            }
-            crate::PipelineRequest::PrimaryDirections {
-                target_age_years,
-                key,
-            } => {
-                let dkey = match key.as_str() {
-                    "ptolemy" => EDirectionKey::Ptolemy,
-                    _ => EDirectionKey::Naibod,
-                };
-                build_primary_directions_overlay(
-                    &natal,
-                    *target_age_years,
-                    dkey,
-                    &mut render,
-                );
-                push_overlay_meta(
-                    &mut render,
-                    "primary_directions",
-                    format!(
-                        "GR Direcciones · {:.1}a · {}",
-                        target_age_years,
-                        match dkey {
-                            EDirectionKey::Naibod => "Naibod",
-                            EDirectionKey::Ptolemy => "Ptolomeo",
-                        }
-                    ),
-                );
-            }
-        }
-    }
-
-    render.compute_ms = t0.elapsed().as_millis() as u64;
-    Ok(render)
-}
 
 /// Helper: agrega al `RenderModel` las dos capas del overlay de
 /// tránsitos (Outer + cross Aspects).
-fn build_transit_overlay(
+pub(crate) fn build_transit_overlay(
     natal: &NatalChart,
     config_e: &ChartConfig,
     observer: Observer,
@@ -515,7 +84,7 @@ fn build_transit_overlay(
 /// "topocentric"` para que el canvas los pinte con un visual
 /// consistente. La capa convive con la natal geocéntrica — ambas se
 /// ven simultáneamente.
-fn build_topocentric_overlay(
+pub(crate) fn build_topocentric_overlay(
     natal: &NatalChart,
     render: &mut RenderModel,
 ) -> Result<(), EngineError> {
@@ -619,7 +188,7 @@ pub(crate) const GR_MAX_TRIGGERS: usize = 60;
 /// HUD de rectificación y el resaltado de eventos.
 ///
 /// Usa el key Naibod (0°59'08″/año) como default — convención GR.
-fn build_primary_directions_overlay(
+pub(crate) fn build_primary_directions_overlay(
     natal: &NatalChart,
     target_age_years: f64,
     key: EDirectionKey,
@@ -703,7 +272,7 @@ fn build_primary_directions_overlay(
     );
 }
 
-fn build_progression_overlay(
+pub(crate) fn build_progression_overlay(
     natal: &NatalChart,
     target_age_years: f64,
     render: &mut RenderModel,
@@ -774,7 +343,7 @@ fn build_progression_overlay(
 /// Helper: detecta "ejes" del dial uraniano de 90° — cuerpos natales
 /// cuya longitud módulo 90 cae dentro de una tolerancia ε (2° por
 /// default). Llena `render.uranian_groups` con los grupos detectados.
-fn build_uranian_groups(natal: &NatalChart, render: &mut RenderModel) {
+pub(crate) fn build_uranian_groups(natal: &NatalChart, render: &mut RenderModel) {
     const EPSILON: f64 = 2.0;
     let mut entries: Vec<(String, f64)> = natal
         .placements
@@ -844,7 +413,7 @@ fn build_uranian_groups(natal: &NatalChart, render: &mut RenderModel) {
 /// composite, Davison 1958) entre la natal del sujeto y la carta del
 /// partner. Cada planeta compuesto es el angular midpoint entre los
 /// dos correspondientes. Se renderea en `radii.composite` (ring 0.36).
-fn build_composite_overlay(
+pub(crate) fn build_composite_overlay(
     natal: &NatalChart,
     partner_chart: &Chart,
     render: &mut RenderModel,
@@ -885,7 +454,7 @@ fn build_composite_overlay(
 /// El midpoint de dos longitudes es la menor distancia angular entre
 /// ellas. Si `|a - b| > 180`, hay que sumar 180 al promedio para
 /// obtener el midpoint "corto".
-fn build_midpoints_overlay(natal: &NatalChart, render: &mut RenderModel) {
+pub(crate) fn build_midpoints_overlay(natal: &NatalChart, render: &mut RenderModel) {
     let mut glyphs: Vec<Glyph> = Vec::new();
     let placements = &natal.placements;
 
@@ -932,7 +501,7 @@ fn build_midpoints_overlay(natal: &NatalChart, render: &mut RenderModel) {
 /// (método true-progressed-Sun por default). Cada cuerpo natal se
 /// desplaza por el mismo arco — preserva las relaciones angulares y
 /// las posiciones relativas en casas se mantienen.
-fn build_solar_arc_overlay(
+pub(crate) fn build_solar_arc_overlay(
     natal: &NatalChart,
     target_age_years: f64,
     render: &mut RenderModel,
@@ -1002,7 +571,7 @@ fn build_solar_arc_overlay(
 /// con otra carta natal completa. La carta partner se computa con su
 /// propio observer/config (no comparte con la natal). El outer ring
 /// se comparte con Transit — mutuamente excluyentes a nivel de Shell.
-fn build_synastry_overlay(
+pub(crate) fn build_synastry_overlay(
     natal: &NatalChart,
     partner_chart: &Chart,
     render: &mut RenderModel,
@@ -1065,176 +634,9 @@ fn build_synastry_overlay(
     Ok(())
 }
 
-/// Helper: agrega al `RenderModel` las capas del overlay de retorno
-/// planetario — la carta natal completa computada al instante en que
-/// el `body` vuelve a su posición natal cerca de la edad pedida.
-/// Sun = retorno solar anual, Moon = mensual, Júpiter/Saturno =
-/// generacionales. Esa nueva carta va en el anillo externo (compartido
-/// con Transit/Synastry, mutuamente excluyentes a nivel de Shell).
-/// Computa la carta del retorno planetario actual y devuelve los
-/// datos necesarios para construir un `Chart` standalone que el
-/// caller puede mostrar/persistir.
-///
-/// Devuelve `(StoredBirthData, instant_label)`:
-/// - `StoredBirthData` con birth_data del retorno (year/month/day/...
-///   del instante del retorno, mismas coordenadas que el natal).
-/// - `instant_label` format corto del momento (ej. "2024-03-14
-///   05:22 UTC") — el shell lo concatena en el label final.
-pub fn compute_planetary_return_chart(
-    chart: &Chart,
-    body_str: &str,
-    target_age_years: f64,
-    shift_days: i64,
-) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
-    let (birth_e, config_e, _observer) = build_eternal_inputs(chart, 0)?;
-    let session = session()?;
-    let natal = NatalChart::compute(&birth_e, &config_e, session)
-        .map_err(|e| EngineError::Eternal(format!("NatalChart::compute: {:?}", e)))?;
-    let body = map_body(body_str)
-        .ok_or_else(|| EngineError::Eternal(format!("body desconocido: {}", body_str)))?;
-    let natal_p = natal.placement(body).ok_or_else(|| {
-        EngineError::Eternal(format!(
-            "natal chart sin {} — return imposible",
-            body.name()
-        ))
-    })?;
-    let natal_lon = natal_p.longitude.longitude_rad();
-
-    let after_seconds =
-        (target_age_years * 365.242190 - 30.0 + shift_days as f64) * 86400.0;
-    const TWO_TROPICAL: f64 = 365.242190 * 86400.0 * 2.0;
-    let after_utc = natal
-        .birth
-        .instant
-        .utc()
-        .add_seconds(after_seconds.max(-TWO_TROPICAL));
-    let after = ESInstant::from_utc(after_utc);
-
-    let return_instant = next_return(session, body, natal_lon, after, None)
-        .map_err(|e| EngineError::Eternal(format!("next_return {}: {:?}", body.name(), e)))?;
-
-    // Extraer year/month/day/hour/min/sec del momento del retorno.
-    // `to_iso8601` devuelve "YYYY-MM-DDTHH:MM:SS.sss" — parseamos los
-    // 5 campos relevantes. La precisión está en sub-segundo; usamos
-    // segundo entero (StoredBirthData::second es f64 pero el campo
-    // se persiste así).
-    let iso = return_instant.utc().to_iso8601();
-    let (year, month, day, hour, minute, second) = parse_iso8601_components(&iso)
-        .ok_or_else(|| EngineError::Eternal(format!("iso8601 inválido: {}", iso)))?;
-
-    let stored = cosmos_model::StoredBirthData {
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        // El return se computa en la TZ del observador natal (es la
-        // convención clásica del Solar return). Heredamos también
-        // lat/lon/alt.
-        tz_offset_minutes: chart.birth_data.tz_offset_minutes,
-        latitude_deg: chart.birth_data.latitude_deg,
-        longitude_deg: chart.birth_data.longitude_deg,
-        altitude_m: chart.birth_data.altitude_m,
-        time_certainty: Default::default(),
-        subject_name: chart.birth_data.subject_name.clone(),
-        birthplace_label: chart.birth_data.birthplace_label.clone(),
-    };
-    let label = format!(
-        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
-        year, month, day, hour, minute
-    );
-    Ok((stored, label))
-}
-
-/// Computa la **carta de tránsito** del momento actual sobre las
-/// coordenadas del natal — birth_data = "ahora" UTC, mismo
-/// observer/lat/lon/TZ que el natal. Útil para snapshot del cielo
-/// en este instante anclado al lugar de nacimiento del sujeto.
-pub fn compute_transit_chart(
-    chart: &Chart,
-) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
-    let now_iso = ESInstant::now().utc().to_iso8601();
-    let (year, month, day, hour, minute, second) =
-        parse_iso8601_components(&now_iso).ok_or_else(|| {
-            EngineError::Eternal(format!("iso8601 inválido para now(): {}", now_iso))
-        })?;
-    let stored = cosmos_model::StoredBirthData {
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        tz_offset_minutes: chart.birth_data.tz_offset_minutes,
-        latitude_deg: chart.birth_data.latitude_deg,
-        longitude_deg: chart.birth_data.longitude_deg,
-        altitude_m: chart.birth_data.altitude_m,
-        time_certainty: Default::default(),
-        subject_name: chart.birth_data.subject_name.clone(),
-        birthplace_label: chart.birth_data.birthplace_label.clone(),
-    };
-    let label = format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", year, month, day, hour, minute);
-    Ok((stored, label))
-}
-
-/// Computa la **carta progresada secundaria** a la edad dada como
-/// `StoredBirthData` standalone. Método clásico: el instante de la
-/// progresada es `natal_instant + target_age_years * 1 día`
-/// (un día simbólico = un año de vida). Las coordenadas del
-/// observador se heredan del natal — la progresada es una proyección
-/// simbólica sobre el lugar de nacimiento, no un evento real ahí.
-pub fn compute_progression_chart(
-    chart: &Chart,
-    target_age_years: f64,
-) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
-    let (birth_e, _config_e, _observer) = build_eternal_inputs(chart, 0)?;
-    let advance_seconds = target_age_years * 86400.0; // 1 día / año
-    let advanced_utc = birth_e.instant.utc().add_seconds(advance_seconds);
-    let iso = advanced_utc.to_iso8601();
-    let (year, month, day, hour, minute, second) =
-        parse_iso8601_components(&iso).ok_or_else(|| {
-            EngineError::Eternal(format!("iso8601 inválido: {}", iso))
-        })?;
-    let stored = cosmos_model::StoredBirthData {
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        tz_offset_minutes: chart.birth_data.tz_offset_minutes,
-        latitude_deg: chart.birth_data.latitude_deg,
-        longitude_deg: chart.birth_data.longitude_deg,
-        altitude_m: chart.birth_data.altitude_m,
-        time_certainty: Default::default(),
-        subject_name: chart.birth_data.subject_name.clone(),
-        birthplace_label: chart.birth_data.birthplace_label.clone(),
-    };
-    let label = format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", year, month, day, hour, minute);
-    Ok((stored, label))
-}
-
-/// Parsea "YYYY-MM-DDTHH:MM:SS[.fff]" a `(year, month, day, hour,
-/// minute, second_float)`. Retorna `None` si el format no encaja.
-fn parse_iso8601_components(s: &str) -> Option<(i32, u32, u32, u32, u32, f64)> {
-    // Split en T y luego campo por campo.
-    let mut parts = s.splitn(2, 'T');
-    let date = parts.next()?;
-    let time = parts.next()?;
-    let mut d = date.split('-');
-    let year: i32 = d.next()?.parse().ok()?;
-    let month: u32 = d.next()?.parse().ok()?;
-    let day: u32 = d.next()?.parse().ok()?;
-    let mut t = time.split(':');
-    let hour: u32 = t.next()?.parse().ok()?;
-    let minute: u32 = t.next()?.parse().ok()?;
-    let second: f64 = t.next()?.parse().ok()?;
-    Some((year, month, day, hour, minute, second))
-}
 
 /// Cross aspects natal × return.
-fn build_planetary_return_overlay(
+pub(crate) fn build_planetary_return_overlay(
     natal: &NatalChart,
     config_e: &ChartConfig,
     observer: Observer,
@@ -1344,7 +746,7 @@ fn build_planetary_return_overlay(
 // NatalChart → RenderModel
 // =====================================================================
 
-fn build_render_model(
+pub(crate) fn build_render_model(
     chart: &Chart,
     natal: &NatalChart,
     aspects: &[Aspect],
@@ -1511,7 +913,7 @@ fn build_render_model(
 /// Construye una `OrbTable` con los orbes default de `modern_western`
 /// escalados por `multiplier`. Necesario porque eternal expone
 /// `set_orb` pero no permite iterar los base orbs internos.
-fn build_orb_table(multiplier: f64) -> OrbTable {
+pub(crate) fn build_orb_table(multiplier: f64) -> OrbTable {
     let mut t = OrbTable::modern_western();
     let m = multiplier.max(0.0);
     t.set_orb(EAspectKind::Conjunction, 8.0 * m);
@@ -1529,7 +931,7 @@ fn build_orb_table(multiplier: f64) -> OrbTable {
     t
 }
 
-fn push_overlay_meta(render: &mut RenderModel, module_id: &str, label: String) {
+pub(crate) fn push_overlay_meta(render: &mut RenderModel, module_id: &str, label: String) {
     render.overlays.push(OverlayMeta {
         module_id: module_id.to_string(),
         label,
@@ -1541,7 +943,7 @@ fn push_overlay_meta(render: &mut RenderModel, module_id: &str, label: String) {
 /// Nemesis. Cada uno se renderea como un glifo `lot:Fo` en el anillo
 /// `0.54` (entre midpoints y cuerpos progresados). Retorna la cantidad
 /// de lots renderizados.
-fn build_lots_overlay(
+pub(crate) fn build_lots_overlay(
     natal: &NatalChart,
     render: &mut RenderModel,
 ) -> Result<usize, EngineError> {
@@ -1579,7 +981,7 @@ fn build_lots_overlay(
 /// longitudes están en J2000 ecliptica tropical; aplicamos precesión
 /// general de 50.29″/año hacia adelante hasta el año natal — basta
 /// para el orbe de conjunción de ±1.5° con que se interpretan.
-fn build_fixed_stars_overlay(chart: &Chart, render: &mut RenderModel) -> usize {
+pub(crate) fn build_fixed_stars_overlay(chart: &Chart, render: &mut RenderModel) -> usize {
     // (símbolo, nombre, longitud tropical J2000 en grados)
     const STARS: &[(&str, &str, f64)] = &[
         ("✦Ald", "Aldebaran", 69.79),     // 09°47′ Gem
@@ -1624,7 +1026,7 @@ fn build_fixed_stars_overlay(chart: &Chart, render: &mut RenderModel) -> usize {
 /// Decora cada Glyph de Bodies (module_id="natal") con su dignity
 /// marker en `glyph.dignity_marker`. Usa `essential_dignity(body, sign)`
 /// — los cuerpos modernos quedan sin marker.
-fn annotate_dignities(natal: &NatalChart, render: &mut RenderModel) {
+pub(crate) fn annotate_dignities(natal: &NatalChart, render: &mut RenderModel) {
     use std::collections::HashMap;
     let mut by_symbol: HashMap<&'static str, &'static str> = HashMap::new();
     for p in &natal.placements {
@@ -1644,7 +1046,7 @@ fn annotate_dignities(natal: &NatalChart, render: &mut RenderModel) {
     }
 }
 
-fn populate_natal_aspect_summary(aspects: &[Aspect], render: &mut RenderModel) {
+pub(crate) fn populate_natal_aspect_summary(aspects: &[Aspect], render: &mut RenderModel) {
     for a in aspects {
         render.aspect_summary.push(AspectSummary {
             module_id: "natal".into(),
@@ -1658,7 +1060,7 @@ fn populate_natal_aspect_summary(aspects: &[Aspect], render: &mut RenderModel) {
     sort_aspect_summary(render);
 }
 
-fn populate_cross_aspect_summary(
+pub(crate) fn populate_cross_aspect_summary(
     cross: &[cosmos_astrology::SynastryAspect],
     module_id: &str,
     render: &mut RenderModel,
@@ -1676,7 +1078,7 @@ fn populate_cross_aspect_summary(
     sort_aspect_summary(render);
 }
 
-fn sort_aspect_summary(render: &mut RenderModel) {
+pub(crate) fn sort_aspect_summary(render: &mut RenderModel) {
     render
         .aspect_summary
         .sort_by(|x, y| x.orb_deg.partial_cmp(&y.orb_deg).unwrap_or(std::cmp::Ordering::Equal));
@@ -1684,7 +1086,7 @@ fn sort_aspect_summary(render: &mut RenderModel) {
 
 /// Mapea el orb absoluto a una opacidad — los aspectos más exactos se
 /// pintan más fuerte, los flojos casi se desvanecen.
-fn orb_to_opacity(orb_deg: f64, kind: EAspectKind) -> f32 {
+pub(crate) fn orb_to_opacity(orb_deg: f64, kind: EAspectKind) -> f32 {
     let max = match kind {
         EAspectKind::Conjunction | EAspectKind::Opposition => 8.0,
         EAspectKind::Trine | EAspectKind::Square => 7.0,
@@ -1695,7 +1097,7 @@ fn orb_to_opacity(orb_deg: f64, kind: EAspectKind) -> f32 {
     t as f32
 }
 
-const ZODIAC_SYMBOLS: [&str; 12] = [
+pub(crate) const ZODIAC_SYMBOLS: [&str; 12] = [
     "aries",
     "taurus",
     "gemini",
