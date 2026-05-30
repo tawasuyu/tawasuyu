@@ -40,6 +40,8 @@
 //! - `Shift+Delete` / `Shift+Backspace` — con selección activa, rellena
 //!   el rect con el color activo (cuentagotas o gris default)
 //! - `Ctrl+D`         — duplicar capa
+//! - `Ctrl+J`         — con selección activa, duplica el rect a una
+//!   capa raster nueva (layer via copy)
 //! - `F2`             — renombrar capa in-situ (Enter confirma · Esc cancela)
 //! - `V`              — toggle visibilidad
 //! - `B` / `Shift+B`  — ciclar blend forward / reverse
@@ -366,6 +368,15 @@ enum Msg {
     /// `LimpiarSeleccionEnCapa`; no-op extra si el rect ya tenía ese
     /// color exacto. Mantiene la selección.
     RellenarSeleccionEnCapa,
+    /// Copia los píxeles del rect de `model.seleccion` de la capa
+    /// seleccionada a una **capa raster nueva** del tamaño del lienzo,
+    /// transparente fuera del rect. Inserta la capa encima de la madre
+    /// y la selecciona (Photoshop: Ctrl+J "layer via copy"). No-op si
+    /// no hay selección/capa, el rect tiene área cero, o el rect era
+    /// todo transparente (nada que copiar). No es destructivo: la capa
+    /// madre no se toca, así que copia desde cualquier capa (raster o
+    /// derivada). Mantiene la selección.
+    DuplicarSeleccionACapa,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ
@@ -1640,6 +1651,21 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         &pal,
         Msg::RellenarSeleccionEnCapa,
     )));
+    // Duplicar la selección a una capa nueva (no destructivo). Misma
+    // política discoverable de etiqueta dinámica.
+    let etiqueta_dup_sel = match model.seleccion {
+        Some(r) => format!(
+            "⧉ duplicar selección a capa ({}×{}) · Ctrl+J",
+            r.x1 - r.x0,
+            r.y1 - r.y0
+        ),
+        None => "⧉ duplicar selección a capa (—) · Ctrl+J".to_string(),
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_dup_sel,
+        &pal,
+        Msg::DuplicarSeleccionACapa,
+    )));
 
     // "salida": no requiere selección, siempre activa.
     hijos.push(subtitulo("salida"));
@@ -2415,6 +2441,11 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::DuplicarSeleccionACapa => {
+                if duplicar_seleccion_a_capa(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2723,6 +2754,17 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         }
         Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("d") => {
             Some(Msg::Duplicar(id))
+        }
+        // Ctrl+J = layer via copy (Photoshop): sólo con selección
+        // activa. Sin selección no aplica (la capa entera ya se
+        // duplica con Ctrl+D).
+        Key::Character(s)
+            if m.ctrl
+                && !m.shift
+                && s.eq_ignore_ascii_case("j")
+                && model.seleccion.is_some() =>
+        {
+            Some(Msg::DuplicarSeleccionACapa)
         }
         // Ctrl+E = merge down (combinar con la capa de abajo). Sin
         // selección no aplica. Photoshop standard.
@@ -3304,6 +3346,93 @@ fn rellenar_rect_en_buffer(
         }
     }
     out
+}
+
+/// Construye un buffer Rgba8 `w × h` todo transparente excepto el rect
+/// half-open `(x0, y0, x1, y1)`, donde copia los píxeles de `src`. Es
+/// el complemento de [`limpiar_rect_en_buffer`]: aquél conserva el
+/// afuera y borra el rect; éste borra el afuera y conserva el rect.
+/// Devuelve también si quedó algún píxel con alfa > 0 dentro del rect
+/// (`false` ⇒ nada visible que copiar). Pura. Pre: rect dentro de
+/// bounds (validación aguas arriba).
+fn extraer_rect_a_buffer(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+) -> (Vec<u8>, bool) {
+    let w = w as usize;
+    let mut out = vec![0u8; w * h as usize * 4];
+    let mut hubo_contenido = false;
+    for y in y0..y1 {
+        let row = y as usize * w;
+        for x in x0..x1 {
+            let i = (row + x as usize) * 4;
+            out[i..i + 4].copy_from_slice(&src[i..i + 4]);
+            if src[i + 3] != 0 {
+                hubo_contenido = true;
+            }
+        }
+    }
+    (out, hubo_contenido)
+}
+
+/// Copia los píxeles del rect de `model.seleccion` de la capa
+/// seleccionada a una capa raster nueva del tamaño del lienzo,
+/// transparente fuera del rect, e inserta esa capa encima de la madre
+/// (Photoshop Ctrl+J). Re-clampea contra el lienzo vigente. No es
+/// destructivo: lee `capa.contenido` (raster o derivada — el buffer
+/// composite cacheado sirve igual) y no modifica la madre. No-op si:
+/// no hay selección, no hay capa seleccionada, el rect queda con área
+/// cero, o el rect era todo transparente (nada visible que copiar). La
+/// selección se mantiene.
+fn duplicar_seleccion_a_capa(model: &mut Model) -> bool {
+    let Some(rect) = model.seleccion else {
+        model.estado = "no hay selección — `r` y arrastrar".into();
+        return false;
+    };
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let x0 = rect.x0.min(w);
+    let y0 = rect.y0.min(h);
+    let x1 = rect.x1.min(w);
+    let y1 = rect.y1.min(h);
+    if x1 <= x0 || y1 <= y0 {
+        model.estado = "selección fuera del lienzo".into();
+        return false;
+    }
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    let Some(src) = model.almacen.obtener(capa.contenido) else {
+        return false;
+    };
+    let src = src.to_vec();
+    let (extraido, hubo_contenido) =
+        extraer_rect_a_buffer(&src, w, h, x0, y0, x1, y1);
+    if !hubo_contenido {
+        model.estado = "selección transparente, nada que copiar".into();
+        return false;
+    }
+    let hash = model.almacen.insertar(extraido);
+    let nombre = format!("copia ({}×{})", x1 - x0, y1 - y0);
+    let nueva = Capa::raster(nombre.clone(), hash);
+    let nuevo_id = nueva.id;
+    match model.lienzo.capas.iter().position(|c| c.id == id) {
+        Some(idx) => model.lienzo.capas.insert(idx + 1, nueva),
+        None => model.lienzo.apilar(nueva),
+    }
+    model.seleccionada = Some(nuevo_id);
+    aplicar_y_recomponer(model);
+    model.estado = format!("duplicada selección a '{}'", nombre);
+    true
 }
 
 /// Aplica una transformación de buffer al rect de `model.seleccion`
@@ -6411,6 +6540,177 @@ mod tests {
         assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
+    }
+
+    // ---- Fase 39: duplicar selección a capa nueva (Ctrl+J) --------------
+
+    #[test]
+    fn extraer_rect_a_buffer_conserva_dentro_y_borra_afuera() {
+        // Buffer 3×2 opaco con patrón; extraemos rect (1,0,3,2).
+        let mut buf = Vec::with_capacity(3 * 2 * 4);
+        for y in 0..2u8 {
+            for x in 0..3u8 {
+                buf.extend_from_slice(&[x * 10, y * 10, 100, 255]);
+            }
+        }
+        let (out, hubo) = extraer_rect_a_buffer(&buf, 3, 2, 1, 0, 3, 2);
+        assert!(hubo);
+        assert_eq!(out.len(), buf.len());
+        // Afuera del rect (col 0) → transparente.
+        assert_eq!(out[0..4], [0, 0, 0, 0]);
+        assert_eq!(out[12..16], [0, 0, 0, 0]);
+        // Dentro del rect → copiado de src.
+        assert_eq!(out[4..8], [10, 0, 100, 255]);
+        assert_eq!(out[8..12], [20, 0, 100, 255]);
+        assert_eq!(out[16..20], [10, 10, 100, 255]);
+        assert_eq!(out[20..24], [20, 10, 100, 255]);
+    }
+
+    #[test]
+    fn extraer_rect_a_buffer_rect_transparente_reporta_sin_contenido() {
+        let buf = vec![0u8; 4 * 4 * 4];
+        let (out, hubo) = extraer_rect_a_buffer(&buf, 4, 4, 0, 0, 2, 2);
+        assert!(!hubo);
+        assert_eq!(out, vec![0u8; 4 * 4 * 4]);
+    }
+
+    #[test]
+    fn extraer_rect_es_complemento_de_limpiar_rect() {
+        // extraer(rect) + limpiar(rect) deben reconstruir el original
+        // (partición disjunta de píxeles: cada byte está en uno u otro).
+        let mut buf = Vec::with_capacity(4 * 4 * 4);
+        for i in 0..(4 * 4) {
+            buf.extend_from_slice(&[i as u8, 0, 0, 255]);
+        }
+        let (extraido, _) = extraer_rect_a_buffer(&buf, 4, 4, 1, 1, 3, 3);
+        let resto = limpiar_rect_en_buffer(&buf, 4, 1, 1, 3, 3);
+        for i in 0..buf.len() {
+            assert_eq!(
+                extraido[i].wrapping_add(resto[i]),
+                buf[i],
+                "byte {} no reconstruye",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn duplicar_seleccion_sin_seleccion_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let n_antes = model.lienzo.capas.len();
+        let ok = duplicar_seleccion_a_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("no hay selección"));
+        assert_eq!(model.lienzo.capas.len(), n_antes);
+    }
+
+    #[test]
+    fn duplicar_seleccion_transparente_es_no_op() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("vacia", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let n_antes = model.lienzo.capas.len();
+        let ok = duplicar_seleccion_a_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("nada que copiar"));
+        assert_eq!(model.lienzo.capas.len(), n_antes);
+    }
+
+    #[test]
+    fn duplicar_seleccion_crea_capa_encima_con_solo_el_rect() {
+        let mut model = modelo_minimo();
+        let mut buf = Vec::with_capacity(4 * 4 * 4);
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                buf.extend_from_slice(&[x * 20, y * 20, 100, 255]);
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("madre", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
+
+        let ok = duplicar_seleccion_a_capa(&mut model);
+        assert!(ok);
+        // Hay una capa nueva, seleccionada, justo encima de la madre.
+        assert_eq!(model.lienzo.capas.len(), 2);
+        let idx_madre =
+            model.lienzo.capas.iter().position(|c| c.id == id).unwrap();
+        assert_eq!(idx_madre, 0);
+        let nueva_id = model.seleccionada.unwrap();
+        assert_ne!(nueva_id, id);
+        assert_eq!(model.lienzo.capas[1].id, nueva_id);
+        // La madre no se tocó.
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, h);
+        // La nueva tiene sólo el rect 2×2 central; el resto transparente.
+        let nh = model.lienzo.capa(nueva_id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let pix = |x: u32, y: u32| {
+            let i = (y as usize * 4 + x as usize) * 4;
+            [bp[i], bp[i + 1], bp[i + 2], bp[i + 3]]
+        };
+        assert_eq!(pix(1, 1), [20, 20, 100, 255]);
+        assert_eq!(pix(2, 2), [40, 40, 100, 255]);
+        assert_eq!(pix(0, 0), [0, 0, 0, 0]);
+        assert_eq!(pix(3, 3), [0, 0, 0, 0]);
+        // La selección se mantiene.
+        assert_eq!(
+            model.seleccion,
+            Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 })
+        );
+    }
+
+    #[test]
+    fn hotkey_ctrl_j_emite_duplicar_seleccion_solo_con_seleccion() {
+        let mut m = modelo_minimo();
+        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        // Sin selección → None (la capa entera ya se duplica con Ctrl+D).
+        let msg = hotkey_a_msg(&m, &ev_char("j", ctrl));
+        assert!(msg.is_none());
+        // Con selección → DuplicarSeleccionACapa.
+        m.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let msg = hotkey_a_msg(&m, &ev_char("j", ctrl));
+        assert!(matches!(msg, Some(Msg::DuplicarSeleccionACapa)));
+    }
+
+    #[test]
+    fn msg_duplicar_seleccion_dispatcha_snapshotea_y_undo_quita_la_capa() {
+        let mut model = modelo_minimo();
+        let buf = vec![200u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::DuplicarSeleccionACapa,
+            &Handle::for_test(),
+        );
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.lienzo.capas.len(), 2);
+        // Undo vuelve a una sola capa.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), 1);
+        assert_eq!(model.lienzo.capas[0].id, id);
     }
 
     #[test]
