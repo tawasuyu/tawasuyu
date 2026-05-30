@@ -140,13 +140,19 @@ YA HECHO que el snapshot viejo daba por pendiente (verificado en disco 2026-05-3
   => §14.1.3 NO es "tabla por construir": el sobre y los dos verificadores existen. Lo que falta es el CABLEADO.
 
 ASPIRA_A (pendientes, REORDENADO por valor desbloqueado — no por riesgo teórico):
-  #1  CABLEAR §14.1.3 en el enlace de capacidades del kernel: que el linker derive los permisos
-      efectivos de la ConcesionCapacidad verificada (intersección con EntradaApp) en vez de leer
-      EntradaApp a secas. Es lo más cerca de terminado y lo más diferenciador (frontera física, no
-      tabla de permisos). Convierte agora de "mensajería de confianza" en "cargador de capacidades".
-  #2  DAEMON mudanza completo: faltan sys_red_recibir(filtro) + sys_grafo_pedir(hash) en kernel +
-      UI aceptar/rechazar. Sin esto el control de release es demo host-side; con esto wawa toma el silicio.
-  #3  BRIDGE Akasha-over-Ether ↔ host: crate nuevo agora-akasha-bridge (raw socket + EtherType propio).
+  #1  CABLEAR §14.1.3 — HECHO (2026-05-30, commits 98bc98bc + e27fade9). El kernel deriva permisos
+      efectivos por intersección manifiesto ∩ ConcesionCapacidad verificada en el punto de carga; boot
+      ancla las concesiones offline (*.cap.obj) del génesis. Rollout escalonado: None⇒declarados hasta
+      que el operador provisione. Convierte agora de "mensajería de confianza" en "cargador de capacidades".
+  #2  DAEMON mudanza completo — HECHO. El snapshot era stale: recepción AoE + pull DAG + aceptación
+      soberana ya existían (Fase 64/65: sys_net_recibir, sys_red_solicitar, sys_canal_{anuncio,aceptar}).
+      Cerrado el bucle aceptar/rechazar (commit 330f5a05): sys_canal_descartar (ESC en mudanza).
+  #3  BRIDGE Akasha-over-Ether ↔ host — EN GRAN PARTE HECHO. El "crate nuevo" era redundante: emit+serve
+      sobre raw socket YA viven en wawa-explorer-aoe::ClienteAoE (anunciar_canal/servir/solicitar,
+      AF_PACKET, fragmenta >1024B) y `agora-cli wawa anunciar` los orquesta en loop. El hueco real era el
+      TRANSPORTE host↔guest: el NAT user-mode de QEMU solo reenvía IP, NO el EtherType 0x88B5. CERRADO
+      (2026-05-30): boot::lanzar_qemu honra RENASER_TAP=<iface> y bridgea la NIC del guest a un TAP de
+      capa-2. scripts/aoe-tap-setup.sh forja el tap; scripts/test-mudanza-aoe-qemu.sh corre el E2E vivo.
       Dos máquinas con un cable se instalan SO mutuamente sin IP/DHCP/DNS — el demo que se ve y se entiende.
   #4  ROTACIÓN / REVOCACIÓN de clave (juntas): atestación "cambio-de-clave: vieja→nueva" firmada por
       AMBAS pubkeys + vector de revocación con caducidad estricta. Necesarias ANTES de que exista un set

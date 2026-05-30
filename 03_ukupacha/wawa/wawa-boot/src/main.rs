@@ -677,12 +677,6 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         // El disco de objetos, como dispositivo virtio-blk sobre el bus PCI.
         .arg("-drive").arg(format!("format=raw,file={NOMBRE_DISCO},if=none,id=drv0"))
         .arg("-device").arg("virtio-blk-pci,drive=drv0")
-        // FASE 18 :: la tarjeta de red — `user mode networking` de QEMU, un
-        // NAT virtual hacia el host. Sin opciones extra: gateway en 10.0.2.2,
-        // DHCP/DNS en 10.0.2.3, el invitado en 10.0.2.15. El kernel envia un
-        // ARP request al gateway en cuanto arranca como prueba de vida.
-        .arg("-netdev").arg("user,id=net0")
-        .arg("-device").arg("virtio-net-pci,netdev=net0")
         // FASE 61 :: tableta virtio-input — puntero ABSOLUTO. QEMU enruta el
         // cursor del host a este dispositivo (coordenadas absolutas), de modo
         // que el puntero del huesped lo sigue 1:1, sin captura ni deriva.
@@ -694,6 +688,40 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         // cambia `none` por `pa` (PulseAudio/pipewire-pulse), `pipewire` o `sdl`.
         .arg("-audiodev").arg("none,id=snd0")
         .arg("-device").arg("virtio-sound-pci,audiodev=snd0");
+
+    // FASE 67 :: la tarjeta de red. Dos backends segun para que arrancamos:
+    //
+    //   * DEFECTO — `user mode networking` de QEMU: un NAT virtual hacia el host
+    //     (gateway 10.0.2.2, DHCP/DNS 10.0.2.3, invitado 10.0.2.15). El kernel
+    //     emite un ARP al gateway como prueba de vida. PERO el NAT de QEMU solo
+    //     reenvia IP: NO transporta el EtherType propio de Akasha (0x88B5). Por
+    //     eso el camino vivo de `mudanza` (host `agora-cli wawa anunciar` -> wire
+    //     -> guest) NO funciona sobre `user`.
+    //
+    //   * `RENASER_TAP=<iface>` — bridgea la NIC del guest a un dispositivo TAP
+    //     del host. Un TAP transporta CUALQUIER EtherType en capa-2, asi que el
+    //     host puede abrir un raw socket sobre el mismo `tap0` y difundir AoE que
+    //     el guest recibe 1:1 — el unico transporte que cierra el bucle de
+    //     re-ancla en red contra QEMU. Crealo antes con `scripts/aoe-tap-setup.sh`
+    //     (o `ip tuntap add tap0 mode tap user $USER && ip link set tap0 up`) y
+    //     corre `sudo -E agora-cli wawa anunciar --iface tap0 --dir <release>`.
+    //     `script=no,downscript=no`: QEMU no invoca el helper de red de root —el
+    //     tap ya existe y esta arriba, solo lo adopta.
+    match std::env::var("RENASER_TAP") {
+        Ok(tap) if !tap.is_empty() => {
+            println!("[renaser/boot] red :: TAP «{tap}» (AoE host<->guest habilitado)");
+            qemu.arg("-netdev")
+                .arg(format!("tap,id=net0,ifname={tap},script=no,downscript=no"))
+                .arg("-device")
+                .arg("virtio-net-pci,netdev=net0");
+        }
+        _ => {
+            qemu.arg("-netdev")
+                .arg("user,id=net0")
+                .arg("-device")
+                .arg("virtio-net-pci,netdev=net0");
+        }
+    }
 
     // Cualquier argumento extra tras `--` se reenvia a QEMU intacto.
     // Ejemplo: `cargo run -p boot -- -display none -d int`.
