@@ -15,9 +15,9 @@
 //! Controles comunes: **flechas / Espacio / Enter** vuela por la ruta ·
 //! **Home/Esc** vista general · **p** modo presentador (autoplay) · **rueda**
 //! zoom-a-cursor · **Tab** alterna presentar/editar · **Ctrl+S / Ctrl+O**
-//! guarda / carga. En **editar**: arrastrar mueve/selecciona un marco (o panea
-//! el vacío), **n** crea, **Supr** elimina, **[ ]** rota. En **presentar**:
-//! arrastrar panea libre.
+//! guarda / carga · **Ctrl+Z / Ctrl+Shift+Z** deshace / rehace autoría. En
+//! **editar**: arrastrar mueve/selecciona un marco (o panea el vacío), **n**
+//! crea, **Supr** elimina, **[ ]** rota. En **presentar**: arrastrar panea libre.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -46,6 +46,8 @@ enum Msg {
     NuevoMarco,
     Eliminar,
     Rotar(f64),
+    Deshacer,
+    Rehacer,
     Guardar,
     Cargar,
     ToggleModo,
@@ -66,6 +68,8 @@ struct Model {
     arrastrando: Option<Option<u64>>,
     /// Destino de Ctrl+S (postcard).
     guardar_en: PathBuf,
+    /// Undo/redo de autoría (snapshots del recorrido).
+    historial: Historial<Recorrido>,
 }
 
 /// Recorrido de bienvenida cuando no se pasa archivo.
@@ -135,6 +139,7 @@ impl App for Deck {
             seleccionado: None,
             arrastrando: None,
             guardar_en,
+            historial: Historial::new(64),
         }
     }
 
@@ -154,6 +159,9 @@ impl App for Deck {
                         model.arrastrando = Some(m);
                         if m.is_some() {
                             model.seleccionado = m;
+                            // Una instantánea por arrastre (al agarrar el marco),
+                            // no por cada move — undo revierte el movimiento entero.
+                            model.historial.registrar(&model.rec);
                         }
                         m
                     }
@@ -168,6 +176,7 @@ impl App for Deck {
             }
             Msg::FinArrastre => model.arrastrando = None,
             Msg::NuevoMarco => {
+                model.historial.registrar(&model.rec);
                 let id = model.rec.marcos.iter().map(|m| m.id).max().unwrap_or(0) + 1;
                 let (cx, cy) = model.state.camara.centro;
                 let (w, h) = (520.0, 320.0);
@@ -181,6 +190,7 @@ impl App for Deck {
             }
             Msg::Eliminar => {
                 if let Some(id) = model.seleccionado.take() {
+                    model.historial.registrar(&model.rec);
                     model.rec.eliminar_marco(id);
                     let idx = model.state.paso.min(model.rec.n_pasos().saturating_sub(1));
                     model.state.saltar_a_paso(&model.rec, idx, panel);
@@ -188,7 +198,23 @@ impl App for Deck {
             }
             Msg::Rotar(d) => {
                 if let Some(id) = model.seleccionado {
+                    model.historial.registrar(&model.rec);
                     model.rec.rotar_marco(id, d);
+                }
+            }
+            Msg::Deshacer | Msg::Rehacer => {
+                let nuevo = match msg {
+                    Msg::Deshacer => model.historial.deshacer(&model.rec),
+                    _ => model.historial.rehacer(&model.rec),
+                };
+                if let Some(rec) = nuevo {
+                    model.rec = rec;
+                    // La selección puede haber dejado de existir; el paso se clampa.
+                    if model.seleccionado.map_or(false, |id| model.rec.marco(id).is_none()) {
+                        model.seleccionado = None;
+                    }
+                    let idx = model.state.paso.min(model.rec.n_pasos().saturating_sub(1));
+                    model.state.saltar_a_paso(&model.rec, idx, panel);
                 }
             }
             Msg::Guardar => match model.rec.serializar() {
@@ -271,6 +297,11 @@ impl App for Deck {
             return match &ev.key {
                 Key::Character(c) if c.eq_ignore_ascii_case("s") => Some(Msg::Guardar),
                 Key::Character(c) if c.eq_ignore_ascii_case("o") => Some(Msg::Cargar),
+                // Ctrl+Z deshace; Ctrl+Shift+Z o Ctrl+Y rehacen.
+                Key::Character(c) if c.eq_ignore_ascii_case("z") => {
+                    Some(if ev.modifiers.shift { Msg::Rehacer } else { Msg::Deshacer })
+                }
+                Key::Character(c) if c.eq_ignore_ascii_case("y") => Some(Msg::Rehacer),
                 _ => None,
             };
         }
@@ -299,6 +330,92 @@ impl App for Deck {
     }
 }
 
+/// Pila de undo/redo genérica para autoría. Antes de cada cambio se `registrar`a
+/// el estado previo; `deshacer`/`rehacer` mueven el estado entre pasado y futuro.
+/// Acotada a `max` entradas (descarta las más viejas).
+struct Historial<T> {
+    pasado: Vec<T>,
+    futuro: Vec<T>,
+    max: usize,
+}
+
+impl<T: Clone> Historial<T> {
+    fn new(max: usize) -> Self {
+        Self { pasado: Vec::new(), futuro: Vec::new(), max: max.max(1) }
+    }
+
+    /// Registra `actual` (estado **previo** al cambio que está por aplicarse) y
+    /// limpia el redo — una rama nueva invalida los rehacer pendientes.
+    fn registrar(&mut self, actual: &T) {
+        self.pasado.push(actual.clone());
+        if self.pasado.len() > self.max {
+            self.pasado.remove(0);
+        }
+        self.futuro.clear();
+    }
+
+    /// Deshace: devuelve el último estado registrado y manda `actual` al futuro.
+    fn deshacer(&mut self, actual: &T) -> Option<T> {
+        let prev = self.pasado.pop()?;
+        self.futuro.push(actual.clone());
+        Some(prev)
+    }
+
+    /// Rehace: devuelve el último estado deshecho y manda `actual` al pasado.
+    fn rehacer(&mut self, actual: &T) -> Option<T> {
+        let next = self.futuro.pop()?;
+        self.pasado.push(actual.clone());
+        Some(next)
+    }
+}
+
 fn main() {
     llimphi_ui::run::<Deck>();
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::Historial;
+
+    #[test]
+    fn deshacer_rehacer_round_trip() {
+        let mut h = Historial::new(10);
+        // estado: 0 → (registrar 0) → 1 → (registrar 1) → 2
+        h.registrar(&0);
+        h.registrar(&1);
+        let mut actual = 2;
+        // deshacer dos veces: 2→1→0
+        actual = h.deshacer(&actual).unwrap();
+        assert_eq!(actual, 1);
+        actual = h.deshacer(&actual).unwrap();
+        assert_eq!(actual, 0);
+        assert!(h.deshacer(&actual).is_none(), "sin más pasado");
+        // rehacer dos veces: 0→1→2
+        actual = h.rehacer(&actual).unwrap();
+        assert_eq!(actual, 1);
+        actual = h.rehacer(&actual).unwrap();
+        assert_eq!(actual, 2);
+        assert!(h.rehacer(&actual).is_none(), "sin más futuro");
+    }
+
+    #[test]
+    fn registrar_tras_deshacer_limpia_el_futuro() {
+        let mut h = Historial::new(10);
+        h.registrar(&0);
+        let actual = h.deshacer(&1).unwrap(); // actual ahora = 0, futuro = [1]
+        assert_eq!(actual, 0);
+        h.registrar(&actual); // rama nueva: el futuro se descarta
+        assert!(h.rehacer(&actual).is_none());
+    }
+
+    #[test]
+    fn respeta_el_tope_descartando_lo_mas_viejo() {
+        let mut h = Historial::new(2);
+        h.registrar(&1);
+        h.registrar(&2);
+        h.registrar(&3); // descarta el 1
+        assert_eq!(h.deshacer(&99), Some(3));
+        assert_eq!(h.deshacer(&3), Some(2));
+        assert!(h.deshacer(&2).is_none());
+    }
 }
