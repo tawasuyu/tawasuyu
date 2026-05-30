@@ -8,6 +8,7 @@ mod microtask;
 mod performance;
 mod dom_events;
 mod event_class;
+mod event_target;
 mod domexception;
 mod window_scroll;
 mod window_events;
@@ -43,6 +44,7 @@ pub(crate) use microtask::MICROTASK_BOOTSTRAP;
 pub(crate) use performance::PERFORMANCE_BOOTSTRAP;
 pub(crate) use dom_events::DOM_EVENTS_BOOTSTRAP;
 pub(crate) use event_class::EVENT_CLASS_BOOTSTRAP;
+pub(crate) use event_target::EVENT_TARGET_BOOTSTRAP;
 pub(crate) use domexception::DOMEXCEPTION_BOOTSTRAP;
 pub(crate) use window_scroll::WINDOW_SCROLL_BOOTSTRAP;
 pub(crate) use window_events::WINDOW_EVENTS_BOOTSTRAP;
@@ -80,6 +82,7 @@ pub(crate) const ALL: &[&str] = &[
     PERFORMANCE_BOOTSTRAP,
     DOM_EVENTS_BOOTSTRAP,
     EVENT_CLASS_BOOTSTRAP,
+    EVENT_TARGET_BOOTSTRAP,
     DOMEXCEPTION_BOOTSTRAP,
     WINDOW_SCROLL_BOOTSTRAP,
     WINDOW_EVENTS_BOOTSTRAP,

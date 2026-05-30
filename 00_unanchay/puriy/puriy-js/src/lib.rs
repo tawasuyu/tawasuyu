@@ -7339,4 +7339,61 @@ mod tests {
             other => panic!("esperaba rechazo de data, fue {other:?}"),
         }
     }
+
+    // ============= Fase 7.76 — EventTarget genérico =============
+
+    #[test]
+    fn event_target_add_dispatch_remove() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var et = new EventTarget(); var hits = 0, tgtOk = false; \
+             var fn = function(e) { hits++; tgtOk = (e.target === et); }; \
+             et.addEventListener('ping', fn); \
+             et.dispatchEvent(new Event('ping')); \
+             et.removeEventListener('ping', fn); \
+             et.dispatchEvent(new Event('ping'));",
+        )
+        .expect("e");
+        // Disparó una vez (la segunda ya sin listener).
+        assert_eq!(rt.eval("hits").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("tgtOk").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn event_target_once_y_dedup() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var et = new EventTarget(); var a = 0, b = 0; \
+             var fa = function() { a++; }; \
+             et.addEventListener('x', fa); et.addEventListener('x', fa); /* dedup */ \
+             et.addEventListener('x', function() { b++; }, { once: true }); \
+             et.dispatchEvent(new Event('x')); \
+             et.dispatchEvent(new Event('x'));",
+        )
+        .expect("e");
+        // fa registrado una sola vez (dedup) → 2 dispatches = 2 hits.
+        assert_eq!(rt.eval("a").expect("e"), JsValue::Number(2.0));
+        // el listener once corre sólo en el primer dispatch.
+        assert_eq!(rt.eval("b").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn event_target_handle_event_stop_immediate_y_default_prevented() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var et = new EventTarget(); var seq = []; \
+             et.addEventListener('y', { handleEvent: function(e) { seq.push('obj'); e.stopImmediatePropagation(); } }); \
+             et.addEventListener('y', function() { seq.push('no-deberia'); }); \
+             var ev = new Event('y', { cancelable: true }); \
+             var et2 = new EventTarget(); \
+             et2.addEventListener('z', function(e) { e.preventDefault(); }); \
+             var ret = et2.dispatchEvent(new Event('z', { cancelable: true })); \
+             et.dispatchEvent(ev);",
+        )
+        .expect("e");
+        // handleEvent corrió y stopImmediatePropagation cortó al segundo listener.
+        assert_eq!(rt.eval("seq.join(',')").expect("e"), JsValue::String("obj".into()));
+        // dispatchEvent devuelve false cuando un listener llamó preventDefault.
+        assert_eq!(rt.eval("ret").expect("e"), JsValue::Bool(false));
+    }
 }
