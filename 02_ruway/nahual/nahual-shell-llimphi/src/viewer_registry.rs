@@ -41,6 +41,10 @@ pub enum ViewerKind {
     /// Markdown renderizado (`nahual-markdown-viewer-llimphi`); encabezados,
     /// listas, código y citas con estilo en vez de la sintaxis cruda.
     Markdown,
+    /// Listado de un ZIP (`nahual-archive-viewer-llimphi`); muestra las
+    /// entradas (nombre/tamaño/ratio) en vez del volcado hex. Cubre la
+    /// familia ZIP entera: .jar/.apk/.epub/.docx/.xlsx/.pptx.
+    Archive,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
@@ -83,11 +87,13 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
         // Binarios que shuma detecta por magic-bytes (sin lens) pero que
         // ningún visor "rico" cubre: un dump hex es mejor que el text
         // viewer diciendo "(binario — sin preview)".
+        // Un ZIP es un contenedor: listamos sus entradas en vez del hex.
+        // Cubre .zip y toda la familia basada en ZIP (jar/apk/epub/OOXML).
+        Some("application/zip") => return ViewerKind::Archive,
         Some(
             "application/x-executable"
             | "application/wasm"
-            | "application/gzip"
-            | "application/zip",
+            | "application/gzip",
         ) => return ViewerKind::Hex,
         _ => {}
     }
@@ -160,7 +166,12 @@ mod tests {
     fn binarios_van_a_hex() {
         assert_eq!(pick(Some(&disc(None, Some("application/x-executable")))), ViewerKind::Hex);
         assert_eq!(pick(Some(&disc(None, Some("application/wasm")))), ViewerKind::Hex);
-        assert_eq!(pick(Some(&disc(None, Some("application/zip")))), ViewerKind::Hex);
+        assert_eq!(pick(Some(&disc(None, Some("application/gzip")))), ViewerKind::Hex);
+    }
+
+    #[test]
+    fn zip_va_a_archive() {
+        assert_eq!(pick(Some(&disc(None, Some("application/zip")))), ViewerKind::Archive);
     }
 
     #[test]

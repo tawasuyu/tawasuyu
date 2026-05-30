@@ -22,12 +22,13 @@
 //! cuando lleguen más visores y un AppBus con `EntityType`, el registro
 //! crece por tabla sin tocar el resto del shell.
 //!
-//! Hoy embebe nueve visores in-process — texto (fallback universal),
+//! Hoy embebe diez visores in-process — texto (fallback universal),
 //! imagen, video (AV1 nativo), audio (WAV/MP3/FLAC/Opus/Vorbis por cpal,
 //! con espectro en vivo), card (`shared/card` presentada por campos),
 //! tree (árbol JSON/TOML indentado), hex (dump de binarios), table
-//! (CSV/TSV alineado) y markdown (`.md` renderizado con encabezados,
-//! listas, código y citas) — todos ruteados por `viewer_registry::pick`
+//! (CSV/TSV alineado), markdown (`.md` renderizado con encabezados,
+//! listas, código y citas) y archive (listado de ZIP y su familia
+//! .jar/.apk/.epub/OOXML) — todos ruteados por `viewer_registry::pick`
 //! sobre el `lens`/`mime` discernido. `Space` hace play/pausa del video
 //! o audio.
 //!
@@ -86,6 +87,9 @@ use nahual_markdown_viewer_llimphi::{
     load_markdown, markdown_viewer_view, MarkdownPreview, MarkdownViewerPalette,
     DEFAULT_MARKDOWN_BYTES_MAX,
 };
+use nahual_archive_viewer_llimphi::{
+    archive_viewer_view, load_archive, ArchivePreview, ArchiveViewerPalette,
+};
 use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
@@ -108,6 +112,7 @@ enum PreviewPane {
     Hex(HexPreview),
     Table(TablePreview),
     Markdown(MarkdownPreview),
+    Archive(ArchivePreview),
 }
 
 /// Cadencia del avance de los visores con reloj (video, audio) ~30 Hz.
@@ -289,6 +294,7 @@ impl App for Shell {
         let hex_palette = HexViewerPalette::from_theme(&theme);
         let table_palette = TableViewerPalette::from_theme(&theme);
         let markdown_palette = MarkdownViewerPalette::from_theme(&theme);
+        let archive_palette = ArchiveViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = file_explorer_view::<Msg, _>(
             &model.explorer,
@@ -327,6 +333,9 @@ impl App for Shell {
             }
             PreviewPane::Markdown(state) => {
                 markdown_viewer_view::<Msg>(state, model.preview_of.as_deref(), &markdown_palette)
+            }
+            PreviewPane::Archive(state) => {
+                archive_viewer_view::<Msg>(state, model.preview_of.as_deref(), &archive_palette)
             }
         };
 
@@ -430,6 +439,7 @@ fn load_for(path: &Path) -> PreviewPane {
         ViewerKind::Markdown => {
             PreviewPane::Markdown(load_markdown(path, DEFAULT_MARKDOWN_BYTES_MAX))
         }
+        ViewerKind::Archive => PreviewPane::Archive(load_archive(path)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
     }
 }
