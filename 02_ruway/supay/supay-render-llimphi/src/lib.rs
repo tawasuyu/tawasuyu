@@ -2075,7 +2075,9 @@ fn render_frame(
     // Fase 3.46: decals de impacto (host state). Camera-facing quads
     // pequeños, z-ordenados con el resto de la escena.
     if !cfg.decals.is_empty() {
-        gather_decals(&mut renderables, cfg, snap, &cam, &proj);
+        gather_decals(
+            &mut renderables, cfg, snap, &cam, &proj, lit_ref, world_lights_ref,
+        );
     }
     renderables.sort_by(|a, b| {
         b.depth
@@ -3547,12 +3549,15 @@ fn gather_sprite_shadow(
 /// `+y_cam` = izquierda, `+z` = arriba (convención de `gather_sprite`).
 /// El depth se sesga `-0.5` para que la marca quede apenas delante de la
 /// pared/piso donde impactó, sin z-fight.
+#[allow(clippy::too_many_arguments)]
 fn gather_decals(
     out: &mut Vec<Renderable>,
     cfg: &RenderConfig,
     snap: &SceneSnapshot,
     cam: &Camera,
     proj: &Projection,
+    lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
 ) {
     for d in &cfg.decals {
         let a = (d.alpha.clamp(0.0, 1.0) * 255.0) as u8;
@@ -3614,13 +3619,35 @@ fn gather_decals(
         }
         let depth = (cx_cam * cx_cam + cy_cam * cy_cam).sqrt();
         // Fase 3.49: shadeamos el color por la luz del sector donde cae
-        // el decal (+ fog por distancia). En modo stub (sin BSP) queda
-        // full-bright como en 3.46-3.48.
-        let (cr, cg, cb) = if snap.nodes.is_empty() {
-            d.color
+        // el decal (+ fog por distancia). Fase 3.50: además sumamos el
+        // tinte RGB de world lights + muzzle en esa posición — un charco
+        // junto a un fireball se enrojece, el fogonazo lo ilumina. En
+        // modo stub (sin BSP) queda full-bright como en 3.46-3.48.
+        let col = if snap.nodes.is_empty() {
+            Color::from_rgba8(d.color.0, d.color.1, d.color.2, a)
         } else {
-            let light = sector_light_at(snap, d.x, d.y);
-            shade_rgb(d.color, shade_for(light, depth, cfg))
+            let sec = subsector_at_point(&snap.nodes, d.x, d.y)
+                .and_then(|ss| snap.subsectors.get(ss as usize))
+                .map(|ss| ss.sector);
+            let light = sec
+                .and_then(|s| snap.sectors.get(s as usize))
+                .map(|s| s.light_level)
+                .unwrap_or(DEFAULT_PLAYER_LIGHT);
+            let (sr, sg, sb) = shade_rgb(d.color, shade_for(light, depth, cfg));
+            let base = Color::from_rgba8(sr, sg, sb, a);
+            // Boost omni (el decal es una marca plana chica — la
+            // direccionalidad no aporta). `directional=false`.
+            let boost = combined_boost_rgb_sprite_cam(
+                cx_cam,
+                cy_cam,
+                d.z - cam.view_z,
+                cfg.muzzle_glow_alpha,
+                sec.unwrap_or(NO_SECTOR),
+                lit_sectors,
+                world_lights,
+                false,
+            );
+            apply_color_boost(base, boost)
         };
         let mut path = BezPath::new();
         path.move_to(corners[0]);
@@ -3630,7 +3657,7 @@ fn gather_decals(
         path.close_path();
         out.push(Renderable {
             depth: depth - 0.5,
-            color: Color::from_rgba8(cr, cg, cb, a),
+            color: col,
             path,
             kind: RenderKind::Fill,
         });
@@ -7441,7 +7468,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj, None, &[]);
         assert_eq!(out.len(), 1, "decal al frente ⇒ 1 quad");
         assert!(matches!(out[0].kind, RenderKind::Fill));
     }
@@ -7463,7 +7490,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj, None, &[]);
         assert!(out.is_empty(), "decal detrás de la cámara se descarta");
     }
 
@@ -7484,7 +7511,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj, None, &[]);
         assert!(out.is_empty(), "alpha 0 ⇒ no se dibuja");
     }
 
@@ -7505,7 +7532,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj, None, &[]);
         assert_eq!(out.len(), 1);
         let a = out[0].color.to_rgba8().to_u8_array()[3];
         assert!((a as i32 - 127).abs() <= 1, "alpha 0.5 ⇒ ~127, got {}", a);
@@ -7530,7 +7557,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj, None, &[]);
         assert!((out[0].depth - (100.0 - 0.5)).abs() < 1e-3, "depth = dist - 0.5");
     }
 
@@ -7557,7 +7584,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = Vec::new();
-            gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
+            gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj, None, &[]);
             out
         };
         let billboard = mk((0.0, 0.0));
@@ -7609,7 +7636,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj, None, &[]);
         assert_eq!(out.len(), 1);
         let pts: Vec<Point> = out[0]
             .path
@@ -7642,6 +7669,72 @@ mod tests {
         assert_eq!(shade_rgb(c, 0.5), (52, 6, 6), "mitad de luz ⇒ mitad por canal");
         assert_eq!(shade_rgb(c, 0.0), (0, 0, 0), "oscuridad total ⇒ negro");
         assert_eq!(shade_rgb(c, 2.0), c, "clamp a 1.0");
+    }
+
+    #[test]
+    fn decal_picks_up_world_light_tint() {
+        // Fase 3.50: un decal scorch (gris oscuro) junto a una world
+        // light verde recibe boost en el canal verde — comparamos con la
+        // misma escena sin luces.
+        let (cam, proj) = decal_test_setup();
+        // Snap con BSP de una hoja (sector único, luz media) para que el
+        // path de shading+boost se active (nodes no vacío).
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sectors = Arc::from(vec![SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 200,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        }]);
+        snap.subsectors = Arc::from(vec![SubsectorSnap {
+            sector: 0,
+            first_seg: 0,
+            num_segs: 0,
+        }]);
+        // Nodo único cuyos dos hijos apuntan al subsector 0.
+        snap.nodes = Arc::from(vec![NodeSnap {
+            partition_x: 0.0,
+            partition_y: 0.0,
+            partition_dx: 0.0,
+            partition_dy: 1.0,
+            children: [NF_SUBSECTOR, NF_SUBSECTOR],
+        }]);
+        let decal = Decal {
+            x: 100.0,
+            y: 0.0,
+            z: 40.0,
+            radius: 5.0,
+            color: (40, 40, 40),
+            alpha: 1.0,
+            tangent: (0.0, 0.0),
+            horizontal: false,
+        };
+        let cfg = RenderConfig {
+            decals: vec![decal],
+            ..Default::default()
+        };
+        // Sin luces.
+        let mut plain = Vec::new();
+        gather_decals(&mut plain, &cfg, &snap, &cam, &proj, None, &[]);
+        // Con una world light verde pegada al decal.
+        let green = [WorldLight {
+            x_cam: 100.0,
+            y_cam: 0.0,
+            z_cam: 40.0 - cam.view_z,
+            sector: 0,
+            tint_rgb: (0, 255, 0),
+            lit_sectors: None,
+        }];
+        let mut lit = Vec::new();
+        gather_decals(&mut lit, &cfg, &snap, &cam, &proj, None, &green);
+        let g_plain = plain[0].color.to_rgba8().to_u8_array()[1];
+        let g_lit = lit[0].color.to_rgba8().to_u8_array()[1];
+        assert!(
+            g_lit > g_plain,
+            "la world light verde sube el canal G: plain={} lit={}",
+            g_plain, g_lit
+        );
     }
 
     // =================================================================
