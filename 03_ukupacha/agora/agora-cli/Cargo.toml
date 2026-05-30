@@ -20,6 +20,10 @@ agora-keystore = { path = "../agora-keystore" }
 agora-channel = { path = "../agora-channel" }
 format = { path = "../../../shared/format" }
 foreign-fs = { path = "../../../shared/foreign-fs" }
+# Transporte AoE (raw sockets de capa 2) para `wawa anunciar`: difunde el
+# AnunciarCanal firmado y sirve los objetos del bundle a una wawa en la misma
+# red. Reusa el cliente ya probado en vez de duplicar el unsafe de libc.
+wawa-explorer-aoe = { path = "../../wawa-explorer/wawa-explorer-aoe" }
 clap = { workspace = true }
 directories = { workspace = true }
 rand = { workspace = true }

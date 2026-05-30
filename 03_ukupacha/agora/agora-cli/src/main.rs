@@ -133,6 +133,28 @@ enum WawaOp {
         #[arg(long)]
         salida: PathBuf,
     },
+    /// Difunde el release de un directorio (el que produjo `publicar`) por
+    /// Akasha-over-Ether y sirve sus objetos a las wawa de la misma red L2.
+    /// Es la mitad "transporte" del lazo Rust→wawa: empaqueta el
+    /// `MensajeAkasha::AnunciarCanal` firmado desde `anuncio.bin`, lo difunde
+    /// en loop y atiende los `SolicitarObjeto` de los peers (fragmentando los
+    /// objetos > 1024 B). REQUIERE CAP_NET_RAW o root para el raw socket:
+    ///
+    ///   sudo -E agora-cli wawa anunciar --iface eth0 --dir ./release
+    ///
+    /// Cortar con Ctrl-C cuando la wawa haya absorbido el release (su baliza
+    /// serial lo confirma) y el operador haya aceptado en `mudanza`.
+    Anunciar {
+        /// Interfaz Ethernet por la que difundir (ej. `eth0`, `wlp3s0`).
+        #[arg(long)]
+        iface: String,
+        /// Directorio del release (con `anuncio.bin` + los `<hash>.obj`).
+        #[arg(long)]
+        dir: PathBuf,
+        /// Segundos a difundir+servir antes de terminar.
+        #[arg(long, default_value_t = 120)]
+        segundos: u64,
+    },
     /// Fase 66 :: importa un directorio REAL al grafo direccionado por
     /// contenido (el monorepo como grafo). Cada archivo se vuelve un BLOB,
     /// cada subdirectorio un ÁRBOL (git-like). Escribe un `<hash>.obj` por
@@ -448,6 +470,8 @@ enum Error {
     Spec(String),
     #[error("foreign-fs: {0:?}")]
     ForeignFs(foreign_fs::FsError),
+    #[error("AoE (raw socket): {0}")]
+    Aoe(String),
 }
 
 type CliResult<T> = std::result::Result<T, Error>;
@@ -561,6 +585,7 @@ fn run(cmd: Cmd) -> CliResult<()> {
         },
         Cmd::Wawa { op } => match op {
             WawaOp::Publicar { como, spec, salida } => wawa_publicar(&como, &spec, &salida),
+            WawaOp::Anunciar { iface, dir, segundos } => wawa_anunciar(&iface, &dir, segundos),
             WawaOp::Importar { dir, salida } => wawa_importar(&dir, &salida),
             WawaOp::ImportarImagen { imagen, salida, particion } => {
                 wawa_importar_imagen(&imagen, &salida, particion)
@@ -1139,7 +1164,7 @@ fn wawa_publicar(como: &str, spec_path: &Path, salida: &Path) -> CliResult<()> {
     println!();
     println!("Difundir + servir en vivo a una wawa en la misma red L2:");
     println!(
-        "  sudo -E cargo run -p wawa-explorer-aoe --example servir_release -- <iface> {}",
+        "  sudo -E agora-cli wawa anunciar --iface <iface> --dir {}",
         salida.display()
     );
     Ok(())
@@ -1151,6 +1176,112 @@ fn wawa_publicar(como: &str, spec_path: &Path, salida: &Path) -> CliResult<()> {
 /// aquél cambia, este aviso queda desfasado — es sólo un AVISO informativo.
 fn umbral_fragmento() -> usize {
     1024
+}
+
+/// `agora-cli wawa anunciar` — la mitad "transporte" del lazo Rust→wawa: lee el
+/// bundle que `publicar` dejó en disco y lo difunde por AoE, sirviendo sus
+/// objetos a las wawa que los pidan. Reusa `wawa_explorer_aoe::ClienteAoE` —el
+/// mismo cliente raw-socket ya probado—, así no duplicamos el `unsafe` de libc.
+fn wawa_anunciar(iface: &str, dir: &Path, segundos: u64) -> CliResult<()> {
+    use std::time::{Duration, Instant};
+    use wawa_explorer_aoe::ClienteAoE;
+
+    let objetos = cargar_objetos_bundle(dir)?;
+    let (canal, raiz, autor, timestamp, firma) = cargar_anuncio_bundle(dir)?;
+
+    let cliente = ClienteAoE::nuevo(iface).map_err(|e| Error::Aoe(e.to_string()))?;
+    println!(
+        "anunciando release de {} sobre {iface} ({} objetos, MAC {})",
+        dir.display(),
+        objetos.len(),
+        hex_de(&cliente.mac_local())
+    );
+    println!("  canal {} · raiz {}", hex_de(&canal), hex_de(&raiz));
+    println!("  difundiendo + sirviendo {segundos}s (Ctrl-C para cortar)");
+
+    // Lazo: anunciar, servir una ventana corta, repetir. El anuncio se re-emite
+    // mientras atendemos pulls —robusto ante pérdida L2 y ante una wawa que
+    // arranca después de nosotros—.
+    let inicio = Instant::now();
+    let total = Duration::from_secs(segundos);
+    let mut servidos = 0u64;
+    while inicio.elapsed() < total {
+        if let Err(e) = cliente.anunciar_canal(canal, raiz, autor, timestamp, firma) {
+            eprintln!("agora-cli: fallo al anunciar: {e}");
+        }
+        let restante = total.saturating_sub(inicio.elapsed());
+        match cliente.servir(&objetos, restante.min(Duration::from_secs(5))) {
+            Ok(stats) => {
+                let n = stats.servidos + stats.fragmentados;
+                servidos += n;
+                if n > 0 {
+                    println!(
+                        "  +{} servidos, +{} fragmentados, {} ignorados (acum={})",
+                        stats.servidos, stats.fragmentados, stats.ignorados, servidos
+                    );
+                }
+            }
+            Err(e) => return Err(Error::Aoe(e.to_string())),
+        }
+    }
+    println!("fin. objetos servidos en total: {servidos}");
+    Ok(())
+}
+
+/// Carga los `<hash>.obj` del bundle en un mapa `id → payload`, verificando que
+/// el nombre (64 hex) sea el hash BLAKE3 del contenido —integridad de punta a
+/// punta—. Mismo layout que escriben `publicar`/`importar`.
+fn cargar_objetos_bundle(dir: &Path) -> CliResult<std::collections::HashMap<[u8; 32], Vec<u8>>> {
+    let mut mapa = std::collections::HashMap::new();
+    for ent in fs::read_dir(dir)? {
+        let ent = ent?;
+        let ruta = ent.path();
+        let Some(nombre) = ruta.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        let Some(hex_hash) = nombre.strip_suffix(".obj") else {
+            continue;
+        };
+        let id = parse_hex_32(hex_hash).map_err(|_| Error::HashInvalido(hex_hash.to_string()))?;
+        let datos = fs::read(&ruta)?;
+        if format::hash(&datos) != id {
+            return Err(Error::Spec(format!(
+                "objeto {nombre}: el contenido no rehashea a su nombre (¿corrupto?)"
+            )));
+        }
+        mapa.insert(id, datos);
+    }
+    if mapa.is_empty() {
+        return Err(Error::Spec(format!(
+            "{}: no hallé ningún <hash>.obj (¿es un bundle de `publicar`?)",
+            dir.display()
+        )));
+    }
+    Ok(mapa)
+}
+
+/// Lee `anuncio.bin` (168 B fijos): `canal|raiz|autor|timestamp_le|firma`. Es el
+/// layout crudo que escribe `wawa_publicar`, leído sin postcard.
+#[allow(clippy::type_complexity)]
+fn cargar_anuncio_bundle(dir: &Path) -> CliResult<([u8; 32], [u8; 32], [u8; 32], u64, [u8; 64])> {
+    let bytes = fs::read(dir.join("anuncio.bin"))?;
+    if bytes.len() != 168 {
+        return Err(Error::Spec(format!(
+            "anuncio.bin: esperaba 168 B, hallé {}",
+            bytes.len()
+        )));
+    }
+    let mut canal = [0u8; 32];
+    let mut raiz = [0u8; 32];
+    let mut autor = [0u8; 32];
+    let mut ts = [0u8; 8];
+    let mut firma = [0u8; 64];
+    canal.copy_from_slice(&bytes[0..32]);
+    raiz.copy_from_slice(&bytes[32..64]);
+    autor.copy_from_slice(&bytes[64..96]);
+    ts.copy_from_slice(&bytes[96..104]);
+    firma.copy_from_slice(&bytes[104..168]);
+    Ok((canal, raiz, autor, u64::from_le_bytes(ts), firma))
 }
 
 // =============================================================================
