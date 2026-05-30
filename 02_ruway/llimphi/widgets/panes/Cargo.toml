@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-panes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-panes — árbol de paneles BSP estilo tmux: hojas opacas (`View<Msg>`) que se parten horizontal/vertical, se cierran, enfocan y redimensionan arrastrando divisores. La base para montar cualquier componente de gioser en un layout intercambiable."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
