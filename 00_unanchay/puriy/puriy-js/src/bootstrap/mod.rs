@@ -55,6 +55,9 @@ mod geolocation;
 mod clipboard;
 mod share;
 mod matchmedia;
+mod screen;
+mod serviceworker;
+mod mediadevices;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -110,6 +113,9 @@ pub(crate) use geolocation::GEOLOCATION_BOOTSTRAP;
 pub(crate) use clipboard::CLIPBOARD_BOOTSTRAP;
 pub(crate) use share::SHARE_BOOTSTRAP;
 pub(crate) use matchmedia::MATCHMEDIA_BOOTSTRAP;
+pub(crate) use screen::SCREEN_BOOTSTRAP;
+pub(crate) use serviceworker::SERVICEWORKER_BOOTSTRAP;
+pub(crate) use mediadevices::MEDIADEVICES_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -167,5 +173,8 @@ pub(crate) const ALL: &[&str] = &[
     CLIPBOARD_BOOTSTRAP,
     SHARE_BOOTSTRAP,
     MATCHMEDIA_BOOTSTRAP,
+    SCREEN_BOOTSTRAP,
+    SERVICEWORKER_BOOTSTRAP,
+    MEDIADEVICES_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

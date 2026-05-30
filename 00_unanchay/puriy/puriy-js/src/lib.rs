@@ -8509,4 +8509,178 @@ mod tests {
         // El listener corrió una sola vez (se quitó antes del segundo cambio).
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
     }
+
+    // ---- Fase 7.99 — screen / orientation / devicePixelRatio ----
+
+    #[test]
+    fn screen_expone_defaults_y_es_instancia_de_screen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("screen.width").expect("e"), JsValue::Number(1280.0));
+        assert_eq!(rt.eval("screen.height").expect("e"), JsValue::Number(720.0));
+        assert_eq!(rt.eval("screen.colorDepth").expect("e"), JsValue::Number(24.0));
+        assert_eq!(rt.eval("devicePixelRatio").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("screen instanceof Screen").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("screen.orientation instanceof EventTarget").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn set_screen_y_device_pixel_ratio_actualizan_los_getters() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_screen({ width: 390, height: 844, availHeight: 800 });").expect("e");
+        rt.eval("__puriy_set_device_pixel_ratio(3);").expect("e");
+        assert_eq!(rt.eval("screen.width").expect("e"), JsValue::Number(390.0));
+        assert_eq!(rt.eval("screen.availHeight").expect("e"), JsValue::Number(800.0));
+        // height intacto (no venía en el patch).
+        assert_eq!(rt.eval("screen.height").expect("e"), JsValue::Number(844.0));
+        assert_eq!(rt.eval("devicePixelRatio").expect("e"), JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn set_orientation_flippea_type_angle_y_dispara_change() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var got = []; \
+             screen.orientation.onchange = function() { got.push(screen.orientation.type); }; \
+             screen.orientation.addEventListener('change', function(e) { got.push('lst:' + e.type); }); \
+             __puriy_set_orientation('portrait-primary', 90);",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("screen.orientation.type").expect("e"),
+            JsValue::String("portrait-primary".into())
+        );
+        assert_eq!(rt.eval("screen.orientation.angle").expect("e"), JsValue::Number(90.0));
+        assert_eq!(
+            rt.eval("got.join(',')").expect("e"),
+            JsValue::String("portrait-primary,lst:change".into())
+        );
+    }
+
+    #[test]
+    fn orientation_lock_rechaza_con_not_supported() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             screen.orientation.lock('portrait').catch(function(e) { errName = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotSupportedError".into()));
+    }
+
+    // ---- Fase 7.100 — navigator.serviceWorker ----
+
+    #[test]
+    fn service_worker_existe_y_controller_es_null() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("'serviceWorker' in navigator").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(rt.eval("navigator.serviceWorker.controller").expect("e"), JsValue::Null);
+        assert_eq!(
+            rt.eval("typeof navigator.serviceWorker.register").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn service_worker_register_publica_mutacion_y_resuelve_registration() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var scope = null; \
+             navigator.serviceWorker.register('/sw.js', { scope: '/app/' }) \
+                 .then(function(reg) { scope = reg.scope; });",
+        )
+        .expect("e");
+        // Publicó la mutación serviceworker-register al chrome.
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'serviceworker-register'; })")
+                .expect("e"),
+            JsValue::Bool(true)
+        );
+        // El chrome resuelve el registro pendiente (id=1).
+        rt.eval("__puriy_serviceworker_resolve(1, '/app/');").expect("e");
+        assert_eq!(rt.eval("scope").expect("e"), JsValue::String("/app/".into()));
+    }
+
+    #[test]
+    fn service_worker_register_reject_rechaza_con_dom_exception() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.serviceWorker.register('/sw.js').catch(function(e) { errName = e.name; }); \
+             __puriy_serviceworker_reject(1, 'SecurityError', 'no');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("SecurityError".into()));
+    }
+
+    #[test]
+    fn service_worker_get_registrations_resuelve_vacio() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = -1; \
+             navigator.serviceWorker.getRegistrations().then(function(r) { n = r.length; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
+
+    // ---- Fase 7.101 — navigator.mediaDevices ----
+
+    #[test]
+    fn media_devices_existe_y_get_user_media_rechaza_por_defecto() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof navigator.mediaDevices.getUserMedia").expect("e"),
+            JsValue::String("function".into())
+        );
+        rt.eval(
+            "var errName = null; \
+             navigator.mediaDevices.getUserMedia({ video: true }).catch(function(e) { errName = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotAllowedError".into()));
+    }
+
+    #[test]
+    fn media_devices_get_user_media_sin_constraints_es_type_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ok = false; \
+             navigator.mediaDevices.getUserMedia({}).catch(function(e) { ok = (e instanceof TypeError); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn media_devices_permiso_concedido_resuelve_stream() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_media_devices_permission(true);").expect("e");
+        rt.eval(
+            "var active = null; \
+             navigator.mediaDevices.getUserMedia({ audio: true }) \
+                 .then(function(s) { active = (s instanceof MediaStream) && s.active; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("active").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn media_devices_enumerate_y_devicechange() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = -1; var cambios = 0; \
+             navigator.mediaDevices.ondevicechange = function() { cambios++; }; \
+             __puriy_set_media_devices([{ kind: 'audioinput', deviceId: 'mic1' }]); \
+             navigator.mediaDevices.enumerateDevices().then(function(d) { n = d.length; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("cambios").expect("e"), JsValue::Number(1.0));
+    }
 }
