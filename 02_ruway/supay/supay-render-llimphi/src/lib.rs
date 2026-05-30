@@ -386,6 +386,17 @@ pub struct RenderConfig {
     /// Sin gating por oclusión: las luces son efímeras (1-30 ticks),
     /// el leak fugaz a través de paredes es invisible en práctica.
     pub world_lights_enabled: bool,
+    /// **Fase 3.29 — oclusión sectorial de world lights**. Si `true`,
+    /// cada world light cachea su set de sectores alcanzables por BFS
+    /// desde su sector origen (mismo radio y hops del muzzle gate),
+    /// y sólo aporta tinte a superficies cuyo sector está en ese set.
+    /// Un BFG ball pasando en el cuarto vecino con pared sólida deja
+    /// de pintar verde la pared detrás del jugador. Si `false`, las
+    /// luces aportan por radio solamente — comportamiento 3.27. En
+    /// stub sin BSP el flag no aplica (lit_sectors queda `None` y el
+    /// boost pasa). Costo: una llamada a BFS por luz por frame, ≤ 8
+    /// luces, ≤ 2 hops — despreciable.
+    pub world_lights_occlusion: bool,
     /// **Fase 3.28 — rim-light del arma desde world lights**. Si `true`,
     /// el sprite del arma se tinta cada frame con el boost RGB de
     /// `world_lights` evaluado en la posición del jugador (origen del
@@ -419,6 +430,7 @@ impl Default for RenderConfig {
             muzzle_glow_alpha: 0.0,
             muzzle_occlusion: true,
             world_lights_enabled: true,
+            world_lights_occlusion: true,
             weapon_rim_light: true,
         }
     }
@@ -550,21 +562,39 @@ fn compute_muzzle_lit_sectors(snap: &SceneSnapshot) -> Option<HashSet<u32>> {
     let player_ss = subsector_at_point(&snap.nodes, snap.player.x, snap.player.y)?;
     let ss = snap.subsectors.get(player_ss as usize)?;
     let player_sec = ss.sector;
-    let r = MUZZLE_RADIUS_WORLD;
-    // Estado por sector visitado: distancia cumulativa mínima desde el
-    // jugador y midpoint del bridge wall por el que entró (queda como
-    // origen de los hops siguientes). El sector del player tiene dist=0
-    // y entry=posición real del jugador.
+    Some(compute_lit_sectors_from(
+        snap,
+        snap.player.x,
+        snap.player.y,
+        player_sec,
+        MUZZLE_RADIUS_WORLD,
+    ))
+}
+
+/// BFS sectorial reusable: desde un sector fuente (con su entry point
+/// en coords mundo) explora vecinos via linedefs two-sided hasta
+/// [`MUZZLE_BFS_MAX_HOPS`] hops, con corte cumulativo por `radius`
+/// (suma de tramos entre midpoints) — la misma maquinaria de 3.25 para
+/// el muzzle, parametrizada para soportar también world lights (Fase
+/// 3.29). El sector fuente queda con `dist=0`, los vecinos accesibles
+/// con su distancia cumulativa.
+fn compute_lit_sectors_from(
+    snap: &SceneSnapshot,
+    src_x: f32,
+    src_y: f32,
+    src_sec: u32,
+    radius: f32,
+) -> HashSet<u32> {
     let mut dist: HashMap<u32, f32> = HashMap::with_capacity(16);
     let mut entry: HashMap<u32, (f32, f32)> = HashMap::with_capacity(16);
     let mut hops: HashMap<u32, usize> = HashMap::with_capacity(16);
-    dist.insert(player_sec, 0.0);
-    entry.insert(player_sec, (snap.player.x, snap.player.y));
-    hops.insert(player_sec, 0);
+    dist.insert(src_sec, 0.0);
+    entry.insert(src_sec, (src_x, src_y));
+    hops.insert(src_sec, 0);
     // Cola de trabajo. No es un BinaryHeap real porque el set típico es
     // <16 sectores; un Vec con relajación re-inserta y deja que la
     // condición `better` filtre lo redundante. Suficiente y sin deps.
-    let mut queue: Vec<u32> = vec![player_sec];
+    let mut queue: Vec<u32> = vec![src_sec];
     while let Some(sec) = queue.pop() {
         let d_sec = dist[&sec];
         let (ex, ey) = entry[&sec];
@@ -592,7 +622,7 @@ fn compute_muzzle_lit_sectors(snap: &SceneSnapshot) -> Option<HashSet<u32>> {
             let dy = my - ey;
             let hop_d = (dx * dx + dy * dy).sqrt();
             let new_d = d_sec + hop_d;
-            if new_d > r {
+            if new_d > radius {
                 continue;
             }
             let better = match dist.get(&other_sec) {
@@ -607,7 +637,7 @@ fn compute_muzzle_lit_sectors(snap: &SceneSnapshot) -> Option<HashSet<u32>> {
             }
         }
     }
-    Some(dist.into_keys().collect())
+    dist.into_keys().collect()
 }
 
 /// Gate del muzzle boost por sector cuando la oclusión está activa.
@@ -665,20 +695,25 @@ const WORLD_LIGHT_PEAK: f32 = 0.40;
 /// distancia.
 const MAX_WORLD_LIGHTS: usize = 8;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct WorldLight {
     /// Posición en cam-space (forward, right).
     x_cam: f32,
     y_cam: f32,
-    /// Sector "dueño" del mobj — se conserva por si una fase futura
-    /// quiere agregar gating per-light (BFS local) sin recomputar
-    /// `subsector_at_point`.
-    #[allow(dead_code)]
+    /// Sector "dueño" del mobj — origen del BFS de oclusión 3.29.
     sector: u32,
     /// Fase 3.27: tinte característico del mobj resuelto vía
     /// `sprite_tint_for_name`. Cae al amarillo cálido del muzzle si el
     /// sprite es desconocido para la tabla.
     tint_rgb: (u8, u8, u8),
+    /// Fase 3.29: sectores alcanzables desde `sector` por linedefs
+    /// two-sided, BFS hasta [`MUZZLE_BFS_MAX_HOPS`] con corte
+    /// cumulativo por [`WORLD_LIGHT_RADIUS_WORLD`]. `None` cuando la
+    /// oclusión está desactivada o no hay BSP en el snapshot — el caller
+    /// asume "ilumina todo" (comportamiento 3.27). `Arc` para compartir
+    /// el set sin copiar entre las múltiples superficies que consultan
+    /// la misma luz por frame.
+    lit_sectors: Option<Arc<HashSet<u32>>>,
 }
 
 /// Recolecta las luces puntuales del mundo del snapshot: cada sprite
@@ -693,6 +728,7 @@ fn gather_world_lights(
     snap: &SceneSnapshot,
     cam: &Camera,
     atlas: Option<&Arc<WadAtlas>>,
+    enable_occlusion: bool,
 ) -> Vec<WorldLight> {
     let mut lights: Vec<(f32, WorldLight)> = snap
         .sprites
@@ -715,6 +751,7 @@ fn gather_world_lights(
                     y_cam,
                     sector: s.sector,
                     tint_rgb,
+                    lit_sectors: None,
                 },
             )
         })
@@ -725,6 +762,20 @@ fn gather_world_lights(
             a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
         });
         lights.truncate(MAX_WORLD_LIGHTS);
+    }
+    // Fase 3.29: oclusión per-light. Cada luz cachea el set de sectores
+    // alcanzables desde su sector origen (BFS desde la posición mundo
+    // del mobj). Sólo computamos si hay BSP — sin él el caller asume
+    // "todo lit" (comportamiento 3.27). Para revertir la transformación
+    // cam→world usamos `cam.from_cam_2d`, evitando re-iterar los
+    // sprites originales.
+    if enable_occlusion && !snap.nodes.is_empty() && !snap.subsectors.is_empty() {
+        for (_, l) in lights.iter_mut() {
+            let (sx, sy) = cam.from_cam_2d(l.x_cam, l.y_cam);
+            let set =
+                compute_lit_sectors_from(snap, sx, sy, l.sector, WORLD_LIGHT_RADIUS_WORLD);
+            l.lit_sectors = Some(Arc::new(set));
+        }
     }
     lights.into_iter().map(|(_, l)| l).collect()
 }
@@ -877,7 +928,19 @@ fn muzzle_boost_rgb_cam(x_cam: f32, y_cam: f32, alpha: f32) -> BoostRgb {
 /// Versión RGB del boost de world lights. Cada luz contribuye
 /// `f²·PEAK·(tint/255)` per-canal, sumadas y clampeadas a
 /// `MUZZLE_BOOST_PEAK` por canal.
-fn world_lights_boost_rgb_cam(x_cam: f32, y_cam: f32, lights: &[WorldLight]) -> BoostRgb {
+///
+/// Fase 3.29: oclusión sectorial per-light. Si una luz tiene
+/// `lit_sectors = Some(set)` y `surf_sector ∉ set`, su contribución se
+/// descarta — la luz quedó "encerrada" por geometría sólida del cuarto
+/// que la contiene. Cuando `lit_sectors = None` (oclusión desactivada
+/// o snapshot sin BSP) la luz aporta como antes, preservando el
+/// comportamiento 3.27.
+fn world_lights_boost_rgb_cam(
+    x_cam: f32,
+    y_cam: f32,
+    surf_sector: u32,
+    lights: &[WorldLight],
+) -> BoostRgb {
     if lights.is_empty() {
         return ZERO_BOOST;
     }
@@ -885,6 +948,11 @@ fn world_lights_boost_rgb_cam(x_cam: f32, y_cam: f32, lights: &[WorldLight]) -> 
     let peak = WORLD_LIGHT_PEAK;
     let mut sum = [0.0_f32; 3];
     for l in lights {
+        if let Some(set) = l.lit_sectors.as_deref() {
+            if !set.contains(&surf_sector) {
+                continue;
+            }
+        }
         let dx = x_cam - l.x_cam;
         let dy = y_cam - l.y_cam;
         let d2 = dx * dx + dy * dy;
@@ -942,7 +1010,7 @@ fn combined_boost_rgb_cam(
         surf_sector,
         lit_sectors,
     );
-    let w = world_lights_boost_rgb_cam(x_cam, y_cam, world_lights);
+    let w = world_lights_boost_rgb_cam(x_cam, y_cam, surf_sector, world_lights);
     [
         (m[0] + w[0]).min(MUZZLE_BOOST_PEAK),
         (m[1] + w[1]).min(MUZZLE_BOOST_PEAK),
@@ -1103,7 +1171,7 @@ fn render_frame(
     // ordenados por cercanía al jugador. Si el toggle está apagado, queda
     // vacía y el plumbing pasa a no-op (rama temprana en `world_lights_boost_cam`).
     let world_lights: Vec<WorldLight> = if cfg.world_lights_enabled {
-        gather_world_lights(snap, &cam, cfg.atlas.as_ref())
+        gather_world_lights(snap, &cam, cfg.atlas.as_ref(), cfg.world_lights_occlusion)
     } else {
         Vec::new()
     };
@@ -1197,8 +1265,18 @@ fn render_frame(
     // world lights del frame; sin alocaciones extra. El muzzle del
     // propio jugador *no* se incluye (consistente con 3.22 — el
     // fogonazo sale de la pistola, no la ilumina a ella).
+    // Fase 3.29: el rim del arma se evalúa en la posición del player
+    // (origen cam-space). Para que la oclusión per-light corte luces
+    // separadas por paredes, resolvemos el sector del player vía BSP
+    // point query. Sin BSP cae a `NO_SECTOR`, que ninguna luz incluye
+    // en su lit set ⇒ ZERO_BOOST salvo lights con `lit_sectors = None`
+    // (toggle off), preservando el comportamiento 3.28.
+    let player_sec = subsector_at_point(&snap.nodes, snap.player.x, snap.player.y)
+        .and_then(|ss| snap.subsectors.get(ss as usize))
+        .map(|ss| ss.sector)
+        .unwrap_or(NO_SECTOR);
     let weapon_rim_boost = if cfg.weapon_rim_light {
-        world_lights_boost_rgb_cam(0.0, 0.0, world_lights_ref)
+        world_lights_boost_rgb_cam(0.0, 0.0, player_sec, world_lights_ref)
     } else {
         ZERO_BOOST
     };
@@ -4637,6 +4715,7 @@ mod tests {
             y_cam: 0.0,
             sector: 0,
             tint_rgb: MUZZLE_TINT_RGB,
+            lit_sectors: None,
         }];
         let b = world_lights_boost_cam(0.0, 0.0, &lights);
         assert!(
@@ -4655,6 +4734,7 @@ mod tests {
             y_cam: 0.0,
             sector: 0,
             tint_rgb: MUZZLE_TINT_RGB,
+            lit_sectors: None,
         }];
         let r = WORLD_LIGHT_RADIUS_WORLD;
         assert_eq!(world_lights_boost_cam(r, 0.0, &lights), 0.0);
@@ -4672,6 +4752,7 @@ mod tests {
             y_cam: 0.0,
             sector: 0,
             tint_rgb: MUZZLE_TINT_RGB,
+            lit_sectors: None,
         }];
         let close = world_lights_boost_cam(WORLD_LIGHT_RADIUS_WORLD * 0.25, 0.0, &lights);
         let mid = world_lights_boost_cam(WORLD_LIGHT_RADIUS_WORLD * 0.5, 0.0, &lights);
@@ -4689,8 +4770,20 @@ mod tests {
         // contribuciones, pero clampeada al peak del muzzle (invariante:
         // el fogonazo del arma no debe quedar dominado por proyectiles).
         let lights = vec![
-            WorldLight { x_cam: 0.0, y_cam: 0.0, sector: 0, tint_rgb: MUZZLE_TINT_RGB },
-            WorldLight { x_cam: 0.0, y_cam: 0.0, sector: 1, tint_rgb: MUZZLE_TINT_RGB },
+            WorldLight {
+                x_cam: 0.0,
+                y_cam: 0.0,
+                sector: 0,
+                tint_rgb: MUZZLE_TINT_RGB,
+                lit_sectors: None,
+            },
+            WorldLight {
+                x_cam: 0.0,
+                y_cam: 0.0,
+                sector: 1,
+                tint_rgb: MUZZLE_TINT_RGB,
+                lit_sectors: None,
+            },
         ];
         let b = world_lights_boost_cam(0.0, 0.0, &lights);
         // Sin clamp serían 2 × PEAK = 0.8; con clamp = MUZZLE_BOOST_PEAK.
@@ -4708,7 +4801,7 @@ mod tests {
             fb_sprite(128.0, 0.0, 0x02, 0), // sin bit 7
         ]);
         let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
-        let lights = gather_world_lights(&snap, &cam, None);
+        let lights = gather_world_lights(&snap, &cam, None, false);
         assert_eq!(lights.len(), 1, "sólo el sprite FF_FULLBRIGHT cuenta");
     }
 
@@ -4723,7 +4816,7 @@ mod tests {
         let mut snap = SceneSnapshot::empty(0);
         snap.sprites = Arc::from(sprites);
         let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
-        let lights = gather_world_lights(&snap, &cam, None);
+        let lights = gather_world_lights(&snap, &cam, None, false);
         assert_eq!(
             lights.len(),
             MAX_WORLD_LIGHTS,
@@ -4752,6 +4845,7 @@ mod tests {
             y_cam: 0.0,
             sector: 0,
             tint_rgb: MUZZLE_TINT_RGB,
+            lit_sectors: None,
         }];
         let b = combined_boost_cam(0.0, 0.0, 1.0, 0, None, &lights);
         assert!(
@@ -4821,8 +4915,9 @@ mod tests {
             y_cam: 0.0,
             sector: 0,
             tint_rgb: (160, 255, 160), // BFG green
+            lit_sectors: None,
         }];
-        let b = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        let b = world_lights_boost_rgb_cam(0.0, 0.0, 0, &lights);
         assert!(b[1] > b[0] && b[1] > b[2], "G debe dominar para BFG verde");
         // Magnitud verde ≈ WORLD_LIGHT_PEAK · 255/255 = PEAK.
         assert!(
@@ -4840,6 +4935,7 @@ mod tests {
                 y_cam: 0.0,
                 sector: 0,
                 tint_rgb: (255, 255, 255), // luz blanca máxima
+                lit_sectors: None,
             })
             .collect();
         let b = combined_boost_rgb_cam(0.0, 0.0, 1.0, 0, None, &lights);
@@ -4909,7 +5005,7 @@ mod tests {
         let mut snap = SceneSnapshot::empty(0);
         snap.sprites = Arc::from(vec![fb_sprite(64.0, 0.0, 0x80, 0)]);
         let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
-        let lights = gather_world_lights(&snap, &cam, None);
+        let lights = gather_world_lights(&snap, &cam, None, false);
         assert_eq!(lights.len(), 1);
         assert_eq!(lights[0].tint_rgb, MUZZLE_TINT_RGB);
     }
@@ -4919,14 +5015,21 @@ mod tests {
     // =================================================================
 
     /// Helper: una `WorldLight` en `(x_cam, y_cam)` con el tinte dado.
+    /// `lit_sectors: None` ⇒ aporta sin gating sectorial (path 3.27).
     fn rim_light(x: f32, y: f32, tint: (u8, u8, u8)) -> WorldLight {
-        WorldLight { x_cam: x, y_cam: y, sector: NO_SECTOR, tint_rgb: tint }
+        WorldLight {
+            x_cam: x,
+            y_cam: y,
+            sector: NO_SECTOR,
+            tint_rgb: tint,
+            lit_sectors: None,
+        }
     }
 
     #[test]
     fn weapon_rim_boost_zero_at_player_with_no_world_lights() {
         // Sin world lights el arma no recibe tinte ambiente: identity.
-        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &[]);
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &[]);
         assert_eq!(boost, ZERO_BOOST);
         let tint = sprite_shade_with_world(0.7, boost);
         assert!((tint[0] - 0.7).abs() < 1e-5);
@@ -4940,7 +5043,7 @@ mod tests {
         // el boost en (0,0) tiene B > R y B > G — el arma se tinta azulada.
         let blue = (110, 160, 255);
         let lights = [rim_light(120.0, 0.0, blue)];
-        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &lights);
         assert!(
             boost[2] > boost[0] && boost[2] > boost[1],
             "blue torch debería skewear B: got [{}, {}, {}]",
@@ -4959,7 +5062,7 @@ mod tests {
         // BAL1 imp fireball a 80 u del jugador: el boost tiene R > G > B.
         let red = (255, 130, 60);
         let lights = [rim_light(80.0, 0.0, red)];
-        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &lights);
         assert!(
             boost[0] > boost[1] && boost[1] > boost[2],
             "fireball debería skewear R > G > B: got [{}, {}, {}]",
@@ -4975,7 +5078,7 @@ mod tests {
         let blue = (110, 160, 255);
         let r = WORLD_LIGHT_RADIUS_WORLD + 1.0;
         let lights = [rim_light(r, 0.0, blue)];
-        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &lights);
         assert_eq!(boost, ZERO_BOOST);
     }
 
@@ -4989,7 +5092,7 @@ mod tests {
         // grayscale: `[1, 1, 1]` independiente del boost.
         let blue = (110, 160, 255);
         let lights = [rim_light(120.0, 0.0, blue)];
-        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &lights);
         // Path normal: tint asimétrico per-canal en shade bajo.
         let normal_tint = sprite_shade_with_world(0.5, boost);
         assert!(
@@ -5001,5 +5104,97 @@ mod tests {
         let full_bright_tint = [1.0_f32, 1.0, 1.0];
         assert_eq!(full_bright_tint[0], full_bright_tint[1]);
         assert_eq!(full_bright_tint[1], full_bright_tint[2]);
+    }
+
+    // =================================================================
+    // Fase 3.29 — Oclusión sectorial de world lights
+    // =================================================================
+
+    #[test]
+    fn lit_sectors_from_arbitrary_source_includes_source_sector() {
+        // Generalización: arrancar la BFS desde un sector arbitrario
+        // (p. ej. el sector que aloja a un proyectil FF_FULLBRIGHT)
+        // siempre incluye al sector origen, y al vecino conectado por
+        // two-sided. El sector 2 (sólo one-sided) queda excluido.
+        let snap = snap_with_adjacency();
+        let lit = compute_lit_sectors_from(&snap, 0.0, 0.0, 1, WORLD_LIGHT_RADIUS_WORLD);
+        assert!(lit.contains(&1), "sector origen siempre en el set");
+        assert!(lit.contains(&0), "vecino directo via two-sided incluido");
+        assert!(!lit.contains(&2), "sector aislado fuera del set");
+    }
+
+    #[test]
+    fn world_lights_boost_rgb_skips_light_when_surf_not_in_lit_sectors() {
+        // Luz con lit_sectors restringido a {1}. Superficie en sector 2 ⇒
+        // la luz no aporta. Misma luz evaluada con surf_sector=1 sí aporta.
+        let mut lit = HashSet::new();
+        lit.insert(1_u32);
+        let light = WorldLight {
+            x_cam: 0.0,
+            y_cam: 0.0,
+            sector: 1,
+            tint_rgb: (255, 255, 255),
+            lit_sectors: Some(Arc::new(lit)),
+        };
+        let lights = [light];
+        let blocked = world_lights_boost_rgb_cam(0.0, 0.0, 2, &lights);
+        assert_eq!(blocked, ZERO_BOOST, "sector no listado ⇒ luz oculta");
+        let visible = world_lights_boost_rgb_cam(0.0, 0.0, 1, &lights);
+        assert!(visible[0] > 0.0, "sector listado ⇒ luz aporta");
+    }
+
+    #[test]
+    fn world_lights_boost_rgb_passes_light_when_lit_sectors_is_none() {
+        // Backward-compat 3.27: lit_sectors=None ⇒ surf_sector ignorado.
+        // Una luz sin gating aporta en cualquier sector.
+        let light = WorldLight {
+            x_cam: 0.0,
+            y_cam: 0.0,
+            sector: 0,
+            tint_rgb: (255, 255, 255),
+            lit_sectors: None,
+        };
+        let lights = [light];
+        let b0 = world_lights_boost_rgb_cam(0.0, 0.0, 0, &lights);
+        let b9 = world_lights_boost_rgb_cam(0.0, 0.0, 999, &lights);
+        assert_eq!(b0, b9, "sin gating, surf_sector no cambia el boost");
+        assert!(b0[0] > 0.0);
+    }
+
+    #[test]
+    fn gather_world_lights_computes_lit_sectors_when_occlusion_enabled() {
+        // Con BSP + un sprite FF_FULLBRIGHT en sector 1 + oclusión on,
+        // la luz cachea un set que incluye al menos su sector origen.
+        let mut snap = snap_with_adjacency();
+        // Sprite en (0, 0): cae sobre el seam pero el sector lo fijamos
+        // explícitamente a 1 (igual al snap_with_adjacency wall 0↔1).
+        snap.sprites = Arc::from(vec![fb_sprite(0.0, 0.0, 0x80, 1)]);
+        let cam = Camera::new(snap.player.x, snap.player.y, 0.0, 0.0);
+        let lights = gather_world_lights(&snap, &cam, None, true);
+        assert_eq!(lights.len(), 1);
+        let set = lights[0]
+            .lit_sectors
+            .as_ref()
+            .expect("oclusión on con BSP ⇒ Some(set)");
+        assert!(set.contains(&1), "set incluye sector origen");
+    }
+
+    #[test]
+    fn gather_world_lights_skips_occlusion_when_disabled_or_no_bsp() {
+        // (a) oclusión off ⇒ lit_sectors = None para todas.
+        let mut snap = snap_with_adjacency();
+        snap.sprites = Arc::from(vec![fb_sprite(0.0, 0.0, 0x80, 1)]);
+        let cam = Camera::new(snap.player.x, snap.player.y, 0.0, 0.0);
+        let off = gather_world_lights(&snap, &cam, None, false);
+        assert_eq!(off.len(), 1);
+        assert!(off[0].lit_sectors.is_none(), "oclusión off ⇒ None");
+        // (b) oclusión on pero sin BSP (snapshot sintético sin nodes)
+        // ⇒ lit_sectors = None (el caller cae al comportamiento 3.27).
+        let mut bare = SceneSnapshot::empty(0);
+        bare.sprites = Arc::from(vec![fb_sprite(20.0, 0.0, 0x80, 0)]);
+        let cam2 = Camera::new(0.0, 0.0, 0.0, 0.0);
+        let no_bsp = gather_world_lights(&bare, &cam2, None, true);
+        assert_eq!(no_bsp.len(), 1);
+        assert!(no_bsp[0].lit_sectors.is_none(), "sin BSP ⇒ None");
     }
 }
