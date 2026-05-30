@@ -156,6 +156,30 @@ impl RecorridoWeb {
         self.inner.borrow().state.paso
     }
 
+    /// Exporta el recorrido a un documento **HTML autocontenido** (un solo
+    /// `.html` sin servidor ni `.wasm`): lee los `.recorrido-marco` vivos del
+    /// DOM (geometría de mundo + su HTML interno) y emite un documento con CSS y
+    /// un JS vanilla que replica la cámara del core (fit, zoom-a-cursor, pan,
+    /// pasos, vista general). Para publicar la presentación offline.
+    pub fn exportar_html(&self, titulo: &str) -> String {
+        let hijos = self.mundo.children();
+        let mut marcos = Vec::new();
+        for idx in 0..hijos.length() {
+            let Some(el) = hijos.item(idx).and_then(|e| e.dyn_into::<HtmlElement>().ok()) else {
+                continue;
+            };
+            marcos.push(MarcoExport {
+                x: attr_f64(&el, "data-x", 0.0),
+                y: attr_f64(&el, "data-y", 0.0),
+                w: attr_f64(&el, "data-w", 640.0),
+                h: attr_f64(&el, "data-h", 400.0),
+                rot: attr_f64(&el, "data-rot", 0.0),
+                html: el.inner_html(),
+            });
+        }
+        recorrido_a_html(titulo, &marcos)
+    }
+
     pub fn on_change<F: FnMut(usize) + 'static>(&self, cb: F) {
         self.inner.borrow_mut().on_change = Some(Box::new(cb));
     }
@@ -325,6 +349,115 @@ fn attr_f64(el: &HtmlElement, name: &str, def: f64) -> f64 {
     el.get_attribute(name).and_then(|s| s.trim().parse::<f64>().ok()).unwrap_or(def)
 }
 
+// ---- Export a HTML autocontenido -----------------------------------------
+
+/// Un marco listo para exportar: su rect de mundo + giro + su HTML interno.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarcoExport {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub rot: f64,
+    /// HTML interno del marco (texto, `<img>`, lo que sea).
+    pub html: String,
+}
+
+/// Genera un documento HTML **autocontenido** desde los marcos (función pura,
+/// sin DOM — testeable en host). Embebe el CSS y un JS vanilla que replica la
+/// cámara de `pluma-deck-core` (`fit`/`zoom_a_cursor`/`pan`/pasos/`vista_general`)
+/// para que el `.html` resultante presente offline sin servidor ni `.wasm`.
+pub fn recorrido_a_html(titulo: &str, marcos: &[MarcoExport]) -> String {
+    let t = escapar_html(titulo);
+    let mut cuerpo = String::new();
+    for m in marcos {
+        let rot = if m.rot != 0.0 {
+            format!(";transform:rotate({}rad)", m.rot)
+        } else {
+            String::new()
+        };
+        cuerpo.push_str(&format!(
+            "<div class=\"recorrido-marco\" data-x=\"{x}\" data-y=\"{y}\" data-w=\"{w}\" data-h=\"{h}\" data-rot=\"{r}\" \
+             style=\"left:{x}px;top:{y}px;width:{w}px;height:{h}px{rot}\">{html}</div>",
+            x = m.x, y = m.y, w = m.w, h = m.h, r = m.rot, rot = rot, html = m.html,
+        ));
+    }
+    format!(
+        "<!DOCTYPE html>\n<html lang=\"es\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <title>{t}</title><style>{css}</style></head><body>\
+         <div class=\"recorrido-viewport\"><div class=\"recorrido-mundo\">{cuerpo}</div>\
+         <div class=\"recorrido-hud\"></div></div><script>{js}</script></body></html>",
+        t = t, css = EXPORT_CSS, cuerpo = cuerpo, js = EXPORT_JS,
+    )
+}
+
+/// Escape mínimo para insertar texto en HTML (sólo para el `<title>`).
+fn escapar_html(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+const EXPORT_CSS: &str = "\
+html,body{margin:0;height:100%;background:#12141c;font-family:system-ui,sans-serif}\
+.recorrido-viewport{position:relative;width:100vw;height:100vh;overflow:hidden;touch-action:none;user-select:none}\
+.recorrido-mundo{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}\
+.recorrido-marco{position:absolute;box-sizing:border-box;background:#262a38;border:1px solid #505668;\
+border-radius:6px;color:#e1e6f0;padding:20px;overflow:hidden}\
+.recorrido-marco h1,.recorrido-marco h2{margin:0 0 .4em;color:#fff}\
+.recorrido-marco img{max-width:100%;max-height:100%;object-fit:contain}\
+.recorrido-hud{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);\
+background:rgba(12,14,20,.78);color:#cdd4e2;padding:6px 12px;border-radius:999px;font-size:14px;pointer-events:none}";
+
+// JS vanilla — espejo de RecorridoWeb/Camara. Se inserta como argumento de
+// format!, así sus llaves no necesitan escaparse.
+const EXPORT_JS: &str = r#"(function(){
+var vp=document.querySelector('.recorrido-viewport');
+var mundo=document.querySelector('.recorrido-mundo');
+var hud=document.querySelector('.recorrido-hud');
+var ZB=1.1,FIT=0.9,ZMIN=0.02,ZMAX=64,DUR=800,WN=100;
+var EASE='transform '+DUR+'ms cubic-bezier(0.22,0.61,0.36,1)';
+var marcos=[].slice.call(mundo.children).map(function(el){return{
+ x:+el.dataset.x||0,y:+el.dataset.y||0,w:+el.dataset.w||640,h:+el.dataset.h||400,rot:+el.dataset.rot||0};});
+var cam={cx:0,cy:0,zoom:1,rot:0},paso=0;
+function P(){return{w:vp.clientWidth,h:vp.clientHeight};}
+function clamp(z){return Math.max(ZMIN,Math.min(ZMAX,z));}
+function fit(m){var p=P();var zw=m.w>0?p.w/m.w:1,zh=m.h>0?p.h/m.h:1;
+ return{cx:m.x+m.w/2,cy:m.y+m.h/2,zoom:clamp(Math.min(zw,zh)*FIT),rot:m.rot};}
+function fitAll(){if(!marcos.length)return cam;var p=P();
+ var minx=1/0,miny=1/0,maxx=-1/0,maxy=-1/0;
+ marcos.forEach(function(m){var hw=m.w/2,hh=m.h/2,c=Math.abs(Math.cos(m.rot)),s=Math.abs(Math.sin(m.rot));
+  var ex=hw*c+hh*s,ey=hw*s+hh*c,cx=m.x+hw,cy=m.y+hh;
+  minx=Math.min(minx,cx-ex);miny=Math.min(miny,cy-ey);maxx=Math.max(maxx,cx+ex);maxy=Math.max(maxy,cy+ey);});
+ var bw=maxx-minx,bh=maxy-miny;var zw=bw>0?p.w/bw:1,zh=bh>0?p.h/bh:1;
+ return{cx:(minx+maxx)/2,cy:(miny+maxy)/2,zoom:clamp(Math.min(zw,zh)*FIT),rot:0};}
+function apply(smooth){var p=P();mundo.style.transition=smooth?EASE:'none';
+ mundo.style.transform='translate('+(p.w/2)+'px,'+(p.h/2)+'px) scale('+cam.zoom+') rotate('+(-cam.rot)+'rad) translate('+(-cam.cx)+'px,'+(-cam.cy)+'px)';
+ if(hud)hud.textContent=(paso+1)+' / '+marcos.length;}
+function s2w(px,py){var p=P();var sx=(px-p.w/2)/cam.zoom,sy=(py-p.h/2)/cam.zoom;
+ var c=Math.cos(cam.rot),s=Math.sin(cam.rot);return[cam.cx+sx*c-sy*s,cam.cy+sx*s+sy*c];}
+function goto(i,smooth){if(i<0||i>=marcos.length)return;paso=i;cam=fit(marcos[i]);apply(smooth);}
+marcos.forEach(function(m,i){var el=mundo.children[i];el.style.position='absolute';
+ el.style.left=m.x+'px';el.style.top=m.y+'px';el.style.width=m.w+'px';el.style.height=m.h+'px';
+ el.style.boxSizing='border-box';if(m.rot)el.style.transform='rotate('+m.rot+'rad)';});
+vp.addEventListener('wheel',function(e){e.preventDefault();var r=vp.getBoundingClientRect();
+ var cx=e.clientX-r.left,cy=e.clientY-r.top;var pasos=Math.max(-3,Math.min(3,e.deltaY/WN));
+ var mult=Math.pow(ZB,-pasos);var anc=s2w(cx,cy);cam.zoom=clamp(cam.zoom*mult);
+ var p=P();var sx=(cx-p.w/2)/cam.zoom,sy=(cy-p.h/2)/cam.zoom;var c=Math.cos(cam.rot),s=Math.sin(cam.rot);
+ cam.cx=anc[0]-(sx*c-sy*s);cam.cy=anc[1]-(sx*s+sy*c);apply(false);},{passive:false});
+var drag=null;
+vp.addEventListener('pointerdown',function(e){drag=[e.clientX,e.clientY];vp.setPointerCapture(e.pointerId);});
+vp.addEventListener('pointermove',function(e){if(!drag)return;var dx=e.clientX-drag[0],dy=e.clientY-drag[1];
+ drag=[e.clientX,e.clientY];var c=Math.cos(cam.rot),s=Math.sin(cam.rot);
+ cam.cx-=(dx*c-dy*s)/cam.zoom;cam.cy-=(dx*s+dy*c)/cam.zoom;apply(false);});
+['pointerup','pointercancel','pointerleave'].forEach(function(ev){vp.addEventListener(ev,function(){drag=null;});});
+window.addEventListener('keydown',function(e){var k=e.key;
+ if(k==='ArrowRight'||k==='ArrowDown'||k===' '||k==='Spacebar'||k==='Enter'){if(paso+1<marcos.length){goto(paso+1,true);e.preventDefault();}}
+ else if(k==='ArrowLeft'||k==='ArrowUp'){if(paso>0){goto(paso-1,true);e.preventDefault();}}
+ else if(k==='Home'||k==='Escape'){cam=fitAll();apply(true);e.preventDefault();}});
+window.addEventListener('resize',function(){apply(false);});
+goto(0,false);
+})();"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +492,33 @@ mod tests {
         let css = camara_css(&cam, PANEL);
         assert!(css.contains("scale(1.7)"), "{css}");
         assert!(css.contains("rotate(-0.3rad)"), "{css}");
+    }
+
+    #[test]
+    fn export_html_es_documento_autocontenido() {
+        let marcos = vec![
+            MarcoExport { x: 0.0, y: 0.0, w: 640.0, h: 400.0, rot: 0.0, html: "<h1>Uno</h1>".into() },
+            MarcoExport { x: 900.0, y: 0.0, w: 640.0, h: 400.0, rot: 0.12, html: "<p>Dos</p>".into() },
+        ];
+        let html = recorrido_a_html("Mi <demo>", &marcos);
+        // Documento completo con CSS + JS embebidos (sin recursos externos).
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.contains("<style>") && html.contains("<script>"));
+        assert!(!html.contains("http://") && !html.contains("https://") && !html.contains(".wasm"));
+        // El título se escapa.
+        assert!(html.contains("<title>Mi &lt;demo&gt;</title>"), "{}", &html[..200]);
+        // Cada marco con su geometría de mundo y su HTML interno.
+        assert!(html.contains("data-x=\"900\"") && html.contains("data-rot=\"0.12\""));
+        assert!(html.contains("<h1>Uno</h1>") && html.contains("<p>Dos</p>"));
+        // El JS replica la cámara del core (funciones clave presentes).
+        assert!(html.contains("function fit(") && html.contains("function fitAll("));
+        assert!(html.contains("function s2w(") && html.contains("goto(0,false)"));
+    }
+
+    #[test]
+    fn export_html_sin_marcos_sigue_siendo_valido() {
+        let html = recorrido_a_html("vacío", &[]);
+        assert!(html.starts_with("<!DOCTYPE html>") && html.ends_with("</html>"));
+        assert!(html.contains("recorrido-mundo"));
     }
 }
