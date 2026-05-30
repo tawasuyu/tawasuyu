@@ -23,5 +23,6 @@ foreign-psd = { path = "../../../shared/foreign-psd" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
+llimphi-module-file-picker = { workspace = true }
 image = { workspace = true }
 uuid = { workspace = true }
