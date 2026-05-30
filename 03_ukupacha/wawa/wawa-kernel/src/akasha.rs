@@ -420,7 +420,7 @@ fn procesar(mensaje: MensajeAkasha, origen: Mac, nuestra: Mac) {
         }
         MensajeAkasha::ProveedorObjeto(id, payload) => {
             RX_PROVEEDORES.fetch_add(1, Ordering::Relaxed);
-            absorber_proveedor(id, &payload, origen);
+            absorber_proveedor(id, &payload, origen, nuestra);
         }
         MensajeAkasha::ProveedorFragmento {
             id,
@@ -435,7 +435,7 @@ fn procesar(mensaje: MensajeAkasha, origen: Mac, nuestra: Mac) {
             RX_PROVEEDORES.fetch_add(1, Ordering::Relaxed);
             let completo = REENSAMBLADOR.lock().ingerir(id, indice, total, &datos);
             if let Some(payload) = completo {
-                absorber_proveedor(id, &payload, origen);
+                absorber_proveedor(id, &payload, origen, nuestra);
             }
         }
         MensajeAkasha::AnunciarRaiz(id) => {
@@ -513,7 +513,15 @@ fn atender_solicitud(id: Hash, origen: Mac, nuestra: Mac) {
 /// rehashea al `id` que el remitente afirma; si cuadra, lo deposita en el
 /// grafo local; si no, lo descarta con una traza. La unica entrada de
 /// integridad esta aqui: el grafo local no admite mentiras.
-fn absorber_proveedor(id: Hash, payload: &[u8], origen: Mac) {
+///
+/// CASCADA DEL DAG :: tras absorber, pide al MISMO emisor los `hijos` que aun
+/// nos falten. Asi un solo `AnunciarCanal` arrastra el cono completo
+/// `canal -> manifiesto -> bytecodes` sin que el kernel entienda la semantica:
+/// el objeto-manifiesto lista sus bytecodes como `hijos` (ver
+/// `agora_channel::construir_release`), y el objeto-canal lista el manifiesto.
+/// El walk es seguro contra ciclos —un grafo direccionado por contenido es
+/// aciclico— y solo pide lo ausente, asi un re-anuncio no re-descarga nada.
+fn absorber_proveedor(id: Hash, payload: &[u8], origen: Mac, nuestra: Mac) {
     if format::hash(payload) != id {
         let _ = writeln!(
             baliza::Serie,
@@ -532,6 +540,9 @@ fn absorber_proveedor(id: Hash, payload: &[u8], origen: Mac) {
             return;
         }
     };
+    // Los hijos viajan al almacen por valor; clonamos la lista (un punado de
+    // hashes de 32 B) para caminarla despues de almacenar.
+    let hijos = objeto.hijos.clone();
     match almacen::almacenar(objeto.datos, objeto.hijos) {
         Ok(hash) => {
             let _ = writeln!(
@@ -540,6 +551,8 @@ fn absorber_proveedor(id: Hash, payload: &[u8], origen: Mac) {
                 FormatoHash(&hash),
                 FormatoMac(&origen)
             );
+            // Cascada: pedir los hijos que no tengamos, al mismo emisor.
+            solicitar_hijos_faltantes(&hijos, origen, nuestra);
         }
         Err(motivo) => {
             let _ = writeln!(
@@ -547,6 +560,43 @@ fn absorber_proveedor(id: Hash, payload: &[u8], origen: Mac) {
                 "akasha :: no se pudo absorber proveedor :: {motivo}"
             );
         }
+    }
+}
+
+/// Cota dura de hijos que solicitamos por objeto absorbido. Un objeto valido
+/// (su payload rehashea a su id) puede aun asi declarar una lista de hijos
+/// adversarialmente larga; el walk del DAG la respeta solo hasta este techo
+/// para no convertir un objeto malicioso en una rafaga de solicitudes. Un
+/// manifiesto real lista una app por entrada — 256 cubre cualquier release
+/// plausible con holgura.
+const MAX_HIJOS_SOLICITAR: usize = 256;
+
+/// Pide a `origen` (unicast) cada hash de `hijos` que el almacen local no
+/// tenga aun. Es el motor del walk recursivo del DAG: cada objeto que llega
+/// reactiva esta funcion sobre SUS hijos via `absorber_proveedor`, asi el cono
+/// entero converge. Idempotente: un hijo ya presente no se re-pide.
+fn solicitar_hijos_faltantes(hijos: &[Hash], origen: Mac, nuestra: Mac) {
+    for hijo in hijos.iter().take(MAX_HIJOS_SOLICITAR) {
+        if matches!(almacen::recuperar(hijo), Ok(None)) {
+            let mensaje = MensajeAkasha::SolicitarObjeto(*hijo);
+            if enviar(&mensaje, nuestra, origen).is_ok() {
+                TX_SOLICITUDES.fetch_add(1, Ordering::Relaxed);
+                let _ = writeln!(
+                    baliza::Serie,
+                    "akasha :: SOLICITUD (hijo del DAG) :: {} -> {}",
+                    FormatoHash(hijo),
+                    FormatoMac(&origen)
+                );
+            }
+        }
+    }
+    if hijos.len() > MAX_HIJOS_SOLICITAR {
+        let _ = writeln!(
+            baliza::Serie,
+            "akasha :: objeto con {} hijos excede el techo {} :: walk truncado",
+            hijos.len(),
+            MAX_HIJOS_SOLICITAR
+        );
     }
 }
 
@@ -607,12 +657,22 @@ fn atender_anuncio_canal(
             TX_SOLICITUDES.fetch_add(1, Ordering::Relaxed);
         }
     }
-    // Pedir la raiz de manifiesto si nos falta.
-    if matches!(almacen::recuperar(&raiz), Ok(None)) {
-        let mensaje = MensajeAkasha::SolicitarObjeto(raiz);
-        if enviar(&mensaje, nuestra, origen).is_ok() {
-            TX_SOLICITUDES.fetch_add(1, Ordering::Relaxed);
+    // Pedir la raiz de manifiesto si nos falta; si YA la tenemos, caminar sus
+    // hijos y re-pedir los bytecodes ausentes. Esto da reintento ante perdida
+    // L2: la cascada de `absorber_proveedor` dispara una sola vez al llegar el
+    // manifiesto, pero el emisor re-anuncia el canal cada pocos segundos, asi
+    // un bytecode cuya solicitud se perdio se vuelve a pedir en el proximo faro.
+    match almacen::recuperar(&raiz) {
+        Ok(None) => {
+            let mensaje = MensajeAkasha::SolicitarObjeto(raiz);
+            if enviar(&mensaje, nuestra, origen).is_ok() {
+                TX_SOLICITUDES.fetch_add(1, Ordering::Relaxed);
+            }
         }
+        Ok(Some(manifiesto)) => {
+            solicitar_hijos_faltantes(&manifiesto.hijos, origen, nuestra);
+        }
+        Err(_) => {}
     }
 }
 
