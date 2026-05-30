@@ -1,0 +1,16 @@
+[package]
+name = "media-recorder-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/recorder-app — grabador de pantalla Llimphi: botón Rec/Stop + timer → .webm AV1+Opus nativo (pantalla X11 + micrófono cpal), sin ffmpeg."
+
+[dependencies]
+llimphi-ui = { path = "../../llimphi/llimphi-ui" }
+media-core = { path = "../media-core" }
+media-recorder-webm = { path = "../media-recorder-webm" }
+# Captura con los dos backends de sistema activos (X11 + cpal). El crate
+# es una app: necesita el hardware, así que pide las features directo.
+media-source-capture = { path = "../media-source-capture", features = ["screen", "mic"] }

@@ -45,6 +45,7 @@ Mascota: un calcetín — guarda cosas, se pierde, abriga.
 | `media-recorder-av1`  | captura del stream de video a `.ivf` AV1 nativo (vía `media-encode-av1`) — contraparte de video del recorder WAV. Round-trip verificado. Ver su README. |
 | `media-recorder-webm` | **recorder unificado**: tee de video (`FrameSource`→AV1) + audio (`AudioSource`→Opus) a un único `.webm` AV1+Opus muxeado en `stop()` (vía `media-encode-av1` + `media-encode-opus` + `media-mux-webm`). Audio con sample-rate no-Opus degrada a video-solo. Round-trip grabación→reproducción verificado, sin ffmpeg. |
 | `media-app`           | reproductor Llimphi con visores; `examples/analyze.rs` analiza offline |
+| `media-recorder-app`  | **grabador** de pantalla Llimphi (botón Rec/Stop + timer): `ScreenSource`+`MicSource` → `.webm` AV1+Opus nativo. Grabación en hilo de fondo vía `Handle::spawn` (no bloquea el bucle Elm). Crate aparte del reproductor para no arrastrarle los backends de sistema. Ver su README. |
 
 Los `media-source-*` son hojas: dependen sólo de `media-core` y de su
 decoder. Los wrappers (pause, volume, recorder, probe) componen sobre

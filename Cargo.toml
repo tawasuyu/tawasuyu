@@ -276,6 +276,7 @@ members = [
     "02_ruway/mirada/mirada-portal",
     "02_ruway/mirada/mirada-protocol",
     "02_ruway/media/media-app",
+    "02_ruway/media/media-recorder-app",
     "02_ruway/media/media-audio-cpal",
     "02_ruway/media/media-core",
     "02_ruway/media/media-encode-av1",
