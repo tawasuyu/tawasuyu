@@ -7889,4 +7889,61 @@ mod tests {
         assert_eq!(rt.eval("window.frames === window").expect("e"), JsValue::Bool(true));
         assert_eq!(rt.eval("window.length").expect("e"), JsValue::Number(0.0));
     }
+
+    // ---- Fase 7.85 — navigator ampliado ----
+
+    #[test]
+    fn navigator_props_de_feature_detection() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Locale + capacidades.
+        assert_eq!(rt.eval("navigator.language").expect("e"), JsValue::String("es-ES".into()));
+        assert_eq!(rt.eval("Array.isArray(navigator.languages)").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.languages[0]").expect("e"), JsValue::String("es-ES".into()));
+        assert_eq!(rt.eval("navigator.hardwareConcurrency >= 1").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.cookieEnabled").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.maxTouchPoints").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn navigator_constantes_legacy() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Valores literales que el spec obliga a devolver en todo browser.
+        assert_eq!(rt.eval("navigator.appCodeName").expect("e"), JsValue::String("Mozilla".into()));
+        assert_eq!(rt.eval("navigator.appName").expect("e"), JsValue::String("Netscape".into()));
+        assert_eq!(rt.eval("navigator.product").expect("e"), JsValue::String("Gecko".into()));
+    }
+
+    // ---- Fase 7.86 — eventos online/offline ----
+
+    #[test]
+    fn set_online_dispara_offline_y_online_y_actualiza_navigator() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var log = []; \
+             addEventListener('offline', function() { log.push('off:' + navigator.onLine); }); \
+             addEventListener('online', function() { log.push('on:' + navigator.onLine); }); \
+             __puriy_set_online(false); \
+             __puriy_set_online(true);",
+        )
+        .expect("e");
+        // navigator.onLine refleja el último estado y el evento ve el valor ya actualizado.
+        assert_eq!(rt.eval("navigator.onLine").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("log.length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("log[0]").expect("e"), JsValue::String("off:false".into()));
+        assert_eq!(rt.eval("log[1]").expect("e"), JsValue::String("on:true".into()));
+    }
+
+    #[test]
+    fn set_online_sin_cambio_es_noop() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             addEventListener('online', function() { n++; }); \
+             var r = __puriy_set_online(true);",
+        )
+        .expect("e");
+        // Arranca online; setear online de nuevo no dispara nada.
+        assert_eq!(rt.eval("r").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
 }
