@@ -47,6 +47,10 @@
 //! - `Ctrl+V`         — pegar el portapapeles como capa nueva
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
+//!
+//! Con la herramienta Marco, arrastrar DESDE ADENTRO de una selección
+//! existente mueve su contenido (drag-to-move); arrastrar desde afuera
+//! arma un marquee nuevo.
 //! - `F2`             — renombrar capa in-situ (Enter confirma · Esc cancela)
 //! - `V`              — toggle visibilidad
 //! - `B` / `Shift+B`  — ciclar blend forward / reverse
@@ -385,17 +389,41 @@ impl App for Tullpu {
                     ),
                 ) {
                     let _ = img;
-                    model.seleccion_drag = Some(SeleccionDrag {
-                        ancla_ix: ix.floor() as i32,
-                        ancla_iy: iy.floor() as i32,
-                        cur_lx: lx,
-                        cur_ly: ly,
-                        rw,
-                        rh,
+                    let pix_x = ix.floor() as i32;
+                    let pix_y = iy.floor() as i32;
+                    // Si el press cae DENTRO de la selección vigente,
+                    // arrastramos su contenido (drag-to-move) en vez de
+                    // construir un marquee nuevo (Photoshop standard).
+                    let dentro = model.seleccion.is_some_and(|r| {
+                        pix_x >= r.x0 as i32
+                            && pix_x < r.x1 as i32
+                            && pix_y >= r.y0 as i32
+                            && pix_y < r.y1 as i32
                     });
-                    // Press limpia la selección previa — vamos a
-                    // construir una nueva sobre la marcha.
-                    model.seleccion = None;
+                    if dentro {
+                        model.mover_drag = Some(MoverDrag {
+                            press_lx: lx,
+                            press_ly: ly,
+                            cur_lx: lx,
+                            cur_ly: ly,
+                            rw,
+                            rh,
+                            aplicado_ix: 0,
+                            aplicado_iy: 0,
+                        });
+                    } else {
+                        model.seleccion_drag = Some(SeleccionDrag {
+                            ancla_ix: pix_x,
+                            ancla_iy: pix_y,
+                            cur_lx: lx,
+                            cur_ly: ly,
+                            rw,
+                            rh,
+                        });
+                        // Press fuera limpia la selección previa — vamos
+                        // a construir una nueva sobre la marcha.
+                        model.seleccion = None;
+                    }
                 }
             }
             Msg::AjustarSeleccion { dx, dy } => {
@@ -411,9 +439,62 @@ impl App for Tullpu {
                         model.pan_x,
                         model.pan_y,
                     );
+                } else if let Some(md) = model.mover_drag.as_mut() {
+                    // Drag-to-move: acumular el desplazamiento local,
+                    // convertir a coords-imagen vía la escala del fit, y
+                    // mover el contenido por el paso entero que todavía
+                    // falte aplicar (el resto sub-píxel queda en cur-press).
+                    md.cur_lx += dx;
+                    md.cur_ly += dy;
+                    let md = *md;
+                    if let Some((s, _, _)) = transform_lienzo(
+                        model.lienzo.width,
+                        model.lienzo.height,
+                        md.rw,
+                        md.rh,
+                        model.factor_zoom,
+                        model.pan_x,
+                        model.pan_y,
+                    ) {
+                        if s > 0.0 {
+                            let total_ix = (((md.cur_lx - md.press_lx) as f64)
+                                / s)
+                                .round() as i32;
+                            let total_iy = (((md.cur_ly - md.press_ly) as f64)
+                                / s)
+                                .round() as i32;
+                            let paso_x = total_ix - md.aplicado_ix;
+                            let paso_y = total_iy - md.aplicado_iy;
+                            if (paso_x != 0 || paso_y != 0)
+                                && mover_pixeles_seleccion(
+                                    &mut model, paso_x, paso_y,
+                                )
+                            {
+                                if let Some(m) = model.mover_drag.as_mut() {
+                                    m.aplicado_ix = total_ix;
+                                    m.aplicado_iy = total_iy;
+                                }
+                                // Coalesce: todo el drag = un solo Undo.
+                                let etiqueta =
+                                    model.seleccionada.map(|i| (i, "mover_sel"));
+                                pushear_snapshot(&mut model, etiqueta);
+                            }
+                        }
+                    }
                 }
             }
             Msg::FinalizarSeleccion => {
+                // Si veníamos arrastrando contenido, cerramos ese drag y
+                // dejamos la selección donde quedó (siguió al contenido).
+                if model.mover_drag.take().is_some() {
+                    if let Some(rect) = model.seleccion {
+                        model.estado = format!(
+                            "movida a ({},{})",
+                            rect.x0, rect.y0
+                        );
+                    }
+                    return model;
+                }
                 // Commit final: si el rect quedó válido al fin del drag
                 // ya está en `seleccion`. Si era un click sin
                 // movimiento (área cero), `seleccion` quedó None
@@ -736,6 +817,7 @@ mod tests {
             histograma: None,
             seleccion: None,
             seleccion_drag: None,
+            mover_drag: None,
             portapapeles: None,
         }
     }
@@ -4252,6 +4334,130 @@ mod tests {
         // Un solo Undo restaura el hash original de la capa.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
+    }
+
+    // ---- Fase 42: arrastrar el contenido de la selección (drag-to-move) -
+
+    /// Modelo 4×4 con un bloque 2×2 opaco en la esquina (0,0) y una capa
+    /// raster seleccionada, listo para tests de drag. Con `rw=rh=4`,
+    /// `zoom=1`, `pan=0` la conversión local→imagen es la identidad.
+    fn modelo_bloque_4x4() -> (Model, Uuid) {
+        let mut model = modelo_minimo();
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        for y in 0..2 {
+            for x in 0..2 {
+                let i = (y * 4 + x) * 4;
+                buf[i..i + 4].copy_from_slice(&[200, 100, 50, 255]);
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("bloque", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        (model, id)
+    }
+
+    #[test]
+    fn iniciar_seleccion_dentro_arranca_mover_drag_sin_limpiar() {
+        let (mut model, _) = modelo_bloque_4x4();
+        let sel = RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 };
+        model.seleccion = Some(sel);
+        // Press local (1,1) con rw=rh=4 → imagen (1,1), dentro del rect.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarSeleccion { lx: 1.0, ly: 1.0, rw: 4.0, rh: 4.0 },
+            &Handle::for_test(),
+        );
+        assert!(model.mover_drag.is_some());
+        assert!(model.seleccion_drag.is_none());
+        // La selección NO se limpió (sigue ahí para mover su contenido).
+        assert_eq!(model.seleccion, Some(sel));
+    }
+
+    #[test]
+    fn iniciar_seleccion_fuera_arranca_marquee_y_limpia() {
+        let (mut model, _) = modelo_bloque_4x4();
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        // Press local (3,3) → imagen (3,3), fuera del rect.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarSeleccion { lx: 3.0, ly: 3.0, rw: 4.0, rh: 4.0 },
+            &Handle::for_test(),
+        );
+        assert!(model.mover_drag.is_none());
+        assert!(model.seleccion_drag.is_some());
+        // El press fuera limpia la selección previa.
+        assert!(model.seleccion.is_none());
+    }
+
+    #[test]
+    fn drag_to_move_traslada_el_contenido_y_la_seleccion() {
+        let (mut model, id) = modelo_bloque_4x4();
+        let sel = RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 };
+        model.seleccion = Some(sel);
+        // Press dentro (1,1).
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarSeleccion { lx: 1.0, ly: 1.0, rw: 4.0, rh: 4.0 },
+            &Handle::for_test(),
+        );
+        // Arrastrar +2 en X (s=1 → 2 px-imagen).
+        model = <Tullpu as App>::update(
+            model,
+            Msg::AjustarSeleccion { dx: 2.0, dy: 0.0 },
+            &Handle::for_test(),
+        );
+        // El contenido se movió a x=2..4; el origen quedó transparente.
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [bp[i], bp[i + 1], bp[i + 2], bp[i + 3]]
+        };
+        assert_eq!(pix(0, 0), [0, 0, 0, 0]);
+        assert_eq!(pix(2, 0), [200, 100, 50, 255]);
+        assert_eq!(pix(3, 1), [200, 100, 50, 255]);
+        // La selección siguió al contenido.
+        assert_eq!(
+            model.seleccion,
+            Some(RectImagen { x0: 2, y0: 0, x1: 4, y1: 2 })
+        );
+        // Finalizar limpia el drag.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::FinalizarSeleccion,
+            &Handle::for_test(),
+        );
+        assert!(model.mover_drag.is_none());
+    }
+
+    #[test]
+    fn drag_to_move_sub_pixel_no_mueve_hasta_acumular_un_pixel() {
+        let (mut model, id) = modelo_bloque_4x4();
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let hash0 = model.lienzo.capa(id).unwrap().contenido;
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarSeleccion { lx: 1.0, ly: 1.0, rw: 4.0, rh: 4.0 },
+            &Handle::for_test(),
+        );
+        // Medio píxel (0.4 < 0.5 redondea a 0) no debe mover nada.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::AjustarSeleccion { dx: 0.4, dy: 0.0 },
+            &Handle::for_test(),
+        );
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, hash0);
+        // Acumular hasta pasar 0.5 sí mueve.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::AjustarSeleccion { dx: 0.4, dy: 0.0 },
+            &Handle::for_test(),
+        );
+        assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash0);
     }
 
     #[test]

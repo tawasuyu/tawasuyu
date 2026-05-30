@@ -89,6 +89,11 @@ pub(crate) struct Model {
     /// click. `None` fuera de un drag. Se commitea a `seleccion` en
     /// el `End` y se limpia.
     pub(crate) seleccion_drag: Option<SeleccionDrag>,
+    /// Estado del drag-to-move del contenido de una selección existente.
+    /// `None` salvo mientras se arrastra desde adentro del rect. Excluye
+    /// mutuamente a `seleccion_drag` (un press entra a uno u otro según
+    /// caiga dentro o fuera de la selección vigente).
+    pub(crate) mover_drag: Option<MoverDrag>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -161,6 +166,26 @@ pub(crate) struct SeleccionDrag {
     pub(crate) cur_ly: f32,
     pub(crate) rw: f32,
     pub(crate) rh: f32,
+}
+
+/// Estado intermedio mientras el usuario arrastra el CONTENIDO de una
+/// selección existente (drag-to-move, no construir un marquee nuevo). Se
+/// entra cuando el press cae dentro de `model.seleccion` con la
+/// herramienta Marco activa. `press_l*` es la posición local del press;
+/// `cur_l*` la actual (acumulando los `dx, dy` de cada Move). `aplicado_*`
+/// es el offset entero en coords-imagen YA aplicado al contenido — la
+/// diferencia con el offset total deseado es el paso a mover en el frame
+/// siguiente (el resto sub-píxel queda implícito en `cur - press`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MoverDrag {
+    pub(crate) press_lx: f32,
+    pub(crate) press_ly: f32,
+    pub(crate) cur_lx: f32,
+    pub(crate) cur_ly: f32,
+    pub(crate) rw: f32,
+    pub(crate) rh: f32,
+    pub(crate) aplicado_ix: i32,
+    pub(crate) aplicado_iy: i32,
 }
 
 /// Multiplicador por tick de wheel. 1.1 ≈ +10%, un escalón cómodo. El
