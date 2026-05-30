@@ -89,6 +89,37 @@ enum WawaOp {
         #[arg(long, default_value = "wawa-soberano")]
         name: String,
     },
+    /// Fase 67 / WAWA §14.1.3 :: forja la CONCESIÓN DE CAPACIDAD de un binario.
+    /// Firma con `--como` el par `(hash_objeto_bytecode, permisos)` y emite la
+    /// `format::ConcesionCapacidad` envuelta en un `Objeto` del grafo (`<hash>.obj`),
+    /// lista para sembrar en el génesis y referenciar desde `EntradaApp.concesion`.
+    ///
+    /// El hash que firma es el del OBJETO del grafo —`Objeto{datos:wasm,hijos:[]}`
+    /// serializado, luego BLAKE3—, IDÉNTICO al que `wawa-boot::sembrar_grafo` y
+    /// `construir_release` anclan. No es el hash de los bytes crudos del `.wasm`.
+    ///
+    /// Es la ceremonia OFFLINE que `boot` no puede hacer (no tiene seed). El
+    /// operador la corre con la seed slot-0 del AGORA_AUTH_RING:
+    ///
+    ///   agora-cli wawa concesion --como wawa-soberano \
+    ///     --wasm mudanza.wasm --permisos RAIZ --salida mudanza.cap.obj
+    Concesion {
+        /// Identidad firmante (seed en el keystore local). Su pubkey DEBE vivir
+        /// en `AGORA_AUTH_RING` de claves.rs o el kernel rechaza la concesión.
+        #[arg(long)]
+        como: String,
+        /// Path al `.wasm` compilado de la app (el mismo que sembra el génesis).
+        #[arg(long)]
+        wasm: PathBuf,
+        /// Permisos a conceder: máscara decimal/hex (`0x4`) o nombres separados
+        /// por coma (`RED,RAIZ`). Nombres: RED, GRAFO_ESCRITURA, RAIZ, ALTAVOZ,
+        /// CONFIG, COMPACTAR, TINKUY.
+        #[arg(long)]
+        permisos: String,
+        /// Archivo de salida del objeto-concesión (`<hash>.obj`, payload postcard).
+        #[arg(long)]
+        salida: PathBuf,
+    },
     /// Toma un hash de manifiesto + una identidad propia y produce un
     /// `format::ManifiestoFirmado` postcard de 128 bytes, listo para
     /// embeber en `apps/mudanza/src/propuesta_demo.bin` o emitir por
@@ -466,6 +497,8 @@ enum Error {
     AgoraChannel(agora_channel::CanalError),
     #[error("release: {0}")]
     Release(String),
+    #[error("permisos inválidos: {0}")]
+    Permiso(String),
     #[error("spec JSON: {0}")]
     Spec(String),
     #[error("foreign-fs: {0:?}")]
@@ -596,6 +629,9 @@ fn run(cmd: Cmd) -> CliResult<()> {
             WawaOp::ForjarClave { name } => wawa_forjar_clave(&name),
             WawaOp::ForjarPropuesta { como, hash, salida } => {
                 wawa_forjar_propuesta(&como, &hash, &salida)
+            }
+            WawaOp::Concesion { como, wasm, permisos, salida } => {
+                wawa_concesion(&como, &wasm, &permisos, &salida)
             }
         },
     }
@@ -1043,6 +1079,105 @@ fn wawa_forjar_propuesta(como: &str, hash_hex: &str, salida: &Path) -> CliResult
     println!("estar en AGORA_AUTH_RING de claves.rs. Si no está, mudanza");
     println!("la verifica en userspace OK y el kernel responde con");
     println!("CapacidadInsuficiente.");
+    Ok(())
+}
+
+/// Parsea la especificación de permisos del CLI: o una máscara numérica
+/// (`6`, `0x6`, `0b110`) o una lista de nombres separados por coma
+/// (`RED,RAIZ`). Tolerante a mayúsculas/minúsculas y al prefijo `PERMISO_`.
+/// Los nombres reflejan las constantes `format::PERMISO_*` — única fuente de
+/// verdad del bitfield, así un permiso nuevo en `format` se nombra aquí sin
+/// re-derivar números a mano.
+fn parse_permisos(s: &str) -> CliResult<format::Permisos> {
+    let t = s.trim();
+    // Camino numérico: una sola palabra que parsea como entero.
+    if !t.contains(',') {
+        if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+            return u32::from_str_radix(hex, 16).map_err(|_| Error::Permiso(s.to_string()));
+        }
+        if let Some(bin) = t.strip_prefix("0b").or_else(|| t.strip_prefix("0B")) {
+            return u32::from_str_radix(bin, 2).map_err(|_| Error::Permiso(s.to_string()));
+        }
+        if t.chars().all(|c| c.is_ascii_digit()) && !t.is_empty() {
+            return t.parse::<u32>().map_err(|_| Error::Permiso(s.to_string()));
+        }
+    }
+    // Camino por nombres.
+    let mut mask: format::Permisos = 0;
+    for parte in t.split(',') {
+        let nombre = parte.trim().trim_start_matches("PERMISO_").trim_start_matches("permiso_");
+        let bit = match nombre.to_ascii_uppercase().as_str() {
+            "RED" => format::PERMISO_RED,
+            "GRAFO_ESCRITURA" | "GRAFO" => format::PERMISO_GRAFO_ESCRITURA,
+            "RAIZ" => format::PERMISO_RAIZ,
+            "ALTAVOZ" => format::PERMISO_ALTAVOZ,
+            "CONFIG" => format::PERMISO_CONFIG,
+            "COMPACTAR" => format::PERMISO_COMPACTAR,
+            "TINKUY" => format::PERMISO_TINKUY,
+            "" => continue,
+            otro => {
+                return Err(Error::Permiso(format!(
+                    "nombre de permiso desconocido «{otro}» (válidos: RED, GRAFO_ESCRITURA, \
+                     RAIZ, ALTAVOZ, CONFIG, COMPACTAR, TINKUY)"
+                )))
+            }
+        };
+        mask |= bit;
+    }
+    Ok(mask)
+}
+
+/// `agora-cli wawa concesion` — la ceremonia OFFLINE de §14.1.3. Firma el par
+/// `(hash_objeto_bytecode, permisos)` con la seed del operador y emite la
+/// `ConcesionCapacidad` envuelta en un `Objeto` del grafo. El hash que firma es
+/// el del OBJETO (`Objeto{datos:wasm,hijos:[]}` → BLAKE3), idéntico al que el
+/// génesis y `construir_release` anclan — atar la firma a los bytes crudos NO
+/// serviría: el kernel verifica contra `EntradaApp.bytecode`, que es el del objeto.
+fn wawa_concesion(como: &str, wasm: &Path, permisos_spec: &str, salida: &Path) -> CliResult<()> {
+    let s = Sesion::abrir()?;
+    let como_id = s.resolver_id(como)?;
+    let kp = s.cargar_keypair(como_id)?;
+
+    let permisos = parse_permisos(permisos_spec)?;
+    if permisos == 0 {
+        return Err(Error::Permiso(
+            "una concesión de 0 permisos no tiene sentido: la app correría sin \
+             capacidades gateadas igual con concesion: None"
+                .to_string(),
+        ));
+    }
+
+    // El hash del OBJETO-bytecode, calculado EXACTAMENTE como el génesis: los
+    // bytes del `.wasm` envueltos en un `Objeto` sin hijos, serializados, BLAKE3.
+    let wasm_bytes = fs::read(wasm)
+        .map_err(|e| Error::Release(format!("no pude leer {}: {e}", wasm.display())))?;
+    let bytecode_obj = format::Objeto { datos: wasm_bytes, hijos: Vec::new() };
+    let bytecode_payload = bytecode_obj.serializar().map_err(Error::Canal)?;
+    let bytecode_hash = format::hash(&bytecode_payload);
+
+    // La concesión firmada, y su forma como objeto del grafo.
+    let concesion = agora_channel::firmar_capacidad(&kp, &bytecode_hash, permisos);
+    let datos = concesion.serializar().map_err(Error::Canal)?;
+    let concesion_obj = format::Objeto { datos, hijos: Vec::new() };
+    let payload = concesion_obj.serializar().map_err(Error::Canal)?;
+    let concesion_hash = format::hash(&payload);
+
+    fs::write(salida, &payload)?;
+
+    println!("concesión forjada → {}", salida.display());
+    println!("  bytecode (objeto) : {}", hex_de(&bytecode_hash));
+    println!("  permisos          : {permisos:#09b} ({permisos})");
+    println!("  autor (pubkey)    : {}", hex_de(&concesion.autor));
+    println!("  concesion_hash    : {}", hex_de(&concesion_hash));
+    println!();
+    println!("Es un objeto del grafo: siémbralo en el génesis y referencia su hash");
+    println!("desde `EntradaApp.concesion` de la app cuyo bytecode coincide. Cuando");
+    println!("`wawa-boot` lea las concesiones de sus assets y las ancle, este `None`");
+    println!("pasa a `Some(concesion_hash)` (ver SDD-capacidades §3.3).");
+    println!();
+    println!("La pubkey del autor DEBE habitar AGORA_AUTH_RING de claves.rs, o el");
+    println!("kernel rechaza la concesión (CapacidadInsuficiente) y la app corre");
+    println!("con 0 capacidades gateadas.");
     Ok(())
 }
 
@@ -1633,5 +1768,75 @@ fn main() -> ExitCode {
             eprintln!("agora-cli: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_permisos_numerico_y_por_nombre_coinciden() {
+        // Decimal, hex, binario y nombres deben dar el mismo bitfield.
+        let esperado = format::PERMISO_RED | format::PERMISO_RAIZ; // 1 | 4 = 5
+        assert_eq!(parse_permisos("5").unwrap(), esperado);
+        assert_eq!(parse_permisos("0x5").unwrap(), esperado);
+        assert_eq!(parse_permisos("0b101").unwrap(), esperado);
+        assert_eq!(parse_permisos("RED,RAIZ").unwrap(), esperado);
+        // Tolerancia: espacios, minúsculas, prefijo PERMISO_, orden.
+        assert_eq!(parse_permisos(" raiz , permiso_red ").unwrap(), esperado);
+    }
+
+    #[test]
+    fn parse_permisos_rechaza_nombre_desconocido() {
+        assert!(matches!(parse_permisos("RED,VOLAR"), Err(Error::Permiso(_))));
+    }
+
+    #[test]
+    fn parse_permisos_cubre_todas_las_constantes() {
+        let todas = parse_permisos(
+            "RED,GRAFO_ESCRITURA,RAIZ,ALTAVOZ,CONFIG,COMPACTAR,TINKUY",
+        )
+        .unwrap();
+        let esperado = format::PERMISO_RED
+            | format::PERMISO_GRAFO_ESCRITURA
+            | format::PERMISO_RAIZ
+            | format::PERMISO_ALTAVOZ
+            | format::PERMISO_CONFIG
+            | format::PERMISO_COMPACTAR
+            | format::PERMISO_TINKUY;
+        assert_eq!(todas, esperado);
+    }
+
+    /// EL CONTRATO de la ceremonia: el hash que `wawa concesion` firma debe ser
+    /// IDÉNTICO al `EntradaApp.bytecode` que `construir_release` ancla para el
+    /// mismo `.wasm` — si no, la concesión cubre un hash que el kernel nunca verá
+    /// y la app correría con 0 capacidades. Locked aquí contra drift.
+    #[test]
+    fn hash_objeto_bytecode_coincide_con_construir_release() {
+        let wasm = b"\0asm-binario-de-prueba".to_vec();
+
+        // Vía `wawa concesion` (replicado: la fn lee de disco, el cómputo es éste).
+        let obj = format::Objeto { datos: wasm.clone(), hijos: Vec::new() };
+        let mio = format::hash(&obj.serializar().unwrap());
+
+        // Vía release: el bytecode anclado en la EntradaApp.
+        let kp = agora_core::Keypair::from_seed([3u8; 32]);
+        let app = agora_channel::AppSpec {
+            nombre: "x".into(),
+            bytecode: wasm,
+            region: (0, 0, 1, 1),
+            techo_memoria: 1024,
+            fuel_fotograma: 1,
+            permisos: format::PERMISO_RAIZ,
+        };
+        let r = agora_channel::construir_release(&[app], &kp, "dev", 1).unwrap();
+        let mobj = format::Objeto::deserializar(
+            &r.objetos.iter().find(|o| o.hash == r.manifiesto).unwrap().payload,
+        )
+        .unwrap();
+        let manifiesto = format::Manifiesto::deserializar(&mobj.datos).unwrap();
+
+        assert_eq!(mio, manifiesto.apps[0].bytecode, "el hash de la concesión debe ser el del objeto-bytecode anclado");
     }
 }

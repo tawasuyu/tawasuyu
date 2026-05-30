@@ -132,11 +132,26 @@ veredicto NO se cachea — el verificador corre FRESH en cada parto.
 claves privadas** (sólo el operador, offline). Por tanto las concesiones del
 génesis se forjan **fuera de banda** y se embeben:
 
-1. El operador firma, con una seed del anillo (`agora-cli` → `firmar_capacidad`),
-   una `ConcesionCapacidad` por cada app del génesis que requiera permisos
-   gateados (`mudanza`, `asistente`, las de RED, etc.).
+1. El operador firma, con la seed slot-0 del anillo, una `ConcesionCapacidad`
+   por cada app del génesis con permisos gateados (`mudanza`, `asistente`, las de
+   RED, etc.). **HERRAMIENTA HECHA (2026-05-30):**
+
+   ```
+   agora-cli wawa concesion --como wawa-soberano \
+     --wasm mudanza.wasm --permisos RAIZ --salida mudanza.cap.obj
+   ```
+
+   Calcula el hash del OBJETO-bytecode IGUAL que el génesis (`Objeto{datos:wasm,
+   hijos:[]}` → BLAKE3 — contrato lockeado por test contra `construir_release`),
+   firma `(hash, permisos)` y emite la concesión envuelta en un `Objeto` del
+   grafo. `--permisos` acepta máscara (`0x4`) o nombres (`RED,RAIZ`).
 2. Esas concesiones se siembran como objetos del grafo y sus hashes se ponen en
-   el campo `concesion` de cada `EntradaApp` del manifiesto génesis.
+   el campo `concesion` de cada `EntradaApp` del manifiesto génesis. **FALTA EL
+   SEAM EN `boot`:** que `sembrar_grafo` lea las `*.cap.obj` de un directorio de
+   assets (mapeadas por nombre de app), las ancle como objetos y rellene
+   `EntradaApp.concesion`. Hoy `boot` siembra `concesion: None` para todas (no
+   se puede compilar `boot` en sandbox — la valida el operador en QEMU, por eso
+   no se cableó a ciegas).
 3. Apps sin permisos gateados (`permisos == 0`): `concesion: None`, sin ceremonia.
 
 ### 3.4 Back-compat / migración
