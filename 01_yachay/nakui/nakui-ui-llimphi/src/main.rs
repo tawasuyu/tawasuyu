@@ -2030,7 +2030,7 @@ fn export_breakdown_csv(
         },
         _ => return err_toast("la vista no tiene tarjetas"),
     };
-    let result = compute_card_result(m, card, &active);
+    let result = compute_card_result(m, module, card, &active);
     let (gh, vh) = breakdown_headers(card);
     let Some(csv) = breakdown_to_csv(&result, &gh, &vh) else {
         return err_toast("esta tarjeta no es un desglose");
@@ -2434,16 +2434,87 @@ fn resolve_breakdown_keys(
     }
 }
 
-/// Computa el agregado de una card resolviendo `group_ref` si lo hay.
-/// Toma el lock del backend por card — el tablero no es ruta caliente.
-/// `extra` son filtros adicionales (toggles de reporte activos) que se
-/// aplican (AND) sobre los records antes de agregar.
+/// Mapa `valor_crudo → label legible` para un campo de una entity,
+/// derivado de su `FieldSpec` en el Form del módulo: opciones de un
+/// `Select` (value → label) o booleano (`true`/`false` → Sí/No). `None`
+/// si el campo no tiene un mapeo legible (texto/número/fecha/ref/etc.).
+fn field_label_map(module: &Module, entity: &str, field: &str) -> Option<BTreeMap<String, String>> {
+    let fv = find_form_view(module, entity)?;
+    let spec = fv.fields.iter().find(|f| f.name == field)?;
+    match spec.kind {
+        FieldKind::Select => {
+            let map: BTreeMap<String, String> = spec
+                .options
+                .iter()
+                .map(|o| (o.value.clone(), o.display().to_string()))
+                .collect();
+            (!map.is_empty()).then_some(map)
+        }
+        FieldKind::Boolean => Some(
+            [
+                ("true".to_string(), "Sí".to_string()),
+                ("false".to_string(), "No".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Reemplaza una clave por su label si el mapa la cubre (no-op si no).
+fn relabel(k: &mut String, map: &BTreeMap<String, String>) {
+    if let Some(label) = map.get(k.as_str()) {
+        *k = label.clone();
+    }
+}
+
+/// Reemplaza las claves crudas de un desglose por labels legibles según
+/// el `FieldSpec` del campo de grupo (y de serie, en multi-serie). No
+/// toca la dimensión de grupo si la card usa `group_ref` (ya resuelta a
+/// labels de record) o `bucket` (claves de fecha). Las series de un
+/// `SumBySeries` siempre se humanizan. Sólo afecta lo mostrado/exportado
+/// — el drill-down sigue usando las `raw_keys` crudas.
+fn humanize_breakdown_labels(result: &mut MetricResult, module: &Module, card: &DashboardCard) {
+    let entity = &card.entity;
+    if card.group_ref.is_none() && card.bucket.is_none() {
+        if let Some(field) = metric_group_field(&card.metric) {
+            if let Some(map) = field_label_map(module, entity, field) {
+                match result {
+                    MetricResult::Breakdown(rows) => {
+                        rows.iter_mut().for_each(|(k, _)| relabel(k, &map))
+                    }
+                    MetricResult::ValueBreakdown(rows) => {
+                        rows.iter_mut().for_each(|(k, _)| relabel(k, &map))
+                    }
+                    MetricResult::MultiBreakdown { groups, .. } => {
+                        groups.iter_mut().for_each(|k| relabel(k, &map))
+                    }
+                    MetricResult::Scalar(_) => {}
+                }
+            }
+        }
+    }
+    if let nahual_meta_schema::Metric::SumBySeries { series, .. } = &card.metric {
+        if let Some(map) = field_label_map(module, entity, series) {
+            if let MetricResult::MultiBreakdown { series: rows, .. } = result {
+                rows.iter_mut().for_each(|(name, _)| relabel(name, &map));
+            }
+        }
+    }
+}
+
+/// Computa el agregado de una card resolviendo `group_ref` y labels de
+/// campo si los hay. Toma el lock del backend por card — el tablero no
+/// es ruta caliente. `extra` son filtros adicionales (toggles de reporte
+/// activos) que se aplican (AND) sobre los records antes de agregar.
 fn compute_card_result(
     model: &Model,
+    module: &Module,
     card: &DashboardCard,
     extra: &[&CardFilter],
 ) -> MetricResult {
-    compute_card_full(model, card, extra).0
+    compute_card_full(model, module, card, extra).0
 }
 
 /// Como [`compute_card_result`] pero devuelve también las claves de
@@ -2452,6 +2523,7 @@ fn compute_card_result(
 /// el valor real (UUID), aunque la card muestre el label resuelto.
 fn compute_card_full(
     model: &Model,
+    module: &Module,
     card: &DashboardCard,
     extra: &[&CardFilter],
 ) -> (MetricResult, Vec<String>) {
@@ -2508,6 +2580,9 @@ fn compute_card_full(
     if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
         resolve_breakdown_keys(&mut result, backend, ref_entity);
     }
+    // Labels legibles de las claves de campo (Select → su label,
+    // booleano → Sí/No). No pisa lo resuelto por `group_ref`/`bucket`.
+    humanize_breakdown_labels(&mut result, module, card);
     (result, raw_keys)
 }
 
@@ -3080,7 +3155,7 @@ fn build_dashboard_panel(
 
     let mut cards: Vec<View<Msg>> = Vec::new();
     for (i, card) in dv.cards.iter().enumerate() {
-        let (result, raw_keys) = compute_card_full(model, card, &[]);
+        let (result, raw_keys) = compute_card_full(model, module, card, &[]);
         // Las cards con desglose ganan un botón de export CSV.
         let on_export = if is_breakdown(&result) {
             Some(Msg::ExportBreakdownCsv {
@@ -3420,7 +3495,7 @@ fn build_report_panel(
     // Una card por agregado, apiladas en columna (documento).
     for (i, card) in rv.cards.iter().enumerate() {
         let active = card_active_filters(model, view_key, rv, card);
-        let (result, raw_keys) = compute_card_full(model, card, &active);
+        let (result, raw_keys) = compute_card_full(model, module, card, &active);
         let on_export = if is_breakdown(&result) {
             Some(Msg::ExportBreakdownCsv {
                 module_idx: mod_idx,
@@ -3460,7 +3535,7 @@ fn report_markdown(model: &Model, module: &Module, view_key: &str, rv: &ReportVi
     out.push_str("Generado por nakui.\n\n");
     for card in &rv.cards {
         let active = card_active_filters(model, view_key, rv, card);
-        let result = compute_card_result(model, card, &active);
+        let result = compute_card_result(model, module, card, &active);
         out.push_str(&format!("## {}\n\n", card.label));
         match &result {
             MetricResult::Scalar(s) => {
@@ -4313,6 +4388,89 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// Las claves crudas de un desglose se muestran con su label: un
+    /// `Select` resuelve a su `label` declarado, un booleano a Sí/No.
+    #[test]
+    fn humanize_relabels_select_and_boolean_keys() {
+        use nahual_meta_schema::Metric;
+
+        let modules_dir = std::path::Path::new("examples/nakui-modules");
+        let (modules, _) = load_ui_modules(modules_dir).unwrap();
+        let ventas = modules.iter().find(|m| m.id == "ventas").unwrap();
+
+        // Select: tier → labels declarados; booleano → Sí/No; texto → sin mapa.
+        let tier = field_label_map(ventas, "Customer", "tier").unwrap();
+        assert_eq!(tier.get("pro").map(String::as_str), Some("Pro"));
+        assert_eq!(tier.get("enterprise").map(String::as_str), Some("Enterprise"));
+        let pagado = field_label_map(ventas, "Order", "pagado").unwrap();
+        assert_eq!(pagado.get("true").map(String::as_str), Some("Sí"));
+        assert_eq!(pagado.get("false").map(String::as_str), Some("No"));
+        assert!(field_label_map(ventas, "Customer", "name").is_none());
+
+        let card = |metric, group_ref: Option<&str>, bucket| DashboardCard {
+            label: "x".into(),
+            entity: "Customer".into(),
+            metric,
+            filter: None,
+            format: ValueFormat::default(),
+            group_ref: group_ref.map(Into::into),
+            chart: ChartKind::Bars,
+            limit: None,
+            bucket,
+        };
+
+        // GroupBy de tier: claves crudas → labels.
+        let mut r = MetricResult::Breakdown(vec![("pro".into(), 3), ("free".into(), 2)]);
+        humanize_breakdown_labels(
+            &mut r,
+            ventas,
+            &card(Metric::GroupBy { field: "tier".into() }, None, None),
+        );
+        assert_eq!(
+            r,
+            MetricResult::Breakdown(vec![("Pro".into(), 3), ("Free".into(), 2)])
+        );
+
+        // group_ref presente → NO humaniza la dimensión de grupo.
+        let mut r2 = MetricResult::Breakdown(vec![("pro".into(), 3)]);
+        humanize_breakdown_labels(
+            &mut r2,
+            ventas,
+            &card(Metric::GroupBy { field: "tier".into() }, Some("Customer"), None),
+        );
+        assert_eq!(r2, MetricResult::Breakdown(vec![("pro".into(), 3)]));
+
+        // SumBySeries: la dimensión de serie (pagado) se humaniza a Sí/No.
+        let order_card = DashboardCard {
+            label: "x".into(),
+            entity: "Order".into(),
+            metric: Metric::SumBySeries {
+                group: "fecha".into(),
+                series: "pagado".into(),
+                value: "monto".into(),
+            },
+            filter: None,
+            format: ValueFormat::default(),
+            group_ref: None,
+            chart: ChartKind::Line,
+            limit: None,
+            bucket: Some(nahual_meta_schema::DateBucket::Month),
+        };
+        let mut r3 = MetricResult::MultiBreakdown {
+            groups: vec!["2026-01".into()],
+            series: vec![("true".into(), vec![100.0]), ("false".into(), vec![50.0])],
+        };
+        humanize_breakdown_labels(&mut r3, ventas, &order_card);
+        assert_eq!(
+            r3,
+            MetricResult::MultiBreakdown {
+                // bucket activo → groups (fechas) intactos.
+                groups: vec!["2026-01".into()],
+                series: vec![("Sí".into(), vec![100.0]), ("No".into(), vec![50.0])],
+            }
+        );
     }
 
     /// El drill-down por prefijo (series temporales) recorta la lista al
