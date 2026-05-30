@@ -7096,4 +7096,46 @@ mod tests {
             .expect("e");
         assert_eq!(rt.eval("tira").expect("e"), JsValue::Bool(true));
     }
+
+    // ============= Fase 7.71 — AbortSignal.abort() static =============
+
+    #[test]
+    fn abort_signal_abort_static_nace_aborted() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var s = AbortSignal.abort(); var ab = s.aborted; \
+             var tira = false; try { s.throwIfAborted(); } catch (e) { tira = true; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ab").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("tira").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_signal_abort_con_reason_propaga() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var s = AbortSignal.abort('boom'); var r = s.reason;")
+            .expect("e");
+        assert_eq!(rt.eval("r").expect("e"), JsValue::String("boom".into()));
+    }
+
+    #[test]
+    fn abort_signal_abort_static_rechaza_fetch_inmediato() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var rechazo = null; \
+             fetch('/x', { signal: AbortSignal.abort() }) \
+                 .then(function() {}, function(e) { rechazo = String(e); });",
+        )
+        .expect("e");
+        // El signal ya-abortado hace que fetch rechace sin tocar la red.
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 0);
+        match rt.eval("rechazo").expect("e") {
+            JsValue::String(s) => assert!(s.contains("AbortError"), "esperaba AbortError, fue {s}"),
+            other => panic!("esperaba string de rechazo, fue {other:?}"),
+        }
+    }
 }
