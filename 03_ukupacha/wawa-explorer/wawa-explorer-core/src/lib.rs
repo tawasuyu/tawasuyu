@@ -236,6 +236,7 @@ mod tests {
                 concesion: None,
             }],
             configuracion: None,
+            overlay_revocacion: None,
         };
         let manifest_obj = Objeto {
             datos: manifiesto.serializar().unwrap(),

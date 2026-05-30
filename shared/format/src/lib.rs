@@ -63,12 +63,14 @@ pub const VERSION_SUPERBLOQUE: u32 = 3;
 /// `None` no hay techo per-bytecode: gobierna la firma del manifiesto (camino
 /// legacy, rollout escalonado — ver `SDD-capacidades.md` §3.6).
 ///
-/// CORTE DE FORMATO: `postcard` NO es autodescriptivo, asi que el campo nuevo
-/// rompe el wire de v4. Un disco v4 NO deserializa como v5 — el guardia de
-/// version (`Manifiesto::deserializar` exige `version == VERSION_MANIFIESTO`)
+/// CORTE DE FORMATO: `postcard` NO es autodescriptivo, asi que cada campo nuevo
+/// rompe el wire de la version previa. Un disco viejo NO deserializa — el guardia
+/// de version (`Manifiesto::deserializar` exige `version == VERSION_MANIFIESTO`)
 /// lo rechaza y exige re-sembrar el genesis. En la practica el operador re-forja
-/// la imagen en cada `cargo run -p boot`, asi que la genesis nace v5 limpia.
-pub const VERSION_MANIFIESTO: u32 = 5;
+/// la imagen en cada `cargo run -p boot`, asi que la genesis nace limpia.
+/// v5→v6 (2026-05-30): agrega `overlay_revocacion: Option<Hash>` para el plano de
+/// control del SDD-rotacion-revocacion §4.
+pub const VERSION_MANIFIESTO: u32 = 6;
 
 /// Version del format de la `Configuracion` serializada. La configuracion es
 /// otro objeto del grafo (idioma + paleta); el manifiesto la enlaza por hash.
@@ -245,6 +247,15 @@ pub struct Manifiesto {
     /// y reancla el manifiesto al objeto nuevo en un solo paso atomico —el
     /// mismo trazado que `EntradaApp::estado` para el estado por app.
     pub configuracion: Option<Hash>,
+    /// Hash del nodo [`OverlayRevocacion`] vigente, o `None` si el operador no
+    /// ancló ninguno (el caso común — sin revocaciones de claves del anillo).
+    /// El kernel lo lee FRESH en el arranque y deniega en `autor_en_anillo` toda
+    /// clave del anillo revocada M-of-N: así una clave soberana filtrada se
+    /// apaga ENTRE reflasheos, sin esperar al re-forjado del binario. Es la pieza
+    /// del plano de CONTROL del SDD-rotacion-revocacion §4 — gemela de
+    /// `configuracion`/`estado`: reanclar engendra un overlay nuevo y mueve el
+    /// puntero del manifiesto, jamás muta en sitio.
+    pub overlay_revocacion: Option<Hash>,
 }
 
 /// Un idioma codificado como un par de letras ASCII ISO 639-1 empaquetado en
@@ -554,6 +565,94 @@ impl ConcesionCapacidad {
         postcard::take_from_bytes::<ConcesionCapacidad>(bytes)
             .map(|(c, _)| c)
             .map_err(|_| "concesion_capacidad :: deserializacion fallida")
+    }
+}
+
+// =============================================================================
+//  Overlay de revocacion del plano de CONTROL (SDD-rotacion-revocacion §4)
+// -----------------------------------------------------------------------------
+//  El AGORA_AUTH_RING del kernel es `const` en `.rodata`: rotar el ancla = reflash
+//  deliberado. Pero entre reflasheos una clave soberana puede filtrarse, y esperar
+//  al re-forjado deja una ventana abierta. El overlay la cierra: un objeto del
+//  grafo, anclado por el manifiesto (`Manifiesto::overlay_revocacion`), que lista
+//  revocaciones firmadas M-of-N por el RESTO del anillo. El kernel lo lee FRESH en
+//  el arranque y deniega en `autor_en_anillo` toda clave del anillo revocada.
+//
+//  Tipos `no_std + alloc`: el kernel los deserializa (postcard) y los verifica con
+//  `claves::verificar_revocacion` sobre el canonico de `mensaje_revocacion_clave`.
+//  El productor host-side (`agora-cli wawa revocar`) emite el mismo wire.
+//
+//  TIEMPO: el kernel hoy lleva ticks PIT, no wall-clock. Aplica la revocacion
+//  mientras este ANCLADA (fail-closed, deny-wins); `vence_en` entra en el canonico
+//  firmado pero la auto-caducidad temporal espera un RTC. Des-revocar = anclar un
+//  overlay nuevo sin esa entrada (gemelo de mover el puntero de `configuracion`).
+// =============================================================================
+
+/// Version del format del [`OverlayRevocacion`] serializado.
+pub const VERSION_OVERLAY: u32 = 1;
+
+/// Una firma individual dentro de una [`RevocacionFirmada`]: la pubkey del
+/// firmante y su firma Ed25519 sobre el canonico de la revocacion. Espejo
+/// minimo de `agora_core::SingleSig` (sin el `IdentityId` redundante: el kernel
+/// re-deriva la autoridad comparando la pubkey contra el `AGORA_AUTH_RING`).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct FirmaRevocacion {
+    /// Clave publica Ed25519 del firmante (un miembro del anillo, en control).
+    pub autor: AgoraId,
+    /// Firma Ed25519 sobre [`mensaje_revocacion_clave`]`(objetivo, motivo,
+    /// emitida_en, vence_en)`.
+    #[serde(with = "BigArray")]
+    pub firma: Firma,
+}
+
+/// Una revocacion de clave firmada por un quorum, en forma de wire para el
+/// overlay. Espejo de `agora_core::Revocation` aplanado para el kernel: el
+/// `motivo` es el discriminante estable de `RevReason` (0=Compromised,
+/// 1=Retired, 2=Superseded) y `firmantes` es la multifirma desnuda.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct RevocacionFirmada {
+    /// La clave que se revoca (en el plano de control, una del anillo).
+    pub objetivo: AgoraId,
+    /// Motivo (entra en el canonico firmado): 0=Compromised, 1=Retired, 2=Superseded.
+    pub motivo: u8,
+    /// Segundos UNIX desde cuando rige.
+    pub emitida_en: u64,
+    /// `None` ⇒ permanente; `Some(t)` ⇒ suspension hasta `t` (auto-caducidad
+    /// pendiente de RTC en el kernel — ver nota de tiempo arriba).
+    pub vence_en: Option<u64>,
+    /// Las firmas del quorum autorizador.
+    pub firmantes: Vec<FirmaRevocacion>,
+}
+
+/// El overlay de revocacion: la lista de revocaciones que el kernel consulta al
+/// arrancar. Objeto del grafo direccionado por contenido; el manifiesto guarda
+/// su hash en `overlay_revocacion`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Default)]
+pub struct OverlayRevocacion {
+    /// Version del format — debe ser [`VERSION_OVERLAY`].
+    pub version: u32,
+    /// Las revocaciones vigentes. El kernel aplica las que apunten a un slot del
+    /// anillo y reunan el quorum; ignora el resto (no son su jurisdiccion).
+    pub revocaciones: Vec<RevocacionFirmada>,
+}
+
+impl OverlayRevocacion {
+    /// Serializa el overlay a `postcard` — la carga util del objeto del grafo
+    /// que lo aloja.
+    pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
+        postcard::to_allocvec(self).map_err(|_| "overlay_revocacion :: serializacion fallida")
+    }
+
+    /// Reconstruye un overlay desde su forma binaria. Rechaza una version de
+    /// format desconocida en lugar de malinterpretarla. Tolera bytes sobrantes
+    /// tras la estructura — el relleno del registro.
+    pub fn deserializar(bytes: &[u8]) -> Result<OverlayRevocacion, &'static str> {
+        let (overlay, _) = postcard::take_from_bytes::<OverlayRevocacion>(bytes)
+            .map_err(|_| "overlay_revocacion :: deserializacion fallida")?;
+        if overlay.version != VERSION_OVERLAY {
+            return Err("overlay_revocacion :: version de format desconocida");
+        }
+        Ok(overlay)
     }
 }
 
@@ -1531,6 +1630,7 @@ mod pruebas {
             version: 99,
             apps: Vec::new(),
             configuracion: None,
+            overlay_revocacion: None,
         };
         let bytes = postcard::to_allocvec(&manifiesto).unwrap();
         assert!(Manifiesto::deserializar(&bytes).is_err());
@@ -1547,6 +1647,7 @@ mod pruebas {
             version: VERSION_MANIFIESTO,
             apps: Vec::new(),
             configuracion: Some([0xC5; 32]),
+            overlay_revocacion: None,
         };
         let bytes = con_enlace.serializar().unwrap();
         let leido = Manifiesto::deserializar(&bytes).unwrap();
@@ -1556,6 +1657,7 @@ mod pruebas {
             version: VERSION_MANIFIESTO,
             apps: Vec::new(),
             configuracion: None,
+            overlay_revocacion: None,
         };
         let bytes = sin_enlace.serializar().unwrap();
         assert!(Manifiesto::deserializar(&bytes)
@@ -1629,11 +1731,13 @@ mod pruebas {
             version: VERSION_MANIFIESTO,
             apps: vec![base.clone()],
             configuracion: None,
+            overlay_revocacion: None,
         };
         let manifiesto_b = Manifiesto {
             version: VERSION_MANIFIESTO,
             apps: vec![con_red],
             configuracion: None,
+            overlay_revocacion: None,
         };
         assert_ne!(
             hash(&manifiesto_a.serializar().unwrap()),
@@ -1655,6 +1759,7 @@ mod pruebas {
             version: VERSION_MANIFIESTO,
             apps: vec![con_todo],
             configuracion: None,
+            overlay_revocacion: None,
         };
         let bytes = m.serializar().unwrap();
         let leido = Manifiesto::deserializar(&bytes).unwrap();
@@ -1806,6 +1911,32 @@ mod pruebas {
         assert_ne!(m1, mensaje_capacidad(&otro, PERMISO_RED));
         // Distintos permisos => distinto mensaje: subir un bit invalida la firma.
         assert_ne!(m1, mensaje_capacidad(&bc, PERMISO_RED | PERMISO_RAIZ));
+    }
+
+    #[test]
+    fn overlay_revocacion_roundtrip_y_rechaza_version_ajena() {
+        let overlay = OverlayRevocacion {
+            version: VERSION_OVERLAY,
+            revocaciones: vec![RevocacionFirmada {
+                objetivo: [0x42; 32],
+                motivo: 0, // Compromised
+                emitida_en: 1_700_000_000,
+                vence_en: None,
+                firmantes: vec![
+                    FirmaRevocacion { autor: [0x10; 32], firma: [0xAA; 64] },
+                    FirmaRevocacion { autor: [0x11; 32], firma: [0xBB; 64] },
+                ],
+            }],
+        };
+        let bytes = overlay.serializar().unwrap();
+        let leido = OverlayRevocacion::deserializar(&bytes).unwrap();
+        assert_eq!(leido, overlay);
+        assert_eq!(leido.revocaciones[0].firmantes.len(), 2);
+
+        // Un overlay con versión ajena se rechaza, no se malinterpreta.
+        let ajeno = OverlayRevocacion { version: 99, revocaciones: Vec::new() };
+        let bytes = postcard::to_allocvec(&ajeno).unwrap();
+        assert!(OverlayRevocacion::deserializar(&bytes).is_err());
     }
 
     #[test]

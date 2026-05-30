@@ -652,6 +652,18 @@ fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantall
         // consulta lee del manifiesto vivo.
         manifiesto::instalar(m.clone());
 
+        // Aplicar el overlay de revocación que el manifiesto ancla (si ancla
+        // uno) ANTES de aceptar propuesta soberana alguna: enciende los slots
+        // del AGORA_AUTH_RING revocados por quórum, de modo que una clave
+        // soberana filtrada quede denegada ya en este arranque, sin esperar al
+        // reflash (SDD-rotacion-revocacion §4).
+        let slots_revocados = manifiesto::aplicar_overlay();
+        if slots_revocados > 0 {
+            reportar(&format!(
+                "claves :: overlay de revocacion activo -- {slots_revocados} slot(s) del anillo denegado(s)",
+            ));
+        }
+
         // FASE 8 :: fundar el escritorio del compositor — una ventana por app,
         // con su cache de respaldo y su marco teselado por `mirada-layout`— y
         // pintar el escenario antes de encender las apps: el teselado se ve

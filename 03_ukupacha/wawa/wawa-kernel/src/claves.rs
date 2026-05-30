@@ -49,9 +49,13 @@
 //  reimprime el literal — comparar byte a byte basta.
 // =============================================================================
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use ed25519_compact::{PublicKey, Signature};
 
-use format::{CodigoError, ConcesionCapacidad, CuadernoFirmado, Hash, ManifiestoFirmado};
+use format::{
+    CodigoError, ConcesionCapacidad, CuadernoFirmado, Hash, ManifiestoFirmado, OverlayRevocacion,
+};
 
 /// FASE 41 :: ANILLO MULTI-AUTOR de identidades federadas del operador
 /// local. Una propuesta firmada por CUALQUIERA de las tres claves de
@@ -115,20 +119,38 @@ pub const AGORA_AUTH_RING: [[u8; 32]; 3] = [
 #[allow(dead_code)]
 pub const AGORA_PUBLIC_KEY_LOCAL: [u8; 32] = AGORA_AUTH_RING[0];
 
-/// Comprueba si una clave publica habita el [`AGORA_AUTH_RING`]. Tres
-/// comparaciones de 32 bytes en linea, con cortocircuito al primer
-/// match — zero-alloc, zero-indireccion. El verificador la llama antes
-/// de gastar un ciclo en `ed25519_compact::PublicKey::from_slice`.
+/// Quórum M-of-N exigido para revocar una clave del anillo en el plano de
+/// CONTROL (SDD-rotacion-revocacion §4). 2-of-3: una clave soberana se apaga
+/// sólo si el RESTO del anillo (las otras dos, ya que la `objetivo` comprometida
+/// no cuenta para su propia revocación) la respalda. Una sola clave —incluida una
+/// filtrada— jamás revoca por sí misma.
+pub const QUORUM_REVOCACION_ANILLO: usize = 2;
+
+/// SLOTS del [`AGORA_AUTH_RING`] revocados por el overlay vigente: el bit `i`
+/// encendido ⇒ el slot `i` del anillo está revocado y `autor_en_anillo` lo
+/// deniega. Se siembra UNA vez en el arranque desde el overlay anclado por el
+/// manifiesto ([`aplicar_overlay_revocacion`]) y de ahí sólo se lee — zero-alloc,
+/// sin bloqueo, una lectura atómica por verificación. Un `u32` sobra: el anillo
+/// tiene 3 slots.
+///
+/// FAIL-CLOSED: mientras el overlay siga anclado, la clave queda denegada (no se
+/// re-evalúa `vence_en` — el kernel no tiene wall-clock). Des-revocar = anclar un
+/// overlay nuevo sin esa entrada.
+static SLOTS_REVOCADOS: AtomicU32 = AtomicU32::new(0);
+
+/// Comprueba si una clave publica habita el [`AGORA_AUTH_RING`] Y NO esta
+/// revocada por el overlay vigente. Localiza el slot (tres comparaciones de 32
+/// bytes con cortocircuito) y, si lo halla, exige que su bit NO este encendido
+/// en [`SLOTS_REVOCADOS`] — una clave soberana filtrada y revocada M-of-N cae
+/// aqui aunque siga grabada en `.rodata`, sin esperar al reflash. Zero-alloc,
+/// una lectura atomica relajada. El verificador la llama antes de gastar un
+/// ciclo en `ed25519_compact::PublicKey::from_slice`.
 #[inline]
 fn autor_en_anillo(autor: &[u8; 32]) -> bool {
-    let mut i = 0;
-    while i < AGORA_AUTH_RING.len() {
-        if *autor == AGORA_AUTH_RING[i] {
-            return true;
-        }
-        i += 1;
+    match indice_en_anillo(autor) {
+        Some(slot) => SLOTS_REVOCADOS.load(Ordering::Relaxed) & (1 << slot) == 0,
+        None => false,
     }
-    false
 }
 
 /// Verifica un sobre criptografico `ManifiestoFirmado`. Falla por la primera
@@ -268,14 +290,12 @@ pub const MOTIVO_SUCEDIDA: u8 = 2;
 /// COLD PATH: compone un `Vec` canonico una vez (igual que `verificar_anuncio_
 /// canal`); la verificacion `ed25519-compact` por firma es zero-alloc.
 ///
-/// ESTADO (2026-05-30): SOBERANO Y TESTEABLE, aun NO cableado al punto de carga.
-/// Igual que `verificar_concesion_capacidad` antes de la Fase 67, el verificador
-/// existe y es correcto pero todavia no gobierna: falta el "overlay en carga"
-/// del SDD §4 — anclar la lista de revocaciones como el manifiesto (superbloque),
-/// re-verificarla FRESH en cada arranque, y que `autor_en_anillo` exija ademas
-/// que la clave NO este revocada-activa-a-`now`. Eso pide extender el superbloque
-/// y una fuente de tiempo unix (el kernel hoy lleva ticks PIT, no wall-clock).
-#[allow(dead_code)]
+/// ESTADO (2026-05-30): CABLEADO. [`aplicar_overlay_revocacion`] lo invoca en el
+/// arranque por cada entrada del overlay anclado por el manifiesto; las que
+/// reúnen quórum y apuntan a un slot del anillo encienden su bit en
+/// `SLOTS_REVOCADOS`, y `autor_en_anillo` las deniega. La auto-caducidad temporal
+/// (`vence_en`) queda pendiente de un RTC: el kernel aplica la revocación mientras
+/// el overlay siga anclado (fail-closed).
 pub fn verificar_revocacion(
     objetivo: &[u8; 32],
     motivo: u8,
@@ -316,11 +336,54 @@ pub fn verificar_revocacion(
     }
 }
 
+/// Aplica el [`OverlayRevocacion`] anclado por el manifiesto: por cada entrada
+/// que apunte a un SLOT del [`AGORA_AUTH_RING`] y reúna el quórum
+/// [`QUORUM_REVOCACION_ANILLO`] (verificado FRESH con [`verificar_revocacion`]),
+/// enciende su bit en [`SLOTS_REVOCADOS`] — y desde ese instante
+/// `autor_en_anillo` la deniega. Devuelve cuántos slots quedaron revocados.
+///
+/// Se invoca UNA vez en el arranque (`manifiesto::aplicar_overlay`), DESPUÉS de
+/// montar el almacén y ANTES de aceptar propuesta soberana alguna. Es idempotente
+/// y aditivo: REEMPLAZA el set (no acumula), de modo que re-aplicar un overlay
+/// recortado des-revoca lo que ya no figura — el "des-revocar = anclar overlay
+/// nuevo" del SDD §4.
+///
+/// Entradas que NO apuntan a un slot del anillo (revocaciones de claves de app o
+/// del plano social) se IGNORAN en silencio: no son jurisdicción del control
+/// plane del kernel. Las que apuntan al anillo pero no reúnen quórum tampoco se
+/// aplican (una sola firma no apaga una clave soberana).
+pub fn aplicar_overlay_revocacion(overlay: &OverlayRevocacion) -> u32 {
+    let mut slots: u32 = 0;
+    for rev in &overlay.revocaciones {
+        // ¿Apunta a una clave del anillo? Si no, no es asunto del kernel.
+        let Some(slot) = indice_en_anillo(&rev.objetivo) else {
+            continue;
+        };
+        // Re-empacar la multifirma como pares (&pubkey, &firma) para el
+        // verificador. Camino frío de arranque: una alloc puntual es inocua.
+        let firmantes: alloc::vec::Vec<(&[u8; 32], &[u8; 64])> =
+            rev.firmantes.iter().map(|f| (&f.autor, &f.firma)).collect();
+        let ok = verificar_revocacion(
+            &rev.objetivo,
+            rev.motivo,
+            rev.emitida_en,
+            rev.vence_en,
+            &firmantes,
+            QUORUM_REVOCACION_ANILLO,
+        )
+        .is_ok();
+        if ok {
+            slots |= 1 << slot;
+        }
+    }
+    SLOTS_REVOCADOS.store(slots, Ordering::Relaxed);
+    slots.count_ones()
+}
+
 /// Indice del slot del [`AGORA_AUTH_RING`] que iguala `clave`, o `None` si no
 /// habita el anillo. Gemela de [`autor_en_anillo`] pero devuelve el slot, que
 /// `verificar_revocacion` necesita para contar firmantes DISTINTOS por slot.
 #[inline]
-#[allow(dead_code)]
 fn indice_en_anillo(clave: &[u8; 32]) -> Option<usize> {
     let mut i = 0;
     while i < AGORA_AUTH_RING.len() {

@@ -75,6 +75,38 @@ pub fn instalar(manifiesto: Manifiesto) {
     VIVO.call_once(|| Mutex::new(manifiesto));
 }
 
+/// Aplica el overlay de revocación que el manifiesto vivo ancla, si ancla uno.
+/// Lo lee FRESH del grafo, lo deserializa y delega en
+/// [`crate::claves::aplicar_overlay_revocacion`], que enciende los slots del
+/// `AGORA_AUTH_RING` revocados por quórum — desde ahí `autor_en_anillo` deniega
+/// esas claves (SDD-rotacion-revocacion §4). Devuelve cuántos slots quedaron
+/// revocados (`0` también si no hay overlay anclado).
+///
+/// Se invoca UNA vez en el arranque, DESPUÉS de [`instalar`] y ANTES de aceptar
+/// propuesta soberana alguna. Una falla al leer/deserializar el overlay NO
+/// incendia el arranque: se trata como "sin revocaciones" (`0`) — un overlay
+/// corrupto no debe dejar al sistema sin userspace; el operador lo re-ancla.
+/// (Fail-safe en disponibilidad; el gate de autoridad sigue intacto: ninguna
+/// clave se ACEPTA por error, sólo deja de denegarse una que el overlay no pudo
+/// confirmar revocada.)
+pub fn aplicar_overlay() -> u32 {
+    let Some(vivo) = VIVO.get() else {
+        return 0;
+    };
+    let hash = match vivo.lock().overlay_revocacion {
+        Some(hash) => hash,
+        None => return 0,
+    };
+    let objeto = match almacen::recuperar(&hash) {
+        Ok(Some(objeto)) => objeto,
+        _ => return 0, // overlay anclado pero ausente/ilegible: sin revocaciones
+    };
+    match format::OverlayRevocacion::deserializar(&objeto.datos) {
+        Ok(overlay) => crate::claves::aplicar_overlay_revocacion(&overlay),
+        Err(_) => 0,
+    }
+}
+
 /// El hash del estado persistido de la app `indice`, si tiene uno anclado. Lo
 /// consulta la capacidad `sys_estado_cargar` cuando una app despierta.
 pub fn estado_de(indice: usize) -> Option<Hash> {

@@ -581,7 +581,11 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
     // Sin configuracion enlazada: el kernel inyectara `Configuracion::por_defecto`
     // en cada `ContextoCapacidades`. El cambio de idioma/tema engendrara un
     // nodo nuevo en caliente y reanclara el manifiesto sin pasar por aqui.
-    let manifiesto = Manifiesto { version: VERSION_MANIFIESTO, apps, configuracion: None };
+    // `overlay_revocacion: None` — el génesis no ancla overlay; boot no tiene las
+    // seeds del anillo para firmar revocaciones. El operador lo ancla aparte si
+    // necesita apagar una clave soberana filtrada (SDD-rotacion-revocacion §4).
+    let manifiesto =
+        Manifiesto { version: VERSION_MANIFIESTO, apps, configuracion: None, overlay_revocacion: None };
     let man_datos = manifiesto.serializar().map_err(|e| e.to_string())?;
     let man_objeto = Objeto { datos: man_datos, hijos: hijos_manifiesto };
     let man_payload = man_objeto.serializar().map_err(|e| e.to_string())?;

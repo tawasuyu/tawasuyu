@@ -192,6 +192,9 @@ pub fn construir_release(
         version: VERSION_MANIFIESTO,
         apps: entradas,
         configuracion: None,
+        // Un release nuevo no ancla overlay de revocación: las revocaciones de
+        // claves del anillo las ancla el operador aparte (SDD §4).
+        overlay_revocacion: None,
     };
     let man_datos = manifiesto.serializar().map_err(ReleaseError::Serializacion)?;
     let man_obj = emitir_objeto(man_datos, hijos_manifiesto)?;
