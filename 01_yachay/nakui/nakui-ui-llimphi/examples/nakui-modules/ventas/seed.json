@@ -1,0 +1,35 @@
+{
+  "seed": [
+    {
+      "entity": "Customer",
+      "records": [
+        { "handle": "acme",      "data": { "name": "ACME Corp",   "tier": "enterprise", "activo": true } },
+        { "handle": "globex",    "data": { "name": "Globex",      "tier": "enterprise", "activo": true } },
+        { "handle": "stark",     "data": { "name": "Stark Ind.",  "tier": "enterprise", "activo": true } },
+        { "handle": "initech",   "data": { "name": "Initech",     "tier": "pro",        "activo": true } },
+        { "handle": "umbrella",  "data": { "name": "Umbrella",    "tier": "pro",        "activo": true } },
+        { "handle": "hooli",     "data": { "name": "Hooli",       "tier": "pro",        "activo": false } },
+        { "handle": "wayne",     "data": { "name": "Wayne Ent.",  "tier": "free",       "activo": true } },
+        { "handle": "wonka",     "data": { "name": "Wonka",       "tier": "free",       "activo": true } },
+        { "handle": "piedpiper", "data": { "name": "Pied Piper",  "tier": "free",       "activo": false } }
+      ]
+    },
+    {
+      "entity": "Order",
+      "records": [
+        { "data": { "customer": "@acme",      "monto": 1200, "pagado": true } },
+        { "data": { "customer": "@acme",      "monto": 800,  "pagado": true } },
+        { "data": { "customer": "@globex",    "monto": 1500, "pagado": true } },
+        { "data": { "customer": "@stark",     "monto": 2500, "pagado": true } },
+        { "data": { "customer": "@stark",     "monto": 500,  "pagado": true } },
+        { "data": { "customer": "@initech",   "monto": 600,  "pagado": true } },
+        { "data": { "customer": "@initech",   "monto": 300,  "pagado": false } },
+        { "data": { "customer": "@umbrella",  "monto": 1100, "pagado": true } },
+        { "data": { "customer": "@hooli",     "monto": 750,  "pagado": true } },
+        { "data": { "customer": "@wayne",     "monto": 200,  "pagado": false } },
+        { "data": { "customer": "@wonka",     "monto": 400,  "pagado": true } },
+        { "data": { "customer": "@piedpiper", "monto": 150,  "pagado": false } }
+      ]
+    }
+  ]
+}

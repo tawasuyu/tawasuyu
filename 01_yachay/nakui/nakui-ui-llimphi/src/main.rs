@@ -8,6 +8,9 @@
 //! - Crea `NakuiBackend` (event log persistente + replay + snapshot +
 //!   auto-compact). El backend implementa `nahual_meta_runtime::MetaBackend`
 //!   completo (seed/update/delete/morphism).
+//! - Siembra datos de ejemplo desde un `seed.json` opcional por módulo
+//!   (`seed_demo_data`), sólo para entities vacías — los tableros y
+//!   gráficos se ven en vivo en el primer arranque sin pisar datos.
 //! - Llimphi shell: sidebar de módulos (clickeable) + menú del módulo
 //!   activo + área principal.
 //! - **Meta-form Llimphi** (paralelo al `nahual-widget-meta-form` GPUI
@@ -395,11 +398,23 @@ impl App for NakuiApp {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(50);
-        let (backend, status) = NakuiBackend::open(log_path, snapshot_threshold, executors);
-        let initial_toast = status.init_toast;
+        let (mut backend, status) = NakuiBackend::open(log_path, snapshot_threshold, executors);
+        let mut initial_toast = status.init_toast;
         if let Some(msg) = status.load_error {
             load_error = Some(match load_error {
                 Some(prev) => format!("{prev}; {msg}"),
+                None => msg,
+            });
+        }
+
+        // 3.bis. Sembrar datos de ejemplo de cada módulo que traiga un
+        // `seed.json`, sólo para las entities que estén vacías (no pisa
+        // datos del usuario ni duplica entre arranques). Hace que los
+        // tableros/gráficos se vean en vivo en el primer run.
+        let seed_toast = seed_demo_data(&mut backend, &modules, &modules_dir);
+        if let Some(msg) = seed_toast {
+            initial_toast = Some(match initial_toast {
+                Some(prev) => format!("{prev} · {msg}"),
                 None => msg,
             });
         }
@@ -3616,6 +3631,90 @@ fn load_ui_modules(dir: &std::path::Path) -> Result<(Vec<Module>, Vec<String>), 
     Ok((modules, skipped))
 }
 
+/// Siembra datos de ejemplo de cada módulo que traiga un `seed.json`
+/// junto a su `module.json` (en `<modules_dir>/<module.id>/seed.json`),
+/// **sólo** para las entities que estén vacías en el backend. Devuelve
+/// un toast resumen si sembró algo.
+///
+/// Formato del `seed.json`:
+/// ```json
+/// { "seed": [
+///     { "entity": "Customer", "records": [
+///         { "handle": "acme", "data": { "name": "ACME", ... } } ] },
+///     { "entity": "Order", "records": [
+///         { "data": { "customer": "@acme", "monto": 1200 } } ] } ] }
+/// ```
+/// Los valores string que empiezan con `@` se resuelven al UUID del
+/// record sembrado con ese `handle` (los bloques se procesan en orden,
+/// así una entity puede referenciar a otra ya sembrada).
+fn seed_demo_data(
+    backend: &mut NakuiBackend,
+    modules: &[Module],
+    modules_dir: &std::path::Path,
+) -> Option<String> {
+    let mut total = 0usize;
+    let mut entities_seeded: Vec<String> = Vec::new();
+    for m in modules {
+        let path = modules_dir.join(&m.id).join("seed.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(blocks) = doc.get("seed").and_then(Value::as_array) else {
+            continue;
+        };
+        // handle → UUID de los records ya sembrados (para resolver `@`).
+        let mut handles: BTreeMap<String, String> = BTreeMap::new();
+        for block in blocks {
+            let Some(entity) = block.get("entity").and_then(Value::as_str) else {
+                continue;
+            };
+            // Idempotencia: no sembrar si la entity ya tiene records.
+            if !backend.list_records(entity).is_empty() {
+                continue;
+            }
+            let Some(records) = block.get("records").and_then(Value::as_array) else {
+                continue;
+            };
+            let mut count = 0usize;
+            for rec in records {
+                let Some(data) = rec.get("data").and_then(Value::as_object) else {
+                    continue;
+                };
+                // Resolver refs `@handle` a UUIDs ya sembrados.
+                let mut obj = data.clone();
+                for v in obj.values_mut() {
+                    if let Value::String(s) = v {
+                        if let Some(key) = s.strip_prefix('@') {
+                            if let Some(uuid) = handles.get(key) {
+                                *v = Value::String(uuid.clone());
+                            }
+                        }
+                    }
+                }
+                match backend.seed(entity, obj) {
+                    Ok(outcome) => {
+                        count += 1;
+                        if let (Some(handle), Some(id)) =
+                            (rec.get("handle").and_then(Value::as_str), outcome.id)
+                        {
+                            handles.insert(handle.to_string(), id.to_string());
+                        }
+                    }
+                    Err(_) => continue,
+                }
+            }
+            if count > 0 {
+                entities_seeded.push(format!("{entity}×{count}"));
+                total += count;
+            }
+        }
+    }
+    (total > 0).then(|| format!("sembré datos de ejemplo: {}", entities_seeded.join(", ")))
+}
+
 fn main() {
     rimay_localize::init();
     llimphi_ui::run::<NakuiApp>();
@@ -3678,6 +3777,49 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// El seeder de demo siembra el `seed.json` del módulo `ventas`,
+    /// resuelve las refs `@handle` a UUIDs reales y es idempotente.
+    #[test]
+    fn seed_demo_data_seeds_ventas_and_is_idempotent() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+
+        let modules_dir = std::path::Path::new("examples/nakui-modules");
+        let (modules, _) = load_ui_modules(modules_dir).unwrap();
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, BTreeMap::new());
+
+        // Primer sembrado: 9 clientes + 12 órdenes.
+        let toast = seed_demo_data(&mut backend, &modules, modules_dir);
+        assert!(toast.is_some(), "debió sembrar en el primer arranque");
+        let customers = backend.list_records("Customer");
+        let orders = backend.list_records("Order");
+        assert_eq!(customers.len(), 9);
+        assert_eq!(orders.len(), 12);
+
+        // Las refs `@handle` se resolvieron a UUIDs reales de Customer.
+        let customer_ids: std::collections::BTreeSet<String> = customers
+            .iter()
+            .map(|(id, _)| id.to_string())
+            .collect();
+        for (_, ord) in &orders {
+            let cust = ord.get("customer").and_then(Value::as_str).unwrap();
+            assert!(
+                customer_ids.contains(cust),
+                "la orden referencia un Customer inexistente: {cust}"
+            );
+        }
+
+        // Segundo sembrado: idempotente (entities no vacías → no toca nada).
+        let again = seed_demo_data(&mut backend, &modules, modules_dir);
+        assert!(again.is_none(), "no debió re-sembrar entities ya pobladas");
+        assert_eq!(backend.list_records("Customer").len(), 9);
+        assert_eq!(backend.list_records("Order").len(), 12);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
     }
 
     /// `build_form` en alta: AutoId se rellena con un UUID, default
