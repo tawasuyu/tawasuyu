@@ -1,0 +1,21 @@
+[package]
+name = "launcher-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "launcher-core — el LAYOUT configurable de UN solo motor de launcher reusable: barras por borde (estilo eww), docks (con tear-off), tarjetas flotantes y la barra de menú global (estilo mac). Schema de datos puro y no_std; lo renderiza `launcher-llimphi` en host/shuma y el compositor en wawa. Generaliza el WidgetSpec de mirada-launcher (kind + props) para que sirva en los tres entornos."
+
+[features]
+default = ["std"]
+std = ["serde/std"]
+
+[dependencies]
+# serde directo (no workspace) para apagar default-features en no_std.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+
+[dev-dependencies]
+toml = { workspace = true }
+serde_json = { workspace = true }

@@ -6,28 +6,37 @@
 //! Cada uno reimplementa "qué apps existen y cómo se lanzan". Este crate
 //! es la tabla única que todos consultan.
 //!
-//! Tres piezas, en capas:
+//! Cuatro piezas, en capas:
 //!
 //! 1. **Registro** ([`AppRegistry`] + [`AppEntry`]): qué apps hay, cómo se
 //!    lanzan ([`Launch`]) y qué mimes/lentes saben abrir (open-with).
-//!    Se descubre de `~/.config/gioser/apps/*.toml`.
+//!    Se descubre de `~/.config/gioser/apps/*.toml` (feature `std`).
 //! 2. **Menú global** ([`AppMenu`]/[`Menu`]/[`MenuItem`]): el clásico
 //!    Archivo/Editar/Ayuda que la app *declara*. Cuando hay una barra de
 //!    launcher presente, ésta lo *adopta* y la app deja de pintarlo en su
 //!    ventana — el comportamiento "menú global" de macOS.
-//! 3. **Bus** ([`Bus`] + [`BusEvent`]): pub/sub in-process de foco /
+//! 3. **Launcher** ([`Launcher`] trait + [`LaunchError`]): la *instrucción
+//!    de ejecución* abstracta. El host implementa con `std::process`
+//!    ([`ProcessLauncher`]), wawa con instanciación WASM, shuma
+//!    despachando `action`. El motor de launcher llama al trait y no se
+//!    entera de en qué entorno corre.
+//! 4. **Bus** ([`Bus`] + [`BusEvent`]): pub/sub in-process de foco /
 //!    cambio de menú / pedido de lanzamiento / comando. La versión
 //!    cross-proceso montará sobre el broker de brahman más adelante.
 //!
-//! v1 es `std` (host). Los tipos de datos se mantienen simples y serde
-//! para poder espejarlos `no_std` cuando crucen a wawa.
+//! Los **datos** ([`AppEntry`], [`Launch`], [`AppMenu`]…) y el **trait
+//! [`Launcher`]** son `no_std + alloc`. El descubrimiento por filesystem,
+//! el spawn de procesos y el [`Bus`] viven detrás del feature `std`.
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 
 // =====================================================================
 // Registro de apps
@@ -64,9 +73,16 @@ pub struct AppEntry {
 }
 
 impl AppEntry {
-    /// Enciende la app. Sólo `Exec` spawnea un proceso; `Action`/`Wasm`
-    /// devuelven `Ok(None)` — el host (chasis o kernel) los despacha por
-    /// su cuenta, este crate no los conoce.
+    /// `true` si la app declara saber abrir `mime`.
+    pub fn handles_mime(&self, mime: &str) -> bool {
+        self.handles.iter().any(|m| m == mime)
+    }
+}
+
+#[cfg(feature = "std")]
+impl AppEntry {
+    /// Enciende la app vía `std::process`. Sólo `Exec` spawnea; `Action`/
+    /// `Wasm` devuelven `Ok(None)` — los despacha el host (chasis/kernel).
     pub fn spawn(&self) -> std::io::Result<Option<std::process::Child>> {
         match &self.launch {
             Launch::Exec { program, args } => std::process::Command::new(program)
@@ -76,11 +92,6 @@ impl AppEntry {
             Launch::Action(_) | Launch::Wasm { .. } => Ok(None),
         }
     }
-
-    /// `true` si la app declara saber abrir `mime`.
-    pub fn handles_mime(&self, mime: &str) -> bool {
-        self.handles.iter().any(|m| m == mime)
-    }
 }
 
 // ----- forma en disco (TOML) -----
@@ -88,7 +99,8 @@ impl AppEntry {
 /// Espejo serde del archivo `<id>.toml`. La `[launch]` es una tabla con
 /// campos opcionales en vez de un enum etiquetado — toml 0.8 trata los
 /// enums internamente etiquetados de forma quisquillosa, así que
-/// resolvemos a mano a [`Launch`].
+/// resolvemos a mano a [`Launch`]. Sólo se usa al parsear TOML (`std`).
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AppFile {
     id: String,
@@ -102,6 +114,7 @@ struct AppFile {
     launch: LaunchFile,
 }
 
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LaunchFile {
     #[serde(default)]
@@ -114,6 +127,7 @@ struct LaunchFile {
     wasm: Option<String>,
 }
 
+#[cfg(feature = "std")]
 impl LaunchFile {
     fn resolve(self) -> Option<Launch> {
         if let Some(program) = self.exec {
@@ -129,6 +143,7 @@ impl LaunchFile {
     }
 }
 
+#[cfg(feature = "std")]
 impl AppFile {
     fn into_entry(self) -> Option<AppEntry> {
         Some(AppEntry {
@@ -144,6 +159,7 @@ impl AppFile {
 
 /// Parsea una entrada de app desde texto TOML. Devuelve `None` si no
 /// parsea o si la `[launch]` no nombra ningún modo (`exec`/`action`/`wasm`).
+#[cfg(feature = "std")]
 pub fn parse_entry(toml_src: &str) -> Option<AppEntry> {
     toml::from_str::<AppFile>(toml_src)
         .ok()
@@ -151,7 +167,8 @@ pub fn parse_entry(toml_src: &str) -> Option<AppEntry> {
 }
 
 /// Directorio canónico del registro: `~/.config/gioser/apps/`.
-pub fn apps_dir() -> Option<PathBuf> {
+#[cfg(feature = "std")]
+pub fn apps_dir() -> Option<std::path::PathBuf> {
     directories::BaseDirs::new().map(|b| b.config_dir().join("gioser").join("apps"))
 }
 
@@ -164,37 +181,9 @@ pub struct AppRegistry {
 
 impl AppRegistry {
     pub fn new(mut entries: Vec<AppEntry>) -> Self {
-        entries.sort_by(|a, b| a.label.cmp(&b.label));
+        // sort_unstable_by para no exigir alloc extra (vive en core).
+        entries.sort_unstable_by(|a, b| a.label.cmp(&b.label));
         Self { entries }
-    }
-
-    /// Descubre del dir canónico. Vacío si no hay config dir o el dir no
-    /// existe — la app sigue, sólo sin entradas.
-    pub fn discover() -> Self {
-        apps_dir().map(Self::from_dir).unwrap_or_default()
-    }
-
-    /// Escanea `<dir>/*.toml`. Ignora en silencio los que no parsean
-    /// (con una nota a stderr), igual que el resto de los loaders del repo.
-    pub fn from_dir(dir: impl AsRef<Path>) -> Self {
-        let dir = dir.as_ref();
-        let mut entries = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(dir) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.extension().and_then(|s| s.to_str()) != Some("toml") {
-                    continue;
-                }
-                match std::fs::read_to_string(&p) {
-                    Ok(src) => match parse_entry(&src) {
-                        Some(entry) => entries.push(entry),
-                        None => eprintln!("app-bus: {p:?} no declara una app válida"),
-                    },
-                    Err(err) => eprintln!("app-bus: no se pudo leer {p:?}: {err}"),
-                }
-            }
-        }
-        Self::new(entries)
     }
 
     pub fn all(&self) -> &[AppEntry] {
@@ -224,6 +213,38 @@ impl AppRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+#[cfg(feature = "std")]
+impl AppRegistry {
+    /// Descubre del dir canónico. Vacío si no hay config dir o el dir no
+    /// existe — la app sigue, sólo sin entradas.
+    pub fn discover() -> Self {
+        apps_dir().map(Self::from_dir).unwrap_or_default()
+    }
+
+    /// Escanea `<dir>/*.toml`. Ignora en silencio los que no parsean
+    /// (con una nota a stderr), igual que el resto de los loaders del repo.
+    pub fn from_dir(dir: impl AsRef<std::path::Path>) -> Self {
+        let dir = dir.as_ref();
+        let mut entries = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|s| s.to_str()) != Some("toml") {
+                    continue;
+                }
+                match std::fs::read_to_string(&p) {
+                    Ok(src) => match parse_entry(&src) {
+                        Some(entry) => entries.push(entry),
+                        None => eprintln!("app-bus: {p:?} no declara una app válida"),
+                    },
+                    Err(err) => eprintln!("app-bus: no se pudo leer {p:?}: {err}"),
+                }
+            }
+        }
+        Self::new(entries)
     }
 }
 
@@ -351,7 +372,45 @@ impl AppMenu {
 }
 
 // =====================================================================
-// Bus de eventos (pub/sub in-process)
+// Launcher — la instrucción de ejecución abstracta
+// =====================================================================
+
+/// Por qué no se pudo lanzar una app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchError {
+    /// Este `Launcher` no maneja el modo de la app (p.ej. un host que no
+    /// instancia WASM, o wawa que no spawnea procesos del host).
+    Unsupported,
+    /// El lanzamiento falló; mensaje libre.
+    Failed(String),
+}
+
+/// La *instrucción de ejecución* abstracta. El motor de launcher
+/// (`launcher-core`/`launcher-llimphi`) llama a `launch` y no sabe en qué
+/// entorno corre — host, shuma o wawa cada uno trae su impl.
+pub trait Launcher {
+    fn launch(&self, app: &AppEntry) -> Result<(), LaunchError>;
+}
+
+/// Launcher del host: spawnea binarios vía `std::process`. No maneja
+/// `Action`/`Wasm` (devuelve `Unsupported` — esos los resuelve el chasis).
+#[cfg(feature = "std")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProcessLauncher;
+
+#[cfg(feature = "std")]
+impl Launcher for ProcessLauncher {
+    fn launch(&self, app: &AppEntry) -> Result<(), LaunchError> {
+        match app.spawn() {
+            Ok(Some(_child)) => Ok(()),
+            Ok(None) => Err(LaunchError::Unsupported),
+            Err(e) => Err(LaunchError::Failed(alloc::string::ToString::to_string(&e))),
+        }
+    }
+}
+
+// =====================================================================
+// Bus de eventos (pub/sub in-process) — sólo `std`
 // =====================================================================
 
 /// Lo que viaja por el bus. El flujo del menú global: una app toma foco
@@ -374,11 +433,13 @@ pub enum BusEvent {
 /// Bus pub/sub mínimo y `Send + Sync`: fan-out a todos los suscriptores.
 /// Un suscriptor caído (receiver dropeado) se poda en el próximo publish.
 /// Clonar el `Bus` comparte el mismo conjunto de suscriptores.
+#[cfg(feature = "std")]
 #[derive(Clone, Default)]
 pub struct Bus {
-    subs: Arc<Mutex<Vec<Sender<BusEvent>>>>,
+    subs: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<BusEvent>>>>,
 }
 
+#[cfg(feature = "std")]
 impl Bus {
     pub fn new() -> Self {
         Self::default()
@@ -386,8 +447,8 @@ impl Bus {
 
     /// Crea un canal y devuelve su extremo de recepción. El emisor queda
     /// registrado para recibir cada `publish` futuro.
-    pub fn subscribe(&self) -> Receiver<BusEvent> {
-        let (tx, rx) = channel();
+    pub fn subscribe(&self) -> std::sync::mpsc::Receiver<BusEvent> {
+        let (tx, rx) = std::sync::mpsc::channel();
         self.subs.lock().unwrap().push(tx);
         rx
     }
@@ -401,10 +462,10 @@ impl Bus {
 }
 
 // =====================================================================
-// Tests
+// Tests (corren con default features = std)
 // =====================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 
@@ -462,12 +523,10 @@ mod tests {
             "id='nada'\nlabel='Nada'\ncategory='ruway'\n[launch]\nexec='nada'",
         )
         .unwrap();
-        // Un archivo basura no debe romper el escaneo.
         std::fs::write(dir.join("roto.toml"), "no es toml válido = =").unwrap();
 
         let reg = AppRegistry::from_dir(&dir);
         assert_eq!(reg.len(), 2);
-        // Orden por label: Cosmos antes que Nada.
         assert_eq!(reg.all()[0].id, "cosmos");
         assert_eq!(reg.get("nada").unwrap().label, "Nada");
         assert_eq!(reg.handlers_for("x/chart").len(), 1);
@@ -496,6 +555,20 @@ mod tests {
     }
 
     #[test]
+    fn process_launcher_unsupported_para_action() {
+        // Action no es del host → Unsupported (no intenta spawnear).
+        let app = AppEntry {
+            id: "s".into(),
+            label: "Shell".into(),
+            icon: None,
+            category: None,
+            launch: Launch::Action("focus:shell".into()),
+            handles: Vec::new(),
+        };
+        assert_eq!(ProcessLauncher.launch(&app), Err(LaunchError::Unsupported));
+    }
+
+    #[test]
     fn bus_fanout_y_poda() {
         let bus = Bus::new();
         let a = bus.subscribe();
@@ -506,7 +579,6 @@ mod tests {
         assert_eq!(n, 2);
         assert!(matches!(a.recv().unwrap(), BusEvent::LaunchRequested { .. }));
         assert!(matches!(b.recv().unwrap(), BusEvent::LaunchRequested { .. }));
-        // Dropear un receiver → se poda en el próximo publish.
         drop(a);
         let n = bus.publish(BusEvent::AppFocused {
             app_id: "nada".into(),

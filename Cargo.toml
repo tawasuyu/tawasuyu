@@ -407,6 +407,7 @@ members = [
     "shared/foreign-psd",
     "shared/format",
     "shared/forth-emisor",
+    "shared/launcher-core",
     "shared/rimay-localize",
     "shared/sandokan/sandokan-core",
     "shared/sandokan/sandokan-lifecycle",

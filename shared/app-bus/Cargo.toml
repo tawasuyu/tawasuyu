@@ -6,12 +6,22 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "app-bus — registro único de aplicaciones de gioser + protocolo de menú global (Archivo/Editar/Ayuda) + bus de eventos foco/lanzamiento. Lo consultan los launchers (mirada, shuma) en vez de reimplementar el despacho cada uno; el menú clásico de la app se declara acá para que una barra de launcher pueda adoptarlo (estilo menú global mac)."
+description = "app-bus — registro único de aplicaciones de gioser + protocolo de menú global (Archivo/Editar/Ayuda) + bus de eventos foco/lanzamiento + trait Launcher. Lo consultan los launchers (mirada, shuma, wawa) en vez de reimplementar el despacho cada uno. Los datos + el trait son no_std; el descubrimiento (fs/TOML), el spawn de procesos y el Bus van detrás del feature `std`."
+
+[features]
+default = ["std"]
+# `std` enciende el descubrimiento por filesystem/TOML, el spawn de
+# procesos del host (ProcessLauncher) y el Bus pub/sub (std::sync::mpsc).
+# Sin `std`, el crate queda en datos + trait Launcher + AppMenu, listo para
+# espejar en el kernel de wawa.
+std = ["serde/std", "toml", "directories"]
 
 [dependencies]
-serde = { workspace = true }
-toml = { workspace = true }
-directories = { workspace = true }
+# serde directo (no workspace) para poder apagar default-features en el
+# build no_std — la versión workspace fuerza std.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+toml = { workspace = true, optional = true }
+directories = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
