@@ -8,6 +8,19 @@ pub(crate) const FETCH_BOOTSTRAP: &str = r#"
 globalThis.__puriy_fetch_next_id = 1;
 globalThis.__puriy_fetch_pending = {};
 globalThis.fetch = function(url, init) {
+    // Fase 7.56 — aceptar un Request como primer arg. El `init` explícito
+    // (segundo arg) pisa los campos que trae el Request.
+    if (globalThis.Request && url instanceof globalThis.Request) {
+        var req = url;
+        var over = init || {};
+        init = {
+            method: over.method || req.method,
+            headers: (over.headers != null) ? over.headers : req.headers,
+            body: (over.body != null) ? over.body : req._body,
+            signal: (over.signal != null) ? over.signal : req.signal
+        };
+        url = req.url;
+    }
     var id = globalThis.__puriy_fetch_next_id++;
     var method = (init && init.method) ? String(init.method).toUpperCase() : 'GET';
     var body = (init && init.body != null) ? String(init.body) : '';

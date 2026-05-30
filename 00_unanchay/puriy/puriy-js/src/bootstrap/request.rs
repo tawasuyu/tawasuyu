@@ -1,0 +1,53 @@
+pub(crate) const REQUEST_BOOTSTRAP: &str = r#"
+// Fase 7.56 — Request como constructor público (`new Request(input, init)`).
+// `input` puede ser una URL string u otro Request (en cuyo caso se clona y
+// el `init` pisa los campos que trae). `fetch()` acepta un Request como
+// primer arg (ver fetch.rs). Body crudo en `_body` (string/Blob/USP/…),
+// consumible una vez vía text()/json()/arrayBuffer().
+globalThis.Request = function(input, init) {
+    init = init || {};
+    if (input instanceof globalThis.Request) {
+        this.url = input.url;
+        this.method = init.method ? String(init.method).toUpperCase() : input.method;
+        this.headers = new globalThis.Headers(
+            (init.headers != null) ? init.headers : input.headers);
+        this._body = (init.body != null) ? init.body : input._body;
+        this.credentials = init.credentials || input.credentials;
+        this.mode = init.mode || input.mode;
+        this.signal = (init.signal != null) ? init.signal : input.signal;
+    } else {
+        this.url = String(input);
+        this.method = init.method ? String(init.method).toUpperCase() : 'GET';
+        this.headers = new globalThis.Headers(init.headers);
+        this._body = (init.body != null) ? init.body : null;
+        this.credentials = init.credentials || 'same-origin';
+        this.mode = init.mode || 'cors';
+        this.signal = init.signal || null;
+    }
+    this.bodyUsed = false;
+};
+globalThis.Request.prototype.text = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+    this.bodyUsed = true;
+    return Promise.resolve(globalThis.__puriy_body_to_string(this._body));
+};
+globalThis.Request.prototype.json = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+    this.bodyUsed = true;
+    try { return Promise.resolve(JSON.parse(globalThis.__puriy_body_to_string(this._body))); }
+    catch (e) { return Promise.reject(e); }
+};
+globalThis.Request.prototype.arrayBuffer = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+    this.bodyUsed = true;
+    var s = globalThis.__puriy_body_to_string(this._body);
+    var buf = new ArrayBuffer(s.length);
+    var view = new Uint8Array(buf);
+    for (var i = 0; i < s.length; i++) view[i] = s.charCodeAt(i) & 0xff;
+    return Promise.resolve(buf);
+};
+globalThis.Request.prototype.clone = function() {
+    if (this.bodyUsed) throw new TypeError('Request body is already used');
+    return new globalThis.Request(this);
+};
+"#;

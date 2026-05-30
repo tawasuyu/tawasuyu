@@ -6353,4 +6353,53 @@ mod tests {
         assert_eq!(rt.eval("threw").expect("e"), JsValue::Bool(true));
     }
 
+    // ============= Fase 7.56 — Request constructor + fetch(Request) =============
+
+    #[test]
+    fn request_constructor_campos_y_clone() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var req = new Request('https://api.test/x', { method: 'post', \
+                headers: { 'X-A': '1' }, body: 'cuerpo' }); \
+             var m = req.method; var u = req.url; var h = req.headers.get('x-a'); \
+             var bodyTxt = null; req.text().then(function(t) { bodyTxt = t; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("m").expect("e"), JsValue::String("POST".into()));
+        assert_eq!(rt.eval("u").expect("e"), JsValue::String("https://api.test/x".into()));
+        assert_eq!(rt.eval("h").expect("e"), JsValue::String("1".into()));
+        assert_eq!(rt.eval("bodyTxt").expect("e"), JsValue::String("cuerpo".into()));
+    }
+
+    #[test]
+    fn fetch_acepta_request_object() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var req = new Request('/api/y', { method: 'PUT', body: 'payload' }); \
+             fetch(req);",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[1], "PUT");
+        assert_eq!(parts[2], "https://example.com/api/y");
+        assert_eq!(parts[4], "payload");
+    }
+
+    #[test]
+    fn fetch_request_init_pisa_al_request() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var req = new Request('/z', { method: 'GET' }); \
+             fetch(req, { method: 'DELETE' });",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[1], "DELETE");
+    }
 }
