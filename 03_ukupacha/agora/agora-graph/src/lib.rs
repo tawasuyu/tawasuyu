@@ -15,8 +15,32 @@
 
 use std::collections::HashMap;
 
-use agora_core::{AgoraError, Attestation, Identity, IdentityId, IdentityKind};
+use agora_core::{
+    AgoraError, Attestation, Identity, IdentityId, IdentityKind, KeyRotation, MultiSigError,
+    RevReason, Revocation,
+};
 use serde::{Deserialize, Serialize};
+
+/// Predicado reservado con el que una identidad declara a sus guardianes: una
+/// auto-atestación `subject=yo, attester=yo, predicate="guardian", value=hex(G)`
+/// por cada guardián `G`. El set de guardianes es la autoridad que puede
+/// revocar la clave de la identidad por compromiso (M-of-N) en el plano social
+/// —el análogo del `AGORA_AUTH_RING` en el de control—. Se declaran ANTES de un
+/// compromiso: [`TrustGraph::guardians_of`] los resuelve a la hora de revocar.
+pub const PREDICATE_GUARDIAN: &str = "guardian";
+
+/// Parsea 64 chars hex a un `IdentityId` (32 bytes). `None` si el largo o los
+/// dígitos no cuadran — un `value` de guardián mal formado simplemente no suma.
+fn parse_id_hex(s: &str) -> Option<IdentityId> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0u8; 32];
+    for (i, b) in bytes.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(IdentityId::from_bytes(bytes))
+}
 
 /// Evidencia acumulada a favor de un claim concreto.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +162,17 @@ pub struct TrustGraph {
     identities: HashMap<IdentityId, Identity>,
     /// Atestaciones verificadas, en orden de inserción.
     attestations: Vec<Attestation>,
+    /// Revocaciones de clave verificadas — tombstones de primera clase. Una
+    /// clave revocada (vigente a `now`) deja de contar como atestador. Se
+    /// guardan APARTE de las atestaciones para que el filtrado sea en tiempo de
+    /// consulta: un re-gossip de lo revocado NO lo resucita. `serde(default)`
+    /// preserva la lectura de snapshots viejos (sin estos campos).
+    #[serde(default)]
+    revocations: Vec<Revocation>,
+    /// Rotaciones de clave verificadas (doble-firmadas). Encadenan vieja→nueva;
+    /// [`TrustGraph::current_key_at`] sigue la cadena hasta la punta viva.
+    #[serde(default)]
+    rotations: Vec<KeyRotation>,
 }
 
 impl TrustGraph {
@@ -187,6 +222,122 @@ impl TrustGraph {
             self.attestations.push(att);
         }
         Ok(())
+    }
+
+    // =========================================================================
+    //  Ciclo de vida de claves — rotación y revocación (SDD #4)
+    // =========================================================================
+
+    /// Snapshot de las revocaciones almacenadas (persistencia / gossip).
+    pub fn revocations(&self) -> &[Revocation] {
+        &self.revocations
+    }
+
+    /// Snapshot de las rotaciones almacenadas (persistencia / gossip).
+    pub fn rotations(&self) -> &[KeyRotation] {
+        &self.rotations
+    }
+
+    /// Resuelve los guardianes de una identidad: las identidades `G` que ella
+    /// misma declaró vía una auto-atestación [`PREDICATE_GUARDIAN`]. Es la
+    /// autoridad que un consumidor del plano social pasa como `allowed` a
+    /// [`Self::add_revocation`]. Distintos, en orden de declaración.
+    pub fn guardians_of(&self, id: IdentityId) -> Vec<IdentityId> {
+        let mut out: Vec<IdentityId> = Vec::new();
+        for a in &self.attestations {
+            if a.claim.subject == id
+                && a.attester == id
+                && a.claim.predicate == PREDICATE_GUARDIAN
+            {
+                if let Some(g) = parse_id_hex(&a.claim.value) {
+                    if !out.contains(&g) {
+                        out.push(g);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Incorpora una rotación de clave tras verificar que AMBAS firmas
+    /// (vieja + nueva) cierran. Una rotación con una firma rota se rechaza —
+    /// como con las atestaciones, la red sólo guarda lo comprobable. Duplicados
+    /// exactos se ignoran.
+    pub fn add_rotation(&mut self, rot: KeyRotation) -> Result<(), AgoraError> {
+        rot.verify()?;
+        if !self.rotations.contains(&rot) {
+            self.rotations.push(rot);
+        }
+        Ok(())
+    }
+
+    /// Incorpora una revocación tras verificar que ≥ `min` firmantes DISTINTOS
+    /// del set `allowed` la respaldan. El consumidor decide la autoridad: en el
+    /// plano social `allowed = guardians_of(target)`; en el de control, el
+    /// anillo. El grafo es mecanismo, no veredicto — pero NO guarda una
+    /// revocación que su autoridad declarada no respalde (si no, cualquiera
+    /// inyectaría tombstones como negación de servicio). Duplicados se ignoran.
+    pub fn add_revocation(
+        &mut self,
+        rev: Revocation,
+        min: usize,
+        allowed: &[IdentityId],
+    ) -> Result<(), MultiSigError> {
+        rev.verify(min, allowed)?;
+        if !self.revocations.contains(&rev) {
+            self.revocations.push(rev);
+        }
+        Ok(())
+    }
+
+    /// `true` si `key` está revocada y la revocación rige en `now`. Cualquier
+    /// motivo cuenta para suprimir evidencia.
+    pub fn is_revoked_at(&self, key: IdentityId, now: u64) -> bool {
+        self.revocations
+            .iter()
+            .any(|r| r.target_id() == key && r.is_active_at(now))
+    }
+
+    /// La clave VIVA que una identidad controla en `now`, siguiendo la cadena
+    /// de rotaciones desde `start`. `None` si la línea está muerta: una
+    /// revocación por COMPROMISO en cualquier eslabón corta la cadena ahí (no
+    /// seguimos rotaciones firmadas por una clave en manos hostiles — esa es la
+    /// precedencia "la revocación gana sobre la rotación"), y una punta revocada
+    /// por cualquier motivo tampoco devuelve clave viva.
+    pub fn current_key_at(&self, start: IdentityId, now: u64) -> Option<IdentityId> {
+        let mut current = start;
+        // Cota dura contra datos cíclicos (un grafo honesto es acíclico).
+        for _ in 0..1024 {
+            // Un compromiso vigente mata la línea: las rotaciones que salgan de
+            // esta clave son indignas de confianza.
+            let comprometida = self.revocations.iter().any(|r| {
+                r.target_id() == current
+                    && r.reason == RevReason::Compromised
+                    && r.is_active_at(now)
+            });
+            if comprometida {
+                return None;
+            }
+            // El sucesor: la rotación más reciente que sale de `current`.
+            let siguiente = self
+                .rotations
+                .iter()
+                .filter(|r| r.old_id() == current)
+                .max_by_key(|r| r.issued_at)
+                .map(|r| r.new_id());
+            match siguiente {
+                Some(n) if n != current => current = n,
+                // Sin sucesor: la punta. Vale sólo si no está revocada.
+                _ => {
+                    return if self.is_revoked_at(current, now) {
+                        None
+                    } else {
+                        Some(current)
+                    };
+                }
+            }
+        }
+        None
     }
 
     /// Cambia el `display_name` de una identidad ya registrada. Devuelve
@@ -281,6 +432,50 @@ impl TrustGraph {
         Corroboration { attesters, self_attested }
     }
 
+    /// Como [`Self::evidence_for`] pero EXCLUYE atestaciones cuyo atestador esté
+    /// revocado (vigente a `now`). El filtro es en tiempo de consulta — un
+    /// re-gossip de una atestación de clave revocada no la resucita.
+    pub fn evidence_for_at(
+        &self,
+        subject: IdentityId,
+        predicate: &str,
+        value: &str,
+        now: u64,
+    ) -> Vec<&Attestation> {
+        self.attestations
+            .iter()
+            .filter(|a| {
+                a.claim.subject == subject
+                    && a.claim.predicate == predicate
+                    && a.claim.value == value
+                    && !self.is_revoked_at(a.attester, now)
+            })
+            .collect()
+    }
+
+    /// Como [`Self::corroboration`] pero sobre la evidencia NO revocada a `now`.
+    /// La que usa [`Self::is_accepted_at`] para que una clave revocada deje de
+    /// sostener el claim que respaldaba.
+    pub fn corroboration_at(
+        &self,
+        subject: IdentityId,
+        predicate: &str,
+        value: &str,
+        now: u64,
+    ) -> Corroboration {
+        let mut attesters: Vec<IdentityId> = Vec::new();
+        let mut self_attested = false;
+        for att in self.evidence_for_at(subject, predicate, value, now) {
+            if att.is_self_attested() {
+                self_attested = true;
+            }
+            if !attesters.contains(&att.attester) {
+                attesters.push(att.attester);
+            }
+        }
+        Corroboration { attesters, self_attested }
+    }
+
     /// Atajo: `true` si la `policy` acepta el claim según su eje
     /// **básico** (`min_third_party` + `accept_self`). Ignora
     /// `min_attesters_of_kind` y `max_age_secs` — para esos usar
@@ -317,7 +512,8 @@ impl TrustGraph {
         policy: &TrustPolicy,
         now: u64,
     ) -> bool {
-        let cor = self.corroboration(subject, predicate, value);
+        // Evidencia NO revocada a `now`: una clave revocada deja de respaldar.
+        let cor = self.corroboration_at(subject, predicate, value, now);
         if !policy.accepts(&cor) {
             return false;
         }
@@ -337,11 +533,11 @@ impl TrustGraph {
             }
         }
         if let Some(max_age) = policy.max_age_secs {
-            // Tomamos el claim más reciente que respalda este (subject,
-            // predicate, value). Si no hay ninguno, accepts() ya falló
+            // El claim más reciente que respalda (subject, predicate, value)
+            // ENTRE los no revocados. Si no hay ninguno, accepts() ya falló
             // arriba; acá hay por lo menos uno.
             let mas_reciente = self
-                .evidence_for(subject, predicate, value)
+                .evidence_for_at(subject, predicate, value, now)
                 .iter()
                 .map(|a| a.claim.issued_at)
                 .max()
@@ -613,5 +809,139 @@ mod tests {
         let again = g.remove_identity(venezuela.identity_id());
         assert!(!again.identity);
         assert_eq!(again.attestations, 0);
+    }
+
+    // =========================================================================
+    //  Ciclo de vida — rotación y revocación (SDD #4 fase 2)
+    // =========================================================================
+
+    fn id_hex(id: IdentityId) -> String {
+        id.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn revocacion_suprime_evidencia_en_is_accepted_at() {
+        // Venezuela respalda la nacionalidad de Yumaira; con un tercero basta.
+        // Tras revocar la clave de Venezuela (M-of-N de su anillo de guardianes),
+        // la atestación deja de contar y el claim ya no se acepta.
+        let (yumaira, venezuela, ..) = actors();
+        let g1 = Keypair::from_seed([71; 32]);
+        let g2 = Keypair::from_seed([72; 32]);
+        let mut g = TrustGraph::new();
+        g.add_attestation(attest(&venezuela, yumaira.identity_id(), "nacionalidad", "venezolana"))
+            .unwrap();
+
+        let pol = TrustPolicy::strict(1);
+        let now = 1_700_000_500;
+        assert!(g.is_accepted_at(yumaira.identity_id(), "nacionalidad", "venezolana", &pol, now));
+
+        let allowed = [g1.identity_id(), g2.identity_id()];
+        let rev = Revocation::create(
+            venezuela.public_key(),
+            RevReason::Compromised,
+            1_700_000_400,
+            None,
+            &[&g1, &g2],
+        );
+        g.add_revocation(rev, 2, &allowed).unwrap();
+
+        // Antes de que rija la revocación, la evidencia seguía contando…
+        assert!(g.is_accepted_at(yumaira.identity_id(), "nacionalidad", "venezolana", &pol, 1_700_000_300));
+        // …a partir de issued_at, suprimida.
+        assert!(!g.is_accepted_at(yumaira.identity_id(), "nacionalidad", "venezolana", &pol, now));
+        // El legacy `is_accepted` (sin `now`) NO filtra revocaciones — sigue viendo la evidencia.
+        assert!(g.is_accepted(yumaira.identity_id(), "nacionalidad", "venezolana", &pol));
+    }
+
+    #[test]
+    fn add_revocation_rechaza_quorum_insuficiente() {
+        let g1 = Keypair::from_seed([71; 32]);
+        let g2 = Keypair::from_seed([72; 32]);
+        let target = Keypair::from_seed([99; 32]).public_key();
+        let allowed = [g1.identity_id(), g2.identity_id()];
+        // Sólo g1 firma.
+        let rev = Revocation::create(target, RevReason::Compromised, 100, None, &[&g1]);
+        let mut g = TrustGraph::new();
+        assert!(g.clone().add_revocation(rev.clone(), 2, &allowed).is_err());
+        // Bajar el umbral a 1 la acepta y la almacena.
+        g.add_revocation(rev, 1, &allowed).unwrap();
+        assert_eq!(g.revocations().len(), 1);
+    }
+
+    #[test]
+    fn rotacion_resuelve_clave_actual_en_cadena() {
+        let v1 = Keypair::from_seed([1; 32]);
+        let v2 = Keypair::from_seed([2; 32]);
+        let v3 = Keypair::from_seed([3; 32]);
+        let mut g = TrustGraph::new();
+        g.add_rotation(KeyRotation::create(&v1, &v2, 100)).unwrap();
+        g.add_rotation(KeyRotation::create(&v2, &v3, 200)).unwrap();
+        // Desde la original, la punta viva es v3.
+        assert_eq!(g.current_key_at(v1.identity_id(), 1_000), Some(v3.identity_id()));
+        // Una clave sin rotaciones es su propia clave actual.
+        let suelta = Keypair::from_seed([5; 32]);
+        assert_eq!(
+            g.current_key_at(suelta.identity_id(), 0),
+            Some(suelta.identity_id())
+        );
+    }
+
+    #[test]
+    fn compromiso_corta_la_cadena_de_rotacion() {
+        // v1→v2, pero v1 se revoca por COMPROMISO: no seguimos una rotación que
+        // pudo firmar el atacante. La línea queda muerta (None).
+        let v1 = Keypair::from_seed([1; 32]);
+        let v2 = Keypair::from_seed([2; 32]);
+        let g1 = Keypair::from_seed([71; 32]);
+        let g2 = Keypair::from_seed([72; 32]);
+        let allowed = [g1.identity_id(), g2.identity_id()];
+        let mut g = TrustGraph::new();
+        g.add_rotation(KeyRotation::create(&v1, &v2, 100)).unwrap();
+        let rev = Revocation::create(v1.public_key(), RevReason::Compromised, 150, None, &[&g1, &g2]);
+        g.add_revocation(rev, 2, &allowed).unwrap();
+        // Antes del compromiso, la cadena resolvía a v2.
+        assert_eq!(g.current_key_at(v1.identity_id(), 120), Some(v2.identity_id()));
+        // Vigente el compromiso, muerta.
+        assert_eq!(g.current_key_at(v1.identity_id(), 200), None);
+    }
+
+    #[test]
+    fn guardians_of_resuelve_autodeclaracion() {
+        let yo = Keypair::from_seed([20; 32]);
+        let g1 = Keypair::from_seed([71; 32]);
+        let g2 = Keypair::from_seed([72; 32]);
+        let mut g = TrustGraph::new();
+        g.add_attestation(attest(&yo, yo.identity_id(), PREDICATE_GUARDIAN, &id_hex(g1.identity_id())))
+            .unwrap();
+        g.add_attestation(attest(&yo, yo.identity_id(), PREDICATE_GUARDIAN, &id_hex(g2.identity_id())))
+            .unwrap();
+        // Una declaración de guardián AJENA (otro firma "mis guardianes") no cuenta.
+        let intruso = Keypair::from_seed([88; 32]);
+        g.add_attestation(attest(&intruso, yo.identity_id(), PREDICATE_GUARDIAN, &id_hex(intruso.identity_id())))
+            .unwrap();
+
+        let guardianes = g.guardians_of(yo.identity_id());
+        assert_eq!(guardianes.len(), 2);
+        assert!(guardianes.contains(&g1.identity_id()));
+        assert!(guardianes.contains(&g2.identity_id()));
+        assert!(!guardianes.contains(&intruso.identity_id()));
+    }
+
+    #[test]
+    fn revocacion_temporal_caduca_y_la_evidencia_revive() {
+        // Una suspensión temporal (expires_at) suprime la evidencia DENTRO de la
+        // ventana y la deja revivir después — la caducidad estricta del modelo.
+        let (yumaira, venezuela, ..) = actors();
+        let g1 = Keypair::from_seed([71; 32]);
+        let allowed = [g1.identity_id()];
+        let mut g = TrustGraph::new();
+        g.add_attestation(attest(&venezuela, yumaira.identity_id(), "oficio", "partera"))
+            .unwrap();
+        let rev = Revocation::create(venezuela.public_key(), RevReason::Retired, 100, Some(200), &[&g1]);
+        g.add_revocation(rev, 1, &allowed).unwrap();
+
+        let pol = TrustPolicy::strict(1);
+        assert!(!g.is_accepted_at(yumaira.identity_id(), "oficio", "partera", &pol, 150)); // suspendida
+        assert!(g.is_accepted_at(yumaira.identity_id(), "oficio", "partera", &pol, 250)); // ya caducó
     }
 }
