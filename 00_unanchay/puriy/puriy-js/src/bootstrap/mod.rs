@@ -67,6 +67,9 @@ mod mediasession;
 mod vibration;
 mod gamepad;
 mod credentials;
+mod badging;
+mod deviceorientation;
+mod payment;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -134,6 +137,9 @@ pub(crate) use mediasession::MEDIA_SESSION_BOOTSTRAP;
 pub(crate) use vibration::VIBRATION_BOOTSTRAP;
 pub(crate) use gamepad::GAMEPAD_BOOTSTRAP;
 pub(crate) use credentials::CREDENTIALS_BOOTSTRAP;
+pub(crate) use badging::BADGING_BOOTSTRAP;
+pub(crate) use deviceorientation::DEVICE_ORIENTATION_BOOTSTRAP;
+pub(crate) use payment::PAYMENT_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -203,5 +209,8 @@ pub(crate) const ALL: &[&str] = &[
     VIBRATION_BOOTSTRAP,
     GAMEPAD_BOOTSTRAP,
     CREDENTIALS_BOOTSTRAP,
+    BADGING_BOOTSTRAP,
+    DEVICE_ORIENTATION_BOOTSTRAP,
+    PAYMENT_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

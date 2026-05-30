@@ -9086,4 +9086,139 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotAllowedError".into()));
     }
+
+    // ---- Fase 7.111 — Badging API (navigator.setAppBadge) ----
+
+    #[test]
+    fn set_app_badge_numero_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("navigator.setAppBadge(3);").expect("e");
+        assert_eq!(rt.eval("__puriy_app_badge").expect("e"), JsValue::Number(3.0));
+        assert_eq!(
+            rt.eval(
+                "var v = __puriy_dirty.filter(function(d) { return d.kind === 'app-badge'; }); \
+                 v[v.length - 1].value",
+            )
+            .expect("e"),
+            JsValue::String("3".into())
+        );
+    }
+
+    #[test]
+    fn set_app_badge_cero_y_clear_limpian() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("navigator.setAppBadge(5);").expect("e");
+        rt.eval("navigator.setAppBadge(0);").expect("e");
+        assert_eq!(rt.eval("__puriy_app_badge").expect("e"), JsValue::Null);
+        rt.eval("navigator.setAppBadge();").expect("e"); // flag
+        assert_eq!(rt.eval("__puriy_app_badge").expect("e"), JsValue::String("flag".into()));
+        rt.eval("navigator.clearAppBadge();").expect("e");
+        assert_eq!(rt.eval("__puriy_app_badge").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn set_app_badge_negativo_rechaza_type_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.setAppBadge(-1).catch(function(e) { errName = e.constructor.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("TypeError".into()));
+    }
+
+    // ---- Fase 7.112 — DeviceOrientation / DeviceMotion ----
+
+    #[test]
+    fn device_orientation_deliver_dispara_evento_con_campos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var got = null; \
+             addEventListener('deviceorientation', function(e) { got = e.alpha + ',' + e.beta + ',' + e.gamma; });",
+        )
+        .expect("e");
+        rt.eval("__puriy_deliver_device_orientation(90, 45, -10, true);").expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("90,45,-10".into()));
+    }
+
+    #[test]
+    fn device_motion_deliver_dispara_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var iv = -1; \
+             addEventListener('devicemotion', function(e) { iv = e.interval; });",
+        )
+        .expect("e");
+        rt.eval("__puriy_deliver_device_motion(null, { x: 0, y: 9.8, z: 0 }, null, 16);").expect("e");
+        assert_eq!(rt.eval("iv").expect("e"), JsValue::Number(16.0));
+    }
+
+    #[test]
+    fn device_sensor_request_permission_refleja_estado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var p = null; DeviceOrientationEvent.requestPermission().then(function(s) { p = s; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("p").expect("e"), JsValue::String("granted".into()));
+        rt.eval("__puriy_set_device_sensor_permission('denied');").expect("e");
+        rt.eval(
+            "var p2 = null; DeviceMotionEvent.requestPermission().then(function(s) { p2 = s; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("p2").expect("e"), JsValue::String("denied".into()));
+    }
+
+    // ---- Fase 7.113 — Payment Request API ----
+
+    #[test]
+    fn payment_request_valida_method_data_y_total() {
+        let mut rt = JsRuntime::new().expect("rt");
+        let r = rt.eval(
+            "var msg = 'ok'; \
+             try { new PaymentRequest([], { total: { label: 'x', amount: { currency: 'USD', value: '1' } } }); } \
+             catch (e) { msg = e.constructor.name; } msg",
+        );
+        assert_eq!(r.expect("e"), JsValue::String("TypeError".into()));
+    }
+
+    #[test]
+    fn payment_request_show_publica_mutacion_y_resuelve_response() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var resp = null; \
+             var pr = new PaymentRequest( \
+                 [{ supportedMethods: 'basic-card' }], \
+                 { total: { label: 'Total', amount: { currency: 'USD', value: '10.00' } } }); \
+             pr.show().then(function(r) { resp = r; });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'payment-request'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+        rt.eval(
+            "var id = globalThis.__puriy_payment_next_id - 1; \
+             __puriy_payment_resolve(id, { methodName: 'basic-card', payerEmail: 'ana@x.com' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("resp.methodName").expect("e"), JsValue::String("basic-card".into()));
+        assert_eq!(rt.eval("resp.payerEmail").expect("e"), JsValue::String("ana@x.com".into()));
+        assert_eq!(rt.eval("resp instanceof PaymentResponse").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn payment_request_abort_rechaza_con_abort_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             var pr = new PaymentRequest( \
+                 [{ supportedMethods: 'basic-card' }], \
+                 { total: { label: 'T', amount: { currency: 'USD', value: '1' } } }); \
+             pr.show().catch(function(e) { errName = e.name; }); \
+             pr.abort();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("AbortError".into()));
+    }
 }
