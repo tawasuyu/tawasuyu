@@ -7138,4 +7138,51 @@ mod tests {
             other => panic!("esperaba string de rechazo, fue {other:?}"),
         }
     }
+
+    // ============= Fase 7.72 — DOMException =============
+
+    #[test]
+    fn dom_exception_construct_name_message_code() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var e = new DOMException('algo falló', 'AbortError'); \
+             var nm = e.name; var msg = e.message; var code = e.code; \
+             var esError = e instanceof Error; var esDom = e instanceof DOMException;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nm").expect("e"), JsValue::String("AbortError".into()));
+        assert_eq!(rt.eval("msg").expect("e"), JsValue::String("algo falló".into()));
+        assert_eq!(rt.eval("code").expect("e"), JsValue::Number(20.0));
+        assert_eq!(rt.eval("esError").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("esDom").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dom_exception_default_name_y_constantes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var e = new DOMException('m'); var nm = e.name; var code = e.code; \
+             var ab = DOMException.ABORT_ERR; var dc = DOMException.DATA_CLONE_ERR;",
+        )
+        .expect("e");
+        // Nombre no-legacy → code 0; default name 'Error'.
+        assert_eq!(rt.eval("nm").expect("e"), JsValue::String("Error".into()));
+        assert_eq!(rt.eval("code").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("ab").expect("e"), JsValue::Number(20.0));
+        assert_eq!(rt.eval("dc").expect("e"), JsValue::Number(25.0));
+    }
+
+    #[test]
+    fn dom_exception_tostring_y_throw() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var s = String(new DOMException('boom', 'DataCloneError')); \
+             var caught = null; \
+             try { throw new DOMException('no está', 'NotFoundError'); } \
+             catch (e) { caught = e.name + '/' + e.code; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("s").expect("e"), JsValue::String("DataCloneError: boom".into()));
+        assert_eq!(rt.eval("caught").expect("e"), JsValue::String("NotFoundError/8".into()));
+    }
 }

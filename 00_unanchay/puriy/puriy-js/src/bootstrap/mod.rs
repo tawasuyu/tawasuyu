@@ -7,6 +7,7 @@ mod timers;
 mod microtask;
 mod dom_events;
 mod event_class;
+mod domexception;
 mod window_scroll;
 mod window_events;
 mod url;
@@ -39,6 +40,7 @@ pub(crate) use timers::TIMERS_BOOTSTRAP;
 pub(crate) use microtask::MICROTASK_BOOTSTRAP;
 pub(crate) use dom_events::DOM_EVENTS_BOOTSTRAP;
 pub(crate) use event_class::EVENT_CLASS_BOOTSTRAP;
+pub(crate) use domexception::DOMEXCEPTION_BOOTSTRAP;
 pub(crate) use window_scroll::WINDOW_SCROLL_BOOTSTRAP;
 pub(crate) use window_events::WINDOW_EVENTS_BOOTSTRAP;
 pub(crate) use url::URL_BOOTSTRAP;
@@ -73,6 +75,7 @@ pub(crate) const ALL: &[&str] = &[
     MICROTASK_BOOTSTRAP,
     DOM_EVENTS_BOOTSTRAP,
     EVENT_CLASS_BOOTSTRAP,
+    DOMEXCEPTION_BOOTSTRAP,
     WINDOW_SCROLL_BOOTSTRAP,
     WINDOW_EVENTS_BOOTSTRAP,
     URL_BOOTSTRAP,
