@@ -32,9 +32,53 @@ use media_recorder_webm::{
     default_recording_path, RecordedAudioSource, RecordedFrameSource, WebmRecorder,
     WebmRecorderSettings,
 };
-use media_source_capture::{MicSource, ScreenOptions, ScreenSource};
+use media_source_capture::{
+    MicSource, ScreenOptions, ScreenSource, WaylandScreenOptions, WaylandScreenSource,
+};
 
 const FPS: u32 = 30;
+
+/// Backend de pantalla elegido en runtime: X11 o Wayland (wlr). Un enum
+/// en vez de `Box<dyn FrameSource>` para no depender de un impl de Box.
+enum Screen {
+    X11(ScreenSource),
+    Wayland(WaylandScreenSource),
+}
+
+impl FrameSource for Screen {
+    fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        match self {
+            Screen::X11(s) => s.tick(dt, buf),
+            Screen::Wayland(s) => s.tick(dt, buf),
+        }
+    }
+}
+
+/// Abre la pantalla con el backend adecuado: Wayland si hay
+/// `$WAYLAND_DISPLAY` (con fallback a X11/XWayland si falla), si no X11.
+fn open_screen(fps: u32) -> Result<Screen, String> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        match WaylandScreenSource::open(WaylandScreenOptions {
+            fps,
+            ..Default::default()
+        }) {
+            Ok(s) => return Ok(Screen::Wayland(s)),
+            Err(e) => {
+                // wlr-screencopy no disponible (GNOME/KDE): si hay X11
+                // (XWayland) seguimos por ahí; si no, devolvemos el error.
+                if std::env::var_os("DISPLAY").is_none() {
+                    return Err(format!("wayland: {e}"));
+                }
+            }
+        }
+    }
+    ScreenSource::open(ScreenOptions {
+        fps,
+        ..Default::default()
+    })
+    .map(Screen::X11)
+    .map_err(|e| format!("pantalla: {e}"))
+}
 
 /// Resumen liviano (Clone) de una grabación cerrada, para viajar en el
 /// `Msg`.
@@ -256,12 +300,9 @@ impl App for RecorderApp {
 /// Loop de grabación, en hilo de fondo. Devuelve el `Msg` que el bucle
 /// Elm recibe al cerrar.
 fn record_loop(rec: WebmRecorder, stop: Arc<AtomicBool>, path: PathBuf) -> Msg {
-    let screen = match ScreenSource::open(ScreenOptions {
-        fps: FPS,
-        ..Default::default()
-    }) {
+    let screen = match open_screen(FPS) {
         Ok(s) => s,
-        Err(e) => return Msg::Finished(Err(format!("pantalla: {e}"))),
+        Err(e) => return Msg::Finished(Err(e)),
     };
 
     // Micrófono opcional: sin él, grabación video-solo.

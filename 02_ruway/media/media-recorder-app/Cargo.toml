@@ -11,6 +11,6 @@ description = "media/recorder-app — grabador de pantalla Llimphi: botón Rec/S
 llimphi-ui = { path = "../../llimphi/llimphi-ui" }
 media-core = { path = "../media-core" }
 media-recorder-webm = { path = "../media-recorder-webm" }
-# Captura con los dos backends de sistema activos (X11 + cpal). El crate
-# es una app: necesita el hardware, así que pide las features directo.
-media-source-capture = { path = "../media-source-capture", features = ["screen", "mic"] }
+# Captura con los backends de pantalla (X11 + Wayland wlr) + micrófono. El
+# crate es una app: necesita el hardware, así que pide las features directo.
+media-source-capture = { path = "../media-source-capture", features = ["screen", "wayland", "mic"] }

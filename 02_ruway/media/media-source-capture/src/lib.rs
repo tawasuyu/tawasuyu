@@ -68,6 +68,11 @@ mod mic;
 #[cfg(feature = "mic")]
 pub use mic::{MicError, MicOptions, MicSource};
 
+#[cfg(feature = "wayland")]
+mod wayland;
+#[cfg(feature = "wayland")]
+pub use wayland::{WaylandError, WaylandScreenOptions, WaylandScreenSource};
+
 /// Estado compartido entre [`LiveSink`] (escribe) y [`LiveSource`]
 /// (lee). El `version` se incrementa cada vez que el sink deja un
 /// frame; el source recuerda la última versión vista para no re-emitir.

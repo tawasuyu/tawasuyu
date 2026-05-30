@@ -26,6 +26,11 @@ screen = ["dep:x11rb"]
 # backends de hardware. El núcleo `live_audio` (ring + drain) es puro y
 # siempre compila; sólo este backend necesita cpal + un input device real.
 mic = ["dep:cpal"]
+# Backend de captura de pantalla Wayland vía wlr-screencopy (puro-Rust:
+# wayland-client + wayland-protocols-wlr, con dlopen → ni libwayland en
+# build). Funciona en compositores wlroots (Sway/Hyprland/river); GNOME/KDE
+# necesitan portal+PipeWire (otro backend). rustix+memmap2 para el shm buffer.
+wayland = ["dep:wayland-client", "dep:wayland-protocols-wlr", "dep:rustix", "dep:memmap2"]
 
 [dependencies]
 media-core = { path = "../media-core" }
@@ -42,6 +47,13 @@ x11rb = { version = "0.13", optional = true }
 
 # Backend micrófono: cpal (mismo que el sink de salida `media-audio-cpal`).
 cpal = { workspace = true, optional = true }
+
+# Backend Wayland (wlr-screencopy). Puro-Rust; `dlopen` carga libwayland en
+# runtime, no en build. rustix+memmap2 para el buffer shm de la copia.
+wayland-client = { version = "0.31", optional = true, features = ["dlopen"] }
+wayland-protocols-wlr = { version = "0.3", optional = true, features = ["client"] }
+rustix = { version = "1", optional = true, features = ["fs", "mm"] }
+memmap2 = { version = "0.9", optional = true }
 
 [dev-dependencies]
 media-recorder-webm = { path = "../media-recorder-webm" }

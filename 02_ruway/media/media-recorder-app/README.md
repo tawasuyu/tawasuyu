@@ -11,11 +11,14 @@ MicSource   (cpal)  ─▶ RecordedAudioSource ─┘   (sin ffmpeg)
 ```
 
 ```bash
-cargo run -p media-recorder-app --release   # necesita $DISPLAY
+cargo run -p media-recorder-app --release   # X11 ($DISPLAY) o Wayland wlroots ($WAYLAND_DISPLAY)
 ```
 
-El micrófono es **opcional**: sin input device, graba video-solo. El
-archivo sale como `media-rec-<epoch>.webm` en el directorio actual.
+Elige el backend de pantalla en **runtime**: Wayland (`wlr-screencopy`)
+si hay `$WAYLAND_DISPLAY` —con fallback a X11/XWayland si el compositor
+no lo expone (GNOME/KDE)—, si no X11. El micrófono es **opcional**: sin
+input device, graba video-solo. El archivo sale como
+`media-rec-<epoch>.webm` en el directorio actual.
 
 ## El patrón: trabajo pesado fuera del bucle Elm
 

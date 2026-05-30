@@ -74,6 +74,26 @@ mismo núcleo. `GetImage` copia el framebuffer por el socket cada frame
 (MVP); MIT-SHM (memoria compartida) es la optimización natural cuando
 duela.
 
+### Backend pantalla Wayland — `WaylandScreenSource` (feature `wayland`, opt-in)
+
+Mismo molde que X11, pero por el protocolo `wlr-screencopy`
+(`zwlr_screencopy_manager_v1`): un hilo copia el output a un buffer shm
+(memfd+mmap), convierte a RGBA y empuja al `LiveSink`. **Puro-Rust**
+(`wayland-client` + `wayland-protocols-wlr`, con `dlopen` ni siquiera
+enlaza libwayland en build) — mismo ethos que x11rb.
+
+Wayland prohíbe por diseño que un cliente lea la pantalla sin un
+protocolo sancionado. `wlr-screencopy` lo exponen los compositores
+**wlroots** (Sway, Hyprland, river); **GNOME/KDE no** — ahí la vía es
+xdg-desktop-portal + PipeWire (otro backend, que sí arrastraría
+libpipewire en C). El `media-recorder-app` elige X11 o Wayland en
+runtime según `$WAYLAND_DISPLAY`/`$DISPLAY`.
+
+```rust
+use media_source_capture::WaylandScreenSource;
+let scr = WaylandScreenSource::open_default()?;  // primer output, 30 fps
+```
+
 El loop completo pantalla→`.webm` (sin ffmpeg) está como ejemplo
 ejecutable, en dos variantes:
 
@@ -90,8 +110,9 @@ cargo run -p media-source-capture --example grabar_pantalla_audio \
 La conversión de pixel-formats (`convert`) es **pura y testeable sin
 ningún dispositivo** — vive separada de los backends. Soporta `YUYV`
 (YUV 4:2:2, BT.601 limited range — la convención v4l2), `MJPG` (vía el
-crate `image`), `RGB3`, `BGR3` y los empaquetados de 32-bit de X11
-(`Bgrx32` little-endian / `Xrgb32` big-endian, padding ignorado).
+crate `image`), `RGB3`, `BGR3` y los empaquetados de 32-bit
+(`Bgrx32`/`Xrgb32` de X11 + `Rgbx32` del XBGR8888 de Wayland, padding
+ignorado).
 
 ### Lado del audio — `AudioLiveSink`/`AudioLiveSource` + `MicSource`
 
@@ -124,16 +145,18 @@ El loop completo pantalla+mic→`.webm` está en el ejemplo
 de **build** pesada y frágil en builds paralelos (el smoke test
 `cargo check --workspace` reventaba con *"libclang not loaded on this
 thread"*). Misma lógica que los puentes `foreign-*`: el hardware/ajeno
-entra opt-in, el núcleo del dominio queda liviano. `screen` arrastra
-`x11rb` (puro-Rust, sin lib C) — más liviano que `camera`, pero igual
-queda opt-in: es un backend de sistema (necesita un servidor X) y no
-toda plataforma lo quiere.
+entra opt-in, el núcleo del dominio queda liviano. `screen` (x11rb),
+`wayland` (wayland-client + wlr-protocols) y `mic` (cpal) son todos
+puro-Rust y sin lib C en build, pero igual quedan opt-in: son backends
+de sistema (necesitan servidor X / compositor wlroots / input device) y
+no toda plataforma los quiere.
 
 ```bash
-cargo test  -p media-source-capture                   # núcleo puro (20 tests) + integración (2)
-cargo check -p media-source-capture --features camera # backend v4l2 (necesita libclang)
-cargo check -p media-source-capture --features screen # backend X11 (x11rb, puro-Rust)
-cargo check -p media-source-capture --features mic    # backend micrófono (cpal)
+cargo test  -p media-source-capture                    # núcleo puro (21 tests) + integración (2)
+cargo check -p media-source-capture --features camera  # backend v4l2 (necesita libclang)
+cargo check -p media-source-capture --features screen  # backend X11 (x11rb, puro-Rust)
+cargo check -p media-source-capture --features wayland # backend Wayland wlr-screencopy (puro-Rust)
+cargo check -p media-source-capture --features mic     # backend micrófono (cpal)
 ```
 
 `camera` compila donde haya cabeceras `videodev2` + `libclang` y
@@ -147,7 +170,7 @@ compilar.
 ## Tests
 
 - `convert::tests` — round-trips de conversión (YUYV gris/rojo, RGB/BGR,
-  los 32-bit de X11 `Bgrx32`/`Xrgb32` con padding ignorado, rechazo de
+  los 32-bit `Bgrx32`/`Xrgb32`/`Rgbx32` con padding ignorado, rechazo de
   buffers truncados, mapeo de FourCC).
 - `live_audio::tests` — ring de audio: drena en orden, underrun rellena
   silencio, fill parcial mantiene continuidad, overrun descarta lo viejo
