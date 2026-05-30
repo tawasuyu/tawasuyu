@@ -34,7 +34,9 @@
 //! globales). Si el picker está abierto las teclas van al filtro, no acá.
 //!
 //! - `Ctrl+P`         — abre fuzzy file picker para agregar capa
-//! - `Delete` / `Backspace` — eliminar capa
+//! - `Delete` / `Backspace` — con selección activa, limpia los píxeles
+//!   del rect (alfa=0) en la capa raster; sin selección, elimina la
+//!   capa entera
 //! - `Ctrl+D`         — duplicar capa
 //! - `F2`             — renombrar capa in-situ (Enter confirma · Esc cancela)
 //! - `V`              — toggle visibilidad
@@ -349,6 +351,13 @@ enum Msg {
     /// selección o si el rect cubre el lienzo entero. Limpia la
     /// selección post-crop (la unidad de coords-imagen cambió).
     RecortarASeleccion,
+    /// Pone alfa=0 en los píxeles del rect de `model.seleccion` dentro
+    /// de la capa raster seleccionada. No-op si no hay selección, no
+    /// hay capa seleccionada, la capa es derivada (su buffer es cache,
+    /// se sobrescribe en el siguiente recompose), o el rect ya era
+    /// todo transparente. Mantiene la selección — un workflow típico
+    /// es "marquee + Delete + re-pintar".
+    LimpiarSeleccionEnCapa,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ
@@ -1592,6 +1601,22 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         &pal,
         Msg::RecortarASeleccion,
     )));
+    // Limpiar selección (alfa=0) en la capa raster seleccionada.
+    // Misma política discoverable: botón siempre visible, etiqueta
+    // refleja el estado.
+    let etiqueta_limpiar_sel = match model.seleccion {
+        Some(r) => format!(
+            "🗑 limpiar selección ({}×{}) · Del",
+            r.x1 - r.x0,
+            r.y1 - r.y0
+        ),
+        None => "🗑 limpiar selección (—) · Del".to_string(),
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_limpiar_sel,
+        &pal,
+        Msg::LimpiarSeleccionEnCapa,
+    )));
 
     // "salida": no requiere selección, siempre activa.
     hijos.push(subtitulo("salida"));
@@ -2357,6 +2382,11 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::LimpiarSeleccionEnCapa => {
+                if limpiar_seleccion_en_capa(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2642,8 +2672,16 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
     let id = model.seleccionada?;
     match &event.key {
         Key::Named(NamedKey::F2) => Some(Msg::IniciarRenombrar(id)),
+        // Con selección activa, Del/Backspace limpian los píxeles
+        // del rect (Photoshop standard). Sin selección, eliminan la
+        // capa entera (comportamiento previo). El conflicto se
+        // resuelve por el contexto del marquee, no por un modifier.
         Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) if !m.ctrl => {
-            Some(Msg::Eliminar(id))
+            if model.seleccion.is_some() {
+                Some(Msg::LimpiarSeleccionEnCapa)
+            } else {
+                Some(Msg::Eliminar(id))
+            }
         }
         Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("d") => {
             Some(Msg::Duplicar(id))
@@ -3175,6 +3213,93 @@ fn recortar_lienzo_a_seleccion(model: &mut Model) -> bool {
     model.estado = format!(
         "recortado a selección {}×{} (offset {},{})",
         new_w, new_h, x0, y0
+    );
+    true
+}
+
+/// Pone `[0, 0, 0, 0]` (transparente full) en cada píxel del rect
+/// half-open `(x0, y0, x1, y1)` de un buffer Rgba8 `w × h`. Devuelve
+/// un buffer nuevo del mismo tamaño con el resto intacto. Pura.
+/// Pre: rect dentro de bounds (validación aguas arriba).
+fn limpiar_rect_en_buffer(
+    src: &[u8],
+    w: u32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+) -> Vec<u8> {
+    let mut out = src.to_vec();
+    let w = w as usize;
+    for y in y0..y1 {
+        let row = y as usize * w;
+        for x in x0..x1 {
+            let i = (row + x as usize) * 4;
+            out[i] = 0;
+            out[i + 1] = 0;
+            out[i + 2] = 0;
+            out[i + 3] = 0;
+        }
+    }
+    out
+}
+
+/// Pone alfa=0 en los píxeles del rect de `model.seleccion` dentro
+/// de la capa raster seleccionada. Re-clampea contra el lienzo
+/// vigente. No-op si: no hay selección, no hay capa seleccionada,
+/// la capa es derivada (su buffer es cache regenerable), el rect
+/// queda con área cero tras clampear, o el rect ya era todo
+/// transparente (mismo hash post-limpieza). Tras la limpieza,
+/// propaga stale al cono descendiente y recompone. La selección
+/// se mantiene — encaja con flujos tipo "marquee + Delete +
+/// re-pintar"; un Esc la limpia explícitamente.
+fn limpiar_seleccion_en_capa(model: &mut Model) -> bool {
+    let Some(rect) = model.seleccion else {
+        model.estado = "no hay selección — `r` y arrastrar".into();
+        return false;
+    };
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let x0 = rect.x0.min(w);
+    let y0 = rect.y0.min(h);
+    let x1 = rect.x1.min(w);
+    let y1 = rect.y1.min(h);
+    if x1 <= x0 || y1 <= y0 {
+        model.estado = "selección fuera del lienzo".into();
+        return false;
+    }
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    if !matches!(capa.origen, OrigenCapa::Raster) {
+        model.estado =
+            "la capa seleccionada es derivada — limpiá la raster madre".into();
+        return false;
+    }
+    let hash_actual = capa.contenido;
+    let Some(src) = model.almacen.obtener(hash_actual) else {
+        return false;
+    };
+    let src = src.to_vec();
+    let limpio = limpiar_rect_en_buffer(&src, w, x0, y0, x1, y1);
+    let new_hash = model.almacen.insertar(limpio);
+    if new_hash == hash_actual {
+        model.estado = "selección ya transparente, nada que limpiar".into();
+        return false;
+    }
+    if let Some(capa_mut) = model.lienzo.capa_mut(id) {
+        capa_mut.contenido = new_hash;
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+    model.estado = format!(
+        "limpiada selección {}×{} (capa raster)",
+        x1 - x0,
+        y1 - y0
     );
     true
 }
@@ -5746,6 +5871,244 @@ mod tests {
         assert_eq!(model.historial.len(), hist_antes + 1);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!((model.lienzo.width, model.lienzo.height), (4, 4));
+    }
+
+    // ---- Fase 37: limpiar selección a transparente ----------------------
+
+    #[test]
+    fn limpiar_rect_en_buffer_pone_alfa_cero_dentro_y_deja_el_resto_intacto() {
+        // Buffer 3×2 con un patrón distinguible (R = x*10, G = y*10, B = 100,
+        // A = 200). Limpiamos el rect (1, 0, 3, 2): los 4 píxeles de las
+        // 2 columnas derechas.
+        let mut buf = Vec::with_capacity(3 * 2 * 4);
+        for y in 0..2u8 {
+            for x in 0..3u8 {
+                buf.extend_from_slice(&[x * 10, y * 10, 100, 200]);
+            }
+        }
+        let out = limpiar_rect_en_buffer(&buf, 3, 1, 0, 3, 2);
+        assert_eq!(out.len(), buf.len());
+        // Píxel (0, 0) intacto.
+        assert_eq!(out[0..4], [0, 0, 100, 200]);
+        // Píxel (1, 0) limpio.
+        assert_eq!(out[4..8], [0, 0, 0, 0]);
+        // Píxel (2, 0) limpio.
+        assert_eq!(out[8..12], [0, 0, 0, 0]);
+        // Píxel (0, 1) intacto.
+        assert_eq!(out[12..16], [0, 10, 100, 200]);
+        // Píxel (1, 1) limpio.
+        assert_eq!(out[16..20], [0, 0, 0, 0]);
+        // Píxel (2, 1) limpio.
+        assert_eq!(out[20..24], [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn limpiar_rect_vacio_es_identidad() {
+        // Rect half-open con x1 = x0 = 0 → ningún píxel debería tocarse.
+        // Lo invocamos para verificar que el loop interno no panickea
+        // cuando el rango es vacío (la validación de área va aguas
+        // arriba, pero el helper debe sobrevivir un rect degenerado).
+        let buf = vec![7u8; 4 * 4 * 4];
+        let out = limpiar_rect_en_buffer(&buf, 4, 1, 1, 1, 1);
+        assert_eq!(out, buf);
+    }
+
+    #[test]
+    fn limpiar_seleccion_sin_seleccion_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let ok = limpiar_seleccion_en_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("no hay selección"));
+    }
+
+    #[test]
+    fn limpiar_seleccion_sin_capa_seleccionada_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        model.seleccionada = None;
+        let ok = limpiar_seleccion_en_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("no hay capa"));
+    }
+
+    #[test]
+    fn limpiar_seleccion_fuera_del_lienzo_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 10, y0: 10, x1: 12, y1: 12 });
+        let ok = limpiar_seleccion_en_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("fuera"));
+    }
+
+    #[test]
+    fn limpiar_seleccion_sobre_derivada_es_no_op() {
+        // La capa seleccionada arranca raster — la convertimos en
+        // derivada manualmente para verificar el rechazo.
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let id = model.seleccionada.unwrap();
+        let capa = model.lienzo.capa_mut(id).unwrap();
+        let madre_id = Uuid::new_v4();
+        capa.origen = OrigenCapa::Derivada {
+            madre: madre_id,
+            op: TransformacionPixel::Local(OpLocal::Invertir),
+            estado: Frescura::Fresca,
+        };
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let ok = limpiar_seleccion_en_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("derivada"));
+    }
+
+    #[test]
+    fn limpiar_seleccion_pone_alfa_cero_pixel_perfect_y_mantiene_seleccion() {
+        // Lienzo 4×4 con patrón distinguible; selección (1, 1, 3, 3) =
+        // 2×2 central. Tras la op, los 4 píxeles centrales deben quedar
+        // todo cero y los 12 del borde intactos.
+        let mut model = modelo_minimo();
+        let mut buf = Vec::with_capacity(4 * 4 * 4);
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                buf.extend_from_slice(&[x * 20, y * 20, 100, 255]);
+            }
+        }
+        let h = model.almacen.insertar(buf.clone());
+        let cap = Capa::raster("patron", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        let sel = RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 };
+        model.seleccion = Some(sel);
+
+        let ok = limpiar_seleccion_en_capa(&mut model);
+        assert!(ok);
+        // La selección se mantiene (workflow Photoshop: marquee + Del +
+        // pintar adentro sin re-armar el rect).
+        assert_eq!(model.seleccion, Some(sel));
+        // Dims del lienzo intactas.
+        assert_eq!((model.lienzo.width, model.lienzo.height), (4, 4));
+        // Píxel-perfect: los 4 centrales son [0,0,0,0]; el píxel (0,0)
+        // de borde queda con su valor original.
+        let nueva_h = model.lienzo.capa(id).unwrap().contenido;
+        let buf_post = model.almacen.obtener(nueva_h).unwrap();
+        let pix = |x: u32, y: u32| {
+            let i = (y as usize * 4 + x as usize) * 4;
+            [buf_post[i], buf_post[i + 1], buf_post[i + 2], buf_post[i + 3]]
+        };
+        assert_eq!(pix(1, 1), [0, 0, 0, 0]);
+        assert_eq!(pix(2, 1), [0, 0, 0, 0]);
+        assert_eq!(pix(1, 2), [0, 0, 0, 0]);
+        assert_eq!(pix(2, 2), [0, 0, 0, 0]);
+        // Borde superior izquierdo intacto.
+        assert_eq!(pix(0, 0), [0, 0, 100, 255]);
+        // Borde inferior derecho intacto.
+        assert_eq!(pix(3, 3), [60, 60, 100, 255]);
+    }
+
+    #[test]
+    fn limpiar_seleccion_clampea_si_rect_sobresale_parcialmente() {
+        // Selección (2, 2, 10, 10) con lienzo 4×4 → intersección
+        // (2, 2, 4, 4) = 2×2 esquina inferior derecha. Necesitamos un
+        // buffer no-cero para que la limpieza efectivamente cambie el
+        // hash y la función devuelva true.
+        let mut model = modelo_minimo();
+        let buf = vec![200u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("opaca", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 2, y0: 2, x1: 10, y1: 10 });
+        let ok = limpiar_seleccion_en_capa(&mut model);
+        assert!(ok);
+        // El cuadrante inferior derecho tiene que estar todo cero, el
+        // resto intacto (RGBA 200).
+        let new_h = model.lienzo.capa(id).unwrap().contenido;
+        let buf_post = model.almacen.obtener(new_h).unwrap();
+        for y in 2..4 {
+            for x in 2..4 {
+                let i = (y * 4 + x) * 4;
+                assert_eq!(&buf_post[i..i + 4], &[0, 0, 0, 0]);
+            }
+        }
+        // Borde superior izquierdo intacto.
+        assert_eq!(&buf_post[0..4], &[200, 200, 200, 200]);
+        // Borde fila 1, col 1 (fuera del rect 2..4 × 2..4) intacto.
+        let i = (1 * 4 + 1) * 4;
+        assert_eq!(&buf_post[i..i + 4], &[200, 200, 200, 200]);
+    }
+
+    #[test]
+    fn limpiar_seleccion_sobre_rect_ya_transparente_es_no_op() {
+        // Capa enteramente transparente — limpiar cualquier subrect
+        // produce el mismo hash que el original, no hay cambio efectivo.
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("vacia", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let ok = limpiar_seleccion_en_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("ya transparente"));
+    }
+
+    #[test]
+    fn msg_limpiar_seleccion_dispatcha_y_undo_restaura() {
+        let mut model = modelo_minimo();
+        // Buffer con valores no-cero para que la limpieza efectivamente
+        // cambie el hash.
+        let buf = vec![123u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let hash_inicial = h;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::LimpiarSeleccionEnCapa,
+            &Handle::for_test(),
+        );
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        // El hash de la capa cambió.
+        assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
+        // Undo restaura el hash original.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
+    }
+
+    #[test]
+    fn hotkey_delete_con_seleccion_emite_limpiar_y_sin_seleccion_emite_eliminar() {
+        let mut m = modelo_minimo();
+        // Sin selección → Eliminar(id).
+        let id = m.seleccionada.unwrap();
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Delete, Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::Eliminar(x)) if x == id));
+        // Con selección → LimpiarSeleccionEnCapa.
+        m.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Delete, Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::LimpiarSeleccionEnCapa)));
+        // Backspace mismo comportamiento.
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Backspace, Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::LimpiarSeleccionEnCapa)));
     }
 
     #[test]
