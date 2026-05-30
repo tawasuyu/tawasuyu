@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect, RoundedRect, Stroke};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Rect as KurboRect, RoundedRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat, Mix};
 use llimphi_ui::llimphi_text::{draw_layout_xf, layout_block, measurement, Alignment, TextBlock};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
@@ -119,6 +119,9 @@ const MARCO_BORDE: Color = Color::from_rgba8(80, 86, 104, 255);
 const MARCO_ACENTO: Color = Color::from_rgba8(120, 180, 255, 255);
 const TEXTO: Color = Color::from_rgba8(225, 230, 240, 235);
 const TEXTO_TENUE: Color = Color::from_rgba8(186, 194, 210, 225);
+// Camino narrativo: línea punteada que une los marcos en orden de la ruta,
+// pintada por detrás de los marcos. Acento tenue para no robar protagonismo.
+const RUTA: Color = Color::from_rgba8(120, 180, 255, 120);
 // HUD "paso X / N": píldora sobria abajo-centro, en espacio de pantalla.
 const HUD_FONDO: Color = Color::from_rgba8(12, 14, 20, 190);
 const HUD_TEXTO: Color = Color::from_rgba8(205, 212, 226, 235);
@@ -148,6 +151,10 @@ pub fn recorrido_view<Msg: 'static>(rec: &Recorrido, state: &RecorridoState) -> 
         })
         .collect();
     let paso_id = rec.pasos.get(state.paso).copied();
+    // Centros (coords de mundo) de los marcos en orden de la ruta, para pintar
+    // el camino narrativo. Los pasos cuyo id no resuelve se omiten.
+    let ruta: Vec<(f64, f64)> =
+        rec.pasos.iter().filter_map(|id| rec.marco(*id)).map(|m| m.rect.centro()).collect();
     let camara = state.camara;
     let paso = state.paso;
     let n_pasos = rec.n_pasos();
@@ -158,7 +165,7 @@ pub fn recorrido_view<Msg: 'static>(rec: &Recorrido, state: &RecorridoState) -> 
     .fill(FONDO)
     .paint_with(move |scene, ts, rect: PaintRect| {
         panel_set(to_rect(rect));
-        pintar(scene, ts, rect, &pinturas, paso_id, &camara);
+        pintar(scene, ts, rect, &pinturas, &ruta, paso_id, &camara);
         pintar_hud(scene, ts, rect, paso, n_pasos);
     })
 }
@@ -183,6 +190,7 @@ fn pintar(
     ts: &mut llimphi_ui::llimphi_text::Typesetter,
     rect: PaintRect,
     marcos: &[MarcoPintura],
+    ruta: &[(f64, f64)],
     paso_id: Option<MarcoId>,
     cam: &Camara,
 ) {
@@ -200,6 +208,9 @@ fn pintar(
         (rect.y + rect.h) as f64,
     );
     scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &node);
+
+    // Camino narrativo por detrás de los marcos.
+    pintar_ruta(scene, cam, panel, ruta);
 
     for m in marcos {
         let (mcx, mcy) = m.rect.centro();
@@ -242,6 +253,31 @@ fn pintar(
     }
 
     scene.pop_layer();
+}
+
+/// Pinta el **camino narrativo**: una polilínea punteada que une los centros
+/// de los marcos en orden de la ruta, con un nodo en cada paso. Se dibuja en
+/// espacio de pantalla (grosor constante en px a cualquier zoom) y por detrás
+/// de los marcos. No-op con menos de dos pasos.
+fn pintar_ruta(scene: &mut Scene, cam: &Camara, panel: Rect, ruta: &[(f64, f64)]) {
+    if ruta.len() < 2 {
+        return;
+    }
+    let mut path = BezPath::new();
+    for (i, p) in ruta.iter().enumerate() {
+        let s = cam.world_to_screen(*p, panel);
+        if i == 0 {
+            path.move_to(s);
+        } else {
+            path.line_to(s);
+        }
+    }
+    let trazo = Stroke::new(2.0).with_dashes(0.0, [9.0, 7.0]);
+    scene.stroke(&trazo, Affine::IDENTITY, RUTA, None, &path);
+    for p in ruta {
+        let s = cam.world_to_screen(*p, panel);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, RUTA, None, &Circle::new(s, 3.5));
+    }
 }
 
 /// Pinta `img` encajada en el rect del marco preservando aspect ratio,
