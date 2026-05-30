@@ -540,6 +540,18 @@ pub struct RenderConfig {
     /// (modo stub, o el host no las alimenta). Se reconstruye cada frame;
     /// el renderer las dibuja como billboards camera-facing z-ordenados.
     pub decals: Vec<Decal>,
+    /// **Fase 3.51 — boost direccional del decal por su normal**. Si
+    /// `true`, el tinte RGB de world lights + muzzle sobre cada decal se
+    /// atenúa por el cosine entre la normal de la superficie donde yace
+    /// el decal y la dirección a cada luz, igual que walls/planes/sprites:
+    /// un charco de piso usa BRDF de plano (`n_z=+1`), una marca pegada a
+    /// la pared usa BRDF de pared (normal del lineseg toward-camera) y un
+    /// billboard flotante (sangre en el aire) queda omni. Un scorch en
+    /// pared rasante a una antorcha recibe menos tinte que uno encarado;
+    /// un charco bajo un fireball alto recoge el cosine vertical. Cuando
+    /// `false` (o sin BSP), cae al boost omni 3.50 bit-equivalente. Sólo
+    /// afecta al tinte de los decals.
+    pub decal_rim_directional: bool,
 }
 
 impl Default for RenderConfig {
@@ -571,6 +583,7 @@ impl Default for RenderConfig {
             wall_vertical_gradient: false,
             plane_depth_gradient: false,
             decals: Vec::new(),
+            decal_rim_directional: true,
         }
     }
 }
@@ -3635,18 +3648,75 @@ fn gather_decals(
                 .unwrap_or(DEFAULT_PLAYER_LIGHT);
             let (sr, sg, sb) = shade_rgb(d.color, shade_for(light, depth, cfg));
             let base = Color::from_rgba8(sr, sg, sb, a);
-            // Boost omni (el decal es una marca plana chica — la
-            // direccionalidad no aporta). `directional=false`.
-            let boost = combined_boost_rgb_sprite_cam(
-                cx_cam,
-                cy_cam,
-                d.z - cam.view_z,
-                cfg.muzzle_glow_alpha,
-                sec.unwrap_or(NO_SECTOR),
-                lit_sectors,
-                world_lights,
-                false,
-            );
+            let surf_sector = sec.unwrap_or(NO_SECTOR);
+            let z_surf_cam = d.z - cam.view_z;
+            // Fase 3.51: el boost se direcciona por la normal de la
+            // superficie donde yace el decal — un scorch en pared rasante
+            // a la luz recibe menos tinte que uno encarado, un charco bajo
+            // un fireball alto recoge el cosine vertical. Charco
+            // (`horizontal`) ⇒ BRDF de plano; marca de pared (`tangent`)
+            // ⇒ BRDF de pared; billboard flotante ⇒ omni (no tiene normal
+            // estable). Con `decal_rim_directional=false` todo cae al omni
+            // 3.50 bit-equivalente.
+            let boost = if cfg.decal_rim_directional && d.horizontal {
+                // Charco: normal +Z (piso) o -Z (techo) según a qué plano
+                // del sector está más pegado el decal.
+                let n_z = sec
+                    .and_then(|s| snap.sectors.get(s as usize))
+                    .map(|s| {
+                        if (d.z - s.floor_height).abs() <= (d.z - s.ceiling_height).abs() {
+                            1.0
+                        } else {
+                            -1.0
+                        }
+                    })
+                    .unwrap_or(1.0);
+                combined_boost_rgb_plane_cam(
+                    cx_cam,
+                    cy_cam,
+                    z_surf_cam,
+                    cfg.muzzle_glow_alpha,
+                    surf_sector,
+                    lit_sectors,
+                    world_lights,
+                    n_z,
+                    true,
+                    cfg.muzzle_brdf,
+                )
+            } else if cfg.decal_rim_directional && (tx != 0.0 || ty != 0.0) {
+                // Marca de pared: la normal es perpendicular a la tangente
+                // mundo. Transformamos dos puntos a lo largo de la tangente
+                // a cam-space y resolvemos la perpendicular toward-camera
+                // (misma maquinaria que los slabs de pared, 3.32).
+                let (ax, ay) = cam.to_cam_2d(d.x - tx, d.y - ty);
+                let (bx, by) = cam.to_cam_2d(d.x + tx, d.y + ty);
+                let normal = wall_normal_cam(ax, ay, bx, by, cx_cam, cy_cam);
+                combined_boost_rgb_wall_cam(
+                    cx_cam,
+                    cy_cam,
+                    z_surf_cam,
+                    cfg.muzzle_glow_alpha,
+                    surf_sector,
+                    lit_sectors,
+                    world_lights,
+                    normal,
+                    normal != (0.0, 0.0),
+                    cfg.muzzle_brdf,
+                )
+            } else {
+                // Billboard flotante (sangre en el aire) o direccional
+                // off: omni toward-camera (3.50).
+                combined_boost_rgb_sprite_cam(
+                    cx_cam,
+                    cy_cam,
+                    z_surf_cam,
+                    cfg.muzzle_glow_alpha,
+                    surf_sector,
+                    lit_sectors,
+                    world_lights,
+                    false,
+                )
+            };
             apply_color_boost(base, boost)
         };
         let mut path = BezPath::new();
@@ -7734,6 +7804,72 @@ mod tests {
             g_lit > g_plain,
             "la world light verde sube el canal G: plain={} lit={}",
             g_plain, g_lit
+        );
+    }
+
+    #[test]
+    fn decal_wall_grazing_light_dimmer_than_head_on() {
+        // Fase 3.51: una marca pegada a la pared (tangent set) recibe el
+        // tinte de world lights atenuado por el cosine de la normal del
+        // muro. Una luz verde **encarada** (perpendicular a la pared)
+        // tinta más fuerte que una **rasante** (paralela al muro) a la
+        // misma distancia. La pared corre a lo largo de Y (tangent (0,1)),
+        // su normal toward-camera es (-1, 0).
+        let (cam, proj) = decal_test_setup();
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sectors = Arc::from(vec![SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 200,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        }]);
+        snap.subsectors = Arc::from(vec![SubsectorSnap {
+            sector: 0,
+            first_seg: 0,
+            num_segs: 0,
+        }]);
+        snap.nodes = Arc::from(vec![NodeSnap {
+            partition_x: 0.0,
+            partition_y: 0.0,
+            partition_dx: 0.0,
+            partition_dy: 1.0,
+            children: [NF_SUBSECTOR, NF_SUBSECTOR],
+        }]);
+        let cfg = RenderConfig {
+            decals: vec![Decal {
+                x: 100.0,
+                y: 0.0,
+                z: 40.0,
+                radius: 5.0,
+                color: (40, 40, 40),
+                alpha: 1.0,
+                tangent: (0.0, 1.0), // muro a lo largo de Y ⇒ normal ±X
+                horizontal: false,
+            }],
+            ..Default::default()
+        };
+        let z = 40.0 - cam.view_z;
+        // Encarada: entre cámara y decal ⇒ cos ≈ 1.
+        let head_on = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: z,
+            sector: 0, tint_rgb: (0, 255, 0), lit_sectors: None,
+        }];
+        // Rasante: a lo largo del muro, misma distancia ⇒ cos ≈ 0.
+        let grazing = [WorldLight {
+            x_cam: 100.0, y_cam: 50.0, z_cam: z,
+            sector: 0, tint_rgb: (0, 255, 0), lit_sectors: None,
+        }];
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        gather_decals(&mut a, &cfg, &snap, &cam, &proj, None, &head_on);
+        gather_decals(&mut b, &cfg, &snap, &cam, &proj, None, &grazing);
+        let g_head = a[0].color.to_rgba8().to_u8_array()[1];
+        let g_graze = b[0].color.to_rgba8().to_u8_array()[1];
+        assert!(
+            g_head > g_graze,
+            "luz encarada tinta más que rasante: head={} graze={}",
+            g_head, g_graze
         );
     }
 
