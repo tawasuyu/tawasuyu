@@ -38,7 +38,8 @@ Mascota: un calcetín — guarda cosas, se pierde, abriga.
 | `media-source-gif`    | GIF animado (image) → `FrameSource + Seekable`                       |
 | `media-source-image`  | PNG/JPEG/WebP/BMP/TIFF (image) → `FrameSource` (frame único)         |
 | `media-audio-cpal`    | sink realtime sobre cpal (default output device)                     |
-| `media-recorder-wav`  | captura del stream a WAV (hound, PCM 16) — wrapper transparente      |
+| `media-recorder-wav`  | captura del stream de audio a WAV (hound, PCM 16) — wrapper transparente |
+| `media-recorder-av1`  | captura del stream de video a `.ivf` AV1 nativo (vía `media-encode-av1`) — contraparte de video del recorder WAV. Round-trip verificado. Ver su README. |
 | `media-app`           | reproductor Llimphi con visores; `examples/analyze.rs` analiza offline |
 
 Los `media-source-*` son hojas: dependen sólo de `media-core` y de su

@@ -1,0 +1,16 @@
+[package]
+name = "media-recorder-av1"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/media-recorder-av1 — captura los frames de un FrameSource a un .ivf AV1 nativo (vía media-encode-av1). Contraparte de video de media-recorder-wav."
+
+[dependencies]
+media-core = { path = "../media-core" }
+media-encode-av1 = { path = "../media-encode-av1" }
+
+[dev-dependencies]
+# Round-trip real: graba aquí → decode con el decoder nativo → verifica.
+media-source-av1 = { path = "../media-source-av1" }
