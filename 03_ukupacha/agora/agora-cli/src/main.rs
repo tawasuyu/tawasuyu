@@ -7,7 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use agora_core::{Attestation, Claim, Identity, IdentityId, IdentityKind, Keypair};
+use agora_core::{
+    Attestation, Claim, Identity, IdentityId, IdentityKind, KeyRotation, Keypair, RevReason,
+    Revocation,
+};
 use agora_graph::TrustGraph;
 use agora_keystore::Keystore;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -326,6 +329,63 @@ enum IdentidadOp {
         #[arg(long)]
         purgar_keystore: bool,
     },
+    /// Rota una identidad propia: forja una clave NUEVA, la liga a la vieja con
+    /// una `KeyRotation` doble-firmada (la vieja autoriza el handoff, la nueva
+    /// prueba posesión) y registra la sucesora en grafo + keystore. Handoff
+    /// VOLUNTARIO sin compromiso — `current_key_at` seguirá la cadena hasta la
+    /// nueva punta. La clave vieja debe vivir en el keystore local.
+    Rotar {
+        /// Id o prefijo hex de la identidad propia a rotar.
+        id: String,
+        /// Nombre legible para la sucesora (default: el de la madre).
+        #[arg(long)]
+        nombre: Option<String>,
+        /// Lee la seed de la NUEVA clave de stdin (64 hex o 32 bytes raw) en vez
+        /// de generarla con CSPRNG. Útil para sembrar la sucesora desde backup.
+        #[arg(long)]
+        seed_stdin: bool,
+    },
+    /// Revoca una identidad (plano SOCIAL): apaga su clave a partir de ahora.
+    /// La autoridad son sus GUARDIANES declarados (`predicate="guardian"`) — una
+    /// clave no se revoca a sí misma. Firma con cada guardián cuya seed viva en
+    /// el keystore local; si no se alcanza el umbral con las locales, falla
+    /// (la combinación multi-parte offline de firmas parciales queda pendiente).
+    Revocar {
+        /// Id o prefijo hex de la identidad a revocar.
+        id: String,
+        /// Motivo: compromised (permanente), retired o superseded.
+        #[arg(long, value_enum, default_value_t = MotivoArg::Compromised)]
+        motivo: MotivoArg,
+        /// Umbral M-of-N exigido al set de guardianes. Default: la cantidad de
+        /// guardianes con seed local (firma con todos los que tengo).
+        #[arg(long)]
+        umbral: Option<usize>,
+        /// Suspensión TEMPORAL: segundos desde ahora hasta que la revocación
+        /// vence (la clave vuelve a valer). Sin esto, la revocación es PERMANENTE.
+        #[arg(long)]
+        vence_en_seg: Option<u64>,
+    },
+}
+
+/// Motivo de revocación, espejo CLI de [`RevReason`].
+#[derive(Clone, Copy, ValueEnum)]
+enum MotivoArg {
+    /// Clave filtrada / en manos hostiles — revocación permanente.
+    Compromised,
+    /// Retiro voluntario, sin compromiso.
+    Retired,
+    /// Reemplazada por una sucesora vía rotación.
+    Superseded,
+}
+
+impl From<MotivoArg> for RevReason {
+    fn from(m: MotivoArg) -> Self {
+        match m {
+            MotivoArg::Compromised => RevReason::Compromised,
+            MotivoArg::Retired => RevReason::Retired,
+            MotivoArg::Superseded => RevReason::Superseded,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -505,6 +565,8 @@ enum Error {
     ForeignFs(foreign_fs::FsError),
     #[error("AoE (raw socket): {0}")]
     Aoe(String),
+    #[error("multifirma: {0}")]
+    MultiSig(agora_core::MultiSigError),
 }
 
 type CliResult<T> = std::result::Result<T, Error>;
@@ -598,6 +660,12 @@ fn run(cmd: Cmd) -> CliResult<()> {
             IdentidadOp::Rename { id, nombre } => identidad_rename(&id, &nombre),
             IdentidadOp::Remove { id, force, purgar_keystore } => {
                 identidad_remove(&id, force, purgar_keystore)
+            }
+            IdentidadOp::Rotar { id, nombre, seed_stdin } => {
+                identidad_rotar(&id, nombre, seed_stdin)
+            }
+            IdentidadOp::Revocar { id, motivo, umbral, vence_en_seg } => {
+                identidad_revocar(&id, motivo.into(), umbral, vence_en_seg)
             }
         },
         Cmd::Atestacion { op } => match op {
@@ -741,6 +809,115 @@ fn identidad_remove(id: &str, force: bool, purgar_keystore: bool) -> CliResult<(
             ""
         }
     );
+    Ok(())
+}
+
+fn identidad_rotar(id: &str, nombre: Option<String>, seed_stdin: bool) -> CliResult<()> {
+    let mut s = Sesion::abrir()?;
+    let vieja_id = s.resolver_id(id)?;
+    // La rotación se auto-autoriza con la clave vieja viva: tiene que ser nuestra.
+    let vieja_kp = s.cargar_keypair(vieja_id)?;
+    let madre = s
+        .graph
+        .identity(vieja_id)
+        .ok_or(Error::IdentidadDesconocida(vieja_id))?;
+    let kind = madre.kind;
+    let nombre = nombre.unwrap_or_else(|| madre.display_name.clone());
+
+    // Forjar (o sembrar) la clave sucesora.
+    let seed = if seed_stdin {
+        leer_seed_de_stdin()?
+    } else {
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+        seed
+    };
+    let nueva_kp = Keypair::from_seed(seed);
+    let nueva_id = nueva_kp.identity_id();
+
+    // El record doble-firmado y su ingreso al grafo (re-verifica ambas firmas).
+    let rot = KeyRotation::create(&vieja_kp, &nueva_kp, ahora_unix());
+    s.graph.add_rotation(rot)?;
+    // Registrar la sucesora como identidad de primera clase + su seed.
+    s.keystore
+        .save(nueva_id, &seed, &s.passphrase)
+        .map_err(Error::Keystore)?;
+    s.graph.register(nueva_kp.identity(kind, &nombre));
+    s.guardar()?;
+
+    println!("identidad rotada (handoff voluntario, doble-firmado)");
+    println!("  vieja  {}", hex_de(vieja_id.as_bytes()));
+    println!("  nueva  {}  ★ (seed en el keystore)", hex_de(nueva_id.as_bytes()));
+    println!("  name   {nombre}");
+    println!(
+        "la cadena de sucesión queda viva: `current_key_at` desde la vieja apunta a la nueva."
+    );
+    Ok(())
+}
+
+fn identidad_revocar(
+    id: &str,
+    motivo: RevReason,
+    umbral: Option<usize>,
+    vence_en_seg: Option<u64>,
+) -> CliResult<()> {
+    let mut s = Sesion::abrir()?;
+    let target_id = s.resolver_id(id)?;
+    let target = s
+        .graph
+        .identity(target_id)
+        .ok_or(Error::IdentidadDesconocida(target_id))?;
+    let target_key = target.public_key;
+
+    // Autoridad SOCIAL: el set de guardianes que la propia identidad declaró.
+    let guardianes = s.graph.guardians_of(target_id);
+    if guardianes.is_empty() {
+        return Err(Error::Canal(
+            "la identidad no declaró guardianes — sin autoridad de revocación \
+             social (atestá `predicate=\"guardian\"` con `agora-cli atestar`)",
+        ));
+    }
+    // Sólo podemos firmar con los guardianes cuya seed vive en el keystore local.
+    let mut firmantes: Vec<Keypair> = Vec::new();
+    for g in &guardianes {
+        if s.keystore.exists(*g) {
+            firmantes.push(s.cargar_keypair(*g)?);
+        }
+    }
+    if firmantes.is_empty() {
+        return Err(Error::Canal(
+            "ningún guardián declarado tiene seed en el keystore local — \
+             no puedo aportar firmas (la combinación multi-parte queda pendiente)",
+        ));
+    }
+    let min = umbral.unwrap_or(firmantes.len());
+
+    let now = ahora_unix();
+    let expires_at = vence_en_seg.map(|seg| now + seg);
+    let refs: Vec<&Keypair> = firmantes.iter().collect();
+    let rev = Revocation::create(target_key, motivo, now, expires_at, &refs);
+
+    // El grafo es el juez: NO guarda una revocación que sus guardianes no
+    // respalden al umbral pedido (anti-DoS de tombstones).
+    s.graph
+        .add_revocation(rev, min, &guardianes)
+        .map_err(Error::MultiSig)?;
+    s.guardar()?;
+
+    let motivo_str = match motivo {
+        RevReason::Compromised => "compromised (PERMANENTE)",
+        RevReason::Retired => "retired",
+        RevReason::Superseded => "superseded",
+    };
+    println!("identidad revocada (plano social, M-of-N de guardianes)");
+    println!("  target  {}", hex_de(target_id.as_bytes()));
+    println!("  motivo  {motivo_str}");
+    println!("  quórum  {min}-of-{} guardianes (firmé con {})", guardianes.len(), firmantes.len());
+    match expires_at {
+        Some(t) => println!("  vence   en t={t} (suspensión temporal)"),
+        None => println!("  vence   nunca (permanente)"),
+    }
+    println!("la evidencia de esta clave deja de contar en `corroboration_at` desde ahora.");
     Ok(())
 }
 

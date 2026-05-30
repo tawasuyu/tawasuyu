@@ -135,4 +135,15 @@ contra reflash malicioso del kernel (frontera física fuera de alcance).
      exija además que la clave NO esté revocada-activa-a-`now`. BLOQUEADO por dos
      decisiones de diseño: extender el formato del superbloque (campo overlay_raíz)
      y una fuente de tiempo unix en el kernel (hoy lleva ticks PIT, no wall-clock).
-5. `agora-cli` — `identidad rotar` / `identidad revocar` (M-of-N) / `wawa revocar`.
+5. `agora-cli`:
+   - ✅ 5a. `identidad rotar <id>` — forja la sucesora, `KeyRotation` doble-firmada,
+     registra la clave nueva en grafo + keystore (handoff voluntario; la cadena
+     queda viva en `current_key_at`).
+   - ✅ 5b. `identidad revocar <id> [--motivo] [--umbral] [--vence-en-seg]` — plano
+     SOCIAL: autoridad = `guardians_of(target)`, firma con cada guardián cuya seed
+     viva en el keystore local, el grafo gatea el umbral M-of-N (anti-DoS de
+     tombstones). Persisten ambos vía `agora-store` (snapshot, fase 3). Falta la
+     combinación multi-parte offline de firmas parciales (un guardián por máquina).
+   - ⏳ 5c. `wawa revocar` — productor del OVERLAY del plano de CONTROL (revocación
+     firmada M-of-N por `AGORA_AUTH_RING`). Emparejado con 4b: las seeds del anillo
+     viven offline y el kernel aún no consume el overlay; se hace junto a 4b.
