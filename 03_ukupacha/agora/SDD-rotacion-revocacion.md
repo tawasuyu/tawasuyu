@@ -112,7 +112,11 @@ contra reflash malicioso del kernel (frontera física fuera de alcance).
 ## 6. Plan de implementación
 
 1. ✅ `agora-core::lifecycle` — `KeyRotation` + `Revocation` + `RevReason` + tests.
-2. `agora-graph` — almacenar tombstones, filtrar evidencia, `current_key`, guardianes.
-3. `agora-store` — persistir rotaciones/revocaciones en el append-log + replay.
+2. ✅ `agora-graph` — tombstones, filtrar evidencia (`corroboration_at`),
+   `current_key_at`, `guardians_of`, `is_revoked_at`, `ingest_revocation`.
+3. ✅ `agora-store` — rotaciones/revocaciones en el SNAPSHOT (camino frío; el
+   append-log queda para las atestaciones, camino caliente), `serde(default)` ⇒
+   sin corte de formato (SCHEMA 1). `load` re-verifica firma (doble en rotación,
+   integridad en revocación; el umbral M-of-N es del consumidor, no del store).
 4. `wawa-kernel/src/claves.rs` — espejo `verificar_revocacion` + overlay en carga.
 5. `agora-cli` — `identidad rotar` / `identidad revocar` (M-of-N) / `wawa revocar`.
