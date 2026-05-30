@@ -249,6 +249,12 @@ enum Msg {
     /// por una `Capa::raster` con defaults (Normal/1.0/visible). Si la
     /// capa ya está en el fondo (idx 0), no-op + estado descriptivo.
     Combinar(Uuid),
+    /// Aplana todas las capas visibles a una sola raster con el
+    /// composite del lienzo. Las hidden se preservan en su posición
+    /// topológica; el resultado va donde estaba la más alta visible
+    /// (Photoshop "Merge Visible"). Sin selección. No-op si hay 0 o 1
+    /// visibles.
+    AplanarVisibles,
 }
 
 // =============================================================================
@@ -1167,6 +1173,16 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         Msg::Picker(PickerMsg::Open),
     )));
 
+    // "estructura": operaciones sobre el lienzo entero. Por ahora una:
+    // aplanar las capas visibles (Photoshop "Merge Visible", Ctrl+Shift+E).
+    let n_visibles = model.lienzo.capas.iter().filter(|c| c.visible).count();
+    hijos.push(subtitulo("estructura"));
+    hijos.push(envolver_fila(button_view(
+        format!("⊞ aplanar visibles ({}) · Ctrl+Shift+E", n_visibles),
+        &pal,
+        Msg::AplanarVisibles,
+    )));
+
     // "salida": no requiere selección, siempre activa.
     hijos.push(subtitulo("salida"));
     hijos.push(envolver_fila(button_view(
@@ -1782,6 +1798,11 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::AplanarVisibles => {
+                if aplanar_capas_visibles(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2028,6 +2049,11 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("y") => {
             return Some(Msg::Redo);
         }
+        // Ctrl+Shift+E = aplanar visibles (Photoshop "Merge Visible").
+        // Global: no requiere selección — opera sobre todo el lienzo.
+        Key::Character(s) if m.ctrl && m.shift && s.eq_ignore_ascii_case("e") => {
+            return Some(Msg::AplanarVisibles);
+        }
         // Reset de vista: zoom 100% del fit + pan a cero. Global porque
         // no depende de capa seleccionada — es navegación del viewport.
         Key::Character(s) if !m.ctrl && !m.alt && s == "0" => {
@@ -2261,6 +2287,73 @@ fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     model.seleccionada = Some(nuevo_id);
     aplicar_y_recomponer(model);
     model.estado = format!("combinada '{}'", nombre);
+    true
+}
+
+/// Aplana todas las capas visibles a una sola `Capa::raster` con el
+/// composite del lienzo entero. Las hidden se preservan tal cual en su
+/// posición relativa; el resultado se inserta donde estaba la *más
+/// alta* visible (Photoshop "Merge Visible"). Esto exige un cálculo
+/// topológico de la nueva posición:
+///
+/// ```text
+/// original  visibles  hidden        nueva_pos
+/// [bg v]    [0]       []            0  (todo se aplanó al primer slot)
+/// [bg v, hidA h, fg v, hidB h]      [0, 2]   [1, 3]   2  (preservo hidA debajo, hidB encima)
+/// ```
+///
+/// El criterio: cuántos hidden hay por debajo del top de los visibles.
+/// Devuelve `false` si hay 0 o 1 visibles (nada que aplanar) o si el
+/// `componer` falla (típicamente derivada stale → `BufferFaltante`).
+fn aplanar_capas_visibles(model: &mut Model) -> bool {
+    let visibles: Vec<usize> = model
+        .lienzo
+        .capas
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.visible)
+        .map(|(i, _)| i)
+        .collect();
+    if visibles.len() < 2 {
+        model.estado = if visibles.is_empty() {
+            "nada visible que aplanar".into()
+        } else {
+            "ya hay una sola capa visible".into()
+        };
+        return false;
+    }
+    // `componer` ya itera sobre el lienzo entero saltando `!visible`, así
+    // que el composite del Lienzo actual ES exactamente "merge visible".
+    let img = match tullpu_render::componer(&model.lienzo, &model.almacen) {
+        Ok(im) => im,
+        Err(e) => {
+            model.estado = format!("aplanar falló: {e:?}");
+            return false;
+        }
+    };
+    let buffer = img.into_raw();
+    let hash = model.almacen.insertar(buffer);
+    let n_aplanadas = visibles.len();
+    let nombre = format!("aplanado de {} capas", n_aplanadas);
+    let nueva = Capa::raster(nombre.clone(), hash);
+    let nuevo_id = nueva.id;
+    // Posición topológica: cuántos hidden hay por debajo del más alto
+    // visible. Esos son los que quedan "debajo" de la merged en el nuevo
+    // lienzo. Después de quitar los visibles (que viven en `0..=max_v`),
+    // los hidden de ese rango se quedan al principio del Vec restante.
+    let max_v = *visibles.last().unwrap();
+    let insert_idx = (0..=max_v)
+        .filter(|i| !model.lienzo.capas[*i].visible)
+        .count();
+    // Quitar los visibles en orden inverso para no descolocar los índices
+    // que todavía no procesamos.
+    for &i in visibles.iter().rev() {
+        model.lienzo.capas.remove(i);
+    }
+    model.lienzo.capas.insert(insert_idx, nueva);
+    model.seleccionada = Some(nuevo_id);
+    aplicar_y_recomponer(model);
+    model.estado = format!("aplanadas {} → '{}'", n_aplanadas, nombre);
     true
 }
 
@@ -3342,6 +3435,168 @@ mod tests {
         // Sin Ctrl, la `e` suelta no debe disparar nada.
         let msg2 = hotkey_a_msg(&model, &ev_char("e", Modifiers::default()));
         assert!(msg2.is_none());
+    }
+
+    // ---- Fase 28: aplanar visibles (merge visible) ---------------------------
+
+    /// Helper que mete N capas raster opacas de colores distintos al
+    /// modelo mínimo. Devuelve los Uuid en orden de inserción
+    /// (capas[0] = primera retornada).
+    fn modelo_n_capas(colores: &[[u8; 4]]) -> (Model, Vec<Uuid>) {
+        let mut model = modelo_minimo();
+        model.lienzo = Lienzo::nuevo(2, 2);
+        let mut ids = Vec::new();
+        for (i, &c) in colores.iter().enumerate() {
+            let buf = buffer_relleno(2, 2, c);
+            let h = model.almacen.insertar(buf);
+            let cap = Capa::raster(format!("c{}", i), h);
+            ids.push(cap.id);
+            model.lienzo.apilar(cap);
+        }
+        model.seleccionada = ids.first().copied();
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        (model, ids)
+    }
+
+    #[test]
+    fn aplanar_con_cero_visibles_es_no_op() {
+        let (mut model, ids) = modelo_n_capas(&[[10, 20, 30, 255]]);
+        // Oculto la única capa que hay.
+        let idx = model
+            .lienzo
+            .capas
+            .iter()
+            .position(|c| c.id == ids[0])
+            .unwrap();
+        model.lienzo.capas[idx].visible = false;
+        let lienzo_antes = model.lienzo.clone();
+        let ok = aplanar_capas_visibles(&mut model);
+        assert!(!ok);
+        assert_eq!(model.lienzo, lienzo_antes);
+        assert!(model.estado.contains("nada visible"));
+    }
+
+    #[test]
+    fn aplanar_con_una_sola_visible_es_no_op() {
+        let (mut model, _) = modelo_n_capas(&[[10, 20, 30, 255]]);
+        let lienzo_antes = model.lienzo.clone();
+        let ok = aplanar_capas_visibles(&mut model);
+        assert!(!ok);
+        assert_eq!(model.lienzo, lienzo_antes);
+        assert!(model.estado.contains("una sola"));
+    }
+
+    #[test]
+    fn aplanar_dos_visibles_da_una_capa_con_composite() {
+        // Dos Normal/opacas: el composite es el color de arriba.
+        let (mut model, _) =
+            modelo_n_capas(&[[10, 20, 30, 255], [200, 100, 50, 255]]);
+        let ok = aplanar_capas_visibles(&mut model);
+        assert!(ok);
+        assert_eq!(model.lienzo.capas.len(), 1);
+        let buf = model.almacen.obtener(model.lienzo.capas[0].contenido).unwrap();
+        for px in buf.chunks_exact(4) {
+            assert_eq!(px, &[200, 100, 50, 255]);
+        }
+        // La merged hereda defaults Normal/1.0/visible.
+        assert!((model.lienzo.capas[0].opacidad - 1.0).abs() < 1e-6);
+        assert_eq!(model.lienzo.capas[0].blend, ModoFusion::Normal);
+    }
+
+    #[test]
+    fn aplanar_preserva_hidden_intercalado_en_su_posicion_topologica() {
+        // Lienzo de 4 capas en orden fondo→tope:
+        //   c0 (v)  bg
+        //   c1 (h)  hidA — entre dos visibles
+        //   c2 (v)  fg
+        //   c3 (h)  hidB — encima de la última visible
+        // Esperado tras aplanar: [hidA, merged, hidB] (3 capas).
+        let (mut model, ids) = modelo_n_capas(&[
+            [10, 0, 0, 255],
+            [0, 20, 0, 255],
+            [0, 0, 30, 255],
+            [40, 40, 40, 255],
+        ]);
+        // Marco c1 y c3 como hidden.
+        for &id in &[ids[1], ids[3]] {
+            let idx = model
+                .lienzo
+                .capas
+                .iter()
+                .position(|c| c.id == id)
+                .unwrap();
+            model.lienzo.capas[idx].visible = false;
+        }
+        let ok = aplanar_capas_visibles(&mut model);
+        assert!(ok);
+        // 4 originales − 2 visibles + 1 merged = 3 capas.
+        assert_eq!(model.lienzo.capas.len(), 3);
+        // Orden esperado: hidA (idx 0), merged (idx 1), hidB (idx 2).
+        assert_eq!(model.lienzo.capas[0].id, ids[1]);
+        assert!(model.lienzo.capas[1].nombre.starts_with("aplanado"));
+        assert_eq!(model.lienzo.capas[2].id, ids[3]);
+        // hidA y hidB siguen siendo invisibles.
+        assert!(!model.lienzo.capas[0].visible);
+        assert!(!model.lienzo.capas[2].visible);
+    }
+
+    #[test]
+    fn aplanar_no_visible_arriba_de_todo_inserta_al_tope() {
+        // Caso degenerado: una hidden ARRIBA de la última visible.
+        // [v0 v, v1 v, hid v0 → no, hidden h]
+        // Tras aplanar: [merged, hidden] (merged va donde estaba v1,
+        // que era max_visible=1; hidden de 0..=1 = 0, así que insert_idx=0
+        // — merged va a idx 0, hidden queda atrás al final).
+        let (mut model, ids) = modelo_n_capas(&[
+            [10, 0, 0, 255],
+            [0, 20, 0, 255],
+            [40, 40, 40, 255],
+        ]);
+        let idx_hidden = model
+            .lienzo
+            .capas
+            .iter()
+            .position(|c| c.id == ids[2])
+            .unwrap();
+        model.lienzo.capas[idx_hidden].visible = false;
+        let ok = aplanar_capas_visibles(&mut model);
+        assert!(ok);
+        assert_eq!(model.lienzo.capas.len(), 2);
+        // merged va a 0 (no había hidden por debajo del top visible).
+        assert!(model.lienzo.capas[0].nombre.starts_with("aplanado"));
+        // La hidden queda en idx 1 (arriba).
+        assert_eq!(model.lienzo.capas[1].id, ids[2]);
+    }
+
+    #[test]
+    fn msg_aplanar_dispatcha_y_undo_restaura() {
+        let (mut model, ids) =
+            modelo_n_capas(&[[1, 2, 3, 255], [4, 5, 6, 255], [7, 8, 9, 255]]);
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(model, Msg::AplanarVisibles, &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), 1);
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), 3);
+        let ids_post: Vec<Uuid> = model.lienzo.capas.iter().map(|c| c.id).collect();
+        for id in ids {
+            assert!(ids_post.contains(&id));
+        }
+    }
+
+    #[test]
+    fn hotkey_ctrl_shift_e_emite_aplanar() {
+        let m = modelo_minimo();
+        let mods = Modifiers { ctrl: true, shift: true, ..Default::default() };
+        let msg = hotkey_a_msg(&m, &ev_char("e", mods));
+        assert!(matches!(msg, Some(Msg::AplanarVisibles)));
+        // Ctrl+E (sin shift) sigue siendo Combinar(id), no AplanarVisibles.
+        let solo_ctrl = hotkey_a_msg(
+            &m,
+            &ev_char("e", Modifiers { ctrl: true, ..Default::default() }),
+        );
+        assert!(matches!(solo_ctrl, Some(Msg::Combinar(_))));
     }
 
     #[test]
