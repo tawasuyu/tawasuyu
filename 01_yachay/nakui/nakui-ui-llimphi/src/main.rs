@@ -33,7 +33,10 @@
 //!     operadores `eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`between`/`non_empty`
 //!     (numéricos o fechas ISO). Cada fila de un desglose es clickeable:
 //!     drill-down a la lista de esa entity filtrada al grupo (por el
-//!     valor real, aunque la fila muestre el label resuelto).
+//!     valor real, aunque la fila muestre el label resuelto). El campo
+//!     `chart` de la card elige cómo se pinta el desglose: barras ASCII
+//!     (default), torta (`pie`) o dona (`donut`) —sectores proporcionales
+//!     con leyenda de color + porcentaje, también clickeable para drill—.
 //!   - `Report`: los mismos agregados que un tablero, dispuestos como
 //!     documento de una columna (título + subtítulo) con botón
 //!     "Exportar (.md)" que vuelca el reporte completo a Markdown.
@@ -65,9 +68,10 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_styled, ButtonPalette};
@@ -85,8 +89,9 @@ use nahual_meta_runtime::{
     MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, CardFilter, Column, DashboardCard, DashboardView, FieldKind, FieldSpec, FormView,
-    GraphView, ListView, Module, RelatedList, ReportView, ValueFormat, View as ModuleView,
+    Action, CardFilter, ChartKind, Column, DashboardCard, DashboardView, FieldKind, FieldSpec,
+    FormView, GraphView, ListView, Module, RelatedList, ReportView, ValueFormat,
+    View as ModuleView,
 };
 use nakui_core::executor::Executor;
 use serde_json::Value;
@@ -2378,6 +2383,167 @@ fn breakdown_row(
     row
 }
 
+/// Paleta categórica de los gráficos de torta/dona: colores estables
+/// por índice de sector (cicla si hay más grupos que colores).
+const CHART_COLORS: [(u8, u8, u8); 10] = [
+    (76, 145, 224),  // azul
+    (236, 151, 56),  // ámbar
+    (94, 186, 125),  // verde
+    (214, 96, 122),  // rosa
+    (149, 117, 205), // violeta
+    (76, 194, 196),  // turquesa
+    (224, 109, 84),  // teja
+    (180, 190, 90),  // oliva
+    (140, 140, 150), // gris
+    (120, 170, 230), // celeste
+];
+
+/// Color del sector `i` del gráfico (cicla sobre [`CHART_COLORS`]).
+fn chart_color(i: usize) -> Color {
+    let (r, g, b) = CHART_COLORS[i % CHART_COLORS.len()];
+    Color::from_rgba8(r, g, b, 255)
+}
+
+/// Normaliza un desglose a `(label, magnitud, texto_formateado)`:
+/// `magnitud` es el número crudo (para escalar barras/sectores) y
+/// `texto` su presentación según el [`ValueFormat`] de la card.
+/// Vacío para escalares.
+fn breakdown_display(result: &MetricResult, fmt: &ValueFormat) -> Vec<(String, f64, String)> {
+    match result {
+        MetricResult::Breakdown(rows) => rows
+            .iter()
+            .map(|(k, n)| (k.clone(), *n as f64, n.to_string()))
+            .collect(),
+        MetricResult::ValueBreakdown(rows) => rows
+            .iter()
+            .map(|(k, v)| {
+                let value = if v.fract() == 0.0 {
+                    Value::from(*v as i64)
+                } else {
+                    Value::from(*v)
+                };
+                (k.clone(), *v, format_value(Some(&value), fmt))
+            })
+            .collect(),
+        MetricResult::Scalar(_) => Vec::new(),
+    }
+}
+
+/// Canvas de un gráfico de torta (o dona si `donut`): cada `(valor,
+/// color)` es un sector con barrido proporcional al valor sobre el
+/// total, arrancando arriba (12 en punto) y girando horario. Los
+/// sectores se separan con un trazo fino del color de fondo `gap`.
+fn pie_canvas(slices: Vec<(f64, Color)>, donut: bool, gap: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(128.0),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect: PaintRect| {
+        let total: f64 = slices.iter().map(|(v, _)| v.max(0.0)).sum();
+        if total <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let r = (rect.w.min(rect.h) as f64) * 0.5 - 4.0;
+        if r <= 0.0 {
+            return;
+        }
+        let inner = if donut { r * 0.55 } else { 0.0 };
+        let mut a0 = -std::f64::consts::FRAC_PI_2; // arranca arriba
+        for (v, color) in &slices {
+            if *v <= 0.0 {
+                continue;
+            }
+            let a1 = a0 + (v / total) * std::f64::consts::TAU;
+            let path = wedge_path(cx, cy, r, inner, a0, a1);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &path);
+            scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, gap, None, &path);
+            a0 = a1;
+        }
+    })
+}
+
+/// Polígono que aproxima un sector circular entre los ángulos `a0` y
+/// `a1` (radianes). Si `inner > 0` es un sector de anillo (dona); si
+/// no, una porción de torta con vértice en el centro.
+fn wedge_path(cx: f64, cy: f64, r: f64, inner: f64, a0: f64, a1: f64) -> BezPath {
+    let mut p = BezPath::new();
+    // ~1 segmento cada 7° para que el arco se vea curvo.
+    let steps = ((a1 - a0).abs() / 0.12).ceil().max(2.0) as usize;
+    let at = |a: f64, rad: f64| (cx + rad * a.cos(), cy + rad * a.sin());
+    if inner <= 0.0 {
+        p.move_to((cx, cy));
+        for i in 0..=steps {
+            let a = a0 + (a1 - a0) * (i as f64 / steps as f64);
+            p.line_to(at(a, r));
+        }
+    } else {
+        for i in 0..=steps {
+            let a = a0 + (a1 - a0) * (i as f64 / steps as f64);
+            let pt = at(a, r);
+            if i == 0 {
+                p.move_to(pt);
+            } else {
+                p.line_to(pt);
+            }
+        }
+        for i in (0..=steps).rev() {
+            let a = a0 + (a1 - a0) * (i as f64 / steps as f64);
+            p.line_to(at(a, inner));
+        }
+    }
+    p.close_path();
+    p
+}
+
+/// Fila de leyenda de un gráfico: cuadradito de color + etiqueta +
+/// valor (con porcentaje). Clickeable (drill-down) si `on_drill`.
+fn legend_row(
+    color: Color,
+    label: String,
+    value: String,
+    on_drill: Option<Msg>,
+    theme: &Theme,
+) -> View<Msg> {
+    let swatch = View::new(Style {
+        size: Size {
+            width: length(12.0),
+            height: length(12.0),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(color)
+    .radius(3.0);
+    let mut row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(6.0),
+            height: length(0.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        swatch,
+        cell_flex(label, theme.fg_text),
+        cell_text(value, 96.0, theme.fg_muted),
+    ]);
+    if let Some(msg) = on_drill {
+        row = row.hover_fill(theme.bg_panel).on_click(msg);
+    }
+    row
+}
+
 /// Claves de grupo de un desglose, en orden (vacío para escalares).
 fn breakdown_raw_keys(result: &MetricResult) -> Vec<String> {
     match result {
@@ -2525,6 +2691,7 @@ fn build_dashboard_panel(
             &card.label,
             &result,
             &card.format,
+            card.chart,
             on_export,
             drill.as_ref(),
             theme,
@@ -2556,6 +2723,7 @@ fn dashboard_card(
     label: &str,
     result: &MetricResult,
     fmt: &ValueFormat,
+    chart: ChartKind,
     on_export: Option<Msg>,
     drill: Option<&DrillCtx>,
     theme: &Theme,
@@ -2597,52 +2765,56 @@ fn dashboard_card(
                 ),
             );
         }
-        MetricResult::Breakdown(rows) => {
-            if rows.is_empty() {
+        // Desgloses (GroupBy / SumBy / AvgBy): normalizados a una lista
+        // `(label, magnitud, texto)` y pintados según `chart` —barras
+        // ASCII (default), torta o dona—.
+        MetricResult::Breakdown(_) | MetricResult::ValueBreakdown(_) => {
+            let items = breakdown_display(result, fmt);
+            if items.is_empty() {
                 children.push(text_line("(sin datos)".into(), 11.0, theme.fg_muted));
-            }
-            let max = rows.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
-            for (i, (key, n)) in rows.iter().enumerate() {
-                let bar = "█".repeat((n * 12 / max).max(1));
-                let row = breakdown_row(
-                    key.clone(),
-                    bar,
-                    n.to_string(),
-                    32.0,
-                    drill_msg(i),
-                    theme,
-                );
-                children.push(row);
-            }
-        }
-        MetricResult::ValueBreakdown(rows) => {
-            if rows.is_empty() {
-                children.push(text_line("(sin datos)".into(), 11.0, theme.fg_muted));
-            }
-            // La barra escala contra el mayor valor absoluto; el número
-            // se formatea con el `ValueFormat` de la tarjeta (moneda).
-            let max = rows
-                .iter()
-                .map(|(_, v)| v.abs())
-                .fold(0.0_f64, f64::max)
-                .max(1.0);
-            for (i, (key, v)) in rows.iter().enumerate() {
-                let filled = ((v.abs() / max) * 12.0).round() as usize;
-                let bar = "█".repeat(filled.max(1));
-                let value = if v.fract() == 0.0 {
-                    Value::from(*v as i64)
+            } else if matches!(chart, ChartKind::Pie | ChartKind::Donut) {
+                let donut = matches!(chart, ChartKind::Donut);
+                let slices: Vec<(f64, Color)> = items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, m, _))| (m.abs(), chart_color(i)))
+                    .collect();
+                children.push(pie_canvas(slices, donut, theme.bg_panel_alt));
+                let total: f64 = items.iter().map(|(_, m, _)| m.abs()).sum();
+                for (i, (key, m, disp)) in items.iter().enumerate() {
+                    let pct = if total > 0.0 { m.abs() / total * 100.0 } else { 0.0 };
+                    children.push(legend_row(
+                        chart_color(i),
+                        key.clone(),
+                        format!("{disp} · {pct:.0}%"),
+                        drill_msg(i),
+                        theme,
+                    ));
+                }
+            } else {
+                // Barras: la longitud escala contra el mayor valor absoluto.
+                let value_w = if matches!(result, MetricResult::ValueBreakdown(_)) {
+                    72.0
                 } else {
-                    Value::from(*v)
+                    32.0
                 };
-                let row = breakdown_row(
-                    key.clone(),
-                    bar,
-                    format_value(Some(&value), fmt),
-                    64.0,
-                    drill_msg(i),
-                    theme,
-                );
-                children.push(row);
+                let max = items
+                    .iter()
+                    .map(|(_, m, _)| m.abs())
+                    .fold(0.0_f64, f64::max)
+                    .max(1.0);
+                for (i, (key, m, disp)) in items.iter().enumerate() {
+                    let filled = ((m.abs() / max) * 12.0).round() as usize;
+                    let bar = "█".repeat(filled.max(1));
+                    children.push(breakdown_row(
+                        key.clone(),
+                        bar,
+                        disp.clone(),
+                        value_w,
+                        drill_msg(i),
+                        theme,
+                    ));
+                }
             }
         }
     }
@@ -2788,6 +2960,7 @@ fn build_report_panel(
             &card.label,
             &result,
             &card.format,
+            card.chart,
             on_export,
             drill.as_ref(),
             theme,

@@ -258,6 +258,25 @@ pub struct DashboardCard {
     /// el motor de métricas permanece agnóstico.
     #[serde(default)]
     pub group_ref: Option<String>,
+    /// Cómo se dibuja un desglose (`GroupBy` / `SumBy` / `AvgBy`):
+    /// barras ASCII (default), torta o dona. Ignorado por métricas
+    /// escalares (`Count` / `Sum` / `Avg` / `Min` / `Max`), que siempre
+    /// se muestran como número grande.
+    #[serde(default)]
+    pub chart: ChartKind,
+}
+
+/// Forma visual de un desglose de tablero/reporte.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartKind {
+    /// Barras horizontales en caracteres de bloque. Default.
+    #[default]
+    Bars,
+    /// Gráfico de torta: cada grupo es un sector proporcional a su valor.
+    Pie,
+    /// Como `Pie` pero con el centro hueco (anillo).
+    Donut,
 }
 
 /// El agregado que computa una [`DashboardCard`].
@@ -1006,6 +1025,29 @@ mod tests {
         };
         assert_eq!(with_label.display(), "Equis");
         assert_eq!(bare.display(), "y");
+    }
+
+    #[test]
+    fn chart_kind_defaults_to_bars_and_parses() {
+        // Card sin `chart` → default Bars (back-compat con tableros viejos).
+        let card: DashboardCard = serde_json::from_value(serde_json::json!({
+            "label": "Clientes por plan",
+            "entity": "customers",
+            "metric": { "kind": "group_by", "field": "tier" }
+        }))
+        .unwrap();
+        assert_eq!(card.chart, ChartKind::Bars);
+
+        // Con `chart` explícito en snake_case.
+        let pie: DashboardCard = serde_json::from_value(serde_json::json!({
+            "label": "Facturación",
+            "entity": "orders",
+            "metric": { "kind": "sum_by", "group": "customer", "value": "monto" },
+            "chart": "pie"
+        }))
+        .unwrap();
+        assert_eq!(pie.chart, ChartKind::Pie);
+        assert_eq!(ChartKind::default(), ChartKind::Bars);
     }
 
     #[test]

@@ -3,29 +3,130 @@
   "label": "Ventas",
   "description": "Demo del meta-form Llimphi: clientes + órdenes (alta/edición/borrado vivos)",
   "entities": [
-    { "name": "Customer", "label": "Cliente", "fields": [] },
-    { "name": "Order", "label": "Orden", "fields": [] }
+    {
+      "name": "Customer",
+      "label": "Cliente",
+      "fields": []
+    },
+    {
+      "name": "Order",
+      "label": "Orden",
+      "fields": []
+    }
   ],
   "menu": [
-    { "label": "Tablero", "view": "tablero" },
-    { "label": "Reporte", "view": "reporte" },
-    { "label": "Clientes", "view": "customers_list" },
-    { "label": "+ Cliente", "view": "customers_form" },
-    { "label": "Órdenes", "view": "orders_list" },
-    { "label": "+ Orden", "view": "orders_form" }
+    {
+      "label": "Tablero",
+      "view": "tablero"
+    },
+    {
+      "label": "Reporte",
+      "view": "reporte"
+    },
+    {
+      "label": "Clientes",
+      "view": "customers_list"
+    },
+    {
+      "label": "+ Cliente",
+      "view": "customers_form"
+    },
+    {
+      "label": "Órdenes",
+      "view": "orders_list"
+    },
+    {
+      "label": "+ Orden",
+      "view": "orders_form"
+    }
   ],
   "views": {
     "tablero": {
       "kind": "dashboard",
       "title": "Resumen",
       "cards": [
-        { "label": "Clientes", "entity": "Customer", "metric": { "kind": "count" } },
-        { "label": "Órdenes", "entity": "Order", "metric": { "kind": "count" } },
-        { "label": "Facturado", "entity": "Order", "metric": { "kind": "sum", "field": "monto" }, "format": { "kind": "currency", "symbol": "$" } },
-        { "label": "Cobrado", "entity": "Order", "metric": { "kind": "sum", "field": "monto" }, "filter": { "field": "pagado", "equals": "true" }, "format": { "kind": "currency", "symbol": "$" } },
-        { "label": "Clientes por plan", "entity": "Customer", "metric": { "kind": "group_by", "field": "tier" } },
-        { "label": "Facturación por cliente", "entity": "Order", "metric": { "kind": "sum_by", "group": "customer", "value": "monto" }, "group_ref": "Customer", "format": { "kind": "currency", "symbol": "$" } },
-        { "label": "Ticket promedio (cobrado)", "entity": "Order", "metric": { "kind": "avg", "field": "monto" }, "filter": { "field": "pagado", "equals": "true" }, "format": { "kind": "currency", "symbol": "$" } }
+        {
+          "label": "Clientes",
+          "entity": "Customer",
+          "metric": {
+            "kind": "count"
+          }
+        },
+        {
+          "label": "Órdenes",
+          "entity": "Order",
+          "metric": {
+            "kind": "count"
+          }
+        },
+        {
+          "label": "Facturado",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum",
+            "field": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          }
+        },
+        {
+          "label": "Cobrado",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum",
+            "field": "monto"
+          },
+          "filter": {
+            "field": "pagado",
+            "equals": "true"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          }
+        },
+        {
+          "label": "Clientes por plan",
+          "entity": "Customer",
+          "metric": {
+            "kind": "group_by",
+            "field": "tier"
+          },
+          "chart": "donut"
+        },
+        {
+          "label": "Facturación por cliente",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum_by",
+            "group": "customer",
+            "value": "monto"
+          },
+          "group_ref": "Customer",
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          },
+          "chart": "pie"
+        },
+        {
+          "label": "Ticket promedio (cobrado)",
+          "entity": "Order",
+          "metric": {
+            "kind": "avg",
+            "field": "monto"
+          },
+          "filter": {
+            "field": "pagado",
+            "equals": "true"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          }
+        }
       ]
     },
     "reporte": {
@@ -33,14 +134,73 @@
       "title": "Reporte de ventas",
       "subtitle": "Resumen ejecutivo — exportable a Markdown",
       "cards": [
-        { "label": "Facturado total", "entity": "Order", "metric": { "kind": "sum", "field": "monto" }, "format": { "kind": "currency", "symbol": "$" } },
-        { "label": "Órdenes grandes (≥ 1000)", "entity": "Order", "metric": { "kind": "count" }, "filter": { "field": "monto", "op": "gte", "value": "1000" } },
-        { "label": "Facturación por cliente", "entity": "Order", "metric": { "kind": "sum_by", "group": "customer", "value": "monto" }, "group_ref": "Customer", "format": { "kind": "currency", "symbol": "$" } },
-        { "label": "Clientes por plan", "entity": "Customer", "metric": { "kind": "group_by", "field": "tier" } }
+        {
+          "label": "Facturado total",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum",
+            "field": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          }
+        },
+        {
+          "label": "Órdenes grandes (≥ 1000)",
+          "entity": "Order",
+          "metric": {
+            "kind": "count"
+          },
+          "filter": {
+            "field": "monto",
+            "op": "gte",
+            "value": "1000"
+          }
+        },
+        {
+          "label": "Facturación por cliente",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum_by",
+            "group": "customer",
+            "value": "monto"
+          },
+          "group_ref": "Customer",
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          }
+        },
+        {
+          "label": "Clientes por plan",
+          "entity": "Customer",
+          "metric": {
+            "kind": "group_by",
+            "field": "tier"
+          },
+          "chart": "pie"
+        }
       ],
       "toggles": [
-        { "label": "Solo pagadas", "entity": "Order", "filter": { "field": "pagado", "op": "eq", "value": "true" } },
-        { "label": "Órdenes ≥ 500", "entity": "Order", "filter": { "field": "monto", "op": "gte", "value": "500" } }
+        {
+          "label": "Solo pagadas",
+          "entity": "Order",
+          "filter": {
+            "field": "pagado",
+            "op": "eq",
+            "value": "true"
+          }
+        },
+        {
+          "label": "Órdenes ≥ 500",
+          "entity": "Order",
+          "filter": {
+            "field": "monto",
+            "op": "gte",
+            "value": "500"
+          }
+        }
       ]
     },
     "customers_list": {
@@ -48,11 +208,23 @@
       "title": "Clientes",
       "entity": "Customer",
       "row_detail": "customer_detail",
-      "search_in": ["name", "tier"],
+      "search_in": [
+        "name",
+        "tier"
+      ],
       "columns": [
-        { "field": "name", "label": "Nombre" },
-        { "field": "tier", "label": "Plan" },
-        { "field": "activo", "label": "Activo" }
+        {
+          "field": "name",
+          "label": "Nombre"
+        },
+        {
+          "field": "tier",
+          "label": "Plan"
+        },
+        {
+          "field": "activo",
+          "label": "Activo"
+        }
       ]
     },
     "customer_detail": {
@@ -60,9 +232,18 @@
       "title": "Ficha de cliente",
       "entity": "Customer",
       "fields": [
-        { "field": "name", "label": "Nombre" },
-        { "field": "tier", "label": "Plan" },
-        { "field": "activo", "label": "Activo" }
+        {
+          "field": "name",
+          "label": "Nombre"
+        },
+        {
+          "field": "tier",
+          "label": "Plan"
+        },
+        {
+          "field": "activo",
+          "label": "Activo"
+        }
       ],
       "related": [
         {
@@ -70,8 +251,18 @@
           "entity": "Order",
           "via_field": "customer",
           "columns": [
-            { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } },
-            { "field": "pagado", "label": "Pagado" }
+            {
+              "field": "monto",
+              "label": "Monto",
+              "format": {
+                "kind": "currency",
+                "symbol": "$"
+              }
+            },
+            {
+              "field": "pagado",
+              "label": "Pagado"
+            }
           ]
         }
       ]
@@ -81,31 +272,71 @@
       "title": "Cliente",
       "entity": "Customer",
       "fields": [
-        { "name": "id", "label": "Id", "kind": "auto_id" },
-        { "name": "name", "label": "Nombre", "kind": "text", "required": true, "help": "Razón social del cliente" },
+        {
+          "name": "id",
+          "label": "Id",
+          "kind": "auto_id"
+        },
+        {
+          "name": "name",
+          "label": "Nombre",
+          "kind": "text",
+          "required": true,
+          "help": "Razón social del cliente"
+        },
         {
           "name": "tier",
           "label": "Plan",
           "kind": "select",
           "options": [
-            { "value": "free", "label": "Free" },
-            { "value": "pro", "label": "Pro" },
-            { "value": "enterprise", "label": "Enterprise" }
+            {
+              "value": "free",
+              "label": "Free"
+            },
+            {
+              "value": "pro",
+              "label": "Pro"
+            },
+            {
+              "value": "enterprise",
+              "label": "Enterprise"
+            }
           ]
         },
-        { "name": "activo", "label": "Activo", "kind": "boolean", "default": "true" }
+        {
+          "name": "activo",
+          "label": "Activo",
+          "kind": "boolean",
+          "default": "true"
+        }
       ],
-      "on_submit": { "kind": "seed_entity", "entity": "Customer", "next_view": "customers_list" }
+      "on_submit": {
+        "kind": "seed_entity",
+        "entity": "Customer",
+        "next_view": "customers_list"
+      }
     },
     "orders_list": {
       "kind": "list",
       "title": "Órdenes",
       "entity": "Order",
-      "search_in": ["monto"],
+      "search_in": [
+        "monto"
+      ],
       "columns": [
-        { "field": "customer", "label": "Cliente", "ref_entity": "Customer" },
-        { "field": "monto", "label": "Monto" },
-        { "field": "pagado", "label": "Pagado" }
+        {
+          "field": "customer",
+          "label": "Cliente",
+          "ref_entity": "Customer"
+        },
+        {
+          "field": "monto",
+          "label": "Monto"
+        },
+        {
+          "field": "pagado",
+          "label": "Pagado"
+        }
       ]
     },
     "orders_form": {
@@ -113,11 +344,32 @@
       "title": "Orden",
       "entity": "Order",
       "fields": [
-        { "name": "customer", "label": "Cliente", "kind": "entity_ref", "ref_entity": "Customer", "required": true, "help": "Elegí un cliente existente" },
-        { "name": "monto", "label": "Monto", "kind": "number", "required": true },
-        { "name": "pagado", "label": "Pagado", "kind": "boolean", "default": "false" }
+        {
+          "name": "customer",
+          "label": "Cliente",
+          "kind": "entity_ref",
+          "ref_entity": "Customer",
+          "required": true,
+          "help": "Elegí un cliente existente"
+        },
+        {
+          "name": "monto",
+          "label": "Monto",
+          "kind": "number",
+          "required": true
+        },
+        {
+          "name": "pagado",
+          "label": "Pagado",
+          "kind": "boolean",
+          "default": "false"
+        }
       ],
-      "on_submit": { "kind": "seed_entity", "entity": "Order", "next_view": "orders_list" }
+      "on_submit": {
+        "kind": "seed_entity",
+        "entity": "Order",
+        "next_view": "orders_list"
+      }
     }
   }
 }
