@@ -23,6 +23,7 @@ pub type MarcoId = u64;
 /// referencia o etiqueta y deja la resolución (cuerpo, subgrafo de átomos,
 /// imagen, página de deck) al frontend vía `pluma-render-plan` u otro.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ContenidoMarco {
     #[default]
     Vacio,
@@ -43,6 +44,7 @@ pub enum ContenidoMarco {
 /// Un marco colocado en el lienzo: su rectángulo en coordenadas de mundo, su
 /// giro propio y su contenido.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Marco {
     pub id: MarcoId,
     pub rect: Rect,
@@ -100,6 +102,7 @@ impl Marco {
 /// Lienzo + ruta narrativa. `pasos` es una secuencia de `MarcoId` (puede
 /// repetir un marco, saltarse otros, o recorrerlos en cualquier orden).
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Recorrido {
     pub marcos: Vec<Marco>,
     pub pasos: Vec<MarcoId>,
@@ -178,6 +181,22 @@ impl Recorrido {
             rec.pasos.push(id);
         }
         rec
+    }
+}
+
+#[cfg(feature = "serde")]
+impl Recorrido {
+    /// Serializa el recorrido (marcos + ruta) a su forma binaria `postcard` —
+    /// el codec nativo del workspace (mismo que `format`/`akasha`/`pluma-cuerpo`).
+    /// Persiste sólo el modelo de datos; el estado de interacción
+    /// ([`RecorridoState`]) es efímero y no se guarda.
+    pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
+        postcard::to_allocvec(self).map_err(|_| "recorrido :: serializacion fallida")
+    }
+
+    /// Reconstruye un recorrido desde su forma binaria `postcard`.
+    pub fn deserializar(bytes: &[u8]) -> Result<Recorrido, &'static str> {
+        postcard::from_bytes::<Recorrido>(bytes).map_err(|_| "recorrido :: deserializacion fallida")
     }
 }
 
@@ -694,6 +713,41 @@ mod tests {
         ap.play();
         assert!(correr_hasta_avance(&mut ap, &mut s, &r));
         assert_eq!(s.paso, 0, "con bucle reinicia");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn roundtrip_postcard_preserva_marcos_ruta_y_contenido() {
+        let mut r = recorrido_demo();
+        // Un marco con giro, imagen (bytes crudos) y texto, para cubrir variantes.
+        r.agregar_marco(
+            Marco::new(4, Rect::new(10.0, 20.0, 300.0, 200.0), ContenidoMarco::Imagen {
+                bytes: vec![1, 2, 3, 4, 5],
+                ancho: 64,
+                alto: 48,
+            })
+            .con_giro(0.37),
+        );
+        r.agregar_marco(Marco::new(
+            5,
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            ContenidoMarco::Texto { titulo: Some("T".into()), parrafos: vec!["p1".into(), "p2".into()] },
+        ));
+        r.pasos = vec![1, 2, 3, 4, 5];
+        let bytes = r.serializar().unwrap();
+        let r2 = Recorrido::deserializar(&bytes).unwrap();
+        assert_eq!(r2.pasos, r.pasos);
+        assert_eq!(r2.marcos.len(), r.marcos.len());
+        // El marco girado con imagen conserva geometría, giro y bytes.
+        let m4 = r2.marco(4).unwrap();
+        assert_eq!(m4.rect, Rect::new(10.0, 20.0, 300.0, 200.0));
+        assert!((m4.rot_rad - 0.37).abs() < 1e-12);
+        assert_eq!(
+            m4.contenido,
+            ContenidoMarco::Imagen { bytes: vec![1, 2, 3, 4, 5], ancho: 64, alto: 48 }
+        );
+        // Bytes corruptos no panican: error controlado.
+        assert!(Recorrido::deserializar(&[0xFF]).is_err());
     }
 
     #[test]

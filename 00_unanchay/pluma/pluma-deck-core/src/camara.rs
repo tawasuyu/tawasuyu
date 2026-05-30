@@ -21,6 +21,7 @@ pub const FIT_MARGEN: f64 = 0.9;
 /// Rectángulo axis-aligned. Sirve tanto para el panel (px de pantalla) como
 /// para el `rect` de un marco (coords de mundo).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Rect {
     pub x: f64,
     pub y: f64,
@@ -41,6 +42,7 @@ impl Rect {
 
 /// Función de suavizado para la interpolación entre pasos del recorrido.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Ease {
     /// Velocidad constante.
     Lineal,
@@ -61,6 +63,7 @@ impl Ease {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Camara {
     /// Punto de mundo que cae en el centro del panel.
     pub centro: (f64, f64),
