@@ -64,6 +64,9 @@ mod storagemanager;
 mod locks;
 mod useractivation;
 mod mediasession;
+mod vibration;
+mod gamepad;
+mod credentials;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -128,6 +131,9 @@ pub(crate) use storagemanager::STORAGEMANAGER_BOOTSTRAP;
 pub(crate) use locks::LOCKS_BOOTSTRAP;
 pub(crate) use useractivation::USER_ACTIVATION_BOOTSTRAP;
 pub(crate) use mediasession::MEDIA_SESSION_BOOTSTRAP;
+pub(crate) use vibration::VIBRATION_BOOTSTRAP;
+pub(crate) use gamepad::GAMEPAD_BOOTSTRAP;
+pub(crate) use credentials::CREDENTIALS_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -194,5 +200,8 @@ pub(crate) const ALL: &[&str] = &[
     LOCKS_BOOTSTRAP,
     USER_ACTIVATION_BOOTSTRAP,
     MEDIA_SESSION_BOOTSTRAP,
+    VIBRATION_BOOTSTRAP,
+    GAMEPAD_BOOTSTRAP,
+    CREDENTIALS_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

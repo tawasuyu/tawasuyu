@@ -8961,4 +8961,129 @@ mod tests {
         );
         assert_eq!(r.expect("e"), JsValue::String("TypeError".into()));
     }
+
+    // ---- Fase 7.108 — navigator.vibrate (Vibration API) ----
+
+    #[test]
+    fn vibrate_numero_y_array_publican_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("navigator.vibrate(200)").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.vibrate([200, 100, 200])").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.filter(function(d) { return d.kind === 'vibrate'; }).length")
+                .expect("e"),
+            JsValue::Number(2.0)
+        );
+        // El último patrón viaja como JSON.
+        assert_eq!(
+            rt.eval(
+                "var v = __puriy_dirty.filter(function(d) { return d.kind === 'vibrate'; }); \
+                 v[v.length - 1].value",
+            )
+            .expect("e"),
+            JsValue::String("[200,100,200]".into())
+        );
+    }
+
+    #[test]
+    fn vibrate_patron_invalido_devuelve_false_sin_publicar() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("navigator.vibrate([100, -5])").expect("e"), JsValue::Bool(false));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'vibrate'; })").expect("e"),
+            JsValue::Bool(false)
+        );
+    }
+
+    // ---- Fase 7.109 — Gamepad API ----
+
+    #[test]
+    fn gamepad_set_conecta_dispara_evento_y_aparece_en_get_gamepads() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var conectado = null; \
+             addEventListener('gamepadconnected', function(e) { conectado = e.gamepad.id; });",
+        )
+        .expect("e");
+        rt.eval("__puriy_set_gamepad(0, { id: 'XBox', buttons: [1, 0], axes: [0.5, -0.5] });")
+            .expect("e");
+        assert_eq!(rt.eval("conectado").expect("e"), JsValue::String("XBox".into()));
+        assert_eq!(rt.eval("navigator.getGamepads()[0].id").expect("e"), JsValue::String("XBox".into()));
+        assert_eq!(rt.eval("navigator.getGamepads()[0].buttons[0].pressed").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.getGamepads()[0].axes[1]").expect("e"), JsValue::Number(-0.5));
+        assert_eq!(rt.eval("navigator.getGamepads()[1]").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn gamepad_update_no_redispara_connected() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; addEventListener('gamepadconnected', function() { n++; }); \
+             __puriy_set_gamepad(0, {}); __puriy_set_gamepad(0, { buttons: [1] });",
+        )
+        .expect("e");
+        // Segundo set actualiza pero no re-dispara connected.
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn gamepad_remove_dispara_disconnected_y_limpia_slot() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ido = false; addEventListener('gamepaddisconnected', function() { ido = true; }); \
+             __puriy_set_gamepad(2, {}); __puriy_remove_gamepad(2);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ido").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.getGamepads()[2]").expect("e"), JsValue::Null);
+    }
+
+    // ---- Fase 7.110 — navigator.credentials (Credential Management) ----
+
+    #[test]
+    fn credentials_get_publica_mutacion_y_resuelve_password_credential() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var cred = 'sin-resolver'; \
+             navigator.credentials.get({ password: true }).then(function(c) { cred = c; });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'credentials'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+        // El chrome resuelve con una password credential.
+        rt.eval(
+            "var id = globalThis.__puriy_credentials_next_id - 1; \
+             __puriy_credentials_resolve(id, { id: 'ana@x.com', type: 'password', name: 'Ana', password: 's3cr3t' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("cred.id").expect("e"), JsValue::String("ana@x.com".into()));
+        assert_eq!(rt.eval("cred.password").expect("e"), JsValue::String("s3cr3t".into()));
+        assert_eq!(rt.eval("cred instanceof PasswordCredential").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn credentials_get_resuelve_null_cuando_no_hay() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var cred = 'x'; \
+             navigator.credentials.get().then(function(c) { cred = c; }); \
+             __puriy_credentials_resolve(globalThis.__puriy_credentials_next_id - 1, null);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("cred").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn credentials_reject_rechaza_con_dom_exception() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.credentials.get().catch(function(e) { errName = e.name; }); \
+             __puriy_credentials_reject(globalThis.__puriy_credentials_next_id - 1, 'NotAllowedError', 'no');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotAllowedError".into()));
+    }
 }
