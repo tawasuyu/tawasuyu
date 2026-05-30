@@ -6697,4 +6697,53 @@ mod tests {
         assert_eq!(rt.eval("conBase").expect("e"), JsValue::Bool(true));
         assert_eq!(rt.eval("malo").expect("e"), JsValue::Bool(false));
     }
+
+    // ===== Fase 7.62 — Response.redirect + Headers.getSetCookie =====
+
+    #[test]
+    fn response_redirect_setea_location_y_status() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = Response.redirect('https://example.com/x', 301); \
+             var st = r.status; var loc = r.headers.get('location'); \
+             var def = Response.redirect('/y'); var defSt = def.status;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("st").expect("e"), JsValue::Number(301.0));
+        assert_eq!(rt.eval("loc").expect("e"), JsValue::String("https://example.com/x".into()));
+        assert_eq!(rt.eval("defSt").expect("e"), JsValue::Number(302.0));
+    }
+
+    #[test]
+    fn response_redirect_status_invalido_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var threw = false; \
+             try { Response.redirect('https://e.com', 200); } catch (e) { threw = true; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("threw").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn headers_get_set_cookie_lista_separada() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var h = new Headers(); \
+             h.append('Set-Cookie', 'a=1; Path=/'); \
+             h.append('Set-Cookie', 'b=2; HttpOnly'); \
+             h.append('X-Other', 'z'); \
+             var cookies = h.getSetCookie(); var n = cookies.length; \
+             var joined = h.get('set-cookie');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("cookies[0]").expect("e"), JsValue::String("a=1; Path=/".into()));
+        assert_eq!(rt.eval("cookies[1]").expect("e"), JsValue::String("b=2; HttpOnly".into()));
+        // get() sí los comma-joina (comportamiento legacy preservado).
+        assert_eq!(
+            rt.eval("joined").expect("e"),
+            JsValue::String("a=1; Path=/, b=2; HttpOnly".into())
+        );
+    }
 }

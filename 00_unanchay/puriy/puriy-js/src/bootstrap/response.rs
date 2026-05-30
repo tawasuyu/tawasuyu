@@ -113,4 +113,19 @@ globalThis.Response.error = function() {
     r.ok = false;
     return r;
 };
+// Fase 7.62 — Response.redirect(url, status). status default 302; sólo se
+// aceptan los códigos de redirect del spec (301/302/303/307/308), si no
+// tira RangeError. El header `Location` lleva la URL tal cual.
+// Divergencia: el spec parsea/valida la URL (TypeError si es inválida) y la
+// serializa absoluta; acá la guardamos cruda — suficiente para construir la
+// respuesta, sin resolución contra base.
+globalThis.Response.redirect = function(url, status) {
+    status = (status == null) ? 302 : status;
+    if (status !== 301 && status !== 302 && status !== 303 && status !== 307 && status !== 308) {
+        throw new RangeError('Invalid status code for redirect: ' + status);
+    }
+    var r = new globalThis.Response(null, { status: status });
+    r.headers.set('Location', String(url));
+    return r;
+};
 "#;

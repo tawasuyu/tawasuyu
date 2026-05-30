@@ -3,13 +3,18 @@ pub(crate) const HEADERS_BOOTSTRAP: &str = r#"
 // múltiples values por key (joined con ', ').
 globalThis.Headers = function(init) {
     this._store = {};
+    // Fase 7.62 — Set-Cookie se guarda aparte como lista: el spec lo trata
+    // distinto del resto (no se puede comma-joinar sin romper Expires=…, y
+    // `getSetCookie()` debe devolver cada cookie como elemento separado).
+    this._setCookie = [];
     if (init) {
         if (init instanceof globalThis.Headers) {
             for (var k in init._store) this._store[k] = init._store[k];
+            this._setCookie = init._setCookie ? init._setCookie.slice() : [];
         } else if (typeof init === 'object') {
             for (var k2 in init) {
                 if (Object.prototype.hasOwnProperty.call(init, k2)) {
-                    this._store[String(k2).toLowerCase()] = String(init[k2]);
+                    this.set(String(k2), String(init[k2]));
                 }
             }
         }
@@ -20,7 +25,9 @@ globalThis.Headers.prototype.get = function(name) {
     return Object.prototype.hasOwnProperty.call(this._store, k) ? this._store[k] : null;
 };
 globalThis.Headers.prototype.set = function(name, value) {
-    this._store[String(name).toLowerCase()] = String(value);
+    var k = String(name).toLowerCase();
+    this._store[k] = String(value);
+    if (k === 'set-cookie') this._setCookie = [String(value)];
 };
 globalThis.Headers.prototype.append = function(name, value) {
     var k = String(name).toLowerCase();
@@ -29,12 +36,20 @@ globalThis.Headers.prototype.append = function(name, value) {
     } else {
         this._store[k] = String(value);
     }
+    if (k === 'set-cookie') this._setCookie.push(String(value));
 };
 globalThis.Headers.prototype.has = function(name) {
     return Object.prototype.hasOwnProperty.call(this._store, String(name).toLowerCase());
 };
 globalThis.Headers.prototype.delete = function(name) {
-    delete this._store[String(name).toLowerCase()];
+    var k = String(name).toLowerCase();
+    delete this._store[k];
+    if (k === 'set-cookie') this._setCookie = [];
+};
+// Fase 7.62 — getSetCookie() devuelve cada valor Set-Cookie como elemento
+// separado (a diferencia de get('set-cookie'), que los comma-joina).
+globalThis.Headers.prototype.getSetCookie = function() {
+    return this._setCookie.slice();
 };
 globalThis.Headers.prototype.forEach = function(cb) {
     for (var k in this._store) {
