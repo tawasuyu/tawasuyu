@@ -23,8 +23,11 @@ globalThis.fetch = function(url, init) {
     }
     var id = globalThis.__puriy_fetch_next_id++;
     var method = (init && init.method) ? String(init.method).toUpperCase() : 'GET';
-    var body = (init && init.body != null) ? String(init.body) : '';
-    var has_body = (init && init.body != null);
+    // Fase 7.57 — serializa el body (FormData → multipart, URLSearchParams /
+    // Blob → su Content-Type implícito) en vez de un String() crudo.
+    var ser = globalThis.__puriy_serialize_body(init ? init.body : null);
+    var body = ser.text;
+    var has_body = ser.hasBody;
     // Headers serializados como "namevaluename2value2..."
     // — U+001F como Unit Separator (mismo sep que usa drain_dirty).
     var hdr_pairs = [];
@@ -44,6 +47,9 @@ globalThis.fetch = function(url, init) {
             }
         }
     }
+    // Fase 7.57 — aplica el Content-Type implícito del body serializado SÓLO
+    // si el user no seteó uno propio.
+    globalThis.__puriy_apply_content_type(hdr_pairs, ser.contentType);
     // Fase 7.34 — signal: si ya está aborted, reject inmediato.
     if (init && init.signal && init.signal.aborted) {
         return Promise.reject(new Error('AbortError: fetch aborted'));

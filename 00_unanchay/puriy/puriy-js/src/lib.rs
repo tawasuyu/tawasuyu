@@ -6402,4 +6402,77 @@ mod tests {
         let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
         assert_eq!(parts[1], "DELETE");
     }
+
+    // ============= Fase 7.57 — serialización de body (multipart + auto CT) =============
+
+    #[test]
+    fn fetch_formdata_se_serializa_a_multipart() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var f = new FormData(); f.append('campo', 'valor'); \
+             f.append('archivo', new Blob(['hola']), 'a.txt'); \
+             fetch('/up', { method: 'POST', body: f });",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        // [4] body multipart; los pares de header van aplanados desde [5].
+        assert!(parts[4].contains("Content-Disposition: form-data; name=\"campo\""));
+        assert!(parts[4].contains("filename=\"a.txt\""));
+        assert!(parts[4].contains("valor"));
+        // El Content-Type con boundary sólo aparece en la región de headers.
+        let headers = parts[5..].join("\u{001D}");
+        assert!(headers.contains("multipart/form-data; boundary=----puriyFormBoundary"));
+    }
+
+    #[test]
+    fn fetch_urlsearchparams_auto_content_type() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("fetch('/api', { method: 'POST', body: new URLSearchParams({ k: 'v' }) });")
+            .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[4], "k=v");
+        let headers = parts[5..].join("\u{001D}");
+        assert!(headers.contains("application/x-www-form-urlencoded"));
+    }
+
+    #[test]
+    fn fetch_content_type_explicito_no_se_pisa() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "fetch('/api', { method: 'POST', \
+                headers: { 'Content-Type': 'application/json' }, \
+                body: new URLSearchParams({ k: 'v' }) });",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        let headers = parts[5..].join("\u{001D}");
+        assert!(headers.contains("application/json"));
+        assert!(!headers.contains("x-www-form-urlencoded"));
+    }
+
+    #[test]
+    fn xhr_formdata_se_serializa_a_multipart() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var f = new FormData(); f.append('a', '1'); \
+             var x = new XMLHttpRequest(); x.open('POST', '/up'); x.send(f);",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert!(parts[4].contains("Content-Disposition: form-data; name=\"a\""));
+        let headers = parts[5..].join("\u{001D}");
+        assert!(headers.contains("multipart/form-data; boundary="));
+    }
 }

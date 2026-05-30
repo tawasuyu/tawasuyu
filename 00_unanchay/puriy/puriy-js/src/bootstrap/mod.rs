@@ -16,6 +16,7 @@ mod urlsearchparams;
 mod textcodec;
 mod base64;
 mod formdata;
+mod body;
 mod response;
 mod request;
 mod fetch;
@@ -40,6 +41,7 @@ pub(crate) use urlsearchparams::URLSEARCHPARAMS_BOOTSTRAP;
 pub(crate) use textcodec::TEXTCODEC_BOOTSTRAP;
 pub(crate) use base64::BASE64_BOOTSTRAP;
 pub(crate) use formdata::FORMDATA_BOOTSTRAP;
+pub(crate) use body::BODY_BOOTSTRAP;
 pub(crate) use response::RESPONSE_BOOTSTRAP;
 pub(crate) use request::REQUEST_BOOTSTRAP;
 pub(crate) use fetch::FETCH_BOOTSTRAP;
@@ -66,6 +68,7 @@ pub(crate) const ALL: &[&str] = &[
     TEXTCODEC_BOOTSTRAP,
     BASE64_BOOTSTRAP,
     FORMDATA_BOOTSTRAP,
+    BODY_BOOTSTRAP,
     RESPONSE_BOOTSTRAP,
     REQUEST_BOOTSTRAP,
     FETCH_BOOTSTRAP,

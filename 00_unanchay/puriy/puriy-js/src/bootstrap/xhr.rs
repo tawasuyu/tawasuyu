@@ -106,8 +106,13 @@ globalThis.XMLHttpRequest.prototype.send = function(body) {
     this._sent = true;
     var id = globalThis.__puriy_fetch_next_id++;
     globalThis.__puriy_xhr_pending[id] = this;
-    var has_body = body != null;
-    var body_str = has_body ? String(body) : '';
+    // Fase 7.57 — serializa el body igual que fetch() (FormData → multipart,
+    // URLSearchParams/Blob → su Content-Type implícito) y agrega el
+    // Content-Type a `_headers` si el user no llamó setRequestHeader.
+    var ser = globalThis.__puriy_serialize_body(body);
+    var has_body = ser.hasBody;
+    var body_str = ser.text;
+    globalThis.__puriy_apply_content_type(this._headers, ser.contentType);
     var base = (globalThis.location && globalThis.location.href) || '';
     var resolved = globalThis.__puriy_resolve_url(this._url, base);
     this.responseURL = resolved;
