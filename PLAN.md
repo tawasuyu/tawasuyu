@@ -298,6 +298,8 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 
 **Relación con foreign-pptx** (§6.ter): `.pptx` importa al modo lineal (`pluma-deck`); el modo `Recorrido` es el ciudadano nativo sin equivalente office — es donde gioser supera a PowerPoint, no donde lo imita.
 
+**Deuda técnica anotada** (2026-05-30): el zoom/pan vive hoy *inline* en `tullpu-app-llimphi/src/main.rs` (**6735 LOC** — viola regla #1, split > ~1500-2000). Fase 1 ya creó la fuente de verdad reusable (`pluma-deck-core::Camara`). Pendiente: (a) splitear ese `main.rs` en módulos por responsabilidad (estado/mensajes/vista/lienzo/ops); (b) reemplazar su `factor_zoom`/`pan` inline por `Camara`, dejando una sola cámara 2D para tullpu/deck/pineal. Refactor de dominio aparte (`02_ruway/tullpu`, SDD propio), no bloquea el feature Prezi.
+
 ## 7. Repos legacy
 
 `~/legacy/{brahman, eternal, dominium}` — arqueología local. Espejos remotos en gitea siguen como respaldo (no se borran).

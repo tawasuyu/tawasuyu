@@ -1,0 +1,13 @@
+[package]
+name = "pluma-deck-recorrido-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Frontend Llimphi del modo Recorrido de pluma-deck: lienzo infinito + cámara que vuela entre marcos (presentación tipo Prezi)."
+
+[dependencies]
+pluma-deck-core = { path = "../pluma-deck-core" }
+llimphi-ui = { workspace = true }

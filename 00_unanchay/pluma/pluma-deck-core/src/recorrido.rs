@@ -151,6 +151,14 @@ impl RecorridoState {
         self.arrastre = None;
     }
 
+    /// Paneo por delta de pantalla — para hosts que ya entregan el delta del
+    /// arrastre (p. ej. `llimphi-ui::draggable`, que da `(dx, dy)` por evento).
+    /// Cancela el vuelo (control manual). Alternativa a `pointer_down/move/up`.
+    pub fn arrastrar_delta(&mut self, dx: f64, dy: f64) {
+        self.vuelo = None;
+        self.camara.pan(dx, dy);
+    }
+
     /// Wheel: zoom-a-cursor inmediato. Cancela el vuelo (control manual).
     pub fn wheel(&mut self, mult: f64, cursor: (f64, f64), panel: Rect) {
         self.vuelo = None;
@@ -255,6 +263,20 @@ mod tests {
         assert!(s.pointer_move(130.0, 100.0));
         s.pointer_up();
         assert!(!s.pointer_move(200.0, 200.0), "sin arrastre no panea");
+    }
+
+    #[test]
+    fn arrastrar_delta_panea_y_cancela_vuelo() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        s.ir_a_paso(&r, 1, PANEL);
+        s.camara.zoom = 2.0;
+        let antes = s.camara.world_to_screen((0.0, 0.0), PANEL);
+        s.arrastrar_delta(40.0, -20.0);
+        assert!(!s.animando());
+        let despues = s.camara.world_to_screen((0.0, 0.0), PANEL);
+        assert!((despues.0 - antes.0 - 40.0).abs() < 1e-9);
+        assert!((despues.1 - antes.1 + 20.0).abs() < 1e-9);
     }
 
     #[test]
