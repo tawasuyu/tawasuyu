@@ -79,6 +79,20 @@ pub trait App: 'static {
         None
     }
 
+    /// Maneja un drop de archivo desde el sistema operativo (drag&drop
+    /// desde el file manager hacia la ventana). El runtime invoca este
+    /// callback una vez por archivo soltado — si el usuario suelta varios,
+    /// llega un evento por path. Devolver `Some(Msg)` dispara un update;
+    /// `None` (default) ignora el drop.
+    ///
+    /// Backend: mapea directamente `winit::WindowEvent::DroppedFile(PathBuf)`.
+    /// La posición del drop no se reporta porque winit no la expone hasta
+    /// que el compositor la propague — en Wayland depende del extension
+    /// `data_device_manager`, en X11 viene en el ClientMessage XDND.
+    fn on_file_drop(_model: &Self::Model, _path: std::path::PathBuf) -> Option<Self::Msg> {
+        None
+    }
+
     /// Título de la ventana (sólo se lee al arrancar).
     fn title() -> &'static str {
         "llimphi"
@@ -1438,6 +1452,17 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     repeat: event.repeat,
                 };
                 if let Some(msg) = A::on_key(state.model.as_ref().expect("model"), &ev) {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
+                    state.window.request_redraw();
+                }
+            }
+            WindowEvent::DroppedFile(path) => {
+                // Un evento por archivo (winit los entrega serializados); si
+                // el usuario suelta varios, el bucle re-entra y aplicamos
+                // updates en orden.
+                if let Some(msg) = A::on_file_drop(state.model.as_ref().expect("model"), path) {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;
