@@ -263,6 +263,7 @@ members = [
     "02_ruway/nahual/nahual-table-viewer-llimphi",
     "02_ruway/nahual/nahual-markdown-viewer-llimphi",
     "02_ruway/nahual/nahual-archive-viewer-llimphi",
+    "02_ruway/nahual/nahual-font-viewer-llimphi",
     "02_ruway/mirada/asistente-puente",
     "02_ruway/mirada/mirada-app-llimphi",
     "02_ruway/mirada/mirada-asistente-llimphi",
@@ -682,6 +683,10 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 zip = { version = "2.4", default-features = false }
 tar = { version = "0.4", default-features = false }
 
+# === Fuentes (nahual font viewer) ===
+# Parseo de TTF/OTF/TTC y extracción de contornos de glifo a paths.
+ttf-parser = "0.25"
+
 # ============================================================
 # Intra-workspace deps de nahual (referenciadas por workspace = true)
 # ============================================================
@@ -695,6 +700,7 @@ nahual-hex-viewer-llimphi = { path = "02_ruway/nahual/nahual-hex-viewer-llimphi"
 nahual-table-viewer-llimphi = { path = "02_ruway/nahual/nahual-table-viewer-llimphi" }
 nahual-markdown-viewer-llimphi = { path = "02_ruway/nahual/nahual-markdown-viewer-llimphi" }
 nahual-archive-viewer-llimphi = { path = "02_ruway/nahual/nahual-archive-viewer-llimphi" }
+nahual-font-viewer-llimphi = { path = "02_ruway/nahual/nahual-font-viewer-llimphi" }
 nahual-file-explorer-llimphi = { path = "02_ruway/nahual/nahual-file-explorer-llimphi" }
 
 # ============================================================

@@ -140,6 +140,16 @@ impl Discerner for MagicBytes {
             }
             // IVF — contenedor crudo de un stream AV1/VP9 ("DKIF").
             x if x.starts_with(b"DKIF") => Some(d("ivf", "video/x-ivf", Some("video"))),
+            // Fuentes parseables por ttf-parser: TrueType (0x00010000 o
+            // "true"), OpenType/CFF ("OTTO") y colecciones ("ttcf"). WOFF
+            // queda fuera (es un wrapper comprimido que ttf-parser no abre).
+            x if x.starts_with(&[0x00, 0x01, 0x00, 0x00])
+                || x.starts_with(b"OTTO")
+                || x.starts_with(b"true")
+                || x.starts_with(b"ttcf") =>
+            {
+                Some(d("font", "font/sfnt", Some("font")))
+            }
             _ => None,
         }
     }
@@ -358,6 +368,15 @@ mod tests {
         bytes[257..262].copy_from_slice(b"ustar");
         let r = discern(&bytes).unwrap();
         assert_eq!(r.mime.as_deref(), Some("application/x-tar"));
+    }
+
+    #[test]
+    fn fuentes_detectadas_por_magic() {
+        // TTF (0x00010000) y OTF ("OTTO") → lens font.
+        let r = discern(&[0x00, 0x01, 0x00, 0x00, 0x00, 0x0F]).unwrap();
+        assert_eq!(r.lens.as_deref(), Some("font"));
+        assert_eq!(discern(b"OTTO\x00\x0a").unwrap().lens.as_deref(), Some("font"));
+        assert_eq!(discern(b"ttcf\x00\x01").unwrap().mime.as_deref(), Some("font/sfnt"));
     }
 
     #[test]

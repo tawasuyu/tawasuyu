@@ -45,6 +45,9 @@ pub enum ViewerKind {
     /// muestra las entradas (nombre/tamaño/ratio) en vez del volcado hex.
     /// Cubre ZIP (y .jar/.apk/.epub/OOXML), tar y tar.gz.
     Archive,
+    /// Visor de fuentes (`nahual-font-viewer-llimphi`); metadatos + una
+    /// muestra dibujada con los contornos de la propia fuente (TTF/OTF).
+    Font,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
@@ -78,6 +81,7 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
         Some("tree") => return ViewerKind::Tree,
         Some("table") => return ViewerKind::Table,
         Some("markdown") => return ViewerKind::Markdown,
+        Some("font") => return ViewerKind::Font,
         _ => {}
     }
     match d.mime.as_deref() {
@@ -177,6 +181,11 @@ mod tests {
     #[test]
     fn markdown_va_a_markdown() {
         assert_eq!(pick(Some(&disc(Some("markdown"), Some("text/plain")))), ViewerKind::Markdown);
+    }
+
+    #[test]
+    fn font_lens_va_a_font() {
+        assert_eq!(pick(Some(&disc(Some("font"), Some("font/sfnt")))), ViewerKind::Font);
     }
 
     #[test]

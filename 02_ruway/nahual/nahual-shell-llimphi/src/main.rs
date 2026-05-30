@@ -22,15 +22,16 @@
 //! cuando lleguen más visores y un AppBus con `EntityType`, el registro
 //! crece por tabla sin tocar el resto del shell.
 //!
-//! Hoy embebe diez visores in-process — texto (fallback universal),
+//! Hoy embebe once visores in-process — texto (fallback universal),
 //! imagen, video (AV1 nativo), audio (WAV/MP3/FLAC/Opus/Vorbis por cpal,
 //! con espectro en vivo), card (`shared/card` presentada por campos),
 //! tree (árbol JSON/TOML indentado), hex (dump de binarios), table
 //! (CSV/TSV alineado), markdown (`.md` renderizado con encabezados,
-//! listas, código y citas) y archive (listado de ZIP/tar/tar.gz; ZIP
-//! cubre .jar/.apk/.epub/OOXML) — todos ruteados por `viewer_registry::pick`
-//! sobre el `lens`/`mime` discernido. `Space` hace play/pausa del video
-//! o audio.
+//! listas, código y citas), archive (listado de ZIP/tar/tar.gz; ZIP
+//! cubre .jar/.apk/.epub/OOXML) y font (TTF/OTF: metadatos + muestra
+//! dibujada con los contornos de la propia fuente) — todos ruteados por
+//! `viewer_registry::pick` sobre el `lens`/`mime` discernido. `Space`
+//! hace play/pausa del video o audio.
 //!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
@@ -90,6 +91,9 @@ use nahual_markdown_viewer_llimphi::{
 use nahual_archive_viewer_llimphi::{
     archive_viewer_view, load_archive, ArchivePreview, ArchiveViewerPalette,
 };
+use nahual_font_viewer_llimphi::{
+    font_viewer_view, load_font, FontPreview, FontViewerPalette, DEFAULT_FONT_BYTES_MAX,
+};
 use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
@@ -113,6 +117,7 @@ enum PreviewPane {
     Table(TablePreview),
     Markdown(MarkdownPreview),
     Archive(ArchivePreview),
+    Font(FontPreview),
 }
 
 /// Cadencia del avance de los visores con reloj (video, audio) ~30 Hz.
@@ -295,6 +300,7 @@ impl App for Shell {
         let table_palette = TableViewerPalette::from_theme(&theme);
         let markdown_palette = MarkdownViewerPalette::from_theme(&theme);
         let archive_palette = ArchiveViewerPalette::from_theme(&theme);
+        let font_palette = FontViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = file_explorer_view::<Msg, _>(
             &model.explorer,
@@ -336,6 +342,9 @@ impl App for Shell {
             }
             PreviewPane::Archive(state) => {
                 archive_viewer_view::<Msg>(state, model.preview_of.as_deref(), &archive_palette)
+            }
+            PreviewPane::Font(state) => {
+                font_viewer_view::<Msg>(state, model.preview_of.as_deref(), &font_palette)
             }
         };
 
@@ -440,6 +449,7 @@ fn load_for(path: &Path) -> PreviewPane {
             PreviewPane::Markdown(load_markdown(path, DEFAULT_MARKDOWN_BYTES_MAX))
         }
         ViewerKind::Archive => PreviewPane::Archive(load_archive(path)),
+        ViewerKind::Font => PreviewPane::Font(load_font(path, DEFAULT_FONT_BYTES_MAX)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
     }
 }
