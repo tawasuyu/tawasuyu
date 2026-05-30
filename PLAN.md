@@ -190,7 +190,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 | `foreign-pptx` | `shared/foreign-pptx` | pptx ↔ pluma-deck | no |
 | `foreign-psd` | `shared/foreign-psd` | psd ↔ AST de capas tullpu | no |
 | `yupay` (motor de fórmulas) | `01_yachay/nakui/yupay-core` + `yupay-fns` | DSL Excel-like (`=SUMA(A1:A10)`, bilingüe es/qu) compilado a Rhai; lambdas y full-Rhai en celdas avanzadas | crate nuevo, **Rhai ya está en el stack** |
-| Vista de hoja en `nakui-ui-llimphi` | `01_yachay/nakui/nakui-ui-llimphi` | celdas + headers + freeze panes + pivot views | vista alterna; no toca el ERP view |
+| Vista de hoja en `nakui-ui-llimphi` | `01_yachay/nakui/nakui-ui-llimphi` | celdas + headers + freeze panes + pivot views | vista alterna; no toca el ERP view. **Freeze panes ✅ (2026-05-30)** en `nakui-sheet-llimphi`: Ctrl+Shift+F (toggle) ancla filas-arriba/columnas-izquierda de la celda activa — la banda inmovilizada se pinta siempre (tinte azul-gris + headers en accent), el viewport scrollea por detrás (`viewport_* >= freeze_*`), `ensure_visible` ignora el eje cuando la selección cae en la banda, e indicador `❄ N×M` en la barra de título + entradas de menú contextual. Pivot views pendiente. |
 | `tullpu` (editor de capas) | `02_ruway/tullpu/tullpu-core` + `tullpu-app-llimphi` + `tullpu-render` + `tullpu-ops` | App nueva: lienzo, capas (cada una objeto del grafo BLAKE3 → dedup automático), brush, máscaras, ajustes no destructivos + ops IA como nodos del DAG. **SDD autoritativo: `02_ruway/tullpu/SDD.md`**. Multimedia en §6.quinquies | crate nuevo |
 
 **Estimaciones gruesas**: foreign-docx 2-3 sem · foreign-xlsx sin fórmulas 1-2 sem · yupay 6-10 sem · vista spreadsheet 3-4 sem · foreign-pptx 1-2 sem · tullpu base 3-4 meses · foreign-psd 2 sem post-tullpu.

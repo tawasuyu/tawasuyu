@@ -6,6 +6,9 @@
 //!     de la celda seleccionada. Enter aplica al Workbook; Esc revierte.
 //!   - Grilla con headers de columna (A, B, ...) y de fila (1, 2, ...).
 //!     Click sobre una celda la selecciona; flechas la mueven.
+//!   - Paneles inmovilizables (freeze panes): Ctrl+Shift+F ancla las
+//!     filas por encima y columnas a la izquierda de la celda activa
+//!     (toggle); se pintan siempre, el resto scrollea por detrás.
 //!
 //! No re-implementa el flujo Excel completo de edición *dentro* de la
 //! celda — toda la edición pasa por la barra. Eso simplifica el caret
@@ -74,6 +77,11 @@ mod palette {
     /// apagado — visible sobre el negro pero no rivaliza con la
     /// accent de la live cell.
     pub const SEL_RANGE_BG: Color = Color::from_rgba8(64, 44, 22, 255);
+    /// Tinte de las celdas dentro de una banda inmovilizada (frozen
+    /// pane). Azul-gris muy apagado — distinto del negro de las
+    /// celdas normales para que el usuario vea de un vistazo qué
+    /// filas/columnas quedaron ancladas, sin rivalizar con el accent.
+    pub const FROZEN_BG: Color = Color::from_rgba8(20, 24, 34, 255);
     pub const ERROR: Color = Color::from_rgba8(232, 96, 96, 255);
     pub const ERROR_BG: Color = Color::from_rgba8(80, 24, 24, 255);
     pub const FG_PLACEHOLDER: Color = Color::from_rgba8(95, 100, 115, 255);
@@ -127,6 +135,13 @@ enum Msg {
     MenuActivateActive,
     /// Activa el item N-ésimo del menú (click directo).
     MenuPick(usize),
+    /// Inmoviliza paneles tomando la celda activa como esquina: todas
+    /// las filas por encima y las columnas a la izquierda quedan
+    /// ancladas (igual que "Inmovilizar paneles" de Excel). En A1 es
+    /// no-op. Lo dispara Ctrl+Shift+F y el menú contextual.
+    FreezeAtSelection,
+    /// Libera todos los paneles inmovilizados (vuelve a scroll total).
+    Unfreeze,
 }
 
 #[derive(Clone, Copy)]
@@ -169,6 +184,15 @@ struct Model {
     /// celda). Shift+flecha mueve `selected` sin tocar `anchor`,
     /// extendiendo el rectángulo a lo Excel.
     anchor: CellRef,
+    /// Cantidad de filas inmovilizadas (frozen panes). Las primeras
+    /// `freeze_rows` filas (0..freeze_rows) se pintan SIEMPRE arriba,
+    /// no importa el scroll. `0` = sin inmovilizar. Invariante:
+    /// `viewport_row >= freeze_rows`.
+    freeze_rows: u32,
+    /// Cantidad de columnas inmovilizadas. Análogo a `freeze_rows`
+    /// pero sobre el eje horizontal. Invariante: `viewport_col >=
+    /// freeze_cols`.
+    freeze_cols: u32,
 }
 
 /// Estado del menú contextual mientras está abierto.
@@ -222,6 +246,8 @@ impl App for NakuiSheetApp {
             theme: dark_sheet_theme(),
             viewport_row: 0,
             viewport_col: 0,
+            freeze_rows: 0,
+            freeze_cols: 0,
             clipboard_origin: None,
             editing: false,
             menu: None,
@@ -355,6 +381,9 @@ impl App for NakuiSheetApp {
                     apply_scroll_axis(model.viewport_row, drow);
                 model.viewport_col =
                     apply_scroll_axis(model.viewport_col, dcol);
+                // El viewport scrolleable nunca puede invadir la banda
+                // inmovilizada — esas filas/columnas viven aparte.
+                clamp_viewport_to_freeze(&mut model);
             }
             Msg::Undo => match model.wb.undo() {
                 Ok(Some(_)) => {
@@ -491,7 +520,7 @@ impl App for NakuiSheetApp {
             }
             Msg::MenuStep(dir) => {
                 if let Some(menu) = model.menu.as_mut() {
-                    let items = menu_items(&model.wb, model.clipboard_origin.is_some());
+                    let items = menu_items(&model.wb, model.clipboard_origin.is_some(), model.freeze_rows > 0 || model.freeze_cols > 0);
                     menu.active = step_active(&items, menu.active, dir);
                 }
             }
@@ -511,13 +540,45 @@ impl App for NakuiSheetApp {
                     h.dispatch(inner);
                 }
             }
+            Msg::FreezeAtSelection => {
+                // Inmovilizamos por encima/izquierda de la celda
+                // activa. Dejamos siempre algunas ranuras de scroll
+                // (no tiene sentido anclar toda la grilla visible).
+                let max_fr = VISIBLE_ROWS.saturating_sub(3);
+                let max_fc = VISIBLE_COLS.saturating_sub(2);
+                model.freeze_rows = model.selected.row.min(max_fr);
+                model.freeze_cols = model.selected.col.min(max_fc);
+                clamp_viewport_to_freeze(&mut model);
+                model.status = if model.freeze_rows == 0 && model.freeze_cols == 0 {
+                    Status {
+                        text: "  ❄ nada que inmovilizar (A1) — movete a la esquina deseada".into(),
+                        kind: StatusKind::Info,
+                    }
+                } else {
+                    Status {
+                        text: format!(
+                            "  ❄ paneles inmovilizados: {} fila(s) · {} columna(s)",
+                            model.freeze_rows, model.freeze_cols
+                        ),
+                        kind: StatusKind::Info,
+                    }
+                };
+            }
+            Msg::Unfreeze => {
+                model.freeze_rows = 0;
+                model.freeze_cols = 0;
+                model.status = Status {
+                    text: "  ❄ paneles liberados".into(),
+                    kind: StatusKind::Info,
+                };
+            }
         }
         model
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
         let menu = model.menu.as_ref()?;
-        let items = menu_items(&model.wb, model.clipboard_origin.is_some());
+        let items = menu_items(&model.wb, model.clipboard_origin.is_some(), model.freeze_rows > 0 || model.freeze_cols > 0);
         let mut palette = ContextMenuPalette::from_theme(&model.theme);
         // El theme dark-sheet vive en `palette` (módulo local). El
         // accent es naranja gioser; eso ya viene del theme. Aclaramos
@@ -549,14 +610,8 @@ impl App for NakuiSheetApp {
         // Si la celda está fuera del viewport (raro porque el menú
         // se invoca por click sobre una celda visible), el clamping
         // del widget la trae al borde más cercano.
-        let col_local = menu
-            .cell
-            .col
-            .saturating_sub(model.viewport_col) as f32;
-        let row_local = menu
-            .cell
-            .row
-            .saturating_sub(model.viewport_row) as f32;
+        let col_local = screen_col_index(model, menu.cell.col) as f32;
+        let row_local = screen_row_index(model, menu.cell.row) as f32;
         let anchor_x = ROW_HEADER_W + col_local * CELL_W + 6.0;
         // Y: top-of-window + barra título + barra fórmula + header de
         // columnas + filas previas + altura de la propia celda → menú
@@ -583,7 +638,8 @@ impl App for NakuiSheetApp {
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let t = &model.theme;
-        let title_bar = title_bar_view(model.selected);
+        let title_bar =
+            title_bar_view(model.selected, model.freeze_rows, model.freeze_cols);
         let formula_bar = formula_bar_view(t, &model.bar, model.selected);
         let grid = grid_view(
             &model.wb,
@@ -651,6 +707,18 @@ impl App for NakuiSheetApp {
                 // contra ambos.
                 if ev.modifiers.shift {
                     let lower = s.to_lowercase();
+                    // Ctrl+Shift+F: toggle de inmovilizar paneles. Si ya
+                    // hay banda anclada la libera; si no, ancla en la
+                    // celda activa — feel "Inmovilizar/Movilizar" de Excel.
+                    if lower == "f" {
+                        return Some(
+                            if model.freeze_rows > 0 || model.freeze_cols > 0 {
+                                Msg::Unfreeze
+                            } else {
+                                Msg::FreezeAtSelection
+                            },
+                        );
+                    }
                     if lower == "1" || lower == "!" {
                         return Some(Msg::ApplyFormat(CellFormat::Number {
                             decimals: 2,
@@ -954,34 +1022,84 @@ fn apply_scroll_axis(viewport: u32, delta: i32) -> u32 {
     }
 }
 
+/// Índice de columna *en pantalla* (0 = primera columna tras el row
+/// header) de una columna absoluta, teniendo en cuenta la banda
+/// inmovilizada. Las columnas frozen ocupan las primeras `freeze_cols`
+/// ranuras; el resto se mide desde el viewport scrolleable.
+fn screen_col_index(model: &Model, col: u32) -> u32 {
+    if col < model.freeze_cols {
+        col
+    } else {
+        model.freeze_cols + col.saturating_sub(model.viewport_col)
+    }
+}
+
+/// Análogo a [`screen_col_index`] sobre el eje de filas.
+fn screen_row_index(model: &Model, row: u32) -> u32 {
+    if row < model.freeze_rows {
+        row
+    } else {
+        model.freeze_rows + row.saturating_sub(model.viewport_row)
+    }
+}
+
+/// Empuja el viewport scrolleable de vuelta a respetar la banda
+/// inmovilizada. Las filas/columnas `< freeze_*` se pintan aparte y
+/// SIEMPRE; el área que scrollea arranca recién en `freeze_*`.
+fn clamp_viewport_to_freeze(model: &mut Model) {
+    model.viewport_row = model.viewport_row.max(model.freeze_rows);
+    model.viewport_col = model.viewport_col.max(model.freeze_cols);
+}
+
 /// Mantiene la celda seleccionada dentro del viewport con un margen
 /// de seguridad. Si la celda salió por arriba/izquierda, el viewport
 /// se acerca; si salió por abajo/derecha, el viewport avanza lo
-/// justo para volver a verla más el margen.
+/// justo para volver a verla más el margen. Las celdas que caen
+/// dentro de una banda inmovilizada están siempre a la vista, así que
+/// no fuerzan ningún scroll en ese eje.
 fn ensure_visible(model: &mut Model) {
     let sel = model.selected;
-    // Vertical
-    let v_top = model.viewport_row;
-    let v_bot = model.viewport_row + VISIBLE_ROWS;
-    if sel.row < v_top + SCROLL_MARGIN_ROWS {
-        model.viewport_row = sel.row.saturating_sub(SCROLL_MARGIN_ROWS);
-    } else if sel.row + SCROLL_MARGIN_ROWS >= v_bot {
-        model.viewport_row = sel.row + SCROLL_MARGIN_ROWS + 1 - VISIBLE_ROWS;
+    // Vertical — el área scrolleable tiene `VISIBLE_ROWS - freeze_rows`
+    // ranuras y arranca en `viewport_row` (>= freeze_rows).
+    if sel.row >= model.freeze_rows {
+        let scroll_rows = VISIBLE_ROWS.saturating_sub(model.freeze_rows).max(1);
+        let margin = SCROLL_MARGIN_ROWS.min(scroll_rows.saturating_sub(1));
+        let v_top = model.viewport_row;
+        let v_bot = model.viewport_row + scroll_rows;
+        if sel.row < v_top + margin {
+            model.viewport_row =
+                sel.row.saturating_sub(margin).max(model.freeze_rows);
+        } else if sel.row + margin >= v_bot {
+            model.viewport_row = (sel.row + margin + 1)
+                .saturating_sub(scroll_rows)
+                .max(model.freeze_rows);
+        }
     }
-    // Horizontal
-    let h_left = model.viewport_col;
-    let h_right = model.viewport_col + VISIBLE_COLS;
-    if sel.col < h_left + SCROLL_MARGIN_COLS {
-        model.viewport_col = sel.col.saturating_sub(SCROLL_MARGIN_COLS);
-    } else if sel.col + SCROLL_MARGIN_COLS >= h_right {
-        model.viewport_col = sel.col + SCROLL_MARGIN_COLS + 1 - VISIBLE_COLS;
+    // Horizontal — análogo.
+    if sel.col >= model.freeze_cols {
+        let scroll_cols = VISIBLE_COLS.saturating_sub(model.freeze_cols).max(1);
+        let margin = SCROLL_MARGIN_COLS.min(scroll_cols.saturating_sub(1));
+        let h_left = model.viewport_col;
+        let h_right = model.viewport_col + scroll_cols;
+        if sel.col < h_left + margin {
+            model.viewport_col =
+                sel.col.saturating_sub(margin).max(model.freeze_cols);
+        } else if sel.col + margin >= h_right {
+            model.viewport_col = (sel.col + margin + 1)
+                .saturating_sub(scroll_cols)
+                .max(model.freeze_cols);
+        }
     }
 }
 
 /// Construye la lista de items del menú contextual de una celda. El
 /// orden de items aquí es el contrato implícito de
 /// `activate_menu_item` — si reordenás, asegurate de mover el match.
-fn menu_items(wb: &Workbook, has_clipboard: bool) -> Vec<ContextMenuItem> {
+fn menu_items(
+    wb: &Workbook,
+    has_clipboard: bool,
+    frozen: bool,
+) -> Vec<ContextMenuItem> {
     let can_undo = wb.events().len() > 0; // approximation; el Workbook expone applied_count
     let _ = can_undo;
     vec![
@@ -1018,6 +1136,14 @@ fn menu_items(wb: &Workbook, has_clipboard: bool) -> Vec<ContextMenuItem> {
                 .with_shortcut("Ctrl+Y")
                 .disabled()
         },                                                                // 12
+        ContextMenuItem::separator(),                                    // 13
+        ContextMenuItem::action("Inmovilizar paneles aquí")
+            .with_shortcut("Ctrl+Shift+F"),                              // 14
+        if frozen {
+            ContextMenuItem::action("Liberar paneles")
+        } else {
+            ContextMenuItem::action("Liberar paneles").disabled()
+        },                                                                // 15
     ]
 }
 
@@ -1039,11 +1165,13 @@ fn menu_item_msg(idx: usize) -> Option<Msg> {
         9 => Some(Msg::ApplyFormat(CellFormat::General)),
         11 => Some(Msg::Undo),
         12 => Some(Msg::Redo),
+        14 => Some(Msg::FreezeAtSelection),
+        15 => Some(Msg::Unfreeze),
         _ => None,
     }
 }
 
-fn title_bar_view(selected: CellRef) -> View<Msg> {
+fn title_bar_view(selected: CellRef, freeze_rows: u32, freeze_cols: u32) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -1068,7 +1196,13 @@ fn title_bar_view(selected: CellRef) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        format!("nakui-sheet  ·  celda activa: {selected}"),
+        if freeze_rows == 0 && freeze_cols == 0 {
+            format!("nakui-sheet  ·  celda activa: {selected}")
+        } else {
+            format!(
+                "nakui-sheet  ·  celda activa: {selected}  ·  ❄ {freeze_rows}×{freeze_cols}"
+            )
+        },
         13.0,
         palette::FG_TEXT,
         Alignment::Start,
@@ -1146,17 +1280,36 @@ fn grid_view(
     model: &Model,
 ) -> View<Msg> {
     let mut rows: Vec<View<Msg>> = Vec::new();
-    // Cabecera de columnas: muestra los labels A, B, C... empezando
-    // desde la columna del viewport.
-    rows.push(column_header_row(viewport_col));
-    // Filas de datos. Cada r local mapea a row = viewport_row + r.
-    for r in 0..VISIBLE_ROWS {
+    let freeze_rows = model.freeze_rows;
+    let freeze_cols = model.freeze_cols;
+    // Cabecera de columnas: corner + columnas inmovilizadas + columnas
+    // scrolleables a partir del viewport.
+    rows.push(column_header_row(viewport_col, freeze_cols));
+    // Banda de filas inmovilizadas (0..freeze_rows): siempre arriba.
+    for abs_row in 0..freeze_rows {
+        rows.push(data_row(
+            wb,
+            selected,
+            abs_row,
+            viewport_col,
+            freeze_cols,
+            editing,
+            bar,
+            model,
+        ));
+    }
+    // Filas scrolleables. Cada r local mapea a row = viewport_row + r,
+    // y `viewport_row >= freeze_rows` por invariante, así que no se
+    // pisan con la banda inmovilizada.
+    let scroll_rows = VISIBLE_ROWS.saturating_sub(freeze_rows);
+    for r in 0..scroll_rows {
         let abs_row = viewport_row + r;
         rows.push(data_row(
             wb,
             selected,
             abs_row,
             viewport_col,
+            freeze_cols,
             editing,
             bar,
             model,
@@ -1240,7 +1393,7 @@ fn bordered_cell(
     .children(vec![inner])
 }
 
-fn column_header_row(viewport_col: u32) -> View<Msg> {
+fn column_header_row(viewport_col: u32, freeze_cols: u32) -> View<Msg> {
     let mut cells: Vec<View<Msg>> = Vec::new();
     // Esquina vacía — más oscura para anclar visualmente la grilla.
     cells.push(bordered_cell(
@@ -1253,18 +1406,31 @@ fn column_header_row(viewport_col: u32) -> View<Msg> {
         Alignment::Center,
         None,
     ));
-    for c in 0..VISIBLE_COLS {
-        let abs_col = viewport_col + c;
+    // Una closure para no duplicar el header de columna. Las columnas
+    // inmovilizadas se rotulan en accent para señalar el anclaje.
+    let push_header = |cells: &mut Vec<View<Msg>>, abs_col: u32, frozen: bool| {
         cells.push(bordered_cell(
             CELL_W,
             CELL_H,
             palette::BG_HEADER,
             None,
-            palette::FG_HEADER,
+            if frozen {
+                palette::ACCENT
+            } else {
+                palette::FG_HEADER
+            },
             CellRef::col_label(abs_col),
             Alignment::Center,
             None,
         ));
+    };
+    for abs_col in 0..freeze_cols {
+        push_header(&mut cells, abs_col, true);
+    }
+    let scroll_cols = VISIBLE_COLS.saturating_sub(freeze_cols);
+    for c in 0..scroll_cols {
+        let abs_col = viewport_col + c;
+        push_header(&mut cells, abs_col, false);
     }
     View::new(Style {
         size: Size {
@@ -1281,19 +1447,22 @@ fn data_row(
     selected: CellRef,
     row: u32,
     viewport_col: u32,
+    freeze_cols: u32,
     editing: bool,
     bar: &TextInputState,
     model: &Model,
 ) -> View<Msg> {
     let is_active_row = row == selected.row;
+    let is_frozen_row = row < model.freeze_rows;
     let mut cells: Vec<View<Msg>> = Vec::new();
-    // Cabecera de fila — accent suave si la fila contiene la celda activa.
+    // Cabecera de fila — accent suave si la fila contiene la celda
+    // activa o si está inmovilizada.
     let header_bg = if is_active_row {
         palette::BG_PANEL_ALT
     } else {
         palette::BG_HEADER
     };
-    let header_fg = if is_active_row {
+    let header_fg = if is_active_row || is_frozen_row {
         palette::ACCENT
     } else {
         palette::FG_HEADER
@@ -1308,14 +1477,21 @@ fn data_row(
         Alignment::Center,
         None,
     ));
-    for c in 0..VISIBLE_COLS {
-        let abs_col = viewport_col + c;
+    let push_cell = |cells: &mut Vec<View<Msg>>, abs_col: u32| {
         let cr = CellRef::new(abs_col, row);
         if editing && cr == selected {
             cells.push(editing_cell_view(bar));
         } else {
             cells.push(cell_view(wb, selected, cr, model));
         }
+    };
+    for abs_col in 0..freeze_cols {
+        push_cell(&mut cells, abs_col);
+    }
+    let scroll_cols = VISIBLE_COLS.saturating_sub(freeze_cols);
+    for c in 0..scroll_cols {
+        let abs_col = viewport_col + c;
+        push_cell(&mut cells, abs_col);
     }
     View::new(Style {
         size: Size {
@@ -1387,12 +1563,15 @@ fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef, model: &Model) -> Vi
     let is_error = matches!(value, SheetValue::Error(_));
     let is_text = matches!(value, SheetValue::Text(_));
 
+    let is_frozen = cr.row < model.freeze_rows || cr.col < model.freeze_cols;
     let bg = if is_sel {
         palette::ACCENT
     } else if is_error {
         palette::ERROR_BG
     } else if in_sel_range {
         palette::SEL_RANGE_BG
+    } else if is_frozen {
+        palette::FROZEN_BG
     } else {
         palette::BG_CELL
     };
