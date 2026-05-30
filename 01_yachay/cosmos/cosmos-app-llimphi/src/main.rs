@@ -92,6 +92,8 @@ impl App for Cosmos {
             error,
             panel_order: ui.panel_order,
             corpus,
+            lib_expanded: true,
+            selected_card: None,
             selected_body: None,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
@@ -156,6 +158,7 @@ impl App for Cosmos {
             Msg::CargarCarta(name) => {
                 if let Some(loaded) = load_card(&name) {
                     m.chart = loaded;
+                    m.selected_card = Some(name);
                     save_chart_to_disk(&m.chart);
                     let (render, error) = compute(&m.chart, &m.overlays, m.harmonic);
                     m.render = render;
@@ -167,6 +170,10 @@ impl App for Cosmos {
             Msg::DuplicarActual => {
                 let name = generate_card_name(&m.chart);
                 save_card(&name, &m.chart);
+                m.selected_card = Some(name);
+            }
+            Msg::ToggleBiblioteca => {
+                m.lib_expanded = !m.lib_expanded;
             }
             Msg::SelectBody(sel) => {
                 // Toggle: si se clickeó el mismo cuerpo, deselecciona.

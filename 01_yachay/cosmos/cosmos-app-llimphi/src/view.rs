@@ -15,6 +15,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_tiled::{tiled_view_reorderable_cols, TileSpec, TiledPalette};
+use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
 use crate::astrocarto::tile_astrocarto;
 use crate::format::{fmt_deg_sign, fmt_dms, signo_de_longitud, simbolo_aspecto, simbolo_cuerpo};
@@ -144,7 +145,7 @@ fn build_tile(tid: TileId, model: &Model, theme: &Theme) -> TileSpec<Msg> {
         TileId::BoxGraph => tile_box_graph(&model.render, theme),
         TileId::Cualidades => tile_cualidades(&model.render, theme),
         TileId::AstroCarto => tile_astrocarto(&model.chart, &model.render, theme),
-        TileId::Cartas => tile_cartas(theme),
+        TileId::Cartas => tile_cartas(model, theme),
         TileId::Corpus => tile_corpus(&model.render, &model.corpus, theme),
         TileId::Uraniano => tile_uraniano(&model.render.uranian_groups, theme),
         TileId::Lotes => tile_layer_glyphs(&model.render, LayerKind::Lots, "lots", theme),
@@ -254,9 +255,17 @@ fn aspect_row(
     ])
 }
 
-// ----- Cartas (librería multi-archivo) -----
+// ----- Cartas (librería multi-archivo como árbol) -----
 
-fn tile_cartas(theme: &Theme) -> View<Msg> {
+const TREE_ROW_H: f32 = 20.0;
+
+/// Tile de navegación: el botón "duplicar actual" arriba y, debajo, el
+/// árbol de la biblioteca de cartas (`llimphi-widget-tree`). El nodo raíz
+/// "Biblioteca" agrupa cada `<nombre>.json` del `cosmos-charts/` como hoja
+/// clickeable — click carga la carta (`Msg::CargarCarta`), click en el
+/// chevron expande/colapsa (`Msg::ToggleBiblioteca`). La hoja de la carta
+/// cargada queda resaltada.
+fn tile_cartas(model: &Model, theme: &Theme) -> View<Msg> {
     let pal_btn = ButtonPalette::from_theme(theme);
     let mut rows: Vec<View<Msg>> = Vec::new();
 
@@ -298,36 +307,58 @@ fn tile_cartas(theme: &Theme) -> View<Msg> {
             theme.fg_muted,
         ));
     } else {
-        for name in cards {
-            rows.push(button_styled(
-                name.clone(),
-                Style {
-                    size: Size {
-                        width: percent(1.0_f32),
-                        height: length(20.0_f32),
-                    },
-                    flex_shrink: 0.0,
-                    padding: Rect {
-                        left: length(8.0_f32),
-                        right: length(8.0_f32),
-                        top: length(0.0_f32),
-                        bottom: length(0.0_f32),
-                    },
-                    margin: Rect {
-                        left: length(0.0_f32),
-                        right: length(0.0_f32),
-                        top: length(0.0_f32),
-                        bottom: length(2.0_f32),
-                    },
-                    align_items: Some(AlignItems::Center),
-                    justify_content: Some(JustifyContent::Start),
-                    ..Default::default()
-                },
-                Alignment::Start,
-                &pal_btn,
-                Msg::CargarCarta(name),
-            ));
+        // Raíz "Biblioteca (N)" + una hoja por carta. El caller (acá)
+        // aplana el árbol: sólo emitimos las hojas si el nodo está
+        // expandido. El chevron togglea; la fila carga.
+        let mut tree_rows: Vec<TreeRow<Msg>> = Vec::with_capacity(cards.len() + 1);
+        tree_rows.push(TreeRow {
+            label: format!("Biblioteca ({})", cards.len()),
+            depth: 0,
+            has_children: true,
+            expanded: model.lib_expanded,
+            selected: false,
+            on_toggle: Msg::ToggleBiblioteca,
+            on_select: Msg::ToggleBiblioteca,
+        });
+        if model.lib_expanded {
+            for name in &cards {
+                let selected = model.selected_card.as_deref() == Some(name.as_str());
+                tree_rows.push(TreeRow {
+                    label: name.clone(),
+                    depth: 1,
+                    has_children: false,
+                    expanded: false,
+                    selected,
+                    // Hoja: `on_toggle` no se usa (sin chevron); igual debe
+                    // ser un Msg válido — reusamos el de carga.
+                    on_toggle: Msg::CargarCarta(name.clone()),
+                    on_select: Msg::CargarCarta(name.clone()),
+                });
+            }
         }
+
+        // El widget pide altura definida (su contenedor es percent(1.0)):
+        // se la damos según la cantidad de filas visibles, con tope para no
+        // empujar al resto de los tiles fuera de pantalla.
+        let n = tree_rows.len() as f32;
+        let tree_h = (n * TREE_ROW_H + 8.0).min(360.0);
+        let tree = tree_view(TreeSpec {
+            rows: tree_rows,
+            row_height: TREE_ROW_H,
+            indent_px: 14.0,
+            palette: TreePalette::from_theme(theme),
+        });
+        rows.push(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(tree_h),
+                },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .children(vec![tree]),
+        );
     }
 
     let path_hint = charts_dir()

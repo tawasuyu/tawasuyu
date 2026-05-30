@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "cosmos-app-llimphi — visor del lienzo astrológico sobre Llimphi. Llama a `cosmos-engine::compose` (VSOP2013 vía eternal-bridge) con un `Chart` sample y pinta el `RenderModel` con `cosmos-canvas-llimphi`. Toolbar de overlays (Transit/Progression/SolarArc) en la barra superior. Shell completo con tree + panel laterales viene después."
+description = "cosmos-app-llimphi — visor del lienzo astrológico sobre Llimphi. Llama a `cosmos-engine::compose` (VSOP2013 vía eternal-bridge) con un `Chart` sample y pinta el `RenderModel` con `cosmos-canvas-llimphi`. Toolbar de overlays (Transit/Progression/SolarArc) en la barra superior. Biblioteca de cartas como árbol (`llimphi-widget-tree`) en el sidebar tiled."
 
 [[bin]]
 name = "cosmos-app-llimphi"
@@ -21,6 +21,7 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-tiled = { workspace = true }
+llimphi-widget-tree = { workspace = true }
 notify = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

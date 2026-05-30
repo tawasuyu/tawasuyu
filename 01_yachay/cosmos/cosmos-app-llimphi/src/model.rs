@@ -22,6 +22,8 @@ pub(crate) enum Msg {
     CargarCarta(String),
     /// Duplicar la carta actual a un nuevo archivo en `cosmos-charts/`.
     DuplicarActual,
+    /// Expandir/colapsar el nodo raíz "Biblioteca" del árbol de cartas.
+    ToggleBiblioteca,
     /// Seleccionar (o deseleccionar con `None`) un cuerpo natal. Se
     /// dispara desde el `on_click_at` del canvas; al estar
     /// seleccionado, el wheel atenúa los cuerpos y aspectos no
@@ -171,6 +173,12 @@ pub(crate) struct Model {
     /// extiende/recorta cuando los overlays con tile propio se prenden/apagan.
     pub(crate) panel_order: Vec<TileId>,
     pub(crate) corpus: Corpus,
+    /// Si el nodo raíz "Biblioteca" del árbol de cartas está expandido.
+    pub(crate) lib_expanded: bool,
+    /// Nombre de la carta de biblioteca actualmente cargada (`None` si la
+    /// carta presente viene del `cosmos-chart.json` editado a mano y no de
+    /// un archivo de la biblioteca). Resalta la fila en el árbol.
+    pub(crate) selected_card: Option<String>,
     /// Cuerpo natal seleccionado (`None` = sin selección). Cuando hay
     /// selección, el wheel atenúa los cuerpos y aspectos que no lo
     /// involucran; click en vacío deselecciona.
