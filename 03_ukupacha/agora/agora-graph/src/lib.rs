@@ -290,6 +290,24 @@ impl TrustGraph {
         Ok(())
     }
 
+    /// Reincorpora una revocación cuya AUTORIDAD ya se estableció antes —el
+    /// camino de la persistencia (`agora-store::load`) y el gossip—. Re-verifica
+    /// sólo la INTEGRIDAD de firma ([`Revocation::signatures_valid`]): que no
+    /// haya firmas forjadas. NO re-corre el umbral M-of-N (el set autorizador no
+    /// viaja con el record), igual que [`Self::add_attestation`] re-verifica la
+    /// firma pero no la confianza. El gate de autoridad lo aplicó
+    /// [`Self::add_revocation`] cuando la revocación se aceptó por primera vez.
+    /// Duplicados se ignoran.
+    pub fn ingest_revocation(&mut self, rev: Revocation) -> Result<(), AgoraError> {
+        if !rev.signatures_valid() {
+            return Err(AgoraError::BadSignature);
+        }
+        if !self.revocations.contains(&rev) {
+            self.revocations.push(rev);
+        }
+        Ok(())
+    }
+
     /// `true` si `key` está revocada y la revocación rige en `now`. Cualquier
     /// motivo cuenta para suprimir evidencia.
     pub fn is_revoked_at(&self, key: IdentityId, now: u64) -> bool {

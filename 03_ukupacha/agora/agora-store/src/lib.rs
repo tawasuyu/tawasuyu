@@ -25,7 +25,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-use agora_core::{AgoraError, Attestation, Identity};
+use agora_core::{AgoraError, Attestation, Identity, KeyRotation, Revocation};
 use agora_graph::TrustGraph;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -51,6 +51,10 @@ pub enum Error {
     SchemaDesconocida { found: u32 },
     #[error("atestación con firma inválida en el archivo: {0}")]
     AtestacionInvalida(AgoraError),
+    #[error("rotación de clave con firma inválida en el archivo: {0}")]
+    RotacionInvalida(AgoraError),
+    #[error("revocación con firma inválida en el archivo: {0}")]
+    RevocacionInvalida(AgoraError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -62,6 +66,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 struct GraphSnapshot {
     identities: Vec<Identity>,
     attestations: Vec<Attestation>,
+    /// Tombstones del ciclo de vida de claves (SDD #4). Son eventos de CAMINO
+    /// FRÍO (raros), así que viven en el snapshot y no en el append-log de
+    /// atestaciones (camino caliente). `serde(default)` lee snapshots viejos
+    /// —sin estos campos— sin romper, conservando `SCHEMA = 1`.
+    #[serde(default)]
+    rotations: Vec<KeyRotation>,
+    #[serde(default)]
+    revocations: Vec<Revocation>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -74,6 +86,8 @@ fn snapshot_of(g: &TrustGraph) -> GraphSnapshot {
     GraphSnapshot {
         identities: g.identities().cloned().collect(),
         attestations: g.attestations().to_vec(),
+        rotations: g.rotations().to_vec(),
+        revocations: g.revocations().to_vec(),
     }
 }
 
@@ -149,6 +163,17 @@ pub fn load(ruta: &Path) -> Result<TrustGraph> {
         }
         for att in env.graph.attestations {
             g.add_attestation(att).map_err(Error::AtestacionInvalida)?;
+        }
+        // Tombstones de ciclo de vida: re-verificar como las atestaciones —una
+        // firma rota en el archivo es error de carga, no un silencio—. La
+        // rotación re-chequea su doble firma; la revocación, la integridad de
+        // sus firmas (el umbral M-of-N contra el set autorizador lo aplica el
+        // consumidor, no el store: ver `TrustGraph::ingest_revocation`).
+        for rot in env.graph.rotations {
+            g.add_rotation(rot).map_err(Error::RotacionInvalida)?;
+        }
+        for rev in env.graph.revocations {
+            g.ingest_revocation(rev).map_err(Error::RevocacionInvalida)?;
         }
         g
     } else {
@@ -533,5 +558,119 @@ mod tests {
         save(&ruta, &g).unwrap();
         assert!(ruta.exists());
         assert!(!tmp_path(&ruta).exists());
+    }
+
+    // =========================================================================
+    //  Ciclo de vida — persistencia de rotaciones/revocaciones (SDD #4 fase 3)
+    // =========================================================================
+
+    /// Grafo con una rotación (v1→v2) y una revocación M-of-2 sobre `target`.
+    fn graph_con_tombstones() -> TrustGraph {
+        use agora_core::{KeyRotation, RevReason, Revocation};
+        let v1 = Keypair::from_seed([1; 32]);
+        let v2 = Keypair::from_seed([2; 32]);
+        let g1 = Keypair::from_seed([71; 32]);
+        let g2 = Keypair::from_seed([72; 32]);
+        let allowed = [g1.identity_id(), g2.identity_id()];
+        let target = Keypair::from_seed([99; 32]).public_key();
+
+        let mut g = TrustGraph::new();
+        g.add_rotation(KeyRotation::create(&v1, &v2, 100)).unwrap();
+        let rev = Revocation::create(target, RevReason::Compromised, 200, None, &[&g1, &g2]);
+        g.add_revocation(rev, 2, &allowed).unwrap();
+        g
+    }
+
+    #[test]
+    fn tombstones_roundtrip_json_y_postcard() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = graph_con_tombstones();
+
+        for (nombre, guardar) in [
+            ("a.json", save as fn(&Path, &TrustGraph) -> Result<()>),
+            ("a.bin", save_postcard as fn(&Path, &TrustGraph) -> Result<()>),
+        ] {
+            let ruta = dir.path().join(nombre);
+            guardar(&ruta, &g).unwrap();
+            let cargado = load(&ruta).unwrap();
+            assert_eq!(cargado.rotations().len(), 1, "{nombre}: rotación perdida");
+            assert_eq!(cargado.revocations().len(), 1, "{nombre}: revocación perdida");
+            // La revocación sigue suprimiendo: el target queda revocado a now.
+            let target = agora_core::Keypair::from_seed([99; 32]).identity_id();
+            assert!(cargado.is_revoked_at(target, 300), "{nombre}: revocación no rige tras recargar");
+            // La cadena de rotación se reconstruyó: v1 resuelve a v2.
+            let v1 = agora_core::Keypair::from_seed([1; 32]).identity_id();
+            let v2 = agora_core::Keypair::from_seed([2; 32]).identity_id();
+            assert_eq!(cargado.current_key_at(v1, 50), Some(v2));
+        }
+    }
+
+    #[test]
+    fn snapshot_viejo_sin_tombstones_carga_igual() {
+        // Un Envelope JSON sin los campos rotations/revocations (schema 1
+        // anterior a la fase 4) debe cargar sin romper — serde(default).
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("legacy.json");
+        std::fs::write(
+            &ruta,
+            r#"{"schema":1,"graph":{"identities":[],"attestations":[]}}"#,
+        )
+        .unwrap();
+        let g = load(&ruta).unwrap();
+        assert_eq!(g.rotations().len(), 0);
+        assert_eq!(g.revocations().len(), 0);
+    }
+
+    #[test]
+    fn revocacion_con_firma_forjada_falla_load() {
+        use agora_core::{RevReason, Revocation};
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("malicioso.json");
+        let g1 = Keypair::from_seed([71; 32]);
+        let target = Keypair::from_seed([99; 32]).public_key();
+        // Revocación con una firma real, luego corrompida en el archivo.
+        let mut rev = Revocation::create(target, RevReason::Compromised, 1, None, &[&g1]);
+        rev.authorizers.signers[0].signature[0] ^= 0xFF;
+
+        let snapshot = GraphSnapshot {
+            identities: vec![],
+            attestations: vec![],
+            rotations: vec![],
+            revocations: vec![rev],
+        };
+        let env = Envelope { schema: SCHEMA, graph: snapshot };
+        std::fs::write(&ruta, serde_json::to_string(&env).unwrap()).unwrap();
+
+        let err = load(&ruta).unwrap_err();
+        assert!(
+            matches!(err, Error::RevocacionInvalida(_)),
+            "esperaba RevocacionInvalida, fue {err:?}"
+        );
+    }
+
+    #[test]
+    fn rotacion_con_firma_forjada_falla_load() {
+        use agora_core::KeyRotation;
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("malicioso.json");
+        let v1 = Keypair::from_seed([1; 32]);
+        let v2 = Keypair::from_seed([2; 32]);
+        let mut rot = KeyRotation::create(&v1, &v2, 100);
+        rot.sig_new[0] ^= 0xFF; // rompe la firma de la nueva
+
+        let snapshot = GraphSnapshot {
+            identities: vec![],
+            attestations: vec![],
+            rotations: vec![rot],
+            revocations: vec![],
+        };
+        let env = Envelope { schema: SCHEMA, graph: snapshot };
+        std::fs::write(&ruta, serde_json::to_string(&env).unwrap()).unwrap();
+
+        let err = load(&ruta).unwrap_err();
+        assert!(
+            matches!(err, Error::RotacionInvalida(_)),
+            "esperaba RotacionInvalida, fue {err:?}"
+        );
     }
 }

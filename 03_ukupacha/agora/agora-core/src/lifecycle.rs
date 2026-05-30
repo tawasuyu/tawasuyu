@@ -217,6 +217,20 @@ impl Revocation {
         self.authorizers.verify_threshold_in(&msg, min, allowed)
     }
 
+    /// `true` si TODAS las firmas presentes son criptográficamente reales (cada
+    /// firmante cubre el canónico y su id deriva de su pubkey) y hay al menos
+    /// una. NO mira umbral ni set autorizador — es el bar de INTEGRIDAD de firma
+    /// (no se puede fabricar una revocación firmada por claves que no tenés),
+    /// análogo a `Attestation::verify`. La autoridad M-of-N la decide quien la
+    /// consume con [`Self::verify`]. Lo usa la persistencia para re-verificar al
+    /// recargar sin conocer el set autorizador.
+    pub fn signatures_valid(&self) -> bool {
+        let msg =
+            Self::canonical_bytes(&self.target_key, self.reason, self.issued_at, self.expires_at);
+        let v = self.authorizers.verdict(&msg);
+        v.invalidas == 0 && v.firmantes_distintos >= 1
+    }
+
     /// `true` si la revocación está VIGENTE en `now`: ya empezó (`issued_at <=
     /// now`) y no venció (`expires_at` ausente, o `now < expires_at`). No
     /// verifica firmas — eso es [`Self::verify`]; esto es la ventana temporal.
@@ -374,6 +388,23 @@ mod tests {
         assert!(temporal.is_active_at(150));
         assert!(!temporal.is_active_at(200)); // vencida (límite exclusivo)
         assert!(!temporal.is_active_at(250));
+    }
+
+    #[test]
+    fn signatures_valid_acepta_firmas_reales_rechaza_forjadas() {
+        let anillo = [kp(10), kp(11)];
+        let target = kp(99).public_key();
+        let rev = Revocation::create(target, RevReason::Compromised, 1, None, &[&anillo[0], &anillo[1]]);
+        // Integridad de firma OK, sin conocer el set autorizador.
+        assert!(rev.signatures_valid());
+        // Una firma corrompida ⇒ una `invalida` presente ⇒ rechaza.
+        let mut roto = rev.clone();
+        roto.authorizers.signers[0].signature[0] ^= 0xFF;
+        assert!(!roto.signatures_valid());
+        // Sin firmantes ⇒ rechaza (nada que respaldar).
+        let mut vacio = rev;
+        vacio.authorizers.signers.clear();
+        assert!(!vacio.signatures_valid());
     }
 
     #[test]
