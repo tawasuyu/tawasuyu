@@ -37,6 +37,10 @@
         { "label": "Órdenes grandes (≥ 1000)", "entity": "Order", "metric": { "kind": "count" }, "filter": { "field": "monto", "op": "gte", "value": "1000" } },
         { "label": "Facturación por cliente", "entity": "Order", "metric": { "kind": "sum_by", "group": "customer", "value": "monto" }, "group_ref": "Customer", "format": { "kind": "currency", "symbol": "$" } },
         { "label": "Clientes por plan", "entity": "Customer", "metric": { "kind": "group_by", "field": "tier" } }
+      ],
+      "toggles": [
+        { "label": "Solo pagadas", "entity": "Order", "filter": { "field": "pagado", "op": "eq", "value": "true" } },
+        { "label": "Órdenes ≥ 500", "entity": "Order", "filter": { "field": "monto", "op": "gte", "value": "500" } }
       ]
     },
     "customers_list": {

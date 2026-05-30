@@ -136,6 +136,13 @@ fn grouped_aggregate(
     ranked
 }
 
+/// Versión pública del predicado de filtro: decide si un record entra
+/// dado un [`CardFilter`]. Útil para componer filtros fuera del motor
+/// (p.ej. controles interactivos que pre-filtran los records).
+pub fn record_matches(v: &Value, f: &CardFilter) -> bool {
+    filter_passes(v, f)
+}
+
 /// Decide si un record pasa el filtro de una tarjeta. Las comparaciones
 /// de orden (`gt`/`lt`/`between`) son numéricas cuando ambos lados
 /// parsean como número, y lexicográficas si no — lo que cubre rangos

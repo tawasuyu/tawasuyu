@@ -35,6 +35,9 @@
 //!   - `Report`: los mismos agregados que un tablero, dispuestos como
 //!     documento de una columna (título + subtítulo) con botón
 //!     "Exportar (.md)" que vuelca el reporte completo a Markdown.
+//!     Soporta `toggles`: controles de filtro interactivos que el
+//!     usuario prende/apaga desde la UI y recortan los records de las
+//!     cards (opcionalmente acotados a una `entity`) en vivo.
 //!   El resultado (o el error de validación) se muestra como banner.
 //!
 //! El ciclo de escritura ya no pasa por CLI/tests: la UI crea, edita,
@@ -72,13 +75,13 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputStat
 
 use nahual_meta_runtime::{
     breakdown_to_csv, cmp_values, compute_clear_fields, compute_field_delta, compute_metric,
-    format_value, human_label_for_record, parse_field_value, preview_value, render_value,
-    resolve_param_value, short_uuid, to_csv, validate_entity_refs, MetaBackend, MetricResult,
-    WriteOutcome,
+    format_value, human_label_for_record, parse_field_value, preview_value, record_matches,
+    render_value, resolve_param_value, short_uuid, to_csv, validate_entity_refs, MetaBackend,
+    MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, Column, DashboardCard, DashboardView, FieldKind, FieldSpec, FormView, ListView, Module,
-    RelatedList, ReportView, ValueFormat, View as ModuleView,
+    Action, CardFilter, Column, DashboardCard, DashboardView, FieldKind, FieldSpec, FormView,
+    ListView, Module, RelatedList, ReportView, ValueFormat, View as ModuleView,
 };
 use nakui_core::executor::Executor;
 use serde_json::Value;
@@ -161,6 +164,11 @@ enum Msg {
         view_key: String,
         card_idx: usize,
     },
+    /// Prende/apaga un toggle de filtro de un reporte.
+    ToggleReportFilter {
+        view_key: String,
+        idx: usize,
+    },
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -226,6 +234,10 @@ struct Model {
     /// Columna de orden + dirección (`true` = ascendente).
     list_sort: Option<(String, bool)>,
     list_page: usize,
+    /// Toggles de filtro de reporte activos, por clave `"viewkey#idx"`.
+    /// Persisten entre frames y entre cambios de vista (un reporte
+    /// recuerda sus filtros si volvés a él).
+    report_filters: BTreeSet<String>,
 }
 
 impl Model {
@@ -347,6 +359,7 @@ impl App for NakuiApp {
             list_search_focused: false,
             list_sort: None,
             list_page: 0,
+            report_filters: BTreeSet::new(),
         }
     }
 
@@ -554,6 +567,12 @@ impl App for NakuiApp {
                 card_idx,
             } => {
                 m.toast = Some(export_breakdown_csv(&m, module_idx, &view_key, card_idx));
+            }
+            Msg::ToggleReportFilter { view_key, idx } => {
+                let key = report_filter_key(&view_key, idx);
+                if !m.report_filters.remove(&key) {
+                    m.report_filters.insert(key);
+                }
             }
         }
         m
@@ -1413,8 +1432,8 @@ fn active_list_view<'a>(m: &'a Model, entity: &str) -> Option<&'a ListView> {
     }
 }
 
-/// Ruta destino de un export CSV: `<entity>-<unix-secs>.csv` en el cwd.
-/// Exporta un `View::Report` completo a Markdown en el cwd.
+/// Exporta un `View::Report` completo a Markdown en el cwd, respetando
+/// los toggles de filtro activos.
 fn export_report_md(m: &Model, module_idx: usize, view_key: &str) -> Toast {
     let Some(module) = m.modules.get(module_idx) else {
         return err_toast("módulo fuera de rango");
@@ -1422,7 +1441,7 @@ fn export_report_md(m: &Model, module_idx: usize, view_key: &str) -> Toast {
     let Some(ModuleView::Report(rv)) = module.views.get(view_key) else {
         return err_toast("no encontré el reporte a exportar");
     };
-    let md = report_markdown(m, module, rv);
+    let md = report_markdown(m, module, view_key, rv);
     let path = export_path_ext(&rv.title, "md");
     match std::fs::write(&path, md) {
         Ok(()) => Toast {
@@ -1443,15 +1462,20 @@ fn export_breakdown_csv(
     let Some(module) = m.modules.get(module_idx) else {
         return err_toast("módulo fuera de rango");
     };
-    let cards = match module.views.get(view_key) {
-        Some(ModuleView::Dashboard(dv)) => &dv.cards,
-        Some(ModuleView::Report(rv)) => &rv.cards,
+    // Los reportes aplican sus toggles activos (los que matchean la
+    // entity de la card) al CSV; los tableros no tienen toggles.
+    let (card, active): (&DashboardCard, Vec<&CardFilter>) = match module.views.get(view_key) {
+        Some(ModuleView::Dashboard(dv)) => match dv.cards.get(card_idx) {
+            Some(c) => (c, Vec::new()),
+            None => return err_toast("tarjeta fuera de rango"),
+        },
+        Some(ModuleView::Report(rv)) => match rv.cards.get(card_idx) {
+            Some(c) => (c, card_active_filters(m, view_key, rv, c)),
+            None => return err_toast("tarjeta fuera de rango"),
+        },
         _ => return err_toast("la vista no tiene tarjetas"),
     };
-    let Some(card) = cards.get(card_idx) else {
-        return err_toast("tarjeta fuera de rango");
-    };
-    let result = compute_card_result(m, card);
+    let result = compute_card_result(m, card, &active);
     let (gh, vh) = breakdown_headers(card);
     let Some(csv) = breakdown_to_csv(&result, &gh, &vh) else {
         return err_toast("esta tarjeta no es un desglose");
@@ -1797,17 +1821,59 @@ fn resolve_breakdown_keys(
 
 /// Computa el agregado de una card resolviendo `group_ref` si lo hay.
 /// Toma el lock del backend por card — el tablero no es ruta caliente.
-fn compute_card_result(model: &Model, card: &DashboardCard) -> MetricResult {
+/// `extra` son filtros adicionales (toggles de reporte activos) que se
+/// aplican (AND) sobre los records antes de agregar.
+fn compute_card_result(
+    model: &Model,
+    card: &DashboardCard,
+    extra: &[&CardFilter],
+) -> MetricResult {
     let guard = model.backend.lock().ok();
-    let records = guard
+    let mut records = guard
         .as_ref()
         .map(|b| b.list_records(&card.entity))
         .unwrap_or_default();
+    if !extra.is_empty() {
+        records.retain(|(_, v)| extra.iter().all(|f| record_matches(v, f)));
+    }
     let mut result = compute_metric(&card.metric, card.filter.as_ref(), &records);
     if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
         resolve_breakdown_keys(&mut result, backend, ref_entity);
     }
     result
+}
+
+/// Clave de un toggle de reporte en `Model::report_filters`.
+fn report_filter_key(view_key: &str, idx: usize) -> String {
+    format!("{view_key}#{idx}")
+}
+
+/// Filtros de los toggles activos que aplican a una card concreta: un
+/// toggle entra si está prendido y su `entity` es `None` o coincide con
+/// la de la card.
+fn card_active_filters<'a>(
+    model: &'a Model,
+    view_key: &str,
+    rv: &'a ReportView,
+    card: &DashboardCard,
+) -> Vec<&'a CardFilter> {
+    rv.toggles
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| model.report_filters.contains(&report_filter_key(view_key, *i)))
+        .filter(|(_, t)| t.entity.as_deref().map_or(true, |e| e == card.entity))
+        .map(|(_, t)| &t.filter)
+        .collect()
+}
+
+/// Labels de los toggles activos de un reporte (para encabezados).
+fn active_toggle_labels(model: &Model, view_key: &str, rv: &ReportView) -> Vec<String> {
+    rv.toggles
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| model.report_filters.contains(&report_filter_key(view_key, *i)))
+        .map(|(_, t)| t.label.clone())
+        .collect()
 }
 
 /// `true` si el resultado es un desglose (exportable a CSV).
@@ -1837,7 +1903,7 @@ fn build_dashboard_panel(
 
     let mut cards: Vec<View<Msg>> = Vec::new();
     for (i, card) in dv.cards.iter().enumerate() {
-        let result = compute_card_result(model, card);
+        let result = compute_card_result(model, card, &[]);
         // Las cards con desglose ganan un botón de export CSV.
         let on_export = if is_breakdown(&result) {
             Some(Msg::ExportBreakdownCsv {
@@ -2053,9 +2119,56 @@ fn build_report_panel(
         children.push(text_line(sub.clone(), 12.0, theme.fg_muted));
     }
 
+    // Barra de toggles interactivos: cada uno prende/apaga un filtro.
+    if !rv.toggles.is_empty() {
+        let mut chips: Vec<View<Msg>> = Vec::new();
+        for (i, toggle) in rv.toggles.iter().enumerate() {
+            let active = model
+                .report_filters
+                .contains(&report_filter_key(view_key, i));
+            let palette = if active {
+                accent_btn(theme)
+            } else {
+                ButtonPalette::from_theme(theme)
+            };
+            let label = if active {
+                format!("● {}", toggle.label)
+            } else {
+                format!("○ {}", toggle.label)
+            };
+            chips.push(button_styled(
+                label,
+                btn_style_auto(),
+                Alignment::Center,
+                &palette,
+                Msg::ToggleReportFilter {
+                    view_key: view_key.to_string(),
+                    idx: i,
+                },
+            ));
+        }
+        children.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                gap: Size {
+                    width: length(8.0),
+                    height: length(8.0),
+                },
+                ..Default::default()
+            })
+            .children(chips),
+        );
+    }
+
     // Una card por agregado, apiladas en columna (documento).
     for (i, card) in rv.cards.iter().enumerate() {
-        let result = compute_card_result(model, card);
+        let active = card_active_filters(model, view_key, rv, card);
+        let result = compute_card_result(model, card, &active);
         let on_export = if is_breakdown(&result) {
             Some(Msg::ExportBreakdownCsv {
                 module_idx: mod_idx,
@@ -2073,15 +2186,20 @@ fn build_report_panel(
 
 /// Serializa un reporte completo a Markdown: título, subtítulo, y una
 /// sección por card (escalar en negrita o tabla de desglose).
-fn report_markdown(model: &Model, module: &Module, rv: &ReportView) -> String {
+fn report_markdown(model: &Model, module: &Module, view_key: &str, rv: &ReportView) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {} · {}\n\n", module.label, rv.title));
     if let Some(sub) = &rv.subtitle {
         out.push_str(&format!("_{sub}_\n\n"));
     }
+    let active_labels = active_toggle_labels(model, view_key, rv);
+    if !active_labels.is_empty() {
+        out.push_str(&format!("Filtros activos: {}\n\n", active_labels.join(" · ")));
+    }
     out.push_str("Generado por nakui.\n\n");
     for card in &rv.cards {
-        let result = compute_card_result(model, card);
+        let active = card_active_filters(model, view_key, rv, card);
+        let result = compute_card_result(model, card, &active);
         out.push_str(&format!("## {}\n\n", card.label));
         match &result {
             MetricResult::Scalar(s) => {

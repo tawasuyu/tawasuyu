@@ -195,6 +195,26 @@ pub struct ReportView {
     #[serde(default)]
     pub subtitle: Option<String>,
     pub cards: Vec<DashboardCard>,
+    /// Controles interactivos: cada uno es un filtro etiquetado que el
+    /// usuario prende/apaga desde la UI. Cuando está activo, su filtro
+    /// se aplica (AND) sobre los records de cada card antes de agregar
+    /// —recortando el reporte sin tocar el `module.json`—.
+    #[serde(default)]
+    pub toggles: Vec<ReportToggle>,
+}
+
+/// Un control de filtro interactivo de un [`ReportView`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportToggle {
+    /// Texto del botón (p.ej. "Solo pagadas", "Q1 2026").
+    pub label: String,
+    /// Si está set, el toggle sólo afecta a las cards de esta entity
+    /// (evita vaciar cards de otra entity que no tiene el campo). Si es
+    /// `None`, se aplica a todas las cards.
+    #[serde(default)]
+    pub entity: Option<String>,
+    /// Filtro que se aplica cuando el control está activo.
+    pub filter: CardFilter,
 }
 
 /// Una tarjeta de KPI del tablero.

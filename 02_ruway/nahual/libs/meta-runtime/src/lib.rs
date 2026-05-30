@@ -38,6 +38,6 @@ pub use format::{
     cmp_values, format_value, human_label_for_record, preview_value, render_value, short_hash,
     short_uuid, value_to_input_text,
 };
-pub use metric::{breakdown_to_csv, compute_metric, MetricResult};
+pub use metric::{breakdown_to_csv, compute_metric, record_matches, MetricResult};
 pub use parse::{infer_param_value, parse_field_value, resolve_param_value};
 pub use refs::validate_entity_refs;
