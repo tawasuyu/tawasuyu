@@ -168,6 +168,34 @@ pub struct DetailView {
     /// Listas de records relacionados (back-references).
     #[serde(default)]
     pub related: Vec<RelatedList>,
+    /// KPIs scopeados al record (el "360" de la ficha): agregados sobre
+    /// los records relacionados (`entity` cuyo `via_field` apunta al
+    /// record actual), p.ej. en la ficha de un cliente "Total facturado"
+    /// / "Órdenes" / "Ticket promedio". Renderizados como stat cards
+    /// arriba de las listas relacionadas.
+    #[serde(default)]
+    pub metrics: Vec<DetailMetric>,
+}
+
+/// Un KPI scopeado a un record dentro de una [`DetailView`]: computa
+/// `metric` sobre los records de `entity` cuyo `via_field` referencia
+/// al record que se está viendo (mismo criterio de scope que una
+/// [`RelatedList`]), con un `filter` opcional adicional.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetailMetric {
+    pub label: String,
+    /// Entity sobre cuyos records relacionados se computa el agregado.
+    pub entity: String,
+    /// Campo de esa entity que referencia (UUID) al record actual.
+    pub via_field: String,
+    pub metric: Metric,
+    /// Filtro adicional opcional (AND con el scope), p.ej. `pagado=true`
+    /// para un KPI "cobrado".
+    #[serde(default)]
+    pub filter: Option<CardFilter>,
+    /// Formato del número resultante (`Currency` para sumas de dinero).
+    #[serde(default)]
+    pub format: ValueFormat,
 }
 
 /// Una lista de records relacionados dentro de una [`DetailView`]: los

@@ -23,9 +23,10 @@
 //!   - `Form`: inputs por `FieldKind` (text/multiline/number/date/bool/
 //!     select/entity_ref/auto_id), con foco de teclado y submit que
 //!     dispara `SeedEntity`, edición (`update` con delta) o `Morphism`.
-//!   - `Detail`: ficha de un record (← Volver / ✎ Editar), sus campos y
-//!     las listas de records relacionados (back-references por
-//!     `via_field`).
+//!   - `Detail`: ficha de un record (← Volver / ✎ Editar), sus campos,
+//!     KPIs scopeados al record (el "360": agregados sobre los records
+//!     relacionados vía `via_field`, como stat cards) y las listas de
+//!     records relacionados (back-references por `via_field`).
 //!   - `Dashboard`: grilla de tarjetas de KPI vía `compute_metric`,
 //!     con `ValueFormat` y filtros. Escalares `Count`/`Sum`/`Avg`/
 //!     `Min`/`Max` y desgloses `GroupBy` (conteo) / `SumBy` / `AvgBy`
@@ -101,8 +102,8 @@ use nahual_meta_runtime::{
     sort_breakdown_by_key, to_csv, validate_entity_refs, MetaBackend, MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, CardFilter, ChartKind, Column, DashboardCard, DashboardView, FieldKind, FieldSpec,
-    FormView, GraphView, ListView, Module, RelatedList, ReportView, ValueFormat,
+    Action, CardFilter, ChartKind, Column, DashboardCard, DashboardView, DetailMetric, FieldKind,
+    FieldSpec, FormView, GraphView, ListView, Module, RelatedList, ReportView, ValueFormat,
     View as ModuleView,
 };
 use nakui_core::executor::Executor;
@@ -2241,6 +2242,37 @@ fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Theme) -> Vie
         );
     }
 
+    // KPIs scopeados al record (el "360" de la ficha): stat cards con
+    // agregados sobre los records relacionados.
+    if !dv.metrics.is_empty() {
+        if let Some(b) = guard.as_ref() {
+            let cards: Vec<View<Msg>> = dv
+                .metrics
+                .iter()
+                .map(|dm| {
+                    let result = compute_detail_metric(b, dm, detail.id);
+                    dashboard_card(&dm.label, &result, &dm.format, ChartKind::Bars, None, None, theme)
+                })
+                .collect();
+            children.push(
+                View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: auto(),
+                    },
+                    gap: Size {
+                        width: length(12.0),
+                        height: length(12.0),
+                    },
+                    ..Default::default()
+                })
+                .children(cards),
+            );
+        }
+    }
+
     // Listas de records relacionados.
     for rl in &dv.related {
         if let Some(b) = guard.as_ref() {
@@ -2249,6 +2281,23 @@ fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Theme) -> Vie
     }
 
     column(children, 8.0)
+}
+
+/// Computa un [`DetailMetric`]: agrega sobre los records de `dm.entity`
+/// cuyo `dm.via_field` referencia al record `target_id` (mismo scope que
+/// una [`RelatedList`]), con el `dm.filter` opcional como AND adicional.
+fn compute_detail_metric(
+    backend: &NakuiBackend,
+    dm: &DetailMetric,
+    target_id: Uuid,
+) -> MetricResult {
+    let id_str = target_id.to_string();
+    let records: Vec<(Uuid, Value)> = backend
+        .list_records(&dm.entity)
+        .into_iter()
+        .filter(|(_, v)| v.get(&dm.via_field).and_then(Value::as_str) == Some(id_str.as_str()))
+        .collect();
+    compute_metric(&dm.metric, dm.filter.as_ref(), &records)
 }
 
 /// Una lista de back-references dentro de una ficha: los records de
@@ -3967,6 +4016,78 @@ mod tests {
         assert!(again.is_none(), "no debió re-sembrar entities ya pobladas");
         assert_eq!(backend.list_records("Customer").len(), 9);
         assert_eq!(backend.list_records("Order").len(), 12);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// Los KPIs de la ficha (`DetailMetric`) se scopean a los records
+    /// relacionados: ACME tiene 2 órdenes (1200 + 800, ambas pagadas).
+    #[test]
+    fn detail_metric_scopes_to_related_records() {
+        use nahual_meta_schema::{CardFilter, FilterOp, Metric};
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+
+        let modules_dir = std::path::Path::new("examples/nakui-modules");
+        let (modules, _) = load_ui_modules(modules_dir).unwrap();
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, BTreeMap::new());
+        seed_demo_data(&mut backend, &modules, modules_dir);
+
+        let acme = backend
+            .list_records("Customer")
+            .into_iter()
+            .find(|(_, v)| v.get("name").and_then(Value::as_str) == Some("ACME Corp"))
+            .map(|(id, _)| id)
+            .unwrap();
+
+        let dm = |metric, filter| DetailMetric {
+            label: "x".into(),
+            entity: "Order".into(),
+            via_field: "customer".into(),
+            metric,
+            filter,
+            format: ValueFormat::default(),
+        };
+
+        assert_eq!(
+            compute_detail_metric(&backend, &dm(Metric::Count, None), acme),
+            MetricResult::Scalar(2.0)
+        );
+        assert_eq!(
+            compute_detail_metric(
+                &backend,
+                &dm(Metric::Sum { field: "monto".into() }, None),
+                acme
+            ),
+            MetricResult::Scalar(2000.0)
+        );
+        // Cobrado (pagado=true) = mismas 2 órdenes.
+        let pagado = CardFilter {
+            field: "pagado".into(),
+            op: FilterOp::Eq,
+            value: Some("true".into()),
+            min: None,
+            max: None,
+        };
+        assert_eq!(
+            compute_detail_metric(
+                &backend,
+                &dm(Metric::Sum { field: "monto".into() }, Some(pagado)),
+                acme
+            ),
+            MetricResult::Scalar(2000.0)
+        );
+        assert_eq!(
+            compute_detail_metric(
+                &backend,
+                &dm(Metric::Avg { field: "monto".into() }, None),
+                acme
+            ),
+            MetricResult::Scalar(1000.0)
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));

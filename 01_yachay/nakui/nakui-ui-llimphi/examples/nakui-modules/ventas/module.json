@@ -300,6 +300,59 @@
             }
           ]
         }
+      ],
+      "metrics": [
+        {
+          "label": "Órdenes",
+          "entity": "Order",
+          "via_field": "customer",
+          "metric": {
+            "kind": "count"
+          }
+        },
+        {
+          "label": "Total facturado",
+          "entity": "Order",
+          "via_field": "customer",
+          "metric": {
+            "kind": "sum",
+            "field": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          }
+        },
+        {
+          "label": "Cobrado",
+          "entity": "Order",
+          "via_field": "customer",
+          "metric": {
+            "kind": "sum",
+            "field": "monto"
+          },
+          "filter": {
+            "field": "pagado",
+            "equals": "true"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          }
+        },
+        {
+          "label": "Ticket promedio",
+          "entity": "Order",
+          "via_field": "customer",
+          "metric": {
+            "kind": "avg",
+            "field": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          }
+        }
       ]
     },
     "customers_form": {
