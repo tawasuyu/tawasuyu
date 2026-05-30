@@ -42,8 +42,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, KeyEvent, View};
+use llimphi_ui::{App, DragPhase, Handle, KeyEvent, View};
 use llimphi_widget_button::{button_styled, button_view, ButtonPalette};
+use llimphi_widget_slider::{slider_view, SliderPalette};
 
 use pixel_verbo_core::{OpPixel, Proveedor};
 use pixel_verbo_daemon::ClienteBloqueante;
@@ -96,6 +97,7 @@ enum Msg {
     Recargar,
     Exportar(FormatoExport),
     Picker(PickerMsg),
+    FileDrop(PathBuf),
 }
 
 // =============================================================================
@@ -605,8 +607,23 @@ fn fila_capa(
 
     // Botones de control compactos a la derecha.
     let toggle = mini_btn(if capa.visible { "👁" } else { "—" }, Msg::ToggleVisible(capa.id), &btn_pal);
-    let opd = mini_btn("α−", Msg::BumpOpacidad(capa.id, -0.1), &btn_pal);
-    let opu = mini_btn("α+", Msg::BumpOpacidad(capa.id, 0.1), &btn_pal);
+    // Slider de opacidad in-situ: reemplaza los botones α−/α+ (saltos de
+    // 0.1) con drag continuo en [0.0, 1.0]. El widget devuelve `dv` (delta
+    // de valor) por evento; `BumpOpacidad` ya acumula deltas, así que el
+    // hook es directo. Sólo emitimos en `DragPhase::Move` — `End` no aporta
+    // nuevo delta y duplicaría el último.
+    let cap_id = capa.id;
+    let opacidad = slider_view(
+        "",
+        capa.opacidad,
+        0.0,
+        1.0,
+        &slider_pal_compacto(theme),
+        move |phase, dv| match phase {
+            DragPhase::Move => Some(Msg::BumpOpacidad(cap_id, dv)),
+            DragPhase::End => None,
+        },
+    );
     let blend = mini_btn("blnd", Msg::CiclarBlend(capa.id), &btn_pal);
     // En la lista la pintamos top→fondo: "↑" visualmente sube en la lista,
     // lo que equivale a bajar el índice en la pila (más cerca del fondo).
@@ -659,8 +676,20 @@ fn fila_capa(
         ..Default::default()
     })
     .children(vec![
-        thumb_view, nombre, toggle, opd, opu, blend, subir, bajar, dup, elim,
+        thumb_view, nombre, toggle, opacidad, blend, subir, bajar, dup, elim,
     ])
+}
+
+/// Slider compacto pensado para vivir embedded en la fila de capa: sin
+/// bloque de label (el nombre de la capa ya lo identifica), track
+/// estrecho, valor a la derecha para feedback numérico inmediato.
+fn slider_pal_compacto(theme: &llimphi_theme::Theme) -> SliderPalette {
+    let mut p = SliderPalette::from_theme(theme);
+    p.label_width = 0.0;
+    p.track_width = 56.0;
+    p.value_width = 36.0;
+    p.row_height = 24.0;
+    p
 }
 
 fn mini_btn(label: &str, msg: Msg, pal: &ButtonPalette) -> View<Msg> {
@@ -713,7 +742,7 @@ fn panel_capas(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(360.0_f32),
+            width: length(400.0_f32),
             height: percent(1.0_f32),
         },
         padding: Rect {
@@ -1075,6 +1104,15 @@ impl App for Tullpu {
             Msg::Picker(pm) => {
                 model = aplicar_picker(model, pm);
             }
+            Msg::FileDrop(path) => {
+                // Drag&drop OS-level: reusamos exactamente el mismo path
+                // que el picker. Si la extensión no está en el catálogo
+                // soportado (PNG/JPEG), `agregar_capa_desde_archivo` falla
+                // al decodificar y deja el lienzo intacto con un estado
+                // descriptivo — no preflight check para mantener una sola
+                // rama de error.
+                agregar_capa_desde_archivo(&mut model, &path);
+            }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app
                 // todavía no tiene). La extensión la elige el formato; el
@@ -1131,6 +1169,13 @@ impl App for Tullpu {
         })
         .fill(theme.bg_app)
         .children(vec![cabecera, centro])
+    }
+
+    fn on_file_drop(_model: &Model, path: PathBuf) -> Option<Msg> {
+        // Cualquier archivo soltado se procesa por la misma vía que el
+        // picker. Si no es PNG/JPEG la decodificación falla y el estado
+        // refleja el error — sin diálogo modal, sin preflight.
+        Some(Msg::FileDrop(path))
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
