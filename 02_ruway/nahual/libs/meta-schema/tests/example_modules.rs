@@ -1,68 +1,29 @@
-//! Validación de los 6 módulos demo en `examples/nakui-modules/`.
+//! Validación de los módulos demo que trae el shell `nakui-ui-llimphi`
+//! en `01_yachay/nakui/nakui-ui-llimphi/examples/nakui-modules/`.
 //!
-//! Si esto verde, garantizamos que un usuario que clone el repo y
-//! corra `NAKUI_MODULES_DIR=examples/nakui-modules cargo run -p nakui-ui`
-//! va a obtener los 6 módulos cargados sin tocar nada.
+//! Si esto está verde, garantizamos que un usuario que clone el repo y
+//! corra `NAKUI_MODULES_DIR=01_yachay/nakui/nakui-ui-llimphi/examples/nakui-modules
+//! cargo run -p nakui-ui-llimphi` va a obtener los módulos cargados sin
+//! tocar nada.
 
 use nahual_meta_schema::{load_modules_from_dir, FieldKind, View};
 
 fn examples_dir() -> std::path::PathBuf {
-    // Tests corren desde el dir del crate; el repo root está dos
-    // niveles arriba: crates/modules/nakui/ui-schema → repo.
-    // Tras el lift a nahual, el crate vive en
-    // `crates/modules/ui_engine/libs/meta-schema`, así que el repo
-    // root queda 5 niveles arriba.
+    // El crate vive en `02_ruway/nahual/libs/meta-schema`; el repo root
+    // queda 4 niveles arriba. Los módulos demo viven junto al shell.
     let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    here.join("../../../../..").join("examples/nakui-modules")
+    here.join("../../../..")
+        .join("01_yachay/nakui/nakui-ui-llimphi/examples/nakui-modules")
 }
 
 #[test]
-fn loads_all_demo_modules() {
+fn loads_demo_modules() {
     let dir = examples_dir();
     let mods = load_modules_from_dir(&dir).unwrap_or_else(|e| {
         panic!("load failed for {}: {e}", dir.display());
     });
     let ids: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        vec![
-            "crm",
-            "customers",
-            "inventory_movements",
-            "invoices",
-            "products",
-            "sales_engine",
-            "sales_orders",
-            "suppliers",
-        ],
-        "expected 8 modules in alphabetical order \
-         (crm se sumó como ERP con morfismos)"
-    );
-}
-
-#[test]
-fn sales_engine_declares_nakui_module_dir_and_morphism() {
-    // Sanity del módulo demo de morphism: nakui_module_dir set,
-    // y al menos una vista con Action::Morphism en su on_submit.
-    let mods = load_modules_from_dir(examples_dir()).unwrap();
-    let sales = mods
-        .iter()
-        .find(|m| m.id == "sales_engine")
-        .expect("sales_engine debe estar");
-    assert!(
-        sales.nakui_module_dir.is_some(),
-        "sales_engine debería declarar nakui_module_dir"
-    );
-    let has_morphism_view = sales.views.values().any(|v| match v {
-        nahual_meta_schema::View::Form(form) => {
-            matches!(form.on_submit, nahual_meta_schema::Action::Morphism { .. })
-        }
-        _ => false,
-    });
-    assert!(
-        has_morphism_view,
-        "sales_engine debería tener al menos una Form con Action::Morphism"
-    );
+    assert_eq!(ids, vec!["ventas"], "se esperaba el módulo demo 'ventas'");
 }
 
 #[test]
@@ -75,7 +36,7 @@ fn every_demo_module_has_list_and_form_views() {
             match v {
                 View::List(_) => has_list = true,
                 View::Form(_) => has_form = true,
-                View::Detail(_) | View::Dashboard(_) => {}
+                View::Detail(_) | View::Dashboard(_) | View::Report(_) => {}
             }
         }
         assert!(
@@ -84,6 +45,16 @@ fn every_demo_module_has_list_and_form_views() {
             m.id
         );
     }
+}
+
+#[test]
+fn ventas_has_dashboard_and_report_views() {
+    let mods = load_modules_from_dir(examples_dir()).unwrap();
+    let ventas = mods.iter().find(|m| m.id == "ventas").expect("ventas");
+    let has_dashboard = ventas.views.values().any(|v| matches!(v, View::Dashboard(_)));
+    let has_report = ventas.views.values().any(|v| matches!(v, View::Report(_)));
+    assert!(has_dashboard, "ventas debería tener un tablero");
+    assert!(has_report, "ventas debería tener un reporte");
 }
 
 #[test]
@@ -102,6 +73,9 @@ fn every_demo_form_field_kind_is_recognized() {
                             | FieldKind::Number
                             | FieldKind::Boolean
                             | FieldKind::Date
+                            | FieldKind::Select
+                            | FieldKind::EntityRef
+                            | FieldKind::AutoId
                     );
                 }
             }
@@ -111,8 +85,8 @@ fn every_demo_form_field_kind_is_recognized() {
 
 #[test]
 fn every_module_validates_clean() {
-    // validate() chequea que cada MenuItem.view exista en views.
-    // Un typo en cualquiera de los 6 módulos haría fallar este test.
+    // validate() chequea que cada MenuItem.view exista en views y que
+    // los row_detail apunten a una vista Detail. Un typo haría fallar.
     let mods = load_modules_from_dir(examples_dir()).unwrap();
     for m in &mods {
         m.validate()

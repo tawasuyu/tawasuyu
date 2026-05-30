@@ -51,6 +51,13 @@ use std::path::{Path, PathBuf};
 use llimphi_module_file_picker::{
     self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
 };
+use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
+use llimphi_ui::llimphi_raster::peniko::Mix;
+use llimphi_ui::PaintRect;
+use llimphi_ui::WheelDelta;
+use llimphi_ui::Modifiers;
+use std::sync::{Mutex, OnceLock};
+
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
@@ -115,6 +122,46 @@ struct Model {
     /// (decenas de eventos por segundo) cuente como una sola operación
     /// reversible. Sin coalesce, deshacer un drag costaría 100 Ctrl+Z.
     ultima_etiqueta_snapshot: Option<(Uuid, &'static str)>,
+    /// Multiplicador de zoom sobre el fit-contain natural. 1.0 = fit (la
+    /// imagen entra entera en el lienzo); 2.0 = el doble del tamaño fit;
+    /// 0.5 = la mitad. Clamp en [`ZOOM_MIN`]..=[`ZOOM_MAX`].
+    factor_zoom: f32,
+    /// Offset de paneo en px de pantalla desde la posición centrada-fit. La
+    /// imagen escala alrededor de `(centro_lienzo + pan)` (matemáticamente
+    /// invariante bajo cambios de zoom — el píxel medio de la imagen
+    /// permanece en el mismo punto al hacer wheel). Sin clamp: se puede
+    /// "perder" la imagen, hotkey `0` resetea.
+    pan_x: f32,
+    pan_y: f32,
+}
+
+/// Multiplicador por tick de wheel. 1.1 ≈ +10%, un escalón cómodo. El
+/// factor entra como `factor_zoom *= base.powf(-delta.y)` (delta.y > 0 es
+/// scroll hacia abajo en convención CSS → zoom out).
+const ZOOM_BASE: f32 = 1.1;
+const ZOOM_MIN: f32 = 0.05;
+const ZOOM_MAX: f32 = 32.0;
+
+/// Side-channel para que [`on_wheel`] —que sólo recibe cursor absoluto, no
+/// info de layout— pueda saber si el cursor cayó sobre el lienzo. Lo
+/// escribe el closure de `paint_with` del lienzo en cada frame; lo lee
+/// `on_wheel` antes de despachar. Es lectura-mostly: `Mutex` es OK para
+/// los bytes de un `PaintRect` (16 bytes) y evita atomics-por-campo.
+static LIENZO_RECT: OnceLock<Mutex<Option<PaintRect>>> = OnceLock::new();
+
+fn lienzo_rect_set(r: PaintRect) {
+    let cell = LIENZO_RECT.get_or_init(|| Mutex::new(None));
+    if let Ok(mut g) = cell.lock() {
+        *g = Some(r);
+    }
+}
+
+fn lienzo_rect_get() -> Option<PaintRect> {
+    LIENZO_RECT.get()?.lock().ok().and_then(|g| *g)
+}
+
+fn dentro_de_rect(r: PaintRect, cx: f32, cy: f32) -> bool {
+    cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h
 }
 
 /// Tope de la pila de undo. 64 estados × 32 capas × ~100 B postcard ≈ 200 KB
@@ -144,6 +191,16 @@ enum Msg {
     CancelarRenombrar,
     Undo,
     Redo,
+    /// Wheel sobre el lienzo: multiplica `factor_zoom` por `mult` y, si
+    /// hay un punto de anclaje conocido, ajusta `pan` para que el punto
+    /// quede fijo bajo el cursor (zoom-a-cursor). `(rect, cursor)` son
+    /// el último rect del lienzo y la posición global del cursor; ambos
+    /// en px de pantalla. `None` ⇒ zoom-alrededor-del-centro.
+    Zoom { mult: f32, ancla: Option<(PaintRect, f32, f32)> },
+    /// Drag sobre el lienzo: acumula offset de paneo. `dx, dy` en px.
+    Pan(f32, f32),
+    /// Resetea zoom y pan al estado inicial (fit-contain centrado).
+    ResetVista,
 }
 
 // =============================================================================
@@ -343,6 +400,9 @@ fn inicializar() -> Model {
         historial,
         cursor_historial: 0,
         ultima_etiqueta_snapshot: None,
+        factor_zoom: 1.0,
+        pan_x: 0.0,
+        pan_y: 0.0,
     };
     sincronizar_thumbs(&mut model);
     model
@@ -661,9 +721,17 @@ fn header(
     lienzo: &Lienzo,
     estado: &str,
     proveedor_etiqueta: &str,
+    factor_zoom: f32,
 ) -> View<Msg> {
+    // Indicador discreto: sólo se muestra cuando el usuario tocó zoom
+    // o pan; en el caso por defecto (fit) el header queda igual que antes.
+    let vista = if (factor_zoom - 1.0).abs() < 1e-4 {
+        String::new()
+    } else {
+        format!(" · vista {:.0}%", factor_zoom * 100.0)
+    };
     let titulo = format!(
-        "tullpu · {}×{} · {} capas · IA: {proveedor_etiqueta} · {estado}",
+        "tullpu · {}×{} · {} capas · IA: {proveedor_etiqueta}{vista} · {estado}",
         lienzo.width,
         lienzo.height,
         lienzo.capas.len()
@@ -1134,23 +1202,140 @@ fn envolver_fila(boton: View<Msg>) -> View<Msg> {
     .children(vec![boton])
 }
 
+/// Construye el transform para pintar `(image_w, image_h)` dentro de un
+/// rect `(rw, rh)` con `factor_zoom` y `pan` aplicados. Devuelve la escala
+/// absoluta y el offset top-left del rectángulo destino, ambos en px.
+/// Pura — testeable sin gráficos.
+fn transform_lienzo(
+    image_w: u32,
+    image_h: u32,
+    rw: f32,
+    rh: f32,
+    factor_zoom: f32,
+    pan_x: f32,
+    pan_y: f32,
+) -> Option<(f64, f64, f64)> {
+    if image_w == 0 || image_h == 0 || rw <= 0.0 || rh <= 0.0 {
+        return None;
+    }
+    let sx = rw as f64 / image_w as f64;
+    let sy = rh as f64 / image_h as f64;
+    let s_fit = sx.min(sy);
+    let s = s_fit * factor_zoom as f64;
+    let dw = image_w as f64 * s;
+    let dh = image_h as f64 * s;
+    let off_x = (rw as f64 - dw) * 0.5 + pan_x as f64;
+    let off_y = (rh as f64 - dh) * 0.5 + pan_y as f64;
+    Some((s, off_x, off_y))
+}
+
+/// Calcula el nuevo `(pan_x, pan_y)` para que el punto de pantalla
+/// `(cursor_x, cursor_y)` siga apuntando al mismo píxel-imagen tras
+/// cambiar `factor_zoom` de `zoom_old` a `zoom_new`. Devuelve los pans
+/// sin tocar si la imagen o el rect son degenerados (división por cero).
+/// Pura — testeable sin gráficos.
+fn pan_para_zoom_a_cursor(
+    image_w: u32,
+    image_h: u32,
+    rect: PaintRect,
+    cursor_x: f32,
+    cursor_y: f32,
+    zoom_old: f32,
+    zoom_new: f32,
+    pan_x: f32,
+    pan_y: f32,
+) -> (f32, f32) {
+    let Some((s_old, off_x, off_y)) =
+        transform_lienzo(image_w, image_h, rect.w, rect.h, zoom_old, pan_x, pan_y)
+    else {
+        return (pan_x, pan_y);
+    };
+    if s_old <= 0.0 || image_w == 0 || image_h == 0 {
+        return (pan_x, pan_y);
+    }
+    // Cursor en coords-imagen bajo el zoom anterior.
+    let tx_old = rect.x as f64 + off_x;
+    let ty_old = rect.y as f64 + off_y;
+    let ix = (cursor_x as f64 - tx_old) / s_old;
+    let iy = (cursor_y as f64 - ty_old) / s_old;
+    // Nueva escala y nuevo top-left exigido para que (ix, iy) caiga bajo
+    // el cursor: tx_new = cursor - ix * s_new.
+    let s_fit_w = rect.w as f64 / image_w as f64;
+    let s_fit_h = rect.h as f64 / image_h as f64;
+    let s_new = s_fit_w.min(s_fit_h) * zoom_new as f64;
+    let tx_new = cursor_x as f64 - ix * s_new;
+    let ty_new = cursor_y as f64 - iy * s_new;
+    let dw_new = image_w as f64 * s_new;
+    let dh_new = image_h as f64 * s_new;
+    let pan_x_nuevo = (tx_new - rect.x as f64 - (rect.w as f64 - dw_new) * 0.5) as f32;
+    let pan_y_nuevo = (ty_new - rect.y as f64 - (rect.h as f64 - dh_new) * 0.5) as f32;
+    (pan_x_nuevo, pan_y_nuevo)
+}
+
 fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     let cuerpo = match &model.imagen {
-        Some(img) => View::new(Style {
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(1.0_f32),
-            },
-            padding: Rect {
-                left: length(12.0_f32),
-                right: length(12.0_f32),
-                top: length(12.0_f32),
-                bottom: length(12.0_f32),
-            },
-            ..Default::default()
-        })
-        .image(img.clone()),
+        Some(img) => {
+            // Clones cheap: peniko::Image internamente es Arc<Blob>, los
+            // floats son Copy. Capturadas por valor para que el closure
+            // sea 'static + Send + Sync.
+            let img = img.clone();
+            let factor_zoom = model.factor_zoom;
+            let pan_x = model.pan_x;
+            let pan_y = model.pan_y;
+            View::new(Style {
+                flex_grow: 1.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                padding: Rect {
+                    left: length(12.0_f32),
+                    right: length(12.0_f32),
+                    top: length(12.0_f32),
+                    bottom: length(12.0_f32),
+                },
+                ..Default::default()
+            })
+            .paint_with(move |scene, _ts, r| {
+                // Registramos el rect en cada paint para que on_wheel
+                // pueda decidir si el cursor cayó sobre el lienzo y, en
+                // ese caso, hacer zoom-a-cursor (el closure no muta
+                // estado de la app — sólo escribe la cache lateral).
+                lienzo_rect_set(r);
+                if img.width == 0 || img.height == 0 || r.w <= 0.0 || r.h <= 0.0 {
+                    return;
+                }
+                let Some((s, off_x, off_y)) = transform_lienzo(
+                    img.width,
+                    img.height,
+                    r.w,
+                    r.h,
+                    factor_zoom,
+                    pan_x,
+                    pan_y,
+                ) else {
+                    return;
+                };
+                let tx = r.x as f64 + off_x;
+                let ty = r.y as f64 + off_y;
+                let transform = Affine::translate((tx, ty)) * Affine::scale(s);
+                // Clip al rect del lienzo: una imagen zoom-in que se sale
+                // del panel no debe pintar sobre el panel de ops o capas.
+                let node_rect = KurboRect::new(
+                    r.x as f64,
+                    r.y as f64,
+                    (r.x + r.w) as f64,
+                    (r.y + r.h) as f64,
+                );
+                scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &node_rect);
+                scene.draw_image(&img, transform);
+                scene.pop_layer();
+            })
+            .draggable(|fase, dx, dy| match fase {
+                DragPhase::Move => Some(Msg::Pan(dx, dy)),
+                DragPhase::End => None,
+            })
+        }
         None => View::new(Style {
             flex_grow: 1.0,
             size: Size {
@@ -1380,6 +1565,42 @@ impl App for Tullpu {
                     model.estado = "↷ nada que rehacer".into();
                 }
             }
+            Msg::Zoom { mult, ancla } => {
+                let zoom_anterior = model.factor_zoom;
+                let zoom_nuevo = (zoom_anterior * mult).clamp(ZOOM_MIN, ZOOM_MAX);
+                // Si el cursor está sobre el lienzo (ancla = Some), ajustamos
+                // pan para que el píxel bajo el cursor quede fijo
+                // (zoom-a-cursor) — la sensación natural de un image editor.
+                // Sin ancla, dejamos pan tal cual: el centro de la imagen
+                // mostrada permanece fijo (consecuencia de la ecuación de
+                // offset).
+                if let (Some((rect, cx, cy)), Some(img)) = (ancla, model.imagen.as_ref()) {
+                    let (pan_x_nuevo, pan_y_nuevo) = pan_para_zoom_a_cursor(
+                        img.width,
+                        img.height,
+                        rect,
+                        cx,
+                        cy,
+                        zoom_anterior,
+                        zoom_nuevo,
+                        model.pan_x,
+                        model.pan_y,
+                    );
+                    model.pan_x = pan_x_nuevo;
+                    model.pan_y = pan_y_nuevo;
+                }
+                model.factor_zoom = zoom_nuevo;
+            }
+            Msg::Pan(dx, dy) => {
+                model.pan_x += dx;
+                model.pan_y += dy;
+            }
+            Msg::ResetVista => {
+                model.factor_zoom = 1.0;
+                model.pan_x = 0.0;
+                model.pan_y = 0.0;
+                model.estado = "vista reseteada".into();
+            }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app
                 // todavía no tiene). La extensión la elige el formato; el
@@ -1411,6 +1632,7 @@ impl App for Tullpu {
             &model.lienzo,
             &model.estado,
             &model.proveedor_etiqueta,
+            model.factor_zoom,
         );
         let centro = View::new(Style {
             flex_direction: FlexDirection::Row,
@@ -1436,6 +1658,27 @@ impl App for Tullpu {
         })
         .fill(theme.bg_app)
         .children(vec![cabecera, centro])
+    }
+
+    fn on_wheel(
+        _model: &Model,
+        delta: WheelDelta,
+        cursor: (f32, f32),
+        _modifiers: Modifiers,
+    ) -> Option<Msg> {
+        // Sólo zoom-eamos si el cursor está sobre el lienzo. Si está en
+        // los paneles laterales, dejamos pasar (futuro: scroll vertical
+        // del panel de capas si crece). delta.y > 0 ⇒ scroll hacia abajo ⇒
+        // zoom out (convención CSS — ver `WheelDelta`).
+        let rect = lienzo_rect_get()?;
+        if !dentro_de_rect(rect, cursor.0, cursor.1) {
+            return None;
+        }
+        let mult = ZOOM_BASE.powf(-delta.y);
+        Some(Msg::Zoom {
+            mult,
+            ancla: Some((rect, cursor.0, cursor.1)),
+        })
     }
 
     fn on_file_drop(_model: &Model, path: PathBuf) -> Option<Msg> {
@@ -1570,6 +1813,11 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         }
         Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("y") => {
             return Some(Msg::Redo);
+        }
+        // Reset de vista: zoom 100% del fit + pan a cero. Global porque
+        // no depende de capa seleccionada — es navegación del viewport.
+        Key::Character(s) if !m.ctrl && !m.alt && s == "0" => {
+            return Some(Msg::ResetVista);
         }
         _ => {}
     }
@@ -1742,6 +1990,9 @@ mod tests {
             historial,
             cursor_historial: 0,
             ultima_etiqueta_snapshot: None,
+            factor_zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
         }
     }
 
@@ -2209,6 +2460,149 @@ mod tests {
         }
         model = <Tullpu as App>::update(model, Msg::ConfirmarRenombrar, &Handle::for_test());
         assert_eq!(model.historial.len(), len_inicial);
+    }
+
+    // ---- Fase 24: zoom y pan --------------------------------------------------
+
+    #[test]
+    fn transform_lienzo_fit_centra_imagen_en_zoom_1() {
+        // Imagen 100×100 en un rect 200×200 → s_fit=2, dw=200, off=0,0.
+        let (s, off_x, off_y) = transform_lienzo(100, 100, 200.0, 200.0, 1.0, 0.0, 0.0)
+            .expect("ok");
+        assert!((s - 2.0).abs() < 1e-9);
+        assert!(off_x.abs() < 1e-9);
+        assert!(off_y.abs() < 1e-9);
+    }
+
+    #[test]
+    fn transform_lienzo_aspect_distinto_pad_simétrico() {
+        // Imagen 100×50 (2:1) en rect 200×200: s_fit=min(2, 4)=2, dw=200,
+        // dh=100 → off_y = (200-100)/2 = 50, off_x = 0.
+        let (s, off_x, off_y) = transform_lienzo(100, 50, 200.0, 200.0, 1.0, 0.0, 0.0)
+            .expect("ok");
+        assert!((s - 2.0).abs() < 1e-9);
+        assert!(off_x.abs() < 1e-9);
+        assert!((off_y - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn transform_lienzo_factor_zoom_2_duplica_y_descentra() {
+        // Imagen 100×100 fit en 200×200 con zoom=2: s=4, dw=400, off=-100,-100.
+        // (la imagen "se sale" del rect — el clip se encarga en paint).
+        let (s, off_x, off_y) = transform_lienzo(100, 100, 200.0, 200.0, 2.0, 0.0, 0.0)
+            .expect("ok");
+        assert!((s - 4.0).abs() < 1e-9);
+        assert!((off_x + 100.0).abs() < 1e-9);
+        assert!((off_y + 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn transform_lienzo_pan_solo_traslada() {
+        // Cualquier pan se suma directo al offset sin afectar la escala.
+        let (s_a, ax, ay) = transform_lienzo(100, 100, 200.0, 200.0, 1.5, 0.0, 0.0).unwrap();
+        let (s_b, bx, by) = transform_lienzo(100, 100, 200.0, 200.0, 1.5, 17.0, -23.0).unwrap();
+        assert!((s_a - s_b).abs() < 1e-9);
+        assert!((bx - ax - 17.0).abs() < 1e-9);
+        assert!((by - ay + 23.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn transform_lienzo_dims_cero_devuelve_none() {
+        assert!(transform_lienzo(0, 10, 100.0, 100.0, 1.0, 0.0, 0.0).is_none());
+        assert!(transform_lienzo(10, 10, 0.0, 100.0, 1.0, 0.0, 0.0).is_none());
+        assert!(transform_lienzo(10, 10, 100.0, -1.0, 1.0, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn zoom_a_cursor_mantiene_el_pixel_bajo_el_cursor_fijo() {
+        // Imagen 100×100, rect 200×200, zoom_old=1 → s=2, top-left=(0,0).
+        // Cursor en (50, 60) → píxel-imagen (25, 30).
+        // Zoom a 2: s_new=4, queremos top-left tal que (25,30) caiga en (50,60):
+        // tx_new = 50 - 25*4 = -50, ty_new = 60 - 30*4 = -60.
+        // dw=400, dh=400 → centered_off = (200-400)/2 = -100.
+        // pan = tx_new - centered_off = -50 - (-100) = 50.
+        let rect = PaintRect { x: 0.0, y: 0.0, w: 200.0, h: 200.0 };
+        let (pan_x, pan_y) =
+            pan_para_zoom_a_cursor(100, 100, rect, 50.0, 60.0, 1.0, 2.0, 0.0, 0.0);
+        assert!((pan_x - 50.0).abs() < 1e-3, "pan_x = {}", pan_x);
+        // píxel-imagen y=30 → tx_new=60-30*4=-60, centered_off_y=-100,
+        // pan_y = -60 - (-100) = 40.
+        assert!((pan_y - 40.0).abs() < 1e-3, "pan_y = {}", pan_y);
+
+        // Verificación cruzada: aplico el transform y reviso que (50,60)
+        // corresponde a (25, 30) en coords-imagen al zoom 2.
+        let (s_new, off_x, off_y) =
+            transform_lienzo(100, 100, rect.w, rect.h, 2.0, pan_x, pan_y).unwrap();
+        let tx = rect.x as f64 + off_x;
+        let ty = rect.y as f64 + off_y;
+        let ix = (50.0 - tx) / s_new;
+        let iy = (60.0 - ty) / s_new;
+        assert!((ix - 25.0).abs() < 1e-3, "ix = {}", ix);
+        assert!((iy - 30.0).abs() < 1e-3, "iy = {}", iy);
+    }
+
+    #[test]
+    fn dentro_de_rect_es_inclusive_en_bordes() {
+        let r = PaintRect { x: 10.0, y: 20.0, w: 100.0, h: 50.0 };
+        assert!(dentro_de_rect(r, 10.0, 20.0));
+        assert!(dentro_de_rect(r, 110.0, 70.0));
+        assert!(dentro_de_rect(r, 60.0, 45.0));
+        assert!(!dentro_de_rect(r, 9.99, 50.0));
+        assert!(!dentro_de_rect(r, 60.0, 70.01));
+        assert!(!dentro_de_rect(r, 110.01, 45.0));
+    }
+
+    #[test]
+    fn msg_zoom_aplica_clamp_min_max() {
+        // factor_zoom inicial = 1.0. Mult = 0.0001 → clamp a ZOOM_MIN.
+        let mut model = modelo_minimo();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::Zoom { mult: 0.0001, ancla: None },
+            &Handle::for_test(),
+        );
+        assert!((model.factor_zoom - ZOOM_MIN).abs() < 1e-6);
+        // Y al revés: mult grande → ZOOM_MAX.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::Zoom { mult: 1e6, ancla: None },
+            &Handle::for_test(),
+        );
+        assert!((model.factor_zoom - ZOOM_MAX).abs() < 1e-6);
+    }
+
+    #[test]
+    fn msg_pan_acumula_offsets() {
+        let mut model = modelo_minimo();
+        model = <Tullpu as App>::update(model, Msg::Pan(10.0, -5.0), &Handle::for_test());
+        model = <Tullpu as App>::update(model, Msg::Pan(3.0, 7.0), &Handle::for_test());
+        assert!((model.pan_x - 13.0).abs() < 1e-6);
+        assert!((model.pan_y - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn msg_reset_vista_restaura_zoom_y_pan_default() {
+        let mut model = modelo_minimo();
+        model.factor_zoom = 3.5;
+        model.pan_x = 42.0;
+        model.pan_y = -17.0;
+        model = <Tullpu as App>::update(model, Msg::ResetVista, &Handle::for_test());
+        assert!((model.factor_zoom - 1.0).abs() < 1e-6);
+        assert_eq!(model.pan_x, 0.0);
+        assert_eq!(model.pan_y, 0.0);
+    }
+
+    #[test]
+    fn hotkey_cero_emite_reset_vista() {
+        let model = modelo_minimo();
+        let msg = hotkey_a_msg(&model, &ev_char("0", Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::ResetVista)));
+        // Con Ctrl no — el 0 estándar es sin modificador.
+        let ctrl0 = hotkey_a_msg(
+            &model,
+            &ev_char("0", Modifiers { ctrl: true, ..Default::default() }),
+        );
+        assert!(matches!(ctrl0, None));
     }
 
     #[test]

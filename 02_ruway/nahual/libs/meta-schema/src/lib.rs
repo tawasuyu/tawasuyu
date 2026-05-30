@@ -123,6 +123,10 @@ pub enum View {
     Detail(DetailView),
     /// Tablero de KPIs: una grilla de tarjetas de agregados.
     Dashboard(DashboardView),
+    /// Reporte imprimible: los mismos agregados que un tablero, pero
+    /// dispuestos como documento de una columna (título + fecha de
+    /// generación) y exportable a Markdown.
+    Report(ReportView),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,6 +186,17 @@ pub struct DashboardView {
     pub cards: Vec<DashboardCard>,
 }
 
+/// Reporte imprimible: mismos agregados que un tablero, presentados
+/// como documento exportable. Opcionalmente un subtítulo/encabezado.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportView {
+    pub title: String,
+    /// Línea de subtítulo opcional bajo el título (período, área…).
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    pub cards: Vec<DashboardCard>,
+}
+
 /// Una tarjeta de KPI del tablero.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardCard {
@@ -232,12 +247,52 @@ pub enum Metric {
     AvgBy { group: String, value: String },
 }
 
-/// Filtro de una [`DashboardCard`]: el record entra si el valor de
-/// `field` (como texto) es igual a `equals`.
+/// Operador de comparación de un [`CardFilter`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterOp {
+    /// Igualdad textual contra `value`. Default (compat con `equals`).
+    #[default]
+    Eq,
+    /// Desigualdad textual.
+    Ne,
+    /// Mayor que `value` (numérico, o fecha ISO comparada como texto).
+    Gt,
+    /// Mayor o igual.
+    Gte,
+    /// Menor que.
+    Lt,
+    /// Menor o igual.
+    Lte,
+    /// Dentro de `[min, max]` inclusivo (cualquiera de las dos cotas
+    /// puede omitirse para un rango abierto).
+    Between,
+    /// El campo existe y no está vacío.
+    NonEmpty,
+}
+
+/// Filtro de una [`DashboardCard`]: decide qué records entran al
+/// agregado. El default (`op: eq` + `value`) replica el viejo
+/// `{ field, equals }`, que sigue parseando por el alias `equals`.
+/// Para `gt`/`lt`/`between`, las comparaciones son numéricas si ambos
+/// lados parsean como número, y lexicográficas en caso contrario —
+/// suficiente para rangos de fecha en ISO-8601 (`YYYY-MM-DD`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CardFilter {
     pub field: String,
-    pub equals: String,
+    /// Operador. Default `eq`.
+    #[serde(default)]
+    pub op: FilterOp,
+    /// Comparando para `eq`/`ne`/`gt`/`gte`/`lt`/`lte`. Acepta el alias
+    /// `equals` por compatibilidad con tableros ya escritos.
+    #[serde(default, alias = "equals")]
+    pub value: Option<String>,
+    /// Cota inferior para `between` (inclusiva). `None` = sin piso.
+    #[serde(default)]
+    pub min: Option<String>,
+    /// Cota superior para `between` (inclusiva). `None` = sin techo.
+    #[serde(default)]
+    pub max: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -544,7 +599,7 @@ impl Module {
                         }
                     }
                 }
-                View::Detail(_) | View::Dashboard(_) => {}
+                View::Detail(_) | View::Dashboard(_) | View::Report(_) => {}
             }
         }
         Ok(())

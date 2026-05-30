@@ -8,6 +8,7 @@
   ],
   "menu": [
     { "label": "Tablero", "view": "tablero" },
+    { "label": "Reporte", "view": "reporte" },
     { "label": "Clientes", "view": "customers_list" },
     { "label": "+ Cliente", "view": "customers_form" },
     { "label": "Órdenes", "view": "orders_list" },
@@ -25,6 +26,17 @@
         { "label": "Clientes por plan", "entity": "Customer", "metric": { "kind": "group_by", "field": "tier" } },
         { "label": "Facturación por cliente", "entity": "Order", "metric": { "kind": "sum_by", "group": "customer", "value": "monto" }, "group_ref": "Customer", "format": { "kind": "currency", "symbol": "$" } },
         { "label": "Ticket promedio (cobrado)", "entity": "Order", "metric": { "kind": "avg", "field": "monto" }, "filter": { "field": "pagado", "equals": "true" }, "format": { "kind": "currency", "symbol": "$" } }
+      ]
+    },
+    "reporte": {
+      "kind": "report",
+      "title": "Reporte de ventas",
+      "subtitle": "Resumen ejecutivo — exportable a Markdown",
+      "cards": [
+        { "label": "Facturado total", "entity": "Order", "metric": { "kind": "sum", "field": "monto" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Órdenes grandes (≥ 1000)", "entity": "Order", "metric": { "kind": "count" }, "filter": { "field": "monto", "op": "gte", "value": "1000" } },
+        { "label": "Facturación por cliente", "entity": "Order", "metric": { "kind": "sum_by", "group": "customer", "value": "monto" }, "group_ref": "Customer", "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Clientes por plan", "entity": "Customer", "metric": { "kind": "group_by", "field": "tier" } }
       ]
     },
     "customers_list": {

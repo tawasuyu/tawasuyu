@@ -11,7 +11,7 @@
 //! - Llimphi shell: sidebar de módulos (clickeable) + menú del módulo
 //!   activo + área principal.
 //! - **Meta-form Llimphi** (paralelo al `nahual-widget-meta-form` GPUI
-//!   borrado): cuatro vistas meta-driven.
+//!   borrado): cinco vistas meta-driven.
 //!   - `List`: filas reales con columnas del manifest (refs resueltas a
 //!     su label legible), búsqueda por `search_in`, orden clickeando el
 //!     header de columna (asc→desc→sin), paginación, botones editar/
@@ -29,6 +29,12 @@
 //!     (valor agregado por dimensión — el reporte ERP clásico). Las
 //!     claves de un desglose con `group_ref` se resuelven al label del
 //!     record referido (p.ej. "facturación por cliente" con nombres).
+//!     Cada desglose tiene botón de export CSV. Los filtros aceptan
+//!     operadores `eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`between`/`non_empty`
+//!     (numéricos o fechas ISO).
+//!   - `Report`: los mismos agregados que un tablero, dispuestos como
+//!     documento de una columna (título + subtítulo) con botón
+//!     "Exportar (.md)" que vuelca el reporte completo a Markdown.
 //!   El resultado (o el error de validación) se muestra como banner.
 //!
 //! El ciclo de escritura ya no pasa por CLI/tests: la UI crea, edita,
@@ -65,13 +71,14 @@ use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use nahual_meta_runtime::{
-    cmp_values, compute_clear_fields, compute_field_delta, compute_metric, format_value,
-    human_label_for_record, parse_field_value, preview_value, render_value, resolve_param_value,
-    short_uuid, to_csv, validate_entity_refs, MetaBackend, MetricResult, WriteOutcome,
+    breakdown_to_csv, cmp_values, compute_clear_fields, compute_field_delta, compute_metric,
+    format_value, human_label_for_record, parse_field_value, preview_value, render_value,
+    resolve_param_value, short_uuid, to_csv, validate_entity_refs, MetaBackend, MetricResult,
+    WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, Column, DashboardView, FieldKind, FieldSpec, FormView, ListView, Module, RelatedList,
-    ValueFormat, View as ModuleView,
+    Action, Column, DashboardCard, DashboardView, FieldKind, FieldSpec, FormView, ListView, Module,
+    RelatedList, ReportView, ValueFormat, View as ModuleView,
 };
 use nakui_core::executor::Executor;
 use serde_json::Value;
@@ -142,6 +149,17 @@ enum Msg {
     /// Exporta la lista activa (filas filtradas/ordenadas) a un CSV.
     ExportCsv {
         entity: String,
+    },
+    /// Exporta un reporte (`View::Report`) completo a Markdown.
+    ExportReport {
+        module_idx: usize,
+        view_key: String,
+    },
+    /// Exporta el desglose de una card (tablero o reporte) a CSV.
+    ExportBreakdownCsv {
+        module_idx: usize,
+        view_key: String,
+        card_idx: usize,
     },
 }
 
@@ -523,6 +541,19 @@ impl App for NakuiApp {
             }
             Msg::ExportCsv { entity } => {
                 m.toast = Some(export_active_list_csv(&m, &entity));
+            }
+            Msg::ExportReport {
+                module_idx,
+                view_key,
+            } => {
+                m.toast = Some(export_report_md(&m, module_idx, &view_key));
+            }
+            Msg::ExportBreakdownCsv {
+                module_idx,
+                view_key,
+                card_idx,
+            } => {
+                m.toast = Some(export_breakdown_csv(&m, module_idx, &view_key, card_idx));
             }
         }
         m
@@ -981,7 +1012,7 @@ fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
                 let m = &model.modules[mod_idx];
                 let item = &m.menu[menu_idx];
                 match m.views.get(&item.view) {
-                    Some(view) => build_view_panel(model, mod_idx, view, theme),
+                    Some(view) => build_view_panel(model, mod_idx, &item.view, view, theme),
                     None => empty_panel(
                         theme,
                         &format!("vista '{}' no existe en el manifest del módulo", item.view),
@@ -1019,6 +1050,7 @@ fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
 fn build_view_panel(
     model: &Model,
     mod_idx: usize,
+    view_key: &str,
     view: &ModuleView,
     theme: &Theme,
 ) -> View<Msg> {
@@ -1054,7 +1086,12 @@ fn build_view_panel(
             )];
             placeholder_panel(module, &dv.title, lines, theme)
         }
-        ModuleView::Dashboard(dv) => build_dashboard_panel(model, module, dv, theme),
+        ModuleView::Dashboard(dv) => {
+            build_dashboard_panel(model, mod_idx, view_key, dv, theme)
+        }
+        ModuleView::Report(rv) => {
+            build_report_panel(model, mod_idx, view_key, rv, theme)
+        }
     }
 }
 
@@ -1377,12 +1414,93 @@ fn active_list_view<'a>(m: &'a Model, entity: &str) -> Option<&'a ListView> {
 }
 
 /// Ruta destino de un export CSV: `<entity>-<unix-secs>.csv` en el cwd.
+/// Exporta un `View::Report` completo a Markdown en el cwd.
+fn export_report_md(m: &Model, module_idx: usize, view_key: &str) -> Toast {
+    let Some(module) = m.modules.get(module_idx) else {
+        return err_toast("módulo fuera de rango");
+    };
+    let Some(ModuleView::Report(rv)) = module.views.get(view_key) else {
+        return err_toast("no encontré el reporte a exportar");
+    };
+    let md = report_markdown(m, module, rv);
+    let path = export_path_ext(&rv.title, "md");
+    match std::fs::write(&path, md) {
+        Ok(()) => Toast {
+            kind: BannerKind::Success,
+            text: format!("exporté el reporte a {}", path.display()),
+        },
+        Err(e) => err_toast(&format!("no pude exportar el reporte: {e}")),
+    }
+}
+
+/// Exporta el desglose de una card (de un tablero o reporte) a CSV.
+fn export_breakdown_csv(
+    m: &Model,
+    module_idx: usize,
+    view_key: &str,
+    card_idx: usize,
+) -> Toast {
+    let Some(module) = m.modules.get(module_idx) else {
+        return err_toast("módulo fuera de rango");
+    };
+    let cards = match module.views.get(view_key) {
+        Some(ModuleView::Dashboard(dv)) => &dv.cards,
+        Some(ModuleView::Report(rv)) => &rv.cards,
+        _ => return err_toast("la vista no tiene tarjetas"),
+    };
+    let Some(card) = cards.get(card_idx) else {
+        return err_toast("tarjeta fuera de rango");
+    };
+    let result = compute_card_result(m, card);
+    let (gh, vh) = breakdown_headers(card);
+    let Some(csv) = breakdown_to_csv(&result, &gh, &vh) else {
+        return err_toast("esta tarjeta no es un desglose");
+    };
+    let path = export_path_ext(&card.label, "csv");
+    match std::fs::write(&path, csv) {
+        Ok(()) => Toast {
+            kind: BannerKind::Success,
+            text: format!("exporté «{}» a {}", card.label, path.display()),
+        },
+        Err(e) => err_toast(&format!("no pude exportar CSV: {e}")),
+    }
+}
+
+/// Encabezados (grupo, valor) del CSV de un desglose, derivados de la
+/// métrica de la card.
+fn breakdown_headers(card: &DashboardCard) -> (String, String) {
+    use nahual_meta_schema::Metric;
+    match &card.metric {
+        Metric::GroupBy { field } => (field.clone(), "Cantidad".to_string()),
+        Metric::SumBy { group, value } => (group.clone(), format!("Suma de {value}")),
+        Metric::AvgBy { group, value } => (group.clone(), format!("Promedio de {value}")),
+        _ => ("Grupo".to_string(), "Valor".to_string()),
+    }
+}
+
+fn err_toast(text: &str) -> Toast {
+    Toast {
+        kind: BannerKind::Error,
+        text: text.to_string(),
+    }
+}
+
 fn export_path(entity: &str) -> std::path::PathBuf {
+    export_path_ext(entity, "csv")
+}
+
+/// Como [`export_path`] pero con extensión arbitraria. El `stem` se
+/// normaliza a kebab seguro para el filesystem.
+fn export_path_ext(stem: &str, ext: &str) -> std::path::PathBuf {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let name = format!("{entity}-{secs}.csv");
+    let safe: String = stem
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
+    let name = format!("{safe}-{secs}.{ext}");
     std::env::current_dir()
         .map(|d| d.join(&name))
         .unwrap_or_else(|_| std::path::PathBuf::from(name))
@@ -1677,35 +1795,60 @@ fn resolve_breakdown_keys(
     }
 }
 
+/// Computa el agregado de una card resolviendo `group_ref` si lo hay.
+/// Toma el lock del backend por card — el tablero no es ruta caliente.
+fn compute_card_result(model: &Model, card: &DashboardCard) -> MetricResult {
+    let guard = model.backend.lock().ok();
+    let records = guard
+        .as_ref()
+        .map(|b| b.list_records(&card.entity))
+        .unwrap_or_default();
+    let mut result = compute_metric(&card.metric, card.filter.as_ref(), &records);
+    if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
+        resolve_breakdown_keys(&mut result, backend, ref_entity);
+    }
+    result
+}
+
+/// `true` si el resultado es un desglose (exportable a CSV).
+fn is_breakdown(r: &MetricResult) -> bool {
+    matches!(
+        r,
+        MetricResult::Breakdown(_) | MetricResult::ValueBreakdown(_)
+    )
+}
+
 /// Vista `Dashboard`: una grilla de tarjetas de KPI, cada una con su
 /// agregado (`Count`/`Sum`/`Avg`/`Min`/`Max`/`GroupBy`/`SumBy`/`AvgBy`)
 /// computado sobre los records de su entity.
 fn build_dashboard_panel(
     model: &Model,
-    module: &Module,
+    mod_idx: usize,
+    view_key: &str,
     dv: &DashboardView,
     theme: &Theme,
 ) -> View<Msg> {
+    let module = &model.modules[mod_idx];
     let title = text_line(
         format!("{} · {}", module.label, dv.title),
         16.0,
         theme.fg_text,
     );
 
-    let guard = model.backend.lock().ok();
     let mut cards: Vec<View<Msg>> = Vec::new();
-    for card in &dv.cards {
-        let records = guard
-            .as_ref()
-            .map(|b| b.list_records(&card.entity))
-            .unwrap_or_default();
-        let mut result = compute_metric(&card.metric, card.filter.as_ref(), &records);
-        // Si la card declara `group_ref`, las claves de un desglose son
-        // UUIDs de esa entity → las resolvemos a su label legible.
-        if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
-            resolve_breakdown_keys(&mut result, backend, ref_entity);
-        }
-        cards.push(dashboard_card(&card.label, &result, &card.format, theme));
+    for (i, card) in dv.cards.iter().enumerate() {
+        let result = compute_card_result(model, card);
+        // Las cards con desglose ganan un botón de export CSV.
+        let on_export = if is_breakdown(&result) {
+            Some(Msg::ExportBreakdownCsv {
+                module_idx: mod_idx,
+                view_key: view_key.to_string(),
+                card_idx: i,
+            })
+        } else {
+            None
+        };
+        cards.push(dashboard_card(&card.label, &result, &card.format, on_export, theme));
     }
 
     let grid = View::new(Style {
@@ -1733,6 +1876,7 @@ fn dashboard_card(
     label: &str,
     result: &MetricResult,
     fmt: &ValueFormat,
+    on_export: Option<Msg>,
     theme: &Theme,
 ) -> View<Msg> {
     let mut children: Vec<View<Msg>> = vec![text_line(label.to_string(), 11.0, theme.fg_muted)];
@@ -1832,6 +1976,17 @@ fn dashboard_card(
         }
     }
 
+    // Botón de export CSV para los desgloses.
+    if let Some(msg) = on_export {
+        children.push(button_styled(
+            "⤓ CSV",
+            btn_style_auto(),
+            Alignment::Center,
+            &ButtonPalette::from_theme(theme),
+            msg,
+        ));
+    }
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -1855,6 +2010,119 @@ fn dashboard_card(
     .fill(theme.bg_panel_alt)
     .radius(8.0)
     .children(children)
+}
+
+/// Vista `Report`: los mismos agregados que un tablero, dispuestos
+/// como documento de una columna (título + subtítulo) con un botón
+/// "Exportar (.md)" que vuelca el reporte completo a Markdown.
+fn build_report_panel(
+    model: &Model,
+    mod_idx: usize,
+    view_key: &str,
+    rv: &ReportView,
+    theme: &Theme,
+) -> View<Msg> {
+    let module = &model.modules[mod_idx];
+    let mut children: Vec<View<Msg>> = Vec::new();
+
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::SpaceBetween),
+        ..Default::default()
+    })
+    .children(vec![
+        text_line(format!("{} · {}", module.label, rv.title), 16.0, theme.fg_text),
+        button_styled(
+            "⤓ Exportar (.md)",
+            btn_style(150.0),
+            Alignment::Center,
+            &accent_btn(theme),
+            Msg::ExportReport {
+                module_idx: mod_idx,
+                view_key: view_key.to_string(),
+            },
+        ),
+    ]);
+    children.push(header);
+    if let Some(sub) = &rv.subtitle {
+        children.push(text_line(sub.clone(), 12.0, theme.fg_muted));
+    }
+
+    // Una card por agregado, apiladas en columna (documento).
+    for (i, card) in rv.cards.iter().enumerate() {
+        let result = compute_card_result(model, card);
+        let on_export = if is_breakdown(&result) {
+            Some(Msg::ExportBreakdownCsv {
+                module_idx: mod_idx,
+                view_key: view_key.to_string(),
+                card_idx: i,
+            })
+        } else {
+            None
+        };
+        children.push(dashboard_card(&card.label, &result, &card.format, on_export, theme));
+    }
+
+    column(children, 12.0)
+}
+
+/// Serializa un reporte completo a Markdown: título, subtítulo, y una
+/// sección por card (escalar en negrita o tabla de desglose).
+fn report_markdown(model: &Model, module: &Module, rv: &ReportView) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# {} · {}\n\n", module.label, rv.title));
+    if let Some(sub) = &rv.subtitle {
+        out.push_str(&format!("_{sub}_\n\n"));
+    }
+    out.push_str("Generado por nakui.\n\n");
+    for card in &rv.cards {
+        let result = compute_card_result(model, card);
+        out.push_str(&format!("## {}\n\n", card.label));
+        match &result {
+            MetricResult::Scalar(s) => {
+                let value = if s.fract() == 0.0 {
+                    Value::from(*s as i64)
+                } else {
+                    Value::from(*s)
+                };
+                out.push_str(&format!("**{}**\n\n", format_value(Some(&value), &card.format)));
+            }
+            MetricResult::Breakdown(rows) => {
+                out.push_str("| Grupo | Cantidad |\n|---|---:|\n");
+                for (k, n) in rows {
+                    out.push_str(&format!("| {} | {} |\n", md_escape(k), n));
+                }
+                out.push('\n');
+            }
+            MetricResult::ValueBreakdown(rows) => {
+                out.push_str("| Grupo | Valor |\n|---|---:|\n");
+                for (k, v) in rows {
+                    let value = if v.fract() == 0.0 {
+                        Value::from(*v as i64)
+                    } else {
+                        Value::from(*v)
+                    };
+                    out.push_str(&format!(
+                        "| {} | {} |\n",
+                        md_escape(k),
+                        format_value(Some(&value), &card.format)
+                    ));
+                }
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// Escapa los `|` de una celda de tabla Markdown.
+fn md_escape(s: &str) -> String {
+    s.replace('|', "\\|")
 }
 
 /// Render del valor de una celda. Una columna con `ref_entity` resuelve

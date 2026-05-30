@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 use uuid::Uuid;
 
-use nahual_meta_schema::{CardFilter, Metric};
+use std::cmp::Ordering;
+
+use nahual_meta_schema::{CardFilter, FilterOp, Metric};
 
 /// Resultado de computar una [`Metric`] sobre un conjunto de records.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,7 +31,7 @@ pub fn compute_metric(
 ) -> MetricResult {
     let passes = |v: &Value| match filter {
         None => true,
-        Some(f) => field_as_text(v, &f.field).as_deref() == Some(f.equals.as_str()),
+        Some(f) => filter_passes(v, f),
     };
     match metric {
         Metric::Count => {
@@ -134,6 +136,87 @@ fn grouped_aggregate(
     ranked
 }
 
+/// Decide si un record pasa el filtro de una tarjeta. Las comparaciones
+/// de orden (`gt`/`lt`/`between`) son numéricas cuando ambos lados
+/// parsean como número, y lexicográficas si no — lo que cubre rangos
+/// de fecha en ISO-8601 sin parser de fechas.
+fn filter_passes(v: &Value, f: &CardFilter) -> bool {
+    let cell = field_as_text(v, &f.field);
+    match f.op {
+        FilterOp::Eq => cell.as_deref() == f.value.as_deref(),
+        FilterOp::Ne => cell.as_deref() != f.value.as_deref(),
+        FilterOp::NonEmpty => cell.map(|s| !s.is_empty()).unwrap_or(false),
+        FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
+            let (Some(cell), Some(bound)) = (cell, f.value.as_ref()) else {
+                return false;
+            };
+            let ord = cmp_text(&cell, bound);
+            match f.op {
+                FilterOp::Gt => ord == Ordering::Greater,
+                FilterOp::Gte => ord != Ordering::Less,
+                FilterOp::Lt => ord == Ordering::Less,
+                FilterOp::Lte => ord != Ordering::Greater,
+                _ => unreachable!(),
+            }
+        }
+        FilterOp::Between => {
+            let Some(cell) = cell else {
+                return false;
+            };
+            let lo_ok = f
+                .min
+                .as_ref()
+                .map_or(true, |lo| cmp_text(&cell, lo) != Ordering::Less);
+            let hi_ok = f
+                .max
+                .as_ref()
+                .map_or(true, |hi| cmp_text(&cell, hi) != Ordering::Greater);
+            lo_ok && hi_ok
+        }
+    }
+}
+
+/// Orden entre dos valores como texto: numérico si ambos parsean,
+/// lexicográfico en caso contrario.
+fn cmp_text(a: &str, b: &str) -> Ordering {
+    match (a.parse::<f64>(), b.parse::<f64>()) {
+        (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+        _ => a.cmp(b),
+    }
+}
+
+/// Serializa un desglose (`Breakdown` conteo o `ValueBreakdown` valor)
+/// a CSV de dos columnas. `value_header` rotula la segunda columna.
+/// Reusa el `to_csv` del runtime para el quoting.
+pub fn breakdown_to_csv(
+    result: &MetricResult,
+    group_header: &str,
+    value_header: &str,
+) -> Option<String> {
+    let rows: Vec<Vec<String>> = match result {
+        MetricResult::Breakdown(rows) => rows
+            .iter()
+            .map(|(k, n)| vec![k.clone(), n.to_string()])
+            .collect(),
+        MetricResult::ValueBreakdown(rows) => rows
+            .iter()
+            .map(|(k, v)| {
+                let n = if v.fract() == 0.0 {
+                    format!("{}", *v as i64)
+                } else {
+                    v.to_string()
+                };
+                vec![k.clone(), n]
+            })
+            .collect(),
+        MetricResult::Scalar(_) => return None,
+    };
+    Some(crate::csv::to_csv(
+        &[group_header.to_string(), value_header.to_string()],
+        &rows,
+    ))
+}
+
 /// Valor de un campo de nivel superior como texto plano, para comparar
 /// (filtros) o agrupar (`GroupBy`).
 fn field_as_text(v: &Value, field: &str) -> Option<String> {
@@ -166,12 +249,96 @@ mod tests {
         );
         let f = CardFilter {
             field: "etapa".into(),
-            equals: "ganada".into(),
+            op: FilterOp::Eq,
+            value: Some("ganada".into()),
+            min: None,
+            max: None,
         };
         assert_eq!(
             compute_metric(&Metric::Count, Some(&f), &rs),
             MetricResult::Scalar(2.0)
         );
+    }
+
+    fn filt(field: &str, op: FilterOp, value: Option<&str>) -> CardFilter {
+        CardFilter {
+            field: field.into(),
+            op,
+            value: value.map(Into::into),
+            min: None,
+            max: None,
+        }
+    }
+
+    #[test]
+    fn numeric_range_filters() {
+        let rs = recs(&[
+            json!({"monto": 100}),
+            json!({"monto": 500}),
+            json!({"monto": 900}),
+        ]);
+        // gte 500 → 500 y 900.
+        assert_eq!(
+            compute_metric(&Metric::Count, Some(&filt("monto", FilterOp::Gte, Some("500"))), &rs),
+            MetricResult::Scalar(2.0)
+        );
+        // lt 500 → solo 100.
+        assert_eq!(
+            compute_metric(&Metric::Count, Some(&filt("monto", FilterOp::Lt, Some("500"))), &rs),
+            MetricResult::Scalar(1.0)
+        );
+        // between [200, 800] → solo 500.
+        let between = CardFilter {
+            field: "monto".into(),
+            op: FilterOp::Between,
+            value: None,
+            min: Some("200".into()),
+            max: Some("800".into()),
+        };
+        assert_eq!(
+            compute_metric(&Metric::Count, Some(&between), &rs),
+            MetricResult::Scalar(1.0)
+        );
+    }
+
+    #[test]
+    fn date_range_is_lexicographic() {
+        let rs = recs(&[
+            json!({"fecha": "2026-01-15"}),
+            json!({"fecha": "2026-06-30"}),
+            json!({"fecha": "2027-02-01"}),
+        ]);
+        let q1_h1 = CardFilter {
+            field: "fecha".into(),
+            op: FilterOp::Between,
+            value: None,
+            min: Some("2026-01-01".into()),
+            max: Some("2026-12-31".into()),
+        };
+        assert_eq!(
+            compute_metric(&Metric::Count, Some(&q1_h1), &rs),
+            MetricResult::Scalar(2.0)
+        );
+    }
+
+    #[test]
+    fn non_empty_filter() {
+        let rs = recs(&[json!({"nota": "x"}), json!({"nota": ""}), json!({"otro": 1})]);
+        assert_eq!(
+            compute_metric(&Metric::Count, Some(&filt("nota", FilterOp::NonEmpty, None)), &rs),
+            MetricResult::Scalar(1.0)
+        );
+    }
+
+    #[test]
+    fn breakdown_csv_roundtrip() {
+        let res = MetricResult::ValueBreakdown(vec![
+            ("ACME".into(), 1500.0),
+            ("Globex".into(), 2000.0),
+        ]);
+        let csv = breakdown_to_csv(&res, "Cliente", "Monto").unwrap();
+        assert_eq!(csv, "Cliente,Monto\nACME,1500\nGlobex,2000\n");
+        assert!(breakdown_to_csv(&MetricResult::Scalar(1.0), "a", "b").is_none());
     }
 
     #[test]
