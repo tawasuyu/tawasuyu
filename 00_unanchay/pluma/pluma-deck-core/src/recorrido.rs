@@ -17,6 +17,9 @@ use crate::camara::{Camara, Ease, Rect};
 /// Duración por defecto del vuelo entre dos pasos, en segundos.
 pub const DURACION_PASO_S: f64 = 0.8;
 
+/// Tamaño mínimo (mundo) al redimensionar un marco — evita marcos degenerados.
+pub const MIN_MARCO: f64 = 20.0;
+
 pub type MarcoId = u64;
 
 /// Qué pinta el host dentro de un marco. El core es agnóstico: guarda una
@@ -136,6 +139,45 @@ impl Recorrido {
             m.rect.x += dx;
             m.rect.y += dy;
         }
+    }
+
+    /// Elimina el marco `id` y purga **todos** los pasos que lo referencian
+    /// (manteniendo el resto del guion). Devuelve `true` si el marco existía.
+    /// Para autoría — deja la ruta consistente sin ids colgantes.
+    pub fn eliminar_marco(&mut self, id: MarcoId) -> bool {
+        let antes = self.marcos.len();
+        self.marcos.retain(|m| m.id != id);
+        let elimino = self.marcos.len() != antes;
+        if elimino {
+            self.pasos.retain(|p| *p != id);
+        }
+        elimino
+    }
+
+    /// Redimensiona el marco `id` a `w`×`h` (clamp a [`MIN_MARCO`]), conservando
+    /// su esquina superior-izquierda. No-op si el id no existe.
+    pub fn redimensionar_marco(&mut self, id: MarcoId, w: f64, h: f64) {
+        if let Some(m) = self.marcos.iter_mut().find(|m| m.id == id) {
+            m.rect.w = w.max(MIN_MARCO);
+            m.rect.h = h.max(MIN_MARCO);
+        }
+    }
+
+    /// Suma `delta_rad` al giro propio del marco `id`. No-op si no existe.
+    pub fn rotar_marco(&mut self, id: MarcoId, delta_rad: f64) {
+        if let Some(m) = self.marcos.iter_mut().find(|m| m.id == id) {
+            m.rot_rad += delta_rad;
+        }
+    }
+
+    /// Reordena el guion: mueve el paso en el índice `desde` a la posición
+    /// `hasta` (clamp al final). No-op si `desde` está fuera de rango.
+    pub fn mover_paso(&mut self, desde: usize, hasta: usize) {
+        if desde >= self.pasos.len() {
+            return;
+        }
+        let id = self.pasos.remove(desde);
+        self.pasos.insert(hasta.min(self.pasos.len()), id);
     }
 
     /// Marco al que apunta el paso `idx` (resolviendo el id contra `marcos`).
@@ -528,6 +570,52 @@ mod tests {
         assert_eq!(r.marco(1).unwrap().rect, Rect::new(100.0, -40.0, 400.0, 300.0));
         // Id inexistente: no-op.
         r.mover_marco(999, 1.0, 1.0);
+    }
+
+    #[test]
+    fn eliminar_marco_purga_la_ruta() {
+        let mut r = recorrido_demo(); // marcos 1,2,3; pasos [1,2,3]
+        r.pasos = vec![1, 2, 3, 2]; // el 2 aparece dos veces en el guion
+        assert!(r.eliminar_marco(2));
+        assert!(r.marco(2).is_none());
+        assert_eq!(r.pasos, vec![1, 3], "se purgan TODAS las apariciones del 2");
+        // Id inexistente: no-op, devuelve false.
+        assert!(!r.eliminar_marco(999));
+        assert_eq!(r.marcos.len(), 2);
+    }
+
+    #[test]
+    fn redimensionar_marco_clampa_al_minimo() {
+        let mut r = recorrido_demo();
+        r.redimensionar_marco(1, 500.0, 5.0); // alto por debajo del mínimo
+        let m = r.marco(1).unwrap();
+        assert_eq!(m.rect.w, 500.0);
+        assert_eq!(m.rect.h, MIN_MARCO);
+        // Conserva la esquina sup-izq (marco 1 estaba en 0,0).
+        assert_eq!((m.rect.x, m.rect.y), (0.0, 0.0));
+    }
+
+    #[test]
+    fn rotar_marco_acumula() {
+        let mut r = recorrido_demo();
+        r.rotar_marco(1, 0.3);
+        r.rotar_marco(1, 0.2);
+        assert!((r.marco(1).unwrap().rot_rad - 0.5).abs() < 1e-12);
+        r.rotar_marco(404, 1.0); // inexistente: no-op
+    }
+
+    #[test]
+    fn mover_paso_reordena_el_guion() {
+        let mut r = recorrido_demo(); // pasos [1,2,3]
+        r.mover_paso(0, 2); // lleva el primero al final
+        assert_eq!(r.pasos, vec![2, 3, 1]);
+        r.mover_paso(2, 0); // y de vuelta al inicio
+        assert_eq!(r.pasos, vec![1, 2, 3]);
+        // hasta fuera de rango → clamp al final; desde fuera de rango → no-op.
+        r.mover_paso(0, 99);
+        assert_eq!(r.pasos, vec![2, 3, 1]);
+        r.mover_paso(99, 0);
+        assert_eq!(r.pasos, vec![2, 3, 1]);
     }
 
     #[test]
