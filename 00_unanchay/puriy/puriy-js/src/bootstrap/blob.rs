@@ -63,6 +63,14 @@ globalThis.Blob.prototype.stream = function() {
         }
     });
 };
+// Fase 7.67 — bytes() devuelve Promise<Uint8Array> (adición 2024 al File/Fetch
+// spec; el equivalente directo de arrayBuffer() pero ya como vista de bytes).
+globalThis.Blob.prototype.bytes = function() {
+    var len = this._bytes.length;
+    var view = new Uint8Array(len);
+    for (var i = 0; i < len; i++) view[i] = this._bytes[i];
+    return Promise.resolve(view);
+};
 globalThis.Blob.prototype.slice = function(start, end, contentType) {
     var n = this._bytes.length;
     if (start == null) start = 0;

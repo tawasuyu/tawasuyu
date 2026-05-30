@@ -46,6 +46,14 @@ globalThis.Request.prototype.arrayBuffer = function() {
     for (var i = 0; i < s.length; i++) view[i] = s.charCodeAt(i) & 0xff;
     return Promise.resolve(buf);
 };
+globalThis.Request.prototype.bytes = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
+    this.bodyUsed = true;
+    var s = globalThis.__puriy_body_to_string(this._body);
+    var view = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) view[i] = s.charCodeAt(i) & 0xff;
+    return Promise.resolve(view);
+};
 globalThis.Request.prototype.formData = function() {
     if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
     this.bodyUsed = true;

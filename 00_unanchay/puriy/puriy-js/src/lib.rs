@@ -6910,4 +6910,98 @@ mod tests {
         assert_eq!(rt.eval("taOk").expect("e"), JsValue::Bool(true));
         assert_eq!(rt.eval("fnTira").expect("e"), JsValue::Bool(true));
     }
+
+    // ===== Fase 7.66 — URLSearchParams.size + has/delete dos args =====
+
+    #[test]
+    fn usp_size_cuenta_pares() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var p = new URLSearchParams('a=1&a=2&b=3'); var n0 = p.size; \
+             p.append('c', '4'); var n1 = p.size; \
+             p.delete('a'); var n2 = p.size;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n0").expect("e"), JsValue::Number(3.0));
+        assert_eq!(rt.eval("n1").expect("e"), JsValue::Number(4.0));
+        assert_eq!(rt.eval("n2").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn usp_has_y_delete_de_dos_args() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var p = new URLSearchParams('a=1&a=2&b=3'); \
+             var hasA2 = p.has('a', '2'); var hasA9 = p.has('a', '9'); var hasA = p.has('a'); \
+             p.delete('a', '1'); \
+             var queda = p.getAll('a').join(','); var size = p.size;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("hasA2").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("hasA9").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("hasA").expect("e"), JsValue::Bool(true));
+        // delete('a','1') sólo borra el par a=1; queda a=2 y b=3.
+        assert_eq!(rt.eval("queda").expect("e"), JsValue::String("2".into()));
+        assert_eq!(rt.eval("size").expect("e"), JsValue::Number(2.0));
+    }
+
+    // ===== Fase 7.67 — .bytes() en Blob / Response / Request =====
+
+    #[test]
+    fn bytes_en_blob_response_request() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Los `.then` corren como microtasks que drenan al CERRAR el eval, así
+        // que las aserciones van en evals separados (el patrón del resto).
+        rt.eval(
+            "var bb = null, rb = null, qb = null, rusada = false; \
+             new Blob(['AB']).bytes().then(function(u) { bb = u; }); \
+             var r = new Response('CD'); r.bytes().then(function(u) { rb = u; }); \
+             r.text().then(function() {}, function() { rusada = true; }); \
+             var q = new Request('https://e.com', { method: 'POST', body: 'EF' }); \
+             q.bytes().then(function(u) { qb = u; });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("(bb instanceof Uint8Array) && bb[0] === 65 && bb[1] === 66").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("(rb instanceof Uint8Array) && rb[0] === 67 && rb[1] === 68").expect("e"),
+            JsValue::Bool(true)
+        );
+        // bytes() consumió el body → text() posterior rechaza (bodyUsed).
+        assert_eq!(rt.eval("rusada").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("(qb instanceof Uint8Array) && qb[0] === 69 && qb[1] === 70").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    // ===== Fase 7.68 — navigator.sendBeacon =====
+
+    #[test]
+    fn navigator_send_beacon_encola_post() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval("var ret = navigator.sendBeacon('/log', 'evento=click');")
+            .expect("e");
+        assert_eq!(rt.eval("ret").expect("e"), JsValue::Bool(true));
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[1], "POST");
+        assert_eq!(parts[2], "https://example.com/log");
+        assert_eq!(parts[3], "1");
+        assert_eq!(parts[4], "evento=click");
+    }
+
+    #[test]
+    fn navigator_user_agent_y_online() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ua = typeof navigator.userAgent === 'string'; var on = navigator.onLine;")
+            .expect("e");
+        assert_eq!(rt.eval("ua").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("on").expect("e"), JsValue::Bool(true));
+    }
 }

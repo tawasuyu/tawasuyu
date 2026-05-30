@@ -65,11 +65,16 @@ globalThis.URLSearchParams = function(init) {
 globalThis.URLSearchParams.prototype.append = function(name, value) {
     this._list.push([String(name), String(value)]);
 };
-globalThis.URLSearchParams.prototype.delete = function(name) {
+globalThis.URLSearchParams.prototype.delete = function(name, value) {
     name = String(name);
+    // Fase 7.66 — overload de dos args: si se pasa value, borra sólo los
+    // pares que matcheen nombre Y valor (spec WHATWG reciente).
+    var hasValue = arguments.length > 1;
+    if (hasValue) value = String(value);
     var out = [];
     for (var i = 0; i < this._list.length; i++) {
-        if (this._list[i][0] !== name) out.push(this._list[i]);
+        var drop = this._list[i][0] === name && (!hasValue || this._list[i][1] === value);
+        if (!drop) out.push(this._list[i]);
     }
     this._list = out;
 };
@@ -88,10 +93,13 @@ globalThis.URLSearchParams.prototype.getAll = function(name) {
     }
     return out;
 };
-globalThis.URLSearchParams.prototype.has = function(name) {
+globalThis.URLSearchParams.prototype.has = function(name, value) {
     name = String(name);
+    // Fase 7.66 — overload de dos args: con value, exige match de nombre Y valor.
+    var hasValue = arguments.length > 1;
+    if (hasValue) value = String(value);
     for (var i = 0; i < this._list.length; i++) {
-        if (this._list[i][0] === name) return true;
+        if (this._list[i][0] === name && (!hasValue || this._list[i][1] === value)) return true;
     }
     return false;
 };
@@ -150,4 +158,13 @@ globalThis.URLSearchParams.prototype.values = function() {
 globalThis.URLSearchParams.prototype[Symbol.iterator] = function() {
     return this.entries();
 };
+// Fase 7.66 — `size` (cantidad de pares, contando duplicados). Adición
+// reciente del spec WHATWG.
+Object.defineProperty(globalThis.URLSearchParams.prototype, 'size', {
+    get: function() { return this._list.length; }
+});
+// El valor de retorno de defineProperty es el prototype; cerrar con `void 0`
+// evita que el bootstrap coaccione ese objeto a string (su toString corre con
+// `this = prototype`, sin `_list`, y tiraría).
+void 0;
 "#;
