@@ -330,6 +330,11 @@ pub struct Decal {
     /// `(0, 0)` (sin pared cercana — p.ej. sangre en el aire) el renderer
     /// cae al billboard camera-facing de 3.46.
     pub tangent: (f32, f32),
+    /// **Fase 3.48** — el impacto fue contra piso o techo: el quad yace
+    /// **horizontal** (ejes en el plano XY mundo, a `z` constante) como
+    /// un charco. Tiene prioridad sobre `tangent`. `false` ⇒ pared
+    /// (tangente) o billboard.
+    pub horizontal: bool,
 }
 
 /// Parámetros del renderer.
@@ -3540,7 +3545,21 @@ fn gather_decals(out: &mut Vec<Renderable>, cfg: &RenderConfig, cam: &Camera, pr
         // tangente, billboard 3.46 (a `cx_cam` constante el quad es
         // axis-aligned en pantalla).
         let (tx, ty) = d.tangent;
-        let corners: [Point; 4] = if tx != 0.0 || ty != 0.0 {
+        let corners: [Point; 4] = if d.horizontal {
+            // Fase 3.48: charco horizontal — ejes en el plano XY mundo a
+            // `z` constante. El quad se ve en perspectiva sobre el piso
+            // (o bajo el techo).
+            let project_xy = |dx: f32, dy: f32| -> Point {
+                let (wcx, wcy) = cam.to_cam_2d(d.x + dx, d.y + dy);
+                proj.project(wcx, wcy, cz)
+            };
+            [
+                project_xy(-r, -r),
+                project_xy(r, -r),
+                project_xy(r, r),
+                project_xy(-r, r),
+            ]
+        } else if tx != 0.0 || ty != 0.0 {
             // Esquinas en mundo: centro ± r·tangente (horizontal) y
             // ± r en Z (vertical). Cada una se transforma a cámara y
             // se proyecta — el quad queda con la inclinación de la pared.
@@ -7380,6 +7399,7 @@ mod tests {
                 color: (24, 21, 18),
                 alpha: 1.0,
                 tangent: (0.0, 0.0),
+                horizontal: false,
             }],
             ..Default::default()
         };
@@ -7401,6 +7421,7 @@ mod tests {
                 color: (24, 21, 18),
                 alpha: 1.0,
                 tangent: (0.0, 0.0),
+                horizontal: false,
             }],
             ..Default::default()
         };
@@ -7421,6 +7442,7 @@ mod tests {
                 color: (24, 21, 18),
                 alpha: 0.0, // ya desvanecido
                 tangent: (0.0, 0.0),
+                horizontal: false,
             }],
             ..Default::default()
         };
@@ -7441,6 +7463,7 @@ mod tests {
                 color: (100, 10, 10),
                 alpha: 0.5,
                 tangent: (0.0, 0.0),
+                horizontal: false,
             }],
             ..Default::default()
         };
@@ -7465,6 +7488,7 @@ mod tests {
                 color: (24, 21, 18),
                 alpha: 1.0,
                 tangent: (0.0, 0.0),
+                horizontal: false,
             }],
             ..Default::default()
         };
@@ -7491,6 +7515,7 @@ mod tests {
                     color: (24, 21, 18),
                     alpha: 1.0,
                     tangent,
+                    horizontal: false,
                 }],
                 ..Default::default()
             };
@@ -7524,6 +7549,50 @@ mod tests {
             (wl - wr).abs() > 1e-3,
             "pared oblicua: altura izq != der (perspectiva), izq={} der={}",
             wl, wr
+        );
+    }
+
+    #[test]
+    fn decal_horizontal_lies_flat_below_eye() {
+        // Fase 3.48: un decal horizontal (charco) en el piso, bajo el
+        // ojo, proyecta su borde cercano (más bajo en pantalla) más
+        // ancho que el lejano — perspectiva de un quad sobre el suelo.
+        let (cam, proj) = decal_test_setup(); // view_z=41, mira +X
+        let cfg = RenderConfig {
+            decals: vec![Decal {
+                x: 100.0,
+                y: 0.0,
+                z: 0.0, // a nivel del piso, bajo el ojo
+                radius: 16.0,
+                color: (24, 21, 18),
+                alpha: 1.0,
+                tangent: (0.0, 0.0),
+                horizontal: true,
+            }],
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        gather_decals(&mut out, &cfg, &cam, &proj);
+        assert_eq!(out.len(), 1);
+        let pts: Vec<Point> = out[0]
+            .path
+            .elements()
+            .iter()
+            .filter_map(|e| match e {
+                llimphi_ui::llimphi_raster::kurbo::PathEl::MoveTo(p)
+                | llimphi_ui::llimphi_raster::kurbo::PathEl::LineTo(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        // pts = [(-r,-r), (r,-r), (r,r), (-r,r)] en XY mundo. El borde
+        // cercano (x_cam = 100-16 = 84) lo forman pts[0] y pts[3]; el
+        // lejano (x_cam = 116), pts[1] y pts[2]. El cercano es más ancho.
+        let near_w = (pts[0].x - pts[3].x).abs();
+        let far_w = (pts[1].x - pts[2].x).abs();
+        assert!(
+            near_w > far_w + 1e-3,
+            "borde cercano más ancho que el lejano: near={} far={}",
+            near_w, far_w
         );
     }
 

@@ -190,6 +190,8 @@ struct HostDecal {
     /// Fase 3.47: tangente del lineseg impactado para apoyar el decal
     /// plano. `(0, 0)` ⇒ billboard.
     tangent: (f32, f32),
+    /// Fase 3.48: impacto contra piso/techo ⇒ charco horizontal.
+    horizontal: bool,
 }
 
 /// Fase 3.47: tangente unitaria del lineseg más cercano a `(x, y)`
@@ -222,6 +224,10 @@ fn nearest_wall_tangent(walls: &[WallSeg], x: f32, y: f32, max_dist: f32) -> (f3
 /// Distancia máxima (unidades) impacto→pared para apoyar el decal plano.
 /// Más allá, billboard (sangre/impacto lejos de cualquier pared).
 const DECAL_WALL_SNAP_DIST: f32 = 32.0;
+
+/// Fase 3.48: holgura (unidades) para considerar un impacto "contra el
+/// piso o el techo" del sector ⇒ decal horizontal en vez de pared.
+const DECAL_PLANE_SNAP: f32 = 12.0;
 
 /// Vida de un decal en ticks (35 Hz). ~6 s antes de desvanecerse.
 const DECAL_TTL: u32 = 210;
@@ -468,12 +474,15 @@ impl App for Supay {
                         }
                     }
                 }
-                // (2) posiciones de impacto presentes este tick.
-                let impacts: Vec<(f32, f32, f32, DecalKind)> = snap
+                // (2) posiciones de impacto presentes este tick (+ sector
+                // para decidir piso/techo vs pared).
+                let impacts: Vec<(f32, f32, f32, DecalKind, u32)> = snap
                     .sprites
                     .iter()
                     .filter_map(|spr| {
-                        m.decal_kind.get(&spr.sprite).map(|&k| (spr.x, spr.y, spr.z, k))
+                        m.decal_kind
+                            .get(&spr.sprite)
+                            .map(|&k| (spr.x, spr.y, spr.z, k, spr.sector))
                     })
                     .collect();
                 // (3) envejecer los decals vivos.
@@ -483,7 +492,7 @@ impl App for Supay {
                 });
                 // (4) sembrar los impactos nuevos (no vistos el tick
                 // anterior, dedup posicional).
-                for &(x, y, z, k) in &impacts {
+                for &(x, y, z, k, sector) in &impacts {
                     let is_new = !m.prev_impacts.iter().any(|&(px, py)| {
                         let dx = px - x;
                         let dy = py - y;
@@ -499,10 +508,19 @@ impl App for Supay {
                         DecalKind::Scorch => ((24, 21, 18), 5.0),
                         DecalKind::Blood => ((104, 12, 12), 5.0),
                     };
-                    // Fase 3.47: apoyamos el decal plano sobre la pared
-                    // más cercana (si la hay dentro de SNAP_DIST).
-                    let tangent =
-                        nearest_wall_tangent(&snap.walls, x, y, DECAL_WALL_SNAP_DIST);
+                    // Fase 3.48: si el impacto cae cerca del piso o del
+                    // techo de su sector, el decal yace horizontal (charco).
+                    // Si no, Fase 3.47: lo apoyamos sobre la pared más
+                    // cercana (tangente); sin pared, billboard.
+                    let horizontal = snap.sectors.get(sector as usize).is_some_and(|s| {
+                        z <= s.floor_height + DECAL_PLANE_SNAP
+                            || z >= s.ceiling_height - DECAL_PLANE_SNAP
+                    });
+                    let tangent = if horizontal {
+                        (0.0, 0.0)
+                    } else {
+                        nearest_wall_tangent(&snap.walls, x, y, DECAL_WALL_SNAP_DIST)
+                    };
                     m.decals.push(HostDecal {
                         x,
                         y,
@@ -511,9 +529,10 @@ impl App for Supay {
                         color,
                         radius,
                         tangent,
+                        horizontal,
                     });
                 }
-                m.prev_impacts = impacts.iter().map(|&(x, y, _, _)| (x, y)).collect();
+                m.prev_impacts = impacts.iter().map(|&(x, y, _, _, _)| (x, y)).collect();
                 m.snapshots.push(snap);
                 m.last_tick_at = Instant::now();
             }
@@ -640,6 +659,7 @@ impl App for Supay {
                             color: d.color,
                             alpha: d.ttl as f32 / DECAL_TTL as f32,
                             tangent: d.tangent,
+                            horizontal: d.horizontal,
                         })
                         .collect(),
                     ..RenderConfig::default()
@@ -701,7 +721,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.47 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.48 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,
