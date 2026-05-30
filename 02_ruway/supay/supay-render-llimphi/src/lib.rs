@@ -1859,6 +1859,22 @@ fn plane_near_far_indices(clipped: &[(f32, f32)]) -> Option<(usize, usize)> {
     Some((i_near, i_far))
 }
 
+/// **Fase 3.45** — proyección escalar de un punto `p` sobre el eje
+/// `start→end`, normalizada a `[0, 1]` (clampeada). `start` ⇒ 0,
+/// `end` ⇒ 1, puntos intermedios según su proyección ortogonal. Si el
+/// eje es degenerado (`start ≈ end`) devuelve 0. Usado para ubicar los
+/// stops del gradiente de profundidad de planos en su offset correcto.
+fn axis_offset(p: Point, start: Point, end: Point) -> f32 {
+    let ax = end.x - start.x;
+    let ay = end.y - start.y;
+    let len2 = ax * ax + ay * ay;
+    if len2 < 1e-9 {
+        return 0.0;
+    }
+    let t = ((p.x - start.x) * ax + (p.y - start.y) * ay) / len2;
+    t.clamp(0.0, 1.0) as f32
+}
+
 // =====================================================================
 // API pública
 // =====================================================================
@@ -3143,10 +3159,17 @@ fn gather_subsector_planes(
                                 use llimphi_ui::llimphi_raster::peniko::Gradient;
                                 let start = screen_pts[i_near];
                                 let end = screen_pts[i_far];
-                                let mut dark = Vec::with_capacity(2);
-                                let mut tint = Vec::with_capacity(2);
-                                for (off, idx) in [(0.0_f32, i_near), (1.0_f32, i_far)] {
-                                    let (vx, vy) = clipped[idx];
+                                // Fase 3.45: muestreamos fog + boost en
+                                // *cada* vértice del polígono (más el
+                                // centroide), proyectando su posición en
+                                // pantalla sobre el eje near→far para
+                                // obtener el offset del stop. Así el
+                                // gradiente captura la variación de luz
+                                // intermedia (un proyectil a mitad del
+                                // piso, una esquina más iluminada) en
+                                // lugar de interpolar linealmente sólo
+                                // entre los dos extremos (3.44).
+                                let sample_at = |vx: f32, vy: f32| -> (f32, BoostRgb) {
                                     let vdepth = (vx * vx + vy * vy).sqrt();
                                     let vb = combined_boost_rgb_plane_cam(
                                         vx,
@@ -3162,10 +3185,44 @@ fn gather_subsector_planes(
                                     );
                                     let vshade =
                                         shade_for(sec.light_level, vdepth, cfg) * base_factor;
-                                    // Pasamos el lit-shade completo como
-                                    // "boost_scalar" con base 0 ⇒ el
-                                    // helper computa alpha = (1 - lit)·255.
+                                    // lit-shade completo; el helper de
+                                    // oscuridad recibe base 0 ⇒ alpha =
+                                    // (1 - lit)·255.
                                     let lit = (vshade + boost_max(vb)).clamp(0.0, 1.0);
+                                    (lit, vb)
+                                };
+                                // (offset, lit, boost) por vértice +
+                                // centroide.
+                                let mut raw: Vec<(f32, f32, BoostRgb)> =
+                                    Vec::with_capacity(clipped.len() + 1);
+                                for (i, &(vx, vy)) in clipped.iter().enumerate() {
+                                    let off = axis_offset(screen_pts[i], start, end);
+                                    let (lit, vb) = sample_at(vx, vy);
+                                    raw.push((off, lit, vb));
+                                }
+                                // Centroide (offset por su proyección).
+                                let c_screen = proj.project(
+                                    centroid_cx,
+                                    centroid_cy,
+                                    z_world - cam.view_z,
+                                );
+                                let c_off = axis_offset(c_screen, start, end);
+                                let (c_lit, c_vb) = sample_at(centroid_cx, centroid_cy);
+                                raw.push((c_off, c_lit, c_vb));
+                                // Orden por offset + dedup (Vello exige
+                                // offsets no decrecientes; colapsamos los
+                                // casi-iguales para evitar stops cero-ancho).
+                                raw.sort_by(|a, b| {
+                                    a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                let mut dark: Vec<(f32, f32)> = Vec::with_capacity(raw.len());
+                                let mut tint: Vec<(f32, BoostRgb)> = Vec::with_capacity(raw.len());
+                                let mut last_off = f32::NEG_INFINITY;
+                                for (off, lit, vb) in raw {
+                                    if off <= last_off + 1e-4 {
+                                        continue;
+                                    }
+                                    last_off = off;
                                     dark.push((off, lit));
                                     tint.push((off, vb));
                                 }
@@ -7132,6 +7189,63 @@ mod tests {
     fn plane_depth_gradient_default_off() {
         let cfg = RenderConfig::default();
         assert!(!cfg.plane_depth_gradient);
+    }
+
+    #[test]
+    fn axis_offset_endpoints_and_midpoint() {
+        // Fase 3.45: proyección sobre el eje start→end.
+        let start = Point::new(100.0, 400.0);
+        let end = Point::new(100.0, 100.0); // eje vertical hacia arriba
+        assert!((axis_offset(start, start, end) - 0.0).abs() < 1e-5, "start ⇒ 0");
+        assert!((axis_offset(end, start, end) - 1.0).abs() < 1e-5, "end ⇒ 1");
+        let mid = Point::new(100.0, 250.0);
+        assert!((axis_offset(mid, start, end) - 0.5).abs() < 1e-5, "mid ⇒ 0.5");
+    }
+
+    #[test]
+    fn axis_offset_clamps_and_projects_orthogonally() {
+        let start = Point::new(0.0, 0.0);
+        let end = Point::new(10.0, 0.0); // eje horizontal
+        // Punto más allá del end ⇒ clamp a 1.
+        assert_eq!(axis_offset(Point::new(50.0, 0.0), start, end), 1.0);
+        // Punto antes del start ⇒ clamp a 0.
+        assert_eq!(axis_offset(Point::new(-5.0, 0.0), start, end), 0.0);
+        // Punto fuera del eje (con offset y): sólo cuenta la componente x.
+        assert!((axis_offset(Point::new(5.0, 99.0), start, end) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn axis_offset_degenerate_axis_is_zero() {
+        let p = Point::new(3.0, 7.0);
+        let s = Point::new(1.0, 1.0);
+        assert_eq!(axis_offset(p, s, s), 0.0, "eje cero ⇒ 0 sin NaN");
+    }
+
+    #[test]
+    fn plane_multistop_dedup_keeps_increasing_offsets() {
+        // Reproduce el dedup del gradiente de planos 3.45: offsets casi
+        // iguales colapsan, el resultado queda estrictamente creciente.
+        let raw = [
+            (0.0_f32, 0.9_f32),
+            (0.00005, 0.8), // colapsa con 0.0 (< +1e-4)
+            (0.5, 0.6),
+            (0.5, 0.5), // colapsa con el 0.5 previo
+            (1.0, 0.3),
+        ];
+        let mut last = f32::NEG_INFINITY;
+        let mut kept = Vec::new();
+        for &(off, lit) in &raw {
+            if off <= last + 1e-4 {
+                continue;
+            }
+            last = off;
+            kept.push((off, lit));
+        }
+        let offs: Vec<f32> = kept.iter().map(|&(o, _)| o).collect();
+        assert_eq!(offs, vec![0.0, 0.5, 1.0], "dedup deja 3 stops crecientes");
+        for w in offs.windows(2) {
+            assert!(w[1] > w[0]);
+        }
     }
 
     // =================================================================
