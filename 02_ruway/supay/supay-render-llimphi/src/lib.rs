@@ -1193,13 +1193,23 @@ const SPRITE_RIM_AMBIENT_FLOOR: f32 = 0.3;
 /// (`world_lights_boost_rgb_cam`). Con `directional=true` cada luz se
 /// escala por `att = max(SPRITE_RIM_AMBIENT_FLOOR, 0.5 + 0.5·cos(θ))`
 /// donde `cos(θ) = dot(normal, dir_sprite_to_light)` y la normal es
-/// `(-x_surf, -y_surf)/|surf|` (toward camera).
+/// `(-x_surf, -y_surf)/|surf|` (toward camera) — Vec2 con `nz=0`,
+/// consistente con el billboard model (sprites flat hacia la cámara
+/// regardless de pitch).
+///
+/// Fase 3.35: la distancia y el cosine pasan a 3D usando `z_surf_cam`
+/// (sprite z relativo al ojo). Una luz alta a la misma XY del mobj
+/// queda con cos menor (`d_3D > d_XY` ⇒ normalización mayor) — la
+/// cara del sprite "ve" menos de su intensidad. El radio también
+/// es 3D-aware: una luz a 200 u en vertical queda fuera aunque su
+/// XY caiga adentro.
 ///
 /// Casos degenerados (sprite en la cámara o luz coincidente con el
 /// sprite): att=1.0 — sin NaN.
 fn world_lights_boost_rgb_for_sprite_cam(
     x_surf: f32,
     y_surf: f32,
+    z_surf_cam: f32,
     surf_sector: u32,
     lights: &[WorldLight],
     directional: bool,
@@ -1232,7 +1242,8 @@ fn world_lights_boost_rgb_for_sprite_cam(
         }
         let dx = l.x_cam - x_surf;
         let dy = l.y_cam - y_surf;
-        let d2 = dx * dx + dy * dy;
+        let dz = l.z_cam - z_surf_cam;
+        let d2 = dx * dx + dy * dy + dz * dz;
         if d2 >= r2 {
             continue;
         }
@@ -1241,7 +1252,7 @@ fn world_lights_boost_rgb_for_sprite_cam(
             1.0
         } else {
             let inv_d = d2.sqrt().recip();
-            let cos_theta = nx * dx * inv_d + ny * dy * inv_d;
+            let cos_theta = (nx * dx + ny * dy) * inv_d;
             (0.5 + 0.5 * cos_theta).max(SPRITE_RIM_AMBIENT_FLOOR)
         };
         let amount = f * f * peak * att;
@@ -1257,13 +1268,15 @@ fn world_lights_boost_rgb_for_sprite_cam(
     ]
 }
 
-/// Versión sprite del boost combinado: muzzle (omni, anclado al jugador)
-/// + world lights direccionadas por la fake-normal del billboard.
-/// El muzzle no se direcciona porque emana **del** sprite del arma,
-/// que es ortogonal a la geometría de un mobj observado a distancia.
+/// Versión sprite del boost combinado: muzzle (omni 2D, anclado al
+/// jugador) + world lights direccionadas por la fake-normal del
+/// billboard, con BRDF 3D (Fase 3.35). El muzzle no se direcciona
+/// porque emana **del** sprite del arma — esa luz "envuelve" al mobj
+/// independiente de la fake-normal.
 fn combined_boost_rgb_sprite_cam(
     x_cam: f32,
     y_cam: f32,
+    z_surf_cam: f32,
     muzzle_alpha: f32,
     surf_sector: u32,
     lit_sectors: Option<&HashSet<u32>>,
@@ -1278,6 +1291,7 @@ fn combined_boost_rgb_sprite_cam(
     let w = world_lights_boost_rgb_for_sprite_cam(
         x_cam,
         y_cam,
+        z_surf_cam,
         surf_sector,
         world_lights,
         directional,
@@ -2982,6 +2996,12 @@ fn gather_sprite(
     let sec = snap.sectors.get(sprite.sector as usize);
     let floor = sec.map(|s| s.floor_height).unwrap_or(0.0);
     let depth = (x_cam * x_cam + y_cam * y_cam).sqrt();
+    // Fase 3.35: punto de muestreo vertical para BRDF 3D — usamos el
+    // floor del sprite (mobj.z) relativo al ojo. El sprite es una
+    // billboard tall; este sample point representa la base. Suficiente
+    // para que el cosine refleje la diferencia de altura entre el mobj
+    // y las luces cercanas (antorcha en techo vs proyectil al ras).
+    let z_surf_cam = sprite.z - cam.view_z;
 
     // Fase 3.21: sombra circular en el plano del piso bajo el sprite.
     // Va siempre — texturizado o fallback — antes de pushear el sprite
@@ -3053,6 +3073,7 @@ fn gather_sprite(
             let boost_rgb = combined_boost_rgb_sprite_cam(
                 x_cam,
                 y_cam,
+                z_surf_cam,
                 cfg.muzzle_glow_alpha,
                 sprite.sector,
                 lit_sectors,
@@ -3094,10 +3115,11 @@ fn gather_sprite(
     // Fase 3.26: fallback (sin patch del WAD) también combina muzzle + world lights.
     // Fase 3.27: boost RGB per-canal.
     // Fase 3.31: idem rim direccional (fake-normal toward camera) si
-    // el toggle está on.
+    // el toggle está on. Fase 3.35: distancia 3D usando `z_surf_cam`.
     let boost = combined_boost_rgb_sprite_cam(
         x_cam,
         y_cam,
+        z_surf_cam,
         cfg.muzzle_glow_alpha,
         sprite.sector,
         lit_sectors,
@@ -5881,8 +5903,8 @@ mod tests {
         // direccional debería coincidir bit-a-bit con el omni.
         let white = (255, 255, 255);
         let lights = [rim_light(100.0, 0.0, white)];
-        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, false);
-        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, true);
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, false);
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, true);
         for ch in 0..3 {
             assert!(
                 (omni[ch] - dir[ch]).abs() < 1e-5,
@@ -5899,8 +5921,8 @@ mod tests {
         // cámara), opuesto a la fake-normal (-1, 0). cos=-1 ⇒ att=floor.
         let white = (255, 255, 255);
         let lights = [rim_light(260.0, 0.0, white)];
-        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, false);
-        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, true);
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, false);
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, true);
         for ch in 0..3 {
             if omni[ch] > 0.01 {
                 let ratio = dir[ch] / omni[ch];
@@ -5921,8 +5943,8 @@ mod tests {
         // (-1, 0). cos=0 ⇒ att=0.5.
         let white = (255, 255, 255);
         let lights = [rim_light(200.0, 60.0, white)];
-        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, false);
-        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, true);
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, false);
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, true);
         for ch in 0..3 {
             if omni[ch] > 0.01 {
                 let ratio = dir[ch] / omni[ch];
@@ -5948,7 +5970,7 @@ mod tests {
             rim_light(120.0, -40.0, blue),
             rim_light(240.0, 80.0, warm),
         ];
-        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, false);
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, false);
         let baseline = world_lights_boost_rgb_cam(200.0, 0.0, NO_SECTOR, &lights);
         assert_eq!(omni, baseline, "directional=false debe ser bit-identical al path 3.29");
     }
@@ -5961,12 +5983,12 @@ mod tests {
         // ≥ 0 por canal.
         let white = (255, 255, 255);
         let lights = [rim_light(50.0, 0.0, white)];
-        let dir = world_lights_boost_rgb_for_sprite_cam(0.0, 0.0, NO_SECTOR, &lights, true);
+        let dir = world_lights_boost_rgb_for_sprite_cam(0.0, 0.0, 0.0, NO_SECTOR, &lights, true);
         for ch in 0..3 {
             assert!(dir[ch].is_finite(), "canal {} no NaN/Inf", ch);
         }
         // Y debería coincidir con el omni (porque caemos al fallback).
-        let omni = world_lights_boost_rgb_for_sprite_cam(0.0, 0.0, NO_SECTOR, &lights, false);
+        let omni = world_lights_boost_rgb_for_sprite_cam(0.0, 0.0, 0.0, NO_SECTOR, &lights, false);
         assert_eq!(dir, omni, "degenerado ⇒ fallback omni");
     }
 
@@ -6279,6 +6301,101 @@ mod tests {
         for ch in 0..3 {
             assert!(dir[ch].is_finite(), "canal {} finite", ch);
             assert!(dir[ch] > 0.0, "luz pegada aporta full");
+        }
+    }
+
+    // =================================================================
+    // Fase 3.35 — BRDF 3D para mobj sprites
+    // =================================================================
+
+    #[test]
+    fn sprite_rim_3d_high_light_attenuates_compared_to_planar() {
+        // Sprite (mobj) en (200, 0, 0). Dos luces a misma XY (100, 0)
+        // pero distinto z_cam:
+        //   - planar (100, 0, 0): al nivel del eye/sprite.
+        //   - high   (100, 0, 60): 60 unidades arriba.
+        // 3D BRDF: d² incluye dz, cos = (nx·dx + ny·dy)/d_3D — la alta
+        // queda con d_3D > d_2D y cos < cos_2D ⇒ menor aporte.
+        let white = (255, 255, 255);
+        let planar = [WorldLight {
+            x_cam: 100.0, y_cam: 0.0, z_cam: 0.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let high = [WorldLight {
+            x_cam: 100.0, y_cam: 0.0, z_cam: 60.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let b_planar = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &planar, true);
+        let b_high = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &high, true);
+        for ch in 0..3 {
+            assert!(
+                b_planar[ch] > b_high[ch],
+                "luz alta debería atenuar más vía 3D: canal {} planar={} high={}",
+                ch, b_planar[ch], b_high[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn sprite_rim_3d_radius_cuts_far_vertical_light() {
+        // Sprite a (200, 0, 0). Luz a XY (200, 0) pero z=250. En 2D
+        // d_XY=0 ⇒ omni la incluye; en 3D d=250 > r=192 ⇒ direccional
+        // la excluye.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 200.0, y_cam: 0.0, z_cam: 250.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, true);
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, false);
+        assert_eq!(dir, ZERO_BOOST, "3D radio corta la luz lejana en z");
+        assert!(omni[0] > 0.0, "omni 2D no la corta (d_XY=0)");
+    }
+
+    #[test]
+    fn sprite_rim_3d_planar_light_finite_and_positive() {
+        // Luz con z_cam=0 (planar al sprite). Sanity check del path 3D
+        // colapsando a 2D cuando dz=0.
+        let red = (255, 130, 60);
+        let lights = [WorldLight {
+            x_cam: 100.0, y_cam: 30.0, z_cam: 0.0,
+            sector: NO_SECTOR, tint_rgb: red, lit_sectors: None,
+        }];
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            assert!(dir[ch].is_finite(), "canal {} finite", ch);
+        }
+        assert!(dir[0] > 0.0, "tinte rojo presente");
+    }
+
+    #[test]
+    fn sprite_rim_3d_disabled_uses_omni_2d() {
+        // Toggle off ⇒ bit-equivalente al `world_lights_boost_rgb_cam`
+        // omni 2D del 3.29 incluso con z_cam alto.
+        let lights = [WorldLight {
+            x_cam: 100.0, y_cam: 20.0, z_cam: 80.0,
+            sector: NO_SECTOR, tint_rgb: (200, 200, 200), lit_sectors: None,
+        }];
+        let off = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, 0.0, NO_SECTOR, &lights, false);
+        let baseline = world_lights_boost_rgb_cam(200.0, 0.0, NO_SECTOR, &lights);
+        assert_eq!(off, baseline);
+    }
+
+    #[test]
+    fn sprite_rim_3d_handles_sprite_below_eye_level() {
+        // Sprite en (200, 0, -32) (mobj parado sobre piso 32 u debajo
+        // del ojo) + luz al ras del piso a la izquierda (100, 50, -32).
+        // dz = 0 ⇒ ratio 3D/2D ≈ 1 (luz al nivel del sprite). El
+        // direccional debería seguir siendo finito y positivo.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 100.0, y_cam: 50.0, z_cam: -32.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, -32.0, NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            assert!(dir[ch].is_finite(), "canal {} finite", ch);
+            assert!(dir[ch] > 0.0, "luz al nivel del sprite aporta canal {}", ch);
         }
     }
 }

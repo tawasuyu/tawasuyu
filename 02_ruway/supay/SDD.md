@@ -750,6 +750,43 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.34 (defer a 3.35+):** sprite-BSP true occlusion vía R_CheckSight; smoothing del muzzle alpha por interp entre snapshots; volumetric god rays; decals dinámicos del impacto del disparo; tabla de tintes para Final Doom / Heretic-style PWADs; cache cross-tick del lit_sectors por (sector, radio); BRDF 3D también en sprites; subdivisión vertical de walls para BRDF per-strip; muzzle direccional sobre walls; planos inclinados (slopes).
 
+**Fase 3.35 (2026-05-30, este bloque):** BRDF 3D para mobj sprites — cierra el ciclo direccional 3D completo.
+
+- **Contexto.** 3.32→3.34 movió walls, planes y de vuelta walls al BRDF 3D. Faltaban sprites — el path direccional de 3.31 seguía siendo 2D pure (`d² = dx² + dy²`, `cos = (nx·dx + ny·dy)/d_2D`). Con `z_cam` en `WorldLight` desde 3.33, sprites pueden adoptar el mismo modelo que walls: normal 2D toward-camera (consistente con el billboard que siempre encara al jugador), pero distancia y normalización del cosine en 3D. Resultado: un mobj queda menos iluminado por una luz que está alta arriba de él y más por una al mismo nivel.
+- **`world_lights_boost_rgb_for_sprite_cam` toma `z_surf_cam: f32`.** Sample point vertical del sprite — `gather_sprite` lo computa como `sprite.z - cam.view_z` (mobj.z floor del sprite, relativo al ojo del jugador). La normal sigue siendo 2D `(-x_surf, -y_surf)/|surf|` (la billboard mira al jugador en XY, sin tilt vertical). `d² = dx² + dy² + dz²`, `cos = (nx·dx + ny·dy)/d_3D` — la `dz` no aparece en el numerador del cos (la normal no tiene componente Z), pero sí en el denominador.
+- **`combined_boost_rgb_sprite_cam` también toma `z_surf_cam`** y lo reenvía. Ambos sites de `gather_sprite` (patch texturizado + fallback) pasan `z_surf_cam = sprite.z - cam.view_z`.
+- **Sample point.** Elegimos el floor del sprite (mobj.z, donde el sprite "se apoya") en lugar del centro vertical. Razón: simple y consistente con la convención Doom de anclaje al piso; la diferencia con el centro (~24 u para un imp) es pequeña respecto al radio 192. Cuando la altura del patch decodificado realmente importe, podemos sumar `patch.height * 0.5` en una fase futura.
+- **Compatibilidad 3.31.** Todas las luces con `z_cam=0` y sample con `z_surf_cam=0` colapsan al cálculo 2D del 3.31. Los 5 tests previos de sprite directional siguen verde porque `rim_light` helper usa z_cam=0 y los tests llaman con z_surf_cam=0 (actualizados via perl one-liner). El path `sprite_rim_directional=false` cae al omni 2D 3.29 — bit-equivalente.
+- **Resultado visible.** Caminar bajo un techo con una lámpara alta (TLMP en z=80) que hace stand-up frente a un imp (z=0): el imp recibe menos tinte que en 3.31 porque la luz queda con cosine rasante (`d_3D > d_XY`). Un fireball volando muy alto (BAL1 a z=120 over el player's head) deja de tintar a los enemigos del suelo: 3D distance los excluye del radio. Un imp con un mismo fireball pasando al ras de su altura (z=24): tinte rojo fuerte. La separación vertical pega — antes (3.31) un fireball flotante daba el mismo tinte que uno al nivel del mobj.
+- **Tests** (+5 render = 124 total verde):
+  - `sprite_rim_3d_high_light_attenuates_compared_to_planar` — dos luces a misma XY pero distinta z ⇒ la alta atenúa más.
+  - `sprite_rim_3d_radius_cuts_far_vertical_light` — luz `z=250` con `d_XY=0` ⇒ direccional 3D la excluye; omni 2D no.
+  - `sprite_rim_3d_planar_light_finite_and_positive` — sanity con luz a `z=0` (colapso al 2D).
+  - `sprite_rim_3d_disabled_uses_omni_2d` — toggle off ⇒ bit-equivalente al 3.29 aún con z_cam alto.
+  - `sprite_rim_3d_handles_sprite_below_eye_level` — sprite en piso debajo del ojo (z_surf=−32) + luz al ras del piso ⇒ finito, positivo (sanity del path con z_surf < 0).
+- **Header bump**: `PHASE 3.34` → `PHASE 3.35`.
+- **Costo.** Igual que walls 3.34: 1 multiplicación + 1 suma por luz (componente z). Despreciable.
+
+**Cierre del ciclo direccional 3D.**
+
+Con 3.35 cerrado, **todas las superficies del renderer con normal definida** pasan por BRDF 3D unificado:
+| Superficie | Fase | Normal | d/cos |
+|---|---|---|---|
+| Arma (psprite) | 3.30 | `+X_cam` fija | 2D (sólo XY) |
+| Mobj sprite (billboard) | 3.31→3.35 | `(-x, -y)/|s|` toward-cam | **3D** |
+| Wall | 3.32→3.34 | perpendicular al lineseg toward-cam | **3D** |
+| Floor | 3.33 | `+Z` | **3D** |
+| Ceiling | 3.33 | `-Z` | **3D** |
+
+El arma sigue siendo 2D (el psprite no tiene posición Z real — es overlay 2D sobre el viewport, evaluado en el origen del cam-space). El resto es BRDF 3D coherente.
+
+**Limitaciones conocidas de 3.35.**
+- **Sample point en el floor del sprite.** Para mobjs altos (cyberdemon ~110 u), el sample subestima el cos para luces a media altura. Un offset `+ patch.height·0.5` sería más fiel — defer hasta que se necesite distinguir.
+- **Sprite normal sigue 2D.** Si en el futuro queremos modelar la inclinación del billboard cuando el jugador mira hacia arriba/abajo (pitch), habría que extender la normal a Vec3. Hoy el billboard se proyecta plano hacia la cámara independientemente del pitch — coherente con Doom clásico.
+- **Sprites no usan los lit_sectors específicos del sprite.** El gating usa `sprite.sector`, igual que el resto. Si un mobj está en un sector y una luz en otro pero conectados, los dos quedan iluminados por el BFS 3.29 — esperado.
+
+**No incluido en 3.35 (defer a 3.36+):** sprite-BSP true occlusion vía R_CheckSight (gating por línea de vista exacta); smoothing del muzzle alpha por interp entre snapshots; volumetric god rays; decals dinámicos del impacto del disparo; tabla de tintes para Final Doom / Heretic-style PWADs; cache cross-tick del lit_sectors por (sector, radio); subdivisión vertical de walls para BRDF per-strip; muzzle direccional sobre walls; planos inclinados (slopes); sprite sample point en el centro del patch (offset `+height·0.5`).
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -813,6 +850,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-30 (+10):** Fase 3.35 — BRDF 3D para mobj sprites. `world_lights_boost_rgb_for_sprite_cam` y `combined_boost_rgb_sprite_cam` toman `z_surf_cam: f32` (sample point vertical, `sprite.z - cam.view_z` desde `gather_sprite`). Normal sigue 2D toward-camera (billboard model); distancia y cosine en 3D: `d² = dx²+dy²+dz²`, `cos = (nx·dx + ny·dy)/d_3D`. Mobj recibe menos tinte de luces verticalmente lejanas; radio 3D corta proyectiles altos. Plumbing en los dos sites de `gather_sprite`. 9 callers de test actualizados via perl. Compatibilidad 3.31 bit-equivalent cuando z_cam=z_surf=0. **Cierra el ciclo direccional 3D** — todas las superficies con normal definida (sprites, walls, floors, ceilings) usan BRDF 3D unificado. 124 tests verde (+5). Header `PHASE 3.34` → `PHASE 3.35`.
 - **2026-05-30 (+9):** Fase 3.34 — BRDF 3D para paredes. `world_lights_boost_rgb_for_wall_cam` y `combined_boost_rgb_wall_cam` toman `z_surf_cam: f32` (sample point vertical, `0.0` = eye level del jugador desde `gather_wall`). La distancia y el cosine pasan a 3D: `d² = dx²+dy²+dz²`, `cos = (nx·dx + ny·dy)/d_3D` (la wall normal tiene `nz=0`, las paredes son verticales). Antorcha alta a misma XY que la pared atenúa más (`cos < cos_2D`); radio 3D corta luces remotas en vertical aunque XY caiga adentro. 7 calls test fixures actualizadas con `z_surf_cam=0.0` via perl. Compatibilidad 3.32 bit-equivalent cuando todas las luces tienen `z_cam=0` (caso común en los fixtures previos). `wall_rim_directional=false` ⇒ omni 2D 3.29 sin cambio. 119 tests verde (+5: high-attenuates-vs-planar, 3d-radius-cuts-vertical, planar-finite, disabled-omni, zero-distance-safe). Header `PHASE 3.33` → `PHASE 3.34`.
 - **2026-05-30 (+8):** Fase 3.33 — BRDF 3D para pisos y techos. `WorldLight` gana `z_cam` (sprite.z menos `cam.view_z`). Nuevos helpers `world_lights_boost_rgb_for_plane_cam` + `combined_boost_rgb_plane_cam` con falloff por d² 3D + cosine `n_z·dz/d_3D`. Pisos usan `n_z=+1`, techos `n_z=-1`. `gather_subsector_planes` ahora calcula el boost dentro de `emit_plane` (una vez por floor, una por ceiling) — eliminado el cómputo único compartido. `RenderConfig::plane_rim_directional` default on; `false` ⇒ bit-equivalente al path omni 2D 3.29. `combined_boost_rgb_cam` queda `#[cfg(test)]` — todos los callers del render loop pasaron a variantes especializadas (wall, sprite, plane, weapon). Proyectil al ras del piso ilumina fuerte el piso y rasante el techo; antorcha alta ilumina más el techo. Radio 3D corta luces que el 2D dejaba pasar. 11 fixtures de tests actualizados con `z_cam: 0.0` vía perl. 114 tests verde (+5). Header `PHASE 3.32` → `PHASE 3.33`.
 - **2026-05-30 (+7):** Fase 3.32 — rim direccional para paredes. Cierra la trilogía 3.30→3.31→3.32. Cada pared usa `wall_normal_cam(x1, y1, x2, y2, mid_x, mid_y)` para resolver su perpendicular toward-camera; el aporte de cada world light se atenúa por `max(0.3, 0.5 + 0.5·cos(θ))`. Antorcha perpendicular ⇒ 100 %, rasante (paralela al lineseg) ⇒ 50 %, detrás del plano ⇒ piso `WALL_RIM_AMBIENT_FLOOR=0.3`. Muzzle queda omni (consistente con 3.30/3.31). Nuevos helpers `world_lights_boost_rgb_for_wall_cam` + `combined_boost_rgb_wall_cam` aplicados en el site del boost de `gather_wall`. `RenderConfig::wall_rim_directional` default on; `false` ⇒ bit-identical al path omni 3.29. Pisos/techos siguen omni. 109 tests verde (+6: normal-orients-camera, normal-degenerate, perpendicular-full, grazing-half, back-floor, disabled-equals-omni). Header `PHASE 3.31` → `PHASE 3.32`.
