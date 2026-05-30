@@ -12,6 +12,7 @@ mod url;
 mod streams;
 mod blob;
 mod file;
+mod filereader;
 mod objecturl;
 mod urlsearchparams;
 mod urlclass;
@@ -42,6 +43,7 @@ pub(crate) use url::URL_BOOTSTRAP;
 pub(crate) use streams::STREAMS_BOOTSTRAP;
 pub(crate) use blob::BLOB_BOOTSTRAP;
 pub(crate) use file::FILE_BOOTSTRAP;
+pub(crate) use filereader::FILEREADER_BOOTSTRAP;
 pub(crate) use objecturl::OBJECT_URL_BOOTSTRAP;
 pub(crate) use urlsearchparams::URLSEARCHPARAMS_BOOTSTRAP;
 pub(crate) use urlclass::URLCLASS_BOOTSTRAP;
@@ -74,6 +76,7 @@ pub(crate) const ALL: &[&str] = &[
     STREAMS_BOOTSTRAP,
     BLOB_BOOTSTRAP,
     FILE_BOOTSTRAP,
+    FILEREADER_BOOTSTRAP,
     OBJECT_URL_BOOTSTRAP,
     URLSEARCHPARAMS_BOOTSTRAP,
     URLCLASS_BOOTSTRAP,

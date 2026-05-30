@@ -7004,4 +7004,64 @@ mod tests {
         assert_eq!(rt.eval("ua").expect("e"), JsValue::Bool(true));
         assert_eq!(rt.eval("on").expect("e"), JsValue::Bool(true));
     }
+
+    // ============= Fase 7.69 — FileReader =============
+
+    #[test]
+    fn filereader_read_as_text_y_data_url() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Los eventos disparan en un microtask (drena al cerrar el eval): se
+        // agenda en el primer eval y se asierta en evals separados.
+        rt.eval(
+            "var txt = null, durl = null, estado = null; \
+             var b = new Blob(['Hi'], { type: 'text/plain' }); \
+             var fr = new FileReader(); fr.onload = function() { txt = fr.result; estado = fr.readyState; }; \
+             fr.readAsText(b); \
+             var fr2 = new FileReader(); fr2.addEventListener('load', function() { durl = fr2.result; }); \
+             fr2.readAsDataURL(b);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("txt").expect("e"), JsValue::String("Hi".into()));
+        assert_eq!(rt.eval("estado").expect("e"), JsValue::Number(2.0));
+        assert_eq!(
+            rt.eval("durl").expect("e"),
+            JsValue::String("data:text/plain;base64,SGk=".into())
+        );
+    }
+
+    #[test]
+    fn filereader_read_as_array_buffer_y_binary_string() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var abLen = null, abByte0 = null, bin = null; \
+             var b = new Blob([new Uint8Array([65, 0, 66])]); \
+             var fr = new FileReader(); \
+             fr.onload = function() { abLen = fr.result.byteLength; \
+                 abByte0 = new Uint8Array(fr.result)[0]; }; \
+             fr.readAsArrayBuffer(b); \
+             var fr2 = new FileReader(); fr2.onload = function() { bin = fr2.result; }; \
+             fr2.readAsBinaryString(new Blob(['AB']));",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("abLen").expect("e"), JsValue::Number(3.0));
+        assert_eq!(rt.eval("abByte0").expect("e"), JsValue::Number(65.0));
+        assert_eq!(rt.eval("bin").expect("e"), JsValue::String("AB".into()));
+    }
+
+    #[test]
+    fn filereader_loadstart_load_loadend_en_orden_y_no_blob_tira() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var orden = []; var b = new Blob(['x']); \
+             var fr = new FileReader(); \
+             fr.addEventListener('loadstart', function() { orden.push('start'); }); \
+             fr.addEventListener('load', function() { orden.push('load'); }); \
+             fr.addEventListener('loadend', function() { orden.push('end'); }); \
+             fr.readAsText(b); \
+             var tira = false; try { new FileReader().readAsText('no soy blob'); } catch (e) { tira = true; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("orden.join(',')").expect("e"), JsValue::String("start,load,end".into()));
+        assert_eq!(rt.eval("tira").expect("e"), JsValue::Bool(true));
+    }
 }
