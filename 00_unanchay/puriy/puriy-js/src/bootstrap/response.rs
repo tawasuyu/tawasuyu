@@ -36,6 +36,9 @@ globalThis.Response = function(body, init) {
     this.ok = this.status >= 200 && this.status < 300;
     this.url = '';
     this.type = 'default';
+    // Fase 7.73 — `redirected` no es seteable por init (lo pone fetch si
+    // siguió un redirect); default false y se preserva en clone().
+    this.redirected = false;
     this.bodyUsed = false;
     this.headers = (init.headers instanceof globalThis.Headers)
         ? init.headers : new globalThis.Headers(init.headers);
@@ -91,7 +94,7 @@ globalThis.Response.prototype.clone = function() {
         status: this.status, statusText: this.statusText,
         headers: new globalThis.Headers(this.headers)
     });
-    r.url = this.url; r.type = this.type;
+    r.url = this.url; r.type = this.type; r.redirected = this.redirected;
     return r;
 };
 Object.defineProperty(globalThis.Response.prototype, 'body', {

@@ -15,6 +15,13 @@ globalThis.Request = function(input, init) {
         this.credentials = init.credentials || input.credentials;
         this.mode = init.mode || input.mode;
         this.signal = (init.signal != null) ? init.signal : input.signal;
+        // Fase 7.73 — campos de init pasados tal cual (el `init` pisa al input).
+        this.cache = init.cache || input.cache;
+        this.redirect = init.redirect || input.redirect;
+        this.referrer = (init.referrer != null) ? String(init.referrer) : input.referrer;
+        this.referrerPolicy = (init.referrerPolicy != null) ? String(init.referrerPolicy) : input.referrerPolicy;
+        this.integrity = (init.integrity != null) ? String(init.integrity) : input.integrity;
+        this.keepalive = (init.keepalive != null) ? !!init.keepalive : input.keepalive;
     } else {
         this.url = String(input);
         this.method = init.method ? String(init.method).toUpperCase() : 'GET';
@@ -23,6 +30,13 @@ globalThis.Request = function(input, init) {
         this.credentials = init.credentials || 'same-origin';
         this.mode = init.mode || 'cors';
         this.signal = init.signal || null;
+        // Fase 7.73 — defaults del spec para los campos de init.
+        this.cache = init.cache || 'default';
+        this.redirect = init.redirect || 'follow';
+        this.referrer = (init.referrer != null) ? String(init.referrer) : 'about:client';
+        this.referrerPolicy = (init.referrerPolicy != null) ? String(init.referrerPolicy) : '';
+        this.integrity = (init.integrity != null) ? String(init.integrity) : '';
+        this.keepalive = !!init.keepalive;
     }
     this.bodyUsed = false;
 };

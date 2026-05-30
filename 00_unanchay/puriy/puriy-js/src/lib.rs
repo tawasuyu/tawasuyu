@@ -7185,4 +7185,56 @@ mod tests {
         assert_eq!(rt.eval("s").expect("e"), JsValue::String("DataCloneError: boom".into()));
         assert_eq!(rt.eval("caught").expect("e"), JsValue::String("NotFoundError/8".into()));
     }
+
+    // ===== Fase 7.73 — Request init fields + Response.redirected =====
+
+    #[test]
+    fn request_init_fields_defaults() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = new Request('https://e.com'); \
+             var c = r.cache, rd = r.redirect, ref = r.referrer, \
+                 rp = r.referrerPolicy, integ = r.integrity, ka = r.keepalive;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("c").expect("e"), JsValue::String("default".into()));
+        assert_eq!(rt.eval("rd").expect("e"), JsValue::String("follow".into()));
+        assert_eq!(rt.eval("ref").expect("e"), JsValue::String("about:client".into()));
+        assert_eq!(rt.eval("rp").expect("e"), JsValue::String("".into()));
+        assert_eq!(rt.eval("integ").expect("e"), JsValue::String("".into()));
+        assert_eq!(rt.eval("ka").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn request_init_fields_explicitos_y_clone_pisa() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = new Request('https://e.com', { cache: 'no-store', redirect: 'manual', \
+                 integrity: 'sha256-x', keepalive: true }); \
+             var c = r.cache, rd = r.redirect, integ = r.integrity, ka = r.keepalive; \
+             var r2 = new Request(r, { cache: 'reload' }); \
+             var c2 = r2.cache, rd2 = r2.redirect;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("c").expect("e"), JsValue::String("no-store".into()));
+        assert_eq!(rt.eval("rd").expect("e"), JsValue::String("manual".into()));
+        assert_eq!(rt.eval("integ").expect("e"), JsValue::String("sha256-x".into()));
+        assert_eq!(rt.eval("ka").expect("e"), JsValue::Bool(true));
+        // El init del segundo Request pisa cache pero hereda redirect del input.
+        assert_eq!(rt.eval("c2").expect("e"), JsValue::String("reload".into()));
+        assert_eq!(rt.eval("rd2").expect("e"), JsValue::String("manual".into()));
+    }
+
+    #[test]
+    fn response_redirected_default_false_y_clone() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = new Response('x'); var d0 = r.redirected; \
+             r.redirected = true; var c = r.clone(); var dc = c.redirected;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("d0").expect("e"), JsValue::Bool(false));
+        // clone() preserva el flag.
+        assert_eq!(rt.eval("dc").expect("e"), JsValue::Bool(true));
+    }
 }
