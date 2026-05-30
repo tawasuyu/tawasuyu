@@ -372,6 +372,10 @@ pub enum Metric {
     Min { field: String },
     /// Máximo de un campo numérico.
     Max { field: String },
+    /// Cantidad de **valores distintos** de un campo (ignora records sin
+    /// el campo o vacíos) — p.ej. "clientes distintos con órdenes",
+    /// "cajas con movimiento", "días con actividad".
+    CountDistinct { field: String },
     /// Conteo de records por cada valor distinto de un campo.
     GroupBy { field: String },
     /// Suma de `value` por cada valor distinto de `group` — el reporte

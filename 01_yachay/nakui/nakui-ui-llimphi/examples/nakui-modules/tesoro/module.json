@@ -29,6 +29,11 @@
           "metric": { "kind": "count" }
         },
         {
+          "label": "Cajas con movimiento",
+          "entity": "Movimiento",
+          "metric": { "kind": "count_distinct", "field": "caja" }
+        },
+        {
           "label": "Saldo neto",
           "entity": "Movimiento",
           "metric": { "kind": "sum", "field": "monto" },

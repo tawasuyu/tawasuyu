@@ -85,6 +85,14 @@ pub fn compute_metric(
                 .fold(f64::NEG_INFINITY, f64::max);
             MetricResult::Scalar(if m.is_finite() { m } else { 0.0 })
         }
+        Metric::CountDistinct { field } => {
+            let distinct: std::collections::BTreeSet<String> = records
+                .iter()
+                .filter(|(_, v)| passes(v))
+                .filter_map(|(_, v)| field_as_text(v, field).filter(|s| !s.is_empty()))
+                .collect();
+            MetricResult::Scalar(distinct.len() as f64)
+        }
         Metric::GroupBy { field } => {
             let mut counts: BTreeMap<String, usize> = BTreeMap::new();
             for (_, v) in records.iter().filter(|(_, v)| passes(v)) {
@@ -608,6 +616,33 @@ mod tests {
         assert_eq!(
             compute_metric(&Metric::Count, Some(&f), &rs),
             MetricResult::Scalar(2.0)
+        );
+    }
+
+    #[test]
+    fn count_distinct_counts_unique_non_empty_values() {
+        let rs = recs(&[
+            json!({"cliente": "acme"}),
+            json!({"cliente": "acme"}),
+            json!({"cliente": "globex"}),
+            json!({"cliente": ""}),      // vacío → no cuenta
+            json!({"otro": "x"}),        // sin el campo → no cuenta
+        ]);
+        assert_eq!(
+            compute_metric(&Metric::CountDistinct { field: "cliente".into() }, None, &rs),
+            MetricResult::Scalar(2.0) // acme, globex
+        );
+        // Con filtro: sólo los records que pasan entran al set distinto.
+        let f = CardFilter {
+            field: "cliente".into(),
+            op: FilterOp::Eq,
+            value: Some("acme".into()),
+            min: None,
+            max: None,
+        };
+        assert_eq!(
+            compute_metric(&Metric::CountDistinct { field: "cliente".into() }, Some(&f), &rs),
+            MetricResult::Scalar(1.0)
         );
     }
 

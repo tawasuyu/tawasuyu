@@ -60,6 +60,14 @@
           }
         },
         {
+          "label": "Clientes con órdenes",
+          "entity": "Order",
+          "metric": {
+            "kind": "count_distinct",
+            "field": "customer"
+          }
+        },
+        {
           "label": "Facturado",
           "entity": "Order",
           "metric": {
