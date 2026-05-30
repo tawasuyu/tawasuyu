@@ -471,6 +471,16 @@ pub struct RenderConfig {
     /// omni 3.30-3.35 — backwards-compat exacta. Sólo afecta walls
     /// y floors/ceilings.
     pub muzzle_brdf: bool,
+    /// **Fase 3.42 — bandas verticales para BRDF de walls**. Número de
+    /// sub-bandas horizontales sobre cada slab texturizado donde el
+    /// overlay del shading y el tinte se calculan independientemente.
+    /// Default `1` = un único overlay por slab (comportamiento 3.32-3.41).
+    /// Valores > 1 emiten N overlays adicionales con boost computado al
+    /// centro vertical de cada banda — una antorcha al ras del piso
+    /// ilumina más la parte baja de la pared, una a la altura del
+    /// techo más la parte alta. Coste: ~2N extra fills por slab
+    /// texturizado. Recomendado: 2-4. Sólo afecta al path texturizado.
+    pub wall_vertical_bands: u8,
 }
 
 impl Default for RenderConfig {
@@ -498,6 +508,7 @@ impl Default for RenderConfig {
             wall_rim_directional: true,
             plane_rim_directional: true,
             muzzle_brdf: false,
+            wall_vertical_bands: 1,
         }
     }
 }
@@ -2444,32 +2455,93 @@ fn gather_wall(
                     },
                 });
             }
-            // Overlay de shade: una sola fill sobre todo el slab —
-            // no hace falta strip-per-strip porque shade es constante
-            // sobre la slab al mismo depth.
-            //
-            // Fase 3.22: el muzzle boost levanta `shade` aditivamente
-            // (clamp ≤ 1.0) y, si queda boost residual, emitimos un
-            // segundo overlay aditivo amarillo para sumar el tinte
-            // cálido sobre la textura.
+            // Overlay de shade y tinte. Fase 3.32-3.41: una sola fill
+            // por slab con boost computado al eye-level.
+            // Fase 3.42: si `wall_vertical_bands > 1`, subdividimos el
+            // slab en N bandas horizontales y computamos el boost al
+            // centro vertical de cada una. Una antorcha al ras del piso
+            // ilumina más la parte baja, una a la altura del techo más
+            // la parte alta — gradient discreto vertical.
             let base_shade = shade_for(sec.light_level, depth, cfg);
-            let lit_shade = (base_shade + boost_scalar).clamp(0.0, 1.0);
-            if lit_shade < 0.95 {
-                let alpha = ((1.0 - lit_shade) * 255.0) as u8;
-                out.push(Renderable {
-                    depth: depth - 0.001,
-                    color: Color::from_rgba8(0, 0, 0, alpha),
-                    path: path.clone(),
-                    kind: RenderKind::Fill,
-                });
-            }
-            if let Some((or, og, ob, oa)) = overlay_color_alpha_from_boost(boost_rgb) {
-                out.push(Renderable {
-                    depth: depth - 0.002,
-                    color: Color::from_rgba8(or, og, ob, oa),
-                    path,
-                    kind: RenderKind::Fill,
-                });
+            let v_bands = cfg.wall_vertical_bands.max(1) as u32;
+            if v_bands == 1 {
+                // Path 3.32-3.41: single overlay sobre todo el slab.
+                let lit_shade = (base_shade + boost_scalar).clamp(0.0, 1.0);
+                if lit_shade < 0.95 {
+                    let alpha = ((1.0 - lit_shade) * 255.0) as u8;
+                    out.push(Renderable {
+                        depth: depth - 0.001,
+                        color: Color::from_rgba8(0, 0, 0, alpha),
+                        path: path.clone(),
+                        kind: RenderKind::Fill,
+                    });
+                }
+                if let Some((or, og, ob, oa)) = overlay_color_alpha_from_boost(boost_rgb) {
+                    out.push(Renderable {
+                        depth: depth - 0.002,
+                        color: Color::from_rgba8(or, og, ob, oa),
+                        path,
+                        kind: RenderKind::Fill,
+                    });
+                }
+            } else {
+                // Path 3.42: N bandas verticales, cada una con su boost.
+                for b in 0..v_bands {
+                    let t0 = b as f32 / v_bands as f32;
+                    let t1 = (b + 1) as f32 / v_bands as f32;
+                    // Centro vertical de la banda en world z.
+                    let z_band_center =
+                        z_bot + (z_top - z_bot) * (t0 + t1) * 0.5;
+                    let z_band_cam = z_band_center - cam.view_z;
+                    // Boost específico de la banda (mismo wall_normal,
+                    // distinto z_surf_cam).
+                    let band_boost = combined_boost_rgb_wall_cam(
+                        mid_x,
+                        mid_y,
+                        z_band_cam,
+                        cfg.muzzle_glow_alpha,
+                        near_idx,
+                        lit_sectors,
+                        world_lights,
+                        wall_normal,
+                        cfg.wall_rim_directional,
+                        cfg.muzzle_brdf,
+                    );
+                    let band_scalar = boost_max(band_boost);
+                    // Path de la banda: clip vertical del slab.
+                    let zb_b = (z_bot + (z_top - z_bot) * t0) - cam.view_z;
+                    let zt_b = (z_bot + (z_top - z_bot) * t1) - cam.view_z;
+                    let bl_b = proj.project(x1, y1, zb_b);
+                    let tl_b = proj.project(x1, y1, zt_b);
+                    let tr_b = proj.project(x2, y2, zt_b);
+                    let br_b = proj.project(x2, y2, zb_b);
+                    let mut band_path = BezPath::new();
+                    band_path.move_to(bl_b);
+                    band_path.line_to(tl_b);
+                    band_path.line_to(tr_b);
+                    band_path.line_to(br_b);
+                    band_path.close_path();
+                    let lit_band = (base_shade + band_scalar).clamp(0.0, 1.0);
+                    if lit_band < 0.95 {
+                        let alpha = ((1.0 - lit_band) * 255.0) as u8;
+                        out.push(Renderable {
+                            depth: depth - 0.001,
+                            color: Color::from_rgba8(0, 0, 0, alpha),
+                            path: band_path.clone(),
+                            kind: RenderKind::Fill,
+                        });
+                    }
+                    if let Some((or, og, ob, oa)) =
+                        overlay_color_alpha_from_boost(band_boost)
+                    {
+                        out.push(Renderable {
+                            depth: depth - 0.002,
+                            color: Color::from_rgba8(or, og, ob, oa),
+                            path: band_path,
+                            kind: RenderKind::Fill,
+                        });
+                    }
+                }
             }
         } else {
             // Fallback: bandas horizontales coloreadas (3.1 behavior).
@@ -6633,6 +6705,95 @@ mod tests {
     // =================================================================
     // Fase 3.37 — Muzzle direccional sobre walls y planes
     // =================================================================
+
+    // =================================================================
+    // Fase 3.42 — Bandas verticales para BRDF de walls
+    // =================================================================
+
+    #[test]
+    fn wall_v_band_centers_split_slab_uniformly() {
+        // Verifica el cálculo de los centros verticales de N bandas
+        // sobre un slab `[z_bot, z_top]`. Reproduce la fórmula del
+        // loop de gather_wall: `z_band_center = z_bot + (z_top - z_bot)
+        // * (t0 + t1) * 0.5` con `t0 = b/N`, `t1 = (b+1)/N`.
+        let z_bot = 0.0_f32;
+        let z_top = 128.0_f32;
+        let v_bands: u32 = 4;
+        let mut centers = Vec::new();
+        for b in 0..v_bands {
+            let t0 = b as f32 / v_bands as f32;
+            let t1 = (b + 1) as f32 / v_bands as f32;
+            centers.push(z_bot + (z_top - z_bot) * (t0 + t1) * 0.5);
+        }
+        // Esperado: 16, 48, 80, 112 (centros de cada cuarto).
+        assert_eq!(centers, vec![16.0, 48.0, 80.0, 112.0]);
+    }
+
+    #[test]
+    fn wall_v_band_bottom_band_receives_more_from_floor_light() {
+        // Pared a x=100 con normal toward-camera (-1, 0). Luz al ras del
+        // piso (z_cam = -50). Comparamos boost al centro de la banda
+        // inferior (z_band_cam=-32) vs banda superior (z_band_cam=+96).
+        // La luz baja tiene dz pequeño con la banda inferior ⇒ d_3D
+        // menor ⇒ más boost.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: -50.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let n = (-1.0, 0.0);
+        let band_low = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, -32.0, NO_SECTOR, &lights, n, true);
+        let band_high = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 96.0, NO_SECTOR, &lights, n, true);
+        for ch in 0..3 {
+            assert!(
+                band_low[ch] > band_high[ch],
+                "luz al piso ⇒ banda inferior recibe más: canal {} low={} high={}",
+                ch, band_low[ch], band_high[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn wall_v_band_top_band_receives_more_from_ceiling_light() {
+        // Espejo: luz a la altura del techo (z_cam=+90) ⇒ la banda
+        // superior recibe más.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: 90.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let n = (-1.0, 0.0);
+        let band_low = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, -32.0, NO_SECTOR, &lights, n, true);
+        let band_high = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 96.0, NO_SECTOR, &lights, n, true);
+        for ch in 0..3 {
+            assert!(
+                band_high[ch] > band_low[ch],
+                "luz al techo ⇒ banda superior recibe más: canal {} high={} low={}",
+                ch, band_high[ch], band_low[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn wall_v_bands_default_one_preserves_path() {
+        // `cfg.wall_vertical_bands = 1` debe preservar el path 3.32-3.41:
+        // un único boost al z=0 (eye-level), sin subdivisión. El default
+        // de RenderConfig es 1.
+        let cfg = RenderConfig::default();
+        assert_eq!(cfg.wall_vertical_bands, 1);
+        // Sanity: el path single (v_bands == 1) en gather_wall computa
+        // el boost una sola vez. Reproducible por:
+        let z_surf_default = 0.0_f32; // eye level (3.34 convention)
+        let lights = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: -20.0,
+            sector: NO_SECTOR, tint_rgb: (255, 255, 255), lit_sectors: None,
+        }];
+        let n = (-1.0, 0.0);
+        let single = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, z_surf_default, NO_SECTOR, &lights, n, true);
+        for ch in 0..3 {
+            assert!(single[ch].is_finite());
+        }
+    }
 
     // =================================================================
     // Fase 3.41 — Weapon rim 3D
