@@ -40,6 +40,7 @@
 //! - `V`              — toggle visibilidad
 //! - `B` / `Shift+B`  — ciclar blend forward / reverse
 //! - `[` / `]`        — opacidad ∓0.1
+//! - `Ctrl+Z` / `Ctrl+Shift+Z` (o `Ctrl+Y`) — undo / redo
 //! - `Ctrl+S` / `Ctrl+Shift+S` — exportar PNG / WebP
 
 #![forbid(unsafe_code)]
@@ -99,7 +100,26 @@ struct Model {
     /// la fila correspondiente pinta el text-input en vez del botón de
     /// nombre. F2 entra, Enter confirma, Escape cancela.
     renombrando: Option<(Uuid, TextInputState)>,
+    /// Pila de snapshots del [`Lienzo`] para undo/redo. Siempre no vacía:
+    /// `historial[0]` es el lienzo al inicializar. `cursor_historial` apunta
+    /// al estado vigente: `historial[cursor]` siempre cuadra con `lienzo` en
+    /// régimen estable. Una mutación trunca cualquier rama de redo (todo lo
+    /// que esté después de `cursor`) y pushea el nuevo estado al tope.
+    /// Capado a [`HIST_CAP`] entradas para no inflar RAM en sesiones largas.
+    historial: Vec<Lienzo>,
+    cursor_historial: usize,
+    /// Etiqueta del último snapshot pushado. Se usa para *coalescer* mutaciones
+    /// continuas: si la próxima mutación viene con la misma etiqueta y
+    /// estamos en el tope del historial, en lugar de agregar otra entrada se
+    /// sustituye la del tope. Sirve para que un drag del slider de opacidad
+    /// (decenas de eventos por segundo) cuente como una sola operación
+    /// reversible. Sin coalesce, deshacer un drag costaría 100 Ctrl+Z.
+    ultima_etiqueta_snapshot: Option<(Uuid, &'static str)>,
 }
+
+/// Tope de la pila de undo. 64 estados × 32 capas × ~100 B postcard ≈ 200 KB
+/// — despreciable. Si se excede, descartamos las entradas más viejas (FIFO).
+const HIST_CAP: usize = 64;
 
 #[derive(Clone)]
 enum Msg {
@@ -122,6 +142,8 @@ enum Msg {
     TeclaRenombrar(KeyEvent),
     ConfirmarRenombrar,
     CancelarRenombrar,
+    Undo,
+    Redo,
 }
 
 // =============================================================================
@@ -304,6 +326,7 @@ fn inicializar() -> Model {
     let imagenes_disponibles = walk_imagenes(&raiz);
 
     let imagen = recomponer(&lienzo, &almacen);
+    let historial = vec![lienzo.clone()];
     let mut model = Model {
         lienzo,
         almacen,
@@ -317,6 +340,9 @@ fn inicializar() -> Model {
         imagenes_disponibles,
         picker: None,
         renombrando: None,
+        historial,
+        cursor_historial: 0,
+        ultima_etiqueta_snapshot: None,
     };
     sincronizar_thumbs(&mut model);
     model
@@ -415,6 +441,83 @@ fn aplicar_y_recomponer(model: &mut Model) {
         None => model.estado = "error compositor".into(),
     }
     sincronizar_thumbs(model);
+}
+
+/// Pushea el estado actual del lienzo a la pila de undo. Si la `etiqueta`
+/// (Uuid de capa + categoría) coincide con la del último snapshot Y estamos
+/// en el tope, sustituye en lugar de pushear — es el mecanismo de *coalesce*
+/// para drags continuos (slider de opacidad disparando decenas de mensajes
+/// por segundo). Si no, trunca la rama de redo y agrega entrada nueva.
+///
+/// Se invoca después de cualquier mutación de `model.lienzo` que el usuario
+/// pueda querer revertir (toggle visible, blend, opacidad, mover, dup, elim,
+/// agregar, rename, file drop). Las acciones de pura UI (Seleccionar,
+/// Recargar, Exportar, Picker abrir/cerrar) no producen snapshot.
+fn pushear_snapshot(model: &mut Model, etiqueta: Option<(Uuid, &'static str)>) {
+    let en_el_tope = model.cursor_historial + 1 == model.historial.len();
+    let coalesce = match (model.ultima_etiqueta_snapshot, etiqueta) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
+    if en_el_tope && coalesce {
+        // Drag continuo: sustituyo el tope con el nuevo estado. Un solo
+        // Ctrl+Z deshace el drag completo en vez de N micro-steps.
+        model.historial[model.cursor_historial] = model.lienzo.clone();
+    } else {
+        // Cualquier mutación nueva tras un Ctrl+Z aborta la rama de redo.
+        model.historial.truncate(model.cursor_historial + 1);
+        model.historial.push(model.lienzo.clone());
+        // Cap por memoria: desfilan las entradas más viejas. Si tiramos
+        // `n` entradas del frente, el cursor baja `n`.
+        while model.historial.len() > HIST_CAP {
+            model.historial.remove(0);
+        }
+        model.cursor_historial = model.historial.len() - 1;
+    }
+    model.ultima_etiqueta_snapshot = etiqueta;
+}
+
+/// Restaura el estado anterior del lienzo (cursor−−). Devuelve `true` si hubo
+/// algo que deshacer. El almacén content-addressed nunca borra buffers, así
+/// que restaurar a una versión anterior siempre encuentra los hashes — los
+/// buffers "huérfanos" de la versión actual quedan dormidos pero accesibles
+/// si después se hace redo. Recomposición posterior a cargo del caller.
+fn aplicar_undo(model: &mut Model) -> bool {
+    if model.cursor_historial == 0 {
+        return false;
+    }
+    model.cursor_historial -= 1;
+    model.lienzo = model.historial[model.cursor_historial].clone();
+    // Cualquier mutación posterior al undo arranca rama nueva — invalidamos
+    // la etiqueta para que el primer push no se coalesce con el último drag
+    // que produjo el estado destino.
+    model.ultima_etiqueta_snapshot = None;
+    true
+}
+
+/// Reaplica un estado del que ya habíamos hecho undo (cursor++).
+fn aplicar_redo(model: &mut Model) -> bool {
+    if model.cursor_historial + 1 >= model.historial.len() {
+        return false;
+    }
+    model.cursor_historial += 1;
+    model.lienzo = model.historial[model.cursor_historial].clone();
+    model.ultima_etiqueta_snapshot = None;
+    true
+}
+
+/// Tras restaurar `model.lienzo` desde el historial, la selección puede
+/// apuntar a una capa que no existe en ese estado (ej. la creé, le hice
+/// Eliminar, ahora Ctrl+Z trae de vuelta una versión ANTERIOR a la creación).
+/// Si la seleccionada ya no está, caemos al tope visual del lienzo restaurado.
+fn ajustar_seleccion_tras_restaurar(model: &mut Model) {
+    let existe = model
+        .seleccionada
+        .map(|id| model.lienzo.capas.iter().any(|c| c.id == id))
+        .unwrap_or(false);
+    if !existe {
+        model.seleccionada = model.lienzo.capas.last().map(|c| c.id);
+    }
 }
 
 /// Lado del thumb en píxeles. Pequeño a propósito — la fila de capa es de
@@ -1108,24 +1211,30 @@ impl App for Tullpu {
                     c.visible = !c.visible;
                 }
                 aplicar_y_recomponer(&mut model);
+                pushear_snapshot(&mut model, None);
             }
             Msg::BumpOpacidad(id, delta) => {
                 if let Some(c) = model.lienzo.capa_mut(id) {
                     c.opacidad = (c.opacidad + delta).clamp(0.0, 1.0);
                 }
                 aplicar_y_recomponer(&mut model);
+                // Coalesce: un drag continuo del slider sobre la misma capa
+                // colapsa a una sola entrada de historial.
+                pushear_snapshot(&mut model, Some((id, "opacidad")));
             }
             Msg::CiclarBlend(id) => {
                 if let Some(c) = model.lienzo.capa_mut(id) {
                     c.blend = siguiente_blend(c.blend);
                 }
                 aplicar_y_recomponer(&mut model);
+                pushear_snapshot(&mut model, None);
             }
             Msg::CiclarBlendInverso(id) => {
                 if let Some(c) = model.lienzo.capa_mut(id) {
                     c.blend = blend_anterior(c.blend);
                 }
                 aplicar_y_recomponer(&mut model);
+                pushear_snapshot(&mut model, None);
             }
             Msg::MoverArriba(id) => {
                 // Reordenar no toca dependencias por Uuid, así que basta
@@ -1133,17 +1242,20 @@ impl App for Tullpu {
                 // barato si nada está stale.
                 if model.lienzo.mover_arriba(id) {
                     aplicar_y_recomponer(&mut model);
+                    pushear_snapshot(&mut model, None);
                 }
             }
             Msg::MoverAbajo(id) => {
                 if model.lienzo.mover_abajo(id) {
                     aplicar_y_recomponer(&mut model);
+                    pushear_snapshot(&mut model, None);
                 }
             }
             Msg::Duplicar(id) => {
                 if let Some(nuevo) = model.lienzo.duplicar(id) {
                     model.seleccionada = Some(nuevo);
                     aplicar_y_recomponer(&mut model);
+                    pushear_snapshot(&mut model, None);
                 }
             }
             Msg::Eliminar(id) => {
@@ -1154,6 +1266,7 @@ impl App for Tullpu {
                 // Las capas derivadas que quedaron huérfanas se marcan stale
                 // — su regeneración fallará silenciosamente (BufferFaltante).
                 aplicar_y_recomponer(&mut model);
+                pushear_snapshot(&mut model, None);
             }
             Msg::Agregar(op) => {
                 if let Some(madre_id) = model.seleccionada {
@@ -1169,6 +1282,7 @@ impl App for Tullpu {
                     model.lienzo.apilar(nueva);
                     model.seleccionada = Some(nuevo_id);
                     aplicar_y_recomponer(&mut model);
+                    pushear_snapshot(&mut model, None);
                 }
             }
             Msg::AgregarIa(op) => {
@@ -1181,6 +1295,7 @@ impl App for Tullpu {
                     model.lienzo.apilar(nueva);
                     model.seleccionada = Some(nuevo_id);
                     aplicar_y_recomponer(&mut model);
+                    pushear_snapshot(&mut model, None);
                 }
             }
             Msg::Recargar => {
@@ -1209,10 +1324,17 @@ impl App for Tullpu {
             Msg::ConfirmarRenombrar => {
                 if let Some((id, input)) = model.renombrando.take() {
                     let nuevo = input.text();
+                    let mut cambio = false;
                     if !nuevo.trim().is_empty() {
                         if let Some(c) = model.lienzo.capa_mut(id) {
-                            c.nombre = nuevo;
+                            if c.nombre != nuevo {
+                                c.nombre = nuevo;
+                                cambio = true;
+                            }
                         }
+                    }
+                    if cambio {
+                        pushear_snapshot(&mut model, None);
                     }
                     model.estado = "listo".into();
                 }
@@ -1228,7 +1350,35 @@ impl App for Tullpu {
                 // al decodificar y deja el lienzo intacto con un estado
                 // descriptivo — no preflight check para mantener una sola
                 // rama de error.
-                agregar_capa_desde_archivo(&mut model, &path);
+                if agregar_capa_desde_archivo(&mut model, &path) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
+            Msg::Undo => {
+                if aplicar_undo(&mut model) {
+                    ajustar_seleccion_tras_restaurar(&mut model);
+                    aplicar_y_recomponer(&mut model);
+                    model.estado = format!(
+                        "↶ undo · {}/{}",
+                        model.cursor_historial + 1,
+                        model.historial.len()
+                    );
+                } else {
+                    model.estado = "↶ nada que deshacer".into();
+                }
+            }
+            Msg::Redo => {
+                if aplicar_redo(&mut model) {
+                    ajustar_seleccion_tras_restaurar(&mut model);
+                    aplicar_y_recomponer(&mut model);
+                    model.estado = format!(
+                        "↷ redo · {}/{}",
+                        model.cursor_historial + 1,
+                        model.historial.len()
+                    );
+                } else {
+                    model.estado = "↷ nada que rehacer".into();
+                }
             }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app
@@ -1397,7 +1547,7 @@ fn op_etiqueta(op: &OpLocal) -> &'static str {
 /// - `B` → ciclar blend forward, `Shift+B` ciclar reverse
 /// - `[` / `]` → bump opacidad ∓0.1
 /// - `Ctrl+S` → export PNG, `Ctrl+Shift+S` → WebP
-/// - `Ctrl+Z` reservado para futuro undo (no implementado todavía)
+/// - `Ctrl+Z` → undo, `Ctrl+Shift+Z` o `Ctrl+Y` → redo (globales)
 fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
     use llimphi_ui::KeyState;
     if event.state != KeyState::Pressed {
@@ -1411,6 +1561,15 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         }
         Key::Character(s) if m.ctrl && m.shift && s.eq_ignore_ascii_case("s") => {
             return Some(Msg::Exportar(FormatoExport::Webp));
+        }
+        Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("z") => {
+            return Some(Msg::Undo);
+        }
+        Key::Character(s) if m.ctrl && m.shift && s.eq_ignore_ascii_case("z") => {
+            return Some(Msg::Redo);
+        }
+        Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("y") => {
+            return Some(Msg::Redo);
         }
         _ => {}
     }
@@ -1477,7 +1636,9 @@ fn aplicar_picker(mut model: Model, pm: PickerMsg) -> Model {
         }
         PickerAction::Open(path) => {
             model.picker = None;
-            agregar_capa_desde_archivo(&mut model, &path);
+            if agregar_capa_desde_archivo(&mut model, &path) {
+                pushear_snapshot(&mut model, None);
+            }
         }
         PickerAction::None => {}
     }
@@ -1486,18 +1647,19 @@ fn aplicar_picker(mut model: Model, pm: PickerMsg) -> Model {
 
 /// Carga `path` como PNG/JPEG, lo ajusta al tamaño del lienzo y apila la
 /// capa raster nueva. Se mete justo encima de la capa seleccionada (o al
-/// tope si no hay selección). En éxito refresca compositor + thumbs; en
-/// fallo deja el lienzo intacto y escribe el error en el estado.
-fn agregar_capa_desde_archivo(model: &mut Model, path: &Path) {
+/// tope si no hay selección). En éxito refresca compositor + thumbs y
+/// devuelve `true` (para que el caller decida si snapshotear); en fallo deja
+/// el lienzo intacto, escribe el error en el estado y devuelve `false`.
+fn agregar_capa_desde_archivo(model: &mut Model, path: &Path) -> bool {
     let Some((w, h, bytes)) = cargar_png(path) else {
         model.estado = format!("error decodificando {}", path.display());
-        return;
+        return false;
     };
     let dst_w = model.lienzo.width;
     let dst_h = model.lienzo.height;
     let Some(buffer) = ajustar_a_lienzo(bytes, w, h, dst_w, dst_h) else {
         model.estado = format!("error ajustando {}×{} → {}×{}", w, h, dst_w, dst_h);
-        return;
+        return false;
     };
     let hash = model.almacen.insertar(buffer);
     let nombre = path
@@ -1525,6 +1687,7 @@ fn agregar_capa_desde_archivo(model: &mut Model, path: &Path) {
     };
     aplicar_y_recomponer(model);
     model.estado = format!("agregada capa '{}'{}", nombre, ajuste);
+    true
 }
 
 fn main() {
@@ -1562,6 +1725,7 @@ mod tests {
         let cap = Capa::raster("c", hash);
         let id = cap.id;
         lienzo.apilar(cap);
+        let historial = vec![lienzo.clone()];
         Model {
             lienzo,
             almacen,
@@ -1575,6 +1739,9 @@ mod tests {
             imagenes_disponibles: Vec::new(),
             picker: None,
             renombrando: None,
+            historial,
+            cursor_historial: 0,
+            ultima_etiqueta_snapshot: None,
         }
     }
 
@@ -1835,5 +2002,232 @@ mod tests {
         assert!(!es_imagen_soportada(Path::new("foo.psd")));
         assert!(!es_imagen_soportada(Path::new("foo.txt")));
         assert!(!es_imagen_soportada(Path::new("foo")));
+    }
+
+    // ---- Fase 23: undo/redo --------------------------------------------------
+
+    #[test]
+    fn hotkey_ctrl_z_y_variantes_redo_emiten_msg_correcto() {
+        let m = modelo_minimo();
+        // Ctrl+Z = undo.
+        let undo = hotkey_a_msg(
+            &m,
+            &ev_char("z", Modifiers { ctrl: true, ..Default::default() }),
+        );
+        assert!(matches!(undo, Some(Msg::Undo)));
+        // Ctrl+Shift+Z = redo.
+        let redo_shift = hotkey_a_msg(
+            &m,
+            &ev_char(
+                "z",
+                Modifiers { ctrl: true, shift: true, ..Default::default() },
+            ),
+        );
+        assert!(matches!(redo_shift, Some(Msg::Redo)));
+        // Ctrl+Y = redo (alias).
+        let redo_y = hotkey_a_msg(
+            &m,
+            &ev_char("y", Modifiers { ctrl: true, ..Default::default() }),
+        );
+        assert!(matches!(redo_y, Some(Msg::Redo)));
+    }
+
+    #[test]
+    fn undo_sin_historial_anota_estado_pero_no_panickea() {
+        // Modelo recién armado: historial tiene 1 sola entrada (la inicial).
+        // Un Undo no debería hacer nada y el estado debe reflejarlo.
+        let mut model = modelo_minimo();
+        let lienzo_antes = model.lienzo.clone();
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo, lienzo_antes, "lienzo intacto");
+        assert!(model.estado.contains("nada que deshacer"));
+        assert_eq!(model.cursor_historial, 0);
+    }
+
+    #[test]
+    fn undo_revierte_toggle_visible() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let visible_original = model.lienzo.capa(id).unwrap().visible;
+        model = <Tullpu as App>::update(model, Msg::ToggleVisible(id), &Handle::for_test());
+        assert_eq!(model.lienzo.capa(id).unwrap().visible, !visible_original);
+        assert_eq!(model.historial.len(), 2);
+        // Undo: volvemos al estado anterior.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capa(id).unwrap().visible, visible_original);
+        // Redo: re-aplicamos el toggle.
+        model = <Tullpu as App>::update(model, Msg::Redo, &Handle::for_test());
+        assert_eq!(model.lienzo.capa(id).unwrap().visible, !visible_original);
+    }
+
+    #[test]
+    fn nueva_mutacion_tras_undo_trunca_la_rama_de_redo() {
+        // Mutación 1, mutación 2, undo (vuelvo a 1), mutación 3: la rama 2
+        // queda descartada y un redo posterior debe ser no-op.
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        // M1: invertir visibilidad
+        model = <Tullpu as App>::update(model, Msg::ToggleVisible(id), &Handle::for_test());
+        // M2: invertirla de nuevo (la deja igual al estado original).
+        model = <Tullpu as App>::update(model, Msg::ToggleVisible(id), &Handle::for_test());
+        assert_eq!(model.historial.len(), 3);
+        assert_eq!(model.cursor_historial, 2);
+        // Undo: vuelvo a M1.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.cursor_historial, 1);
+        // M3: ciclar blend → debe truncar M2.
+        model = <Tullpu as App>::update(model, Msg::CiclarBlend(id), &Handle::for_test());
+        assert_eq!(model.historial.len(), 3, "M2 fue truncada");
+        assert_eq!(model.cursor_historial, 2);
+        // Redo ahora no tiene a dónde ir.
+        let snapshot = model.lienzo.clone();
+        model = <Tullpu as App>::update(model, Msg::Redo, &Handle::for_test());
+        assert_eq!(model.lienzo, snapshot);
+        assert!(model.estado.contains("nada que rehacer"));
+    }
+
+    #[test]
+    fn bump_opacidad_coalesce_drag_en_una_sola_entrada() {
+        // Simulo un drag del slider: 50 BumpOpacidad consecutivas sobre la
+        // misma capa. El historial debe crecer en 1 sola entrada (la final).
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let len_inicial = model.historial.len();
+        for _ in 0..50 {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::BumpOpacidad(id, -0.01),
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(
+            model.historial.len(),
+            len_inicial + 1,
+            "el drag entero debe coalesce a 1 snapshot"
+        );
+        // Un solo undo revierte el drag completo.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        let cap = model.lienzo.capa(id).unwrap();
+        assert!(
+            (cap.opacidad - 1.0).abs() < 1e-6,
+            "opacidad volvió a 1.0, no quedó atrapada a medio camino: {}",
+            cap.opacidad
+        );
+    }
+
+    #[test]
+    fn coalesce_no_cruza_entre_capas_distintas() {
+        // Drag de opacidad sobre capa A y luego sobre capa B no deben
+        // colapsar en la misma entrada — son operaciones independientes.
+        let mut model = modelo_minimo();
+        let id_a = model.seleccionada.unwrap();
+        // Agrego una segunda capa raster para tener dos targets distintos.
+        let mut almacen2 = std::mem::replace(&mut model.almacen, AlmacenEnMemoria::nuevo());
+        let h_b = almacen2.insertar(vec![1u8; 4 * 4 * 4]);
+        model.almacen = almacen2;
+        let cap_b = Capa::raster("b", h_b);
+        let id_b = cap_b.id;
+        model.lienzo.apilar(cap_b);
+        // Forzamos un snapshot manual del estado post-agregado (simulando
+        // que la capa B vino vía Agregar/Eliminar — para este test ad-hoc
+        // basta con pushear directo).
+        pushear_snapshot(&mut model, None);
+        let base = model.historial.len();
+
+        // Drag sobre A
+        for _ in 0..3 {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::BumpOpacidad(id_a, -0.05),
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(model.historial.len(), base + 1);
+
+        // Drag sobre B (capa distinta → no coalesce con el de A)
+        for _ in 0..3 {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::BumpOpacidad(id_b, -0.05),
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(
+            model.historial.len(),
+            base + 2,
+            "drag en B agrega entrada propia"
+        );
+    }
+
+    #[test]
+    fn historial_capado_descarta_entradas_viejas() {
+        // Fuerzo HIST_CAP+5 snapshots no-coalescables (sin etiqueta).
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        for _ in 0..(HIST_CAP + 5) {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::ToggleVisible(id),
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(model.historial.len(), HIST_CAP);
+        assert_eq!(model.cursor_historial, HIST_CAP - 1);
+    }
+
+    #[test]
+    fn undo_de_eliminar_resucita_la_capa() {
+        // Una capa eliminada debe volver al hacer Ctrl+Z. La selección se
+        // reajusta a la capa restaurada (única en el lienzo).
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert_eq!(model.lienzo.capas.len(), 1);
+        model = <Tullpu as App>::update(model, Msg::Eliminar(id), &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), 0);
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), 1);
+        assert_eq!(model.lienzo.capas[0].id, id);
+        // Ajusta_seleccion_tras_restaurar la reasigna ya que tras Eliminar
+        // la habíamos blanqueado.
+        assert_eq!(model.seleccionada, Some(id));
+    }
+
+    #[test]
+    fn confirmar_renombrar_vacio_no_genera_snapshot() {
+        // El path "input vacío" no muta el nombre → no debe ensuciar el
+        // historial con una entrada idéntica.
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let len_inicial = model.historial.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarRenombrar(id),
+            &Handle::for_test(),
+        );
+        if let Some((_, input)) = model.renombrando.as_mut() {
+            input.set_text("   "); // whitespace only — descartado por update
+        }
+        model = <Tullpu as App>::update(model, Msg::ConfirmarRenombrar, &Handle::for_test());
+        assert_eq!(model.historial.len(), len_inicial);
+    }
+
+    #[test]
+    fn confirmar_renombrar_con_nuevo_nombre_si_genera_snapshot() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let len_inicial = model.historial.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarRenombrar(id),
+            &Handle::for_test(),
+        );
+        if let Some((_, input)) = model.renombrando.as_mut() {
+            input.set_text("renombrado");
+        }
+        model = <Tullpu as App>::update(model, Msg::ConfirmarRenombrar, &Handle::for_test());
+        assert_eq!(model.historial.len(), len_inicial + 1);
+        // Undo restaura el nombre original ("c").
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capa(id).unwrap().nombre, "c");
     }
 }
