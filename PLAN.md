@@ -252,6 +252,8 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 6. **`pixel-verbo-daemon`** ✅ (en tullpu) **+ visión en `pluma-llm`** ✅ — `ChatMessage` lleva `images: Vec<ChatImage>` (base64, retrocompat por `serde(default)`); backends Anthropic (bloques `image`/`source`) y Gemini (`inlineData`) los emiten. Capa IA.
 7. ✅ **`shared/foreign-psd`** — import Photoshop (post-tullpu, §6.ter).
 
+8. ✅ **`media-encode-av1`** — encode AV1 nativo (rav1e, puro-Rust, sin nasm) desde frames RGBA → IVF. Contraparte exacta de `media-source-av1`: gioser **produce** su video nativo sin ffmpeg. Conversión RGBA→YUV420 inversa de la del decoder (BT.601 full range). Round-trip verificado end-to-end (encode → IVF → decode con rav1d → color preservado, sin ffmpeg en ningún extremo). `media-source-vorbis`/`-flac`/`-opus` completan el trío de audio abierto y `media-core` lee SRT **+ WebVTT** (subtítulo nativo de la web, par del stack WebM+AV1+Opus). H.264/H.265/AAC siguen sólo por puente: la barrera es **patente** (pools Via LA / Access Advance gravan las técnicas del bitstream, da igual el lenguaje), no esfuerzo ni licencia de fuente — por eso AV1/Opus, royalty-free de diseño, son lo único que gioser encodea en código propio.
+
 **Nota hardware**: wgpu no expone Vulkan Video hoy → el decode arranca en CPU (rav1d es threaded y rinde). `media-core` deja el hook para frame-ya-en-GPU cuando el camino madure.
 
 ## 7. Repos legacy
