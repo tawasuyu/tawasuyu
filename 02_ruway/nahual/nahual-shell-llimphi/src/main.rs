@@ -432,6 +432,7 @@ fn open_video(path: &Path) -> VideoViewerState {
         .map(str::to_ascii_lowercase);
     match ext.as_deref() {
         Some("webm" | "mkv") => VideoViewerState::open_webm(path),
+        Some("gif") => VideoViewerState::open_gif(path),
         _ => VideoViewerState::open_av1(path),
     }
 }

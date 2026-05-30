@@ -150,6 +150,28 @@ impl VideoViewerState {
         }
     }
 
+    /// Abre un GIF animado vía `media-source-gif` (frames RGBA8
+    /// precomputados con sus delays). El visor lo trata como cualquier
+    /// `FrameSource`: lo anima en loop. Las dimensiones se corrigen en
+    /// el primer `tick` (se pasan en 0 acá; el frame inicial las fija).
+    pub fn open_gif(path: &Path) -> Self {
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        match media_source_gif::GifSource::from_path(path) {
+            Ok(src) => {
+                let duration = Some(src.total_duration());
+                Self::from_source(Box::new(src), name, 0, 0, duration)
+            }
+            Err(e) => Self {
+                name,
+                error: Some(e.to_string()),
+                ..Default::default()
+            },
+        }
+    }
+
     /// Construye el viewer sobre una fuente arbitraria (p.ej. un puente
     /// `foreign-av`). El viewer no decodifica: sólo tickea y pinta.
     pub fn from_source(

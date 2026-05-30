@@ -57,6 +57,12 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
     let Some(d) = discernment else {
         return ViewerKind::Text;
     };
+    // GIF: shuma lo marca `gallery` (es una imagen), pero un GIF animado
+    // se ve mejor reproducido. El video viewer acepta su `FrameSource` y
+    // lo anima en loop; un GIF de un solo frame se ve igual que estático.
+    if d.mime.as_deref() == Some("image/gif") {
+        return ViewerKind::Video;
+    }
     match d.lens.as_deref() {
         Some("gallery") => return ViewerKind::Image,
         Some("video") => return ViewerKind::Video,
@@ -106,6 +112,12 @@ mod tests {
     #[test]
     fn mime_image_sin_lens_va_a_imagen() {
         assert_eq!(pick(Some(&disc(None, Some("image/webp")))), ViewerKind::Image);
+    }
+
+    #[test]
+    fn gif_va_a_video_aunque_sea_gallery() {
+        // shuma marca el GIF como gallery; igual lo anima el video viewer.
+        assert_eq!(pick(Some(&disc(Some("gallery"), Some("image/gif")))), ViewerKind::Video);
     }
 
     #[test]

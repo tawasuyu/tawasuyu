@@ -14,6 +14,7 @@ llimphi-theme = { workspace = true }
 media-core = { path = "../../media/media-core" }
 media-source-av1 = { path = "../../media/media-source-av1" }
 media-source-webm = { path = "../../media/media-source-webm" }
+media-source-gif = { path = "../../media/media-source-gif" }
 
 [[example]]
 name = "video_viewer_demo"
