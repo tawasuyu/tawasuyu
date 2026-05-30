@@ -31,6 +31,11 @@ pub enum ContenidoMarco {
     /// Contenido de "slide": título opcional + párrafos. Agnóstico (sólo
     /// strings); un adaptador convierte un cuerpo/subgrafo de pluma a esto.
     Texto { titulo: Option<String>, parrafos: Vec<String> },
+    /// Imagen rasterizada: bytes **codificados** (PNG/JPEG/WebP) + dimensiones
+    /// en px. El core es agnóstico — guarda los bytes sin decodificar y deja la
+    /// rasterización al frontend; `ancho`/`alto` permiten encuadrar/aspectar el
+    /// marco sin tener que decodificar.
+    Imagen { bytes: Vec<u8>, ancho: u32, alto: u32 },
     /// Referencia opaca que el host resuelve (hash BLAKE3, id de cuerpo, ruta…).
     Ref(String),
 }
@@ -359,6 +364,19 @@ mod tests {
         assert_eq!(r.marco_en_punto((49.0, 49.0)), None);
         // Sobre el eje X a distancia 60 < semidiagonal: dentro del rombo.
         assert_eq!(r.marco_en_punto((60.0, 0.0)), Some(7));
+    }
+
+    #[test]
+    fn marco_con_imagen_es_agnostico_al_hit_test() {
+        // El core no decodifica la imagen: guarda bytes + dims y el hit-test
+        // sigue dependiendo sólo de la geometría del marco.
+        let mut r = Recorrido::new();
+        let img = ContenidoMarco::Imagen { bytes: vec![0xDE, 0xAD, 0xBE, 0xEF], ancho: 320, alto: 240 };
+        r.agregar_marco(Marco::new(5, Rect::new(0.0, 0.0, 400.0, 300.0), img.clone()));
+        assert_eq!(r.marco_en_punto((100.0, 100.0)), Some(5));
+        assert_eq!(r.marco_en_punto((9999.0, 0.0)), None);
+        // La variante conserva bytes y dimensiones tal cual.
+        assert_eq!(r.marco(5).unwrap().contenido, img);
     }
 
     #[test]

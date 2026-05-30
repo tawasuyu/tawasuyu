@@ -15,15 +15,16 @@
 //! - flechas: `siguiente`/`anterior` + un tick periódico que llama
 //!   `RecorridoState::avanzar(dt)` para animar el vuelo.
 
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect, Stroke};
-use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Mix};
+use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat, Mix};
 use llimphi_ui::llimphi_text::{draw_layout, layout_block, measurement, Alignment, TextBlock};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::{PaintRect, View};
 
-use pluma_deck_core::{Camara, ContenidoMarco, Recorrido, RecorridoState, Rect};
+use pluma_deck_core::{Camara, ContenidoMarco, MarcoId, Recorrido, RecorridoState, Rect};
 
 /// Base del zoom por "clic" de rueda (igual criterio que tullpu: `1.1`).
 pub const ZOOM_BASE: f64 = 1.1;
@@ -59,6 +60,57 @@ pub fn dentro(panel: Rect, cx: f32, cy: f32) -> bool {
     cx >= panel.x && cx <= panel.x + panel.w && cy >= panel.y && cy <= panel.y + panel.h
 }
 
+// ---- Caché de imágenes decodificadas -------------------------------------
+//
+// `ContenidoMarco::Imagen` guarda bytes **codificados** (PNG/JPEG/WebP): el
+// core es agnóstico al render. Decodificarlos a RGBA8 en cada frame sería
+// carísimo, así que se decodifica una vez y se cachea la `peniko::Image`
+// (que es barata de clonar — su `Blob` es `Arc`). La clave `(id, len)` detecta
+// el caso de reemplazar la imagen de un marco por otra de distinto tamaño.
+
+static IMG_CACHE: OnceLock<Mutex<HashMap<(MarcoId, usize), PenikoImage>>> = OnceLock::new();
+
+/// Devuelve la `peniko::Image` del marco `id`, decodificando+cacheando la
+/// primera vez. `None` si los bytes no son una imagen válida.
+fn imagen_cacheada(id: MarcoId, bytes: &[u8]) -> Option<PenikoImage> {
+    let cell = IMG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut g = cell.lock().ok()?;
+    if let Some(img) = g.get(&(id, bytes.len())) {
+        return Some(img.clone());
+    }
+    let img = decodificar(bytes)?;
+    g.insert((id, bytes.len()), img.clone());
+    Some(img)
+}
+
+fn decodificar(bytes: &[u8]) -> Option<PenikoImage> {
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let blob = Blob::from(img.into_raw());
+    Some(PenikoImage::new(blob, ImageFormat::Rgba8, w, h))
+}
+
+// ---- Pintura por marco ---------------------------------------------------
+//
+// El `paint_with` corre cada frame con un closure `Send + Sync`. Para no clonar
+// los bytes de imagen (ni re-decodificar) por frame, `recorrido_view` precocina
+// cada marco a una `Pintura` ligera: el texto se clona (barato) y la imagen se
+// resuelve a una `peniko::Image` cacheada (clon barato).
+
+enum Pintura {
+    Etiqueta(String),
+    Texto { titulo: Option<String>, parrafos: Vec<String> },
+    Imagen(PenikoImage),
+    Nada,
+}
+
+struct MarcoPintura {
+    id: MarcoId,
+    rect: Rect,
+    rot_rad: f64,
+    pintura: Pintura,
+}
+
 // ---- Colores del lienzo (no temáticos todavía; placeholder sobrio) -------
 
 const FONDO: Color = Color::from_rgba8(18, 20, 28, 255);
@@ -72,8 +124,26 @@ const TEXTO_TENUE: Color = Color::from_rgba8(186, 194, 210, 225);
 /// panel. `Msg` es libre: el caller suele colgarle un `.draggable(...)` para
 /// el pan — esta función no lo impone para no fijar el tipo de mensaje.
 pub fn recorrido_view<Msg: 'static>(rec: &Recorrido, state: &RecorridoState) -> View<Msg> {
-    // Clonamos lo mínimo para que el closure `Send + Sync` sobreviva al frame.
-    let marcos = rec.marcos.clone();
+    // Precocinamos cada marco a una `Pintura` ligera (texto clonado, imagen
+    // resuelta a peniko::Image cacheada) para no clonar bytes ni re-decodificar
+    // por frame, y para que el closure `Send + Sync` sobreviva sin los bytes.
+    let pinturas: Vec<MarcoPintura> = rec
+        .marcos
+        .iter()
+        .map(|m| {
+            let pintura = match &m.contenido {
+                ContenidoMarco::Etiqueta(t) if !t.is_empty() => Pintura::Etiqueta(t.clone()),
+                ContenidoMarco::Texto { titulo, parrafos } => {
+                    Pintura::Texto { titulo: titulo.clone(), parrafos: parrafos.clone() }
+                }
+                ContenidoMarco::Imagen { bytes, .. } => {
+                    imagen_cacheada(m.id, bytes).map(Pintura::Imagen).unwrap_or(Pintura::Nada)
+                }
+                _ => Pintura::Nada,
+            };
+            MarcoPintura { id: m.id, rect: m.rect, rot_rad: m.rot_rad, pintura }
+        })
+        .collect();
     let paso_id = rec.pasos.get(state.paso).copied();
     let camara = state.camara;
     View::new(Style {
@@ -83,7 +153,7 @@ pub fn recorrido_view<Msg: 'static>(rec: &Recorrido, state: &RecorridoState) -> 
     .fill(FONDO)
     .paint_with(move |scene, ts, rect: PaintRect| {
         panel_set(to_rect(rect));
-        pintar(scene, ts, rect, &marcos, paso_id, &camara);
+        pintar(scene, ts, rect, &pinturas, paso_id, &camara);
     })
 }
 
@@ -106,8 +176,8 @@ fn pintar(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
     ts: &mut llimphi_ui::llimphi_text::Typesetter,
     rect: PaintRect,
-    marcos: &[pluma_deck_core::Marco],
-    paso_id: Option<pluma_deck_core::MarcoId>,
+    marcos: &[MarcoPintura],
+    paso_id: Option<MarcoId>,
     cam: &Camara,
 ) {
     if rect.w <= 0.0 || rect.h <= 0.0 {
@@ -139,31 +209,55 @@ fn pintar(
             m.rect.y + m.rect.h,
         );
         scene.fill(Fill::NonZero, xf, MARCO_FONDO, None, &kr);
+
+        // La imagen se pinta encajada en el marco (respeta giro/zoom vía `xf`).
+        if let Pintura::Imagen(img) = &m.pintura {
+            pintar_imagen(scene, xf, &m.rect, img);
+        }
+
         let actual = paso_id == Some(m.id);
         let (grosor, color) = if actual { (3.0, MARCO_ACENTO) } else { (1.0, MARCO_BORDE) };
         scene.stroke(&Stroke::new(grosor), xf, color, None, &kr);
 
         // El contenido decide cómo se pinta: etiqueta = una línea centrada;
         // texto = título + párrafos fluidos desde la esquina, clipeados al marco.
-        match &m.contenido {
-            ContenidoMarco::Etiqueta(t) if !t.is_empty() => {
-                pintar_etiqueta(scene, ts, cam, panel, m, t);
+        match &m.pintura {
+            Pintura::Etiqueta(t) => pintar_etiqueta(scene, ts, cam, panel, &m.rect, t),
+            Pintura::Texto { titulo, parrafos } => {
+                pintar_texto(scene, ts, cam, panel, &m.rect, titulo.as_deref(), parrafos);
             }
-            ContenidoMarco::Texto { titulo, parrafos } => {
-                pintar_texto(scene, ts, cam, panel, m, titulo.as_deref(), parrafos);
-            }
-            _ => {}
+            Pintura::Imagen(_) | Pintura::Nada => {}
         }
     }
 
     scene.pop_layer();
 }
 
+/// Pinta `img` encajada en el rect del marco preservando aspect ratio,
+/// centrada y clipeada al marco (en su espacio transformado, así respeta el
+/// giro propio). `xf` es el mundo→pantalla del marco ya con su rotación.
+fn pintar_imagen(scene: &mut Scene, xf: Affine, rect: &Rect, img: &PenikoImage) {
+    let (iw, ih) = (img.width as f64, img.height as f64);
+    if iw <= 0.0 || ih <= 0.0 || rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+    let s = (rect.w / iw).min(rect.h / ih);
+    let (dw, dh) = (iw * s, ih * s);
+    let ox = rect.x + (rect.w - dw) * 0.5;
+    let oy = rect.y + (rect.h - dh) * 0.5;
+    let kr = KurboRect::new(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+    // Clip al rect del marco en su propio espacio (xf incluye giro+zoom).
+    scene.push_layer(Mix::Clip, 1.0, xf, &kr);
+    let img_xf = xf * Affine::translate((ox, oy)) * Affine::scale(s);
+    scene.draw_image(img, img_xf);
+    scene.pop_layer();
+}
+
 /// Etiqueta de una línea centrada en el centro de pantalla del marco. El
 /// tamaño escala con el zoom (clamp para que siga legible lejos/cerca).
-fn pintar_etiqueta(scene: &mut Scene, ts: &mut Ts, cam: &Camara, panel: Rect, m: &pluma_deck_core::Marco, t: &str) {
-    let (mcx, mcy) = m.rect.centro();
-    let ancho_px = (m.rect.w * cam.zoom) as f32;
+fn pintar_etiqueta(scene: &mut Scene, ts: &mut Ts, cam: &Camara, panel: Rect, rect: &Rect, t: &str) {
+    let (mcx, mcy) = rect.centro();
+    let ancho_px = (rect.w * cam.zoom) as f32;
     if ancho_px < 12.0 {
         return; // demasiado chico para texto
     }
@@ -192,13 +286,13 @@ fn pintar_texto(
     ts: &mut Ts,
     cam: &Camara,
     panel: Rect,
-    m: &pluma_deck_core::Marco,
+    rect: &Rect,
     titulo: Option<&str>,
     parrafos: &[String],
 ) {
-    let (sx, sy) = cam.world_to_screen((m.rect.x, m.rect.y), panel);
-    let w_px = (m.rect.w * cam.zoom) as f32;
-    let h_px = (m.rect.h * cam.zoom) as f32;
+    let (sx, sy) = cam.world_to_screen((rect.x, rect.y), panel);
+    let w_px = (rect.w * cam.zoom) as f32;
+    let h_px = (rect.h * cam.zoom) as f32;
     if w_px < 40.0 || h_px < 24.0 {
         return; // demasiado chico para texto fluido
     }

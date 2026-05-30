@@ -11,6 +11,9 @@ description = "Frontend Llimphi del modo Recorrido de pluma-deck: lienzo infinit
 [dependencies]
 pluma-deck-core = { path = "../pluma-deck-core" }
 llimphi-ui = { workspace = true }
+# Decodifica los bytes de ContenidoMarco::Imagen (PNG/JPEG/WebP) → RGBA8 para
+# pintarlos como peniko::Image. El core guarda bytes crudos; aquí se rasterizan.
+image = { workspace = true }
 
 [dev-dependencies]
 # Sólo para el example recorrido_md_demo: muestra la cadena markdown →
