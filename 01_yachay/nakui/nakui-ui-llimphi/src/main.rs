@@ -23,8 +23,12 @@
 //!   - `Detail`: ficha de un record (← Volver / ✎ Editar), sus campos y
 //!     las listas de records relacionados (back-references por
 //!     `via_field`).
-//!   - `Dashboard`: grilla de tarjetas de KPI (`Count`/`Sum`/`GroupBy`
-//!     vía `compute_metric`, con `ValueFormat` y filtros).
+//!   - `Dashboard`: grilla de tarjetas de KPI vía `compute_metric`,
+//!     con `ValueFormat` y filtros. Escalares `Count`/`Sum`/`Avg`/
+//!     `Min`/`Max` y desgloses `GroupBy` (conteo) / `SumBy` / `AvgBy`
+//!     (valor agregado por dimensión — el reporte ERP clásico). Las
+//!     claves de un desglose con `group_ref` se resuelven al label del
+//!     record referido (p.ej. "facturación por cliente" con nombres).
 //!   El resultado (o el error de validación) se muestra como banner.
 //!
 //! El ciclo de escritura ya no pasa por CLI/tests: la UI crea, edita,
@@ -1640,9 +1644,42 @@ fn build_related_list(
     .children(children)
 }
 
+/// Resuelve las claves de un desglose (UUIDs) al label legible del
+/// record referido en `ref_entity`. Las claves que no son UUID se
+/// dejan tal cual; los records borrados se marcan como tales. Mismo
+/// criterio que [`cell_display`] para columnas `ref_entity`.
+fn resolve_breakdown_keys(
+    result: &mut MetricResult,
+    backend: &NakuiBackend,
+    ref_entity: &str,
+) {
+    let resolve = |key: &str| -> String {
+        match Uuid::parse_str(key) {
+            Ok(uuid) => backend
+                .load_record(ref_entity, uuid)
+                .map(|rec| human_label_for_record(&rec, &uuid))
+                .unwrap_or_else(|| format!("(borrado · {})", short_uuid(&uuid))),
+            Err(_) => key.to_string(),
+        }
+    };
+    match result {
+        MetricResult::Breakdown(rows) => {
+            for (k, _) in rows.iter_mut() {
+                *k = resolve(k);
+            }
+        }
+        MetricResult::ValueBreakdown(rows) => {
+            for (k, _) in rows.iter_mut() {
+                *k = resolve(k);
+            }
+        }
+        MetricResult::Scalar(_) => {}
+    }
+}
+
 /// Vista `Dashboard`: una grilla de tarjetas de KPI, cada una con su
-/// agregado (`Count`/`Sum`/`GroupBy`) computado sobre los records de su
-/// entity.
+/// agregado (`Count`/`Sum`/`Avg`/`Min`/`Max`/`GroupBy`/`SumBy`/`AvgBy`)
+/// computado sobre los records de su entity.
 fn build_dashboard_panel(
     model: &Model,
     module: &Module,
@@ -1662,7 +1699,12 @@ fn build_dashboard_panel(
             .as_ref()
             .map(|b| b.list_records(&card.entity))
             .unwrap_or_default();
-        let result = compute_metric(&card.metric, card.filter.as_ref(), &records);
+        let mut result = compute_metric(&card.metric, card.filter.as_ref(), &records);
+        // Si la card declara `group_ref`, las claves de un desglose son
+        // UUIDs de esa entity → las resolvemos a su label legible.
+        if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
+            resolve_breakdown_keys(&mut result, backend, ref_entity);
+        }
         cards.push(dashboard_card(&card.label, &result, &card.format, theme));
     }
 
@@ -1744,6 +1786,46 @@ fn dashboard_card(
                     cell_text(key.clone(), 96.0, theme.fg_text),
                     cell_flex(bar, theme.accent),
                     cell_text(n.to_string(), 32.0, theme.fg_muted),
+                ]);
+                children.push(row);
+            }
+        }
+        MetricResult::ValueBreakdown(rows) => {
+            if rows.is_empty() {
+                children.push(text_line("(sin datos)".into(), 11.0, theme.fg_muted));
+            }
+            // La barra escala contra el mayor valor absoluto; el número
+            // se formatea con el `ValueFormat` de la tarjeta (moneda).
+            let max = rows
+                .iter()
+                .map(|(_, v)| v.abs())
+                .fold(0.0_f64, f64::max)
+                .max(1.0);
+            for (key, v) in rows {
+                let filled = ((v.abs() / max) * 12.0).round() as usize;
+                let bar = "█".repeat(filled.max(1));
+                let value = if v.fract() == 0.0 {
+                    Value::from(*v as i64)
+                } else {
+                    Value::from(*v)
+                };
+                let row = View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(18.0),
+                    },
+                    align_items: Some(AlignItems::Center),
+                    gap: Size {
+                        width: length(6.0),
+                        height: length(0.0),
+                    },
+                    ..Default::default()
+                })
+                .children(vec![
+                    cell_text(key.clone(), 96.0, theme.fg_text),
+                    cell_flex(bar, theme.accent),
+                    cell_text(format_value(Some(&value), fmt), 64.0, theme.fg_muted),
                 ]);
                 children.push(row);
             }

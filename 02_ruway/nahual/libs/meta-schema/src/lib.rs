@@ -198,6 +198,14 @@ pub struct DashboardCard {
     /// Ignorado por `GroupBy`.
     #[serde(default)]
     pub format: ValueFormat,
+    /// Cuando el agregado produce un desglose por grupo (`GroupBy` /
+    /// `SumBy` / `AvgBy`) y la clave de grupo es un UUID que referencia
+    /// a otra entity, esta entity se usa para resolver cada clave a su
+    /// label legible (p.ej. "facturación por cliente" muestra nombres
+    /// en vez de UUIDs). El runtime de presentación hace la resolución;
+    /// el motor de métricas permanece agnóstico.
+    #[serde(default)]
+    pub group_ref: Option<String>,
 }
 
 /// El agregado que computa una [`DashboardCard`].
@@ -208,8 +216,20 @@ pub enum Metric {
     Count,
     /// Suma de un campo numérico.
     Sum { field: String },
+    /// Promedio de un campo numérico (ignora records sin el campo).
+    Avg { field: String },
+    /// Mínimo de un campo numérico.
+    Min { field: String },
+    /// Máximo de un campo numérico.
+    Max { field: String },
     /// Conteo de records por cada valor distinto de un campo.
     GroupBy { field: String },
+    /// Suma de `value` por cada valor distinto de `group` — el reporte
+    /// ERP clásico ("facturación por cliente", "ingresos por mes").
+    SumBy { group: String, value: String },
+    /// Promedio de `value` por cada valor distinto de `group`
+    /// ("ticket promedio por plan").
+    AvgBy { group: String, value: String },
 }
 
 /// Filtro de una [`DashboardCard`]: el record entra si el valor de

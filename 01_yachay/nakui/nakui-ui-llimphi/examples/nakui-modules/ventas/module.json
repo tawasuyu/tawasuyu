@@ -22,7 +22,9 @@
         { "label": "Órdenes", "entity": "Order", "metric": { "kind": "count" } },
         { "label": "Facturado", "entity": "Order", "metric": { "kind": "sum", "field": "monto" }, "format": { "kind": "currency", "symbol": "$" } },
         { "label": "Cobrado", "entity": "Order", "metric": { "kind": "sum", "field": "monto" }, "filter": { "field": "pagado", "equals": "true" }, "format": { "kind": "currency", "symbol": "$" } },
-        { "label": "Clientes por plan", "entity": "Customer", "metric": { "kind": "group_by", "field": "tier" } }
+        { "label": "Clientes por plan", "entity": "Customer", "metric": { "kind": "group_by", "field": "tier" } },
+        { "label": "Facturación por cliente", "entity": "Order", "metric": { "kind": "sum_by", "group": "customer", "value": "monto" }, "group_ref": "Customer", "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Ticket promedio (cobrado)", "entity": "Order", "metric": { "kind": "avg", "field": "monto" }, "filter": { "field": "pagado", "equals": "true" }, "format": { "kind": "currency", "symbol": "$" } }
       ]
     },
     "customers_list": {
