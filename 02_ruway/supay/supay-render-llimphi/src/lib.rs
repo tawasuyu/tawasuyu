@@ -2075,7 +2075,7 @@ fn render_frame(
     // Fase 3.46: decals de impacto (host state). Camera-facing quads
     // pequeños, z-ordenados con el resto de la escena.
     if !cfg.decals.is_empty() {
-        gather_decals(&mut renderables, cfg, &cam, &proj);
+        gather_decals(&mut renderables, cfg, snap, &cam, &proj);
     }
     renderables.sort_by(|a, b| {
         b.depth
@@ -2953,7 +2953,16 @@ fn subsector_at_point(nodes: &[NodeSnap], px: f32, py: f32) -> Option<u32> {
 /// de la lista de sectores. Usado por `draw_weapon_sprite` para tintar
 /// el arma según la iluminación local (Fase 3.18).
 fn player_sector_light(snap: &SceneSnapshot) -> u8 {
-    let ss_id = match subsector_at_point(&snap.nodes, snap.player.x, snap.player.y) {
+    sector_light_at(snap, snap.player.x, snap.player.y)
+}
+
+/// **Fase 3.49** — light level del sector que contiene `(px, py)`,
+/// resuelto por BSP point query. Fallback a [`DEFAULT_PLAYER_LIGHT`] si
+/// no hay BSP o el subsector apunta fuera de la lista de sectores.
+/// Generalización de [`player_sector_light`] para iluminar decals en su
+/// posición real (no la del jugador).
+fn sector_light_at(snap: &SceneSnapshot, px: f32, py: f32) -> u8 {
+    let ss_id = match subsector_at_point(&snap.nodes, px, py) {
         Some(id) => id,
         None => return DEFAULT_PLAYER_LIGHT,
     };
@@ -2964,6 +2973,19 @@ fn player_sector_light(snap: &SceneSnapshot) -> u8 {
         .get(ss.sector as usize)
         .map(|s| s.light_level)
         .unwrap_or(DEFAULT_PLAYER_LIGHT)
+}
+
+/// **Fase 3.49** — multiplica un color RGB por un factor de shade
+/// `[0, 1]` (per-canal, clampeado). Oscurece el decal según la luz del
+/// sector donde cae: un charco en cuarto oscuro se ve casi negro, no a
+/// luz plena.
+fn shade_rgb((r, g, b): (u8, u8, u8), shade: f32) -> (u8, u8, u8) {
+    let s = shade.clamp(0.0, 1.0);
+    (
+        (r as f32 * s) as u8,
+        (g as f32 * s) as u8,
+        (b as f32 * s) as u8,
+    )
 }
 
 /// Camina el árbol BSP recursivamente desde `child`, agregando los
@@ -3525,7 +3547,13 @@ fn gather_sprite_shadow(
 /// `+y_cam` = izquierda, `+z` = arriba (convención de `gather_sprite`).
 /// El depth se sesga `-0.5` para que la marca quede apenas delante de la
 /// pared/piso donde impactó, sin z-fight.
-fn gather_decals(out: &mut Vec<Renderable>, cfg: &RenderConfig, cam: &Camera, proj: &Projection) {
+fn gather_decals(
+    out: &mut Vec<Renderable>,
+    cfg: &RenderConfig,
+    snap: &SceneSnapshot,
+    cam: &Camera,
+    proj: &Projection,
+) {
     for d in &cfg.decals {
         let a = (d.alpha.clamp(0.0, 1.0) * 255.0) as u8;
         if a == 0 {
@@ -3585,6 +3613,15 @@ fn gather_decals(out: &mut Vec<Renderable>, cfg: &RenderConfig, cam: &Camera, pr
             continue;
         }
         let depth = (cx_cam * cx_cam + cy_cam * cy_cam).sqrt();
+        // Fase 3.49: shadeamos el color por la luz del sector donde cae
+        // el decal (+ fog por distancia). En modo stub (sin BSP) queda
+        // full-bright como en 3.46-3.48.
+        let (cr, cg, cb) = if snap.nodes.is_empty() {
+            d.color
+        } else {
+            let light = sector_light_at(snap, d.x, d.y);
+            shade_rgb(d.color, shade_for(light, depth, cfg))
+        };
         let mut path = BezPath::new();
         path.move_to(corners[0]);
         for p in &corners[1..] {
@@ -3593,7 +3630,7 @@ fn gather_decals(out: &mut Vec<Renderable>, cfg: &RenderConfig, cam: &Camera, pr
         path.close_path();
         out.push(Renderable {
             depth: depth - 0.5,
-            color: Color::from_rgba8(d.color.0, d.color.1, d.color.2, a),
+            color: Color::from_rgba8(cr, cg, cb, a),
             path,
             kind: RenderKind::Fill,
         });
@@ -7404,7 +7441,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
         assert_eq!(out.len(), 1, "decal al frente ⇒ 1 quad");
         assert!(matches!(out[0].kind, RenderKind::Fill));
     }
@@ -7426,7 +7463,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
         assert!(out.is_empty(), "decal detrás de la cámara se descarta");
     }
 
@@ -7447,7 +7484,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
         assert!(out.is_empty(), "alpha 0 ⇒ no se dibuja");
     }
 
@@ -7468,7 +7505,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
         assert_eq!(out.len(), 1);
         let a = out[0].color.to_rgba8().to_u8_array()[3];
         assert!((a as i32 - 127).abs() <= 1, "alpha 0.5 ⇒ ~127, got {}", a);
@@ -7493,7 +7530,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
         assert!((out[0].depth - (100.0 - 0.5)).abs() < 1e-3, "depth = dist - 0.5");
     }
 
@@ -7520,7 +7557,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = Vec::new();
-            gather_decals(&mut out, &cfg, &cam, &proj);
+            gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
             out
         };
         let billboard = mk((0.0, 0.0));
@@ -7572,7 +7609,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        gather_decals(&mut out, &cfg, &cam, &proj);
+        gather_decals(&mut out, &cfg, &SceneSnapshot::empty(0), &cam, &proj);
         assert_eq!(out.len(), 1);
         let pts: Vec<Point> = out[0]
             .path
@@ -7594,6 +7631,17 @@ mod tests {
             "borde cercano más ancho que el lejano: near={} far={}",
             near_w, far_w
         );
+    }
+
+    #[test]
+    fn decal_shade_rgb_darkens_in_dark_sector() {
+        // Fase 3.49: shade 1.0 preserva el color; shade bajo lo oscurece
+        // per-canal; shade 0 ⇒ negro.
+        let c = (104, 12, 12);
+        assert_eq!(shade_rgb(c, 1.0), c, "luz plena ⇒ idéntico");
+        assert_eq!(shade_rgb(c, 0.5), (52, 6, 6), "mitad de luz ⇒ mitad por canal");
+        assert_eq!(shade_rgb(c, 0.0), (0, 0, 0), "oscuridad total ⇒ negro");
+        assert_eq!(shade_rgb(c, 2.0), c, "clamp a 1.0");
     }
 
     // =================================================================
