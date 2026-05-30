@@ -17,13 +17,17 @@
 //!   render nunca se frena esperando al dispositivo, y un frame viejo
 //!   nunca se re-emite. Reusable por cualquier grabber (cámara,
 //!   pantalla, compute shader, red).
-//! - [`CameraSource`] — backend v4l2 (feature `camera`, on por
-//!   default). Abre `/dev/videoN`, negocia formato, y corre un hilo que
-//!   convierte cada frame a RGBA y lo empuja al `LiveSink`. Se detiene
-//!   solo al dropearse.
+//! - [`CameraSource`] — backend v4l2 (feature `camera`, opt-in). Abre
+//!   `/dev/videoN`, negocia formato, y corre un hilo que convierte cada
+//!   frame a RGBA y lo empuja al `LiveSink`. Se detiene solo al dropearse.
+//! - [`ScreenSource`] — backend de captura de pantalla X11 (feature
+//!   `screen`, opt-in). Mismo molde que la cámara, pero la fuente es el
+//!   framebuffer del servidor (X11 `GetImage` del root) y un timer
+//!   interno marca el ritmo. Cumple la promesa "cámara hoy, pantalla
+//!   mañana sin crate nuevo" reusando el mismo núcleo `LiveSource`.
 //!
 //! La conversión de pixel-formats ([`convert`]) es pura y testeable sin
-//! ningún dispositivo — vive separada del backend.
+//! ningún dispositivo — vive separada de los backends.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,6 +42,11 @@ pub use convert::PixelFormat;
 mod camera;
 #[cfg(feature = "camera")]
 pub use camera::{CameraOptions, CameraSource, CaptureError};
+
+#[cfg(feature = "screen")]
+mod screen;
+#[cfg(feature = "screen")]
+pub use screen::{ScreenError, ScreenOptions, ScreenSource};
 
 /// Estado compartido entre [`LiveSink`] (escribe) y [`LiveSource`]
 /// (lee). El `version` se incrementa cada vez que el sink deja un

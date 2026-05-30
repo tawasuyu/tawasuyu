@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "media/source-capture — captura en vivo (cámara v4l2) como FrameSource. Núcleo puro de conversión de pixel-formats + slot latest-frame reusable; backend cámara detrás de feature."
+description = "media/source-capture — captura en vivo (cámara v4l2 · pantalla X11) como FrameSource. Núcleo puro de conversión de pixel-formats + slot latest-frame reusable; backends detrás de features opt-in."
 
 [features]
 # Núcleo puro (convert + LiveSource/LiveSink) por default — sin deps de
@@ -18,6 +18,10 @@ default = []
 # Activar con `--features camera` en plataformas con cabeceras videodev2 +
 # libclang. Correr necesita un dispositivo `/dev/videoN` real.
 camera = ["dep:v4l"]
+# Backend de captura de pantalla X11. OPT-IN: arrastra `x11rb` (puro-Rust,
+# habla el protocolo X11 por socket, sin lib C). Compila en cualquier lado;
+# correr necesita un servidor X (`$DISPLAY`). Wayland sería otro backend.
+screen = ["dep:x11rb"]
 
 [dependencies]
 media-core = { path = "../media-core" }
@@ -27,6 +31,10 @@ image = { workspace = true }
 
 # Backend cámara: v4l es puro-Rust (ioctl vía libc, sin lib C externa).
 v4l = { version = "0.14", optional = true }
+
+# Backend pantalla: x11rb es puro-Rust (protocolo X11 por socket, RustConnection
+# por default, sin enlazar libX11/libxcb).
+x11rb = { version = "0.13", optional = true }
 
 [dev-dependencies]
 media-recorder-webm = { path = "../media-recorder-webm" }

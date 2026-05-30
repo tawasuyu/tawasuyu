@@ -51,33 +51,64 @@ println!("{}×{} {:?}", cam.width(), cam.height(), cam.format());
 // cam: FrameSource — enchufar al pipeline o al recorder.
 ```
 
-La conversión de pixel-formats (`convert`) es **pura y testeable sin
-ningún dispositivo** — vive separada del backend. Soporta `YUYV`
-(YUV 4:2:2, BT.601 limited range — la convención v4l2), `MJPG` (vía el
-crate `image`), `RGB3` y `BGR3`.
+### Backend pantalla X11 — `ScreenSource` (feature `screen`, opt-in)
 
-## Por qué `camera` es opt-in
+Mismo molde que la cámara, pero la fuente es el **framebuffer del
+servidor**: un hilo dedicado hace `GetImage` del root window de X11,
+convierte a RGBA y empuja al `LiveSink`. La pantalla no marca ritmo
+(a diferencia de la cámara, que lo da el driver), así que un timer
+interno limita a `fps` para no re-grabar un framebuffer que no cambió.
+
+```rust
+use media_source_capture::{ScreenSource, ScreenOptions};
+
+let scr = ScreenSource::open_default()?;           // $DISPLAY, pantalla completa, 30 fps
+println!("{}×{} {:?}", scr.width(), scr.height(), scr.format());
+// scr: FrameSource — mismo recorder, ahora grabás la pantalla a .webm.
+```
+
+Cumple la promesa del núcleo: "cámara hoy, captura de pantalla mañana
+**sin crate nuevo**" — reusa `LiveSource`/`LiveSink` tal cual. X11 sólo
+por ahora; Wayland (portal + PipeWire) sería otro backend sobre el
+mismo núcleo. `GetImage` copia el framebuffer por el socket cada frame
+(MVP); MIT-SHM (memoria compartida) es la optimización natural cuando
+duela.
+
+La conversión de pixel-formats (`convert`) es **pura y testeable sin
+ningún dispositivo** — vive separada de los backends. Soporta `YUYV`
+(YUV 4:2:2, BT.601 limited range — la convención v4l2), `MJPG` (vía el
+crate `image`), `RGB3`, `BGR3` y los empaquetados de 32-bit de X11
+(`Bgrx32` little-endian / `Xrgb32` big-endian, padding ignorado).
+
+## Por qué los backends son opt-in
 
 `v4l` arrastra `v4l2-sys-mit` → `bindgen` → `libclang`, una dependencia
 de **build** pesada y frágil en builds paralelos (el smoke test
 `cargo check --workspace` reventaba con *"libclang not loaded on this
 thread"*). Misma lógica que los puentes `foreign-*`: el hardware/ajeno
-entra opt-in, el núcleo del dominio queda liviano.
+entra opt-in, el núcleo del dominio queda liviano. `screen` arrastra
+`x11rb` (puro-Rust, sin lib C) — más liviano que `camera`, pero igual
+queda opt-in: es un backend de sistema (necesita un servidor X) y no
+toda plataforma lo quiere.
 
 ```bash
-cargo test  -p media-source-capture                   # núcleo puro (12 tests) + integración (2)
+cargo test  -p media-source-capture                   # núcleo puro (15 tests) + integración (2)
 cargo check -p media-source-capture --features camera # backend v4l2 (necesita libclang)
+cargo check -p media-source-capture --features screen # backend X11 (x11rb, puro-Rust)
 ```
 
-Compila donde haya cabeceras `videodev2` + `libclang`; **correr**
-necesita un `/dev/videoN` real — igual que `media-audio-cpal` necesita
-un sink de sonido. Por eso esta capa es fina y la lógica testeable
-(conversión + slot latest-frame) vive fuera del backend.
+`camera` compila donde haya cabeceras `videodev2` + `libclang` y
+**correr** necesita un `/dev/videoN` real; `screen` compila en
+cualquier lado y correr necesita un `$DISPLAY`. En ambos la capa de
+backend es fina y la lógica testeable (conversión + slot latest-frame)
+vive fuera — igual que `media-audio-cpal` necesita un sink de sonido
+para sonar pero no para compilar.
 
 ## Tests
 
 - `convert::tests` — round-trips de conversión (YUYV gris/rojo, RGB/BGR,
-  rechazo de buffers truncados, mapeo de FourCC).
+  los 32-bit de X11 `Bgrx32`/`Xrgb32` con padding ignorado, rechazo de
+  buffers truncados, mapeo de FourCC).
 - `lib::tests` — contrato del `LiveSource`: empieza vacío, emite sólo
   frames nuevos, descarta intermedios, detecta huérfano.
 - `tests/captura_a_webm.rs` — el loop estrella sin hardware: `LiveSink`

@@ -18,6 +18,15 @@ pub enum PixelFormat {
     Rgb24,
     /// 3 bytes por píxel, orden B,G,R.
     Bgr24,
+    /// 4 bytes por píxel, orden B,G,R,X — el 4º byte (padding/alfa) se
+    /// ignora y la salida queda opaca. Es lo que entrega un servidor X11
+    /// little-endian (`ImageOrder::LSBFirst`) por `GetImage`: el pixel
+    /// `0x00RRGGBB` cae en memoria como `[BB GG RR 00]`. Usado por el
+    /// backend de captura de pantalla.
+    Bgrx32,
+    /// 4 bytes por píxel, orden X,R,G,B — contraparte big-endian del
+    /// anterior (`ImageOrder::MSBFirst`). El 4º (último) canal real es B.
+    Xrgb32,
 }
 
 impl PixelFormat {
@@ -73,6 +82,28 @@ pub fn to_rgba(
                 out[0] = r;
                 out[1] = px[1];
                 out[2] = b;
+                out[3] = 255;
+            }
+            true
+        }
+        PixelFormat::Bgrx32 | PixelFormat::Xrgb32 => {
+            if src.len() < pixels * 4 {
+                return false;
+            }
+            dst.resize(rgba_len, 0);
+            let xrgb = matches!(fmt, PixelFormat::Xrgb32);
+            for (px, out) in src.chunks_exact(4).take(pixels).zip(dst.chunks_exact_mut(4)) {
+                if xrgb {
+                    // [X, R, G, B]
+                    out[0] = px[1];
+                    out[1] = px[2];
+                    out[2] = px[3];
+                } else {
+                    // [B, G, R, X]
+                    out[0] = px[2];
+                    out[1] = px[1];
+                    out[2] = px[0];
+                }
                 out[3] = 255;
             }
             true
@@ -197,6 +228,32 @@ mod tests {
         // R debe dominar sobre B en ambos píxeles.
         assert!(dst[0] > dst[2]);
         assert!(dst[4] > dst[6]);
+    }
+
+    #[test]
+    fn bgrx32_swap_e_ignora_padding() {
+        // [B,G,R,X] → [R,G,B,255]; el padding 0x77 se descarta.
+        let src = [30u8, 20, 10, 0x77];
+        let mut dst = Vec::new();
+        assert!(to_rgba(PixelFormat::Bgrx32, 1, 1, &src, &mut dst));
+        assert_eq!(dst, vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn xrgb32_big_endian() {
+        // [X,R,G,B] → [R,G,B,255]; el padding 0x77 (primero) se descarta.
+        let src = [0x77u8, 10, 20, 30];
+        let mut dst = Vec::new();
+        assert!(to_rgba(PixelFormat::Xrgb32, 1, 1, &src, &mut dst));
+        assert_eq!(dst, vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn bgrx32_truncado_se_rechaza() {
+        let src = [0u8; 4]; // alcanza para 1 px, no para 2
+        let mut dst = vec![0xAB; 8];
+        assert!(!to_rgba(PixelFormat::Bgrx32, 2, 1, &src, &mut dst));
+        assert_eq!(dst, vec![0xAB; 8]);
     }
 
     #[test]
