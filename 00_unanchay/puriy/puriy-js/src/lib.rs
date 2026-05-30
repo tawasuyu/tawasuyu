@@ -7742,4 +7742,58 @@ mod tests {
         // Tras close() en port2, port1.postMessage es no-op.
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
     }
+
+    // ---- Fase 7.82 — ErrorEvent + reportError ----
+
+    #[test]
+    fn report_error_dispara_evento_error_y_es_event() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var msg = null, esEE = false, esE = false; \
+             addEventListener('error', function(ev) { \
+                 msg = ev.message; \
+                 esEE = (ev instanceof ErrorEvent); \
+                 esE = (ev instanceof Event); \
+             }); \
+             reportError(new TypeError('boom'));",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("msg").expect("e"), JsValue::String("boom".into()));
+        assert_eq!(rt.eval("esEE").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("esE").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn report_error_invoca_onerror_con_firma_clasica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var capturado = null, nargs = 0; \
+             globalThis.onerror = function(message, filename, lineno, colno, error) { \
+                 capturado = message; nargs = arguments.length; return true; \
+             }; \
+             reportError('caída');",
+        )
+        .expect("e");
+        // onerror recibe el message como primer arg (no el event) y los 5 args.
+        assert_eq!(rt.eval("capturado").expect("e"), JsValue::String("caída".into()));
+        assert_eq!(rt.eval("nargs").expect("e"), JsValue::Number(5.0));
+    }
+
+    #[test]
+    fn error_event_campos_y_defaults() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var e = new ErrorEvent('error', { message: 'x', lineno: 7, colno: 3, error: 42 }); \
+             var d = new ErrorEvent('error');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("e.message").expect("e"), JsValue::String("x".into()));
+        assert_eq!(rt.eval("e.lineno").expect("e"), JsValue::Number(7.0));
+        assert_eq!(rt.eval("e.colno").expect("e"), JsValue::Number(3.0));
+        assert_eq!(rt.eval("e.error").expect("e"), JsValue::Number(42.0));
+        // Defaults: message vacío, lineno/colno 0, error null.
+        assert_eq!(rt.eval("d.message").expect("e"), JsValue::String("".into()));
+        assert_eq!(rt.eval("d.lineno").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("d.error").expect("e"), JsValue::Null);
+    }
 }
