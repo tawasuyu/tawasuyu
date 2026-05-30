@@ -265,6 +265,46 @@ enum Msg {
     /// vacío". Si el bbox cubre el lienzo entero, no-op + estado "ya
     /// está justo".
     AutotrimLienzo,
+    /// Ajuste in-vivo de un parámetro de la capa derivada `id`. El
+    /// slider del panel ops emite `dv` (en unidades del parámetro);
+    /// `update` lo suma al valor actual, clamp-ea, marca la capa
+    /// stale y propaga al cono. Coalesce por `(id, param.clave())`
+    /// para que un drag entero ocupe 1 sola entrada de historial.
+    AjustarParametro {
+        id: Uuid,
+        param: ParametroSlider,
+        dv: f32,
+    },
+}
+
+/// Etiqueta del parámetro que se está editando con un slider in-situ
+/// en el panel ops. Cada variante corresponde a un campo de una
+/// `OpLocal` parametrizable. Los no-paramétricos (`Invertir`,
+/// `Espejar*`) no aparecen acá — su edición es no-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParametroSlider {
+    BrilloDelta,
+    ContrasteFactor,
+    SaturacionFactor,
+    TonalidadGrados,
+    BlurRadio,
+    OpacidadFactor,
+}
+
+impl ParametroSlider {
+    /// Clave estable para `pushear_snapshot` — coalesce los eventos
+    /// del mismo slider sobre la misma capa en una sola entrada de
+    /// historial.
+    fn clave_coalesce(self) -> &'static str {
+        match self {
+            ParametroSlider::BrilloDelta => "p:brillo",
+            ParametroSlider::ContrasteFactor => "p:contraste",
+            ParametroSlider::SaturacionFactor => "p:saturacion",
+            ParametroSlider::TonalidadGrados => "p:tonalidad",
+            ParametroSlider::BlurRadio => "p:blur",
+            ParametroSlider::OpacidadFactor => "p:opacidad",
+        }
+    }
 }
 
 // =============================================================================
@@ -1015,6 +1055,117 @@ fn slider_pal_compacto(theme: &llimphi_theme::Theme) -> SliderPalette {
     p
 }
 
+/// Paleta de slider para la sección "parámetros" del panel ops: track
+/// más ancho que el de la fila de capa porque acá hay más espacio
+/// horizontal, y label visible (a diferencia de la fila donde el
+/// nombre de la capa ya identifica).
+fn slider_pal_parametros(theme: &llimphi_theme::Theme) -> SliderPalette {
+    let mut p = SliderPalette::from_theme(theme);
+    p.label_width = 80.0;
+    p.track_width = 140.0;
+    p.value_width = 50.0;
+    p.row_height = 26.0;
+    p
+}
+
+/// Si la capa seleccionada es una derivada con un `OpLocal`
+/// parametrizable, devuelve los rows con los sliders en vivo
+/// (`label`, slider escalado al rango del parámetro, drag → `Msg::AjustarParametro`).
+/// `None` cuando no aplica: capa no seleccionada, raster, op IA, o
+/// op sin parámetros (Invertir, Espejar*).
+fn sliders_parametros_capa(
+    theme: &llimphi_theme::Theme,
+    model: &Model,
+) -> Option<Vec<View<Msg>>> {
+    let id = model.seleccionada?;
+    let capa = model.lienzo.capa(id)?;
+    let op = match &capa.origen {
+        OrigenCapa::Derivada {
+            op: TransformacionPixel::Local(op),
+            ..
+        } => op,
+        _ => return None,
+    };
+    let pal = slider_pal_parametros(theme);
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    // Helper para construir 1 row con 1 slider para `param`.
+    let mk_slider = |label: &'static str,
+                     valor: f32,
+                     min: f32,
+                     max: f32,
+                     param: ParametroSlider|
+     -> View<Msg> {
+        let pal_clon = pal.clone();
+        slider_view(label, valor, min, max, &pal_clon, move |fase, dv| {
+            match fase {
+                DragPhase::Move => Some(Msg::AjustarParametro { id, param, dv }),
+                DragPhase::End => None,
+            }
+        })
+    };
+    match op {
+        OpLocal::Brillo { delta } => {
+            rows.push(mk_slider(
+                "brillo",
+                *delta,
+                -1.0,
+                1.0,
+                ParametroSlider::BrilloDelta,
+            ));
+        }
+        OpLocal::Contraste { factor } => {
+            rows.push(mk_slider(
+                "contraste",
+                *factor,
+                0.0,
+                3.0,
+                ParametroSlider::ContrasteFactor,
+            ));
+        }
+        OpLocal::Saturacion { factor } => {
+            rows.push(mk_slider(
+                "saturación",
+                *factor,
+                0.0,
+                3.0,
+                ParametroSlider::SaturacionFactor,
+            ));
+        }
+        OpLocal::Tonalidad { grados } => {
+            rows.push(mk_slider(
+                "tonalidad",
+                *grados,
+                -180.0,
+                180.0,
+                ParametroSlider::TonalidadGrados,
+            ));
+        }
+        OpLocal::Blur { radio } => {
+            rows.push(mk_slider(
+                "radio blur",
+                *radio,
+                0.0,
+                20.0,
+                ParametroSlider::BlurRadio,
+            ));
+        }
+        OpLocal::Opacidad { factor } => {
+            rows.push(mk_slider(
+                "opacidad op",
+                *factor,
+                0.0,
+                1.0,
+                ParametroSlider::OpacidadFactor,
+            ));
+        }
+        // Sin parámetros editables: `Invertir`, `Espejar*`, `Niveles`
+        // (3 params, queda para una fase dedicada). Devolvemos None
+        // para que el panel ops no muestre la sección.
+        _ => return None,
+    }
+    Some(rows)
+}
+
 fn mini_btn(label: &str, msg: Msg, pal: &ButtonPalette) -> View<Msg> {
     button_styled(
         label.to_string(),
@@ -1155,6 +1306,14 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         },
         Msg::CambiarHerramienta(Herramienta::Cuentagotas),
     )));
+
+    // "parámetros": sliders en vivo si la capa seleccionada es una
+    // derivada con OpLocal parametrizable. Sólo aparece cuando aplica
+    // para no agregar ruido al panel.
+    if let Some(rows) = sliders_parametros_capa(theme, model) {
+        hijos.push(subtitulo("parámetros"));
+        hijos.extend(rows.into_iter().map(envolver_fila));
+    }
 
     // "entrada": agregar una capa nueva. Dos vías: relleno sólido del
     // color del cuentagotas, o fuzzy picker de un archivo del workspace.
@@ -1846,6 +2005,12 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::AjustarParametro { id, param, dv } => {
+                if ajustar_parametro_derivada(&mut model, id, param, dv) {
+                    aplicar_y_recomponer(&mut model);
+                    pushear_snapshot(&mut model, Some((id, param.clave_coalesce())));
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2332,6 +2497,70 @@ fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     model.seleccionada = Some(nuevo_id);
     aplicar_y_recomponer(model);
     model.estado = format!("combinada '{}'", nombre);
+    true
+}
+
+/// Mutador in-place del parámetro de una capa derivada con `OpLocal`
+/// parametrizable. Aplica `dv` (delta en unidades del parámetro,
+/// emitido por el slider) al campo correspondiente con clamp al rango
+/// visible. Devuelve `false` si la capa no se encuentra, no es una
+/// derivada local, o el `param` no concuerda con la variante de op —
+/// en esos casos el caller no recompone ni snapshotea. Marca la capa
+/// `Stale` y propaga al cono descendiente (toda hija con esta como
+/// madre transitiva se invalida).
+fn ajustar_parametro_derivada(
+    model: &mut Model,
+    id: Uuid,
+    param: ParametroSlider,
+    dv: f32,
+) -> bool {
+    let Some(capa) = model.lienzo.capa_mut(id) else {
+        return false;
+    };
+    let OrigenCapa::Derivada {
+        op: TransformacionPixel::Local(op),
+        estado,
+        ..
+    } = &mut capa.origen
+    else {
+        return false;
+    };
+    let cambio = match (param, op) {
+        (ParametroSlider::BrilloDelta, OpLocal::Brillo { delta }) => {
+            *delta = (*delta + dv).clamp(-1.0, 1.0);
+            true
+        }
+        (ParametroSlider::ContrasteFactor, OpLocal::Contraste { factor }) => {
+            *factor = (*factor + dv).clamp(0.0, 3.0);
+            true
+        }
+        (ParametroSlider::SaturacionFactor, OpLocal::Saturacion { factor }) => {
+            *factor = (*factor + dv).clamp(0.0, 3.0);
+            true
+        }
+        (ParametroSlider::TonalidadGrados, OpLocal::Tonalidad { grados }) => {
+            // Tonalidad es periódica; clamp visual a [-180, 180] para
+            // que el slider tenga rango fijo, pero el módulo lo aplica
+            // `aplicar_op_local` (rem_euclid).
+            *grados = (*grados + dv).clamp(-180.0, 180.0);
+            true
+        }
+        (ParametroSlider::BlurRadio, OpLocal::Blur { radio }) => {
+            *radio = (*radio + dv).clamp(0.0, 20.0);
+            true
+        }
+        (ParametroSlider::OpacidadFactor, OpLocal::Opacidad { factor }) => {
+            *factor = (*factor + dv).clamp(0.0, 1.0);
+            true
+        }
+        // Param solicitado no coincide con la op de la capa — no muta.
+        _ => false,
+    };
+    if !cambio {
+        return false;
+    }
+    *estado = Frescura::Stale;
+    model.lienzo.propagar_stale(id);
     true
 }
 
@@ -4168,6 +4397,217 @@ mod tests {
         assert_eq!(model.historial.len(), hist_antes + 1);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!((model.lienzo.width, model.lienzo.height), (4, 4));
+    }
+
+    // ---- Fase 32: editar parámetros de derivada con sliders ---------------
+
+    /// Construye un modelo con 1 raster fondo + 1 derivada de la op
+    /// pasada. Devuelve (model, id_fondo, id_derivada).
+    fn modelo_con_derivada(op: OpLocal) -> (Model, Uuid, Uuid) {
+        let mut model = modelo_minimo();
+        // La capa que viene en modelo_minimo es la madre.
+        let id_madre = model.seleccionada.unwrap();
+        let derivada = Capa::derivada(
+            "deriv",
+            id_madre,
+            TransformacionPixel::Local(op),
+            [0u8; 32],
+        );
+        let id_deriv = derivada.id;
+        model.lienzo.apilar(derivada);
+        model.seleccionada = Some(id_deriv);
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        (model, id_madre, id_deriv)
+    }
+
+    #[test]
+    fn ajustar_brillo_suma_delta_y_marca_stale() {
+        let (mut model, _madre, deriv) =
+            modelo_con_derivada(OpLocal::Brillo { delta: 0.1 });
+        let cambio = ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::BrilloDelta,
+            0.2,
+        );
+        assert!(cambio);
+        // Delta queda en 0.3 con clamp [-1, 1].
+        let capa = model.lienzo.capa(deriv).unwrap();
+        match &capa.origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Brillo { delta }),
+                estado,
+                ..
+            } => {
+                assert!((delta - 0.3).abs() < 1e-6);
+                assert_eq!(*estado, Frescura::Stale);
+            }
+            other => panic!("esperaba Brillo derivada: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ajustar_brillo_clamp_a_min_1_max_1() {
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::Brillo { delta: 0.0 });
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::BrilloDelta,
+            10.0,
+        );
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Brillo { delta }),
+                ..
+            } => assert!((delta - 1.0).abs() < 1e-6),
+            _ => unreachable!(),
+        }
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::BrilloDelta,
+            -10.0,
+        );
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Brillo { delta }),
+                ..
+            } => assert!((delta - (-1.0)).abs() < 1e-6),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn ajustar_param_no_concuerda_con_op_es_no_op() {
+        // ParametroSlider::BrilloDelta sobre una capa con OpLocal::Saturacion
+        // no debe mutar nada.
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::Saturacion { factor: 1.0 });
+        let cambio = ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::BrilloDelta,
+            0.5,
+        );
+        assert!(!cambio);
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Saturacion { factor }),
+                ..
+            } => assert!((factor - 1.0).abs() < 1e-6, "saturación intacta"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn ajustar_param_sobre_raster_es_no_op() {
+        // No hay derivada acá — el modelo_minimo es raster pura.
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let cambio = ajustar_parametro_derivada(
+            &mut model,
+            id,
+            ParametroSlider::BrilloDelta,
+            0.5,
+        );
+        assert!(!cambio);
+    }
+
+    #[test]
+    fn ajustar_param_propaga_stale_al_cono() {
+        // Construyo: raster → derivada Brillo → derivada Saturacion
+        // (hija de la Brillo). Ajustar el Brillo debe marcar la
+        // Saturacion también Stale.
+        let (mut model, _madre, brillo) =
+            modelo_con_derivada(OpLocal::Brillo { delta: 0.1 });
+        let sat = Capa::derivada(
+            "sat",
+            brillo,
+            TransformacionPixel::Local(OpLocal::Saturacion { factor: 1.0 }),
+            [0u8; 32],
+        );
+        let id_sat = sat.id;
+        model.lienzo.apilar(sat);
+        // Marco sat como Fresca para verificar que propagar realmente la
+        // toca.
+        if let OrigenCapa::Derivada { estado, .. } =
+            &mut model.lienzo.capa_mut(id_sat).unwrap().origen
+        {
+            *estado = Frescura::Fresca;
+        }
+        ajustar_parametro_derivada(
+            &mut model,
+            brillo,
+            ParametroSlider::BrilloDelta,
+            0.1,
+        );
+        assert!(model.lienzo.capa(id_sat).unwrap().esta_stale());
+    }
+
+    #[test]
+    fn msg_ajustar_parametro_coalesce_drag_en_un_solo_snapshot() {
+        // 30 events seguidos sobre el mismo slider deben colapsar en 1
+        // entrada nueva de historial (mismo coalesce-key).
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::Brillo { delta: 0.0 });
+        let hist_antes = model.historial.len();
+        for _ in 0..30 {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::AjustarParametro {
+                    id: deriv,
+                    param: ParametroSlider::BrilloDelta,
+                    dv: 0.01,
+                },
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(
+            model.historial.len(),
+            hist_antes + 1,
+            "drag de slider coalesce a 1 entrada"
+        );
+        // Un solo Undo revierte el drag entero.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Brillo { delta }),
+                ..
+            } => assert!(delta.abs() < 1e-6, "vuelve a 0, no quedó a medio"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn sliders_parametros_devuelve_none_para_op_no_parametrizable() {
+        let theme = llimphi_theme::Theme::dark();
+        // Invertir no tiene parámetros → no aparece sección.
+        let (model, _, _) = modelo_con_derivada(OpLocal::Invertir);
+        assert!(sliders_parametros_capa(&theme, &model).is_none());
+        // EspejarHorizontal idem.
+        let (model, _, _) = modelo_con_derivada(OpLocal::EspejarHorizontal);
+        assert!(sliders_parametros_capa(&theme, &model).is_none());
+    }
+
+    #[test]
+    fn sliders_parametros_devuelve_some_para_ops_parametrizables() {
+        let theme = llimphi_theme::Theme::dark();
+        for op in [
+            OpLocal::Brillo { delta: 0.0 },
+            OpLocal::Contraste { factor: 1.0 },
+            OpLocal::Saturacion { factor: 1.0 },
+            OpLocal::Tonalidad { grados: 0.0 },
+            OpLocal::Blur { radio: 0.0 },
+            OpLocal::Opacidad { factor: 1.0 },
+        ] {
+            let (model, _, _) = modelo_con_derivada(op);
+            assert!(
+                sliders_parametros_capa(&theme, &model).is_some(),
+                "esperaba sección para op parametrizable"
+            );
+        }
     }
 
     #[test]
