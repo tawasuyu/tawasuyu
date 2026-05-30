@@ -410,6 +410,16 @@ pub struct RenderConfig {
     /// (el fogonazo sale *de* la pistola, no la ilumina a ella), como
     /// en 3.22.
     pub weapon_rim_light: bool,
+    /// **Fase 3.30 — rim direccional**. Si `true`, el aporte de cada
+    /// world light al rim del arma se atenúa según el ángulo entre la
+    /// "normal" virtual del psprite (apuntando a +X_cam, hacia adelante)
+    /// y la dirección a la luz: una antorcha al frente tinta a plena
+    /// intensidad; una atrás baja a un piso ambient (cosine·0.5 + 0.5
+    /// clampeado a [`WEAPON_RIM_AMBIENT_FLOOR`]). Sin direccional
+    /// (`false`), todas las luces aportan igual sin importar dónde
+    /// estén — comportamiento 3.28-3.29. Sólo afecta al rim del arma;
+    /// el resto de la escena conserva el path omnidireccional 3.27.
+    pub weapon_rim_directional: bool,
 }
 
 impl Default for RenderConfig {
@@ -432,6 +442,7 @@ impl Default for RenderConfig {
             world_lights_enabled: true,
             world_lights_occlusion: true,
             weapon_rim_light: true,
+            weapon_rim_directional: true,
         }
     }
 }
@@ -979,6 +990,84 @@ fn world_lights_boost_rgb_cam(
     ]
 }
 
+// =====================================================================
+// Fase 3.30 — Rim direccional del arma
+// =====================================================================
+//
+// El psprite del jugador es un sprite 2D, pero conceptualmente "mira"
+// hacia adelante (+X_cam). Una luz frontal debería tintarlo a plena
+// intensidad; una luz detrás del jugador no la "ve" la cara visible
+// del arma — sólo aportaría el bounce ambiente del cuarto. Modelamos
+// esto con una atenuación cosine entre la "fake normal" del psprite
+// (+X_cam) y la dirección normalizada a cada luz. El piso ambient
+// (`WEAPON_RIM_AMBIENT_FLOOR`) representa el bounce indirecto: una
+// antorcha estrictamente detrás todavía contribuye un poco vía las
+// paredes del cuarto, en lugar de cortar a 0.
+
+/// Piso ambient del rim direccional. Una luz detrás del jugador
+/// igual aporta este fracción del cosine — modela el bounce
+/// indirecto de paredes/techo. 0.0 = corte hard, 1.0 = sin atenuar.
+const WEAPON_RIM_AMBIENT_FLOOR: f32 = 0.3;
+
+/// Boost RGB para el rim del arma con atenuación direccional opcional.
+/// `directional = false` ⇒ idéntico a `world_lights_boost_rgb_cam(0, 0,
+/// player_sec, lights)` — backwards-compat con 3.28/3.29.
+/// `directional = true` ⇒ cada luz se escala por
+/// `att = max(AMBIENT_FLOOR, 0.5 + 0.5·cos(θ))` donde `θ` es el ángulo
+/// entre la fake-normal del psprite (+X_cam, hacia adelante) y la
+/// dirección unitaria a la luz. Luces frontales (cos=1) ⇒ att=1.0;
+/// laterales (cos=0) ⇒ att=0.5; traseras (cos=-1) ⇒ att=AMBIENT_FLOOR.
+/// Una luz exactamente en la posición del jugador (d≈0) se trata como
+/// frontal — el cosine no está definido y el caso límite "abrazado por
+/// la luz" merece full intensity.
+fn weapon_rim_boost_rgb_cam(
+    player_sec: u32,
+    lights: &[WorldLight],
+    directional: bool,
+) -> BoostRgb {
+    if !directional {
+        return world_lights_boost_rgb_cam(0.0, 0.0, player_sec, lights);
+    }
+    if lights.is_empty() {
+        return ZERO_BOOST;
+    }
+    let r2 = WORLD_LIGHT_RADIUS_WORLD * WORLD_LIGHT_RADIUS_WORLD;
+    let peak = WORLD_LIGHT_PEAK;
+    let mut sum = [0.0_f32; 3];
+    for l in lights {
+        if let Some(set) = l.lit_sectors.as_deref() {
+            if !set.contains(&player_sec) {
+                continue;
+            }
+        }
+        let d2 = l.x_cam * l.x_cam + l.y_cam * l.y_cam;
+        if d2 >= r2 {
+            continue;
+        }
+        let f = 1.0 - d2 / r2;
+        // Atenuación direccional: cos(θ) = dot((+X, 0), (lx, ly)/|l|).
+        // Para |l|=0 (luz encima del player) tratamos como att=1.0 (full
+        // intensity), evita NaN y cubre el caso "luz pegada al jugador".
+        let att = if d2 < 1e-6 {
+            1.0
+        } else {
+            let inv_d = d2.sqrt().recip();
+            let cos_theta = l.x_cam * inv_d;
+            (0.5 + 0.5 * cos_theta).max(WEAPON_RIM_AMBIENT_FLOOR)
+        };
+        let amount = f * f * peak * att;
+        let t = rgb_to_norm(l.tint_rgb);
+        sum[0] += amount * t[0];
+        sum[1] += amount * t[1];
+        sum[2] += amount * t[2];
+    }
+    [
+        sum[0].min(MUZZLE_BOOST_PEAK),
+        sum[1].min(MUZZLE_BOOST_PEAK),
+        sum[2].min(MUZZLE_BOOST_PEAK),
+    ]
+}
+
 /// Gate RGB del muzzle boost por sector. Si `lit_sectors` está activo y
 /// el sector no aparece, devuelve `ZERO_BOOST`; sino pasa el boost
 /// crudo. Espejo del gating scalar de 3.23.
@@ -1275,8 +1364,12 @@ fn render_frame(
         .and_then(|ss| snap.subsectors.get(ss as usize))
         .map(|ss| ss.sector)
         .unwrap_or(NO_SECTOR);
+    // Fase 3.30: el rim del arma se atenúa por dirección a la luz
+    // cuando `weapon_rim_directional` está on — una antorcha frente al
+    // jugador tinta más fuerte que una atrás. Caso `false` cae al
+    // path omnidireccional 3.28/3.29.
     let weapon_rim_boost = if cfg.weapon_rim_light {
-        world_lights_boost_rgb_cam(0.0, 0.0, player_sec, world_lights_ref)
+        weapon_rim_boost_rgb_cam(player_sec, world_lights_ref, cfg.weapon_rim_directional)
     } else {
         ZERO_BOOST
     };
@@ -5196,5 +5289,107 @@ mod tests {
         let no_bsp = gather_world_lights(&bare, &cam2, None, true);
         assert_eq!(no_bsp.len(), 1);
         assert!(no_bsp[0].lit_sectors.is_none(), "sin BSP ⇒ None");
+    }
+
+    // =================================================================
+    // Fase 3.30 — Rim direccional del arma
+    // =================================================================
+
+    #[test]
+    fn weapon_rim_directional_full_intensity_in_front() {
+        // Luz a 80u en +X_cam (frente al jugador). Sin tinte real (luz
+        // blanca pura) ⇒ cos(0)=1 ⇒ att=1.0 ⇒ boost igual al omni.
+        let white = (255, 255, 255);
+        let lights = [rim_light(80.0, 0.0, white)];
+        let omni = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, false);
+        let dir = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, true);
+        // Diferencia despreciable ⇒ ambos paths coinciden al frente.
+        for ch in 0..3 {
+            assert!(
+                (omni[ch] - dir[ch]).abs() < 1e-5,
+                "frente debería igualar omni: canal {} omni={} dir={}",
+                ch,
+                omni[ch],
+                dir[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn weapon_rim_directional_attenuates_lights_behind() {
+        // Luz a 80u en -X_cam (detrás del jugador). cos=-1 ⇒
+        // att=(0.5-0.5).max(0.3)=0.3. Boost direccional debería ser
+        // estrictamente menor que omni (que ignora dirección).
+        let white = (255, 255, 255);
+        let lights = [rim_light(-80.0, 0.0, white)];
+        let omni = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, false);
+        let dir = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, true);
+        // Cada canal direccional debería ser ~0.3 del omni (el piso).
+        for ch in 0..3 {
+            if omni[ch] > 0.01 {
+                assert!(dir[ch] < omni[ch], "canal {} debería atenuar atrás", ch);
+                let ratio = dir[ch] / omni[ch];
+                assert!(
+                    (ratio - WEAPON_RIM_AMBIENT_FLOOR).abs() < 1e-4,
+                    "ratio canal {} = {} debería ser ≈ piso {}",
+                    ch,
+                    ratio,
+                    WEAPON_RIM_AMBIENT_FLOOR
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn weapon_rim_directional_side_lights_use_half() {
+        // Luz a 80u en +Y_cam (lateral derecho). cos=0 ⇒ att=0.5.
+        // El boost lateral debe quedar ~ a mitad del omni.
+        let white = (255, 255, 255);
+        let lights = [rim_light(0.0, 80.0, white)];
+        let omni = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, false);
+        let dir = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            if omni[ch] > 0.01 {
+                let ratio = dir[ch] / omni[ch];
+                assert!(
+                    (ratio - 0.5).abs() < 1e-4,
+                    "lateral debería ser 0.5 del omni: canal {} ratio {}",
+                    ch,
+                    ratio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn weapon_rim_directional_disabled_equals_omni() {
+        // Toggle off ⇒ direccional==omni para cualquier configuración.
+        let red = (255, 130, 60);
+        let blue = (110, 160, 255);
+        let lights = [
+            rim_light(120.0, 0.0, red),
+            rim_light(-60.0, 90.0, blue),
+            rim_light(0.0, -150.0, (255, 255, 200)),
+        ];
+        let omni = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, false);
+        let baseline = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &lights);
+        assert_eq!(
+            omni, baseline,
+            "directional=false debe ser bit-identical al path 3.29"
+        );
+    }
+
+    #[test]
+    fn weapon_rim_directional_handles_zero_distance() {
+        // Luz exactamente en el jugador (raro pero posible: psprite
+        // FF_FULLBRIGHT del propio fogonazo si entrara por error). El
+        // cos no está definido; degradamos a att=1.0 y evitamos NaN.
+        let white = (255, 255, 255);
+        let lights = [rim_light(0.0, 0.0, white)];
+        let dir = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            assert!(dir[ch].is_finite(), "canal {} no NaN/Inf", ch);
+            assert!(dir[ch] > 0.0, "luz pegada al player aporta full");
+        }
     }
 }
