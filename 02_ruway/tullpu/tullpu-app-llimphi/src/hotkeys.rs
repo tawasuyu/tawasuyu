@@ -95,6 +95,10 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("r") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Marco));
         }
+        // `g` = balde (flood fill). Global como las demás herramientas.
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("g") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Balde));
+        }
         // Esc limpia la selección (si hay) — global porque no compite
         // con otros modales: cuando picker está abierto o se está
         // renombrando, este `hotkey_a_msg` no se invoca (los modales

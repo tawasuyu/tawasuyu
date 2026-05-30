@@ -752,6 +752,134 @@ pub(crate) fn expandir_rect(
     }
 }
 
+/// Flood fill (balde) sobre un buffer Rgba8 `w × h`. Desde la semilla
+/// `(sx, sy)` expande en 4-conexión a todos los píxeles cuyo color esté
+/// dentro de `tol` (suma de |Δ| RGBA) respecto al color semilla, y los
+/// pinta de `nuevo`. Si `bounds` es `Some((x0,y0,x1,y1))` el relleno
+/// queda confinado a ese rect half-open (los bordes actúan como muro) y
+/// una semilla fuera de él no rellena nada. Devuelve `Some(buffer)` si
+/// cambió algún píxel, `None` si no (semilla fuera, o región ya del
+/// color destino). Pura. La tolerancia se chequea SIEMPRE contra el
+/// color original del píxel (el pintado ocurre sólo al visitarlo, así
+/// que un vecino nunca se evalúa con un color ya modificado).
+pub(crate) fn flood_fill(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    sx: u32,
+    sy: u32,
+    nuevo: [u8; 4],
+    tol: u32,
+    bounds: Option<(u32, u32, u32, u32)>,
+) -> Option<Vec<u8>> {
+    let w_us = w as usize;
+    let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
+    // Recortar bounds al canvas por si vinieran sobredimensionados.
+    let bx1 = bx1.min(w);
+    let by1 = by1.min(h);
+    if sx < bx0 || sx >= bx1 || sy < by0 || sy >= by1 {
+        return None;
+    }
+    let idx = |x: u32, y: u32| ((y as usize) * w_us + x as usize) * 4;
+    let si = idx(sx, sy);
+    let seed = [src[si], src[si + 1], src[si + 2], src[si + 3]];
+    let dentro_tol = |c: &[u8]| -> bool {
+        let d = (c[0] as i32 - seed[0] as i32).unsigned_abs()
+            + (c[1] as i32 - seed[1] as i32).unsigned_abs()
+            + (c[2] as i32 - seed[2] as i32).unsigned_abs()
+            + (c[3] as i32 - seed[3] as i32).unsigned_abs();
+        d <= tol
+    };
+    let mut out = src.to_vec();
+    let mut visto = vec![false; w_us * h as usize];
+    let mut pila = vec![(sx, sy)];
+    let mut cambio = false;
+    while let Some((x, y)) = pila.pop() {
+        let vi = y as usize * w_us + x as usize;
+        if visto[vi] {
+            continue;
+        }
+        visto[vi] = true;
+        let i = vi * 4;
+        if !dentro_tol(&out[i..i + 4]) {
+            continue;
+        }
+        let actual = [out[i], out[i + 1], out[i + 2], out[i + 3]];
+        if actual != nuevo {
+            out[i..i + 4].copy_from_slice(&nuevo);
+            cambio = true;
+        }
+        if x + 1 < bx1 {
+            pila.push((x + 1, y));
+        }
+        if x > bx0 {
+            pila.push((x - 1, y));
+        }
+        if y + 1 < by1 {
+            pila.push((x, y + 1));
+        }
+        if y > by0 {
+            pila.push((x, y - 1));
+        }
+    }
+    if cambio {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// Flood fill desde la coord-imagen `(sx, sy)` con el color activo sobre
+/// la capa raster seleccionada, acotado a `model.seleccion` si la hay.
+/// Re-clampea contra el lienzo. No-op si: no hay capa, la semilla cae
+/// fuera del lienzo, la capa es derivada, o el relleno no cambia nada.
+pub(crate) fn rellenar_flood_en_capa(
+    model: &mut Model,
+    sx: u32,
+    sy: u32,
+) -> bool {
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    if sx >= w || sy >= h {
+        model.estado = "balde fuera del lienzo".into();
+        return false;
+    }
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    if !matches!(capa.origen, OrigenCapa::Raster) {
+        model.estado =
+            "la capa seleccionada es derivada — usá la raster madre".into();
+        return false;
+    }
+    let hash_actual = capa.contenido;
+    let color = model.color_picked.unwrap_or(RELLENO_DEFAULT);
+    let bounds = model.seleccion.map(|r| (r.x0, r.y0, r.x1, r.y1));
+    let Some(src) = model.almacen.obtener(hash_actual) else {
+        return false;
+    };
+    let src = src.to_vec();
+    let Some(nuevo) =
+        flood_fill(&src, w, h, sx, sy, color, TOL_BALDE, bounds)
+    else {
+        model.estado = "balde: nada que rellenar".into();
+        return false;
+    };
+    let new_hash = model.almacen.insertar(nuevo);
+    if let Some(capa_mut) = model.lienzo.capa_mut(id) {
+        capa_mut.contenido = new_hash;
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+    model.estado =
+        format!("balde @ ({}, {}) {}", sx, sy, etiqueta_color_activo(Some(color)));
+    true
+}
+
 /// Compone (alpha src-over, Rgba8 NO premultiplicado) un `clip` de
 /// `clip_w × clip_h` sobre `dst` (`dst_w × dst_h`) con la esquina
 /// superior izquierda en el offset CON SIGNO `(dx, dy)`. Los píxeles del

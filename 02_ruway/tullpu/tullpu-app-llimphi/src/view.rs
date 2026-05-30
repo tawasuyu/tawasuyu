@@ -618,6 +618,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Marco),
     )));
+    let etiqueta_balde = if model.herramienta == Herramienta::Balde {
+        "● balde (g)"
+    } else {
+        "○ balde (g)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_balde.to_string(),
+        if model.herramienta == Herramienta::Balde {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Balde),
+    )));
     // Gestión de la selección: seleccionar todo + expandir/contraer el
     // rect. La etiqueta de "todo" muestra las dims del lienzo.
     hijos.push(envolver_fila(button_view(
@@ -1110,6 +1124,9 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                         DragPhase::Move => Some(Msg::AjustarSeleccion { dx, dy }),
                         DragPhase::End => Some(Msg::FinalizarSeleccion),
                     }),
+                Herramienta::Balde => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
+                    Some(Msg::RellenarFlood { lx, ly, rw, rh })
+                }),
             }
         }
         None => View::new(Style {

@@ -111,6 +111,10 @@ pub(crate) enum Herramienta {
     /// en coords de imagen. La selección sirve de ROI para crop /
     /// fill / copy en fases posteriores; esta fase solo dibuja el rect.
     Marco,
+    /// Click sobre el lienzo hace flood fill (balde) desde el píxel
+    /// clickeado con el color activo, sobre la capa raster seleccionada.
+    /// Si hay selección, el relleno queda acotado al rect.
+    Balde,
 }
 
 impl Herramienta {
@@ -119,6 +123,7 @@ impl Herramienta {
             Herramienta::Mover => "mover",
             Herramienta::Cuentagotas => "cuentagotas",
             Herramienta::Marco => "marco",
+            Herramienta::Balde => "balde",
         }
     }
 }
@@ -360,6 +365,11 @@ pub(crate) enum Msg {
     /// Si la contracción colapsa el rect, limpia la selección. No toca
     /// píxeles ni el historial.
     ExpandirSeleccion(i32),
+    /// Click con la herramienta Balde: flood fill desde el píxel local
+    /// `(lx, ly)` con el color activo sobre la capa raster seleccionada.
+    /// `rw, rh` son las dims del panel del lienzo (para la conversión
+    /// local→imagen). Acotado a `model.seleccion` si la hay.
+    RellenarFlood { lx: f32, ly: f32, rw: f32, rh: f32 },
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ
@@ -409,6 +419,12 @@ pub(crate) const THUMB_LADO: u32 = 22;
 /// Color de fallback cuando el cuentagotas todavía no leyó nada — un
 /// gris medio opaco es el "neutro" que típicamente se usa como base.
 pub(crate) const RELLENO_DEFAULT: [u8; 4] = [128, 128, 128, 255];
+
+/// Tolerancia del balde (flood fill): suma de diferencias absolutas RGBA
+/// permitida respecto al píxel semilla para considerar un vecino parte
+/// de la misma región. `32` (≈8 por canal) tolera leve antialias sin
+/// derramarse a colores distintos. Rango de la métrica: 0..=1020.
+pub(crate) const TOL_BALDE: u32 = 32;
 
 pub(crate) const PICKER_FILE_CAP: usize = 50_000;
 

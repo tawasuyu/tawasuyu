@@ -46,6 +46,8 @@
 //!   portapapeles interno
 //! - `Ctrl+V`         — pegar el portapapeles como capa nueva
 //! - `Ctrl+A`         — seleccionar todo el lienzo
+//! - `g`              — herramienta balde (flood fill); click rellena la
+//!   región contigua con el color activo (acotado a la selección)
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
 //!
@@ -618,6 +620,29 @@ impl App for Tullpu {
                             model.estado = "color · fuera de la imagen".into();
                         }
                     }
+                }
+            }
+            Msg::RellenarFlood { lx, ly, rw, rh } => {
+                // Convertir el click local a coord-imagen (misma inversa
+                // que el marquee) y floodear desde ahí.
+                if let Some((ix, iy)) = local_a_imagen(
+                    lx,
+                    ly,
+                    rw,
+                    rh,
+                    model.lienzo.width,
+                    model.lienzo.height,
+                    model.factor_zoom,
+                    model.pan_x,
+                    model.pan_y,
+                ) {
+                    let sx = ix.floor() as u32;
+                    let sy = iy.floor() as u32;
+                    if rellenar_flood_en_capa(&mut model, sx, sy) {
+                        pushear_snapshot(&mut model, None);
+                    }
+                } else {
+                    model.estado = "balde · fuera de la imagen".into();
                 }
             }
             Msg::Exportar(formato) => {
