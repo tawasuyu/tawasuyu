@@ -466,6 +466,15 @@ impl App for Supay {
                     world_lights_enabled: model.world_lights_enabled,
                     // Fase 3.28: rim-light del arma desde world lights.
                     weapon_rim_light: model.weapon_rim_light,
+                    // Fase 3.43: gradiente vertical continuo para el
+                    // shading/tinte de paredes texturizadas. `bands` aquí
+                    // sólo controla la densidad de muestreo (4 alturas →
+                    // 5 stops). Reemplaza las bandas discretas de 3.42 por
+                    // una transición suave sin costuras. La default de
+                    // librería sigue off (contrato bit-exact); lo
+                    // activamos en el host porque es estrictamente mejor.
+                    wall_vertical_bands: 4,
+                    wall_vertical_gradient: true,
                     ..RenderConfig::default()
                 },
             )),
@@ -525,7 +534,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.42 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.43 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

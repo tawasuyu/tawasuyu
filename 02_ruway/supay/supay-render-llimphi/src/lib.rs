@@ -481,6 +481,17 @@ pub struct RenderConfig {
     /// techo más la parte alta. Coste: ~2N extra fills por slab
     /// texturizado. Recomendado: 2-4. Sólo afecta al path texturizado.
     pub wall_vertical_bands: u8,
+    /// **Fase 3.43 — gradiente vertical continuo para walls**. Si `true`,
+    /// el shading y el tinte del slab texturizado se pintan con un único
+    /// `Gradient` lineal de Vello (bottom→top en pantalla) en lugar de N
+    /// bandas discretas. El boost se muestrea a
+    /// `wall_vertical_bands.max(2) + 1` alturas y Vello interpola suave
+    /// entre stops — sin las costuras visibles de las bandas 3.42 y con
+    /// **dos** fills por slab en lugar de 2N. Cuando está on tiene
+    /// precedencia sobre `wall_vertical_bands` (que sólo controla la
+    /// densidad de muestreo). Default `false` ⇒ comportamiento 3.42
+    /// bit-equivalente. Sólo afecta al path texturizado.
+    pub wall_vertical_gradient: bool,
 }
 
 impl Default for RenderConfig {
@@ -509,6 +520,7 @@ impl Default for RenderConfig {
             plane_rim_directional: true,
             muzzle_brdf: false,
             wall_vertical_bands: 1,
+            wall_vertical_gradient: false,
         }
     }
 }
@@ -1768,6 +1780,49 @@ fn overlay_color_alpha_from_boost(boost: BoostRgb) -> Option<(u8, u8, u8, u8)> {
     Some((r, g, b, alpha))
 }
 
+/// **Fase 3.43** — construye los color-stops del gradiente de oscuridad
+/// vertical de un slab texturizado. `samples` son pares
+/// `(offset 0..1, boost_scalar)` ordenados de abajo (offset 0) hacia
+/// arriba (offset 1). El alpha de cada stop = `(1 - shade_iluminado)·255`
+/// con `shade_iluminado = clamp(base_shade + boost_scalar)`; el color es
+/// siempre negro. Vello interpola el alpha linealmente entre stops, dando
+/// el gradiente continuo que reemplaza las bandas discretas de 3.42.
+fn wall_darkness_gradient_stops(base_shade: f32, samples: &[(f32, f32)]) -> Vec<(f32, Color)> {
+    samples
+        .iter()
+        .map(|&(off, bscalar)| {
+            let lit = (base_shade + bscalar).clamp(0.0, 1.0);
+            let alpha = ((1.0 - lit) * 255.0) as u8;
+            (off, Color::from_rgba8(0, 0, 0, alpha))
+        })
+        .collect()
+}
+
+/// **Fase 3.43** — construye los color-stops del gradiente de tinte
+/// vertical. `samples` son pares `(offset 0..1, boost_rgb)`. Cada stop
+/// reusa la normalización de [`overlay_color_alpha_from_boost`]; los
+/// stops con boost despreciable quedan transparentes (alpha 0) para no
+/// cortar la continuidad del gradiente. Devuelve `None` si **ningún**
+/// sample tiene tinte apreciable — en ese caso no se emite fill de tinte.
+fn wall_tint_gradient_stops(samples: &[(f32, BoostRgb)]) -> Option<Vec<(f32, Color)>> {
+    let mut any = false;
+    let stops: Vec<(f32, Color)> = samples
+        .iter()
+        .map(|&(off, boost)| match overlay_color_alpha_from_boost(boost) {
+            Some((r, g, b, a)) => {
+                any = true;
+                (off, Color::from_rgba8(r, g, b, a))
+            }
+            None => (off, Color::from_rgba8(0, 0, 0, 0)),
+        })
+        .collect();
+    if any {
+        Some(stops)
+    } else {
+        None
+    }
+}
+
 // =====================================================================
 // API pública
 // =====================================================================
@@ -1949,6 +2004,9 @@ fn render_frame(
                     &r.path,
                 );
             }
+            RenderKind::GradientFill { gradient } => {
+                scene.fill(Fill::NonZero, Affine::IDENTITY, gradient, None, &r.path);
+            }
         }
     }
 
@@ -2050,6 +2108,12 @@ enum RenderKind {
     TexturedWall {
         image: llimphi_ui::llimphi_raster::peniko::Image,
         brush_xform: Affine,
+    },
+    /// **Fase 3.43** — fill del `path` con un `Gradient` lineal vertical
+    /// como brush. `color` se ignora. Usado por el shading/tinte continuo
+    /// de paredes texturizadas (reemplaza las bandas discretas de 3.42).
+    GradientFill {
+        gradient: llimphi_ui::llimphi_raster::peniko::Gradient,
     },
 }
 
@@ -2464,7 +2528,67 @@ fn gather_wall(
             // la parte alta — gradient discreto vertical.
             let base_shade = shade_for(sec.light_level, depth, cfg);
             let v_bands = cfg.wall_vertical_bands.max(1) as u32;
-            if v_bands == 1 {
+            if cfg.wall_vertical_gradient {
+                // Path 3.43: gradiente lineal continuo bottom→top. Dos
+                // fills por slab (oscuridad + tinte) en lugar de 2N.
+                use llimphi_ui::llimphi_raster::peniko::Gradient;
+                let nstops = (cfg.wall_vertical_bands as usize).max(2) + 1;
+                // Geometría: bottom-center (t=0) → top-center (t=1) en
+                // pantalla. Proyectamos las cuatro esquinas del slab.
+                let zb_c = z_bot - cam.view_z;
+                let zt_c = z_top - cam.view_z;
+                let g_bl = proj.project(x1, y1, zb_c);
+                let g_br = proj.project(x2, y2, zb_c);
+                let g_tl = proj.project(x1, y1, zt_c);
+                let g_tr = proj.project(x2, y2, zt_c);
+                let start = Point::new((g_bl.x + g_br.x) * 0.5, (g_bl.y + g_br.y) * 0.5);
+                let end = Point::new((g_tl.x + g_tr.x) * 0.5, (g_tl.y + g_tr.y) * 0.5);
+                // Muestreo del boost a `nstops` alturas (igual normal de
+                // pared, distinto z_surf_cam).
+                let mut dark_samples = Vec::with_capacity(nstops);
+                let mut tint_samples = Vec::with_capacity(nstops);
+                for i in 0..nstops {
+                    let t = i as f32 / (nstops - 1) as f32;
+                    let z_band_cam = (z_bot + (z_top - z_bot) * t) - cam.view_z;
+                    let band_boost = combined_boost_rgb_wall_cam(
+                        mid_x,
+                        mid_y,
+                        z_band_cam,
+                        cfg.muzzle_glow_alpha,
+                        near_idx,
+                        lit_sectors,
+                        world_lights,
+                        wall_normal,
+                        cfg.wall_rim_directional,
+                        cfg.muzzle_brdf,
+                    );
+                    dark_samples.push((t, boost_max(band_boost)));
+                    tint_samples.push((t, band_boost));
+                }
+                let dark_stops = wall_darkness_gradient_stops(base_shade, &dark_samples);
+                let dark_grad =
+                    Gradient::new_linear(start, end).with_stops(dark_stops.as_slice());
+                out.push(Renderable {
+                    depth: depth - 0.001,
+                    color: Color::WHITE,
+                    path: path.clone(),
+                    kind: RenderKind::GradientFill {
+                        gradient: dark_grad,
+                    },
+                });
+                if let Some(tint_stops) = wall_tint_gradient_stops(&tint_samples) {
+                    let tint_grad =
+                        Gradient::new_linear(start, end).with_stops(tint_stops.as_slice());
+                    out.push(Renderable {
+                        depth: depth - 0.002,
+                        color: Color::WHITE,
+                        path,
+                        kind: RenderKind::GradientFill {
+                            gradient: tint_grad,
+                        },
+                    });
+                }
+            } else if v_bands == 1 {
                 // Path 3.32-3.41: single overlay sobre todo el slab.
                 let lit_shade = (base_shade + boost_scalar).clamp(0.0, 1.0);
                 if lit_shade < 0.95 {
@@ -6793,6 +6917,80 @@ mod tests {
         for ch in 0..3 {
             assert!(single[ch].is_finite());
         }
+    }
+
+    // =================================================================
+    // Fase 3.43 — Gradiente vertical continuo para walls
+    // =================================================================
+
+    #[test]
+    fn wall_gradient_dark_stops_offsets_monotonic_and_cover_unit() {
+        // Los stops deben quedar en offsets crecientes que cubran [0, 1]:
+        // el primer stop en 0 (bottom), el último en 1 (top).
+        let samples = [(0.0_f32, 0.0_f32), (0.5, 0.1), (1.0, 0.2)];
+        let stops = wall_darkness_gradient_stops(0.4, &samples);
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].0, 0.0);
+        assert_eq!(stops[2].0, 1.0);
+        for w in stops.windows(2) {
+            assert!(w[1].0 > w[0].0, "offsets estrictamente crecientes");
+        }
+    }
+
+    #[test]
+    fn wall_gradient_dark_stop_brighter_band_is_less_opaque() {
+        // Una banda con más boost ⇒ shade iluminado mayor ⇒ overlay
+        // negro menos opaco (alpha menor). Bottom con boost 0.4, top con
+        // boost 0.0, base_shade 0.3.
+        let samples = [(0.0_f32, 0.4_f32), (1.0, 0.0)];
+        let stops = wall_darkness_gradient_stops(0.3, &samples);
+        let a_bottom = stops[0].1.to_rgba8().to_u8_array()[3];
+        let a_top = stops[1].1.to_rgba8().to_u8_array()[3];
+        assert!(
+            a_bottom < a_top,
+            "banda más iluminada (bottom) ⇒ menos oscuridad: a_bottom={} a_top={}",
+            a_bottom, a_top
+        );
+    }
+
+    #[test]
+    fn wall_gradient_tint_none_when_all_negligible() {
+        // Si ningún sample tiene tinte apreciable, no se emite gradiente
+        // de tinte (None) ⇒ el render loop salta el segundo fill.
+        let samples = [
+            (0.0_f32, ZERO_BOOST),
+            (0.5, [0.005, 0.0, 0.0]),
+            (1.0, ZERO_BOOST),
+        ];
+        assert!(wall_tint_gradient_stops(&samples).is_none());
+    }
+
+    #[test]
+    fn wall_gradient_tint_some_keeps_all_stops_with_transparent_gaps() {
+        // Con al menos un sample tintado, devolvemos Some con TODOS los
+        // stops (los despreciables quedan alpha 0) para no cortar la
+        // continuidad del gradiente.
+        let samples = [
+            (0.0_f32, ZERO_BOOST),     // despreciable ⇒ alpha 0
+            (0.5, [0.0, 0.30, 0.0]),   // verde apreciable
+            (1.0, ZERO_BOOST),         // despreciable ⇒ alpha 0
+        ];
+        let stops = wall_tint_gradient_stops(&samples).expect("hay un sample tintado");
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].1.to_rgba8().to_u8_array()[3], 0, "gap inferior transparente");
+        assert!(stops[1].1.to_rgba8().to_u8_array()[3] > 0, "stop tintado opaco");
+        assert_eq!(stops[2].1.to_rgba8().to_u8_array()[3], 0, "gap superior transparente");
+        // El canal verde del stop tintado domina (normalizado al máximo).
+        let [r, g, b, _] = stops[1].1.to_rgba8().to_u8_array();
+        assert!(g > r && g > b, "tinte verde: g={} r={} b={}", g, r, b);
+    }
+
+    #[test]
+    fn wall_gradient_default_off_preserves_3_42_path() {
+        // Default RenderConfig: gradiente off ⇒ el path 3.42 (bandas /
+        // single overlay) queda intacto.
+        let cfg = RenderConfig::default();
+        assert!(!cfg.wall_vertical_gradient);
     }
 
     // =================================================================
