@@ -345,6 +345,10 @@ enum Msg {
     /// Esc o click "limpiar" → borra la selección + cualquier drag en
     /// curso. La barra de espacios libre.
     LimpiarSeleccion,
+    /// Recorta el lienzo al rect de `model.seleccion`. No-op si no hay
+    /// selección o si el rect cubre el lienzo entero. Limpia la
+    /// selección post-crop (la unidad de coords-imagen cambió).
+    RecortarASeleccion,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ
@@ -1572,6 +1576,22 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         &pal,
         Msg::AutotrimLienzo,
     )));
+    // Crop a selección: sólo tiene sentido si hay un rect activo.
+    // Mostramos siempre pero la etiqueta refleja el estado para que
+    // el botón sea discoverable también sin selección.
+    let etiqueta_crop_sel = match model.seleccion {
+        Some(r) => format!(
+            "✂ recortar a selección ({}×{})",
+            r.x1 - r.x0,
+            r.y1 - r.y0
+        ),
+        None => "✂ recortar a selección (—)".to_string(),
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_crop_sel,
+        &pal,
+        Msg::RecortarASeleccion,
+    )));
 
     // "salida": no requiere selección, siempre activa.
     hijos.push(subtitulo("salida"));
@@ -2332,6 +2352,11 @@ impl App for Tullpu {
                 model.seleccion_drag = None;
                 model.estado = "selección limpia".into();
             }
+            Msg::RecortarASeleccion => {
+                if recortar_lienzo_a_seleccion(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -3055,14 +3080,43 @@ fn recortar_buffer(src: &[u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> Ve
     out
 }
 
-/// Recorta el lienzo entero al bbox no-transparente del compuesto. Es
-/// el "Trim Transparent Pixels" de Photoshop. La estrategia espeja
-/// `rotar_lienzo`: (1) recorta el buffer de cada capa al mismo rect,
-/// inserta al almacén content-addressed; (2) actualiza dims del
-/// lienzo; (3) marca todas las derivadas Stale (ops como Blur no
-/// conmutan exacto con crop por los efectos de borde — se regen desde
-/// la madre recortada). No-op si el lienzo está vacío (todo
-/// transparente) o si ya estaba justo (bbox = lienzo entero).
+
+/// Recorta el lienzo entero al rect half-open `(x0, y0, x1, y1)`. La
+/// estrategia espeja `rotar_lienzo`: (1) recorta el buffer de cada
+/// capa al rect, inserta al almacén content-addressed; (2) actualiza
+/// dims del lienzo; (3) marca todas las derivadas Stale (Blur/Niveles
+/// no conmutan exacto con crop por los bordes — se regen desde la
+/// madre recortada). Pre: el rect debe estar dentro de los bounds del
+/// lienzo y tener área positiva (validación aguas arriba).
+fn recortar_lienzo_a(model: &mut Model, x0: u32, y0: u32, x1: u32, y1: u32) {
+    let w = model.lienzo.width;
+    let new_w = x1 - x0;
+    let new_h = y1 - y0;
+    for capa in model.lienzo.capas.iter_mut() {
+        let Some(src) = model.almacen.obtener(capa.contenido) else {
+            // Derivada nunca regenerada — la regen post-recorte la
+            // armará desde la madre recortada.
+            continue;
+        };
+        let src = src.to_vec();
+        let cropped = recortar_buffer(&src, w, x0, y0, x1, y1);
+        let new_hash = model.almacen.insertar(cropped);
+        capa.contenido = new_hash;
+    }
+    model.lienzo.width = new_w;
+    model.lienzo.height = new_h;
+    for capa in model.lienzo.capas.iter_mut() {
+        if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
+            *estado = Frescura::Stale;
+        }
+    }
+    aplicar_y_recomponer(model);
+}
+
+/// Recorta el lienzo al bbox no-transparente del compuesto. Es el
+/// "Trim Transparent Pixels" de Photoshop. No-op si el lienzo está
+/// vacío (todo transparente) o si ya estaba justo (bbox = lienzo
+/// entero).
 fn recortar_lienzo_a_visible(model: &mut Model) -> bool {
     let Some(img) = model.imagen.as_ref() else {
         model.estado = "no hay composite que medir".into();
@@ -3081,30 +3135,45 @@ fn recortar_lienzo_a_visible(model: &mut Model) -> bool {
     }
     let new_w = x1 - x0;
     let new_h = y1 - y0;
-    // Recortar cada capa: lookup buffer, recortar, insertar nuevo hash.
-    for capa in model.lienzo.capas.iter_mut() {
-        let Some(src) = model.almacen.obtener(capa.contenido) else {
-            // Derivada nunca regenerada — la regen post-recorte la
-            // armará desde la madre recortada.
-            continue;
-        };
-        let src = src.to_vec();
-        let cropped = recortar_buffer(&src, w, x0, y0, x1, y1);
-        let new_hash = model.almacen.insertar(cropped);
-        capa.contenido = new_hash;
-    }
-    model.lienzo.width = new_w;
-    model.lienzo.height = new_h;
-    // Stale para todas las derivadas: Blur, Niveles con clamp, etc. no
-    // siempre conmutan exacto con crop (kernel de borde, normalización).
-    for capa in model.lienzo.capas.iter_mut() {
-        if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
-            *estado = Frescura::Stale;
-        }
-    }
-    aplicar_y_recomponer(model);
+    recortar_lienzo_a(model, x0, y0, x1, y1);
     model.estado = format!(
         "recortado a {}×{} (offset {},{})",
+        new_w, new_h, x0, y0
+    );
+    true
+}
+
+/// Recorta el lienzo al rect de `model.seleccion`. Re-clampea contra
+/// el lienzo vigente (un rotar/recortar posterior puede haber dejado
+/// la selección parcial o fuera). No-op si no hay selección, si la
+/// intersección con el lienzo es vacía, o si el rect cubre el lienzo
+/// entero. Tras el crop limpia la selección — sus coords pertenecen
+/// al coord-space anterior.
+fn recortar_lienzo_a_seleccion(model: &mut Model) -> bool {
+    let Some(rect) = model.seleccion else {
+        model.estado = "no hay selección — `r` y arrastrar".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let x0 = rect.x0.min(w);
+    let y0 = rect.y0.min(h);
+    let x1 = rect.x1.min(w);
+    let y1 = rect.y1.min(h);
+    if x1 <= x0 || y1 <= y0 {
+        model.estado = "selección fuera del lienzo".into();
+        return false;
+    }
+    if x0 == 0 && y0 == 0 && x1 == w && y1 == h {
+        model.estado = "selección cubre todo, nada que recortar".into();
+        return false;
+    }
+    let new_w = x1 - x0;
+    let new_h = y1 - y0;
+    recortar_lienzo_a(model, x0, y0, x1, y1);
+    model.seleccion = None;
+    model.estado = format!(
+        "recortado a selección {}×{} (offset {},{})",
         new_w, new_h, x0, y0
     );
     true
@@ -5577,6 +5646,106 @@ mod tests {
         m.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 1, y1: 1 });
         let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Escape, Modifiers::default()));
         assert!(matches!(msg, Some(Msg::LimpiarSeleccion)));
+    }
+
+    // ---- Fase 36: recortar a selección -----------------------------------
+
+    #[test]
+    fn recortar_a_seleccion_sin_seleccion_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let dims_antes = (model.lienzo.width, model.lienzo.height);
+        let ok = recortar_lienzo_a_seleccion(&mut model);
+        assert!(!ok);
+        assert_eq!((model.lienzo.width, model.lienzo.height), dims_antes);
+        assert!(model.estado.contains("no hay selección"));
+    }
+
+    #[test]
+    fn recortar_a_seleccion_cubriendo_todo_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        // Selección de todo el lienzo 4×4.
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 4, y1: 4 });
+        let ok = recortar_lienzo_a_seleccion(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("cubre todo"));
+    }
+
+    #[test]
+    fn recortar_a_seleccion_fuera_del_lienzo_es_no_op() {
+        // Selección con coords más allá del lienzo (4×4 acá).
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 10, y0: 10, x1: 12, y1: 12 });
+        let ok = recortar_lienzo_a_seleccion(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("fuera"));
+    }
+
+    #[test]
+    fn recortar_a_seleccion_aplica_rect_y_limpia_seleccion() {
+        // Lienzo 4×4 con un patrón distinguible, recortar a (1, 1, 3, 3)
+        // = subrect 2×2 central.
+        let mut model = modelo_minimo();
+        // Reemplazamos la capa base por una con buffer conocido para
+        // poder verificar pixel-perfect post-crop.
+        let mut buf = Vec::with_capacity(4 * 4 * 4);
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                buf.extend_from_slice(&[x * 20, y * 20, 100, 255]);
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("patron", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
+
+        let ok = recortar_lienzo_a_seleccion(&mut model);
+        assert!(ok);
+        assert_eq!((model.lienzo.width, model.lienzo.height), (2, 2));
+        // Selección debe limpiar — sus coords ya no son del nuevo
+        // coord-space.
+        assert!(model.seleccion.is_none());
+        // Verificación de píxeles: el píxel (0,0) post-crop debe ser
+        // el píxel (1,1) original = (20, 20, 100, 255).
+        let nueva_h = model.lienzo.capa(id).unwrap().contenido;
+        let buf_post = model.almacen.obtener(nueva_h).unwrap();
+        assert_eq!(buf_post[0..4], [20, 20, 100, 255]);
+        // Píxel (1, 1) post-crop = (2, 2) original = (40, 40, 100, 255).
+        let i = (1 * 2 + 1) * 4;
+        assert_eq!(buf_post[i..i + 4], [40, 40, 100, 255]);
+    }
+
+    #[test]
+    fn recortar_a_seleccion_clampea_si_rect_sobresale_parcialmente() {
+        // Selección (2, 2, 10, 10) con lienzo 4×4 → intersección
+        // (2, 2, 4, 4) = 2×2 esquina inferior derecha.
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 2, y0: 2, x1: 10, y1: 10 });
+        let ok = recortar_lienzo_a_seleccion(&mut model);
+        assert!(ok);
+        assert_eq!((model.lienzo.width, model.lienzo.height), (2, 2));
+    }
+
+    #[test]
+    fn msg_recortar_a_seleccion_dispatcha_y_undo_restaura() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(model, Msg::RecortarASeleccion, &Handle::for_test());
+        assert_eq!((model.lienzo.width, model.lienzo.height), (2, 2));
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!((model.lienzo.width, model.lienzo.height), (4, 4));
     }
 
     #[test]
