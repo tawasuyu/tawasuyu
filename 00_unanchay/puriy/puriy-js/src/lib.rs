@@ -7796,4 +7796,62 @@ mod tests {
         assert_eq!(rt.eval("d.lineno").expect("e"), JsValue::Number(0.0));
         assert_eq!(rt.eval("d.error").expect("e"), JsValue::Null);
     }
+
+    // ---- Fase 7.83 — PromiseRejectionEvent + unhandledrejection ----
+
+    #[test]
+    fn unhandled_rejection_dispara_evento_con_reason_y_promise() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var visto = null, esPRE = false, esE = false; \
+             var p = Promise.reject('x').catch(function(){}); \
+             addEventListener('unhandledrejection', function(ev) { \
+                 visto = ev.reason; \
+                 esPRE = (ev instanceof PromiseRejectionEvent); \
+                 esE = (ev instanceof Event); \
+                 ev.preventDefault(); \
+             }); \
+             __puriy_emit_unhandled_rejection('motivo', p);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("visto").expect("e"), JsValue::String("motivo".into()));
+        assert_eq!(rt.eval("esPRE").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("esE").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn unhandled_rejection_sin_handler_loguea_a_stderr() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Sin preventDefault → cae al log por defecto en stderr.
+        rt.eval("__puriy_emit_unhandled_rejection(new Error('zap'));").expect("e");
+        let err = rt.stderr();
+        assert!(err.contains("Uncaught (in promise)"), "stderr: {err}");
+        assert!(err.contains("zap"), "stderr: {err}");
+    }
+
+    #[test]
+    fn unhandled_rejection_preventdefault_suprime_log() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "onunhandledrejection = function(ev) { ev.preventDefault(); }; \
+             __puriy_emit_unhandled_rejection('silenciado');",
+        )
+        .expect("e");
+        // preventDefault desde el handler `on…` ⇒ no se loguea nada.
+        assert!(!rt.stderr().contains("Uncaught"), "stderr: {}", rt.stderr());
+    }
+
+    #[test]
+    fn rejection_handled_despacha_a_su_listener() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             addEventListener('rejectionhandled', function(ev) { \
+                 if (ev.type === 'rejectionhandled') n++; \
+             }); \
+             __puriy_emit_rejection_handled(null);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+    }
 }
