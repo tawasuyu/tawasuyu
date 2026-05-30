@@ -1,0 +1,18 @@
+[package]
+name = "media-recorder-webm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/media-recorder-webm — graba video (FrameSource) + audio (AudioSource) a un .webm AV1+Opus nativo, muxeado en stop(). Unifica media-recorder-av1 (video→IVF) y media-recorder-wav (audio→WAV) en el contenedor nativo de gioser."
+
+[dependencies]
+media-core = { path = "../media-core" }
+media-encode-av1 = { path = "../media-encode-av1" }
+media-encode-opus = { path = "../media-encode-opus" }
+media-mux-webm = { path = "../media-mux-webm" }
+
+[dev-dependencies]
+# Round-trip: graba acá → demux + decode nativo de ambos tracks.
+media-source-webm = { path = "../media-source-webm" }

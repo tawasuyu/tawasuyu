@@ -279,6 +279,7 @@ members = [
     "02_ruway/media/media-encode-opus",
     "02_ruway/media/media-mux-webm",
     "02_ruway/media/media-recorder-av1",
+    "02_ruway/media/media-recorder-webm",
     "02_ruway/media/media-recorder-wav",
     "02_ruway/media/media-source-av1",
     "02_ruway/media/media-source-flac",

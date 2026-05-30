@@ -42,6 +42,7 @@ Mascota: un calcetín — guarda cosas, se pierde, abriga.
 | `media-audio-cpal`    | sink realtime sobre cpal (default output device)                     |
 | `media-recorder-wav`  | captura del stream de audio a WAV (hound, PCM 16) — wrapper transparente |
 | `media-recorder-av1`  | captura del stream de video a `.ivf` AV1 nativo (vía `media-encode-av1`) — contraparte de video del recorder WAV. Round-trip verificado. Ver su README. |
+| `media-recorder-webm` | **recorder unificado**: tee de video (`FrameSource`→AV1) + audio (`AudioSource`→Opus) a un único `.webm` AV1+Opus muxeado en `stop()` (vía `media-encode-av1` + `media-encode-opus` + `media-mux-webm`). Audio con sample-rate no-Opus degrada a video-solo. Round-trip grabación→reproducción verificado, sin ffmpeg. |
 | `media-app`           | reproductor Llimphi con visores; `examples/analyze.rs` analiza offline |
 
 Los `media-source-*` son hojas: dependen sólo de `media-core` y de su
@@ -161,6 +162,7 @@ del notebook funciona como patch-bay del audio.
 ```bash
 cargo test -p media-core              # primitivas puras (Spectrum, Levels, AudioProbe, Mixer, Waterfall, Subtitles)
 cargo test -p media-recorder-wav      # round-trip de grabación
+cargo test -p media-recorder-webm     # recorder unificado: graba .webm AV1+Opus → reproduce nativo
 cargo test -p media-encode-opus       # encode Opus + round-trip encode→decode y .webm AV1+Opus propio
 cargo test -p media-mux-webm          # EBML de bajo nivel + round-trip mux→demux→decode nativo
 cargo test -p foreign-av              # parse + clamp (sin invocar ffmpeg)
