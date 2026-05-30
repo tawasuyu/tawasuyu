@@ -1,11 +1,24 @@
 //! `brahman-card-wit` — extractor de contratos WIT.
 //!
+//! **DORMIDO (2026-05-30).** No existe ningún archivo `.wit` en el workspace
+//! y ningún crate de producción depende de éste (sólo `examples/` y la
+//! dev-dependency de `card-sidecar`). Es la "Capa 3" de Brahman (ver `/BRAHMAN.md`):
+//! la idea de módulos agnósticos descritos por interfaz WIT nunca se ejecutó.
+//! El **contrato agnóstico real y vigente** es `shared/card` (formato `Card`) +
+//! el handshake nativo Rust de `card-handshake` + el namespacing de `DhtKey`.
+//! Se conserva como herramienta opcional por si algún día aparecen `.wit`
+//! reales; no asumir que está en ninguna ruta de build.
+//!
+//! Nota: el tipo de metadata [`WitInterface`] vive en `card-core` y SÍ lo usa
+//! el broker para matching estructural — eso es metadata opcional viva. Lo
+//! dormido es este *parser* de archivos `.wit` inexistentes.
+//!
 //! Crate **opcional** (no es dep de `brahman-card`). Parsea texto WIT
 //! mediante [`wit-parser`] y devuelve una lista de [`WitInterface`]
 //! (uno por `world`) lista para acoplarse a una [`card_core::Card`]
 //! cuando se construye una [`card_core::ResolvedCard`].
 //!
-//! Casos de uso:
+//! Casos de uso (hipotéticos hasta que existan `.wit`):
 //!
 //! - El Init lee `<modulo>/wit/protocol.wit` durante el descubrimiento
 //!   y lo combina con la Card del módulo para obtener una

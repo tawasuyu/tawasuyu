@@ -34,11 +34,15 @@ una sola cosa difusa. Dos de las tres están vivas; una está muerta.
 │   card-discovery lo usan nahual-shell y agora-app.                              │
 │   ALCANCE REAL: se detuvo en DAEMONS DE BACKEND. No llegó a widgets ni a gente. │
 ├───────────────────────────────────────────────────────────────────────────────┤
-│ CAPA 3 — Módulos agnósticos vía WIT/WASM.  ✗ MUERTA.                            │
+│ CAPA 3 — Módulos agnósticos vía WIT/WASM.  ✗ MUERTA → RELEGADA (Fase 1, 26-05-30)│
 │   shared/card/card-wit existe; NO hay un solo archivo .wit en el workspace;     │
-│   nada lo pide en build real. El "WASM agnóstico por interfaz" nunca se ejecutó.│
-│   El contrato agnóstico que SÍ funciona: shared/card + handshake nativo Rust    │
-│   + namespacing de DhtKey. WIT fue aspiracional.                                │
+│   nada lo pide en build real (sólo examples + dev-dep de card-sidecar).         │
+│   El "WASM agnóstico por interfaz" nunca se ejecutó.                            │
+│   DECISIÓN: relegado, no borrado — documentado como DORMIDO (ver su README).    │
+│   CONTRATO AGNÓSTICO REAL Y VIGENTE: shared/card (formato Card) + handshake      │
+│   nativo Rust (card-handshake) + namespacing de DhtKey. WIT fue aspiracional.   │
+│   NOTA: el tipo WitInterface vive en card-core y SÍ lo usa el broker para        │
+│   matching estructural — eso es metadata viva; lo dormido es el PARSER de .wit. │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -80,8 +84,9 @@ wawa, una Mónada de nouser o un archivo POSIX — porque cada uno registra un v
 
 ```
 FASE 0  Nombrar la realidad.  → ESTE DOCUMENTO.                                          [no destructiva] ✓
-FASE 1  Decidir sobre WIT/WASM (Capa 3 muerta): relegar card-wit a metadata opcional y
-        declarar shared/card + handshake como el contrato agnóstico real; o borrar card-wit.   [decisión]
+FASE 1  Decidir sobre WIT/WASM (Capa 3 muerta).  ✓ HECHA (2026-05-30): card-wit RELEGADO a
+        "dormido" (doc en lib.rs + README propio); shared/card + handshake + DhtKey declarados
+        contrato agnóstico real. No se borró (parser funcional, reversible).   [decisión cerrada]
 FASE 2a nahual viewer_registry → Cards: visores se registran por (lens,mime,priority),
         el shell despacha vía broker.  REALIZA "widgets hablan por Brahman".            [refactor medio]
 FASE 2b agora personas → discovery por DhtKey::Persona.  REALIZA "gente entra a la espina". [refactor medio]
