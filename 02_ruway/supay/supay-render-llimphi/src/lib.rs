@@ -539,6 +539,27 @@ fn muzzle_boost_cam(x_cam: f32, y_cam: f32, alpha: f32) -> f32 {
     (f * f * alpha * MUZZLE_BOOST_PEAK).clamp(0.0, MUZZLE_BOOST_PEAK)
 }
 
+/// Variante 3D del falloff del muzzle (Fase 3.40). Incluye el componente
+/// `z_cam` en la distancia: una superficie alta o baja del jugador queda
+/// fuera del rango del fogonazo cuando la distancia 3D la supera, aunque
+/// su distancia horizontal sea chica. Usado por las versiones BRDF del
+/// muzzle (`muzzle_boost_rgb_wall_3d`, `muzzle_boost_rgb_plane_3d`) para
+/// que el modelo direccional sea coherentemente 3D — el scalar 2D del
+/// `muzzle_boost_cam` sigue activo en el path omni (`muzzle_brdf=false`,
+/// default) y en mobjs/weapon.
+fn muzzle_boost_cam_3d(x_cam: f32, y_cam: f32, z_cam: f32, alpha: f32) -> f32 {
+    if alpha <= 0.0 {
+        return 0.0;
+    }
+    let d2 = x_cam * x_cam + y_cam * y_cam + z_cam * z_cam;
+    let r2 = MUZZLE_RADIUS_WORLD * MUZZLE_RADIUS_WORLD;
+    if d2 >= r2 {
+        return 0.0;
+    }
+    let f = 1.0 - d2 / r2;
+    (f * f * alpha * MUZZLE_BOOST_PEAK).clamp(0.0, MUZZLE_BOOST_PEAK)
+}
+
 /// Suma aditivamente el tinte cálido `MUZZLE_TINT_RGB · boost` al color
 /// base, preservando alpha. Boost ≤ 0 ⇒ no-op.
 #[cfg(test)]
@@ -1048,7 +1069,9 @@ fn muzzle_boost_rgb_wall_3d(
     alpha: f32,
     wall_normal: (f32, f32),
 ) -> BoostRgb {
-    let scalar = muzzle_boost_cam(x_surf, y_surf, alpha);
+    // Fase 3.40: falloff 3D — el muzzle decae con d_3D, no d_2D, para
+    // ser coherente con el cosine BRDF que ya considera el z.
+    let scalar = muzzle_boost_cam_3d(x_surf, y_surf, z_surf_cam, alpha);
     if scalar <= 0.0 {
         return ZERO_BOOST;
     }
@@ -1079,7 +1102,8 @@ fn muzzle_boost_rgb_plane_3d(
     alpha: f32,
     n_z: f32,
 ) -> BoostRgb {
-    let scalar = muzzle_boost_cam(x_surf, y_surf, alpha);
+    // Fase 3.40: falloff 3D, mismo principio que en walls.
+    let scalar = muzzle_boost_cam_3d(x_surf, y_surf, z_surf_cam, alpha);
     if scalar <= 0.0 {
         return ZERO_BOOST;
     }
@@ -6601,6 +6625,77 @@ mod tests {
     // Fase 3.37 — Muzzle direccional sobre walls y planes
     // =================================================================
 
+    // =================================================================
+    // Fase 3.40 — Muzzle falloff 3D
+    // =================================================================
+
+    #[test]
+    fn muzzle_boost_3d_recovers_2d_when_z_zero() {
+        // Sin componente z, el helper 3D debe dar exactamente el mismo
+        // resultado que el 2D — backwards-compat.
+        let xs = [0.0_f32, 50.0, 100.0, 200.0];
+        for &x in &xs {
+            let s2d = muzzle_boost_cam(x, 0.0, 1.0);
+            let s3d = muzzle_boost_cam_3d(x, 0.0, 0.0, 1.0);
+            assert!(
+                (s2d - s3d).abs() < 1e-5,
+                "z=0 ⇒ 3D == 2D para x={}: s2d={} s3d={}",
+                x, s2d, s3d
+            );
+        }
+    }
+
+    #[test]
+    fn muzzle_boost_3d_attenuates_with_height() {
+        // Misma XY pero z creciente ⇒ scalar cae monotonamente.
+        let planar = muzzle_boost_cam_3d(50.0, 0.0, 0.0, 1.0);
+        let mid = muzzle_boost_cam_3d(50.0, 0.0, 50.0, 1.0);
+        let high = muzzle_boost_cam_3d(50.0, 0.0, 150.0, 1.0);
+        assert!(planar > mid, "planar > mid: {} > {}", planar, mid);
+        assert!(mid > high, "mid > high: {} > {}", mid, high);
+    }
+
+    #[test]
+    fn muzzle_boost_3d_radius_cuts_far_vertical() {
+        // d_2D=0 pero z muy alto ⇒ 2D la incluye, 3D la corta.
+        let r = MUZZLE_RADIUS_WORLD;
+        let s2d = muzzle_boost_cam(0.0, 0.0, 1.0); // peak
+        let s3d = muzzle_boost_cam_3d(0.0, 0.0, r + 10.0, 1.0); // fuera de radio
+        assert!(s2d > 0.0, "2D no la corta (d_XY=0)");
+        assert_eq!(s3d, 0.0, "3D la corta (d_3D > r)");
+    }
+
+    #[test]
+    fn muzzle_brdf_wall_3d_falloff_dims_high_surface() {
+        // Pared a (100, 0) en cam-space + z_surf alto: el muzzle 3D del
+        // 3.40 debe dar menos que el 2D del 3.32-3.37 (que ignoraba z).
+        // Verificamos comparando el helper actual contra un cálculo
+        // manual con scalar 2D pero misma cosine att.
+        let n = (-1.0, 0.0);
+        let z_high = 80.0;
+        let actual_3d = muzzle_boost_rgb_wall_3d(100.0, 0.0, z_high, 1.0, n);
+        // Simulamos el path 3.32-3.37 con scalar 2D pero cosine 3D:
+        // los componentes per-canal serían `scalar_2d * tint * att`.
+        let scalar_2d = muzzle_boost_cam(100.0, 0.0, 1.0);
+        // cos del wall normal (-1,0) con dir surf→muzzle (-100,0,-80)/d_3D:
+        let d2 = 100.0_f32 * 100.0 + z_high * z_high;
+        let inv_d = d2.sqrt().recip();
+        let cos = ((-1.0) * (-100.0) + 0.0 * 0.0) * inv_d;
+        let att = (0.5 + 0.5 * cos).max(WALL_RIM_AMBIENT_FLOOR);
+        let pre_340 = [
+            scalar_2d * MUZZLE_TINT_RGB.0 as f32 / 255.0 * att,
+            scalar_2d * MUZZLE_TINT_RGB.1 as f32 / 255.0 * att,
+            scalar_2d * MUZZLE_TINT_RGB.2 as f32 / 255.0 * att,
+        ];
+        for ch in 0..3 {
+            assert!(
+                actual_3d[ch] < pre_340[ch],
+                "3.40 dimea respecto al modelo pre-3.40 (scalar 2D + cosine 3D): canal {} 3.40={} pre={}",
+                ch, actual_3d[ch], pre_340[ch]
+            );
+        }
+    }
+
     #[test]
     fn muzzle_brdf_wall_perpendicular_full_intensity() {
         // Pared straight-ahead a (100, 0, 0), normal (-1, 0). Muzzle en
@@ -6652,18 +6747,25 @@ mod tests {
     }
 
     #[test]
-    fn muzzle_brdf_plane_floor_below_camera_full_intensity() {
+    fn muzzle_brdf_plane_floor_below_camera_full_cosine() {
         // Floor a z_surf = -32 (debajo del ojo), centroide en (0, 0, -32).
         // direction surf→muzzle = (0, 0, 32)/32 = (0, 0, 1). cos con
-        // n_z=+1 (floor) = 1 ⇒ att=1.
+        // n_z=+1 (floor) = 1 ⇒ att=1. Fase 3.40: el scalar usa d_3D=32,
+        // no d_2D=0, así que decae ligeramente respecto al peak. La
+        // verificación correcta es `dir ≈ scalar_3D · tint` (att=1 sin
+        // modulación) — coherente con falloff 3D del 3.40.
         let dir = muzzle_boost_rgb_plane_3d(0.0, 0.0, -32.0, 1.0, 1.0);
-        // muzzle_boost_rgb_cam usa solo XY ⇒ 2D distance = 0 ⇒ scalar = peak.
-        let omni = muzzle_boost_rgb_cam(0.0, 0.0, 1.0);
+        let scalar_3d = muzzle_boost_cam_3d(0.0, 0.0, -32.0, 1.0);
+        let expected = [
+            scalar_3d * MUZZLE_TINT_RGB.0 as f32 / 255.0,
+            scalar_3d * MUZZLE_TINT_RGB.1 as f32 / 255.0,
+            scalar_3d * MUZZLE_TINT_RGB.2 as f32 / 255.0,
+        ];
         for ch in 0..3 {
             assert!(
-                (dir[ch] - omni[ch]).abs() < 1e-5,
-                "floor below camera: canal {} dir={} omni={}",
-                ch, dir[ch], omni[ch]
+                (dir[ch] - expected[ch]).abs() < 1e-5,
+                "cos=1 ⇒ dir = scalar_3D·tint: canal {} dir={} expected={}",
+                ch, dir[ch], expected[ch]
             );
         }
     }
