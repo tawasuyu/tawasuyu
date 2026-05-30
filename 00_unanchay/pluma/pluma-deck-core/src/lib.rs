@@ -12,6 +12,9 @@
 
 pub mod camara;
 pub mod recorrido;
+/// Adaptador opcional pluma → Recorrido. Sólo con la feature `pluma`.
+#[cfg(feature = "pluma")]
+pub mod adaptador;
 
 pub use camara::{Camara, Ease, Rect, FIT_MARGEN, ZOOM_MAX, ZOOM_MIN};
 pub use recorrido::{

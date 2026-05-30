@@ -5,10 +5,10 @@
 //! encabezado y cuyos párrafos son los bloques siguientes hasta el próximo
 //! encabezado. `en_rejilla` los coloca y rutea en orden de lectura.
 //!
-//! El adaptador `slides_desde_atoms` vive aquí (no en el lib ni en el core):
-//! es glue de demostración entre el modelo de documento de pluma y el
-//! `ContenidoMarco` agnóstico de `pluma-deck-core`. Si prueba valor, se
-//! promueve a un crate adaptador propio.
+//! El adaptador (`recorrido_desde_atomos`) ya **no vive aquí**: se promovió a
+//! `pluma_deck_core::adaptador` (feature `pluma`) y este demo lo dogfoodea, sin
+//! glue inline. El core sigue agnóstico por defecto; la feature sólo se activa
+//! en dev para los demos que tocan el modelo de documento de pluma.
 //!
 //! Corre con un .md propio o el de ejemplo embebido:
 //!   `cargo run -p pluma-deck-recorrido-llimphi --example recorrido_md_demo --release [archivo.md]`
@@ -16,8 +16,8 @@
 use std::time::Duration;
 
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
-use pluma_core::NarrativeAtom;
-use pluma_deck_core::{ContenidoMarco, Recorrido, RecorridoState, Rect, RejillaOpts};
+use pluma_deck_core::adaptador::recorrido_desde_atomos;
+use pluma_deck_core::{Recorrido, RecorridoState, Rect, RejillaOpts};
 use pluma_deck_recorrido_llimphi::{dentro, panel_actual, recorrido_view, ZOOM_BASE};
 
 const PANEL_INICIAL: Rect = Rect { x: 0.0, y: 0.0, w: 1100.0, h: 720.0 };
@@ -45,37 +45,6 @@ El frontend Llimphi pinta cada marco y la cámara vuela entre ellos.
 
 Mismo material que ya escribís — presentado sin diapositivas.
 ";
-
-/// Adaptador: átomos de pluma (en orden de documento) → slides. Un átomo cuyo
-/// contenido arranca con `#`+espacio es un encabezado y abre un slide nuevo.
-fn slides_desde_atoms(atoms: &[NarrativeAtom]) -> Vec<ContenidoMarco> {
-    let mut slides = Vec::new();
-    let mut titulo: Option<String> = None;
-    let mut parrafos: Vec<String> = Vec::new();
-
-    for a in atoms {
-        let c = a.content.as_str();
-        let hashes = c.chars().take_while(|&ch| ch == '#').count();
-        let es_encabezado = hashes > 0 && c[hashes..].starts_with(' ');
-        if es_encabezado {
-            empujar(&mut slides, &mut titulo, &mut parrafos);
-            titulo = Some(c[hashes..].trim().to_string());
-        } else {
-            parrafos.push(c.to_string());
-        }
-    }
-    empujar(&mut slides, &mut titulo, &mut parrafos);
-    slides
-}
-
-fn empujar(slides: &mut Vec<ContenidoMarco>, titulo: &mut Option<String>, parrafos: &mut Vec<String>) {
-    if titulo.is_some() || !parrafos.is_empty() {
-        slides.push(ContenidoMarco::Texto {
-            titulo: titulo.take(),
-            parrafos: std::mem::take(parrafos),
-        });
-    }
-}
 
 #[derive(Clone)]
 enum Msg {
@@ -112,9 +81,8 @@ impl App for Demo {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_else(|| MD_EJEMPLO.to_string());
         let doc = pluma_md::parse_md(&md, "es", "recorrido", 0);
-        let slides = slides_desde_atoms(&doc.atoms);
-        let rec = Recorrido::en_rejilla(
-            slides,
+        let rec = recorrido_desde_atomos(
+            &doc.atoms,
             RejillaOpts { cols: 3, marco_w: 660.0, marco_h: 420.0, gap_x: 240.0, gap_y: 200.0 },
         );
 

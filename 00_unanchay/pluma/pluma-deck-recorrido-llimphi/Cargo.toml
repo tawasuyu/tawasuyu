@@ -17,6 +17,9 @@ image = { workspace = true }
 
 [dev-dependencies]
 # Sólo para el example recorrido_md_demo: muestra la cadena markdown →
-# cuerpo/átomos → Recorrido sin acoplar el lib al modelo de documento.
+# cuerpo/átomos → Recorrido sin acoplar el lib al modelo de documento. La
+# feature `pluma` del core (sólo en dev) trae el adaptador reusable que el
+# demo dogfoodea en vez de su antiguo glue inline.
 pluma-md = { path = "../pluma-md" }
 pluma-core = { path = "../pluma-core" }
+pluma-deck-core = { path = "../pluma-deck-core", features = ["pluma"] }
