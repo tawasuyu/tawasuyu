@@ -905,6 +905,39 @@ El arma sigue siendo 2D (el psprite no tiene posición Z real — es overlay 2D 
 
 **No incluido en 3.40 (defer a 3.41+):** sprite-BSP true occlusion vía R_CheckSight; smoothing del muzzle alpha por interp entre snapshots; volumetric god rays; decals dinámicos del impacto del disparo; cache cross-tick del lit_sectors por (sector, radio); subdivisión vertical de walls para BRDF per-strip; planos inclinados (slopes); tabla de tintes Heretic / Hexen; fallback path con altura real (refactor); muzzle 3D para mobjs (cambia el feel envolvente).
 
+**Fase 3.41 (2026-05-30, este bloque):** weapon rim 3D — completa el set BRDF 3D para todas las superficies con normal definida.
+
+- **Contexto.** 3.30 estableció el rim direccional del arma con cosine 2D (sólo XY). El arma vive efectivamente en el eye-level del jugador (overlay 2D sobre el viewport). Con `z_cam` en `WorldLight` desde 3.33, podemos consolidar el modelo: distancia 3D + cos = `nx·dx/d_3D` con normal `(1, 0, 0)` y `nx=1` ⇒ `cos = dx/d_3D`. Una antorcha alta sobre el jugador atenúa más el rim que una al nivel del ojo.
+- **Cambio mínimo.** Sólo `weapon_rim_boost_rgb_cam`. Antes: `d² = lx²+ly²`, `cos = lx·inv_d_2d`. Después: `d² = lx²+ly²+lz²`, `cos = lx·inv_d_3d`. La rama temprana `!directional ⇒ world_lights_boost_rgb_cam` (omni 2D) sigue intacta — sin cambio en el path off del 3.30.
+- **Resultado visible.** Caminar bajo un techo bajo con un proyectil flotante (BAL1) muy arriba: el arma se tintaba antes con rojo fuerte (la luz está "frente" en cosine 2D); ahora cae por el d_3D mayor y el cosine reducido — la cara visible del psprite "ve" menos del fireball alto. Una antorcha a media pared al frente del jugador sigue tintando fuerte (z bajo + dx alto). Lights detrás muy arriba caen rápido del rim.
+- **Cierre del ciclo 3D total.**
+
+| Superficie | Fase | Normal | d/cos |
+|---|---|---|---|
+| Arma (psprite) | 3.30→3.41 | `(+1, 0)` 2D | **3D** |
+| Mobj sprite | 3.31→3.35 | toward-cam 2D | **3D** |
+| Wall | 3.32→3.34 | perp lineseg 2D | **3D** |
+| Floor | 3.33 | `+Z` | **3D** |
+| Ceiling | 3.33 | `-Z` | **3D** |
+| Muzzle BRDF (opt-in) | 3.37→3.40 | n/a | **3D** |
+
+Todas las superficies con normal usan BRDF 3D coherente end-to-end.
+
+- **Compatibilidad 3.30.** Cuando todas las luces tienen `z_cam=0` (caso típico cuando todos los mobjs FF_FULLBRIGHT están al ras del piso, como en mapas planos), el 3D colapsa al 2D del 3.30 — bit-equivalente. El 99 % de los tests previos siguen verdes sin tocar porque su `rim_light` helper usa `z_cam=0`.
+- **Tests** (+4 render = 150 total verde):
+  - `weapon_rim_3d_recovers_2d_when_z_zero` — sanity con luces planares: finito, ≤ baseline omni.
+  - `weapon_rim_3d_attenuates_for_high_light_compared_to_planar` — z=0 vs z=80 a misma XY ⇒ planar > high.
+  - `weapon_rim_3d_radius_cuts_far_vertical_light` — d_XY=0 + z=400 (> r=384) ⇒ 3D excluye; 2D omni la incluye.
+  - `weapon_rim_3d_disabled_uses_omni_2d` — toggle off ⇒ bit-equivalente al 3.29 omni 2D.
+- **Header bump**: `PHASE 3.40` → `PHASE 3.41`.
+- **Costo.** Una multiplicación y una suma extras por luz cuando `weapon_rim_directional=true`. Despreciable.
+
+**Limitaciones conocidas de 3.41.**
+- **Fake-normal sigue 2D (+X, 0, 0).** No considera pitch — un techo bajo no inclina la "vista" del psprite. Modelar el pitch con Vec3 sería marginal en Doom (mouse-look es cosmético en supay).
+- **Sample point sigue en origen.** El psprite vive en `(0, 0, 0)` cam-space. Una luz directamente "abajo" (z=-100) recibe el mismo trato que una "arriba" (z=+100) — el `nx` no discrimina vertical. Consistente con la billboard 2D.
+
+**No incluido en 3.41 (defer a 3.42+):** sprite-BSP true occlusion vía R_CheckSight; smoothing del muzzle alpha por interp entre snapshots; volumetric god rays; decals dinámicos del impacto del disparo; cache cross-tick del lit_sectors por (sector, radio); subdivisión vertical de walls para BRDF per-strip; planos inclinados (slopes); tabla de tintes Heretic / Hexen; fallback path con altura real (refactor); muzzle 3D para mobjs (cambia el feel envolvente); weapon fake-normal Vec3 con pitch.
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -968,6 +1001,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-30 (+16):** Fase 3.41 — weapon rim 3D. `weapon_rim_boost_rgb_cam` pasa la distancia y la normalización del cosine a 3D: `d² = lx²+ly²+lz²`, `cos = lx·inv_d_3d` (sigue siendo normal 2D `(+1, 0)` con `nx=1`, `nz=0`). Antorcha alta sobre el jugador atenúa más el rim que una al nivel del ojo. Radio 3D corta luces remotas verticalmente. Cierra el ciclo BRDF 3D: **todas las superficies con normal definida** (arma, mobjs, walls, floors, ceilings, muzzle opt-in) ahora usan modelo 3D coherente. Compat 3.30 bit-equivalent cuando todas las luces tienen z_cam=0 (caso común). 150 tests verde (+4: recovers-2d-when-z-zero, attenuates-for-high-light, 3d-radius-cuts-vertical, disabled-uses-omni-2d). Header `PHASE 3.40` → `PHASE 3.41`.
 - **2026-05-30 (+15):** Fase 3.40 — muzzle falloff 3D. Nuevo `muzzle_boost_cam_3d(x, y, z, alpha)` que usa `d² = x²+y²+z²`. Conectado a las dos versiones BRDF del muzzle (`muzzle_boost_rgb_wall_3d`, `muzzle_boost_rgb_plane_3d`). El path omni 2D (`muzzle_brdf=false`, default) sin cambio. Cierra incoherencia 3.37 donde el cosine era 3D pero el scalar 2D. Techos altos durante el fogonazo (con `muzzle_brdf=true`) ahora decaen con d_3D — antes recibían igual aporte que el piso. Test `muzzle_brdf_plane_floor_below_camera_full_intensity` renombrado a `_full_cosine` con aserción `dir ≈ scalar_3D · tint` (coherente con cos=1 ⇒ att=1 + scalar decrescido por d=32). 146 tests verde (+4: 3d-recovers-2d-when-z-zero, attenuates-with-height, 3d-radius-cuts-vertical, wall-3d-dims-vs-pre-3.40). Header `PHASE 3.39` → `PHASE 3.40`.
 - **2026-05-30 (+14):** Fase 3.39 — sprite sample point con `patch.height` real (textured path). Override en la rama texturizada de `gather_sprite`: `let z_surf_cam_textured = (z_top + z_bot) * 0.5` calculado del rectángulo real del patch (floor + topoffset, h del lump). Reemplaza al estimate `cfg.sprite_height/2` del 3.38 que es genérico. Cyberdemon (h=110) centra a 55 u sobre piso, imp (h=56) a 28, PUFF (h=16) a 8 — cada uno con su sample real. Antorcha a media pared tinta diferente al cyberdemon vs al imp (antes recibían el mismo cosine). Fallback path sigue con cfg.sprite_height (no tiene altura real disponible). Compatibilidad 3.38 bit-equivalente para mobjs cuyo patch matchea el estimate (h=56, to=56 — típico imp/zombi). 142 tests verde (+4: center-imp-formula, cyber-higher-than-estimate, puff-lower-than-estimate, real-vs-estimate-changes-BRDF). Header `PHASE 3.38` → `PHASE 3.39`.
 - **2026-05-30 (+13):** Fase 3.38 — sprite sample point al centro del billboard. Cambio one-line en `gather_sprite`: `z_surf_cam = sprite.z - cam.view_z + cfg.sprite_height * 0.5` (antes era sólo `sprite.z - cam.view_z`). El sample sube ~28 u (mitad de `sprite_height=56`), alineándose con el centro visual del billboard. Antorchas a media pared (TBLU/TRED a z≈64) tintan más fuerte a mobjs frente a ellas — el sample queda cerca de la fuente. Proyectiles al ras del piso back-lightean mobjs más rasante. Compatibilidad 3.35 bit-equivalent cuando `sprite_height=0`. 138 tests verde (+4: overhead-light-differs, floor-light-differs, planar-equivalence-when-dz-zero, sprite_height-zero-recovers-3.35). Header `PHASE 3.37` → `PHASE 3.38`.

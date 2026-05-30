@@ -1203,6 +1203,14 @@ const WEAPON_RIM_AMBIENT_FLOOR: f32 = 0.3;
 /// Una luz exactamente en la posición del jugador (d≈0) se trata como
 /// frontal — el cosine no está definido y el caso límite "abrazado por
 /// la luz" merece full intensity.
+///
+/// Fase 3.41: la distancia y la normalización del cosine pasan a 3D.
+/// El psprite vive efectivamente en el eye-level del jugador (overlay
+/// 2D sobre el viewport), entonces el sample point vertical es `z=0`.
+/// Una antorcha alta a `(50, 0, 60)` queda con `d_3D=78`, `cos=50/78=0.64`,
+/// vs el cálculo 2D que daba `cos=1` (full). El radio también es 3D —
+/// una luz remota verticalmente queda fuera del rim aunque su XY sea
+/// chico. Compat 3.30 cuando todas las luces tienen `z_cam=0`.
 fn weapon_rim_boost_rgb_cam(
     player_sec: u32,
     lights: &[WorldLight],
@@ -1223,12 +1231,13 @@ fn weapon_rim_boost_rgb_cam(
                 continue;
             }
         }
-        let d2 = l.x_cam * l.x_cam + l.y_cam * l.y_cam;
+        // Fase 3.41: distancia 3D para falloff + cos.
+        let d2 = l.x_cam * l.x_cam + l.y_cam * l.y_cam + l.z_cam * l.z_cam;
         if d2 >= r2 {
             continue;
         }
         let f = 1.0 - d2 / r2;
-        // Atenuación direccional: cos(θ) = dot((+X, 0), (lx, ly)/|l|).
+        // Atenuación direccional: cos(θ) = dot((+X, 0, 0), (lx, ly, lz)/|l|_3D).
         // Para |l|=0 (luz encima del player) tratamos como att=1.0 (full
         // intensity), evita NaN y cubre el caso "luz pegada al jugador".
         let att = if d2 < 1e-6 {
@@ -6624,6 +6633,86 @@ mod tests {
     // =================================================================
     // Fase 3.37 — Muzzle direccional sobre walls y planes
     // =================================================================
+
+    // =================================================================
+    // Fase 3.41 — Weapon rim 3D
+    // =================================================================
+
+    #[test]
+    fn weapon_rim_3d_recovers_2d_when_z_zero() {
+        // Luces con z_cam=0 ⇒ 3D == 2D (caso de los tests previos 3.30).
+        let red = (255, 130, 60);
+        let blue = (110, 160, 255);
+        let lights = [
+            rim_light(120.0, 0.0, red),
+            rim_light(-60.0, 90.0, blue),
+            rim_light(0.0, -150.0, (255, 255, 200)),
+        ];
+        let baseline = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &lights);
+        let dir = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, true);
+        // omni del 3.30 sumaba sin direccional ⇒ matchea con dir-3.41
+        // sólo cuando todos los lights tienen att=1 (frontales). No es
+        // el caso de este test general; aquí verificamos que el path
+        // funciona con z=0 sin crash + valores finitos.
+        for ch in 0..3 {
+            assert!(dir[ch].is_finite(), "canal {} finite", ch);
+            assert!(dir[ch] <= baseline[ch] + 1e-5, "dir <= baseline omni");
+        }
+    }
+
+    #[test]
+    fn weapon_rim_3d_attenuates_for_high_light_compared_to_planar() {
+        // Misma XY (50, 0) pero z distinto:
+        //   - planar (50, 0, 0): luz al nivel del eye/weapon ⇒ cos=1.
+        //   - high   (50, 0, 80): luz arriba ⇒ d_3D=94, cos=50/94=0.53.
+        // El path direccional 3D debería dimear la luz alta respecto
+        // a la planar.
+        let white = (255, 255, 255);
+        let planar = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: 0.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let high = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: 80.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let b_planar = weapon_rim_boost_rgb_cam(NO_SECTOR, &planar, true);
+        let b_high = weapon_rim_boost_rgb_cam(NO_SECTOR, &high, true);
+        for ch in 0..3 {
+            assert!(
+                b_planar[ch] > b_high[ch],
+                "luz alta debería atenuar: canal {} planar={} high={}",
+                ch, b_planar[ch], b_high[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn weapon_rim_3d_radius_cuts_far_vertical_light() {
+        // Luz a XY=(0,0) pero z=400 (fuera del radio 384). En 2D
+        // d_XY=0 ⇒ omni la incluye. En 3D d=400 > r ⇒ excluida.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 0.0, y_cam: 0.0, z_cam: 400.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let dir = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, true);
+        let omni = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, false);
+        assert_eq!(dir, ZERO_BOOST, "3D radio corta la luz lejana en z");
+        assert!(omni[0] > 0.0, "omni 2D no la corta");
+    }
+
+    #[test]
+    fn weapon_rim_3d_disabled_uses_omni_2d() {
+        // Toggle off ⇒ bit-equivalent al 3.29 omni 2D (sin z).
+        let lights = [WorldLight {
+            x_cam: 50.0, y_cam: 20.0, z_cam: 100.0,
+            sector: NO_SECTOR, tint_rgb: (200, 200, 200), lit_sectors: None,
+        }];
+        let off = weapon_rim_boost_rgb_cam(NO_SECTOR, &lights, false);
+        let baseline = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &lights);
+        assert_eq!(off, baseline);
+    }
 
     // =================================================================
     // Fase 3.40 — Muzzle falloff 3D
