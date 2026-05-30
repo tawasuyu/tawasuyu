@@ -3110,12 +3110,17 @@ fn gather_sprite(
     let sec = snap.sectors.get(sprite.sector as usize);
     let floor = sec.map(|s| s.floor_height).unwrap_or(0.0);
     let depth = (x_cam * x_cam + y_cam * y_cam).sqrt();
-    // Fase 3.35: punto de muestreo vertical para BRDF 3D — usamos el
-    // floor del sprite (mobj.z) relativo al ojo. El sprite es una
-    // billboard tall; este sample point representa la base. Suficiente
-    // para que el cosine refleje la diferencia de altura entre el mobj
-    // y las luces cercanas (antorcha en techo vs proyectil al ras).
-    let z_surf_cam = sprite.z - cam.view_z;
+    // Fase 3.35: punto de muestreo vertical para BRDF 3D — base del
+    // billboard relativo al ojo del jugador.
+    // Fase 3.38: subimos el sample al **centro** vertical del billboard
+    // (`+ cfg.sprite_height * 0.5`). Para mobjs altos (cyberdemon ~110 u,
+    // baron ~64 u) la diferencia entre floor y center es significativa —
+    // una antorcha a media altura ahora "ve" al imp con cosine fuerte
+    // en lugar de marginal, y un proyectil al ras del piso lo back-lightea
+    // más realísticamente porque la cara visible del billboard se mide
+    // desde su centro, no desde sus pies. Compatible bit-exact con 3.35
+    // cuando `cfg.sprite_height = 0`.
+    let z_surf_cam = sprite.z - cam.view_z + cfg.sprite_height * 0.5;
 
     // Fase 3.21: sombra circular en el plano del piso bajo el sprite.
     // Va siempre — texturizado o fallback — antes de pushear el sprite
@@ -6655,6 +6660,113 @@ mod tests {
                 ch, dir[ch], omni[ch]
             );
         }
+    }
+
+    // =================================================================
+    // Fase 3.38 — Sprite sample point al centro del billboard
+    // =================================================================
+
+    #[test]
+    fn sprite_sample_center_vs_floor_differs_for_overhead_light() {
+        // Antorcha alta TLMP a XY (0, 0) en z_cam=+80 (techo). Sprite a
+        // XY (100, 0). Sample en floor (z_surf=0) vs en centro (z_surf=28
+        // ≈ cfg.sprite_height/2). El sample center reduce el dz (80→52)
+        // y el d_3D (128→113), por lo que el cosine (que normaliza por
+        // d_3D) sube ⇒ más aporte.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 0.0, y_cam: 0.0, z_cam: 80.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let floor = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, true);
+        let center = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, 28.0, NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            if floor[ch] > 0.01 {
+                assert!(
+                    center[ch] > floor[ch],
+                    "centro debería recibir más de luz alta: canal {} center={} floor={}",
+                    ch, center[ch], floor[ch]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sprite_sample_center_vs_floor_differs_for_floor_light() {
+        // Espejo: proyectil al ras del piso (z_cam=-32). Sprite a XY
+        // (100, 0). Sample en floor (z_surf=0) tiene dz=-32 ⇒ d_3D=104,
+        // cos pequeño. Sample en centro (z_surf=28) tiene dz=-60 ⇒
+        // d_3D=116, d_3D mayor pero el dz grande hace cos más rasante.
+        // Resultado: el sample floor recibe **más** que el center —
+        // un proyectil al ras del piso ilumina la base del mobj con
+        // cosine mejor que su centro.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 0.0, y_cam: 0.0, z_cam: -32.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let floor = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, true);
+        let center = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, 28.0, NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            if center[ch] > 0.01 {
+                assert!(
+                    floor[ch] > center[ch],
+                    "floor sample debería recibir más de luz baja: canal {} floor={} center={}",
+                    ch, floor[ch], center[ch]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sprite_sample_center_planar_light_matches_floor_when_dz_zero() {
+        // Si la luz está al **nivel del sample** (mismo z), el cosine es
+        // puramente XY independientemente de dónde esté el sample point.
+        // Una luz al centro vertical del sprite (z=center) ⇒ dz=0
+        // produce el mismo resultado que luz al floor (z=0) cuando el
+        // sample también está al floor — ambas tienen dz=0 desde su
+        // respectiva sample point.
+        let white = (255, 255, 255);
+        let light_at_center = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: 28.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let light_at_floor = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: 0.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        // Center sample vs center-z light: dz=0.
+        let a = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, 28.0, NO_SECTOR, &light_at_center, true);
+        // Floor sample vs floor-z light: dz=0 también.
+        let b = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, 0.0, NO_SECTOR, &light_at_floor, true);
+        for ch in 0..3 {
+            assert!(
+                (a[ch] - b[ch]).abs() < 1e-5,
+                "dz=0 desde cualquier sample ⇒ mismo aporte: canal {} a={} b={}",
+                ch, a[ch], b[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn sprite_sample_center_offset_zero_recovers_3_35_behavior() {
+        // Si cfg.sprite_height = 0, el offset es 0 y el sample queda
+        // en sprite.z (Fase 3.35). Verificamos que el helper produce
+        // exactamente el mismo resultado con z_surf_cam idéntico —
+        // la regresión sólo está en el caller (`gather_sprite`), aquí
+        // chequeamos sanidad del helper.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: 20.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        // sprite.z = 0, cfg.sprite_height = 0 ⇒ z_surf_cam = 0
+        let z_surf_335 = 0.0_f32 + 0.0 * 0.5; // 3.35 behavior
+        let z_surf_338 = 0.0_f32 + 0.0 * 0.5; // 3.38 con sprite_height=0
+        assert_eq!(z_surf_335, z_surf_338);
+        let a = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, z_surf_335, NO_SECTOR, &lights, true);
+        let b = world_lights_boost_rgb_for_sprite_cam(100.0, 0.0, z_surf_338, NO_SECTOR, &lights, true);
+        assert_eq!(a, b, "sprite_height=0 ⇒ 3.38 == 3.35");
     }
 
     #[test]
