@@ -346,6 +346,87 @@ impl RecorridoState {
     }
 }
 
+/// Reproducción automática ("modo presentador"): tras aterrizar en un paso
+/// espera `dwell_s` segundos y avanza solo al siguiente. Al llegar al final,
+/// vuelve al inicio si `bucle`, o se detiene. Máquina de tiempo **pura** — el
+/// host la tickea junto a [`RecorridoState::avanzar`]; no tiene reloj propio.
+#[derive(Clone, Copy, Debug)]
+pub struct Autoplay {
+    /// Segundos de permanencia en cada paso una vez que el vuelo aterrizó.
+    pub dwell_s: f64,
+    /// Si al final vuelve al primer paso (`true`) o se detiene (`false`).
+    pub bucle: bool,
+    activo: bool,
+    espera: f64,
+}
+
+/// Dwell por defecto del modo presentador, en segundos.
+pub const DWELL_S: f64 = 2.5;
+
+impl Default for Autoplay {
+    fn default() -> Self {
+        Self { dwell_s: DWELL_S, bucle: true, activo: false, espera: 0.0 }
+    }
+}
+
+impl Autoplay {
+    pub fn new(dwell_s: f64, bucle: bool) -> Self {
+        Self { dwell_s, bucle, activo: false, espera: 0.0 }
+    }
+
+    pub fn activo(&self) -> bool {
+        self.activo
+    }
+
+    /// Arranca la reproducción (resetea el contador de permanencia).
+    pub fn play(&mut self) {
+        self.activo = true;
+        self.espera = 0.0;
+    }
+
+    pub fn pausa(&mut self) {
+        self.activo = false;
+    }
+
+    /// Alterna play/pausa. Devuelve el nuevo estado.
+    pub fn toggle(&mut self) -> bool {
+        if self.activo {
+            self.pausa();
+        } else {
+            self.play();
+        }
+        self.activo
+    }
+
+    /// Tick del modo presentador. No hace nada si está pausado. Mientras el
+    /// vuelo se anima, espera (no acumula dwell). Una vez quieto, acumula `dt`;
+    /// al superar `dwell_s` avanza un paso (o vuelve al inicio si `bucle`; o se
+    /// detiene). Devuelve `true` si disparó un avance este tick.
+    pub fn tick(&mut self, dt: f64, state: &mut RecorridoState, rec: &Recorrido, panel: Rect) -> bool {
+        if !self.activo || rec.n_pasos() == 0 {
+            return false;
+        }
+        if state.animando() {
+            self.espera = 0.0;
+            return false;
+        }
+        self.espera += dt;
+        if self.espera < self.dwell_s {
+            return false;
+        }
+        self.espera = 0.0;
+        if state.paso + 1 < rec.n_pasos() {
+            state.siguiente(rec, panel);
+        } else if self.bucle {
+            state.ir_a_paso(rec, 0, panel);
+        } else {
+            self.activo = false;
+            return false;
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,6 +630,70 @@ mod tests {
         assert_eq!(s.camara, objetivo);
         // Lienzo vacío: no-op.
         assert!(!RecorridoState::new().vista_general(&Recorrido::new(), PANEL));
+    }
+
+    /// Tickea estado + autoplay hasta que el autoplay dispare un avance (o se
+    /// agote el presupuesto de iteraciones). Simula el bucle del host.
+    fn correr_hasta_avance(ap: &mut Autoplay, s: &mut RecorridoState, r: &Recorrido) -> bool {
+        for _ in 0..100_000 {
+            s.avanzar(1.0 / 60.0);
+            if ap.tick(1.0 / 60.0, s, r, PANEL) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn autoplay_pausado_no_hace_nada() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        let mut ap = Autoplay::new(0.5, false);
+        assert!(!ap.activo());
+        // Sin play, mil ticks no mueven el paso.
+        for _ in 0..1000 {
+            assert!(!ap.tick(1.0 / 60.0, &mut s, &r, PANEL));
+        }
+        assert_eq!(s.paso, 0);
+    }
+
+    #[test]
+    fn autoplay_avanza_tras_el_dwell_esperando_a_que_aterrice_el_vuelo() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        let mut ap = Autoplay::new(0.5, false);
+        ap.play();
+        assert!(ap.toggle() == false, "toggle desde activo pausa");
+        ap.play();
+        // Mientras el contador de dwell no llega, no avanza; el avance ocurre
+        // recién tras ~0.5s quietos.
+        assert!(correr_hasta_avance(&mut ap, &mut s, &r));
+        assert_eq!(s.paso, 1);
+        // Y respeta que el vuelo aterrice antes de contar el siguiente dwell.
+        assert!(correr_hasta_avance(&mut ap, &mut s, &r));
+        assert_eq!(s.paso, 2);
+    }
+
+    #[test]
+    fn autoplay_al_final_sin_bucle_se_detiene_y_con_bucle_reinicia() {
+        let r = recorrido_demo(); // 3 pasos
+        // Sin bucle: tras el último, se desactiva solo.
+        let mut s = RecorridoState::new();
+        let mut ap = Autoplay::new(0.2, false);
+        ap.play();
+        correr_hasta_avance(&mut ap, &mut s, &r); // → paso 1
+        correr_hasta_avance(&mut ap, &mut s, &r); // → paso 2 (último)
+        assert_eq!(s.paso, 2);
+        // En el último, el dwell vence pero no avanza: se apaga.
+        let arranco = correr_hasta_avance(&mut ap, &mut s, &r);
+        assert!(!arranco && !ap.activo(), "sin bucle se detiene en el final");
+        // Con bucle: del último vuelve al inicio.
+        let mut s = RecorridoState::new();
+        s.saltar_a_paso(&r, 2, PANEL);
+        let mut ap = Autoplay::new(0.2, true);
+        ap.play();
+        assert!(correr_hasta_avance(&mut ap, &mut s, &r));
+        assert_eq!(s.paso, 0, "con bucle reinicia");
     }
 
     #[test]

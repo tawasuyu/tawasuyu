@@ -5,6 +5,7 @@
 //!   - **→ / ↓ / Espacio / Enter**: paso siguiente (la cámara vuela al marco).
 //!   - **← / ↑**: paso anterior.
 //!   - **Home / Esc**: vista general (aleja para ver todo el lienzo).
+//!   - **p**: play/pausa del modo presentador (avance automático con bucle).
 //!   - **rueda**: zoom-a-cursor.
 //!   - **arrastrar**: paneo libre por el lienzo.
 //!
@@ -14,7 +15,7 @@
 use std::time::Duration;
 
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
-use pluma_deck_core::{ContenidoMarco, Marco, Recorrido, RecorridoState, Rect, RejillaOpts};
+use pluma_deck_core::{Autoplay, ContenidoMarco, Marco, Recorrido, RecorridoState, Rect, RejillaOpts};
 use pluma_deck_recorrido_llimphi::{dentro, panel_actual, recorrido_view, ZOOM_BASE};
 
 /// Panel inicial supuesto antes del primer paint (= `initial_size`), para
@@ -28,12 +29,14 @@ enum Msg {
     Siguiente,
     Anterior,
     VistaGeneral,
+    ToggleAutoplay,
     Tick,
 }
 
 struct Model {
     rec: Recorrido,
     state: RecorridoState,
+    autoplay: Autoplay,
 }
 
 struct Demo;
@@ -103,7 +106,7 @@ impl App for Demo {
         // Tick de animación a ~60 Hz; avanzar() es no-op cuando no hay vuelo.
         handle.spawn_periodic(Duration::from_millis(16), || Msg::Tick);
 
-        Model { rec, state }
+        Model { rec, state, autoplay: Autoplay::default() }
     }
 
     fn update(mut model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
@@ -124,8 +127,12 @@ impl App for Demo {
             Msg::VistaGeneral => {
                 model.state.vista_general(&model.rec, panel);
             }
+            Msg::ToggleAutoplay => {
+                model.autoplay.toggle();
+            }
             Msg::Tick => {
                 model.state.avanzar(1.0 / 60.0);
+                model.autoplay.tick(1.0 / 60.0, &mut model.state, &model.rec, panel);
             }
         }
         model
@@ -163,6 +170,7 @@ impl App for Demo {
             }
             Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) => Some(Msg::Anterior),
             Key::Named(NamedKey::Home | NamedKey::Escape) => Some(Msg::VistaGeneral),
+            Key::Character(c) if c.as_str().eq_ignore_ascii_case("p") => Some(Msg::ToggleAutoplay),
             _ => None,
         }
     }

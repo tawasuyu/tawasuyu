@@ -15,7 +15,8 @@ pub mod recorrido;
 
 pub use camara::{Camara, Ease, Rect, FIT_MARGEN, ZOOM_MAX, ZOOM_MIN};
 pub use recorrido::{
-    ContenidoMarco, Marco, MarcoId, Recorrido, RecorridoState, RejillaOpts, DURACION_PASO_S,
+    Autoplay, ContenidoMarco, Marco, MarcoId, Recorrido, RecorridoState, RejillaOpts,
+    DURACION_PASO_S, DWELL_S,
 };
 
 /// Umbral en pixels para confirmar gesto horizontal vs vertical.

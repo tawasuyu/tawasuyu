@@ -414,7 +414,8 @@ const EXPORT_JS: &str = r#"(function(){
 var vp=document.querySelector('.recorrido-viewport');
 var mundo=document.querySelector('.recorrido-mundo');
 var hud=document.querySelector('.recorrido-hud');
-var ZB=1.1,FIT=0.9,ZMIN=0.02,ZMAX=64,DUR=800,WN=100;
+var ZB=1.1,FIT=0.9,ZMIN=0.02,ZMAX=64,DUR=800,WN=100,DWELL=2500;
+var autoTimer=null;
 var EASE='transform '+DUR+'ms cubic-bezier(0.22,0.61,0.36,1)';
 var marcos=[].slice.call(mundo.children).map(function(el){return{
  x:+el.dataset.x||0,y:+el.dataset.y||0,w:+el.dataset.w||640,h:+el.dataset.h||400,rot:+el.dataset.rot||0};});
@@ -436,6 +437,8 @@ function apply(smooth){var p=P();mundo.style.transition=smooth?EASE:'none';
 function s2w(px,py){var p=P();var sx=(px-p.w/2)/cam.zoom,sy=(py-p.h/2)/cam.zoom;
  var c=Math.cos(cam.rot),s=Math.sin(cam.rot);return[cam.cx+sx*c-sy*s,cam.cy+sx*s+sy*c];}
 function goto(i,smooth){if(i<0||i>=marcos.length)return;paso=i;cam=fit(marcos[i]);apply(smooth);}
+function setAuto(on){if(autoTimer){clearInterval(autoTimer);autoTimer=null;}
+ if(on)autoTimer=setInterval(function(){goto(paso+1<marcos.length?paso+1:0,true);},DUR+DWELL);}
 marcos.forEach(function(m,i){var el=mundo.children[i];el.style.position='absolute';
  el.style.left=m.x+'px';el.style.top=m.y+'px';el.style.width=m.w+'px';el.style.height=m.h+'px';
  el.style.boxSizing='border-box';if(m.rot)el.style.transform='rotate('+m.rot+'rad)';});
@@ -453,7 +456,8 @@ vp.addEventListener('pointermove',function(e){if(!drag)return;var dx=e.clientX-d
 window.addEventListener('keydown',function(e){var k=e.key;
  if(k==='ArrowRight'||k==='ArrowDown'||k===' '||k==='Spacebar'||k==='Enter'){if(paso+1<marcos.length){goto(paso+1,true);e.preventDefault();}}
  else if(k==='ArrowLeft'||k==='ArrowUp'){if(paso>0){goto(paso-1,true);e.preventDefault();}}
- else if(k==='Home'||k==='Escape'){cam=fitAll();apply(true);e.preventDefault();}});
+ else if(k==='Home'||k==='Escape'){cam=fitAll();apply(true);e.preventDefault();}
+ else if(k==='p'||k==='P'){setAuto(!autoTimer);e.preventDefault();}});
 window.addEventListener('resize',function(){apply(false);});
 goto(0,false);
 })();"#;
@@ -513,6 +517,8 @@ mod tests {
         // El JS replica la cámara del core (funciones clave presentes).
         assert!(html.contains("function fit(") && html.contains("function fitAll("));
         assert!(html.contains("function s2w(") && html.contains("goto(0,false)"));
+        // Y el modo presentador (autoplay con setInterval, tecla 'p').
+        assert!(html.contains("function setAuto(") && html.contains("setInterval("));
     }
 
     #[test]
