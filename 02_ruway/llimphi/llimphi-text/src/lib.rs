@@ -178,8 +178,20 @@ pub fn draw_layout(
     color: Color,
     origin: (f64, f64),
 ) {
+    draw_layout_xf(scene, layout, color, vello::kurbo::Affine::translate(origin));
+}
+
+/// Igual que [`draw_layout`] pero con una **afín completa** en vez de sólo un
+/// desplazamiento: permite pintar texto girado/escalado (p. ej. dentro de un
+/// marco rotado en una presentación espacial). El origen del layout (0,0) es el
+/// que mapea `transform`; las posiciones de glifo se aplican en ese espacio.
+pub fn draw_layout_xf(
+    scene: &mut vello::Scene,
+    layout: &parley::Layout<()>,
+    color: Color,
+    transform: vello::kurbo::Affine,
+) {
     let brush = Brush::Solid(color);
-    let transform = vello::kurbo::Affine::translate(origin);
     for line in layout.lines() {
         for item in line.items() {
             if let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item {

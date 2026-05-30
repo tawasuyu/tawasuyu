@@ -20,7 +20,7 @@ use std::sync::{Mutex, OnceLock};
 
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat, Mix};
-use llimphi_ui::llimphi_text::{draw_layout, layout_block, measurement, Alignment, TextBlock};
+use llimphi_ui::llimphi_text::{draw_layout_xf, layout_block, measurement, Alignment, TextBlock};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::{PaintRect, View};
 
@@ -219,12 +219,17 @@ fn pintar(
         let (grosor, color) = if actual { (3.0, MARCO_ACENTO) } else { (1.0, MARCO_BORDE) };
         scene.stroke(&Stroke::new(grosor), xf, color, None, &kr);
 
-        // El contenido decide cómo se pinta: etiqueta = una línea centrada;
-        // texto = título + párrafos fluidos desde la esquina, clipeados al marco.
+        // El texto se pinta en el **espacio local del marco** (origen en su
+        // esquina sup-izq, ejes alineados al marco, 1 unidad = 1 px de pantalla),
+        // así sigue el giro del marco como lo hace su borde. Los tamaños de
+        // fuente se clampan por zoom para seguir legibles lejos/cerca.
+        let local = marco_local_xf(cam, panel, &m.rect, m.rot_rad);
+        let w_px = (m.rect.w * cam.zoom) as f32;
+        let h_px = (m.rect.h * cam.zoom) as f32;
         match &m.pintura {
-            Pintura::Etiqueta(t) => pintar_etiqueta(scene, ts, cam, panel, &m.rect, t),
+            Pintura::Etiqueta(t) => pintar_etiqueta(scene, ts, local, w_px, h_px, cam.zoom, t),
             Pintura::Texto { titulo, parrafos } => {
-                pintar_texto(scene, ts, cam, panel, &m.rect, titulo.as_deref(), parrafos);
+                pintar_texto(scene, ts, local, w_px, h_px, cam.zoom, titulo.as_deref(), parrafos);
             }
             Pintura::Imagen(_) | Pintura::Nada => {}
         }
@@ -253,60 +258,73 @@ fn pintar_imagen(scene: &mut Scene, xf: Affine, rect: &Rect, img: &PenikoImage) 
     scene.pop_layer();
 }
 
-/// Etiqueta de una línea centrada en el centro de pantalla del marco. El
-/// tamaño escala con el zoom (clamp para que siga legible lejos/cerca).
-fn pintar_etiqueta(scene: &mut Scene, ts: &mut Ts, cam: &Camara, panel: Rect, rect: &Rect, t: &str) {
-    let (mcx, mcy) = rect.centro();
-    let ancho_px = (rect.w * cam.zoom) as f32;
-    if ancho_px < 12.0 {
+/// Afín que lleva coordenadas **locales del marco** a pantalla: el origen (0,0)
+/// es su esquina superior-izquierda, los ejes están alineados al marco (rotados
+/// según el giro del marco *relativo a la cámara*) y 1 unidad local = 1 px de
+/// pantalla. Pintar texto en este espacio hace que siga el giro del marco igual
+/// que su borde, sin que el zoom deforme el tamaño de fuente (que se clampa).
+fn marco_local_xf(cam: &Camara, panel: Rect, rect: &Rect, rot_rad: f64) -> Affine {
+    let (scx, scy) = cam.world_to_screen(rect.centro(), panel);
+    // Giro del marco visto en pantalla: la cámara rota -rot, el marco +rot_rad.
+    let ang = rot_rad - cam.rot_rad;
+    let (w_px, h_px) = (rect.w * cam.zoom, rect.h * cam.zoom);
+    Affine::translate((scx, scy))
+        * Affine::rotate(ang)
+        * Affine::translate((-w_px * 0.5, -h_px * 0.5))
+}
+
+/// Etiqueta de una línea centrada en el marco, en su espacio local (sigue el
+/// giro). El tamaño escala con el zoom (clamp para seguir legible lejos/cerca).
+fn pintar_etiqueta(scene: &mut Scene, ts: &mut Ts, local: Affine, w_px: f32, h_px: f32, zoom: f64, t: &str) {
+    if w_px < 12.0 {
         return; // demasiado chico para texto
     }
-    let (sx, sy) = cam.world_to_screen((mcx, mcy), panel);
-    let size_px = ((16.0 * cam.zoom) as f32).clamp(9.0, 40.0);
+    let size_px = ((16.0 * zoom) as f32).clamp(9.0, 40.0);
     let block = TextBlock {
         text: t,
         size_px,
         color: TEXTO,
-        origin: (sx - ancho_px as f64 * 0.5, sy - size_px as f64 * 0.6),
-        max_width: Some(ancho_px),
+        // Centrado vertical aproximado dentro del marco; el `max_width` + center
+        // resuelven el horizontal.
+        origin: (0.0, (h_px as f64 - size_px as f64) * 0.5),
+        max_width: Some(w_px),
         alignment: Alignment::Center,
         line_height: 1.2,
         italic: false,
         font_family: None,
     };
     let layout = layout_block(ts, &block);
-    draw_layout(scene, &layout, block.color, block.origin);
+    draw_layout_xf(scene, &layout, block.color, local * Affine::translate(block.origin));
 }
 
 /// Contenido de "slide": título (si hay) + párrafos, fluidos desde la esquina
-/// superior-izquierda del marco, clipeados a su rect de pantalla. El apilado
-/// usa la altura medida del título (sin rotación: apto para marcos rectos).
+/// superior-izquierda del marco, clipeados a su rect — todo en el espacio local
+/// del marco, así el texto gira con él. El apilado usa la altura medida del
+/// título.
 fn pintar_texto(
     scene: &mut Scene,
     ts: &mut Ts,
-    cam: &Camara,
-    panel: Rect,
-    rect: &Rect,
+    local: Affine,
+    w_px: f32,
+    h_px: f32,
+    zoom: f64,
     titulo: Option<&str>,
     parrafos: &[String],
 ) {
-    let (sx, sy) = cam.world_to_screen((rect.x, rect.y), panel);
-    let w_px = (rect.w * cam.zoom) as f32;
-    let h_px = (rect.h * cam.zoom) as f32;
     if w_px < 40.0 || h_px < 24.0 {
         return; // demasiado chico para texto fluido
     }
-    let pad = ((12.0 * cam.zoom) as f32).clamp(5.0, 22.0);
+    let pad = ((12.0 * zoom) as f32).clamp(5.0, 22.0);
     let inner_w = (w_px - 2.0 * pad).max(8.0);
-    let left = sx + pad as f64;
-    let mut y = sy + pad as f64;
+    let left = pad as f64;
+    let mut y = pad as f64;
 
-    // Clip al rect de pantalla del marco para que el texto no se derrame.
-    let clip = KurboRect::new(sx, sy, sx + w_px as f64, sy + h_px as f64);
-    scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &clip);
+    // Clip al rect del marco en su espacio local (gira con el marco).
+    let clip = KurboRect::new(0.0, 0.0, w_px as f64, h_px as f64);
+    scene.push_layer(Mix::Clip, 1.0, local, &clip);
 
     if let Some(tt) = titulo.filter(|s| !s.is_empty()) {
-        let size = ((22.0 * cam.zoom) as f32).clamp(12.0, 46.0);
+        let size = ((22.0 * zoom) as f32).clamp(12.0, 46.0);
         let block = TextBlock {
             text: tt,
             size_px: size,
@@ -320,13 +338,13 @@ fn pintar_texto(
         };
         let layout = layout_block(ts, &block);
         let medida = measurement(&layout);
-        draw_layout(scene, &layout, TEXTO, (left, y));
-        y += medida.height as f64 + ((10.0 * cam.zoom) as f32).clamp(4.0, 18.0) as f64;
+        draw_layout_xf(scene, &layout, TEXTO, local * Affine::translate((left, y)));
+        y += medida.height as f64 + ((10.0 * zoom) as f32).clamp(4.0, 18.0) as f64;
     }
 
     if !parrafos.is_empty() {
         let cuerpo = parrafos.join("\n\n");
-        let size = ((15.0 * cam.zoom) as f32).clamp(9.0, 32.0);
+        let size = ((15.0 * zoom) as f32).clamp(9.0, 32.0);
         let block = TextBlock {
             text: &cuerpo,
             size_px: size,
@@ -339,7 +357,7 @@ fn pintar_texto(
             font_family: None,
         };
         let layout = layout_block(ts, &block);
-        draw_layout(scene, &layout, TEXTO_TENUE, (left, y));
+        draw_layout_xf(scene, &layout, TEXTO_TENUE, local * Affine::translate((left, y)));
     }
 
     scene.pop_layer();
