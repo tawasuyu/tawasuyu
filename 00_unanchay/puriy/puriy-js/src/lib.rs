@@ -8683,4 +8683,152 @@ mod tests {
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
         assert_eq!(rt.eval("cambios").expect("e"), JsValue::Number(1.0));
     }
+
+    // ---- Fase 7.102 — navigator.getBattery / BatteryManager ----
+
+    #[test]
+    fn get_battery_resuelve_singleton_con_defaults() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var b1 = null; var b2 = null; \
+             navigator.getBattery().then(function(b) { b1 = b; }); \
+             navigator.getBattery().then(function(b) { b2 = b; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("b1 === b2").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("b1.charging").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("b1.level").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("b1 instanceof BatteryManager").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("b1 instanceof EventTarget").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_battery_flippea_y_dispara_los_change_correspondientes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // El callback de getBattery() corre como microtask al final del eval;
+        // attach los handlers ANTES de setear (eval separado) o llegan tarde.
+        rt.eval(
+            "var got = []; var b = null; \
+             navigator.getBattery().then(function(x) { b = x; \
+                 b.onlevelchange = function() { got.push('level:' + b.level); }; \
+                 b.onchargingchange = function() { got.push('charging:' + b.charging); }; \
+             });",
+        )
+        .expect("e");
+        rt.eval("__puriy_set_battery({ level: 0.5, charging: false });").expect("e");
+        assert_eq!(rt.eval("b.level").expect("e"), JsValue::Number(0.5));
+        assert_eq!(rt.eval("b.charging").expect("e"), JsValue::Bool(false));
+        assert_eq!(
+            rt.eval("got.join(',')").expect("e"),
+            JsValue::String("charging:false,level:0.5".into())
+        );
+    }
+
+    #[test]
+    fn set_battery_no_dispara_si_el_valor_no_cambia() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; var b = null; \
+             navigator.getBattery().then(function(x) { b = x; \
+                 b.onlevelchange = function() { n++; }; });",
+        )
+        .expect("e");
+        rt.eval("__puriy_set_battery({ level: 1.0 });").expect("e");
+        // level ya era 1.0 → sin evento.
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
+
+    // ---- Fase 7.103 — navigator.wakeLock ----
+
+    #[test]
+    fn wake_lock_request_resuelve_sentinel_y_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var s = null; \
+             navigator.wakeLock.request('screen').then(function(x) { s = x; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("s.type").expect("e"), JsValue::String("screen".into()));
+        assert_eq!(rt.eval("s.released").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("s instanceof WakeLockSentinel").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'wakelock-request'; })")
+                .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn wake_lock_release_marca_released_y_dispara_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var liberado = false; var s = null; \
+             navigator.wakeLock.request().then(function(x) { s = x; \
+                 s.addEventListener('release', function() { liberado = true; }); \
+                 s.release(); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("s.released").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("liberado").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'wakelock-release'; })")
+                .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn wake_lock_denegado_rechaza_con_not_allowed() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_set_wakelock_permission(false); \
+             var errName = null; \
+             navigator.wakeLock.request('screen').catch(function(e) { errName = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotAllowedError".into()));
+    }
+
+    // ---- Fase 7.104 — navigator.storage (StorageManager) ----
+
+    #[test]
+    fn storage_estimate_devuelve_defaults() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var usage = -1; var quota = -1; \
+             navigator.storage.estimate().then(function(e) { usage = e.usage; quota = e.quota; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("usage").expect("e"), JsValue::Number(0.0));
+        assert_eq!(
+            rt.eval("quota").expect("e"),
+            JsValue::Number(2.0 * 1024.0 * 1024.0 * 1024.0)
+        );
+    }
+
+    #[test]
+    fn set_storage_estimate_y_persisted_actualizan() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_storage_estimate({ usage: 1000, quota: 5000 });").expect("e");
+        rt.eval("__puriy_set_storage_persisted(true);").expect("e");
+        rt.eval(
+            "var u = -1; var p = null; \
+             navigator.storage.estimate().then(function(e) { u = e.usage; }); \
+             navigator.storage.persisted().then(function(x) { p = x; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("u").expect("e"), JsValue::Number(1000.0));
+        assert_eq!(rt.eval("p").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn storage_get_directory_rechaza_security_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.storage.getDirectory().catch(function(e) { errName = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("SecurityError".into()));
+    }
 }

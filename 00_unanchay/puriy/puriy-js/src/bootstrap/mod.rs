@@ -58,6 +58,9 @@ mod matchmedia;
 mod screen;
 mod serviceworker;
 mod mediadevices;
+mod battery;
+mod wakelock;
+mod storagemanager;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -116,6 +119,9 @@ pub(crate) use matchmedia::MATCHMEDIA_BOOTSTRAP;
 pub(crate) use screen::SCREEN_BOOTSTRAP;
 pub(crate) use serviceworker::SERVICEWORKER_BOOTSTRAP;
 pub(crate) use mediadevices::MEDIADEVICES_BOOTSTRAP;
+pub(crate) use battery::BATTERY_BOOTSTRAP;
+pub(crate) use wakelock::WAKELOCK_BOOTSTRAP;
+pub(crate) use storagemanager::STORAGEMANAGER_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -176,5 +182,8 @@ pub(crate) const ALL: &[&str] = &[
     SCREEN_BOOTSTRAP,
     SERVICEWORKER_BOOTSTRAP,
     MEDIADEVICES_BOOTSTRAP,
+    BATTERY_BOOTSTRAP,
+    WAKELOCK_BOOTSTRAP,
+    STORAGEMANAGER_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
