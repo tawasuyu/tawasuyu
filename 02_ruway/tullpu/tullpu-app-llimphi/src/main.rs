@@ -133,6 +133,32 @@ struct Model {
     /// "perder" la imagen, hotkey `0` resetea.
     pan_x: f32,
     pan_y: f32,
+    /// Herramienta activa del lienzo. Cambia el cableado de eventos:
+    /// `Mover` ⇒ click-drag panea; `Cuentagotas` ⇒ click lee el píxel
+    /// bajo el cursor. El wheel zoom-ea en ambos modos.
+    herramienta: Herramienta,
+    /// Último color leído por el cuentagotas (RGBA del píxel del lienzo
+    /// compuesto). `None` hasta que el usuario clickee con la
+    /// herramienta `Cuentagotas` activa.
+    color_picked: Option<[u8; 4]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Herramienta {
+    /// Click-drag panea el lienzo. Es la herramienta por defecto.
+    Mover,
+    /// Click sobre el lienzo lee el RGBA del píxel compuesto. No
+    /// dragea (el drag se reservaría para una pintura futura).
+    Cuentagotas,
+}
+
+impl Herramienta {
+    fn etiqueta(self) -> &'static str {
+        match self {
+            Herramienta::Mover => "mover",
+            Herramienta::Cuentagotas => "cuentagotas",
+        }
+    }
 }
 
 /// Multiplicador por tick de wheel. 1.1 ≈ +10%, un escalón cómodo. El
@@ -201,6 +227,17 @@ enum Msg {
     Pan(f32, f32),
     /// Resetea zoom y pan al estado inicial (fit-contain centrado).
     ResetVista,
+    /// Cambia la herramienta activa del lienzo (mover/cuentagotas).
+    CambiarHerramienta(Herramienta),
+    /// Click sobre el lienzo en modo cuentagotas: `(lx, ly)` relativo al
+    /// rect del panel y `(rw, rh)` las dims actuales. El handler
+    /// resuelve el píxel-imagen vía `transform_lienzo` y guarda el RGBA.
+    RecogerColor {
+        lx: f32,
+        ly: f32,
+        rw: f32,
+        rh: f32,
+    },
 }
 
 // =============================================================================
@@ -403,6 +440,8 @@ fn inicializar() -> Model {
         factor_zoom: 1.0,
         pan_x: 0.0,
         pan_y: 0.0,
+        herramienta: Herramienta::Mover,
+        color_picked: None,
     };
     sincronizar_thumbs(&mut model);
     model
@@ -722,6 +761,8 @@ fn header(
     estado: &str,
     proveedor_etiqueta: &str,
     factor_zoom: f32,
+    herramienta: Herramienta,
+    color_picked: Option<[u8; 4]>,
 ) -> View<Msg> {
     // Indicador discreto: sólo se muestra cuando el usuario tocó zoom
     // o pan; en el caso por defecto (fit) el header queda igual que antes.
@@ -730,8 +771,13 @@ fn header(
     } else {
         format!(" · vista {:.0}%", factor_zoom * 100.0)
     };
+    let tool = format!(" · ⌨ {}", herramienta.etiqueta());
+    let color = match color_picked {
+        Some([r, g, b, a]) => format!(" · 🎨 #{r:02X}{g:02X}{b:02X} α={a}"),
+        None => String::new(),
+    };
     let titulo = format!(
-        "tullpu · {}×{} · {} capas · IA: {proveedor_etiqueta}{vista} · {estado}",
+        "tullpu · {}×{} · {} capas · IA: {proveedor_etiqueta}{vista}{tool}{color} · {estado}",
         lienzo.width,
         lienzo.height,
         lienzo.capas.len()
@@ -1040,9 +1086,47 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         .text_aligned(s.to_string(), 11.0, theme.fg_muted, Alignment::Start)
     };
 
-    // "entrada" primero: abrir el fuzzy picker para agregar una capa nueva
+    // "herramienta": toggle entre mover (drag panea) y cuentagotas (click
+    // lee píxel). Globales — no dependen de selección. Las hotkeys `m` y
+    // `i` hacen lo mismo; los botones son por discoverability.
+    let mut hijos = vec![subtitulo("herramienta")];
+    let pal_tool_activo = ButtonPalette {
+        bg: theme.bg_selected,
+        fg: theme.fg_text,
+        ..pal.clone()
+    };
+    let etiqueta_mover = if model.herramienta == Herramienta::Mover {
+        "● mover (m)"
+    } else {
+        "○ mover (m)"
+    };
+    let etiqueta_cuenta = if model.herramienta == Herramienta::Cuentagotas {
+        "● cuentagotas (i)"
+    } else {
+        "○ cuentagotas (i)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_mover.to_string(),
+        if model.herramienta == Herramienta::Mover {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Mover),
+    )));
+    hijos.push(envolver_fila(button_view(
+        etiqueta_cuenta.to_string(),
+        if model.herramienta == Herramienta::Cuentagotas {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Cuentagotas),
+    )));
+
+    // "entrada": abrir el fuzzy picker para agregar una capa nueva
     // desde un PNG/JPEG del workspace. No requiere selección — siempre activo.
-    let mut hijos = vec![subtitulo("entrada")];
+    hijos.push(subtitulo("entrada"));
     hijos.push(envolver_fila(button_view(
         format!(
             "📂 capa desde archivo · {} candidatos · Ctrl+P",
@@ -1272,6 +1356,50 @@ fn pan_para_zoom_a_cursor(
     (pan_x_nuevo, pan_y_nuevo)
 }
 
+/// Convierte un click en coords-panel `(lx, ly)` con dims `(rw, rh)` a
+/// la posición del píxel-imagen bajo el cursor (aplicando zoom + pan) y
+/// devuelve el RGBA de ese píxel del buffer `image_data` (Rgba8 fila por
+/// fila). Devuelve `None` si las dims son degeneradas, si el píxel cae
+/// fuera de la imagen o si el buffer no tiene tamaño suficiente. Pura.
+fn recoger_color_en(
+    image_data: &[u8],
+    image_w: u32,
+    image_h: u32,
+    lx: f32,
+    ly: f32,
+    rw: f32,
+    rh: f32,
+    factor_zoom: f32,
+    pan_x: f32,
+    pan_y: f32,
+) -> Option<[u8; 4]> {
+    let (s, off_x, off_y) =
+        transform_lienzo(image_w, image_h, rw, rh, factor_zoom, pan_x, pan_y)?;
+    if s <= 0.0 {
+        return None;
+    }
+    let ix = ((lx as f64 - off_x) / s).floor() as i64;
+    let iy = ((ly as f64 - off_y) / s).floor() as i64;
+    if ix < 0 || iy < 0 {
+        return None;
+    }
+    let (ix, iy) = (ix as u32, iy as u32);
+    if ix >= image_w || iy >= image_h {
+        return None;
+    }
+    let stride = image_w as usize * 4;
+    let idx = iy as usize * stride + ix as usize * 4;
+    if idx + 4 > image_data.len() {
+        return None;
+    }
+    Some([
+        image_data[idx],
+        image_data[idx + 1],
+        image_data[idx + 2],
+        image_data[idx + 3],
+    ])
+}
+
 fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     let cuerpo = match &model.imagen {
         Some(img) => {
@@ -1282,7 +1410,7 @@ fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
             let factor_zoom = model.factor_zoom;
             let pan_x = model.pan_x;
             let pan_y = model.pan_y;
-            View::new(Style {
+            let cuerpo_paint = View::new(Style {
                 flex_grow: 1.0,
                 size: Size {
                     width: percent(1.0_f32),
@@ -1330,11 +1458,19 @@ fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
                 scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &node_rect);
                 scene.draw_image(&img, transform);
                 scene.pop_layer();
-            })
-            .draggable(|fase, dx, dy| match fase {
-                DragPhase::Move => Some(Msg::Pan(dx, dy)),
-                DragPhase::End => None,
-            })
+            });
+            // El cableado de eventos depende de la herramienta: Mover
+            // panea con drag; Cuentagotas recoge color con click. El
+            // wheel sigue zoom-eando en ambos modos (vía `on_wheel`).
+            match model.herramienta {
+                Herramienta::Mover => cuerpo_paint.draggable(|fase, dx, dy| match fase {
+                    DragPhase::Move => Some(Msg::Pan(dx, dy)),
+                    DragPhase::End => None,
+                }),
+                Herramienta::Cuentagotas => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
+                    Some(Msg::RecogerColor { lx, ly, rw, rh })
+                }),
+            }
         }
         None => View::new(Style {
             flex_grow: 1.0,
@@ -1601,6 +1737,41 @@ impl App for Tullpu {
                 model.pan_y = 0.0;
                 model.estado = "vista reseteada".into();
             }
+            Msg::CambiarHerramienta(h) => {
+                model.herramienta = h;
+                model.estado = format!("herramienta · {}", h.etiqueta());
+            }
+            Msg::RecogerColor { lx, ly, rw, rh } => {
+                if let Some(img) = model.imagen.as_ref() {
+                    let bytes = img.data.data();
+                    match recoger_color_en(
+                        bytes,
+                        img.width,
+                        img.height,
+                        lx,
+                        ly,
+                        rw,
+                        rh,
+                        model.factor_zoom,
+                        model.pan_x,
+                        model.pan_y,
+                    ) {
+                        Some(rgba) => {
+                            model.color_picked = Some(rgba);
+                            model.estado = format!(
+                                "color · #{:02X}{:02X}{:02X} α={}",
+                                rgba[0], rgba[1], rgba[2], rgba[3]
+                            );
+                        }
+                        None => {
+                            // Click cayó fuera de la imagen (en el pad del
+                            // fit-contain o en el borde). Dejamos
+                            // `color_picked` tal cual y avisamos.
+                            model.estado = "color · fuera de la imagen".into();
+                        }
+                    }
+                }
+            }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app
                 // todavía no tiene). La extensión la elige el formato; el
@@ -1633,6 +1804,8 @@ impl App for Tullpu {
             &model.estado,
             &model.proveedor_etiqueta,
             model.factor_zoom,
+            model.herramienta,
+            model.color_picked,
         );
         let centro = View::new(Style {
             flex_direction: FlexDirection::Row,
@@ -1819,6 +1992,15 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s == "0" => {
             return Some(Msg::ResetVista);
         }
+        // Herramientas: `m` mover (pan), `i` cuentagotas (eyedropper —
+        // Photoshop standard). Globales porque cambian el modo del
+        // lienzo, no operan sobre la capa.
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("m") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Mover));
+        }
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("i") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Cuentagotas));
+        }
         _ => {}
     }
     // El resto opera sobre la capa seleccionada.
@@ -1993,6 +2175,8 @@ mod tests {
             factor_zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
+            herramienta: Herramienta::Mover,
+            color_picked: None,
         }
     }
 
@@ -2603,6 +2787,147 @@ mod tests {
             &ev_char("0", Modifiers { ctrl: true, ..Default::default() }),
         );
         assert!(matches!(ctrl0, None));
+    }
+
+    // ---- Fase 25: herramientas + cuentagotas ---------------------------------
+
+    /// Construye un buffer Rgba8 4×4 con un patrón conocido: cada píxel
+    /// codifica su posición en (R, G), con B fijo y α opaco. Útil para
+    /// verificar que el sampler aterriza en la celda correcta.
+    fn buffer_patron_4x4() -> Vec<u8> {
+        let mut v = Vec::with_capacity(4 * 4 * 4);
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                v.extend_from_slice(&[x * 60, y * 60, 17, 255]);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn recoger_color_pixel_central_a_zoom_1() {
+        // Imagen 4×4 en rect 200×200 → s_fit = 50; cada píxel ocupa 50 px.
+        // Click en (75, 25) cae en x=1, y=0 → R=60, G=0, B=17, α=255.
+        let buf = buffer_patron_4x4();
+        let col =
+            recoger_color_en(&buf, 4, 4, 75.0, 25.0, 200.0, 200.0, 1.0, 0.0, 0.0).unwrap();
+        assert_eq!(col, [60, 0, 17, 255], "(1, 0) esperado");
+        // Click en (125, 175) cae en x=2, y=3 → R=120, G=180, B=17, α=255.
+        let col2 =
+            recoger_color_en(&buf, 4, 4, 125.0, 175.0, 200.0, 200.0, 1.0, 0.0, 0.0).unwrap();
+        assert_eq!(col2, [120, 180, 17, 255], "(2, 3) esperado");
+    }
+
+    #[test]
+    fn recoger_color_fuera_de_imagen_devuelve_none() {
+        // Imagen 4×4 en rect 200×100 fit-contain → s=25, dw=100, off_x=50
+        // (la imagen está centrada con bandas a izquierda y derecha). Un
+        // click en x=10 cae en la banda transparente → fuera de la imagen.
+        let buf = buffer_patron_4x4();
+        assert!(recoger_color_en(&buf, 4, 4, 10.0, 50.0, 200.0, 100.0, 1.0, 0.0, 0.0).is_none());
+        // También fuera por arriba.
+        assert!(recoger_color_en(&buf, 4, 4, 100.0, -5.0, 200.0, 100.0, 1.0, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn recoger_color_respeta_zoom_y_pan() {
+        // Mismo buffer 4×4 en rect 200×200. A zoom 2 + pan (0,0) la imagen
+        // queda 400×400 centrada en el rect → top-left en (-100, -100).
+        // Cada píxel ocupa 100 px. Click en (0, 0) (esquina del rect) cae
+        // en píxel (1, 1) — verifico R=60, G=60.
+        let buf = buffer_patron_4x4();
+        let col = recoger_color_en(&buf, 4, 4, 0.0, 0.0, 200.0, 200.0, 2.0, 0.0, 0.0).unwrap();
+        assert_eq!(col, [60, 60, 17, 255], "esquina superior con zoom 2");
+    }
+
+    #[test]
+    fn recoger_color_buffer_corto_devuelve_none() {
+        // Buffer prometido como 4×4 pero sólo trae 2 píxeles → indexar más
+        // allá no debe panickear: devolvemos None.
+        let buf = vec![10, 20, 30, 255, 40, 50, 60, 255];
+        // Click que apuntaría al píxel (3, 3) — fuera del buffer real.
+        assert!(recoger_color_en(&buf, 4, 4, 175.0, 175.0, 200.0, 200.0, 1.0, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn msg_recoger_color_actualiza_color_picked() {
+        // Un Model mínimo con una imagen 4×4 conocida; despachamos
+        // RecogerColor y verificamos que `color_picked` queda con el RGBA
+        // del píxel correcto.
+        let mut model = modelo_minimo();
+        // Reemplazamos la imagen del modelo por una con buffer conocido.
+        let buf = buffer_patron_4x4();
+        let blob = Blob::from(buf);
+        model.imagen = Some(Image::new(blob, ImageFormat::Rgba8, 4, 4));
+        // Click en píxel (2, 3) sobre rect 200×200 a zoom 1 → R=120, G=180.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::RecogerColor { lx: 125.0, ly: 175.0, rw: 200.0, rh: 200.0 },
+            &Handle::for_test(),
+        );
+        assert_eq!(model.color_picked, Some([120, 180, 17, 255]));
+        assert!(model.estado.contains("#78B411"), "estado = {}", model.estado);
+    }
+
+    #[test]
+    fn msg_recoger_color_fuera_no_pisa_color_anterior() {
+        let mut model = modelo_minimo();
+        let buf = buffer_patron_4x4();
+        let blob = Blob::from(buf);
+        model.imagen = Some(Image::new(blob, ImageFormat::Rgba8, 4, 4));
+        model.color_picked = Some([1, 2, 3, 4]);
+        // Click fuera del área de imagen (banda del pad).
+        model = <Tullpu as App>::update(
+            model,
+            Msg::RecogerColor { lx: 5.0, ly: 50.0, rw: 200.0, rh: 100.0 },
+            &Handle::for_test(),
+        );
+        assert_eq!(model.color_picked, Some([1, 2, 3, 4]), "color anterior intacto");
+        assert!(model.estado.contains("fuera"));
+    }
+
+    #[test]
+    fn msg_cambiar_herramienta_actualiza_modo() {
+        let mut model = modelo_minimo();
+        assert_eq!(model.herramienta, Herramienta::Mover);
+        model = <Tullpu as App>::update(
+            model,
+            Msg::CambiarHerramienta(Herramienta::Cuentagotas),
+            &Handle::for_test(),
+        );
+        assert_eq!(model.herramienta, Herramienta::Cuentagotas);
+        model = <Tullpu as App>::update(
+            model,
+            Msg::CambiarHerramienta(Herramienta::Mover),
+            &Handle::for_test(),
+        );
+        assert_eq!(model.herramienta, Herramienta::Mover);
+    }
+
+    #[test]
+    fn hotkey_m_e_i_emiten_cambio_de_herramienta() {
+        let model = modelo_minimo();
+        let mover = hotkey_a_msg(&model, &ev_char("m", Modifiers::default()));
+        assert!(matches!(
+            mover,
+            Some(Msg::CambiarHerramienta(Herramienta::Mover))
+        ));
+        let cuenta = hotkey_a_msg(&model, &ev_char("i", Modifiers::default()));
+        assert!(matches!(
+            cuenta,
+            Some(Msg::CambiarHerramienta(Herramienta::Cuentagotas))
+        ));
+        // Con Ctrl o Alt no deben disparar — son hotkeys de tecla suelta.
+        assert!(hotkey_a_msg(
+            &model,
+            &ev_char("m", Modifiers { ctrl: true, ..Default::default() })
+        )
+        .is_none());
+        assert!(hotkey_a_msg(
+            &model,
+            &ev_char("i", Modifiers { alt: true, ..Default::default() })
+        )
+        .is_none());
     }
 
     #[test]
