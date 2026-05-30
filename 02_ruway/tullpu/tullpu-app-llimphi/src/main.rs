@@ -37,6 +37,8 @@
 //! - `Delete` / `Backspace` — con selección activa, limpia los píxeles
 //!   del rect (alfa=0) en la capa raster; sin selección, elimina la
 //!   capa entera
+//! - `Shift+Delete` / `Shift+Backspace` — con selección activa, rellena
+//!   el rect con el color activo (cuentagotas o gris default)
 //! - `Ctrl+D`         — duplicar capa
 //! - `F2`             — renombrar capa in-situ (Enter confirma · Esc cancela)
 //! - `V`              — toggle visibilidad
@@ -358,6 +360,12 @@ enum Msg {
     /// todo transparente. Mantiene la selección — un workflow típico
     /// es "marquee + Delete + re-pintar".
     LimpiarSeleccionEnCapa,
+    /// Rellena los píxeles del rect de `model.seleccion` con el color
+    /// activo (`color_picked`, o `RELLENO_DEFAULT` si no se leyó ninguno)
+    /// dentro de la capa raster seleccionada. Mismas precondiciones que
+    /// `LimpiarSeleccionEnCapa`; no-op extra si el rect ya tenía ese
+    /// color exacto. Mantiene la selección.
+    RellenarSeleccionEnCapa,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ
@@ -1540,10 +1548,7 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
     hijos.push(subtitulo("entrada"));
     // Botón de relleno: muestra el color que va a usar. Si no hay color
     // leído por el cuentagotas, dice "gris" (el RELLENO_DEFAULT).
-    let etiqueta_color = match model.color_picked {
-        Some(c) => format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]),
-        None => "gris".to_string(),
-    };
+    let etiqueta_color = etiqueta_color_activo(model.color_picked);
     hijos.push(envolver_fila(button_view(
         format!(
             "+ relleno {} ({}×{})",
@@ -1616,6 +1621,24 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         etiqueta_limpiar_sel,
         &pal,
         Msg::LimpiarSeleccionEnCapa,
+    )));
+    // Rellenar selección con el color activo. La etiqueta muestra el
+    // color que se usará (hex del cuentagotas, o "gris" del default) y
+    // las dims del rect — discoverable también sin marquee.
+    let color_fill = etiqueta_color_activo(model.color_picked);
+    let etiqueta_rellenar_sel = match model.seleccion {
+        Some(r) => format!(
+            "🪣 rellenar selección {} ({}×{}) · ⇧Del",
+            color_fill,
+            r.x1 - r.x0,
+            r.y1 - r.y0
+        ),
+        None => format!("🪣 rellenar selección {} (—) · ⇧Del", color_fill),
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_rellenar_sel,
+        &pal,
+        Msg::RellenarSeleccionEnCapa,
     )));
 
     // "salida": no requiere selección, siempre activa.
@@ -2387,6 +2410,11 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::RellenarSeleccionEnCapa => {
+                if rellenar_seleccion_en_capa(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2672,6 +2700,16 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
     let id = model.seleccionada?;
     match &event.key {
         Key::Named(NamedKey::F2) => Some(Msg::IniciarRenombrar(id)),
+        // Shift+Del/Backspace con selección activa: rellena el rect con
+        // el color activo (Photoshop usa Alt+Backspace para fill de
+        // foreground; acá Shift queda libre y es la convención del
+        // resto de la app para "variante" de una acción). Sin selección
+        // no aplica y cae a las arms de abajo.
+        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
+            if m.shift && !m.ctrl && model.seleccion.is_some() =>
+        {
+            Some(Msg::RellenarSeleccionEnCapa)
+        }
         // Con selección activa, Del/Backspace limpian los píxeles
         // del rect (Photoshop standard). Sin selección, eliminan la
         // capa entera (comportamiento previo). El conflicto se
@@ -3244,16 +3282,47 @@ fn limpiar_rect_en_buffer(
     out
 }
 
-/// Pone alfa=0 en los píxeles del rect de `model.seleccion` dentro
-/// de la capa raster seleccionada. Re-clampea contra el lienzo
-/// vigente. No-op si: no hay selección, no hay capa seleccionada,
-/// la capa es derivada (su buffer es cache regenerable), el rect
-/// queda con área cero tras clampear, o el rect ya era todo
-/// transparente (mismo hash post-limpieza). Tras la limpieza,
-/// propaga stale al cono descendiente y recompone. La selección
-/// se mantiene — encaja con flujos tipo "marquee + Delete +
-/// re-pintar"; un Esc la limpia explícitamente.
-fn limpiar_seleccion_en_capa(model: &mut Model) -> bool {
+/// Pone `rgba` en cada píxel del rect half-open `(x0, y0, x1, y1)` de
+/// un buffer Rgba8 `w × h`. Devuelve un buffer nuevo del mismo tamaño
+/// con el resto intacto. Pura. Pre: rect dentro de bounds.
+fn rellenar_rect_en_buffer(
+    src: &[u8],
+    w: u32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+    rgba: [u8; 4],
+) -> Vec<u8> {
+    let mut out = src.to_vec();
+    let w = w as usize;
+    for y in y0..y1 {
+        let row = y as usize * w;
+        for x in x0..x1 {
+            let i = (row + x as usize) * 4;
+            out[i..i + 4].copy_from_slice(&rgba);
+        }
+    }
+    out
+}
+
+/// Aplica una transformación de buffer al rect de `model.seleccion`
+/// dentro de la capa raster seleccionada, compartiendo toda la
+/// validación y el cableado entre limpiar (Fase 37) y rellenar
+/// (Fase 38). `transformar(src, w, x0, y0, x1, y1)` produce el buffer
+/// nuevo. Re-clampea el rect contra el lienzo vigente. No-op si: no
+/// hay selección, no hay capa seleccionada, la capa es derivada (su
+/// buffer es cache regenerable), el rect queda con área cero tras
+/// clampear, o el buffer resultante es idéntico al original (mismo
+/// hash content-addressed). Tras la mutación propaga stale al cono
+/// descendiente y recompone; la selección se mantiene. `verbo`
+/// describe el éxito, `sin_cambio` el caso de hash igual.
+fn aplicar_a_seleccion_en_capa(
+    model: &mut Model,
+    transformar: impl Fn(&[u8], u32, u32, u32, u32, u32) -> Vec<u8>,
+    verbo: &str,
+    sin_cambio: &str,
+) -> bool {
     let Some(rect) = model.seleccion else {
         model.estado = "no hay selección — `r` y arrastrar".into();
         return false;
@@ -3277,7 +3346,7 @@ fn limpiar_seleccion_en_capa(model: &mut Model) -> bool {
     };
     if !matches!(capa.origen, OrigenCapa::Raster) {
         model.estado =
-            "la capa seleccionada es derivada — limpiá la raster madre".into();
+            "la capa seleccionada es derivada — usá la raster madre".into();
         return false;
     }
     let hash_actual = capa.contenido;
@@ -3285,10 +3354,10 @@ fn limpiar_seleccion_en_capa(model: &mut Model) -> bool {
         return false;
     };
     let src = src.to_vec();
-    let limpio = limpiar_rect_en_buffer(&src, w, x0, y0, x1, y1);
-    let new_hash = model.almacen.insertar(limpio);
+    let nuevo = transformar(&src, w, x0, y0, x1, y1);
+    let new_hash = model.almacen.insertar(nuevo);
     if new_hash == hash_actual {
-        model.estado = "selección ya transparente, nada que limpiar".into();
+        model.estado = sin_cambio.into();
         return false;
     }
     if let Some(capa_mut) = model.lienzo.capa_mut(id) {
@@ -3296,12 +3365,48 @@ fn limpiar_seleccion_en_capa(model: &mut Model) -> bool {
     }
     model.lienzo.propagar_stale(id);
     aplicar_y_recomponer(model);
-    model.estado = format!(
-        "limpiada selección {}×{} (capa raster)",
-        x1 - x0,
-        y1 - y0
-    );
+    model.estado = format!("{} {}×{} (capa raster)", verbo, x1 - x0, y1 - y0);
     true
+}
+
+/// Pone alfa=0 en los píxeles del rect de `model.seleccion` dentro de
+/// la capa raster seleccionada (ver [`aplicar_a_seleccion_en_capa`]).
+/// La selección se mantiene — encaja con flujos tipo "marquee + Delete
+/// + re-pintar"; un Esc la limpia explícitamente.
+fn limpiar_seleccion_en_capa(model: &mut Model) -> bool {
+    aplicar_a_seleccion_en_capa(
+        model,
+        limpiar_rect_en_buffer,
+        "limpiada selección",
+        "selección ya transparente, nada que limpiar",
+    )
+}
+
+/// Rellena los píxeles del rect de `model.seleccion` con el color
+/// activo (`color_picked`, o `RELLENO_DEFAULT` si no se leyó ninguno)
+/// dentro de la capa raster seleccionada (ver
+/// [`aplicar_a_seleccion_en_capa`]). No-op extra si el rect ya tenía
+/// ese color exacto (hash sin cambio).
+fn rellenar_seleccion_en_capa(model: &mut Model) -> bool {
+    let rgba = model.color_picked.unwrap_or(RELLENO_DEFAULT);
+    aplicar_a_seleccion_en_capa(
+        model,
+        |src, w, x0, y0, x1, y1| {
+            rellenar_rect_en_buffer(src, w, x0, y0, x1, y1, rgba)
+        },
+        "rellenada selección",
+        "selección ya tenía ese color, sin cambio",
+    )
+}
+
+/// Etiqueta corta del color activo: hex `#RRGGBB` si el cuentagotas
+/// leyó alguno, o `"gris"` (el `RELLENO_DEFAULT`) si todavía no.
+/// Compartida por el botón "+ relleno" y "rellenar selección".
+fn etiqueta_color_activo(picked: Option<[u8; 4]>) -> String {
+    match picked {
+        Some(c) => format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]),
+        None => "gris".to_string(),
+    }
 }
 
 /// Rota 90° en sentido horario un buffer Rgba8 `w × h`. El buffer
@@ -6109,6 +6214,203 @@ mod tests {
         // Backspace mismo comportamiento.
         let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Backspace, Modifiers::default()));
         assert!(matches!(msg, Some(Msg::LimpiarSeleccionEnCapa)));
+    }
+
+    // ---- Fase 38: rellenar selección con el color activo ----------------
+
+    #[test]
+    fn etiqueta_color_activo_hex_o_gris() {
+        assert_eq!(etiqueta_color_activo(None), "gris");
+        assert_eq!(
+            etiqueta_color_activo(Some([0x12, 0xAB, 0xFF, 0xFF])),
+            "#12ABFF"
+        );
+        // Ignora el alfa.
+        assert_eq!(etiqueta_color_activo(Some([10, 20, 30, 0])), "#0A141E");
+    }
+
+    #[test]
+    fn rellenar_rect_en_buffer_pone_color_dentro_y_deja_el_resto_intacto() {
+        // Buffer 3×2 con patrón distinguible; rellenamos rect (1,0,3,2)
+        // con magenta opaco. Las 2 columnas derechas cambian, la izq no.
+        let mut buf = Vec::with_capacity(3 * 2 * 4);
+        for y in 0..2u8 {
+            for x in 0..3u8 {
+                buf.extend_from_slice(&[x * 10, y * 10, 100, 200]);
+            }
+        }
+        let magenta = [255, 0, 255, 255];
+        let out = rellenar_rect_en_buffer(&buf, 3, 1, 0, 3, 2, magenta);
+        assert_eq!(out.len(), buf.len());
+        // Píxel (0,0) intacto.
+        assert_eq!(out[0..4], [0, 0, 100, 200]);
+        // Píxeles (1,0) y (2,0) magenta.
+        assert_eq!(out[4..8], magenta);
+        assert_eq!(out[8..12], magenta);
+        // Píxel (0,1) intacto.
+        assert_eq!(out[12..16], [0, 10, 100, 200]);
+        // Píxeles (1,1) y (2,1) magenta.
+        assert_eq!(out[16..20], magenta);
+        assert_eq!(out[20..24], magenta);
+    }
+
+    #[test]
+    fn rellenar_rect_vacio_es_identidad() {
+        let buf = vec![7u8; 4 * 4 * 4];
+        let out = rellenar_rect_en_buffer(&buf, 4, 2, 2, 2, 2, [1, 2, 3, 4]);
+        assert_eq!(out, buf);
+    }
+
+    #[test]
+    fn rellenar_seleccion_sin_seleccion_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let ok = rellenar_seleccion_en_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("no hay selección"));
+    }
+
+    #[test]
+    fn rellenar_seleccion_sobre_derivada_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let id = model.seleccionada.unwrap();
+        let capa = model.lienzo.capa_mut(id).unwrap();
+        capa.origen = OrigenCapa::Derivada {
+            madre: Uuid::new_v4(),
+            op: TransformacionPixel::Local(OpLocal::Invertir),
+            estado: Frescura::Fresca,
+        };
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let ok = rellenar_seleccion_en_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("derivada"));
+    }
+
+    #[test]
+    fn rellenar_seleccion_usa_color_picked_pixel_perfect_y_mantiene_seleccion() {
+        // Lienzo 4×4 todo transparente; color leído = naranja opaco;
+        // selección 2×2 central. Los 4 centrales deben quedar naranjas,
+        // los 12 de borde transparentes.
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("vacia", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        let naranja = [255, 140, 0, 255];
+        model.color_picked = Some(naranja);
+        aplicar_y_recomponer(&mut model);
+        let sel = RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 };
+        model.seleccion = Some(sel);
+
+        let ok = rellenar_seleccion_en_capa(&mut model);
+        assert!(ok);
+        // La selección se mantiene.
+        assert_eq!(model.seleccion, Some(sel));
+        let nueva_h = model.lienzo.capa(id).unwrap().contenido;
+        let buf_post = model.almacen.obtener(nueva_h).unwrap();
+        let pix = |x: u32, y: u32| {
+            let i = (y as usize * 4 + x as usize) * 4;
+            [buf_post[i], buf_post[i + 1], buf_post[i + 2], buf_post[i + 3]]
+        };
+        assert_eq!(pix(1, 1), naranja);
+        assert_eq!(pix(2, 2), naranja);
+        // Borde sigue transparente.
+        assert_eq!(pix(0, 0), [0, 0, 0, 0]);
+        assert_eq!(pix(3, 3), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn rellenar_seleccion_sin_color_picked_usa_gris_default() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("vacia", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        model.color_picked = None; // → RELLENO_DEFAULT
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let ok = rellenar_seleccion_en_capa(&mut model);
+        assert!(ok);
+        let nueva_h = model.lienzo.capa(id).unwrap().contenido;
+        let buf_post = model.almacen.obtener(nueva_h).unwrap();
+        assert_eq!(&buf_post[0..4], &RELLENO_DEFAULT);
+    }
+
+    #[test]
+    fn rellenar_seleccion_con_mismo_color_es_no_op() {
+        // Capa ya pintada del color activo → el rellenado no cambia el
+        // hash, no-op con estado descriptivo.
+        let mut model = modelo_minimo();
+        let gris = RELLENO_DEFAULT;
+        let buf: Vec<u8> = std::iter::repeat(gris).take(4 * 4).flatten().collect();
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("gris", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        model.color_picked = Some(gris);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let ok = rellenar_seleccion_en_capa(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("ya tenía ese color"));
+    }
+
+    #[test]
+    fn hotkey_shift_delete_con_seleccion_emite_rellenar() {
+        let mut m = modelo_minimo();
+        let shift = Modifiers { shift: true, ..Default::default() };
+        // Sin selección, Shift+Del cae a Eliminar (la arm de fill exige
+        // selección).
+        let id = m.seleccionada.unwrap();
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Delete, shift));
+        assert!(matches!(msg, Some(Msg::Eliminar(x)) if x == id));
+        // Con selección → RellenarSeleccionEnCapa (Shift) vs.
+        // LimpiarSeleccionEnCapa (sin Shift).
+        m.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Delete, shift));
+        assert!(matches!(msg, Some(Msg::RellenarSeleccionEnCapa)));
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Backspace, shift));
+        assert!(matches!(msg, Some(Msg::RellenarSeleccionEnCapa)));
+        let msg =
+            hotkey_a_msg(&m, &ev_named(NamedKey::Delete, Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::LimpiarSeleccionEnCapa)));
+    }
+
+    #[test]
+    fn msg_rellenar_seleccion_dispatcha_y_undo_restaura() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let hash_inicial = h;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        model.color_picked = Some([255, 0, 0, 255]);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::RellenarSeleccionEnCapa,
+            &Handle::for_test(),
+        );
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
     }
 
     #[test]
