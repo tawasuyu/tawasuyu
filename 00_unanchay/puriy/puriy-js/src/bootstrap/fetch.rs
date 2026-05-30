@@ -63,12 +63,14 @@ globalThis.fetch = function(url, init) {
     });
     return promise;
 };
-// Fase 7.31 — Response class JS-puro. Construido por
+// Fase 7.31 — Response del lado net. Construido por
 // `__puriy_fetch_resolve(id, status, statusText, body, headers)` que el
-// chrome llama cuando el HTTP termina. Methods: .text() y .json()
-// devuelven Promises (matchea spec). .headers expone una Headers-like
-// (Fase 7.33). Múltiples llamadas a .text()/.json() funcionan porque
-// guardamos _body string crudo (sin "body locked" todavía).
+// chrome llama cuando el HTTP termina. Fase 7.55 — refactorizado para
+// delegar en el constructor público `new Response(body, init)` (módulo
+// `response`); acá sólo armamos los Headers desde los pares crudos y
+// marcamos `type = 'basic'` (respuesta de red). Métodos (text/json/
+// arrayBuffer/blob), `bodyUsed` enforcement y el getter `body`
+// (ReadableStream lazy) viven en `Response.prototype`.
 globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) {
     var headers = new globalThis.Headers();
     if (hdrPairs) {
@@ -76,71 +78,10 @@ globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) 
             headers.set(hdrPairs[i], hdrPairs[i + 1]);
         }
     }
-    var resp = {
-        status: status,
-        statusText: statusText,
-        ok: status >= 200 && status < 300,
-        url: '',
-        type: 'basic',
-        bodyUsed: false,
-        headers: headers,
-        _body: body,
-        _bodyStream: null,
-        // Fase 7.35 — bodyUsed enforcement. Spec: tras consumir el body
-        // (.text()/.json()/.arrayBuffer()), bodyUsed pasa a true y un
-        // segundo intento rechaza con TypeError("body stream already read").
-        // Aplica también si el primer intento falló (JSON.parse roto).
-        text: function() {
-            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
-            this.bodyUsed = true;
-            return Promise.resolve(this._body);
-        },
-        json: function() {
-            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
-            this.bodyUsed = true;
-            try { return Promise.resolve(JSON.parse(this._body)); }
-            catch (e) { return Promise.reject(e); }
-        },
-        arrayBuffer: function() {
-            // Stub: devuelve un objeto pseudo-arrayBuffer con _body bytes
-            // mapeados a un Array de char codes. Apps que necesitan
-            // ArrayBuffer real verán divergencia; suficiente para JSON.
-            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
-            this.bodyUsed = true;
-            var len = this._body.length;
-            var buf = new ArrayBuffer(len);
-            var view = new Uint8Array(buf);
-            for (var i = 0; i < len; i++) view[i] = this._body.charCodeAt(i) & 0xff;
-            return Promise.resolve(buf);
-        }
-    };
-    // Fase 7.45 — `response.body` como ReadableStream. Getter lazy: el
-    // stream se construye la primera vez que se accede y se cachea (el
-    // spec exige que `r.body === r.body`). Leer el chunk marca
-    // `bodyUsed = true`, así un `.text()` posterior rechaza (y viceversa:
-    // si `.text()` ya consumió, leer el stream entrega done sin re-emitir).
-    Object.defineProperty(resp, 'body', {
-        get: function() {
-            if (this._bodyStream) return this._bodyStream;
-            var self = this;
-            var emitted = false;
-            this._bodyStream = new globalThis.ReadableStream({
-                pull: function(controller) {
-                    if (emitted || self.bodyUsed) {
-                        controller.close();
-                        return;
-                    }
-                    emitted = true;
-                    self.bodyUsed = true;
-                    var len = self._body.length;
-                    var view = new Uint8Array(len);
-                    for (var i = 0; i < len; i++) view[i] = self._body.charCodeAt(i) & 0xff;
-                    controller.enqueue(view);
-                }
-            });
-            return this._bodyStream;
-        }
+    var resp = new globalThis.Response(body, {
+        status: status, statusText: statusText, headers: headers
     });
+    resp.type = 'basic';
     return resp;
 };
 // Fase 7.31 — resolve y reject los Promises pending. El chrome los

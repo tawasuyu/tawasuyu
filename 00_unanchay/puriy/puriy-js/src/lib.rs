@@ -6302,4 +6302,55 @@ mod tests {
         assert_eq!(rt.eval("blobOk").expect("e"), JsValue::Bool(true));
     }
 
+    // ============= Fase 7.55 — Response constructor =============
+
+    #[test]
+    fn response_constructor_status_y_text() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = new Response('cuerpo', { status: 201, statusText: 'Created' }); \
+             var st = r.status; var ok = r.ok; var stt = r.statusText; var txt = null; \
+             r.text().then(function(t) { txt = t; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("st").expect("e"), JsValue::Number(201.0));
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("stt").expect("e"), JsValue::String("Created".into()));
+        assert_eq!(rt.eval("txt").expect("e"), JsValue::String("cuerpo".into()));
+    }
+
+    #[test]
+    fn response_json_static_y_blob() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = Response.json({ n: 7 }); var ct = r.headers.get('content-type'); \
+             var parsed = null; r.text().then(function(t) { parsed = JSON.parse(t).n; }); \
+             var r2 = new Response('xy', { headers: { 'content-type': 'text/plain' } }); \
+             var bt = null, bsz = null; \
+             r2.blob().then(function(b) { bt = b.type; bsz = b.size; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ct").expect("e"), JsValue::String("application/json".into()));
+        assert_eq!(rt.eval("parsed").expect("e"), JsValue::Number(7.0));
+        assert_eq!(rt.eval("bt").expect("e"), JsValue::String("text/plain".into()));
+        assert_eq!(rt.eval("bsz").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn response_clone_preserva_body_y_bloquea_si_usado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = new Response('dato'); var c = r.clone(); \
+             var a = null, b = null; \
+             r.text().then(function(t) { a = t; }); \
+             c.text().then(function(t) { b = t; }); \
+             var threw = false; try { r.clone(); } catch (e) { threw = true; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("a").expect("e"), JsValue::String("dato".into()));
+        assert_eq!(rt.eval("b").expect("e"), JsValue::String("dato".into()));
+        // r ya fue consumido por .text() → clone() debe tirar.
+        assert_eq!(rt.eval("threw").expect("e"), JsValue::Bool(true));
+    }
+
 }
