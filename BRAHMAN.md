@@ -1,0 +1,111 @@
+# BRAHMAN.md — la espina dorsal de la suite
+
+> Manifiesto autoritativo. Snapshot: 2026-05-30. Cuando otra doc contradiga, esta gana sobre el tema "Brahman".
+> Escrito en lenguaje denso para IA y para el autor.
+
+## Qué fue la visión original
+
+Brahman nació como un **broker universal** donde *todo* se comunicaría agnóstica y distribuidamente vía
+**Cards** (módulos con flujos tipados): desde un subsistema de backend, hasta un widget de ventana, hasta una persona.
+Un solo sistema nervioso para la suite entera.
+
+## Qué pasó realmente: se bifurcó en TRES capas
+
+La visión no fracasó ni triunfó — se partió en tres, y hay que **nombrarlas** porque el riesgo es tratarlas como
+una sola cosa difusa. Dos de las tres están vivas; una está muerta.
+
+```
+┌───────────────────────────────────────────────────────────────────────────────┐
+│ CAPA 1 — BrahmanNet (TRANSPORTE P2P).  ★ VIVA — lo más valioso de la suite.     │
+│   shared/card/card-net : libp2p TCP+Noise+Yamux+Kademlia+identify+stream.       │
+│   UN PeerId, UNA DHT, MÚLTIPLES protocolos sobre el mismo nodo:                 │
+│     /minga/sync/1.0.0 · /agora/gossip/1.0.0 · /brahman/handshake/1.0.0          │
+│   COMPARTIDA POR: minga + agora + ayni (open_with_node / sharing(net)).         │
+│   PRIMITIVA UNIFICADORA: DhtKey = [kind_tag(1)] ++ [blake3(32)]                 │
+│     RecordKind { Code(minga), Card(discovery), Persona(agora), Service(futuro) }│
+│   => "todo direccionable distribuidamente en un namespace común" YA ES REAL.    │
+├───────────────────────────────────────────────────────────────────────────────┤
+│ CAPA 2 — Broker de Cards (MATCHING TIPADO local).  ◑ VIVA pero SUB-ADOPTADA.    │
+│   chasqui-broker (matching Exact/Structural) instanciado en arje-zero (PID 1).  │
+│   Infra: card-handshake (Hello→HelloAck/ULID) · card-sidecar · card-admin.      │
+│   CONSUMIDORES REALES (~10 crates, vía sidecar/handshake):                      │
+│     chasqui-{core,nous-mock,nous-real,explorer,broker-explorer} ·               │
+│     cosmos-card · nakui-core · shuma-daemon · card-discovery(en minga).         │
+│   card-discovery lo usan nahual-shell y agora-app.                              │
+│   ALCANCE REAL: se detuvo en DAEMONS DE BACKEND. No llegó a widgets ni a gente. │
+├───────────────────────────────────────────────────────────────────────────────┤
+│ CAPA 3 — Módulos agnósticos vía WIT/WASM.  ✗ MUERTA.                            │
+│   shared/card/card-wit existe; NO hay un solo archivo .wit en el workspace;     │
+│   nada lo pide en build real. El "WASM agnóstico por interfaz" nunca se ejecutó.│
+│   El contrato agnóstico que SÍ funciona: shared/card + handshake nativo Rust    │
+│   + namespacing de DhtKey. WIT fue aspiracional.                                │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Las dos piezas que faltan de la visión original
+
+La visión decía "hasta widgets de ventana, hasta gente". Esas dos piezas **no se construyeron, pero están a un paso**
+porque cada una ya reinventó localmente lo que la Capa 2 hace:
+
+```
+WIDGETS ↔ CARDS:
+  nahual/viewer_registry::pick despacha visores por (lens, mime) pero HARDCODED in-process.
+  El norte declarado de nahual es un "AppBus" donde los visores se registran por (lens, mime, priority).
+  Eso ES una Card. Conectar nahual al broker realiza "hasta widgets de ventana".
+
+GENTE ↔ CARDS:
+  DhtKey::Persona YA está reservado en la DHT (Capa 1).
+  agora descubre personas por su propio gossip, no por la espina.
+  Rutear ese discovery por DhtKey::Persona realiza "hasta gente".
+```
+
+## Sobre la proliferación de "exploradores" (no es redundancia, es deuda conceptual)
+
+No se pisan en función (modelos de datos distintos), pero crecieron cada uno por su lado:
+
+```
+nouser (chasqui-core)      clusteriza archivos POSIX en Mónadas semánticas (embeddings)
+nahual-file-explorer       navega filesystem POSIX vivo (state machine UI)
+wawa-explorer              lee objetos content-addressed de una imagen .img (DAG, BLAKE3)
+minga-explorer             dashboard de peers/contenido/tráfico P2P
+chasqui-explorer(+broker)  debuggers del broker
+nakui / agora-app          navegadores de dominio
+```
+
+NO fusionar (datos incompatibles). La cura es una **espina de discovery común**: que cada explorador sea
+productor/consumidor de Cards, y que **nahual-shell sea el FRONT universal** que abre una raíz de minga, un objeto de
+wawa, una Mónada de nouser o un archivo POSIX — porque cada uno registra un visor-Card.
+
+## Plan para ORDENAR (terminar de enchufar, no reconstruir)
+
+```
+FASE 0  Nombrar la realidad.  → ESTE DOCUMENTO.                                          [no destructiva] ✓
+FASE 1  Decidir sobre WIT/WASM (Capa 3 muerta): relegar card-wit a metadata opcional y
+        declarar shared/card + handshake como el contrato agnóstico real; o borrar card-wit.   [decisión]
+FASE 2a nahual viewer_registry → Cards: visores se registran por (lens,mime,priority),
+        el shell despacha vía broker.  REALIZA "widgets hablan por Brahman".            [refactor medio]
+FASE 2b agora personas → discovery por DhtKey::Persona.  REALIZA "gente entra a la espina". [refactor medio]
+FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Cards;
+        nahual-shell = front universal.  VISIÓN ORIGINAL REALIZADA.                     [visión realizada]
+```
+
+## Tesis de cierre
+
+No hay un sistema fragmentado. Hay un **transporte unificado vivo (Capa 1)** con **dos clientes desconectados**
+(widgets y gente) que **ya saben cómo conectarse**. Brahman no se rescata desde cero: se termina de enchufar.
+
+## Mapa de rutas
+
+```
+shared/card/card-net        Capa 1 — BrahmanNet (libp2p)
+shared/card/card-wit        Capa 3 — parser WIT (muerto)
+shared/card                 contrato agnóstico real (formato Card)
+02_ruway/chasqui/chasqui-broker      Capa 2 — broker de matching tipado
+02_ruway/chasqui/card-handshake      Capa 2 — handshake Init↔módulo
+02_ruway/chasqui/card-sidecar        Capa 2 — sidecar reusable
+02_ruway/chasqui/card-admin          Capa 2 — snapshot del broker
+03_ukupacha/minga/card-discovery     widget de descubrimiento de Cards (nexo UI↔broker)
+03_ukupacha/arje/init/arje-zero      PID 1 — instancia el broker + levanta BrahmanNet
+02_ruway/nahual/nahual-shell-llimphi viewer_registry hardcoded (candidato Fase 2a)
+03_ukupacha/agora/agora-net-brahman  gossip sobre BrahmanNet compartida
+```
