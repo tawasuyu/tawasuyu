@@ -32,6 +32,7 @@ mod response;
 mod request;
 mod fetch;
 mod navigator;
+mod websocket;
 mod headers;
 mod abort;
 mod visibility;
@@ -69,6 +70,7 @@ pub(crate) use response::RESPONSE_BOOTSTRAP;
 pub(crate) use request::REQUEST_BOOTSTRAP;
 pub(crate) use fetch::FETCH_BOOTSTRAP;
 pub(crate) use navigator::NAVIGATOR_BOOTSTRAP;
+pub(crate) use websocket::WEBSOCKET_BOOTSTRAP;
 pub(crate) use headers::HEADERS_BOOTSTRAP;
 pub(crate) use abort::ABORT_BOOTSTRAP;
 pub(crate) use visibility::VISIBILITY_BOOTSTRAP;
@@ -108,6 +110,7 @@ pub(crate) const ALL: &[&str] = &[
     REQUEST_BOOTSTRAP,
     FETCH_BOOTSTRAP,
     NAVIGATOR_BOOTSTRAP,
+    WEBSOCKET_BOOTSTRAP,
     HEADERS_BOOTSTRAP,
     ABORT_BOOTSTRAP,
     VISIBILITY_BOOTSTRAP,

@@ -7450,4 +7450,93 @@ mod tests {
         assert_eq!(rt.eval("tt").expect("e"), JsValue::Number(10.0));
         assert_eq!(rt.eval("esEv").expect("e"), JsValue::Bool(true));
     }
+
+    // ============= Fase 7.78 — WebSocket =============
+
+    #[test]
+    fn websocket_construye_y_encola_open() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var ws = new WebSocket('wss://echo.example/sock', ['p1', 'p2']); \
+             var rs = ws.readyState; var u = ws.url; \
+             var cc = WebSocket.CONNECTING; var oo = WebSocket.OPEN; \
+             var esET = (ws instanceof EventTarget);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("rs").expect("e"), JsValue::Number(0.0)); // CONNECTING
+        assert_eq!(rt.eval("cc").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("oo").expect("e"), JsValue::Number(1.0));
+        assert_eq!(
+            rt.eval("u").expect("e"),
+            JsValue::String("wss://echo.example/sock".into())
+        );
+        assert_eq!(rt.eval("esET").expect("e"), JsValue::Bool(true));
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "websocket");
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[1], "open");
+        assert_eq!(parts[2], "wss://echo.example/sock");
+        assert_eq!(parts[3], "p1,p2");
+    }
+
+    #[test]
+    fn websocket_send_antes_de_open_tira_y_dispatch_open_message() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var abrio = false, recibido = null; \
+             var ws = new WebSocket('ws://x/'); \
+             ws.onopen = function() { abrio = true; }; \
+             ws.onmessage = function(e) { recibido = e.data; }; \
+             var tiroAlEnviarTemprano = false; \
+             try { ws.send('temprano'); } catch (e) { tiroAlEnviarTemprano = true; } \
+             __puriy_ws_dispatch(ws._id, 'open', 'p1', ''); \
+             var rsTrasOpen = ws.readyState; \
+             ws.send('hola'); \
+             __puriy_ws_dispatch(ws._id, 'message', 'mundo');",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("tiroAlEnviarTemprano").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(rt.eval("abrio").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("rsTrasOpen").expect("e"), JsValue::Number(1.0)); // OPEN
+        assert_eq!(
+            rt.eval("recibido").expect("e"),
+            JsValue::String("mundo".into())
+        );
+    }
+
+    #[test]
+    fn websocket_close_transiciona_y_close_event() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var cerro = null; \
+             var ws = new WebSocket('ws://x/'); \
+             ws.addEventListener('close', function(e) { cerro = { c: e.code, r: e.reason, w: e.wasClean }; }); \
+             __puriy_ws_dispatch(ws._id, 'open'); \
+             ws.close(1000, 'bye'); \
+             var rsCerrando = ws.readyState; \
+             __puriy_ws_dispatch(ws._id, 'close', 1000, 'bye', '1'); \
+             var rsFinal = ws.readyState;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("rsCerrando").expect("e"), JsValue::Number(2.0)); // CLOSING
+        assert_eq!(rt.eval("rsFinal").expect("e"), JsValue::Number(3.0)); // CLOSED
+        assert_eq!(rt.eval("cerro.c").expect("e"), JsValue::Number(1000.0));
+        assert_eq!(rt.eval("cerro.r").expect("e"), JsValue::String("bye".into()));
+        assert_eq!(rt.eval("cerro.w").expect("e"), JsValue::Bool(true));
+        // El close() del cliente encoló una mutación 'close'.
+        let muts = rt.drain_dom_mutations();
+        let cierre = muts.iter().find(|m| {
+            m.kind == "websocket" && m.value.split('\u{001D}').nth(1) == Some("close")
+        });
+        assert!(cierre.is_some());
+    }
 }
