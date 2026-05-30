@@ -255,6 +255,11 @@ enum Msg {
     /// (Photoshop "Merge Visible"). Sin selección. No-op si hay 0 o 1
     /// visibles.
     AplanarVisibles,
+    /// Rota el lienzo entero 90°. `cw=true` ⇒ sentido horario;
+    /// `cw=false` ⇒ antihorario. Cada raster gana un buffer nuevo
+    /// (rotado), las derivadas quedan stale y se regenan desde la
+    /// madre rotada, las dims del lienzo se intercambian.
+    RotarLienzo { cw: bool },
 }
 
 // =============================================================================
@@ -1173,14 +1178,24 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         Msg::Picker(PickerMsg::Open),
     )));
 
-    // "estructura": operaciones sobre el lienzo entero. Por ahora una:
-    // aplanar las capas visibles (Photoshop "Merge Visible", Ctrl+Shift+E).
+    // "estructura": operaciones sobre el lienzo entero. Aplanar las
+    // visibles y rotar el lienzo 90° en cada sentido.
     let n_visibles = model.lienzo.capas.iter().filter(|c| c.visible).count();
     hijos.push(subtitulo("estructura"));
     hijos.push(envolver_fila(button_view(
         format!("⊞ aplanar visibles ({}) · Ctrl+Shift+E", n_visibles),
         &pal,
         Msg::AplanarVisibles,
+    )));
+    hijos.push(envolver_fila(button_view(
+        "⟳ rotar +90° (CW)".to_string(),
+        &pal,
+        Msg::RotarLienzo { cw: true },
+    )));
+    hijos.push(envolver_fila(button_view(
+        "⟲ rotar −90° (CCW)".to_string(),
+        &pal,
+        Msg::RotarLienzo { cw: false },
     )));
 
     // "salida": no requiere selección, siempre activa.
@@ -1811,6 +1826,11 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::RotarLienzo { cw } => {
+                if rotar_lienzo(&mut model, cw) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2297,6 +2317,98 @@ fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     model.seleccionada = Some(nuevo_id);
     aplicar_y_recomponer(model);
     model.estado = format!("combinada '{}'", nombre);
+    true
+}
+
+/// Rota 90° en sentido horario un buffer Rgba8 `w × h`. El buffer
+/// resultante tiene el mismo conteo de bytes pero su layout corresponde
+/// a dimensiones `h × w` (el ancho del destino = el alto del origen).
+/// Pura. Pre: `src.len() == w*h*4` (la validación va aguas arriba).
+///
+/// Mapeo: src `(x, y)` → dst `(h-1-y, x)` con `w_new = h`.
+fn rotar_buffer_90_cw(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let w = w as usize;
+    let h = h as usize;
+    let mut out = vec![0u8; src.len()];
+    let w_new = h;
+    for y in 0..h {
+        for x in 0..w {
+            let i_src = (y * w + x) * 4;
+            let i_dst = (x * w_new + (h - 1 - y)) * 4;
+            out[i_dst..i_dst + 4].copy_from_slice(&src[i_src..i_src + 4]);
+        }
+    }
+    out
+}
+
+/// Rota 90° en sentido antihorario. Mapeo: src `(x, y)` → dst
+/// `(y, w-1-x)` con `w_new = h`. Inversa exacta de `rotar_buffer_90_cw`.
+fn rotar_buffer_90_ccw(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let w = w as usize;
+    let h = h as usize;
+    let mut out = vec![0u8; src.len()];
+    let w_new = h;
+    for y in 0..h {
+        for x in 0..w {
+            let i_src = (y * w + x) * 4;
+            let i_dst = ((w - 1 - x) * w_new + y) * 4;
+            out[i_dst..i_dst + 4].copy_from_slice(&src[i_src..i_src + 4]);
+        }
+    }
+    out
+}
+
+/// Rota el lienzo entero 90° (CW si `cw=true`, CCW si no). Estrategia:
+/// 1. Rotar el buffer Rgba8 de cada capa (raster o cache de derivada),
+///    insertando el resultado al almacén content-addressed → nuevo hash.
+/// 2. Swap `lienzo.width ↔ lienzo.height`.
+/// 3. Marcar TODAS las derivadas Stale. Las ops `Espejar↔/↕` no
+///    conmutan con rotación, así que la cache rotada quedaría
+///    incorrecta para esos casos; el regen las recalcula desde la madre
+///    ya rotada en `orden_regeneracion` topológico.
+/// Devuelve `false` si las dims son cero o si el lienzo no tiene capas.
+fn rotar_lienzo(model: &mut Model, cw: bool) -> bool {
+    let w_old = model.lienzo.width;
+    let h_old = model.lienzo.height;
+    if w_old == 0 || h_old == 0 || model.lienzo.capas.is_empty() {
+        model.estado = "nada que rotar".into();
+        return false;
+    }
+    // Paso 1: rotar cada buffer. Iteramos las capas en orden de aparición;
+    // no hay dependencias entre rotaciones (cada una es local al buffer).
+    for capa in model.lienzo.capas.iter_mut() {
+        let Some(src) = model.almacen.obtener(capa.contenido) else {
+            // Derivada que nunca regeneró — el regen post-rotación la
+            // armará desde la madre rotada. Saltamos.
+            continue;
+        };
+        // `obtener` devuelve `&[u8]` (préstamo del almacén); lo copiamos
+        // antes de liberar el préstamo para poder llamar `insertar`.
+        let src = src.to_vec();
+        let rotated = if cw {
+            rotar_buffer_90_cw(&src, w_old, h_old)
+        } else {
+            rotar_buffer_90_ccw(&src, w_old, h_old)
+        };
+        let new_hash = model.almacen.insertar(rotated);
+        capa.contenido = new_hash;
+    }
+    // Paso 2: swap de dimensiones.
+    model.lienzo.width = h_old;
+    model.lienzo.height = w_old;
+    // Paso 3: marcar TODAS las derivadas Stale (las ops espejar no
+    // conmutan con rotación). El regen reconstruye en orden topológico.
+    for capa in model.lienzo.capas.iter_mut() {
+        if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
+            *estado = Frescura::Stale;
+        }
+    }
+    aplicar_y_recomponer(model);
+    let signo = if cw { "+90" } else { "-90" };
+    model.estado = format!(
+        "lienzo rotado {signo}° → {}×{}",
+        model.lienzo.width, model.lienzo.height
+    );
     true
 }
 
@@ -3607,6 +3719,166 @@ mod tests {
             &ev_char("e", Modifiers { ctrl: true, ..Default::default() }),
         );
         assert!(matches!(solo_ctrl, Some(Msg::Combinar(_))));
+    }
+
+    // ---- Fase 30: rotar lienzo 90° -----------------------------------------
+
+    fn px_at(buf: &[u8], w: usize, x: usize, y: usize) -> [u8; 4] {
+        let i = (y * w + x) * 4;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    }
+
+    #[test]
+    fn rotar_buffer_90_cw_mueve_top_left_a_top_right() {
+        // src 2×3 con 6 colores distintos. Verifico el mapeo:
+        //   src        dst (3×2)
+        //   A B        E C A
+        //   C D   →    F D B
+        //   E F
+        let src = vec![
+            // row 0:           A             B
+            10, 0, 0, 255,   20, 0, 0, 255,
+            // row 1:           C             D
+            30, 0, 0, 255,   40, 0, 0, 255,
+            // row 2:           E             F
+            50, 0, 0, 255,   60, 0, 0, 255,
+        ];
+        let out = rotar_buffer_90_cw(&src, 2, 3);
+        // dst dims son 3×2.
+        assert_eq!(out.len(), 24);
+        // A en (0,0) → (2,0) en dst
+        assert_eq!(px_at(&out, 3, 2, 0)[0], 10);
+        // B en (1,0) → (2,1) en dst
+        assert_eq!(px_at(&out, 3, 2, 1)[0], 20);
+        // C en (0,1) → (1,0) en dst
+        assert_eq!(px_at(&out, 3, 1, 0)[0], 30);
+        // E en (0,2) → (0,0) en dst (top-left de dst era bottom-left de src)
+        assert_eq!(px_at(&out, 3, 0, 0)[0], 50);
+        // F en (1,2) → (0,1) en dst
+        assert_eq!(px_at(&out, 3, 0, 1)[0], 60);
+    }
+
+    #[test]
+    fn rotar_buffer_90_ccw_es_inversa_de_cw() {
+        // Aplicar CW y luego CCW debe devolver el buffer original
+        // bit-a-bit. Garantía para que "rotar a un lado y volver" no
+        // pierda nada.
+        let src = vec![
+            // 4×3 con un patrón distinguible.
+            1, 2, 3, 255,    4, 5, 6, 255,    7, 8, 9, 255,   10, 11, 12, 255,
+            13, 14, 15, 255, 16, 17, 18, 255, 19, 20, 21, 255, 22, 23, 24, 255,
+            25, 26, 27, 255, 28, 29, 30, 255, 31, 32, 33, 255, 34, 35, 36, 255,
+        ];
+        let cw = rotar_buffer_90_cw(&src, 4, 3);
+        // cw quedó con dims 3×4. Aplicar CCW debe revertir a 4×3 idéntico.
+        let regreso = rotar_buffer_90_ccw(&cw, 3, 4);
+        assert_eq!(regreso, src);
+    }
+
+    #[test]
+    fn rotar_buffer_90_cw_dos_veces_es_rotacion_180() {
+        // CW + CW debe equivaler a espejar h + espejar v (rotación 180°).
+        // Calculo ambos y comparo.
+        let src = vec![
+            10, 0, 0, 255,   20, 0, 0, 255,
+            30, 0, 0, 255,   40, 0, 0, 255,
+            50, 0, 0, 255,   60, 0, 0, 255,
+        ];
+        let dos_cw = {
+            let una = rotar_buffer_90_cw(&src, 2, 3);
+            // una es 3×2. CW de nuevo da 2×3.
+            rotar_buffer_90_cw(&una, 3, 2)
+        };
+        // Construyo el espejado 180° vía buffer_relleno + manual:
+        // src reversed-byte-wise (en grupos de 4) da el 180°.
+        let mut esperado = vec![0u8; src.len()];
+        for i in 0..(src.len() / 4) {
+            let i_src = i * 4;
+            let i_dst = ((src.len() / 4) - 1 - i) * 4;
+            esperado[i_dst..i_dst + 4].copy_from_slice(&src[i_src..i_src + 4]);
+        }
+        assert_eq!(dos_cw, esperado);
+    }
+
+    #[test]
+    fn rotar_lienzo_cw_intercambia_dimensiones() {
+        let (mut model, _) =
+            modelo_n_capas(&[[10, 20, 30, 255], [200, 100, 50, 255]]);
+        // El lienzo era 2×2 después de modelo_n_capas. Tras rotar +90°
+        // sigue siendo 2×2 (cuadrado), así que para verificar el swap
+        // armo un lienzo 2×3 explícitamente.
+        model.lienzo = Lienzo::nuevo(2, 3);
+        // Cargo una capa raster cualquiera; lo que importa es la dim.
+        let buf = buffer_relleno(2, 3, [100, 100, 100, 255]);
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("c", h);
+        let id = cap.id;
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        let ok = rotar_lienzo(&mut model, true);
+        assert!(ok);
+        assert_eq!(model.lienzo.width, 3);
+        assert_eq!(model.lienzo.height, 2);
+    }
+
+    #[test]
+    fn rotar_lienzo_ccw_es_inversa_de_cw() {
+        // CW seguido de CCW debe restaurar dims (y los buffers de las
+        // capas son content-addressed: cada rotación inserta un nuevo
+        // hash, pero el FINAL coincide con el hash original).
+        let mut model = modelo_minimo();
+        // Empiezo con 2×3.
+        model.lienzo = Lienzo::nuevo(2, 3);
+        let buf = vec![
+            10, 0, 0, 255,   20, 0, 0, 255,
+            30, 0, 0, 255,   40, 0, 0, 255,
+            50, 0, 0, 255,   60, 0, 0, 255,
+        ];
+        let h_inicial = model.almacen.insertar(buf);
+        let cap = Capa::raster("c", h_inicial);
+        let id = cap.id;
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        // CW: dims 2×3 → 3×2.
+        rotar_lienzo(&mut model, true);
+        assert_eq!((model.lienzo.width, model.lienzo.height), (3, 2));
+        // CCW: vuelve a 2×3.
+        rotar_lienzo(&mut model, false);
+        assert_eq!((model.lienzo.width, model.lienzo.height), (2, 3));
+        // El hash final debe igualar el inicial (content-addressing).
+        let h_final = model.lienzo.capa(id).unwrap().contenido;
+        assert_eq!(h_final, h_inicial);
+    }
+
+    #[test]
+    fn rotar_lienzo_sin_capas_es_no_op() {
+        let mut model = modelo_minimo();
+        model.lienzo.capas.clear();
+        let ok = rotar_lienzo(&mut model, true);
+        assert!(!ok);
+        assert!(model.estado.contains("nada que rotar"));
+    }
+
+    #[test]
+    fn msg_rotar_lienzo_dispatcha_y_undo_restaura_dims() {
+        let mut model = modelo_minimo();
+        model.lienzo = Lienzo::nuevo(2, 3);
+        let buf = buffer_relleno(2, 3, [50, 50, 50, 255]);
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("c", h);
+        model.lienzo.apilar(cap);
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::RotarLienzo { cw: true },
+            &Handle::for_test(),
+        );
+        assert_eq!((model.lienzo.width, model.lienzo.height), (3, 2));
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!((model.lienzo.width, model.lienzo.height), (2, 3));
     }
 
     #[test]
