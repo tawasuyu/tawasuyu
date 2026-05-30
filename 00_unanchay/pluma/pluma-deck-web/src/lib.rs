@@ -17,6 +17,8 @@
 //! .vista-page { flex: 0 0 100%; height: 100%; overflow-y: auto; }
 //! ```
 
+pub mod recorrido;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
