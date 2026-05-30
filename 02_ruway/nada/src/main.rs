@@ -41,38 +41,6 @@ use crate::fsutil::*;
 use crate::session::*;
 use crate::clipboard::*;
 
-pub(crate) const TREE_WIDTH: f32 = 240.0;
-pub(crate) const TREE_ROW_H: f32 = 22.0;
-pub(crate) const TREE_INDENT: f32 = 16.0;
-pub(crate) const HEADER_H: f32 = 34.0;
-/// Altura del status bar inferior (estilo VS Code).
-pub(crate) const STATUS_H: f32 = 24.0;
-/// Grosor de las lineas accent que separan header/body/status.
-pub(crate) const SEP_H: f32 = 1.0;
-/// Altura del tab strip (sin contar la línea de acento).
-pub(crate) const TAB_STRIP_H: f32 = 26.0;
-/// Cuántas líneas mostramos en el viewport del editor. Aproximación
-/// estática: (alto ventana ~760 − header 28) / line_height(~18) ≈ 40.
-pub(crate) const EDITOR_VISIBLE_LINES: usize = 40;
-/// Altura del panel terminal cuando está abierto. ~14 filas de 14px +
-/// header 18px ≈ 214px — redondeado a 220.
-pub(crate) const TERM_PANEL_H: f32 = 220.0;
-/// Altura del panel diff cuando está abierto. ~30 filas de 15px +
-/// header 18px ≈ 468px — redondeado a 480.
-pub(crate) const DIFF_PANEL_H: f32 = 480.0;
-
-#[derive(Clone)]
-pub(crate) enum Msg {
-    ToggleNode(usize),
-    SelectNode(usize),
-    EditKey(KeyEvent),
-    EditorPointer(PointerEvent),
-    Save,
-    SaveResult(Result<(), String>),
-    Scroll(i32),
-    /// Cambia el tab activo. El índice se asume válido; en caso contrario
-    /// se ignora.
-    ActivateTab(usize),
     /// Cierra el tab dado. Si era el activo, salta al anterior (o `None`
     /// si era el último). Notifica `did_close` al LSP.
     CloseTab(usize),
@@ -373,7 +341,7 @@ impl Model {
     }
 }
 
-struct EditorApp;
+pub(crate) struct EditorApp;
 
 impl App for EditorApp {
     type Model = Model;
@@ -404,7 +372,7 @@ impl App for EditorApp {
         // está, el comando falla silenciosamente y el mapa queda vacío.
         {
             let args: Vec<String> = env::args().skip(1).collect();
-            let root_for_git = args
+
                 .iter()
                 .find(|a| !a.starts_with("--"))
                 .map(PathBuf::from)
@@ -533,21 +501,14 @@ impl App for EditorApp {
         let header = header_bar(model, &theme);
         let body = body_view(model, &theme);
         let status = status_bar(model, &theme);
-
-        View::new(Style {
-            flex_direction: FlexDirection::Column,
-            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-            ..Default::default()
-        })
-        .fill(theme.bg_app)
-        .children(vec![
-            header,
-            separator_line(&theme),
-            body,
-            separator_line(&theme),
-            status,
-        ])
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
+        crate::update::update(model, msg, handle)
     }
+
+    fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        crate::keys::on_key(model, event)
+    }
+
 }
 
 fn main() {

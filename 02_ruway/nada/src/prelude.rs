@@ -1,49 +1,49 @@
 //! Re-exports de los imports externos para los módulos hijos.
 #![allow(unused_imports)]
-pub(crate) use std::env;
-pub(crate) use std::ffi::OsStr;
-pub(crate) use std::fs;
-pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use llimphi_theme::Theme;
-pub(crate) use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Rect, Size, Style},
-    AlignItems, JustifyContent,
-};
-pub(crate) use llimphi_ui::llimphi_raster::peniko::Color;
-pub(crate) use llimphi_ui::llimphi_text::Alignment;
-pub(crate) use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
-pub(crate) use llimphi_module_command_palette::{
-    self as palette, Command as PaletteCommand, PaletteAction, PaletteMsg, PalettePalette,
-    PaletteState,
-};
-pub(crate) use llimphi_module_diff_viewer::{
-    self as diff, DiffAction, DiffMsg, DiffPalette, DiffState,
-};
-pub(crate) use llimphi_module_fif::{self as fif, FifAction, FifMsg, FifPalette, FifState};
-pub(crate) use llimphi_module_file_picker::{
-    self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
-};
-pub(crate) use llimphi_module_bookmarks::{
-    self as bookmarks, BookmarksAction, BookmarksMsg, BookmarksOverlay, BookmarksPalette, BookmarksState,
-};
-pub(crate) use llimphi_module_mini_map::{
-    self as minimap, MiniMapAction, MiniMapMsg, MiniMapPalette, MiniMapState, Snapshot as MiniMapSnapshot,
-};
-pub(crate) use llimphi_module_shuma_term::{
-    self as term, ShumaTermAction, ShumaTermMsg, ShumaTermPalette, ShumaTermState,
-};
-pub(crate) use llimphi_module_symbol_outline::{
-    self as outline, OutlineAction, OutlineMsg, OutlinePalette, OutlineState, SymbolItem,
-};
-pub(crate) use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
-pub(crate) use llimphi_widget_text_editor::{
-    all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
-    EditorMetrics, EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
-};
-pub(crate) use llimphi_widget_text_editor_lsp::{
-    CompletionItem, DefinitionLocation, DocumentSymbolEntry, HoverInfo, LspClient, NoopLspClient,
-    RustAnalyzerClient, SignatureHelpInfo, TextEdit,
-};
-pub(crate) use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-pub(crate) use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
+mod prelude;
+mod view;
+mod fsutil;
+mod actions;
+mod session;
+mod clipboard;
+mod update;
+mod keys;
+
+pub(crate) use crate::prelude::*;
+pub(crate) use crate::actions::*;
+pub(crate) use crate::fsutil::*;
+pub(crate) use crate::session::*;
+pub(crate) use crate::clipboard::*;
+
+pub(crate) const TREE_WIDTH: f32 = 240.0;
+pub(crate) const TREE_ROW_H: f32 = 22.0;
+pub(crate) const TREE_INDENT: f32 = 16.0;
+pub(crate) const HEADER_H: f32 = 34.0;
+/// Altura del status bar inferior (estilo VS Code).
+pub(crate) const STATUS_H: f32 = 24.0;
+/// Grosor de las lineas accent que separan header/body/status.
+pub(crate) const SEP_H: f32 = 1.0;
+/// Altura del tab strip (sin contar la línea de acento).
+pub(crate) const TAB_STRIP_H: f32 = 26.0;
+/// Cuántas líneas mostramos en el viewport del editor. Aproximación
+/// estática: (alto ventana ~760 − header 28) / line_height(~18) ≈ 40.
+pub(crate) const EDITOR_VISIBLE_LINES: usize = 40;
+/// Altura del panel terminal cuando está abierto. ~14 filas de 14px +
+/// header 18px ≈ 214px — redondeado a 220.
+pub(crate) const TERM_PANEL_H: f32 = 220.0;
+/// Altura del panel diff cuando está abierto. ~30 filas de 15px +
+/// header 18px ≈ 468px — redondeado a 480.
+pub(crate) const DIFF_PANEL_H: f32 = 480.0;
+
+#[derive(Clone)]
+pub(crate) enum Msg {
+    ToggleNode(usize),
+    SelectNode(usize),
+    EditKey(KeyEvent),
+    EditorPointer(PointerEvent),
+    Save,
+    SaveResult(Result<(), String>),
+    Scroll(i32),
+    /// Cambia el tab activo. El índice se asume válido; en caso contrario
+    /// se ignora.
