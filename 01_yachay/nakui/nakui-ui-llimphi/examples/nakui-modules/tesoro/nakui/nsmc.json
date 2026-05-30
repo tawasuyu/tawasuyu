@@ -1,0 +1,41 @@
+{
+  "module": "tesoro",
+  "schemas": ["schema.ncl"],
+  "morphisms": [
+    {
+      "name": "abrir_caja",
+      "inputs": [],
+      "reads": [],
+      "writes": ["Caja"],
+      "script": "scripts/abrir_caja.rhai"
+    },
+    {
+      "name": "registrar_movimiento",
+      "inputs": [],
+      "reads": [],
+      "writes": ["Movimiento"],
+      "script": "scripts/registrar_movimiento.rhai"
+    },
+    {
+      "name": "aplicar_movimiento",
+      "inputs": [{ "role": "caja", "entity": "Caja" }],
+      "reads": ["Movimiento"],
+      "writes": ["caja.saldo"],
+      "script": "scripts/aplicar_movimiento.rhai"
+    },
+    {
+      "name": "asentar_libro",
+      "inputs": [{ "role": "caja", "entity": "Caja" }],
+      "reads": ["caja.saldo"],
+      "writes": ["Asiento"],
+      "script": "scripts/asentar_libro.rhai"
+    },
+    {
+      "name": "cerrar_periodo",
+      "inputs": [{ "role": "caja", "entity": "Caja" }],
+      "reads": ["Asiento", "caja.saldo"],
+      "writes": ["caja.estado"],
+      "script": "scripts/cerrar_periodo.rhai"
+    }
+  ]
+}

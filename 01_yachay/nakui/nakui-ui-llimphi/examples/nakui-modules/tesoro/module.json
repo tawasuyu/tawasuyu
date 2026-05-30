@@ -1,0 +1,52 @@
+{
+  "id": "tesoro",
+  "label": "Tesorería",
+  "description": "Demo de la vista grafo: el DAG de morfismos de un módulo nakui (flujo de datos entre tokens leídos/escritos)",
+  "nakui_module_dir": "nakui",
+  "entities": [
+    { "name": "Caja", "label": "Caja", "fields": [] },
+    { "name": "Movimiento", "label": "Movimiento", "fields": [] },
+    { "name": "Asiento", "label": "Asiento", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Flujo de morfismos", "view": "flujo" },
+    { "label": "Cajas", "view": "cajas_list" },
+    { "label": "+ Caja", "view": "cajas_form" }
+  ],
+  "views": {
+    "flujo": {
+      "kind": "graph",
+      "title": "Flujo de morfismos",
+      "subtitle": "Cada morfismo es un nodo; sus pins son los tokens que lee/escribe; los cables son la cascada escritura→lectura."
+    },
+    "cajas_list": {
+      "kind": "list",
+      "title": "Cajas",
+      "entity": "Caja",
+      "search_in": ["estado"],
+      "columns": [
+        { "field": "saldo", "label": "Saldo", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "estado", "label": "Estado" }
+      ]
+    },
+    "cajas_form": {
+      "kind": "form",
+      "title": "Caja",
+      "entity": "Caja",
+      "fields": [
+        { "name": "id", "label": "Id", "kind": "auto_id" },
+        { "name": "saldo", "label": "Saldo", "kind": "number", "required": true },
+        {
+          "name": "estado",
+          "label": "Estado",
+          "kind": "select",
+          "options": [
+            { "value": "abierta", "label": "Abierta" },
+            { "value": "cerrada", "label": "Cerrada" }
+          ]
+        }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Caja", "next_view": "cajas_list" }
+    }
+  }
+}

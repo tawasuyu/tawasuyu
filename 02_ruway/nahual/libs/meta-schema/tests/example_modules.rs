@@ -23,7 +23,11 @@ fn loads_demo_modules() {
         panic!("load failed for {}: {e}", dir.display());
     });
     let ids: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(ids, vec!["ventas"], "se esperaba el módulo demo 'ventas'");
+    assert_eq!(
+        ids,
+        vec!["tesoro", "ventas"],
+        "se esperaban los módulos demo 'tesoro' (vista grafo) y 'ventas'"
+    );
 }
 
 #[test]
@@ -36,7 +40,7 @@ fn every_demo_module_has_list_and_form_views() {
             match v {
                 View::List(_) => has_list = true,
                 View::Form(_) => has_form = true,
-                View::Detail(_) | View::Dashboard(_) | View::Report(_) => {}
+                View::Detail(_) | View::Dashboard(_) | View::Report(_) | View::Graph(_) => {}
             }
         }
         assert!(

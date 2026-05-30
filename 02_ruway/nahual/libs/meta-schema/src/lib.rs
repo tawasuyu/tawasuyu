@@ -127,6 +127,11 @@ pub enum View {
     /// dispuestos como documento de una columna (título + fecha de
     /// generación) y exportable a Markdown.
     Report(ReportView),
+    /// Grafo de dependencias: el DAG de morfismos del módulo nakui. Cada
+    /// morfismo es un nodo; los tokens que lee/escribe son sus pins; las
+    /// aristas de flujo de datos (escritura→lectura del mismo token) son
+    /// los cables. Visualiza la cascada reactiva que conecta el dato.
+    Graph(GraphView),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +220,18 @@ pub struct ReportToggle {
     pub entity: Option<String>,
     /// Filtro que se aplica cuando el control está activo.
     pub filter: CardFilter,
+}
+
+/// Vista grafo: el DAG de morfismos del módulo nakui. No tiene
+/// parámetros más allá del título y un subtítulo opcional — el grafo se
+/// deriva en runtime del manifest del `Executor` del módulo (los
+/// morfismos y los tokens que lee/escribe cada uno), no se declara acá.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphView {
+    pub title: String,
+    /// Línea de contexto opcional bajo el título.
+    #[serde(default)]
+    pub subtitle: Option<String>,
 }
 
 /// Una tarjeta de KPI del tablero.
@@ -619,7 +636,7 @@ impl Module {
                         }
                     }
                 }
-                View::Detail(_) | View::Dashboard(_) | View::Report(_) => {}
+                View::Detail(_) | View::Dashboard(_) | View::Report(_) | View::Graph(_) => {}
             }
         }
         Ok(())

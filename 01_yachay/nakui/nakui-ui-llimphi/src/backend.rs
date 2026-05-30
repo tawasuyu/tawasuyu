@@ -252,6 +252,68 @@ impl NakuiBackend {
             .map_err(|_| "log mutex envenenado".to_string())?;
         log.append(entry).map_err(|e| format!("append al log: {e}"))
     }
+
+    /// Deriva el grafo de morfismos del módulo `module_id` a partir de
+    /// su `Executor`: cada morfismo es un nodo (con los tokens que lee y
+    /// escribe), y cada par escritura→lectura del mismo token es una
+    /// arista de flujo de datos. `None` si el módulo no tiene executor
+    /// (no declara `nakui_module_dir` o falló la carga).
+    pub fn morphism_graph(&self, module_id: &str) -> Option<MorphismGraphData> {
+        let exec = self.executors.get(module_id)?;
+        let g = &exec.graph;
+        let order = g.topological_order();
+        let nodes: Vec<MorphismNode> = order
+            .iter()
+            .map(|name| MorphismNode {
+                name: name.clone(),
+                reads: g.morphism_reads(name).to_vec(),
+                writes: g.morphism_writes(name).to_vec(),
+            })
+            .collect();
+        let mut edges: Vec<DataFlowEdge> = Vec::new();
+        for name in &order {
+            for token in g.morphism_writes(name) {
+                for reader in g.readers_of(token) {
+                    // Self-loops (un morfismo que lee lo que escribe) no
+                    // aportan al grafo de cascada — se omiten.
+                    if reader != name {
+                        edges.push(DataFlowEdge {
+                            from: name.clone(),
+                            to: reader.clone(),
+                            token: token.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        Some(MorphismGraphData { nodes, edges })
+    }
+}
+
+/// Un nodo del grafo de morfismos: el morfismo y los tokens que lee
+/// (pins de entrada) / escribe (pins de salida).
+#[derive(Debug, Clone)]
+pub struct MorphismNode {
+    pub name: String,
+    pub reads: Vec<String>,
+    pub writes: Vec<String>,
+}
+
+/// Una arista de flujo de datos: el morfismo `from` escribe `token`,
+/// que el morfismo `to` lee — por eso `to` está aguas abajo de `from`.
+#[derive(Debug, Clone)]
+pub struct DataFlowEdge {
+    pub from: String,
+    pub to: String,
+    pub token: String,
+}
+
+/// El grafo de morfismos de un módulo: nodos (morfismos con sus tokens)
+/// + aristas de flujo de datos.
+#[derive(Debug, Clone)]
+pub struct MorphismGraphData {
+    pub nodes: Vec<MorphismNode>,
+    pub edges: Vec<DataFlowEdge>,
 }
 
 impl MetaBackend for NakuiBackend {
@@ -586,6 +648,42 @@ mod tests {
             "msg debe mencionar el módulo: {err}"
         );
         assert!(err.contains("nakui_module_dir") || err.contains("executor"));
+    }
+
+    #[test]
+    fn morphism_graph_derives_nodes_and_data_flow_edges() {
+        // Carga el módulo demo `tesoro` y verifica que el grafo de
+        // morfismos sale del manifest: 5 nodos y las aristas de flujo
+        // de datos (escritura→lectura del mismo token canónico).
+        let module_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/nakui-modules/tesoro/nakui");
+        let exec = Executor::load_module(&module_dir).expect("tesoro carga");
+        let mut execs: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        execs.insert("tesoro".into(), Arc::new(exec));
+        let dir = tempfile::tempdir().unwrap();
+        let (b, _status) = NakuiBackend::open(dir.path().join("log.jsonl"), 0, execs);
+
+        let g = b.morphism_graph("tesoro").expect("hay grafo");
+        assert_eq!(g.nodes.len(), 5, "5 morfismos");
+
+        let edge = |from: &str, to: &str| {
+            g.edges
+                .iter()
+                .any(|e| e.from == from && e.to == to)
+        };
+        // registrar_movimiento escribe Movimiento → aplicar_movimiento lo lee.
+        assert!(edge("registrar_movimiento", "aplicar_movimiento"));
+        // aplicar_movimiento escribe Caja.saldo → asentar_libro y cerrar lo leen.
+        assert!(edge("aplicar_movimiento", "asentar_libro"));
+        assert!(edge("aplicar_movimiento", "cerrar_periodo"));
+        // asentar_libro escribe Asiento → cerrar_periodo lo lee.
+        assert!(edge("asentar_libro", "cerrar_periodo"));
+        // abrir_caja escribe la entity Caja (Create), nadie lee "Caja" suelto:
+        // queda como nodo fuente sin aristas salientes de ese token.
+        assert!(
+            !g.edges.iter().any(|e| e.from == "abrir_caja"),
+            "abrir_caja no alimenta a nadie por flujo de datos"
+        );
     }
 
     #[test]

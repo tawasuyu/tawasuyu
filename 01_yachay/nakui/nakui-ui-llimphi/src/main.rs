@@ -67,13 +67,16 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_field::{field_view, FieldPalette, FieldSpec as FieldWidgetSpec};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_nodegraph::{
+    nodegraph_view, NodeId, NodeSpec, NodegraphMetrics, NodegraphPalette, Wire,
+};
 
 use nahual_meta_runtime::{
     breakdown_to_csv, cmp_values, compute_clear_fields, compute_field_delta, compute_metric,
@@ -83,13 +86,13 @@ use nahual_meta_runtime::{
 };
 use nahual_meta_schema::{
     Action, CardFilter, Column, DashboardCard, DashboardView, FieldKind, FieldSpec, FormView,
-    ListView, Module, RelatedList, ReportView, ValueFormat, View as ModuleView,
+    GraphView, ListView, Module, RelatedList, ReportView, ValueFormat, View as ModuleView,
 };
 use nakui_core::executor::Executor;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::backend::NakuiBackend;
+use crate::backend::{MorphismGraphData, NakuiBackend};
 
 const SIDEBAR_WIDTH: f32 = 240.0;
 const ROW_HEIGHT: f32 = 22.0;
@@ -181,6 +184,14 @@ enum Msg {
     },
     /// Limpia el filtro de drill-down activo.
     ClearDrill,
+    /// Arrastre de un nodo en la vista grafo: integra el delta del cursor
+    /// sobre la posición acumulada del nodo `id` del módulo `mod_idx`.
+    DragGraphNode {
+        mod_idx: usize,
+        id: NodeId,
+        dx: f32,
+        dy: f32,
+    },
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -254,6 +265,10 @@ struct Model {
     /// se navega a la lista de esa entity filtrada a ese grupo. La lista
     /// aplica el filtro y muestra un chip para limpiarlo.
     drill: Option<DrillFilter>,
+    /// Posiciones override de los nodos de la vista grafo, por
+    /// `(mod_idx, node_id)`. Vacío = layout automático por rango
+    /// topológico; al arrastrar un nodo se fija su `(x, y)` acá.
+    graph_pos: BTreeMap<(usize, NodeId), (f32, f32)>,
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
@@ -389,6 +404,7 @@ impl App for NakuiApp {
             list_page: 0,
             report_filters: BTreeSet::new(),
             drill: None,
+            graph_pos: BTreeMap::new(),
         }
     }
 
@@ -645,6 +661,25 @@ impl App for NakuiApp {
             }
             Msg::ClearDrill => {
                 m.drill = None;
+            }
+            Msg::DragGraphNode {
+                mod_idx,
+                id,
+                dx,
+                dy,
+            } => {
+                // El delta llega ya integrado por evento; partimos de la
+                // posición actual (override previo o la base del layout)
+                // y la desplazamos, clampeada a coordenadas no-negativas.
+                let base = m
+                    .graph_pos
+                    .get(&(mod_idx, id))
+                    .copied()
+                    .unwrap_or_else(|| graph_base_pos(&m, mod_idx, id));
+                m.graph_pos.insert(
+                    (mod_idx, id),
+                    ((base.0 + dx).max(0.0), (base.1 + dy).max(0.0)),
+                );
             }
         }
         m
@@ -1183,6 +1218,227 @@ fn build_view_panel(
         ModuleView::Report(rv) => {
             build_report_panel(model, mod_idx, view_key, rv, theme)
         }
+        ModuleView::Graph(gv) => build_graph_panel(model, mod_idx, gv, theme),
+    }
+}
+
+/// Origen y paso del auto-layout por rango topológico de la vista grafo.
+const GRAPH_ORIGIN_X: f32 = 24.0;
+const GRAPH_ORIGIN_Y: f32 = 16.0;
+const GRAPH_COL_STEP: f32 = 220.0;
+const GRAPH_ROW_STEP: f32 = 130.0;
+
+/// Vista `Graph`: el DAG de morfismos del módulo nakui pintado sobre el
+/// `llimphi-widget-nodegraph`. Cada morfismo es un nodo cuyos pins de
+/// entrada son los tokens que lee y los de salida los que escribe; cada
+/// par escritura→lectura del mismo token es un cable. El layout base es
+/// por rango (profundidad de flujo de datos); el usuario puede arrastrar
+/// nodos y sus posiciones se fijan en `model.graph_pos`.
+fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, theme: &Theme) -> View<Msg> {
+    let module = &model.modules[mod_idx];
+    let data = model
+        .backend
+        .lock()
+        .ok()
+        .and_then(|b| b.morphism_graph(&module.id));
+    let data = match data {
+        Some(d) if !d.nodes.is_empty() => d,
+        Some(_) => {
+            return placeholder_panel(
+                module,
+                &gv.title,
+                vec!["el módulo no declara morfismos — no hay grafo que mostrar.".into()],
+                theme,
+            );
+        }
+        None => {
+            return placeholder_panel(
+                module,
+                &gv.title,
+                vec![format!(
+                    "'{}' no tiene executor nakui (falta `nakui_module_dir`): sin grafo de morfismos.",
+                    module.label
+                )],
+                theme,
+            );
+        }
+    };
+
+    let base = graph_layout(&data);
+    let idx_of: BTreeMap<&str, usize> = data
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.name.as_str(), i))
+        .collect();
+
+    let nodes: Vec<NodeSpec> = data
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let id = i as NodeId;
+            let (x, y) = model
+                .graph_pos
+                .get(&(mod_idx, id))
+                .copied()
+                .unwrap_or(base[i]);
+            NodeSpec {
+                id,
+                label: n.name.clone(),
+                x,
+                y,
+                inputs: n.reads.clone(),
+                outputs: n.writes.clone(),
+            }
+        })
+        .collect();
+
+    let mut wires: Vec<Wire> = Vec::with_capacity(data.edges.len());
+    for e in &data.edges {
+        let (Some(&fi), Some(&ti)) =
+            (idx_of.get(e.from.as_str()), idx_of.get(e.to.as_str()))
+        else {
+            continue;
+        };
+        let from_output = data.nodes[fi]
+            .writes
+            .iter()
+            .position(|t| t == &e.token)
+            .unwrap_or(0) as u16;
+        let to_input = data.nodes[ti]
+            .reads
+            .iter()
+            .position(|t| t == &e.token)
+            .unwrap_or(0) as u16;
+        wires.push(Wire {
+            from_node: fi as NodeId,
+            from_output,
+            to_node: ti as NodeId,
+            to_input,
+        });
+    }
+
+    let palette = NodegraphPalette::from_theme(theme);
+    let metrics = NodegraphMetrics::default();
+    let canvas = nodegraph_view(
+        &nodes,
+        &wires,
+        &palette,
+        &metrics,
+        // Arrastre de nodo: el delta se integra en `update`.
+        move |id, _phase: DragPhase, dx, dy| Some(Msg::DragGraphNode { mod_idx, id, dx, dy }),
+        // El grafo de morfismos es read-only: no se crean cables a mano
+        // (las aristas las dicta el manifest, no la UI).
+        |_fn, _fp, _tn, _tp| None,
+    );
+
+    let n_nodes = data.nodes.len();
+    let n_edges = data.edges.len();
+    let mut header: Vec<View<Msg>> = vec![text_line(
+        format!("{} · {}", module.label, gv.title),
+        16.0,
+        theme.fg_text,
+    )];
+    if let Some(sub) = &gv.subtitle {
+        header.push(text_line(sub.clone(), 11.0, theme.fg_muted));
+    }
+    header.push(text_line(
+        format!(
+            "{n_nodes} morfismos · {n_edges} aristas de flujo — arrastrá un nodo por su barra de título para reorganizar."
+        ),
+        11.0,
+        theme.fg_muted,
+    ));
+
+    // Lienzo dentro de una caja flex-grow para que ocupe el alto
+    // restante bajo el encabezado.
+    let canvas_box = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        min_size: Size {
+            width: auto(),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![canvas]);
+    header.push(canvas_box);
+
+    column(header, 6.0)
+}
+
+/// Posiciones base `(x, y)` de los nodos del grafo de `data`, indexadas
+/// por el índice de cada nodo (= su `NodeId`). El rango de un nodo es su
+/// profundidad en el DAG de flujo de datos (longest-path desde una
+/// fuente); los nodos de un mismo rango se apilan en filas.
+fn graph_layout(data: &MorphismGraphData) -> Vec<(f32, f32)> {
+    let n = data.nodes.len();
+    let idx: BTreeMap<&str, usize> = data
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.name.as_str(), i))
+        .collect();
+
+    // Rango por relajación acotada (converge en ≤ n pasadas para un DAG;
+    // el tope evita un bucle infinito si el flujo de datos tuviera ciclo).
+    let mut rank = vec![0u32; n];
+    for _ in 0..n {
+        let mut changed = false;
+        for e in &data.edges {
+            if let (Some(&f), Some(&t)) =
+                (idx.get(e.from.as_str()), idx.get(e.to.as_str()))
+            {
+                if rank[t] < rank[f] + 1 {
+                    rank[t] = rank[f] + 1;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Fila dentro de cada rango (orden estable por índice de nodo).
+    let mut row_in_rank = vec![0u32; n];
+    let mut counts: BTreeMap<u32, u32> = BTreeMap::new();
+    for (i, slot) in row_in_rank.iter_mut().enumerate() {
+        let c = counts.entry(rank[i]).or_insert(0);
+        *slot = *c;
+        *c += 1;
+    }
+
+    (0..n)
+        .map(|i| {
+            (
+                GRAPH_ORIGIN_X + rank[i] as f32 * GRAPH_COL_STEP,
+                GRAPH_ORIGIN_Y + row_in_rank[i] as f32 * GRAPH_ROW_STEP,
+            )
+        })
+        .collect()
+}
+
+/// Posición base de un nodo del grafo (sin override de drag), recomputada
+/// desde el executor del módulo. La usa `update` para integrar el primer
+/// delta de un arrastre sobre la posición correcta del layout.
+fn graph_base_pos(model: &Model, mod_idx: usize, id: NodeId) -> (f32, f32) {
+    let module = &model.modules[mod_idx];
+    let data = model
+        .backend
+        .lock()
+        .ok()
+        .and_then(|b| b.morphism_graph(&module.id));
+    match data {
+        Some(d) => graph_layout(&d)
+            .get(id as usize)
+            .copied()
+            .unwrap_or((GRAPH_ORIGIN_X, GRAPH_ORIGIN_Y)),
+        None => (GRAPH_ORIGIN_X, GRAPH_ORIGIN_Y),
     }
 }
 
@@ -3076,9 +3332,14 @@ mod tests {
             .join("nakui-modules");
         let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
         assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
-        assert_eq!(modules.len(), 1);
-        let m = &modules[0];
-        assert_eq!(m.id, "ventas");
+        // Dos demos: 'ventas' (meta-form completo) y 'tesoro' (vista grafo).
+        assert_eq!(modules.len(), 2);
+        let tesoro = modules.iter().find(|m| m.id == "tesoro").expect("tesoro");
+        assert!(
+            matches!(tesoro.views.get("flujo"), Some(ModuleView::Graph(_))),
+            "tesoro expone la vista grafo 'flujo'"
+        );
+        let m = modules.iter().find(|m| m.id == "ventas").expect("ventas");
         // Tiene un Form para cada entity (customers + orders).
         assert!(find_form_view(m, "Customer").is_some());
         assert!(find_form_view(m, "Order").is_some());
