@@ -30,9 +30,10 @@ Mascota: un calcetín — guarda cosas, se pierde, abriga.
 | `media-source-mp3`    | MP3 (symphonia, feature `mp3`) → `AudioSource + Seekable`            |
 | `media-source-flac`   | **FLAC nativo** (puro-Rust, symphonia feature `flac`) → `AudioSource + Seekable`. Lossless patent-free; par sin pérdida del Opus. Ver su README. |
 | `media-source-opus`   | **Opus nativo** (puro-Rust, opus-wave) sobre Ogg → `AudioSource + Seekable`. Formato de audio nativo de gioser, par del video AV1. Ver su README. |
+| `media-encode-opus`   | **Encode Opus nativo** (puro-Rust, opus-wave): PCM f32 → paquetes Opus + `OpusHead`. Contraparte de `media-source-opus` — gioser PRODUCE su audio nativo. Alimenta el track Opus de `media-mux-webm`. Round-trip encode↔decode verificado. |
 | `media-source-vorbis` | **Vorbis nativo** (puro-Rust, symphonia features `vorbis`+`ogg`) sobre Ogg → `AudioSource + Seekable`. Lossy clásico libre de patentes; tercero del trío Opus/FLAC/Vorbis. Ver su README. |
 | `media-source-webm`   | **Demux Matroska/WebM nativo** (matroska-demuxer): un `.webm`/`.mkv` AV1+Opus alimenta los decoders nativos (av1 + opus) → reproducción 100% puro-Rust. Ver su README. |
-| `media-mux-webm`      | **Mux WebM/Matroska nativo** (EBML escrito a mano, **sin deps**): paquetes AV1 (+ Opus opcional) → `.webm`. Contraparte de `media-source-webm` — gioser PRODUCE su contenedor nativo sin ffmpeg. Round-trip mux→demux→decode verificado. |
+| `media-mux-webm`      | **Mux WebM/Matroska nativo** (EBML escrito a mano, **sin deps**): paquetes AV1 (+ Opus opcional, vía `media-encode-opus`) → `.webm`. Contraparte de `media-source-webm` — gioser PRODUCE su contenedor nativo AV1+Opus sin ffmpeg. Round-trip mux→demux→decode verificado. |
 | `shared/foreign-av`   | MP4/WebM/MKV/MOV/AVI/FLV via ffmpeg subprocess — 1 proceso por archivo (audio + video desde el mismo ffmpeg vía pipes dup'eados a fd 3/4). **Vive en `shared/foreign-*`** (regla dura #4: formatos ajenos por puente). Ofrece además `transcode_a_av1` (ingesta al formato nativo). |
 | `media-source-av1`    | **AV1 nativo** (puro-Rust, rav1d) sobre IVF → `FrameSource + Seekable`. Formato de video nativo de gioser; demux IVF + split OBU sin decoder. Ver su README. |
 | `media-encode-av1`    | **Encode AV1 nativo** (puro-Rust, rav1e): frames RGBA → IVF. Contraparte de `media-source-av1` — gioser PRODUCE su video nativo sin ffmpeg. Round-trip encode↔decode verificado. Ver su README. Su salida alimenta `media-mux-webm`. |
@@ -160,6 +161,7 @@ del notebook funciona como patch-bay del audio.
 ```bash
 cargo test -p media-core              # primitivas puras (Spectrum, Levels, AudioProbe, Mixer, Waterfall, Subtitles)
 cargo test -p media-recorder-wav      # round-trip de grabación
+cargo test -p media-encode-opus       # encode Opus + round-trip encode→decode y .webm AV1+Opus propio
 cargo test -p media-mux-webm          # EBML de bajo nivel + round-trip mux→demux→decode nativo
 cargo test -p foreign-av              # parse + clamp (sin invocar ffmpeg)
 cargo test -p pluma-notebook-kernel-media   # parse del mini-DSL

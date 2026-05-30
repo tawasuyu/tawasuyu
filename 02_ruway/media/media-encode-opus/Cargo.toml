@@ -1,0 +1,22 @@
+[package]
+name = "media-encode-opus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/media-encode-opus — encode Opus NATIVO puro-Rust (opus-wave) desde PCM f32 → paquetes Opus + OpusHead. Contraparte de media-source-opus: gioser PRODUCE su audio nativo. Alimenta el track Opus de media-mux-webm."
+
+[dependencies]
+# opus-wave: port puro-Rust de libopus (mismo crate que usa el decoder en
+# media-source-opus); su `OpusEncoder` cubre SILK+CELT sin C ni FFI.
+opus-wave = { workspace = true }
+
+[dev-dependencies]
+# Round-trip real: encode acá → decode con opus-wave (vía media-source-opus)
+# → verifica que vuelve señal. Y muxeo a .webm con el track Opus armado.
+media-source-opus = { path = "../media-source-opus" }
+media-core = { path = "../media-core" }
+media-mux-webm = { path = "../media-mux-webm" }
+media-encode-av1 = { path = "../media-encode-av1" }
+media-source-webm = { path = "../media-source-webm" }
