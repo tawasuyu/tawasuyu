@@ -44,7 +44,11 @@
 //!     negativos—. La leyenda siempre es clickeable para drill-down. El
 //!     campo `limit` recorta el desglose a las N filas de mayor valor y
 //!     colapsa el resto en un bucket "Otros" (no-navegable) — mantiene
-//!     legibles los gráficos sobre dimensiones de muchos grupos.
+//!     legibles los gráficos sobre dimensiones de muchos grupos. El campo
+//!     `bucket` (`year`/`month`/`day`) trunca una fecha de grupo ISO y
+//!     convierte el desglose en una serie temporal: orden cronológico,
+//!     sin recorte — el caso natural de `line`/`columns` (p.ej.
+//!     "facturación por mes").
 //!   - `Report`: los mismos agregados que un tablero, dispuestos como
 //!     documento de una columna (título + subtítulo) con botón
 //!     "Exportar (.md)" que vuelca el reporte completo a Markdown.
@@ -91,10 +95,10 @@ use llimphi_widget_nodegraph::{
 };
 
 use nahual_meta_runtime::{
-    breakdown_to_csv, cmp_values, compute_clear_fields, compute_field_delta, compute_metric,
-    format_value, human_label_for_record, limit_breakdown, parse_field_value, preview_value,
-    record_matches, render_value, resolve_param_value, short_uuid, to_csv, validate_entity_refs,
-    MetaBackend, MetricResult, WriteOutcome,
+    breakdown_to_csv, bucket_date, cmp_values, compute_clear_fields, compute_field_delta,
+    compute_metric, format_value, human_label_for_record, limit_breakdown, parse_field_value,
+    preview_value, record_matches, render_value, resolve_param_value, short_uuid,
+    sort_breakdown_by_key, to_csv, validate_entity_refs, MetaBackend, MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
     Action, CardFilter, ChartKind, Column, DashboardCard, DashboardView, FieldKind, FieldSpec,
@@ -2361,27 +2365,65 @@ fn compute_card_full(
     if !extra.is_empty() {
         records.retain(|(_, v)| extra.iter().all(|f| record_matches(v, f)));
     }
+    // Serie temporal: si la card define `bucket` sobre el campo de grupo
+    // (una fecha ISO), reescribimos ese campo a su bucket (año/mes/día)
+    // *antes* de agregar, así records de distintos días caen en el mismo
+    // grupo. La agregación queda agnóstica al truncado.
+    let group_field = metric_group_field(&card.metric);
+    let bucketed = match (card.bucket, group_field) {
+        (Some(bucket), Some(field)) => {
+            for (_, v) in records.iter_mut() {
+                if let Some(s) = v.get(field).and_then(Value::as_str) {
+                    let key = bucket_date(s, bucket);
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert(field.to_string(), Value::String(key));
+                    }
+                }
+            }
+            true
+        }
+        _ => false,
+    };
     let mut result = compute_metric(&card.metric, card.filter.as_ref(), &records);
-    // Top-N: recortar a las `limit` mayores + bucket "Otros". Se hace
-    // sobre el resultado crudo (antes de resolver claves) para que las
-    // raw_keys —y por ende el drill-down, el CSV y el export .md— queden
-    // alineadas. `AvgBy` no es aditivo (el bucket promedia, no suma).
-    let collapsed = card
-        .limit
-        .map(|n| limit_breakdown(&mut result, n, metric_is_additive(&card.metric)))
-        .unwrap_or(false);
+    // Series temporales: orden cronológico (por clave) y sin recorte.
+    // Resto: top-N opcional (recorte a las `limit` mayores + "Otros").
+    // Se hace sobre el resultado crudo (antes de resolver claves) para
+    // que las raw_keys —drill-down, CSV, export .md— queden alineadas.
+    let collapsed = if bucketed {
+        sort_breakdown_by_key(&mut result);
+        false
+    } else {
+        card.limit
+            .map(|n| limit_breakdown(&mut result, n, metric_is_additive(&card.metric)))
+            .unwrap_or(false)
+    };
     let mut raw_keys = breakdown_raw_keys(&result);
     // La fila "Otros" no apunta a un grupo concreto: sentinel vacío para
-    // que `drill_msg` la deje no-clickeable.
+    // que `drill_msg` la deje no-clickeable. Las series temporales
+    // tampoco navegan (la clave es un mes/año, no el valor crudo).
     if collapsed {
         if let Some(last) = raw_keys.last_mut() {
             last.clear();
         }
     }
+    if bucketed {
+        raw_keys.iter_mut().for_each(String::clear);
+    }
     if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
         resolve_breakdown_keys(&mut result, backend, ref_entity);
     }
     (result, raw_keys)
+}
+
+/// El campo de grupo de una métrica de desglose (`GroupBy.field` /
+/// `SumBy`·`AvgBy.group`). `None` para escalares.
+fn metric_group_field(metric: &nahual_meta_schema::Metric) -> Option<&str> {
+    use nahual_meta_schema::Metric;
+    match metric {
+        Metric::GroupBy { field } => Some(field),
+        Metric::SumBy { group, .. } | Metric::AvgBy { group, .. } => Some(group),
+        _ => None,
+    }
 }
 
 /// `true` si el valor de un desglose es aditivo (se puede sumar para el

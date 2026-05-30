@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use std::cmp::Ordering;
 
-use nahual_meta_schema::{CardFilter, FilterOp, Metric};
+use nahual_meta_schema::{CardFilter, DateBucket, FilterOp, Metric};
 
 /// Resultado de computar una [`Metric`] sobre un conjunto de records.
 #[derive(Debug, Clone, PartialEq)]
@@ -265,6 +265,40 @@ pub fn limit_breakdown(result: &mut MetricResult, limit: usize, additive: bool) 
     }
 }
 
+/// Trunca una fecha ISO-8601 a la granularidad pedida, para agrupar
+/// series temporales (`2026-01-15T10:30Z` / `2026-01-15` → `2026`,
+/// `2026-01` o `2026-01-15`). Si `raw` no empieza con un año de 4
+/// dígitos seguido de `-` (o no es una fecha reconocible), se devuelve
+/// sin cambios — el bucketing es inofensivo sobre datos no-fecha.
+pub fn bucket_date(raw: &str, bucket: DateBucket) -> String {
+    // Reconocer el prefijo `YYYY-`: 4 dígitos + guión.
+    let looks_like_date = raw.len() >= 5
+        && raw.as_bytes()[..4].iter().all(u8::is_ascii_digit)
+        && raw.as_bytes()[4] == b'-';
+    if !looks_like_date {
+        return raw.to_string();
+    }
+    // Fecha = los primeros 10 chars (`YYYY-MM-DD`) si los hay.
+    let date = raw.get(0..10).unwrap_or(raw);
+    let end = match bucket {
+        DateBucket::Year => 4,
+        DateBucket::Month => 7,
+        DateBucket::Day => 10,
+    };
+    date.get(0..end).unwrap_or(date).to_string()
+}
+
+/// Reordena las filas de un desglose por su clave de grupo ascendente
+/// (lexicográfico — coincide con el orden cronológico para claves ISO
+/// de [`bucket_date`]). No-op sobre escalares.
+pub fn sort_breakdown_by_key(result: &mut MetricResult) {
+    match result {
+        MetricResult::Breakdown(rows) => rows.sort_by(|a, b| a.0.cmp(&b.0)),
+        MetricResult::ValueBreakdown(rows) => rows.sort_by(|a, b| a.0.cmp(&b.0)),
+        MetricResult::Scalar(_) => {}
+    }
+}
+
 /// Valor de un campo de nivel superior como texto plano, para comparar
 /// (filtros) o agrupar (`GroupBy`).
 fn field_as_text(v: &Value, field: &str) -> Option<String> {
@@ -282,6 +316,36 @@ mod tests {
 
     fn recs(items: &[Value]) -> Vec<(Uuid, Value)> {
         items.iter().map(|v| (Uuid::new_v4(), v.clone())).collect()
+    }
+
+    #[test]
+    fn bucket_date_truncates_iso() {
+        assert_eq!(bucket_date("2026-01-15", DateBucket::Year), "2026");
+        assert_eq!(bucket_date("2026-01-15", DateBucket::Month), "2026-01");
+        assert_eq!(bucket_date("2026-01-15", DateBucket::Day), "2026-01-15");
+        // Con hora.
+        assert_eq!(bucket_date("2026-03-09T10:30:00Z", DateBucket::Month), "2026-03");
+        // No-fecha → sin cambios (inofensivo).
+        assert_eq!(bucket_date("activo", DateBucket::Month), "activo");
+        assert_eq!(bucket_date("", DateBucket::Year), "");
+    }
+
+    #[test]
+    fn sort_breakdown_by_key_is_chronological_for_iso() {
+        let mut r = MetricResult::ValueBreakdown(vec![
+            ("2026-03".into(), 30.0),
+            ("2026-01".into(), 10.0),
+            ("2026-02".into(), 20.0),
+        ]);
+        sort_breakdown_by_key(&mut r);
+        assert_eq!(
+            r,
+            MetricResult::ValueBreakdown(vec![
+                ("2026-01".into(), 10.0),
+                ("2026-02".into(), 20.0),
+                ("2026-03".into(), 30.0),
+            ])
+        );
     }
 
     #[test]

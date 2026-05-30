@@ -39,7 +39,8 @@ pub use format::{
     short_uuid, value_to_input_text,
 };
 pub use metric::{
-    breakdown_to_csv, compute_metric, limit_breakdown, record_matches, MetricResult, OTROS_LABEL,
+    breakdown_to_csv, bucket_date, compute_metric, limit_breakdown, record_matches,
+    sort_breakdown_by_key, MetricResult, OTROS_LABEL,
 };
 pub use parse::{infer_param_value, parse_field_value, resolve_param_value};
 pub use refs::validate_entity_refs;

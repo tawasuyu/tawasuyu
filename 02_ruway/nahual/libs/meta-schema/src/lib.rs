@@ -269,8 +269,28 @@ pub struct DashboardCard {
     /// colapsa en una fila "Otros" (suma para conteos/`SumBy`, promedio
     /// de los grupos restantes para `AvgBy`). Mantiene legibles los
     /// gráficos sobre dimensiones de muchos grupos. `None` = sin tope.
+    /// Ignorado cuando hay `bucket` (las series temporales no se recortan).
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Cuando el campo de grupo de un desglose es una fecha ISO-8601,
+    /// trunca la clave a año/mes/día antes de agregar — convierte el
+    /// desglose en una **serie temporal** (p.ej. "facturación por mes").
+    /// El resultado se ordena cronológicamente (no por valor) y no se
+    /// recorta. `None` = agrupar por el valor crudo del campo.
+    #[serde(default)]
+    pub bucket: Option<DateBucket>,
+}
+
+/// Granularidad de truncado de una fecha ISO-8601 para series temporales.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DateBucket {
+    /// Año: `2026-01-15` → `2026`.
+    Year,
+    /// Año-mes: `2026-01-15` → `2026-01`.
+    Month,
+    /// Día (fecha completa): `2026-01-15` → `2026-01-15`.
+    Day,
 }
 
 /// Forma visual de un desglose de tablero/reporte.
@@ -1061,6 +1081,18 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(capped.limit, Some(8));
+        assert_eq!(card.bucket, None);
+
+        // `bucket` parsea en snake_case a DateBucket.
+        let serie: DashboardCard = serde_json::from_value(serde_json::json!({
+            "label": "Por mes",
+            "entity": "orders",
+            "metric": { "kind": "sum_by", "group": "fecha", "value": "monto" },
+            "chart": "line",
+            "bucket": "month"
+        }))
+        .unwrap();
+        assert_eq!(serie.bucket, Some(DateBucket::Month));
 
         // Con `chart` explícito en snake_case.
         let pie: DashboardCard = serde_json::from_value(serde_json::json!({

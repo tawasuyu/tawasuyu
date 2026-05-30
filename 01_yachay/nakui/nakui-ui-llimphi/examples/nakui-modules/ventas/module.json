@@ -128,6 +128,21 @@
             "kind": "currency",
             "symbol": "$"
           }
+        },
+        {
+          "label": "Facturación por mes",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum_by",
+            "group": "fecha",
+            "value": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          },
+          "chart": "line",
+          "bucket": "month"
         }
       ]
     },
@@ -185,6 +200,21 @@
           },
           "chart": "pie",
           "limit": 2
+        },
+        {
+          "label": "Facturación por mes",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum_by",
+            "group": "fecha",
+            "value": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          },
+          "chart": "columns",
+          "bucket": "month"
         }
       ],
       "toggles": [
@@ -341,6 +371,10 @@
         {
           "field": "pagado",
           "label": "Pagado"
+        },
+        {
+          "field": "fecha",
+          "label": "Fecha"
         }
       ]
     },
@@ -362,6 +396,13 @@
           "label": "Monto",
           "kind": "number",
           "required": true
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "kind": "date",
+          "required": false,
+          "help": "YYYY-MM-DD"
         },
         {
           "name": "pagado",

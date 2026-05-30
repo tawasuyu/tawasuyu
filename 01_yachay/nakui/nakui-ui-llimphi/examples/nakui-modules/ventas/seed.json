@@ -17,18 +17,18 @@
     {
       "entity": "Order",
       "records": [
-        { "data": { "customer": "@acme",      "monto": 1200, "pagado": true } },
-        { "data": { "customer": "@acme",      "monto": 800,  "pagado": true } },
-        { "data": { "customer": "@globex",    "monto": 1500, "pagado": true } },
-        { "data": { "customer": "@stark",     "monto": 2500, "pagado": true } },
-        { "data": { "customer": "@stark",     "monto": 500,  "pagado": true } },
-        { "data": { "customer": "@initech",   "monto": 600,  "pagado": true } },
-        { "data": { "customer": "@initech",   "monto": 300,  "pagado": false } },
-        { "data": { "customer": "@umbrella",  "monto": 1100, "pagado": true } },
-        { "data": { "customer": "@hooli",     "monto": 750,  "pagado": true } },
-        { "data": { "customer": "@wayne",     "monto": 200,  "pagado": false } },
-        { "data": { "customer": "@wonka",     "monto": 400,  "pagado": true } },
-        { "data": { "customer": "@piedpiper", "monto": 150,  "pagado": false } }
+        { "data": { "customer": "@acme",      "monto": 1200, "pagado": true,  "fecha": "2026-01-08" } },
+        { "data": { "customer": "@acme",      "monto": 800,  "pagado": true,  "fecha": "2026-02-14" } },
+        { "data": { "customer": "@globex",    "monto": 1500, "pagado": true,  "fecha": "2026-01-22" } },
+        { "data": { "customer": "@stark",     "monto": 2500, "pagado": true,  "fecha": "2026-03-03" } },
+        { "data": { "customer": "@stark",     "monto": 500,  "pagado": true,  "fecha": "2026-02-27" } },
+        { "data": { "customer": "@initech",   "monto": 600,  "pagado": true,  "fecha": "2026-01-15" } },
+        { "data": { "customer": "@initech",   "monto": 300,  "pagado": false, "fecha": "2026-03-19" } },
+        { "data": { "customer": "@umbrella",  "monto": 1100, "pagado": true,  "fecha": "2026-02-05" } },
+        { "data": { "customer": "@hooli",     "monto": 750,  "pagado": true,  "fecha": "2026-03-11" } },
+        { "data": { "customer": "@wayne",     "monto": 200,  "pagado": false, "fecha": "2026-01-30" } },
+        { "data": { "customer": "@wonka",     "monto": 400,  "pagado": true,  "fecha": "2026-02-18" } },
+        { "data": { "customer": "@piedpiper", "monto": 150,  "pagado": false, "fecha": "2026-03-25" } }
       ]
     }
   ]
