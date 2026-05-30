@@ -243,6 +243,12 @@ enum Msg {
     /// loop pick→use: pickeás un color con el cuentagotas, después
     /// "+ relleno" aparece como capa nueva encima de la seleccionada.
     AgregarRelleno,
+    /// Combina la capa identificada con la que está justo debajo (idx
+    /// menor) en una sola capa raster que conserva el composite visual
+    /// (respetando blend + opacidad + visibilidad). El par se reemplaza
+    /// por una `Capa::raster` con defaults (Normal/1.0/visible). Si la
+    /// capa ya está en el fondo (idx 0), no-op + estado descriptivo.
+    Combinar(Uuid),
 }
 
 // =============================================================================
@@ -927,6 +933,11 @@ fn fila_capa(
     let subir = mini_btn("↑", Msg::MoverArriba(capa.id), &btn_pal);
     let bajar = mini_btn("↓", Msg::MoverAbajo(capa.id), &btn_pal);
     let dup = mini_btn("⎘", Msg::Duplicar(capa.id), &btn_pal);
+    // ⊕ = combinar con la de abajo (merge down). Si la capa ya está al
+    // fondo (idx 0 en la pila), el handler en `update` lo detecta y
+    // emite estado descriptivo — el botón se pinta igual para todas las
+    // capas; no escondemos para mantener el layout estable.
+    let merge = mini_btn("⊕", Msg::Combinar(capa.id), &btn_pal);
     let elim = mini_btn("✕", Msg::Eliminar(capa.id), &btn_pal);
 
     // Thumbnail a la izquierda (slot fijo aun si el cache aún no lo tiene
@@ -972,7 +983,7 @@ fn fila_capa(
         ..Default::default()
     })
     .children(vec![
-        thumb_view, nombre, toggle, opacidad, blend, subir, bajar, dup, elim,
+        thumb_view, nombre, toggle, opacidad, blend, subir, bajar, dup, merge, elim,
     ])
 }
 
@@ -1766,6 +1777,11 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::Combinar(id) => {
+                if combinar_capa_abajo(&mut model, id) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2038,6 +2054,11 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("d") => {
             Some(Msg::Duplicar(id))
         }
+        // Ctrl+E = merge down (combinar con la capa de abajo). Sin
+        // selección no aplica. Photoshop standard.
+        Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("e") => {
+            Some(Msg::Combinar(id))
+        }
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("v") => {
             Some(Msg::ToggleVisible(id))
         }
@@ -2187,6 +2208,59 @@ fn agregar_capa_relleno(model: &mut Model) -> bool {
     model.seleccionada = Some(nuevo_id);
     aplicar_y_recomponer(model);
     model.estado = format!("agregada '{}'", nombre);
+    true
+}
+
+/// Combina la capa `id` con la que está directamente debajo (idx menor)
+/// en una sola capa raster. La merge respeta blend + opacidad + visible
+/// de ambas: arma un mini-`Lienzo` con sólo ese par (abajo primero,
+/// arriba después — `componer` itera fondo→tope), compone, mete el
+/// buffer al almacén content-addressed y reemplaza el par por una
+/// `Capa::raster` nueva con defaults (Normal/1.0/visible). Las hijas
+/// derivadas que apuntaban a cualquiera de las dos quedan huérfanas —
+/// `regenerar_stale_con_ia` fallará con `BufferFaltante` (mismo
+/// comportamiento que `Eliminar`). Devuelve `false` si la capa ya está
+/// en el fondo (no hay nada debajo para combinar) o si no se encuentra
+/// la `id`; el caller lo usa para decidir si snapshotear.
+fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
+    let Some(idx) = model.lienzo.capas.iter().position(|c| c.id == id) else {
+        return false;
+    };
+    if idx == 0 {
+        model.estado = "no hay capa debajo para combinar".into();
+        return false;
+    }
+    // Capas para el mini-Lienzo. Las clonamos: las originales se
+    // borran del Lienzo más abajo. `apilar` consume por valor.
+    let abajo = model.lienzo.capas[idx - 1].clone();
+    let arriba = model.lienzo.capas[idx].clone();
+
+    let mut mini = Lienzo::nuevo(model.lienzo.width, model.lienzo.height);
+    mini.apilar(abajo.clone());
+    mini.apilar(arriba.clone());
+
+    let img = match tullpu_render::componer(&mini, &model.almacen) {
+        Ok(im) => im,
+        Err(e) => {
+            // Errores típicos: BufferFaltante (alguna era derivada stale
+            // que nunca se regeneró). Dejamos el lienzo intacto.
+            model.estado = format!("merge falló: {e:?}");
+            return false;
+        }
+    };
+    let buffer = img.into_raw();
+    let hash = model.almacen.insertar(buffer);
+    let nombre = format!("{} ⊕ {}", abajo.nombre, arriba.nombre);
+    let nueva = Capa::raster(nombre.clone(), hash);
+    let nuevo_id = nueva.id;
+    // Quitamos la de arriba primero (idx mayor) para no shiftear índices
+    // antes de tocar la de abajo. Después reemplazamos la de abajo por
+    // la merged.
+    model.lienzo.capas.remove(idx);
+    model.lienzo.capas[idx - 1] = nueva;
+    model.seleccionada = Some(nuevo_id);
+    aplicar_y_recomponer(model);
+    model.estado = format!("combinada '{}'", nombre);
     true
 }
 
@@ -3129,6 +3203,145 @@ mod tests {
         // Undo lo revierte.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), n_antes);
+    }
+
+    // ---- Fase 27: combinar capa hacia abajo (merge down) -------------------
+
+    /// Construye un modelo con dos capas raster opacas de colores planos:
+    /// debajo `rgba_bajo` ocupando todo el lienzo 2×2; encima `rgba_alto`
+    /// también ocupando todo. Devuelve (model, id_abajo, id_arriba).
+    fn modelo_dos_capas(rgba_bajo: [u8; 4], rgba_alto: [u8; 4]) -> (Model, Uuid, Uuid) {
+        let mut model = modelo_minimo();
+        // El minimo trae una capa de 4×4 todo en cero — la usamos como
+        // "abajo". Reemplazamos su contenido por el del color pedido.
+        model.lienzo = Lienzo::nuevo(2, 2);
+        let buf_b = buffer_relleno(2, 2, rgba_bajo);
+        let h_b = model.almacen.insertar(buf_b);
+        let cap_b = Capa::raster("base", h_b);
+        let id_b = cap_b.id;
+        model.lienzo.apilar(cap_b);
+        let buf_a = buffer_relleno(2, 2, rgba_alto);
+        let h_a = model.almacen.insertar(buf_a);
+        let cap_a = Capa::raster("sobre", h_a);
+        let id_a = cap_a.id;
+        model.lienzo.apilar(cap_a);
+        model.seleccionada = Some(id_a);
+        // Reseteamos el historial para que este sea el estado base.
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        (model, id_b, id_a)
+    }
+
+    #[test]
+    fn combinar_capa_en_fondo_es_no_op_con_mensaje() {
+        // La capa en idx 0 no tiene nada debajo: la merge es un no-op
+        // semántico. El lienzo no cambia y el estado avisa.
+        let (mut model, id_b, _) = modelo_dos_capas([10, 20, 30, 255], [200, 100, 50, 255]);
+        let lienzo_antes = model.lienzo.clone();
+        let ok = combinar_capa_abajo(&mut model, id_b);
+        assert!(!ok, "no debe reportar éxito");
+        assert_eq!(model.lienzo, lienzo_antes, "lienzo intacto");
+        assert!(model.estado.contains("no hay capa debajo"));
+    }
+
+    #[test]
+    fn combinar_capas_normales_aplana_a_la_de_arriba_opaca() {
+        // Dos rasters opacos con blend Normal y opacidad 1.0: el composite
+        // es exactamente la capa de arriba (la de abajo queda totalmente
+        // cubierta). La merge debe producir un buffer de ese color.
+        let (mut model, _id_b, id_a) =
+            modelo_dos_capas([10, 20, 30, 255], [200, 100, 50, 255]);
+        assert_eq!(model.lienzo.capas.len(), 2);
+        let ok = combinar_capa_abajo(&mut model, id_a);
+        assert!(ok);
+        assert_eq!(model.lienzo.capas.len(), 1);
+        let nueva = &model.lienzo.capas[0];
+        let buf = model.almacen.obtener(nueva.contenido).unwrap();
+        // 2×2 píxeles, todos el color de arriba.
+        assert_eq!(buf.len(), 16);
+        for px in buf.chunks_exact(4) {
+            assert_eq!(px, &[200, 100, 50, 255]);
+        }
+        // El nombre conserva la genealogía con el separador ⊕.
+        assert!(nueva.nombre.contains("⊕"), "nombre = {}", nueva.nombre);
+        // Selección apuntó a la merged.
+        assert_eq!(model.seleccionada, Some(nueva.id));
+    }
+
+    #[test]
+    fn combinar_capa_con_opacidad_media_mezcla_50_50() {
+        // Arriba semitransparente (α=128) sobre fondo opaco: el resultado
+        // debe ser aprox. promedio. Tolerancia ±2 por el rounding del
+        // compositor (premultiplicación + división).
+        let (mut model, _id_b, id_a) =
+            modelo_dos_capas([0, 0, 0, 255], [255, 255, 255, 255]);
+        // Bajamos la opacidad de la capa de arriba a 0.5.
+        let idx_a = model.lienzo.capas.iter().position(|c| c.id == id_a).unwrap();
+        model.lienzo.capas[idx_a].opacidad = 0.5;
+        let ok = combinar_capa_abajo(&mut model, id_a);
+        assert!(ok);
+        let nueva = &model.lienzo.capas[0];
+        let buf = model.almacen.obtener(nueva.contenido).unwrap();
+        for px in buf.chunks_exact(4) {
+            for c in 0..3 {
+                assert!(
+                    (px[c] as i32 - 128).abs() <= 4,
+                    "canal {} = {} no está cerca de 128",
+                    c,
+                    px[c]
+                );
+            }
+            assert_eq!(px[3], 255);
+        }
+        // Crítico: la merged tiene opacidad 1.0 y blend Normal, no
+        // heredando el 0.5 — el 0.5 ya quedó horneado en los píxeles.
+        assert!((nueva.opacidad - 1.0).abs() < 1e-6);
+        assert_eq!(nueva.blend, ModoFusion::Normal);
+    }
+
+    #[test]
+    fn combinar_dos_mismos_pares_comparten_hash() {
+        // Content-addressing: mergear el mismo par dos veces produce el
+        // mismo hash en el almacén (la pintura es función de las capas).
+        let (mut m1, _, id_a1) =
+            modelo_dos_capas([12, 34, 56, 255], [78, 90, 12, 255]);
+        let (mut m2, _, id_a2) =
+            modelo_dos_capas([12, 34, 56, 255], [78, 90, 12, 255]);
+        combinar_capa_abajo(&mut m1, id_a1);
+        combinar_capa_abajo(&mut m2, id_a2);
+        let h1 = m1.lienzo.capas[0].contenido;
+        let h2 = m2.lienzo.capas[0].contenido;
+        assert_eq!(h1, h2, "mismo composite ⇒ mismo hash");
+    }
+
+    #[test]
+    fn msg_combinar_dispatcha_y_undo_restaura() {
+        // El flujo completo por update: tras Combinar hay 1 capa, tras
+        // Undo vuelven las 2 originales.
+        let (mut model, id_b, id_a) =
+            modelo_dos_capas([0, 0, 0, 255], [255, 255, 255, 255]);
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(model, Msg::Combinar(id_a), &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), 1);
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), 2);
+        // Los Uuid originales vuelven (el historial guarda el Lienzo
+        // entero, no rastrea hashes de buffers).
+        let ids_post: Vec<Uuid> = model.lienzo.capas.iter().map(|c| c.id).collect();
+        assert!(ids_post.contains(&id_b));
+        assert!(ids_post.contains(&id_a));
+    }
+
+    #[test]
+    fn hotkey_ctrl_e_emite_combinar() {
+        let (model, _, id_a) = modelo_dos_capas([0; 4], [0; 4]);
+        let mods = Modifiers { ctrl: true, ..Default::default() };
+        let msg = hotkey_a_msg(&model, &ev_char("e", mods));
+        assert!(matches!(msg, Some(Msg::Combinar(x)) if x == id_a));
+        // Sin Ctrl, la `e` suelta no debe disparar nada.
+        let msg2 = hotkey_a_msg(&model, &ev_char("e", Modifiers::default()));
+        assert!(msg2.is_none());
     }
 
     #[test]
