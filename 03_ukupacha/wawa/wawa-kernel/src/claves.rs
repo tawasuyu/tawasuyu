@@ -51,7 +51,7 @@
 
 use ed25519_compact::{PublicKey, Signature};
 
-use format::{CodigoError, CuadernoFirmado, Hash, ManifiestoFirmado};
+use format::{CodigoError, ConcesionCapacidad, CuadernoFirmado, Hash, ManifiestoFirmado};
 
 /// FASE 41 :: ANILLO MULTI-AUTOR de identidades federadas del operador
 /// local. Una propuesta firmada por CUALQUIERA de las tres claves de
@@ -220,5 +220,35 @@ pub fn verificar_cuaderno_firmado(cf: &CuadernoFirmado) -> Result<(), CodigoErro
     let pk = PublicKey::from_slice(&cf.autor).map_err(|_| CodigoError::Ausente)?;
     let sig = Signature::from_slice(&cf.firma).map_err(|_| CodigoError::Ausente)?;
     pk.verify(cf.cuaderno_raiz_hash, &sig)
+        .map_err(|_| CodigoError::AlmacenamientoFallo)
+}
+
+/// Verifica una [`ConcesionCapacidad`] (Fase 67 / WAWA §14.1.3): el binding
+/// firmado "este bytecode puede usar estos permisos". Mismo orden estricto de
+/// fallos que sus gemelos (anillo -> decodificacion -> firma) y mismos codigos.
+/// El MENSAJE firmado es `format::mensaje_capacidad(bytecode, permisos)` —un
+/// arreglo de pila de 36 bytes—, de modo que la firma liga la concesion al hash
+/// EXACTO del binario y al bitfield EXACTO: ni se transplanta a otro bytecode ni
+/// admite que se le suba un bit de permiso sin re-firmar.
+///
+/// ZERO-ALLOC: `mensaje_capacidad` devuelve un `[u8; 36]` de pila y la
+/// verificacion `ed25519-compact` no toca al asignador. El llamante (el punto
+/// de carga de una app) decide que hacer con el `Ok(())`: tomar la INTERSECCION
+/// de estos `permisos` con los que el manifiesto declara (`permisos_efectivos`).
+///
+/// `allow(dead_code)`: el VERIFICADOR ya es soberano y testeable; el punto de
+/// CARGA que lo invoca (intersectar con `entrada.permisos` en `encender_app`)
+/// llega en la fase de enforcement —ver `SDD-capacidades.md` §4, que exige el
+/// bump `VERSION_MANIFIESTO 4→5` y la ceremonia de concesiones del genesis,
+/// validables solo en QEMU—.
+#[allow(dead_code)]
+pub fn verificar_concesion_capacidad(c: &ConcesionCapacidad) -> Result<(), CodigoError> {
+    if !autor_en_anillo(&c.autor) {
+        return Err(CodigoError::CapacidadInsuficiente);
+    }
+    let pk = PublicKey::from_slice(&c.autor).map_err(|_| CodigoError::Ausente)?;
+    let sig = Signature::from_slice(&c.firma).map_err(|_| CodigoError::Ausente)?;
+    let mensaje = format::mensaje_capacidad(&c.bytecode, c.permisos);
+    pk.verify(mensaje, &sig)
         .map_err(|_| CodigoError::AlmacenamientoFallo)
 }

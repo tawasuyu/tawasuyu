@@ -22,7 +22,9 @@ pub mod release;
 pub use release::{construir_release, AppSpec, ObjetoEmitido, Release, ReleaseError};
 
 use agora_core::{verify_signature, AgoraError, IdentityId, Keypair};
-use format::{AgoraId, Canal, Firma, Hash, ManifiestoFirmado, RaizFirmada};
+use format::{
+    AgoraId, Canal, ConcesionCapacidad, Firma, Hash, ManifiestoFirmado, Permisos, RaizFirmada,
+};
 use thiserror::Error;
 
 /// Falla al firmar o verificar dentro del contrato del canal.
@@ -174,6 +176,41 @@ pub fn firmar_manifiesto(kp: &Keypair, manifiesto_hash: &Hash) -> ManifiestoFirm
 /// quemar un trap a Ring 0.
 pub fn verificar_manifiesto(mf: &ManifiestoFirmado) -> Result<(), CanalError> {
     verify_signature(&mf.autor, &mf.manifiesto_hash, &mf.firma)
+        .map_err(|_| CanalError::FirmaInvalida { timestamp: 0 })
+}
+
+// =============================================================================
+//  ConcesionCapacidad — "que binario puede hacer que", firmado e independiente
+//  del manifiesto (Fase 67 / WAWA §14.1.3)
+// =============================================================================
+
+/// Firma una [`ConcesionCapacidad`]: liga el `bytecode` (por su hash) a un
+/// bitfield de `permisos` con la firma del `kp` sobre el mensaje canonico de
+/// `format::mensaje_capacidad(bytecode, permisos)`. El kernel exigira que la
+/// pubkey del firmante habite el `AGORA_AUTH_RING` antes de honrar la concesion.
+///
+/// Es el gemelo de [`firmar_manifiesto`] para el binding de capacidad: mientras
+/// aquel firma "reancla a este manifiesto", este firma "este binario exacto
+/// puede usar estos permisos exactos" —un hecho que viaja con el bytecode y que
+/// ningun manifiesto puede escalar (el kernel toma la interseccion).
+pub fn firmar_capacidad(kp: &Keypair, bytecode: &Hash, permisos: Permisos) -> ConcesionCapacidad {
+    let mensaje = format::mensaje_capacidad(bytecode, permisos);
+    ConcesionCapacidad {
+        bytecode: *bytecode,
+        permisos,
+        autor: kp.public_key(),
+        firma: kp.sign(&mensaje),
+    }
+}
+
+/// Re-verifica una [`ConcesionCapacidad`] en userspace/host: la firma debe
+/// cubrir `mensaje_capacidad(bytecode, permisos)` bajo `autor`. No comprueba la
+/// pertenencia al anillo —eso es soberania del kernel (`claves.rs`)—; aqui solo
+/// validamos que la firma cierra matematicamente, util para que una herramienta
+/// host rechace una concesion corrupta antes de servirla.
+pub fn verificar_capacidad(c: &ConcesionCapacidad) -> Result<(), CanalError> {
+    let mensaje = format::mensaje_capacidad(&c.bytecode, c.permisos);
+    verify_signature(&c.autor, &mensaje, &c.firma)
         .map_err(|_| CanalError::FirmaInvalida { timestamp: 0 })
 }
 
@@ -400,6 +437,60 @@ mod tests {
         mf.manifiesto_hash[0] ^= 0x01;
         assert!(matches!(
             verificar_manifiesto(&mf),
+            Err(CanalError::FirmaInvalida { .. })
+        ));
+    }
+
+    #[test]
+    fn firmar_y_verificar_capacidad() {
+        use format::{PERMISO_RAIZ, PERMISO_RED};
+        let kp = Keypair::from_seed([7; 32]);
+        let bc = hash_de(13);
+        let c = firmar_capacidad(&kp, &bc, PERMISO_RED | PERMISO_RAIZ);
+        assert_eq!(c.autor, kp.public_key());
+        assert_eq!(c.bytecode, bc);
+        assert_eq!(c.permisos, PERMISO_RED | PERMISO_RAIZ);
+        assert!(verificar_capacidad(&c).is_ok());
+    }
+
+    #[test]
+    fn concesion_con_permisos_manipulados_se_detecta() {
+        use format::PERMISO_RED;
+        // Subir un bit de permiso sin re-firmar rompe la firma — exactamente lo
+        // que un manifiesto hostil intentaria para escalar un binario.
+        let kp = Keypair::from_seed([7; 32]);
+        let mut c = firmar_capacidad(&kp, &hash_de(13), PERMISO_RED);
+        c.permisos |= format::PERMISO_RAIZ;
+        assert!(matches!(
+            verificar_capacidad(&c),
+            Err(CanalError::FirmaInvalida { .. })
+        ));
+    }
+
+    #[test]
+    fn concesion_con_bytecode_manipulado_se_detecta() {
+        use format::PERMISO_RED;
+        // Transplantar la firma a OTRO bytecode no cuela: el hash entra en el
+        // mensaje canonico.
+        let kp = Keypair::from_seed([7; 32]);
+        let mut c = firmar_capacidad(&kp, &hash_de(13), PERMISO_RED);
+        c.bytecode = hash_de(99);
+        assert!(matches!(
+            verificar_capacidad(&c),
+            Err(CanalError::FirmaInvalida { .. })
+        ));
+    }
+
+    #[test]
+    fn concesion_con_autor_ajeno_falla() {
+        use format::PERMISO_RED;
+        let real = Keypair::from_seed([7; 32]);
+        let impostor = Keypair::from_seed([99; 32]);
+        let mut c = firmar_capacidad(&real, &hash_de(13), PERMISO_RED);
+        // Reclamar otra autoria sin re-firmar: la firma no valida bajo el impostor.
+        c.autor = impostor.public_key();
+        assert!(matches!(
+            verificar_capacidad(&c),
             Err(CanalError::FirmaInvalida { .. })
         ));
     }

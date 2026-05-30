@@ -474,6 +474,60 @@ impl ManifiestoFirmado {
 }
 
 // =============================================================================
+//  Fase 67 :: la CONCESION DE CAPACIDAD — "que binario puede hacer que", firmado
+// -----------------------------------------------------------------------------
+//  Hoy los permisos de una app viven en su `EntradaApp` del manifiesto: el
+//  manifiesto firmado dice "el bytecode X corre con permisos P". El binding es
+//  tan fuerte como el manifiesto — re-firmar un manifiesto nuevo basta para
+//  darle al MISMO binario permisos distintos. La concesion eleva ese binding a
+//  un hecho INDEPENDIENTE del manifiesto: una firma Ed25519 de una llave del
+//  `AGORA_AUTH_RING` sobre el par `(hash_bytecode, permisos)`. La firma viaja
+//  con el binario y NINGUN manifiesto puede escalar un binario mas alla de lo
+//  que su concesion autoriza —el kernel toma la INTERSECCION, ver
+//  [`permisos_efectivos`]—. Gemelo estructural de [`ManifiestoFirmado`]: la
+//  verificacion comparte el camino Ring 0 zero-alloc de `ed25519-compact`, pero
+//  el mensaje firmado es [`mensaje_capacidad`], no el hash pelado.
+// =============================================================================
+
+/// Una concesion de capacidad firmada: liga inmutablemente un bytecode (por su
+/// hash BLAKE3) a un bitfield de permisos, respaldada por la firma de una
+/// identidad soberana. Es un objeto del grafo (direccionado por contenido) que
+/// un `EntradaApp` referencia; el kernel la verifica contra el `AGORA_AUTH_RING`
+/// antes de enlazar capacidad alguna.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct ConcesionCapacidad {
+    /// Hash BLAKE3 del objeto-bytecode WASM al que esta concesion aplica. La
+    /// firma lo cubre: una concesion para el bytecode X jamas vale para Y.
+    pub bytecode: Hash,
+    /// Bitfield de permisos que esta concesion AUTORIZA para ese bytecode (ver
+    /// [`Permisos`] y las constantes `PERMISO_*`). Subir un bit invalida la firma.
+    pub permisos: Permisos,
+    /// Llave publica Ed25519 de quien concede. El kernel exige que habite el
+    /// `AGORA_AUTH_RING` antes de gastar un ciclo en criptografia.
+    pub autor: AgoraId,
+    /// Firma Ed25519 sobre [`mensaje_capacidad`]`(bytecode, permisos)`.
+    #[serde(with = "BigArray")]
+    pub firma: Firma,
+}
+
+impl ConcesionCapacidad {
+    /// Serializa la concesion a `postcard` — la carga util del objeto del grafo
+    /// que la aloja.
+    pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
+        postcard::to_allocvec(self)
+            .map_err(|_| "concesion_capacidad :: serializacion fallida")
+    }
+
+    /// Reconstruye una concesion desde su forma binaria. Tolera bytes
+    /// sobrantes tras la estructura — el relleno del registro.
+    pub fn deserializar(bytes: &[u8]) -> Result<ConcesionCapacidad, &'static str> {
+        postcard::take_from_bytes::<ConcesionCapacidad>(bytes)
+            .map(|(c, _)| c)
+            .map_err(|_| "concesion_capacidad :: deserializacion fallida")
+    }
+}
+
+// =============================================================================
 //  Fase 37 :: el sello criptografico del CUADERNO SOBERANO
 // -----------------------------------------------------------------------------
 //  La integridad de un cuaderno —un nodo del grafo cuyo payload es
@@ -870,6 +924,31 @@ pub fn mensaje_a_firmar(nombre_canal: &str, timestamp: u64, raiz_manifiesto: &Ha
     mensaje.extend_from_slice(&timestamp.to_le_bytes());
     mensaje.extend_from_slice(raiz_manifiesto);
     mensaje
+}
+
+/// Compone el mensaje canonico que un autor firma para CONCEDER capacidad a un
+/// bytecode: `bytecode(32) || permisos_le(4)`. Es la unica verdad del payload
+/// firmable de una [`ConcesionCapacidad`] —firmante y verificador lo componen
+/// por aqui, jamas a mano—. Liga la firma al hash EXACTO del binario y al
+/// bitfield EXACTO: una concesion para el bytecode X no vale para Y, y subir un
+/// bit de permiso invalida la firma. Devuelve un arreglo de pila de 36 bytes:
+/// zero-alloc, apto para el camino Ring 0 del kernel.
+pub fn mensaje_capacidad(bytecode: &Hash, permisos: Permisos) -> [u8; 36] {
+    let mut m = [0u8; 36];
+    m[..32].copy_from_slice(bytecode);
+    m[32..].copy_from_slice(&permisos.to_le_bytes());
+    m
+}
+
+/// Permisos EFECTIVOS de una app: la INTERSECCION de lo que su `EntradaApp` del
+/// manifiesto DECLARA y lo que una [`ConcesionCapacidad`] valida CONCEDE para su
+/// bytecode. El manifiesto no puede escalar un binario mas alla de su concesion
+/// firmada, y una concesion generosa no enciende permisos que el manifiesto no
+/// pidio. Sin concesion valida, el llamante pasa `0` como `concedidos` y la app
+/// corre sin capacidades gateadas (la matriz pasiva siempre esta). Es la regla
+/// que el kernel aplica en el punto de carga —ver `SDD-capacidades.md`—.
+pub const fn permisos_efectivos(declarados: Permisos, concedidos: Permisos) -> Permisos {
+    declarados & concedidos
 }
 
 // =============================================================================
@@ -1628,6 +1707,52 @@ mod pruebas {
         // como si fuera nueva.
         let m4 = mensaje_a_firmar("estable", 43, &raiz);
         assert_ne!(m1, m4);
+    }
+
+    #[test]
+    fn mensaje_capacidad_es_canonico_y_distingue_bytecode_y_permisos() {
+        let bc: Hash = [0xAB; 32];
+        let m1 = mensaje_capacidad(&bc, PERMISO_RED);
+        assert_eq!(m1, mensaje_capacidad(&bc, PERMISO_RED), "deterministico");
+        // Layout: bytecode(32) || permisos_le(4).
+        assert_eq!(&m1[..32], &bc);
+        assert_eq!(&m1[32..], &PERMISO_RED.to_le_bytes());
+
+        // Distinto bytecode => distinto mensaje: una concesion no se transplanta.
+        let otro: Hash = [0xCD; 32];
+        assert_ne!(m1, mensaje_capacidad(&otro, PERMISO_RED));
+        // Distintos permisos => distinto mensaje: subir un bit invalida la firma.
+        assert_ne!(m1, mensaje_capacidad(&bc, PERMISO_RED | PERMISO_RAIZ));
+    }
+
+    #[test]
+    fn concesion_capacidad_roundtrip() {
+        let c = ConcesionCapacidad {
+            bytecode: [0x11; 32],
+            permisos: PERMISO_RED | PERMISO_RAIZ,
+            autor: [0x22; 32],
+            firma: [0x33; 64],
+        };
+        let bytes = c.serializar().unwrap();
+        let vuelta = ConcesionCapacidad::deserializar(&bytes).unwrap();
+        assert_eq!(c, vuelta);
+    }
+
+    #[test]
+    fn permisos_efectivos_es_la_interseccion() {
+        // El manifiesto pide RED|RAIZ pero la concesion solo autoriza RED:
+        // efectivos = RED. El manifiesto no puede escalar a RAIZ por su cuenta.
+        let declarados = PERMISO_RED | PERMISO_RAIZ;
+        let concedidos = PERMISO_RED;
+        assert_eq!(permisos_efectivos(declarados, concedidos), PERMISO_RED);
+        // Concesion generosa, manifiesto modesto: efectivos = lo que el
+        // manifiesto pidio (no enciende lo que no se declaro).
+        assert_eq!(
+            permisos_efectivos(PERMISO_RED, PERMISO_RED | PERMISO_ALTAVOZ),
+            PERMISO_RED
+        );
+        // Sin concesion (concedidos=0): cero capacidades gateadas.
+        assert_eq!(permisos_efectivos(declarados, 0), 0);
     }
 
     #[test]
