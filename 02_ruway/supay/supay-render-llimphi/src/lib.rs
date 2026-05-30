@@ -420,6 +420,20 @@ pub struct RenderConfig {
     /// estén — comportamiento 3.28-3.29. Sólo afecta al rim del arma;
     /// el resto de la escena conserva el path omnidireccional 3.27.
     pub weapon_rim_directional: bool,
+    /// **Fase 3.31 — rim direccional de mobjs**. Si `true`, cada sprite
+    /// billboard (enemigos, decoración, proyectiles) usa una fake-normal
+    /// apuntando hacia la cámara para atenuar el aporte de cada world
+    /// light. Una antorcha **entre** el jugador y el imp tinta su frente
+    /// al 100 %; una antorcha **detrás** del imp lo back-lightea — el
+    /// sprite que ve el jugador es la cara frontal, ahí queda al piso
+    /// (`SPRITE_RIM_AMBIENT_FLOOR`). Sin direccional (`false`), todos
+    /// los sprites reciben el aporte omnidireccional del 3.27/3.29 —
+    /// backwards-compat exacta. Se aplica tanto al patch texturizado
+    /// como al fallback de rectángulos coloreados. El muzzle del
+    /// jugador queda fuera del shading direccional (es la luz que
+    /// emite el propio sprite del arma, no hay normal de mobj que la
+    /// module).
+    pub sprite_rim_directional: bool,
 }
 
 impl Default for RenderConfig {
@@ -443,6 +457,7 @@ impl Default for RenderConfig {
             world_lights_occlusion: true,
             weapon_rim_light: true,
             weapon_rim_directional: true,
+            sprite_rim_directional: true,
         }
     }
 }
@@ -1100,6 +1115,129 @@ fn combined_boost_rgb_cam(
         lit_sectors,
     );
     let w = world_lights_boost_rgb_cam(x_cam, y_cam, surf_sector, world_lights);
+    [
+        (m[0] + w[0]).min(MUZZLE_BOOST_PEAK),
+        (m[1] + w[1]).min(MUZZLE_BOOST_PEAK),
+        (m[2] + w[2]).min(MUZZLE_BOOST_PEAK),
+    ]
+}
+
+// =====================================================================
+// Fase 3.31 — Rim direccional para mobj sprites (billboards)
+// =====================================================================
+//
+// Generaliza el shading direccional del arma (3.30) a cualquier mobj
+// sprite. La billboard "mira" siempre a la cámara — su fake-normal es
+// `(-x_surf, -y_surf)/|surf|` (la dirección desde el sprite hacia el
+// origen del cam-space). Una luz **entre** la cámara y el sprite cae
+// del lado iluminado del billboard ⇒ tinte fuerte. Una luz **detrás**
+// del sprite back-lightea: la cara visible queda oscura, con piso
+// ambient para emular el bounce indirecto. La maquinaria es la misma
+// del 3.30 (cos(θ) clampeado a [`SPRITE_RIM_AMBIENT_FLOOR`]) pero la
+// normal y la dirección a la luz son relativas a la posición del
+// sprite, no al origen.
+
+/// Piso ambient del rim direccional para mobjs — análogo a
+/// [`WEAPON_RIM_AMBIENT_FLOOR`] del 3.30. Modela el bounce indirecto:
+/// una antorcha exactamente detrás del imp igual ilumina su entorno
+/// y un poco rebota hacia su cara visible.
+const SPRITE_RIM_AMBIENT_FLOOR: f32 = 0.3;
+
+/// Boost RGB de world lights en una superficie de sprite (`x_surf`,
+/// `y_surf` en cam-space) con atenuación direccional opcional. Con
+/// `directional=false` cae al path omni del 3.27/3.29
+/// (`world_lights_boost_rgb_cam`). Con `directional=true` cada luz se
+/// escala por `att = max(SPRITE_RIM_AMBIENT_FLOOR, 0.5 + 0.5·cos(θ))`
+/// donde `cos(θ) = dot(normal, dir_sprite_to_light)` y la normal es
+/// `(-x_surf, -y_surf)/|surf|` (toward camera).
+///
+/// Casos degenerados (sprite en la cámara o luz coincidente con el
+/// sprite): att=1.0 — sin NaN.
+fn world_lights_boost_rgb_for_sprite_cam(
+    x_surf: f32,
+    y_surf: f32,
+    surf_sector: u32,
+    lights: &[WorldLight],
+    directional: bool,
+) -> BoostRgb {
+    if !directional {
+        return world_lights_boost_rgb_cam(x_surf, y_surf, surf_sector, lights);
+    }
+    if lights.is_empty() {
+        return ZERO_BOOST;
+    }
+    let s2 = x_surf * x_surf + y_surf * y_surf;
+    if s2 < 1e-6 {
+        // Sprite en la cámara: la billboard no tiene normal definida.
+        // Degeneramos al path omni para evitar NaN — el caso "sprite
+        // pegado al jugador" es raro y visualmente ya está subsumido
+        // por la propia geometría del jugador.
+        return world_lights_boost_rgb_cam(x_surf, y_surf, surf_sector, lights);
+    }
+    let inv_s = s2.sqrt().recip();
+    let nx = -x_surf * inv_s;
+    let ny = -y_surf * inv_s;
+    let r2 = WORLD_LIGHT_RADIUS_WORLD * WORLD_LIGHT_RADIUS_WORLD;
+    let peak = WORLD_LIGHT_PEAK;
+    let mut sum = [0.0_f32; 3];
+    for l in lights {
+        if let Some(set) = l.lit_sectors.as_deref() {
+            if !set.contains(&surf_sector) {
+                continue;
+            }
+        }
+        let dx = l.x_cam - x_surf;
+        let dy = l.y_cam - y_surf;
+        let d2 = dx * dx + dy * dy;
+        if d2 >= r2 {
+            continue;
+        }
+        let f = 1.0 - d2 / r2;
+        let att = if d2 < 1e-6 {
+            1.0
+        } else {
+            let inv_d = d2.sqrt().recip();
+            let cos_theta = nx * dx * inv_d + ny * dy * inv_d;
+            (0.5 + 0.5 * cos_theta).max(SPRITE_RIM_AMBIENT_FLOOR)
+        };
+        let amount = f * f * peak * att;
+        let t = rgb_to_norm(l.tint_rgb);
+        sum[0] += amount * t[0];
+        sum[1] += amount * t[1];
+        sum[2] += amount * t[2];
+    }
+    [
+        sum[0].min(MUZZLE_BOOST_PEAK),
+        sum[1].min(MUZZLE_BOOST_PEAK),
+        sum[2].min(MUZZLE_BOOST_PEAK),
+    ]
+}
+
+/// Versión sprite del boost combinado: muzzle (omni, anclado al jugador)
+/// + world lights direccionadas por la fake-normal del billboard.
+/// El muzzle no se direcciona porque emana **del** sprite del arma,
+/// que es ortogonal a la geometría de un mobj observado a distancia.
+fn combined_boost_rgb_sprite_cam(
+    x_cam: f32,
+    y_cam: f32,
+    muzzle_alpha: f32,
+    surf_sector: u32,
+    lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
+    directional: bool,
+) -> BoostRgb {
+    let m = muzzle_boost_gated_rgb(
+        muzzle_boost_rgb_cam(x_cam, y_cam, muzzle_alpha),
+        surf_sector,
+        lit_sectors,
+    );
+    let w = world_lights_boost_rgb_for_sprite_cam(
+        x_cam,
+        y_cam,
+        surf_sector,
+        world_lights,
+        directional,
+    );
     [
         (m[0] + w[0]).min(MUZZLE_BOOST_PEAK),
         (m[1] + w[1]).min(MUZZLE_BOOST_PEAK),
@@ -2590,13 +2728,17 @@ fn gather_sprite(
             // lights (mobjs FF_FULLBRIGHT cercanos), sumado al muzzle.
             // Fase 3.27: boost RGB per-canal — un sprite cerca de una
             // bola BFG se tinta verdoso; cerca de plasma, azulado.
-            let boost_rgb = combined_boost_rgb_cam(
+            // Fase 3.31: opcionalmente direccional — luces detrás del
+            // sprite back-lightean (cara visible apagada con piso
+            // ambient), luces frontales tintan al 100 %.
+            let boost_rgb = combined_boost_rgb_sprite_cam(
                 x_cam,
                 y_cam,
                 cfg.muzzle_glow_alpha,
                 sprite.sector,
                 lit_sectors,
                 world_lights,
+                cfg.sprite_rim_directional,
             );
             let shade_rgb = sprite_shade_with_world(shade, boost_rgb);
             let img = make_tinted_sprite_image_rgb(&patch, shade_rgb);
@@ -2632,13 +2774,16 @@ fn gather_sprite(
     path.close_path();
     // Fase 3.26: fallback (sin patch del WAD) también combina muzzle + world lights.
     // Fase 3.27: boost RGB per-canal.
-    let boost = combined_boost_rgb_cam(
+    // Fase 3.31: idem rim direccional (fake-normal toward camera) si
+    // el toggle está on.
+    let boost = combined_boost_rgb_sprite_cam(
         x_cam,
         y_cam,
         cfg.muzzle_glow_alpha,
         sprite.sector,
         lit_sectors,
         world_lights,
+        cfg.sprite_rim_directional,
     );
     out.push(Renderable {
         depth,
@@ -5391,5 +5536,107 @@ mod tests {
             assert!(dir[ch].is_finite(), "canal {} no NaN/Inf", ch);
             assert!(dir[ch] > 0.0, "luz pegada al player aporta full");
         }
+    }
+
+    // =================================================================
+    // Fase 3.31 — Rim direccional de mobj sprites
+    // =================================================================
+
+    #[test]
+    fn sprite_rim_directional_front_light_matches_omni() {
+        // Sprite a (200, 0) en cam-space (frente al jugador). Una luz
+        // a (100, 0) está entre el jugador y el sprite — desde el
+        // sprite, la luz queda en dirección -X (hacia la cámara), que
+        // es exactamente su fake-normal. cos(0)=1 ⇒ att=1.0 ⇒ el path
+        // direccional debería coincidir bit-a-bit con el omni.
+        let white = (255, 255, 255);
+        let lights = [rim_light(100.0, 0.0, white)];
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, false);
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            assert!(
+                (omni[ch] - dir[ch]).abs() < 1e-5,
+                "luz front al sprite debería igualar omni: canal {} omni={} dir={}",
+                ch, omni[ch], dir[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn sprite_rim_directional_back_light_falls_to_floor() {
+        // Sprite a (200, 0), luz a (260, 0) (detrás del sprite desde
+        // la cámara). Desde el sprite la luz está en +X (lejos de la
+        // cámara), opuesto a la fake-normal (-1, 0). cos=-1 ⇒ att=floor.
+        let white = (255, 255, 255);
+        let lights = [rim_light(260.0, 0.0, white)];
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, false);
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            if omni[ch] > 0.01 {
+                let ratio = dir[ch] / omni[ch];
+                assert!(
+                    (ratio - SPRITE_RIM_AMBIENT_FLOOR).abs() < 1e-4,
+                    "back-light debería caer al piso ambient: canal {} ratio {}",
+                    ch, ratio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sprite_rim_directional_side_light_uses_half() {
+        // Sprite a (200, 0), luz a (200, 60) (al costado del sprite,
+        // perpendicular al eje player→sprite). Desde el sprite la
+        // dirección a la luz es (0, 1) — perpendicular a la normal
+        // (-1, 0). cos=0 ⇒ att=0.5.
+        let white = (255, 255, 255);
+        let lights = [rim_light(200.0, 60.0, white)];
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, false);
+        let dir = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            if omni[ch] > 0.01 {
+                let ratio = dir[ch] / omni[ch];
+                assert!(
+                    (ratio - 0.5).abs() < 1e-4,
+                    "lateral debería ser 0.5 del omni: canal {} ratio {}",
+                    ch, ratio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sprite_rim_directional_disabled_equals_omni_for_arbitrary_lights() {
+        // Toggle off ⇒ direccional debe coincidir con `world_lights_boost_rgb_cam`
+        // para cualquier configuración de luces (tres luces, tintes
+        // distintos, posiciones mezcladas alrededor del sprite).
+        let red = (255, 130, 60);
+        let blue = (110, 160, 255);
+        let warm = (255, 220, 140);
+        let lights = [
+            rim_light(180.0, 30.0, red),
+            rim_light(120.0, -40.0, blue),
+            rim_light(240.0, 80.0, warm),
+        ];
+        let omni = world_lights_boost_rgb_for_sprite_cam(200.0, 0.0, NO_SECTOR, &lights, false);
+        let baseline = world_lights_boost_rgb_cam(200.0, 0.0, NO_SECTOR, &lights);
+        assert_eq!(omni, baseline, "directional=false debe ser bit-identical al path 3.29");
+    }
+
+    #[test]
+    fn sprite_rim_directional_degenerates_safely_at_camera() {
+        // Sprite exactamente en el origen del cam-space (degenerado:
+        // billboard sin normal definida). Caemos al path omni dentro
+        // del helper direccional para evitar NaN. Resultado finito y
+        // ≥ 0 por canal.
+        let white = (255, 255, 255);
+        let lights = [rim_light(50.0, 0.0, white)];
+        let dir = world_lights_boost_rgb_for_sprite_cam(0.0, 0.0, NO_SECTOR, &lights, true);
+        for ch in 0..3 {
+            assert!(dir[ch].is_finite(), "canal {} no NaN/Inf", ch);
+        }
+        // Y debería coincidir con el omni (porque caemos al fallback).
+        let omni = world_lights_boost_rgb_for_sprite_cam(0.0, 0.0, NO_SECTOR, &lights, false);
+        assert_eq!(dir, omni, "degenerado ⇒ fallback omni");
     }
 }
