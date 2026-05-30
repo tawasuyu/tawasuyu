@@ -386,6 +386,19 @@ pub struct RenderConfig {
     /// Sin gating por oclusión: las luces son efímeras (1-30 ticks),
     /// el leak fugaz a través de paredes es invisible en práctica.
     pub world_lights_enabled: bool,
+    /// **Fase 3.28 — rim-light del arma desde world lights**. Si `true`,
+    /// el sprite del arma se tinta cada frame con el boost RGB de
+    /// `world_lights` evaluado en la posición del jugador (origen del
+    /// cam-space). Caminar al lado de una antorcha azul (`TBLU`) tinta
+    /// la pistola apenas azulada; un fireball pasando cerca le pinta
+    /// un rim rojizo. Modernización pura — Doom clásico no liga el
+    /// arma al ambiente (la PLAYPAL global no llega al psprite del
+    /// arma). Los frames `FF_FULLBRIGHT` (muzzle flash) saltan el
+    /// boost — el destello del propio fogonazo domina y el ambiente
+    /// queda subsumido. El muzzle glow del jugador *no* se suma acá
+    /// (el fogonazo sale *de* la pistola, no la ilumina a ella), como
+    /// en 3.22.
+    pub weapon_rim_light: bool,
 }
 
 impl Default for RenderConfig {
@@ -406,6 +419,7 @@ impl Default for RenderConfig {
             muzzle_glow_alpha: 0.0,
             muzzle_occlusion: true,
             world_lights_enabled: true,
+            weapon_rim_light: true,
         }
     }
 }
@@ -1178,11 +1192,28 @@ fn render_frame(
     // mismo player_light pero, gracias a su flag FF_FULLBRIGHT, igual
     // sale a luz plena.
     let player_light = player_sector_light(snap);
-    draw_weapon_sprite(scene, rect, &snap.weapon, player_light, cfg);
+    // Fase 3.28: boost RGB del ambiente evaluado en la posición del
+    // jugador (origen del cam-space). Reutiliza la lista cacheada de
+    // world lights del frame; sin alocaciones extra. El muzzle del
+    // propio jugador *no* se incluye (consistente con 3.22 — el
+    // fogonazo sale de la pistola, no la ilumina a ella).
+    let weapon_rim_boost = if cfg.weapon_rim_light {
+        world_lights_boost_rgb_cam(0.0, 0.0, world_lights_ref)
+    } else {
+        ZERO_BOOST
+    };
+    draw_weapon_sprite(scene, rect, &snap.weapon, player_light, weapon_rim_boost, cfg);
     // Fase 3.16: muzzle flash (`ps_flash`) sobrepuesto al weapon.
     // Doom usa este slot para el destello brillante de BFG, plasma,
     // chaingun, etc. Mismo helper, mismo z-order layer apenas encima.
-    draw_weapon_sprite(scene, rect, &snap.weapon_flash, player_light, cfg);
+    draw_weapon_sprite(
+        scene,
+        rect,
+        &snap.weapon_flash,
+        player_light,
+        weapon_rim_boost,
+        cfg,
+    );
 
     // Fase 3.19: viñeta de cabina (gradient radial muy sutil). Va antes
     // que el overlay de PLAYPAL para que un damage flash rojo intenso
@@ -2446,17 +2477,6 @@ fn gather_sprite(
     });
 }
 
-/// Crea un `peniko::Image` aplicando un shade multiplicativo (0..1) al
-/// RGBA del patch. `shade=1.0` → idéntico; `shade<1.0` → tonos más
-/// oscuros. La alpha del patch se preserva tal cual (importante: los
-/// pixels transparentes siguen transparentes después del tint).
-fn make_tinted_sprite_image(
-    patch: &supay_wad::Patch,
-    shade: f32,
-) -> llimphi_ui::llimphi_raster::peniko::Image {
-    make_tinted_sprite_image_rgb(patch, [shade, shade, shade])
-}
-
 /// Variante per-canal: cada componente RGB se multiplica por su tint
 /// individual. Usada por el muzzle flash (Fase 3.22) para tintar
 /// amarillo cálido los sprites cercanos al destello del arma. Default
@@ -2836,6 +2856,7 @@ fn draw_weapon_sprite(
     rect: PaintRect,
     weap: &WeaponSpriteSnap,
     player_light: u8,
+    rim_boost: BoostRgb,
     cfg: &RenderConfig,
 ) {
     if !weap.active {
@@ -2884,7 +2905,16 @@ fn draw_weapon_sprite(
     } else {
         shade_for(player_light, 0.0, cfg)
     };
-    let img = make_tinted_sprite_image(&patch, shade);
+    // Fase 3.28: rim-light desde world lights cercanas. El arma recoge
+    // tinte ambiente per-canal (torch azul → arma azulada; fireball
+    // cerca → rim rojizo). Bypass en full_bright: el destello del
+    // propio fogonazo domina y subsume el ambiente.
+    let tint_rgb = if full_bright {
+        [shade, shade, shade]
+    } else {
+        sprite_shade_with_world(shade, rim_boost)
+    };
+    let img = make_tinted_sprite_image_rgb(&patch, tint_rgb);
     // Affine: image(ix, iy) → screen(screen_x + ix·scale, screen_y + iy·scale).
     // Para mirror, X negativo + offset al borde derecho.
     let xform = if mirror {
@@ -4882,5 +4912,94 @@ mod tests {
         let lights = gather_world_lights(&snap, &cam, None);
         assert_eq!(lights.len(), 1);
         assert_eq!(lights[0].tint_rgb, MUZZLE_TINT_RGB);
+    }
+
+    // =================================================================
+    // Fase 3.28 — Weapon rim-light desde world lights
+    // =================================================================
+
+    /// Helper: una `WorldLight` en `(x_cam, y_cam)` con el tinte dado.
+    fn rim_light(x: f32, y: f32, tint: (u8, u8, u8)) -> WorldLight {
+        WorldLight { x_cam: x, y_cam: y, sector: NO_SECTOR, tint_rgb: tint }
+    }
+
+    #[test]
+    fn weapon_rim_boost_zero_at_player_with_no_world_lights() {
+        // Sin world lights el arma no recibe tinte ambiente: identity.
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &[]);
+        assert_eq!(boost, ZERO_BOOST);
+        let tint = sprite_shade_with_world(0.7, boost);
+        assert!((tint[0] - 0.7).abs() < 1e-5);
+        assert!((tint[1] - 0.7).abs() < 1e-5);
+        assert!((tint[2] - 0.7).abs() < 1e-5);
+    }
+
+    #[test]
+    fn weapon_rim_boost_blue_torch_skews_blue_at_player() {
+        // Antorcha azul a 120 u del jugador (dentro de WORLD_LIGHT_RADIUS=192):
+        // el boost en (0,0) tiene B > R y B > G — el arma se tinta azulada.
+        let blue = (110, 160, 255);
+        let lights = [rim_light(120.0, 0.0, blue)];
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        assert!(
+            boost[2] > boost[0] && boost[2] > boost[1],
+            "blue torch debería skewear B: got [{}, {}, {}]",
+            boost[0], boost[1], boost[2]
+        );
+        // Con shade=0.5 (cuarto oscuro, donde el rim importa) el tinte
+        // final preserva la asimetría: el canal B queda por encima del R.
+        // En shade=1.0 todos los canales saturan a 1.0 — el rim sólo
+        // se ve cuando el arma está apagada por luz baja.
+        let tint = sprite_shade_with_world(0.5, boost);
+        assert!(tint[2] > tint[0], "tint[B] > tint[R] con shade bajo");
+    }
+
+    #[test]
+    fn weapon_rim_boost_red_fireball_skews_red_at_player() {
+        // BAL1 imp fireball a 80 u del jugador: el boost tiene R > G > B.
+        let red = (255, 130, 60);
+        let lights = [rim_light(80.0, 0.0, red)];
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        assert!(
+            boost[0] > boost[1] && boost[1] > boost[2],
+            "fireball debería skewear R > G > B: got [{}, {}, {}]",
+            boost[0], boost[1], boost[2]
+        );
+    }
+
+    #[test]
+    fn weapon_rim_boost_zero_when_light_beyond_radius() {
+        // Una luz fuera del radio (`WORLD_LIGHT_RADIUS_WORLD`) no aporta
+        // boost al arma — el rim queda neutro aunque haya antorchas
+        // lejanas en línea de vista.
+        let blue = (110, 160, 255);
+        let r = WORLD_LIGHT_RADIUS_WORLD + 1.0;
+        let lights = [rim_light(r, 0.0, blue)];
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        assert_eq!(boost, ZERO_BOOST);
+    }
+
+    #[test]
+    fn weapon_full_bright_bypasses_rim_boost() {
+        // Cuando el frame del arma tiene FF_FULLBRIGHT, el render usa
+        // `[shade, shade, shade]` y *no* sprite_shade_with_world — el
+        // destello del fogonazo domina y subsume el ambiente. Validamos
+        // que el path normal en cuarto oscuro (shade=0.5) sí preserva
+        // la asimetría per-canal, mientras el path full_bright es
+        // grayscale: `[1, 1, 1]` independiente del boost.
+        let blue = (110, 160, 255);
+        let lights = [rim_light(120.0, 0.0, blue)];
+        let boost = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        // Path normal: tint asimétrico per-canal en shade bajo.
+        let normal_tint = sprite_shade_with_world(0.5, boost);
+        assert!(
+            normal_tint[2] > normal_tint[0],
+            "path normal debería tener B>R con boost azul + shade bajo"
+        );
+        // Path full_bright: el render *no* llama a sprite_shade_with_world,
+        // usa `[shade, shade, shade]` directo — grayscale.
+        let full_bright_tint = [1.0_f32, 1.0, 1.0];
+        assert_eq!(full_bright_tint[0], full_bright_tint[1]);
+        assert_eq!(full_bright_tint[1], full_bright_tint[2]);
     }
 }

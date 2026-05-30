@@ -147,6 +147,12 @@ struct Model {
     /// sobre paredes/pisos/techos/sprites cercanos. Off vuelve al 3.25
     /// (sólo el muzzle del jugador ilumina el mundo).
     world_lights_enabled: bool,
+    /// Fase 3.28: rim-light del arma desde world lights (F11). Default on
+    /// — el sprite del psprite recoge tinte RGB ambiente (torch azul →
+    /// pistola azulada, fireball pasando cerca → rim rojizo). Off vuelve
+    /// al 3.27 (arma sólo recibe el `light_level` del sector como
+    /// shading scalar).
+    weapon_rim_light: bool,
 }
 
 /// Tiempo de decaimiento del fogonazo del arma — el boost cae de 1.0 a 0
@@ -194,6 +200,8 @@ enum Msg {
     ToggleMuzzleOcclusion,
     /// Fase 3.26: alterna las world lights de mobjs FF_FULLBRIGHT (F10).
     ToggleWorldLights,
+    /// Fase 3.28: alterna el rim-light del arma desde world lights (F11).
+    ToggleWeaponRimLight,
     Quit,
 }
 
@@ -257,6 +265,7 @@ impl App for Supay {
             muzzle_glow_at: None,
             muzzle_occlusion: true,
             world_lights_enabled: true,
+            weapon_rim_light: true,
         }
     }
 
@@ -291,6 +300,9 @@ impl App for Supay {
             }
             if matches!(&e.key, Key::Named(NamedKey::F10)) {
                 return Some(Msg::ToggleWorldLights);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F11)) {
+                return Some(Msg::ToggleWeaponRimLight);
             }
             // Fase 3.17: mouse-look cosmético. PageUp = mirar arriba,
             // PageDown = mirar abajo, Home = resetear horizonte. No pasan
@@ -417,6 +429,9 @@ impl App for Supay {
             Msg::ToggleWorldLights => {
                 m.world_lights_enabled = !m.world_lights_enabled;
             }
+            Msg::ToggleWeaponRimLight => {
+                m.weapon_rim_light = !m.weapon_rim_light;
+            }
         }
         m
     }
@@ -449,6 +464,8 @@ impl App for Supay {
                     muzzle_occlusion: model.muzzle_occlusion,
                     // Fase 3.26: luces dinámicas desde mobjs FF_FULLBRIGHT.
                     world_lights_enabled: model.world_lights_enabled,
+                    // Fase 3.28: rim-light del arma desde world lights.
+                    weapon_rim_light: model.weapon_rim_light,
                     ..RenderConfig::default()
                 },
             )),
@@ -508,7 +525,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.27 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.28 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

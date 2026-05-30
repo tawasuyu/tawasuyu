@@ -195,7 +195,7 @@ supay-stub-step-2-cmd =     curl -O https://distro.ibiblio.org/slitaz/sources/pa
 supay-stub-step-3 = Watiq kachay
 supay-stub-step-3-cmd =     cargo run -p supay-doom-llimphi --release
 supay-stub-footer = doomgeneric (C) 35 Hz-pi puriy; framebuffer 320×200 ARGB aspect-fit-wan llimpisqa.
-supay-controls-hint = WASD · Ctrl tuksiy · Space kichay · Tab mapa · F3 qhaway · F4 ñawi · F5 llantu · F6 HUD · F7 ll-chaki · F8 q'ancha · F9 hark'ay · F10 mobj-k'anchay · F12 lluqsiy
+supay-controls-hint = WASD · Ctrl tuksiy · Space kichay · Tab mapa · F3 qhaway · F4 ñawi · F5 llantu · F6 HUD · F7 ll-chaki · F8 q'ancha · F9 hark'ay · F10 mobj-k'anchay · F11 maki-k'anchay · F12 lluqsiy
 supay-stub-controls-hint = F3 FB/3D tikray  ·  F12 wisq'ay
 
 # === shuma-shell ===
