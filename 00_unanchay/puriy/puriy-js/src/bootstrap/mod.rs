@@ -11,6 +11,7 @@ mod window_events;
 mod url;
 mod streams;
 mod blob;
+mod file;
 mod objecturl;
 mod urlsearchparams;
 mod urlclass;
@@ -37,6 +38,7 @@ pub(crate) use window_events::WINDOW_EVENTS_BOOTSTRAP;
 pub(crate) use url::URL_BOOTSTRAP;
 pub(crate) use streams::STREAMS_BOOTSTRAP;
 pub(crate) use blob::BLOB_BOOTSTRAP;
+pub(crate) use file::FILE_BOOTSTRAP;
 pub(crate) use objecturl::OBJECT_URL_BOOTSTRAP;
 pub(crate) use urlsearchparams::URLSEARCHPARAMS_BOOTSTRAP;
 pub(crate) use urlclass::URLCLASS_BOOTSTRAP;
@@ -65,6 +67,7 @@ pub(crate) const ALL: &[&str] = &[
     URL_BOOTSTRAP,
     STREAMS_BOOTSTRAP,
     BLOB_BOOTSTRAP,
+    FILE_BOOTSTRAP,
     OBJECT_URL_BOOTSTRAP,
     URLSEARCHPARAMS_BOOTSTRAP,
     URLCLASS_BOOTSTRAP,

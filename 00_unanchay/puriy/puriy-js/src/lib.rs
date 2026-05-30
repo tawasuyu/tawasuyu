@@ -6603,4 +6603,54 @@ mod tests {
         // URLSearchParams consume el iterable de pares de Headers.
         assert_eq!(rt.eval("s").expect("e"), JsValue::String("x=1&y=2".into()));
     }
+
+    // ============= Fase 7.60 — File (subclase de Blob) =============
+
+    #[test]
+    fn file_constructor_es_blob_y_tiene_name() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var f = new File(['hola'], 'a.txt', { type: 'text/plain', lastModified: 5 }); \
+             var esBlob = f instanceof Blob; var esFile = f instanceof File; \
+             var nm = f.name; var tp = f.type; var sz = f.size; var lm = f.lastModified; \
+             var txt = null; f.text().then(function(t) { txt = t; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("esBlob").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("esFile").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("nm").expect("e"), JsValue::String("a.txt".into()));
+        assert_eq!(rt.eval("tp").expect("e"), JsValue::String("text/plain".into()));
+        assert_eq!(rt.eval("sz").expect("e"), JsValue::Number(4.0));
+        assert_eq!(rt.eval("lm").expect("e"), JsValue::Number(5.0));
+        assert_eq!(rt.eval("txt").expect("e"), JsValue::String("hola".into()));
+    }
+
+    #[test]
+    fn file_hereda_metodos_de_blob() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var f = new File(['abcdef'], 'b.bin'); \
+             var sl = f.slice(1, 3); var slEsBlob = sl instanceof Blob; \
+             var sub = null; sl.text().then(function(t) { sub = t; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("slEsBlob").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("sub").expect("e"), JsValue::String("bc".into()));
+    }
+
+    #[test]
+    fn formdata_blob_se_envuelve_en_file() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var fd = new FormData(); \
+             fd.append('doc', new Blob(['x'], { type: 'text/plain' }), 'd.txt'); \
+             fd.append('texto', 'plano'); \
+             var v = fd.get('doc'); var esFile = v instanceof File; var nm = v.name; \
+             var planoEsString = typeof fd.get('texto') === 'string';",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("esFile").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("nm").expect("e"), JsValue::String("d.txt".into()));
+        assert_eq!(rt.eval("planoEsString").expect("e"), JsValue::Bool(true));
+    }
 }

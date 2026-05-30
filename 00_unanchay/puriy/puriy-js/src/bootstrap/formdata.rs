@@ -15,13 +15,15 @@ globalThis.FormData = function() {
 };
 globalThis.FormData.prototype.append = function(name, value, filename) {
     name = String(name);
-    var v = (value instanceof globalThis.Blob) ? value : String(value);
-    this._list.push([name, v, filename != null ? String(filename) : undefined]);
+    // Fase 7.60 — un Blob/File con (o sin) filename se normaliza a File; el
+    // resto cae a String. `__puriy_fd_normalize` vive en bootstrap/file.
+    var norm = globalThis.__puriy_fd_normalize(value, filename);
+    this._list.push([name, norm.value, norm.filename]);
 };
 globalThis.FormData.prototype.set = function(name, value, filename) {
     name = String(name);
-    var v = (value instanceof globalThis.Blob) ? value : String(value);
-    var entry = [name, v, filename != null ? String(filename) : undefined];
+    var norm = globalThis.__puriy_fd_normalize(value, filename);
+    var entry = [name, norm.value, norm.filename];
     var found = false; var out = [];
     for (var i = 0; i < this._list.length; i++) {
         if (this._list[i][0] === name) {
