@@ -55,6 +55,7 @@
 //! - `{` / `}`        — con pincel/borrador, ∓10% a la dureza (borde)
 //! - `Shift`+click (pincel/borrador) — traza una línea recta desde el
 //!   último punto pintado hasta el click
+//! - `s`              — cicla la simetría del trazo (✕/↔/↕/✛)
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
 //!
@@ -679,12 +680,14 @@ impl App for Tullpu {
                     // Shift + click con un punto previo: trazo en LÍNEA
                     // RECTA desde el último punto hasta acá (Photoshop).
                     // Si no, una pincelada puntual.
+                    let sim = model.simetria;
                     let cambio = match (model.shift_held, model.ultimo_pincel) {
                         (true, Some((px, py))) => pincel_segmento_en_capa(
                             &mut model, px, py, cx, cy, radio, borrar, dureza,
+                            sim,
                         ),
                         _ => pincel_punto_en_capa(
-                            &mut model, cx, cy, radio, borrar, dureza,
+                            &mut model, cx, cy, radio, borrar, dureza, sim,
                         ),
                     };
                     if cambio {
@@ -715,6 +718,7 @@ impl App for Tullpu {
                         let borrar = model.herramienta == Herramienta::Borrador;
                         let radio = model.radio_pincel;
                         let dureza = model.dureza_pincel;
+                        let sim = model.simetria;
                         if pincel_segmento_en_capa(
                             &mut model,
                             pd.last_ix,
@@ -724,6 +728,7 @@ impl App for Tullpu {
                             radio,
                             borrar,
                             dureza,
+                            sim,
                         ) {
                             let etiqueta =
                                 model.seleccionada.map(|i| (i, "pincel"));
@@ -763,6 +768,10 @@ impl App for Tullpu {
             }
             Msg::SetShift(v) => {
                 model.shift_held = v;
+            }
+            Msg::CiclarSimetria => {
+                model.simetria = model.simetria.siguiente();
+                model.estado = format!("simetría: {}", model.simetria.etiqueta());
             }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app

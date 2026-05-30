@@ -70,6 +70,7 @@
             dureza_pincel: DUREZA_PINCEL,
             shift_held: false,
             ultimo_pincel: None,
+            simetria: Simetria::Ninguna,
             portapapeles: None,
         }
     }
@@ -4059,7 +4060,7 @@
         model.color_picked = Some([255, 0, 0, 255]);
         aplicar_y_recomponer(&mut model);
         // Disco radio 0 en (1,1).
-        let ok = pincel_punto_en_capa(&mut model, 1, 1, 0, false, 1.0);
+        let ok = pincel_punto_en_capa(&mut model, 1, 1, 0, false, 1.0, Simetria::Ninguna);
         assert!(ok);
         let nh = model.lienzo.capa(id).unwrap().contenido;
         let bp = model.almacen.obtener(nh).unwrap();
@@ -4073,7 +4074,7 @@
             op: TransformacionPixel::Local(OpLocal::Invertir),
             estado: Frescura::Fresca,
         };
-        assert!(!pincel_punto_en_capa(&mut model, 2, 2, 0, false, 1.0));
+        assert!(!pincel_punto_en_capa(&mut model, 2, 2, 0, false, 1.0, Simetria::Ninguna));
         assert!(model.estado.contains("derivada"));
     }
 
@@ -4465,4 +4466,97 @@
         assert_eq!(alfa(1, 1), 255);
         assert_eq!(alfa(6, 1), 255);
         assert_eq!(alfa(3, 1), 0);
+    }
+
+    // ---- Fase 49: simetría de trazo (mirror painting) -------------------
+
+    #[test]
+    fn ejes_simetria_cuenta_correcta() {
+        assert_eq!(ejes_simetria(Simetria::Ninguna).len(), 1);
+        assert_eq!(ejes_simetria(Simetria::Vertical).len(), 2);
+        assert_eq!(ejes_simetria(Simetria::Horizontal).len(), 2);
+        assert_eq!(ejes_simetria(Simetria::Ambas).len(), 4);
+    }
+
+    #[test]
+    fn aplicar_eje_refleja_sobre_el_centro() {
+        // Lienzo 8×8. Punto (1,2).
+        assert_eq!(aplicar_eje(1, 2, 8, 8, (false, false)), (1, 2));
+        assert_eq!(aplicar_eje(1, 2, 8, 8, (true, false)), (6, 2)); // 8-1-1
+        assert_eq!(aplicar_eje(1, 2, 8, 8, (false, true)), (1, 5)); // 8-1-2
+        assert_eq!(aplicar_eje(1, 2, 8, 8, (true, true)), (6, 5));
+    }
+
+    #[test]
+    fn simetria_siguiente_cicla() {
+        assert_eq!(Simetria::Ninguna.siguiente(), Simetria::Vertical);
+        assert_eq!(Simetria::Vertical.siguiente(), Simetria::Horizontal);
+        assert_eq!(Simetria::Horizontal.siguiente(), Simetria::Ambas);
+        assert_eq!(Simetria::Ambas.siguiente(), Simetria::Ninguna);
+    }
+
+    #[test]
+    fn ciclar_simetria_hotkey_y_handler() {
+        let m = modelo_minimo();
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("s", Modifiers::default())),
+            Some(Msg::CiclarSimetria)
+        ));
+        let mut model = modelo_minimo();
+        assert_eq!(model.simetria, Simetria::Ninguna);
+        model = <Tullpu as App>::update(model, Msg::CiclarSimetria, &Handle::for_test());
+        assert_eq!(model.simetria, Simetria::Vertical);
+    }
+
+    #[test]
+    fn pincel_con_simetria_vertical_pinta_ambos_lados() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 8 * 8 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let mut lienzo = Lienzo::nuevo(8, 8);
+        lienzo.apilar(cap);
+        model.lienzo = lienzo;
+        model.seleccionada = Some(id);
+        model.color_picked = Some([0, 0, 0, 255]);
+        aplicar_y_recomponer(&mut model);
+        // Punto en (1,3) radio 0 con simetría vertical → también (6,3).
+        let ok = pincel_punto_en_capa(
+            &mut model, 1, 3, 0, false, 1.0, Simetria::Vertical,
+        );
+        assert!(ok);
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let alfa = |x: usize, y: usize| bp[(y * 8 + x) * 4 + 3];
+        assert_eq!(alfa(1, 3), 255); // original
+        assert_eq!(alfa(6, 3), 255); // espejo X (8-1-1)
+        assert_eq!(alfa(1, 4), 0); // sin espejo Y
+    }
+
+    #[test]
+    fn pincel_con_simetria_ambas_pinta_cuatro() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 8 * 8 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let mut lienzo = Lienzo::nuevo(8, 8);
+        lienzo.apilar(cap);
+        model.lienzo = lienzo;
+        model.seleccionada = Some(id);
+        model.color_picked = Some([0, 0, 0, 255]);
+        aplicar_y_recomponer(&mut model);
+        let ok = pincel_punto_en_capa(
+            &mut model, 1, 2, 0, false, 1.0, Simetria::Ambas,
+        );
+        assert!(ok);
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let alfa = |x: usize, y: usize| bp[(y * 8 + x) * 4 + 3];
+        // 4 cuadrantes: (1,2),(6,2),(1,5),(6,5).
+        assert_eq!(alfa(1, 2), 255);
+        assert_eq!(alfa(6, 2), 255);
+        assert_eq!(alfa(1, 5), 255);
+        assert_eq!(alfa(6, 5), 255);
     }

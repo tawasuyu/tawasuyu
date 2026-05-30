@@ -107,6 +107,10 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("e") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Borrador));
         }
+        // `s` = cicla la simetría del trazo (sin Ctrl: Ctrl+S exporta).
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("s") => {
+            return Some(Msg::CiclarSimetria);
+        }
         // Esc limpia la selección (si hay) — global porque no compite
         // con otros modales: cuando picker está abierto o se está
         // renombrando, este `hotkey_a_msg` no se invoca (los modales

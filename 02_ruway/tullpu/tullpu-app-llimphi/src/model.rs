@@ -113,6 +113,8 @@ pub(crate) struct Model {
     /// sólo durante un drag). Ancla del trazo recto con Shift. `None`
     /// hasta el primer trazo.
     pub(crate) ultimo_pincel: Option<(i32, i32)>,
+    /// Simetría activa del trazo (espejo sobre ejes del lienzo).
+    pub(crate) simetria: Simetria,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -239,6 +241,40 @@ pub(crate) struct PincelDrag {
     pub(crate) rh: f32,
     pub(crate) last_ix: i32,
     pub(crate) last_iy: i32,
+}
+
+/// Simetría del trazo: refleja cada estampa sobre el/los eje(s) central(es)
+/// del lienzo. `Ninguna` = comportamiento normal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Simetria {
+    Ninguna,
+    /// Espejo izquierda↔derecha (eje vertical en el centro).
+    Vertical,
+    /// Espejo arriba↔abajo (eje horizontal en el centro).
+    Horizontal,
+    /// Las dos: 4 estampas por punto.
+    Ambas,
+}
+
+impl Simetria {
+    /// Cicla Ninguna → Vertical → Horizontal → Ambas → Ninguna.
+    pub(crate) fn siguiente(self) -> Simetria {
+        match self {
+            Simetria::Ninguna => Simetria::Vertical,
+            Simetria::Vertical => Simetria::Horizontal,
+            Simetria::Horizontal => Simetria::Ambas,
+            Simetria::Ambas => Simetria::Ninguna,
+        }
+    }
+
+    pub(crate) fn etiqueta(self) -> &'static str {
+        match self {
+            Simetria::Ninguna => "✕",
+            Simetria::Vertical => "↔",
+            Simetria::Horizontal => "↕",
+            Simetria::Ambas => "✛",
+        }
+    }
 }
 
 /// Radio inicial del pincel en px-imagen (disco lleno; diámetro ≈ `2·r+1`).
@@ -445,6 +481,8 @@ pub(crate) enum Msg {
     /// Sincroniza el estado vivo de la tecla Shift (emitido por `on_key`
     /// al presionar/soltar Shift). Sólo actualiza `model.shift_held`.
     SetShift(bool),
+    /// Cicla la simetría del trazo (Ninguna→V→H→Ambas). No toca el lienzo.
+    CiclarSimetria,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

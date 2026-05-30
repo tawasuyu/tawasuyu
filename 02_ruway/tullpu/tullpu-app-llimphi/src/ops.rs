@@ -1031,6 +1031,34 @@ fn pincel_aplicar(
 
 /// Estampa un disco del pincel en `(cx, cy)` sobre la capa raster
 /// seleccionada (inicio de trazo). `borrar` → goma. Ver [`pincel_aplicar`].
+/// Ejes de espejo activos para una simetría: lista de `(flip_x, flip_y)`.
+/// Siempre incluye `(false, false)` (la estampa original). Pura.
+pub(crate) fn ejes_simetria(sim: Simetria) -> Vec<(bool, bool)> {
+    match sim {
+        Simetria::Ninguna => vec![(false, false)],
+        Simetria::Vertical => vec![(false, false), (true, false)],
+        Simetria::Horizontal => vec![(false, false), (false, true)],
+        Simetria::Ambas => {
+            vec![(false, false), (true, false), (false, true), (true, true)]
+        }
+    }
+}
+
+/// Refleja `(x, y)` en un lienzo `w × h` según `(flip_x, flip_y)`
+/// (espejo sobre el eje central de cada dimensión). Pura.
+pub(crate) fn aplicar_eje(
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    flip: (bool, bool),
+) -> (i32, i32) {
+    let nx = if flip.0 { w as i32 - 1 - x } else { x };
+    let ny = if flip.1 { h as i32 - 1 - y } else { y };
+    (nx, ny)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pincel_punto_en_capa(
     model: &mut Model,
     cx: i32,
@@ -1038,15 +1066,20 @@ pub(crate) fn pincel_punto_en_capa(
     radio: i32,
     borrar: bool,
     dureza: f32,
+    sim: Simetria,
 ) -> bool {
     pincel_aplicar(model, |buf, w, h, color, bounds| {
-        estampar_disco(buf, w, h, cx, cy, radio, color, borrar, dureza, bounds)
+        for eje in ejes_simetria(sim) {
+            let (x, y) = aplicar_eje(cx, cy, w, h, eje);
+            estampar_disco(buf, w, h, x, y, radio, color, borrar, dureza, bounds);
+        }
     })
 }
 
 /// Pinta el segmento `(x0,y0) → (x1,y1)` del pincel sobre la capa raster
 /// seleccionada (continuación de trazo). `borrar` → goma. Ver
 /// [`pincel_aplicar`].
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pincel_segmento_en_capa(
     model: &mut Model,
@@ -1057,11 +1090,16 @@ pub(crate) fn pincel_segmento_en_capa(
     radio: i32,
     borrar: bool,
     dureza: f32,
+    sim: Simetria,
 ) -> bool {
     pincel_aplicar(model, |buf, w, h, color, bounds| {
-        trazar_linea_pincel(
-            buf, w, h, x0, y0, x1, y1, radio, color, borrar, dureza, bounds,
-        )
+        for eje in ejes_simetria(sim) {
+            let (ax, ay) = aplicar_eje(x0, y0, w, h, eje);
+            let (bx, by) = aplicar_eje(x1, y1, w, h, eje);
+            trazar_linea_pincel(
+                buf, w, h, ax, ay, bx, by, radio, color, borrar, dureza, bounds,
+            );
+        }
     })
 }
 

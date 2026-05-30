@@ -719,6 +719,12 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
                 ),
             ]),
         ));
+        // Simetría del trazo (cicla con `s` o este botón).
+        hijos.push(envolver_fila(button_view(
+            format!("simetría {} · s", model.simetria.etiqueta()),
+            &pal,
+            Msg::CiclarSimetria,
+        )));
     }
     // Gestión de la selección: seleccionar todo + expandir/contraer el
     // rect. La etiqueta de "todo" muestra las dims del lienzo.
