@@ -76,6 +76,9 @@ mod eyedropper;
 mod idledetector;
 mod contacts;
 mod midi;
+mod serial;
+mod hid;
+mod usb;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -152,6 +155,9 @@ pub(crate) use eyedropper::EYEDROPPER_BOOTSTRAP;
 pub(crate) use idledetector::IDLEDETECTOR_BOOTSTRAP;
 pub(crate) use contacts::CONTACTS_BOOTSTRAP;
 pub(crate) use midi::MIDI_BOOTSTRAP;
+pub(crate) use serial::SERIAL_BOOTSTRAP;
+pub(crate) use hid::HID_BOOTSTRAP;
+pub(crate) use usb::USB_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -230,5 +236,8 @@ pub(crate) const ALL: &[&str] = &[
     IDLEDETECTOR_BOOTSTRAP,
     CONTACTS_BOOTSTRAP,
     MIDI_BOOTSTRAP,
+    SERIAL_BOOTSTRAP,
+    HID_BOOTSTRAP,
+    USB_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
