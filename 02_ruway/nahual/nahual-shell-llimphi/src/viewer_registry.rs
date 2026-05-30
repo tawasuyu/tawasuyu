@@ -38,6 +38,9 @@ pub enum ViewerKind {
     Hex,
     /// Tabla CSV/TSV (`nahual-table-viewer-llimphi`); columnas alineadas.
     Table,
+    /// Markdown renderizado (`nahual-markdown-viewer-llimphi`); encabezados,
+    /// listas, código y citas con estilo en vez de la sintaxis cruda.
+    Markdown,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
@@ -70,6 +73,7 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
         Some("card") => return ViewerKind::Card,
         Some("tree") => return ViewerKind::Tree,
         Some("table") => return ViewerKind::Table,
+        Some("markdown") => return ViewerKind::Markdown,
         _ => {}
     }
     match d.mime.as_deref() {
@@ -160,8 +164,12 @@ mod tests {
     }
 
     #[test]
-    fn markdown_y_code_van_a_texto() {
-        assert_eq!(pick(Some(&disc(Some("markdown"), Some("text/plain")))), ViewerKind::Text);
+    fn markdown_va_a_markdown() {
+        assert_eq!(pick(Some(&disc(Some("markdown"), Some("text/plain")))), ViewerKind::Markdown);
+    }
+
+    #[test]
+    fn code_va_a_texto() {
         assert_eq!(pick(Some(&disc(Some("code"), Some("text/plain")))), ViewerKind::Text);
     }
 
