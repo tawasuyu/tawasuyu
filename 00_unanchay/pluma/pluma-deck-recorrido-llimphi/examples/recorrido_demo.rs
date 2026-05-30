@@ -4,6 +4,7 @@
 //! la cámara vuela entre ellos siguiendo la ruta. Controles:
 //!   - **→ / ↓ / Espacio / Enter**: paso siguiente (la cámara vuela al marco).
 //!   - **← / ↑**: paso anterior.
+//!   - **Home / Esc**: vista general (aleja para ver todo el lienzo).
 //!   - **rueda**: zoom-a-cursor.
 //!   - **arrastrar**: paneo libre por el lienzo.
 //!
@@ -26,6 +27,7 @@ enum Msg {
     Pan { dx: f32, dy: f32 },
     Siguiente,
     Anterior,
+    VistaGeneral,
     Tick,
 }
 
@@ -119,6 +121,9 @@ impl App for Demo {
             Msg::Anterior => {
                 model.state.anterior(&model.rec, panel);
             }
+            Msg::VistaGeneral => {
+                model.state.vista_general(&model.rec, panel);
+            }
             Msg::Tick => {
                 model.state.avanzar(1.0 / 60.0);
             }
@@ -157,6 +162,7 @@ impl App for Demo {
                 Some(Msg::Siguiente)
             }
             Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) => Some(Msg::Anterior),
+            Key::Named(NamedKey::Home | NamedKey::Escape) => Some(Msg::VistaGeneral),
             _ => None,
         }
     }

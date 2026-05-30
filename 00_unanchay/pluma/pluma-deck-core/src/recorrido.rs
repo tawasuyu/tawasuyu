@@ -65,6 +65,21 @@ impl Marco {
         Camara::fit(self.rect, self.rot_rad, panel)
     }
 
+    /// Bounding box axis-aligned (en coordenadas de mundo) que contiene al
+    /// marco **ya girado** alrededor de su centro. Para un marco recto coincide
+    /// con su `rect`; para uno girado lo envuelve sin recortar esquinas. Base de
+    /// [`Recorrido::bbox`] → vista general.
+    pub fn aabb(&self) -> Rect {
+        let (cx, cy) = self.rect.centro();
+        let (hw, hh) = (self.rect.w * 0.5, self.rect.h * 0.5);
+        let (s, c) = self.rot_rad.sin_cos();
+        // Las cuatro esquinas relativas al centro, giradas; el AABB lo fija la
+        // mayor extensión en cada eje (simétrico, así que basta el máximo).
+        let ex = (hw * c).abs() + (hh * s).abs();
+        let ey = (hw * s).abs() + (hh * c).abs();
+        Rect::new(cx - ex, cy - ey, ex * 2.0, ey * 2.0)
+    }
+
     /// `true` si el punto de mundo `p` cae dentro del marco, considerando su
     /// giro propio (deshace la rotación con que se dibuja antes del aabb test).
     pub fn contiene(&self, p: (f64, f64)) -> bool {
@@ -127,6 +142,23 @@ impl Recorrido {
 
     pub fn n_pasos(&self) -> usize {
         self.pasos.len()
+    }
+
+    /// Bounding box de **todos** los marcos (cada uno por su [`Marco::aabb`], así
+    /// los girados entran enteros). `None` si no hay marcos. Es el encuadre de la
+    /// *vista general* — el zoom-out narrativo que muestra el mapa completo.
+    pub fn bbox(&self) -> Option<Rect> {
+        let mut it = self.marcos.iter().map(Marco::aabb);
+        let primero = it.next()?;
+        let (mut min_x, mut min_y) = (primero.x, primero.y);
+        let (mut max_x, mut max_y) = (primero.x + primero.w, primero.y + primero.h);
+        for r in it {
+            min_x = min_x.min(r.x);
+            min_y = min_y.min(r.y);
+            max_x = max_x.max(r.x + r.w);
+            max_y = max_y.max(r.y + r.h);
+        }
+        Some(Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
     }
 
     /// Auto-layout: coloca una secuencia de contenidos en una rejilla y arma
@@ -266,6 +298,16 @@ impl RecorridoState {
             return false;
         }
         self.ir_a_paso(rec, self.paso - 1, panel);
+        true
+    }
+
+    /// Vuela a la **vista general**: aleja la cámara hasta encuadrar todos los
+    /// marcos (recta, sin giro), el gesto-firma de Prezi "alejarse para ver el
+    /// mapa". No toca `paso` — `siguiente`/`anterior` siguen desde donde iban.
+    /// Devuelve `true` si arrancó un vuelo (`false` si el lienzo está vacío).
+    pub fn vista_general(&mut self, rec: &Recorrido, panel: Rect) -> bool {
+        let Some(bbox) = rec.bbox() else { return false };
+        self.iniciar_vuelo(Camara::fit(bbox, 0.0, panel), DURACION_PASO_S);
         true
     }
 
@@ -464,6 +506,49 @@ mod tests {
         assert!(!s.animando());
         // Un avanzar extra no hace nada.
         assert!(!s.avanzar(0.1));
+    }
+
+    #[test]
+    fn aabb_recto_coincide_con_rect_y_girado_lo_envuelve() {
+        // Marco recto: el aabb es su propio rect.
+        let m = Marco::new(1, Rect::new(10.0, 20.0, 100.0, 60.0), ContenidoMarco::Vacio);
+        assert_eq!(m.aabb(), Rect::new(10.0, 20.0, 100.0, 60.0));
+        // Cuadrado 100×100 centrado en (0,0) girado 45°: su aabb es el cuadrado
+        // que lo circunscribe, lado = diagonal = 100·√2 ≈ 141.42.
+        let g = Marco::new(2, Rect::new(-50.0, -50.0, 100.0, 100.0), ContenidoMarco::Vacio)
+            .con_giro(std::f64::consts::FRAC_PI_4);
+        let bb = g.aabb();
+        let lado = 100.0 * std::f64::consts::SQRT_2;
+        assert!((bb.w - lado).abs() < 1e-6 && (bb.h - lado).abs() < 1e-6, "{bb:?}");
+        assert!((bb.centro().0).abs() < 1e-9 && (bb.centro().1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bbox_une_todos_los_marcos() {
+        let r = recorrido_demo();
+        // Marcos: (0,0,400,300), (2000,0,200,150), (1000,1000,800,600).
+        let bb = r.bbox().unwrap();
+        assert_eq!(bb, Rect::new(0.0, 0.0, 2200.0, 1600.0));
+        assert!(Recorrido::new().bbox().is_none(), "lienzo vacío no tiene bbox");
+    }
+
+    #[test]
+    fn vista_general_vuela_a_encuadrar_todo_sin_tocar_el_paso() {
+        let r = recorrido_demo();
+        let mut s = RecorridoState::new();
+        s.ir_a_paso(&r, 2, PANEL);
+        while s.avanzar(0.1) {}
+        assert_eq!(s.paso, 2);
+        assert!(s.vista_general(&r, PANEL));
+        assert!(s.animando());
+        // No cambió el paso narrativo.
+        assert_eq!(s.paso, 2);
+        while s.avanzar(0.1) {}
+        // Aterriza en el fit del bbox completo, recto.
+        let objetivo = Camara::fit(r.bbox().unwrap(), 0.0, PANEL);
+        assert_eq!(s.camara, objetivo);
+        // Lienzo vacío: no-op.
+        assert!(!RecorridoState::new().vista_general(&Recorrido::new(), PANEL));
     }
 
     #[test]

@@ -134,6 +134,20 @@ impl RecorridoWeb {
         true
     }
 
+    /// Vuela a la **vista general** (aleja para encuadrar todo el lienzo). Gesto
+    /// Prezi de "ver el mapa". No cambia el paso narrativo. Igual que `goto`, el
+    /// vuelo es una transición CSS: se fija la cámara objetivo del core (instante)
+    /// y el navegador la anima — el core nunca tickea `avanzar` en web.
+    pub fn vista_general(&self) {
+        let panel = self.panel();
+        {
+            let mut i = self.inner.borrow_mut();
+            let Some(bbox) = i.rec.bbox() else { return };
+            i.state.camara = Camara::fit(bbox, 0.0, panel);
+        }
+        self.aplicar(true);
+    }
+
     pub fn paso_actual(&self) -> usize {
         self.inner.borrow().state.paso
     }
@@ -216,6 +230,10 @@ impl RecorridoWeb {
             let movido = match e.key().as_str() {
                 "ArrowRight" | "ArrowDown" | " " | "Spacebar" | "Enter" => this.siguiente(),
                 "ArrowLeft" | "ArrowUp" => this.anterior(),
+                "Home" | "Escape" => {
+                    this.vista_general();
+                    true
+                }
                 _ => return,
             };
             if movido {
