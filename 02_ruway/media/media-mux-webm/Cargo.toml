@@ -1,0 +1,21 @@
+[package]
+name = "media-mux-webm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/media-mux-webm — mux WebM/Matroska NATIVO (EBML escrito a mano, sin deps) desde paquetes AV1 + Opus → .webm. Contraparte de media-source-webm: gioser PRODUCE su contenedor nativo sin ffmpeg."
+
+# Sin dependencias: el contenedor WebM es un subconjunto acotado de EBML y lo
+# escribimos byte a byte, mismo criterio que el muxer IVF de media-encode-av1.
+[dependencies]
+
+[dev-dependencies]
+# Round-trip real: muxea acá → demuxea con el demuxer nativo (matroska-demuxer
+# directo y media-source-webm completo) → decodea AV1 con rav1d → verifica.
+matroska-demuxer = { workspace = true }
+media-encode-av1 = { path = "../media-encode-av1" }
+media-source-webm = { path = "../media-source-webm" }
+media-source-av1 = { path = "../media-source-av1" }
+media-core = { path = "../media-core" }
