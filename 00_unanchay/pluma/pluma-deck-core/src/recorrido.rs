@@ -26,8 +26,11 @@ pub type MarcoId = u64;
 pub enum ContenidoMarco {
     #[default]
     Vacio,
-    /// Texto plano — placeholder de autoría / títulos de sección.
+    /// Texto plano de una línea — títulos de sección, hitos del recorrido.
     Etiqueta(String),
+    /// Contenido de "slide": título opcional + párrafos. Agnóstico (sólo
+    /// strings); un adaptador convierte un cuerpo/subgrafo de pluma a esto.
+    Texto { titulo: Option<String>, parrafos: Vec<String> },
     /// Referencia opaca que el host resuelve (hash BLAKE3, id de cuerpo, ruta…).
     Ref(String),
 }
@@ -88,6 +91,41 @@ impl Recorrido {
 
     pub fn n_pasos(&self) -> usize {
         self.pasos.len()
+    }
+
+    /// Auto-layout: coloca una secuencia de contenidos en una rejilla y arma
+    /// la ruta en orden de lectura (fila por fila). Es el "dame N piezas →
+    /// dame un recorrido listo" — el frontend sólo pinta y vuela. Los ids se
+    /// asignan `1..=n` en orden.
+    pub fn en_rejilla(contenidos: Vec<ContenidoMarco>, opts: RejillaOpts) -> Recorrido {
+        let cols = opts.cols.max(1);
+        let mut rec = Recorrido::new();
+        for (i, c) in contenidos.into_iter().enumerate() {
+            let col = (i % cols) as f64;
+            let row = (i / cols) as f64;
+            let x = col * (opts.marco_w + opts.gap_x);
+            let y = row * (opts.marco_h + opts.gap_y);
+            let id = (i + 1) as MarcoId;
+            rec.agregar_marco(Marco::new(id, Rect::new(x, y, opts.marco_w, opts.marco_h), c));
+            rec.pasos.push(id);
+        }
+        rec
+    }
+}
+
+/// Parámetros del auto-layout en rejilla de [`Recorrido::en_rejilla`].
+#[derive(Clone, Copy, Debug)]
+pub struct RejillaOpts {
+    pub cols: usize,
+    pub marco_w: f64,
+    pub marco_h: f64,
+    pub gap_x: f64,
+    pub gap_y: f64,
+}
+
+impl Default for RejillaOpts {
+    fn default() -> Self {
+        Self { cols: 3, marco_w: 640.0, marco_h: 400.0, gap_x: 220.0, gap_y: 180.0 }
     }
 }
 
@@ -243,6 +281,25 @@ mod tests {
         r.agregar_marco(Marco::new(3, Rect::new(1000.0, 1000.0, 800.0, 600.0), ContenidoMarco::Etiqueta("c".into())));
         r.pasos = vec![1, 2, 3];
         r
+    }
+
+    #[test]
+    fn en_rejilla_coloca_y_rutea_en_orden_de_lectura() {
+        let contenidos = vec![
+            ContenidoMarco::Etiqueta("a".into()),
+            ContenidoMarco::Etiqueta("b".into()),
+            ContenidoMarco::Etiqueta("c".into()),
+            ContenidoMarco::Etiqueta("d".into()),
+        ];
+        let opts = RejillaOpts { cols: 2, marco_w: 100.0, marco_h: 50.0, gap_x: 20.0, gap_y: 10.0 };
+        let rec = Recorrido::en_rejilla(contenidos, opts);
+        assert_eq!(rec.marcos.len(), 4);
+        // Ruta secuencial 1..=4.
+        assert_eq!(rec.pasos, vec![1, 2, 3, 4]);
+        // Índice 0 en (0,0); índice 1 en la columna siguiente; índice 2 baja de fila.
+        assert_eq!(rec.marco(1).unwrap().rect, Rect::new(0.0, 0.0, 100.0, 50.0));
+        assert_eq!(rec.marco(2).unwrap().rect, Rect::new(120.0, 0.0, 100.0, 50.0));
+        assert_eq!(rec.marco(3).unwrap().rect, Rect::new(0.0, 60.0, 100.0, 50.0));
     }
 
     #[test]
