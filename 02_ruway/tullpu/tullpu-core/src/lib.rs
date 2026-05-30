@@ -189,6 +189,13 @@ pub enum OpLocal {
     Saturacion { factor: f32 },
     /// Rota el matiz HSL por `grados` (mod 360).
     Tonalidad { grados: f32 },
+    /// Espeja el buffer horizontalmente (swap de columnas alrededor del
+    /// eje vertical central). No cambia dimensiones — encaja como
+    /// derivada pixel-a-pixel.
+    EspejarHorizontal,
+    /// Espeja el buffer verticalmente (swap de filas alrededor del eje
+    /// horizontal central). No cambia dimensiones.
+    EspejarVertical,
 }
 
 /// La operación que produce una capa derivada a partir de su madre. Local =
@@ -222,6 +229,8 @@ impl TransformacionPixel {
                 OpLocal::Opacidad { .. } => "opacidad".into(),
                 OpLocal::Saturacion { .. } => "saturación".into(),
                 OpLocal::Tonalidad { .. } => "tonalidad".into(),
+                OpLocal::EspejarHorizontal => "espejar ↔".into(),
+                OpLocal::EspejarVertical => "espejar ↕".into(),
             },
             TransformacionPixel::Ia { modelo, .. } => format!("ia:{modelo}"),
         }

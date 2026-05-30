@@ -100,6 +100,8 @@ pub fn aplicar_op_local(op: &OpLocal, src: &[u8], w: u32, h: u32) -> Result<Vec<
             let blurred = image::imageops::blur(&buf, sigma);
             blurred.into_raw()
         }
+        OpLocal::EspejarHorizontal => espejar_horizontal(src, w, h),
+        OpLocal::EspejarVertical => espejar_vertical(src, w, h),
     };
     Ok(salida)
 }
@@ -123,6 +125,38 @@ pub fn aplicar_transformacion(
 // =============================================================================
 //  Helpers de mapeo
 // =============================================================================
+
+/// Espeja horizontalmente un buffer Rgba8 `w×h`: cada fila se invierte
+/// por columna. Pura. Pre: `src.len() == w*h*4` (validado en el caller).
+fn espejar_horizontal(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let w = w as usize;
+    let h = h as usize;
+    let mut out = vec![0u8; src.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let i_src = (y * w + x) * 4;
+            let i_dst = (y * w + (w - 1 - x)) * 4;
+            out[i_dst..i_dst + 4].copy_from_slice(&src[i_src..i_src + 4]);
+        }
+    }
+    out
+}
+
+/// Espeja verticalmente un buffer Rgba8 `w×h`: cada fila viaja al
+/// índice complementario. Más barato que el horizontal — un swap por
+/// fila, no por píxel.
+fn espejar_vertical(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let w = w as usize;
+    let h = h as usize;
+    let stride = w * 4;
+    let mut out = vec![0u8; src.len()];
+    for y in 0..h {
+        let i_src = y * stride;
+        let i_dst = (h - 1 - y) * stride;
+        out[i_dst..i_dst + stride].copy_from_slice(&src[i_src..i_src + stride]);
+    }
+    out
+}
 
 fn mapear_rgb<F: Fn(u8) -> u8>(src: &[u8], f: F) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len());
@@ -513,6 +547,92 @@ mod tests {
         assert!((p[0] as i32 - 120).abs() <= 2, "got {:?}", p);
         assert!((p[1] as i32 - 60).abs() <= 2);
         assert!((p[2] as i32 - 200).abs() <= 2);
+    }
+
+    #[test]
+    fn espejar_horizontal_invierte_columnas() {
+        // 3×2 con un patrón distinguible por columna: x=0 rojo, x=1 verde,
+        // x=2 azul. Tras espejar horizontal, las columnas quedan azul,
+        // verde, rojo (las filas mantienen su orden).
+        let mut src = Vec::with_capacity(3 * 2 * 4);
+        for _y in 0..2 {
+            src.extend_from_slice(&[255, 0, 0, 255]);
+            src.extend_from_slice(&[0, 255, 0, 255]);
+            src.extend_from_slice(&[0, 0, 255, 255]);
+        }
+        let out = aplicar_op_local(&OpLocal::EspejarHorizontal, &src, 3, 2).unwrap();
+        // Píxel (0, 0) — esquina superior izquierda — ahora es azul.
+        assert_eq!(px(&out, 0), [0, 0, 255, 255]);
+        // Píxel (1, 0) — columna media — verde (sin cambio).
+        assert_eq!(px(&out, 1), [0, 255, 0, 255]);
+        // Píxel (2, 0) — esquina superior derecha — ahora es rojo.
+        assert_eq!(px(&out, 2), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn espejar_horizontal_dos_veces_es_identidad() {
+        // Propiedad básica de una involución: aplicar dos veces vuelve al
+        // origen. Verifica que el cálculo no introduce drift.
+        let mut src = Vec::with_capacity(4 * 4 * 4);
+        for i in 0..(4 * 4) {
+            src.extend_from_slice(&[i as u8 * 16, 100, 200, 255]);
+        }
+        let una = aplicar_op_local(&OpLocal::EspejarHorizontal, &src, 4, 4).unwrap();
+        let dos = aplicar_op_local(&OpLocal::EspejarHorizontal, &una, 4, 4).unwrap();
+        assert_eq!(dos, src);
+    }
+
+    #[test]
+    fn espejar_vertical_invierte_filas() {
+        // 2×3 con un patrón distinguible por fila: y=0 rojo, y=1 verde,
+        // y=2 azul. Tras espejar vertical, las filas quedan azul, verde,
+        // rojo (las columnas mantienen su orden).
+        let mut src = Vec::new();
+        for &color in &[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]] {
+            for _x in 0..2 {
+                src.extend_from_slice(&color);
+            }
+        }
+        let out = aplicar_op_local(&OpLocal::EspejarVertical, &src, 2, 3).unwrap();
+        // Píxel (0, 0) — fila 0 — ahora es azul.
+        assert_eq!(px(&out, 0), [0, 0, 255, 255]);
+        // Píxel (0, 2) — fila inferior — ahora es rojo.
+        assert_eq!(px(&out, 2 * 2), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn espejar_vertical_dos_veces_es_identidad() {
+        let mut src = Vec::with_capacity(4 * 4 * 4);
+        for i in 0..(4 * 4) {
+            src.extend_from_slice(&[i as u8 * 16, 100, 200, 255]);
+        }
+        let una = aplicar_op_local(&OpLocal::EspejarVertical, &src, 4, 4).unwrap();
+        let dos = aplicar_op_local(&OpLocal::EspejarVertical, &una, 4, 4).unwrap();
+        assert_eq!(dos, src);
+    }
+
+    #[test]
+    fn espejar_h_y_v_no_conmutan_con_orden_arbitrario_pero_componen_a_rotacion_180() {
+        // Composición h∘v = v∘h = rotación 180°. Verifica que ambas órdenes
+        // dan el mismo resultado y que ese resultado es exactamente el
+        // píxel opuesto por el centro.
+        let mut src = Vec::with_capacity(3 * 3 * 4);
+        for i in 0..9u8 {
+            src.extend_from_slice(&[i * 20, 0, 0, 255]);
+        }
+        let h_then_v = {
+            let h = aplicar_op_local(&OpLocal::EspejarHorizontal, &src, 3, 3).unwrap();
+            aplicar_op_local(&OpLocal::EspejarVertical, &h, 3, 3).unwrap()
+        };
+        let v_then_h = {
+            let v = aplicar_op_local(&OpLocal::EspejarVertical, &src, 3, 3).unwrap();
+            aplicar_op_local(&OpLocal::EspejarHorizontal, &v, 3, 3).unwrap()
+        };
+        assert_eq!(h_then_v, v_then_h);
+        // Píxel central (idx 4) queda en sí mismo bajo 180°.
+        assert_eq!(px(&h_then_v, 4), px(&src, 4));
+        // Píxel (0, 0) intercambia con (2, 2) — esquinas opuestas.
+        assert_eq!(px(&h_then_v, 0), px(&src, 8));
     }
 
     #[test]

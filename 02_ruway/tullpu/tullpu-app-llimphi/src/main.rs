@@ -1232,6 +1232,14 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         OpLocal::Tonalidad { grados: 90.0 },
     )));
     hijos.push(envolver_fila(mk_local(
+        "+ Espejar ↔",
+        OpLocal::EspejarHorizontal,
+    )));
+    hijos.push(envolver_fila(mk_local(
+        "+ Espejar ↕",
+        OpLocal::EspejarVertical,
+    )));
+    hijos.push(envolver_fila(mk_local(
         "+ Blur radio 4",
         OpLocal::Blur { radio: 4.0 },
     )));
@@ -2006,6 +2014,8 @@ fn op_etiqueta(op: &OpLocal) -> &'static str {
         OpLocal::Opacidad { .. } => "opacidad",
         OpLocal::Saturacion { .. } => "saturación",
         OpLocal::Tonalidad { .. } => "tonalidad",
+        OpLocal::EspejarHorizontal => "espejar ↔",
+        OpLocal::EspejarVertical => "espejar ↕",
     }
 }
 
