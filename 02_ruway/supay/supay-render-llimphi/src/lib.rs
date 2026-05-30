@@ -445,6 +445,19 @@ pub struct RenderConfig {
     /// queda extremo. El muzzle queda omni (como en 3.30/3.31). Cuando
     /// `false`, vuelve al path omni 3.27/3.29 — backwards-compat.
     pub wall_rim_directional: bool,
+    /// **Fase 3.33 — BRDF para pisos y techos**. Si `true`, los planos
+    /// horizontales reciben el aporte de cada world light atenuado por
+    /// el cosine entre la normal del plano (`+Z` floor, `-Z` ceiling) y
+    /// la dirección 3D del plano hacia la luz. Una antorcha al ras del
+    /// piso ilumina fuerte el piso cercano pero el techo lo recibe
+    /// rasante (cos ≈ 0); un mobj BFG en el aire (proyectil flotante)
+    /// ilumina ambos, pero más al que tiene más cara hacia él. Combina
+    /// con el radio 3D-aware: una luz a 100 u horizontal y 100 u
+    /// vertical (d_3D ≈ 141) cae con `f = 1 - d²/r²` donde `d` es 3D —
+    /// más realista que el 2D-only del 3.27. Cuando `false`, vuelve al
+    /// path omni 3.27/3.29 con radio 2D. El muzzle queda omni
+    /// (consistente con 3.30-3.32).
+    pub plane_rim_directional: bool,
 }
 
 impl Default for RenderConfig {
@@ -470,6 +483,7 @@ impl Default for RenderConfig {
             weapon_rim_directional: true,
             sprite_rim_directional: true,
             wall_rim_directional: true,
+            plane_rim_directional: true,
         }
     }
 }
@@ -738,6 +752,13 @@ struct WorldLight {
     /// Posición en cam-space (forward, right).
     x_cam: f32,
     y_cam: f32,
+    /// Fase 3.33: altura del mobj relativa a `cam.view_z` — `sprite.z`
+    /// menos la altura del ojo del jugador. Necesaria para el cosine
+    /// BRDF de pisos/techos (normal ±Z) y para que el radio sea 3D-aware
+    /// en el helper `world_lights_boost_rgb_for_plane_cam`. El gather
+    /// inicial sigue filtrando por d² 2D × 4 (margen generoso) — la
+    /// distancia 3D real se chequea dentro del helper de cada plano.
+    z_cam: f32,
     /// Sector "dueño" del mobj — origen del BFS de oclusión 3.29.
     sector: u32,
     /// Fase 3.27: tinte característico del mobj resuelto vía
@@ -774,6 +795,9 @@ fn gather_world_lights(
         .filter(|s| (s.frame & 0x80) != 0 && s.sector != NO_SECTOR)
         .map(|s| {
             let (x_cam, y_cam) = cam.to_cam_2d(s.x, s.y);
+            // Fase 3.33: z relativa al ojo del jugador. Permite que el
+            // helper de pisos/techos calcule cos(θ) con normal ±Z.
+            let z_cam = s.z - cam.view_z;
             let d2 = x_cam * x_cam + y_cam * y_cam;
             // Fase 3.27: tinte per-mobj. Si el atlas no tiene el nombre
             // (o no hay atlas — modo sin WAD), cae al amarillo cálido
@@ -787,6 +811,7 @@ fn gather_world_lights(
                 WorldLight {
                     x_cam,
                     y_cam,
+                    z_cam,
                     sector: s.sector,
                     tint_rgb,
                     lit_sectors: None,
@@ -1113,6 +1138,13 @@ fn muzzle_boost_gated_rgb(
 /// + world lights (sólo radio), sumados per-canal y clampeados a
 /// `MUZZLE_BOOST_PEAK` por canal. Reemplaza al `combined_boost_cam`
 /// scalar en el render loop.
+///
+/// Fase 3.33: el render loop usa los variantes specializados
+/// (`combined_boost_rgb_wall_cam`, `combined_boost_rgb_sprite_cam`,
+/// `combined_boost_rgb_plane_cam`). Esta versión omni se conserva como
+/// referencia para tests — los specialized con `directional=false` son
+/// bit-equivalentes a ella.
+#[cfg(test)]
 fn combined_boost_rgb_cam(
     x_cam: f32,
     y_cam: f32,
@@ -1392,6 +1424,117 @@ fn wall_normal_cam(x1: f32, y1: f32, x2: f32, y2: f32, mid_x: f32, mid_y: f32) -
     } else {
         (-n1x, -n1y)
     }
+}
+
+// =====================================================================
+// Fase 3.33 — BRDF para pisos y techos con z exportado
+// =====================================================================
+//
+// Los pisos y techos son los únicos elementos de la escena con normal
+// **vertical** (`+Z` floor, `-Z` ceiling) — fuera del plano XY donde
+// viven las world lights hasta el 3.32. Con la `z_cam` exportada al
+// `WorldLight` desde el sprite (Fase 3.33), podemos calcular el cosine
+// 3D: una antorcha al ras del piso ilumina el piso cercano pero apenas
+// el techo (cos rasante); un proyectil BFG flotando en el aire ilumina
+// ambos planos, con balance según su altura relativa al view-Z. El
+// radio también pasa a 3D: una luz a 100 u horizontal y 100 u vertical
+// queda a `d_3D≈141`, no `d_2D=100` — el aporte cae con el cuadrado
+// del 3D real, más fiel al inverse-square que el 2D-only de 3.27.
+
+const PLANE_RIM_AMBIENT_FLOOR: f32 = 0.3;
+
+/// Boost RGB de world lights en una superficie plano-horizontal con
+/// normal `±Z`. `z_surf_cam` es la altura del plano relativa al
+/// `cam.view_z` (positivo arriba del ojo, negativo abajo). `n_z` =
+/// `+1.0` para pisos (mirando arriba) o `-1.0` para techos (mirando
+/// abajo). Cuando `directional=false`, cae al path omni 2D del
+/// 3.27/3.29. Cuando `true`, usa distancia 3D para falloff + cosine
+/// `n_z · dz/d_3D` para atenuar por incidencia.
+fn world_lights_boost_rgb_for_plane_cam(
+    x_surf: f32,
+    y_surf: f32,
+    z_surf_cam: f32,
+    surf_sector: u32,
+    lights: &[WorldLight],
+    n_z: f32,
+    directional: bool,
+) -> BoostRgb {
+    if !directional {
+        return world_lights_boost_rgb_cam(x_surf, y_surf, surf_sector, lights);
+    }
+    if lights.is_empty() {
+        return ZERO_BOOST;
+    }
+    let r2 = WORLD_LIGHT_RADIUS_WORLD * WORLD_LIGHT_RADIUS_WORLD;
+    let peak = WORLD_LIGHT_PEAK;
+    let mut sum = [0.0_f32; 3];
+    for l in lights {
+        if let Some(set) = l.lit_sectors.as_deref() {
+            if !set.contains(&surf_sector) {
+                continue;
+            }
+        }
+        let dx = l.x_cam - x_surf;
+        let dy = l.y_cam - y_surf;
+        let dz = l.z_cam - z_surf_cam;
+        let d2 = dx * dx + dy * dy + dz * dz;
+        if d2 >= r2 {
+            continue;
+        }
+        let f = 1.0 - d2 / r2;
+        let att = if d2 < 1e-6 {
+            1.0
+        } else {
+            let inv_d = d2.sqrt().recip();
+            let cos_theta = n_z * dz * inv_d;
+            (0.5 + 0.5 * cos_theta).max(PLANE_RIM_AMBIENT_FLOOR)
+        };
+        let amount = f * f * peak * att;
+        let t = rgb_to_norm(l.tint_rgb);
+        sum[0] += amount * t[0];
+        sum[1] += amount * t[1];
+        sum[2] += amount * t[2];
+    }
+    [
+        sum[0].min(MUZZLE_BOOST_PEAK),
+        sum[1].min(MUZZLE_BOOST_PEAK),
+        sum[2].min(MUZZLE_BOOST_PEAK),
+    ]
+}
+
+/// Versión plano del boost combinado: muzzle (omni 2D, anclado al
+/// jugador) + world lights con BRDF 3D. El muzzle no se direcciona
+/// — emana del jugador, consistente con 3.30-3.32.
+fn combined_boost_rgb_plane_cam(
+    x_cam: f32,
+    y_cam: f32,
+    z_surf_cam: f32,
+    muzzle_alpha: f32,
+    surf_sector: u32,
+    lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
+    n_z: f32,
+    directional: bool,
+) -> BoostRgb {
+    let m = muzzle_boost_gated_rgb(
+        muzzle_boost_rgb_cam(x_cam, y_cam, muzzle_alpha),
+        surf_sector,
+        lit_sectors,
+    );
+    let w = world_lights_boost_rgb_for_plane_cam(
+        x_cam,
+        y_cam,
+        z_surf_cam,
+        surf_sector,
+        world_lights,
+        n_z,
+        directional,
+    );
+    [
+        (m[0] + w[0]).min(MUZZLE_BOOST_PEAK),
+        (m[1] + w[1]).min(MUZZLE_BOOST_PEAK),
+        (m[2] + w[2]).min(MUZZLE_BOOST_PEAK),
+    ]
 }
 
 /// Suma aditivamente el boost RGB a un color base, preservando alpha.
@@ -2463,20 +2606,6 @@ fn gather_subsector_planes(
         (cx_sum / n, cy_sum / n)
     };
     let shade_depth = (centroid_cx * centroid_cx + centroid_cy * centroid_cy).sqrt();
-    // Fase 3.22: muzzle boost en el centroide del plano (en cam-space).
-    // Fase 3.23: gateado por `sub.sector` — si el subsector no está en
-    // el cuarto del player ni en uno vecino directo, no recibe tinte.
-    // Fase 3.26: + boost de las world lights cercanas al centroide.
-    // Fase 3.27: boost per-canal RGB para que cada luz emita su tinte.
-    let boost_rgb = combined_boost_rgb_cam(
-        centroid_cx,
-        centroid_cy,
-        cfg.muzzle_glow_alpha,
-        sub.sector,
-        lit_sectors,
-        world_lights,
-    );
-    let boost_scalar = boost_max(boost_rgb);
     // Depth para painter's sort:
     // - Con BSP (Fase 3.13), usamos el depth asignado por la travesía
     //   back-to-front del árbol — orden correcto Doom, elimina glitches
@@ -2519,6 +2648,25 @@ fn gather_subsector_planes(
         let Some((path, screen_pts)) = project_polygon(z_world) else {
             return;
         };
+        // Fase 3.33: boost específico del plano. Normal `+Z` para floor,
+        // `-Z` para ceiling — la luz de un proyectil al ras del piso
+        // ilumina el piso pero queda rasante para el techo. Cuando
+        // `plane_rim_directional` está off, cae al path omni 3.27/3.29
+        // (igual aporte para floor y ceiling).
+        let z_surf_cam = z_world - cam.view_z;
+        let n_z = if is_floor { 1.0 } else { -1.0 };
+        let boost_rgb = combined_boost_rgb_plane_cam(
+            centroid_cx,
+            centroid_cy,
+            z_surf_cam,
+            cfg.muzzle_glow_alpha,
+            sub.sector,
+            lit_sectors,
+            world_lights,
+            n_z,
+            cfg.plane_rim_directional,
+        );
+        let boost_scalar = boost_max(boost_rgb);
         // Intentar texturizar: tenemos atlas + flat resolves a RGBA.
         if let Some(atlas) = cfg.atlas.as_ref() {
             if let Some(rgba) = atlas.flat_rgba(pic_idx) {
@@ -5106,6 +5254,7 @@ mod tests {
         let lights = vec![WorldLight {
             x_cam: 0.0,
             y_cam: 0.0,
+            z_cam: 0.0,
             sector: 0,
             tint_rgb: MUZZLE_TINT_RGB,
             lit_sectors: None,
@@ -5125,6 +5274,7 @@ mod tests {
         let lights = vec![WorldLight {
             x_cam: 0.0,
             y_cam: 0.0,
+            z_cam: 0.0,
             sector: 0,
             tint_rgb: MUZZLE_TINT_RGB,
             lit_sectors: None,
@@ -5143,6 +5293,7 @@ mod tests {
         let lights = vec![WorldLight {
             x_cam: 0.0,
             y_cam: 0.0,
+            z_cam: 0.0,
             sector: 0,
             tint_rgb: MUZZLE_TINT_RGB,
             lit_sectors: None,
@@ -5166,6 +5317,7 @@ mod tests {
             WorldLight {
                 x_cam: 0.0,
                 y_cam: 0.0,
+                z_cam: 0.0,
                 sector: 0,
                 tint_rgb: MUZZLE_TINT_RGB,
                 lit_sectors: None,
@@ -5173,6 +5325,7 @@ mod tests {
             WorldLight {
                 x_cam: 0.0,
                 y_cam: 0.0,
+                z_cam: 0.0,
                 sector: 1,
                 tint_rgb: MUZZLE_TINT_RGB,
                 lit_sectors: None,
@@ -5236,6 +5389,7 @@ mod tests {
         let lights = vec![WorldLight {
             x_cam: 0.0,
             y_cam: 0.0,
+            z_cam: 0.0,
             sector: 0,
             tint_rgb: MUZZLE_TINT_RGB,
             lit_sectors: None,
@@ -5306,6 +5460,7 @@ mod tests {
         let lights = vec![WorldLight {
             x_cam: 0.0,
             y_cam: 0.0,
+            z_cam: 0.0,
             sector: 0,
             tint_rgb: (160, 255, 160), // BFG green
             lit_sectors: None,
@@ -5326,6 +5481,7 @@ mod tests {
             .map(|_| WorldLight {
                 x_cam: 0.0,
                 y_cam: 0.0,
+                z_cam: 0.0,
                 sector: 0,
                 tint_rgb: (255, 255, 255), // luz blanca máxima
                 lit_sectors: None,
@@ -5413,6 +5569,7 @@ mod tests {
         WorldLight {
             x_cam: x,
             y_cam: y,
+            z_cam: 0.0,
             sector: NO_SECTOR,
             tint_rgb: tint,
             lit_sectors: None,
@@ -5525,6 +5682,7 @@ mod tests {
         let light = WorldLight {
             x_cam: 0.0,
             y_cam: 0.0,
+            z_cam: 0.0,
             sector: 1,
             tint_rgb: (255, 255, 255),
             lit_sectors: Some(Arc::new(lit)),
@@ -5543,6 +5701,7 @@ mod tests {
         let light = WorldLight {
             x_cam: 0.0,
             y_cam: 0.0,
+            z_cam: 0.0,
             sector: 0,
             tint_rgb: (255, 255, 255),
             lit_sectors: None,
@@ -5895,5 +6054,115 @@ mod tests {
         let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
         let baseline = world_lights_boost_rgb_cam(100.0, 0.0, NO_SECTOR, &lights);
         assert_eq!(omni, baseline, "directional=false ⇒ bit-identical al 3.29");
+    }
+
+    // =================================================================
+    // Fase 3.33 — BRDF para pisos y techos con z exportado
+    // =================================================================
+
+    /// Helper: luz con z_cam dado.
+    fn plane_light(x: f32, y: f32, z: f32, tint: (u8, u8, u8)) -> WorldLight {
+        WorldLight {
+            x_cam: x,
+            y_cam: y,
+            z_cam: z,
+            sector: NO_SECTOR,
+            tint_rgb: tint,
+            lit_sectors: None,
+        }
+    }
+
+    #[test]
+    fn plane_rim_directional_floor_strongest_when_light_above() {
+        // Floor centroide en el origen. Dos luces a igual d_3D=50 pero
+        // distinta dirección — el cosine es la única variable:
+        // - above (0, 30, 40): dz = +40 ⇒ cos = 40/50 = 0.8 ⇒ att = 0.9.
+        // - level (50, 0, 0): dz = 0 ⇒ cos = 0 ⇒ att = 0.5.
+        // Ratio esperado ≈ 1.8 (=0.9/0.5) por canal — el plano "ve"
+        // mejor la luz por arriba (su cara mira a +Z).
+        let white = (255, 255, 255);
+        let above = [plane_light(0.0, 30.0, 40.0, white)];
+        let level = [plane_light(50.0, 0.0, 0.0, white)];
+        let b_above = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &above, 1.0, true);
+        let b_level = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &level, 1.0, true);
+        for ch in 0..3 {
+            assert!(
+                b_above[ch] > b_level[ch],
+                "luz por arriba del floor debería iluminar más: canal {} above={} level={}",
+                ch, b_above[ch], b_level[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn plane_rim_directional_ceiling_strongest_when_light_below() {
+        // Espejo del test del floor con normal `-Z`. d_3D=50 fijo:
+        // - below (0, 30, -40): dz = -40 ⇒ cos = -(-40)/50 = 0.8.
+        // - level (50, 0, 0): dz = 0 ⇒ cos = 0.
+        let white = (255, 255, 255);
+        let below = [plane_light(0.0, 30.0, -40.0, white)];
+        let level = [plane_light(50.0, 0.0, 0.0, white)];
+        let b_below = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &below, -1.0, true);
+        let b_level = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &level, -1.0, true);
+        for ch in 0..3 {
+            assert!(
+                b_below[ch] > b_level[ch],
+                "luz por debajo del ceiling debería iluminar más: canal {} below={} level={}",
+                ch, b_below[ch], b_level[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn plane_rim_directional_3d_radius_cuts_far_vertical() {
+        // Luz a 0 XY pero z_cam = 250 — fuera del radio (192). El
+        // path 2D omni la incluiría (distancia horizontal = 0); el
+        // 3D direccional la rechaza por d_3D = 250 > 192. Result =
+        // ZERO_BOOST en direccional, > 0 en omni.
+        let white = (255, 255, 255);
+        let lights = [plane_light(0.0, 0.0, 250.0, white)];
+        let dir = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &lights, 1.0, true);
+        let omni = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &lights, 1.0, false);
+        assert_eq!(dir, ZERO_BOOST, "3D radio corta la luz lejana en z");
+        assert!(omni[0] > 0.0, "omni 2D no la corta (distancia XY=0)");
+    }
+
+    #[test]
+    fn plane_rim_directional_disabled_equals_omni_2d() {
+        // Toggle off ⇒ el helper de plano debe coincidir bit-a-bit con
+        // `world_lights_boost_rgb_cam` (path omni 2D del 3.29).
+        let lights = [
+            plane_light(50.0, 30.0, 20.0, (255, 130, 60)),
+            plane_light(80.0, -20.0, -50.0, (110, 160, 255)),
+        ];
+        let off = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &lights, 1.0, false);
+        let baseline = world_lights_boost_rgb_cam(0.0, 0.0, NO_SECTOR, &lights);
+        assert_eq!(off, baseline);
+    }
+
+    #[test]
+    fn plane_rim_directional_floor_back_lit_from_below_falls_to_floor() {
+        // Floor con normal +Z. Una luz "por debajo" del piso (dz < 0)
+        // back-lightea: cos = +1 * dz/d_3D < 0 ⇒ att = floor (raro en
+        // Doom — los mobjs FF_FULLBRIGHT van por arriba de los pisos —
+        // pero el caso límite debe atenuarse al piso ambient).
+        let white = (255, 255, 255);
+        // Floor a z_cam = 0; luz a z_cam = -50 (50 abajo del piso).
+        let lights = [plane_light(0.0, 0.0, -50.0, white)];
+        let dir = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &lights, 1.0, true);
+        // Omni-2D: distancia 2D = 0 ⇒ full peak.
+        let omni = world_lights_boost_rgb_for_plane_cam(0.0, 0.0, 0.0, NO_SECTOR, &lights, 1.0, false);
+        for ch in 0..3 {
+            if omni[ch] > 0.01 {
+                // Direccional debería ser bastante menor que omni
+                // (att ≈ floor = 0.3, modulado además por el radio
+                // 3D que en este test sigue dentro del rango).
+                assert!(
+                    dir[ch] < omni[ch] * (PLANE_RIM_AMBIENT_FLOOR + 0.1),
+                    "back-lit floor: canal {} dir={} no clampea cerca del floor ambient",
+                    ch, dir[ch]
+                );
+            }
+        }
     }
 }
