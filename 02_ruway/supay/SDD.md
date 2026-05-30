@@ -510,6 +510,57 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.26 (defer a 3.27+):** tinte per-spritenum (BFG verde, plasma azul, rocket naranja, fireballs rojizos); sprite-BSP true occlusion vía R_CheckSight; smoothing del muzzle alpha por interp entre snapshots; player rim-lit; volumetric god rays; decals dinámicos del impacto del disparo.
 
+**Fase 3.27 (2026-05-30, este bloque):** tinte per-spritenum + boost RGB per-canal.
+
+- **Contexto.** Hasta 3.26 todas las world lights usaban el mismo amarillo cálido (`MUZZLE_TINT_RGB`). Pero un proyectil BFG es verde fluorescente, una bola de plasma es azul cyan, un fireball de imp es rojo-naranja, una antorcha azul de decoración tiñe su cuarto azul. Esta fase refactoriza el boost a representación per-canal (`[f32; 3]`) para que cada luz emita su tinte característico, sumándose aditivamente en RGB. La maquinaria scalar histórica (`muzzle_boost_cam`, `apply_muzzle_tint`, `sprite_shade_with_muzzle`) sobrevive como `#[cfg(test)]` (referencia + cobertura de tests existentes); el render loop pasa íntegro al path RGB.
+- **Tabla `FB_SPRITE_TINTS`** (24 entradas). Match 4-char case-insensitive sobre el nombre del sprite del WAD:
+  - Proyectiles: `BAL1` imp fireball `(255,130,60)`, `BAL2` caco fireball `(255,100,80)`, `BAL7` baron fireball `(140,255,140)`, `PLSS`/`PLSE` plasma `(130,180,255)`, `BFS1`/`BFE1`/`BFE2`/`BFGG` BFG `(160-180,255,160-180)`, `MISL` rocket `(255,180,100)`, `PUFF` bullet puff `(255,220,160)`, `BEXP` barrel/rocket explosion `(255,180,100)`.
+  - Fogs: `TFOG` teleport `(140,200,255)`, `IFOG` item respawn `(255,240,140)`.
+  - Decoración (FF_FULLBRIGHT constante): `TBLU`/`SMBT` blue torch `(110,160,255)`, `TGRN`/`SMGT` green torch `(140,255,160)`, `TRED`/`SMRT` red torch `(255,140,90)`, `CAND` candle `(255,200,130)`, `CBRA` brazier `(255,170,90)`, `TLMP`/`TLP2` lamps `(255,240,200)`.
+  - Fallback: `MUZZLE_TINT_RGB` para nombres desconocidos (preserva el comportamiento 3.26).
+- **`WadAtlas::sprite_name(spritenum) -> Option<String>`** (nuevo). Getter público — la maquinaria de set/has ya existía desde 3.4, esto sólo expone la lectura.
+- **`WorldLight` gana `tint_rgb: (u8, u8, u8)`** resuelto en `gather_world_lights` vía `atlas.sprite_name(s.sprite)` + `sprite_tint_for_name`. Sin atlas → cae al amarillo (modo stub o WAD no cargado).
+- **Tipo `BoostRgb = [f32; 3]`** y constante `ZERO_BOOST`. Cada canal en `[0, MUZZLE_BOOST_PEAK]`. Helpers nuevos:
+  - `muzzle_boost_rgb_cam(x, y, alpha) -> BoostRgb`: scalar × `MUZZLE_TINT_RGB/255` per-canal.
+  - `world_lights_boost_rgb_cam(x, y, &[WorldLight]) -> BoostRgb`: por luz, `f²·PEAK·(tint/255)` per-canal, sumados + clampeados a peak por canal, con fast-exit si las tres componentes saturan.
+  - `muzzle_boost_gated_rgb(boost, sector, lit_sectors) -> BoostRgb`: espejo del gating scalar 3.23.
+  - `combined_boost_rgb_cam(...) -> BoostRgb`: muzzle (gateado) + world lights, suma per-canal + clamp por canal.
+  - `apply_color_boost(c, boost_rgb) -> Color`: suma aditiva per-canal, preserva alpha. Reemplaza `apply_muzzle_tint`.
+  - `sprite_shade_with_world(shade, boost_rgb) -> [f32; 3]`: `shade · (1 + boost_rgb)` per-canal. Reemplaza `sprite_shade_with_muzzle`.
+  - `overlay_color_alpha_from_boost(boost_rgb) -> Option<(u8,u8,u8,u8)>`: deriva color overlay + alpha para texturas. Color = boost normalizado al canal más alto (preserva el tinte); alpha = `boost_max · 180 / MUZZLE_BOOST_PEAK`. None si `boost_max ≤ 0.02`.
+  - `boost_max(boost_rgb) -> f32`: la componente más alta, usada para "scalar lit" (reducción del overlay de oscuridad).
+- **4+ sites en gather actualizados** (`gather_wall` fake-floor + slab texturizado + fallback banda, `gather_subsector_planes` texturizado + fallback color, `gather_sprite` patch texturizado + fallback): scalar `muzzle_boost` → `boost_rgb` con `boost_scalar = boost_max(boost_rgb)` derivado donde se necesita una magnitud única (overlay alpha del darkness reduce).
+- **Resultado visible.**
+  - Un cuarto con antorcha azul **TBLU** ahora se tinta levemente azulado, no amarillo.
+  - Un BFG ball volando por un pasillo tinta paredes y techos verde fluorescente — sin tocar la simulación.
+  - Un cuarto con sólo plasma (PLSS) recibe halo azul-cyan; rocket en vuelo (MISL) tinta naranja cálido.
+  - Sprites cercanos a un fireball de imp se tintean rojizos por `sprite_shade_with_world([0, .4, .15])`.
+  - El muzzle del jugador sigue siendo el mismo amarillo cálido (escenario común — F8 lo activa/desactiva).
+- **Compatibilidad 3.26.** El path scalar legacy queda `#[cfg(test)]` con sus 8 tests verde. El path RGB es bit-equivalent al scalar 3.26 cuando todas las luces usan `MUZZLE_TINT_RGB` (caso reducible por `(255, 220, 140)` → per-canal `(1.0, 0.86, 0.55) · scalar` que mapea al mismo blend de `apply_muzzle_tint`).
+- **Costo.** Por superficie: 3 multiplicaciones extras per-canal vs scalar 3.26. ~330 superficies × 8 lights × 3 canales ≈ 8000 ops/frame, despreciable. Sin alocaciones nuevas — `BoostRgb` es `[f32; 3]` por valor.
+- **Tests** (+12 render = 83 total verde):
+  - `sprite_tint_for_name_resolves_known_sprites` (BAL1 rojo, PLSS azul, BFS1 verde, TBLU azul).
+  - `sprite_tint_for_name_falls_back_to_muzzle_tint_for_unknown` (XYZW + 4-char match en strings largos).
+  - `sprite_tint_for_name_is_case_insensitive`.
+  - `muzzle_boost_rgb_uses_muzzle_tint_per_channel` (R > G > B con peak en R).
+  - `world_lights_boost_rgb_per_light_tint_dominates` (BFG verde → G alto).
+  - `combined_boost_rgb_clamps_each_channel_to_muzzle_peak` (10 luces blancas saturadas → cada canal capeado).
+  - `apply_color_boost_adds_per_channel` (boost G-only tinta verdoso, R y B intactas).
+  - `apply_color_boost_zero_is_identity`.
+  - `sprite_shade_with_world_per_channel` (boost G-only escala sólo G).
+  - `overlay_color_alpha_from_boost_normalizes_to_brightest_channel`.
+  - `overlay_color_alpha_from_boost_none_when_negligible`.
+  - `gather_world_lights_uses_default_tint_without_atlas`.
+- **Header bump**: `PHASE 3.26` → `PHASE 3.27`.
+
+**Limitaciones conocidas de 3.27.**
+- **Sin gating per-light por oclusión.** Mismas limitaciones del 3.26: una pared sólida entre la luz y la superficie no corta el boost (sólo el radio lo hace). En corredores largos con una BFG ball del otro lado, podés ver leak verde — el radio chico (192) y la vida corta de los mobjs lo hacen invisible en práctica.
+- **Tabla curada manual.** Doom 1 + cobertura básica de Doom 2 cubierta; Final Doom, Heretic-compatible WADs o PWADs custom van a caer al amarillo cálido por nombres desconocidos. Defer hasta tener feedback visual real (¿cuáles sprites adicionales notan ausencia de tinte?).
+- **Color normalizado en overlay.** El overlay sobre texturas usa SrcOver (no aditivo puro), entonces el color resultante no es matemáticamente correcto en luminancia. Visual ≈ correcto: BFG verde se ve verde, plasma azul se ve azul. Para HDR-correctness habría que sumar en linear-light + tonemap; defer hasta que llimphi-ui exponga custom passes wgpu.
+- **Sin animación de intensidad por frame.** Algunos mobjs (BAL1 frame A/B alterna brillantes/dim en Doom original) emiten el mismo tinte. Refleja la simulación tal cual — el motor C ya rota frames y el FF_FULLBRIGHT bit responde por tick.
+
+**No incluido en 3.27 (defer a 3.28+):** sprite-BSP true occlusion vía R_CheckSight; smoothing del muzzle alpha por interp entre snapshots; player rim-lit; volumetric god rays; decals dinámicos del impacto del disparo; tabla de tintes para Final Doom / Heretic-style PWADs.
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -573,6 +624,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-30 (+2):** Fase 3.27 — tinte per-spritenum + boost RGB per-canal. Tabla `FB_SPRITE_TINTS` con 24 entradas (BFG verde, plasma azul, fireballs rojos, antorchas teñidas, fogs, candles, lamps). `WadAtlas::sprite_name` getter público + `sprite_tint_for_name` resuelve por 4-char case-insensitive con fallback al amarillo cálido del muzzle. `WorldLight.tint_rgb` resuelto al gatherearse. Refactor del boost a `BoostRgb = [f32; 3]` per-canal: nuevos `muzzle_boost_rgb_cam`, `world_lights_boost_rgb_cam`, `combined_boost_rgb_cam`, `apply_color_boost`, `sprite_shade_with_world`, `overlay_color_alpha_from_boost`. Path scalar legacy queda `#[cfg(test)]` con sus 8 tests verde. 4 sites en `gather_*` migrados al path RGB. 83 tests verde (+12 nuevos: tabla/case/RGB-per-canal/clamp/overlay normalization). Compatibilidad 3.26 preservada cuando todas las luces usan el tinte default.
 - **2026-05-30 (+1):** Fase 3.26 — world point lights desde mobjs `FF_FULLBRIGHT`. `gather_world_lights` recolecta sprites con bit 7 set, los transforma a cam-space y trunca a `MAX_WORLD_LIGHTS=8` más cercanos al player. `world_lights_boost_cam` suma falloffs `f²·PEAK` con `WORLD_LIGHT_RADIUS_WORLD=192`, `WORLD_LIGHT_PEAK=0.40`, clampeado a `MUZZLE_BOOST_PEAK`. `combined_boost_cam` unifica muzzle + world lights en un solo helper, reemplaza 4 sites de cómputo en `gather_wall`/`gather_subsector_planes`/`gather_sprite`. Proyectiles iluminan corridors oscuros, explosiones irradian destellos, plasma deja halos. F10 toggle host. Locales i18n actualizadas (en/es/qu). 71 tests verde renderer (+8 nuevos). Compatibilidad 3.25 preservada bit-exact cuando no hay sprites FF_FULLBRIGHT.
 - **2026-05-30:** Fase 3.25 — radio cumulativo por hop. `compute_muzzle_lit_sectors` ahora hace Dijkstra-lite sobre midpoints encadenados: cada sector cachea su entry midpoint, el siguiente hop se mide desde ahí. En cadenas rectas el comportamiento es idéntico al 3.24 (cumulative == player_dist); en U/L-shapes el cumulativo cuts donde 3.24 dejaba pasar el falso positivo. Hop cap `MUZZLE_BFS_MAX_HOPS=2` preservado como safety net dual al radio. Triangle inequality garantiza 3.25 ⊂ 3.24 en cobertura. 63 tests verde renderer (+2 nuevos: L-shape cumulative cut + entry-chaining correctness). 10 tests del 3.23/3.24 siguen verdes.
 - **2026-05-29 (+3):** Fase 3.24 — BFS multi-hop + filtro por radio en el lit set del muzzle. `compute_muzzle_lit_sectors` ahora BFS hasta `MUZZLE_BFS_MAX_HOPS=2` con cada bridge wall filtrado por midpoint dentro de `MUZZLE_RADIUS_WORLD`. El corredor saliente del cuarto del player (1 puerta más allá) entra al lit cuando antes quedaba oscuro; cuartos al final de pasillos largos siguen excluidos por el radius cut. 61 tests verde renderer (+3 nuevos: 2-hop included / BFS bound at MAX / 1-hop excluido por bridge fuera de radio). Compatibilidad 3.23 preservada.

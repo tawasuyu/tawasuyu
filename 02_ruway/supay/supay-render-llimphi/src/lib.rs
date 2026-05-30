@@ -204,6 +204,18 @@ impl WadAtlas {
             .unwrap_or(false)
     }
 
+    /// Devuelve el 4-char name del sprite si fue registrado vía
+    /// [`Self::set_sprite_name`]. Usado por el renderer para resolver
+    /// el tinte característico de cada mobj FF_FULLBRIGHT (Fase 3.27).
+    pub fn sprite_name(&self, spritenum: u16) -> Option<String> {
+        self.inner
+            .lock()
+            .ok()?
+            .sprite_names
+            .get(&spritenum)
+            .cloned()
+    }
+
     /// Recupera (decodificando si hace falta y cacheando) el patch
     /// RGBA para el sprite `spritenum` en `frame` (bits 0..4 = letter
     /// A..Z; bit 7 = full bright, ignorado por ahora) y `angle` (1..8).
@@ -437,6 +449,7 @@ fn muzzle_boost_cam(x_cam: f32, y_cam: f32, alpha: f32) -> f32 {
 
 /// Suma aditivamente el tinte cálido `MUZZLE_TINT_RGB · boost` al color
 /// base, preservando alpha. Boost ≤ 0 ⇒ no-op.
+#[cfg(test)]
 fn apply_muzzle_tint(c: Color, boost: f32) -> Color {
     if boost <= 0.0 {
         return c;
@@ -458,6 +471,7 @@ fn apply_muzzle_tint(c: Color, boost: f32) -> Color {
 /// shade·tint_b)` con `tint = 1 + boost · MUZZLE_TINT/255` clampeado.
 /// Cuando `boost = 0` devuelve `[shade, shade, shade]` — equivalente al
 /// shading grayscale histórico.
+#[cfg(test)]
 fn sprite_shade_with_muzzle(shade: f32, boost: f32) -> [f32; 3] {
     if boost <= 0.0 {
         return [shade, shade, shade];
@@ -588,6 +602,7 @@ fn compute_muzzle_lit_sectors(snap: &SceneSnapshot) -> Option<HashSet<u32>> {
 /// pared). Si la oclusión está activa y `sector_id ∉ lit_sectors`, la
 /// función devuelve 0 (sin boost). Sin oclusión o sin BSP devuelve el
 /// boost crudo.
+#[cfg(test)]
 fn muzzle_boost_gated(
     boost: f32,
     sector_id: u32,
@@ -646,6 +661,10 @@ struct WorldLight {
     /// `subsector_at_point`.
     #[allow(dead_code)]
     sector: u32,
+    /// Fase 3.27: tinte característico del mobj resuelto vía
+    /// `sprite_tint_for_name`. Cae al amarillo cálido del muzzle si el
+    /// sprite es desconocido para la tabla.
+    tint_rgb: (u8, u8, u8),
 }
 
 /// Recolecta las luces puntuales del mundo del snapshot: cada sprite
@@ -656,7 +675,11 @@ struct WorldLight {
 ///
 /// Costo: O(sprites + N·log N) por frame con N ≈ sprites; en mapas Doom
 /// el número de sprites visibles es <60, despreciable.
-fn gather_world_lights(snap: &SceneSnapshot, cam: &Camera) -> Vec<WorldLight> {
+fn gather_world_lights(
+    snap: &SceneSnapshot,
+    cam: &Camera,
+    atlas: Option<&Arc<WadAtlas>>,
+) -> Vec<WorldLight> {
     let mut lights: Vec<(f32, WorldLight)> = snap
         .sprites
         .iter()
@@ -664,12 +687,20 @@ fn gather_world_lights(snap: &SceneSnapshot, cam: &Camera) -> Vec<WorldLight> {
         .map(|s| {
             let (x_cam, y_cam) = cam.to_cam_2d(s.x, s.y);
             let d2 = x_cam * x_cam + y_cam * y_cam;
+            // Fase 3.27: tinte per-mobj. Si el atlas no tiene el nombre
+            // (o no hay atlas — modo sin WAD), cae al amarillo cálido
+            // del muzzle (comportamiento 3.26).
+            let tint_rgb = atlas
+                .and_then(|a| a.sprite_name(s.sprite))
+                .map(|name| sprite_tint_for_name(&name))
+                .unwrap_or(MUZZLE_TINT_RGB);
             (
                 d2,
                 WorldLight {
                     x_cam,
                     y_cam,
                     sector: s.sector,
+                    tint_rgb,
                 },
             )
         })
@@ -689,6 +720,7 @@ fn gather_world_lights(snap: &SceneSnapshot, cam: &Camera) -> Vec<WorldLight> {
 /// peak del muzzle (no superar el destello del arma propia es un
 /// invariante del sistema — el flash debe seguir siendo el efecto
 /// dominante).
+#[cfg(test)]
 fn world_lights_boost_cam(x_cam: f32, y_cam: f32, lights: &[WorldLight]) -> f32 {
     if lights.is_empty() {
         return 0.0;
@@ -716,6 +748,7 @@ fn world_lights_boost_cam(x_cam: f32, y_cam: f32, lights: &[WorldLight]) -> f32 
 /// sólo por radio. La suma se clampea a `MUZZLE_BOOST_PEAK` para
 /// preservar el invariante "el fogonazo nunca debe sentirse más débil
 /// que un proyectil distante".
+#[cfg(test)]
 fn combined_boost_cam(
     x_cam: f32,
     y_cam: f32,
@@ -731,6 +764,225 @@ fn combined_boost_cam(
     );
     let wl = world_lights_boost_cam(x_cam, y_cam, world_lights);
     (muzzle + wl).clamp(0.0, MUZZLE_BOOST_PEAK)
+}
+
+// =====================================================================
+// Fase 3.27 — Tinte per-spritenum para world lights (BFG verde, plasma
+// azul, fireballs rojos, antorchas teñidas, etc.)
+// =====================================================================
+//
+// Hasta 3.26 todas las world lights usaban el mismo amarillo cálido
+// (`MUZZLE_TINT_RGB`). Pero un proyectil BFG es verde fluorescente, una
+// bola de plasma es azul cyan, un fireball de imp es rojo-naranja y una
+// antorcha azul de decoración tiñe su cuarto azul. Esta fase refactoriza
+// el boost a representación per-canal (`[f32; 3]`) para que cada luz
+// emita su tinte característico, sumándose aditivamente en RGB.
+//
+// La maquinaria scalar (`muzzle_boost_cam`, `apply_muzzle_tint`,
+// `sprite_shade_with_muzzle`) sobrevive para los tests existentes y como
+// implementación de referencia; el render loop usa la versión RGB.
+
+/// Boost per-canal (R, G, B), cada uno en `[0, MUZZLE_BOOST_PEAK]`.
+type BoostRgb = [f32; 3];
+const ZERO_BOOST: BoostRgb = [0.0, 0.0, 0.0];
+
+/// Tabla de colores característicos por nombre de sprite Doom (4-char).
+/// El nombre viene del WAD (resuelto por `WadAtlas::sprite_name`).
+/// Cubre los mobjs `FF_FULLBRIGHT` notables del shareware y Doom 2:
+/// proyectiles, splashes, fogs, antorchas decorativas y lamps.
+const FB_SPRITE_TINTS: &[(&str, (u8, u8, u8))] = &[
+    // --- Proyectiles ---
+    ("BAL1", (255, 130, 60)),  // imp fireball — rojo-naranja
+    ("BAL2", (255, 100, 80)),  // caco fireball — rojo
+    ("BAL7", (140, 255, 140)), // baron fireball — verde
+    ("PLSS", (130, 180, 255)), // plasma en vuelo — azul-cyan
+    ("PLSE", (130, 180, 255)), // plasma impact
+    ("BFS1", (160, 255, 160)), // BFG ball — verde fluorescente
+    ("BFE1", (160, 255, 160)), // BFG explosion
+    ("BFE2", (180, 255, 180)), // BFG splash
+    ("BFGG", (160, 255, 160)), // BFG launching frames (algunos FB)
+    ("MISL", (255, 180, 100)), // rocket — naranja cálido
+    ("PUFF", (255, 220, 160)), // bullet puff — amarillo cálido
+    ("BEXP", (255, 180, 100)), // barrel/rocket explosion — naranja
+    // --- Fogs / fx ---
+    ("TFOG", (140, 200, 255)), // teleport fog — azul
+    ("IFOG", (255, 240, 140)), // item respawn — amarillo-blanco
+    // --- Antorchas / decoración (FF_FULLBRIGHT constante) ---
+    ("TBLU", (110, 160, 255)), // blue torch (tall)
+    ("TGRN", (140, 255, 160)), // green torch (tall)
+    ("TRED", (255, 140, 90)),  // red torch (tall)
+    ("SMBT", (110, 160, 255)), // short blue torch
+    ("SMGT", (140, 255, 160)), // short green torch
+    ("SMRT", (255, 140, 90)),  // short red torch
+    ("CAND", (255, 200, 130)), // candle — cálido
+    ("CBRA", (255, 170, 90)),  // brazier — naranja
+    ("TLMP", (255, 240, 200)), // tall lamp — blanco cálido
+    ("TLP2", (255, 240, 200)), // short lamp
+];
+
+/// Resuelve el tinte característico del sprite a partir de su nombre
+/// 4-char. Cae al amarillo cálido del muzzle (`MUZZLE_TINT_RGB`) si el
+/// nombre es desconocido — preserva el comportamiento 3.26 para mobjs
+/// que el motor reportó pero la tabla no contempla.
+fn sprite_tint_for_name(name: &str) -> (u8, u8, u8) {
+    let key = name.get(..4).unwrap_or(name);
+    for &(k, t) in FB_SPRITE_TINTS {
+        if k.eq_ignore_ascii_case(key) {
+            return t;
+        }
+    }
+    MUZZLE_TINT_RGB
+}
+
+#[inline]
+fn rgb_to_norm(rgb: (u8, u8, u8)) -> BoostRgb {
+    [
+        rgb.0 as f32 / 255.0,
+        rgb.1 as f32 / 255.0,
+        rgb.2 as f32 / 255.0,
+    ]
+}
+
+#[inline]
+fn boost_max(b: BoostRgb) -> f32 {
+    b[0].max(b[1]).max(b[2])
+}
+
+/// Versión RGB del muzzle boost. Toma el scalar histórico y lo tinta
+/// con `MUZZLE_TINT_RGB` per-canal — equivalente a "muzzle = world light
+/// con tinte amarillo cálido anclada al jugador".
+fn muzzle_boost_rgb_cam(x_cam: f32, y_cam: f32, alpha: f32) -> BoostRgb {
+    let scalar = muzzle_boost_cam(x_cam, y_cam, alpha);
+    if scalar <= 0.0 {
+        return ZERO_BOOST;
+    }
+    let t = rgb_to_norm(MUZZLE_TINT_RGB);
+    [scalar * t[0], scalar * t[1], scalar * t[2]]
+}
+
+/// Versión RGB del boost de world lights. Cada luz contribuye
+/// `f²·PEAK·(tint/255)` per-canal, sumadas y clampeadas a
+/// `MUZZLE_BOOST_PEAK` por canal.
+fn world_lights_boost_rgb_cam(x_cam: f32, y_cam: f32, lights: &[WorldLight]) -> BoostRgb {
+    if lights.is_empty() {
+        return ZERO_BOOST;
+    }
+    let r2 = WORLD_LIGHT_RADIUS_WORLD * WORLD_LIGHT_RADIUS_WORLD;
+    let peak = WORLD_LIGHT_PEAK;
+    let mut sum = [0.0_f32; 3];
+    for l in lights {
+        let dx = x_cam - l.x_cam;
+        let dy = y_cam - l.y_cam;
+        let d2 = dx * dx + dy * dy;
+        if d2 >= r2 {
+            continue;
+        }
+        let f = 1.0 - d2 / r2;
+        let amount = f * f * peak;
+        let t = rgb_to_norm(l.tint_rgb);
+        sum[0] += amount * t[0];
+        sum[1] += amount * t[1];
+        sum[2] += amount * t[2];
+        if sum[0] >= MUZZLE_BOOST_PEAK
+            && sum[1] >= MUZZLE_BOOST_PEAK
+            && sum[2] >= MUZZLE_BOOST_PEAK
+        {
+            return [MUZZLE_BOOST_PEAK; 3];
+        }
+    }
+    [
+        sum[0].min(MUZZLE_BOOST_PEAK),
+        sum[1].min(MUZZLE_BOOST_PEAK),
+        sum[2].min(MUZZLE_BOOST_PEAK),
+    ]
+}
+
+/// Gate RGB del muzzle boost por sector. Si `lit_sectors` está activo y
+/// el sector no aparece, devuelve `ZERO_BOOST`; sino pasa el boost
+/// crudo. Espejo del gating scalar de 3.23.
+fn muzzle_boost_gated_rgb(
+    boost: BoostRgb,
+    sector_id: u32,
+    lit_sectors: Option<&HashSet<u32>>,
+) -> BoostRgb {
+    match lit_sectors {
+        Some(lit) if !lit.contains(&sector_id) => ZERO_BOOST,
+        _ => boost,
+    }
+}
+
+/// Versión RGB del boost combinado: muzzle (gateado por lit_sectors)
+/// + world lights (sólo radio), sumados per-canal y clampeados a
+/// `MUZZLE_BOOST_PEAK` por canal. Reemplaza al `combined_boost_cam`
+/// scalar en el render loop.
+fn combined_boost_rgb_cam(
+    x_cam: f32,
+    y_cam: f32,
+    muzzle_alpha: f32,
+    surf_sector: u32,
+    lit_sectors: Option<&HashSet<u32>>,
+    world_lights: &[WorldLight],
+) -> BoostRgb {
+    let m = muzzle_boost_gated_rgb(
+        muzzle_boost_rgb_cam(x_cam, y_cam, muzzle_alpha),
+        surf_sector,
+        lit_sectors,
+    );
+    let w = world_lights_boost_rgb_cam(x_cam, y_cam, world_lights);
+    [
+        (m[0] + w[0]).min(MUZZLE_BOOST_PEAK),
+        (m[1] + w[1]).min(MUZZLE_BOOST_PEAK),
+        (m[2] + w[2]).min(MUZZLE_BOOST_PEAK),
+    ]
+}
+
+/// Suma aditivamente el boost RGB a un color base, preservando alpha.
+/// Reemplaza a `apply_muzzle_tint` (scalar+yellow-fixed) en el render
+/// loop. Cero boost ⇒ identidad.
+fn apply_color_boost(c: Color, boost: BoostRgb) -> Color {
+    if boost == ZERO_BOOST {
+        return c;
+    }
+    let [r, g, b, a] = c.to_rgba8().to_u8_array();
+    let add_r = (boost[0] * 255.0) as u32;
+    let add_g = (boost[1] * 255.0) as u32;
+    let add_b = (boost[2] * 255.0) as u32;
+    Color::from_rgba8(
+        (r as u32 + add_r).min(255) as u8,
+        (g as u32 + add_g).min(255) as u8,
+        (b as u32 + add_b).min(255) as u8,
+        a,
+    )
+}
+
+/// Versión RGB del tinte multiplicativo per-canal del sprite. Reemplaza
+/// a `sprite_shade_with_muzzle` en el render loop. Devuelve `(shade · (1 + boost))`
+/// por canal, clampeado a 1.0.
+fn sprite_shade_with_world(shade: f32, boost: BoostRgb) -> [f32; 3] {
+    [
+        (shade * (1.0 + boost[0])).clamp(0.0, 1.0),
+        (shade * (1.0 + boost[1])).clamp(0.0, 1.0),
+        (shade * (1.0 + boost[2])).clamp(0.0, 1.0),
+    ]
+}
+
+/// Deriva un par `(color, alpha)` para el overlay aditivo sobre
+/// texturas (paredes + flats). El color es el boost normalizado al
+/// canal más alto; el alpha escala con la magnitud del boost. Devuelve
+/// `None` si el boost es despreciable (< 0.02 en cualquier canal).
+fn overlay_color_alpha_from_boost(boost: BoostRgb) -> Option<(u8, u8, u8, u8)> {
+    let m = boost_max(boost);
+    if m <= 0.02 {
+        return None;
+    }
+    let scale = 255.0 / m.max(1e-3);
+    let r = (boost[0] * scale).clamp(0.0, 255.0) as u8;
+    let g = (boost[1] * scale).clamp(0.0, 255.0) as u8;
+    let b = (boost[2] * scale).clamp(0.0, 255.0) as u8;
+    // Alpha proporcional al boost máximo, normalizado al peak del muzzle
+    // para preservar la intensidad histórica del overlay.
+    let alpha = (m * 180.0 / MUZZLE_BOOST_PEAK).clamp(0.0, 180.0) as u8;
+    Some((r, g, b, alpha))
 }
 
 // =====================================================================
@@ -837,7 +1089,7 @@ fn render_frame(
     // ordenados por cercanía al jugador. Si el toggle está apagado, queda
     // vacía y el plumbing pasa a no-op (rama temprana en `world_lights_boost_cam`).
     let world_lights: Vec<WorldLight> = if cfg.world_lights_enabled {
-        gather_world_lights(snap, &cam)
+        gather_world_lights(snap, &cam, cfg.atlas.as_ref())
     } else {
         Vec::new()
     };
@@ -1190,10 +1442,12 @@ fn gather_wall(
     // desde el player por linedef two-sided directo), el boost se anula
     // — la pared queda como en escena base, sin tinte cálido.
     // Fase 3.26: sumamos también las world lights de mobjs FF_FULLBRIGHT
-    // cercanos al midpoint. El nombre `muzzle_boost` se conserva por
-    // legibilidad downstream — la fuente del tinte cálido ahora es
-    // "muzzle + proyectiles + explosiones" combinados.
-    let muzzle_boost = combined_boost_cam(
+    // cercanos al midpoint. Fase 3.27: el boost ahora es per-canal RGB
+    // — cada luz emite su tinte (BFG verde, plasma azul, fireball rojo,
+    // antorcha teñida). El scalar `boost_scalar = max(boost_rgb)` se
+    // usa donde necesitamos una magnitud única (overlay alpha del
+    // shading darkness).
+    let boost_rgb = combined_boost_rgb_cam(
         mid_x,
         mid_y,
         cfg.muzzle_glow_alpha,
@@ -1201,6 +1455,7 @@ fn gather_wall(
         lit_sectors,
         world_lights,
     );
+    let boost_scalar = boost_max(boost_rgb);
 
     // -----------------------------------------------------------------
     // Floor & ceiling strips ("fake floor") — fallback de 3.1 cuando no
@@ -1228,7 +1483,7 @@ fn gather_wall(
             path.close_path();
             out.push(Renderable {
                 depth: depth + 0.5,
-                color: apply_muzzle_tint(floor_color(near_sec, depth, cfg), muzzle_boost),
+                color: apply_color_boost(floor_color(near_sec, depth, cfg), boost_rgb),
                 path,
                 kind: RenderKind::Fill,
             });
@@ -1243,9 +1498,9 @@ fn gather_wall(
             path.close_path();
             out.push(Renderable {
                 depth: depth + 0.5,
-                color: apply_muzzle_tint(
+                color: apply_color_boost(
                     ceiling_color(near_sec, depth, cfg, snap.sky_pic),
-                    muzzle_boost,
+                    boost_rgb,
                 ),
                 path,
                 kind: RenderKind::Fill,
@@ -1384,7 +1639,7 @@ fn gather_wall(
             // segundo overlay aditivo amarillo para sumar el tinte
             // cálido sobre la textura.
             let base_shade = shade_for(sec.light_level, depth, cfg);
-            let lit_shade = (base_shade + muzzle_boost).clamp(0.0, 1.0);
+            let lit_shade = (base_shade + boost_scalar).clamp(0.0, 1.0);
             if lit_shade < 0.95 {
                 let alpha = ((1.0 - lit_shade) * 255.0) as u8;
                 out.push(Renderable {
@@ -1394,16 +1649,10 @@ fn gather_wall(
                     kind: RenderKind::Fill,
                 });
             }
-            if muzzle_boost > 0.02 {
-                let a = (muzzle_boost * 180.0).clamp(0.0, 180.0) as u8;
+            if let Some((or, og, ob, oa)) = overlay_color_alpha_from_boost(boost_rgb) {
                 out.push(Renderable {
                     depth: depth - 0.002,
-                    color: Color::from_rgba8(
-                        MUZZLE_TINT_RGB.0,
-                        MUZZLE_TINT_RGB.1,
-                        MUZZLE_TINT_RGB.2,
-                        a,
-                    ),
+                    color: Color::from_rgba8(or, og, ob, oa),
                     path,
                     kind: RenderKind::Fill,
                 });
@@ -1427,9 +1676,9 @@ fn gather_wall(
                 p.close_path();
                 out.push(Renderable {
                     depth,
-                    color: apply_muzzle_tint(
+                    color: apply_color_boost(
                         wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
-                        muzzle_boost,
+                        boost_rgb,
                     ),
                     path: p,
                     kind: RenderKind::Fill,
@@ -1723,7 +1972,8 @@ fn gather_subsector_planes(
     // Fase 3.23: gateado por `sub.sector` — si el subsector no está en
     // el cuarto del player ni en uno vecino directo, no recibe tinte.
     // Fase 3.26: + boost de las world lights cercanas al centroide.
-    let muzzle_boost = combined_boost_cam(
+    // Fase 3.27: boost per-canal RGB para que cada luz emita su tinte.
+    let boost_rgb = combined_boost_rgb_cam(
         centroid_cx,
         centroid_cy,
         cfg.muzzle_glow_alpha,
@@ -1731,6 +1981,7 @@ fn gather_subsector_planes(
         lit_sectors,
         world_lights,
     );
+    let boost_scalar = boost_max(boost_rgb);
     // Depth para painter's sort:
     // - Con BSP (Fase 3.13), usamos el depth asignado por la travesía
     //   back-to-front del árbol — orden correcto Doom, elimina glitches
@@ -1838,7 +2089,7 @@ fn gather_subsector_planes(
                         // amarillo aditivo sobre la textura.
                         let base_shade = shade_for(sec.light_level, shade_depth, cfg)
                             * if is_floor { 0.92 } else { 0.85 };
-                        let lit_shade = (base_shade + muzzle_boost).clamp(0.0, 1.0);
+                        let lit_shade = (base_shade + boost_scalar).clamp(0.0, 1.0);
                         if lit_shade < 0.95 {
                             let alpha = ((1.0 - lit_shade) * 255.0).clamp(0.0, 255.0) as u8;
                             out.push(Renderable {
@@ -1848,16 +2099,10 @@ fn gather_subsector_planes(
                                 kind: RenderKind::Fill,
                             });
                         }
-                        if muzzle_boost > 0.02 {
-                            let a = (muzzle_boost * 180.0).clamp(0.0, 180.0) as u8;
+                        if let Some((or, og, ob, oa)) = overlay_color_alpha_from_boost(boost_rgb) {
                             out.push(Renderable {
                                 depth: depth + 0.998,
-                                color: Color::from_rgba8(
-                                    MUZZLE_TINT_RGB.0,
-                                    MUZZLE_TINT_RGB.1,
-                                    MUZZLE_TINT_RGB.2,
-                                    a,
-                                ),
+                                color: Color::from_rgba8(or, og, ob, oa),
                                 path,
                                 kind: RenderKind::Fill,
                             });
@@ -1875,7 +2120,7 @@ fn gather_subsector_planes(
         };
         out.push(Renderable {
             depth: depth + 1.0,
-            color: apply_muzzle_tint(color, muzzle_boost),
+            color: apply_color_boost(color, boost_rgb),
             path,
             kind: RenderKind::Fill,
         });
@@ -2141,7 +2386,9 @@ fn gather_sprite(
             // del player lo alcance.
             // Fase 3.26: el sprite también recibe boost de las world
             // lights (mobjs FF_FULLBRIGHT cercanos), sumado al muzzle.
-            let muzzle_boost = combined_boost_cam(
+            // Fase 3.27: boost RGB per-canal — un sprite cerca de una
+            // bola BFG se tinta verdoso; cerca de plasma, azulado.
+            let boost_rgb = combined_boost_rgb_cam(
                 x_cam,
                 y_cam,
                 cfg.muzzle_glow_alpha,
@@ -2149,7 +2396,7 @@ fn gather_sprite(
                 lit_sectors,
                 world_lights,
             );
-            let shade_rgb = sprite_shade_with_muzzle(shade, muzzle_boost);
+            let shade_rgb = sprite_shade_with_world(shade, boost_rgb);
             let img = make_tinted_sprite_image_rgb(&patch, shade_rgb);
             // Mirror = pintamos espejado: scale_x negativo + corrimiento.
             let xform = if mirror {
@@ -2182,7 +2429,8 @@ fn gather_sprite(
     path.line_to(br);
     path.close_path();
     // Fase 3.26: fallback (sin patch del WAD) también combina muzzle + world lights.
-    let boost = combined_boost_cam(
+    // Fase 3.27: boost RGB per-canal.
+    let boost = combined_boost_rgb_cam(
         x_cam,
         y_cam,
         cfg.muzzle_glow_alpha,
@@ -2192,7 +2440,7 @@ fn gather_sprite(
     );
     out.push(Renderable {
         depth,
-        color: apply_muzzle_tint(sprite_color(sprite, sec, depth, cfg), boost),
+        color: apply_color_boost(sprite_color(sprite, sec, depth, cfg), boost),
         path,
         kind: RenderKind::Fill,
     });
@@ -4358,6 +4606,7 @@ mod tests {
             x_cam: 0.0,
             y_cam: 0.0,
             sector: 0,
+            tint_rgb: MUZZLE_TINT_RGB,
         }];
         let b = world_lights_boost_cam(0.0, 0.0, &lights);
         assert!(
@@ -4375,6 +4624,7 @@ mod tests {
             x_cam: 0.0,
             y_cam: 0.0,
             sector: 0,
+            tint_rgb: MUZZLE_TINT_RGB,
         }];
         let r = WORLD_LIGHT_RADIUS_WORLD;
         assert_eq!(world_lights_boost_cam(r, 0.0, &lights), 0.0);
@@ -4391,6 +4641,7 @@ mod tests {
             x_cam: 0.0,
             y_cam: 0.0,
             sector: 0,
+            tint_rgb: MUZZLE_TINT_RGB,
         }];
         let close = world_lights_boost_cam(WORLD_LIGHT_RADIUS_WORLD * 0.25, 0.0, &lights);
         let mid = world_lights_boost_cam(WORLD_LIGHT_RADIUS_WORLD * 0.5, 0.0, &lights);
@@ -4408,8 +4659,8 @@ mod tests {
         // contribuciones, pero clampeada al peak del muzzle (invariante:
         // el fogonazo del arma no debe quedar dominado por proyectiles).
         let lights = vec![
-            WorldLight { x_cam: 0.0, y_cam: 0.0, sector: 0 },
-            WorldLight { x_cam: 0.0, y_cam: 0.0, sector: 1 },
+            WorldLight { x_cam: 0.0, y_cam: 0.0, sector: 0, tint_rgb: MUZZLE_TINT_RGB },
+            WorldLight { x_cam: 0.0, y_cam: 0.0, sector: 1, tint_rgb: MUZZLE_TINT_RGB },
         ];
         let b = world_lights_boost_cam(0.0, 0.0, &lights);
         // Sin clamp serían 2 × PEAK = 0.8; con clamp = MUZZLE_BOOST_PEAK.
@@ -4427,7 +4678,7 @@ mod tests {
             fb_sprite(128.0, 0.0, 0x02, 0), // sin bit 7
         ]);
         let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
-        let lights = gather_world_lights(&snap, &cam);
+        let lights = gather_world_lights(&snap, &cam, None);
         assert_eq!(lights.len(), 1, "sólo el sprite FF_FULLBRIGHT cuenta");
     }
 
@@ -4442,7 +4693,7 @@ mod tests {
         let mut snap = SceneSnapshot::empty(0);
         snap.sprites = Arc::from(sprites);
         let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
-        let lights = gather_world_lights(&snap, &cam);
+        let lights = gather_world_lights(&snap, &cam, None);
         assert_eq!(
             lights.len(),
             MAX_WORLD_LIGHTS,
@@ -4470,6 +4721,7 @@ mod tests {
             x_cam: 0.0,
             y_cam: 0.0,
             sector: 0,
+            tint_rgb: MUZZLE_TINT_RGB,
         }];
         let b = combined_boost_cam(0.0, 0.0, 1.0, 0, None, &lights);
         assert!(
@@ -4478,5 +4730,157 @@ mod tests {
             MUZZLE_BOOST_PEAK,
             b
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.27: tinte per-spritenum + boost RGB per-canal
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn sprite_tint_for_name_resolves_known_sprites() {
+        let imp = sprite_tint_for_name("BAL1");
+        assert_eq!(imp, (255, 130, 60), "imp fireball rojo-naranja");
+        let plasma = sprite_tint_for_name("PLSS");
+        assert_eq!(plasma, (130, 180, 255), "plasma azul-cyan");
+        let bfg = sprite_tint_for_name("BFS1");
+        assert_eq!(bfg, (160, 255, 160), "BFG ball verde fluorescente");
+        let torch_blue = sprite_tint_for_name("TBLU");
+        assert_eq!(torch_blue, (110, 160, 255), "blue torch azul");
+    }
+
+    #[test]
+    fn sprite_tint_for_name_falls_back_to_muzzle_tint_for_unknown() {
+        let unk = sprite_tint_for_name("XYZW");
+        assert_eq!(unk, MUZZLE_TINT_RGB, "sprite desconocido cae al amarillo");
+        // El nombre puede traer más de 4 chars (e.g. "PLSSA0"); el match
+        // se hace sobre los primeros 4 — debería resolver igual.
+        let plasma_long = sprite_tint_for_name("PLSSA0");
+        assert_eq!(plasma_long, (130, 180, 255));
+    }
+
+    #[test]
+    fn sprite_tint_for_name_is_case_insensitive() {
+        // El motor a veces devuelve los nombres tal-cual del WAD (uppercase)
+        // pero defensemos contra mixed-case por si una fase futura los
+        // normaliza.
+        assert_eq!(sprite_tint_for_name("bal1"), (255, 130, 60));
+        assert_eq!(sprite_tint_for_name("Plss"), (130, 180, 255));
+    }
+
+    #[test]
+    fn muzzle_boost_rgb_uses_muzzle_tint_per_channel() {
+        // Muzzle en origen con alpha=1 ⇒ scalar = MUZZLE_BOOST_PEAK.
+        // Per-canal = peak · (255/255, 220/255, 140/255).
+        let b = muzzle_boost_rgb_cam(0.0, 0.0, 1.0);
+        let expected_r = MUZZLE_BOOST_PEAK * (MUZZLE_TINT_RGB.0 as f32 / 255.0);
+        let expected_g = MUZZLE_BOOST_PEAK * (MUZZLE_TINT_RGB.1 as f32 / 255.0);
+        let expected_b = MUZZLE_BOOST_PEAK * (MUZZLE_TINT_RGB.2 as f32 / 255.0);
+        assert!((b[0] - expected_r).abs() < 1e-5);
+        assert!((b[1] - expected_g).abs() < 1e-5);
+        assert!((b[2] - expected_b).abs() < 1e-5);
+        // R > G > B porque el amarillo cálido tiene R=255 > G=220 > B=140.
+        assert!(b[0] > b[1] && b[1] > b[2], "amarillo: R > G > B");
+    }
+
+    #[test]
+    fn world_lights_boost_rgb_per_light_tint_dominates() {
+        // Una sola luz verde (BFG) en el origen ⇒ boost RGB con G alto,
+        // R/B mucho más bajos.
+        let lights = vec![WorldLight {
+            x_cam: 0.0,
+            y_cam: 0.0,
+            sector: 0,
+            tint_rgb: (160, 255, 160), // BFG green
+        }];
+        let b = world_lights_boost_rgb_cam(0.0, 0.0, &lights);
+        assert!(b[1] > b[0] && b[1] > b[2], "G debe dominar para BFG verde");
+        // Magnitud verde ≈ WORLD_LIGHT_PEAK · 255/255 = PEAK.
+        assert!(
+            (b[1] - WORLD_LIGHT_PEAK).abs() < 1e-5,
+            "G debe alcanzar PEAK"
+        );
+    }
+
+    #[test]
+    fn combined_boost_rgb_clamps_each_channel_to_muzzle_peak() {
+        // Muchas luces saturadas en cada canal ⇒ cada canal clampea a peak.
+        let lights: Vec<WorldLight> = (0..10)
+            .map(|_| WorldLight {
+                x_cam: 0.0,
+                y_cam: 0.0,
+                sector: 0,
+                tint_rgb: (255, 255, 255), // luz blanca máxima
+            })
+            .collect();
+        let b = combined_boost_rgb_cam(0.0, 0.0, 1.0, 0, None, &lights);
+        for ch in 0..3 {
+            assert!(
+                b[ch] <= MUZZLE_BOOST_PEAK + 1e-5,
+                "canal {} {} > peak",
+                ch,
+                b[ch]
+            );
+            // Y deberían estar saturados (al peak):
+            assert!(
+                (b[ch] - MUZZLE_BOOST_PEAK).abs() < 1e-4,
+                "canal {} debería estar saturado",
+                ch
+            );
+        }
+    }
+
+    #[test]
+    fn apply_color_boost_adds_per_channel() {
+        let base = Color::from_rgba8(50, 50, 50, 255);
+        // Boost sólo en G ⇒ sale verdoso.
+        let b = apply_color_boost(base, [0.0, 0.4, 0.0]);
+        let [r, g, bb, a] = b.to_rgba8().to_u8_array();
+        assert_eq!(r, 50, "R sin cambio");
+        assert!(g > 100, "G boosted (esperado ~50 + 0.4·255 ≈ 152), dió {g}");
+        assert_eq!(bb, 50, "B sin cambio");
+        assert_eq!(a, 255, "alpha preservada");
+    }
+
+    #[test]
+    fn apply_color_boost_zero_is_identity() {
+        let base = Color::from_rgba8(120, 80, 200, 200);
+        let same = apply_color_boost(base, ZERO_BOOST);
+        assert_eq!(same.to_rgba8().to_u8_array(), [120, 80, 200, 200]);
+    }
+
+    #[test]
+    fn sprite_shade_with_world_per_channel() {
+        // Shade base 0.5, boost RGB (0, 0.4, 0) ⇒ G escalado, R/B intactos.
+        let s = sprite_shade_with_world(0.5, [0.0, 0.4, 0.0]);
+        assert!((s[0] - 0.5).abs() < 1e-5, "R sin cambio");
+        assert!(s[1] > 0.5, "G boosted");
+        assert!((s[2] - 0.5).abs() < 1e-5, "B sin cambio");
+    }
+
+    #[test]
+    fn overlay_color_alpha_from_boost_normalizes_to_brightest_channel() {
+        // Boost dominantemente verde con poca R y nada de B ⇒
+        // color overlay debe ser verde dominante.
+        let (r, g, b, a) = overlay_color_alpha_from_boost([0.05, 0.30, 0.0]).expect("non-trivial");
+        assert!(g > r && g > b, "G dominante en color overlay");
+        assert!(a > 0, "alpha > 0 para boost no despreciable");
+    }
+
+    #[test]
+    fn overlay_color_alpha_from_boost_none_when_negligible() {
+        // Boost por debajo del threshold ⇒ None.
+        assert!(overlay_color_alpha_from_boost([0.01, 0.0, 0.0]).is_none());
+        assert!(overlay_color_alpha_from_boost(ZERO_BOOST).is_none());
+    }
+
+    #[test]
+    fn gather_world_lights_uses_default_tint_without_atlas() {
+        // Sin atlas (modo stub), los lights caen al amarillo cálido.
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sprites = Arc::from(vec![fb_sprite(64.0, 0.0, 0x80, 0)]);
+        let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
+        let lights = gather_world_lights(&snap, &cam, None);
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].tint_rgb, MUZZLE_TINT_RGB);
     }
 }
