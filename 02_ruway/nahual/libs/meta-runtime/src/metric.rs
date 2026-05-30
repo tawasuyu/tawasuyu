@@ -401,6 +401,44 @@ pub fn sort_breakdown_by_key(result: &mut MetricResult) {
     }
 }
 
+/// Reescribe un desglose ordenado a su **acumulado** (running total):
+/// cada valor pasa a ser la suma corrida de sí mismo y todos los
+/// anteriores. Pensado para series temporales (orden cronológico, vía
+/// `bucket`) — p.ej. el saldo acumulado de tesorería mes a mes. En
+/// multi-serie, cada serie acumula de forma independiente a lo largo
+/// del eje de grupos. `Breakdown` (conteo) se acumula igual. No-op
+/// sobre `Scalar`. Asume que `result` ya está en el orden deseado
+/// (típicamente tras `sort_breakdown_by_key`); sólo tiene sentido sobre
+/// métricas aditivas (`Count`/`Sum`).
+pub fn cumulative_breakdown(result: &mut MetricResult) {
+    match result {
+        MetricResult::Breakdown(rows) => {
+            let mut acc = 0usize;
+            for (_, v) in rows.iter_mut() {
+                acc += *v;
+                *v = acc;
+            }
+        }
+        MetricResult::ValueBreakdown(rows) => {
+            let mut acc = 0.0;
+            for (_, v) in rows.iter_mut() {
+                acc += *v;
+                *v = acc;
+            }
+        }
+        MetricResult::MultiBreakdown { series, .. } => {
+            for (_, vals) in series.iter_mut() {
+                let mut acc = 0.0;
+                for v in vals.iter_mut() {
+                    acc += *v;
+                    *v = acc;
+                }
+            }
+        }
+        MetricResult::Scalar(_) => {}
+    }
+}
+
 /// Valor de un campo de nivel superior como texto plano, para comparar
 /// (filtros) o agrupar (`GroupBy`).
 fn field_as_text(v: &Value, field: &str) -> Option<String> {
@@ -448,6 +486,55 @@ mod tests {
                 ("2026-03".into(), 30.0),
             ])
         );
+    }
+
+    #[test]
+    fn cumulative_breakdown_running_total() {
+        // Serie de valores → saldo acumulado.
+        let mut r = MetricResult::ValueBreakdown(vec![
+            ("2026-01".into(), 10.0),
+            ("2026-02".into(), 20.0),
+            ("2026-03".into(), 5.0),
+        ]);
+        cumulative_breakdown(&mut r);
+        assert_eq!(
+            r,
+            MetricResult::ValueBreakdown(vec![
+                ("2026-01".into(), 10.0),
+                ("2026-02".into(), 30.0),
+                ("2026-03".into(), 35.0),
+            ])
+        );
+        // Conteo acumulado.
+        let mut c = MetricResult::Breakdown(vec![("a".into(), 2), ("b".into(), 3), ("c".into(), 1)]);
+        cumulative_breakdown(&mut c);
+        assert_eq!(
+            c,
+            MetricResult::Breakdown(vec![("a".into(), 2), ("b".into(), 5), ("c".into(), 6)])
+        );
+        // Multi-serie: cada serie acumula por separado.
+        let mut m = MetricResult::MultiBreakdown {
+            groups: vec!["ene".into(), "feb".into(), "mar".into()],
+            series: vec![
+                ("pagado".into(), vec![1.0, 2.0, 3.0]),
+                ("no".into(), vec![10.0, 0.0, 5.0]),
+            ],
+        };
+        cumulative_breakdown(&mut m);
+        assert_eq!(
+            m,
+            MetricResult::MultiBreakdown {
+                groups: vec!["ene".into(), "feb".into(), "mar".into()],
+                series: vec![
+                    ("pagado".into(), vec![1.0, 3.0, 6.0]),
+                    ("no".into(), vec![10.0, 10.0, 15.0]),
+                ],
+            }
+        );
+        // No-op sobre escalar.
+        let mut s = MetricResult::Scalar(42.0);
+        cumulative_breakdown(&mut s);
+        assert_eq!(s, MetricResult::Scalar(42.0));
     }
 
     #[test]

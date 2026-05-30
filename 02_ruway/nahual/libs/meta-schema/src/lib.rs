@@ -307,6 +307,16 @@ pub struct DashboardCard {
     /// recorta. `None` = agrupar por el valor crudo del campo.
     #[serde(default)]
     pub bucket: Option<DateBucket>,
+    /// Convierte un desglose ordenado en su **acumulado** (running
+    /// total): tras ordenar/recortar, cada valor pasa a ser la suma
+    /// corrida de sí mismo y los anteriores. El caso natural de
+    /// tesorería ("saldo acumulado por mes"); se combina con `bucket`
+    /// para series cronológicas, y en multi-serie cada serie acumula por
+    /// separado. Sólo tiene sentido sobre métricas aditivas
+    /// (`Count`/`Sum`/`SumBy`/`SumBySeries`). `false` = valores por
+    /// período (default).
+    #[serde(default)]
+    pub cumulative: bool,
 }
 
 /// Granularidad de truncado de una fecha ISO-8601 para series temporales.

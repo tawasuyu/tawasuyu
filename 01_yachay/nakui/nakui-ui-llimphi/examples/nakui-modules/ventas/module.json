@@ -145,6 +145,22 @@
           "bucket": "month"
         },
         {
+          "label": "Facturación acumulada",
+          "entity": "Order",
+          "metric": {
+            "kind": "sum_by",
+            "group": "fecha",
+            "value": "monto"
+          },
+          "format": {
+            "kind": "currency",
+            "symbol": "$"
+          },
+          "chart": "line",
+          "bucket": "month",
+          "cumulative": true
+        },
+        {
           "label": "Facturación por mes y estado de pago",
           "entity": "Order",
           "metric": {

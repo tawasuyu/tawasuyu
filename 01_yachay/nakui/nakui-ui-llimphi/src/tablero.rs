@@ -178,6 +178,12 @@ pub(crate) fn compute_card_full(
             .map(|n| limit_breakdown(&mut result, n, metric_is_additive(&card.metric)))
             .unwrap_or(false)
     };
+    // Acumulado (running total): tras fijar el orden, cada valor pasa a
+    // ser la suma corrida. No toca las claves, así raw_keys/drill siguen
+    // alineados. El caso natural de tesorería ("saldo acumulado por mes").
+    if card.cumulative {
+        cumulative_breakdown(&mut result);
+    }
     let mut raw_keys = breakdown_raw_keys(&result);
     // La fila "Otros" no apunta a un grupo concreto: sentinel vacío para
     // que `drill_msg` la deje no-clickeable. Las series temporales SÍ
