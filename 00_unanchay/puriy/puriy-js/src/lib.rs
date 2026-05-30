@@ -8247,4 +8247,127 @@ mod tests {
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
         assert_eq!(rt.eval("rec").expect("e"), JsValue::String("tema=oscuro:true:true".into()));
     }
+
+    // ---- Fase 7.93 — Permissions API ----
+
+    #[test]
+    fn permissions_query_devuelve_status_y_es_eventtarget() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_set_permission('geolocation', 'granted'); \
+             var st = null; \
+             navigator.permissions.query({ name: 'geolocation' }).then(function(s) { st = s; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("st.name").expect("e"), JsValue::String("geolocation".into()));
+        assert_eq!(rt.eval("st.state").expect("e"), JsValue::String("granted".into()));
+        assert_eq!(rt.eval("st instanceof EventTarget").expect("e"), JsValue::Bool(true));
+        // permiso sin setear → 'prompt' (el usuario no decidió).
+        rt.eval("navigator.permissions.query({ name: 'camera' }).then(function(s) { globalThis._cam = s; });")
+            .expect("e");
+        assert_eq!(rt.eval("_cam.state").expect("e"), JsValue::String("prompt".into()));
+    }
+
+    #[test]
+    fn set_permission_dispara_change_en_status_vivo() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var st = null, changed = null; \
+             navigator.permissions.query({ name: 'notifications' }).then(function(s) { \
+                 st = s; \
+                 st.onchange = function() { changed = st.state; }; \
+             });",
+        )
+        .expect("e");
+        rt.eval("__puriy_set_permission('notifications', 'denied');").expect("e");
+        assert_eq!(rt.eval("changed").expect("e"), JsValue::String("denied".into()));
+        assert_eq!(rt.eval("st.state").expect("e"), JsValue::String("denied".into()));
+    }
+
+    // ---- Fase 7.94 — Notification API ----
+
+    #[test]
+    fn notification_permission_default_y_request() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("Notification.permission").expect("e"), JsValue::String("default".into()));
+        rt.eval("var p = null; Notification.requestPermission().then(function(s) { p = s; });")
+            .expect("e");
+        assert_eq!(rt.eval("p").expect("e"), JsValue::String("default".into()));
+        rt.eval("__puriy_set_notification_permission('granted');").expect("e");
+        assert_eq!(rt.eval("Notification.permission").expect("e"), JsValue::String("granted".into()));
+    }
+
+    #[test]
+    fn notification_granted_dispara_show() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_set_notification_permission('granted'); \
+             var got = null; \
+             var n = new Notification('hola', { body: 'cuerpo' }); \
+             n.onshow = function() { got = n.title + ':' + n.body; };",
+        )
+        .expect("e");
+        // show se dispara en microtask → ya corrió tras el drain del eval.
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("hola:cuerpo".into()));
+    }
+
+    #[test]
+    fn notification_sin_permiso_dispara_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = false, shown = false; \
+             var n = new Notification('y'); \
+             n.onerror = function() { err = true; }; \
+             n.onshow = function() { shown = true; };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("shown").expect("e"), JsValue::Bool(false));
+    }
+
+    // ---- Fase 7.95 — navigator.geolocation ----
+
+    #[test]
+    fn geolocation_get_current_position_entrega_coords() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var rec = null; \
+             navigator.geolocation.getCurrentPosition(function(p) { \
+                 rec = p.coords.latitude + ',' + p.coords.longitude + ',' + p.coords.accuracy; \
+             }); \
+             __puriy_deliver_position(1, { latitude: 10.5, longitude: -66.9, accuracy: 5 });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("rec").expect("e"), JsValue::String("10.5,-66.9,5".into()));
+    }
+
+    #[test]
+    fn geolocation_watch_entrega_repetido_y_clear_corta() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var id = navigator.geolocation.watchPosition(function() { n++; }); \
+             __puriy_deliver_position(id, { latitude: 1, longitude: 2 }); \
+             __puriy_deliver_position(id, { latitude: 3, longitude: 4 }); \
+             navigator.geolocation.clearWatch(id); \
+             var afterClear = __puriy_deliver_position(id, { latitude: 5, longitude: 6 });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("afterClear").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn geolocation_error_invoca_callback_de_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var code = null; \
+             navigator.geolocation.getCurrentPosition(function() {}, function(e) { \
+                 code = e.code + ':' + (e.PERMISSION_DENIED === 1); \
+             }); \
+             __puriy_deliver_position_error(1, 1, 'denegado');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("code").expect("e"), JsValue::String("1:true".into()));
+    }
 }
