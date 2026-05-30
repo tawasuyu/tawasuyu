@@ -291,9 +291,9 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 - `RecorridoState`: máquina de interacción libre (drag = pan, wheel = zoom-a-cursor) **+** reproducción guiada (flechas avanzan por `pasos` con cámara interpolada). Análoga a `DeckState`.
 
 **Fases (orden por dependencia):**
-1. **`pluma-deck-core::{camara, recorrido}`** — `Camara` + math (zoom-a-cursor, pan, fit, interpolar con easing) + `Marco`/`Recorrido`/`RecorridoState` + máquina libre/guiada. Cero render, cero DOM. Tests unitarios (invarianza zoom-a-cursor, snap de pasos, clamp de zoom, round-trip world↔screen). *Esta es la pieza con sustancia.*
-2. **Frontend Llimphi** (`pluma-deck-recorrido-llimphi` o módulo en `pluma-editor-llimphi`) — canvas `View::paint_with` que aplica el transform de `Camara` y pinta cada `Marco` (rects+labels placeholder primero); wheel→zoom-a-cursor, drag→pan, flechas→paso con animación vía `Handle::spawn_periodic`. Demo `recorrido_demo`.
-3. **Contenido real** — meter cuerpo/subgrafo/imagen dentro del marco vía `pluma-render-plan`; autoría: colocar/mover marcos y definir el orden de la ruta.
+1. ✅ **`pluma-deck-core::{camara, recorrido}`** (2026-05-30) — `Camara` + math (zoom-a-cursor, pan, fit, interpolar en espacio-log) + `Marco`/`Recorrido`/`RecorridoState` + máquina libre/guiada. Cero render, cero DOM. 25/25 tests.
+2. ✅ **Frontend Llimphi** `pluma-deck-recorrido-llimphi` (2026-05-30) — canvas `View::paint_with` con el transform de `Camara` (giro por marco, clip al panel), wheel→zoom-a-cursor (side-channel del rect, patrón tullpu), drag→pan, flechas→paso con vuelo interpolado vía `Handle::spawn_periodic`. Demo `recorrido_demo`.
+3. ✅ **Contenido real + autoría** (2026-05-30) — (3a) `ContenidoMarco::Texto{titulo,parrafos}` + `Recorrido::en_rejilla` (auto-layout) + render de slides (título + párrafos fluidos clipeados). (3b) `recorrido_md_demo`: markdown real → `pluma_md::parse_md` → átomos → `Recorrido` (encabezado abre slide). (3c) autoría: `Marco::contiene`/`marco_en_punto`/`mover_marco` + `recorrido_editor_demo` (arrastrar mueve marco / panea vacío, `n` crea marco). *Pendiente menor: imagen dentro del marco vía `pluma-render-plan`.*
 4. **Frontend web** (opcional, post-Llimphi) — `pluma-deck-web` espejo espacial + export, cuando se quiera publicar a navegador.
 
 **Relación con foreign-pptx** (§6.ter): `.pptx` importa al modo lineal (`pluma-deck`); el modo `Recorrido` es el ciudadano nativo sin equivalente office — es donde gioser supera a PowerPoint, no donde lo imita.
