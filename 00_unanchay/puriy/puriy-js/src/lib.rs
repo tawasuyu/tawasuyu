@@ -7396,4 +7396,58 @@ mod tests {
         // dispatchEvent devuelve false cuando un listener llamó preventDefault.
         assert_eq!(rt.eval("ret").expect("e"), JsValue::Bool(false));
     }
+
+    // ============= Fase 7.77 — eventos tipados (Message/Close/Progress) =============
+
+    #[test]
+    fn message_event_campos_y_es_event() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ev = new MessageEvent('message', { data: { x: 7 }, origin: 'http://a', lastEventId: '5' }); \
+             var dx = ev.data.x; var org = ev.origin; var lid = ev.lastEventId; \
+             var esEvent = (ev instanceof Event); var esMsg = (ev instanceof MessageEvent); \
+             var tipo = ev.type;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("dx").expect("e"), JsValue::Number(7.0));
+        assert_eq!(rt.eval("org").expect("e"), JsValue::String("http://a".into()));
+        assert_eq!(rt.eval("lid").expect("e"), JsValue::String("5".into()));
+        assert_eq!(rt.eval("esEvent").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("esMsg").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("tipo").expect("e"), JsValue::String("message".into()));
+    }
+
+    #[test]
+    fn close_event_campos_y_defaults() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var a = new CloseEvent('close', { code: 1000, reason: 'bye', wasClean: true }); \
+             var ac = a.code, ar = a.reason, aw = a.wasClean, aEv = (a instanceof Event); \
+             var b = new CloseEvent('close'); \
+             var bc = b.code, br = b.reason, bw = b.wasClean;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ac").expect("e"), JsValue::Number(1000.0));
+        assert_eq!(rt.eval("ar").expect("e"), JsValue::String("bye".into()));
+        assert_eq!(rt.eval("aw").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("aEv").expect("e"), JsValue::Bool(true));
+        // Defaults sin init.
+        assert_eq!(rt.eval("bc").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("br").expect("e"), JsValue::String("".into()));
+        assert_eq!(rt.eval("bw").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn progress_event_campos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ev = new ProgressEvent('progress', { lengthComputable: true, loaded: 5, total: 10 }); \
+             var lc = ev.lengthComputable, ld = ev.loaded, tt = ev.total, esEv = (ev instanceof Event);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("lc").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ld").expect("e"), JsValue::Number(5.0));
+        assert_eq!(rt.eval("tt").expect("e"), JsValue::Number(10.0));
+        assert_eq!(rt.eval("esEv").expect("e"), JsValue::Bool(true));
+    }
 }
