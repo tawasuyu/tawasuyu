@@ -7854,4 +7854,39 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
     }
+
+    // ---- Fase 7.84 — window / self como alias del global ----
+
+    #[test]
+    fn window_y_self_son_el_global() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("window === globalThis").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("self === globalThis").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("window === self").expect("e"), JsValue::Bool(true));
+        // Auto-referencias cerradas.
+        assert_eq!(rt.eval("window.window === window").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("self.self === self").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("typeof window !== 'undefined'").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn window_ve_props_definidas_en_globalthis() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Una API que vive en globalThis (console) se ve por el alias window.
+        assert_eq!(rt.eval("typeof window.console").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("window.setTimeout === setTimeout").expect("e"), JsValue::Bool(true));
+        // Lo nuevo agregado por código de usuario en window aparece en globalThis.
+        rt.eval("window.miFlag = 42;").expect("e");
+        assert_eq!(rt.eval("globalThis.miFlag").expect("e"), JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn window_jerarquia_de_navegacion_colapsa_en_el_global() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Sin iframes: parent/top son el propio global y length = 0.
+        assert_eq!(rt.eval("window.parent === window").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("window.top === window").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("window.frames === window").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("window.length").expect("e"), JsValue::Number(0.0));
+    }
 }

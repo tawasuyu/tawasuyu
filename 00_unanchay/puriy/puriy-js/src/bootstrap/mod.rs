@@ -2,6 +2,7 @@
 //! dependencias semánticas marcadas en cada módulo. Para agregar features
 //! grandes, preferí UN módulo nuevo a engordar uno existente.
 
+mod window_alias;
 mod console;
 mod timers;
 mod microtask;
@@ -44,6 +45,7 @@ mod observers;
 mod xhr;
 mod computed_style;
 
+pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
 pub(crate) use console::CONSOLE_BOOTSTRAP;
 pub(crate) use timers::TIMERS_BOOTSTRAP;
 pub(crate) use microtask::MICROTASK_BOOTSTRAP;
@@ -88,6 +90,7 @@ pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
 pub(crate) const ALL: &[&str] = &[
+    WINDOW_ALIAS_BOOTSTRAP,
     CONSOLE_BOOTSTRAP,
     TIMERS_BOOTSTRAP,
     MICROTASK_BOOTSTRAP,
