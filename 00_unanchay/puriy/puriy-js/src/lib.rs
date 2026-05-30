@@ -7539,4 +7539,89 @@ mod tests {
         });
         assert!(cierre.is_some());
     }
+
+    // ============= Fase 7.79 — EventSource (SSE) =============
+
+    #[test]
+    fn eventsource_construye_y_encola_open() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var es = new EventSource('/stream'); \
+             var rs = es.readyState; var u = es.url; \
+             var cc = EventSource.CONNECTING, oo = EventSource.OPEN, xx = EventSource.CLOSED; \
+             var esET = (es instanceof EventTarget);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("rs").expect("e"), JsValue::Number(0.0)); // CONNECTING
+        assert_eq!(rt.eval("cc").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("oo").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("xx").expect("e"), JsValue::Number(2.0));
+        assert_eq!(
+            rt.eval("u").expect("e"),
+            JsValue::String("https://example.com/stream".into())
+        );
+        assert_eq!(rt.eval("esET").expect("e"), JsValue::Bool(true));
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "eventsource");
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[1], "open");
+        assert_eq!(parts[2], "https://example.com/stream");
+        assert_eq!(parts[3], "0"); // withCredentials false
+    }
+
+    #[test]
+    fn eventsource_dispatch_open_message_y_named() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var abrio = false, msg = null, lid = null, named = null, onmsgEnNamed = false; \
+             var es = new EventSource('/s'); \
+             es.onopen = function() { abrio = true; }; \
+             es.onmessage = function(e) { msg = e.data; lid = e.lastEventId; }; \
+             es.addEventListener('update', function(e) { named = e.data; }); \
+             __puriy_es_dispatch(es._id, 'open'); \
+             var rsTrasOpen = es.readyState; \
+             __puriy_es_dispatch(es._id, 'message', '', 'hola', '7'); \
+             __puriy_es_dispatch(es._id, 'message', 'update', 'parche'); \
+             if (msg === 'parche') onmsgEnNamed = true;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("abrio").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("rsTrasOpen").expect("e"), JsValue::Number(1.0)); // OPEN
+        assert_eq!(rt.eval("msg").expect("e"), JsValue::String("hola".into()));
+        assert_eq!(rt.eval("lid").expect("e"), JsValue::String("7".into()));
+        // El evento nombrado 'update' va sólo a su listener.
+        assert_eq!(rt.eval("named").expect("e"), JsValue::String("parche".into()));
+        // ...y NO disparó onmessage (que sigue en 'hola').
+        assert_eq!(rt.eval("onmsgEnNamed").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn eventsource_close_detiene_dispatch() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var msgs = 0; \
+             var es = new EventSource('/s'); \
+             es.onmessage = function() { msgs++; }; \
+             __puriy_es_dispatch(es._id, 'open'); \
+             __puriy_es_dispatch(es._id, 'message', '', 'uno'); \
+             es.close(); \
+             var rs = es.readyState; \
+             __puriy_es_dispatch(es._id, 'message', '', 'dos');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("rs").expect("e"), JsValue::Number(2.0)); // CLOSED
+        // Tras close() el registry se vació: el segundo dispatch es no-op.
+        assert_eq!(rt.eval("msgs").expect("e"), JsValue::Number(1.0));
+        let muts = rt.drain_dom_mutations();
+        let cierre = muts.iter().find(|m| {
+            m.kind == "eventsource" && m.value.split('\u{001D}').nth(1) == Some("close")
+        });
+        assert!(cierre.is_some());
+    }
 }
