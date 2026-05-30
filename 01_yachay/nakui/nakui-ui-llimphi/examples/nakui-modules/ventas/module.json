@@ -157,7 +157,7 @@
             "kind": "currency",
             "symbol": "$"
           },
-          "chart": "columns",
+          "chart": "stacked_columns",
           "bucket": "month"
         }
       ]

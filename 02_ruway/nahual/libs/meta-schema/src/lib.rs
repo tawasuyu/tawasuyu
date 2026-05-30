@@ -333,11 +333,19 @@ pub enum ChartKind {
     /// Como `Pie` pero con el centro hueco (anillo).
     Donut,
     /// Columnas verticales, una por grupo (en el orden del desglose).
-    /// Apto para series ordenadas (p.ej. ingresos por mes).
+    /// Apto para series ordenadas (p.ej. ingresos por mes). En un
+    /// desglose multi-serie (`SumBySeries`) las series se dibujan
+    /// **agrupadas** (lado a lado dentro de cada grupo).
     Columns,
     /// Línea que une los valores de cada grupo, con un punto por grupo.
     /// Pensado para tendencias sobre un eje ordenado.
     Line,
+    /// Columnas verticales **apiladas**: sólo aplica a desgloses
+    /// multi-serie (`SumBySeries`); cada grupo es una sola columna donde
+    /// los segmentos de cada serie se apilan, y la altura total es la
+    /// suma del grupo (composición sobre un eje ordenado). En un
+    /// desglose de una sola dimensión se comporta como `Columns`.
+    StackedColumns,
 }
 
 /// El agregado que computa una [`DashboardCard`].

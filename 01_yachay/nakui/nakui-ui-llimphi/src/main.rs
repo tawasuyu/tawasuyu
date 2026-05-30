@@ -2763,15 +2763,26 @@ fn plot_canvas(series: Vec<(f64, Color)>, line: bool, axis: Color, accent: Color
     })
 }
 
+/// Modo de dibujo de un desglose multi-serie.
+#[derive(Clone, Copy, PartialEq)]
+enum MultiMode {
+    /// Una polilínea con puntos por serie.
+    Line,
+    /// Columnas agrupadas: las series se reparten el slot, lado a lado.
+    Grouped,
+    /// Columnas apiladas: una columna por grupo, segmentos apilados.
+    Stacked,
+}
+
 /// Canvas multi-serie sobre un eje común de `n_groups` posiciones: cada
-/// `(valores, color)` es una serie alineada 1:1 con los grupos. Con
-/// `line` cada serie es una polilínea con puntos; si no, columnas
-/// **agrupadas** (las series se reparten el ancho del slot de cada
-/// grupo, lado a lado). El rango siempre incluye el cero (eje base).
+/// `(valores, color)` es una serie alineada 1:1 con los grupos. El modo
+/// decide el dibujo: línea (polilínea+puntos por serie), columnas
+/// agrupadas (lado a lado) o apiladas (una columna por grupo, segmentos
+/// apilados desde el cero). El rango siempre incluye el cero (eje base).
 fn multi_plot_canvas(
     n_groups: usize,
     series: Vec<(Vec<f64>, Color)>,
-    line: bool,
+    mode: MultiMode,
     axis: Color,
 ) -> View<Msg> {
     View::new(Style {
@@ -2793,9 +2804,23 @@ fn multi_plot_canvas(
         let y1 = (rect.y + rect.h) as f64 - pad;
         let w = (x1 - x0).max(1.0);
         let h = (y1 - y0).max(1.0);
-        let all = || series.iter().flat_map(|(v, _)| v.iter().copied());
-        let lo = all().fold(0.0_f64, f64::min);
-        let hi = all().fold(0.0_f64, f64::max);
+        // El rango incluye el cero. Para apiladas, la cota superior es
+        // el mayor total apilado por grupo (sólo suma los aportes
+        // positivos, que es lo que se dibuja), no el mayor valor suelto.
+        let (lo, hi) = if mode == MultiMode::Stacked {
+            let max_stack = (0..n_groups)
+                .map(|i| {
+                    series
+                        .iter()
+                        .map(|(v, _)| v.get(i).copied().unwrap_or(0.0).max(0.0))
+                        .sum::<f64>()
+                })
+                .fold(0.0_f64, f64::max);
+            (0.0, max_stack)
+        } else {
+            let all = || series.iter().flat_map(|(v, _)| v.iter().copied());
+            (all().fold(0.0_f64, f64::min), all().fold(0.0_f64, f64::max))
+        };
         let range = (hi - lo).max(1e-9);
         let y_of = |v: f64| y0 + (hi - v) / range * h;
         let zero_y = y_of(0.0);
@@ -2806,45 +2831,67 @@ fn multi_plot_canvas(
         scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, axis, None, &axis_path);
 
         let slot = w / n_groups as f64;
-        if line {
-            for (vals, color) in &series {
-                let mut path = BezPath::new();
-                for (i, v) in vals.iter().enumerate() {
-                    let cx = x0 + slot * (i as f64 + 0.5);
-                    let pt = (cx, y_of(*v));
-                    if i == 0 {
-                        path.move_to(pt);
-                    } else {
-                        path.line_to(pt);
+        match mode {
+            MultiMode::Line => {
+                for (vals, color) in &series {
+                    let mut path = BezPath::new();
+                    for (i, v) in vals.iter().enumerate() {
+                        let cx = x0 + slot * (i as f64 + 0.5);
+                        let pt = (cx, y_of(*v));
+                        if i == 0 {
+                            path.move_to(pt);
+                        } else {
+                            path.line_to(pt);
+                        }
+                    }
+                    scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, *color, None, &path);
+                    for (i, v) in vals.iter().enumerate() {
+                        let cx = x0 + slot * (i as f64 + 0.5);
+                        scene.fill(
+                            Fill::NonZero,
+                            Affine::IDENTITY,
+                            *color,
+                            None,
+                            &KurboCircle::new((cx, y_of(*v)), 3.0),
+                        );
                     }
                 }
-                scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, *color, None, &path);
-                for (i, v) in vals.iter().enumerate() {
-                    let cx = x0 + slot * (i as f64 + 0.5);
-                    scene.fill(
-                        Fill::NonZero,
-                        Affine::IDENTITY,
-                        *color,
-                        None,
-                        &KurboCircle::new((cx, y_of(*v)), 3.0),
-                    );
+            }
+            MultiMode::Grouped => {
+                // El 80% central del slot se reparte entre las series.
+                let ns = series.len();
+                let group_w = slot * 0.8;
+                let bw = (group_w / ns as f64).max(1.0);
+                for i in 0..n_groups {
+                    let gstart = x0 + slot * i as f64 + (slot - group_w) / 2.0;
+                    for (s, (vals, color)) in series.iter().enumerate() {
+                        let v = vals.get(i).copied().unwrap_or(0.0);
+                        let yv = y_of(v);
+                        let (top, bot) = if yv <= zero_y { (yv, zero_y) } else { (zero_y, yv) };
+                        let bx = gstart + bw * s as f64;
+                        let r = KurboRect::new(bx, top, bx + bw * 0.9, bot);
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &r);
+                    }
                 }
             }
-        } else {
-            // Columnas agrupadas: el 80% central del slot se reparte
-            // entre las series, lado a lado.
-            let ns = series.len();
-            let group_w = slot * 0.8;
-            let bw = (group_w / ns as f64).max(1.0);
-            for i in 0..n_groups {
-                let gstart = x0 + slot * i as f64 + (slot - group_w) / 2.0;
-                for (s, (vals, color)) in series.iter().enumerate() {
-                    let v = vals.get(i).copied().unwrap_or(0.0);
-                    let yv = y_of(v);
-                    let (top, bot) = if yv <= zero_y { (yv, zero_y) } else { (zero_y, yv) };
-                    let bx = gstart + bw * s as f64;
-                    let r = KurboRect::new(bx, top, bx + bw * 0.9, bot);
-                    scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &r);
+            MultiMode::Stacked => {
+                // Una columna por grupo; los aportes positivos de cada
+                // serie se apilan desde el cero hacia arriba.
+                let bw = (slot * 0.7).max(1.0);
+                for i in 0..n_groups {
+                    let cx = x0 + slot * (i as f64 + 0.5);
+                    let mut acc = 0.0_f64;
+                    for (vals, color) in &series {
+                        let v = vals.get(i).copied().unwrap_or(0.0).max(0.0);
+                        if v <= 0.0 {
+                            continue;
+                        }
+                        let top = y_of(acc + v);
+                        let bot = y_of(acc);
+                        let r = KurboRect::new(cx - bw / 2.0, top, cx + bw / 2.0, bot);
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &r);
+                        acc += v;
+                    }
                 }
             }
         }
@@ -3155,7 +3202,11 @@ fn dashboard_card(
                         theme,
                     ));
                 }
-            } else if matches!(chart, ChartKind::Columns | ChartKind::Line) {
+            } else if matches!(
+                chart,
+                ChartKind::Columns | ChartKind::Line | ChartKind::StackedColumns
+            ) {
+                // En una sola dimensión, `stacked_columns` = `columns`.
                 let line = matches!(chart, ChartKind::Line);
                 let series: Vec<(f64, Color)> = items
                     .iter()
@@ -3205,7 +3256,11 @@ fn dashboard_card(
             if groups.is_empty() || series.is_empty() {
                 children.push(text_line("(sin datos)".into(), 11.0, theme.fg_muted));
             } else {
-                let line = matches!(chart, ChartKind::Line);
+                let mode = match chart {
+                    ChartKind::Line => MultiMode::Line,
+                    ChartKind::StackedColumns => MultiMode::Stacked,
+                    _ => MultiMode::Grouped,
+                };
                 let plot_series: Vec<(Vec<f64>, Color)> = series
                     .iter()
                     .enumerate()
@@ -3214,7 +3269,7 @@ fn dashboard_card(
                 children.push(multi_plot_canvas(
                     groups.len(),
                     plot_series,
-                    line,
+                    mode,
                     theme.border,
                 ));
                 // Caption: el eje x (grupos en orden).
