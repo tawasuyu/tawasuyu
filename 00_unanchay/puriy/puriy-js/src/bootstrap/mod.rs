@@ -46,6 +46,9 @@ mod abort;
 mod visibility;
 mod observers;
 mod xhr;
+mod cookies;
+mod cachestorage;
+mod storage_event;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -92,6 +95,9 @@ pub(crate) use abort::ABORT_BOOTSTRAP;
 pub(crate) use visibility::VISIBILITY_BOOTSTRAP;
 pub(crate) use observers::OBSERVERS_BOOTSTRAP;
 pub(crate) use xhr::XHR_BOOTSTRAP;
+pub(crate) use cookies::COOKIES_BOOTSTRAP;
+pub(crate) use cachestorage::CACHE_STORAGE_BOOTSTRAP;
+pub(crate) use storage_event::STORAGE_EVENT_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -140,5 +146,8 @@ pub(crate) const ALL: &[&str] = &[
     VISIBILITY_BOOTSTRAP,
     OBSERVERS_BOOTSTRAP,
     XHR_BOOTSTRAP,
+    COOKIES_BOOTSTRAP,
+    CACHE_STORAGE_BOOTSTRAP,
+    STORAGE_EVENT_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

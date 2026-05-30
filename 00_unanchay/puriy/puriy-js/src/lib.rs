@@ -471,6 +471,14 @@ impl JsRuntime {
              * Fallback al objeto plano si la URL no parsea (p. ej. about:). */ \
             try {{ globalThis.location = globalThis.__puriy_make_location({u}); }} \
             catch (e) {{ globalThis.location = {{ href: {u}, toString: function() {{ return {u}; }} }}; }} \
+            /* Fase 7.90 — document.cookie como getter/setter sobre el jar global \
+             * (bootstrap/cookies.rs). El jar sobrevive entre set_document; si \
+             * eso molesta en una recarga, limpiarlo acá. */ \
+            Object.defineProperty(globalThis.document, 'cookie', {{ \
+                configurable: true, \
+                get: function() {{ return globalThis.__puriy_cookie_get(); }}, \
+                set: function(v) {{ globalThis.__puriy_cookie_set(String(v)); }} \
+            }}); \
             /* Fase 7.22 — localStorage + sessionStorage.\n             * In-memory por ahora — no persiste entre sesiones. Cuando\n             * aparezca caso real con datos que deben sobrevivir un\n             * reload, persistir localStorage en `$profile_dir/storage/`\n             * con keys URL-scoped (mismo origen). sessionStorage queda\n             * in-memory siempre (matchea spec — borrar al cerrar tab).\n             * Sin Proxy magic — la spec acepta `localStorage.foo` con\n             * setter property pero usar `setItem('foo', ...)` cubre el\n             * 95% del uso real. */ \
             globalThis.__puriy_make_storage = function() {{ \
                 var store = {{}}; \
@@ -8104,5 +8112,139 @@ mod tests {
         assert_eq!(rt.eval("seq.length").expect("e"), JsValue::Number(2.0));
         assert_eq!(rt.eval("seq[0]").expect("e"), JsValue::String("on:2g".into()));
         assert_eq!(rt.eval("seq[1]").expect("e"), JsValue::String("al:true".into()));
+    }
+
+    // ---- Fase 7.90 — document.cookie ----
+
+    #[test]
+    fn cookie_set_y_get_round_trip() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval("document.cookie = 'a=1'; document.cookie = 'b=2';").expect("e");
+        assert_eq!(rt.eval("document.cookie").expect("e"), JsValue::String("a=1; b=2".into()));
+        // re-set del mismo nombre actualiza el valor, no duplica.
+        rt.eval("document.cookie = 'a=9';").expect("e");
+        assert_eq!(rt.eval("document.cookie").expect("e"), JsValue::String("a=9; b=2".into()));
+    }
+
+    #[test]
+    fn cookie_max_age_cero_borra() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval("document.cookie = 'tmp=x'; document.cookie = 'keep=y';").expect("e");
+        rt.eval("document.cookie = 'tmp=; Max-Age=0';").expect("e");
+        assert_eq!(rt.eval("document.cookie").expect("e"), JsValue::String("keep=y".into()));
+    }
+
+    #[test]
+    fn cookie_httponly_de_red_no_es_visible_a_js() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        // Cookie HttpOnly inyectada por la red: el jar la guarda pero JS no la ve.
+        rt.eval(
+            "__puriy_set_cookie_from_network('sid=secreto; HttpOnly; Path=/'); \
+             document.cookie = 'vis=1';",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("document.cookie").expect("e"), JsValue::String("vis=1".into()));
+        // sanity: el jar guardó ambas (sid no es visible, pero existe).
+        assert_eq!(
+            rt.eval("Object.keys(__puriy_cookie_jar).sort().join(',')").expect("e"),
+            JsValue::String("sid,vis".into())
+        );
+    }
+
+    // ---- Fase 7.91 — Cache API (caches / CacheStorage) ----
+
+    #[test]
+    fn caches_open_put_match_round_trip() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var got = null, hadMiss = null; \
+             caches.open('v1').then(function(c) { \
+                 return c.put('/data', new Response('hola', { status: 200 })).then(function() { \
+                     return c.match('/data'); \
+                 }); \
+             }).then(function(resp) { return resp.text(); }).then(function(t) { got = t; }) \
+              .then(function() { return caches.open('v1'); }) \
+              .then(function(c) { return c.match('/ausente'); }) \
+              .then(function(r) { hadMiss = (r === undefined); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("hola".into()));
+        assert_eq!(rt.eval("hadMiss").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn caches_keys_has_y_delete() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Cadena única para que el orden de microtasks sea determinista.
+        rt.eval(
+            "var r = {}; \
+             caches.open('v1').then(function() { return caches.open('v2'); }) \
+              .then(function() { return caches.keys(); }).then(function(k) { r.names = k.join(','); }) \
+              .then(function() { return caches.has('v1'); }).then(function(h) { r.hasV1 = h; }) \
+              .then(function() { return caches.delete('v1'); }).then(function(d) { r.delOk = d; }) \
+              .then(function() { return caches.has('v1'); }).then(function(h) { r.hasAfter = h; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("r.names").expect("e"), JsValue::String("v1,v2".into()));
+        assert_eq!(rt.eval("r.hasV1").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("r.delOk").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("r.hasAfter").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn cache_matchall_y_cachestorage_match() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = {}; \
+             caches.open('v1').then(function(c) { \
+                 return c.put('/a', new Response('AAA', { status: 200 })); \
+             }).then(function() { return caches.match('/a'); }) \
+              .then(function(resp) { return resp.text(); }).then(function(t) { r.viaStorage = t; }) \
+              .then(function() { return caches.open('v1'); }) \
+              .then(function(c) { return c.matchAll(); }) \
+              .then(function(list) { r.count = list.length; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("r.viaStorage").expect("e"), JsValue::String("AAA".into()));
+        assert_eq!(rt.eval("r.count").expect("e"), JsValue::Number(1.0));
+    }
+
+    // ---- Fase 7.92 — StorageEvent + evento storage ----
+
+    #[test]
+    fn storage_event_campos_y_es_event() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var e = new StorageEvent('storage', \
+                 { key: 'k', oldValue: 'viejo', newValue: 'nuevo', url: 'https://x/' }); \
+             var esEvent = e instanceof Event;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("e.type").expect("e"), JsValue::String("storage".into()));
+        assert_eq!(rt.eval("e.key").expect("e"), JsValue::String("k".into()));
+        assert_eq!(rt.eval("e.oldValue").expect("e"), JsValue::String("viejo".into()));
+        assert_eq!(rt.eval("e.newValue").expect("e"), JsValue::String("nuevo".into()));
+        assert_eq!(rt.eval("e.url").expect("e"), JsValue::String("https://x/".into()));
+        assert_eq!(rt.eval("esEvent").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_storage_entrega_evento_en_window() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var rec = null; \
+             addEventListener('storage', function(e) { \
+                 rec = e.key + '=' + e.newValue + ':' + (e.storageArea === localStorage) \
+                     + ':' + (e instanceof StorageEvent); \
+             }); \
+             var n = __puriy_dispatch_storage('tema', null, 'oscuro', 'local', 'https://example.com/otra');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("rec").expect("e"), JsValue::String("tema=oscuro:true:true".into()));
     }
 }
