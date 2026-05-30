@@ -11,3 +11,9 @@ description = "Frontend Llimphi del modo Recorrido de pluma-deck: lienzo infinit
 [dependencies]
 pluma-deck-core = { path = "../pluma-deck-core" }
 llimphi-ui = { workspace = true }
+
+[dev-dependencies]
+# Sólo para el example recorrido_md_demo: muestra la cadena markdown →
+# cuerpo/átomos → Recorrido sin acoplar el lib al modelo de documento.
+pluma-md = { path = "../pluma-md" }
+pluma-core = { path = "../pluma-core" }
