@@ -260,6 +260,11 @@ enum Msg {
     /// (rotado), las derivadas quedan stale y se regenan desde la
     /// madre rotada, las dims del lienzo se intercambian.
     RotarLienzo { cw: bool },
+    /// Recorta el lienzo al bounding box no-transparente del composite
+    /// vigente. Si no hay píxeles opacos, no-op + estado "lienzo
+    /// vacío". Si el bbox cubre el lienzo entero, no-op + estado "ya
+    /// está justo".
+    AutotrimLienzo,
 }
 
 // =============================================================================
@@ -1197,6 +1202,11 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         &pal,
         Msg::RotarLienzo { cw: false },
     )));
+    hijos.push(envolver_fila(button_view(
+        "✂ recortar a visible (auto-trim)".to_string(),
+        &pal,
+        Msg::AutotrimLienzo,
+    )));
 
     // "salida": no requiere selección, siempre activa.
     hijos.push(subtitulo("salida"));
@@ -1831,6 +1841,11 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::AutotrimLienzo => {
+                if recortar_lienzo_a_visible(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2317,6 +2332,120 @@ fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     model.seleccionada = Some(nuevo_id);
     aplicar_y_recomponer(model);
     model.estado = format!("combinada '{}'", nombre);
+    true
+}
+
+/// Calcula el bounding box (half-open `(x0, y0, x1, y1)`) de los píxeles
+/// con alfa > 0 en un buffer Rgba8 `w × h`. Devuelve `None` si todos
+/// los píxeles son transparentes (no hay nada para encerrar). Pura.
+fn bbox_no_transparente(data: &[u8], w: u32, h: u32) -> Option<(u32, u32, u32, u32)> {
+    if w == 0 || h == 0 || data.len() != (w as usize) * (h as usize) * 4 {
+        return None;
+    }
+    let mut min_x = u32::MAX;
+    let mut min_y = u32::MAX;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            // Alfa estricto > 0; algunos pipelines premultiplican y dejan
+            // valores 1..3 en bordes — eso sigue contando como "tinta".
+            if data[i + 3] > 0 {
+                found = true;
+                if x < min_x {
+                    min_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+            }
+        }
+    }
+    if !found {
+        return None;
+    }
+    // Convención half-open: x1/y1 son exclusivos. Suma 1 al máximo
+    // observado para que `x1 - x0` sea el ancho efectivo.
+    Some((min_x, min_y, max_x + 1, max_y + 1))
+}
+
+/// Recorta un buffer Rgba8 `w × h` al rect half-open
+/// `(x0, y0, x1, y1)` y devuelve un buffer del nuevo tamaño
+/// `(x1 - x0) × (y1 - y0)`. Asume el rect dentro de los bounds
+/// (validación aguas arriba). Pura.
+fn recortar_buffer(src: &[u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> Vec<u8> {
+    let w = w as usize;
+    let new_w = (x1 - x0) as usize;
+    let new_h = (y1 - y0) as usize;
+    let mut out = Vec::with_capacity(new_w * new_h * 4);
+    for y in y0..y1 {
+        let row_start = (y as usize * w + x0 as usize) * 4;
+        let row_end = row_start + new_w * 4;
+        out.extend_from_slice(&src[row_start..row_end]);
+    }
+    out
+}
+
+/// Recorta el lienzo entero al bbox no-transparente del compuesto. Es
+/// el "Trim Transparent Pixels" de Photoshop. La estrategia espeja
+/// `rotar_lienzo`: (1) recorta el buffer de cada capa al mismo rect,
+/// inserta al almacén content-addressed; (2) actualiza dims del
+/// lienzo; (3) marca todas las derivadas Stale (ops como Blur no
+/// conmutan exacto con crop por los efectos de borde — se regen desde
+/// la madre recortada). No-op si el lienzo está vacío (todo
+/// transparente) o si ya estaba justo (bbox = lienzo entero).
+fn recortar_lienzo_a_visible(model: &mut Model) -> bool {
+    let Some(img) = model.imagen.as_ref() else {
+        model.estado = "no hay composite que medir".into();
+        return false;
+    };
+    let w = img.width;
+    let h = img.height;
+    let bytes = img.data.data();
+    let Some((x0, y0, x1, y1)) = bbox_no_transparente(bytes, w, h) else {
+        model.estado = "lienzo vacío, nada que recortar".into();
+        return false;
+    };
+    if x0 == 0 && y0 == 0 && x1 == w && y1 == h {
+        model.estado = "ya está justo, nada que recortar".into();
+        return false;
+    }
+    let new_w = x1 - x0;
+    let new_h = y1 - y0;
+    // Recortar cada capa: lookup buffer, recortar, insertar nuevo hash.
+    for capa in model.lienzo.capas.iter_mut() {
+        let Some(src) = model.almacen.obtener(capa.contenido) else {
+            // Derivada nunca regenerada — la regen post-recorte la
+            // armará desde la madre recortada.
+            continue;
+        };
+        let src = src.to_vec();
+        let cropped = recortar_buffer(&src, w, x0, y0, x1, y1);
+        let new_hash = model.almacen.insertar(cropped);
+        capa.contenido = new_hash;
+    }
+    model.lienzo.width = new_w;
+    model.lienzo.height = new_h;
+    // Stale para todas las derivadas: Blur, Niveles con clamp, etc. no
+    // siempre conmutan exacto con crop (kernel de borde, normalización).
+    for capa in model.lienzo.capas.iter_mut() {
+        if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
+            *estado = Frescura::Stale;
+        }
+    }
+    aplicar_y_recomponer(model);
+    model.estado = format!(
+        "recortado a {}×{} (offset {},{})",
+        new_w, new_h, x0, y0
+    );
     true
 }
 
@@ -3879,6 +4008,166 @@ mod tests {
         assert_eq!(model.historial.len(), hist_antes + 1);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!((model.lienzo.width, model.lienzo.height), (2, 3));
+    }
+
+    // ---- Fase 31: auto-trim del lienzo --------------------------------------
+
+    #[test]
+    fn bbox_devuelve_none_si_todo_transparente() {
+        // Buffer 3×3 todo a alfa=0.
+        let buf = vec![0u8; 3 * 3 * 4];
+        assert_eq!(bbox_no_transparente(&buf, 3, 3), None);
+    }
+
+    #[test]
+    fn bbox_un_solo_pixel_devuelve_rect_de_un_pixel() {
+        // 3×3, todo transparente excepto el píxel central (1, 1).
+        let mut buf = vec![0u8; 3 * 3 * 4];
+        let i = ((1 * 3 + 1) * 4) as usize;
+        buf[i] = 100;
+        buf[i + 1] = 200;
+        buf[i + 2] = 50;
+        buf[i + 3] = 255;
+        let bb = bbox_no_transparente(&buf, 3, 3).unwrap();
+        // Half-open: el píxel (1,1) da (1, 1, 2, 2).
+        assert_eq!(bb, (1, 1, 2, 2));
+    }
+
+    #[test]
+    fn bbox_full_alpha_cubre_el_lienzo_entero() {
+        // Buffer 2×3 todo opaco.
+        let buf = buffer_relleno(2, 3, [10, 20, 30, 255]);
+        assert_eq!(bbox_no_transparente(&buf, 2, 3), Some((0, 0, 2, 3)));
+    }
+
+    #[test]
+    fn bbox_ignora_pixeles_alfa_cero_aun_con_rgb_no_cero() {
+        // Photoshop/PSD a veces deja "pixel data" con alfa=0 — no son
+        // tinta visible. El bbox debe ignorarlos.
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        // Toda la columna izquierda: RGB no-cero pero alfa=0.
+        for y in 0..4 {
+            let i = (y * 4 * 4) as usize;
+            buf[i] = 200;
+            buf[i + 3] = 0;
+        }
+        // Píxel (3, 2) opaco con alfa=255.
+        let j = ((2 * 4 + 3) * 4) as usize;
+        buf[j + 3] = 255;
+        let bb = bbox_no_transparente(&buf, 4, 4).unwrap();
+        assert_eq!(bb, (3, 2, 4, 3));
+    }
+
+    #[test]
+    fn recortar_buffer_extrae_subrect_correcto() {
+        // 4×3 con un patrón de gradiente lineal en R.
+        let mut buf = Vec::with_capacity(4 * 3 * 4);
+        for i in 0..(4 * 3) {
+            buf.extend_from_slice(&[i as u8 * 20, 0, 0, 255]);
+        }
+        // Recorto el rect (1, 1, 4, 3) → 3×2 píxeles.
+        // Esperado: filas 1 y 2, columnas 1, 2, 3 del src.
+        let out = recortar_buffer(&buf, 4, 1, 1, 4, 3);
+        assert_eq!(out.len(), 3 * 2 * 4);
+        // Píxel (0, 0) del out = píxel (1, 1) del src = idx 5 lineal.
+        // R = 5 * 20 = 100.
+        assert_eq!(out[0], 100);
+        // Píxel (2, 1) del out = píxel (3, 2) del src = idx 11. R = 220.
+        let i = (1 * 3 + 2) * 4;
+        assert_eq!(out[i], 220);
+    }
+
+    #[test]
+    fn autotrim_no_op_si_lienzo_todo_opaco() {
+        // El bbox cubre todo el lienzo → no-op + estado.
+        let (mut model, _) = modelo_n_capas(&[[10, 20, 30, 255]]);
+        // `modelo_n_capas` no recompone — forzamos para que `model.imagen`
+        // exista y `recortar_lienzo_a_visible` no caiga en la rama de
+        // "no hay composite".
+        aplicar_y_recomponer(&mut model);
+        let dims_antes = (model.lienzo.width, model.lienzo.height);
+        let ok = recortar_lienzo_a_visible(&mut model);
+        assert!(!ok);
+        assert_eq!((model.lienzo.width, model.lienzo.height), dims_antes);
+        assert!(model.estado.contains("ya está justo"));
+    }
+
+    #[test]
+    fn autotrim_no_op_si_lienzo_todo_transparente() {
+        // Capa única con alfa=0 → bbox = None → no-op con mensaje.
+        let mut model = modelo_minimo();
+        model.lienzo = Lienzo::nuevo(3, 3);
+        let buf = buffer_relleno(3, 3, [100, 100, 100, 0]); // RGB pero alfa 0
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("trasparent", h);
+        model.lienzo.apilar(cap);
+        // Forzamos recompose para llenar model.imagen.
+        aplicar_y_recomponer(&mut model);
+        let ok = recortar_lienzo_a_visible(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("vacío"));
+    }
+
+    #[test]
+    fn autotrim_recorta_lienzo_a_la_region_opaca() {
+        // Lienzo 4×4 todo transparente excepto un rect interior 2×2
+        // (filas 1-2, cols 1-2). Tras autotrim el lienzo debería
+        // reducirse a 2×2.
+        let mut model = modelo_minimo();
+        model.lienzo = Lienzo::nuevo(4, 4);
+        // Buffer 4×4 con sólo (1..3, 1..3) opaco rojo.
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        for y in 1..3 {
+            for x in 1..3 {
+                let i = (y * 4 + x) * 4;
+                buf[i] = 200;
+                buf[i + 3] = 255;
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("isla", h);
+        let id = cap.id;
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        let ok = recortar_lienzo_a_visible(&mut model);
+        assert!(ok);
+        assert_eq!((model.lienzo.width, model.lienzo.height), (2, 2));
+        // El buffer recortado de la capa: todos los 4 píxeles son la isla
+        // roja opaca.
+        let nueva_h = model.lienzo.capa(id).unwrap().contenido;
+        let buf_post = model.almacen.obtener(nueva_h).unwrap();
+        assert_eq!(buf_post.len(), 2 * 2 * 4);
+        for px in buf_post.chunks_exact(4) {
+            assert_eq!(px, &[200, 0, 0, 255]);
+        }
+    }
+
+    #[test]
+    fn msg_autotrim_dispatcha_y_undo_restaura() {
+        // El flujo entero por update: autotrim baja dims, Undo las
+        // restaura.
+        let mut model = modelo_minimo();
+        model.lienzo = Lienzo::nuevo(4, 4);
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        for y in 1..3 {
+            for x in 1..3 {
+                let i = (y * 4 + x) * 4;
+                buf[i + 3] = 255;
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("isla", h);
+        model.lienzo.apilar(cap);
+        aplicar_y_recomponer(&mut model);
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(model, Msg::AutotrimLienzo, &Handle::for_test());
+        assert_eq!((model.lienzo.width, model.lienzo.height), (2, 2));
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!((model.lienzo.width, model.lienzo.height), (4, 4));
     }
 
     #[test]
