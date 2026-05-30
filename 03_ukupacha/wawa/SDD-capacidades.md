@@ -1,8 +1,12 @@
 # SDD — Tabla de capacidades por bytecode hash (WAWA §14.1.3)
 
-> Estado: **fase fundacional cerrada (2026-05-30)** · enforcement pendiente de
-> QEMU + ceremonia. Este documento es la fuente autoritativa del modelo de
-> concesiones de capacidad; cuando difiera con `WAWA.md` §14.1.3, manda este.
+> Estado: **enforcement CABLEADO (2026-05-30)** · `VERSION_MANIFIESTO 4→5`,
+> `EntradaApp.concesion`, intersección viva en el punto de carga del kernel y
+> emisión de concesiones en el camino de release host. Resta solo la **ceremonia
+> de génesis** (firmar offline las concesiones de las apps génesis con permisos
+> gateados) — un paso del operador, no de código, validable en QEMU. Este
+> documento es la fuente autoritativa del modelo; cuando difiera con `WAWA.md`
+> §14.1.3, manda este.
 
 ## 0. El problema
 
@@ -89,41 +93,38 @@ La verificación soberana sigue el orden estricto de sus gemelos
 2. pubkey o firma no decodifican → `Ausente`;
 3. firma no valida sobre `mensaje_capacidad` → `AlmacenamientoFallo`.
 
-## 3. Enforcement (próxima fase — requiere QEMU + ceremonia)
+## 3. Enforcement — CABLEADO (2026-05-30)
 
-`claves::verificar_concesion_capacidad` ya es soberano y zero-alloc, pero
-todavía **no se invoca**: el punto de carga aún pasa `entrada.permisos` directo.
-Cablearlo exige:
+`claves::verificar_concesion_capacidad` dejó de ser dead-code: el punto de carga
+lo invoca. Lo entregado:
 
-### 3.1 Bump `VERSION_MANIFIESTO 4 → 5`
+### 3.1 Bump `VERSION_MANIFIESTO 4 → 5` ✅
 
-`EntradaApp` gana un campo:
+`EntradaApp` ganó el campo `concesion: Option<Hash>` (hash del objeto
+`ConcesionCapacidad`, o `None`). `postcard` no es autodescriptivo ⇒ es un CORTE
+de wire: un disco v4 NO deserializa como v5; el guardia de versión de
+`Manifiesto::deserializar` lo rechaza y exige re-sembrar el génesis. En la
+práctica el operador re-forja la imagen en cada `cargo run -p boot`, así que la
+génesis nace v5 limpia (no hay test `vanguard` separado en el árbol; los tests de
+`format`/`release` cubren el roundtrip y la intersección).
 
-```rust
-concesion: Option<Hash>,   // hash del objeto ConcesionCapacidad, o None
-```
+### 3.2 Punto de carga (`wawa-kernel/src/main.rs`) ✅
 
-Toca el test `test_wawa_ecosystem_immutable_vanguard` (guard del ABI) — hay que
-actualizarlo a conciencia, no por inercia.
-
-### 3.2 Punto de carga (`wawa-kernel/src/main.rs::encender_app`)
+Helper `permisos_efectivos_de(declarados, concesion, bytecode)`:
 
 ```text
-let concedidos = match entrada.concesion {
-    Some(h) => {
-        let c = almacen::recuperar(&h) -> ConcesionCapacidad::deserializar;
-        if c.bytecode == entrada.bytecode
-           && claves::verificar_concesion_capacidad(&c).is_ok() { c.permisos }
-        else { 0 }   // concesión ausente/corrupta/ajena/para otro binario
-    }
-    None => 0,       // sin concesión declarada
-};
-let efectivos = permisos_efectivos(entrada.permisos, concedidos);
-wasm::AplicacionWasm::cargar(..., efectivos);
+None      ⇒ declarados            (sin techo per-bytecode; rige la firma del manifiesto)
+Some(h)   ⇒ recuperar(h) -> ConcesionCapacidad::deserializar;
+            si c.bytecode == bytecode && verificar_concesion_capacidad(&c).ok()
+              ⇒ permisos_efectivos(declarados, c.permisos)   // intersección
+            si no
+              ⇒ permisos_efectivos(declarados, 0) == 0       // FAIL-CLOSED
 ```
 
-Misma intersección en `instanciar_plantilla` (la `Plantilla` debe portar
-`concesion` junto a `permisos`). El verificador es FRESH en cada carga.
+Lo invocan `encender_app` (instancia de arranque) e `instanciar_plantilla`
+(cada `Alt+N`). La `Plantilla` porta `concesion: Option<Hash>` + `bytecode_hash`
+(la firma cubre el hash del OBJETO del grafo, no el de los bytes crudos); el
+veredicto NO se cachea — el verificador corre FRESH en cada parto.
 
 ### 3.3 Ceremonia del génesis
 
@@ -146,13 +147,35 @@ manifiesto viejo**: la migración NO es transparente, exige re-sembrar el génes
 con concesiones. Es deliberado — el punto del modelo es que ningún permiso
 gateado exista sin una firma sobre el bytecode. Documentar el corte en `PLAN.md`.
 
-### 3.5 Vía host (`agora-channel::construir_release`)
+### 3.5 Vía host (`agora-channel::construir_release`) ✅
 
-`AppSpec` gana la concesión: `construir_release` emite, junto al objeto-bytecode
-y al manifiesto, una `ConcesionCapacidad` firmada por el mismo `kp` y referencia
-su hash desde la `EntradaApp`. Así un release publicado por `agora-cli wawa
-publicar` ya trae sus concesiones, y la cascada del DAG (Fase 67, descarga
-recursiva) las replica como un objeto-hijo más.
+A diferencia de `boot`, quien publica un release TIENE el `kp`. `construir_release`
+emite, para cada app con `permisos != 0`, una `ConcesionCapacidad` firmada por el
+mismo `kp` sobre `(bytecode, permisos)`, la siembra como objeto del grafo, la
+cuelga del objeto-manifiesto (alcanzable por el MARK del GC) y referencia su hash
+desde la `EntradaApp.concesion`. Apps con `permisos == 0` ⇒ `None`. `AppSpec` NO
+cambió: la concesión se DERIVA dentro de `construir_release`, así que ningún
+caller (el example `servir_release`, `agora-cli wawa publicar/anunciar`) se tocó.
+Dedup por contenido: mismo `(bytecode, permisos)` ⇒ una sola concesión. Así un
+release ya trae sus concesiones y la cascada del DAG las replica como hijos.
+
+### 3.6 Rollout escalonado (decisión 2026-05-30)
+
+La semántica estricta `None ⇒ 0` del modelo (un manifiesto sin concesión corre
+SIN capacidades gateadas) es el END-STATE de seguridad: cierra la escalada por
+re-firma de manifiesto incluso para apps que nunca declararon concesión. Pero
+exige que TODA app génesis con permisos gateados traiga una concesión válida —y
+`boot` no puede firmarlas (no tiene seed; ver §3.3). Activarla hoy, con el génesis
+sin provisionar, dejaría a `mudanza`/`cronista`/`asistente`/etc. sin sus permisos
+en el próximo QEMU.
+
+Por eso el kernel arranca en modo **escalonado**: `None ⇒ declarados` (la firma
+del manifiesto sigue gobernando), `Some ⇒ intersección estricta`. Toda app que
+OPTE por una concesión (todo release host, ya) obtiene su techo per-bytecode
+duro; el génesis sigue booteando. El flip a `None ⇒ 0` (estricto global) es una
+hardening de UNA línea en `permisos_efectivos_de`, gated a que el operador
+complete la ceremonia §3.3 y siembre las concesiones del génesis. Documentado el
+corte de formato (v4→v5) en `PLAN.md`.
 
 ## 4. Modelo de amenaza
 

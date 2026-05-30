@@ -28,7 +28,7 @@ use format::{
     VERSION_CANAL, VERSION_MANIFIESTO,
 };
 
-use crate::{firmar_manifiesto, firmar_raiz};
+use crate::{firmar_capacidad, firmar_manifiesto, firmar_raiz};
 
 /// La especificación de una app a incluir en el manifiesto del release.
 /// El `bytecode` son los bytes crudos del `.wasm` ya compilado y (idealmente)
@@ -147,6 +147,29 @@ pub fn construir_release(
             hijos_manifiesto.push(bc_hash);
             objetos.push(obj);
         }
+
+        // §14.1.3 — la CONCESIÓN. A diferencia de `wawa-boot` (que no tiene
+        // clave privada), quien publica un release TIENE el `kp`: puede firmar,
+        // aquí y ahora, una `ConcesionCapacidad` sobre `(bytecode, permisos)`.
+        // Así el release viaja con su propio techo per-bytecode — ningún
+        // manifiesto re-firmado río abajo escala el binario. Apps sin permisos
+        // gateados (`permisos == 0`) no necesitan concesión: `None`.
+        let concesion = if app.permisos != 0 {
+            let c = firmar_capacidad(kp, &bc_hash, app.permisos);
+            let datos = c.serializar().map_err(ReleaseError::Serializacion)?;
+            let cobj = emitir_objeto(datos, Vec::new())?;
+            let chash = cobj.hash;
+            // Dedup: dos apps con el mismo bytecode Y los mismos permisos
+            // comparten una sola concesión (mismo mensaje firmado → mismo hash).
+            if vistos.insert(chash) {
+                hijos_manifiesto.push(chash);
+                objetos.push(cobj);
+            }
+            Some(chash)
+        } else {
+            None
+        };
+
         let (x, y, ancho, alto) = app.region;
         entradas.push(EntradaApp {
             nombre: app.nombre.clone(),
@@ -159,6 +182,7 @@ pub fn construir_release(
             fuel_fotograma: app.fuel_fotograma,
             estado: None,
             permisos: app.permisos,
+            concesion,
         });
     }
 
@@ -280,6 +304,51 @@ mod tests {
         // Las dos entradas apuntan al MISMO hash de bytecode.
         assert_eq!(manifiesto.apps[0].bytecode, manifiesto.apps[1].bytecode);
         assert_eq!(objeto.hijos.len(), 1);
+    }
+
+    #[test]
+    fn app_con_permisos_emite_concesion_firmada_que_verifica() {
+        use crate::verificar_capacidad;
+        let kp = Keypair::from_seed([42u8; 32]);
+        let mut con_red = app("conectada", b"\0asm-red");
+        con_red.permisos = format::PERMISO_RED | format::PERMISO_RAIZ;
+        let sin_perms = app("muda", b"\0asm-muda"); // permisos: 0
+
+        let r = construir_release(&[con_red, sin_perms], &kp, "estable", 7)
+            .expect("debe construir");
+
+        // El manifiesto referencia la concesión de la app con permisos y None
+        // para la que no tiene.
+        let mobj = Objeto::deserializar(
+            &r.objetos.iter().find(|o| o.hash == r.manifiesto).unwrap().payload,
+        )
+        .unwrap();
+        let manifiesto = Manifiesto::deserializar(&mobj.datos).unwrap();
+        let con = manifiesto.apps.iter().find(|a| a.nombre == "conectada").unwrap();
+        let muda = manifiesto.apps.iter().find(|a| a.nombre == "muda").unwrap();
+        assert!(muda.concesion.is_none(), "app sin permisos no lleva concesión");
+        let chash = con.concesion.expect("app con permisos lleva concesión");
+
+        // La concesión está entre los objetos emitidos y es hija del manifiesto
+        // (alcanzable por el MARK del GC del kernel).
+        assert!(mobj.hijos.contains(&chash), "la concesión cuelga del manifiesto");
+        let cobj = Objeto::deserializar(
+            &r.objetos.iter().find(|o| o.hash == chash).unwrap().payload,
+        )
+        .unwrap();
+        let concesion = format::ConcesionCapacidad::deserializar(&cobj.datos).unwrap();
+
+        // La firma cubre (bytecode, permisos) bajo el autor del release.
+        assert_eq!(concesion.bytecode, con.bytecode);
+        assert_eq!(concesion.permisos, format::PERMISO_RED | format::PERMISO_RAIZ);
+        assert_eq!(concesion.autor, kp.public_key());
+        verificar_capacidad(&concesion).expect("la concesión del release verifica");
+
+        // La intersección con lo declarado es idempotente: declarado == concedido.
+        assert_eq!(
+            format::permisos_efectivos(con.permisos, concesion.permisos),
+            con.permisos,
+        );
     }
 
     #[test]

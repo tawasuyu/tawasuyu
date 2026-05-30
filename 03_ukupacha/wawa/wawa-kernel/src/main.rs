@@ -129,14 +129,23 @@ struct Plantilla {
     /// (Fase 14) muestra en la pestaña.
     nombre: alloc::string::String,
     bytecode: Vec<u8>,
+    /// Hash del objeto-bytecode (= `EntradaApp.bytecode`). Lo guardamos porque
+    /// la verificacion FRESH de la concesion (§14.1.3) en cada `Alt+N` necesita
+    /// atar la firma a ESTE hash — `format::hash(&bytecode)` no sirve: la
+    /// concesion cubre el hash del OBJETO del grafo, no el de los bytes crudos.
+    bytecode_hash: format::Hash,
     nat_ancho: usize,
     nat_alto: usize,
     techo: usize,
     fuel: u64,
-    /// Bitfield de permisos heredado del `EntradaApp`. Cada instancia que
-    /// `Alt+N` engendra de esta plantilla nace con los mismos permisos
+    /// Bitfield de permisos DECLARADOS, heredado del `EntradaApp`. Cada instancia
+    /// que `Alt+N` engendra de esta plantilla nace con los mismos permisos
     /// del manifiesto: un clon no se gana, ni se pierde, capacidades.
     permisos: format::Permisos,
+    /// Hash de la [`format::ConcesionCapacidad`] de esta app, o `None` (§14.1.3).
+    /// Cada instanciacion re-verifica FRESH e intersecta con `permisos` para los
+    /// permisos EFECTIVOS — la plantilla porta la concesion, no el veredicto.
+    concesion: Option<format::Hash>,
 }
 
 /// Las plantillas de las apps lanzables. Se fundan en el arranque con la lista
@@ -327,6 +336,45 @@ async fn tarea_sonido() {
     }
 }
 
+/// FASE 67 / WAWA §14.1.3 :: resuelve los permisos EFECTIVOS de una app — la
+/// INTERSECCION de lo que DECLARA (su `EntradaApp.permisos`) y lo que una
+/// [`format::ConcesionCapacidad`] valida CONCEDE para su bytecode.
+///
+/// - `concesion == None`: no hay techo per-bytecode. Rigen los declarados — la
+///   firma del manifiesto (`ManifiestoFirmado`/`RaizFirmada`) ya cubre el
+///   bitfield, asi que es el camino legacy/escalonado.
+/// - `concesion == Some(h)`: se recupera el objeto del grafo y se VERIFICA FRESH
+///   contra el `AGORA_AUTH_RING`. Si esta ausente, corrupto, es para OTRO
+///   bytecode, o lo firmo una llave ajena ⇒ `concedidos = 0` ⇒ cero capacidades
+///   gateadas (FAIL-CLOSED: declarar una concesion y que sea invalida CIERRA, no
+///   abre). El resultado nunca excede ni los declarados ni los concedidos.
+///
+/// FRESH en cada carga: ni cache ni TOCTOU. La concesion vive en el grafo
+/// direccionado por contenido; un swap en disco entre arranque y `Alt+N` se
+/// nota en la proxima instanciacion.
+fn permisos_efectivos_de(
+    declarados: format::Permisos,
+    concesion: Option<&format::Hash>,
+    bytecode: &format::Hash,
+) -> format::Permisos {
+    let Some(h) = concesion else {
+        return declarados;
+    };
+    let concedidos = match almacen::recuperar(h) {
+        Ok(Some(objeto)) => match format::ConcesionCapacidad::deserializar(&objeto.datos) {
+            Ok(c)
+                if &c.bytecode == bytecode
+                    && claves::verificar_concesion_capacidad(&c).is_ok() =>
+            {
+                c.permisos
+            }
+            _ => 0,
+        },
+        _ => 0,
+    };
+    format::permisos_efectivos(declarados, concedidos)
+}
+
 /// Da vida a una aplicacion del userspace a partir de su `EntradaApp` del
 /// manifiesto: recupera su bytecode del grafo, lo carga en la ventana `indice`
 /// del escritorio del compositor y despacha la app como tarea cooperativa del
@@ -350,6 +398,11 @@ fn encender_app(
             return None;
         }
     };
+    // §14.1.3 :: los permisos EFECTIVOS con que se enlaza el `Linker` salen de
+    // la INTERSECCION de los declarados con la concesion firmada — no de
+    // `entrada.permisos` a secas. Sin concesion: rigen los declarados.
+    let efectivos =
+        permisos_efectivos_de(entrada.permisos, entrada.concesion.as_ref(), &entrada.bytecode);
     // `indice` es la identidad de la app: su ventana en el escritorio del
     // compositor y su ranura de estado persistido (Fase 7c).
     match wasm::AplicacionWasm::cargar(
@@ -359,7 +412,7 @@ fn encender_app(
         entrada.techo_memoria as usize,
         entrada.fuel_fotograma as u64,
         indice,
-        entrada.permisos,
+        efectivos,
     ) {
         Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
         Err(_) => compositor::desalojar(indice, Color::DESALOJO),
@@ -370,11 +423,13 @@ fn encender_app(
     Some(Plantilla {
         nombre: entrada.nombre.clone(),
         bytecode,
+        bytecode_hash: entrada.bytecode,
         nat_ancho: natural.ancho,
         nat_alto: natural.alto,
         techo: entrada.techo_memoria as usize,
         fuel: entrada.fuel_fotograma as u64,
         permisos: entrada.permisos,
+        concesion: entrada.concesion,
     })
 }
 
@@ -442,11 +497,13 @@ pub fn instalar_app(entrada: &manifiesto::EntradaApp) -> Option<usize> {
     let plantilla = Plantilla {
         nombre: entrada.nombre.clone(),
         bytecode,
+        bytecode_hash: entrada.bytecode,
         nat_ancho: natural.ancho,
         nat_alto: natural.alto,
         techo: entrada.techo_memoria as usize,
         fuel: entrada.fuel_fotograma as u64,
         permisos: entrada.permisos,
+        concesion: entrada.concesion,
     };
     let mutex = PLANTILLAS.get()?;
     let nuevo_idx;
@@ -524,6 +581,14 @@ fn instanciar_plantilla(plantilla: &Plantilla) {
     // La ventana nace primero: el compositor le entrega su indice —su
     // identidad—, que el WASM necesita para hallar su ventana y su canal.
     let indice = compositor::nacer_ventana(plantilla.nat_ancho, plantilla.nat_alto, &plantilla.nombre);
+    // §14.1.3 :: re-resuelve los permisos efectivos FRESH en cada parto — la
+    // concesion se re-verifica contra el grafo y el anillo, no se cachea su
+    // veredicto en la plantilla.
+    let efectivos = permisos_efectivos_de(
+        plantilla.permisos,
+        plantilla.concesion.as_ref(),
+        &plantilla.bytecode_hash,
+    );
     match wasm::AplicacionWasm::cargar(
         &plantilla.bytecode,
         plantilla.nat_ancho,
@@ -531,7 +596,7 @@ fn instanciar_plantilla(plantilla: &Plantilla) {
         plantilla.techo,
         plantilla.fuel,
         indice,
-        plantilla.permisos,
+        efectivos,
     ) {
         // La tarea se ENGENDRA, no se hace `spawn`: el reactor ya corre y el
         // ejecutor la adoptara en su proxima vuelta (Fase 10).

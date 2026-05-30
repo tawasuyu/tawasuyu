@@ -53,7 +53,22 @@ pub const VERSION_SUPERBLOQUE: u32 = 3;
 /// capacidades sensibles (red, raiz, altavoz, configuracion, escritura del
 /// grafo) no se REGISTRAN si el bit no esta puesto: la frontera es fisica,
 /// no chequeada en runtime. No hay escalada porque no hay tabla que escalar.
-pub const VERSION_MANIFIESTO: u32 = 4;
+///
+/// v5 (Fase 67 / WAWA §14.1.3) — cada `EntradaApp` gana `concesion:
+/// Option<Hash>`: el hash de una [`ConcesionCapacidad`] firmada por el
+/// `AGORA_AUTH_RING` sobre `(bytecode, permisos)`. Cuando una app la declara,
+/// el kernel toma la INTERSECCION [`permisos_efectivos`]`(declarados,
+/// concedidos)` — un manifiesto re-firmado ya no puede escalar un binario mas
+/// alla de lo que su concesion, atada a su hash, autoriza. Si `concesion` es
+/// `None` no hay techo per-bytecode: gobierna la firma del manifiesto (camino
+/// legacy, rollout escalonado — ver `SDD-capacidades.md` §3.6).
+///
+/// CORTE DE FORMATO: `postcard` NO es autodescriptivo, asi que el campo nuevo
+/// rompe el wire de v4. Un disco v4 NO deserializa como v5 — el guardia de
+/// version (`Manifiesto::deserializar` exige `version == VERSION_MANIFIESTO`)
+/// lo rechaza y exige re-sembrar el genesis. En la practica el operador re-forja
+/// la imagen en cada `cargo run -p boot`, asi que la genesis nace v5 limpia.
+pub const VERSION_MANIFIESTO: u32 = 5;
 
 /// Version del format de la `Configuracion` serializada. La configuracion es
 /// otro objeto del grafo (idioma + paleta); el manifiesto la enlaza por hash.
@@ -400,7 +415,22 @@ pub struct EntradaApp {
     /// gateadas que no figuren aqui NO se registran. La app puede llamar a
     /// otras capacidades —la matriz pasiva siempre esta— pero las gateadas
     /// son, literalmente, simbolos inexistentes para el modulo.
+    ///
+    /// Estos son los permisos DECLARADOS. Los EFECTIVOS (lo que el kernel
+    /// enlaza de verdad) salen de [`permisos_efectivos`]`(permisos, concedidos)`
+    /// donde `concedidos` viene de la [`ConcesionCapacidad`] referida por
+    /// [`concesion`](Self::concesion). El manifiesto puede pedir menos, nunca mas.
     pub permisos: Permisos,
+    /// Fase 67 / WAWA §14.1.3 — hash de la [`ConcesionCapacidad`] que firma el
+    /// par `(bytecode, permisos)` de esta app, o `None`. La concesion vive como
+    /// un objeto del grafo (direccionado por contenido); el kernel la recupera,
+    /// verifica su firma contra el `AGORA_AUTH_RING` y toma la interseccion de
+    /// sus permisos con los declarados aqui. `None` ⇒ sin techo per-bytecode:
+    /// el kernel honra `permisos` tal cual (la integridad la da la firma del
+    /// manifiesto). El binding "que binario puede que" queda asi INDEPENDIENTE
+    /// del manifiesto: re-firmar un manifiesto no escala un binario por encima
+    /// de su concesion.
+    pub concesion: Option<Hash>,
 }
 
 /// Un canal de release: un objeto del grafo que historiza, en orden cronologico,
@@ -1539,6 +1569,7 @@ mod pruebas {
             fuel_fotograma: 1_000_000,
             estado: None,
             permisos: 0,
+            concesion: None,
         };
         let mut con_red = base.clone();
         con_red.permisos = PERMISO_RED;

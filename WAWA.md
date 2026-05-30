@@ -618,17 +618,22 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
    "taskbar replicada en cada monitor vs sólo en uno" queda para cuando
    haya N>1 que validar.
 
-3. **Tabla de capacidades por bytecode hash** — **fase fundacional HECHA
-   (2026-05-30)**, enforcement pendiente de QEMU. SDD autoritativo:
-   [`SDD-capacidades.md`](SDD-capacidades.md). El binding "qué binario puede
-   hacer qué" se eleva a una firma Ed25519 del `AGORA_AUTH_RING` sobre el par
-   `(hash_bytecode, permisos)` — `format::ConcesionCapacidad` +
-   `mensaje_capacidad` + `permisos_efectivos` (intersección manifiesto ∩
-   concesión), firmado/verificado host por `agora-channel::{firmar,verificar}_capacidad`
-   y soberanamente por `claves::verificar_concesion_capacidad` (zero-alloc).
-   Falta cablear el punto de carga (`encender_app`) tras el bump
-   `VERSION_MANIFIESTO 4→5` (`EntradaApp.concesion: Option<Hash>`) y la ceremonia
-   de concesiones del génesis — ver SDD §3.
+3. **Tabla de capacidades por bytecode hash** — **enforcement CABLEADO
+   (2026-05-30)**; resta sólo la ceremonia de génesis (un paso del operador, no
+   de código). SDD autoritativo: [`SDD-capacidades.md`](SDD-capacidades.md). El
+   binding "qué binario puede hacer qué" se eleva a una firma Ed25519 del
+   `AGORA_AUTH_RING` sobre el par `(hash_bytecode, permisos)` —
+   `format::ConcesionCapacidad` + `mensaje_capacidad` + `permisos_efectivos`
+   (intersección manifiesto ∩ concesión), firmado/verificado host por
+   `agora-channel::{firmar,verificar}_capacidad` y soberanamente por
+   `claves::verificar_concesion_capacidad` (zero-alloc). **Cableado:**
+   `VERSION_MANIFIESTO 4→5` con `EntradaApp.concesion: Option<Hash>`; el punto de
+   carga del kernel (`encender_app`/`instanciar_plantilla` vía
+   `permisos_efectivos_de`) intersecta FRESH en cada parto; el camino host
+   (`construir_release`) ya emite y referencia una concesión firmada por app con
+   permisos gateados. Rollout escalonado: `None ⇒ declarados`, `Some ⇒ estricto`
+   (SDD §3.6). Falta: ceremonia offline de concesiones del génesis (`boot` no
+   firma — no tiene seed) + el flip a `None ⇒ 0` global — ver SDD §3.3/§3.6.
 
 ---
 

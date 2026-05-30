@@ -461,6 +461,14 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
             fuel_fotograma: app.fuel,
             estado: None,
             permisos: app.permisos,
+            // SEAM de la ceremonia §14.1.3: `boot` NO tiene clave privada (la
+            // seed del `AGORA_AUTH_RING` vive offline con el operador), asi que
+            // NO puede firmar una `ConcesionCapacidad` aqui. El genesis nace sin
+            // techo per-bytecode (`None`): el kernel honra `permisos` tal cual.
+            // Cuando el operador forje concesiones offline (`agora-cli wawa
+            // concesion`, contra el hash determinista del objeto-bytecode) y las
+            // siembre, este `None` pasara a `Some(hash)`. Ver SDD-capacidades §3.3.
+            concesion: None,
         });
     }
 

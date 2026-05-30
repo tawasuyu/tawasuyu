@@ -236,12 +236,11 @@ pub fn verificar_cuaderno_firmado(cf: &CuadernoFirmado) -> Result<(), CodigoErro
 /// de carga de una app) decide que hacer con el `Ok(())`: tomar la INTERSECCION
 /// de estos `permisos` con los que el manifiesto declara (`permisos_efectivos`).
 ///
-/// `allow(dead_code)`: el VERIFICADOR ya es soberano y testeable; el punto de
-/// CARGA que lo invoca (intersectar con `entrada.permisos` en `encender_app`)
-/// llega en la fase de enforcement —ver `SDD-capacidades.md` §4, que exige el
-/// bump `VERSION_MANIFIESTO 4→5` y la ceremonia de concesiones del genesis,
-/// validables solo en QEMU—.
-#[allow(dead_code)]
+/// ENFORCEMENT VIVO (Fase 67, 2026-05-30): el punto de carga ya lo invoca —
+/// `main::permisos_efectivos_de` lo llama en `encender_app` e
+/// `instanciar_plantilla` para intersectar `entrada.permisos` con lo concedido
+/// (`format::permisos_efectivos`). El verificador dejo de ser solo soberano y
+/// testeable: gobierna de verdad que capacidades enlaza el `Linker` de wasmi.
 pub fn verificar_concesion_capacidad(c: &ConcesionCapacidad) -> Result<(), CodigoError> {
     if !autor_en_anillo(&c.autor) {
         return Err(CodigoError::CapacidadInsuficiente);

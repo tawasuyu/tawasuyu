@@ -233,6 +233,7 @@ mod tests {
                 fuel_fotograma: 2_000_000,
                 estado: None,
                 permisos: 0,
+                concesion: None,
             }],
             configuracion: None,
         };
