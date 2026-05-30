@@ -35,6 +35,10 @@ use web_sys::{HtmlElement, KeyboardEvent, PointerEvent, WheelEvent};
 
 /// Base de zoom por "clic" de rueda (igual criterio que tullpu y el frontend Llimphi).
 pub const ZOOM_BASE: f64 = 1.1;
+/// Normalizador del `deltaY` de la rueda a "notches" de zoom: deltaY en modo
+/// pixel ronda ±100 por muesca, así que dividir por esto da ~1 notch por muesca
+/// y a la vez deja que el pinch de trackpad (deltas chicos) zoomee proporcional.
+const WHEEL_NORM: f64 = 100.0;
 
 /// Curva del vuelo entre pasos (misma que el strip lineal: salida suave).
 const EASE_VUELO: &str = "cubic-bezier(0.22, 0.61, 0.36, 1)";
@@ -207,7 +211,12 @@ impl RecorridoWeb {
             let rect = this.viewport.get_bounding_client_rect();
             let cursor = (e.client_x() as f64 - rect.left(), e.client_y() as f64 - rect.top());
             // deltaY>0 ⇒ scroll abajo ⇒ alejar (convención CSS, igual que tullpu).
-            let mult = ZOOM_BASE.powf(-e.delta_y().signum());
+            // Proporcional al delta (no sólo al signo) para que el pinch de
+            // trackpad sea suave; normalizado por `WHEEL_NORM` (un "notch" de
+            // rueda ≈ ±100px en modo pixel) y acotado para que un golpe fuerte no
+            // teletransporte el zoom.
+            let pasos = (e.delta_y() / WHEEL_NORM).clamp(-3.0, 3.0);
+            let mult = ZOOM_BASE.powf(-pasos);
             let panel = this.panel();
             this.inner.borrow_mut().state.wheel(mult, cursor, panel);
             this.aplicar(false);

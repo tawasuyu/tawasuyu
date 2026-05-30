@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect, Stroke};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect, RoundedRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat, Mix};
 use llimphi_ui::llimphi_text::{draw_layout_xf, layout_block, measurement, Alignment, TextBlock};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
@@ -119,6 +119,9 @@ const MARCO_BORDE: Color = Color::from_rgba8(80, 86, 104, 255);
 const MARCO_ACENTO: Color = Color::from_rgba8(120, 180, 255, 255);
 const TEXTO: Color = Color::from_rgba8(225, 230, 240, 235);
 const TEXTO_TENUE: Color = Color::from_rgba8(186, 194, 210, 225);
+// HUD "paso X / N": píldora sobria abajo-centro, en espacio de pantalla.
+const HUD_FONDO: Color = Color::from_rgba8(12, 14, 20, 190);
+const HUD_TEXTO: Color = Color::from_rgba8(205, 212, 226, 235);
 
 /// Nodo a pantalla completa que pinta el recorrido y registra el rect del
 /// panel. `Msg` es libre: el caller suele colgarle un `.draggable(...)` para
@@ -146,6 +149,8 @@ pub fn recorrido_view<Msg: 'static>(rec: &Recorrido, state: &RecorridoState) -> 
         .collect();
     let paso_id = rec.pasos.get(state.paso).copied();
     let camara = state.camara;
+    let paso = state.paso;
+    let n_pasos = rec.n_pasos();
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
@@ -154,6 +159,7 @@ pub fn recorrido_view<Msg: 'static>(rec: &Recorrido, state: &RecorridoState) -> 
     .paint_with(move |scene, ts, rect: PaintRect| {
         panel_set(to_rect(rect));
         pintar(scene, ts, rect, &pinturas, paso_id, &camara);
+        pintar_hud(scene, ts, rect, paso, n_pasos);
     })
 }
 
@@ -361,4 +367,36 @@ fn pintar_texto(
     }
 
     scene.pop_layer();
+}
+
+/// HUD de progreso "paso actual / total" — píldora sobria abajo-centro, pintada
+/// en **espacio de pantalla** (no la afecta la cámara). Orienta al presentador
+/// sin robar protagonismo al lienzo. No-op si la ruta está vacía.
+fn pintar_hud(scene: &mut Scene, ts: &mut Ts, rect: PaintRect, paso: usize, n_pasos: usize) {
+    if n_pasos == 0 || rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+    let texto = format!("{} / {}", paso + 1, n_pasos);
+    let block = TextBlock {
+        text: &texto,
+        size_px: 14.0,
+        color: HUD_TEXTO,
+        origin: (0.0, 0.0),
+        max_width: None,
+        alignment: Alignment::Start,
+        line_height: 1.2,
+        italic: false,
+        font_family: None,
+    };
+    let layout = layout_block(ts, &block);
+    let m = measurement(&layout);
+    let (pad_x, pad_y) = (12.0_f64, 6.0_f64);
+    let w = m.width as f64 + pad_x * 2.0;
+    let h = m.height as f64 + pad_y * 2.0;
+    let cx = rect.x as f64 + rect.w as f64 * 0.5;
+    let x0 = cx - w * 0.5;
+    let y0 = rect.y as f64 + rect.h as f64 - h - 16.0;
+    let pill = RoundedRect::new(x0, y0, x0 + w, y0 + h, h * 0.5);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, HUD_FONDO, None, &pill);
+    draw_layout_xf(scene, &layout, HUD_TEXTO, Affine::translate((x0 + pad_x, y0 + pad_y)));
 }
