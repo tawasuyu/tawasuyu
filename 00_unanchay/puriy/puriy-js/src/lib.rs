@@ -8831,4 +8831,134 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("errName").expect("e"), JsValue::String("SecurityError".into()));
     }
+
+    // ---- Fase 7.105 — navigator.locks (Web Locks API) ----
+
+    #[test]
+    fn locks_exclusive_serializa_el_segundo_request() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // El segundo request no puede correr su cb hasta que el primero libere.
+        rt.eval(
+            "var orden = []; var soltar = null; \
+             navigator.locks.request('r', function() { \
+                 orden.push('a-in'); \
+                 return new Promise(function(res) { soltar = res; }); \
+             }); \
+             navigator.locks.request('r', function() { orden.push('b-in'); });",
+        )
+        .expect("e");
+        // 'a' está adentro reteniendo; 'b' sigue en cola.
+        assert_eq!(rt.eval("orden.join(',')").expect("e"), JsValue::String("a-in".into()));
+        rt.eval("soltar();").expect("e");
+        // Al soltar 'a', 'b' obtiene el lock.
+        assert_eq!(rt.eval("orden.join(',')").expect("e"), JsValue::String("a-in,b-in".into()));
+    }
+
+    #[test]
+    fn locks_shared_corren_concurrentes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             navigator.locks.request('r', { mode: 'shared' }, function() { \
+                 n++; return new Promise(function() {}); }); \
+             navigator.locks.request('r', { mode: 'shared' }, function() { \
+                 n++; return new Promise(function() {}); });",
+        )
+        .expect("e");
+        // Ambos shared adentro al mismo tiempo.
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn locks_if_available_corre_cb_con_null_si_ocupado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var arg = 'sin-correr'; \
+             navigator.locks.request('r', function() { return new Promise(function() {}); }); \
+             navigator.locks.request('r', { ifAvailable: true }, function(lock) { arg = lock; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("arg").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn locks_query_reporta_held_y_pending() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var held = -1; var pend = -1; \
+             navigator.locks.request('r', function() { return new Promise(function() {}); }); \
+             navigator.locks.request('r', function() {}); \
+             navigator.locks.query().then(function(q) { held = q.held.length; pend = q.pending.length; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("held").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("pend").expect("e"), JsValue::Number(1.0));
+    }
+
+    // ---- Fase 7.106 — navigator.userActivation ----
+
+    #[test]
+    fn user_activation_arranca_inactivo_y_set_marca_sticky() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("navigator.userActivation.isActive").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("navigator.userActivation.hasBeenActive").expect("e"), JsValue::Bool(false));
+        rt.eval("__puriy_set_user_activation(true);").expect("e");
+        assert_eq!(rt.eval("navigator.userActivation.isActive").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.userActivation.hasBeenActive").expect("e"), JsValue::Bool(true));
+        // Expira la ventana transitoria: isActive baja, hasBeenActive queda sticky.
+        rt.eval("__puriy_set_user_activation(false);").expect("e");
+        assert_eq!(rt.eval("navigator.userActivation.isActive").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("navigator.userActivation.hasBeenActive").expect("e"), JsValue::Bool(true));
+    }
+
+    // ---- Fase 7.107 — navigator.mediaSession ----
+
+    #[test]
+    fn media_session_metadata_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "navigator.mediaSession.metadata = new MediaMetadata({ title: 'Cancion', artist: 'Banda' });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("navigator.mediaSession.metadata.title").expect("e"),
+            JsValue::String("Cancion".into())
+        );
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d) { return d.kind === 'mediasession-metadata'; })")
+                .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn media_session_action_invoca_el_handler_registrado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var llamado = false; \
+             navigator.mediaSession.setActionHandler('play', function() { llamado = true; });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("__puriy_media_session_action('play')").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(rt.eval("llamado").expect("e"), JsValue::Bool(true));
+        // Sin handler registrado para 'pause' → devuelve false.
+        assert_eq!(
+            rt.eval("__puriy_media_session_action('pause')").expect("e"),
+            JsValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn media_session_set_action_handler_rechaza_accion_invalida() {
+        let mut rt = JsRuntime::new().expect("rt");
+        let r = rt.eval(
+            "var msg = 'ok'; \
+             try { navigator.mediaSession.setActionHandler('volar', function() {}); } \
+             catch (e) { msg = e.constructor.name; } msg",
+        );
+        assert_eq!(r.expect("e"), JsValue::String("TypeError".into()));
+    }
 }
