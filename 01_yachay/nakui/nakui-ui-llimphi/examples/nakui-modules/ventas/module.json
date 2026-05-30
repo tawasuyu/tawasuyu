@@ -94,7 +94,8 @@
             "kind": "group_by",
             "field": "tier"
           },
-          "chart": "donut"
+          "chart": "donut",
+          "limit": 2
         },
         {
           "label": "Facturación por cliente",
@@ -109,7 +110,8 @@
             "kind": "currency",
             "symbol": "$"
           },
-          "chart": "pie"
+          "chart": "pie",
+          "limit": 8
         },
         {
           "label": "Ticket promedio (cobrado)",
@@ -171,7 +173,8 @@
             "kind": "currency",
             "symbol": "$"
           },
-          "chart": "columns"
+          "chart": "columns",
+          "limit": 8
         },
         {
           "label": "Clientes por plan",
@@ -180,7 +183,8 @@
             "kind": "group_by",
             "field": "tier"
           },
-          "chart": "pie"
+          "chart": "pie",
+          "limit": 2
         }
       ],
       "toggles": [

@@ -264,6 +264,13 @@ pub struct DashboardCard {
     /// se muestran como número grande.
     #[serde(default)]
     pub chart: ChartKind,
+    /// Tope de filas de un desglose: se conservan las `limit` de mayor
+    /// valor (el motor ya las ordena de mayor a menor) y el resto se
+    /// colapsa en una fila "Otros" (suma para conteos/`SumBy`, promedio
+    /// de los grupos restantes para `AvgBy`). Mantiene legibles los
+    /// gráficos sobre dimensiones de muchos grupos. `None` = sin tope.
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 /// Forma visual de un desglose de tablero/reporte.
@@ -1043,6 +1050,17 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(card.chart, ChartKind::Bars);
+        assert_eq!(card.limit, None);
+
+        // `limit` parsea como entero opcional.
+        let capped: DashboardCard = serde_json::from_value(serde_json::json!({
+            "label": "Top clientes",
+            "entity": "orders",
+            "metric": { "kind": "sum_by", "group": "customer", "value": "monto" },
+            "limit": 8
+        }))
+        .unwrap();
+        assert_eq!(capped.limit, Some(8));
 
         // Con `chart` explícito en snake_case.
         let pie: DashboardCard = serde_json::from_value(serde_json::json!({

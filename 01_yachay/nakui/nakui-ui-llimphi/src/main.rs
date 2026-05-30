@@ -38,7 +38,10 @@
 //!     (default), torta (`pie`) / dona (`donut`) —sectores proporcionales
 //!     con leyenda de color + porcentaje—, o columnas (`columns`) / línea
 //!     (`line`) —para series ordenadas, con eje cero y soporte de valores
-//!     negativos—. La leyenda siempre es clickeable para drill-down.
+//!     negativos—. La leyenda siempre es clickeable para drill-down. El
+//!     campo `limit` recorta el desglose a las N filas de mayor valor y
+//!     colapsa el resto en un bucket "Otros" (no-navegable) — mantiene
+//!     legibles los gráficos sobre dimensiones de muchos grupos.
 //!   - `Report`: los mismos agregados que un tablero, dispuestos como
 //!     documento de una columna (título + subtítulo) con botón
 //!     "Exportar (.md)" que vuelca el reporte completo a Markdown.
@@ -86,9 +89,9 @@ use llimphi_widget_nodegraph::{
 
 use nahual_meta_runtime::{
     breakdown_to_csv, cmp_values, compute_clear_fields, compute_field_delta, compute_metric,
-    format_value, human_label_for_record, parse_field_value, preview_value, record_matches,
-    render_value, resolve_param_value, short_uuid, to_csv, validate_entity_refs, MetaBackend,
-    MetricResult, WriteOutcome,
+    format_value, human_label_for_record, limit_breakdown, parse_field_value, preview_value,
+    record_matches, render_value, resolve_param_value, short_uuid, to_csv, validate_entity_refs,
+    MetaBackend, MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
     Action, CardFilter, ChartKind, Column, DashboardCard, DashboardView, FieldKind, FieldSpec,
@@ -2344,11 +2347,33 @@ fn compute_card_full(
         records.retain(|(_, v)| extra.iter().all(|f| record_matches(v, f)));
     }
     let mut result = compute_metric(&card.metric, card.filter.as_ref(), &records);
-    let raw_keys = breakdown_raw_keys(&result);
+    // Top-N: recortar a las `limit` mayores + bucket "Otros". Se hace
+    // sobre el resultado crudo (antes de resolver claves) para que las
+    // raw_keys —y por ende el drill-down, el CSV y el export .md— queden
+    // alineadas. `AvgBy` no es aditivo (el bucket promedia, no suma).
+    let collapsed = card
+        .limit
+        .map(|n| limit_breakdown(&mut result, n, metric_is_additive(&card.metric)))
+        .unwrap_or(false);
+    let mut raw_keys = breakdown_raw_keys(&result);
+    // La fila "Otros" no apunta a un grupo concreto: sentinel vacío para
+    // que `drill_msg` la deje no-clickeable.
+    if collapsed {
+        if let Some(last) = raw_keys.last_mut() {
+            last.clear();
+        }
+    }
     if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
         resolve_breakdown_keys(&mut result, backend, ref_entity);
     }
     (result, raw_keys)
+}
+
+/// `true` si el valor de un desglose es aditivo (se puede sumar para el
+/// bucket "Otros"): conteos (`GroupBy`) y sumas (`SumBy`). `AvgBy` no.
+fn metric_is_additive(metric: &nahual_meta_schema::Metric) -> bool {
+    use nahual_meta_schema::Metric;
+    !matches!(metric, Metric::AvgBy { .. })
 }
 
 /// Una fila de desglose: etiqueta + barra + valor. Si `on_drill` está
@@ -2812,10 +2837,15 @@ fn dashboard_card(
     // Closure que arma el click de drill-down de la fila `i` (si hay).
     let drill_msg = |i: usize| -> Option<Msg> {
         let d = drill?;
+        let value = d.raw_keys.get(i)?.clone();
+        // Sentinel vacío = fila agregada ("Otros"): no navega a nada.
+        if value.is_empty() {
+            return None;
+        }
         Some(Msg::DrillDown {
             entity: d.entity.clone(),
             field: d.field.clone(),
-            value: d.raw_keys.get(i)?.clone(),
+            value,
             label: d.labels.get(i).cloned().unwrap_or_default(),
         })
     };

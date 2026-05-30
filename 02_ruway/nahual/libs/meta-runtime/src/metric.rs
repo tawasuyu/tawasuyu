@@ -224,6 +224,47 @@ pub fn breakdown_to_csv(
     ))
 }
 
+/// Etiqueta de la fila que agrupa el resto de un desglose recortado.
+pub const OTROS_LABEL: &str = "Otros";
+
+/// Recorta un desglose a sus `limit` filas de mayor valor (el motor ya
+/// las entrega ordenadas de mayor a menor) y colapsa el resto en una
+/// fila [`OTROS_LABEL`]. Devuelve `true` si efectivamente agregó esa
+/// fila (hubo más de `limit` grupos), para que la capa de presentación
+/// la marque como no-navegable.
+///
+/// El valor de "Otros" es la **suma** del resto para conteos
+/// (`GroupBy`) y para sumas (`SumBy`, `additive = true`); para
+/// promedios (`AvgBy`, `additive = false`) es el promedio aritmético de
+/// los valores de los grupos restantes (aproximación clara: la fila
+/// "Otros" no es un grupo real). `limit == 0` no recorta nada.
+pub fn limit_breakdown(result: &mut MetricResult, limit: usize, additive: bool) -> bool {
+    if limit == 0 {
+        return false;
+    }
+    match result {
+        MetricResult::Breakdown(rows) if rows.len() > limit => {
+            let tail: usize = rows[limit..].iter().map(|(_, n)| *n).sum();
+            rows.truncate(limit);
+            rows.push((OTROS_LABEL.to_string(), tail));
+            true
+        }
+        MetricResult::ValueBreakdown(rows) if rows.len() > limit => {
+            let rest = &rows[limit..];
+            let value = if additive {
+                rest.iter().map(|(_, v)| *v).sum()
+            } else {
+                let sum: f64 = rest.iter().map(|(_, v)| *v).sum();
+                sum / rest.len() as f64
+            };
+            rows.truncate(limit);
+            rows.push((OTROS_LABEL.to_string(), value));
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Valor de un campo de nivel superior como texto plano, para comparar
 /// (filtros) o agrupar (`GroupBy`).
 fn field_as_text(v: &Value, field: &str) -> Option<String> {
@@ -241,6 +282,56 @@ mod tests {
 
     fn recs(items: &[Value]) -> Vec<(Uuid, Value)> {
         items.iter().map(|v| (Uuid::new_v4(), v.clone())).collect()
+    }
+
+    #[test]
+    fn limit_breakdown_counts_sums_the_tail() {
+        let mut r = MetricResult::Breakdown(vec![
+            ("a".into(), 10),
+            ("b".into(), 6),
+            ("c".into(), 3),
+            ("d".into(), 1),
+        ]);
+        let collapsed = limit_breakdown(&mut r, 2, true);
+        assert!(collapsed);
+        assert_eq!(
+            r,
+            MetricResult::Breakdown(vec![
+                ("a".into(), 10),
+                ("b".into(), 6),
+                (OTROS_LABEL.into(), 4), // 3 + 1
+            ])
+        );
+    }
+
+    #[test]
+    fn limit_breakdown_avg_bucket_is_mean_not_sum() {
+        let mut r = MetricResult::ValueBreakdown(vec![
+            ("a".into(), 100.0),
+            ("b".into(), 80.0),
+            ("c".into(), 60.0),
+            ("d".into(), 40.0),
+        ]);
+        // additive = false (AvgBy): el bucket promedia los restantes.
+        let collapsed = limit_breakdown(&mut r, 2, false);
+        assert!(collapsed);
+        assert_eq!(
+            r,
+            MetricResult::ValueBreakdown(vec![
+                ("a".into(), 100.0),
+                ("b".into(), 80.0),
+                (OTROS_LABEL.into(), 50.0), // (60 + 40) / 2
+            ])
+        );
+    }
+
+    #[test]
+    fn limit_breakdown_noop_when_within_limit() {
+        let mut r = MetricResult::Breakdown(vec![("a".into(), 3), ("b".into(), 1)]);
+        let before = r.clone();
+        assert!(!limit_breakdown(&mut r, 5, true));
+        assert!(!limit_breakdown(&mut r, 0, true));
+        assert_eq!(r, before);
     }
 
     #[test]
