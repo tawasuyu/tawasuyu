@@ -324,6 +324,12 @@ pub struct Decal {
     pub color: (u8, u8, u8),
     /// Opacidad 0..1 — el host la decae con la edad del decal.
     pub alpha: f32,
+    /// **Fase 3.47** — tangente unitaria mundo `(tx, ty)` del lineseg
+    /// donde impactó: el decal yace plano sobre la pared, con su eje
+    /// horizontal a lo largo de la tangente y el vertical en `+Z`. Si es
+    /// `(0, 0)` (sin pared cercana — p.ej. sangre en el aire) el renderer
+    /// cae al billboard camera-facing de 3.46.
+    pub tangent: (f32, f32),
 }
 
 /// Parámetros del renderer.
@@ -3520,25 +3526,51 @@ fn gather_decals(out: &mut Vec<Renderable>, cfg: &RenderConfig, cam: &Camera, pr
         if a == 0 {
             continue;
         }
-        let (x_cam, y_cam) = cam.to_cam_2d(d.x, d.y);
-        if x_cam < cfg.near {
+        // Cull por el centro: si el impacto está detrás del near-plane,
+        // descartamos el decal entero.
+        let (cx_cam, cy_cam) = cam.to_cam_2d(d.x, d.y);
+        if cx_cam < cfg.near {
             continue;
         }
-        let cz = d.z - cam.view_z;
         let r = d.radius;
-        let tl = proj.project(x_cam, y_cam + r, cz + r);
-        let tr = proj.project(x_cam, y_cam - r, cz + r);
-        let br = proj.project(x_cam, y_cam - r, cz - r);
-        let bl = proj.project(x_cam, y_cam + r, cz - r);
-        if !(tl.x.is_finite() && br.x.is_finite()) {
+        let cz = d.z - cam.view_z;
+        // Fase 3.47: si hay tangente de pared, el quad yace **plano**
+        // sobre el lineseg (eje horizontal = tangente mundo, vertical =
+        // +Z) — se ve en perspectiva, no de cara a la cámara. Sin
+        // tangente, billboard 3.46 (a `cx_cam` constante el quad es
+        // axis-aligned en pantalla).
+        let (tx, ty) = d.tangent;
+        let corners: [Point; 4] = if tx != 0.0 || ty != 0.0 {
+            // Esquinas en mundo: centro ± r·tangente (horizontal) y
+            // ± r en Z (vertical). Cada una se transforma a cámara y
+            // se proyecta — el quad queda con la inclinación de la pared.
+            let project_world = |sx: f32, dz: f32| -> Point {
+                let (wcx, wcy) = cam.to_cam_2d(d.x + tx * sx, d.y + ty * sx);
+                proj.project(wcx, wcy, cz + dz)
+            };
+            [
+                project_world(-r, r),
+                project_world(r, r),
+                project_world(r, -r),
+                project_world(-r, -r),
+            ]
+        } else {
+            [
+                proj.project(cx_cam, cy_cam + r, cz + r),
+                proj.project(cx_cam, cy_cam - r, cz + r),
+                proj.project(cx_cam, cy_cam - r, cz - r),
+                proj.project(cx_cam, cy_cam + r, cz - r),
+            ]
+        };
+        if !corners.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
             continue;
         }
-        let depth = (x_cam * x_cam + y_cam * y_cam).sqrt();
+        let depth = (cx_cam * cx_cam + cy_cam * cy_cam).sqrt();
         let mut path = BezPath::new();
-        path.move_to(tl);
-        path.line_to(tr);
-        path.line_to(br);
-        path.line_to(bl);
+        path.move_to(corners[0]);
+        for p in &corners[1..] {
+            path.line_to(*p);
+        }
         path.close_path();
         out.push(Renderable {
             depth: depth - 0.5,
@@ -7347,6 +7379,7 @@ mod tests {
                 radius: 5.0,
                 color: (24, 21, 18),
                 alpha: 1.0,
+                tangent: (0.0, 0.0),
             }],
             ..Default::default()
         };
@@ -7367,6 +7400,7 @@ mod tests {
                 radius: 5.0,
                 color: (24, 21, 18),
                 alpha: 1.0,
+                tangent: (0.0, 0.0),
             }],
             ..Default::default()
         };
@@ -7386,6 +7420,7 @@ mod tests {
                 radius: 5.0,
                 color: (24, 21, 18),
                 alpha: 0.0, // ya desvanecido
+                tangent: (0.0, 0.0),
             }],
             ..Default::default()
         };
@@ -7405,6 +7440,7 @@ mod tests {
                 radius: 5.0,
                 color: (100, 10, 10),
                 alpha: 0.5,
+                tangent: (0.0, 0.0),
             }],
             ..Default::default()
         };
@@ -7428,12 +7464,67 @@ mod tests {
                 radius: 5.0,
                 color: (24, 21, 18),
                 alpha: 1.0,
+                tangent: (0.0, 0.0),
             }],
             ..Default::default()
         };
         let mut out = Vec::new();
         gather_decals(&mut out, &cfg, &cam, &proj);
         assert!((out[0].depth - (100.0 - 0.5)).abs() < 1e-3, "depth = dist - 0.5");
+    }
+
+    #[test]
+    fn decal_wall_aligned_quad_is_not_axis_aligned() {
+        // Fase 3.47: un decal sobre una pared oblicua (tangente a 45°)
+        // proyecta un quad cuyos lados superior/inferior tienen distinta
+        // longitud en pantalla (perspectiva) — a diferencia del billboard
+        // axis-aligned. Comparamos un decal billboard vs uno con tangente
+        // diagonal en la misma posición.
+        let (cam, proj) = decal_test_setup();
+        let mk = |tangent: (f32, f32)| {
+            let cfg = RenderConfig {
+                decals: vec![Decal {
+                    x: 100.0,
+                    y: 0.0,
+                    z: 40.0,
+                    radius: 8.0,
+                    color: (24, 21, 18),
+                    alpha: 1.0,
+                    tangent,
+                }],
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            gather_decals(&mut out, &cfg, &cam, &proj);
+            out
+        };
+        let billboard = mk((0.0, 0.0));
+        let walled = mk((0.707, 0.707)); // pared a 45° respecto a la vista
+        assert_eq!(billboard.len(), 1);
+        assert_eq!(walled.len(), 1);
+        // El billboard cae a profundidad constante ⇒ borde izq y der a
+        // la misma `x_cam` ⇒ misma altura en pantalla. El walled tiene
+        // su lado izquierdo más cerca (más alto) y el derecho más lejos
+        // (más bajo) — la perspectiva de la pared oblicua.
+        let edge_heights = |bz: &BezPath| {
+            let pts: Vec<Point> = bz.elements().iter().filter_map(|e| match e {
+                llimphi_ui::llimphi_raster::kurbo::PathEl::MoveTo(p)
+                | llimphi_ui::llimphi_raster::kurbo::PathEl::LineTo(p) => Some(*p),
+                _ => None,
+            }).collect();
+            // pts = [tl, tr, br, bl]. Altura izq = tl→bl, der = tr→br.
+            let left = (pts[0].y - pts[3].y).abs();
+            let right = (pts[1].y - pts[2].y).abs();
+            (left, right)
+        };
+        let (bl, br) = edge_heights(&billboard[0].path);
+        assert!((bl - br).abs() < 1e-6, "billboard: alturas izq == der");
+        let (wl, wr) = edge_heights(&walled[0].path);
+        assert!(
+            (wl - wr).abs() > 1e-3,
+            "pared oblicua: altura izq != der (perspectiva), izq={} der={}",
+            wl, wr
+        );
     }
 
     // =================================================================

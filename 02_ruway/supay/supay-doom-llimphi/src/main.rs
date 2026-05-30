@@ -40,7 +40,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
-use supay_core::{keys, DoomEngine, SnapshotPair, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH};
+use supay_core::{keys, DoomEngine, SnapshotPair, WallSeg, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH};
 use supay_render_llimphi::{scene_view, RenderConfig, WadAtlas};
 use supay_wad::Wad;
 
@@ -187,7 +187,41 @@ struct HostDecal {
     ttl: u32,
     color: (u8, u8, u8),
     radius: f32,
+    /// Fase 3.47: tangente del lineseg impactado para apoyar el decal
+    /// plano. `(0, 0)` ⇒ billboard.
+    tangent: (f32, f32),
 }
+
+/// Fase 3.47: tangente unitaria del lineseg más cercano a `(x, y)`
+/// dentro de `max_dist`. `(0, 0)` si ninguna pared está cerca (sangre en
+/// el aire) ⇒ el renderer cae al billboard. Sirve para apoyar el decal
+/// plano sobre la superficie impactada.
+fn nearest_wall_tangent(walls: &[WallSeg], x: f32, y: f32, max_dist: f32) -> (f32, f32) {
+    let mut best_d2 = max_dist * max_dist;
+    let mut best = (0.0_f32, 0.0_f32);
+    for w in walls {
+        let dx = w.x2 - w.x1;
+        let dy = w.y2 - w.y1;
+        let len2 = dx * dx + dy * dy;
+        if len2 < 1e-6 {
+            continue;
+        }
+        let t = (((x - w.x1) * dx + (y - w.y1) * dy) / len2).clamp(0.0, 1.0);
+        let px = w.x1 + t * dx;
+        let py = w.y1 + t * dy;
+        let d2 = (px - x) * (px - x) + (py - y) * (py - y);
+        if d2 < best_d2 {
+            best_d2 = d2;
+            let inv = len2.sqrt().recip();
+            best = (dx * inv, dy * inv);
+        }
+    }
+    best
+}
+
+/// Distancia máxima (unidades) impacto→pared para apoyar el decal plano.
+/// Más allá, billboard (sangre/impacto lejos de cualquier pared).
+const DECAL_WALL_SNAP_DIST: f32 = 32.0;
 
 /// Vida de un decal en ticks (35 Hz). ~6 s antes de desvanecerse.
 const DECAL_TTL: u32 = 210;
@@ -465,6 +499,10 @@ impl App for Supay {
                         DecalKind::Scorch => ((24, 21, 18), 5.0),
                         DecalKind::Blood => ((104, 12, 12), 5.0),
                     };
+                    // Fase 3.47: apoyamos el decal plano sobre la pared
+                    // más cercana (si la hay dentro de SNAP_DIST).
+                    let tangent =
+                        nearest_wall_tangent(&snap.walls, x, y, DECAL_WALL_SNAP_DIST);
                     m.decals.push(HostDecal {
                         x,
                         y,
@@ -472,6 +510,7 @@ impl App for Supay {
                         ttl: DECAL_TTL,
                         color,
                         radius,
+                        tangent,
                     });
                 }
                 m.prev_impacts = impacts.iter().map(|&(x, y, _, _)| (x, y)).collect();
@@ -600,6 +639,7 @@ impl App for Supay {
                             radius: d.radius,
                             color: d.color,
                             alpha: d.ttl as f32 / DECAL_TTL as f32,
+                            tangent: d.tangent,
                         })
                         .collect(),
                     ..RenderConfig::default()
@@ -661,7 +701,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.46 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.47 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,
