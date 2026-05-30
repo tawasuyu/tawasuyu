@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use llimphi_module_file_picker::{
     self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Mix};
 use llimphi_ui::PaintRect;
 use llimphi_ui::WheelDelta;
@@ -147,6 +147,14 @@ struct Model {
     /// directamente (clone del array) en cada frame. `None` cuando
     /// todavía no hay composite.
     histograma: Option<[[u32; 256]; 3]>,
+    /// Selección rectangular activa (Photoshop's marquee). En coords
+    /// de imagen, no de pantalla — sobrevive a zoom/pan/rotación del
+    /// viewport. `None` cuando no hay selección.
+    seleccion: Option<RectImagen>,
+    /// Estado del drag de selección mientras el usuario sostiene el
+    /// click. `None` fuera de un drag. Se commitea a `seleccion` en
+    /// el `End` y se limpia.
+    seleccion_drag: Option<SeleccionDrag>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +164,10 @@ enum Herramienta {
     /// Click sobre el lienzo lee el RGBA del píxel compuesto. No
     /// dragea (el drag se reservaría para una pintura futura).
     Cuentagotas,
+    /// Drag sobre el lienzo define un rectángulo de selección (marquee)
+    /// en coords de imagen. La selección sirve de ROI para crop /
+    /// fill / copy en fases posteriores; esta fase solo dibuja el rect.
+    Marco,
 }
 
 impl Herramienta {
@@ -163,8 +175,37 @@ impl Herramienta {
         match self {
             Herramienta::Mover => "mover",
             Herramienta::Cuentagotas => "cuentagotas",
+            Herramienta::Marco => "marco",
         }
     }
+}
+
+/// Rectángulo en coordenadas de imagen (half-open `[x0, x1) × [y0, y1)`).
+/// Es la selección "marquee" del lienzo — los píxeles dentro caen en el
+/// ROI; la convención de coords es la misma que `bbox_no_transparente`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RectImagen {
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+}
+
+/// Estado intermedio mientras el usuario arrastra una selección. La
+/// `ancla_*` es la coord-imagen del punto donde clickeó (puede caer
+/// fuera del lienzo — se clampea al normalizar). `cur_l*` es la
+/// posición local actual del cursor (en coords del rect del panel
+/// lienzo), reconstruida acumulando los `dx, dy` de cada Move sobre
+/// el `lx0, ly0` inicial. `rw, rh` se capturan al inicio del drag
+/// para que el resize de ventana mid-drag no descoloque la conversión.
+#[derive(Debug, Clone, Copy)]
+struct SeleccionDrag {
+    ancla_ix: i32,
+    ancla_iy: i32,
+    cur_lx: f32,
+    cur_ly: f32,
+    rw: f32,
+    rh: f32,
 }
 
 /// Multiplicador por tick de wheel. 1.1 ≈ +10%, un escalón cómodo. El
@@ -281,6 +322,29 @@ enum Msg {
         param: ParametroSlider,
         dv: f32,
     },
+    /// Press sobre el lienzo en modo Marco: setea el ancla del drag
+    /// en coords-imagen y captura el rect del panel para conversión
+    /// estable. Emitido por `on_click_at`.
+    IniciarSeleccion {
+        lx: f32,
+        ly: f32,
+        rw: f32,
+        rh: f32,
+    },
+    /// Move durante el drag de Marco: acumula deltas sobre la posición
+    /// local actual, recomputa el rect-imagen y refresca `seleccion`
+    /// (no espera al End — muestra preview en vivo).
+    AjustarSeleccion {
+        dx: f32,
+        dy: f32,
+    },
+    /// End del drag de Marco: el `seleccion_drag` queda vacío; el
+    /// `seleccion` ya tiene el rect final. Sin snapshot — la selección
+    /// no es parte del DAG de imagen.
+    FinalizarSeleccion,
+    /// Esc o click "limpiar" → borra la selección + cualquier drag en
+    /// curso. La barra de espacios libre.
+    LimpiarSeleccion,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ
@@ -522,6 +586,8 @@ fn inicializar() -> Model {
         herramienta: Herramienta::Mover,
         color_picked: None,
         histograma: None,
+        seleccion: None,
+        seleccion_drag: None,
     };
     sincronizar_thumbs(&mut model);
     // Cómputo inicial del histograma desde el composite recién armado.
@@ -1425,6 +1491,20 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         },
         Msg::CambiarHerramienta(Herramienta::Cuentagotas),
     )));
+    let etiqueta_marco = if model.herramienta == Herramienta::Marco {
+        "● marco (r)"
+    } else {
+        "○ marco (r)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_marco.to_string(),
+        if model.herramienta == Herramienta::Marco {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Marco),
+    )));
 
     // "parámetros": sliders en vivo si la capa seleccionada es una
     // derivada con OpLocal parametrizable. Sólo aparece cuando aplica
@@ -1775,6 +1855,11 @@ fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
             let factor_zoom = model.factor_zoom;
             let pan_x = model.pan_x;
             let pan_y = model.pan_y;
+            // Capturas para el painter de la selección: si hay rect
+            // commiteado, lo dibuja; igual si hay drag activo (preview).
+            let seleccion = model.seleccion;
+            let lienzo_w = model.lienzo.width;
+            let lienzo_h = model.lienzo.height;
             let cuerpo_paint = View::new(Style {
                 flex_grow: 1.0,
                 size: Size {
@@ -1822,11 +1907,40 @@ fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
                 );
                 scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &node_rect);
                 scene.draw_image(&img, transform);
+                // Overlay de selección: rect en coords-imagen → coords
+                // de pantalla vía el mismo transform que la imagen.
+                // Doble-stroke (negro grueso + blanco fino) para que
+                // se vea contra cualquier fondo — "marching ants"
+                // estático.
+                if let Some(rect_img) = seleccion {
+                    if lienzo_w > 0 && lienzo_h > 0 {
+                        let sx0 = tx + (rect_img.x0 as f64) * s;
+                        let sy0 = ty + (rect_img.y0 as f64) * s;
+                        let sx1 = tx + (rect_img.x1 as f64) * s;
+                        let sy1 = ty + (rect_img.y1 as f64) * s;
+                        let krect = KurboRect::new(sx0, sy0, sx1, sy1);
+                        scene.stroke(
+                            &Stroke::new(3.0),
+                            Affine::IDENTITY,
+                            Color::from_rgba8(0, 0, 0, 220),
+                            None,
+                            &krect,
+                        );
+                        scene.stroke(
+                            &Stroke::new(1.0),
+                            Affine::IDENTITY,
+                            Color::from_rgba8(255, 255, 255, 240),
+                            None,
+                            &krect,
+                        );
+                    }
+                }
                 scene.pop_layer();
             });
             // El cableado de eventos depende de la herramienta: Mover
-            // panea con drag; Cuentagotas recoge color con click. El
-            // wheel sigue zoom-eando en ambos modos (vía `on_wheel`).
+            // panea con drag; Cuentagotas recoge color con click; Marco
+            // arma una selección con on_click_at (press) + draggable_at
+            // (extender). El wheel sigue zoom-eando en los 3 modos.
             match model.herramienta {
                 Herramienta::Mover => cuerpo_paint.draggable(|fase, dx, dy| match fase {
                     DragPhase::Move => Some(Msg::Pan(dx, dy)),
@@ -1835,6 +1949,14 @@ fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
                 Herramienta::Cuentagotas => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
                     Some(Msg::RecogerColor { lx, ly, rw, rh })
                 }),
+                Herramienta::Marco => cuerpo_paint
+                    .on_click_at(|lx, ly, rw, rh| {
+                        Some(Msg::IniciarSeleccion { lx, ly, rw, rh })
+                    })
+                    .draggable_at(|fase, dx, dy, _lx0, _ly0| match fase {
+                        DragPhase::Move => Some(Msg::AjustarSeleccion { dx, dy }),
+                        DragPhase::End => Some(Msg::FinalizarSeleccion),
+                    }),
             }
         }
         None => View::new(Style {
@@ -2137,6 +2259,79 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, Some((id, param.clave_coalesce())));
                 }
             }
+            Msg::IniciarSeleccion { lx, ly, rw, rh } => {
+                // Capturamos el ancla en coords-imagen y empezamos el
+                // drag. Si la conversión local→imagen falla (lienzo
+                // degenerado), descartamos el press.
+                if let (Some(img), Some((ix, iy))) = (
+                    model.imagen.as_ref(),
+                    local_a_imagen(
+                        lx,
+                        ly,
+                        rw,
+                        rh,
+                        // image_w / image_h: usamos las del lienzo,
+                        // no del peniko::Image (en general coinciden,
+                        // pero el lienzo es la fuente de verdad).
+                        model.lienzo.width,
+                        model.lienzo.height,
+                        model.factor_zoom,
+                        model.pan_x,
+                        model.pan_y,
+                    ),
+                ) {
+                    let _ = img;
+                    model.seleccion_drag = Some(SeleccionDrag {
+                        ancla_ix: ix.floor() as i32,
+                        ancla_iy: iy.floor() as i32,
+                        cur_lx: lx,
+                        cur_ly: ly,
+                        rw,
+                        rh,
+                    });
+                    // Press limpia la selección previa — vamos a
+                    // construir una nueva sobre la marcha.
+                    model.seleccion = None;
+                }
+            }
+            Msg::AjustarSeleccion { dx, dy } => {
+                if let Some(drag) = model.seleccion_drag.as_mut() {
+                    drag.cur_lx += dx;
+                    drag.cur_ly += dy;
+                    let drag = *drag;
+                    model.seleccion = rect_imagen_desde_drag(
+                        &drag,
+                        model.lienzo.width,
+                        model.lienzo.height,
+                        model.factor_zoom,
+                        model.pan_x,
+                        model.pan_y,
+                    );
+                }
+            }
+            Msg::FinalizarSeleccion => {
+                // Commit final: si el rect quedó válido al fin del drag
+                // ya está en `seleccion`. Si era un click sin
+                // movimiento (área cero), `seleccion` quedó None
+                // — limpiamos también el drag y avisamos.
+                model.seleccion_drag = None;
+                if let Some(rect) = model.seleccion {
+                    model.estado = format!(
+                        "selección {}×{} @ ({},{})",
+                        rect.x1 - rect.x0,
+                        rect.y1 - rect.y0,
+                        rect.x0,
+                        rect.y0
+                    );
+                } else {
+                    model.estado = "selección vacía — Esc o re-drag".into();
+                }
+            }
+            Msg::LimpiarSeleccion => {
+                model.seleccion = None;
+                model.seleccion_drag = None;
+                model.estado = "selección limpia".into();
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2404,6 +2599,18 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("i") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Cuentagotas));
         }
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("r") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Marco));
+        }
+        // Esc limpia la selección (si hay) — global porque no compite
+        // con otros modales: cuando picker está abierto o se está
+        // renombrando, este `hotkey_a_msg` no se invoca (los modales
+        // capturan Esc antes).
+        Key::Named(NamedKey::Escape) if !m.ctrl && !m.alt => {
+            if model.seleccion.is_some() || model.seleccion_drag.is_some() {
+                return Some(Msg::LimpiarSeleccion);
+            }
+        }
         _ => {}
     }
     // El resto opera sobre la capa seleccionada.
@@ -2624,6 +2831,71 @@ fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     aplicar_y_recomponer(model);
     model.estado = format!("combinada '{}'", nombre);
     true
+}
+
+/// Convierte un punto local `(lx, ly)` (relativo al rect del panel
+/// lienzo de tamaño `rw × rh`) a coords-imagen, aplicando el zoom/pan
+/// vigentes. Pura. Devuelve `None` si las dims o la escala son
+/// degeneradas — el caller suele caer a un no-op en ese caso.
+fn local_a_imagen(
+    lx: f32,
+    ly: f32,
+    rw: f32,
+    rh: f32,
+    image_w: u32,
+    image_h: u32,
+    factor_zoom: f32,
+    pan_x: f32,
+    pan_y: f32,
+) -> Option<(f64, f64)> {
+    let (s, off_x, off_y) =
+        transform_lienzo(image_w, image_h, rw, rh, factor_zoom, pan_x, pan_y)?;
+    if s <= 0.0 {
+        return None;
+    }
+    Some(((lx as f64 - off_x) / s, (ly as f64 - off_y) / s))
+}
+
+/// Normaliza un drag de selección a un `RectImagen` válido: ordena
+/// las esquinas, clampea al rect del lienzo `[0, image_w) × [0, image_h)`
+/// y devuelve `None` si el rect resulta degenerado (área cero) — el
+/// caller suele descartar selecciones puntuales que el usuario no
+/// quiso hacer.
+fn rect_imagen_desde_drag(
+    drag: &SeleccionDrag,
+    image_w: u32,
+    image_h: u32,
+    factor_zoom: f32,
+    pan_x: f32,
+    pan_y: f32,
+) -> Option<RectImagen> {
+    let cur = local_a_imagen(
+        drag.cur_lx,
+        drag.cur_ly,
+        drag.rw,
+        drag.rh,
+        image_w,
+        image_h,
+        factor_zoom,
+        pan_x,
+        pan_y,
+    )?;
+    let ax = drag.ancla_ix as f64;
+    let ay = drag.ancla_iy as f64;
+    let bx = cur.0;
+    let by = cur.1;
+    let (lo_x, hi_x) = if ax <= bx { (ax, bx) } else { (bx, ax) };
+    let (lo_y, hi_y) = if ay <= by { (ay, by) } else { (by, ay) };
+    // Clamp half-open al rect del lienzo. Floor en el min, ceil en el
+    // max para incluir cualquier píxel parcial bajo el cursor.
+    let x0 = lo_x.floor().clamp(0.0, image_w as f64) as u32;
+    let y0 = lo_y.floor().clamp(0.0, image_h as f64) as u32;
+    let x1 = hi_x.ceil().clamp(0.0, image_w as f64) as u32;
+    let y1 = hi_y.ceil().clamp(0.0, image_h as f64) as u32;
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(RectImagen { x0, y0, x1, y1 })
 }
 
 /// Cuenta cuántos píxeles tiene cada valor 0..255 en cada canal RGB de
@@ -3055,6 +3327,8 @@ mod tests {
             herramienta: Herramienta::Mover,
             color_picked: None,
             histograma: None,
+            seleccion: None,
+            seleccion_drag: None,
         }
     }
 
@@ -5099,6 +5373,210 @@ mod tests {
         assert_eq!(h[0][200], 16);
         assert_eq!(h[1][100], 16);
         assert_eq!(h[2][50], 16);
+    }
+
+    // ---- Fase 35: selección rectangular (marquee) ----------------------------
+
+    #[test]
+    fn local_a_imagen_zoom_1_centra_la_conversion() {
+        // Lienzo 100×100 que cabe en rect 200×200 a zoom 1 → s=2,
+        // off_x=off_y=0. Click en (50, 50) local → (25, 25) image.
+        let (ix, iy) =
+            local_a_imagen(50.0, 50.0, 200.0, 200.0, 100, 100, 1.0, 0.0, 0.0).unwrap();
+        assert!((ix - 25.0).abs() < 1e-3);
+        assert!((iy - 25.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn local_a_imagen_dims_cero_devuelve_none() {
+        assert!(local_a_imagen(0.0, 0.0, 0.0, 100.0, 100, 100, 1.0, 0.0, 0.0).is_none());
+        assert!(local_a_imagen(0.0, 0.0, 100.0, 100.0, 0, 100, 1.0, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn rect_imagen_desde_drag_normaliza_ancla_y_cursor_invertidos() {
+        // Drag de abajo-derecha hacia arriba-izquierda: ancla > cur en
+        // ambos ejes. El rect debe quedar con x0<x1, y0<y1.
+        // ancla en (8, 8) image; cursor local convertido a (2, 2) image.
+        // En un lienzo 10×10 con rect 20×20 a zoom 1 → s=2, off=0.
+        // cur_lx=4, cur_ly=4 → (2, 2) image.
+        let drag = SeleccionDrag {
+            ancla_ix: 8,
+            ancla_iy: 8,
+            cur_lx: 4.0,
+            cur_ly: 4.0,
+            rw: 20.0,
+            rh: 20.0,
+        };
+        let rect = rect_imagen_desde_drag(&drag, 10, 10, 1.0, 0.0, 0.0).unwrap();
+        assert_eq!(rect, RectImagen { x0: 2, y0: 2, x1: 8, y1: 8 });
+    }
+
+    #[test]
+    fn rect_imagen_desde_drag_clampea_al_lienzo() {
+        // Drag que sale por arriba/derecha: el rect debe clampear a
+        // [0, w] × [0, h], no leakear coords negativas o > dims.
+        let drag = SeleccionDrag {
+            ancla_ix: -5,
+            ancla_iy: -3,
+            cur_lx: 200.0, // muy a la derecha
+            cur_ly: 200.0, // muy abajo
+            rw: 20.0,
+            rh: 20.0,
+        };
+        // Lienzo 10×10 en rect 20×20 zoom 1 → cur local (200, 200) →
+        // image (100, 100) muy fuera del lienzo.
+        let rect = rect_imagen_desde_drag(&drag, 10, 10, 1.0, 0.0, 0.0).unwrap();
+        // Clamped: x0=0, y0=0, x1=10, y1=10.
+        assert_eq!(rect, RectImagen { x0: 0, y0: 0, x1: 10, y1: 10 });
+    }
+
+    #[test]
+    fn rect_imagen_desde_drag_area_cero_devuelve_none() {
+        // Click sin drag — ancla y cursor en mismo punto → rect
+        // degenerado.
+        let drag = SeleccionDrag {
+            ancla_ix: 5,
+            ancla_iy: 5,
+            cur_lx: 10.0,
+            cur_ly: 10.0,
+            rw: 20.0,
+            rh: 20.0,
+        };
+        // Lienzo 10×10, rect 20×20 zoom 1 → cur local (10, 10) →
+        // image (5, 5) = ancla. Rect degenerado.
+        assert!(rect_imagen_desde_drag(&drag, 10, 10, 1.0, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn iniciar_seleccion_setea_ancla_y_limpia_seleccion_previa() {
+        let mut model = modelo_minimo();
+        // Simulamos que ya había una selección de un drag anterior.
+        model.seleccion = Some(RectImagen {
+            x0: 0,
+            y0: 0,
+            x1: 2,
+            y1: 2,
+        });
+        // El lienzo de modelo_minimo es 4×4. imagen tiene que existir
+        // para que iniciar entre — un aplicar_y_recomponer la crea.
+        aplicar_y_recomponer(&mut model);
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarSeleccion {
+                lx: 8.0,
+                ly: 8.0,
+                rw: 16.0,
+                rh: 16.0,
+            },
+            &Handle::for_test(),
+        );
+        // Press dispara: limpia seleccion previa + abre el drag.
+        assert!(model.seleccion.is_none());
+        let drag = model.seleccion_drag.expect("debe haber drag");
+        // Lienzo 4×4 en rect 16×16 → s = 4. Local (8, 8) → image (2, 2).
+        assert_eq!(drag.ancla_ix, 2);
+        assert_eq!(drag.ancla_iy, 2);
+    }
+
+    #[test]
+    fn ajustar_seleccion_acumula_y_construye_rect() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        // Init en (0, 0) local → image (0, 0).
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarSeleccion {
+                lx: 0.0,
+                ly: 0.0,
+                rw: 16.0,
+                rh: 16.0,
+            },
+            &Handle::for_test(),
+        );
+        // Move acumulado a (16, 16) local → image (4, 4) (esquina).
+        model = <Tullpu as App>::update(
+            model,
+            Msg::AjustarSeleccion { dx: 16.0, dy: 16.0 },
+            &Handle::for_test(),
+        );
+        let rect = model.seleccion.expect("rect post-move");
+        // Lienzo 4×4 → rect entero.
+        assert_eq!(
+            rect,
+            RectImagen { x0: 0, y0: 0, x1: 4, y1: 4 }
+        );
+    }
+
+    #[test]
+    fn finalizar_seleccion_limpia_el_drag_y_mantiene_el_rect() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarSeleccion {
+                lx: 0.0,
+                ly: 0.0,
+                rw: 16.0,
+                rh: 16.0,
+            },
+            &Handle::for_test(),
+        );
+        model = <Tullpu as App>::update(
+            model,
+            Msg::AjustarSeleccion { dx: 12.0, dy: 8.0 },
+            &Handle::for_test(),
+        );
+        let rect_pre_end = model.seleccion;
+        model = <Tullpu as App>::update(model, Msg::FinalizarSeleccion, &Handle::for_test());
+        // Drag vacío; rect intacto.
+        assert!(model.seleccion_drag.is_none());
+        assert_eq!(model.seleccion, rect_pre_end);
+    }
+
+    #[test]
+    fn limpiar_seleccion_borra_todo() {
+        let mut model = modelo_minimo();
+        model.seleccion = Some(RectImagen {
+            x0: 0,
+            y0: 0,
+            x1: 2,
+            y1: 2,
+        });
+        model.seleccion_drag = Some(SeleccionDrag {
+            ancla_ix: 0,
+            ancla_iy: 0,
+            cur_lx: 0.0,
+            cur_ly: 0.0,
+            rw: 100.0,
+            rh: 100.0,
+        });
+        model = <Tullpu as App>::update(model, Msg::LimpiarSeleccion, &Handle::for_test());
+        assert!(model.seleccion.is_none());
+        assert!(model.seleccion_drag.is_none());
+    }
+
+    #[test]
+    fn hotkey_r_emite_cambio_a_marco() {
+        let m = modelo_minimo();
+        let msg = hotkey_a_msg(&m, &ev_char("r", Modifiers::default()));
+        assert!(matches!(
+            msg,
+            Some(Msg::CambiarHerramienta(Herramienta::Marco))
+        ));
+    }
+
+    #[test]
+    fn hotkey_esc_limpia_si_hay_seleccion_o_drag() {
+        let mut m = modelo_minimo();
+        // Sin selección → Esc no emite nada (deja que otros modales lo
+        // consuman si corresponde).
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Escape, Modifiers::default()));
+        assert!(msg.is_none());
+        // Con selección → Esc emite LimpiarSeleccion.
+        m.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 1, y1: 1 });
+        let msg = hotkey_a_msg(&m, &ev_named(NamedKey::Escape, Modifiers::default()));
+        assert!(matches!(msg, Some(Msg::LimpiarSeleccion)));
     }
 
     #[test]
