@@ -103,6 +103,16 @@ pub(crate) struct Model {
     /// Dureza del pincel/borrador en `[0.0, 1.0]` (1.0 = borde duro).
     /// Ajustable con `{`/`}` (Shift+`[`/`]`) o los botones del panel.
     pub(crate) dureza_pincel: f32,
+    /// Estado vivo de la tecla Shift (lo sincroniza `on_key` desde los
+    /// eventos de la tecla, porque el handler de click no recibe
+    /// modifiers). Habilita el trazo en línea recta: Shift+click pinta
+    /// desde [`Model::ultimo_pincel`] hasta el punto nuevo.
+    pub(crate) shift_held: bool,
+    /// Último punto pintado por el pincel en coords-imagen, persistente
+    /// **entre trazos** (a diferencia de `pincel_drag.last_i*`, que vive
+    /// sólo durante un drag). Ancla del trazo recto con Shift. `None`
+    /// hasta el primer trazo.
+    pub(crate) ultimo_pincel: Option<(i32, i32)>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -432,6 +442,9 @@ pub(crate) enum Msg {
     /// Ajusta la dureza del pincel/borrador en `delta`, clampeada a
     /// `[0.0, 1.0]`. No toca el lienzo ni el historial.
     BumpDurezaPincel(f32),
+    /// Sincroniza el estado vivo de la tecla Shift (emitido por `on_key`
+    /// al presionar/soltar Shift). Sólo actualiza `model.shift_held`.
+    SetShift(bool),
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

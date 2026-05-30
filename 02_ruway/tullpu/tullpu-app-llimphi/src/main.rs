@@ -53,6 +53,8 @@
 //! - `e`              — herramienta borrador (goma): drag borra (alfa=0)
 //! - `[` / `]`        — con pincel/borrador, ∓1 al radio; si no, opacidad
 //! - `{` / `}`        — con pincel/borrador, ∓10% a la dureza (borde)
+//! - `Shift`+click (pincel/borrador) — traza una línea recta desde el
+//!   último punto pintado hasta el click
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
 //!
@@ -674,10 +676,22 @@ impl App for Tullpu {
                     let borrar = model.herramienta == Herramienta::Borrador;
                     let radio = model.radio_pincel;
                     let dureza = model.dureza_pincel;
-                    if pincel_punto_en_capa(&mut model, cx, cy, radio, borrar, dureza) {
+                    // Shift + click con un punto previo: trazo en LÍNEA
+                    // RECTA desde el último punto hasta acá (Photoshop).
+                    // Si no, una pincelada puntual.
+                    let cambio = match (model.shift_held, model.ultimo_pincel) {
+                        (true, Some((px, py))) => pincel_segmento_en_capa(
+                            &mut model, px, py, cx, cy, radio, borrar, dureza,
+                        ),
+                        _ => pincel_punto_en_capa(
+                            &mut model, cx, cy, radio, borrar, dureza,
+                        ),
+                    };
+                    if cambio {
                         let etiqueta = model.seleccionada.map(|i| (i, "pincel"));
                         pushear_snapshot(&mut model, etiqueta);
                     }
+                    model.ultimo_pincel = Some((cx, cy));
                 }
             }
             Msg::ContinuarTrazo { dx, dy } => {
@@ -722,6 +736,9 @@ impl App for Tullpu {
                             p.last_ix = nx;
                             p.last_iy = ny;
                         }
+                        // Persistir el último punto para el ancla del
+                        // próximo trazo recto con Shift.
+                        model.ultimo_pincel = Some((nx, ny));
                     }
                 }
             }
@@ -743,6 +760,9 @@ impl App for Tullpu {
                     "dureza pincel {}%",
                     (model.dureza_pincel * 100.0).round() as i32
                 );
+            }
+            Msg::SetShift(v) => {
+                model.shift_held = v;
             }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app
@@ -856,6 +876,13 @@ impl App for Tullpu {
                 }
             }
             return Some(Msg::TeclaRenombrar(event.clone()));
+        }
+        // Sincronizar el estado vivo de Shift: el handler de click no
+        // recibe modifiers, así que lo trackeamos desde la tecla para
+        // habilitar el trazo recto (Shift+click). Las dos Shift (izq/der)
+        // llegan como NamedKey::Shift.
+        if matches!(event.key, Key::Named(NamedKey::Shift)) {
+            return Some(Msg::SetShift(event.state == KeyState::Pressed));
         }
         // Ctrl+P abre el fuzzy picker (mismo atajo que nada y VS Code).
         if picker::open_shortcut(event) {

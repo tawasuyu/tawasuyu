@@ -68,6 +68,8 @@
             pincel_drag: None,
             radio_pincel: RADIO_PINCEL,
             dureza_pincel: DUREZA_PINCEL,
+            shift_held: false,
+            ultimo_pincel: None,
             portapapeles: None,
         }
     }
@@ -4343,4 +4345,124 @@
         assert!(alfa(4, 4) <= 5, "centro {}", alfa(4, 4));
         // Borde: cobertura ~0 → alfa casi intacto.
         assert!(alfa(8, 4) >= 245, "borde {}", alfa(8, 4));
+    }
+
+    // ---- Fase 48: trazo en línea recta con Shift ------------------------
+
+    #[test]
+    fn on_key_shift_sincroniza_shift_held() {
+        let m = modelo_minimo();
+        // Press de Shift → SetShift(true).
+        let ev = KeyEvent {
+            key: Key::Named(NamedKey::Shift),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: Modifiers::default(),
+            repeat: false,
+        };
+        assert!(matches!(
+            <Tullpu as App>::on_key(&m, &ev),
+            Some(Msg::SetShift(true))
+        ));
+        // Release → SetShift(false).
+        let ev2 = KeyEvent {
+            key: Key::Named(NamedKey::Shift),
+            state: KeyState::Released,
+            text: None,
+            modifiers: Modifiers::default(),
+            repeat: false,
+        };
+        assert!(matches!(
+            <Tullpu as App>::on_key(&m, &ev2),
+            Some(Msg::SetShift(false))
+        ));
+    }
+
+    #[test]
+    fn set_shift_actualiza_el_estado_vivo() {
+        let mut model = modelo_minimo();
+        assert!(!model.shift_held);
+        model = <Tullpu as App>::update(model, Msg::SetShift(true), &Handle::for_test());
+        assert!(model.shift_held);
+        model = <Tullpu as App>::update(model, Msg::SetShift(false), &Handle::for_test());
+        assert!(!model.shift_held);
+    }
+
+    #[test]
+    fn shift_click_traza_linea_recta_desde_el_ultimo_punto() {
+        // Lienzo 8×8 transparente, pincel radio 0 (1 px), negro opaco.
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 8 * 8 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let mut lienzo = Lienzo::nuevo(8, 8);
+        lienzo.apilar(cap);
+        model.lienzo = lienzo;
+        model.seleccionada = Some(id);
+        model.herramienta = Herramienta::Pincel;
+        model.radio_pincel = 0;
+        model.color_picked = Some([0, 0, 0, 255]);
+        aplicar_y_recomponer(&mut model);
+        // Primer click en (1,1) (sin shift) → punto, fija ultimo_pincel.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarTrazo { lx: 1.0, ly: 1.0, rw: 8.0, rh: 8.0 },
+            &Handle::for_test(),
+        );
+        model = <Tullpu as App>::update(model, Msg::FinalizarTrazo, &Handle::for_test());
+        assert_eq!(model.ultimo_pincel, Some((1, 1)));
+        // Shift + click en (6,1): debe pintar TODA la fila y=1 de x=1..=6.
+        model = <Tullpu as App>::update(model, Msg::SetShift(true), &Handle::for_test());
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarTrazo { lx: 6.0, ly: 1.0, rw: 8.0, rh: 8.0 },
+            &Handle::for_test(),
+        );
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let alfa = |x: usize, y: usize| bp[(y * 8 + x) * 4 + 3];
+        for x in 1..=6usize {
+            assert_eq!(alfa(x, 1), 255, "hueco en ({},1)", x);
+        }
+        // Fuera de la línea, transparente.
+        assert_eq!(alfa(3, 3), 0);
+    }
+
+    #[test]
+    fn sin_shift_el_click_no_traza_linea() {
+        // Mismo setup pero sin shift: el segundo click es un punto suelto,
+        // no une con el anterior.
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 8 * 8 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let mut lienzo = Lienzo::nuevo(8, 8);
+        lienzo.apilar(cap);
+        model.lienzo = lienzo;
+        model.seleccionada = Some(id);
+        model.herramienta = Herramienta::Pincel;
+        model.radio_pincel = 0;
+        model.color_picked = Some([0, 0, 0, 255]);
+        aplicar_y_recomponer(&mut model);
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarTrazo { lx: 1.0, ly: 1.0, rw: 8.0, rh: 8.0 },
+            &Handle::for_test(),
+        );
+        model = <Tullpu as App>::update(model, Msg::FinalizarTrazo, &Handle::for_test());
+        // shift_held sigue false; click en (6,1).
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarTrazo { lx: 6.0, ly: 1.0, rw: 8.0, rh: 8.0 },
+            &Handle::for_test(),
+        );
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let alfa = |x: usize, y: usize| bp[(y * 8 + x) * 4 + 3];
+        // Los extremos pintados, el medio NO (no hubo línea).
+        assert_eq!(alfa(1, 1), 255);
+        assert_eq!(alfa(6, 1), 255);
+        assert_eq!(alfa(3, 1), 0);
     }
