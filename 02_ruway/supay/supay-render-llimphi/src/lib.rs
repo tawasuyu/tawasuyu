@@ -916,10 +916,11 @@ const ZERO_BOOST: BoostRgb = [0.0, 0.0, 0.0];
 
 /// Tabla de colores característicos por nombre de sprite Doom (4-char).
 /// El nombre viene del WAD (resuelto por `WadAtlas::sprite_name`).
-/// Cubre los mobjs `FF_FULLBRIGHT` notables del shareware y Doom 2:
-/// proyectiles, splashes, fogs, antorchas decorativas y lamps.
+/// Cubre los mobjs `FF_FULLBRIGHT` notables del shareware (Doom 1) y los
+/// agregados de Doom 2 / Final Doom (mancubus, revenant, archvile, lost
+/// soul, keys, soul sphere, etc.).
 const FB_SPRITE_TINTS: &[(&str, (u8, u8, u8))] = &[
-    // --- Proyectiles ---
+    // --- Proyectiles base (Doom 1) ---
     ("BAL1", (255, 130, 60)),  // imp fireball — rojo-naranja
     ("BAL2", (255, 100, 80)),  // caco fireball — rojo
     ("BAL7", (140, 255, 140)), // baron fireball — verde
@@ -932,10 +933,28 @@ const FB_SPRITE_TINTS: &[(&str, (u8, u8, u8))] = &[
     ("MISL", (255, 180, 100)), // rocket — naranja cálido
     ("PUFF", (255, 220, 160)), // bullet puff — amarillo cálido
     ("BEXP", (255, 180, 100)), // barrel/rocket explosion — naranja
+    // --- Proyectiles Doom 2 ---
+    ("MANF", (255, 160, 90)),  // mancubus fireball — naranja
+    ("FATB", (255, 220, 160)), // revenant tracer — pálido amarillo (la cabeza brilla)
+    ("SKEL", (255, 200, 150)), // revenant attack frames — pálido cálido
+    ("VILE", (255, 130, 70)),  // archvile attack frames — rojo flame
+    ("FIRE", (255, 100, 50)),  // archvile fire pillar — rojo-naranja saturado
+    // --- Mobjs full-bright en vuelo (Doom 1) ---
+    ("SKUL", (180, 220, 255)), // lost soul — blue-white flame
     // --- Fogs / fx ---
     ("TFOG", (140, 200, 255)), // teleport fog — azul
     ("IFOG", (255, 240, 140)), // item respawn — amarillo-blanco
-    // --- Antorchas / decoración (FF_FULLBRIGHT constante) ---
+    // --- Pickups que brillan (Doom 1) ---
+    ("SOUL", (130, 200, 255)), // soul sphere — azul-cyan
+    ("MEGA", (130, 220, 200)), // mega armor — verde-cyan
+    // --- Llaves coloreadas (Doom 1 — todas con FF_FULLBRIGHT) ---
+    ("BKEY", (110, 160, 255)), // blue keycard
+    ("YKEY", (255, 240, 130)), // yellow keycard
+    ("RKEY", (255, 130, 90)),  // red keycard
+    ("BSKU", (110, 160, 255)), // blue skullkey
+    ("YSKU", (255, 240, 130)), // yellow skullkey
+    ("RSKU", (255, 130, 90)),  // red skullkey
+    // --- Antorchas / decoración (FF_FULLBRIGHT constante, Doom 1) ---
     ("TBLU", (110, 160, 255)), // blue torch (tall)
     ("TGRN", (140, 255, 160)), // green torch (tall)
     ("TRED", (255, 140, 90)),  // red torch (tall)
@@ -5474,6 +5493,79 @@ mod tests {
         // normaliza.
         assert_eq!(sprite_tint_for_name("bal1"), (255, 130, 60));
         assert_eq!(sprite_tint_for_name("Plss"), (130, 180, 255));
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.36: tintes Doom 2 (mancubus, revenant, archvile, etc.)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn sprite_tint_for_name_resolves_doom2_projectiles() {
+        // MANF (mancubus fireball), FATB (revenant tracer), SKEL
+        // (revenant attack) — todos con tinte cálido distinto de
+        // MUZZLE_TINT_RGB (el fallback amarillo del 3.26).
+        let manf = sprite_tint_for_name("MANF");
+        assert_eq!(manf, (255, 160, 90), "mancubus fireball naranja");
+        let fatb = sprite_tint_for_name("FATB");
+        assert_eq!(fatb, (255, 220, 160), "revenant tracer pálido cálido");
+        let skel = sprite_tint_for_name("SKEL");
+        assert_eq!(skel, (255, 200, 150), "revenant attack pálido cálido");
+        // Todos los Doom 2 tints deben diferir del fallback amarillo.
+        assert_ne!(manf, MUZZLE_TINT_RGB);
+        assert_ne!(fatb, MUZZLE_TINT_RGB);
+        assert_ne!(skel, MUZZLE_TINT_RGB);
+    }
+
+    #[test]
+    fn sprite_tint_for_name_resolves_archvile_flame() {
+        // Archvile attack frames (VILE) + fire pillar (FIRE) — ambos
+        // rojo flame, FIRE más saturado.
+        let vile = sprite_tint_for_name("VILE");
+        assert_eq!(vile, (255, 130, 70), "archvile attack rojo flame");
+        let fire = sprite_tint_for_name("FIRE");
+        assert_eq!(fire, (255, 100, 50), "archvile fire pillar rojo saturado");
+        // FIRE más rojo (G más bajo) que VILE — el pillar es más intenso.
+        assert!(fire.1 < vile.1, "FIRE G < VILE G");
+    }
+
+    #[test]
+    fn sprite_tint_for_name_resolves_lost_soul_and_pickups() {
+        // Lost soul (SKUL) = blue-white flame; soul sphere (SOUL) y
+        // mega armor (MEGA) = azul/cyan glow.
+        let skul = sprite_tint_for_name("SKUL");
+        assert_eq!(skul, (180, 220, 255), "lost soul blue-white");
+        let soul = sprite_tint_for_name("SOUL");
+        assert_eq!(soul, (130, 200, 255), "soul sphere cyan-blue");
+        let mega = sprite_tint_for_name("MEGA");
+        assert_eq!(mega, (130, 220, 200), "mega armor verde-cyan");
+        // Los tres tienen B > R (azules), distintos del fallback amarillo.
+        assert!(skul.2 > skul.0);
+        assert!(soul.2 > soul.0);
+        assert!(mega.2 > mega.0);
+    }
+
+    #[test]
+    fn sprite_tint_for_name_resolves_colored_keys() {
+        // Keycards y skullkeys — colores que matchean el HUD del juego.
+        assert_eq!(sprite_tint_for_name("BKEY"), (110, 160, 255), "blue keycard");
+        assert_eq!(sprite_tint_for_name("YKEY"), (255, 240, 130), "yellow keycard");
+        assert_eq!(sprite_tint_for_name("RKEY"), (255, 130, 90),  "red keycard");
+        assert_eq!(sprite_tint_for_name("BSKU"), (110, 160, 255), "blue skullkey");
+        assert_eq!(sprite_tint_for_name("YSKU"), (255, 240, 130), "yellow skullkey");
+        assert_eq!(sprite_tint_for_name("RSKU"), (255, 130, 90),  "red skullkey");
+        // Mismas keys card y skull deben dar el mismo color.
+        assert_eq!(sprite_tint_for_name("BKEY"), sprite_tint_for_name("BSKU"));
+    }
+
+    #[test]
+    fn sprite_tint_for_name_doom2_lookups_case_insensitive() {
+        // Las entradas nuevas también respetan el case-insensitive del 3.27.
+        assert_eq!(sprite_tint_for_name("manf"), (255, 160, 90));
+        assert_eq!(sprite_tint_for_name("Skul"), (180, 220, 255));
+        assert_eq!(sprite_tint_for_name("vile"), (255, 130, 70));
+        // El 4-char match también funciona con sufijos (e.g. "MANFA1" ⇒ MANF).
+        assert_eq!(sprite_tint_for_name("MANFA1"), (255, 160, 90));
+        assert_eq!(sprite_tint_for_name("SKULA0"), (180, 220, 255));
     }
 
     #[test]
