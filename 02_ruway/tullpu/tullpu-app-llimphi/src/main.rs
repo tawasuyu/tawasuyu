@@ -42,6 +42,9 @@
 //! - `Ctrl+D`         — duplicar capa
 //! - `Ctrl+J`         — con selección activa, duplica el rect a una
 //!   capa raster nueva (layer via copy)
+//! - `Ctrl+C` / `Ctrl+X` — copiar / cortar el rect de la selección al
+//!   portapapeles interno
+//! - `Ctrl+V`         — pegar el portapapeles como capa nueva
 //! - `F2`             — renombrar capa in-situ (Enter confirma · Esc cancela)
 //! - `V`              — toggle visibilidad
 //! - `B` / `Shift+B`  — ciclar blend forward / reverse
@@ -161,6 +164,10 @@ struct Model {
     /// click. `None` fuera de un drag. Se commitea a `seleccion` en
     /// el `End` y se limpia.
     seleccion_drag: Option<SeleccionDrag>,
+    /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
+    /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
+    /// capa nueva. Vive fuera del historial — un undo no lo limpia.
+    portapapeles: Option<PortaPixeles>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +202,23 @@ struct RectImagen {
     y0: u32,
     x1: u32,
     y1: u32,
+}
+
+/// Portapapeles interno de píxeles. Guarda un buffer Rgba8 **recortado
+/// al rect** (tamaño `w × h`, NO el del lienzo) direccionado por
+/// contenido en el almacén, más el origen `(ox, oy)` desde donde se
+/// copió. Recortar (en vez de guardar un canvas entero como
+/// `extraer_rect_a_buffer`) hace que el clip sobreviva a un crop o un
+/// resize posterior del lienzo: al pegar se compone sobre el lienzo
+/// vigente en `(ox, oy)` clampeado para que entre. No es parte del DAG
+/// del documento — un undo no lo toca.
+#[derive(Debug, Clone, Copy)]
+struct PortaPixeles {
+    w: u32,
+    h: u32,
+    datos: Hash,
+    ox: u32,
+    oy: u32,
 }
 
 /// Estado intermedio mientras el usuario arrastra una selección. La
@@ -377,6 +401,20 @@ enum Msg {
     /// madre no se toca, así que copia desde cualquier capa (raster o
     /// derivada). Mantiene la selección.
     DuplicarSeleccionACapa,
+    /// Copia los píxeles del rect de `model.seleccion` al portapapeles
+    /// interno (`model.portapapeles`), recortados al rect. No destructivo
+    /// — no toca la capa ni el historial. No-op si no hay selección/capa
+    /// o el rect era todo transparente.
+    CopiarSeleccion,
+    /// Como `CopiarSeleccion` pero además limpia (alfa=0) el rect en la
+    /// capa raster seleccionada. Si la capa es derivada, copia pero no
+    /// borra. Snapshotea sólo si efectivamente borró.
+    CortarSeleccion,
+    /// Compone el clip de `model.portapapeles` sobre una capa raster
+    /// nueva del tamaño del lienzo vigente, ubicada en su origen original
+    /// clampeado para que entre. Inserta encima de la seleccionada y la
+    /// selecciona. No-op si el portapapeles está vacío.
+    PegarPortapapeles,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ
@@ -620,6 +658,7 @@ fn inicializar() -> Model {
         histograma: None,
         seleccion: None,
         seleccion_drag: None,
+        portapapeles: None,
     };
     sincronizar_thumbs(&mut model);
     // Cómputo inicial del histograma desde el composite recién armado.
@@ -1666,6 +1705,39 @@ fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg> {
         &pal,
         Msg::DuplicarSeleccionACapa,
     )));
+    // Portapapeles interno: copiar / cortar (exigen selección) y pegar
+    // (exige clip). Las etiquetas reflejan disponibilidad.
+    let etiqueta_copiar = match model.seleccion {
+        Some(r) => {
+            format!("⧉ copiar ({}×{}) · Ctrl+C", r.x1 - r.x0, r.y1 - r.y0)
+        }
+        None => "⧉ copiar (—) · Ctrl+C".to_string(),
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_copiar,
+        &pal,
+        Msg::CopiarSeleccion,
+    )));
+    let etiqueta_cortar = match model.seleccion {
+        Some(r) => {
+            format!("✂ cortar ({}×{}) · Ctrl+X", r.x1 - r.x0, r.y1 - r.y0)
+        }
+        None => "✂ cortar (—) · Ctrl+X".to_string(),
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_cortar,
+        &pal,
+        Msg::CortarSeleccion,
+    )));
+    let etiqueta_pegar = match model.portapapeles {
+        Some(p) => format!("📋 pegar ({}×{}) · Ctrl+V", p.w, p.h),
+        None => "📋 pegar (vacío) · Ctrl+V".to_string(),
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_pegar,
+        &pal,
+        Msg::PegarPortapapeles,
+    )));
 
     // "salida": no requiere selección, siempre activa.
     hijos.push(subtitulo("salida"));
@@ -2446,6 +2518,20 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::CopiarSeleccion => {
+                // No destructivo: nunca snapshotea.
+                copiar_seleccion(&mut model);
+            }
+            Msg::CortarSeleccion => {
+                if cortar_seleccion(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
+            Msg::PegarPortapapeles => {
+                if pegar_portapapeles(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
                     let bytes = img.data.data();
@@ -2765,6 +2851,32 @@ fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
                 && model.seleccion.is_some() =>
         {
             Some(Msg::DuplicarSeleccionACapa)
+        }
+        // Portapapeles interno. Copiar/cortar exigen selección;
+        // pegar exige clip (no selección — crea una capa nueva).
+        Key::Character(s)
+            if m.ctrl
+                && !m.shift
+                && s.eq_ignore_ascii_case("c")
+                && model.seleccion.is_some() =>
+        {
+            Some(Msg::CopiarSeleccion)
+        }
+        Key::Character(s)
+            if m.ctrl
+                && !m.shift
+                && s.eq_ignore_ascii_case("x")
+                && model.seleccion.is_some() =>
+        {
+            Some(Msg::CortarSeleccion)
+        }
+        Key::Character(s)
+            if m.ctrl
+                && !m.shift
+                && s.eq_ignore_ascii_case("v")
+                && model.portapapeles.is_some() =>
+        {
+            Some(Msg::PegarPortapapeles)
         }
         // Ctrl+E = merge down (combinar con la capa de abajo). Sin
         // selección no aplica. Photoshop standard.
@@ -3435,6 +3547,181 @@ fn duplicar_seleccion_a_capa(model: &mut Model) -> bool {
     true
 }
 
+/// Recorta el rect half-open `(x0, y0, x1, y1)` de un buffer Rgba8
+/// `w × *` a un buffer **tight** de `(x1-x0) × (y1-y0)` (NO del tamaño
+/// del origen). Devuelve también si quedó algún píxel con alfa > 0
+/// (`false` ⇒ nada visible). Pura. Pre: rect dentro de bounds.
+fn recortar_subbuffer(
+    src: &[u8],
+    w: u32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+) -> (Vec<u8>, bool) {
+    let sw = w as usize;
+    let rw = (x1 - x0) as usize;
+    let rh = (y1 - y0) as usize;
+    let mut out = Vec::with_capacity(rw * rh * 4);
+    let mut hubo = false;
+    for y in y0..y1 {
+        let row = y as usize * sw;
+        for x in x0..x1 {
+            let i = (row + x as usize) * 4;
+            out.extend_from_slice(&src[i..i + 4]);
+            if src[i + 3] != 0 {
+                hubo = true;
+            }
+        }
+    }
+    (out, hubo)
+}
+
+/// Compone un `clip` tight de `clip_w × clip_h` sobre un lienzo fresco
+/// transparente de `canvas_w × canvas_h`, con la esquina superior
+/// izquierda en `(dx, dy)`. Los píxeles del clip que caigan fuera del
+/// lienzo se descartan (blit con recorte por-píxel). Reemplazo directo,
+/// no alfa-compositing — el clip pisa lo que haya debajo (el lienzo
+/// destino arranca transparente, así que da igual). Pura.
+fn componer_clip_en_canvas(
+    clip: &[u8],
+    clip_w: u32,
+    clip_h: u32,
+    canvas_w: u32,
+    canvas_h: u32,
+    dx: u32,
+    dy: u32,
+) -> Vec<u8> {
+    let cw = canvas_w as usize;
+    let mut out = vec![0u8; cw * canvas_h as usize * 4];
+    let clip_w = clip_w as usize;
+    for cy in 0..clip_h as usize {
+        let ty = dy as usize + cy;
+        if ty >= canvas_h as usize {
+            break;
+        }
+        for cx in 0..clip_w {
+            let tx = dx as usize + cx;
+            if tx >= cw {
+                continue;
+            }
+            let si = (cy * clip_w + cx) * 4;
+            let di = (ty * cw + tx) * 4;
+            out[di..di + 4].copy_from_slice(&clip[si..si + 4]);
+        }
+    }
+    out
+}
+
+/// Copia los píxeles del rect de `model.seleccion` de la capa
+/// seleccionada al portapapeles interno, recortados al rect. No
+/// destructivo (lee `capa.contenido` de cualquier capa). No-op si: no
+/// hay selección/capa, área cero tras clampear, o el rect era todo
+/// transparente. No snapshotea — el portapapeles vive fuera del DAG.
+fn copiar_seleccion(model: &mut Model) -> bool {
+    let Some(rect) = model.seleccion else {
+        model.estado = "no hay selección — `r` y arrastrar".into();
+        return false;
+    };
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let x0 = rect.x0.min(w);
+    let y0 = rect.y0.min(h);
+    let x1 = rect.x1.min(w);
+    let y1 = rect.y1.min(h);
+    if x1 <= x0 || y1 <= y0 {
+        model.estado = "selección fuera del lienzo".into();
+        return false;
+    }
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    let Some(src) = model.almacen.obtener(capa.contenido) else {
+        return false;
+    };
+    let src = src.to_vec();
+    let (sub, hubo) = recortar_subbuffer(&src, w, x0, y0, x1, y1);
+    if !hubo {
+        model.estado = "selección transparente, nada que copiar".into();
+        return false;
+    }
+    let datos = model.almacen.insertar(sub);
+    model.portapapeles = Some(PortaPixeles {
+        w: x1 - x0,
+        h: y1 - y0,
+        datos,
+        ox: x0,
+        oy: y0,
+    });
+    model.estado =
+        format!("copiada selección {}×{} al portapapeles", x1 - x0, y1 - y0);
+    true
+}
+
+/// Copia la selección al portapapeles y limpia el rect en la capa
+/// raster seleccionada (cut). Devuelve `true` (⇒ snapshot) sólo si
+/// efectivamente borró píxeles: si la capa es derivada o el rect ya
+/// era transparente, copia pero no borra y devuelve `false`.
+fn cortar_seleccion(model: &mut Model) -> bool {
+    if !copiar_seleccion(model) {
+        return false; // estado ya seteado por copiar
+    }
+    let borro = limpiar_seleccion_en_capa(model);
+    if borro {
+        model.estado = "cortada selección al portapapeles".into();
+    } else {
+        // Copió pero no pudo borrar (derivada / ya transparente). El
+        // estado de `limpiar_seleccion_en_capa` explica por qué.
+        model.estado =
+            format!("copiada (no se borró: {})", model.estado);
+    }
+    borro
+}
+
+/// Compone el clip de `model.portapapeles` sobre una capa raster nueva
+/// del tamaño del lienzo vigente, ubicada en su origen `(ox, oy)`
+/// clampeado para que el clip entre entero si cabe (tras un crop el
+/// origen puede haber quedado fuera). Inserta encima de la seleccionada
+/// y la selecciona. No-op si el portapapeles está vacío. La selección
+/// se mantiene.
+fn pegar_portapapeles(model: &mut Model) -> bool {
+    let Some(clip) = model.portapapeles else {
+        model.estado = "portapapeles vacío — Ctrl+C primero".into();
+        return false;
+    };
+    let cw = model.lienzo.width;
+    let ch = model.lienzo.height;
+    let Some(datos) = model.almacen.obtener(clip.datos) else {
+        return false;
+    };
+    let datos = datos.to_vec();
+    // Clampea el origen: si el clip cabe en el eje, lo empuja para que
+    // entre entero; si es más grande que el lienzo, lo ancla en 0.
+    let dx = clip.ox.min(cw.saturating_sub(clip.w));
+    let dy = clip.oy.min(ch.saturating_sub(clip.h));
+    let buffer =
+        componer_clip_en_canvas(&datos, clip.w, clip.h, cw, ch, dx, dy);
+    let hash = model.almacen.insertar(buffer);
+    let nombre = format!("pegado ({}×{})", clip.w, clip.h);
+    let nueva = Capa::raster(nombre.clone(), hash);
+    let nuevo_id = nueva.id;
+    match model
+        .seleccionada
+        .and_then(|id| model.lienzo.capas.iter().position(|c| c.id == id))
+    {
+        Some(idx) => model.lienzo.capas.insert(idx + 1, nueva),
+        None => model.lienzo.apilar(nueva),
+    }
+    model.seleccionada = Some(nuevo_id);
+    aplicar_y_recomponer(model);
+    model.estado = format!("pegado '{}' en ({}, {})", nombre, dx, dy);
+    true
+}
+
 /// Aplica una transformación de buffer al rect de `model.seleccion`
 /// dentro de la capa raster seleccionada, compartiendo toda la
 /// validación y el cableado entre limpiar (Fase 37) y rellenar
@@ -3757,6 +4044,7 @@ mod tests {
             histograma: None,
             seleccion: None,
             seleccion_drag: None,
+            portapapeles: None,
         }
     }
 
@@ -6711,6 +6999,335 @@ mod tests {
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), 1);
         assert_eq!(model.lienzo.capas[0].id, id);
+    }
+
+    // ---- Fase 40: portapapeles interno (copiar/cortar/pegar) ------------
+
+    #[test]
+    fn recortar_subbuffer_tight_y_reporta_contenido() {
+        // Buffer 4×2; recortamos el rect (1,0,3,2) → tight 2×2.
+        let mut buf = Vec::with_capacity(4 * 2 * 4);
+        for y in 0..2u8 {
+            for x in 0..4u8 {
+                buf.extend_from_slice(&[x * 10, y * 10, 50, 255]);
+            }
+        }
+        let (sub, hubo) = recortar_subbuffer(&buf, 4, 1, 0, 3, 2);
+        assert!(hubo);
+        // 2×2×4 = 16 bytes, NO el tamaño del origen.
+        assert_eq!(sub.len(), 2 * 2 * 4);
+        // (1,0),(2,0),(1,1),(2,1) en orden row-major.
+        assert_eq!(sub[0..4], [10, 0, 50, 255]);
+        assert_eq!(sub[4..8], [20, 0, 50, 255]);
+        assert_eq!(sub[8..12], [10, 10, 50, 255]);
+        assert_eq!(sub[12..16], [20, 10, 50, 255]);
+    }
+
+    #[test]
+    fn recortar_subbuffer_transparente_reporta_sin_contenido() {
+        let buf = vec![0u8; 4 * 4 * 4];
+        let (sub, hubo) = recortar_subbuffer(&buf, 4, 0, 0, 2, 2);
+        assert!(!hubo);
+        assert_eq!(sub, vec![0u8; 2 * 2 * 4]);
+    }
+
+    #[test]
+    fn componer_clip_en_canvas_ubica_en_offset() {
+        // Clip 2×2 sólido rojo; lienzo 4×4; offset (1,1).
+        let rojo = [255, 0, 0, 255];
+        let clip: Vec<u8> = std::iter::repeat(rojo).take(4).flatten().collect();
+        let out = componer_clip_en_canvas(&clip, 2, 2, 4, 4, 1, 1);
+        assert_eq!(out.len(), 4 * 4 * 4);
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [out[i], out[i + 1], out[i + 2], out[i + 3]]
+        };
+        // El clip cae en (1,1)..(3,3).
+        assert_eq!(pix(1, 1), rojo);
+        assert_eq!(pix(2, 2), rojo);
+        // Afuera transparente.
+        assert_eq!(pix(0, 0), [0, 0, 0, 0]);
+        assert_eq!(pix(3, 3), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn componer_clip_recorta_lo_que_sobresale() {
+        // Clip 3×3 con offset (2,2) sobre lienzo 4×4 → sólo entra el
+        // cuadrante (2,2)..(4,4) = 2×2.
+        let v = [9, 9, 9, 255];
+        let clip: Vec<u8> = std::iter::repeat(v).take(9).flatten().collect();
+        let out = componer_clip_en_canvas(&clip, 3, 3, 4, 4, 2, 2);
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [out[i], out[i + 1], out[i + 2], out[i + 3]]
+        };
+        assert_eq!(pix(2, 2), v);
+        assert_eq!(pix(3, 3), v);
+        // (1,1) fuera del clip.
+        assert_eq!(pix(1, 1), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn copiar_seleccion_llena_portapapeles_sin_snapshot() {
+        let mut model = modelo_minimo();
+        let mut buf = Vec::with_capacity(4 * 4 * 4);
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                buf.extend_from_slice(&[x * 20, y * 20, 100, 255]);
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("madre", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
+        let hist_antes = model.historial.len();
+        let n_capas = model.lienzo.capas.len();
+        let ok = copiar_seleccion(&mut model);
+        assert!(ok);
+        // No tocó historial ni capas.
+        assert_eq!(model.historial.len(), hist_antes);
+        assert_eq!(model.lienzo.capas.len(), n_capas);
+        let clip = model.portapapeles.unwrap();
+        assert_eq!((clip.w, clip.h), (2, 2));
+        assert_eq!((clip.ox, clip.oy), (1, 1));
+        // El clip tight tiene el píxel (1,1) del origen.
+        let datos = model.almacen.obtener(clip.datos).unwrap();
+        assert_eq!(&datos[0..4], &[20, 20, 100, 255]);
+    }
+
+    #[test]
+    fn copiar_seleccion_transparente_no_llena_portapapeles() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("vacia", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let ok = copiar_seleccion(&mut model);
+        assert!(!ok);
+        assert!(model.portapapeles.is_none());
+        assert!(model.estado.contains("nada que copiar"));
+    }
+
+    #[test]
+    fn cortar_seleccion_copia_y_borra_en_raster() {
+        let mut model = modelo_minimo();
+        let buf = vec![200u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let borro = cortar_seleccion(&mut model);
+        assert!(borro);
+        // Portapapeles lleno.
+        assert!(model.portapapeles.is_some());
+        // El rect quedó transparente en la capa.
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        assert_eq!(&bp[0..4], &[0, 0, 0, 0]);
+        // Fuera del rect sigue opaco.
+        let i = (2 * 4 + 2) * 4;
+        assert_eq!(&bp[i..i + 4], &[200, 200, 200, 200]);
+    }
+
+    #[test]
+    fn cortar_sobre_derivada_copia_pero_no_borra() {
+        let mut model = modelo_minimo();
+        let buf = vec![200u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let mut cap = Capa::raster("der", h);
+        cap.origen = OrigenCapa::Derivada {
+            madre: Uuid::new_v4(),
+            op: TransformacionPixel::Local(OpLocal::Invertir),
+            estado: Frescura::Fresca,
+        };
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        let borro = cortar_seleccion(&mut model);
+        assert!(!borro); // no snapshot
+        assert!(model.portapapeles.is_some()); // pero sí copió
+        assert!(model.estado.contains("no se borró"));
+        // La capa derivada quedó intacta.
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, h);
+    }
+
+    #[test]
+    fn pegar_vacio_es_no_op() {
+        let mut model = modelo_minimo();
+        aplicar_y_recomponer(&mut model);
+        let n = model.lienzo.capas.len();
+        let ok = pegar_portapapeles(&mut model);
+        assert!(!ok);
+        assert!(model.estado.contains("vacío"));
+        assert_eq!(model.lienzo.capas.len(), n);
+    }
+
+    #[test]
+    fn copiar_y_pegar_crea_capa_con_el_clip_en_su_origen() {
+        let mut model = modelo_minimo();
+        let mut buf = Vec::with_capacity(4 * 4 * 4);
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                buf.extend_from_slice(&[x * 20, y * 20, 100, 255]);
+            }
+        }
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("madre", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
+        assert!(copiar_seleccion(&mut model));
+        let ok = pegar_portapapeles(&mut model);
+        assert!(ok);
+        // Capa nueva encima, seleccionada.
+        assert_eq!(model.lienzo.capas.len(), 2);
+        let nueva_id = model.seleccionada.unwrap();
+        assert_ne!(nueva_id, id);
+        assert_eq!(model.lienzo.capas[1].id, nueva_id);
+        // El clip 2×2 cae de nuevo en (1,1) (origen preservado).
+        let nh = model.lienzo.capa(nueva_id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [bp[i], bp[i + 1], bp[i + 2], bp[i + 3]]
+        };
+        assert_eq!(pix(1, 1), [20, 20, 100, 255]);
+        assert_eq!(pix(2, 2), [40, 40, 100, 255]);
+        assert_eq!(pix(0, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn pegar_clampea_origen_tras_un_crop_que_lo_dejo_fuera() {
+        // Copiamos un clip 2×2 desde origen (4,4) en un lienzo 8×8, luego
+        // simulamos que el lienzo se achicó a 4×4 — el origen (4,4) cae
+        // fuera; pegar debe clampear a (2,2) para que entre.
+        let mut model = modelo_minimo();
+        // Clip directo en el portapapeles (sin pasar por copiar).
+        let clip_buf = vec![123u8; 2 * 2 * 4];
+        let datos = model.almacen.insertar(clip_buf);
+        model.portapapeles = Some(PortaPixeles {
+            w: 2,
+            h: 2,
+            datos,
+            ox: 4,
+            oy: 4,
+        });
+        // Lienzo vigente 4×4.
+        let base = model.almacen.insertar(vec![0u8; 4 * 4 * 4]);
+        let cap = Capa::raster("base", base);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.lienzo.width = 4;
+        model.lienzo.height = 4;
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        let ok = pegar_portapapeles(&mut model);
+        assert!(ok);
+        // Origen clampeado a (4-2, 4-2) = (2,2): el clip ocupa (2,2)..(4,4).
+        let nueva_id = model.seleccionada.unwrap();
+        let nh = model.lienzo.capa(nueva_id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [bp[i], bp[i + 1], bp[i + 2], bp[i + 3]]
+        };
+        assert_eq!(pix(2, 2), [123, 123, 123, 123]);
+        assert_eq!(pix(3, 3), [123, 123, 123, 123]);
+        assert_eq!(pix(0, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn hotkeys_portapapeles_gateados_por_seleccion_y_clip() {
+        let mut m = modelo_minimo();
+        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        // Sin selección: Ctrl+C/X no emiten copy/cut (caen a otra cosa o None).
+        assert!(!matches!(
+            hotkey_a_msg(&m, &ev_char("c", ctrl)),
+            Some(Msg::CopiarSeleccion)
+        ));
+        assert!(!matches!(
+            hotkey_a_msg(&m, &ev_char("x", ctrl)),
+            Some(Msg::CortarSeleccion)
+        ));
+        // Con selección: Ctrl+C → copiar, Ctrl+X → cortar.
+        m.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("c", ctrl)),
+            Some(Msg::CopiarSeleccion)
+        ));
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("x", ctrl)),
+            Some(Msg::CortarSeleccion)
+        ));
+        // Ctrl+V sin clip → no pega.
+        assert!(!matches!(
+            hotkey_a_msg(&m, &ev_char("v", ctrl)),
+            Some(Msg::PegarPortapapeles)
+        ));
+        // Con clip → pega (no requiere selección).
+        m.seleccion = None;
+        m.portapapeles = Some(PortaPixeles {
+            w: 1,
+            h: 1,
+            datos: m.almacen.insertar(vec![1, 2, 3, 4]),
+            ox: 0,
+            oy: 0,
+        });
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("v", ctrl)),
+            Some(Msg::PegarPortapapeles)
+        ));
+    }
+
+    #[test]
+    fn msg_pegar_dispatcha_snapshotea_y_undo_quita_la_capa() {
+        let mut model = modelo_minimo();
+        let buf = vec![200u8; 4 * 4 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        model.lienzo.capas.clear();
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        aplicar_y_recomponer(&mut model);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        model = <Tullpu as App>::update(
+            model,
+            Msg::CopiarSeleccion,
+            &Handle::for_test(),
+        );
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        let hist_antes = model.historial.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::PegarPortapapeles,
+            &Handle::for_test(),
+        );
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.lienzo.capas.len(), 2);
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        assert_eq!(model.lienzo.capas.len(), 1);
     }
 
     #[test]
