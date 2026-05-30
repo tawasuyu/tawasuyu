@@ -67,6 +67,7 @@
             mover_drag: None,
             pincel_drag: None,
             radio_pincel: RADIO_PINCEL,
+            dureza_pincel: DUREZA_PINCEL,
             portapapeles: None,
         }
     }
@@ -3988,7 +3989,7 @@
         // cruz de 5 píxeles (centro + 4 ortogonales), esquinas no.
         let mut buf = vec![0u8; 5 * 5 * 4];
         let c = [255, 0, 0, 255];
-        estampar_disco(&mut buf, 5, 5, 2, 2, 1, c, false, None);
+        estampar_disco(&mut buf, 5, 5, 2, 2, 1, c, false, 1.0, None);
         let pix = |x: usize, y: usize| {
             let i = (y * 5 + x) * 4;
             [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
@@ -4008,7 +4009,7 @@
         let c = [9, 9, 9, 255];
         // Centro en la esquina (0,0), radio 2 → sólo entra el cuadrante
         // dentro del canvas.
-        estampar_disco(&mut buf, 4, 4, 0, 0, 2, c, false, None);
+        estampar_disco(&mut buf, 4, 4, 0, 0, 2, c, false, 1.0, None);
         let pix = |x: usize, y: usize| {
             let i = (y * 4 + x) * 4;
             [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
@@ -4018,7 +4019,7 @@
         assert_eq!(pix(0, 1), c);
         // Con bounds (0,0,1,1) sólo el píxel (0,0) puede pintarse.
         let mut buf2 = vec![0u8; 4 * 4 * 4];
-        estampar_disco(&mut buf2, 4, 4, 0, 0, 2, c, false, Some((0, 0, 1, 1)));
+        estampar_disco(&mut buf2, 4, 4, 0, 0, 2, c, false, 1.0, Some((0, 0, 1, 1)));
         let pix2 = |x: usize, y: usize| {
             let i = (y * 4 + x) * 4;
             [buf2[i], buf2[i + 1], buf2[i + 2], buf2[i + 3]]
@@ -4033,7 +4034,7 @@
         // paso) sobre lienzo 8×5 → toda la fila 2 pintada.
         let mut buf = vec![0u8; 8 * 5 * 4];
         let c = [1, 2, 3, 255];
-        trazar_linea_pincel(&mut buf, 8, 5, 0, 2, 7, 2, 0, c, false, None);
+        trazar_linea_pincel(&mut buf, 8, 5, 0, 2, 7, 2, 0, c, false, 1.0, None);
         for x in 0..8usize {
             let i = (2 * 8 + x) * 4;
             assert_eq!(&buf[i..i + 4], &c, "hueco en x={}", x);
@@ -4056,7 +4057,7 @@
         model.color_picked = Some([255, 0, 0, 255]);
         aplicar_y_recomponer(&mut model);
         // Disco radio 0 en (1,1).
-        let ok = pincel_punto_en_capa(&mut model, 1, 1, 0, false);
+        let ok = pincel_punto_en_capa(&mut model, 1, 1, 0, false, 1.0);
         assert!(ok);
         let nh = model.lienzo.capa(id).unwrap().contenido;
         let bp = model.almacen.obtener(nh).unwrap();
@@ -4070,7 +4071,7 @@
             op: TransformacionPixel::Local(OpLocal::Invertir),
             estado: Frescura::Fresca,
         };
-        assert!(!pincel_punto_en_capa(&mut model, 2, 2, 0, false));
+        assert!(!pincel_punto_en_capa(&mut model, 2, 2, 0, false, 1.0));
         assert!(model.estado.contains("derivada"));
     }
 
@@ -4154,14 +4155,15 @@
     #[test]
     fn estampar_disco_borrar_pone_alfa_cero() {
         let mut buf = vec![255u8; 5 * 5 * 4]; // todo opaco blanco
-        estampar_disco(&mut buf, 5, 5, 2, 2, 1, [0, 0, 0, 0], true, None);
+        estampar_disco(&mut buf, 5, 5, 2, 2, 1, [0, 0, 0, 0], true, 1.0, None);
         let pix = |x: usize, y: usize| {
             let i = (y * 5 + x) * 4;
             [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
         };
-        // Centro borrado.
-        assert_eq!(pix(2, 2), [0, 0, 0, 0]);
-        assert_eq!(pix(1, 2), [0, 0, 0, 0]);
+        // Centro borrado: alfa 0 (la goma sólo baja el alfa, el RGB
+        // queda — es irrelevante bajo transparencia total).
+        assert_eq!(pix(2, 2)[3], 0);
+        assert_eq!(pix(1, 2)[3], 0);
         // Esquina fuera del disco intacta.
         assert_eq!(pix(0, 0), [255, 255, 255, 255]);
     }
@@ -4171,7 +4173,7 @@
         // Disco radio 0 (sólo el centro) con color 50% sobre fondo negro.
         let mut buf = vec![0u8, 0, 0, 255]; // 1 píxel negro opaco
         // Ajustar buffer a 1×1.
-        estampar_disco(&mut buf, 1, 1, 0, 0, 0, [255, 255, 255, 128], false, None);
+        estampar_disco(&mut buf, 1, 1, 0, 0, 0, [255, 255, 255, 128], false, 1.0, None);
         assert_eq!(buf[3], 255);
         assert!((buf[0] as i32 - 128).abs() <= 2);
     }
@@ -4253,7 +4255,92 @@
         let nh = model.lienzo.capa(id).unwrap().contenido;
         let bp = model.almacen.obtener(nh).unwrap();
         let i = (1 * 4 + 1) * 4;
-        assert_eq!(&bp[i..i + 4], &[0, 0, 0, 0]); // borrado
+        assert_eq!(bp[i + 3], 0); // borrado: alfa 0
         // Vecino sin tocar.
         assert_eq!(&bp[0..4], &[255, 255, 255, 255]);
+    }
+
+    // ---- Fase 47: dureza / suavidad del pincel --------------------------
+
+    #[test]
+    fn cobertura_pincel_dura_es_binaria_y_suave_degrada() {
+        // Dureza 1.0: 1.0 dentro del radio, 0 fuera.
+        assert_eq!(cobertura_pincel(0.0, 4.0, 1.0), 1.0);
+        assert_eq!(cobertura_pincel(4.0, 4.0, 1.0), 1.0);
+        assert_eq!(cobertura_pincel(4.1, 4.0, 1.0), 0.0);
+        // Radio 0 (1 px) → siempre 1.0 dentro.
+        assert_eq!(cobertura_pincel(0.0, 0.0, 0.5), 1.0);
+        // Dureza 0.0 sobre r=4: núcleo en d=0, cae lineal a 0 en d=4.
+        assert_eq!(cobertura_pincel(0.0, 4.0, 0.0), 1.0);
+        assert!((cobertura_pincel(2.0, 4.0, 0.0) - 0.5).abs() < 1e-6);
+        assert_eq!(cobertura_pincel(4.0, 4.0, 0.0), 0.0);
+        // Dureza 0.5: núcleo hasta d=2, luego cae a 0 en d=4.
+        assert_eq!(cobertura_pincel(2.0, 4.0, 0.5), 1.0);
+        assert!((cobertura_pincel(3.0, 4.0, 0.5) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn estampar_disco_suave_deja_borde_translucido() {
+        // Pincel suave (dureza 0) sobre fondo transparente: el centro
+        // queda casi opaco, el borde casi transparente.
+        let mut buf = vec![0u8; 9 * 9 * 4];
+        let color = [255, 0, 0, 255];
+        estampar_disco(&mut buf, 9, 9, 4, 4, 4, color, false, 0.0, None);
+        let alfa = |x: usize, y: usize| buf[(y * 9 + x) * 4 + 3];
+        // Centro: cobertura ~1 → alfa alto.
+        assert!(alfa(4, 4) >= 250, "centro {}", alfa(4, 4));
+        // A 2 px del centro: cobertura ~0.5 → alfa medio.
+        let a = alfa(6, 4);
+        assert!((a as i32 - 128).abs() <= 40, "medio {}", a);
+        // Borde del disco (d≈4): cobertura ~0 → alfa bajo.
+        assert!(alfa(8, 4) <= 10, "borde {}", alfa(8, 4));
+    }
+
+    #[test]
+    fn bump_dureza_pincel_clampa() {
+        let mut model = modelo_minimo();
+        model.dureza_pincel = 0.5;
+        model = <Tullpu as App>::update(
+            model,
+            Msg::BumpDurezaPincel(-1.0),
+            &Handle::for_test(),
+        );
+        assert_eq!(model.dureza_pincel, 0.0);
+        model = <Tullpu as App>::update(
+            model,
+            Msg::BumpDurezaPincel(5.0),
+            &Handle::for_test(),
+        );
+        assert_eq!(model.dureza_pincel, 1.0);
+    }
+
+    #[test]
+    fn hotkey_llaves_ajustan_dureza_solo_con_trazo() {
+        let mut m = modelo_minimo();
+        // Sin herramienta de trazo, `{` / `}` no hacen nada.
+        m.herramienta = Herramienta::Mover;
+        assert!(hotkey_a_msg(&m, &ev_char("}", Modifiers::default())).is_none());
+        // Con pincel, `}` sube y `{` baja la dureza.
+        m.herramienta = Herramienta::Pincel;
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("}", Modifiers::default())),
+            Some(Msg::BumpDurezaPincel(d)) if d > 0.0
+        ));
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("{", Modifiers::default())),
+            Some(Msg::BumpDurezaPincel(d)) if d < 0.0
+        ));
+    }
+
+    #[test]
+    fn borrador_suave_baja_alfa_parcialmente() {
+        // Goma suave (dureza 0) sobre opaco: el centro baja mucho el
+        // alfa, el borde poco.
+        let mut buf = vec![255u8; 9 * 9 * 4];
+        estampar_disco(&mut buf, 9, 9, 4, 4, 4, [0, 0, 0, 0], true, 0.0, None);
+        let alfa = |x: usize, y: usize| buf[(y * 9 + x) * 4 + 3];
+        // Centro: cobertura ~1 → alfa ~0.
+        assert!(alfa(4, 4) <= 5, "centro {}", alfa(4, 4));
+        // Borde: cobertura ~0 → alfa casi intacto.
+        assert!(alfa(8, 4) >= 245, "borde {}", alfa(8, 4));
     }

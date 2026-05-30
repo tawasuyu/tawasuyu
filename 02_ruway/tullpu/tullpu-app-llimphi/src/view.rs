@@ -691,6 +691,34 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
                 ),
             ]),
         ));
+        // Dureza: borde duro (100%) → degradé (0%).
+        hijos.push(envolver_fila(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(26.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .children(vec![
+                mini_btn("−", Msg::BumpDurezaPincel(-0.1), &pal),
+                mini_btn("+", Msg::BumpDurezaPincel(0.1), &pal),
+                View::new(Style {
+                    flex_grow: 1.0,
+                    ..Default::default()
+                })
+                .text(
+                    format!(
+                        "  dureza {}%",
+                        (model.dureza_pincel * 100.0).round() as i32
+                    ),
+                    12.0,
+                    theme.fg_muted,
+                ),
+            ]),
+        ));
     }
     // Gestión de la selección: seleccionar todo + expandir/contraer el
     // rect. La etiqueta de "todo" muestra las dims del lienzo.

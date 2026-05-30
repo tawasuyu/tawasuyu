@@ -52,6 +52,7 @@
 //!   alzada con el color activo (acotado a la selección)
 //! - `e`              — herramienta borrador (goma): drag borra (alfa=0)
 //! - `[` / `]`        — con pincel/borrador, ∓1 al radio; si no, opacidad
+//! - `{` / `}`        — con pincel/borrador, ∓10% a la dureza (borde)
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
 //!
@@ -672,7 +673,8 @@ impl App for Tullpu {
                     });
                     let borrar = model.herramienta == Herramienta::Borrador;
                     let radio = model.radio_pincel;
-                    if pincel_punto_en_capa(&mut model, cx, cy, radio, borrar) {
+                    let dureza = model.dureza_pincel;
+                    if pincel_punto_en_capa(&mut model, cx, cy, radio, borrar, dureza) {
                         let etiqueta = model.seleccionada.map(|i| (i, "pincel"));
                         pushear_snapshot(&mut model, etiqueta);
                     }
@@ -698,6 +700,7 @@ impl App for Tullpu {
                         let ny = iy.floor() as i32;
                         let borrar = model.herramienta == Herramienta::Borrador;
                         let radio = model.radio_pincel;
+                        let dureza = model.dureza_pincel;
                         if pincel_segmento_en_capa(
                             &mut model,
                             pd.last_ix,
@@ -706,6 +709,7 @@ impl App for Tullpu {
                             ny,
                             radio,
                             borrar,
+                            dureza,
                         ) {
                             let etiqueta =
                                 model.seleccionada.map(|i| (i, "pincel"));
@@ -731,6 +735,14 @@ impl App for Tullpu {
                     (model.radio_pincel + delta).clamp(0, RADIO_PINCEL_MAX);
                 model.estado =
                     format!("radio pincel {} px", model.radio_pincel * 2 + 1);
+            }
+            Msg::BumpDurezaPincel(delta) => {
+                model.dureza_pincel =
+                    (model.dureza_pincel + delta).clamp(0.0, 1.0);
+                model.estado = format!(
+                    "dureza pincel {}%",
+                    (model.dureza_pincel * 100.0).round() as i32
+                );
             }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app

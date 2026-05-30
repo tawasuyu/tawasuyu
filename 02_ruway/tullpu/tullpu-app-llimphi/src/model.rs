@@ -100,6 +100,9 @@ pub(crate) struct Model {
     /// Radio actual del pincel/borrador en px-imagen. Ajustable con
     /// `[`/`]` (cuando la herramienta es de trazo) o los botones del panel.
     pub(crate) radio_pincel: i32,
+    /// Dureza del pincel/borrador en `[0.0, 1.0]` (1.0 = borde duro).
+    /// Ajustable con `{`/`}` (Shift+`[`/`]`) o los botones del panel.
+    pub(crate) dureza_pincel: f32,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -232,6 +235,10 @@ pub(crate) struct PincelDrag {
 pub(crate) const RADIO_PINCEL: i32 = 3;
 /// Tope del radio ajustable (radio 0 = 1 px; 64 = disco de 129 px).
 pub(crate) const RADIO_PINCEL_MAX: i32 = 64;
+/// Dureza inicial del pincel: 1.0 = disco duro (borde neto); 0.0 = todo
+/// el radio en degradé hacia el borde. El alfa del trazo cae linealmente
+/// desde `dureza·radio` hasta el borde.
+pub(crate) const DUREZA_PINCEL: f32 = 1.0;
 
 /// Multiplicador por tick de wheel. 1.1 ≈ +10%, un escalón cómodo. El
 /// factor entra como `factor_zoom *= base.powf(-delta.y)` (delta.y > 0 es
@@ -422,6 +429,9 @@ pub(crate) enum Msg {
     /// Ajusta el radio del pincel/borrador en `delta` px, clampeado a
     /// `[0, RADIO_PINCEL_MAX]`. No toca el lienzo ni el historial.
     BumpRadioPincel(i32),
+    /// Ajusta la dureza del pincel/borrador en `delta`, clampeada a
+    /// `[0.0, 1.0]`. No toca el lienzo ni el historial.
+    BumpDurezaPincel(f32),
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

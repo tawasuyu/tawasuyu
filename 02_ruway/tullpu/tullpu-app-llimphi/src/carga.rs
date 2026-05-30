@@ -218,6 +218,7 @@ pub(crate) fn inicializar() -> Model {
         mover_drag: None,
         pincel_drag: None,
         radio_pincel: RADIO_PINCEL,
+        dureza_pincel: DUREZA_PINCEL,
         portapapeles: None,
     };
     sincronizar_thumbs(&mut model);

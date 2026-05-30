@@ -201,6 +201,15 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
                 Some(Msg::CiclarBlend(id))
             }
         }
+        // `{` / `}` (Shift+`[`/`]`): con herramienta de trazo ajustan la
+        // dureza del pincel ∓10% (convención Photoshop). Si no es trazo,
+        // no aplican.
+        Key::Character(s) if !m.ctrl && !m.alt && s == "{" && model.herramienta.es_trazo() => {
+            Some(Msg::BumpDurezaPincel(-0.1))
+        }
+        Key::Character(s) if !m.ctrl && !m.alt && s == "}" && model.herramienta.es_trazo() => {
+            Some(Msg::BumpDurezaPincel(0.1))
+        }
         // `[` / `]`: con herramienta de trazo ajustan el radio del pincel
         // (convención Photoshop); si no, la opacidad de la capa.
         Key::Character(s) if !m.ctrl && !m.alt && s == "[" => {

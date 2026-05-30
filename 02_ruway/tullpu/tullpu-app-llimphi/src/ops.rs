@@ -880,13 +880,34 @@ pub(crate) fn rellenar_flood_en_capa(
     true
 }
 
-/// Estampa un disco lleno de radio `radio` (en px) centrado en `(cx, cy)`
-/// sobre un buffer Rgba8 `w × h`. Si `borrar`, pone `[0,0,0,0]` (goma);
-/// si no, compone `color` con alpha src-over ([`mezclar_src_over`]) — así
-/// un color opaco pisa y uno semitransparente deja trazo translúcido.
-/// Recorta al canvas y, si `bounds` es `Some`, al rect half-open. Pinta
-/// donde `dx² + dy² ≤ radio²`. Pura (muta `buf`); `cx, cy` pueden caer
-/// fuera (sólo entra lo que intersecta).
+/// Factor de cobertura del pincel en `[0,1]` para un píxel a distancia
+/// `d` del centro, con radio `r` y `dureza` en `[0,1]`. Dentro del núcleo
+/// `dureza·r` es 1.0; entre ahí y `r` cae linealmente a 0; fuera de `r`
+/// es 0. `r == 0` (1 px) o `dureza == 1` (borde duro) → 1.0 dentro del
+/// disco. Pura.
+pub(crate) fn cobertura_pincel(d: f32, r: f32, dureza: f32) -> f32 {
+    if d > r {
+        return 0.0;
+    }
+    if r <= 0.0 || dureza >= 1.0 {
+        return 1.0;
+    }
+    let inner = dureza * r;
+    if d <= inner {
+        1.0
+    } else {
+        ((r - d) / (r - inner)).clamp(0.0, 1.0)
+    }
+}
+
+/// Estampa un disco de radio `radio` centrado en `(cx, cy)` sobre un
+/// buffer Rgba8 `w × h`, con `dureza` controlando el degradé del borde
+/// (1.0 = duro; <1.0 = el alfa cae hacia el borde, ver [`cobertura_pincel`]).
+/// Si `borrar`, reduce el alfa destino por la cobertura (goma suave); si
+/// no, compone `color` (con su alfa escalado por la cobertura) src-over
+/// ([`mezclar_src_over`]). Recorta al canvas y, si `bounds` es `Some`, al
+/// rect half-open. Pura (muta `buf`); `cx, cy` pueden caer fuera.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn estampar_disco(
     buf: &mut [u8],
     w: u32,
@@ -896,6 +917,7 @@ pub(crate) fn estampar_disco(
     radio: i32,
     color: [u8; 4],
     borrar: bool,
+    dureza: f32,
     bounds: Option<(u32, u32, u32, u32)>,
 ) {
     let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
@@ -904,6 +926,7 @@ pub(crate) fn estampar_disco(
     let bx0 = bx0 as i32;
     let by0 = by0 as i32;
     let r2 = radio * radio;
+    let rf = radio as f32;
     for dy in -radio..=radio {
         let y = cy + dy;
         if y < by0 || y >= by1 {
@@ -915,11 +938,22 @@ pub(crate) fn estampar_disco(
                 continue;
             }
             if dx * dx + dy * dy <= r2 {
+                let d = ((dx * dx + dy * dy) as f32).sqrt();
+                let cob = cobertura_pincel(d, rf, dureza);
+                if cob <= 0.0 {
+                    continue;
+                }
                 let i = ((y as usize) * w as usize + x as usize) * 4;
                 if borrar {
-                    buf[i..i + 4].copy_from_slice(&[0, 0, 0, 0]);
+                    // Goma: baja el alfa destino por la cobertura.
+                    let a = buf[i + 3] as f32;
+                    buf[i + 3] = (a * (1.0 - cob)) as u8;
                 } else {
-                    mezclar_src_over(&mut buf[i..i + 4], color);
+                    let a = (color[3] as f32 * cob).round() as u8;
+                    mezclar_src_over(
+                        &mut buf[i..i + 4],
+                        [color[0], color[1], color[2], a],
+                    );
                 }
             }
         }
@@ -942,6 +976,7 @@ pub(crate) fn trazar_linea_pincel(
     radio: i32,
     color: [u8; 4],
     borrar: bool,
+    dureza: f32,
     bounds: Option<(u32, u32, u32, u32)>,
 ) {
     let n = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
@@ -949,7 +984,7 @@ pub(crate) fn trazar_linea_pincel(
         let t = k as f32 / n as f32;
         let x = x0 + ((x1 - x0) as f32 * t).round() as i32;
         let y = y0 + ((y1 - y0) as f32 * t).round() as i32;
-        estampar_disco(buf, w, h, x, y, radio, color, borrar, bounds);
+        estampar_disco(buf, w, h, x, y, radio, color, borrar, dureza, bounds);
     }
 }
 
@@ -1002,9 +1037,10 @@ pub(crate) fn pincel_punto_en_capa(
     cy: i32,
     radio: i32,
     borrar: bool,
+    dureza: f32,
 ) -> bool {
     pincel_aplicar(model, |buf, w, h, color, bounds| {
-        estampar_disco(buf, w, h, cx, cy, radio, color, borrar, bounds)
+        estampar_disco(buf, w, h, cx, cy, radio, color, borrar, dureza, bounds)
     })
 }
 
@@ -1020,9 +1056,12 @@ pub(crate) fn pincel_segmento_en_capa(
     y1: i32,
     radio: i32,
     borrar: bool,
+    dureza: f32,
 ) -> bool {
     pincel_aplicar(model, |buf, w, h, color, bounds| {
-        trazar_linea_pincel(buf, w, h, x0, y0, x1, y1, radio, color, borrar, bounds)
+        trazar_linea_pincel(
+            buf, w, h, x0, y0, x1, y1, radio, color, borrar, dureza, bounds,
+        )
     })
 }
 
