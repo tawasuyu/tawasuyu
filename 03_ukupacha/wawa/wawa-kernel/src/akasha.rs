@@ -221,6 +221,25 @@ pub fn ultimo_anuncio() -> Option<AnuncioCanal> {
     *ULTIMO_ANUNCIO.lock()
 }
 
+/// Descarta el anuncio retenido SI su raiz casa con `raiz`. Es la cara RECHAZAR
+/// de `sys_canal_descartar`: el operador que vio una propuesta y no la quiere
+/// vacia el buzon para que `sys_canal_anuncio` deje de ofrecerla. Aplica el
+/// MISMO guard TOCTOU que `sys_canal_aceptar` —solo descarta el anuncio cuya
+/// raiz coincide con la que el operador vio—, asi un anuncio NUEVO que llego
+/// entre "mostrar" y "rechazar" sobrevive en vez de perderse silenciosamente.
+/// Devuelve `true` si descarto algo, `false` si la ranura estaba vacia o la
+/// raiz no casaba.
+pub fn descartar_anuncio(raiz: &Hash) -> bool {
+    let mut ranura = ULTIMO_ANUNCIO.lock();
+    match *ranura {
+        Some(a) if a.raiz == *raiz => {
+            *ranura = None;
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Reensamblador de objetos GRANDES (Fase 65). Un objeto cuyo payload excede
 /// `MAX_PAYLOAD_AKASHA` viaja en varios `ProveedorFragmento`; esta ranura los
 /// acumula y, al completar, entrega el payload entero a `absorber_proveedor`

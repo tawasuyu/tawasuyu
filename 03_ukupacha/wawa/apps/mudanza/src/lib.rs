@@ -42,6 +42,9 @@ extern "C" {
     /// Fase 64 :: acepta el anuncio retenido cuya raiz casa con `raiz_ptr` y
     /// reancla el manifiesto. El kernel re-verifica anillo + firma canonica.
     fn sys_canal_aceptar(raiz_ptr: u32) -> i32;
+    /// Fase 67 :: RECHAZA el anuncio retenido cuya raiz casa con `raiz_ptr`,
+    /// vaciando el buzon del kernel para que deje de ofrecerlo. No reancla nada.
+    fn sys_canal_descartar(raiz_ptr: u32) -> i32;
 }
 
 /// Sobre demo embebido en el binario. Forjado por
@@ -65,6 +68,9 @@ static mut IDIOMA: u16 = 0;
 /// Anti-rebote del SPACE: solo el flanco de subida vale como pulsacion.
 static mut SPACE_PREV: bool = false;
 
+/// Anti-rebote del ESC (rechazo): mismo flanco de subida que el SPACE.
+static mut ESC_PREV: bool = false;
+
 /// Resultado de la ultima propuesta intentada. Tres estados:
 /// - `i32::MIN` :: aun no probado.
 /// - `-100`    :: la verificacion en USERSPACE fallo (firma rota o sobre
@@ -74,6 +80,18 @@ static mut ULTIMO_CODIGO: i32 = i32::MIN;
 
 /// Sentinel que rotula "el sobre fallo localmente, no llame al kernel".
 const VERIFICACION_LOCAL_FALLO: i32 = -100;
+
+/// Sentinel que rotula "el operador rechazo la propuesta": el buzon del kernel
+/// se vacio (`sys_canal_descartar` -> Ok) sin tocar el manifiesto.
+const RECHAZADO_OK: i32 = -200;
+
+/// Sentinel "intente rechazar pero no habia nada que descartar" (la ranura ya
+/// estaba vacia o un anuncio nuevo no casaba la raiz).
+const RECHAZO_VACIO: i32 = -201;
+
+/// Scancodes del set 1 (los que entrega `sys_get_scancode`).
+const SCAN_SPACE: u32 = 0x39;
+const SCAN_ESC: u32 = 0x01;
 
 /// Layout fijo del anuncio que `sys_canal_anuncio` vuelca: 168 bytes.
 const LARGO_ANUNCIO: usize = 168;
@@ -98,14 +116,37 @@ pub extern "C" fn tick() {
     refrescar_contexto();
 
     let scancode = unsafe { sys_get_scancode() };
-    let space_ahora = scancode == 0x39;
+
+    // SPACE = ACEPTAR (reancla / prueba el sobre demo). Solo el flanco de subida.
+    let space_ahora = scancode == SCAN_SPACE;
     if space_ahora && !unsafe { SPACE_PREV } {
         probar_reancla();
     }
     unsafe { SPACE_PREV = space_ahora };
 
+    // ESC = RECHAZAR. Vacia el buzon del kernel para la raiz que se muestra; sin
+    // anuncio en red no hay nada que rechazar (el sobre demo no vive en el buzon).
+    let esc_ahora = scancode == SCAN_ESC;
+    if esc_ahora && !unsafe { ESC_PREV } {
+        rechazar_propuesta();
+    }
+    unsafe { ESC_PREV = esc_ahora };
+
     pintar();
     volcar();
+}
+
+/// Rechaza la propuesta en red vigente: pide al kernel descartar el anuncio cuya
+/// raiz es la que la UI muestra (`ANUNCIO_RAIZ`). El guard TOCTOU del kernel
+/// garantiza que no descartamos un anuncio mas nuevo llegado entre tanto. Sin
+/// anuncio retenido, no hay nada que rechazar.
+fn rechazar_propuesta() {
+    if !unsafe { HAY_ANUNCIO } {
+        return;
+    }
+    let codigo = unsafe { sys_canal_descartar(core::ptr::addr_of!(ANUNCIO_RAIZ) as u32) };
+    // El kernel devuelve Ok (0) si descarto, Ausente si la ranura ya no casaba.
+    unsafe { ULTIMO_CODIGO = if codigo == 0 { RECHAZADO_OK } else { RECHAZO_VACIO } };
 }
 
 fn refrescar_contexto() {
@@ -224,7 +265,9 @@ fn pintar() {
         linea[6..14].copy_from_slice(&hx);
         dibujar_texto(lienzo, &linea[..14], 16, y, 1, tinta);
         y += 18;
-        dibujar_texto(lienzo, b"SPACE PARA ACEPTAR", 16, y, 1, acento);
+        dibujar_texto(lienzo, b"SPACE ACEPTAR", 16, y, 1, acento);
+        y += 12;
+        dibujar_texto(lienzo, b"ESC RECHAZAR", 16, y, 1, secundario);
         y += 22;
     } else {
         dibujar_texto(lienzo, b"SIN ANUNCIO EN RED", 16, y, 1, tinta);
@@ -259,6 +302,8 @@ fn pintar() {
             -2 => b"AUTOR AJENO :: RECHAZADO",
             -3 => b"FIRMA INVALIDA :: RECHAZADO",
             -100 => b"VERIFICACION LOCAL FALLO",
+            RECHAZADO_OK => b"PROPUESTA RECHAZADA",
+            RECHAZO_VACIO => b"NADA QUE RECHAZAR",
             _ => b"CODIGO DESCONOCIDO",
         };
         dibujar_texto(lienzo, explica, 16, y, 1, secundario);
@@ -271,7 +316,7 @@ fn pintar() {
     let mut pie = [b' '; 16];
     pie[0] = ((idioma & 0xFF) as u8).to_ascii_uppercase();
     pie[1] = (((idioma >> 8) & 0xFF) as u8).to_ascii_uppercase();
-    let cola = b"   FASE 64";
+    let cola = b"   FASE 67";
     pie[2..2 + cola.len()].copy_from_slice(cola);
     dibujar_texto(lienzo, &pie[..2 + cola.len()], 16, pie_y + 2, 1, tinta);
 }

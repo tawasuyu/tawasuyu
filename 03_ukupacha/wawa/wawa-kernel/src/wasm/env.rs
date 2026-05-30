@@ -1838,6 +1838,44 @@ pub(crate) fn enlazar_capacidades(
             }
         },
     )?;
+
+    // --- CAPACIDAD 7e :: sys_canal_descartar(raiz_ptr) -> i32 ---
+    // Fase 67 :: RECHAZA el anuncio retenido cuya raiz casa con `raiz_ptr`,
+    // vaciando la ranura `ULTIMO_ANUNCIO` para que `sys_canal_anuncio` deje de
+    // ofrecerlo. Es el gemelo de `sys_canal_aceptar` con el que mudanza cierra
+    // el bucle Aceptar/Rechazar: una propuesta vista y descartada no reaparece
+    // cada fotograma. A diferencia de aceptar, NO mueve el superbloque ni
+    // verifica firma —solo limpia el buzon—; pero comparte el guard TOCTOU
+    // (descarta EXACTAMENTE la raiz que el operador vio, de modo que un anuncio
+    // mas nuevo llegado entre mostrar y rechazar sobrevive). Devuelve `Ok` si
+    // descarto, `Ausente` si la ranura estaba vacia o la raiz no casaba.
+    //
+    // GATEADA por PERMISO_RAIZ por simetria con aceptar: el ciclo de vida del
+    // anuncio de re-ancla es competencia de la app soberana, no de cualquiera
+    // que pudiera vaciar el buzon ajeno como negacion de servicio.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_canal_descartar",
+        |caller: Caller<'_, ContextoCapacidades>, raiz_ptr: u32| -> Result<i32, Error> {
+            let memoria = obtener_memoria(&caller)?;
+            let mut raiz = [0u8; 32];
+            {
+                let m = memoria.data(&caller);
+                let crudo = rango(
+                    m,
+                    raiz_ptr,
+                    32,
+                    "WASM :: sys_canal_descartar desbordo la memoria lineal",
+                )?;
+                raiz.copy_from_slice(crudo);
+            }
+            if crate::akasha::descartar_anuncio(&raiz) {
+                Ok(CodigoError::Ok.como_i32())
+            } else {
+                Ok(CodigoError::Ausente.como_i32())
+            }
+        },
+    )?;
     } // PERMISO_RAIZ
 
     // --- CAPACIDAD 7c :: sys_grafo_compactar() -> i32 ---
