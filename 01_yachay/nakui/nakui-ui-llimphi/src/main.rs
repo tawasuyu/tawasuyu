@@ -192,12 +192,14 @@ enum Msg {
         idx: usize,
     },
     /// Drill-down: navega a la lista de `entity` filtrada a `field ==
-    /// value` (click en una fila de un desglose).
+    /// value` (o `field` empieza con `value` si `prefix` — buckets de
+    /// fecha). Click en una fila de un desglose.
     DrillDown {
         entity: String,
         field: String,
         value: String,
         label: String,
+        prefix: bool,
     },
     /// Limpia el filtro de drill-down activo.
     ClearDrill,
@@ -307,15 +309,18 @@ struct Model {
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
-/// cuyo `field` (como texto) es igual a `value`. `label` es el texto
-/// legible que se muestra en el chip (puede diferir de `value` cuando
-/// el grupo era una ref resuelta a un nombre).
+/// cuyo `field` (como texto) es igual a `value` —o **empieza con**
+/// `value` si `prefix` (para series temporales: el bucket "2026-02"
+/// recorta a las fechas de febrero)—. `label` es el texto legible que
+/// se muestra en el chip (puede diferir de `value` cuando el grupo era
+/// una ref resuelta a un nombre).
 #[derive(Clone)]
 struct DrillFilter {
     entity: String,
     field: String,
     value: String,
     label: String,
+    prefix: bool,
 }
 
 impl Model {
@@ -677,6 +682,7 @@ impl App for NakuiApp {
                 field,
                 value,
                 label,
+                prefix,
             } => {
                 // Buscar una vista List de esa entity en el módulo activo
                 // y navegar a ella aplicando el filtro.
@@ -699,6 +705,7 @@ impl App for NakuiApp {
                                 field,
                                 value,
                                 label,
+                                prefix,
                             });
                         }
                         None => {
@@ -1717,8 +1724,9 @@ fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, theme: &Theme)
 
     // --- Chip de drill-down activo (si filtra esta entity). ---
     if let Some(d) = model.drill.as_ref().filter(|d| d.entity == lv.entity) {
+        let op = if d.prefix { "~" } else { "=" };
         rows.push(button_styled(
-            format!("⤵ {} = {}   ✕ limpiar", d.field, d.label),
+            format!("⤵ {} {op} {}   ✕ limpiar", d.field, d.label),
             btn_style_auto(),
             Alignment::Center,
             &accent_btn(theme),
@@ -1938,7 +1946,11 @@ fn list_filtered_sorted(
     // a los records cuyo campo coincide con el grupo elegido.
     if let Some(d) = drill {
         if d.entity == lv.entity {
-            rows.retain(|(_, v)| group_key_text(v, &d.field).as_deref() == Some(d.value.as_str()));
+            rows.retain(|(_, v)| match group_key_text(v, &d.field) {
+                Some(cell) if d.prefix => cell.starts_with(&d.value),
+                Some(cell) => cell == d.value,
+                None => false,
+            });
         }
     }
     let q = query.trim().to_lowercase();
@@ -2430,15 +2442,13 @@ fn compute_card_full(
     };
     let mut raw_keys = breakdown_raw_keys(&result);
     // La fila "Otros" no apunta a un grupo concreto: sentinel vacío para
-    // que `drill_msg` la deje no-clickeable. Las series temporales
-    // tampoco navegan (la clave es un mes/año, no el valor crudo).
+    // que `drill_msg` la deje no-clickeable. Las series temporales SÍ
+    // navegan: la clave es el bucket ("2026-02") y el drill matchea por
+    // prefijo sobre la fecha cruda (ver `DrillCtx::prefix`).
     if collapsed {
         if let Some(last) = raw_keys.last_mut() {
             last.clear();
         }
-    }
-    if bucketed {
-        raw_keys.iter_mut().for_each(String::clear);
     }
     if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
         resolve_breakdown_keys(&mut result, backend, ref_entity);
@@ -2773,6 +2783,9 @@ struct DrillCtx {
     field: String,
     raw_keys: Vec<String>,
     labels: Vec<String>,
+    /// Match por prefijo (series temporales): el bucket "2026-02"
+    /// recorta a las fechas que empiezan con él.
+    prefix: bool,
 }
 
 /// Arma el `DrillCtx` de una card si es un desglose y existe una lista
@@ -2794,6 +2807,7 @@ fn drill_ctx_for(
         field,
         raw_keys,
         labels,
+        prefix: card.bucket.is_some(),
     })
 }
 
@@ -2935,6 +2949,7 @@ fn dashboard_card(
             field: d.field.clone(),
             value,
             label: d.labels.get(i).cloned().unwrap_or_default(),
+            prefix: d.prefix,
         })
     };
 
@@ -3952,6 +3967,51 @@ mod tests {
         assert!(again.is_none(), "no debió re-sembrar entities ya pobladas");
         assert_eq!(backend.list_records("Customer").len(), 9);
         assert_eq!(backend.list_records("Order").len(), 12);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// El drill-down por prefijo (series temporales) recorta la lista al
+    /// bucket: "2026-02" trae sólo las órdenes de febrero.
+    #[test]
+    fn drill_prefix_filters_list_to_month() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+
+        let modules_dir = std::path::Path::new("examples/nakui-modules");
+        let (modules, _) = load_ui_modules(modules_dir).unwrap();
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, BTreeMap::new());
+        seed_demo_data(&mut backend, &modules, modules_dir);
+
+        let lv = ListView {
+            title: "Órdenes".into(),
+            entity: "Order".into(),
+            columns: Vec::new(),
+            actions: Vec::new(),
+            search_in: Vec::new(),
+            row_detail: None,
+        };
+        let feb = DrillFilter {
+            entity: "Order".into(),
+            field: "fecha".into(),
+            value: "2026-02".into(),
+            label: "2026-02".into(),
+            prefix: true,
+        };
+        let rows = list_filtered_sorted(&backend, &lv, "", &None, Some(&feb));
+        assert_eq!(rows.len(), 4, "deberían ser las 4 órdenes de febrero");
+        assert!(rows
+            .iter()
+            .all(|(_, v)| v.get("fecha").and_then(Value::as_str).unwrap().starts_with("2026-02")));
+
+        // Sin prefijo, "2026-02" no matchea ninguna fecha completa.
+        let exact = DrillFilter { prefix: false, ..feb.clone() };
+        assert_eq!(
+            list_filtered_sorted(&backend, &lv, "", &None, Some(&exact)).len(),
+            0
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
