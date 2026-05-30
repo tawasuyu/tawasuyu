@@ -31,7 +31,9 @@
 //!     record referido (p.ej. "facturación por cliente" con nombres).
 //!     Cada desglose tiene botón de export CSV. Los filtros aceptan
 //!     operadores `eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`between`/`non_empty`
-//!     (numéricos o fechas ISO).
+//!     (numéricos o fechas ISO). Cada fila de un desglose es clickeable:
+//!     drill-down a la lista de esa entity filtrada al grupo (por el
+//!     valor real, aunque la fila muestre el label resuelto).
 //!   - `Report`: los mismos agregados que un tablero, dispuestos como
 //!     documento de una columna (título + subtítulo) con botón
 //!     "Exportar (.md)" que vuelca el reporte completo a Markdown.
@@ -169,6 +171,16 @@ enum Msg {
         view_key: String,
         idx: usize,
     },
+    /// Drill-down: navega a la lista de `entity` filtrada a `field ==
+    /// value` (click en una fila de un desglose).
+    DrillDown {
+        entity: String,
+        field: String,
+        value: String,
+        label: String,
+    },
+    /// Limpia el filtro de drill-down activo.
+    ClearDrill,
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -238,6 +250,22 @@ struct Model {
     /// Persisten entre frames y entre cambios de vista (un reporte
     /// recuerda sus filtros si volvés a él).
     report_filters: BTreeSet<String>,
+    /// Drill-down activo: cuando hacés click en una fila de un desglose,
+    /// se navega a la lista de esa entity filtrada a ese grupo. La lista
+    /// aplica el filtro y muestra un chip para limpiarlo.
+    drill: Option<DrillFilter>,
+}
+
+/// Filtro de drill-down: la lista de `entity` se recorta a los records
+/// cuyo `field` (como texto) es igual a `value`. `label` es el texto
+/// legible que se muestra en el chip (puede diferir de `value` cuando
+/// el grupo era una ref resuelta a un nombre).
+#[derive(Clone)]
+struct DrillFilter {
+    entity: String,
+    field: String,
+    value: String,
+    label: String,
 }
 
 impl Model {
@@ -360,6 +388,7 @@ impl App for NakuiApp {
             list_sort: None,
             list_page: 0,
             report_filters: BTreeSet::new(),
+            drill: None,
         }
     }
 
@@ -372,6 +401,7 @@ impl App for NakuiApp {
                     m.selected_menu = (!m.modules[i].menu.is_empty()).then_some(0);
                     m.form = None;
                     m.detail = None;
+                    m.drill = None;
                     m.reset_list_state();
                     sync_form_to_menu(&mut m);
                 }
@@ -382,6 +412,7 @@ impl App for NakuiApp {
                         m.selected_menu = Some(i);
                         m.form = None;
                         m.detail = None;
+                        m.drill = None;
                         m.reset_list_state();
                         sync_form_to_menu(&mut m);
                     }
@@ -573,6 +604,47 @@ impl App for NakuiApp {
                 if !m.report_filters.remove(&key) {
                     m.report_filters.insert(key);
                 }
+            }
+            Msg::DrillDown {
+                entity,
+                field,
+                value,
+                label,
+            } => {
+                // Buscar una vista List de esa entity en el módulo activo
+                // y navegar a ella aplicando el filtro.
+                if let Some(mod_idx) = m.selected_module {
+                    let module = &m.modules[mod_idx];
+                    let target = module.menu.iter().position(|item| {
+                        matches!(
+                            module.views.get(&item.view),
+                            Some(ModuleView::List(lv)) if lv.entity == entity
+                        )
+                    });
+                    match target {
+                        Some(menu_idx) => {
+                            m.selected_menu = Some(menu_idx);
+                            m.form = None;
+                            m.detail = None;
+                            m.reset_list_state();
+                            m.drill = Some(DrillFilter {
+                                entity,
+                                field,
+                                value,
+                                label,
+                            });
+                        }
+                        None => {
+                            m.toast = Some(Toast {
+                                kind: BannerKind::Error,
+                                text: format!("no hay lista de '{entity}' para abrir"),
+                            });
+                        }
+                    }
+                }
+            }
+            Msg::ClearDrill => {
+                m.drill = None;
             }
         }
         m
@@ -1123,7 +1195,13 @@ fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, theme: &Theme)
     // `ref_entity` a su label legible sin re-lockear por celda.
     let guard = model.backend.lock().ok();
     let records = match guard.as_ref() {
-        Some(b) => list_filtered_sorted(b, lv, &model.list_search.text(), &model.list_sort),
+        Some(b) => list_filtered_sorted(
+            b,
+            lv,
+            &model.list_search.text(),
+            &model.list_sort,
+            model.drill.as_ref(),
+        ),
         None => Vec::new(),
     };
 
@@ -1191,6 +1269,17 @@ fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, theme: &Theme)
     .children(header_children);
 
     let mut rows: Vec<View<Msg>> = vec![header];
+
+    // --- Chip de drill-down activo (si filtra esta entity). ---
+    if let Some(d) = model.drill.as_ref().filter(|d| d.entity == lv.entity) {
+        rows.push(button_styled(
+            format!("⤵ {} = {}   ✕ limpiar", d.field, d.label),
+            btn_style_auto(),
+            Alignment::Center,
+            &accent_btn(theme),
+            Msg::ClearDrill,
+        ));
+    }
 
     // --- Caja de búsqueda (sólo si la lista declara search_in). ---
     if can_search {
@@ -1397,8 +1486,16 @@ fn list_filtered_sorted(
     lv: &ListView,
     query: &str,
     sort: &Option<(String, bool)>,
+    drill: Option<&DrillFilter>,
 ) -> Vec<(Uuid, Value)> {
     let mut rows = backend.list_records(&lv.entity);
+    // Filtro de drill-down: si hay uno activo para esta entity, recorta
+    // a los records cuyo campo coincide con el grupo elegido.
+    if let Some(d) = drill {
+        if d.entity == lv.entity {
+            rows.retain(|(_, v)| group_key_text(v, &d.field).as_deref() == Some(d.value.as_str()));
+        }
+    }
     let q = query.trim().to_lowercase();
     if !q.is_empty() && !lv.search_in.is_empty() {
         rows.retain(|(_, v)| {
@@ -1546,7 +1643,13 @@ fn export_active_list_csv(m: &Model, entity: &str) -> Toast {
             text: "backend lock envenenado".into(),
         };
     };
-    let rows = list_filtered_sorted(&backend, lv, &m.list_search.text(), &m.list_sort);
+    let rows = list_filtered_sorted(
+        &backend,
+        lv,
+        &m.list_search.text(),
+        &m.list_sort,
+        m.drill.as_ref(),
+    );
     let headers: Vec<String> = lv.columns.iter().map(|c| c.label.clone()).collect();
     let data: Vec<Vec<String>> = rows
         .iter()
@@ -1828,6 +1931,18 @@ fn compute_card_result(
     card: &DashboardCard,
     extra: &[&CardFilter],
 ) -> MetricResult {
+    compute_card_full(model, card, extra).0
+}
+
+/// Como [`compute_card_result`] pero devuelve también las claves de
+/// grupo *crudas* (sin resolver por `group_ref`), alineadas 1:1 con las
+/// filas del resultado. El drill-down las usa para filtrar la lista por
+/// el valor real (UUID), aunque la card muestre el label resuelto.
+fn compute_card_full(
+    model: &Model,
+    card: &DashboardCard,
+    extra: &[&CardFilter],
+) -> (MetricResult, Vec<String>) {
     let guard = model.backend.lock().ok();
     let mut records = guard
         .as_ref()
@@ -1837,10 +1952,116 @@ fn compute_card_result(
         records.retain(|(_, v)| extra.iter().all(|f| record_matches(v, f)));
     }
     let mut result = compute_metric(&card.metric, card.filter.as_ref(), &records);
+    let raw_keys = breakdown_raw_keys(&result);
     if let (Some(ref_entity), Some(backend)) = (&card.group_ref, guard.as_ref()) {
         resolve_breakdown_keys(&mut result, backend, ref_entity);
     }
-    result
+    (result, raw_keys)
+}
+
+/// Una fila de desglose: etiqueta + barra + valor. Si `on_drill` está
+/// presente, la fila es clickeable (con hover) y dispara el drill-down.
+fn breakdown_row(
+    key: String,
+    bar: String,
+    value: String,
+    value_w: f32,
+    on_drill: Option<Msg>,
+    theme: &Theme,
+) -> View<Msg> {
+    let mut row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(6.0),
+            height: length(0.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        cell_text(key, 96.0, theme.fg_text),
+        cell_flex(bar, theme.accent),
+        cell_text(value, value_w, theme.fg_muted),
+    ]);
+    if let Some(msg) = on_drill {
+        row = row.hover_fill(theme.bg_panel).on_click(msg);
+    }
+    row
+}
+
+/// Claves de grupo de un desglose, en orden (vacío para escalares).
+fn breakdown_raw_keys(result: &MetricResult) -> Vec<String> {
+    match result {
+        MetricResult::Breakdown(rows) => rows.iter().map(|(k, _)| k.clone()).collect(),
+        MetricResult::ValueBreakdown(rows) => rows.iter().map(|(k, _)| k.clone()).collect(),
+        MetricResult::Scalar(_) => Vec::new(),
+    }
+}
+
+/// El campo por el que agrupa una métrica de desglose (para el filtro
+/// de drill-down). `None` para escalares.
+fn drill_field(card: &DashboardCard) -> Option<String> {
+    use nahual_meta_schema::Metric;
+    match &card.metric {
+        Metric::GroupBy { field } => Some(field.clone()),
+        Metric::SumBy { group, .. } | Metric::AvgBy { group, .. } => Some(group.clone()),
+        _ => None,
+    }
+}
+
+/// `true` si el módulo tiene una vista `List` para esa entity (destino
+/// posible de un drill-down).
+fn has_list_for(module: &Module, entity: &str) -> bool {
+    module.views.values().any(|v| {
+        matches!(v, ModuleView::List(lv) if lv.entity == entity)
+    })
+}
+
+/// Contexto de drill-down de una card: a dónde navega cada fila del
+/// desglose. `field` es el campo de filtro; `raw_keys[i]` el valor real
+/// de la fila i; `labels[i]` el texto mostrado (para el chip).
+struct DrillCtx {
+    entity: String,
+    field: String,
+    raw_keys: Vec<String>,
+    labels: Vec<String>,
+}
+
+/// Arma el `DrillCtx` de una card si es un desglose y existe una lista
+/// de su entity a la que navegar. `raw_keys` son las claves sin
+/// resolver; los labels salen del `result` ya resuelto.
+fn drill_ctx_for(
+    module: &Module,
+    card: &DashboardCard,
+    result: &MetricResult,
+    raw_keys: Vec<String>,
+) -> Option<DrillCtx> {
+    let field = drill_field(card)?;
+    if !has_list_for(module, &card.entity) {
+        return None;
+    }
+    let labels = breakdown_raw_keys(result);
+    Some(DrillCtx {
+        entity: card.entity.clone(),
+        field,
+        raw_keys,
+        labels,
+    })
+}
+
+/// Clave de grupo de un record para un campo top-level, replicando el
+/// `field_as_text` de meta-runtime (lo que produce las claves de los
+/// desgloses) — para que el drill-down matchee exactamente.
+fn group_key_text(v: &Value, field: &str) -> Option<String> {
+    match v.get(field)? {
+        Value::Null => None,
+        Value::String(s) => Some(s.clone()),
+        other => Some(other.to_string()),
+    }
 }
 
 /// Clave de un toggle de reporte en `Model::report_filters`.
@@ -1903,7 +2124,7 @@ fn build_dashboard_panel(
 
     let mut cards: Vec<View<Msg>> = Vec::new();
     for (i, card) in dv.cards.iter().enumerate() {
-        let result = compute_card_result(model, card, &[]);
+        let (result, raw_keys) = compute_card_full(model, card, &[]);
         // Las cards con desglose ganan un botón de export CSV.
         let on_export = if is_breakdown(&result) {
             Some(Msg::ExportBreakdownCsv {
@@ -1914,7 +2135,15 @@ fn build_dashboard_panel(
         } else {
             None
         };
-        cards.push(dashboard_card(&card.label, &result, &card.format, on_export, theme));
+        let drill = drill_ctx_for(module, card, &result, raw_keys);
+        cards.push(dashboard_card(
+            &card.label,
+            &result,
+            &card.format,
+            on_export,
+            drill.as_ref(),
+            theme,
+        ));
     }
 
     let grid = View::new(Style {
@@ -1943,9 +2172,20 @@ fn dashboard_card(
     result: &MetricResult,
     fmt: &ValueFormat,
     on_export: Option<Msg>,
+    drill: Option<&DrillCtx>,
     theme: &Theme,
 ) -> View<Msg> {
     let mut children: Vec<View<Msg>> = vec![text_line(label.to_string(), 11.0, theme.fg_muted)];
+    // Closure que arma el click de drill-down de la fila `i` (si hay).
+    let drill_msg = |i: usize| -> Option<Msg> {
+        let d = drill?;
+        Some(Msg::DrillDown {
+            entity: d.entity.clone(),
+            field: d.field.clone(),
+            value: d.raw_keys.get(i)?.clone(),
+            label: d.labels.get(i).cloned().unwrap_or_default(),
+        })
+    };
 
     match result {
         MetricResult::Scalar(s) => {
@@ -1977,26 +2217,16 @@ fn dashboard_card(
                 children.push(text_line("(sin datos)".into(), 11.0, theme.fg_muted));
             }
             let max = rows.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
-            for (key, n) in rows {
+            for (i, (key, n)) in rows.iter().enumerate() {
                 let bar = "█".repeat((n * 12 / max).max(1));
-                let row = View::new(Style {
-                    flex_direction: FlexDirection::Row,
-                    size: Size {
-                        width: percent(1.0_f32),
-                        height: length(18.0),
-                    },
-                    align_items: Some(AlignItems::Center),
-                    gap: Size {
-                        width: length(6.0),
-                        height: length(0.0),
-                    },
-                    ..Default::default()
-                })
-                .children(vec![
-                    cell_text(key.clone(), 96.0, theme.fg_text),
-                    cell_flex(bar, theme.accent),
-                    cell_text(n.to_string(), 32.0, theme.fg_muted),
-                ]);
+                let row = breakdown_row(
+                    key.clone(),
+                    bar,
+                    n.to_string(),
+                    32.0,
+                    drill_msg(i),
+                    theme,
+                );
                 children.push(row);
             }
         }
@@ -2011,7 +2241,7 @@ fn dashboard_card(
                 .map(|(_, v)| v.abs())
                 .fold(0.0_f64, f64::max)
                 .max(1.0);
-            for (key, v) in rows {
+            for (i, (key, v)) in rows.iter().enumerate() {
                 let filled = ((v.abs() / max) * 12.0).round() as usize;
                 let bar = "█".repeat(filled.max(1));
                 let value = if v.fract() == 0.0 {
@@ -2019,24 +2249,14 @@ fn dashboard_card(
                 } else {
                     Value::from(*v)
                 };
-                let row = View::new(Style {
-                    flex_direction: FlexDirection::Row,
-                    size: Size {
-                        width: percent(1.0_f32),
-                        height: length(18.0),
-                    },
-                    align_items: Some(AlignItems::Center),
-                    gap: Size {
-                        width: length(6.0),
-                        height: length(0.0),
-                    },
-                    ..Default::default()
-                })
-                .children(vec![
-                    cell_text(key.clone(), 96.0, theme.fg_text),
-                    cell_flex(bar, theme.accent),
-                    cell_text(format_value(Some(&value), fmt), 64.0, theme.fg_muted),
-                ]);
+                let row = breakdown_row(
+                    key.clone(),
+                    bar,
+                    format_value(Some(&value), fmt),
+                    64.0,
+                    drill_msg(i),
+                    theme,
+                );
                 children.push(row);
             }
         }
@@ -2168,7 +2388,7 @@ fn build_report_panel(
     // Una card por agregado, apiladas en columna (documento).
     for (i, card) in rv.cards.iter().enumerate() {
         let active = card_active_filters(model, view_key, rv, card);
-        let result = compute_card_result(model, card, &active);
+        let (result, raw_keys) = compute_card_full(model, card, &active);
         let on_export = if is_breakdown(&result) {
             Some(Msg::ExportBreakdownCsv {
                 module_idx: mod_idx,
@@ -2178,7 +2398,15 @@ fn build_report_panel(
         } else {
             None
         };
-        children.push(dashboard_card(&card.label, &result, &card.format, on_export, theme));
+        let drill = drill_ctx_for(module, card, &result, raw_keys);
+        children.push(dashboard_card(
+            &card.label,
+            &result,
+            &card.format,
+            on_export,
+            drill.as_ref(),
+            theme,
+        ));
     }
 
     column(children, 12.0)
