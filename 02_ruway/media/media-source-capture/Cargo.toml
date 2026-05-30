@@ -1,0 +1,32 @@
+[package]
+name = "media-source-capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/source-capture — captura en vivo (cámara v4l2) como FrameSource. Núcleo puro de conversión de pixel-formats + slot latest-frame reusable; backend cámara detrás de feature."
+
+[features]
+# Núcleo puro (convert + LiveSource/LiveSink) por default — sin deps de
+# hardware ni de build (no toca libclang). Es lo que valida `cargo check
+# --workspace`.
+default = []
+# Backend de cámara v4l2 (Linux). OPT-IN: arrastra `v4l` → `v4l2-sys-mit` →
+# bindgen → libclang, una dep de build pesada y frágil en builds paralelos.
+# Por eso queda fuera del default (misma lógica que los puentes `foreign-*`).
+# Activar con `--features camera` en plataformas con cabeceras videodev2 +
+# libclang. Correr necesita un dispositivo `/dev/videoN` real.
+camera = ["dep:v4l"]
+
+[dependencies]
+media-core = { path = "../media-core" }
+# Sólo para decodificar el JPEG de los frames MJPEG de la webcam. El resto de
+# las conversiones (YUYV/RGB/BGR) son aritmética propia, sin deps.
+image = { workspace = true }
+
+# Backend cámara: v4l es puro-Rust (ioctl vía libc, sin lib C externa).
+v4l = { version = "0.14", optional = true }
+
+[dev-dependencies]
+media-recorder-webm = { path = "../media-recorder-webm" }

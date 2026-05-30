@@ -37,6 +37,7 @@ Mascota: un calcetín — guarda cosas, se pierde, abriga.
 | `shared/foreign-av`   | MP4/WebM/MKV/MOV/AVI/FLV via ffmpeg subprocess — 1 proceso por archivo (audio + video desde el mismo ffmpeg vía pipes dup'eados a fd 3/4). **Vive en `shared/foreign-*`** (regla dura #4: formatos ajenos por puente). Ofrece además `transcode_a_av1` (ingesta al formato nativo). |
 | `media-source-av1`    | **AV1 nativo** (puro-Rust, rav1d) sobre IVF → `FrameSource + Seekable`. Formato de video nativo de gioser; demux IVF + split OBU sin decoder. Ver su README. |
 | `media-encode-av1`    | **Encode AV1 nativo** (puro-Rust, rav1e): frames RGBA → IVF. Contraparte de `media-source-av1` — gioser PRODUCE su video nativo sin ffmpeg. Round-trip encode↔decode verificado. Ver su README. Su salida alimenta `media-mux-webm`. |
+| `media-source-capture`| **Captura en vivo** (lado INPUT): cámara v4l2 → RGBA → `FrameSource`. Núcleo agnóstico `LiveSource`/`LiveSink` (slot latest-frame non-blocking, reusable por cualquier grabber) + conversión pura de pixel-formats (YUYV/MJPEG/RGB/BGR) + backend cámara `CameraSource` (feature `camera`, opt-in: arrastra libclang). Alimenta `media-recorder-webm` → grabá la cámara a `.webm` AV1+Opus nativo. Ver su README. |
 | `media-source-gif`    | GIF animado (image) → `FrameSource + Seekable`                       |
 | `media-source-image`  | PNG/JPEG/WebP/BMP/TIFF (image) → `FrameSource` (frame único)         |
 | `media-audio-cpal`    | sink realtime sobre cpal (default output device)                     |
@@ -163,6 +164,7 @@ del notebook funciona como patch-bay del audio.
 cargo test -p media-core              # primitivas puras (Spectrum, Levels, AudioProbe, Mixer, Waterfall, Subtitles)
 cargo test -p media-recorder-wav      # round-trip de grabación
 cargo test -p media-recorder-webm     # recorder unificado: graba .webm AV1+Opus → reproduce nativo
+cargo test -p media-source-capture    # captura en vivo: conversión pura + LiveSource + loop cámara→.webm (sin hardware)
 cargo test -p media-encode-opus       # encode Opus + round-trip encode→decode y .webm AV1+Opus propio
 cargo test -p media-mux-webm          # EBML de bajo nivel + round-trip mux→demux→decode nativo
 cargo test -p foreign-av              # parse + clamp (sin invocar ffmpeg)
