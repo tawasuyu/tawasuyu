@@ -46,6 +46,7 @@ impl DiscernPipeline {
         p.push(Box::new(CardProbe));
         p.push(Box::new(JsonProbe));
         p.push(Box::new(TomlProbe));
+        p.push(Box::new(TabularProbe));
         p.push(Box::new(Utf8Probe));
         p
     }
@@ -268,6 +269,39 @@ impl Discerner for Utf8Probe {
     }
 }
 
+/// Datos tabulares (CSV/TSV). El formato no tiene magic-bytes, así que
+/// se apoya en el `hint.path` (`.csv`/`.tsv`) y confirma con el contenido:
+/// la primera línea debe traer el delimitador. Emite lens `table`.
+pub struct TabularProbe;
+
+impl Discerner for TabularProbe {
+    fn name(&self) -> &str { "tabular" }
+
+    fn discern(&self, s: &[u8], h: &Hint<'_>) -> Option<Discernment> {
+        let path = h.path?;
+        let (delim, mime) = if path.ends_with(".csv") {
+            (b',', "text/csv")
+        } else if path.ends_with(".tsv") {
+            (b'\t', "text/tab-separated-values")
+        } else {
+            return None;
+        };
+        // Confirmar con la primera línea: debe ser UTF-8 y tener el
+        // delimitador (una columna sola no es una tabla).
+        let txt = std::str::from_utf8(s).ok()?;
+        let first = txt.lines().next()?;
+        if !first.as_bytes().contains(&delim) {
+            return None;
+        }
+        Some(Discernment {
+            ty: TypeRef::Primitive { name: "tabular".into() },
+            confidence: 0.93,
+            mime: Some(mime.into()),
+            lens: Some("table".into()),
+        })
+    }
+}
+
 fn trim_left(s: &[u8]) -> &[u8] {
     let mut i = 0;
     while i < s.len() && (s[i] == b' ' || s[i] == b'\t' || s[i] == b'\n' || s[i] == b'\r') {
@@ -327,6 +361,24 @@ mod tests {
             discern(b"OggS\x00\x02\x00\x00").unwrap().mime.as_deref(),
             Some("audio/ogg")
         );
+    }
+
+    #[test]
+    fn csv_por_path_es_tabla() {
+        let p = DiscernPipeline::default_pipeline();
+        let hint = Hint { path: Some("/datos/ventas.csv"), size_total: None };
+        let r = p.discern(b"fecha,monto,region\n2026-01,10,sur\n", &hint).unwrap();
+        assert_eq!(r.mime.as_deref(), Some("text/csv"));
+        assert_eq!(r.lens.as_deref(), Some("table"));
+    }
+
+    #[test]
+    fn csv_sin_delimitador_no_es_tabla() {
+        let p = DiscernPipeline::default_pipeline();
+        let hint = Hint { path: Some("/x.csv"), size_total: None };
+        // Sin coma en la primera línea: cae al text fallback, no a tabla.
+        let r = p.discern(b"una sola columna\nsin comas\n", &hint).unwrap();
+        assert_ne!(r.lens.as_deref(), Some("table"));
     }
 
     #[test]

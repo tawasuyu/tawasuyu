@@ -36,6 +36,8 @@ pub enum ViewerKind {
     /// Volcado hex/ASCII (`nahual-hex-viewer-llimphi`) para binarios que
     /// shuma reconoce pero no tienen visor propio (ELF/wasm/gzip/zip).
     Hex,
+    /// Tabla CSV/TSV (`nahual-table-viewer-llimphi`); columnas alineadas.
+    Table,
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
@@ -61,6 +63,7 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
         Some("audio") => return ViewerKind::Audio,
         Some("card") => return ViewerKind::Card,
         Some("tree") => return ViewerKind::Tree,
+        Some("table") => return ViewerKind::Table,
         _ => {}
     }
     match d.mime.as_deref() {
@@ -130,6 +133,11 @@ mod tests {
     fn tree_lens_va_a_tree() {
         assert_eq!(pick(Some(&disc(Some("tree"), Some("application/json")))), ViewerKind::Tree);
         assert_eq!(pick(Some(&disc(Some("tree"), Some("application/toml")))), ViewerKind::Tree);
+    }
+
+    #[test]
+    fn table_lens_va_a_table() {
+        assert_eq!(pick(Some(&disc(Some("table"), Some("text/csv")))), ViewerKind::Table);
     }
 
     #[test]

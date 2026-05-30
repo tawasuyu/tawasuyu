@@ -1,0 +1,13 @@
+[package]
+name = "nahual-table-viewer-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-table-viewer-llimphi — visor de CSV/TSV sobre Llimphi. Parsea (con comillas básicas) y pinta una tabla alineada por columnas en fuente monoespaciada. Octavo visor del shell nahual; preview rápido de datos tabulares, distinto del editor de planillas nakui."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
