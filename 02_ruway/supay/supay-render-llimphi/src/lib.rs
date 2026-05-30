@@ -1313,14 +1313,23 @@ const WALL_RIM_AMBIENT_FLOOR: f32 = 0.3;
 
 /// Boost RGB de world lights en una superficie de pared (`x_surf`,
 /// `y_surf` en cam-space), atenuado por el cosine entre la normal de
-/// la pared (orientada toward camera) y la dirección a cada luz. Con
-/// `directional=false` cae al path omni 3.27/3.29. La normal se pasa
-/// ya en cam-space y ya orientada al frente — el caller resuelve la
-/// orientación una sola vez (usando la convención de back-face cull
-/// de la fase 3.0).
+/// la pared (orientada toward camera) y la dirección 3D a cada luz.
+/// Con `directional=false` cae al path omni 3.27/3.29 (radio 2D). La
+/// normal se pasa ya en cam-space y ya orientada al frente — el caller
+/// resuelve la orientación una sola vez (usando la convención de
+/// back-face cull de la fase 3.0).
+///
+/// Fase 3.34: la distancia y el cosine se calculan en 3D, usando
+/// `z_surf_cam` como cota vertical del punto de muestreo (típicamente
+/// 0.0 = eye level). La normal de la pared tiene `nz=0` (vertical pura),
+/// así que `cos(θ) = (nx·dx + ny·dy) / d_3D`. Una antorcha alta a la
+/// misma XY que el midpoint del muro queda con cos < cos_2D porque
+/// `d_3D > d_XY`. El radio también es 3D — luces remotas en z quedan
+/// excluidas aunque su XY caiga dentro.
 fn world_lights_boost_rgb_for_wall_cam(
     x_surf: f32,
     y_surf: f32,
+    z_surf_cam: f32,
     surf_sector: u32,
     lights: &[WorldLight],
     wall_normal: (f32, f32),
@@ -1344,7 +1353,8 @@ fn world_lights_boost_rgb_for_wall_cam(
         }
         let dx = l.x_cam - x_surf;
         let dy = l.y_cam - y_surf;
-        let d2 = dx * dx + dy * dy;
+        let dz = l.z_cam - z_surf_cam;
+        let d2 = dx * dx + dy * dy + dz * dz;
         if d2 >= r2 {
             continue;
         }
@@ -1353,7 +1363,7 @@ fn world_lights_boost_rgb_for_wall_cam(
             1.0
         } else {
             let inv_d = d2.sqrt().recip();
-            let cos_theta = nx * dx * inv_d + ny * dy * inv_d;
+            let cos_theta = (nx * dx + ny * dy) * inv_d;
             (0.5 + 0.5 * cos_theta).max(WALL_RIM_AMBIENT_FLOOR)
         };
         let amount = f * f * peak * att;
@@ -1374,6 +1384,7 @@ fn world_lights_boost_rgb_for_wall_cam(
 fn combined_boost_rgb_wall_cam(
     x_cam: f32,
     y_cam: f32,
+    z_surf_cam: f32,
     muzzle_alpha: f32,
     surf_sector: u32,
     lit_sectors: Option<&HashSet<u32>>,
@@ -1389,6 +1400,7 @@ fn combined_boost_rgb_wall_cam(
     let w = world_lights_boost_rgb_for_wall_cam(
         x_cam,
         y_cam,
+        z_surf_cam,
         surf_sector,
         world_lights,
         wall_normal,
@@ -2082,10 +2094,14 @@ fn gather_wall(
     // Fase 3.32: rim direccional. La normal cam-space de la pared
     // (perpendicular al lineseg, toward camera) modula el aporte de
     // cada world light por cos(θ). Muzzle queda omni.
+    // Fase 3.34: distancia y cosine en 3D, sample point en eye level
+    // (`z_surf_cam = 0.0`). El radio 3D excluye luces remotas en
+    // vertical aunque XY caiga dentro del rango.
     let wall_normal = wall_normal_cam(x1, y1, x2, y2, mid_x, mid_y);
     let boost_rgb = combined_boost_rgb_wall_cam(
         mid_x,
         mid_y,
+        0.0,
         cfg.muzzle_glow_alpha,
         near_idx,
         lit_sectors,
@@ -5986,8 +6002,8 @@ mod tests {
         let white = (255, 255, 255);
         let lights = [rim_light(50.0, 0.0, white)];
         let n = (-1.0, 0.0);
-        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
-        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, true);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, false);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, true);
         for ch in 0..3 {
             assert!(
                 (omni[ch] - dir[ch]).abs() < 1e-5,
@@ -6005,8 +6021,8 @@ mod tests {
         let white = (255, 255, 255);
         let lights = [rim_light(100.0, 30.0, white)];
         let n = (-1.0, 0.0);
-        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
-        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, true);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, false);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, true);
         for ch in 0..3 {
             if omni[ch] > 0.01 {
                 let ratio = dir[ch] / omni[ch];
@@ -6026,8 +6042,8 @@ mod tests {
         let white = (255, 255, 255);
         let lights = [rim_light(150.0, 0.0, white)];
         let n = (-1.0, 0.0);
-        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
-        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, true);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, false);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, true);
         for ch in 0..3 {
             if omni[ch] > 0.01 {
                 let ratio = dir[ch] / omni[ch];
@@ -6051,7 +6067,7 @@ mod tests {
             rim_light(150.0, -20.0, (255, 240, 200)),
         ];
         let n = (-1.0, 0.0);
-        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, NO_SECTOR, &lights, n, false);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, false);
         let baseline = world_lights_boost_rgb_cam(100.0, 0.0, NO_SECTOR, &lights);
         assert_eq!(omni, baseline, "directional=false ⇒ bit-identical al 3.29");
     }
@@ -6163,6 +6179,106 @@ mod tests {
                     ch, dir[ch]
                 );
             }
+        }
+    }
+
+    // =================================================================
+    // Fase 3.34 — BRDF 3D para paredes
+    // =================================================================
+
+    #[test]
+    fn wall_rim_3d_high_light_attenuates_compared_to_planar() {
+        // Pared en x=100, normal toward-camera (-1, 0). Dos luces a la
+        // **misma XY** (50, 0) pero distinta z_cam:
+        //   - planar: (50, 0, 0) — al nivel del eye / surface sample.
+        //   - high:   (50, 0, 60) — 60 unidades por encima.
+        // El path 3D usa d² 3D y cos(θ) = (nx·dx + ny·dy)/d_3D — la
+        // luz alta tiene d_3D > d_2D y cos < cos_2D, por lo que su
+        // aporte cae respecto a la planar.
+        let white = (255, 255, 255);
+        let planar = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: 0.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let high = [WorldLight {
+            x_cam: 50.0, y_cam: 0.0, z_cam: 60.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let n = (-1.0, 0.0);
+        let b_planar = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &planar, n, true);
+        let b_high = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &high, n, true);
+        for ch in 0..3 {
+            assert!(
+                b_planar[ch] > b_high[ch],
+                "luz alta debería atenuar más vía 3D: canal {} planar={} high={}",
+                ch, b_planar[ch], b_high[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn wall_rim_3d_radius_cuts_far_vertical_light() {
+        // Pared en x=100, normal (-1, 0). Luz a XY (100, 0) pero
+        // z=250 (muy arriba). En 2D d=0 ⇒ omni la incluye. En 3D
+        // d=250 > r=192 ⇒ direccional la excluye.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 100.0, y_cam: 0.0, z_cam: 250.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let n = (-1.0, 0.0);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, true);
+        let omni = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, false);
+        assert_eq!(dir, ZERO_BOOST, "3D radio corta la luz lejana en z");
+        assert!(omni[0] > 0.0, "omni 2D no la corta (d_XY=0)");
+    }
+
+    #[test]
+    fn wall_rim_3d_planar_light_finite_and_positive() {
+        // Luz con z_cam=0 (planar al eye level). El path 3D con dz=0
+        // colapsa al cálculo 2D del 3.32 — verificamos sanidad
+        // numérica para una geometría no-trivial.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 50.0, y_cam: 20.0, z_cam: 0.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let n = (-1.0, 0.0);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, true);
+        for ch in 0..3 {
+            assert!(dir[ch].is_finite(), "canal {} finite", ch);
+            assert!(dir[ch] > 0.0, "canal {} positivo", ch);
+        }
+    }
+
+    #[test]
+    fn wall_rim_3d_disabled_uses_omni_2d() {
+        // Toggle off ⇒ debería seguir usando `world_lights_boost_rgb_cam`
+        // omni 2D del 3.29 — bit-equivalente aún con z_cam alto.
+        let lights = [WorldLight {
+            x_cam: 50.0, y_cam: 20.0, z_cam: 100.0,
+            sector: NO_SECTOR, tint_rgb: (200, 200, 200), lit_sectors: None,
+        }];
+        let n = (-1.0, 0.0);
+        let off = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, false);
+        let baseline = world_lights_boost_rgb_cam(100.0, 0.0, NO_SECTOR, &lights);
+        assert_eq!(off, baseline, "directional=false ⇒ bit-equivalente al 3.29");
+    }
+
+    #[test]
+    fn wall_rim_3d_handles_zero_distance_safely() {
+        // Luz coincidente con la superficie en 3D (XY + z) ⇒ d² ≈ 0,
+        // fast path att=1.0, sin NaN.
+        let white = (255, 255, 255);
+        let lights = [WorldLight {
+            x_cam: 100.0, y_cam: 0.0, z_cam: 0.0,
+            sector: NO_SECTOR, tint_rgb: white, lit_sectors: None,
+        }];
+        let n = (-1.0, 0.0);
+        let dir = world_lights_boost_rgb_for_wall_cam(100.0, 0.0, 0.0, NO_SECTOR, &lights, n, true);
+        for ch in 0..3 {
+            assert!(dir[ch].is_finite(), "canal {} finite", ch);
+            assert!(dir[ch] > 0.0, "luz pegada aporta full");
         }
     }
 }
