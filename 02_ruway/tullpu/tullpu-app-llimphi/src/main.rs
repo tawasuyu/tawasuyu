@@ -289,6 +289,9 @@ enum ParametroSlider {
     TonalidadGrados,
     BlurRadio,
     OpacidadFactor,
+    NivelesEntradaMin,
+    NivelesEntradaMax,
+    NivelesGamma,
 }
 
 impl ParametroSlider {
@@ -303,6 +306,9 @@ impl ParametroSlider {
             ParametroSlider::TonalidadGrados => "p:tonalidad",
             ParametroSlider::BlurRadio => "p:blur",
             ParametroSlider::OpacidadFactor => "p:opacidad",
+            ParametroSlider::NivelesEntradaMin => "p:niveles_min",
+            ParametroSlider::NivelesEntradaMax => "p:niveles_max",
+            ParametroSlider::NivelesGamma => "p:niveles_gamma",
         }
     }
 }
@@ -1158,9 +1164,37 @@ fn sliders_parametros_capa(
                 ParametroSlider::OpacidadFactor,
             ));
         }
-        // Sin parámetros editables: `Invertir`, `Espejar*`, `Niveles`
-        // (3 params, queda para una fase dedicada). Devolvemos None
-        // para que el panel ops no muestre la sección.
+        OpLocal::Niveles {
+            entrada_min,
+            entrada_max,
+            gamma,
+        } => {
+            // Tres sliders apilados — orden visual: min (negros) abajo,
+            // max (blancos) en medio, gamma (curva) arriba. Replica el
+            // panel Levels de Photoshop de arriba a abajo.
+            rows.push(mk_slider(
+                "niveles γ",
+                *gamma,
+                0.1,
+                4.0,
+                ParametroSlider::NivelesGamma,
+            ));
+            rows.push(mk_slider(
+                "niveles blanco",
+                *entrada_max,
+                0.0,
+                1.0,
+                ParametroSlider::NivelesEntradaMax,
+            ));
+            rows.push(mk_slider(
+                "niveles negro",
+                *entrada_min,
+                0.0,
+                1.0,
+                ParametroSlider::NivelesEntradaMin,
+            ));
+        }
+        // Sin parámetros editables: `Invertir`, `Espejar*`.
         _ => return None,
     }
     Some(rows)
@@ -2551,6 +2585,24 @@ fn ajustar_parametro_derivada(
         }
         (ParametroSlider::OpacidadFactor, OpLocal::Opacidad { factor }) => {
             *factor = (*factor + dv).clamp(0.0, 1.0);
+            true
+        }
+        // Niveles tiene 3 campos; mutamos uno por evento. Permitimos que
+        // entrada_min y entrada_max se crucen — `aplicar_op_local` protege
+        // de división por cero con `(max - min).max(1e-6)`, y cruzarlos
+        // es un truco válido (binarización por intervalo invertido).
+        (ParametroSlider::NivelesEntradaMin, OpLocal::Niveles { entrada_min, .. }) => {
+            *entrada_min = (*entrada_min + dv).clamp(0.0, 1.0);
+            true
+        }
+        (ParametroSlider::NivelesEntradaMax, OpLocal::Niveles { entrada_max, .. }) => {
+            *entrada_max = (*entrada_max + dv).clamp(0.0, 1.0);
+            true
+        }
+        (ParametroSlider::NivelesGamma, OpLocal::Niveles { gamma, .. }) => {
+            // Gamma > 0 es necesario; el rango usable cubre el clásico
+            // [0.1, 4.0] de Photoshop (curva extrema arriba/abajo).
+            *gamma = (*gamma + dv).clamp(0.1, 4.0);
             true
         }
         // Param solicitado no coincide con la op de la capa — no muta.
@@ -4608,6 +4660,238 @@ mod tests {
                 "esperaba sección para op parametrizable"
             );
         }
+    }
+
+    // ---- Fase 33: Niveles con 3 sliders ---------------------------------
+
+    #[test]
+    fn ajustar_niveles_min_max_gamma_mutan_campo_correcto() {
+        let (mut model, _, deriv) = modelo_con_derivada(OpLocal::Niveles {
+            entrada_min: 0.1,
+            entrada_max: 0.9,
+            gamma: 1.0,
+        });
+        // Bump del min en +0.05 → 0.15.
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::NivelesEntradaMin,
+            0.05,
+        );
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op:
+                    TransformacionPixel::Local(OpLocal::Niveles {
+                        entrada_min,
+                        entrada_max,
+                        gamma,
+                    }),
+                ..
+            } => {
+                assert!((entrada_min - 0.15).abs() < 1e-6);
+                // Otros campos intactos.
+                assert!((entrada_max - 0.9).abs() < 1e-6);
+                assert!((gamma - 1.0).abs() < 1e-6);
+            }
+            _ => unreachable!(),
+        }
+        // Ahora bump del max en -0.1 → 0.8.
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::NivelesEntradaMax,
+            -0.1,
+        );
+        // Y del gamma en +0.5 → 1.5.
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::NivelesGamma,
+            0.5,
+        );
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op:
+                    TransformacionPixel::Local(OpLocal::Niveles {
+                        entrada_min,
+                        entrada_max,
+                        gamma,
+                    }),
+                ..
+            } => {
+                assert!((entrada_min - 0.15).abs() < 1e-6);
+                assert!((entrada_max - 0.8).abs() < 1e-6);
+                assert!((gamma - 1.5).abs() < 1e-6);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn ajustar_niveles_clamps_por_param() {
+        let (mut model, _, deriv) = modelo_con_derivada(OpLocal::Niveles {
+            entrada_min: 0.5,
+            entrada_max: 0.5,
+            gamma: 1.0,
+        });
+        // Empujar entrada_min muy arriba → clamp a 1.0.
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::NivelesEntradaMin,
+            10.0,
+        );
+        // Empujar entrada_max muy abajo → clamp a 0.0 (sí, cruzando min:
+        // permitido por design, ver doc del helper).
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::NivelesEntradaMax,
+            -10.0,
+        );
+        // Gamma a 0.05 → clamp a 0.1 (min). 100 → clamp a 4.0.
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::NivelesGamma,
+            -100.0,
+        );
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op:
+                    TransformacionPixel::Local(OpLocal::Niveles {
+                        entrada_min,
+                        entrada_max,
+                        gamma,
+                    }),
+                ..
+            } => {
+                assert!((entrada_min - 1.0).abs() < 1e-6);
+                assert!(entrada_max.abs() < 1e-6);
+                assert!((gamma - 0.1).abs() < 1e-6);
+            }
+            _ => unreachable!(),
+        }
+        // Ahora gamma para arriba.
+        ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::NivelesGamma,
+            100.0,
+        );
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Niveles { gamma, .. }),
+                ..
+            } => assert!((gamma - 4.0).abs() < 1e-6),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn ajustar_niveles_param_min_sobre_brillo_es_no_op() {
+        // Defensivo: NivelesEntradaMin sobre una capa con OpLocal::Brillo
+        // no debe mutar nada.
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::Brillo { delta: 0.3 });
+        let cambio = ajustar_parametro_derivada(
+            &mut model,
+            deriv,
+            ParametroSlider::NivelesEntradaMin,
+            0.1,
+        );
+        assert!(!cambio);
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Brillo { delta }),
+                ..
+            } => assert!((delta - 0.3).abs() < 1e-6, "brillo intacto"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn sliders_parametros_para_niveles_devuelve_tres_rows() {
+        let theme = llimphi_theme::Theme::dark();
+        let (model, _, _) = modelo_con_derivada(OpLocal::Niveles {
+            entrada_min: 0.1,
+            entrada_max: 0.9,
+            gamma: 1.2,
+        });
+        let rows = sliders_parametros_capa(&theme, &model)
+            .expect("Niveles ya debe tener sliders");
+        assert_eq!(rows.len(), 3, "tres sliders: gamma + max + min");
+    }
+
+    #[test]
+    fn niveles_drag_de_gamma_coalesce_en_un_solo_snapshot() {
+        let (mut model, _, deriv) = modelo_con_derivada(OpLocal::Niveles {
+            entrada_min: 0.0,
+            entrada_max: 1.0,
+            gamma: 1.0,
+        });
+        let hist_antes = model.historial.len();
+        // 20 deltas pequeños — todos misma capa, mismo param → 1 snapshot.
+        for _ in 0..20 {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::AjustarParametro {
+                    id: deriv,
+                    param: ParametroSlider::NivelesGamma,
+                    dv: 0.05,
+                },
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(model.historial.len(), hist_antes + 1);
+        // Un Undo revierte el drag completo de gamma.
+        model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
+        match &model.lienzo.capa(deriv).unwrap().origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Niveles { gamma, .. }),
+                ..
+            } => assert!((gamma - 1.0).abs() < 1e-6, "gamma vuelve a 1.0"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn niveles_drag_de_min_no_coalesce_con_drag_de_max() {
+        // Dos params distintos sobre la misma capa Niveles → 2 entradas
+        // separadas en historial (la clave_coalesce difiere).
+        let (mut model, _, deriv) = modelo_con_derivada(OpLocal::Niveles {
+            entrada_min: 0.0,
+            entrada_max: 1.0,
+            gamma: 1.0,
+        });
+        let hist_antes = model.historial.len();
+        for _ in 0..5 {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::AjustarParametro {
+                    id: deriv,
+                    param: ParametroSlider::NivelesEntradaMin,
+                    dv: 0.05,
+                },
+                &Handle::for_test(),
+            );
+        }
+        for _ in 0..5 {
+            model = <Tullpu as App>::update(
+                model,
+                Msg::AjustarParametro {
+                    id: deriv,
+                    param: ParametroSlider::NivelesEntradaMax,
+                    dv: -0.05,
+                },
+                &Handle::for_test(),
+            );
+        }
+        assert_eq!(
+            model.historial.len(),
+            hist_antes + 2,
+            "min y max coalesce por separado"
+        );
     }
 
     #[test]
