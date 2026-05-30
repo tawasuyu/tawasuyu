@@ -458,6 +458,19 @@ pub struct RenderConfig {
     /// path omni 3.27/3.29 con radio 2D. El muzzle queda omni
     /// (consistente con 3.30-3.32).
     pub plane_rim_directional: bool,
+    /// **Fase 3.37 — muzzle direccional sobre walls y planes**. Si
+    /// `true`, el muzzle flash del arma se trata como una luz puntual
+    /// en el origen del cam-space y se atenúa por el cosine de la
+    /// superficie (igual que el rim direccional pero para la fuente
+    /// muzzle). Paredes oblicuas reciben menos tinte cálido durante
+    /// el flash; pisos muy lejos del jugador horizontalmente reciben
+    /// el cosine reducido por el ángulo bajo. Mobjs y weapon siguen
+    /// con muzzle omni — el psprite es overlay 2D sin geometría 3D
+    /// y los mobjs reciben el muzzle "envolvente" característico de
+    /// Doom clásico. Cuando `false` (default), preserva el path
+    /// omni 3.30-3.35 — backwards-compat exacta. Sólo afecta walls
+    /// y floors/ceilings.
+    pub muzzle_brdf: bool,
 }
 
 impl Default for RenderConfig {
@@ -484,6 +497,7 @@ impl Default for RenderConfig {
             sprite_rim_directional: true,
             wall_rim_directional: true,
             plane_rim_directional: true,
+            muzzle_brdf: false,
         }
     }
 }
@@ -1007,6 +1021,80 @@ fn muzzle_boost_rgb_cam(x_cam: f32, y_cam: f32, alpha: f32) -> BoostRgb {
     [scalar * t[0], scalar * t[1], scalar * t[2]]
 }
 
+// =====================================================================
+// Fase 3.37 — Muzzle direccional sobre walls y planes
+// =====================================================================
+//
+// Cuando `cfg.muzzle_brdf = true`, el muzzle se modela como una luz
+// puntual emanada del jugador (origen del cam-space) y se atenúa por
+// el cosine entre la normal de la superficie y la dirección a la luz.
+// Las paredes oblicuas reciben menos tinte; los pisos planos lejos
+// horizontalmente reciben el cosine reducido. El muzzle clásico 3.22
+// (omni) sigue activo cuando el flag está off — preserva el feel
+// "fogonazo que cubre todo el cono delante del jugador".
+//
+// La distancia y el cosine se evalúan en 3D para coincidir con el
+// modelo BRDF de world lights 3.33-3.35.
+
+/// Muzzle direccional sobre paredes. La normal del muro tiene
+/// `nz=0` (paredes verticales), así que `cos = (nx·(-mx) + ny·(-my))/d_3D`.
+/// Para paredes visibles tras back-face cull, `dot(normal, mid) < 0`,
+/// por lo que `cos > 0` siempre — la atenuación queda en `[0.5, 1.0]`
+/// salvo casos extremos.
+fn muzzle_boost_rgb_wall_3d(
+    x_surf: f32,
+    y_surf: f32,
+    z_surf_cam: f32,
+    alpha: f32,
+    wall_normal: (f32, f32),
+) -> BoostRgb {
+    let scalar = muzzle_boost_cam(x_surf, y_surf, alpha);
+    if scalar <= 0.0 {
+        return ZERO_BOOST;
+    }
+    let d2 = x_surf * x_surf + y_surf * y_surf + z_surf_cam * z_surf_cam;
+    let att = if d2 < 1e-6 {
+        1.0
+    } else {
+        let inv_d = d2.sqrt().recip();
+        // Direction from surface to muzzle (origin): (-x_surf, -y_surf, -z) / d_3D.
+        // Cosine with 2D wall normal (nz=0).
+        let cos = (wall_normal.0 * -x_surf + wall_normal.1 * -y_surf) * inv_d;
+        (0.5 + 0.5 * cos).max(WALL_RIM_AMBIENT_FLOOR)
+    };
+    let t = rgb_to_norm(MUZZLE_TINT_RGB);
+    [scalar * t[0] * att, scalar * t[1] * att, scalar * t[2] * att]
+}
+
+/// Muzzle direccional sobre planos horizontales. La normal es `±Z` —
+/// `cos = n_z · (-z_surf_cam) / d_3D`. Para floor (`n_z=+1`) con
+/// `z_surf_cam < 0` (piso debajo del ojo), cos > 0 ⇒ att > 0.5; para
+/// ceiling (`n_z=-1`) con `z_surf_cam > 0` (techo arriba), cos > 0
+/// igual. Pisos/techos muy lejos horizontalmente quedan con cos bajo
+/// (incidencia rasante).
+fn muzzle_boost_rgb_plane_3d(
+    x_surf: f32,
+    y_surf: f32,
+    z_surf_cam: f32,
+    alpha: f32,
+    n_z: f32,
+) -> BoostRgb {
+    let scalar = muzzle_boost_cam(x_surf, y_surf, alpha);
+    if scalar <= 0.0 {
+        return ZERO_BOOST;
+    }
+    let d2 = x_surf * x_surf + y_surf * y_surf + z_surf_cam * z_surf_cam;
+    let att = if d2 < 1e-6 {
+        1.0
+    } else {
+        let inv_d = d2.sqrt().recip();
+        let cos = n_z * -z_surf_cam * inv_d;
+        (0.5 + 0.5 * cos).max(PLANE_RIM_AMBIENT_FLOOR)
+    };
+    let t = rgb_to_norm(MUZZLE_TINT_RGB);
+    [scalar * t[0] * att, scalar * t[1] * att, scalar * t[2] * att]
+}
+
 /// Versión RGB del boost de world lights. Cada luz contribuye
 /// `f²·PEAK·(tint/255)` per-canal, sumadas y clampeadas a
 /// `MUZZLE_BOOST_PEAK` por canal.
@@ -1412,8 +1500,9 @@ fn world_lights_boost_rgb_for_wall_cam(
     ]
 }
 
-/// Versión wall del boost combinado: muzzle (omni, anclado al jugador)
-/// + world lights atenuadas por la normal de la pared.
+/// Versión wall del boost combinado: muzzle (omni por default, BRDF
+/// con `muzzle_brdf=true` en Fase 3.37) + world lights atenuadas por la
+/// normal de la pared.
 fn combined_boost_rgb_wall_cam(
     x_cam: f32,
     y_cam: f32,
@@ -1424,12 +1513,14 @@ fn combined_boost_rgb_wall_cam(
     world_lights: &[WorldLight],
     wall_normal: (f32, f32),
     directional: bool,
+    muzzle_brdf: bool,
 ) -> BoostRgb {
-    let m = muzzle_boost_gated_rgb(
-        muzzle_boost_rgb_cam(x_cam, y_cam, muzzle_alpha),
-        surf_sector,
-        lit_sectors,
-    );
+    let m_raw = if muzzle_brdf {
+        muzzle_boost_rgb_wall_3d(x_cam, y_cam, z_surf_cam, muzzle_alpha, wall_normal)
+    } else {
+        muzzle_boost_rgb_cam(x_cam, y_cam, muzzle_alpha)
+    };
+    let m = muzzle_boost_gated_rgb(m_raw, surf_sector, lit_sectors);
     let w = world_lights_boost_rgb_for_wall_cam(
         x_cam,
         y_cam,
@@ -1547,9 +1638,9 @@ fn world_lights_boost_rgb_for_plane_cam(
     ]
 }
 
-/// Versión plano del boost combinado: muzzle (omni 2D, anclado al
-/// jugador) + world lights con BRDF 3D. El muzzle no se direcciona
-/// — emana del jugador, consistente con 3.30-3.32.
+/// Versión plano del boost combinado: muzzle (omni 2D por default,
+/// BRDF 3D con `muzzle_brdf=true` en Fase 3.37) + world lights con
+/// BRDF 3D.
 fn combined_boost_rgb_plane_cam(
     x_cam: f32,
     y_cam: f32,
@@ -1560,12 +1651,14 @@ fn combined_boost_rgb_plane_cam(
     world_lights: &[WorldLight],
     n_z: f32,
     directional: bool,
+    muzzle_brdf: bool,
 ) -> BoostRgb {
-    let m = muzzle_boost_gated_rgb(
-        muzzle_boost_rgb_cam(x_cam, y_cam, muzzle_alpha),
-        surf_sector,
-        lit_sectors,
-    );
+    let m_raw = if muzzle_brdf {
+        muzzle_boost_rgb_plane_3d(x_cam, y_cam, z_surf_cam, muzzle_alpha, n_z)
+    } else {
+        muzzle_boost_rgb_cam(x_cam, y_cam, muzzle_alpha)
+    };
+    let m = muzzle_boost_gated_rgb(m_raw, surf_sector, lit_sectors);
     let w = world_lights_boost_rgb_for_plane_cam(
         x_cam,
         y_cam,
@@ -2141,6 +2234,7 @@ fn gather_wall(
         world_lights,
         wall_normal,
         cfg.wall_rim_directional,
+        cfg.muzzle_brdf,
     );
     let boost_scalar = boost_max(boost_rgb);
 
@@ -2714,6 +2808,7 @@ fn gather_subsector_planes(
             world_lights,
             n_z,
             cfg.plane_rim_directional,
+            cfg.muzzle_brdf,
         );
         let boost_scalar = boost_max(boost_rgb);
         // Intentar texturizar: tenemos atlas + flat resolves a RGBA.
@@ -6488,6 +6583,102 @@ mod tests {
         for ch in 0..3 {
             assert!(dir[ch].is_finite(), "canal {} finite", ch);
             assert!(dir[ch] > 0.0, "luz al nivel del sprite aporta canal {}", ch);
+        }
+    }
+
+    // =================================================================
+    // Fase 3.37 — Muzzle direccional sobre walls y planes
+    // =================================================================
+
+    #[test]
+    fn muzzle_brdf_wall_perpendicular_full_intensity() {
+        // Pared straight-ahead a (100, 0, 0), normal (-1, 0). Muzzle en
+        // origin ⇒ direction surf→muzzle = (-1, 0, 0). cos = 1 ⇒ att=1.
+        // Direccional debe coincidir con el muzzle omni (sin cosine).
+        let n = (-1.0, 0.0);
+        let dir = muzzle_boost_rgb_wall_3d(100.0, 0.0, 0.0, 1.0, n);
+        let omni = muzzle_boost_rgb_cam(100.0, 0.0, 1.0);
+        for ch in 0..3 {
+            assert!(
+                (dir[ch] - omni[ch]).abs() < 1e-5,
+                "perpendicular: canal {} dir={} omni={}",
+                ch, dir[ch], omni[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn muzzle_brdf_wall_oblique_attenuates() {
+        // Pared oblicua: midpoint (100, 50), normal apuntando al cam pero
+        // con componente lateral. dot(n, -m)/|m_3D| = cos < 1 ⇒ att < 1
+        // ⇒ direccional < omni en cada canal.
+        let mx = 100.0;
+        let my = 50.0;
+        // Pared dirección (0, 1) (vertical-Y), normal (-1, 0) toward camera.
+        let n = (-1.0, 0.0);
+        let dir = muzzle_boost_rgb_wall_3d(mx, my, 0.0, 1.0, n);
+        let omni = muzzle_boost_rgb_cam(mx, my, 1.0);
+        for ch in 0..3 {
+            assert!(dir[ch] < omni[ch], "oblique: canal {} dir={} >= omni={}", ch, dir[ch], omni[ch]);
+        }
+    }
+
+    #[test]
+    fn muzzle_brdf_wall_disabled_equals_omni() {
+        // Toggle off ⇒ combined wall usa muzzle_boost_rgb_cam (omni).
+        let n = (-1.0, 0.0);
+        let off = combined_boost_rgb_wall_cam(
+            100.0, 50.0, 0.0, 1.0, NO_SECTOR, None, &[], n, false, false,
+        );
+        let on = combined_boost_rgb_wall_cam(
+            100.0, 50.0, 0.0, 1.0, NO_SECTOR, None, &[], n, false, true,
+        );
+        // En perpendicular straight muzzle direccional == omni; en
+        // oblicuo direccional < omni ⇒ off[i] >= on[i] por canal.
+        for ch in 0..3 {
+            assert!(off[ch] >= on[ch], "off >= on en canal {}", ch);
+        }
+    }
+
+    #[test]
+    fn muzzle_brdf_plane_floor_below_camera_full_intensity() {
+        // Floor a z_surf = -32 (debajo del ojo), centroide en (0, 0, -32).
+        // direction surf→muzzle = (0, 0, 32)/32 = (0, 0, 1). cos con
+        // n_z=+1 (floor) = 1 ⇒ att=1.
+        let dir = muzzle_boost_rgb_plane_3d(0.0, 0.0, -32.0, 1.0, 1.0);
+        // muzzle_boost_rgb_cam usa solo XY ⇒ 2D distance = 0 ⇒ scalar = peak.
+        let omni = muzzle_boost_rgb_cam(0.0, 0.0, 1.0);
+        for ch in 0..3 {
+            assert!(
+                (dir[ch] - omni[ch]).abs() < 1e-5,
+                "floor below camera: canal {} dir={} omni={}",
+                ch, dir[ch], omni[ch]
+            );
+        }
+    }
+
+    #[test]
+    fn muzzle_brdf_plane_far_horizontal_attenuates() {
+        // Floor lejos horizontalmente, poco vertical: centroide (100, 0, -8).
+        // direction surf→muzzle = (-100, 0, 8)/sqrt(10064) ≈ (-0.997, 0, 0.080).
+        // cos con n_z=+1 = 0.080 ⇒ att = (0.5 + 0.04).max(0.3) ≈ 0.54.
+        // Direccional debe ser ~54% del omni por canal.
+        let dir = muzzle_boost_rgb_plane_3d(100.0, 0.0, -8.0, 1.0, 1.0);
+        let omni = muzzle_boost_rgb_cam(100.0, 0.0, 1.0);
+        for ch in 0..3 {
+            if omni[ch] > 0.01 {
+                let ratio = dir[ch] / omni[ch];
+                assert!(
+                    ratio < 0.6,
+                    "rasante: canal {} ratio {} debería caer < 0.6",
+                    ch, ratio
+                );
+                assert!(
+                    ratio > PLANE_RIM_AMBIENT_FLOOR - 0.01,
+                    "rasante: canal {} ratio {} debería estar sobre el piso ambient",
+                    ch, ratio
+                );
+            }
         }
     }
 }
