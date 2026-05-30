@@ -229,6 +229,7 @@ members = [
     "02_ruway/llimphi/widgets/field",
     "02_ruway/llimphi/widgets/panel",
     "02_ruway/llimphi/widgets/panes",
+    "02_ruway/llimphi/llimphi-workspace",
     "02_ruway/llimphi/widgets/list",
     "02_ruway/llimphi/widgets/slider",
     "02_ruway/llimphi/widgets/splitter",
@@ -631,6 +632,8 @@ llimphi-widget-skeleton = { path = "02_ruway/llimphi/widgets/skeleton" }
 llimphi-widget-field = { path = "02_ruway/llimphi/widgets/field" }
 # Firma visual transversal (gradient sutil + hairline accent).
 llimphi-widget-panel = { path = "02_ruway/llimphi/widgets/panel" }
+llimphi-widget-panes = { path = "02_ruway/llimphi/widgets/panes" }
+llimphi-workspace = { path = "02_ruway/llimphi/llimphi-workspace" }
 # Abstracción Selector — host (paths) + wawa (khipus).
 llimphi-module-selector = { path = "02_ruway/llimphi/modules/selector" }
 
