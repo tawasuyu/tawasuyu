@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use cosmos_canvas_llimphi::canvas_view_clickable;
-use cosmos_render::{compose_wheel_with_hits, CompositionOpts, Palette};
+use cosmos_canvas_llimphi::{canvas_view, canvas_view_clickable};
+use cosmos_render::{compose_sphere, compose_wheel_with_hits, CompositionOpts, Palette, SphereOpts, SphereView};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
@@ -27,12 +27,14 @@ use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_switch::{switch_view, SwitchPalette};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
+use std::collections::HashMap;
+
+use crate::library::{NavKind, NavNode};
 use crate::model::MenuKind;
 use crate::model::{
-    ChartView, Model, Msg, NavGroup, OverlayKind, ToolCat, WheelOpt, HARMONICS, MENU_BAR_H,
-    MENU_BTN_W, STATUS_H, TAB_BAR_H, VIEWPORT, WHEEL_SIZE,
+    ChartView, Model, Msg, OverlayKind, ToolCat, WheelOpt, HARMONICS, MENU_BAR_H, MENU_BTN_W,
+    STATUS_H, TAB_BAR_H, VIEWPORT, WHEEL_SIZE,
 };
-use crate::persist::list_cards;
 use crate::view;
 
 // =====================================================================
@@ -338,42 +340,68 @@ pub(crate) fn menu_bar(model: &Model, theme: &Theme) -> View<Msg> {
 // Árbol de navegación
 // =====================================================================
 
-fn group_row(label: String, expanded: bool, g: NavGroup) -> TreeRow<Msg> {
-    TreeRow {
-        label,
-        depth: 0,
-        has_children: true,
-        expanded,
-        selected: false,
-        on_toggle: Msg::ToggleNavGroup(g),
-        on_select: Msg::ToggleNavGroup(g),
+/// Un nodo es visible sólo si TODOS sus ancestros (grupos/contactos) están
+/// expandidos. Sube por la cadena de `parent` hasta la raíz.
+fn ancestors_expanded(
+    node: &NavNode,
+    by_key: &HashMap<&str, &NavNode>,
+    model: &Model,
+) -> bool {
+    let mut cur = node.parent.clone();
+    while let Some(pk) = cur {
+        if !model.nav_expanded.contains(&pk) {
+            return false;
+        }
+        cur = by_key.get(pk.as_str()).and_then(|n| n.parent.clone());
     }
+    true
 }
 
-/// Árbol izquierdo: explorador de datos (biblioteca de cartas). Las
-/// gráficas y análisis ya no viven acá — el centro switchea el tipo de
-/// gráfica y la derecha trae los módulos de análisis.
+/// Árbol izquierdo: explorador de datos jerárquico (grupo → contacto →
+/// carta) sobre `cosmos-store`, estilo file-manager. Las gráficas y
+/// análisis ya no viven acá — el centro switchea el tipo de gráfica y la
+/// derecha trae los módulos de análisis.
 pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
     let mut rows: Vec<TreeRow<Msg>> = Vec::new();
 
-    let cards = list_cards();
-    rows.push(group_row(
-        format!("Cartas ({})", cards.len()),
-        model.exp_cartas,
-        NavGroup::Cartas,
-    ));
-    if model.exp_cartas {
-        for name in &cards {
-            rows.push(TreeRow {
-                label: name.clone(),
-                depth: 1,
-                has_children: false,
-                expanded: false,
-                selected: model.selected_card.as_deref() == Some(name.as_str()),
-                on_toggle: Msg::CargarCarta(name.clone()),
-                on_select: Msg::CargarCarta(name.clone()),
-            });
+    let by_key: HashMap<&str, &NavNode> =
+        model.nav_nodes.iter().map(|n| (n.key.as_str(), n)).collect();
+
+    for n in &model.nav_nodes {
+        if !ancestors_expanded(n, &by_key, model) {
+            continue;
         }
+        let is_container = n.kind != NavKind::Chart;
+        let selected = match &n.chart_id {
+            Some(id) => model.selected_card.as_deref() == Some(id.as_str()),
+            None => false,
+        };
+        let msg = if is_container {
+            Msg::ToggleNavNode(n.key.clone())
+        } else {
+            Msg::CargarCarta(n.chart_id.clone().unwrap_or_default())
+        };
+        rows.push(TreeRow {
+            label: n.label.clone(),
+            depth: n.depth,
+            has_children: is_container,
+            expanded: is_container && model.nav_expanded.contains(&n.key),
+            selected,
+            on_toggle: msg.clone(),
+            on_select: msg,
+        });
+    }
+
+    if rows.is_empty() {
+        rows.push(TreeRow {
+            label: "(biblioteca vacía)".to_string(),
+            depth: 0,
+            has_children: false,
+            expanded: false,
+            selected: false,
+            on_toggle: Msg::CloseCtx,
+            on_select: Msg::CloseCtx,
+        });
     }
 
     let tree = tree_view(TreeSpec {
@@ -411,10 +439,7 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
     let graphic = match model.chart_view {
         ChartView::Estandar => wheel_canvas(model, theme),
         ChartView::Carto => crate::astrocarto::tile_astrocarto(&model.chart, &model.render, theme),
-        ChartView::Esfera3d => pending_view(
-            "Esfera celeste 3D — renderer en cableo (cosmos-render::sphere3d).",
-            theme,
-        ),
+        ChartView::Esfera3d => sphere_canvas(model),
         ChartView::Cielo => pending_view(
             "Cielo del observador (gráfico) — pendiente; la tabla alt/az está en Herramientas › Astronomía.",
             theme,
@@ -498,6 +523,29 @@ fn chart_switcher(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .children(vec![seg_box])
+}
+
+/// Esfera celeste 3D (wireframe) — compone con `cosmos-render::sphere3d`
+/// y pinta los `DrawCommand` en el mismo canvas que la rueda. Vista fija
+/// por ahora (rotación con drag pendiente de que el canvas exponga drag).
+fn sphere_canvas(model: &Model) -> View<Msg> {
+    let opts = SphereOpts {
+        size: WHEEL_SIZE,
+        palette: Palette::dark(),
+        ..Default::default()
+    };
+    let commands = compose_sphere(&model.render, &SphereView::default(), &opts);
+    let canvas_bg = Color::from_rgba8(8, 10, 16, 255);
+    let canvas = canvas_view::<Msg>(commands, WHEEL_SIZE, Some(canvas_bg));
+    View::new(Style {
+        size: Size {
+            width: length(WHEEL_SIZE),
+            height: length(WHEEL_SIZE),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![canvas])
 }
 
 fn pending_view(msg: &str, theme: &Theme) -> View<Msg> {

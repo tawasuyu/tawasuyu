@@ -8,13 +8,17 @@
 //! rueda. Todo lo configurable vive en la vista `Configuración` y en el
 //! menú `Capas`/`Armónico`.
 
+use std::collections::HashSet;
+
 use cosmos_engine::{Corpus, PipelineRequest};
 use cosmos_model::Chart;
 use cosmos_render::RenderModel;
+use cosmos_store::Store;
 use llimphi_theme::Theme;
 use serde::{Deserialize, Serialize};
 
 use crate::astroview::AstroState;
+use crate::library::NavNode;
 
 pub(crate) const WHEEL_SIZE: f32 = 720.0;
 pub(crate) const NAV_WIDTH: f32 = 232.0;
@@ -391,13 +395,6 @@ impl MenuKind {
     }
 }
 
-/// Grupos colapsables del árbol de navegación (hoy sólo «Cartas»; el
-/// resto de la navegación se mudó al panel de herramientas y al switch de
-/// gráfica).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NavGroup {
-    Cartas,
-}
 
 /// Opción booleana del wheel — togglada desde el menú contextual y la
 /// vista de configuración.
@@ -447,7 +444,9 @@ pub(crate) enum Msg {
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
     // navegación (multi-carta: tabs reservadas para próximo incremento)
     CloseTab(usize),
-    ToggleNavGroup(NavGroup),
+    /// Expande/colapsa un nodo (grupo o contacto) del árbol de datos.
+    ToggleNavNode(String),
+    /// Carga una carta por su id de store.
     CargarCarta(String),
     /// `cosmos-chart.json` cambió en disco — recargar.
     ChartFileChanged,
@@ -502,7 +501,10 @@ pub(crate) struct Model {
     pub(crate) active_tab: usize,
     pub(crate) selected_card: Option<String>,
     pub(crate) selected_body: Option<String>,
-    pub(crate) exp_cartas: bool,
+    // árbol de datos (cosmos-store)
+    pub(crate) store: Option<Store>,
+    pub(crate) nav_nodes: Vec<NavNode>,
+    pub(crate) nav_expanded: HashSet<String>,
     // layout guardable (3 zonas resizables)
     pub(crate) nav_w: f32,
     pub(crate) tools_w: f32,
@@ -530,9 +532,9 @@ impl Model {
             .unwrap_or(ViewKind::Rueda)
     }
 
-    pub(crate) fn toggle_group(&mut self, g: NavGroup) {
-        match g {
-            NavGroup::Cartas => self.exp_cartas = !self.exp_cartas,
+    pub(crate) fn toggle_nav(&mut self, key: String) {
+        if !self.nav_expanded.remove(&key) {
+            self.nav_expanded.insert(key);
         }
     }
 

@@ -16,6 +16,7 @@ path = "src/main.rs"
 cosmos-canvas-llimphi = { path = "../cosmos-canvas-llimphi" }
 cosmos-engine = { path = "../cosmos-engine" }
 cosmos-model = { path = "../cosmos-model" }
+cosmos-store = { path = "../cosmos-store" }
 cosmos-render = { path = "../cosmos-render" }
 cosmos-core = { workspace = true }
 cosmos-time = { path = "../cosmos-time" }

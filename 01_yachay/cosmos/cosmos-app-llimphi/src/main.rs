@@ -20,6 +20,7 @@ mod astroview;
 mod chrome;
 mod engine;
 mod format;
+mod library;
 mod model;
 mod persist;
 mod tools;
@@ -37,7 +38,7 @@ use crate::chrome::MenuCmd;
 use crate::engine::{compute, sample_chart};
 use crate::model::{MenuKind, Model, Msg, ViewKind, WheelOpt};
 use crate::persist::{
-    delete_card, generate_card_name, load_card, load_chart_from_disk, load_ui_state, save_card,
+    delete_card, generate_card_name, load_chart_from_disk, load_ui_state, save_card,
     save_chart_to_disk, save_ui_state, spawn_chart_watcher, UiState,
 };
 
@@ -105,15 +106,25 @@ fn toggle_wheel(m: &mut Model, opt: WheelOpt) {
     }
 }
 
-fn do_cargar(m: &mut Model, name: String) {
-    if let Some(loaded) = load_card(&name) {
-        m.chart = loaded;
-        m.selected_card = Some(name);
+/// Carga una carta del store por su id (string ULID). Espeja la carta en
+/// `cosmos-chart.json` para conservar el watcher / la edición a mano.
+fn do_cargar(m: &mut Model, id: String) {
+    let Some(store) = &m.store else {
+        m.error = Some("store no disponible".into());
+        return;
+    };
+    let chart = id
+        .parse()
+        .ok()
+        .and_then(|cid| store.get_chart(cid).ok());
+    if let Some(chart) = chart {
+        m.chart = chart;
+        m.selected_card = Some(id);
         save_chart_to_disk(&m.chart);
         recompute_chart(m);
         recompute_astro(m);
     } else {
-        m.error = Some(format!("no se pudo cargar carta: {name}"));
+        m.error = Some(format!("no se pudo cargar carta: {id}"));
     }
 }
 
@@ -249,6 +260,15 @@ impl App for Cosmos {
         let corpus = Corpus::desde_ron(CORPUS_DEFAULT_RON).unwrap_or_default();
         let chart_watcher = spawn_chart_watcher(handle);
 
+        // Árbol de datos sobre cosmos-store: abrir, sembrar/migrar y armar
+        // el snapshot jerárquico. Todo expandido en la primera carga.
+        let store = library::open_store();
+        if let Some(s) = &store {
+            library::ensure_seed(s, &chart);
+        }
+        let nav_nodes = store.as_ref().map(library::snapshot).unwrap_or_default();
+        let nav_expanded = library::container_keys(&nav_nodes).into_iter().collect();
+
         Model {
             chart,
             overlays: ui.overlays,
@@ -264,7 +284,9 @@ impl App for Cosmos {
             active_tab: ui.active_tab,
             selected_card: None,
             selected_body: None,
-            exp_cartas: true,
+            store,
+            nav_nodes,
+            nav_expanded,
             nav_w: ui.nav_w,
             tools_w: ui.tools_w,
             nav_open: ui.nav_open,
@@ -300,7 +322,7 @@ impl App for Cosmos {
                 close_tab(&mut m, i);
                 persist = true;
             }
-            Msg::ToggleNavGroup(g) => m.toggle_group(g),
+            Msg::ToggleNavNode(key) => m.toggle_nav(key),
             Msg::CargarCarta(name) => do_cargar(&mut m, name),
             Msg::ChartFileChanged => {
                 if let Some(c) = load_chart_from_disk() {
