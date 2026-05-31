@@ -12672,4 +12672,46 @@ mod tests {
         assert_eq!(rt.eval("err !== null").expect("e"), JsValue::Bool(true));
     }
 
+    // ---- Fase 7.156 — URLPattern API ----
+    #[test]
+    fn urlpattern_pathname_named_group() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new URLPattern({ pathname: '/users/:id' });").expect("e");
+        assert_eq!(rt.eval("p.test('https://e.com/users/5')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("p.exec('https://e.com/users/5').pathname.groups.id").expect("e"), JsValue::String("5".into()));
+    }
+
+    #[test]
+    fn urlpattern_no_match() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new URLPattern({ pathname: '/users/:id' });").expect("e");
+        assert_eq!(rt.eval("p.test('https://e.com/posts/5')").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("p.exec('https://e.com/posts/5')").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn urlpattern_wildcard() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new URLPattern({ pathname: '/files/*' });").expect("e");
+        assert_eq!(rt.eval("p.test('https://e.com/files/a/b/c')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("p.exec('https://e.com/files/a/b/c').pathname.groups['0']").expect("e"), JsValue::String("a/b/c".into()));
+    }
+
+    #[test]
+    fn urlpattern_from_string() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new URLPattern('https://example.com/books/:genre');").expect("e");
+        assert_eq!(rt.eval("p.test('https://example.com/books/fiction')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("p.exec('https://example.com/books/fiction').pathname.groups.genre").expect("e"), JsValue::String("fiction".into()));
+        assert_eq!(rt.eval("p.test('https://otra.com/books/fiction')").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn urlpattern_hostname_named_group() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new URLPattern({ hostname: ':sub.example.com' });").expect("e");
+        assert_eq!(rt.eval("p.test('https://api.example.com/x')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("p.exec('https://api.example.com/x').hostname.groups.sub").expect("e"), JsValue::String("api".into()));
+    }
+
 }
