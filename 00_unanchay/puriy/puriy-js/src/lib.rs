@@ -13247,4 +13247,29 @@ mod tests {
         assert_eq!(rt.eval("ec.text").expect("e"), JsValue::String("abc".into()));
         assert_eq!(rt.eval("got").expect("e"), JsValue::String("c".into()));
     }
+
+    // ---- Fase 7.170 — Virtual Keyboard API ----
+    #[test]
+    fn virtual_keyboard_existe_en_navigator() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof navigator.virtualKeyboard").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("navigator.virtualKeyboard.overlaysContent").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("navigator.virtualKeyboard.boundingRect.height").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn virtual_keyboard_show_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("navigator.virtualKeyboard.show();").expect("e");
+        assert_eq!(rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'virtualkeyboard' && d.value === 'show'; })").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn virtual_keyboard_geometry_dispara_geometrychange() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var h = -1; navigator.virtualKeyboard.ongeometrychange = function(){ \
+            h = navigator.virtualKeyboard.boundingRect.height; }; \
+            __puriy_virtual_keyboard_geometry(0, 500, 360, 260);").expect("e");
+        assert_eq!(rt.eval("h").expect("e"), JsValue::Number(260.0));
+    }
 }
