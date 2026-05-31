@@ -125,6 +125,7 @@ mod pictureinpicture;
 mod documentpictureinpicture;
 mod closewatcher;
 mod shapedetection;
+mod editcontext;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -250,6 +251,7 @@ pub(crate) use pictureinpicture::PICTUREINPICTURE_BOOTSTRAP;
 pub(crate) use documentpictureinpicture::DOCUMENTPICTUREINPICTURE_BOOTSTRAP;
 pub(crate) use closewatcher::CLOSEWATCHER_BOOTSTRAP;
 pub(crate) use shapedetection::SHAPEDETECTION_BOOTSTRAP;
+pub(crate) use editcontext::EDITCONTEXT_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -377,5 +379,6 @@ pub(crate) const ALL: &[&str] = &[
     DOCUMENTPICTUREINPICTURE_BOOTSTRAP,
     CLOSEWATCHER_BOOTSTRAP,
     SHAPEDETECTION_BOOTSTRAP,
+    EDITCONTEXT_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

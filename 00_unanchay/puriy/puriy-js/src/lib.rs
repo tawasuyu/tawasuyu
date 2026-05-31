@@ -13218,4 +13218,33 @@ mod tests {
             var n = -1; new FaceDetector({maxDetectedFaces:2}).detect({}).then(function(r){ n = r.length; });").expect("e");
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
     }
+
+    // ---- Fase 7.169 — EditContext API ----
+    #[test]
+    fn edit_context_existe_y_construye() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof EditContext").expect("e"), JsValue::String("function".into()));
+        rt.eval("var ec = new EditContext({ text: 'hola' });").expect("e");
+        assert_eq!(rt.eval("ec.text").expect("e"), JsValue::String("hola".into()));
+    }
+
+    #[test]
+    fn edit_context_update_text_y_selection() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ec = new EditContext({ text: 'abc' }); \
+            ec.updateText(1, 2, 'XYZ'); ec.updateSelection(0, 3);").expect("e");
+        assert_eq!(rt.eval("ec.text").expect("e"), JsValue::String("aXYZc".into()));
+        assert_eq!(rt.eval("ec.selectionEnd").expect("e"), JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn edit_context_host_text_update_dispara_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var got = ''; var ec = new EditContext({ text: 'ab' }); \
+            ec.ontextupdate = function(e){ got = e.text; }; \
+            var ks = Object.keys(__puriy_editcontexts); \
+            __puriy_editcontext_text_update(ks[ks.length-1], { updateRangeStart: 2, updateRangeEnd: 2, text: 'c', selectionStart: 3 });").expect("e");
+        assert_eq!(rt.eval("ec.text").expect("e"), JsValue::String("abc".into()));
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("c".into()));
+    }
 }
