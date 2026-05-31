@@ -37,6 +37,7 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{App, Handle, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
+use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
@@ -208,6 +209,45 @@ fn query_brain(path: &Path) -> Result<BrainSnapshot, String> {
     })
 }
 
+/// Pide al brain verificar la integridad de la cadena del audit log
+/// (`VerifyAudit`: recorre `prev_sha` hasta el génesis validando cada
+/// entry contra el CAS). Operación **read-only**. Devuelve `(ok, mensaje)`
+/// listo para un banner. Runtime tokio efímero, fuera del hilo de UI.
+fn verify_audit(path: &Path) -> (bool, String) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => return (false, format!("runtime tokio: {e}")),
+    };
+    rt.block_on(async {
+        match call(path, IntrospectRequest::VerifyAudit).await {
+            Ok(IntrospectResponse::AuditVerified(r)) => {
+                if let Some(seq) = r.broken_at_seq {
+                    (
+                        false,
+                        format!(
+                            "audit ROTO en seq {seq}: {}",
+                            r.error.unwrap_or_else(|| "sin detalle".into())
+                        ),
+                    )
+                } else if let Some(e) = r.error {
+                    (false, format!("audit con error: {e}"))
+                } else {
+                    (
+                        true,
+                        format!("audit íntegro — {} entries verificadas", r.verified),
+                    )
+                }
+            }
+            Ok(IntrospectResponse::Error(e)) => (false, format!("brain: {e}")),
+            Ok(_) => (false, "respuesta inesperada a VerifyAudit".into()),
+            Err(e) => (false, e.to_string()),
+        }
+    })
+}
+
 /// Una unidad del card store: una Card `.json` invocable por el Init
 /// (equivalente fractal de un `.service` de systemd).
 #[derive(Clone)]
@@ -301,6 +341,9 @@ struct Model {
     units: UnitsSnapshot,
     last_detect_ms: u64,
     brain: BrainStatus,
+    /// Último resultado de "Verificar audit": `(ok, mensaje)`. `None` = aún
+    /// no se pidió.
+    verify: Option<(bool, String)>,
     /// Mantiene vivo el watcher de wawa-config (su thread muere al dropear).
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
@@ -311,6 +354,10 @@ enum Msg {
     Tick,
     /// Resultado de una consulta al brain (vivo o caído).
     BrainRefresh(Result<BrainSnapshot, String>),
+    /// Click en "Verificar audit": dispara la verificación de la cadena.
+    VerifyAudit,
+    /// Resultado de la verificación: `(ok, mensaje)`.
+    VerifyDone(bool, String),
     /// El bus de wawa-config cambió: re-aplicar theme/accent.
     WawaChanged(wawa_config::WawaConfig),
 }
@@ -352,6 +399,7 @@ impl App for ArjeCard {
             units: detect_units(),
             last_detect_ms: 0,
             brain: BrainStatus::Consultando,
+            verify: None,
             _wawa_watcher: watcher,
         }
     }
@@ -374,6 +422,16 @@ impl App for ArjeCard {
                     Ok(snap) => BrainStatus::Live(snap),
                     Err(e) => BrainStatus::Offline(e),
                 };
+            }
+            Msg::VerifyAudit => {
+                m.verify = Some((true, "verificando…".into()));
+                handle.spawn(move || {
+                    let (ok, txt) = verify_audit(&brain_path());
+                    Msg::VerifyDone(ok, txt)
+                });
+            }
+            Msg::VerifyDone(ok, txt) => {
+                m.verify = Some((ok, txt));
             }
             Msg::WawaChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg);
@@ -398,9 +456,29 @@ impl App for ArjeCard {
             "Linux {ka}.{kb}.{kc}  ·  detección {} ms",
             model.last_detect_ms
         );
-        let header = app_header::<Msg>(header_text, vec![], &header_palette);
+        // Acción "Verificar audit" sólo tiene sentido con el brain vivo.
+        let mut actions: Vec<View<Msg>> = Vec::new();
+        if matches!(model.brain, BrainStatus::Live(_)) {
+            let btn_palette = ButtonPalette::from_theme(theme);
+            actions.push(button_view::<Msg>(
+                "Verificar audit",
+                &btn_palette,
+                Msg::VerifyAudit,
+            ));
+        }
+        let header = app_header::<Msg>(header_text, actions, &header_palette);
 
         let mut body_children: Vec<View<Msg>> = Vec::new();
+
+        // Banner del último resultado de "Verificar audit".
+        if let Some((ok, txt)) = &model.verify {
+            let kind = if *ok {
+                BannerKind::Success
+            } else {
+                BannerKind::Error
+            };
+            body_children.push(banner_view::<Msg>(kind, txt.clone()));
+        }
 
         // Banner de advertencia si no se puede aislar nada: el init no podrá
         // encarnar Cards con los namespaces que pidan.
@@ -620,6 +698,12 @@ mod tests {
         std::env::set_var("ENTE_BRAIN_SOCK", "/tmp/mi-brain.sock");
         assert_eq!(brain_path(), PathBuf::from("/tmp/mi-brain.sock"));
         std::env::remove_var("ENTE_BRAIN_SOCK");
+    }
+
+    #[test]
+    fn verify_audit_offline_es_falso_no_panic() {
+        let (ok, _txt) = verify_audit(Path::new("/nonexistent/arje-card-test.sock"));
+        assert!(!ok);
     }
 
     #[test]

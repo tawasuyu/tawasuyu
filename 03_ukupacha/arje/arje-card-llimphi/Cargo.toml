@@ -16,6 +16,7 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-app-header = { workspace = true }
 llimphi-widget-banner = { workspace = true }
+llimphi-widget-button = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
 wawa-config = { path = "../../../shared/wawa-config" }
 
