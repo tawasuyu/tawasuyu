@@ -210,7 +210,17 @@ pub fn update(state: State, msg: Msg) -> State {
                 }
             }
             if end {
-                copy_vim_selection(&s);
+                // Umbral mínimo de drag: un click (o jitter sub-celda) no
+                // selecciona ni copia. Exige cruzar ~una celda para contar.
+                let dragged = s.vim_sel.is_some_and(|v| {
+                    let (dx, dy) = (v.hx - v.ax, v.hy - v.ay);
+                    (dx * dx + dy * dy).sqrt() >= crate::view::VIM_CHAR_W as f32
+                });
+                if dragged {
+                    copy_vim_selection(&s);
+                } else {
+                    s.vim_sel = None;
+                }
             }
         }
     }
