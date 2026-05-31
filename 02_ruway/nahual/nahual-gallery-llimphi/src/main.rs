@@ -30,7 +30,9 @@ use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, GridPalette};
-use nahual_thumb_core::{generar_thumb_de_archivo, Planificador, ThumbRgba};
+use nahual_thumb_core::{
+    generar_thumb_de_archivo, obtener_o_generar, CacheDisco, Planificador, ThumbRgba,
+};
 
 /// Lado máximo de la miniatura generada (px). Un poco mayor que el tile
 /// para que se vea nítida; el grid la reduce al pintar.
@@ -70,6 +72,9 @@ struct Model {
     /// Paths cuya generación falló — pintan un ⚠ en vez de reintentar.
     fallidos: HashSet<PathBuf>,
     plan: Planificador,
+    /// Cache en disco de miniaturas (reabrir sin re-decodificar). `None`
+    /// si no se pudo crear la carpeta — se cae a generar en RAM siempre.
+    cache_disco: Option<CacheDisco>,
     metrics: GridMetrics,
     /// Viewport útil asumido (de `initial_size`, menos el header).
     vw: f32,
@@ -118,6 +123,7 @@ impl App for Gallery {
             thumbs: HashMap::new(),
             fallidos: HashSet::new(),
             plan: Planificador::nuevo(MAX_EN_VUELO),
+            cache_disco: CacheDisco::por_defecto().ok(),
             metrics,
             vw: w as f32,
             vh: h as f32 - HEADER_H,
@@ -370,9 +376,18 @@ fn bombear(m: &mut Model, handle: &Handle<Msg>) {
 
     for path in m.plan.proximos() {
         let p = path.clone();
-        handle.spawn(move || match generar_thumb_de_archivo(&p, THUMB_LADO) {
-            Ok(t) => Msg::ThumbListo(p, t),
-            Err(e) => Msg::ThumbFallo(p, e.to_string()),
+        let cache = m.cache_disco.clone();
+        handle.spawn(move || {
+            // Pasa por el cache en disco si lo hay: hit ⇒ sin decodificar;
+            // miss ⇒ genera y puebla el disco para la próxima sesión.
+            let res = match &cache {
+                Some(c) => obtener_o_generar(c, &p, THUMB_LADO),
+                None => generar_thumb_de_archivo(&p, THUMB_LADO),
+            };
+            match res {
+                Ok(t) => Msg::ThumbListo(p, t),
+                Err(e) => Msg::ThumbFallo(p, e.to_string()),
+            }
         });
     }
 }

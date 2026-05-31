@@ -269,6 +269,124 @@ impl Planificador {
     }
 }
 
+// ============================================================================
+//  Cache en disco (paso 3) — reabrir una carpeta sin re-decodificar.
+// ============================================================================
+
+/// Hash FNV-1a de 64 bits. Determinista entre ejecuciones (a diferencia del
+/// `DefaultHasher` de std, que randomiza la semilla) — imprescindible para
+/// que el nombre del archivo cache sea estable de un arranque al siguiente.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Cache de miniaturas en disco. Persiste cada thumb como PNG bajo un
+/// nombre que **codifica la clave entera** (`hash(path)_mtime_size_lado`):
+/// si el archivo de origen cambia, su `mtime`/`size` cambian, el nombre
+/// cambia, y el thumb viejo simplemente no se encuentra (queda huérfano
+/// para un GC futuro). Así reabrir una carpeta sin cambios reusa todo el
+/// trabajo de decodificación de la sesión anterior — el pilar de gThumb /
+/// FastStone junto a la virtualización.
+#[derive(Debug, Clone)]
+pub struct CacheDisco {
+    dir: PathBuf,
+}
+
+impl CacheDisco {
+    /// Usa (y crea) `dir` como carpeta del cache.
+    pub fn en(dir: PathBuf) -> std::io::Result<Self> {
+        std::fs::create_dir_all(&dir)?;
+        Ok(Self { dir })
+    }
+
+    /// Cache en la ubicación estándar: `$XDG_CACHE_HOME/nahual/thumbs`
+    /// (cae a `~/.cache/nahual/thumbs`, y a `tmp` si no hay HOME).
+    pub fn por_defecto() -> std::io::Result<Self> {
+        let base = std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .unwrap_or_else(std::env::temp_dir);
+        Self::en(base.join("nahual").join("thumbs"))
+    }
+
+    /// Carpeta donde vive el cache.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    fn nombre(clave: &ClaveThumb) -> String {
+        let h = fnv1a(clave.path.to_string_lossy().as_bytes());
+        format!("{h:016x}_{}_{}_{}.png", clave.mtime_ns, clave.size, clave.lado)
+    }
+
+    fn ruta(&self, clave: &ClaveThumb) -> PathBuf {
+        self.dir.join(Self::nombre(clave))
+    }
+
+    /// Devuelve el thumb cacheado para esta clave, o `None` si no está en
+    /// disco (o el archivo está corrupto / ilegible).
+    pub fn cargar(&self, clave: &ClaveThumb) -> Option<ThumbRgba> {
+        let bytes = std::fs::read(self.ruta(clave)).ok()?;
+        decodificar_png(&bytes)
+    }
+
+    /// Escribe el thumb a disco de forma atómica (tmp + rename) para que un
+    /// corte a mitad de escritura no deje un PNG truncado que luego se lea
+    /// como válido.
+    pub fn guardar(&self, clave: &ClaveThumb, thumb: &ThumbRgba) -> std::io::Result<()> {
+        let bytes = codificar_png(thumb)?;
+        let ruta = self.ruta(clave);
+        let tmp = ruta.with_extension("png.tmp");
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::rename(&tmp, &ruta)?;
+        Ok(())
+    }
+}
+
+fn decodificar_png(bytes: &[u8]) -> Option<ThumbRgba> {
+    let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()?;
+    let rgba = img.to_rgba8();
+    Some(ThumbRgba {
+        w: rgba.width(),
+        h: rgba.height(),
+        rgba: rgba.into_raw(),
+    })
+}
+
+fn codificar_png(thumb: &ThumbRgba) -> std::io::Result<Vec<u8>> {
+    let buf = image::RgbaImage::from_raw(thumb.w, thumb.h, thumb.rgba.clone()).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "buffer de thumb inválido")
+    })?;
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgba8(buf)
+        .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    Ok(out)
+}
+
+/// Obtiene el thumb de `path` pasando por el cache en disco: si ya está
+/// (clave fresca) lo carga; si no, lo genera y lo guarda. Pensada para
+/// correr en el thread de `Handle::spawn`. El guardado es best-effort —
+/// un fallo de disco no impide devolver el thumb recién generado.
+pub fn obtener_o_generar(
+    cache: &CacheDisco,
+    path: &Path,
+    lado: u32,
+) -> Result<ThumbRgba, ThumbError> {
+    let clave = ClaveThumb::de_archivo(path, lado).map_err(|e| ThumbError::Io(e.to_string()))?;
+    if let Some(t) = cache.cargar(&clave) {
+        return Ok(t);
+    }
+    let t = generar_thumb_de_archivo(path, lado)?;
+    let _ = cache.guardar(&clave, &t);
+    Ok(t)
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
@@ -444,6 +562,96 @@ mod pruebas {
         plan.olvidar_excepto(&visibles);
         assert_eq!(plan.pendientes(), 1);
         assert_eq!(plan.proximos(), vec![PathBuf::from("/b")]);
+    }
+
+    /// Carpeta temporal única para un test de cache (sin crate externo).
+    fn tmpdir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("nahual_thumb_cache_{}_{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    fn thumb_demo() -> ThumbRgba {
+        ThumbRgba {
+            w: 3,
+            h: 2,
+            rgba: (0..3 * 2 * 4).map(|i| i as u8).collect(),
+        }
+    }
+
+    #[test]
+    fn fnv1a_es_determinista() {
+        // Estabilidad cross-run: el mismo input siempre da el mismo hash
+        // (a diferencia de DefaultHasher). Valor fijo conocido de FNV-1a.
+        assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a(b"a"), fnv1a(b"a"));
+        assert_ne!(fnv1a(b"a"), fnv1a(b"b"));
+    }
+
+    #[test]
+    fn cache_disco_roundtrip() {
+        let dir = tmpdir("roundtrip");
+        let cache = CacheDisco::en(dir.clone()).unwrap();
+        let clave = ClaveThumb {
+            path: PathBuf::from("/fotos/a.png"),
+            mtime_ns: 42,
+            size: 99,
+            lado: 64,
+        };
+        let thumb = thumb_demo();
+        assert!(cache.cargar(&clave).is_none(), "miss antes de guardar");
+        cache.guardar(&clave, &thumb).unwrap();
+        let recuperado = cache.cargar(&clave).expect("hit tras guardar");
+        // PNG es lossless sobre Rgba8 → bit-a-bit idéntico.
+        assert_eq!(recuperado, thumb);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_disco_nombre_codifica_la_clave() {
+        // Distinto mtime ⇒ archivo distinto ⇒ el thumb viejo no se reusa.
+        let dir = tmpdir("nombre");
+        let cache = CacheDisco::en(dir.clone()).unwrap();
+        let base = ClaveThumb {
+            path: PathBuf::from("/fotos/a.png"),
+            mtime_ns: 1,
+            size: 10,
+            lado: 64,
+        };
+        cache.guardar(&base, &thumb_demo()).unwrap();
+        let editado = ClaveThumb {
+            mtime_ns: 2,
+            ..base.clone()
+        };
+        assert!(
+            cache.cargar(&editado).is_none(),
+            "mtime nuevo ⇒ nombre nuevo ⇒ miss"
+        );
+        assert!(cache.cargar(&base).is_some(), "el original sigue ahí");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn obtener_o_generar_usa_y_puebla_el_disco() {
+        let dir = tmpdir("obtener");
+        let cache = CacheDisco::en(dir.clone()).unwrap();
+        // PNG real en disco para generar desde él.
+        let src = dir.join("origen.png");
+        std::fs::write(&src, png_solido(100, 50, [9, 8, 7, 255])).unwrap();
+
+        // Primera vez: miss de cache → genera + guarda.
+        let clave = ClaveThumb::de_archivo(&src, 32).unwrap();
+        assert!(cache.cargar(&clave).is_none());
+        let t1 = obtener_o_generar(&cache, &src, 32).unwrap();
+        assert_eq!((t1.w, t1.h), (32, 16));
+        // Ahora está en disco.
+        let t2 = cache.cargar(&clave).expect("poblado tras obtener_o_generar");
+        assert_eq!(t1, t2);
+
+        // Segunda vez: hit de cache, mismo resultado (sin re-generar).
+        let t3 = obtener_o_generar(&cache, &src, 32).unwrap();
+        assert_eq!(t1, t3);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
