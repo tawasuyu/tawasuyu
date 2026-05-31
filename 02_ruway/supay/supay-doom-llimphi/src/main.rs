@@ -458,9 +458,18 @@ impl App for Supay {
                 // y reproducirlos. `poll_sounds` y `audio` son campos
                 // distintos → no hay conflicto de borrow.
                 let sounds = m.engine.poll_sounds();
+                // Fase 4.1: cambio de música (arranque de nivel, idmus, etc.).
+                let music = m.engine.poll_music();
                 if let Some(audio) = m.audio.as_mut() {
                     for ev in sounds {
                         audio.play(&ev.name, ev.vol, ev.sep);
+                    }
+                    match music {
+                        Some(supay_core::MusicCommand::Play { data, looping }) => {
+                            audio.play_music(&data, looping)
+                        }
+                        Some(supay_core::MusicCommand::Stop) => audio.stop_music(),
+                        None => {}
                     }
                 }
                 refresh_framebuffer(&mut m);

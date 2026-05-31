@@ -108,19 +108,62 @@ void I_PrecacheSounds(sfxinfo_t *sounds, int num_sounds) {
     (void)sounds; (void)num_sounds;
 }
 
-/* ---- Music API ---- */
+/* ---- Music API (Fase 4.1) ----
+ * `I_RegisterSong` recibe el lump MUS crudo cacheado por s_sound.c.
+ * Lo copiamos a un buffer estático; `I_PlaySong`/`I_StopSong` cambian
+ * el estado + un contador de generación. Rust consulta `supay_music_gen`
+ * (barato) cada tick y, si cambió, drena el buffer con `supay_music_poll`
+ * para arrancar/parar la música en el synth de `supay-audio`. */
+#define SUPAY_MUS_MAX (256 * 1024)
+static unsigned char supay_mus_buf[SUPAY_MUS_MAX];
+static int          supay_mus_len  = 0;
+static int          supay_mus_play = 0;
+static int          supay_mus_loop = 0;
+static unsigned int supay_mus_gen  = 0;
+
 void  I_InitMusic(void) {}
 void  I_ShutdownMusic(void) {}
 void  I_SetMusicVolume(int volume) { (void)volume; }
-void  I_PauseSong(void) {}
+void  I_PauseSong(void) {}   /* MVP: la música sigue (sin pausa real) */
 void  I_ResumeSong(void) {}
 void *I_RegisterSong(void *data, int len) {
-    (void)data; (void)len;
-    return NULL;
+    int n = len;
+    if (n < 0) n = 0;
+    if (n > SUPAY_MUS_MAX) n = SUPAY_MUS_MAX;
+    if (data && n > 0) {
+        memcpy(supay_mus_buf, data, n);
+    }
+    supay_mus_len = n;
+    return (void *)1; /* handle no-nulo: el motor lo trata como válido */
 }
 void  I_UnRegisterSong(void *handle) { (void)handle; }
 void  I_PlaySong(void *handle, boolean looping) {
-    (void)handle; (void)looping;
+    (void)handle;
+    supay_mus_play = 1;
+    supay_mus_loop = looping ? 1 : 0;
+    supay_mus_gen++;
 }
-void  I_StopSong(void) {}
-boolean I_MusicIsPlaying(void) { return 0; }
+void  I_StopSong(void) {
+    supay_mus_play = 0;
+    supay_mus_gen++;
+}
+boolean I_MusicIsPlaying(void) { return supay_mus_play; }
+
+/* Contador de generación: cambia en cada PlaySong/StopSong. Rust lo
+ * compara con el último visto para detectar cambios sin copiar el buffer. */
+unsigned int supay_music_gen(void) { return supay_mus_gen; }
+
+/* Drena el estado de música: copia hasta `max` bytes del lump a `out`
+ * (sólo si está sonando), setea len/play/loop. Devuelve la generación. */
+unsigned int supay_music_poll(unsigned char *out, int max,
+                              int *out_len, int *out_play, int *out_loop) {
+    int n = supay_mus_len;
+    if (n > max) n = max;
+    if (out_play) *out_play = supay_mus_play;
+    if (out_loop) *out_loop = supay_mus_loop;
+    if (supay_mus_play && out && n > 0) {
+        memcpy(out, supay_mus_buf, n);
+    }
+    if (out_len) *out_len = n;
+    return supay_mus_gen;
+}

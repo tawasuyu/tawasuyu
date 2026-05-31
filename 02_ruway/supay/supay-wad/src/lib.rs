@@ -108,6 +108,161 @@ pub struct Sound {
     pub samples: Vec<f32>,
 }
 
+/// Un evento de música decodificado del formato MUS de Doom. El timeline
+/// se reproduce a 140 Hz (los `delay` están en ticks de ~1/140 s). Ver
+/// [`parse_mus`]. El MVP de `supay-audio` sólo consume `NoteOn/Off` y
+/// `Volume`; pitch wheel, instrumentos y eventos de sistema se descartan
+/// al parsear (no hay banco GENMIDI todavía — Fase 4.2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MusEvent {
+    /// Nota presionada en `channel` (0-15), `note` MIDI 0-127, `vel` 0-127.
+    NoteOn { channel: u8, note: u8, vel: u8 },
+    /// Nota soltada.
+    NoteOff { channel: u8, note: u8 },
+    /// Cambio de volumen del canal (controller #3), 0-127.
+    Volume { channel: u8, vol: u8 },
+    /// Fin de la partitura (loop o stop según el modo de reproducción).
+    End,
+}
+
+/// Un evento con el retardo (en ticks de 140 Hz) a esperar **antes** de
+/// ejecutarlo, relativo al evento previo.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MusStep {
+    /// Ticks (1/140 s) a esperar antes de este evento.
+    pub delay: u32,
+    pub event: MusEvent,
+}
+
+/// Partitura MUS parseada: timeline de eventos. El canal 15 (percusión
+/// MIDI) se mantiene — el synth decide qué hacer con él.
+#[derive(Clone, Debug, Default)]
+pub struct MusSong {
+    pub steps: Vec<MusStep>,
+}
+
+/// Parsea un lump en formato MUS de Doom a un timeline de [`MusStep`].
+///
+/// Layout MUS: magic `MUS\x1a` | `u16 scoreLen` | `u16 scoreStart` | ...
+/// header | lista de instrumentos | score. El score es un stream de
+/// eventos: byte descriptor (`bit7`=último-del-grupo, `bits4-6`=tipo,
+/// `bits0-3`=canal) + payload por tipo. Tras un evento con `bit7` se lee
+/// un delay var-length (7 bits/byte, `bit7`=continúa) en ticks de 140 Hz.
+///
+/// Sólo materializamos los eventos que el synth usa (play/release/volume/
+/// end); pitch wheel, system e instrumentos se saltan pero su delay se
+/// preserva. Devuelve `None` si el magic o el header no validan.
+pub fn parse_mus(bytes: &[u8]) -> Option<MusSong> {
+    if bytes.len() < 16 || &bytes[0..4] != b"MUS\x1a" {
+        return None;
+    }
+    let score_start = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
+    let score_len = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    if score_start > bytes.len() {
+        return None;
+    }
+    let end = (score_start + score_len).min(bytes.len());
+    let score = &bytes[score_start..end];
+
+    let mut steps: Vec<MusStep> = Vec::new();
+    let mut pos = 0usize;
+    // Delay acumulado a aplicar al PRÓXIMO evento materializado.
+    let mut pending_delay: u32 = 0;
+    // MUS reusa el último volumen del canal cuando una nota no trae vel.
+    let mut last_vel = [100u8; 16];
+
+    while pos < score.len() {
+        let desc = score[pos];
+        pos += 1;
+        let last = desc & 0x80 != 0;
+        let etype = (desc >> 4) & 0x07;
+        let ch = desc & 0x0f;
+
+        let mut materialized: Option<MusEvent> = None;
+        match etype {
+            0 => {
+                // Release: 1 byte (nota).
+                if pos >= score.len() {
+                    break;
+                }
+                let note = score[pos] & 0x7f;
+                pos += 1;
+                materialized = Some(MusEvent::NoteOff { channel: ch, note });
+            }
+            1 => {
+                // Play: 1 byte (nota | bit7=trae volumen), +1 si bit7.
+                if pos >= score.len() {
+                    break;
+                }
+                let nb = score[pos];
+                pos += 1;
+                let note = nb & 0x7f;
+                let vel = if nb & 0x80 != 0 {
+                    if pos >= score.len() {
+                        break;
+                    }
+                    let v = score[pos] & 0x7f;
+                    pos += 1;
+                    last_vel[ch as usize] = v;
+                    v
+                } else {
+                    last_vel[ch as usize]
+                };
+                materialized = Some(MusEvent::NoteOn { channel: ch, note, vel });
+            }
+            2 => {
+                pos += 1; // pitch wheel: 1 byte, ignorado
+            }
+            3 => {
+                pos += 1; // system event: 1 byte, ignorado
+            }
+            4 => {
+                // Controller: 2 bytes (número, valor).
+                if pos + 1 >= score.len() {
+                    break;
+                }
+                let ctrl = score[pos];
+                let val = score[pos + 1] & 0x7f;
+                pos += 2;
+                if ctrl == 3 {
+                    materialized = Some(MusEvent::Volume { channel: ch, vol: val });
+                }
+            }
+            6 => {
+                materialized = Some(MusEvent::End);
+            }
+            _ => {} // 5, 7: no usados
+        }
+
+        if let Some(ev) = materialized {
+            steps.push(MusStep {
+                delay: pending_delay,
+                event: ev,
+            });
+            pending_delay = 0;
+            if ev == MusEvent::End {
+                break;
+            }
+        }
+
+        if last {
+            // Delay var-length en ticks de 140 Hz.
+            let mut value: u32 = 0;
+            while pos < score.len() {
+                let b = score[pos];
+                pos += 1;
+                value = (value << 7) | (b & 0x7f) as u32;
+                if b & 0x80 == 0 {
+                    break;
+                }
+            }
+            pending_delay = pending_delay.saturating_add(value);
+        }
+    }
+
+    Some(MusSong { steps })
+}
+
 impl Wad {
     /// Abre y parsea un WAD desde disco. Lee el archivo completo a
     /// memoria — DOOM1.WAD ≈ 4 MB, no es problema; permite que `lump`
@@ -320,6 +475,18 @@ impl Wad {
             sample_rate: rate,
             samples,
         })
+    }
+
+    /// Lump de música crudo (e.g. `"D_E1M1"`). Devuelve los bytes tal
+    /// cual — el caller decide si es MUS (magic `MUS\x1a`) o MIDI.
+    pub fn music(&self, name: &str) -> Option<&[u8]> {
+        self.lump(name)
+    }
+
+    /// Parsea un lump MUS a [`MusSong`]. Devuelve `None` si el magic no
+    /// es `MUS\x1a` o el header está truncado. Ver [`parse_mus`].
+    pub fn music_song(&self, name: &str) -> Option<MusSong> {
+        parse_mus(self.lump(name)?)
     }
 
     /// Busca un sprite lump por (name, frame_letter, angle).
@@ -969,5 +1136,99 @@ mod tests {
         let bytes = build_sound_wad("DSTEST", &[1, 2, 3, 4], 11025);
         let wad = Wad::parse(bytes).unwrap();
         assert!(wad.sound("DSNOPE").is_none());
+    }
+
+    /// Construye un lump MUS mínimo: header de 16 bytes (sin
+    /// instrumentos) + el `score` dado a continuación.
+    fn build_mus(score: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"MUS\x1a");
+        out.extend_from_slice(&(score.len() as u16).to_le_bytes()); // scoreLen
+        out.extend_from_slice(&16u16.to_le_bytes()); // scoreStart = 16
+        out.extend_from_slice(&1u16.to_le_bytes()); // channels
+        out.extend_from_slice(&0u16.to_le_bytes()); // sec channels
+        out.extend_from_slice(&0u16.to_le_bytes()); // instr count = 0
+        out.extend_from_slice(&0u16.to_le_bytes()); // dummy
+        debug_assert_eq!(out.len(), 16);
+        out.extend_from_slice(score);
+        out
+    }
+
+    #[test]
+    fn parse_mus_play_delay_release_end() {
+        // Evento play (tipo 1) canal 0, nota 60, con volumen (bit7) 100,
+        // y bit "last" → delay 35 ticks. Luego release (tipo 0) nota 60.
+        // Luego score-end (tipo 6).
+        let score = [
+            // play, ch0, last-bit: 0b1_001_0000 = 0x90
+            0x90, 0x80 | 60, 100, // nota 60 con vel 100
+            35,   // delay var-length = 35
+            // release, ch0, no last: 0b0_000_0000 = 0x00
+            0x00, 60, // nota 60
+            // score end, ch0: 0b0_110_0000 = 0x60
+            0x60,
+        ];
+        let song = parse_mus(&build_mus(&score)).expect("parse");
+        assert_eq!(song.steps.len(), 3);
+        assert_eq!(
+            song.steps[0],
+            MusStep {
+                delay: 0,
+                event: MusEvent::NoteOn { channel: 0, note: 60, vel: 100 }
+            }
+        );
+        // El delay 35 quedó como delay_before del siguiente evento.
+        assert_eq!(
+            song.steps[1],
+            MusStep {
+                delay: 35,
+                event: MusEvent::NoteOff { channel: 0, note: 60 }
+            }
+        );
+        assert_eq!(song.steps[2].event, MusEvent::End);
+    }
+
+    #[test]
+    fn parse_mus_varlen_delay_multibyte() {
+        // play con last → delay = 0x81,0x00 = (1<<7)|0 = 128 ticks.
+        let score = [
+            0x90, 0x80 | 64, 90, 0x81, 0x00, // delay 128
+            0x60, // end
+        ];
+        let song = parse_mus(&build_mus(&score)).unwrap();
+        assert_eq!(song.steps[0].event, MusEvent::NoteOn { channel: 0, note: 64, vel: 90 });
+        assert_eq!(song.steps[1].delay, 128);
+        assert_eq!(song.steps[1].event, MusEvent::End);
+    }
+
+    #[test]
+    fn parse_mus_controller_volume_and_skipped_events() {
+        // controller (tipo 4) ctrl=3 (volumen) val=80 → Volume.
+        // pitch wheel (tipo 2) con last → su delay se preserva.
+        let score = [
+            // controller ch0: 0b0_100_0000 = 0x40
+            0x40, 3, 80, // volumen 80
+            // pitch wheel ch0 last: 0b1_010_0000 = 0xA0, dato 0x40, delay 10
+            0xA0, 0x40, 10,
+            // play sin volumen (reusa last_vel=100 default): note 50
+            0x10, 50, // 0b0_001_0000 = 0x10
+            0x60, // end
+        ];
+        let song = parse_mus(&build_mus(&score)).unwrap();
+        assert_eq!(song.steps[0].event, MusEvent::Volume { channel: 0, vol: 80 });
+        // El pitch wheel no se materializa, pero su delay 10 va al play.
+        assert_eq!(
+            song.steps[1],
+            MusStep {
+                delay: 10,
+                event: MusEvent::NoteOn { channel: 0, note: 50, vel: 100 }
+            }
+        );
+    }
+
+    #[test]
+    fn parse_mus_rejects_non_mus() {
+        assert!(parse_mus(b"MThd\0\0\0\0").is_none());
+        assert!(parse_mus(&[0u8; 4]).is_none());
     }
 }

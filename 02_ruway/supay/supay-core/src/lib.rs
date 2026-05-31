@@ -327,6 +327,27 @@ extern "C" {
     /// Drena hasta `max` eventos de sonido del ring buffer C
     /// (`audio_stubs.c`) al array `out`. Devuelve cuántos copió.
     fn supay_sound_poll(out: *mut SupaySndEvent, max: std::ffi::c_int) -> std::ffi::c_int;
+
+    /// Contador de generación de música (cambia en cada PlaySong/StopSong).
+    fn supay_music_gen() -> std::ffi::c_uint;
+    /// Drena el estado de música: copia el lump MUS a `out` si suena.
+    fn supay_music_poll(
+        out: *mut u8,
+        max: std::ffi::c_int,
+        out_len: *mut std::ffi::c_int,
+        out_play: *mut std::ffi::c_int,
+        out_loop: *mut std::ffi::c_int,
+    ) -> std::ffi::c_uint;
+}
+
+/// Orden de música emitida por el motor: arrancar un lump MUS (con loop)
+/// o parar. Ver [`DoomEngine::poll_music`].
+#[derive(Clone, Debug)]
+pub enum MusicCommand {
+    /// Reproducir estos bytes MUS crudos; `looping` repite al terminar.
+    Play { data: Vec<u8>, looping: bool },
+    /// Detener la música actual.
+    Stop,
 }
 
 /// Layout C del evento de sonido (`supay_snd_event` en `audio_stubs.c`).
@@ -371,6 +392,9 @@ pub struct DoomEngine {
     /// `true` si vendor/doomgeneric/ se compiló y el motor real está
     /// linkeado. `false` en modo stub.
     pub real: bool,
+    /// Fase 4.1: última generación de música vista (`supay_music_gen`).
+    /// `poll_music` la compara para detectar cambios sin copiar el lump.
+    last_music_gen: u32,
 }
 
 // SAFETY: `*mut c_char` no es Send + Sync por defecto, pero los
@@ -412,6 +436,7 @@ impl DoomEngine {
             _args: cstrings,
             _argv: argv,
             real: cfg!(not(doomgeneric_stub)),
+            last_music_gen: 0,
         }
     }
 
@@ -519,6 +544,51 @@ impl DoomEngine {
                 }
             }
             out
+        }
+    }
+
+    /// Detecta si el motor cambió de música desde el último poll. Devuelve
+    /// `Some(Play|Stop)` sólo cuando hay un cambio (arranque de nivel,
+    /// `idmus`, victoria, etc.); `None` el resto de los ticks. En modo
+    /// stub siempre `None`. Mismo thread que [`Self::tick`].
+    pub fn poll_music(&mut self) -> Option<MusicCommand> {
+        #[cfg(doomgeneric_stub)]
+        {
+            None
+        }
+        #[cfg(not(doomgeneric_stub))]
+        {
+            // Chequeo barato: ¿cambió la generación?
+            let gen = unsafe { supay_music_gen() } as u32;
+            if gen == self.last_music_gen {
+                return None;
+            }
+            self.last_music_gen = gen;
+            // Cambió → drenar el estado completo.
+            const MAX: usize = 256 * 1024;
+            let mut buf = vec![0u8; MAX];
+            let mut len: std::ffi::c_int = 0;
+            let mut play: std::ffi::c_int = 0;
+            let mut looping: std::ffi::c_int = 0;
+            // SAFETY: buf tiene MAX bytes; la fn C copia a lo sumo MAX.
+            unsafe {
+                supay_music_poll(
+                    buf.as_mut_ptr(),
+                    MAX as std::ffi::c_int,
+                    &mut len,
+                    &mut play,
+                    &mut looping,
+                );
+            }
+            if play != 0 {
+                buf.truncate((len.max(0) as usize).min(MAX));
+                Some(MusicCommand::Play {
+                    data: buf,
+                    looping: looping != 0,
+                })
+            } else {
+                Some(MusicCommand::Stop)
+            }
         }
     }
 
