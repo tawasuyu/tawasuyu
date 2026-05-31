@@ -26,6 +26,7 @@ use std::time::Duration;
 pub mod control;
 pub mod eq;
 pub mod layout;
+pub mod sync;
 
 /// Productor de frames RGBA. `tick` avanza el tiempo `dt` y, si hay
 /// un nuevo frame disponible, lo deja escrito en `buf` y devuelve
