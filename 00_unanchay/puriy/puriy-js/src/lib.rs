@@ -12390,4 +12390,67 @@ mod tests {
         assert_eq!(rt.eval("__puriy_dirty.filter(function(d){return d.kind==='webgl-call';}).length").expect("e"), JsValue::Number(2.0));
     }
 
+    // ---- Fase 7.152 — CSS Font Loading API ----
+    #[test]
+    fn fontface_existe_y_estado_inicial() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var f = new FontFace('Roboto', 'url(roboto.woff2)', { weight: '700' });").expect("e");
+        assert_eq!(rt.eval("f.family").expect("e"), JsValue::String("Roboto".into()));
+        assert_eq!(rt.eval("f.weight").expect("e"), JsValue::String("700".into()));
+        assert_eq!(rt.eval("f.status").expect("e"), JsValue::String("unloaded".into()));
+        assert_eq!(rt.eval("f.loaded instanceof Promise").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fontface_load_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // load() resuelve optimista por microtask (drenado por el harness en el eval).
+        rt.eval("var f = new FontFace('X', 'url(x.woff2)'); var done = false; f.load().then(function(){ done = true; });").expect("e");
+        assert_eq!(rt.eval("f.status").expect("e"), JsValue::String("loaded".into()));
+        assert_eq!(rt.eval("done").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fontface_load_error_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // El host gana la carrera y fuerza el error antes de que corra el microtask optimista.
+        rt.eval("var f = new FontFace('Y', 'url(y.woff2)'); var err = null; f.loaded.catch(function(e){ err = e.name; }); f.load(); __puriy_fontface_error(f._id, 'no encontrada');").expect("e");
+        assert_eq!(rt.eval("f.status").expect("e"), JsValue::String("error".into()));
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("NetworkError".into()));
+    }
+
+    #[test]
+    fn document_fonts_set_operaciones() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var f = new FontFace('Z', 'url(z.woff2)'); document.fonts.add(f);").expect("e");
+        assert_eq!(rt.eval("document.fonts.has(f)").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("document.fonts.size").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("document.fonts.delete(f)").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("document.fonts.size").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn document_fonts_check() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("document.fonts.check('16px serif')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("document.fonts.check('16px \"Fuente Inexistente\"')").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn document_fonts_loading_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var fired = null; document.fonts.addEventListener('loadingdone', function(e){ fired = e.fontfaces[0].family; }); \
+                 var f = new FontFace('Evt', 'url(e.woff2)'); document.fonts.add(f); document.fonts.load('16px Evt');").expect("e");
+        // load() del set dispara load() de la face; el microtask drena y emite loadingdone.
+        assert_eq!(rt.eval("fired").expect("e"), JsValue::String("Evt".into()));
+        assert_eq!(rt.eval("document.fonts.status").expect("e"), JsValue::String("loaded".into()));
+    }
+
+    #[test]
+    fn document_fonts_ready() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ok = false; document.fonts.ready.then(function(s){ ok = (s === document.fonts); });").expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+    }
+
 }
