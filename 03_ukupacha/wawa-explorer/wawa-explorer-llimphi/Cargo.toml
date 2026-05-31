@@ -20,4 +20,7 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-tree = { workspace = true }
 llimphi-widget-button = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }

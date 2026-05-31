@@ -161,6 +161,20 @@ wawa-detail-aoe-disabled-2 = AoE deshabilitado: { $why }
 wawa-detail-aoe-disabled-3 = pasá `<iface>` como segundo argumento de CLI o ejecutá con CAP_NET_RAW (`sudo setcap cap_net_raw=eip <binario>`).
 wawa-btn-fetch = fetch from peers
 wawa-btn-retry-fetch = reintentar fetch from peers
+# menú principal
+wawa-menu-file = Archivo
+wawa-menu-reload = Recargar imagen
+wawa-menu-quit = Salir
+wawa-menu-view = Ver
+wawa-menu-fetch = Traer nodo por AoE
+wawa-menu-theme = Cambiar tema
+wawa-menu-help = Ayuda
+wawa-menu-about = Acerca de
+# menú contextual sobre el nodo seleccionado
+wawa-ctx-select = Seleccionar
+wawa-ctx-expand = Expandir
+wawa-ctx-collapse = Contraer
+wawa-ctx-fetch = Traer por AoE
 
 # === minga-explorer (repo browser) ===
 minga-header-loaded = Repo: { $path }  ·  reload { $ms } ms

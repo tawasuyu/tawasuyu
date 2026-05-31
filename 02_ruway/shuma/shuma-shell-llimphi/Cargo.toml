@@ -29,6 +29,9 @@ llimphi-theme = { workspace = true }
 llimphi-widget-tabs = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use llimphi_clipboard::SystemClipboard;
 use pixel_verbo_core::Proveedor;
 use pixel_verbo_daemon::ClienteBloqueante;
 use pixel_verbo_mock::ProveedorMock;
@@ -228,6 +229,10 @@ pub(crate) fn inicializar() -> Model {
         valor_mascara: 255,
         thumbs_mascara: HashMap::new(),
         curva_arrastrando: None,
+        menu_open: None,
+        context_menu: None,
+        edit_menu: None,
+        clipboard: SystemClipboard::new(),
     };
     sincronizar_thumbs(&mut model);
     // Cómputo inicial del histograma desde el composite recién armado.

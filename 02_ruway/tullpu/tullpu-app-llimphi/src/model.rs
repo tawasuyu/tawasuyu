@@ -7,9 +7,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use llimphi_clipboard::SystemClipboard;
 use llimphi_module_file_picker::{PickerMsg, PickerState};
 use llimphi_ui::llimphi_raster::peniko::Image;
 use llimphi_ui::{KeyEvent, PaintRect};
+use llimphi_widget_edit_menu::EditAction;
 use llimphi_widget_text_input::TextInputState;
 
 use pixel_verbo_core::{OpPixel, Proveedor};
@@ -145,6 +147,19 @@ pub(crate) struct Model {
     /// del canvas para convertir deltas-px a coords `[0,1]`); el `End` lo
     /// limpia.
     pub(crate) curva_arrastrando: Option<CurvaDrag>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado). Lo enciende el click sobre la barra (vía `menubar_view`).
+    pub(crate) menu_open: Option<usize>,
+    /// Menú contextual sobre el lienzo/capa: ancla `(x, y)` en ventana
+    /// (`None` cerrado). Lo abre el right-click sobre el panel del lienzo.
+    pub(crate) context_menu: Option<(f32, f32)>,
+    /// Menú de edición de TEXTO: ancla `(x, y)` en ventana (`None`
+    /// cerrado). Sólo se usa mientras se renombra una capa (hay un
+    /// `TextInputState` focuseado) — right-click sobre el input lo abre.
+    pub(crate) edit_menu: Option<(f32, f32)>,
+    /// Portapapeles del sistema para el menú de edición de texto del
+    /// renombrado de capas. Independiente del `portapapeles` de píxeles.
+    pub(crate) clipboard: SystemClipboard,
 }
 
 /// Punto activo de un drag en el editor de curvas tonales. `rw`/`rh` son
@@ -598,6 +613,19 @@ pub(crate) enum Msg {
     /// Ajusta el valor de gris (0..255) que el pincel escribe en la
     /// máscara, por el delta dado (clamped). No toca el lienzo.
     BumpValorMascara(i32),
+    /// Barra de menú principal: abre/cierra un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal o contextual — se traduce al
+    /// `Msg` real ya existente y se despacha.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc / tras elegir).
+    CloseMenus,
+    /// Right-click sobre el panel del lienzo: `(x, y)` en ventana. Abre el
+    /// menú contextual de capa/selección si no estamos renombrando, o el
+    /// menú de edición de texto si sí.
+    RightPressAt { x: f32, y: f32 },
+    /// Acción elegida en el menú de edición de texto.
+    EditMenuAction(EditAction),
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

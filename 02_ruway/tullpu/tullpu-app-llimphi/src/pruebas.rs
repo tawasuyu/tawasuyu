@@ -77,6 +77,10 @@
             valor_mascara: 255,
             thumbs_mascara: HashMap::new(),
             curva_arrastrando: None,
+            menu_open: None,
+            context_menu: None,
+            edit_menu: None,
+            clipboard: llimphi_clipboard::SystemClipboard::new(),
         }
     }
 

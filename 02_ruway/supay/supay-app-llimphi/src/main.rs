@@ -34,6 +34,7 @@
 //!
 //! Controles: W/S adelante/atrás, A/D strafe, ←/→ giro, Esc cierra.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use llimphi_ui::llimphi_layout::taffy::{
@@ -44,6 +45,14 @@ use llimphi_ui::llimphi_raster::kurbo::{BezPath, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
+
+use llimphi_theme::Theme;
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+
+use app_bus::{AppMenu, Menu, MenuItem};
 
 // =====================================================================
 // Mapa hardcoded — 1 = pared, número = material id (1..4)
@@ -495,6 +504,17 @@ struct Model {
     /// Todos los enemigos muertos. Mismo handling que `game_over` —
     /// Space reinicia.
     victory: bool,
+    /// Tema activo — sólo viste la barra de menú y los overlays. El
+    /// raycaster pinta con su propia paleta hardcoded.
+    theme: Theme,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual del escenario: ancla `(x, y)` en coords de
+    /// ventana. `None` cerrado. No hay objetos seleccionables en el
+    /// mundo — el contextual expone las acciones de juego (disparar /
+    /// reiniciar), no edición.
+    context_menu: Option<(f32, f32)>,
 }
 
 /// Estado inicial del jugador + estructuras dinámicas. Lo usan `init`
@@ -523,6 +543,18 @@ enum Msg {
     Fire,
     Reset,
     Quit,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en la barra o en el contextual — se traduce al
+    /// `Msg` real existente.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click sobre el escenario → abre el menú contextual de juego
+    /// anclado en `(x, y)` de ventana.
+    ContextMenuOpen(f32, f32),
+    /// Cicla el preset de tema (sólo cosmético para la barra/overlays).
+    CycleTheme,
 }
 
 struct Supay;
@@ -558,11 +590,19 @@ impl App for Supay {
             temp_lights: Vec::with_capacity(8),
             game_over: false,
             victory: false,
+            theme: Theme::dark(),
+            menu_open: None,
+            context_menu: None,
         }
     }
 
     fn on_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
         if matches!(&e.key, Key::Named(NamedKey::Escape)) && e.state == KeyState::Pressed {
+            // Esc cierra primero cualquier menú abierto; sólo sale del
+            // juego si no hay overlay activo.
+            if model.menu_open.is_some() || model.context_menu.is_some() {
+                return Some(Msg::CloseMenus);
+            }
             return Some(Msg::Quit);
         }
         // Space tiene dos modos según el estado: si el jugador está
@@ -626,11 +666,34 @@ impl App for Supay {
                 m.tick = m.tick.wrapping_add(1);
                 advance(&mut m);
             }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                m.menu_open = None;
+                m.context_menu = Some((x, y));
+            }
+            Msg::CycleTheme => {
+                m.theme = Theme::next_after(m.theme.name);
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                m.context_menu = None;
+                handle_menu_command(&cmd, handle);
+            }
         }
         m
     }
 
     fn view(model: &Model) -> View<Msg> {
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model));
         let scene = scene_pane(model);
         let hud = hud_panel(model);
 
@@ -643,7 +706,17 @@ impl App for Supay {
             ..Default::default()
         })
         .fill(rgb(0.02, 0.02, 0.03))
-        .children(vec![scene, hud])
+        .children(vec![menubar, scene, hud])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // Prioridad: menú contextual del escenario.
+        if let Some((x, y)) = model.context_menu {
+            return Some(context_menu_for_scene(model, x, y));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model))
     }
 }
 
@@ -751,6 +824,107 @@ fn hud_panel(model: &Model) -> View<Msg> {
     })
     .fill(hud_bg)
     .children(vec![border_strip, row])
+}
+
+// =====================================================================
+// Menú principal + contextual del escenario
+// =====================================================================
+
+/// Viewport para clampear overlays. Supay no trackea el tamaño real de
+/// ventana, así que usamos las constantes de `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Supay::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &'a Model) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme: &model.theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del raycaster. Archivo / Jugar / Ver / Ayuda — sólo
+/// comandos que mapean a `Msg` reales ya existentes. No hay "Editar": la
+/// app no tiene campos de texto editables, es un canvas de juego.
+///
+/// El submenú Jugar refleja en gris el estado real: "Disparar" se
+/// deshabilita sin munición o en game over/victory.
+fn app_menu(model: &Model) -> AppMenu {
+    let can_fire = !model.game_over && !model.victory && model.ammo > 0;
+    let fire_item = MenuItem::new("Disparar", "play.fire").shortcut("Space");
+    let fire_item = if can_fire { fire_item } else { fire_item.disabled() };
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Reiniciar partida", "file.reset"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Esc").separated()),
+        )
+        .menu(Menu::new("Jugar").item(fire_item))
+        .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id (de la barra o del contextual) al `Msg` real y
+/// lo dispatcha. Todos los ids mapean a acciones que ya existían.
+fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
+    let msg = match cmd {
+        "file.reset" => Some(Msg::Reset),
+        "file.quit" => Some(Msg::Quit),
+        "play.fire" => Some(Msg::Fire),
+        "view.theme" => Some(Msg::CycleTheme),
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => None,
+    };
+    if let Some(msg) = msg {
+        handle.dispatch(msg);
+    }
+}
+
+/// Menú contextual del escenario. No hay objetos seleccionables en el
+/// mundo, así que expone las acciones de juego disponibles según el
+/// estado (disparar gris sin munición o en game over/victory). Sin
+/// edición — esto es un canvas de raycaster, no texto.
+fn context_menu_for_scene(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let can_fire = !model.game_over && !model.victory && model.ammo > 0;
+    let header = if model.game_over {
+        "fin de partida".to_string()
+    } else if model.victory {
+        "victoria".to_string()
+    } else {
+        format!("munición {}", model.ammo)
+    };
+
+    let fire = ContextMenuItem::action("Disparar").with_shortcut("Space");
+    let items = vec![
+        if can_fire { fire } else { fire.disabled() },
+        ContextMenuItem::separator(),
+        ContextMenuItem::action("Reiniciar partida"),
+    ];
+
+    // Mapeo de índice de item → command id de `handle_menu_command`.
+    let cmds: Vec<&'static str> = vec!["play.fire", "", "file.reset"];
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| {
+        Msg::MenuCommand(cmds.get(i).copied().unwrap_or("").to_string())
+    });
+
+    context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: viewport_of(model),
+        header: Some(header),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&model.theme),
+    })
 }
 
 // =====================================================================

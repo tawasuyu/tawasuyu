@@ -84,6 +84,9 @@ mod viewport;
 
 use std::path::PathBuf;
 
+use std::sync::Arc;
+
+use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_module_file_picker::{self as picker, PickerMsg, PickerPalette};
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     length, percent, FlexDirection, Size, Style,
@@ -91,6 +94,13 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{
 use llimphi_ui::llimphi_layout::taffy::Rect;
 use llimphi_ui::{
     App, Handle, Key, KeyEvent, Modifiers, NamedKey, View, WheelDelta,
+};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_edit_menu::{self as editmenu, EditFlags};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_text_input::TextInputState;
 
@@ -129,7 +139,7 @@ impl App for Tullpu {
         inicializar()
     }
 
-    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::Seleccionar(id) => {
                 model.seleccionada = Some(id);
@@ -908,12 +918,51 @@ impl App for Tullpu {
                     Err(e) => format!("export falló: {e}"),
                 };
             }
+            Msg::MenuOpen(idx) => {
+                model.menu_open = idx;
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.context_menu = None;
+                model.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                model.context_menu = None;
+                model = handle_menu_command(model, &cmd, handle);
+            }
+            Msg::RightPressAt { x, y } => {
+                // Si estamos renombrando una capa, el right-click abre el
+                // menú de edición de TEXTO sobre el input. Si no, el menú
+                // contextual de capa/selección. El menú contextual de
+                // Llimphi clampa al viewport, así que un pequeño desfase de
+                // ancla es irrelevante para un MVP.
+                if model.renombrando.is_some() {
+                    model.context_menu = None;
+                    model.edit_menu = Some((x, y));
+                } else {
+                    model.edit_menu = None;
+                    model.context_menu = Some((x, y));
+                }
+            }
+            Msg::EditMenuAction(action) => {
+                model.edit_menu = None;
+                if let Some((_, input)) = model.renombrando.as_mut() {
+                    let _ = editmenu::apply(
+                        input.editor_mut(),
+                        action,
+                        &mut model.clipboard,
+                    );
+                }
+            }
         }
         model
     }
 
     fn view(model: &Model) -> View<Msg> {
         let theme = llimphi_theme::Theme::dark();
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let cabecera = header(
             &theme,
             &model.lienzo,
@@ -923,6 +972,11 @@ impl App for Tullpu {
             model.herramienta,
             model.color_picked,
         );
+        // El panel del lienzo lleva el right-click → menú contextual. Sus
+        // coords locales no son las de ventana (vive bajo menubar+header),
+        // pero el menú clampa al viewport, suficiente para el MVP.
+        let lienzo = panel_lienzo(&theme, model)
+            .on_right_click_at(|x, y, _w, _h| Some(Msg::RightPressAt { x, y }));
         let centro = View::new(Style {
             flex_direction: FlexDirection::Row,
             flex_grow: 1.0,
@@ -934,7 +988,7 @@ impl App for Tullpu {
         })
         .children(vec![
             panel_capas(&theme, model),
-            panel_lienzo(&theme, model),
+            lienzo,
             panel_ops(&theme, model),
         ]);
         View::new(Style {
@@ -946,7 +1000,7 @@ impl App for Tullpu {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![cabecera, centro])
+        .children(vec![menubar, cabecera, centro])
     }
 
     fn on_wheel(
@@ -1016,8 +1070,34 @@ impl App for Tullpu {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
-        let state = model.picker.as_ref()?;
         let theme = llimphi_theme::Theme::dark();
+        // Prioridad 1: menú de edición de texto (sólo durante renombrado).
+        if let Some((x, y)) = model.edit_menu {
+            if let Some((_, input)) = model.renombrando.as_ref() {
+                let flags = EditFlags::from_editor(input.editor(), input.is_masked());
+                return Some(context_menu_view(editmenu::edit_context_menu(
+                    (x, y),
+                    viewport_of(),
+                    &theme,
+                    flags,
+                    Msg::EditMenuAction,
+                    Msg::CloseMenus,
+                )));
+            }
+        }
+        // Prioridad 2: menú contextual de capa/selección.
+        if let Some((x, y)) = model.context_menu {
+            return Some(context_menu_canvas(model, &theme, x, y));
+        }
+        // Prioridad 3: dropdown del menú principal.
+        if model.menu_open.is_some() {
+            let menu = app_menu(model);
+            if let Some(v) = menubar_overlay(&menubar_spec(&menu, model, &theme)) {
+                return Some(v);
+            }
+        }
+        // Prioridad 4: el picker (overlay preexistente).
+        let state = model.picker.as_ref()?;
         let palette = PickerPalette::from_theme(&theme);
         let panel = picker::view(
             state,
@@ -1047,6 +1127,219 @@ impl App for Tullpu {
             .children(vec![panel]),
         )
     }
+}
+
+// =============================================================================
+//  Menú principal + menú contextual + menú de edición de texto
+// =============================================================================
+
+/// Viewport para clampear overlays. La app no trackea el tamaño de
+/// ventana, así que usamos las dims iniciales — el menú clampa a esto y un
+/// resize sólo desfasa el clamp, no rompe la usabilidad (MVP).
+fn viewport_of() -> (f32, f32) {
+    let (w, h) = Tullpu::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a AppMenu,
+    model: &Model,
+    theme: &'a llimphi_theme::Theme,
+) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Menú principal de tullpu. Refleja en gris el estado real (sin capa
+/// seleccionada / sin historial / sin selección). Sólo comandos que mapean
+/// a `Msg` ya existentes — nada inventado.
+fn app_menu(model: &Model) -> AppMenu {
+    let hay_capa = model.seleccionada.is_some();
+    let hay_sel = model.seleccion.is_some();
+    let can_undo = model.cursor_historial > 0;
+    let can_redo = model.cursor_historial + 1 < model.historial.len();
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo {
+        undo = undo.disabled();
+    }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Shift+Z");
+    if !can_redo {
+        redo = redo.disabled();
+    }
+    let mut duplicar = MenuItem::new("Duplicar capa", "edit.duplicar").shortcut("Ctrl+D");
+    let mut eliminar = MenuItem::new("Eliminar capa", "edit.eliminar");
+    let mut combinar = MenuItem::new("Combinar hacia abajo", "edit.combinar");
+    if !hay_capa {
+        duplicar = duplicar.disabled();
+        eliminar = eliminar.disabled();
+        combinar = combinar.disabled();
+    }
+    let aplanar = MenuItem::new("Aplanar visibles", "edit.aplanar").separated();
+
+    let mut copiar = MenuItem::new("Copiar", "edit.copiar").shortcut("Ctrl+C").separated();
+    let mut cortar = MenuItem::new("Cortar", "edit.cortar").shortcut("Ctrl+X");
+    let mut dup_sel = MenuItem::new("Duplicar selección a capa", "edit.dup_sel").shortcut("Ctrl+J");
+    let mut recortar = MenuItem::new("Recortar a selección", "edit.recortar_sel");
+    let mut limpiar_sel = MenuItem::new("Limpiar selección", "sel.limpiar").shortcut("Esc");
+    if !hay_sel {
+        copiar = copiar.disabled();
+        cortar = cortar.disabled();
+        dup_sel = dup_sel.disabled();
+        recortar = recortar.disabled();
+        limpiar_sel = limpiar_sel.disabled();
+    }
+    let pegar = MenuItem::new("Pegar", "edit.pegar").shortcut("Ctrl+V");
+    let sel_todo = MenuItem::new("Seleccionar todo", "sel.todo").shortcut("Ctrl+A").separated();
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Abrir imagen…", "file.abrir").shortcut("Ctrl+P"))
+                .item(MenuItem::new("Exportar PNG", "file.png").shortcut("Ctrl+S").separated())
+                .item(MenuItem::new("Exportar JPEG", "file.jpeg"))
+                .item(MenuItem::new("Exportar WebP", "file.webp").shortcut("Ctrl+Shift+S")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(duplicar)
+                .item(eliminar)
+                .item(combinar)
+                .item(aplanar)
+                .item(copiar)
+                .item(cortar)
+                .item(pegar)
+                .item(dup_sel)
+                .item(sel_todo)
+                .item(limpiar_sel)
+                .item(recortar),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Acercar", "view.zoom_in").shortcut("+"))
+                .item(MenuItem::new("Alejar", "view.zoom_out").shortcut("-"))
+                .item(MenuItem::new("Restablecer vista", "view.reset").shortcut("0").separated())
+                .item(MenuItem::new("Rotar horario", "view.rotar_cw"))
+                .item(MenuItem::new("Rotar antihorario", "view.rotar_ccw"))
+                .item(MenuItem::new("Recorte automático", "view.autotrim")),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id (barra o contextual) al `Msg` real y lo
+/// despacha. Todos los ids mapean a acciones que ya existían.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    let sel = model.seleccionada;
+    let msg = match cmd {
+        "file.abrir" => Some(Msg::Picker(PickerMsg::Open)),
+        "file.png" => Some(Msg::Exportar(tullpu_render::FormatoExport::Png)),
+        "file.jpeg" => Some(Msg::Exportar(tullpu_render::FormatoExport::Jpeg { calidad: 90 })),
+        "file.webp" => Some(Msg::Exportar(tullpu_render::FormatoExport::Webp)),
+        "edit.undo" => Some(Msg::Undo),
+        "edit.redo" => Some(Msg::Redo),
+        "edit.duplicar" => sel.map(Msg::Duplicar),
+        "edit.eliminar" => sel.map(Msg::Eliminar),
+        "edit.combinar" => sel.map(Msg::Combinar),
+        "edit.aplanar" => Some(Msg::AplanarVisibles),
+        "edit.copiar" => Some(Msg::CopiarSeleccion),
+        "edit.cortar" => Some(Msg::CortarSeleccion),
+        "edit.pegar" => Some(Msg::PegarPortapapeles),
+        "edit.dup_sel" => Some(Msg::DuplicarSeleccionACapa),
+        "edit.recortar_sel" => Some(Msg::RecortarASeleccion),
+        "sel.todo" => Some(Msg::SeleccionarTodo),
+        "sel.limpiar" => Some(Msg::LimpiarSeleccion),
+        "view.zoom_in" => Some(Msg::Zoom { mult: ZOOM_BASE, ancla: None }),
+        "view.zoom_out" => Some(Msg::Zoom { mult: 1.0 / ZOOM_BASE, ancla: None }),
+        "view.reset" => Some(Msg::ResetVista),
+        "view.rotar_cw" => Some(Msg::RotarLienzo { cw: true }),
+        "view.rotar_ccw" => Some(Msg::RotarLienzo { cw: false }),
+        "view.autotrim" => Some(Msg::AutotrimLienzo),
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => None,
+    };
+    match msg {
+        Some(m) => Tullpu::update(model, m, handle),
+        None => model,
+    }
+}
+
+/// Menú contextual sobre el lienzo/capa. Refleja en gris el estado real
+/// (sin capa, sin selección, portapapeles vacío). Sólo acciones existentes.
+fn context_menu_canvas(
+    model: &Model,
+    theme: &llimphi_theme::Theme,
+    x: f32,
+    y: f32,
+) -> View<Msg> {
+    let hay_capa = model.seleccionada.is_some();
+    let hay_sel = model.seleccion.is_some();
+    let hay_clip = model.portapapeles.is_some();
+    let header = model
+        .seleccionada
+        .and_then(|id| model.lienzo.capas.iter().find(|c| c.id == id))
+        .map(|c| format!("capa · {}", c.nombre))
+        .unwrap_or_else(|| "lienzo".to_string());
+
+    let dis = |it: ContextMenuItem, on: bool| if on { it } else { it.disabled() };
+
+    let mut items = vec![
+        dis(ContextMenuItem::action("Duplicar capa").with_shortcut("Ctrl+D"), hay_capa),
+        dis(ContextMenuItem::action("Combinar hacia abajo"), hay_capa),
+        ContextMenuItem::action("Aplanar visibles"),
+        ContextMenuItem::separator(),
+        dis(ContextMenuItem::action("Copiar").with_shortcut("Ctrl+C"), hay_sel),
+        dis(ContextMenuItem::action("Cortar").with_shortcut("Ctrl+X"), hay_sel),
+        dis(ContextMenuItem::action("Pegar").with_shortcut("Ctrl+V"), hay_clip),
+        dis(ContextMenuItem::action("Duplicar selección a capa").with_shortcut("Ctrl+J"), hay_sel),
+        ContextMenuItem::separator(),
+        ContextMenuItem::action("Seleccionar todo").with_shortcut("Ctrl+A"),
+        dis(ContextMenuItem::action("Limpiar selección"), hay_sel),
+    ];
+    items.push(dis(
+        ContextMenuItem::action("Eliminar capa").destructive(),
+        hay_capa,
+    ));
+
+    // Mapeo posicional índice → command id de `handle_menu_command`. Los
+    // separadores ocupan slot vacío (nunca enganchan click).
+    let cmds: Vec<&'static str> = vec![
+        "edit.duplicar",
+        "edit.combinar",
+        "edit.aplanar",
+        "",
+        "edit.copiar",
+        "edit.cortar",
+        "edit.pegar",
+        "edit.dup_sel",
+        "",
+        "sel.todo",
+        "sel.limpiar",
+        "edit.eliminar",
+    ];
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| {
+        Msg::MenuCommand(cmds.get(i).copied().unwrap_or("").to_string())
+    });
+
+    context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: viewport_of(),
+        header: Some(header),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(theme),
+    })
 }
 
 fn main() {

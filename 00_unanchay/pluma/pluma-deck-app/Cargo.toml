@@ -20,3 +20,8 @@ pluma-deck-recorrido-llimphi = { path = "../pluma-deck-recorrido-llimphi" }
 # Para abrir documentos markdown reales → Recorrido vía el adaptador del core.
 pluma-md = { path = "../pluma-md" }
 llimphi-ui = { workspace = true }
+# Barra de menú principal + menú contextual sobre el marco seleccionado.
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+llimphi-theme = { workspace = true }
+app-bus = { workspace = true }

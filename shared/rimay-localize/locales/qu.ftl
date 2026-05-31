@@ -164,6 +164,20 @@ wawa-detail-aoe-disabled-2 = AoE wisq'asqa: { $why }
 wawa-detail-aoe-disabled-3 = CLI iskaynin parlachi-pi `<iface>` churay icha CAP_NET_RAW-wan kachay (`sudo setcap cap_net_raw=eip <binario>`).
 wawa-btn-fetch = peer-kuna-manta apamuy
 wawa-btn-retry-fetch = peer-kuna-manta watiq apamuy
+# hatun menú
+wawa-menu-file = Khipu
+wawa-menu-reload = Mosoqmanta kichay
+wawa-menu-quit = Lloqsiy
+wawa-menu-view = Qhaway
+wawa-menu-fetch = AoE-wan nodo apamuy
+wawa-menu-theme = Tema tikray
+wawa-menu-help = Yanapay
+wawa-menu-about = Paymanta
+# akllasqa nodopi contextual menú
+wawa-ctx-select = Akllay
+wawa-ctx-expand = Kichariy
+wawa-ctx-collapse = Wisqay
+wawa-ctx-fetch = AoE-wan apamuy
 
 # === minga-explorer (repo qhawana) ===
 minga-header-loaded = Repo: { $path }  ·  watiq apamuy { $ms } ms

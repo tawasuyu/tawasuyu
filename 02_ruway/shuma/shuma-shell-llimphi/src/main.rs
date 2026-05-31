@@ -241,6 +241,12 @@ struct Model {
     /// el código de update — sólo recibe callbacks que se traducen a
     /// `Msg::WawaConfigChanged`.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+
+    /// Menú principal: índice del menú raíz abierto (`None` = cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual de terminal: ancla `(x, y)` en ventana (`None` =
+    /// cerrado). Se abre con right-click sobre el área de trabajo.
+    ctx_menu: Option<(f32, f32)>,
 }
 
 #[derive(Clone)]
@@ -262,6 +268,17 @@ enum Msg {
     /// rearmamos el theme, accent y locale sin reiniciar. Boxed por
     /// tamaño (la config tiene un BTreeMap de módulos).
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
+
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal o contextual — se traduce al
+    /// `Msg`/acción real del chasis o del módulo shell focado.
+    MenuCommand(String),
+    /// Right-click sobre el área de trabajo → abre el menú contextual de
+    /// terminal en `(x, y)` de ventana.
+    ContextMenuOpen(f32, f32),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
 }
 
 struct Shell;
@@ -339,12 +356,19 @@ impl App for Shell {
             extra_history: HashMap::new(),
             extra_display: HashMap::new(),
             _wawa_watcher: wawa_watcher,
+            menu_open: None,
+            ctx_menu: None,
         }
     }
 
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
+        }
+        // Con un menú abierto, Esc lo cierra y se come la tecla (no va al
+        // shell). El resto de teclas siguen su curso normal.
+        if let Some(msg) = menu::intercept_key(model, e) {
+            return Some(msg);
         }
         // Reenvía teclas al módulo focado. Hoy sólo el shell consume
         // teclas (input del REPL); el resto de módulos siguen sin
@@ -411,6 +435,22 @@ impl App for Shell {
             Msg::ShortcutClicked(slot, action) => {
                 m = handle_shortcut(m, slot, action, handle);
             }
+            Msg::MenuOpen(idx) => {
+                m.menu_open = idx;
+                // Abrir el menú principal cierra el contextual (y viceversa).
+                m.ctx_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                m.ctx_menu = Some((x, y));
+                m.menu_open = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.ctx_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m = menu::handle_command(m, &cmd);
+            }
         }
         m
     }
@@ -418,10 +458,16 @@ impl App for Shell {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let theme = &model.theme;
 
+        let menubar = menu::menubar_row(model, theme);
         let topbar = render_topbar(model, theme);
         let main_area = render_main_area(model, theme);
         let bottombar = render_bottombar(model, theme);
 
+        // El right-click se engancha en la raíz (origen 0,0 → las coords
+        // locales que llegan al handler ya son de ventana) y abre el menú
+        // contextual de terminal. Un nodo hijo con su propio handler de
+        // right-click ganaría; hoy ninguno lo pone, así que la raíz es el
+        // catch-all.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -431,11 +477,17 @@ impl App for Shell {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![topbar, main_area, bottombar])
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, topbar, main_area, bottombar])
+    }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        menu::overlay(model)
     }
 }
 
 // Helpers partidos del monolito (regla dura #1, 1522 LOC): update + view.
+mod menu;
 mod update;
 mod view;
 

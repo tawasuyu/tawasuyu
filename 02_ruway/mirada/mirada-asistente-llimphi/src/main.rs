@@ -35,6 +35,10 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_clipboard::SystemClipboard;
 use pluma_llm_core::{ChatClient, ChatRequest};
 use serde::Deserialize;
 
@@ -183,6 +187,12 @@ struct Model {
     init_error: Option<String>,
     pregunta: TextInputState,
     estado: Estado,
+    /// Menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
+    edit_menu: Option<(f32, f32)>,
+    /// Portapapeles del sistema, compartido por cortar/copiar/pegar.
+    clipboard: SystemClipboard,
 }
 
 #[derive(Clone)]
@@ -203,6 +213,17 @@ enum Msg {
     },
     /// El operador pulsó "Descartar" o quiere empezar otra petición.
     Limpiar,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click en el área de trabajo → abre el menú de edición en
+    /// `(x, y)` de ventana, operando sobre el input de la pregunta.
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición.
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
 }
 
 // ---------------------------------------------------------------------
@@ -243,7 +264,14 @@ impl App for Asistente {
             init_error,
             pregunta: TextInputState::new(),
             estado: Estado::Idle,
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         }
+    }
+
+    fn initial_size() -> (u32, u32) {
+        (640, 480)
     }
 
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
@@ -255,6 +283,12 @@ impl App for Asistente {
         // respuesta entrante.
         if matches!(model.estado, Estado::Consultando) {
             return None;
+        }
+        // Si hay un menú abierto, Escape lo cierra antes que limpiar el estado.
+        if (model.menu_open.is_some() || model.edit_menu.is_some())
+            && matches!(e.key, Key::Named(NamedKey::Escape))
+        {
+            return Some(Msg::CloseMenus);
         }
         match &e.key {
             Key::Named(NamedKey::Enter) => Some(Msg::Submit),
@@ -340,6 +374,25 @@ impl App for Asistente {
             Msg::Limpiar => {
                 m.estado = Estado::Idle;
                 m.pregunta.clear();
+            }
+            Msg::MenuOpen(idx) => {
+                m.menu_open = idx;
+                m.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m = handle_menu_command(m, cmd, handle);
+            }
+            Msg::EditMenuOpen(x, y) => {
+                m.edit_menu = Some((x, y));
+                m.menu_open = None;
+            }
+            Msg::EditMenuAction(action) => {
+                m.edit_menu = None;
+                editmenu::apply(m.pregunta.editor_mut(), action, &mut m.clipboard);
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.edit_menu = None;
             }
         }
         m
@@ -443,17 +496,176 @@ impl App for Asistente {
         .radius(12.0)
         .children(hijos);
 
-        View::new(Style {
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
+
+        // El centro: el panel queda centrado en el área restante bajo la barra.
+        let centro = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
-                height: percent(1.0_f32),
+                height: Dimension::auto(),
             },
+            flex_grow: 1.0,
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![panel])
+        .children(vec![panel]);
+
+        // El right-click se engancha en la raíz (origen 0,0 → las coords
+        // locales que llegan al handler ya son de ventana) y abre el menú de
+        // edición sobre el input de la pregunta.
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
+        .children(vec![menubar, centro])
+    }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        let theme = Theme::dark();
+        // El menú de edición tiene prioridad si está abierto.
+        if let Some((x, y)) = model.edit_menu {
+            let flags = EditFlags::from_editor(model.pregunta.editor(), model.pregunta.is_masked());
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &theme))
+    }
+}
+
+// ---------------------------------------------------------------------
+// Menú principal + menú de edición
+// ---------------------------------------------------------------------
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = Asistente::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Construye el menú principal reflejando el estado real: los ítems de
+/// «Editar» se ponen grises según selección/historial/texto del input; los
+/// de «Asistente» según haya una propuesta vigente. Sólo se incluyen
+/// comandos que mapean a acciones reales existentes en `handle_menu_command`.
+fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+    let ed = model.pregunta.editor();
+    let has_sel = ed.has_selection();
+    let can_undo = ed.can_undo();
+    let can_redo = ed.can_redo();
+    let has_text = !ed.is_empty();
+    let masked = model.pregunta.is_masked();
+    let hay_propuesta = matches!(model.estado, Estado::Propuesta(_));
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo {
+        undo = undo.disabled();
+    }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo {
+        redo = redo.disabled();
+    }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel || masked {
+        cut = cut.disabled();
+        copy = copy.disabled();
+    }
+    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+        .shortcut("Ctrl+A")
+        .separated();
+    if !has_text {
+        sel_all = sel_all.disabled();
+    }
+
+    let mut enviar = MenuItem::new("Enviar petición", "asist.enviar").shortcut("Enter");
+    if !has_text {
+        enviar = enviar.disabled();
+    }
+    let mut ejecutar = MenuItem::new("Ejecutar propuesta", "asist.ejecutar");
+    if !hay_propuesta {
+        ejecutar = ejecutar.disabled();
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(enviar)
+                .item(ejecutar)
+                .item(MenuItem::new("Limpiar", "asist.limpiar").shortcut("Esc").separated()),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Limpiar resultado", "asist.limpiar")),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Acerca del asistente", "ayuda.acerca")),
+        )
+}
+
+/// Traduce el `command` del menú principal al `Msg` real y lo despacha.
+/// Cierra el menú antes de actuar. Sólo mapea comandos a acciones que la
+/// app ya tiene.
+fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
+    model.menu_open = None;
+    let target = match command.as_str() {
+        "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
+        "edit.redo" => Some(Msg::EditMenuAction(EditAction::Redo)),
+        "edit.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "asist.enviar" => Some(Msg::Submit),
+        "asist.ejecutar" => Some(Msg::EjecutarPropuesta),
+        "asist.limpiar" => Some(Msg::Limpiar),
+        // No tiene acción asociada: es informativo y no abrimos diálogo
+        // (MVP). Dejarlo sin Msg evita inventar features.
+        "ayuda.acerca" => None,
+        _ => None,
+    };
+    match target {
+        Some(msg) => Asistente::update(model, msg, handle),
+        None => model,
     }
 }
 

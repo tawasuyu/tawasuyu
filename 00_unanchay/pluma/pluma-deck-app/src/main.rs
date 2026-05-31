@@ -20,12 +20,21 @@
 //! crea, **Supr** elimina, **[ ]** rota. En **presentar**: arrastrar panea libre.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use pluma_deck_core::adaptador::recorrido_desde_atomos;
 use pluma_deck_core::{Autoplay, ContenidoMarco, Marco, Recorrido, RecorridoState, Rect, RejillaOpts};
 use pluma_deck_recorrido_llimphi::{dentro, panel_actual, recorrido_view, recorrido_view_editor, ZOOM_BASE};
+
+use app_bus::{AppMenu, Menu, MenuItem};
 
 const PANEL_INICIAL: Rect = Rect { x: 0.0, y: 0.0, w: 1200.0, h: 760.0 };
 
@@ -56,6 +65,17 @@ enum Msg {
     Siguiente,
     Anterior,
     Tick,
+    /// Cicla el tema del chrome (barra de menú / overlays).
+    CambiarTema,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click en el lienzo → menú contextual anclado en `(x, y)` de
+    /// ventana. En modo editar selecciona el marco bajo el cursor (si lo hay).
+    ContextMenuOpen(f32, f32),
 }
 
 struct Model {
@@ -70,6 +90,12 @@ struct Model {
     guardar_en: PathBuf,
     /// Undo/redo de autoría (snapshots del recorrido).
     historial: Historial<Recorrido>,
+    /// Tema del chrome (barra de menú / overlays). El lienzo usa su paleta propia.
+    theme: Theme,
+    /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual del lienzo: `(x, y)` ancla en ventana. `None` cerrado.
+    context_menu: Option<(f32, f32)>,
 }
 
 /// Recorrido de bienvenida cuando no se pasa archivo.
@@ -140,10 +166,13 @@ impl App for Deck {
             arrastrando: None,
             guardar_en,
             historial: Historial::new(64),
+            theme: Theme::dark(),
+            menu_open: None,
+            context_menu: None,
         }
     }
 
-    fn update(mut model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
+    fn update(mut model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         let panel = panel_actual().unwrap_or(PANEL_INICIAL);
         match msg {
             Msg::Zoom { mult, cursor } => {
@@ -262,12 +291,49 @@ impl App for Deck {
                 model.state.avanzar(1.0 / 60.0);
                 model.autoplay.tick(1.0 / 60.0, &mut model.state, &model.rec, panel);
             }
+            Msg::CambiarTema => {
+                model.theme = Theme::next_after(model.theme.name);
+            }
+            Msg::MenuOpen(which) => {
+                model.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                model.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                if let Some(next) = comando_a_msg(&cmd) {
+                    return Deck::update(model, next, handle);
+                }
+                // Comandos sin Msg directo (salir / no-op).
+                if cmd == "file.quit" {
+                    std::process::exit(0);
+                }
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                model.menu_open = None;
+                // En editar, el right-click también selecciona el marco bajo el
+                // cursor (si lo hay) para que las acciones del menú apliquen a él.
+                if model.modo == Modo::Editar {
+                    let world = model.state.camara.screen_to_world((x as f64, y as f64), panel);
+                    if let Some(id) = model.rec.marco_en_punto(world) {
+                        model.seleccionado = Some(id);
+                    }
+                }
+                model.context_menu = Some((x, y));
+            }
         }
         model
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
-        match model.modo {
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model));
+
+        let lienzo = match model.modo {
             Modo::Editar => recorrido_view_editor(&model.rec, &model.state, model.seleccionado)
                 .draggable_at(|phase, dx, dy, lx, ly| match phase {
                     DragPhase::Move => Some(Msg::Arrastre { dx, dy, lx, ly }),
@@ -277,7 +343,81 @@ impl App for Deck {
                 DragPhase::Move => Some(Msg::Pan { dx, dy }),
                 DragPhase::End => None,
             }),
+        };
+
+        // Column raíz: barra de menú arriba + lienzo a pantalla completa debajo.
+        // El right-click va en la RAÍZ (origen 0,0 ⇒ local == ventana) para anclar
+        // el menú contextual en coords de ventana, igual que el panel del lienzo.
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .fill(model.theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, lienzo])
+    }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // Menú contextual del lienzo tiene prioridad sobre el dropdown principal.
+        if let Some((x, y)) = model.context_menu {
+            let viewport = viewport_of(model);
+            // Acciones según el modo. En editar, sobre el marco seleccionado;
+            // en presentar, navegación. Sólo comandos que mapean a Msg reales.
+            let (header, items, on_pick): (String, Vec<ContextMenuItem>, Arc<dyn Fn(usize) -> Msg + Send + Sync>) =
+                if model.modo == Modo::Editar {
+                    let hay_sel = model.seleccionado.is_some();
+                    // Las acciones sobre marco se deshabilitan (gris) sin selección.
+                    let opt = |it: ContextMenuItem| if hay_sel { it } else { it.disabled() };
+                    let rotar_l = opt(ContextMenuItem::action("Rotar ⟲"));
+                    let rotar_r = opt(ContextMenuItem::action("Rotar ⟳"));
+                    let borrar = opt(ContextMenuItem::action("Eliminar marco").destructive());
+                    let items = vec![
+                        ContextMenuItem::action("Nuevo marco"),
+                        rotar_l,
+                        rotar_r,
+                        ContextMenuItem::separator(),
+                        borrar,
+                    ];
+                    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(|i: usize| match i {
+                        0 => Msg::NuevoMarco,
+                        1 => Msg::Rotar(-0.08),
+                        2 => Msg::Rotar(0.08),
+                        4 => Msg::Eliminar,
+                        _ => Msg::CloseMenus,
+                    });
+                    ("Editar marco".to_string(), items, on_pick)
+                } else {
+                    let items = vec![
+                        ContextMenuItem::action("Siguiente"),
+                        ContextMenuItem::action("Anterior"),
+                        ContextMenuItem::action("Vista general"),
+                        ContextMenuItem::separator(),
+                        ContextMenuItem::action("Presentar (autoplay)"),
+                    ];
+                    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(|i: usize| match i {
+                        0 => Msg::Siguiente,
+                        1 => Msg::Anterior,
+                        2 => Msg::VistaGeneral,
+                        4 => Msg::ToggleAutoplay,
+                        _ => Msg::CloseMenus,
+                    });
+                    ("Presentar".to_string(), items, on_pick)
+                };
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport,
+                header: Some(header),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
         }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model))
     }
 
     fn on_wheel(_m: &Self::Model, delta: WheelDelta, cursor: (f32, f32), _mods: Modifiers) -> Option<Self::Msg> {
@@ -367,6 +507,92 @@ impl<T: Clone> Historial<T> {
         self.pasado.push(actual.clone());
         Some(next)
     }
+}
+
+/// Viewport para clampear overlays. El deck no trackea el resize, así que
+/// usamos el tamaño inicial — basta para anclar los menús dentro de pantalla.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Deck::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &'a Model) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme: &model.theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Menú principal del deck. Sólo comandos que mapean a acciones reales del
+/// `update`. "Editar" (Slide) aparece siempre porque la autoría no necesita
+/// foco de texto; sus ítems se deshabilitan según el modo / selección reales.
+fn app_menu(model: &Model) -> AppMenu {
+    let editar = model.modo == Modo::Editar;
+    let hay_sel = model.seleccionado.is_some();
+    // Helper: ítem habilitado/deshabilitado según condición real.
+    let item = |label: &str, cmd: &str, on: bool| {
+        let it = MenuItem::new(label, cmd);
+        if on { it } else { it.disabled() }
+    };
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Guardar", "file.save").shortcut("Ctrl+S"))
+                .item(MenuItem::new("Cargar", "file.open").shortcut("Ctrl+O")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z"))
+                .item(MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Shift+Z").separated())
+                .item(item("Rotar ⟲", "edit.rotar_l", editar && hay_sel))
+                .item(item("Rotar ⟳", "edit.rotar_r", editar && hay_sel)),
+        )
+        .menu(
+            Menu::new("Slide")
+                .item(item("Nuevo marco", "slide.nuevo", editar).shortcut("n"))
+                .item(item("Eliminar marco", "slide.eliminar", editar && hay_sel).shortcut("Supr"))
+                .item(MenuItem::new("Siguiente", "slide.siguiente").shortcut("→").separated())
+                .item(MenuItem::new("Anterior", "slide.anterior").shortcut("←")),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new(
+                    if editar { "Presentar (Tab)" } else { "Editar (Tab)" },
+                    "view.modo",
+                ))
+                .item(MenuItem::new("Vista general", "view.general").shortcut("Home"))
+                .item(MenuItem::new("Autoplay", "view.autoplay").shortcut("p"))
+                .item(MenuItem::new("Cambiar tema", "view.theme").separated()),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal al `Msg` real del deck. `None` para
+/// los que no tienen Msg directo (`file.quit` se maneja aparte; `help.about` no-op).
+fn comando_a_msg(cmd: &str) -> Option<Msg> {
+    Some(match cmd {
+        "file.save" => Msg::Guardar,
+        "file.open" => Msg::Cargar,
+        "edit.undo" => Msg::Deshacer,
+        "edit.redo" => Msg::Rehacer,
+        "edit.rotar_l" => Msg::Rotar(-0.08),
+        "edit.rotar_r" => Msg::Rotar(0.08),
+        "slide.nuevo" => Msg::NuevoMarco,
+        "slide.eliminar" => Msg::Eliminar,
+        "slide.siguiente" => Msg::Siguiente,
+        "slide.anterior" => Msg::Anterior,
+        "view.modo" => Msg::ToggleModo,
+        "view.general" => Msg::VistaGeneral,
+        "view.autoplay" => Msg::ToggleAutoplay,
+        "view.theme" => Msg::CambiarTema,
+        _ => return None,
+    })
 }
 
 fn main() {

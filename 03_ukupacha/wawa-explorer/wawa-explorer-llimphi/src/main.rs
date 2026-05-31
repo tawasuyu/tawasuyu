@@ -23,8 +23,10 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use app_bus::{AppMenu, Menu, MenuItem};
 use format::{Hash, Objeto};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -34,6 +36,10 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 use wawa_explorer_aoe::ClienteAoE;
 use wawa_explorer_core::{short_hex, Disco};
@@ -49,9 +55,23 @@ enum Msg {
     FetchPeers(Hash),
     FetchOk(Hash, Objeto),
     FetchFailed(Hash, String),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Cicla el tema claro/oscuro.
+    CycleTheme,
+    /// Re-abre la imagen desde disco (descarta fetched de la sesión).
+    Reload,
+    /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
+    /// de ventana sobre el nodo seleccionado. Sin selección es no-op.
+    ContextMenuOpen(f32, f32),
 }
 
 struct Model {
+    theme: Theme,
     disco: Option<Disco>,
     source: PathBuf,
     error: Option<String>,
@@ -67,6 +87,12 @@ struct Model {
     fetching: HashSet<Hash>,
     /// Último error de fetch por hash. Se limpia cuando arranca un retry.
     fetch_errors: HashMap<Hash, String>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual sobre un nodo: `(hash, x, y)` ancla en ventana.
+    /// `None` cerrado.
+    context_menu: Option<(Hash, f32, f32)>,
 }
 
 struct Explorer;
@@ -92,6 +118,7 @@ impl App for Explorer {
 
         if source.as_os_str().is_empty() {
             return Model {
+                theme: Theme::dark(),
                 disco: None,
                 source,
                 error: Some("uso: wawa-explorer-llimphi <ruta.img> [iface]".into()),
@@ -102,6 +129,8 @@ impl App for Explorer {
                 fetched: HashMap::new(),
                 fetching: HashSet::new(),
                 fetch_errors: HashMap::new(),
+                menu_open: None,
+                context_menu: None,
             };
         }
         match Disco::abrir(&source) {
@@ -109,6 +138,7 @@ impl App for Explorer {
                 let raices = raices_de(&d);
                 let selected = raices.first().copied();
                 Model {
+                    theme: Theme::dark(),
                     disco: Some(d),
                     source,
                     error: None,
@@ -119,9 +149,12 @@ impl App for Explorer {
                     fetched: HashMap::new(),
                     fetching: HashSet::new(),
                     fetch_errors: HashMap::new(),
+                    menu_open: None,
+                    context_menu: None,
                 }
             }
             Err(e) => Model {
+                theme: Theme::dark(),
                 disco: None,
                 source,
                 error: Some(e.to_string()),
@@ -132,6 +165,8 @@ impl App for Explorer {
                 fetched: HashMap::new(),
                 fetching: HashSet::new(),
                 fetch_errors: HashMap::new(),
+                menu_open: None,
+                context_menu: None,
             },
         }
     }
@@ -165,14 +200,63 @@ impl App for Explorer {
                 model.fetching.remove(&h);
                 model.fetch_errors.insert(h, e);
             }
+            Msg::MenuOpen(which) => {
+                model.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                model.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                return handle_menu_command(model, &cmd, handle);
+            }
+            Msg::CycleTheme => {
+                model.theme = Theme::next_after(model.theme.name);
+            }
+            Msg::Reload => {
+                // Re-abre la imagen desde disco: descarta los objetos
+                // traídos por AoE en la sesión y recomputa raíces.
+                if !model.source.as_os_str().is_empty() {
+                    match Disco::abrir(&model.source) {
+                        Ok(d) => {
+                            let raices = raices_de(&d);
+                            let selected = raices.first().copied();
+                            model.disco = Some(d);
+                            model.raices = raices;
+                            model.selected = selected;
+                            model.error = None;
+                            model.expanded.clear();
+                            model.fetched.clear();
+                            model.fetching.clear();
+                            model.fetch_errors.clear();
+                        }
+                        Err(e) => {
+                            model.disco = None;
+                            model.error = Some(e.to_string());
+                        }
+                    }
+                }
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                // Sólo si hay un nodo seleccionado.
+                if let Some(h) = model.selected {
+                    model.menu_open = None;
+                    model.context_menu = Some((h, x, y));
+                }
+            }
         }
         model
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
+        let theme = model.theme;
         let palette = Palette::from_theme(&theme);
 
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_view(model, &palette);
         let main = main_view(model, &theme, &palette);
 
@@ -182,7 +266,145 @@ impl App for Explorer {
             ..Default::default()
         })
         .fill(palette.bg)
-        .children(vec![header, main])
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual sobre el nodo seleccionado.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, main])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual del nodo tiene prioridad si está abierto.
+        if let Some((hash, x, y)) = model.context_menu {
+            let presente = lookup(model, &hash).is_some();
+            let expandido = model.expanded.contains(&hash);
+            // Acciones reales del explorer sobre el nodo seleccionado.
+            // Sólo lectura: ver/seleccionar, expandir/contraer y, si está
+            // ausente, traer por AoE. No inventamos edición.
+            let mut items = vec![ContextMenuItem::action(rimay_localize::t(
+                "wawa-ctx-select",
+            ))];
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync>;
+            if presente {
+                items.push(ContextMenuItem::action(if expandido {
+                    rimay_localize::t("wawa-ctx-collapse")
+                } else {
+                    rimay_localize::t("wawa-ctx-expand")
+                }));
+                on_pick = Arc::new(move |i: usize| match i {
+                    0 => Msg::Select(hash),
+                    _ => Msg::Toggle(hash),
+                });
+            } else {
+                let buscando = model.fetching.contains(&hash);
+                let mut fetch = ContextMenuItem::action(rimay_localize::t("wawa-ctx-fetch"));
+                // Si ya hay fetch en vuelo o la iface no está, lo grisamos.
+                if buscando || model.iface.is_err() {
+                    fetch = fetch.disabled();
+                }
+                items.push(fetch);
+                on_pick = Arc::new(move |i: usize| match i {
+                    0 => Msg::Select(hash),
+                    _ => Msg::FetchPeers(hash),
+                });
+            }
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport: viewport_of(model),
+                header: Some(short_hex(&hash)),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Viewport para clampear overlays. El explorer no trackea el tamaño de
+/// ventana en el Model, así que usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Explorer::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del explorer. Archivo / Ver / Ayuda — sólo comandos
+/// que mapean a acciones reales. Sin "Editar": el explorer es de sólo
+/// lectura, no tiene campos de texto editables.
+fn app_menu(model: &Model) -> AppMenu {
+    // "Traer por AoE" sólo aplica a un nodo seleccionado AUSENTE con iface
+    // viable. Si no, lo grisamos.
+    let puede_fetch = model
+        .selected
+        .map(|h| lookup(model, &h).is_none())
+        .unwrap_or(false)
+        && model.iface.is_ok();
+    let mut fetch = MenuItem::new(rimay_localize::t("wawa-menu-fetch"), "node.fetch");
+    if !puede_fetch {
+        fetch = fetch.disabled();
+    }
+    AppMenu::new()
+        .menu(
+            Menu::new(rimay_localize::t("wawa-menu-file"))
+                .item(
+                    MenuItem::new(rimay_localize::t("wawa-menu-reload"), "file.reload")
+                        .shortcut("Ctrl+R"),
+                )
+                .item(
+                    MenuItem::new(rimay_localize::t("wawa-menu-quit"), "file.quit")
+                        .shortcut("Ctrl+Q")
+                        .separated(),
+                ),
+        )
+        .menu(
+            Menu::new(rimay_localize::t("wawa-menu-view"))
+                .item(fetch)
+                .item(
+                    MenuItem::new(rimay_localize::t("wawa-menu-theme"), "view.theme").separated(),
+                ),
+        )
+        .menu(
+            Menu::new(rimay_localize::t("wawa-menu-help"))
+                .item(MenuItem::new(rimay_localize::t("wawa-menu-about"), "help.about")),
+        )
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.reload" => {
+            handle.dispatch(Msg::Reload);
+            model
+        }
+        "file.quit" => std::process::exit(0),
+        "node.fetch" => {
+            if let Some(h) = model.selected {
+                handle.dispatch(Msg::FetchPeers(h));
+            }
+            model
+        }
+        "view.theme" => {
+            handle.dispatch(Msg::CycleTheme);
+            model
+        }
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => model,
     }
 }
 

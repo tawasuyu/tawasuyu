@@ -197,6 +197,11 @@ pub(crate) fn scene_pane(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .clip(true)
+    // Right-click sobre el escenario abre el menú contextual de juego.
+    // El canvas vive bajo la barra de menú, así que la coord local `ly`
+    // se desplaza por `MENU_H` para anclar el overlay en coords de
+    // ventana.
+    .on_right_click_at(|lx, ly, _rw, _rh| Some(Msg::ContextMenuOpen(lx, ly + MENU_H)))
     .paint_with(move |scene, ts, rect: PaintRect| {
         draw_scene(
             scene,
