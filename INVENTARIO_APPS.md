@@ -1,56 +1,88 @@
-# Inventario de apps gioser — estado y completitud
+# Inventario de apps gioser — % de avance y qué falta
 
-> Estado al **2026-05-31**. Los **% son estimaciones** (basadas en fases ✓/pendiente de `PLAN.md`, SDDs, tests verdes y código real vs stubs — no auditoría formal). Ordenado por cuadrante.
+> Estado al **2026-05-31**. Recalculado contra **núcleo funcional usable hoy**, no
+> contra la visión total (ese era el error del inventario anterior: una app que ya
+> hace su trabajo salía ~30% porque le faltaba el 70% de *sueños futuros*).
+
+## Cómo se lee el %
+
+`% core` mide si la app **hace su trabajo central y se usa hoy**. Rúbrica:
+
+- Lógica de dominio testeada — **40**
+- App/UI end-to-end del caso principal — **30**
+- Persistencia / I/O reales (no mocks) — **15**
+- Robustez y pulido (errores, edge cases, perf) — **15**
+
+Lo pendiente se parte en dos cubetas:
+
+- **Falta core** → *descuenta* del %. Sin esto el caso principal cojea.
+- **Visión / stretch** → *no descuenta*. Integraciones futuras, otras plataformas,
+  features extra, roadmaps ambiciosos.
+
+Los % son juicio anclado en código + git + tests, redondeados a múltiplos de 5. No es auditoría formal.
 
 ## 00_unanchay — PERCIBIR
 
-| App | % | Qué falta |
-|---|---|---|
-| **pluma** (`pluma-app`, `pluma-deck-app`, `pluma-notebook-app`) | ~82% | Embeddings reales conectados (verbo-daemon), backend LLM que *genere* traducciones (hoy tabla pre-poblada), vista matriz, búsqueda transversal viva, federación minga, export docx lado-a-lado. Deck: PDF + notas de orador + ruta SVG en HTML. |
-| **khipu** (`khipu-app`) | ~70% | Integrar embeddings al algoritmo de gravedad (similitud → refuerzo), UI de búsqueda/filtros, export/import, tests E2E de federación. |
-| **rimay** (`verbo-daemon`) | ~95% | Backend remoto Cohere, unit systemd para auto-arranque, compilar a WASM. |
-| **chaka** (`chaka-app`, CLI) | ~65% | UI Llimphi (hoy CLI-only), ampliar COBOL (CICS, SQL embebido, Db2/IMS), ficheros indexed/relative, target WASM (`no_std`). |
-| **pineal** (10 demos) | ~90% | Consumidores vivos reales (cosmos/dominium/nakui/takiy), interactividad (click/zoom persistido), leyendas con drill-down, animaciones, vista 3D. |
-| **puriy** (`puriy-app`, navegador) | ~75% | Motor JavaScript (hoy stub), forms interactivos, media-queries/responsive, flexbox/grid expuestos, **bare-metal wawa** (bloquea el Hito #2). |
+| App | % core | Falta para cerrar el core | Visión / stretch (no descuenta) |
+|---|---|---|---|
+| **pineal** | 92% | Una viz densa real que ejercite el camino GPU end-to-end | Consumidores vivos (cosmos/nakui/takiy), vista 3D |
+| **khipu** | 88% | Sync bidireccional + resolución de conflictos | Endurecer la malla DHT en WAN, escala |
+| **pluma** | 85% | Cerrar kernels notebook python/wasm; foreign-docx completo | Split tullpu+Cámara del deck, federación minga |
+| **rimay** | 85% | Gating de permiso de descarga del modelo | Compilar a WASM (Wawa), vertiente lingüística quechua |
+| **chaka** | 80% | REPLACE, ficheros indexed/relative | Dialectos no-COBOL, target WASM (no_std), CICS/SQL/Db2 |
+| **puriy** | 78% | Cerrar las APIs Web restantes + conformance | JIT, HTTP2/3, identidad agora, bare-metal Wawa |
 
 ## 01_yachay — CONOCER
 
-| App | % | Qué falta |
-|---|---|---|
-| **cosmos** (`cosmos-app-llimphi` + CLIs/server) | ~70% | Fondo de continentes en AstroCarto, form de birth-data in-situ (hoy JSON manual), store de cartas con sidebar tree, corpus humano de interpretación, validación research. |
-| **dominium** (`dominium-app-llimphi`, `dominium-cli`) | ~75% | Sliders de parámetros en panel (UI), editor avanzado de Conceptos, export `.webm`, validación contra simulaciones externas. |
-| **nakui** (`nakui-ui-llimphi`, `nakui-sheet-llimphi`, `nakui-explorer-llimphi`) | ~70% | Módulos ERP verticales reales (inventory/CRM — hoy solo `ventas`+`tesoro` demo), **yupay** (motor de fórmulas es/qu, no empezado), validación Rhai integrada en UI. |
-| **iniy** (`iniy-cli`, `iniy-server`, `iniy-wiki`, `iniy-explorer-llimphi`) | ~40% | Pipeline end-to-end (graph+NLI+reportería incompletos), backend NLI local operativo, backend LLM cableado, dirección de subjetividad, validación con datasets. |
-| **tinkuy** (`tinkuy-sim`, `tinkuy-llimphi`) | ~50% | DSL validada + benchmarks de optimizador, ABI WASM, integración Wawa (kernel cdylib), validación física real. |
+| App | % core | Falta para cerrar el core | Visión / stretch |
+|---|---|---|---|
+| **tinkuy** | 88% | Escenas editables desde DSL/grafo | Subir el techo de partículas del visor, más fuerzas nativas |
+| **dominium** | 85% | Exponer SimParams/ZWeights restantes como dato | Sprites reales, escenarios sociales reproducibles, demo web |
+| **cosmos** | 82% | Edición rica de cartas in-situ (hoy parte vía JSON manual) | Viz astrológicas avanzadas, corpus humano de interpretación |
+| **nakui** | 70% | Editor de fórmulas en UI + persistencia WAL desde UI + vista formulario | Verticales ERP reales, motor `yupay` (es/qu) |
+| **iniy** | 65% ⚠️ | Pipeline e2e *probado* + NLI local sólido (hoy piezas sueltas/mock) | Opiniones multinomiales, más operadores SL, piloto real |
 
 ## 02_ruway — HACER
 
-| App | % | Qué falta |
-|---|---|---|
-| **llimphi** (motor: hal/raster/layout/text/ui + gallery) | ~85% ✓ | Sistema de animaciones (tweens/springs), a11y (screen-reader), theming por archivo, **`View::custom_pass(wgpu)` 3D** (lo necesita supay Fase 3). |
-| **media** (`media-app`, `media-recorder-app`) | ~70% | Recorder con UI pulida (región, preview, progreso), playlist avanzada, spectrogram/phase, streaming de red (RTMP/HLS). |
-| **nada** (editor) | ~75% | File watcher (cambios externos), save-as/rename, confirmación de overwrites, multi-cursor, sesiones persistentes. |
-| **shuma** (`shuma-shell-llimphi`, `shuma`, `shuma-daemon`, `shuma-gateway`) | ~65% | Integración visual de **Matilda** (crear/arrancar VMs), persistencia de sesiones, completions context-aware. |
-| **nahual** (`nahual-shell-llimphi`, `nahual-gallery-llimphi`) | ~60% | Visores editables (hoy read-only), full-text search, thumbnails de video, exploración de archives sin descomprimir. |
-| **mirada** (`mirada-llimphi`, `-asistente`, `-launcher`, `-compositor`, `-greeter`, `-ctl`) | ~55% | Shell + DM en hardware real (Wayland nativo, gestor de sesión, autostart, persistencia de workspace), asistente con LLM, multi-pantalla/DPI. |
-| **chasqui** (`chasqui-broker-explorer-llimphi`, `chasqui-explorer-llimphi`) | ~50% | Productividad: WAL persistente, replicación P2P, routing tipo MQTT, ACLs+cifrado, ingesta de eventos reales. |
-| **takiy** (`takiy-app-llimphi`) | ~45% | **Generador IA de sonidos** (no existe), browser de SoundFonts, secuenciador pro (patterns/arpegiadores), grabación de audio. |
-| **supay** (`supay-app-llimphi`, `supay-doom-llimphi`) | ~35% | Fase 2 (extracción completa BSP/segs/nodes), **Fase 3 renderer 3D** (bloqueada por `custom_pass` de Llimphi), validación bit-exact, vendor doomgeneric documentado. |
+| App | % core | Falta para cerrar el core | Visión / stretch |
+|---|---|---|---|
+| **ayni** | 88% | NAT traversal (deuda de minga) | MLS de grupo (PCS), cifrado de sesión en la app wawa |
+| **llimphi** | 85% | **Cerrar el deadlock click/scroll** (bug abierto) | Runtime sobre framebuffer Wawa, AA/texto en GPU directo |
+| **nada** | 82% | Multi-ventana / split de editores | LSP rico (rename, code actions) |
+| **tullpu** | 80% | Nodegraph visual (espera `llimphi-surface`), tiling | Proveedor IA ONNX real, PSD de salida, compositing GPU |
+| **supay** | 78% | BSP-walking real (corrección de orden de render) | Audio vía takiy, renderer sobre HAL Wawa |
+| **shuma** | 78% | Mouse en PTY, lockfile del daemon | Hover-drawer (bloqueado upstream en llimphi-ui) |
+| **wawa** (host) | 72% | Toggles de módulos con efecto real, accent al theme global | SO_PEERCRED, migración a wawa-OS |
+| **takiy** | 72% | (núcleo cerrado) pulir `takiy-midi` | Acoplar al bus chasqui, driver de audio Wawa |
+| **nahual** | 68% | Visor PDF (falta rasterizador) + SVG + seek/scrub | AppBus out-of-process, meta-schema |
+| **media** | 68% | **M1: sincronización A/V por PTS completa** (hoy parcial) | HW decode, streaming de red (RTMP/HLS) |
+| **chasqui** | 62% | Persistencia del broker + transporte/discovery P2P | Routing tipo MQTT, ACLs + cifrado |
+| **mirada** | 55% | Estabilidad del compositor + sesión/DM en hardware real | Compositor sobre framebuffer Wawa, greeter/DRM, multi-DPI |
 
 ## 03_ukupacha — RAÍZ
 
-| App | % | Qué falta |
-|---|---|---|
-| **wawa** (kernel SASOS, **V1.0.0-GOLD** + 14 apps WASM) | ~88% | Ring buffer de N raíces en superbloque + menú "anclas recientes" en boot (rollback), enum multi-output GPU (hoy 1 scanout), revocación de identidades kernel↔userspace. Apps maduras: pluma 90%, mudanza 85%, asistente/bitácora 75-80%; las demás 50-75%. |
-| **agora** (`agora-cli`, `agora-app`) | ~75% | CLI: UI de revocación, gossip anti-entropía propio. App Llimphi (~60%): edición in-situ de identidades, TrustGraph interactivo, políticas de confianza evaluables. |
-| **minga** (`minga-cli`, `minga-explorer-llimphi`) | ~72% | `minga pull` selectivo, merge multi-rama (rebase/cherry-pick), blame/annotate, firma de commits (agora). Explorer: drill-down en árbol, búsqueda, diff visual. |
-| **wawa-explorer** (`wawa-explorer-llimphi`) | ~75% | Búsqueda por hash, renderizado contextual del nodo, export de subárbol a `.tar`, sync remota AoE inline. |
-| **arje** (`arje-packager`, `arje-installer`, `arje-absorb`) | ~52% | Soporte aarch64 completo, compresión de imágenes, particionado inteligente + rollback automático del installer, dedup entre instantáneas. |
-| **sandokan** (shared; `sandokan-app`, `sandokan-daemon`) | ~30-40% | Fase 0: handlers vacíos en la app, sin consumidores reales (debe ser consumido por shuma). |
+| App | % core | Falta para cerrar el core | Visión / stretch |
+|---|---|---|---|
+| **wawa** (kernel) | 88% | Capacidades 100% derivadas de la firma (§14.1.3) | Gaming (AOT cranelift, GPU passthrough, asset streaming), aarch64 |
+| **agora** | 80% | Tabla de capacidades por bytecode hash | Las 17 apps de `APLICACIONES.md` (roadmap) |
+| **minga** | 80% | `MingaPeer` genérico para escala (>100k nodos) | "Grafo de la Verdad" (GossipSub, reputación, +9 idiomas) |
+| **arje** | 78% | Cleanup del socket daemon, RestartTracker en LocalEngine | aarch64/hardware real, dedup entre instantáneas |
+| **wawa-explorer** | 78% | (read-only por diseño) sacar el process-monitor a su crate | Sync remota AoE inline, export de subárbol a `.tar` |
+| **sandokan** | 60% | Cleanup socket, RunCard arbitraria, monitor Fase 4 (lado Wawa) | — |
 
 ## Lectura rápida
 
-- **Más maduros (>80%):** rimay (95), pineal (90), wawa-kernel (88), llimphi (85), pluma (82).
-- **Núcleo gráfico es el cuello de botella:** llimphi al 85% bloquea el 3D de supay y refinamientos de varias UIs (todas las apps GUI dependen de sus 4 fases — hoy estables).
-- **Patrón común de lo que falta:** validación con datos reales/externos, backends remotos (LLM/embeddings vía daemon), y pasar de *demos* a *casos de usuario reales* (módulos ERP de nakui, productividad de chasqui, generador IA de takiy).
-- **Menos avanzados:** sandokan (~35%), supay (~35%), iniy (~40%), takiy (~45%).
+- **Prácticamente terminadas (≥85%):** pineal, khipu, tinkuy, wawa-kernel, ayni, pluma, rimay, llimphi, dominium.
+- **Sólidas y usables (75–84%):** nada, cosmos, supay, tullpu, agora, minga, chaka, wawa-explorer, arje, shuma, puriy.
+- **Funcionan, con hueco de core claro (60–74%):** takiy, wawa-host, nakui, nahual, media, iniy, sandokan, chasqui.
+- **Cuello real (<60%):** mirada (depende de un compositor/DM estable sobre hardware).
+
+### Patrones de lo que falta
+- **Bugs/infra de Llimphi:** el deadlock click/scroll toca casi toda la línea de UIs; cerrarlo sube robustez transversal.
+- **Integraciones cruzadas pendientes:** audio supay↔takiy, transporte chasqui, NAT traversal minga (lo arrastran ayni/chasqui/khipu).
+- **De demo a producto:** nakui (verticales), media (M1 sync), iniy (pipeline e2e probado), mirada (sesión real).
+
+### Nota sobre el recálculo
+Las que más subieron vs el inventario viejo son las que él castigaba por *visión* y no por *función*:
+**supay 35→78 · tinkuy 50→88 · iniy 40→65 · takiy 45→72 · sandokan ~35→60**.
+`iniy` queda marcada ⚠️: se ve completa por piezas, pero el pipeline e2e no se verificó corriendo — no se sube sin verlo andar.
