@@ -26,6 +26,13 @@ use llimphi_ui::{App, Handle, PaintRect, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_card::{card_view, CardOptions, CardPalette};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+
+use app_bus::{AppMenu, Menu, MenuItem};
+use std::sync::Arc;
 
 use iniy_core::{Asercion, AsercionId, FuenteId, Implicacion, Opinion};
 use iniy_graph::GrafoCreencias;
@@ -41,6 +48,20 @@ const ACCENT_CITADA: Color = Color::from_rgba8(0xeb, 0xcb, 0x8b, 0xff);       //
 enum Msg {
     /// Toggle: si el id ya estaba seleccionado, deselecciona.
     Seleccionar(AsercionId),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Cicla el tema claro/oscuro.
+    CambiarTema,
+    /// Recarga el corpus desde la DB (re-lee SQLite y re-calcula layout).
+    Recargar,
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` de ventana sobre la aserción seleccionada. Sin selección
+    /// es no-op.
+    MenuContextual(f32, f32),
 }
 
 struct Model {
@@ -58,6 +79,11 @@ struct Model {
     n_implicaciones: usize,
     seleccionada: Option<AsercionId>,
     theme: Theme,
+    /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual sobre la aserción seleccionada: `(x, y)` ancla en
+    /// ventana. `None` cerrado.
+    menu_contextual: Option<(f32, f32)>,
 }
 
 struct Explorer;
@@ -104,6 +130,8 @@ impl App for Explorer {
                     n_implicaciones,
                     seleccionada: None,
                     theme,
+                    menu_open: None,
+                    menu_contextual: None,
                 }
             }
             Err(e) => Model {
@@ -117,14 +145,44 @@ impl App for Explorer {
                 n_implicaciones: 0,
                 seleccionada: None,
                 theme,
+                menu_open: None,
+                menu_contextual: None,
             },
         }
     }
 
-    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::Seleccionar(id) => {
                 model.seleccionada = if model.seleccionada == Some(id) { None } else { Some(id) };
+                // Seleccionar/deseleccionar cierra cualquier menú contextual.
+                model.menu_contextual = None;
+            }
+            Msg::MenuOpen(which) => {
+                model.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                model.menu_contextual = None;
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.menu_contextual = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                return handle_menu_command(model, &cmd, handle);
+            }
+            Msg::CambiarTema => {
+                model.theme = Theme::next_after(model.theme.name);
+            }
+            Msg::Recargar => {
+                model = recargar_corpus(model);
+            }
+            Msg::MenuContextual(x, y) => {
+                // Sólo si hay una aserción seleccionada.
+                if model.seleccionada.is_some() {
+                    model.menu_open = None;
+                    model.menu_contextual = Some((x, y));
+                }
             }
         }
         model
@@ -132,6 +190,8 @@ impl App for Explorer {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = model.theme;
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header_text = format!(
             "iniy · {}  ·  {} fuentes  ·  {} aserciones  ·  {} relaciones",
             model.db_path.display(),
@@ -142,7 +202,7 @@ impl App for Explorer {
         let header =
             app_header::<Msg>(header_text, Vec::new(), &AppHeaderPalette::from_theme(&theme));
 
-        let mut chrome: Vec<View<Msg>> = vec![header];
+        let mut chrome: Vec<View<Msg>> = vec![menubar, header];
 
         if let Some(err) = &model.error {
             chrome.push(banner_view::<Msg>(BannerKind::Error, err.clone()));
@@ -206,6 +266,146 @@ impl App for Explorer {
         chrome.push(body);
         rama_columna(theme, chrome)
     }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual de la aserción tiene prioridad si está abierto.
+        if let Some((x, y)) = model.menu_contextual {
+            // Sólo se muestra si hay selección viva (la apertura lo garantiza,
+            // pero el corpus pudo recargarse — revalidamos).
+            let sel = model.seleccionada?;
+            let att = model
+                .aserciones
+                .iter()
+                .find(|a| a.asercion.id == sel)?;
+            let header = truncar(&att.asercion.texto, 48);
+            let viewport = viewport_of(model);
+            // Acciones reales del explorer de sólo lectura: deseleccionar la
+            // aserción y recargar el corpus. No inventamos edición.
+            let items = vec![
+                ContextMenuItem::action("Deseleccionar"),
+                ContextMenuItem::action("Recargar corpus"),
+            ];
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| match i {
+                0 => Msg::Seleccionar(sel), // toggle ⇒ deselecciona la activa
+                _ => Msg::Recargar,
+            });
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport,
+                header: Some(header),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Viewport para clampear overlays: el explorer no trackea el tamaño de
+/// ventana, así que usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Explorer::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del explorer. Archivo / Ver / Ayuda — sólo comandos
+/// que mapean a acciones reales (recargar, deseleccionar, tema). Sin
+/// "Editar": el explorer no tiene campos de texto editables.
+fn app_menu(model: &Model) -> AppMenu {
+    let ver = Menu::new("Ver")
+        .item(MenuItem::new("Recargar corpus", "file.recargar").shortcut("Ctrl+R"))
+        .item(MenuItem::new("Cambiar tema", "view.tema").separated());
+    // "Deseleccionar" sólo tiene sentido con una aserción activa.
+    let deseleccionar = if model.seleccionada.is_some() {
+        MenuItem::new("Deseleccionar", "view.deseleccionar")
+    } else {
+        MenuItem::new("Deseleccionar", "view.deseleccionar").disabled()
+    };
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Recargar corpus", "file.recargar").shortcut("Ctrl+R"))
+                .item(MenuItem::new("Salir", "file.salir").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(ver.item(deseleccionar))
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(mut model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.recargar" => {
+            handle.dispatch(Msg::Recargar);
+            model
+        }
+        "file.salir" => std::process::exit(0),
+        "view.tema" => {
+            handle.dispatch(Msg::CambiarTema);
+            model
+        }
+        "view.deseleccionar" => {
+            model.seleccionada = None;
+            model.menu_contextual = None;
+            model
+        }
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => model,
+    }
+}
+
+/// Re-lee la DB SQLite y re-computa layout/aristas en sitio. Tras una
+/// recarga la selección puede quedar colgada (la aserción desapareció);
+/// si ya no existe, la descartamos.
+fn recargar_corpus(mut model: Model) -> Model {
+    match cargar_modelo(&model.db_path) {
+        Ok((aserciones, fuentes, reputaciones, n_implicaciones, imps)) => {
+            let aristas_grafo = std::sync::Arc::new(
+                imps.iter()
+                    .filter(|i| i.relacion.entailment > 0.0 || i.relacion.contradiction > 0.0)
+                    .map(|i| (i.premisa, i.hipotesis, i.relacion.entailment, i.relacion.contradiction))
+                    .collect::<Vec<_>>(),
+            );
+            let posiciones =
+                std::sync::Arc::new(layout_fruchterman_reingold(&aserciones, &aristas_grafo));
+            // Conservar la selección sólo si la aserción sigue presente.
+            if let Some(sel) = model.seleccionada {
+                if !aserciones.iter().any(|a| a.asercion.id == sel) {
+                    model.seleccionada = None;
+                }
+            }
+            model.aserciones = aserciones;
+            model.fuentes = fuentes;
+            model.reputaciones = reputaciones;
+            model.posiciones = posiciones;
+            model.aristas_grafo = aristas_grafo;
+            model.n_implicaciones = n_implicaciones;
+            model.error = None;
+        }
+        Err(e) => {
+            model.error = Some(e.to_string());
+        }
+    }
+    model.menu_open = None;
+    model.menu_contextual = None;
+    model
 }
 
 fn rama_columna(theme: Theme, children: Vec<View<Msg>>) -> View<Msg> {
@@ -215,6 +415,9 @@ fn rama_columna(theme: Theme, children: Vec<View<Msg>>) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_app)
+    // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el menú
+    // contextual sobre la aserción seleccionada.
+    .on_right_click_at(|x, y, _w, _h| Some(Msg::MenuContextual(x, y)))
     .children(children)
 }
 

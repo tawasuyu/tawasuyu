@@ -182,6 +182,14 @@ pub(crate) fn formula_bar_view(t: &Theme, bar: &TextInputState, selected: CellRe
         Alignment::Center,
     );
 
+    // Offsets de ventana del origen top-left de este wrapper de input:
+    // a su izquierda viene el label (70px) y el wrapper agrega 8px de
+    // padding izquierdo; arriba vienen menubar + título + el padding
+    // superior (4px) de la barra de fórmula. `on_right_click_at` da
+    // coords locales al rect del nodo, así que sumamos ese origen para
+    // anclar el menú de edición en coordenadas de ventana.
+    const INPUT_ORIGIN_X: f32 = 70.0 + 8.0;
+    let input_origin_y = MENU_H + TOP_HEADER_H + 4.0;
     let input = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -196,6 +204,9 @@ pub(crate) fn formula_bar_view(t: &Theme, bar: &TextInputState, selected: CellRe
         align_items: Some(AlignItems::Center),
         flex_grow: 1.0,
         ..Default::default()
+    })
+    .on_right_click_at(move |lx, ly, _w, _h| {
+        Some(Msg::EditMenuOpen(INPUT_ORIGIN_X + lx, input_origin_y + ly))
     })
     .children(vec![text_input_view(
         bar,
@@ -585,6 +596,112 @@ pub(crate) fn status_bar_view(status: &Status) -> View<Msg> {
     })
     .fill(bg)
     .text_aligned(status.text.clone(), 12.0, fg, Alignment::Start)
+}
+
+/// Construye el menú principal (barra superior). Archivo / Editar /
+/// Ver / Ayuda. El submenú "Editar" refleja en gris el estado real de
+/// la barra de fórmula (input focuseado) y del Workbook.
+pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+
+    let ed = model.bar.editor();
+    let has_sel = ed.has_selection();
+    let has_text = !ed.is_empty();
+    let can_undo_wb = model.wb.can_undo();
+    let can_redo_wb = model.wb.can_redo();
+    let has_clip = model.clipboard_origin.is_some();
+    let frozen = model.freeze_rows > 0 || model.freeze_cols > 0;
+
+    // --- Editar: undo/redo del Workbook + cut/copy/paste de celda + edición
+    //     in-situ del texto de la barra (cut/copy/paste/seleccionar todo).
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo_wb { undo = undo.disabled(); }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo_wb { redo = redo.disabled(); }
+    let cell_cut = MenuItem::new("Cortar celda", "cell.cut").shortcut("Ctrl+X").separated();
+    let cell_copy = MenuItem::new("Copiar celda", "cell.copy").shortcut("Ctrl+C");
+    let mut cell_paste = MenuItem::new("Pegar celda", "cell.paste").shortcut("Ctrl+V");
+    if !has_clip { cell_paste = cell_paste.disabled(); }
+    let cell_clear = MenuItem::new("Limpiar celda", "cell.clear").shortcut("Del");
+    // Edición del texto de la barra (input focuseado).
+    let mut bar_cut = MenuItem::new("Cortar texto", "bar.cut").separated();
+    let mut bar_copy = MenuItem::new("Copiar texto", "bar.copy");
+    if !has_sel { bar_cut = bar_cut.disabled(); bar_copy = bar_copy.disabled(); }
+    let bar_paste = MenuItem::new("Pegar texto", "bar.paste");
+    let mut bar_sel_all = MenuItem::new("Seleccionar todo (texto)", "bar.selectall");
+    if !has_text { bar_sel_all = bar_sel_all.disabled(); }
+
+    // --- Ver: tema + formatos + inmovilizar + tabla dinámica.
+    let mut unfreeze = MenuItem::new("Liberar paneles", "view.unfreeze");
+    if !frozen { unfreeze = unfreeze.disabled(); }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Importar CSV", "file.import").shortcut("Ctrl+I"))
+                .item(MenuItem::new("Exportar CSV", "file.export").shortcut("Ctrl+E")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cell_cut)
+                .item(cell_copy)
+                .item(cell_paste)
+                .item(cell_clear)
+                .item(bar_cut)
+                .item(bar_copy)
+                .item(bar_paste)
+                .item(bar_sel_all),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Formato: Número", "fmt.number").shortcut("Ctrl+!"))
+                .item(MenuItem::new("Formato: Moneda $", "fmt.currency").shortcut("Ctrl+$"))
+                .item(MenuItem::new("Formato: Porcentaje", "fmt.percent").shortcut("Ctrl+%"))
+                .item(MenuItem::new("Formato: General", "fmt.general").shortcut("Ctrl+)"))
+                .item(MenuItem::new("Inmovilizar paneles aquí", "view.freeze").shortcut("Ctrl+Shift+F").separated())
+                .item(unfreeze)
+                .item(MenuItem::new("Tabla dinámica…", "view.pivot").shortcut("Ctrl+Shift+P").separated()),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Acerca de Nakui Sheet", "help.about")),
+        )
+}
+
+/// Traduce un comando del menú principal al `Msg` real de la planilla.
+/// `None` para entradas informativas sin acción cableada.
+pub(crate) fn menubar_command_msg(model: &Model, command: &str) -> Option<Msg> {
+    match command {
+        "file.import" => Some(Msg::ImportCsv),
+        "file.export" => Some(Msg::ExportCsv),
+        "edit.undo" => Some(Msg::Undo),
+        "edit.redo" => Some(Msg::Redo),
+        "cell.cut" => Some(Msg::Cut),
+        "cell.copy" => Some(Msg::Copy),
+        "cell.paste" => Some(Msg::Paste),
+        "cell.clear" => Some(Msg::ClearActive),
+        "bar.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "bar.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "bar.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "bar.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "fmt.number" => Some(Msg::ApplyFormat(CellFormat::Number { decimals: 2 })),
+        "fmt.currency" => Some(Msg::ApplyFormat(CellFormat::Currency {
+            symbol: "$".into(),
+            decimals: 2,
+        })),
+        "fmt.percent" => Some(Msg::ApplyFormat(CellFormat::Percent { decimals: 0 })),
+        "fmt.general" => Some(Msg::ApplyFormat(CellFormat::General)),
+        "view.freeze" => Some(Msg::FreezeAtSelection),
+        "view.unfreeze" => Some(Msg::Unfreeze),
+        "view.pivot" => Some(Msg::OpenPivot),
+        "help.about" => {
+            let _ = model;
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Theme custom: `Theme::dark()` con overrides para que `text-input`

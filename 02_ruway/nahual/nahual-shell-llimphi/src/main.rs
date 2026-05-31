@@ -41,6 +41,7 @@
 //!   se suscriben.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 mod viewer_registry;
@@ -55,6 +56,13 @@ use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, Nam
 use llimphi_theme::Theme;
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use app_bus::{AppMenu, Menu, MenuItem};
 use nahual_file_explorer_llimphi::{
     file_explorer_view, FileExplorerState, OpenedFile,
 };
@@ -145,6 +153,13 @@ struct Model {
     /// de preview.
     preview_temp: Option<tempfile::TempDir>,
     theme: Theme,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual sobre el nodo/archivo seleccionado: ancla `(x, y)`
+    /// en coords de ventana. `None` cerrado. No hay edición de texto en el
+    /// shell, así que el contextual lista acciones de navegación/montaje.
+    context_menu: Option<(f32, f32)>,
     /// Suscripción al bus de configuración del SO.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
@@ -171,6 +186,19 @@ enum Msg {
     /// `g`: montar el directorio objetivo como grafo CAS de minga, si parece
     /// un repo `.minga` (guard anti-creación de sled en dirs ajenos).
     MountMinga,
+    /// Desmonta la fuente no-POSIX activa y vuelve al filesystem.
+    Unmount,
+    /// Cicla el tema claro/oscuro (preset siguiente).
+    CycleTheme,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
+    /// de ventana sobre la entrada seleccionada.
+    ContextMenuOpen(f32, f32),
 }
 
 struct Shell;
@@ -209,6 +237,8 @@ impl App for Shell {
             preview_of: None,
             preview_temp: None,
             theme,
+            menu_open: None,
+            context_menu: None,
             _wawa_watcher: watcher,
         }
     }
@@ -246,7 +276,7 @@ impl App for Shell {
         Some(Msg::Scroll(steps))
     }
 
-    fn update(model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
+    fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         let mut m = model;
         match msg {
             Msg::Up => {
@@ -379,6 +409,35 @@ impl App for Shell {
                     }
                 }
             }
+            Msg::Unmount => {
+                if m.mounted.is_some() {
+                    m.mounted = None;
+                    clear_preview(&mut m);
+                }
+            }
+            Msg::CycleTheme => {
+                m.theme = Theme::next_after(m.theme.name);
+            }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, &cmd, handle);
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                // Sólo si hay algo seleccionado (POSIX o fuente montada).
+                if hay_seleccion(&m) {
+                    m.menu_open = None;
+                    m.context_menu = Some((x, y));
+                }
+            }
         }
         m
     }
@@ -397,6 +456,8 @@ impl App for Shell {
         let markdown_palette = MarkdownViewerPalette::from_theme(&theme);
         let archive_palette = ArchiveViewerPalette::from_theme(&theme);
         let font_palette = FontViewerPalette::from_theme(&theme);
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_bar(model, &theme);
         let list_pane = match &model.mounted {
             Some(nav) => navigator_list_view(nav, ListPalette::from_theme(&theme)),
@@ -469,7 +530,153 @@ impl App for Shell {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, body])
+        // Right-click en la raíz (origen 0,0 ⇒ local == coords de ventana)
+        // abre el menú contextual sobre la entrada seleccionada.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, body])
+    }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // El menú contextual del nodo seleccionado tiene prioridad.
+        if let Some((x, y)) = model.context_menu {
+            return Some(context_menu_view(context_menu_spec(model, x, y)));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Viewport para clampear overlays. El shell no trackea el tamaño de
+/// ventana, así que usamos `initial_size()` (constante).
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Shell::initial_size();
+    (w as f32, h as f32)
+}
+
+/// ¿Hay una entrada seleccionada sobre la que tenga sentido el menú
+/// contextual? En POSIX, cualquier entry del explorer; en una fuente
+/// montada, el nodo seleccionado.
+fn hay_seleccion(m: &Model) -> bool {
+    match &m.mounted {
+        Some(nav) => nav.selected_node().is_some(),
+        None => m.explorer.selected_entry().is_some(),
+    }
+}
+
+/// Etiqueta de la entrada seleccionada para el header del contextual.
+fn etiqueta_seleccion(m: &Model) -> String {
+    match &m.mounted {
+        Some(nav) => nav
+            .selected_node()
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| "nodo".to_string()),
+        None => m
+            .explorer
+            .selected_entry()
+            .map(|e| e.name)
+            .unwrap_or_else(|| "entrada".to_string()),
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del shell. Sólo comandos que mapean a `Msg` reales:
+/// navegación (abrir/subir), montaje de fuentes no-POSIX (nouser/minga),
+/// desmontar, tema. Sin "Editar": el shell no tiene campos de texto
+/// editables — el panel derecho son visores de sólo lectura.
+fn app_menu(model: &Model) -> AppMenu {
+    let montado = model.mounted.is_some();
+    // Montar sólo aplica desde POSIX (no anidamos fuentes); desmontar sólo
+    // cuando hay una fuente activa. Reflejamos eso en gris.
+    let mut mount_nouser = MenuItem::new("Montar Mónadas (nouser)", "file.mount_nouser")
+        .shortcut("m")
+        .separated();
+    let mut mount_minga = MenuItem::new("Montar grafo minga", "file.mount_minga").shortcut("g");
+    let mut unmount = MenuItem::new("Desmontar fuente", "file.unmount").separated();
+    if montado {
+        mount_nouser = mount_nouser.disabled();
+        mount_minga = mount_minga.disabled();
+    } else {
+        unmount = unmount.disabled();
+    }
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Abrir", "file.open").shortcut("Enter"))
+                .item(MenuItem::new("Subir al padre", "file.parent").shortcut("Backspace"))
+                .item(mount_nouser)
+                .item(mount_minga)
+                .item(unmount)
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.open" => handle.dispatch(Msg::OpenSelected),
+        "file.parent" => handle.dispatch(Msg::Parent),
+        "file.mount_nouser" => handle.dispatch(Msg::MountNouser),
+        "file.mount_minga" => handle.dispatch(Msg::MountMinga),
+        "file.unmount" => handle.dispatch(Msg::Unmount),
+        "file.quit" => std::process::exit(0),
+        "view.theme" => handle.dispatch(Msg::CycleTheme),
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => {}
+    }
+    model
+}
+
+/// Arma el `ContextMenuSpec` del menú contextual sobre la entrada
+/// seleccionada. Las acciones son las navegaciones/montajes que ya existen
+/// como `Msg` — no inventamos edición (no hay campos de texto).
+fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
+    let montado = model.mounted.is_some();
+    // Construimos la lista de (item, msg) según el contexto, para que el
+    // índice del `on_pick` y el item visible siempre coincidan.
+    let mut acciones: Vec<(ContextMenuItem, Msg)> = vec![
+        (ContextMenuItem::action("Abrir"), Msg::OpenSelected),
+        (ContextMenuItem::action("Subir al padre"), Msg::Parent),
+    ];
+    if montado {
+        acciones.push((ContextMenuItem::action("Desmontar fuente"), Msg::Unmount));
+    } else {
+        acciones.push((
+            ContextMenuItem::action("Montar Mónadas (nouser)"),
+            Msg::MountNouser,
+        ));
+        acciones.push((
+            ContextMenuItem::action("Montar grafo minga"),
+            Msg::MountMinga,
+        ));
+    }
+    let msgs: Vec<Msg> = acciones.iter().map(|(_, m)| m.clone()).collect();
+    let items: Vec<ContextMenuItem> = acciones.into_iter().map(|(it, _)| it).collect();
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
+        Arc::new(move |i: usize| msgs.get(i).cloned().unwrap_or(Msg::CloseMenus));
+    ContextMenuSpec {
+        anchor: (x, y),
+        viewport: viewport_of(model),
+        header: Some(etiqueta_seleccion(model)),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&model.theme),
     }
 }
 

@@ -45,6 +45,7 @@ use crate::view;
 pub(crate) enum MenuCmd {
     Sep,
     Nueva,
+    Guardar,
     Duplicar,
     Recargar,
     Eliminar,
@@ -52,6 +53,7 @@ pub(crate) enum MenuCmd {
     CerrarTab,
     Overlay(OverlayKind),
     Harmonic(u32),
+    Theme(bool),
     AcercaDe,
     Wheel(WheelOpt),
     Deselect,
@@ -141,8 +143,24 @@ pub(crate) fn menu_entries(kind: MenuKind, m: &Model) -> Vec<MenuEntry> {
     match kind {
         MenuKind::Archivo => vec![
             MenuEntry::act("Nueva carta (ejemplo)", MenuCmd::Nueva),
+            MenuEntry::act("Guardar carta en biblioteca", MenuCmd::Guardar).shortcut("Ctrl+S"),
             MenuEntry::act("Duplicar carta actual", MenuCmd::Duplicar),
             MenuEntry::act("Recargar desde disco", MenuCmd::Recargar),
+            MenuEntry::sep(),
+            MenuEntry::act("Eliminar carta seleccionada", MenuCmd::Eliminar)
+                .destructive()
+                .enabled(m.selected_card.is_some()),
+        ],
+        // No hay campos de texto editables: la carta se edita en el JSON
+        // de disco y se recarga por watcher. El menú «Editar» reúne las
+        // acciones reales sobre la selección/carta cargada.
+        MenuKind::Editar => vec![
+            MenuEntry::act("Quitar selección del cuerpo", MenuCmd::Deselect)
+                .enabled(m.selected_body.is_some()),
+            MenuEntry::sep(),
+            MenuEntry::act("Recargar carta desde disco", MenuCmd::Recargar),
+            MenuEntry::act("Guardar carta en biblioteca", MenuCmd::Guardar).shortcut("Ctrl+S"),
+            MenuEntry::act("Duplicar carta actual", MenuCmd::Duplicar),
             MenuEntry::sep(),
             MenuEntry::act("Eliminar carta seleccionada", MenuCmd::Eliminar)
                 .destructive()
@@ -159,6 +177,10 @@ pub(crate) fn menu_entries(kind: MenuKind, m: &Model) -> Vec<MenuEntry> {
             }
             v.push(MenuEntry::sep());
             v.push(MenuEntry::act("Configuración", MenuCmd::Open(ViewKind::Configuracion)));
+            v.push(MenuEntry::sep());
+            // Tema (espeja el toggle de Configuración) — «Ver: módulos/tema».
+            v.push(MenuEntry::act_string(check("Tema oscuro", m.cfg.theme_dark), MenuCmd::Theme(true)));
+            v.push(MenuEntry::act_string(check("Tema claro", !m.cfg.theme_dark), MenuCmd::Theme(false)));
             v.push(MenuEntry::sep());
             v.push(MenuEntry::act("Cerrar pestaña actual", MenuCmd::CerrarTab).shortcut("Ctrl+W"));
             v

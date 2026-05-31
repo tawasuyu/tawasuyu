@@ -26,8 +26,10 @@
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, AlignItems, Dimension, FlexDirection, Size, Style},
@@ -38,6 +40,12 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use minga_store::PersistentRepo;
 
@@ -69,6 +77,13 @@ struct Model {
     /// Mantenemos vivo el watcher para que su thread no muera. No se
     /// usa después de crearlo (consume su sí mismo cuando se dropea).
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual sobre el dashboard: `(x, y)` ancla en ventana.
+    /// `None` cerrado. El explorer es de sólo lectura — el contextual
+    /// sólo ofrece acciones de observación (refrescar / tema).
+    context_menu: Option<(f32, f32)>,
 }
 
 #[derive(Clone)]
@@ -84,6 +99,18 @@ enum Msg {
     },
     /// El bus de wawa-config cambió: re-aplicar theme/accent/idioma.
     WawaChanged(wawa_config::WawaConfig),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` de ventana.
+    ContextMenuOpen(f32, f32),
+    /// Cicla el tema claro/oscuro localmente (override del de wawa hasta
+    /// el próximo cambio del bus).
+    CycleTheme,
 }
 
 struct Explorer;
@@ -130,6 +157,8 @@ impl App for Explorer {
             error: None,
             last_load_ms: 0,
             _wawa_watcher: watcher,
+            menu_open: None,
+            context_menu: None,
         }
     }
 
@@ -167,12 +196,34 @@ impl App for Explorer {
                 m.theme = theme_from_wawa(&cfg);
                 apply_lang_from_wawa(&cfg);
             }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, &cmd, handle);
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                m.menu_open = None;
+                m.context_menu = Some((x, y));
+            }
+            Msg::CycleTheme => {
+                m.theme = Theme::next_after(m.theme.name);
+            }
         }
         m
     }
 
     fn view(model: &Model) -> View<Msg> {
         let theme = &model.theme;
+        let menu = app_menu();
+        let menubar = menubar_view(&menubar_spec(&menu, model, theme));
         let header_palette = AppHeaderPalette::from_theme(theme);
         let stat_palette = StatCardPalette::from_theme(theme);
 
@@ -279,7 +330,110 @@ impl App for Explorer {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, body])
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual de observación.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, body])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual tiene prioridad si está abierto.
+        if let Some((x, y)) = model.context_menu {
+            let viewport = viewport_of(model);
+            // Acciones reales del explorer: refrescar el snapshot y ciclar
+            // el tema. El explorer es de sólo lectura — no inventamos
+            // edición.
+            let items = vec![
+                ContextMenuItem::action(&rimay_localize::t("minga-menu-refresh")),
+                ContextMenuItem::action(&rimay_localize::t("minga-menu-theme")),
+            ];
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
+                Arc::new(move |i: usize| match i {
+                    0 => Msg::Tick,
+                    _ => Msg::CycleTheme,
+                });
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport,
+                header: Some(rimay_localize::t("minga-menu-context-title")),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu();
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Viewport para clampear overlays: el explorer no trackea el tamaño de
+/// ventana, así que usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Explorer::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del explorer. Archivo / Ver / Ayuda — sólo comandos
+/// que mapean a acciones reales (refrescar, tema). Sin "Editar": el
+/// explorer no tiene campos de texto editables.
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(
+            Menu::new(&rimay_localize::t("minga-menu-file"))
+                .item(
+                    MenuItem::new(&rimay_localize::t("minga-menu-refresh"), "file.refresh")
+                        .shortcut("Ctrl+R"),
+                )
+                .item(
+                    MenuItem::new(&rimay_localize::t("minga-menu-quit"), "file.quit")
+                        .shortcut("Ctrl+Q")
+                        .separated(),
+                ),
+        )
+        .menu(
+            Menu::new(&rimay_localize::t("minga-menu-view"))
+                .item(MenuItem::new(&rimay_localize::t("minga-menu-theme"), "view.theme")),
+        )
+        .menu(
+            Menu::new(&rimay_localize::t("minga-menu-help"))
+                .item(MenuItem::new(&rimay_localize::t("minga-menu-about"), "help.about")),
+        )
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.refresh" => {
+            handle.dispatch(Msg::Tick);
+            model
+        }
+        "file.quit" => std::process::exit(0),
+        "view.theme" => {
+            handle.dispatch(Msg::CycleTheme);
+            model
+        }
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => model,
     }
 }
 

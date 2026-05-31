@@ -187,6 +187,7 @@ impl OverlayKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuKind {
     Archivo,
+    Editar,
     Vista,
     Capas,
     Armonico,
@@ -197,6 +198,7 @@ impl MenuKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
             MenuKind::Archivo => "Archivo",
+            MenuKind::Editar => "Editar",
             MenuKind::Vista => "Vista",
             MenuKind::Capas => "Capas",
             MenuKind::Armonico => "Armónico",
@@ -207,6 +209,7 @@ impl MenuKind {
     pub(crate) fn order() -> &'static [MenuKind] {
         &[
             MenuKind::Archivo,
+            MenuKind::Editar,
             MenuKind::Vista,
             MenuKind::Capas,
             MenuKind::Armonico,

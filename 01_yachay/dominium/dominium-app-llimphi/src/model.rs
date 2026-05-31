@@ -7,7 +7,9 @@ use dominium_core::{SimParams, World};
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_render_plan::PlanConfig;
 use llimphi_theme::Theme;
+use llimphi_clipboard::SystemClipboard;
 use llimphi_ui::KeyEvent;
+use llimphi_widget_edit_menu::EditAction;
 use llimphi_widget_text_input::TextInputState;
 
 pub(crate) struct Model {
@@ -77,6 +79,14 @@ pub(crate) struct Model {
     /// mueve, segundo click selecciona). Cuando es `false` la app muestra
     /// un hint flotante sobre el canvas. Se apaga al primer click.
     pub(crate) onboarding_done: bool,
+    /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
+    pub(crate) menu_open: Option<usize>,
+    /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
+    /// Opera sobre el editor del campo de texto focuseado (`id_input`).
+    pub(crate) edit_menu: Option<(f32, f32)>,
+    /// Clipboard del sistema, compartido por el menú de edición y el
+    /// text-input de renombre.
+    pub(crate) clipboard: SystemClipboard,
 }
 
 /// Pestañas del panel lateral. El orden es el orden visual en el tab bar.
@@ -242,4 +252,15 @@ pub(crate) enum Msg {
     /// Cierra el hint flotante de onboarding (se cierra solo en el primer
     /// click sobre el canvas, pero también hay una X visible).
     DismissOnboarding,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click en la ventana → abre el menú de edición en `(x, y)`,
+    /// operando sobre el campo de texto focuseado (`id_input`).
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición (sobre `id_input`).
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
 }

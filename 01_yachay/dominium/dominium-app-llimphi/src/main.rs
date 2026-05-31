@@ -37,6 +37,9 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{
     length, percent, Dimension, FlexDirection, Size, Style,
 };
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_text_input::TextInputState;
 use wawa_config_llimphi::theme_from_wawa;
 
@@ -167,10 +170,13 @@ impl App for Dominium {
             cluster_last_refresh: 0,
             panel_tab: PanelTab::Mundo,
             onboarding_done: false,
+            menu_open: None,
+            edit_menu: None,
+            clipboard: llimphi_clipboard::SystemClipboard::new(),
         }
     }
 
-    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(model: Model, msg: Msg, h: &Handle<Msg>) -> Model {
         let mut m = model;
         match msg {
             Msg::Tick => {
@@ -500,6 +506,32 @@ impl App for Dominium {
             Msg::DismissOnboarding => {
                 m.onboarding_done = true;
             }
+            Msg::MenuOpen(idx) => {
+                m.menu_open = idx;
+                // Abrir un menú principal cierra el contextual de edición.
+                m.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, cmd, h);
+            }
+            Msg::EditMenuOpen(x, y) => {
+                // Sólo tiene sentido si hay un campo de texto focuseado;
+                // si no, abrirlo igual sobre un editor vacío es inocuo
+                // (todo aparece en gris), pero preferimos no molestar.
+                if m.id_input_focused {
+                    m.edit_menu = Some((x, y));
+                    m.menu_open = None;
+                }
+            }
+            Msg::EditMenuAction(action) => {
+                m.edit_menu = None;
+                apply_edit_menu_action(&mut m, action);
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.edit_menu = None;
+            }
         }
         m
     }
@@ -586,11 +618,19 @@ impl App for Dominium {
         })
         .children(vec![canvas, side]);
 
-        let mut frame: Vec<View<Msg>> = vec![status];
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
+
+        let mut frame: Vec<View<Msg>> = vec![menubar, status];
         if !model.onboarding_done {
             frame.push(onboarding_bar(&theme));
         }
         frame.push(body);
+        // El right-click se engancha en la raíz (origen 0,0 → las coords
+        // locales que llegan al handler ya son de ventana) y abre el menú
+        // de edición sobre el campo focuseado. El canvas tiene su propio
+        // click/drag, pero no captura right-click, así que la raíz es el
+        // catch-all.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -600,7 +640,197 @@ impl App for Dominium {
             ..Default::default()
         })
         .fill(theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
         .children(frame)
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        let theme = model.theme;
+        // El menú de edición tiene prioridad si está abierto.
+        if let Some((x, y)) = model.edit_menu {
+            let flags = EditFlags::from_editor(model.id_input.editor(), model.id_input.is_masked());
+            let (w, hgt) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, hgt as f32),
+                &theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &theme))
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = Dominium::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: std::sync::Arc::new(Msg::MenuOpen),
+        on_command: std::sync::Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Construye el menú principal reflejando el estado actual de la sim.
+/// El submenú Editar opera sobre `id_input` (el campo de renombre) y se
+/// pone en gris cuando no hay nada focuseado o no hay nada que hacer.
+fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+
+    // Estado del campo de texto focuseado para el submenú Editar.
+    let focused = model.id_input_focused;
+    let ed = model.id_input.editor();
+    let has_sel = focused && ed.has_selection();
+    let can_undo = focused && ed.can_undo();
+    let can_redo = focused && ed.can_redo();
+    let has_text = focused && !ed.is_empty();
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo {
+        undo = undo.disabled();
+    }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo {
+        redo = redo.disabled();
+    }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel {
+        cut = cut.disabled();
+        copy = copy.disabled();
+    }
+    let mut paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    if !focused {
+        paste = paste.disabled();
+    }
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+        .shortcut("Ctrl+A")
+        .separated();
+    if !has_text {
+        sel_all = sel_all.disabled();
+    }
+
+    // Editar conceptos: sólo con selección.
+    let has_concepto = model.selected.is_some();
+    let mut borrar = MenuItem::new("Borrar concepto", "concepto.delete");
+    let mut renombrar = MenuItem::new("Renombrar concepto…", "concepto.rename");
+    if !has_concepto {
+        borrar = borrar.disabled();
+        renombrar = renombrar.disabled();
+    }
+
+    let play_label = if model.running { "Pausar" } else { "Reproducir" };
+    let mut rewind = MenuItem::new("Volver al presente", "sim.rewindhome");
+    if model.rewind_offset == 0 {
+        rewind = rewind.disabled();
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Cargar pack de usuario", "file.loadpack"))
+                .item(MenuItem::new("Guardar pack de usuario", "file.savepack").separated())
+                .item(MenuItem::new("Ciclar scenario", "file.cyclescenario"))
+                .item(MenuItem::new("Cargar scenario", "file.loadscenario")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all)
+                .item(renombrar)
+                .item(borrar),
+        )
+        .menu(
+            Menu::new("Simulación")
+                .item(MenuItem::new(play_label, "sim.toggleplay").shortcut("Espacio"))
+                .item(MenuItem::new("Re-sembrar mundo", "sim.reseed").separated())
+                .item(MenuItem::new("Sembrar conceptos", "sim.sembrar"))
+                .item(MenuItem::new("Limpiar conceptos", "sim.limpiar"))
+                .item(MenuItem::new("Crear concepto", "sim.crear").separated())
+                .item(MenuItem::new("Big Five ψ", "sim.bigfive"))
+                .item(MenuItem::new("Política de acción ψ", "sim.psipolicy").separated())
+                .item(rewind),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Ciclar modo de render", "view.rendermode"))
+                .item(MenuItem::new("Trayectorias", "view.trails"))
+                .item(MenuItem::new("Textura procedural", "view.texture"))
+                .item(MenuItem::new("Terrazas andinas", "view.andina").separated())
+                .item(MenuItem::new("Sincronizar relieve físico", "view.syncrelieve")),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Mostrar guía de uso", "help.onboarding")),
+        )
+}
+
+/// Traduce el `command` del menú principal al `Msg` real y lo despacha.
+fn handle_menu_command(model: Model, command: String, h: &Handle<Msg>) -> Model {
+    let target = match command.as_str() {
+        "file.loadpack" => Some(Msg::CargarPack),
+        "file.savepack" => Some(Msg::GuardarPack),
+        "file.cyclescenario" => Some(Msg::CycleScenario),
+        "file.loadscenario" => Some(Msg::LoadScenario),
+        "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
+        "edit.redo" => Some(Msg::EditMenuAction(EditAction::Redo)),
+        "edit.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "concepto.rename" => Some(Msg::FocusIdInput),
+        "concepto.delete" => Some(Msg::DeleteSelected),
+        "sim.toggleplay" => Some(Msg::TogglePlay),
+        "sim.reseed" => Some(Msg::Reseed),
+        "sim.sembrar" => Some(Msg::SembrarConceptos),
+        "sim.limpiar" => Some(Msg::LimpiarConceptos),
+        "sim.crear" => Some(Msg::CrearConcepto),
+        "sim.bigfive" => Some(Msg::ToggleBigFive),
+        "sim.psipolicy" => Some(Msg::CyclePsiPolicy),
+        "sim.rewindhome" => Some(Msg::RewindHome),
+        "view.rendermode" => Some(Msg::CycleRenderMode),
+        "view.trails" => Some(Msg::ToggleTrails),
+        "view.texture" => Some(Msg::ToggleTexture),
+        "view.andina" => Some(Msg::ToggleAndina),
+        "view.syncrelieve" => Some(Msg::ToggleSyncRelieve),
+        "help.onboarding" => Some(Msg::DismissOnboarding),
+        _ => None,
+    };
+    match target {
+        Some(msg) => Dominium::update(model, msg, h),
+        None => model,
+    }
+}
+
+/// Aplica una acción del menú de edición al editor del campo focuseado
+/// (`id_input`), replicando el bookkeeping de `Msg::IdInputKey`: si el
+/// texto cambió, propaga el nuevo id al Concepto seleccionado.
+fn apply_edit_menu_action(m: &mut Model, action: EditAction) {
+    if !m.id_input_focused {
+        return;
+    }
+    let r = editmenu::apply(m.id_input.editor_mut(), action, &mut m.clipboard);
+    if r.changed() {
+        let new_id = m.id_input.text().to_string();
+        if let Some(c) = selected_mut(m) {
+            c.id = new_id;
+        }
     }
 }
 

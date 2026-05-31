@@ -35,6 +35,9 @@ use llimphi_ui::{
 use llimphi_widget_context_menu::{
     context_menu_view, step_active, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_clipboard::SystemClipboard;
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use nakui_sheet::{csv_io, CellFormat, CellRange, CellRef, ExportMode, SheetValue, Workbook};
 use std::sync::Arc;
@@ -159,6 +162,17 @@ enum Msg {
     PivotCycleValue(i32),
     /// Conmuta si la primera fila del rango se trata como encabezado.
     PivotToggleHeader,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuBarOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click sobre la barra de fórmula → abre el menú de edición en
+    /// `(x, y)` de ventana, operando sobre el `TextInputState` de la barra.
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición de la barra de fórmula.
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú/overlay abierto (menú principal + edición).
+    CloseMenus,
 }
 
 #[derive(Clone, Copy)]
@@ -263,6 +277,17 @@ struct Model {
     freeze_cols: u32,
     /// Tabla dinámica abierta como overlay. `None` = sin pivot.
     pivot: Option<PivotState>,
+    /// Menú principal (barra superior): índice del menú raíz abierto.
+    /// `None` = cerrado.
+    menu_open: Option<usize>,
+    /// Menú de edición contextual sobre la barra de fórmula: ancla
+    /// `(x, y)` en coordenadas de ventana. `None` = cerrado.
+    edit_menu: Option<(f32, f32)>,
+    /// Clipboard del sistema para las acciones del menú de edición de la
+    /// barra de fórmula (cut/copy/paste de texto dentro del input). El
+    /// copy/cut/paste de CELDAS sigue usando `arboard` aparte porque
+    /// shifta fórmulas.
+    clipboard: SystemClipboard,
 }
 
 /// Estado del menú contextual mientras está abierto.
@@ -323,6 +348,9 @@ impl App for NakuiSheetApp {
             editing: false,
             menu: None,
             anchor: selected,
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         }
     }
 
@@ -699,15 +727,65 @@ impl App for NakuiSheetApp {
                     p.header_row = !p.header_row;
                 }
             }
+            Msg::MenuBarOpen(idx) => {
+                model.menu_open = idx;
+                // Abrir el menú principal cierra cualquier otro overlay
+                // local (menú de edición, menú de celda).
+                model.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                if let Some(inner) = menubar_command_msg(&model, &cmd) {
+                    h.dispatch(inner);
+                }
+            }
+            Msg::EditMenuOpen(x, y) => {
+                // Sólo tiene sentido el menú de edición sobre la barra de
+                // fórmula. Lo anclamos en la posición de ventana del click.
+                model.menu_open = None;
+                model.menu = None;
+                model.edit_menu = Some((x, y));
+            }
+            Msg::EditMenuAction(action) => {
+                model.edit_menu = None;
+                let _ = editmenu::apply(model.bar.editor_mut(), action, &mut model.clipboard);
+                // Si el menú de edición tocó el texto de la barra estando
+                // en modo edición, lo dejamos vivo — el commit pasa con
+                // Enter como siempre. No tocamos el Workbook acá.
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.edit_menu = None;
+            }
         }
         model
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
-        // El pivot tiene prioridad: es un modal de pantalla completa.
+        // 1) Menú de edición sobre la barra de fórmula: máxima prioridad
+        //    (es lo que el usuario acaba de invocar con right-click).
+        if let Some((x, y)) = model.edit_menu {
+            let flags = EditFlags::from_editor(model.bar.editor(), model.bar.is_masked());
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &model.theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        // 2) Dropdown del menú principal (barra superior).
+        if model.menu_open.is_some() {
+            let menu = app_menu(model);
+            return menubar_overlay(&menubar_spec(&menu, model, &model.theme));
+        }
+        // 3) El pivot: modal de pantalla completa.
         if let Some(pivot) = model.pivot.as_ref() {
             return Some(pivot_overlay_view(&model.wb, pivot));
         }
+        // 4) Menú contextual de celda (el que ya existía).
         let menu = model.menu.as_ref()?;
         let items = menu_items(&model.wb, model.clipboard_origin.is_some(), model.freeze_rows > 0 || model.freeze_cols > 0);
         let mut palette = ContextMenuPalette::from_theme(&model.theme);
@@ -769,6 +847,8 @@ impl App for NakuiSheetApp {
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let t = &model.theme;
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, t));
         let title_bar =
             title_bar_view(model.selected, model.freeze_rows, model.freeze_cols);
         let formula_bar = formula_bar_view(t, &model.bar, model.selected);
@@ -792,12 +872,18 @@ impl App for NakuiSheetApp {
             ..Default::default()
         })
         .fill(palette::BG_APP)
-        .children(vec![title_bar, formula_bar, grid, status])
+        .children(vec![menubar, title_bar, formula_bar, grid, status])
     }
 
     fn on_key(model: &Self::Model, ev: &KeyEvent) -> Option<Self::Msg> {
         if ev.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal o menú de edición abiertos: Esc cierra; cualquier
+        // otra tecla los cierra también (feel estándar de menús). No
+        // dejamos que la tecla caiga a navegación de grilla.
+        if model.menu_open.is_some() || model.edit_menu.is_some() {
+            return Some(Msg::CloseMenus);
         }
         // Si el pivot está abierto, las teclas controlan el modal:
         // Esc cierra, ←/→ rotan la función, A/G/V ciclan
@@ -986,6 +1072,24 @@ impl App for NakuiSheetApp {
         } else {
             Some(Msg::Scroll { drow, dcol })
         }
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = NakuiSheetApp::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuBarOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
     }
 }
 

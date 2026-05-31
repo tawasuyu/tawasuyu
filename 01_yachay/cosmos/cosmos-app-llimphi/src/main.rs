@@ -33,7 +33,7 @@ use wawa_config_llimphi::theme_from_wawa;
 use crate::astroview::compute_astro;
 use crate::chrome::MenuCmd;
 use crate::engine::{compute, sample_chart};
-use crate::model::{Model, Msg, ViewKind, WheelOpt};
+use crate::model::{MenuKind, Model, Msg, ViewKind, WheelOpt};
 use crate::persist::{
     delete_card, generate_card_name, load_card, load_chart_from_disk, load_ui_state, save_card,
     save_chart_to_disk, save_ui_state, spawn_chart_watcher, UiState,
@@ -141,6 +141,23 @@ fn do_duplicar(m: &mut Model) {
     m.status_note = Some(format!("Carta duplicada: {name}"));
 }
 
+/// Guarda la carta cargada en la biblioteca. Si hay una carta
+/// seleccionada, sobreescribe ese archivo; si no, genera un nombre nuevo.
+fn do_guardar(m: &mut Model) {
+    let name = m
+        .selected_card
+        .clone()
+        .unwrap_or_else(|| generate_card_name(&m.chart));
+    save_card(&name, &m.chart);
+    m.selected_card = Some(name.clone());
+    m.status_note = Some(format!("Carta guardada: {name}"));
+}
+
+fn set_theme_dark(m: &mut Model, dark: bool) {
+    m.cfg.theme_dark = dark;
+    m.theme = if dark { Theme::dark() } else { Theme::light() };
+}
+
 fn do_recargar(m: &mut Model) {
     if let Some(c) = load_chart_from_disk() {
         m.chart = c;
@@ -162,6 +179,8 @@ fn apply_cmd(m: &mut Model, cmd: MenuCmd) {
     match cmd {
         MenuCmd::Sep => {}
         MenuCmd::Nueva => do_nueva(m),
+        MenuCmd::Guardar => do_guardar(m),
+        MenuCmd::Theme(dark) => set_theme_dark(m, dark),
         MenuCmd::Duplicar => do_duplicar(m),
         MenuCmd::Recargar => do_recargar(m),
         MenuCmd::Eliminar => do_eliminar(m),
@@ -307,8 +326,7 @@ impl App for Cosmos {
                 persist = true;
             }
             Msg::SetThemeDark(dark) => {
-                m.cfg.theme_dark = dark;
-                m.theme = if dark { Theme::dark() } else { Theme::light() };
+                set_theme_dark(&mut m, dark);
                 persist = true;
             }
             Msg::ToggleWheelOpt(opt) => {
@@ -428,6 +446,15 @@ impl App for Cosmos {
             }
             Key::Character(s) if ev.modifiers.ctrl && s.as_str().eq_ignore_ascii_case("w") => {
                 Some(Msg::CloseTab(model.active_tab))
+            }
+            // Ctrl+S → guardar carta en biblioteca (espeja Archivo/Editar).
+            // Resolvemos el índice contra la misma lista que pinta el menú
+            // para no acoplar el atajo al orden de las entradas.
+            Key::Character(s) if ev.modifiers.ctrl && s.as_str().eq_ignore_ascii_case("s") => {
+                chrome::menu_entries(MenuKind::Archivo, model)
+                    .iter()
+                    .position(|e| matches!(e.cmd, MenuCmd::Guardar))
+                    .map(|i| Msg::MenuPick(MenuKind::Archivo, i))
             }
             _ => None,
         }
