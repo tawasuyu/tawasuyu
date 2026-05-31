@@ -409,6 +409,7 @@ members = [
     "shared/format",
     "shared/forth-emisor",
     "shared/launcher-core",
+    "shared/launcher-llimphi",
     "shared/rimay-localize",
     "shared/sandokan/sandokan-core",
     "shared/sandokan/sandokan-lifecycle",

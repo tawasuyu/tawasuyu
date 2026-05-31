@@ -1,0 +1,17 @@
+[package]
+name = "launcher-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "launcher-llimphi — renderiza un `launcher-core::Surface` a View<Msg> de Llimphi: barras por borde (estilo eww), barra de menú global (estilo mac, dropdown vía context-menu), dock con tear-off y un hook para módulos dinámicos del host (clock/cpu/custom). Toma un `app_bus::Launcher` inyectado y lee el `AppRegistry`. El frontend único que mirada/shuma montan en vez de su propio launcher."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-button = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { path = "../app-bus" }
+launcher-core = { path = "../launcher-core" }
