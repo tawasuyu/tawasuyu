@@ -1,0 +1,22 @@
+[package]
+name = "khipu-brahman"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "khipu-brahman — transporte de sobres khipu sobre libp2p (BrahmanNet): stream cifrado /khipu/sobre/1.0.0 + descubrimiento por DHT. El sobre se verifica con khipu-share::open; el transporte no necesita ser confiable."
+
+[dependencies]
+khipu-share = { path = "../khipu-share" }
+card-net = { path = "../../../shared/card/card-net" }
+libp2p = { workspace = true }
+libp2p-stream = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }

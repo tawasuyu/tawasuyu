@@ -21,7 +21,8 @@ cargo run --release -p khipu-app
 |---|---|
 | [`khipu-core`](khipu-core/README.md) | Modelo de nota + store; sin UI. |
 | [`khipu-gravity`](khipu-gravity/README.md) | Algoritmo de masa/decay; refuerzo por acceso. |
-| `khipu-share` | Sobres de notas firmados (Ed25519) y direccionados por contenido (BLAKE3) sobre agora. |
+| `khipu-share` | Sobres de notas firmados (Ed25519) y direccionados por contenido (BLAKE3) sobre agora; transporte TCP/LAN + descubrimiento UDP + identidad cifrada. |
+| `khipu-brahman` | Transporte de sobres sobre libp2p (BrahmanNet): stream cifrado + descubrimiento por DHT. |
 | [`khipu-app`](khipu-app/README.md) | UI Llimphi sobre el core. |
 
 ## Gravedad semántica (embeddings)
@@ -46,7 +47,7 @@ Lo que viaja es el **contenido** (título, cuerpo, etiquetas), nunca la física 
 
 Para compartir en vivo sin copiar archivos: `publicar` levanta un servidor TCP que sirve el cuaderno (puerto `KHIPU_BIND`, default `127.0.0.1:7700`) **y anuncia una baliza UDP** para que lo descubran en la LAN. `recibir` abre un panel con un **campo de dirección** (`host:puerto`, prellenado y editable) y, debajo, los **pares descubiertos en la LAN** (nombre · autor · dirección): click en uno para jalarle el cuaderno, o escribí una dirección y «jalar». El transporte es `std::net` puro y **no necesita ser confiable** — el receptor verifica firma + hash antes de ingerir; la baliza sólo dice *dónde*, no *qué*.
 
-**WAN**: el descubrimiento UDP es de LAN, pero el campo de dirección habilita jalar de cualquier `host:puerto` alcanzable (con `KHIPU_BIND=0.0.0.0:7700` + port-forward del lado que publica). Travesía de NAT/rendezvous (libp2p) queda como salto futuro.
+**WAN**: el campo de dirección habilita jalar de cualquier `host:puerto` alcanzable por TCP (con `KHIPU_BIND=0.0.0.0:7700` + port-forward del lado que publica). Para P2P sobre libp2p hay `khipu-brahman`: stream cifrado (Noise) sobre `BrahmanNet` con el protocolo `/khipu/sobre/1.0.0` y descubrimiento por DHT Kademlia (`anunciar`/`descubrir`) — probado entre dos nodos en localhost. Falta cablearlo en la app (swarm + bootstrap) y, para NAT real, relay/dcutr (que `BrahmanNet` aún no configura).
 
 La lógica vive en `khipu-share`: `net` (transporte TCP) y `discovery` (baliza UDP). 15 tests + un test de integración que recorre la cadena completa descubrir→jalar→verificar en loopback.
 

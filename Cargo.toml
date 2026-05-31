@@ -20,6 +20,7 @@ members = [
     "00_unanchay/chaka/chaka-runtime",
     "00_unanchay/chaka/chaka-shadow",
     "00_unanchay/khipu/khipu-app",
+    "00_unanchay/khipu/khipu-brahman",
     "00_unanchay/khipu/khipu-core",
     "00_unanchay/khipu/khipu-gravity",
     "00_unanchay/khipu/khipu-share",
