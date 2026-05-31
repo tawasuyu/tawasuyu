@@ -167,6 +167,41 @@ enum WawaOp {
         #[arg(long)]
         salida: PathBuf,
     },
+    /// SDD-rotacion-revocacion §4/§5c :: forja el OVERLAY de revocación del plano
+    /// de CONTROL: apaga una clave del `AGORA_AUTH_RING` sin re-forjar el kernel.
+    /// Firma la revocación M-of-N con `--como` (varios miembros del anillo,
+    /// separados por coma) sobre `mensaje_revocacion_clave(objetivo, motivo, ...)`
+    /// y emite el `format::OverlayRevocacion` envuelto en un `Objeto` del grafo
+    /// (`<hash>.obj`), listo para sembrar en los assets del génesis. El kernel lo
+    /// lee al arrancar y deniega la clave revocada en `autor_en_anillo`.
+    ///
+    /// Una clave comprometida NO se revoca a sí misma: para `--motivo compromised`
+    /// el `objetivo` NO debe figurar entre `--como`. El kernel exige 2-of-3.
+    ///
+    ///   agora-cli wawa revocar --objetivo <pubkey-hex-filtrada> \
+    ///     --como wawa-secundario,wawa-recuperacion --salida overlay-revocacion.obj
+    Revocar {
+        /// Pubkey hex (64 chars) de la clave del anillo a revocar. Es una PUBKEY
+        /// cruda, no un id del grafo: la clave soberana que se apaga.
+        #[arg(long)]
+        objetivo: String,
+        /// Identidades firmantes (seeds en el keystore local), separadas por coma.
+        /// Sus pubkeys DEBEN habitar `AGORA_AUTH_RING`; el kernel cuenta firmantes
+        /// distintos del anillo y exige el quórum (2-of-3).
+        #[arg(long)]
+        como: String,
+        /// Motivo: compromised (permanente), retired o superseded.
+        #[arg(long, value_enum, default_value_t = MotivoArg::Compromised)]
+        motivo: MotivoArg,
+        /// Suspensión TEMPORAL: segundos desde ahora hasta vencer. Sin esto,
+        /// permanente. (El kernel hoy la aplica fail-closed: la auto-caducidad
+        /// temporal espera un RTC — ver SDD §4.)
+        #[arg(long)]
+        vence_en_seg: Option<u64>,
+        /// Archivo de salida del objeto-overlay (`<hash>.obj`, payload postcard).
+        #[arg(long)]
+        salida: PathBuf,
+    },
     /// Difunde el release de un directorio (el que produjo `publicar`) por
     /// Akasha-over-Ether y sirve sus objetos a las wawa de la misma red L2.
     /// Es la mitad "transporte" del lazo Rust→wawa: empaqueta el
@@ -700,6 +735,9 @@ fn run(cmd: Cmd) -> CliResult<()> {
             }
             WawaOp::Concesion { como, wasm, permisos, salida } => {
                 wawa_concesion(&como, &wasm, &permisos, &salida)
+            }
+            WawaOp::Revocar { objetivo, como, motivo, vence_en_seg, salida } => {
+                wawa_revocar(&objetivo, &como, motivo.into(), vence_en_seg, &salida)
             }
         },
     }
@@ -1355,6 +1393,96 @@ fn wawa_concesion(como: &str, wasm: &Path, permisos_spec: &str, salida: &Path) -
     println!("La pubkey del autor DEBE habitar AGORA_AUTH_RING de claves.rs, o el");
     println!("kernel rechaza la concesión (CapacidadInsuficiente) y la app corre");
     println!("con 0 capacidades gateadas.");
+    Ok(())
+}
+
+/// `agora-cli wawa revocar` — forja el overlay de revocación del plano de control.
+fn wawa_revocar(
+    objetivo_hex: &str,
+    como: &str,
+    motivo: RevReason,
+    vence_en_seg: Option<u64>,
+    salida: &Path,
+) -> CliResult<()> {
+    let s = Sesion::abrir()?;
+
+    // El objetivo es una PUBKEY cruda (la clave del anillo a apagar), no un id
+    // del grafo: 64 chars hex → 32 bytes.
+    let objetivo = parse_hash(objetivo_hex)?;
+
+    // Los firmantes: cada identidad de `--como` (coma-separada) con seed local.
+    let mut firmantes_kp: Vec<Keypair> = Vec::new();
+    for tok in como.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        let id = s.resolver_id(tok)?;
+        firmantes_kp.push(s.cargar_keypair(id)?);
+    }
+    if firmantes_kp.is_empty() {
+        return Err(Error::Canal("--como vacío: pasá al menos un firmante del anillo"));
+    }
+    // Una clave comprometida no respalda su propia revocación: el kernel
+    // descartaría esa firma, así que la rechazamos temprano con un mensaje claro.
+    if motivo == RevReason::Compromised
+        && firmantes_kp.iter().any(|kp| kp.public_key() == objetivo)
+    {
+        return Err(Error::Canal(
+            "el objetivo no puede firmar su propia revocación por compromiso \
+             (M-of-N de OTROS) — quitalo de --como",
+        ));
+    }
+
+    let now = ahora_unix();
+    let expires_at = vence_en_seg.map(|seg| now + seg);
+
+    // Firmar M-of-N sobre el canónico compartido (agora-core delega en
+    // format::mensaje_revocacion_clave, el MISMO que el kernel verifica).
+    let refs: Vec<&Keypair> = firmantes_kp.iter().collect();
+    let rev = Revocation::create(objetivo, motivo, now, expires_at, &refs);
+
+    // Aplanar la multifirma al wire que el kernel deserializa.
+    let firmantes: Vec<format::FirmaRevocacion> = rev
+        .authorizers
+        .signers
+        .iter()
+        .map(|sig| format::FirmaRevocacion { autor: sig.public_key, firma: sig.signature })
+        .collect();
+    let motivo_byte = match motivo {
+        RevReason::Compromised => 0u8,
+        RevReason::Retired => 1,
+        RevReason::Superseded => 2,
+    };
+    let overlay = format::OverlayRevocacion {
+        version: format::VERSION_OVERLAY,
+        revocaciones: vec![format::RevocacionFirmada {
+            objetivo,
+            motivo: motivo_byte,
+            emitida_en: now,
+            vence_en: expires_at,
+            firmantes,
+        }],
+    };
+
+    // El overlay como objeto del grafo (igual trazado que wawa_concesion).
+    let datos = overlay.serializar().map_err(Error::Canal)?;
+    let overlay_obj = format::Objeto { datos, hijos: Vec::new() };
+    let payload = overlay_obj.serializar().map_err(Error::Canal)?;
+    let overlay_hash = format::hash(&payload);
+    fs::write(salida, &payload)?;
+
+    let n = firmantes_kp.len();
+    println!("overlay de revocación forjado → {}", salida.display());
+    println!("  objetivo (pubkey) : {}", hex_de(&objetivo));
+    println!("  motivo            : {motivo_byte} ({motivo:?})");
+    println!("  firmantes         : {n} (el kernel exige quórum 2-of-3 del anillo)");
+    match expires_at {
+        Some(t) => println!("  vence             : t={t} (fail-closed hasta RTC)"),
+        None => println!("  vence             : nunca (permanente)"),
+    }
+    println!("  overlay_hash      : {}", hex_de(&overlay_hash));
+    println!();
+    println!("Es un objeto del grafo. Sembralo en los assets del génesis para que");
+    println!("`wawa-boot` lo ancle en `Manifiesto.overlay_revocacion`; el kernel lo");
+    println!("lee al arrancar y deniega la clave en `autor_en_anillo`. Las pubkeys");
+    println!("firmantes DEBEN habitar AGORA_AUTH_RING o no suman al quórum.");
     Ok(())
 }
 
@@ -2015,5 +2143,73 @@ mod tests {
         let manifiesto = format::Manifiesto::deserializar(&mobj.datos).unwrap();
 
         assert_eq!(mio, manifiesto.apps[0].bytecode, "el hash de la concesión debe ser el del objeto-bytecode anclado");
+    }
+
+    /// EL CONTRATO cross-frontera de la revocación: el overlay que `wawa revocar`
+    /// produce debe (a) round-trippear por `format::OverlayRevocacion` y (b) que
+    /// cada firma verifique sobre `format::mensaje_revocacion_clave` — el MISMO
+    /// canónico que `claves::verificar_revocacion` reconstruye en el kernel. Si
+    /// esto pasa, el kernel acreditaría los firmantes y alcanzaría el quórum.
+    #[test]
+    fn overlay_revocacion_wire_verifica_bajo_el_canonico_del_kernel() {
+        let slot0 = agora_core::Keypair::from_seed([10u8; 32]);
+        let slot1 = agora_core::Keypair::from_seed([11u8; 32]);
+        let slot2 = agora_core::Keypair::from_seed([12u8; 32]);
+        let objetivo = slot0.public_key(); // la clave comprometida
+
+        // Construir el overlay igual que `wawa_revocar` (slot1 + slot2 firman).
+        let now = 1_700_000_000;
+        let rev = Revocation::create(
+            objetivo,
+            RevReason::Compromised,
+            now,
+            None,
+            &[&slot1, &slot2],
+        );
+        let firmantes: Vec<format::FirmaRevocacion> = rev
+            .authorizers
+            .signers
+            .iter()
+            .map(|s| format::FirmaRevocacion { autor: s.public_key, firma: s.signature })
+            .collect();
+        let overlay = format::OverlayRevocacion {
+            version: format::VERSION_OVERLAY,
+            revocaciones: vec![format::RevocacionFirmada {
+                objetivo,
+                motivo: 0,
+                emitida_en: now,
+                vence_en: None,
+                firmantes,
+            }],
+        };
+
+        // (a) round-trip envuelto en un Objeto del grafo, como en disco.
+        let obj = format::Objeto { datos: overlay.serializar().unwrap(), hijos: Vec::new() };
+        let leido_obj = format::Objeto::deserializar(&obj.serializar().unwrap()).unwrap();
+        let leido = format::OverlayRevocacion::deserializar(&leido_obj.datos).unwrap();
+        let rf = &leido.revocaciones[0];
+
+        // (b) reconstruir el canónico EXACTO del kernel y verificar cada firma.
+        let mensaje = format::mensaje_revocacion_clave(
+            &rf.objetivo,
+            rf.motivo,
+            rf.emitida_en,
+            rf.vence_en,
+        );
+        let ring = [slot0.public_key(), slot1.public_key(), slot2.public_key()];
+        let mut slots_acreditados = 0u32;
+        for f in &rf.firmantes {
+            // El objetivo comprometido no cuenta (espejo de verificar_revocacion).
+            if f.autor == objetivo {
+                continue;
+            }
+            if let Some(slot) = ring.iter().position(|k| *k == f.autor) {
+                if agora_core::verify_signature(&f.autor, &mensaje, &f.firma).is_ok() {
+                    slots_acreditados |= 1 << slot;
+                }
+            }
+        }
+        // 2 slots distintos del anillo respaldan ⇒ alcanza el quórum 2-of-3.
+        assert_eq!(slots_acreditados.count_ones(), 2);
     }
 }

@@ -1,6 +1,6 @@
 # SDD — Rotación y revocación de claves (agora #4)
 
-> Estado: **diseño cerrado (2026-05-30)**, primitivos en construcción. Resuelve
+> Estado: **IMPLEMENTADO end-to-end (2026-05-31)** — ver §6 "Estado global". Resuelve
 > el item #4 del norte de `ARQUITECTURA.md`. Fuente autoritativa del modelo.
 
 ## 0. La distinción que define todo
@@ -127,14 +127,19 @@ contra reflash malicioso del kernel (frontera física fuera de alcance).
    - ✅ 4a. Espejo `verificar_revocacion(objetivo, motivo, emitida_en, vence_en,
      firmantes, min)` — M-of-N contra `AGORA_AUTH_RING` (slots distintos por
      bitmask, anti-inflado del conteo), `Compromised` excluye al `objetivo` (no se
-     revoca a sí misma), zero-alloc salvo el canónico (camino frío). SOBERANO Y
-     TESTEABLE, aún NO cableado — igual que `verificar_concesion_capacidad` antes
-     de la Fase 67.
-   - ⏳ 4b. Overlay en carga: anclar la lista de revocaciones como el manifiesto
-     (superbloque), re-verificarla FRESH en cada arranque, y que `autor_en_anillo`
-     exija además que la clave NO esté revocada-activa-a-`now`. BLOQUEADO por dos
-     decisiones de diseño: extender el formato del superbloque (campo overlay_raíz)
-     y una fuente de tiempo unix en el kernel (hoy lleva ticks PIT, no wall-clock).
+     revoca a sí misma), zero-alloc salvo el canónico (camino frío).
+   - ✅ 4b. Overlay en carga (commit a6128110). Anclaje: `Manifiesto.overlay_
+     revocacion: Option<Hash>` (corte de formato v5→v6, NO superbloque — más simple
+     y sigue el patrón ya usado para concesiones). `claves::SLOTS_REVOCADOS`
+     (`AtomicU32`, un bit por slot) lo enciende `aplicar_overlay_revocacion` tras
+     verificar quórum (2-of-3); `autor_en_anillo` lo consulta y deniega.
+     `manifiesto::aplicar_overlay` lo lee FRESH en el arranque (fail-safe en
+     disponibilidad: overlay corrupto ⇒ "sin revocaciones", el gate de autoridad
+     sigue intacto); `main` lo invoca tras `instalar`, antes de aceptar propuesta.
+     DECISIÓN de tiempo: el kernel no tiene wall-clock (ticks PIT), así que aplica
+     la revocación FAIL-CLOSED mientras el overlay siga anclado; la auto-caducidad
+     temporal (`vence_en`) espera un RTC. Des-revocar = anclar overlay recortado.
+     boot siembra `overlay_revocacion: None` salvo que exista el asset (4b seam).
 5. `agora-cli`:
    - ✅ 5a. `identidad rotar <id>` — forja la sucesora, `KeyRotation` doble-firmada,
      registra la clave nueva en grafo + keystore (handoff voluntario; la cadena
@@ -144,6 +149,25 @@ contra reflash malicioso del kernel (frontera física fuera de alcance).
      viva en el keystore local, el grafo gatea el umbral M-of-N (anti-DoS de
      tombstones). Persisten ambos vía `agora-store` (snapshot, fase 3). Falta la
      combinación multi-parte offline de firmas parciales (un guardián por máquina).
-   - ⏳ 5c. `wawa revocar` — productor del OVERLAY del plano de CONTROL (revocación
-     firmada M-of-N por `AGORA_AUTH_RING`). Emparejado con 4b: las seeds del anillo
-     viven offline y el kernel aún no consume el overlay; se hace junto a 4b.
+   - ✅ 5c. `wawa revocar --objetivo <pubkey> --como <id,id,...> [--motivo]
+     [--vence-en-seg] --salida <obj>` — productor del OVERLAY del plano de CONTROL.
+     Firma M-of-N con los miembros del anillo de seed local sobre el canónico
+     compartido (`mensaje_revocacion_clave`), aplana la multifirma al wire
+     (`format::OverlayRevocacion`/`RevocacionFirmada`/`FirmaRevocacion`) y la emite
+     como objeto del grafo. Rechaza que el `objetivo` firme su propia revocación
+     por compromiso. El operador deja el `.obj` en `wawa-kernel/assets/overlay-
+     revocacion.obj` y `wawa-boot::sembrar_overlay` lo ancla (gemelo de
+     `sembrar_concesion`; ausencia ⇒ None ⇒ cero cambio). Test de contrato
+     cross-frontera: el wire round-trippea y cada firma verifica bajo el MISMO
+     canónico que el kernel reconstruye (quórum 2-of-3 alcanzado).
+
+## Estado global (2026-05-31)
+
+**SDD #4 COMPLETO end-to-end.** Las 5 fases (1, 2, 3, 3.bis, 4a, 4b, 5a, 5b, 5c)
+están en `main`. El lazo del plano de control cierra: `wawa revocar` forja el
+overlay → operador lo deja en assets → `boot` lo ancla en el manifiesto v6 → el
+kernel lo aplica al arrancar y deniega la clave del anillo revocada por quórum.
+PENDIENTES menores, no bloqueantes: (a) auto-caducidad temporal en el kernel
+(necesita RTC; hoy fail-closed); (b) combinación multi-parte offline de firmas
+parciales para `identidad revocar` social (hoy sólo firma con guardianes de seed
+local); (c) validación en QEMU del seam de boot (la sandbox no compila `boot`).

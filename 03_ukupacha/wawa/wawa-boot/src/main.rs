@@ -33,8 +33,8 @@ use std::process::Command;
 // enlaza el kernel. Gracias a el, lo que `boot` siembra y lo que el kernel lee
 // es, byte a byte, el mismo idioma.
 use format::{
-    ConcesionCapacidad, EntradaApp, Hash, Manifiesto, Objeto, SuperBloque, MAGIA, MAX_OBJETO,
-    TAM_SECTOR, VERSION_MANIFIESTO, VERSION_SUPERBLOQUE,
+    ConcesionCapacidad, EntradaApp, Hash, Manifiesto, Objeto, OverlayRevocacion, SuperBloque,
+    MAGIA, MAX_OBJETO, TAM_SECTOR, VERSION_MANIFIESTO, VERSION_SUPERBLOQUE,
 };
 
 /// Ruta del ELF del kernel, ya compilado para `x86_64-unknown-none`.
@@ -481,6 +481,59 @@ fn sembrar_concesion(
     Ok(Some(hash))
 }
 
+/// Lee, si existe, el objeto-overlay de revocacion forjado fuera de banda por el
+/// operador: `wawa-kernel/assets/overlay-revocacion.obj` (el payload postcard de
+/// un `Objeto{datos:OverlayRevocacion, hijos:[]}` que escribe `agora-cli wawa
+/// revocar --salida`). Ausencia NO es error —es el caso comun, sin claves del
+/// anillo revocadas—: devuelve `None`.
+fn leer_overlay() -> Result<Option<Vec<u8>>, String> {
+    let ruta = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../wawa-kernel/assets")
+        .join("overlay-revocacion.obj");
+    match std::fs::read(&ruta) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("no se pudo leer el overlay «{}»: {e}", ruta.display())),
+    }
+}
+
+/// Ancla el overlay de revocacion del plano de control, si el operador lo forjo
+/// (`agora-cli wawa revocar`) y lo dejo en los assets. `boot` NO firma
+/// revocaciones —no tiene las seeds del anillo—; solo ancla el objeto firmado
+/// fuera de banda, valida que sea un `OverlayRevocacion` bien formado de la
+/// version corriente, lo cuelga del manifiesto (para que el MARK del GC lo
+/// alcance) y devuelve su hash para `Manifiesto.overlay_revocacion`. El kernel lo
+/// lee FRESH al arrancar y deniega las claves del anillo revocadas por quorum
+/// (SDD-rotacion-revocacion §4). `None` si no hay archivo ⇒ cero cambio.
+fn sembrar_overlay(
+    log: &mut Vec<u8>,
+    cursor: &mut u64,
+    hijos: &mut Vec<Hash>,
+) -> Result<Option<Hash>, String> {
+    let payload = match leer_overlay()? {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    // El archivo es un `Objeto` del grafo cuyo payload es el `OverlayRevocacion`.
+    let objeto = Objeto::deserializar(&payload)
+        .map_err(|e| format!("el overlay de revocacion no es un Objeto valido: {e}"))?;
+    // GUARDA: validar que el payload sea un overlay bien formado de la version
+    // corriente ANTES de sellar el disco — un asset corrupto se delata aqui, no
+    // en el arranque (donde el kernel lo trataria como "sin revocaciones").
+    let overlay = OverlayRevocacion::deserializar(&objeto.datos)
+        .map_err(|e| format!("el overlay de revocacion es ilegible: {e}"))?;
+
+    let hash = format::hash(&payload);
+    anexar_objeto(log, cursor, &payload)?;
+    hijos.push(hash);
+    eprintln!(
+        "[renaser/boot] overlay de revocacion anclado: {} revocacion(es), hash {}",
+        overlay.revocaciones.len(),
+        hex_corto(&hash),
+    );
+    Ok(Some(hash))
+}
+
 /// Los primeros 8 bytes de un hash en hex — suficiente para distinguir objetos
 /// en un mensaje de diagnostico sin volcar los 32 bytes completos.
 fn hex_corto(hash: &Hash) -> String {
@@ -576,24 +629,30 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
         });
     }
 
+    // SEAM del plano de CONTROL (SDD-rotacion-revocacion §4). Igual que las
+    // concesiones: `boot` no firma —no tiene las seeds del anillo— pero SI ancla
+    // el overlay que el operador forjo fuera de banda (`agora-cli wawa revocar`)
+    // y dejo en `wawa-kernel/assets/overlay-revocacion.obj`. Ausencia ⇒ `None` ⇒
+    // cero cambio (el caso comun, sin claves del anillo revocadas).
+    let overlay_revocacion = sembrar_overlay(&mut log, &mut cursor, &mut hijos_manifiesto)?;
+    let anclo_overlay = overlay_revocacion.is_some();
+
     // --- 2. El objeto del Manifiesto de Genesis. Sus `hijos` son los objetos
     //        de bytecode: el grafo lo lee como el nodo padre del userspace. ---
     // Sin configuracion enlazada: el kernel inyectara `Configuracion::por_defecto`
     // en cada `ContextoCapacidades`. El cambio de idioma/tema engendrara un
     // nodo nuevo en caliente y reanclara el manifiesto sin pasar por aqui.
-    // `overlay_revocacion: None` — el génesis no ancla overlay; boot no tiene las
-    // seeds del anillo para firmar revocaciones. El operador lo ancla aparte si
-    // necesita apagar una clave soberana filtrada (SDD-rotacion-revocacion §4).
     let manifiesto =
-        Manifiesto { version: VERSION_MANIFIESTO, apps, configuracion: None, overlay_revocacion: None };
+        Manifiesto { version: VERSION_MANIFIESTO, apps, configuracion: None, overlay_revocacion };
     let man_datos = manifiesto.serializar().map_err(|e| e.to_string())?;
     let man_objeto = Objeto { datos: man_datos, hijos: hijos_manifiesto };
     let man_payload = man_objeto.serializar().map_err(|e| e.to_string())?;
     let hash_manifiesto = anexar_objeto(&mut log, &mut cursor, &man_payload)?;
 
     // El grafo sembrado: un objeto por cada `.wasm` unico, uno por cada
-    // concesion de capacidad anclada, mas el manifiesto.
-    let objetos = hash_de.len() + concesiones.len() + 1;
+    // concesion de capacidad anclada, el overlay de revocacion si se anclo, mas
+    // el manifiesto.
+    let objetos = hash_de.len() + concesiones.len() + anclo_overlay as usize + 1;
 
     // --- 3. El superbloque: el ancla del grafo, en el sector 0. `raiz` queda
     //        vacia —el userspace la fija; `manifiesto` apunta a la genesis. ---
