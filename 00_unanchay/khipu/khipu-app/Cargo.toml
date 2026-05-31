@@ -19,6 +19,8 @@ path = "examples/demo_cli.rs"
 [dependencies]
 khipu-core = { path = "../khipu-core" }
 khipu-gravity = { path = "../khipu-gravity" }
+rimay-verbo = { path = "../../rimay/rimay-verbo" }
+tokio = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-list = { workspace = true }

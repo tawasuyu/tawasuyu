@@ -10,19 +10,28 @@
 //!   2D del [`SemanticField::gravity_layout`]. Color por clúster
 //!   (umbral 0.55), la seleccionada va resaltada con borde acento.
 //!
-//! **Embeddings**: por ahora un hash trigram → R^16 (random projection
-//! 1-bit signed, normalizado) — determinista, sin red, sin daemon. Se
-//! recalculan al editar título o cuerpo. Cuando convenga enchufar
-//! `rimay-verbo-daemon`, basta cambiar la función `embed`.
+//! **Embeddings**: si hay un `verbo-daemon` corriendo en el socket por
+//! defecto (`$XDG_RUNTIME_DIR/verbo.sock`) los vectores son reales
+//! (fastembed e5, etc.) — clústeres y vecinos se vuelven semánticos de
+//! verdad. Sin daemon caemos al hash trigram → R^16 local (random
+//! projection 1-bit signed, normalizado): determinista, offline,
+//! idéntico al comportamiento histórico. Ver [`Embedder`]. El cálculo
+//! es async, así que viaja a un worker (`Handle::spawn`) y reentra al
+//! `update` con [`Msg::EmbeddingReady`] — la UI nunca se bloquea.
 //!
 //! **Persistencia**: cada mutación graba `$XDG_DATA_HOME/khipu/notes.bin`
-//! con postcard. Al arrancar, si el archivo existe se carga; sino se
+//! con postcard, anotando la etiqueta del espacio vectorial usado. Al
+//! arrancar, si el archivo existe se carga; si el espacio cambió (otro
+//! modelo o dimensión) los vectores se recalculan. Sin archivo se
 //! siembra el cuaderno demo (siete notas en español).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::ProjectDirs;
+use rimay_verbo::Provider;
 use khipu_core::{Note, NoteId, NoteStore};
 use khipu_gravity::{Gravity, GravityConfig, NotePlacement, Params, SemanticField};
 use llimphi_theme::Theme;
@@ -42,6 +51,7 @@ use llimphi_widget_text_editor::{
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use serde::{Deserialize, Serialize};
 
+/// Dimensión del embebedor local (fallback sin daemon).
 const EMBED_DIM: usize = 16;
 const CLUSTER_THRESHOLD: f32 = 0.55;
 const EDITOR_VISIBLE_LINES: usize = 24;
@@ -49,6 +59,80 @@ const LIST_WIDTH: f32 = 240.0;
 const HEADER_H: f32 = 36.0;
 const ROW_H: f32 = 26.0;
 const FIELD_LABEL_SIZE: f32 = 10.0;
+
+/// Fuente de vectores semánticos. Con un `verbo-daemon` en el socket por
+/// defecto usa embeddings reales; si no hay daemon cae al hash-trigram
+/// local de 16d — determinista, offline, sin runtime.
+///
+/// El arm remoto guarda el `Runtime` de tokio para resolver las llamadas
+/// async del `Provider` con `block_on` desde el hilo worker que las
+/// dispara (nunca el de UI). Es `Clone` (todo tras `Arc`) para viajar
+/// barato dentro de la closure de `Handle::spawn`.
+#[derive(Clone)]
+enum Embedder {
+    /// Daemon `rimay-verbo` por socket Unix.
+    Remote {
+        provider: Arc<dyn Provider>,
+        rt: Arc<tokio::runtime::Runtime>,
+        dim: usize,
+        label: String,
+    },
+    /// Fallback local: hash-trigram → R^EMBED_DIM, sin red ni runtime.
+    Local,
+}
+
+impl Embedder {
+    /// Conecta al `verbo-daemon` en el socket por defecto. Si no hay
+    /// ninguno (o no se pudo armar el runtime), devuelve el embebedor
+    /// local — los demos arrancan igual, sin red.
+    fn connect() -> Self {
+        let rt = match tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return Embedder::Local,
+        };
+        match rt.block_on(rimay_verbo::conectar()) {
+            Ok(client) => {
+                let id = client.model_id();
+                let dim = id.dimension;
+                let label = id.to_string();
+                Embedder::Remote {
+                    provider: Arc::new(client),
+                    rt: Arc::new(rt),
+                    dim,
+                    label,
+                }
+            }
+            Err(_) => Embedder::Local,
+        }
+    }
+
+    /// Etiqueta del espacio vectorial. Si cambia entre dos arranques, los
+    /// vectores persistidos son incomparables (otro modelo o dimensión) y
+    /// hay que recalcularlos — ver [`from_state`].
+    fn label(&self) -> String {
+        match self {
+            Embedder::Remote { label, .. } => label.clone(),
+            Embedder::Local => format!("khipu-trigram-{EMBED_DIM}d"),
+        }
+    }
+
+    /// Embebe `text` de forma bloqueante. En el arm remoto resuelve el
+    /// future con `block_on`; ante un error del backend devuelve un
+    /// vector de ceros (afinidad nula con todo, nunca panic).
+    fn embed_blocking(&self, text: &str) -> Vec<f32> {
+        match self {
+            Embedder::Local => embed(text, EMBED_DIM),
+            Embedder::Remote { provider, rt, dim, .. } => rt
+                .block_on(provider.embed(text))
+                .map(|v| v.values)
+                .unwrap_or_else(|_| vec![0.0; *dim]),
+        }
+    }
+}
 
 /// Foco activo del teclado. Cualquier `KeyEvent` se rutea al input
 /// correspondiente; sin foco las teclas se ignoran.
@@ -73,6 +157,10 @@ enum Msg {
     /// Latido — fuerza el rerender para que la masa decaiga
     /// visiblemente aunque el usuario no esté tocando nada.
     Tick,
+    /// Resultado async de un embed: `(nota, secuencia, vector)`. Se
+    /// aplica sólo si `secuencia` sigue siendo la más reciente para esa
+    /// nota — descarta cálculos que ediciones posteriores dejaron viejos.
+    EmbeddingReady(NoteId, u64, Vec<f32>),
 }
 
 struct Model {
@@ -94,6 +182,15 @@ struct Model {
     /// `true` cuando el usuario quiere ver también las notas que
     /// cayeron del horizonte. Default `false`.
     show_archive: bool,
+    /// Fuente de embeddings: daemon `verbo` o fallback trigram local.
+    embedder: Embedder,
+    /// Última secuencia de embedding pedida por nota. Un resultado async
+    /// (`Msg::EmbeddingReady`) sólo se aplica si su secuencia coincide
+    /// con la vigente aquí; así una edición rápida invalida el cálculo
+    /// de la anterior sin condición de carrera.
+    embed_latest: BTreeMap<NoteId, u64>,
+    /// Contador monótono de pedidos de embedding.
+    embed_seq: u64,
 }
 
 struct KhipuApp;
@@ -103,10 +200,13 @@ impl App for KhipuApp {
     type Msg = Msg;
 
     fn init(handle: &Handle<Msg>) -> Model {
+        // Conectamos al daemon una sola vez al arrancar; el embebedor
+        // resultante (remoto o local) se clona barato a cada worker.
+        let embedder = Embedder::connect();
         let data_path = data_file_path();
         let mut model = match data_path.as_ref().and_then(load_state) {
-            Some(state) => from_state(state),
-            None => seeded_model(),
+            Some(state) => from_state(state, embedder),
+            None => seeded_model(embedder),
         };
         model.data_path = data_path;
         model.theme = Theme::dark();
@@ -124,20 +224,20 @@ impl App for KhipuApp {
         model
     }
 
-    fn update(mut model: Model, msg: Msg, _h: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, h: &Handle<Msg>) -> Model {
         match msg {
             Msg::SelectNote(id) => {
-                commit_edits(&mut model);
+                commit_edits(&mut model, h);
                 reinforce_and_touch(&mut model, id);
                 select(&mut model, id);
                 persist(&model);
             }
             Msg::NewNote => {
-                commit_edits(&mut model);
+                commit_edits(&mut model, h);
                 let now = now_secs();
                 let id = model.store.create("Nota nueva", "", Vec::new(), now);
                 model.order.push(id);
-                refresh_embedding(&mut model, id);
+                schedule_embedding(&mut model, id, h);
                 select(&mut model, id);
                 persist(&model);
             }
@@ -148,6 +248,18 @@ impl App for KhipuApp {
                 // No muta nada: la masa vive en `current_mass` (decay
                 // contra `last_access`). El Tick existe sólo para
                 // pedirle al event loop un redraw.
+            }
+            Msg::EmbeddingReady(id, seq, v) => {
+                // Aplicamos el vector sólo si sigue siendo el cálculo más
+                // reciente para esa nota y la nota no fue borrada entre
+                // medio. Tras insertarlo, persistimos para que el campo
+                // semántico en disco quede al día.
+                if model.embed_latest.get(&id) == Some(&seq)
+                    && model.store.get(id).is_some()
+                {
+                    model.field.insert(id, v);
+                    persist(&model);
+                }
             }
             Msg::DeleteSelected => {
                 if let Some(id) = model.selected {
@@ -166,7 +278,7 @@ impl App for KhipuApp {
                 }
             }
             Msg::Focus(f) => {
-                commit_edits(&mut model);
+                commit_edits(&mut model, h);
                 model.focus = f;
             }
             Msg::Key(ev) => {
@@ -183,7 +295,7 @@ impl App for KhipuApp {
                     Focus::None => false,
                 };
                 if changed {
-                    commit_edits(&mut model);
+                    commit_edits(&mut model, h);
                 }
             }
             Msg::EditorPointer(ev) => {
@@ -996,7 +1108,7 @@ fn short_label(s: &str) -> String {
 }
 
 /// Sincroniza inputs/editor → store/field + persiste si cambió algo.
-fn commit_edits(model: &mut Model) {
+fn commit_edits(model: &mut Model, h: &Handle<Msg>) {
     let Some(id) = model.selected else {
         return;
     };
@@ -1023,8 +1135,11 @@ fn commit_edits(model: &mut Model) {
         }
     }
     if changed {
-        refresh_embedding(model, id);
+        // El texto ya está en el store: persistimos de inmediato para no
+        // perderlo. El embedding viaja a un worker y persistirá de nuevo
+        // cuando llegue (`Msg::EmbeddingReady`).
         persist(model);
+        schedule_embedding(model, id, h);
     }
 }
 
@@ -1047,12 +1162,35 @@ fn select(model: &mut Model, id: NoteId) {
     model.focus = Focus::Body;
 }
 
-fn refresh_embedding(model: &mut Model, id: NoteId) {
+/// Pide el embedding de `id` en segundo plano. Asigna una secuencia
+/// nueva, la marca como vigente, y dispara un worker (`Handle::spawn`)
+/// que al terminar reentra al `update` con [`Msg::EmbeddingReady`]. Así
+/// el `block_on` del arm remoto nunca corre en el hilo de UI.
+fn schedule_embedding(model: &mut Model, id: NoteId, h: &Handle<Msg>) {
     let Some(note) = model.store.get(id) else {
         return;
     };
     let combined = format!("{} {}", note.title, note.body);
-    let v = embed(&combined, EMBED_DIM);
+    model.embed_seq += 1;
+    let seq = model.embed_seq;
+    model.embed_latest.insert(id, seq);
+    let embedder = model.embedder.clone();
+    h.spawn(move || {
+        let v = embedder.embed_blocking(&combined);
+        Msg::EmbeddingReady(id, seq, v)
+    });
+}
+
+/// Versión síncrona para el arranque (seed y migración de formato):
+/// calcula el vector en línea y lo inserta. En init todavía no hay nada
+/// que repintar, así que bloquear un instante es lo correcto — y deja el
+/// campo semántico listo antes del primer layout.
+fn embed_now(model: &mut Model, id: NoteId) {
+    let Some(note) = model.store.get(id) else {
+        return;
+    };
+    let combined = format!("{} {}", note.title, note.body);
+    let v = model.embedder.embed_blocking(&combined);
     model.field.insert(id, v);
 }
 
@@ -1093,6 +1231,20 @@ struct PersistedState {
     store: NoteStore,
     embeddings: Vec<(NoteId, Vec<f32>)>,
     order: Vec<NoteId>,
+    /// Etiqueta del espacio vectorial con que se guardaron los
+    /// `embeddings` (ver [`Embedder::label`]). Si al cargar no coincide
+    /// con el embebedor activo, los vectores se recalculan.
+    model: String,
+}
+
+/// Formato histórico, sin `model`. postcard no es self-describing, así
+/// que lo intentamos como fallback cuando el formato actual no parsea
+/// (archivos escritos antes de enchufar `verbo`).
+#[derive(Deserialize)]
+struct PersistedStateV1 {
+    store: NoteStore,
+    embeddings: Vec<(NoteId, Vec<f32>)>,
+    order: Vec<NoteId>,
 }
 
 fn data_file_path() -> Option<PathBuf> {
@@ -1104,7 +1256,18 @@ fn data_file_path() -> Option<PathBuf> {
 
 fn load_state(path: &PathBuf) -> Option<PersistedState> {
     let bytes = std::fs::read(path).ok()?;
-    postcard::from_bytes(&bytes).ok()
+    // Formato actual primero; si no parsea (payload viejo sin `model`)
+    // caemos al V1 y lo migramos con `model` vacío → fuerza recálculo.
+    if let Ok(state) = postcard::from_bytes::<PersistedState>(&bytes) {
+        return Some(state);
+    }
+    let v1: PersistedStateV1 = postcard::from_bytes(&bytes).ok()?;
+    Some(PersistedState {
+        store: v1.store,
+        embeddings: v1.embeddings,
+        order: v1.order,
+        model: String::new(),
+    })
 }
 
 fn persist(model: &Model) {
@@ -1119,6 +1282,7 @@ fn persist(model: &Model) {
             .map(|(id, v)| (id, v.to_vec()))
             .collect(),
         order: model.order.clone(),
+        model: model.embedder.label(),
     };
     if let Ok(bytes) = postcard::to_allocvec(&state) {
         let tmp = path.with_extension("bin.tmp");
@@ -1128,30 +1292,15 @@ fn persist(model: &Model) {
     }
 }
 
-fn from_state(state: PersistedState) -> Model {
-    let mut field = SemanticField::new();
-    let restored: std::collections::HashSet<NoteId> = state
-        .embeddings
-        .iter()
-        .map(|(id, _)| *id)
-        .collect();
-    for (id, v) in &state.embeddings {
-        if !v.is_empty() {
-            field.insert(*id, v.clone());
-        }
-    }
-    // Notas sin vector persistido (formato viejo o nota nueva): recalcular.
-    for id in &state.order {
-        if !restored.contains(id) {
-            if let Some(n) = state.store.get(*id) {
-                let combined = format!("{} {}", n.title, n.body);
-                field.insert(*id, embed(&combined, EMBED_DIM));
-            }
-        }
-    }
-    Model {
+fn from_state(state: PersistedState, embedder: Embedder) -> Model {
+    // ¿Los vectores guardados son del mismo espacio que el embebedor
+    // activo? Si cambió el modelo o la dimensión (p. ej. arrancó el
+    // daemon, o se cayó y volvimos al trigram local), son incomparables:
+    // se descartan y se recalcula todo el cuaderno.
+    let same_space = !state.model.is_empty() && state.model == embedder.label();
+    let mut model = Model {
         store: state.store,
-        field,
+        field: SemanticField::new(),
         order: state.order,
         selected: None,
         title: TextInputState::new(),
@@ -1163,10 +1312,39 @@ fn from_state(state: PersistedState) -> Model {
         data_path: None,
         gravity: Gravity::new(Params::default()),
         show_archive: false,
+        embedder,
+        embed_latest: BTreeMap::new(),
+        embed_seq: 0,
+    };
+    if same_space {
+        let restored: std::collections::HashSet<NoteId> =
+            state.embeddings.iter().map(|(id, _)| *id).collect();
+        for (id, v) in &state.embeddings {
+            if !v.is_empty() {
+                model.field.insert(*id, v.clone());
+            }
+        }
+        // Notas sin vector persistido (nota nueva que no alcanzó a
+        // guardar su embedding async): recalcular sólo esas.
+        let missing: Vec<NoteId> = model
+            .order
+            .iter()
+            .copied()
+            .filter(|id| !restored.contains(id))
+            .collect();
+        for id in missing {
+            embed_now(&mut model, id);
+        }
+    } else {
+        let ids: Vec<NoteId> = model.order.clone();
+        for id in ids {
+            embed_now(&mut model, id);
+        }
     }
+    model
 }
 
-fn seeded_model() -> Model {
+fn seeded_model(embedder: Embedder) -> Model {
     let mut model = Model {
         store: NoteStore::new(),
         field: SemanticField::new(),
@@ -1181,6 +1359,9 @@ fn seeded_model() -> Model {
         data_path: None,
         gravity: Gravity::new(Params::default()),
         show_archive: false,
+        embedder,
+        embed_latest: BTreeMap::new(),
+        embed_seq: 0,
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [
@@ -1224,7 +1405,7 @@ fn seeded_model() -> Model {
         let tags: Vec<String> = tags.iter().map(|s| s.to_string()).collect();
         let id = model.store.create(title, body, tags, now);
         model.order.push(id);
-        refresh_embedding(&mut model, id);
+        embed_now(&mut model, id);
     }
     model
 }
