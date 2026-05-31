@@ -22,12 +22,14 @@ mod engine;
 mod format;
 mod model;
 mod persist;
+mod tools;
 mod view;
 
 use cosmos_engine::Corpus;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
-use llimphi_ui::{App, Handle, Key, KeyState, NamedKey, View};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyState, NamedKey, View};
+use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use wawa_config_llimphi::theme_from_wawa;
 
 use crate::astroview::compute_astro;
@@ -55,15 +57,6 @@ fn recompute_chart(m: &mut Model) {
 
 fn recompute_astro(m: &mut Model) {
     m.astro = compute_astro(&m.chart, m.cfg.use_now);
-}
-
-fn open_view(m: &mut Model, v: ViewKind) {
-    if let Some(i) = m.tabs.iter().position(|t| *t == v) {
-        m.active_tab = i;
-    } else {
-        m.tabs.push(v);
-        m.active_tab = m.tabs.len() - 1;
-    }
 }
 
 fn close_tab(m: &mut Model, i: usize) {
@@ -184,8 +177,10 @@ fn apply_cmd(m: &mut Model, cmd: MenuCmd) {
         MenuCmd::Duplicar => do_duplicar(m),
         MenuCmd::Recargar => do_recargar(m),
         MenuCmd::Eliminar => do_eliminar(m),
-        MenuCmd::Open(v) => open_view(m, v),
-        MenuCmd::CerrarTab => close_tab(m, m.active_tab),
+        MenuCmd::SetChartView(cv) => m.chart_view = cv,
+        MenuCmd::GoToolCat(tc) => m.tool_cat = tc,
+        MenuCmd::ToggleNav => m.nav_open = !m.nav_open,
+        MenuCmd::ToggleTools => m.tools_open = !m.tools_open,
         MenuCmd::Overlay(k) => apply_overlay(m, k),
         MenuCmd::Harmonic(h) => set_harmonic(m, h),
         MenuCmd::AcercaDe => {
@@ -204,6 +199,13 @@ fn save_ui(m: &Model) {
         tabs: m.tabs.clone(),
         active_tab: m.active_tab,
         cfg: m.cfg.clone(),
+        nav_w: m.nav_w,
+        tools_w: m.tools_w,
+        nav_open: m.nav_open,
+        tools_open: m.tools_open,
+        chart_view: m.chart_view,
+        tool_cat: m.tool_cat,
+        expanded_panels: m.expanded_panels.clone(),
     });
 }
 
@@ -263,9 +265,13 @@ impl App for Cosmos {
             selected_card: None,
             selected_body: None,
             exp_cartas: true,
-            exp_astrologia: true,
-            exp_astronomia: true,
-            exp_sistema: false,
+            nav_w: ui.nav_w,
+            tools_w: ui.tools_w,
+            nav_open: ui.nav_open,
+            tools_open: ui.tools_open,
+            chart_view: ui.chart_view,
+            tool_cat: ui.tool_cat,
+            expanded_panels: ui.expanded_panels,
             menu_open: None,
             ctx_open: None,
             _wawa_watcher: watcher,
@@ -290,16 +296,6 @@ impl App for Cosmos {
                 }
             }
             // navegación
-            Msg::SelectView(v) => {
-                open_view(&mut m, v);
-                persist = true;
-            }
-            Msg::ActivateTab(i) => {
-                if i < m.tabs.len() {
-                    m.active_tab = i;
-                    persist = true;
-                }
-            }
             Msg::CloseTab(i) => {
                 close_tab(&mut m, i);
                 persist = true;
@@ -370,6 +366,24 @@ impl App for Cosmos {
                 }
             }
             Msg::CloseCtx => m.ctx_open = None,
+            // layout guardable
+            Msg::SetNavWidth(dx) => m.nudge_nav(dx),
+            Msg::SetToolsWidth(dx) => m.nudge_tools(dx),
+            Msg::PersistLayout => persist = true,
+            // panel de herramientas
+            Msg::SelectToolCat(c) => {
+                m.tool_cat = c;
+                persist = true;
+            }
+            Msg::ToggleToolPanel(p) => {
+                m.toggle_panel(p);
+                persist = true;
+            }
+            // tipo de gráfica
+            Msg::SetChartView(v) => {
+                m.chart_view = v;
+                persist = true;
+            }
         }
         if persist {
             save_ui(&m);
@@ -380,26 +394,50 @@ impl App for Cosmos {
     fn view(model: &Model) -> View<Msg> {
         let theme = model.theme;
         let menu = chrome::menu_bar(model, &theme);
-        let nav = chrome::nav_tree(model, &theme);
-        let tabs = chrome::tab_area(model, &theme);
         let status = chrome::status_bar(model, &theme);
+        let sp = SplitterPalette::from_theme(&theme);
 
-        let tab_box = View::new(Style {
-            flex_grow: 1.0,
-            flex_direction: FlexDirection::Column,
-            size: Size {
-                width: percent(0.0_f32),
-                height: percent(1.0_f32),
-            },
-            min_size: Size {
-                width: llimphi_ui::llimphi_layout::taffy::prelude::length(0.0_f32),
-                height: llimphi_ui::llimphi_layout::taffy::prelude::length(0.0_f32),
-            },
-            ..Default::default()
-        })
-        .children(vec![tabs]);
+        let center = chrome::center_view(model, &theme);
 
-        let body = View::new(Style {
+        // Zona derecha: centro (flex) + panel de herramientas (fijo,
+        // resizable). Arrastrar el divisor a la derecha achica las
+        // herramientas (ver Model::nudge_tools).
+        let center_and_tools = if model.tools_open {
+            splitter_two(
+                Direction::Row,
+                center,
+                PaneSize::Flex,
+                tools::tools_panel(model, &theme),
+                PaneSize::Fixed(model.tools_w),
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::SetToolsWidth(dx)),
+                    DragPhase::End => Some(Msg::PersistLayout),
+                },
+                &sp,
+            )
+        } else {
+            center
+        };
+
+        // Zona completa: árbol de datos (fijo, resizable) + lo anterior.
+        let body = if model.nav_open {
+            splitter_two(
+                Direction::Row,
+                chrome::nav_tree(model, &theme),
+                PaneSize::Fixed(model.nav_w),
+                center_and_tools,
+                PaneSize::Flex,
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::SetNavWidth(dx)),
+                    DragPhase::End => Some(Msg::PersistLayout),
+                },
+                &sp,
+            )
+        } else {
+            center_and_tools
+        };
+
+        let body_box = View::new(Style {
             flex_direction: FlexDirection::Row,
             size: Size {
                 width: percent(1.0_f32),
@@ -412,7 +450,7 @@ impl App for Cosmos {
             },
             ..Default::default()
         })
-        .children(vec![nav, tab_box]);
+        .children(vec![body]);
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -423,7 +461,7 @@ impl App for Cosmos {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![menu, body, status])
+        .children(vec![menu, body_box, status])
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {

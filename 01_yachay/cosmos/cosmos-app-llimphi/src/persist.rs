@@ -8,7 +8,10 @@ use cosmos_model::{Chart, ChartId, ChartKind, ContactId, StoredBirthData, Stored
 use llimphi_ui::Handle;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{CosmosConfig, Msg, OverlayKind, ViewKind};
+use crate::model::{
+    ChartView, CosmosConfig, Msg, OverlayKind, ToolCat, ToolPanel, ViewKind, NAV_WIDTH,
+    TOOLS_WIDTH,
+};
 
 /// Subdirectorio dentro del config dir donde viven las cartas guardadas
 /// como archivos individuales `<nombre>.json`. El usuario lo gestiona
@@ -28,7 +31,7 @@ const CHART_FILE: &str = "cosmos-chart.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct UiState {
-    #[serde(default)]
+    #[serde(default = "default_overlays")]
     pub(crate) overlays: Vec<OverlayKind>,
     #[serde(default = "default_harmonic")]
     pub(crate) harmonic: u32,
@@ -38,6 +41,21 @@ pub(crate) struct UiState {
     pub(crate) active_tab: usize,
     #[serde(default)]
     pub(crate) cfg: CosmosConfig,
+    // layout guardable (paneles laterales tipo móvil)
+    #[serde(default = "default_nav_w")]
+    pub(crate) nav_w: f32,
+    #[serde(default = "default_tools_w")]
+    pub(crate) tools_w: f32,
+    #[serde(default = "default_true")]
+    pub(crate) nav_open: bool,
+    #[serde(default = "default_true")]
+    pub(crate) tools_open: bool,
+    #[serde(default)]
+    pub(crate) chart_view: ChartView,
+    #[serde(default)]
+    pub(crate) tool_cat: ToolCat,
+    #[serde(default = "ToolPanel::defaults_expanded")]
+    pub(crate) expanded_panels: Vec<ToolPanel>,
 }
 
 fn default_harmonic() -> u32 {
@@ -48,14 +66,39 @@ fn default_tabs() -> Vec<ViewKind> {
     vec![ViewKind::Rueda]
 }
 
+/// Topocéntrico activo por default — habilita la tabla de aspectos
+/// topocéntricos que el usuario quiere ver de entrada.
+fn default_overlays() -> Vec<OverlayKind> {
+    vec![OverlayKind::Topocentric]
+}
+
+fn default_nav_w() -> f32 {
+    NAV_WIDTH
+}
+
+fn default_tools_w() -> f32 {
+    TOOLS_WIDTH
+}
+
+fn default_true() -> bool {
+    true
+}
+
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            overlays: Vec::new(),
+            overlays: default_overlays(),
             harmonic: 1,
             tabs: default_tabs(),
             active_tab: 0,
             cfg: CosmosConfig::default(),
+            nav_w: NAV_WIDTH,
+            tools_w: TOOLS_WIDTH,
+            nav_open: true,
+            tools_open: true,
+            chart_view: ChartView::default(),
+            tool_cat: ToolCat::default(),
+            expanded_panels: ToolPanel::defaults_expanded(),
         }
     }
 }

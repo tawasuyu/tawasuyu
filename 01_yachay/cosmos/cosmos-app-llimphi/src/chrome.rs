@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use cosmos_canvas_llimphi::canvas_view_clickable;
-use cosmos_render::{compose_wheel_with_hits, CompositionOpts, LayerKind, Palette};
+use cosmos_render::{compose_wheel_with_hits, CompositionOpts, Palette};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
@@ -25,15 +25,13 @@ use llimphi_widget_context_menu::{
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_switch::{switch_view, SwitchPalette};
-use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
-use crate::astroview;
-use crate::model::{
-    Model, Msg, NavGroup, OverlayKind, ViewKind, WheelOpt, HARMONICS, MENU_BAR_H, MENU_BTN_W,
-    NAV_WIDTH, STATUS_H, TAB_BAR_H, VIEWPORT, WHEEL_SIZE,
-};
 use crate::model::MenuKind;
+use crate::model::{
+    ChartView, Model, Msg, NavGroup, OverlayKind, ToolCat, WheelOpt, HARMONICS, MENU_BAR_H,
+    MENU_BTN_W, STATUS_H, TAB_BAR_H, VIEWPORT, WHEEL_SIZE,
+};
 use crate::persist::list_cards;
 use crate::view;
 
@@ -49,8 +47,14 @@ pub(crate) enum MenuCmd {
     Duplicar,
     Recargar,
     Eliminar,
-    Open(ViewKind),
-    CerrarTab,
+    /// Cambia el tipo de gráfica del centro.
+    SetChartView(ChartView),
+    /// Salta a una categoría del panel de herramientas (derecha).
+    GoToolCat(ToolCat),
+    /// Muestra/oculta el árbol de datos (izquierda).
+    ToggleNav,
+    /// Muestra/oculta el panel de herramientas (derecha).
+    ToggleTools,
     Overlay(OverlayKind),
     Harmonic(u32),
     Theme(bool),
@@ -168,21 +172,29 @@ pub(crate) fn menu_entries(kind: MenuKind, m: &Model) -> Vec<MenuEntry> {
         ],
         MenuKind::Vista => {
             let mut v = Vec::new();
-            for vk in ViewKind::astrologia() {
-                v.push(MenuEntry::act(vk.title(), MenuCmd::Open(*vk)));
+            // Tipo de gráfica del centro.
+            for cv in ChartView::all() {
+                v.push(MenuEntry::act_string(
+                    check(cv.title(), m.chart_view == *cv),
+                    MenuCmd::SetChartView(*cv),
+                ));
             }
             v.push(MenuEntry::sep());
-            for vk in ViewKind::astronomia() {
-                v.push(MenuEntry::act(vk.title(), MenuCmd::Open(*vk)));
+            // Categorías del panel de herramientas (derecha).
+            for tc in ToolCat::all() {
+                v.push(MenuEntry::act_string(
+                    check(tc.title(), m.tool_cat == *tc),
+                    MenuCmd::GoToolCat(*tc),
+                ));
             }
             v.push(MenuEntry::sep());
-            v.push(MenuEntry::act("Configuración", MenuCmd::Open(ViewKind::Configuracion)));
+            // Paneles laterales guardables.
+            v.push(MenuEntry::act_string(check("Árbol de datos", m.nav_open), MenuCmd::ToggleNav));
+            v.push(MenuEntry::act_string(check("Panel de herramientas", m.tools_open), MenuCmd::ToggleTools));
             v.push(MenuEntry::sep());
-            // Tema (espeja el toggle de Configuración) — «Ver: módulos/tema».
+            // Tema (espeja el toggle de Configuración).
             v.push(MenuEntry::act_string(check("Tema oscuro", m.cfg.theme_dark), MenuCmd::Theme(true)));
             v.push(MenuEntry::act_string(check("Tema claro", !m.cfg.theme_dark), MenuCmd::Theme(false)));
-            v.push(MenuEntry::sep());
-            v.push(MenuEntry::act("Cerrar pestaña actual", MenuCmd::CerrarTab).shortcut("Ctrl+W"));
             v
         }
         MenuKind::Capas => OverlayKind::all()
@@ -338,18 +350,9 @@ fn group_row(label: String, expanded: bool, g: NavGroup) -> TreeRow<Msg> {
     }
 }
 
-fn view_row(v: ViewKind, model: &Model) -> TreeRow<Msg> {
-    TreeRow {
-        label: v.title().to_string(),
-        depth: 1,
-        has_children: false,
-        expanded: false,
-        selected: model.active_view() == v,
-        on_toggle: Msg::SelectView(v),
-        on_select: Msg::SelectView(v),
-    }
-}
-
+/// Árbol izquierdo: explorador de datos (biblioteca de cartas). Las
+/// gráficas y análisis ya no viven acá — el centro switchea el tipo de
+/// gráfica y la derecha trae los módulos de análisis.
 pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
     let mut rows: Vec<TreeRow<Msg>> = Vec::new();
 
@@ -373,33 +376,6 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         }
     }
 
-    rows.push(group_row(
-        "Astrología".to_string(),
-        model.exp_astrologia,
-        NavGroup::Astrologia,
-    ));
-    if model.exp_astrologia {
-        for v in ViewKind::astrologia() {
-            rows.push(view_row(*v, model));
-        }
-    }
-
-    rows.push(group_row(
-        "Astronomía".to_string(),
-        model.exp_astronomia,
-        NavGroup::Astronomia,
-    ));
-    if model.exp_astronomia {
-        for v in ViewKind::astronomia() {
-            rows.push(view_row(*v, model));
-        }
-    }
-
-    rows.push(group_row("Sistema".to_string(), model.exp_sistema, NavGroup::Sistema));
-    if model.exp_sistema {
-        rows.push(view_row(ViewKind::Configuracion, model));
-    }
-
     let tree = tree_view(TreeSpec {
         rows,
         row_height: 22.0,
@@ -409,10 +385,14 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
 
     View::new(Style {
         size: Size {
-            width: length(NAV_WIDTH),
+            width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
-        flex_shrink: 0.0,
+        flex_direction: FlexDirection::Column,
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
         ..Default::default()
     })
     .fill(theme.bg_panel)
@@ -423,61 +403,113 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
 // Pestañas + contenido
 // =====================================================================
 
-pub(crate) fn tab_area(model: &Model, theme: &Theme) -> View<Msg> {
-    let labels: Vec<String> = model.tabs.iter().map(|v| v.title().to_string()).collect();
-    tabs_view(TabsSpec {
-        labels,
-        active: model.active_tab,
-        on_select: Msg::ActivateTab,
-        content: content_for(model, theme),
-        tab_height: TAB_BAR_H,
-        palette: TabsPalette::from_theme(theme),
-        tab_width: None,
+/// El panel central: cabecera con el switch de tipo de gráfica + la
+/// gráfica elegida. El centro es **sólo el gráfico**; las tablas viven en
+/// el panel de herramientas (derecha).
+pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let switcher = chart_switcher(model, theme);
+    let graphic = match model.chart_view {
+        ChartView::Estandar => wheel_canvas(model, theme),
+        ChartView::Carto => crate::astrocarto::tile_astrocarto(&model.chart, &model.render, theme),
+        ChartView::Esfera3d => pending_view(
+            "Esfera celeste 3D — renderer en cableo (cosmos-render::sphere3d).",
+            theme,
+        ),
+        ChartView::Cielo => pending_view(
+            "Cielo del observador (gráfico) — pendiente; la tabla alt/az está en Herramientas › Astronomía.",
+            theme,
+        ),
+    };
+
+    let graphic_area = View::new(Style {
+        flex_grow: 1.0,
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(0.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
     })
+    .children(vec![graphic]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(0.0_f32),
+            height: percent(1.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![switcher, graphic_area])
 }
 
-fn content_for(model: &Model, theme: &Theme) -> View<Msg> {
-    match model.active_view() {
-        ViewKind::Rueda => rueda_view(model, theme),
-        ViewKind::Cuerpos => view::tile_cuerpos(&model.render, theme),
-        ViewKind::Aspectos => view::tile_aspectos(&model.render, "natal", theme),
-        ViewKind::BoxGraph => view::tile_box_graph(&model.render, theme),
-        ViewKind::Cualidades => view::tile_cualidades(&model.render, theme),
-        ViewKind::Uraniano => view::tile_uraniano(&model.render.uranian_groups, theme),
-        ViewKind::Lotes => view::tile_layer_glyphs(
-            &model.render,
-            LayerKind::Lots,
-            "lots",
-            "Activá la capa «Lotes» (menú Capas) para calcular los lotes helenísticos.",
-            theme,
-        ),
-        ViewKind::EstrellasFijas => view::tile_layer_glyphs(
-            &model.render,
-            LayerKind::FixedStars,
-            "fixed_stars",
-            "Activá la capa «Estrellas fijas» (menú Capas).",
-            theme,
-        ),
-        ViewKind::PuntosMedios => view::tile_layer_glyphs(
-            &model.render,
-            LayerKind::Midpoints,
-            "midpoints",
-            "Activá la capa «Puntos medios» (menú Capas).",
-            theme,
-        ),
-        ViewKind::Corpus => view::tile_corpus(&model.render, &model.corpus, theme),
-        ViewKind::AstroCarto => crate::astrocarto::tile_astrocarto(&model.chart, &model.render, theme),
-        ViewKind::Cielo => astroview::view_cielo(&model.astro, theme),
-        ViewKind::OrtoOcaso => astroview::view_ortoocaso(&model.astro, theme),
-        ViewKind::Sundial => astroview::view_sundial(&model.astro, theme),
-        ViewKind::Mareas => astroview::view_mareas(&model.astro, theme),
-        ViewKind::Eclipses => astroview::view_eclipses(&model.astro, theme),
-        ViewKind::Efemerides => astroview::view_efemerides(&model.astro, theme),
-        ViewKind::Configuracion => config_view(model, theme),
-    }
+/// Segmented en la cabecera del centro para alternar el tipo de gráfica.
+fn chart_switcher(model: &Model, theme: &Theme) -> View<Msg> {
+    let labels: Vec<&str> = ChartView::all().iter().map(|c| c.title()).collect();
+    let sel = ChartView::all()
+        .iter()
+        .position(|c| *c == model.chart_view)
+        .unwrap_or(0);
+    let seg = segmented_view(
+        &labels,
+        sel,
+        |i| Msg::SetChartView(ChartView::all().get(i).copied().unwrap_or_default()),
+        &SegmentedPalette::from_theme(theme),
+    );
+    let seg_box = View::new(Style {
+        size: Size {
+            width: length(320.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![seg]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(TAB_BAR_H),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![seg_box])
 }
 
-fn rueda_view(model: &Model, theme: &Theme) -> View<Msg> {
+fn pending_view(msg: &str, theme: &Theme) -> View<Msg> {
+    view::tile_container(
+        vec![view::line(msg.to_string(), 12.0, theme.fg_muted)],
+        theme,
+    )
+}
+
+/// La rueda natal 2D como canvas clickeable (sólo el gráfico).
+fn wheel_canvas(model: &Model, theme: &Theme) -> View<Msg> {
+    let _ = theme;
     let opts = CompositionOpts {
         size: WHEEL_SIZE,
         rot_offset_deg: model.cfg.rot_offset_deg,
@@ -491,17 +523,18 @@ fn rueda_view(model: &Model, theme: &Theme) -> View<Msg> {
     };
     let (commands, hits) = compose_wheel_with_hits(&model.render, &opts);
     let canvas_bg = Color::from_rgba8(8, 10, 16, 255);
+    // Offset del menú contextual: origen del centro ≈ nav (resizable) +
+    // barra de menú + cabecera del switcher.
+    let nav_off = model.nav_w + if model.nav_open { 6.0 } else { 0.0 };
     let canvas = canvas_view_clickable::<Msg, _>(commands, WHEEL_SIZE, Some(canvas_bg), move |wx, wy| {
         let picked: Option<String> = hits.pick(wx, wy).map(str::to_string);
         Some(Msg::SelectBody(picked))
     })
-    // Click derecho → menú contextual. Las coords son locales al nodo
-    // del canvas; lo sumamos al origen del área central (aprox).
-    .on_right_click_at(|lx, ly, _w, _h| {
-        Some(Msg::OpenCanvasCtx(NAV_WIDTH + lx, MENU_BAR_H + TAB_BAR_H + ly))
+    .on_right_click_at(move |lx, ly, _w, _h| {
+        Some(Msg::OpenCanvasCtx(nav_off + lx, MENU_BAR_H + TAB_BAR_H + ly))
     });
 
-    let canvas_box = View::new(Style {
+    View::new(Style {
         size: Size {
             width: length(WHEEL_SIZE),
             height: length(WHEEL_SIZE),
@@ -509,32 +542,7 @@ fn rueda_view(model: &Model, theme: &Theme) -> View<Msg> {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![canvas]);
-
-    let info = View::new(Style {
-        flex_grow: 1.0,
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(0.0_f32),
-            height: percent(1.0_f32),
-        },
-        min_size: Size {
-            width: length(0.0_f32),
-            height: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![view::tile_carta(model, theme)]);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![canvas_box, info])
+    .children(vec![canvas])
 }
 
 // =====================================================================
@@ -576,7 +584,7 @@ fn switch_row(label: &str, on: bool, msg: Msg, pal: &SwitchPalette, theme: &Them
     .children(vec![lbl, sw])
 }
 
-fn config_view(model: &Model, theme: &Theme) -> View<Msg> {
+pub(crate) fn config_view(model: &Model, theme: &Theme) -> View<Msg> {
     let seg_pal = SegmentedPalette::from_theme(theme);
     let sw_pal = SwitchPalette::from_theme(theme);
     let sl_pal = SliderPalette::from_theme(theme);

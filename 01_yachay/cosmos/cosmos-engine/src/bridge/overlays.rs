@@ -121,6 +121,13 @@ pub(crate) fn build_topocentric_overlay(
         })
         .collect();
 
+    // 1.b) Aspectos mayores entre planetas topocéntricos. Se computan
+    // sobre las longitudes topocéntricas reales y se publican con
+    // `module_id = "topocentric"` para que la tabla de aspectos
+    // topocéntricos (panel «Aspectos · topocéntrico») los muestre junto
+    // a los geocéntricos. Sólo mayores por ahora.
+    populate_topocentric_aspect_summary(&body_glyphs, render);
+
     render.layers.push(Layer {
         module_id: "topocentric".into(),
         kind: LayerKind::Bodies,
@@ -1056,6 +1063,46 @@ pub(crate) fn populate_natal_aspect_summary(aspects: &[Aspect], render: &mut Ren
             orb_deg: a.orb_abs_deg(),
             applying: Some(a.applying),
         });
+    }
+    sort_aspect_summary(render);
+}
+
+/// Detecta los aspectos mayores entre las longitudes topocéntricas de los
+/// planetas y los publica con `module_id = "topocentric"`. Es un detector
+/// directo (separación angular vs. ángulo del aspecto ± orbe), no pasa por
+/// el motor de aspectos natal — suficiente para la tabla topocéntrica.
+pub(crate) fn populate_topocentric_aspect_summary(glyphs: &[Glyph], render: &mut RenderModel) {
+    // (ángulo exacto, orbe, id del aspecto).
+    const MAJORS: &[(f64, f64, &str)] = &[
+        (0.0, 8.0, "conjunction"),
+        (60.0, 4.0, "sextile"),
+        (90.0, 6.0, "square"),
+        (120.0, 6.0, "trine"),
+        (180.0, 8.0, "opposition"),
+    ];
+    for i in 0..glyphs.len() {
+        for j in (i + 1)..glyphs.len() {
+            let a = glyphs[i].deg as f64;
+            let b = glyphs[j].deg as f64;
+            let mut sep = (a - b).rem_euclid(360.0);
+            if sep > 180.0 {
+                sep = 360.0 - sep;
+            }
+            for (angle, orb, kind) in MAJORS {
+                let delta = (sep - angle).abs();
+                if delta <= *orb {
+                    render.aspect_summary.push(AspectSummary {
+                        module_id: "topocentric".into(),
+                        from_body: glyphs[i].symbol.clone(),
+                        to_body: glyphs[j].symbol.clone(),
+                        kind: (*kind).into(),
+                        orb_deg: delta,
+                        applying: None,
+                    });
+                    break;
+                }
+            }
+        }
     }
     sort_aspect_summary(render);
 }

@@ -18,10 +18,199 @@ use crate::astroview::AstroState;
 
 pub(crate) const WHEEL_SIZE: f32 = 720.0;
 pub(crate) const NAV_WIDTH: f32 = 232.0;
+pub(crate) const TOOLS_WIDTH: f32 = 360.0;
+/// Rail de categorías del panel derecho (tabs verticales estilo Photoshop).
+pub(crate) const TOOLS_RAIL_W: f32 = 40.0;
 pub(crate) const MENU_BAR_H: f32 = 30.0;
 pub(crate) const TAB_BAR_H: f32 = 30.0;
 pub(crate) const STATUS_H: f32 = 22.0;
 pub(crate) const HARMONICS: &[u32] = &[1, 4, 5, 7, 9];
+/// Límites de arrastre de los paneles laterales guardables.
+pub(crate) const NAV_MIN: f32 = 160.0;
+pub(crate) const NAV_MAX: f32 = 460.0;
+pub(crate) const TOOLS_MIN: f32 = 240.0;
+pub(crate) const TOOLS_MAX: f32 = 620.0;
+
+// =====================================================================
+// Tipo de gráfica del centro (switcheable)
+// =====================================================================
+
+/// Qué dibuja el panel central. El usuario alterna con un segmented en la
+/// cabecera del centro. La rueda estándar es el default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ChartView {
+    /// Rueda natal 2D clásica (zodíaco + casas + aspectos).
+    #[default]
+    Estandar,
+    /// Mapa equirectangular (AstroCartografía).
+    Carto,
+    /// Esfera celeste 3D (wireframe). Pendiente de cableo del renderer.
+    Esfera3d,
+    /// Cielo como lo ve el observador (alt/az). Pendiente de renderer
+    /// gráfico — hoy hay tabla en el panel de herramientas.
+    Cielo,
+}
+
+impl ChartView {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            ChartView::Estandar => "Estándar",
+            ChartView::Carto => "Carto",
+            ChartView::Esfera3d => "3D",
+            ChartView::Cielo => "Cielo",
+        }
+    }
+
+    pub(crate) fn all() -> &'static [ChartView] {
+        &[
+            ChartView::Estandar,
+            ChartView::Carto,
+            ChartView::Esfera3d,
+            ChartView::Cielo,
+        ]
+    }
+}
+
+// =====================================================================
+// Categorías del panel de herramientas (derecha)
+// =====================================================================
+
+/// Cada categoría es un contenedor de paneles que se intercambia con las
+/// tabs verticales. `Principal` es la más usada (aspectos + cuerpos) y el
+/// default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ToolCat {
+    /// Lo más usado: aspectos (geocéntrico + topocéntrico) y cuerpos.
+    #[default]
+    Principal,
+    /// Análisis astrológico avanzado (cualidades, uraniano, lotes…).
+    Analisis,
+    /// Lecturas astronómicas (cielo, orto/ocaso, mareas, eclipses…).
+    Astronomia,
+    /// Configuración del visor.
+    Sistema,
+}
+
+impl ToolCat {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            ToolCat::Principal => "Principal",
+            ToolCat::Analisis => "Análisis",
+            ToolCat::Astronomia => "Astronomía",
+            ToolCat::Sistema => "Sistema",
+        }
+    }
+
+    /// Glifo corto para el rail vertical (estilo Photoshop).
+    pub(crate) fn glyph(self) -> &'static str {
+        match self {
+            ToolCat::Principal => "△",
+            ToolCat::Analisis => "✦",
+            ToolCat::Astronomia => "☾",
+            ToolCat::Sistema => "⚙",
+        }
+    }
+
+    pub(crate) fn all() -> &'static [ToolCat] {
+        &[
+            ToolCat::Principal,
+            ToolCat::Analisis,
+            ToolCat::Astronomia,
+            ToolCat::Sistema,
+        ]
+    }
+
+    /// Paneles que viven en esta categoría, en orden de aparición.
+    pub(crate) fn panels(self) -> &'static [ToolPanel] {
+        match self {
+            ToolCat::Principal => &[
+                ToolPanel::Carta,
+                ToolPanel::Aspectos,
+                ToolPanel::AspectosTopo,
+                ToolPanel::Cuerpos,
+            ],
+            ToolCat::Analisis => &[
+                ToolPanel::Cualidades,
+                ToolPanel::Uraniano,
+                ToolPanel::BoxGraph,
+                ToolPanel::Lotes,
+                ToolPanel::EstrellasFijas,
+                ToolPanel::PuntosMedios,
+                ToolPanel::Corpus,
+            ],
+            ToolCat::Astronomia => &[
+                ToolPanel::Cielo,
+                ToolPanel::OrtoOcaso,
+                ToolPanel::Sundial,
+                ToolPanel::Mareas,
+                ToolPanel::Eclipses,
+                ToolPanel::Efemerides,
+            ],
+            ToolCat::Sistema => &[ToolPanel::Configuracion],
+        }
+    }
+}
+
+// =====================================================================
+// Paneles de herramientas (colapsables) del panel derecho
+// =====================================================================
+
+/// Cada panel es una sección colapsable (acordeón) dentro de una
+/// categoría. `Aspectos` y `AspectosTopo` arrancan expandidos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ToolPanel {
+    Carta,
+    Aspectos,
+    AspectosTopo,
+    Cuerpos,
+    Cualidades,
+    Uraniano,
+    BoxGraph,
+    Lotes,
+    EstrellasFijas,
+    PuntosMedios,
+    Corpus,
+    Cielo,
+    OrtoOcaso,
+    Sundial,
+    Mareas,
+    Eclipses,
+    Efemerides,
+    Configuracion,
+}
+
+impl ToolPanel {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            ToolPanel::Carta => "Datos de la carta",
+            ToolPanel::Aspectos => "Aspectos",
+            ToolPanel::AspectosTopo => "Aspectos · topocéntrico",
+            ToolPanel::Cuerpos => "Cuerpos",
+            ToolPanel::Cualidades => "Cualidades",
+            ToolPanel::Uraniano => "Uraniano",
+            ToolPanel::BoxGraph => "Aspectario",
+            ToolPanel::Lotes => "Lotes",
+            ToolPanel::EstrellasFijas => "Estrellas fijas",
+            ToolPanel::PuntosMedios => "Puntos medios",
+            ToolPanel::Corpus => "Interpretación",
+            ToolPanel::Cielo => "Cielo (alt/az)",
+            ToolPanel::OrtoOcaso => "Orto y ocaso",
+            ToolPanel::Sundial => "Reloj de sol",
+            ToolPanel::Mareas => "Mareas",
+            ToolPanel::Eclipses => "Eclipses",
+            ToolPanel::Efemerides => "Efemérides",
+            ToolPanel::Configuracion => "Configuración",
+        }
+    }
+
+    /// Paneles abiertos por defecto en una instalación nueva.
+    pub(crate) fn defaults_expanded() -> Vec<ToolPanel> {
+        vec![ToolPanel::Aspectos, ToolPanel::AspectosTopo]
+    }
+}
 
 /// Origen X de la primera entrada de menú (después del pill "cosmos").
 pub(crate) const MENU_X0: f32 = 84.0;
@@ -89,34 +278,6 @@ impl ViewKind {
         }
     }
 
-    /// Gráficas astrológicas, en orden de aparición en el árbol.
-    pub(crate) fn astrologia() -> &'static [ViewKind] {
-        &[
-            ViewKind::Rueda,
-            ViewKind::Cuerpos,
-            ViewKind::Aspectos,
-            ViewKind::BoxGraph,
-            ViewKind::Cualidades,
-            ViewKind::Uraniano,
-            ViewKind::Lotes,
-            ViewKind::EstrellasFijas,
-            ViewKind::PuntosMedios,
-            ViewKind::Corpus,
-            ViewKind::AstroCarto,
-        ]
-    }
-
-    /// Gráficas astronómicas (no astrológicas) sobre el mismo motor.
-    pub(crate) fn astronomia() -> &'static [ViewKind] {
-        &[
-            ViewKind::Cielo,
-            ViewKind::OrtoOcaso,
-            ViewKind::Sundial,
-            ViewKind::Mareas,
-            ViewKind::Eclipses,
-            ViewKind::Efemerides,
-        ]
-    }
 }
 
 // =====================================================================
@@ -133,6 +294,9 @@ pub(crate) enum OverlayKind {
     Lots,
     FixedStars,
     Midpoints,
+    /// Capa ascensional/topocéntrica: planetas en coordenadas del lugar.
+    /// Activa por default — habilita la tabla de aspectos topocéntricos.
+    Topocentric,
 }
 
 impl OverlayKind {
@@ -145,6 +309,7 @@ impl OverlayKind {
             OverlayKind::Lots,
             OverlayKind::FixedStars,
             OverlayKind::Midpoints,
+            OverlayKind::Topocentric,
         ]
     }
 
@@ -160,6 +325,7 @@ impl OverlayKind {
             OverlayKind::Lots => "Lotes",
             OverlayKind::FixedStars => "Estrellas fijas",
             OverlayKind::Midpoints => "Puntos medios",
+            OverlayKind::Topocentric => "Topocéntrico",
         }
     }
 
@@ -176,6 +342,7 @@ impl OverlayKind {
             OverlayKind::Lots => PipelineRequest::Lots,
             OverlayKind::FixedStars => PipelineRequest::FixedStars,
             OverlayKind::Midpoints => PipelineRequest::Midpoints,
+            OverlayKind::Topocentric => PipelineRequest::Topocentric,
         }
     }
 }
@@ -224,13 +391,12 @@ impl MenuKind {
     }
 }
 
-/// Grupos colapsables del árbol de navegación.
+/// Grupos colapsables del árbol de navegación (hoy sólo «Cartas»; el
+/// resto de la navegación se mudó al panel de herramientas y al switch de
+/// gráfica).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NavGroup {
     Cartas,
-    Astrologia,
-    Astronomia,
-    Sistema,
 }
 
 /// Opción booleana del wheel — togglada desde el menú contextual y la
@@ -279,9 +445,7 @@ impl Default for CosmosConfig {
 #[derive(Clone)]
 pub(crate) enum Msg {
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
-    // navegación
-    SelectView(ViewKind),
-    ActivateTab(usize),
+    // navegación (multi-carta: tabs reservadas para próximo incremento)
     CloseTab(usize),
     ToggleNavGroup(NavGroup),
     CargarCarta(String),
@@ -303,6 +467,15 @@ pub(crate) enum Msg {
     OpenCanvasCtx(f32, f32),
     CtxPick(usize),
     CloseCtx,
+    // layout guardable (paneles laterales tipo móvil)
+    SetNavWidth(f32),
+    SetToolsWidth(f32),
+    PersistLayout,
+    // panel de herramientas (derecha)
+    SelectToolCat(ToolCat),
+    ToggleToolPanel(ToolPanel),
+    // tipo de gráfica del centro
+    SetChartView(ChartView),
 }
 
 // =====================================================================
@@ -330,9 +503,15 @@ pub(crate) struct Model {
     pub(crate) selected_card: Option<String>,
     pub(crate) selected_body: Option<String>,
     pub(crate) exp_cartas: bool,
-    pub(crate) exp_astrologia: bool,
-    pub(crate) exp_astronomia: bool,
-    pub(crate) exp_sistema: bool,
+    // layout guardable (3 zonas resizables)
+    pub(crate) nav_w: f32,
+    pub(crate) tools_w: f32,
+    pub(crate) nav_open: bool,
+    pub(crate) tools_open: bool,
+    // centro + herramientas
+    pub(crate) chart_view: ChartView,
+    pub(crate) tool_cat: ToolCat,
+    pub(crate) expanded_panels: Vec<ToolPanel>,
     // chrome
     pub(crate) menu_open: Option<MenuKind>,
     pub(crate) ctx_open: Option<(f32, f32)>,
@@ -354,9 +533,28 @@ impl Model {
     pub(crate) fn toggle_group(&mut self, g: NavGroup) {
         match g {
             NavGroup::Cartas => self.exp_cartas = !self.exp_cartas,
-            NavGroup::Astrologia => self.exp_astrologia = !self.exp_astrologia,
-            NavGroup::Astronomia => self.exp_astronomia = !self.exp_astronomia,
-            NavGroup::Sistema => self.exp_sistema = !self.exp_sistema,
         }
+    }
+
+    pub(crate) fn panel_expanded(&self, p: ToolPanel) -> bool {
+        self.expanded_panels.contains(&p)
+    }
+
+    pub(crate) fn toggle_panel(&mut self, p: ToolPanel) {
+        if let Some(i) = self.expanded_panels.iter().position(|x| *x == p) {
+            self.expanded_panels.remove(i);
+        } else {
+            self.expanded_panels.push(p);
+        }
+    }
+
+    pub(crate) fn nudge_nav(&mut self, dx: f32) {
+        self.nav_w = (self.nav_w + dx).clamp(NAV_MIN, NAV_MAX);
+    }
+
+    /// El divisor entre centro y herramientas: arrastrar a la derecha
+    /// (dx>0) achica el panel de herramientas.
+    pub(crate) fn nudge_tools(&mut self, dx: f32) {
+        self.tools_w = (self.tools_w - dx).clamp(TOOLS_MIN, TOOLS_MAX);
     }
 }
