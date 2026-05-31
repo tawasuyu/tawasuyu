@@ -10880,4 +10880,179 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
     }
+
+    // ---- Fase 7.138 — Navigation API ----
+
+    #[test]
+    fn navigation_existe_y_current_entry() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof navigation").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("typeof navigation.navigate").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("navigation.entries().length").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("typeof navigation.currentEntry.url").expect("e"), JsValue::String("string".into()));
+        assert_eq!(rt.eval("navigation.canGoBack").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn navigation_navigate_agrega_entry_y_actualiza_current() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("navigation.navigate('https://ex/a');").expect("e");
+        assert_eq!(rt.eval("navigation.entries().length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("navigation.currentEntry.url").expect("e"), JsValue::String("https://ex/a".into()));
+        assert_eq!(rt.eval("navigation.canGoBack").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn navigation_navigate_dispara_navigate_event() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var destino = null; \
+             navigation.addEventListener('navigate', function(e){ destino = e.destination.url; }); \
+             navigation.navigate('https://ex/b');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("destino").expect("e"), JsValue::String("https://ex/b".into()));
+    }
+
+    #[test]
+    fn navigation_intercept_resuelve_finished() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var fin = false, corrio = false; \
+             navigation.addEventListener('navigate', function(e){ \
+                 e.intercept({ handler: function(){ corrio = true; return Promise.resolve(); } }); \
+             }); \
+             navigation.navigate('https://ex/c').finished.then(function(){ fin = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("corrio").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("fin").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn navigation_back_mueve_current() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var origen = navigation.currentEntry.url; navigation.navigate('https://ex/d'); navigation.back();")
+            .expect("e");
+        assert_eq!(rt.eval("navigation.currentEntry.url === origen").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigation.canGoForward").expect("e"), JsValue::Bool(true));
+    }
+
+    // ---- Fase 7.139 — View Transitions API ----
+
+    #[test]
+    fn view_transition_devuelve_objeto_con_promesas() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var vt = document.startViewTransition(function(){});").expect("e");
+        assert_eq!(rt.eval("typeof vt.ready.then").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof vt.finished.then").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof vt.updateCallbackDone.then").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof vt.skipTransition").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn view_transition_corre_callback_y_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var corrio = false, fin = false; \
+             var vt = document.startViewTransition(function(){ corrio = true; }); \
+             vt.finished.then(function(){ fin = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("corrio").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("fin").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn view_transition_skip_no_rompe_finished() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var fin = false; \
+             var vt = document.startViewTransition(function(){}); \
+             vt.skipTransition(); \
+             vt.ready.catch(function(){}); \
+             vt.finished.then(function(){ fin = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("fin").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn view_transition_callback_que_lanza_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; \
+             var vt = document.startViewTransition(function(){ throw new Error('boom'); }); \
+             vt.finished.catch(function(e){ err = e.message; }); \
+             vt.updateCallbackDone.catch(function(){});",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("boom".into()));
+    }
+
+    // ---- Fase 7.140 — Cookie Store API ----
+
+    #[test]
+    fn cookie_store_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof cookieStore").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("typeof cookieStore.get").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof cookieStore.set").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn cookie_store_set_y_get_comparten_jar_con_document_cookie() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var v = null; \
+             cookieStore.set('tema', 'oscuro'); \
+             cookieStore.get('tema').then(function(c){ v = c ? c.value : null; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("v").expect("e"), JsValue::String("oscuro".into()));
+        // El mismo jar que document.cookie (Fase 7.90).
+        assert_eq!(
+            rt.eval("__puriy_cookie_get().indexOf('tema=oscuro') >= 0").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn cookie_store_get_all_lista() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = -1; \
+             cookieStore.set('a', '1'); cookieStore.set('b', '2'); \
+             cookieStore.getAll().then(function(list){ n = list.length; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn cookie_store_delete_y_change_event() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var borrado = null, despues = 'x'; \
+             cookieStore.set('s', 'v'); \
+             cookieStore.addEventListener('change', function(e){ if (e.deleted.length) borrado = e.deleted[0].name; }); \
+             cookieStore.delete('s'); \
+             cookieStore.get('s').then(function(c){ despues = c; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("borrado").expect("e"), JsValue::String("s".into()));
+        assert_eq!(rt.eval("despues").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn cookie_store_change_event_en_set() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var cambiado = null; \
+             cookieStore.onchange = function(e){ if (e.changed.length) cambiado = e.changed[0].value; }; \
+             cookieStore.set('k', 'nuevo');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("cambiado").expect("e"), JsValue::String("nuevo".into()));
+    }
 }

@@ -94,6 +94,9 @@ mod presentation;
 mod trustedtypes;
 mod reporting;
 mod pressure;
+mod navigation;
+mod viewtransitions;
+mod cookiestore;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -188,6 +191,9 @@ pub(crate) use presentation::PRESENTATION_BOOTSTRAP;
 pub(crate) use trustedtypes::TRUSTEDTYPES_BOOTSTRAP;
 pub(crate) use reporting::REPORTING_BOOTSTRAP;
 pub(crate) use pressure::PRESSURE_BOOTSTRAP;
+pub(crate) use navigation::NAVIGATION_BOOTSTRAP;
+pub(crate) use viewtransitions::VIEWTRANSITIONS_BOOTSTRAP;
+pub(crate) use cookiestore::COOKIESTORE_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -284,5 +290,8 @@ pub(crate) const ALL: &[&str] = &[
     TRUSTEDTYPES_BOOTSTRAP,
     REPORTING_BOOTSTRAP,
     PRESSURE_BOOTSTRAP,
+    NAVIGATION_BOOTSTRAP,
+    VIEWTRANSITIONS_BOOTSTRAP,
+    COOKIESTORE_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
