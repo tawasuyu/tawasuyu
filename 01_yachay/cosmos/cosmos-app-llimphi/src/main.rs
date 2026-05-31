@@ -36,7 +36,7 @@ use wawa_config_llimphi::theme_from_wawa;
 use crate::astroview::compute_astro;
 use crate::chrome::MenuCmd;
 use crate::engine::{compute, sample_chart};
-use crate::model::{MenuKind, Model, Msg, ViewKind, WheelOpt};
+use crate::model::{MenuKind, Model, Msg, OpenTab, WheelOpt};
 use crate::persist::{
     load_chart_from_disk, load_ui_state, save_chart_to_disk, save_ui_state, spawn_chart_watcher,
     UiState,
@@ -60,21 +60,42 @@ fn recompute_astro(m: &mut Model) {
     m.astro = compute_astro(&m.chart, m.cfg.use_now);
 }
 
-fn close_tab(m: &mut Model, i: usize) {
-    if i >= m.tabs.len() {
+/// Activa la carta-pestaña `i`: la vuelve la carta de trabajo y recomputa.
+fn activate_tab(m: &mut Model, i: usize) {
+    let Some(tab) = m.open.get(i) else { return };
+    m.active_tab = i;
+    m.chart = tab.chart.clone();
+    m.selected_card = tab.id.clone();
+    if let Some(id) = &tab.id {
+        m.nav_selected = Some(format!("h:{id}"));
+    }
+    save_chart_to_disk(&m.chart);
+    recompute_chart(m);
+    recompute_astro(m);
+}
+
+fn close_chart_tab(m: &mut Model, i: usize) {
+    if i >= m.open.len() {
         return;
     }
-    m.tabs.remove(i);
-    if m.tabs.is_empty() {
-        m.tabs.push(ViewKind::Rueda);
-        m.active_tab = 0;
+    m.open.remove(i);
+    if m.open.is_empty() {
+        // Nunca quedamos sin carta: re-abrimos la de trabajo como scratch.
+        m.open.push(OpenTab {
+            id: None,
+            chart: m.chart.clone(),
+        });
+        activate_tab(m, 0);
         return;
     }
-    if m.active_tab > i {
-        m.active_tab -= 1;
-    } else if m.active_tab >= m.tabs.len() {
-        m.active_tab = m.tabs.len() - 1;
-    }
+    let new = if m.active_tab > i {
+        m.active_tab - 1
+    } else if m.active_tab >= m.open.len() {
+        m.open.len() - 1
+    } else {
+        m.active_tab
+    };
+    activate_tab(m, new);
 }
 
 fn set_harmonic(m: &mut Model, h: u32) {
@@ -106,36 +127,38 @@ fn toggle_wheel(m: &mut Model, opt: WheelOpt) {
     }
 }
 
-/// Carga una carta del store por su id (string ULID). Espeja la carta en
-/// `cosmos-chart.json` para conservar el watcher / la edición a mano.
+/// Carga una carta del store por su id (string ULID) como pestaña: si ya
+/// está abierta, salta a ella; si no, la abre en una pestaña nueva.
 fn do_cargar(m: &mut Model, id: String) {
-    let Some(store) = &m.store else {
-        m.error = Some("store no disponible".into());
+    if let Some(i) = m.open.iter().position(|t| t.id.as_deref() == Some(id.as_str())) {
+        activate_tab(m, i);
         return;
-    };
-    let chart = id
-        .parse()
-        .ok()
-        .and_then(|cid| store.get_chart(cid).ok());
+    }
+    let chart = m
+        .store
+        .as_ref()
+        .and_then(|s| id.parse().ok().and_then(|cid| s.get_chart(cid).ok()));
     if let Some(chart) = chart {
-        m.chart = chart;
-        m.selected_card = Some(id);
-        save_chart_to_disk(&m.chart);
-        recompute_chart(m);
-        recompute_astro(m);
+        m.open.push(OpenTab {
+            id: Some(id),
+            chart,
+        });
+        let i = m.open.len() - 1;
+        activate_tab(m, i);
     } else {
         m.error = Some(format!("no se pudo cargar carta: {id}"));
     }
 }
 
+/// Abre una carta de ejemplo como pestaña nueva (scratch, sin id).
 fn do_nueva(m: &mut Model) {
-    let c = sample_chart();
-    save_chart_to_disk(&c);
-    m.chart = c;
-    m.selected_card = None;
-    recompute_chart(m);
-    recompute_astro(m);
-    m.status_note = Some("Carta de ejemplo cargada".into());
+    m.open.push(OpenTab {
+        id: None,
+        chart: sample_chart(),
+    });
+    let i = m.open.len() - 1;
+    activate_tab(m, i);
+    m.status_note = Some("Carta de ejemplo abierta".into());
 }
 
 /// Duplica la carta de trabajo como una carta nueva del store, bajo el
@@ -210,6 +233,11 @@ fn do_guardar(m: &mut Model) {
                     m.nav_expanded.insert(key.clone());
                     m.selected_card = Some(ch.id.to_string());
                     m.nav_selected = Some(format!("h:{}", ch.id));
+                    // La pestaña activa (scratch) queda ligada a la carta nueva.
+                    if let Some(t) = m.open.get_mut(m.active_tab) {
+                        t.id = Some(ch.id.to_string());
+                        t.chart = m.chart.clone();
+                    }
                     refresh_nav(m);
                     m.status_note = Some(format!("Carta creada: {}", m.chart.label));
                 }
@@ -419,8 +447,6 @@ fn save_ui(m: &Model) {
     save_ui_state(&UiState {
         overlays: m.overlays.clone(),
         harmonic: m.harmonic,
-        tabs: m.tabs.clone(),
-        active_tab: m.active_tab,
         cfg: m.cfg.clone(),
         nav_w: m.nav_w,
         tools_w: m.tools_w,
@@ -481,6 +507,12 @@ impl App for Cosmos {
         let nav_nodes = store.as_ref().map(library::snapshot).unwrap_or_default();
         let nav_expanded = library::container_keys(&nav_nodes).into_iter().collect();
 
+        // Una pestaña inicial con la carta de trabajo (scratch, sin id).
+        let open = vec![OpenTab {
+            id: None,
+            chart: chart.clone(),
+        }];
+
         Model {
             chart,
             overlays: ui.overlays,
@@ -492,8 +524,8 @@ impl App for Cosmos {
             theme,
             error,
             status_note: None,
-            tabs: ui.tabs,
-            active_tab: ui.active_tab,
+            open,
+            active_tab: 0,
             selected_card: None,
             selected_body: None,
             store,
@@ -532,11 +564,10 @@ impl App for Cosmos {
                     let _ = rimay_localize::set_locale(&cfg.lang);
                 }
             }
+            // multi-carta (tabs del centro)
+            Msg::ActivateChartTab(i) => activate_tab(&mut m, i),
+            Msg::CloseChartTab(i) => close_chart_tab(&mut m, i),
             // navegación
-            Msg::CloseTab(i) => {
-                close_tab(&mut m, i);
-                persist = true;
-            }
             Msg::ToggleNavNode(key) => m.toggle_nav(key),
             Msg::NavClick(key) => nav_click(&mut m, key),
             Msg::NewGroup => new_group(&mut m),
@@ -557,7 +588,11 @@ impl App for Cosmos {
             Msg::RenameCancel => m.nav_rename = None,
             Msg::ChartFileChanged => {
                 if let Some(c) = load_chart_from_disk() {
-                    m.chart = c;
+                    m.chart = c.clone();
+                    // Reflejar la edición externa en la pestaña activa.
+                    if let Some(t) = m.open.get_mut(m.active_tab) {
+                        t.chart = c;
+                    }
                     recompute_chart(&mut m);
                     recompute_astro(&mut m);
                 }
@@ -748,7 +783,7 @@ impl App for Cosmos {
                 }
             }
             Key::Character(s) if ev.modifiers.ctrl && s.as_str().eq_ignore_ascii_case("w") => {
-                Some(Msg::CloseTab(model.active_tab))
+                Some(Msg::CloseChartTab(model.active_tab))
             }
             // Ctrl+S → guardar carta en biblioteca (espeja Archivo/Editar).
             // Resolvemos el índice contra la misma lista que pinta el menú

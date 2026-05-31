@@ -230,59 +230,23 @@ pub(crate) const MENU_BTN_W: f32 = 84.0;
 pub(crate) const VIEWPORT: (f32, f32) = (1200.0, 860.0);
 
 // =====================================================================
-// Vistas (gráficas) — cada una se abre como pestaña
+// Cartas abiertas (tabs del centro) — multi-carta
 // =====================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum ViewKind {
-    // Astrología
-    Rueda,
-    Cuerpos,
-    Aspectos,
-    BoxGraph,
-    Cualidades,
-    Uraniano,
-    Lotes,
-    EstrellasFijas,
-    PuntosMedios,
-    Corpus,
-    AstroCarto,
-    // Astronomía
-    Cielo,
-    OrtoOcaso,
-    Sundial,
-    Mareas,
-    Eclipses,
-    Efemerides,
-    // Sistema
-    Configuracion,
+/// Una carta abierta como pestaña del centro. Guarda la carta completa
+/// para poder alternar sin volver al store (y soporta cartas «scratch»
+/// sin id). `render`/`astro` se recomputan al activar la pestaña.
+#[derive(Debug, Clone)]
+pub(crate) struct OpenTab {
+    /// Id de la carta en el store (`None` = scratch / ejemplo no guardado).
+    pub(crate) id: Option<String>,
+    pub(crate) chart: Chart,
 }
 
-impl ViewKind {
-    pub(crate) fn title(self) -> &'static str {
-        match self {
-            ViewKind::Rueda => "Rueda natal",
-            ViewKind::Cuerpos => "Cuerpos",
-            ViewKind::Aspectos => "Aspectos",
-            ViewKind::BoxGraph => "Aspectario",
-            ViewKind::Cualidades => "Cualidades",
-            ViewKind::Uraniano => "Uraniano",
-            ViewKind::Lotes => "Lotes",
-            ViewKind::EstrellasFijas => "Estrellas fijas",
-            ViewKind::PuntosMedios => "Puntos medios",
-            ViewKind::Corpus => "Interpretación",
-            ViewKind::AstroCarto => "AstroCartografía",
-            ViewKind::Cielo => "Cielo (alt/az)",
-            ViewKind::OrtoOcaso => "Orto y ocaso",
-            ViewKind::Sundial => "Reloj de sol",
-            ViewKind::Mareas => "Mareas",
-            ViewKind::Eclipses => "Eclipses",
-            ViewKind::Efemerides => "Efemérides",
-            ViewKind::Configuracion => "Configuración",
-        }
+impl OpenTab {
+    pub(crate) fn label(&self) -> &str {
+        &self.chart.label
     }
-
 }
 
 // =====================================================================
@@ -443,8 +407,9 @@ impl Default for CosmosConfig {
 #[derive(Clone)]
 pub(crate) enum Msg {
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
-    // navegación (multi-carta: tabs reservadas para próximo incremento)
-    CloseTab(usize),
+    // multi-carta (tabs del centro)
+    ActivateChartTab(usize),
+    CloseChartTab(usize),
     /// Expande/colapsa un nodo (grupo o contacto) del árbol de datos.
     ToggleNavNode(String),
     /// Selecciona un nodo del árbol; carta→carga, contenedor→toggle.
@@ -506,8 +471,8 @@ pub(crate) struct Model {
     pub(crate) error: Option<String>,
     /// Nota efímera en la barra de estado (confirmaciones, "acerca de").
     pub(crate) status_note: Option<String>,
-    // navegación
-    pub(crate) tabs: Vec<ViewKind>,
+    // multi-carta (tabs del centro)
+    pub(crate) open: Vec<OpenTab>,
     pub(crate) active_tab: usize,
     pub(crate) selected_card: Option<String>,
     pub(crate) selected_body: Option<String>,
@@ -538,13 +503,12 @@ pub(crate) struct Model {
 }
 
 impl Model {
-    /// Vista activa (la de la pestaña seleccionada). Garantiza un valor
-    /// aunque `tabs` esté momentáneamente vacío.
-    pub(crate) fn active_view(&self) -> ViewKind {
-        self.tabs
+    /// Etiqueta de la carta activa (para la barra de estado).
+    pub(crate) fn active_label(&self) -> &str {
+        self.open
             .get(self.active_tab)
-            .copied()
-            .unwrap_or(ViewKind::Rueda)
+            .map(|t| t.label())
+            .unwrap_or("—")
     }
 
     pub(crate) fn toggle_nav(&mut self, key: String) {

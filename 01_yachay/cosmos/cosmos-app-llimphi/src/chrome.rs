@@ -573,7 +573,87 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![switcher, graphic_area])
+    .children(vec![chart_tabs(model, theme), switcher, graphic_area])
+}
+
+/// Tira de pestañas de cartas abiertas (multi-carta). Cada pestaña: label
+/// clickeable + ✕ para cerrar. La activa va resaltada.
+fn chart_tabs(model: &Model, theme: &Theme) -> View<Msg> {
+    let mut kids: Vec<View<Msg>> = Vec::new();
+    for (i, tab) in model.open.iter().enumerate() {
+        let active = i == model.active_tab;
+        let label = View::new(Style {
+            size: Size {
+                width: auto(),
+                height: percent(1.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            padding: Rect {
+                left: length(10.0_f32),
+                right: length(6.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(tab.label().to_string(), 12.0, theme.fg_text, Alignment::Center)
+        .on_click(Msg::ActivateChartTab(i));
+        let close = View::new(Style {
+            size: Size {
+                width: length(18.0_f32),
+                height: percent(1.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .text_aligned("✕".to_string(), 11.0, theme.fg_muted, Alignment::Center)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(Msg::CloseChartTab(i));
+
+        let mut tabv = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: auto(),
+                height: percent(1.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            margin: Rect {
+                left: length(0.0_f32),
+                right: length(2.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![label, close]);
+        tabv = if active {
+            tabv.fill(theme.bg_app)
+        } else {
+            tabv.fill(theme.bg_panel)
+        };
+        kids.push(tabv);
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(2.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(kids)
 }
 
 /// Segmented en la cabecera del centro para alternar el tipo de gráfica.
@@ -838,7 +918,7 @@ pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
     } else {
         format!(
             "{}  ·  {} ms  ·  {} capas  ·  {} aspectos  ·  {} overlays",
-            model.active_view().title(),
+            model.active_label(),
             model.render.compute_ms,
             model.render.layers.len(),
             model.render.aspect_summary.len(),

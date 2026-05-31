@@ -9,8 +9,7 @@ use llimphi_ui::Handle;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    ChartView, CosmosConfig, Msg, OverlayKind, ToolCat, ToolPanel, ViewKind, NAV_WIDTH,
-    TOOLS_WIDTH,
+    ChartView, CosmosConfig, Msg, OverlayKind, ToolCat, ToolPanel, NAV_WIDTH, TOOLS_WIDTH,
 };
 
 /// Subdirectorio dentro del config dir donde viven las cartas guardadas
@@ -35,10 +34,6 @@ pub(crate) struct UiState {
     pub(crate) overlays: Vec<OverlayKind>,
     #[serde(default = "default_harmonic")]
     pub(crate) harmonic: u32,
-    #[serde(default = "default_tabs")]
-    pub(crate) tabs: Vec<ViewKind>,
-    #[serde(default)]
-    pub(crate) active_tab: usize,
     #[serde(default)]
     pub(crate) cfg: CosmosConfig,
     // layout guardable (paneles laterales tipo móvil)
@@ -60,10 +55,6 @@ pub(crate) struct UiState {
 
 fn default_harmonic() -> u32 {
     1
-}
-
-fn default_tabs() -> Vec<ViewKind> {
-    vec![ViewKind::Rueda]
 }
 
 /// Topocéntrico activo por default — habilita la tabla de aspectos
@@ -89,8 +80,6 @@ impl Default for UiState {
         Self {
             overlays: default_overlays(),
             harmonic: 1,
-            tabs: default_tabs(),
-            active_tab: 0,
             cfg: CosmosConfig::default(),
             nav_w: NAV_WIDTH,
             tools_w: TOOLS_WIDTH,
@@ -250,17 +239,7 @@ pub(crate) fn load_ui_state() -> UiState {
         return UiState::default();
     };
     match serde_json::from_slice::<UiState>(&bytes) {
-        Ok(mut s) => {
-            // Garantía: siempre hay al menos una pestaña y `active_tab` es
-            // un índice válido.
-            if s.tabs.is_empty() {
-                s.tabs = default_tabs();
-            }
-            if s.active_tab >= s.tabs.len() {
-                s.active_tab = 0;
-            }
-            s
-        }
+        Ok(s) => s,
         Err(e) => {
             eprintln!("cosmos · ui-state: no se pudo parsear {path:?}: {e}");
             UiState::default()
