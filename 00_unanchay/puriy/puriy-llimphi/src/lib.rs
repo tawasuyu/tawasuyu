@@ -867,6 +867,23 @@ impl App for Puriy {
                         for req in pending {
                             handle.dispatch(req);
                         }
+                        // 'DOMContentLoaded' al document: dispara cuando el DOM
+                        // quedó parseado y los scripts inline corrieron, ANTES
+                        // del 'load' del window (que en spec espera recursos).
+                        // Es el evento más usado para diferir init
+                        // (`document.addEventListener('DOMContentLoaded', ...)`).
+                        if t.js.is_some() {
+                            let (_, pending) = dispatch_document_js_event_on_tab(
+                                t,
+                                "DOMContentLoaded",
+                                None,
+                                None,
+                                now_ms,
+                            );
+                            for req in pending {
+                                handle.dispatch(req);
+                            }
+                        }
                         // Fase 7.39 — disparar 'load' al window. Apps usan
                         // `window.addEventListener('load', fn)` para diferir
                         // init hasta que el DOM esté pronto. Sólo si el tab
@@ -2759,7 +2776,7 @@ fn dispatch_js_event_with_init(
     let _ = rt.set_scroll(0.0, t.scroll_y);
     let prev_stdout_len = rt.stdout().len();
     let prev_stderr_len = rt.stderr().len();
-    let result = match rt.dispatch_event(element_id, event_type, init.as_ref()) {
+    let mut result = match rt.dispatch_event(element_id, event_type, init.as_ref()) {
         Ok(r) => {
             let new_stdout = rt.stdout();
             let new_stderr = rt.stderr();
@@ -2772,8 +2789,47 @@ fn dispatch_js_event_with_init(
             puriy_js::DispatchResult::default()
         }
     };
-    let pending = apply_dom_mutations(t);
+    let mut pending = apply_dom_mutations(t);
+    // Bubbling a `document` (event delegation): tras correr los handlers del
+    // elemento, los eventos que bubblean también disparan los listeners de
+    // `document.addEventListener(type, ...)`, con el elemento original como
+    // `event.target`. Un `preventDefault()` del handler de document también
+    // cuenta para el fallback (p. ej. cancelar la navegación de un `<a>`).
+    // Limitación: `stopPropagation()` a nivel elemento todavía NO corta este
+    // bubble — el dispatch de elemento no propaga su flag `_stopped`.
+    if event_bubbles_to_document(event_type) {
+        let (doc_result, doc_pending) = dispatch_document_js_event_on_tab(
+            t,
+            event_type,
+            init.as_ref(),
+            Some(element_id),
+            now_ms,
+        );
+        result.count += doc_result.count;
+        result.default_prevented |= doc_result.default_prevented;
+        pending.extend(doc_pending);
+    }
     (result, pending)
+}
+
+/// ¿Este tipo de evento bubblea hasta `document`? Cubre los eventos que la
+/// gente delega con `document.addEventListener` (click, teclas, input/change,
+/// submit). `focus`/`blur` quedan afuera a propósito: en spec NO bubblean
+/// (sus variantes `focusin`/`focusout` sí, pero el chrome no las emite aún).
+fn event_bubbles_to_document(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "click"
+            | "dblclick"
+            | "mousedown"
+            | "mouseup"
+            | "keydown"
+            | "keyup"
+            | "keypress"
+            | "input"
+            | "change"
+            | "submit"
+    )
 }
 
 /// Fase 7.42 — cambia la pestaña activa, marcando la vieja como hidden y
@@ -2814,6 +2870,43 @@ fn dispatch_window_js_event_on_tab(
     let prev_stdout_len = rt.stdout().len();
     let prev_stderr_len = rt.stderr().len();
     let result = match rt.dispatch_window_event(event_type, None) {
+        Ok(r) => {
+            let new_stdout = rt.stdout();
+            let new_stderr = rt.stderr();
+            t.js_summary.logs += new_stdout[prev_stdout_len..].matches('\n').count();
+            t.js_summary.errors += new_stderr[prev_stderr_len..].matches('\n').count();
+            r
+        }
+        Err(_) => {
+            t.js_summary.errors += 1;
+            puriy_js::DispatchResult::default()
+        }
+    };
+    let pending = apply_dom_mutations(t);
+    (result, pending)
+}
+
+/// Dispatcha un evento a nivel `document` (`document.addEventListener`).
+/// Cubre `DOMContentLoaded` (sin target) y la fase de delegación de eventos
+/// de elemento (`target_element_id` = el elemento original que bubblea hasta
+/// `document`). Espejo de [`dispatch_window_js_event_on_tab`]: contabiliza
+/// logs/errores y drena las mutaciones DOM que el handler haya producido.
+fn dispatch_document_js_event_on_tab(
+    t: &mut TabState,
+    event_type: &str,
+    init: Option<&puriy_js::EventInit>,
+    target_element_id: Option<&str>,
+    now_ms: u64,
+) -> (puriy_js::DispatchResult, Vec<Msg>) {
+    let Some(rt) = t.js.as_mut() else {
+        return (puriy_js::DispatchResult::default(), Vec::new());
+    };
+    rt.set_fuel(puriy_js::DEFAULT_FUEL);
+    let _ = rt.set_now_ms(now_ms);
+    let _ = rt.set_scroll(0.0, t.scroll_y);
+    let prev_stdout_len = rt.stdout().len();
+    let prev_stderr_len = rt.stderr().len();
+    let result = match rt.dispatch_document_event(event_type, init, target_element_id) {
         Ok(r) => {
             let new_stdout = rt.stdout();
             let new_stderr = rt.stderr();
@@ -6063,6 +6156,63 @@ mod tests {
         let x = snaps.iter().find(|s| s.id == "x").expect("id=x");
         assert!(x.text_content.contains("uno"), "tc: {:?}", x.text_content);
         assert!(x.text_content.contains("dos"), "tc: {:?}", x.text_content);
+    }
+
+    #[test]
+    fn event_bubbles_to_document_cubre_click_y_teclas_no_focus() {
+        assert!(event_bubbles_to_document("click"));
+        assert!(event_bubbles_to_document("keydown"));
+        assert!(event_bubbles_to_document("change"));
+        // focus/blur NO bubblean en spec.
+        assert!(!event_bubbles_to_document("focus"));
+        assert!(!event_bubbles_to_document("blur"));
+        assert!(!event_bubbles_to_document("scroll"));
+    }
+
+    #[test]
+    fn click_en_elemento_bubblea_al_document_listener() {
+        // Event delegation: el listener vive en document, no en el botón.
+        let mut m = model_con_script("console.log('boot')");
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "btn".into(),
+            tag_name: "button".into(),
+            text_content: "go".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
+        }])
+        .expect("set_elements");
+        rt.eval(
+            "document.addEventListener('click', \
+                function(e){ console.log('deleg:' + e.target.id); })",
+        )
+        .expect("e");
+        dispatch_js_event(&mut m, "btn", "click", 0);
+        let rt = m.tabs[0].js.as_ref().expect("rt");
+        assert!(
+            rt.stdout().contains("deleg:btn"),
+            "el listener de document debió correr con target=btn; stdout: {:?}",
+            rt.stdout()
+        );
+    }
+
+    #[test]
+    fn document_prevent_default_cancela_el_fallback_del_link() {
+        // Un handler delegado en document que llama preventDefault debe
+        // reflejarse en result.default_prevented (lo usa el chrome para no
+        // navegar el `<a>`).
+        let mut m = model_con_script("console.log('boot')");
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "lnk".into(),
+            tag_name: "a".into(),
+            text_content: "x".into(), class_list: Vec::new(), value: None, parent_id: None, dataset: Vec::new(), attributes: Vec::new(), dfs_index: 0,
+        }])
+        .expect("set_elements");
+        rt.eval(
+            "document.addEventListener('click', function(e){ e.preventDefault(); })",
+        )
+        .expect("e");
+        let (result, _) = dispatch_js_event(&mut m, "lnk", "click", 0);
+        assert!(result.default_prevented, "preventDefault del document debe contar");
     }
 
     #[test]
