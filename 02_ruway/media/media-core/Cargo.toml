@@ -7,3 +7,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+ron = { workspace = true }

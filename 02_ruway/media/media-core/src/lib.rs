@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub mod control;
+
 /// Productor de frames RGBA. `tick` avanza el tiempo `dt` y, si hay
 /// un nuevo frame disponible, lo deja escrito en `buf` y devuelve
 /// `Some((width, height))`. Si todavía no hay frame nuevo (p.ej. el
