@@ -44,8 +44,14 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, View};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_nodegraph::{nodegraph_view, NodegraphMetrics, NodegraphPalette};
 use llimphi_widget_tiled::{tiled_view_reorderable_cols, TileSpec, TiledPalette};
+
+use app_bus::{AppMenu, Menu, MenuItem};
 
 use tinkuy_core::{
     kinetic_energy, reflect_walls, temperature, total_momentum, velocity_verlet_step,
@@ -130,6 +136,19 @@ pub enum Msg {
     LoadSnapshot {
         idx: usize,
     },
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Cicla el tema claro/oscuro.
+    CycleTheme,
+    /// Selecciona un tile (resalta + habilita contextual).
+    SelectTile(TileId),
+    /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
+    /// de ventana sobre el tile seleccionado. Sin selección es no-op.
+    ContextMenuOpen(f32, f32),
 }
 
 pub struct Model {
@@ -159,6 +178,17 @@ pub struct Model {
     /// Mensaje de estado de la última recompilación. Rojo si error, neutro
     /// si "ok". Se pinta en la title bar lógica del tile fuerzas.
     force_status: ForceStatus,
+    /// Tema activo. Antes era `Theme::dark()` fijo dentro del `view`; ahora
+    /// vive en el modelo para que "Ver → Cambiar tema" lo cicle.
+    theme: Theme,
+    /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Tile seleccionado por click en su cuerpo. Habilita el menú contextual
+    /// y resalta el estado. `None` si ninguno.
+    selected_tile: Option<TileId>,
+    /// Menú contextual sobre el tile seleccionado: `(tile, x, y)` ancla en
+    /// coords de ventana. `None` cerrado.
+    context_menu: Option<(TileId, f32, f32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -333,10 +363,14 @@ impl App for TinkuyApp {
             force_graph,
             force,
             force_status,
+            theme: Theme::dark(),
+            menu_open: None,
+            selected_tile: None,
+            context_menu: None,
         }
     }
 
-    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::Tick => {
                 if !model.paused {
@@ -439,6 +473,33 @@ impl App for TinkuyApp {
                     }
                 }
             }
+            Msg::MenuOpen(which) => {
+                model.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                model.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                return handle_menu_command(model, &cmd, handle);
+            }
+            Msg::CycleTheme => {
+                model.theme = Theme::next_after(model.theme.name);
+            }
+            Msg::SelectTile(t) => {
+                model.selected_tile = Some(t);
+                model.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                // Sólo si hay un tile seleccionado.
+                if let Some(t) = model.selected_tile {
+                    model.menu_open = None;
+                    model.context_menu = Some((t, x, y));
+                }
+            }
         }
         model
     }
@@ -456,41 +517,201 @@ impl App for TinkuyApp {
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
-        let palette = TiledPalette::from_theme(&theme);
+        let theme = &model.theme;
+        let palette = TiledPalette::from_theme(theme);
 
         let tiles: Vec<TileSpec<Msg>> = model
             .tiles
             .iter()
-            .map(|id| match id {
-                TileId::Visor => TileSpec {
-                    label: "visor 3D (axonométrico · |v|→color)".into(),
-                    content: visor_body(model, &theme),
-                },
-                TileId::Fuerzas => TileSpec {
-                    label: fuerzas_label(model),
-                    content: fuerzas_body(model, &theme),
-                },
-                TileId::Observables => TileSpec {
-                    label: "observables".into(),
-                    content: observables_body(model, &theme),
-                },
-                TileId::Snapshots => TileSpec {
-                    label: "snapshots · click rebobina".into(),
-                    content: snapshots_body(model, &theme),
-                },
+            .map(|id| {
+                let sel = model.selected_tile == Some(*id);
+                match id {
+                    TileId::Visor => TileSpec {
+                        label: tile_label(sel, "visor 3D (axonométrico · |v|→color)"),
+                        content: selectable_tile(visor_body(model, theme), TileId::Visor),
+                    },
+                    TileId::Fuerzas => TileSpec {
+                        label: tile_label(sel, &fuerzas_label(model)),
+                        content: selectable_tile(fuerzas_body(model, theme), TileId::Fuerzas),
+                    },
+                    TileId::Observables => TileSpec {
+                        label: tile_label(sel, "observables"),
+                        content: selectable_tile(observables_body(model, theme), TileId::Observables),
+                    },
+                    TileId::Snapshots => TileSpec {
+                        label: tile_label(sel, "snapshots · click rebobina"),
+                        content: selectable_tile(snapshots_body(model, theme), TileId::Snapshots),
+                    },
+                }
             })
             .collect();
 
         // 2 columnas fijas → grilla 2×2 estable. El auto-sqrt también daría
         // 2 para n=4 pero la promesa "2 cols" sobrevive a tiles vacíos.
-        tiled_view_reorderable_cols(
+        let grid = tiled_view_reorderable_cols(
             tiles,
             2,
             |from, to| Some(Msg::Swap { from, to }),
             &palette,
-        )
+        );
+
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, theme));
+
+        // Raíz: column con la barra de menú arriba y la grilla debajo. El
+        // right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual sobre el tile seleccionado.
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, grid])
     }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual del tile tiene prioridad si está abierto.
+        if let Some((tile, x, y)) = model.context_menu {
+            let (header, items, on_pick) = context_menu_for_tile(tile);
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport: viewport_of(model),
+                header: Some(header),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+// ─── Menú principal y contextual ────────────────────────────────────────────
+
+/// Marca con `●` el tile seleccionado en su title bar — feedback mínimo de
+/// selección sin tocar la paleta del tiled.
+fn tile_label(selected: bool, base: &str) -> String {
+    if selected {
+        format!("● {}", base)
+    } else {
+        base.to_string()
+    }
+}
+
+/// Envuelve el cuerpo de un tile en un contenedor clickeable: click
+/// selecciona el tile (habilita el menú contextual por right-click).
+fn selectable_tile(body: View<Msg>, id: TileId) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .on_click(Msg::SelectTile(id))
+    .children(vec![body])
+}
+
+/// Viewport para clampear overlays: tamaño de ventana. El modelo no lo
+/// trackea, así que usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = TinkuyApp::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal. Archivo / Simulación / Ver / Ayuda — sólo comandos que
+/// mapean a `Msg` reales. Sin "Editar": no hay campos de texto editables.
+fn app_menu(model: &Model) -> AppMenu {
+    let pausar_label = if model.paused {
+        "Reanudar"
+    } else {
+        "Pausar"
+    };
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Reiniciar", "file.reset").shortcut("R"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(
+            Menu::new("Simulación")
+                .item(MenuItem::new(pausar_label, "sim.toggle_pause").shortcut("Space"))
+                .item(MenuItem::new("Reiniciar", "file.reset")),
+        )
+        .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.reset" => {
+            handle.dispatch(Msg::Reset);
+            model
+        }
+        "file.quit" => std::process::exit(0),
+        "sim.toggle_pause" => {
+            handle.dispatch(Msg::TogglePause);
+            model
+        }
+        "view.theme" => {
+            handle.dispatch(Msg::CycleTheme);
+            model
+        }
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => model,
+    }
+}
+
+/// Construye el menú contextual de un tile: header + items + handler de
+/// elección. Sólo acciones reales de la app (pausa, reset, snapshots).
+fn context_menu_for_tile(
+    tile: TileId,
+) -> (
+    String,
+    Vec<ContextMenuItem>,
+    Arc<dyn Fn(usize) -> Msg + Send + Sync>,
+) {
+    let header = match tile {
+        TileId::Visor => "Visor 3D",
+        TileId::Fuerzas => "Fuerzas",
+        TileId::Observables => "Observables",
+        TileId::Snapshots => "Snapshots",
+    }
+    .to_string();
+    // Acciones comunes a todos los tiles — los Msg ya existen en la app.
+    let items = vec![
+        ContextMenuItem::action("Pausar / reanudar"),
+        ContextMenuItem::action("Reiniciar simulación"),
+    ];
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(|i: usize| match i {
+        0 => Msg::TogglePause,
+        _ => Msg::Reset,
+    });
+    (header, items, on_pick)
 }
 
 // ─── Cuerpos de tiles ─────────────────────────────────────────────────────────

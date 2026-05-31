@@ -1,9 +1,14 @@
 //! Binary entry point del launcher Llimphi.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
 
 use mirada_launcher_llimphi::config::{Config, FloatingCard};
 use mirada_launcher_llimphi::panel;
@@ -23,6 +28,8 @@ struct Model {
     floating: Vec<(FloatingCard, Vec<Box<dyn Widget>>)>,
     /// Widgets de la barra inferior (vacío si no hay bottom bar).
     bottom: Vec<Box<dyn Widget>>,
+    /// Índice del menú raíz abierto en la barra de menú (`None` = ninguno).
+    menu_open: Option<usize>,
 }
 
 impl Model {
@@ -82,6 +89,66 @@ impl Model {
     }
 }
 
+/// Viewport para clampear los dropdowns. El Model no trackea resize, así
+/// que usamos el tamaño inicial declarado en `initial_size()`.
+const VIEWPORT: (f32, f32) = (1280.0, 720.0);
+
+/// Barra de menú principal de la app. Sólo declara comandos que mapean a
+/// acciones REALES existentes (toggles de los overlays + salir). No hay
+/// campos `EditorState`, por eso no hay submenú "Editar".
+fn app_menu(model: &Model) -> AppMenu {
+    let quake_abierto = model.quake_open();
+    let shuma_abierta = model.shuma_open();
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Salir", "app.quit").shortcut("Esc")),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new(
+                    if quake_abierto { "Ocultar entrada rápida" } else { "Entrada rápida" },
+                    "view.quake",
+                ))
+                .item(MenuItem::new(
+                    if shuma_abierta { "Ocultar shuma" } else { "Shuma (shell)" },
+                    "view.shuma",
+                ))
+                .item(MenuItem::new("Refrescar widgets", "view.tick").separated()),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Acerca de mirada", "help.about")),
+        )
+}
+
+/// Mapea el id de un comando de menú a la acción real de la app. Devuelve
+/// `None` si no hay nada que hacer (p. ej. "Acerca de", sin diálogo aún).
+fn handle_menu_command(cmd: &str) -> Option<Msg> {
+    match cmd {
+        "app.quit" => Some(Msg::Quit),
+        "view.quake" => Some(Msg::QuakeToggle),
+        "view.shuma" => Some(Msg::ShumaToggle),
+        "view.tick" => Some(Msg::Tick),
+        _ => None, // "help.about" u otros sin acción real todavía.
+    }
+}
+
+/// Spec compartida entre `menubar_view` (fila de títulos) y
+/// `menubar_overlay` (dropdown abierto). El `AppMenu` se mantiene vivo
+/// mientras dure la spec.
+fn menubar_spec<'a>(model: &'a Model, menu: &'a AppMenu) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme: &model.theme,
+        viewport: VIEWPORT,
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|cmd: &str| Msg::MenuCommand(cmd.to_string())),
+    }
+}
+
 struct LauncherApp;
 
 impl App for LauncherApp {
@@ -120,7 +187,16 @@ impl App for LauncherApp {
 
         handle.spawn_periodic(Duration::from_secs(1), || Msg::Tick);
 
-        Model { theme: Theme::dark(), cfg, left, center, right, floating, bottom }
+        Model {
+            theme: Theme::dark(),
+            cfg,
+            left,
+            center,
+            right,
+            floating,
+            bottom,
+            menu_open: None,
+        }
     }
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -211,6 +287,19 @@ impl App for LauncherApp {
             | Msg::ShumaResult(_) => {
                 model.route_to_shuma(&msg);
             }
+            Msg::MenuOpen(idx) => {
+                model.menu_open = *idx;
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                if let Some(real) = handle_menu_command(cmd) {
+                    // Reentramos al update con la acción real existente.
+                    return Self::update(model, real, handle);
+                }
+            }
         }
         model
     }
@@ -222,6 +311,8 @@ impl App for LauncherApp {
             .bottom
             .as_ref()
             .map(|b| (b, model.bottom.as_slice()));
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(model, &menu));
         panel::build(
             &model.cfg.panel,
             &model.theme,
@@ -230,10 +321,17 @@ impl App for LauncherApp {
             &model.right,
             &model.floating,
             bottom,
+            Some(menubar),
         )
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // Prioridad: dropdown del menú principal > overlays de los widgets
+        // (quake / shuma).
+        let menu = app_menu(model);
+        if let Some(v) = menubar_overlay(&menubar_spec(model, &menu)) {
+            return Some(v);
+        }
         panel::overlay_view(&model.theme, model.each_widget())
     }
 
@@ -257,6 +355,7 @@ impl App for LauncherApp {
         let quake_open = !shuma_open && model.quake_open();
 
         match &event.key {
+            Key::Named(NamedKey::Escape) if model.menu_open.is_some() => Some(Msg::CloseMenus),
             Key::Named(NamedKey::Escape) if shuma_open => Some(Msg::ShumaToggle),
             Key::Named(NamedKey::Escape) if quake_open => Some(Msg::QuakeToggle),
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),

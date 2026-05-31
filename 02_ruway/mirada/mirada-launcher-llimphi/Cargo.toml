@@ -18,6 +18,8 @@ path = "src/lib.rs"
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+app-bus = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 chrono = { workspace = true }

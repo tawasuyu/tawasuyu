@@ -34,6 +34,13 @@ pub enum Msg {
     /// Resultado de un comando shell ejecutado por shuma_bar
     /// (stdout o mensaje de error).
     ShumaResult(Result<String, String>),
+    /// Abrir/cerrar un menú raíz de la barra (`None` = cerrar todos).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en la barra de menú (id `menu.<verbo>` mapeado a
+    /// una acción real de la app).
+    MenuCommand(String),
+    /// Cerrar cualquier menú/dropdown abierto.
+    CloseMenus,
     /// Cerrar la app.
     Quit,
 }

@@ -25,7 +25,15 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+
+use app_bus::{AppMenu, Menu, MenuItem};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
 
 use media_core::{AudioSource, FrameSource};
 use media_recorder_webm::{
@@ -96,6 +104,18 @@ enum Msg {
     Stop,
     Tick,
     Finished(Result<RecLite, String>),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal o contextual — se traduce al
+    /// `Msg`/efecto real (iniciar/detener grabación, alternar tema, salir).
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` de ventana. Origen de la raíz es 0,0 ⇒ local == ventana.
+    ContextMenuOpen(f32, f32),
+    /// Alterna el tema claro/oscuro de la app.
+    ToggleTheme,
 }
 
 enum RecState {
@@ -112,6 +132,18 @@ struct Model {
     stop: Arc<AtomicBool>,
     /// Segundos transcurridos, refrescados por `Tick` mientras graba.
     elapsed_secs: u64,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual: ancla `(x, y)` en ventana. `None` cerrado. La app
+    /// no tiene campos de texto editables, así que el contextual mapea a
+    /// comandos de grabación reales — no a edición.
+    context_menu: Option<(f32, f32)>,
+    /// Tema oscuro (default) o claro. El menú Ver lo alterna.
+    dark: bool,
+    /// Tamaño aproximado del viewport para anclar overlays. Sin hook de
+    /// resize en llimphi-ui, lo fijamos al `initial_size`.
+    viewport: (f32, f32),
 }
 
 struct RecorderApp;
@@ -140,6 +172,10 @@ impl App for RecorderApp {
             }),
             stop: Arc::new(AtomicBool::new(false)),
             elapsed_secs: 0,
+            menu_open: None,
+            context_menu: None,
+            dark: true,
+            viewport: (560.0, 380.0),
         }
     }
 
@@ -181,14 +217,80 @@ impl App for RecorderApp {
                     Err(e) => RecState::Failed(e),
                 };
             }
+            Msg::MenuOpen(which) => {
+                model.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                model.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                model.context_menu = None;
+                return handle_menu_command(model, &cmd, handle);
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                model.menu_open = None;
+                model.context_menu = Some((x, y));
+            }
+            Msg::ToggleTheme => {
+                model.dark = !model.dark;
+            }
         }
         model
     }
 
+    /// Atajos globales: `Esc` cierra cualquier menú abierto.
+    fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        if matches!(event.key, Key::Named(NamedKey::Escape))
+            && (model.menu_open.is_some() || model.context_menu.is_some())
+        {
+            return Some(Msg::CloseMenus);
+        }
+        None
+    }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // Prioridad: menú contextual > dropdown del menú principal.
+        if let Some((x, y)) = model.context_menu {
+            return Some(context_menu(model, x, y));
+        }
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model))
+    }
+
     fn view(model: &Self::Model) -> View<Self::Msg> {
+        // --- Barra de menú principal: primer hijo del column raíz. ---
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model));
+
+        // Colores de fondo / sub-línea según el tema activo.
+        let bg = if model.dark {
+            rgb(18, 22, 30)
+        } else {
+            rgb(238, 240, 245)
+        };
+        let muted = if model.dark {
+            rgb(150, 160, 175)
+        } else {
+            rgb(90, 100, 115)
+        };
+
         // --- Estado / cabecera ---
         let (status, status_color) = match &model.state {
-            RecState::Idle => ("listo para grabar".to_string(), rgb(170, 180, 195)),
+            RecState::Idle => (
+                "listo para grabar".to_string(),
+                if model.dark {
+                    rgb(170, 180, 195)
+                } else {
+                    rgb(70, 80, 95)
+                },
+            ),
             RecState::Recording { .. } => (
                 format!("● REC  {}", fmt_mmss(model.elapsed_secs)),
                 rgb(240, 90, 90),
@@ -236,7 +338,7 @@ impl App for RecorderApp {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .text(detail, 15.0, rgb(150, 160, 175));
+        .text(detail, 15.0, muted);
 
         // --- Botón Rec/Stop ---
         let recording = matches!(model.state, RecState::Recording { .. });
@@ -292,9 +394,143 @@ impl App for RecorderApp {
             },
             ..Default::default()
         })
-        .fill(rgb(18, 22, 30))
-        .children(vec![header, subline, button_row])
+        .fill(bg)
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual del grabador.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, subline, button_row])
     }
+}
+
+/// Tema activo de la app (claro/oscuro) según el flag del modelo.
+fn app_theme(model: &Model) -> llimphi_theme::Theme {
+    if model.dark {
+        llimphi_theme::Theme::dark()
+    } else {
+        llimphi_theme::Theme::light()
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model) -> MenuBarSpec<'a, Msg> {
+    // El theme va por valor en un slot estático según el flag — el spec
+    // toma `&Theme`, así que necesitamos una referencia con vida 'static.
+    static DARK: std::sync::OnceLock<llimphi_theme::Theme> = std::sync::OnceLock::new();
+    static LIGHT: std::sync::OnceLock<llimphi_theme::Theme> = std::sync::OnceLock::new();
+    let theme: &'static llimphi_theme::Theme = if model.dark {
+        DARK.get_or_init(llimphi_theme::Theme::dark)
+    } else {
+        LIGHT.get_or_init(llimphi_theme::Theme::light)
+    };
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: model.viewport,
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del grabador. Archivo / Grabación / Ver / Ayuda.
+/// Sin "Editar": la app no tiene campos de texto editables. Sólo entran
+/// comandos que mapean a acciones reales (iniciar/detener grabación,
+/// alternar tema, salir). Los ítems de grabación se agrisan según el
+/// estado real (no se puede iniciar si ya graba, ni detener si está idle).
+fn app_menu(model: &Model) -> AppMenu {
+    let recording = matches!(model.state, RecState::Recording { .. });
+    let stopping = matches!(model.state, RecState::Stopping);
+
+    let mut iniciar = MenuItem::new("Iniciar grabación", "rec.start");
+    if recording || stopping {
+        iniciar = iniciar.disabled();
+    }
+    let mut detener = MenuItem::new("Detener grabación", "rec.stop");
+    if !recording {
+        detener = detener.disabled();
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q")),
+        )
+        .menu(
+            Menu::new("Grabación")
+                .item(iniciar)
+                .item(detener),
+        )
+        .menu(
+            Menu::new("Ver").item(MenuItem::new(
+                if model.dark {
+                    "Tema claro"
+                } else {
+                    "Tema oscuro"
+                },
+                "view.theme",
+            )),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú (principal o contextual) al `Msg`/efecto
+/// real. Los ids de grabación despachan los mismos `Msg::Start`/`Msg::Stop`
+/// que el botón Rec/Stop.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "rec.start" => handle.dispatch(Msg::Start),
+        "rec.stop" => handle.dispatch(Msg::Stop),
+        "view.theme" => handle.dispatch(Msg::ToggleTheme),
+        "file.quit" => std::process::exit(0),
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => {}
+    }
+    model
+}
+
+/// Menú contextual del grabador. Como la app no tiene campos de texto
+/// editables, el contextual NO ofrece edición: mapea a los comandos de
+/// grabación y tema reales (los mismos que botón y menú principal). Los
+/// ítems no disponibles según el estado se omiten.
+fn context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let recording = matches!(model.state, RecState::Recording { .. });
+    let stopping = matches!(model.state, RecState::Stopping);
+
+    // Construimos (label, command-id) según el estado real.
+    let mut entries: Vec<(&str, &str)> = Vec::new();
+    if recording {
+        entries.push(("Detener grabación", "rec.stop"));
+    } else if !stopping {
+        entries.push(("Iniciar grabación", "rec.start"));
+    }
+    entries.push((
+        if model.dark { "Tema claro" } else { "Tema oscuro" },
+        "view.theme",
+    ));
+
+    let items: Vec<ContextMenuItem> = entries
+        .iter()
+        .map(|(label, _)| ContextMenuItem::action(*label))
+        .collect();
+    let ids: Vec<String> = entries.iter().map(|(_, id)| id.to_string()).collect();
+
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| {
+        ids.get(i)
+            .map(|id| Msg::MenuCommand(id.clone()))
+            .unwrap_or(Msg::CloseMenus)
+    });
+
+    context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: model.viewport,
+        header: Some("grabador".to_string()),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&app_theme(model)),
+    })
 }
 
 /// Loop de grabación, en hilo de fondo. Devuelve el `Msg` que el bucle

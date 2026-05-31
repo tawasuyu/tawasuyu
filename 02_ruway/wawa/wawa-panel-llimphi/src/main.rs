@@ -28,6 +28,12 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_button::{button_styled, ButtonPalette};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use app_bus::{AppMenu, Menu, MenuItem};
+use std::sync::Arc;
 use wawa_config::{ConfigWatcher, WawaConfig};
 
 // =====================================================================
@@ -320,6 +326,12 @@ struct Model {
     /// futuras CLIs) modifica el archivo. `Option` porque la creación
     /// puede fallar en plataformas sin ProjectDirs.
     _config_watcher: Option<ConfigWatcher>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual sobre la categoría activa: ancla `(x, y)` en
+    /// ventana. `None` cerrado.
+    context_menu: Option<(f32, f32)>,
 }
 
 #[derive(Clone)]
@@ -337,6 +349,15 @@ enum Msg {
     /// Cambió la config desde afuera (otro panel, herramienta, edición
     /// manual). El `WawaConfig` ya viene parseado por el watcher.
     ConfigChanged(Box<WawaConfig>),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` de ventana sobre la categoría activa.
+    ContextMenuOpen(f32, f32),
 }
 
 // =====================================================================
@@ -388,6 +409,8 @@ impl App for Panel {
             host,
             status: String::new(),
             _config_watcher: watcher,
+            menu_open: None,
+            context_menu: None,
         }
     }
 
@@ -461,13 +484,36 @@ impl App for Panel {
                     m.status = "↻ config actualizada desde el bus".into();
                 }
             }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, &cmd);
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                m.menu_open = None;
+                m.context_menu = Some((x, y));
+            }
         }
         m
     }
 
-    fn on_key(_model: &Model, event: &KeyEvent) -> Option<Msg> {
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Esc cierra cualquier menú abierto antes que nada.
+        if let Key::Named(NamedKey::Escape) = event.key {
+            if model.menu_open.is_some() || model.context_menu.is_some() {
+                return Some(Msg::CloseMenus);
+            }
         }
         if event.modifiers.ctrl {
             if let Key::Character(s) = &event.key {
@@ -503,6 +549,8 @@ impl App for Panel {
         let theme = theme_from_cfg(&model.cfg);
         let accent = theme.accent;
 
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = build_header(&theme);
         let nav = build_nav(model, &theme, accent);
         let content = build_content(model, &theme, accent);
@@ -532,8 +580,148 @@ impl App for Panel {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, body, status])
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual sobre la categoría activa.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, body, status])
     }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        let theme = theme_from_cfg(&model.cfg);
+        // El menú contextual de la categoría tiene prioridad si está abierto.
+        if let Some((x, y)) = model.context_menu {
+            let header = rimay_localize::t(model.category.i18n_key());
+            // Acciones reales del panel: aplicar (guardar), restablecer,
+            // y refrescar el monitor del host. El panel no edita texto:
+            // no inventamos cortar/pegar.
+            let items = vec![
+                ContextMenuItem::action(rimay_localize::t("wawa-panel-action-save")),
+                ContextMenuItem::action(rimay_localize::t("wawa-panel-action-reset")),
+                ContextMenuItem::action("Refrescar monitor"),
+            ];
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(|i: usize| match i {
+                0 => Msg::Save,
+                1 => Msg::Reset,
+                _ => Msg::Tick,
+            });
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport: viewport_of(),
+                header: Some(header),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &theme))
+    }
+}
+
+/// Viewport para clampear overlays: el panel no trackea el tamaño de
+/// ventana, así que usamos `initial_size()`.
+fn viewport_of() -> (f32, f32) {
+    let (w, h) = Panel::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del panel. Archivo / Ver / Ayuda — sólo comandos
+/// que mapean a acciones reales (guardar, restablecer, navegar
+/// categorías). Sin "Editar": el panel no tiene campos de texto
+/// editables (sus controles son chips, toggles y botones).
+fn app_menu(model: &Model) -> AppMenu {
+    // Submenú "Ver": saltar a cada categoría. La activa va con check
+    // textual al frente para que el estado sea legible.
+    let mut ver = Menu::new(rimay_localize::t("wawa-panel-menu-view"));
+    for (idx, cat) in Category::all().iter().enumerate() {
+        let active = model.category == *cat;
+        let mark = if active { "● " } else { "  " };
+        let label = format!("{}{}  {}", mark, cat.glyph(), rimay_localize::t(cat.i18n_key()));
+        let cmd = format!("view.cat.{idx}");
+        let mut item = MenuItem::new(label, cmd).shortcut(format!("{}", idx + 1));
+        if active {
+            // La categoría activa no necesita re-navegar: la deshabilitamos.
+            item = item.disabled();
+        }
+        ver = ver.item(item);
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new(rimay_localize::t("wawa-panel-menu-file"))
+                .item(
+                    MenuItem::new(rimay_localize::t("wawa-panel-action-save"), "file.save")
+                        .shortcut("Ctrl+S"),
+                )
+                .item(
+                    MenuItem::new(rimay_localize::t("wawa-panel-action-reset"), "file.reset")
+                        .shortcut("Ctrl+R"),
+                )
+                .item(MenuItem::new(rimay_localize::t("wawa-panel-menu-quit"), "file.quit").separated()),
+        )
+        .menu(ver)
+        .menu(
+            Menu::new(rimay_localize::t("wawa-panel-menu-help"))
+                .item(MenuItem::new(rimay_localize::t("wawa-panel-about-name"), "help.about")),
+        )
+}
+
+/// Traduce un command id del menú principal al efecto real sobre el
+/// modelo. Mapea sólo a acciones que el panel ya implementa.
+fn handle_menu_command(model: Model, cmd: &str) -> Model {
+    let mut m = model;
+    match cmd {
+        "file.save" => match m.cfg.save() {
+            Ok(path) => {
+                m.status = rimay_localize::t_args(
+                    "wawa-panel-saved",
+                    &[("path", path.display().to_string().into())],
+                );
+            }
+            Err(e) => m.status = format!("· save: {e}"),
+        },
+        "file.reset" => {
+            m.cfg = WawaConfig::default();
+            let _ = rimay_localize::set_locale(&m.cfg.lang);
+            autosave(&mut m);
+            m.status = rimay_localize::t("wawa-panel-reset");
+        }
+        "file.quit" => std::process::exit(0),
+        "help.about" => {
+            m.category = Category::About;
+            m.status.clear();
+        }
+        other => {
+            // Navegación de categorías: "view.cat.<idx>".
+            if let Some(idx) = other.strip_prefix("view.cat.").and_then(|s| s.parse::<usize>().ok()) {
+                if let Some(cat) = Category::all().get(idx) {
+                    m.category = *cat;
+                    m.status.clear();
+                }
+            }
+        }
+    }
+    m
 }
 
 fn main() {

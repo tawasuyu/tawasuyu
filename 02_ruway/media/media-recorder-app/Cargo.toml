@@ -9,6 +9,12 @@ description = "media/recorder-app — grabador de pantalla Llimphi: botón Rec/S
 
 [dependencies]
 llimphi-ui = { path = "../../llimphi/llimphi-ui" }
+# Barra de menú principal + menú contextual (la app no tiene campos de
+# texto, así que no usa edit-menu / clipboard).
+llimphi-widget-menubar = { path = "../../llimphi/widgets/menubar" }
+llimphi-widget-context-menu = { path = "../../llimphi/widgets/context-menu" }
+llimphi-theme = { path = "../../llimphi/llimphi-theme" }
+app-bus = { path = "../../../shared/app-bus" }
 media-core = { path = "../media-core" }
 media-recorder-webm = { path = "../media-recorder-webm" }
 # Captura con los backends de pantalla (X11 + Wayland wlr) + micrófono. El

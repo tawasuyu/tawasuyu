@@ -40,6 +40,15 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+
+use llimphi_theme::Theme;
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+
+use app_bus::{AppMenu, Menu, MenuItem};
+
 use supay_core::{
     keys, DoomEngine, SceneSnapshot, SnapshotPair, WallSeg, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH,
 };
@@ -173,6 +182,18 @@ struct Model {
     /// dedup posicional para no sembrar un decal por tick mientras el
     /// puff vive (≈4 ticks).
     prev_impacts: Vec<(f32, f32)>,
+    /// Tema activo — sólo viste la barra de menú y los overlays. El
+    /// juego (framebuffer / renderer 3D) pinta con su propia paleta
+    /// hardcoded; el tema no lo toca.
+    theme: Theme,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual del juego: ancla `(x, y)` en coords de ventana.
+    /// `None` cerrado. No hay objetos seleccionables ni texto editable
+    /// — el contextual expone las acciones de juego (disparar / usar /
+    /// vista), no edición.
+    context_menu: Option<(f32, f32)>,
 }
 
 /// Fase 3.46: tipo de marca de impacto.
@@ -309,6 +330,21 @@ enum Msg {
     /// Fase 3.28: alterna el rim-light del arma desde world lights (F11).
     ToggleWeaponRimLight,
     Quit,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en la barra o en el contextual — se traduce al
+    /// `Msg` real existente (toggle de vista, tecla del motor, etc.).
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click sobre el juego → abre el menú contextual anclado en
+    /// `(x, y)` de ventana.
+    ContextMenuOpen(f32, f32),
+    /// Cicla el preset de tema (sólo cosmético: barra de menú + overlays).
+    CycleTheme,
+    /// Inyecta un tap (press+release) de una tecla del motor Doom — lo
+    /// usan los comandos de menú "Disparar" / "Usar" / "Menú del juego".
+    DoomKeyTap(u8),
 }
 
 struct Supay;
@@ -394,11 +430,21 @@ impl App for Supay {
             decal_kind: std::collections::HashMap::new(),
             checked_decal_spritenums: std::collections::HashSet::new(),
             prev_impacts: Vec::new(),
+            theme: Theme::dark(),
+            menu_open: None,
+            context_menu: None,
         }
     }
 
-    fn on_key(_: &Model, e: &KeyEvent) -> Option<Msg> {
+    fn on_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
         if e.state == KeyState::Pressed {
+            // Esc cierra primero cualquier menú abierto (barra / contextual)
+            // antes de dejar que llegue al motor como KEY_ESCAPE.
+            if matches!(&e.key, Key::Named(NamedKey::Escape))
+                && (model.menu_open.is_some() || model.context_menu.is_some())
+            {
+                return Some(Msg::CloseMenus);
+            }
             if matches!(&e.key, Key::Named(NamedKey::F12)) {
                 // F12 cierra la ventana — Esc lo manejamos como KEY_ESCAPE del juego.
                 return Some(Msg::Quit);
@@ -667,11 +713,40 @@ impl App for Supay {
             Msg::ToggleWeaponRimLight => {
                 m.weapon_rim_light = !m.weapon_rim_light;
             }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                m.menu_open = None;
+                m.context_menu = Some((x, y));
+            }
+            Msg::CycleTheme => {
+                m.theme = Theme::next_after(m.theme.name);
+            }
+            Msg::DoomKeyTap(code) => {
+                // Tap sintético: press + release en el mismo update para
+                // que el motor lo procese como una pulsación completa.
+                m.engine.push_key(true, code);
+                m.engine.push_key(false, code);
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                m.context_menu = None;
+                handle_menu_command(&cmd, handle);
+            }
         }
         m
     }
 
     fn view(model: &Model) -> View<Msg> {
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model));
         let header = header_bar(model);
         let body = match model.view_mode {
             ViewMode::Framebuffer => {
@@ -739,6 +814,10 @@ impl App for Supay {
             )),
         };
         let footer = footer_bar(model);
+        // Right-click sobre el View RAÍZ (origen 0,0) ⇒ las coords locales
+        // que recibe el handler ya son coords de ventana, justo lo que el
+        // menú contextual espera como ancla. Por eso lo anclamos acá y no
+        // en el `body` (que está desplazado por menubar + header).
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -748,8 +827,165 @@ impl App for Supay {
             ..Default::default()
         })
         .fill(COLOR_BG_ABYSS)
-        .children(vec![header, body, footer])
+        .children(vec![menubar, header, body, footer])
+        .on_right_click_at(|x, y, _, _| Some(Msg::ContextMenuOpen(x, y)))
     }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // Prioridad: menú contextual del juego.
+        if let Some((x, y)) = model.context_menu {
+            return Some(context_menu_for_game(model, x, y));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model))
+    }
+}
+
+// =====================================================================
+// Menú principal + contextual del juego
+// =====================================================================
+
+/// Viewport para clampear overlays. La app no trackea el tamaño real de
+/// ventana, así que usamos las constantes de `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Supay::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &'a Model) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme: &model.theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal de Doom. Archivo / Jugar / Ver / Ayuda — sólo
+/// comandos que mapean a `Msg` reales ya existentes (taps del motor o
+/// toggles del renderer). No hay "Editar": la app no tiene campos de
+/// texto editables, es un canvas de juego.
+///
+/// El submenú Jugar inyecta teclas del motor (disparar / usar / menú de
+/// Doom). El submenú Ver refleja en gris/check los toggles cosméticos
+/// del renderer 3D.
+fn app_menu(model: &Model) -> AppMenu {
+    let scene3d = model.view_mode == ViewMode::Scene3d;
+
+    // Helper: item de toggle marcado con [x]/[ ] según el flag.
+    let toggle = |label: &str, on: bool, cmd: &str| -> MenuItem {
+        let mark = if on { "[x] " } else { "[ ] " };
+        MenuItem::new(&format!("{mark}{label}"), cmd)
+    };
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Menú del juego", "file.menu").shortcut("Esc"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("F12").separated()),
+        )
+        .menu(
+            Menu::new("Jugar")
+                .item(MenuItem::new("Disparar", "play.fire").shortcut("Ctrl"))
+                .item(MenuItem::new("Usar / abrir", "play.use").shortcut("Space"))
+                .item(MenuItem::new("Mapa", "play.map").shortcut("Tab")),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(
+                    MenuItem::new(
+                        if scene3d {
+                            "Cambiar a framebuffer"
+                        } else {
+                            "Cambiar a renderer 3D"
+                        },
+                        "view.toggle_mode",
+                    )
+                    .shortcut("F3"),
+                )
+                .item(toggle("Crosshair", model.show_crosshair, "view.crosshair").shortcut("F4"))
+                .item(MenuItem::new("Ciclar viñeta", "view.vignette").shortcut("F5"))
+                .item(toggle("HUD", model.show_hud, "view.hud").shortcut("F6"))
+                .item(
+                    toggle("Sombras de sprites", model.sprite_shadows, "view.shadows")
+                        .shortcut("F7"),
+                )
+                .item(toggle("Tema (barra)", true, "view.theme").separated())
+                .item(toggle("Mirar arriba", false, "view.pitch_up").shortcut("PgUp"))
+                .item(MenuItem::new("Resetear horizonte", "view.pitch_reset").shortcut("Home")),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id (de la barra o del contextual) al `Msg` real y
+/// lo dispatcha. Todos los ids mapean a acciones que ya existían.
+fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
+    use supay_core::keys;
+    let msg = match cmd {
+        "file.menu" => Some(Msg::DoomKeyTap(keys::KEY_ESCAPE)),
+        "file.quit" => Some(Msg::Quit),
+        "play.fire" => Some(Msg::DoomKeyTap(keys::KEY_FIRE)),
+        "play.use" => Some(Msg::DoomKeyTap(keys::KEY_USE)),
+        "play.map" => Some(Msg::DoomKeyTap(keys::KEY_TAB)),
+        "view.toggle_mode" => Some(Msg::ToggleViewMode),
+        "view.crosshair" => Some(Msg::ToggleCrosshair),
+        "view.vignette" => Some(Msg::CycleVignette),
+        "view.hud" => Some(Msg::ToggleHud),
+        "view.shadows" => Some(Msg::ToggleSpriteShadows),
+        "view.theme" => Some(Msg::CycleTheme),
+        "view.pitch_up" => Some(Msg::PitchDelta { delta: PITCH_STEP, reset: false }),
+        "view.pitch_reset" => Some(Msg::PitchDelta { delta: 0.0, reset: true }),
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => None,
+    };
+    if let Some(msg) = msg {
+        handle.dispatch(msg);
+    }
+}
+
+/// Menú contextual del juego. No hay objetos seleccionables ni texto
+/// editable, así que expone las acciones de juego/vista más usadas
+/// según el estado actual. Sin edición — esto es un canvas de Doom.
+fn context_menu_for_game(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let header = match model.view_mode {
+        ViewMode::Framebuffer => "framebuffer",
+        ViewMode::Scene3d => "renderer 3D",
+    };
+
+    let items = vec![
+        ContextMenuItem::action("Disparar").with_shortcut("Ctrl"),
+        ContextMenuItem::action("Usar / abrir").with_shortcut("Space"),
+        ContextMenuItem::separator(),
+        ContextMenuItem::action(if model.view_mode == ViewMode::Scene3d {
+            "Cambiar a framebuffer"
+        } else {
+            "Cambiar a renderer 3D"
+        })
+        .with_shortcut("F3"),
+        ContextMenuItem::action("Menú del juego").with_shortcut("Esc"),
+    ];
+
+    // Mapeo de índice de item → command id de `handle_menu_command`.
+    let cmds: Vec<&'static str> = vec!["play.fire", "play.use", "", "view.toggle_mode", "file.menu"];
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| {
+        Msg::MenuCommand(cmds.get(i).copied().unwrap_or("").to_string())
+    });
+
+    context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: viewport_of(model),
+        header: Some(header.to_string()),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&model.theme),
+    })
 }
 
 /// Fase 3.22: alpha actual del muzzle world light, computada por

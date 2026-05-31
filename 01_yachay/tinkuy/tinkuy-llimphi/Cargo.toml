@@ -12,6 +12,9 @@ llimphi-ui               = { workspace = true }
 llimphi-theme            = { workspace = true }
 llimphi-widget-tiled     = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
+llimphi-widget-menubar      = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus                     = { workspace = true }
 tinkuy-core   = { path = "../tinkuy-core" }
 tinkuy-dsl    = { path = "../tinkuy-dsl" }
 tinkuy-forces = { path = "../tinkuy-forces" }

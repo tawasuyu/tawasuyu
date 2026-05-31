@@ -35,6 +35,7 @@ pub fn build(
     right: &[Box<dyn Widget>],
     floating: &[(FloatingCard, Vec<Box<dyn Widget>>)],
     bottom: Option<(&BottomBar, &[Box<dyn Widget>])>,
+    menubar: Option<View<Msg>>,
 ) -> View<Msg> {
     let dir = flex_dir(&cfg.position);
 
@@ -157,6 +158,10 @@ pub fn build(
     let mut children = if main_at_top { vec![bar, free_area] } else { vec![free_area, bar] };
     if let Some(b) = bottom_bar {
         children.push(b);
+    }
+    // La barra de menú principal, si está, va como PRIMER hijo del column raíz.
+    if let Some(mb) = menubar {
+        children.insert(0, mb);
     }
 
     View::new(root_style).fill(theme.bg_app).children(children)
