@@ -30,6 +30,9 @@ use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, GridPalette};
+use nahual_image_viewer_llimphi::{
+    image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
+};
 use nahual_thumb_core::{
     generar_thumb_de_archivo, obtener_o_generar, CacheDisco, Planificador, ThumbRgba,
 };
@@ -45,6 +48,35 @@ const HEADER_H: f32 = 44.0;
 /// Extensiones que tratamos como imagen (alineadas con las features del
 /// crate `image` en el workspace: png/jpeg/webp).
 const EXTS: &[&str] = &["png", "jpg", "jpeg", "webp"];
+/// Tope para abrir una imagen a tamaño completo en el preview (64 MB de
+/// archivo — un PNG/JPEG así decodifica a cientos de MB, pero es el límite
+/// del visor existente).
+const MAX_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Criterio de orden de la grilla.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Orden {
+    Nombre,
+    Tamano,
+    Fecha,
+}
+
+impl Orden {
+    fn siguiente(self) -> Self {
+        match self {
+            Orden::Nombre => Orden::Tamano,
+            Orden::Tamano => Orden::Fecha,
+            Orden::Fecha => Orden::Nombre,
+        }
+    }
+    fn etiqueta(self) -> &'static str {
+        match self {
+            Orden::Nombre => "nombre",
+            Orden::Tamano => "tamaño",
+            Orden::Fecha => "fecha",
+        }
+    }
+}
 
 #[derive(Clone)]
 enum Msg {
@@ -58,6 +90,16 @@ enum Msg {
     ThumbFallo(PathBuf, String),
     /// Tecla (navegación con flechas / página).
     Tecla(KeyEvent),
+    /// Abre la imagen `i` a tamaño completo (overlay de preview).
+    AbrirPreview(usize),
+    /// Imagen del preview cargada (llega desde el thread de carga).
+    PreviewListo(PathBuf, ImagePreviewState),
+    /// Mueve el preview a la imagen vecina (±1) y la carga.
+    PreviewVecino(i32),
+    /// Cierra el overlay de preview.
+    CerrarPreview,
+    /// Cambia el criterio de orden de la grilla.
+    CiclarOrden,
 }
 
 struct Model {
@@ -79,6 +121,9 @@ struct Model {
     /// Viewport útil asumido (de `initial_size`, menos el header).
     vw: f32,
     vh: f32,
+    /// Imagen abierta a tamaño completo (overlay). `None` = grilla normal.
+    preview: Option<(PathBuf, ImagePreviewState)>,
+    orden: Orden,
     estado: String,
     theme: Theme,
 }
@@ -127,6 +172,8 @@ impl App for Gallery {
             metrics,
             vw: w as f32,
             vh: h as f32 - HEADER_H,
+            preview: None,
+            orden: Orden::Nombre,
             estado,
             theme: Theme::dark(),
         };
@@ -145,8 +192,28 @@ impl App for Gallery {
         }
     }
 
-    fn on_key(_: &Model, e: &KeyEvent) -> Option<Msg> {
-        (e.state == KeyState::Pressed).then(|| Msg::Tecla(e.clone()))
+    fn on_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
+        if e.state != KeyState::Pressed {
+            return None;
+        }
+        // Con el preview abierto, las teclas controlan el preview, no la
+        // grilla: Esc cierra, ←/→ saltan a la vecina.
+        if model.preview.is_some() {
+            return match &e.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CerrarPreview),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::PreviewVecino(1)),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::PreviewVecino(-1)),
+                _ => None,
+            };
+        }
+        // Enter / Espacio abren el preview de la imagen seleccionada.
+        match &e.key {
+            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                model.seleccionado.map(Msg::AbrirPreview)
+            }
+            Key::Character(c) if c == "o" => Some(Msg::CiclarOrden),
+            _ => Some(Msg::Tecla(e.clone())),
+        }
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -179,8 +246,64 @@ impl App for Gallery {
             Msg::Tecla(ev) => {
                 manejar_tecla(&mut m, &ev, handle);
             }
+            Msg::AbrirPreview(i) => {
+                abrir_preview(&mut m, i, handle);
+            }
+            Msg::PreviewListo(path, st) => {
+                // Sólo aplicar si seguimos viendo la misma imagen (evita que
+                // una carga lenta pise a otra más nueva).
+                if let Some((actual, _)) = &m.preview {
+                    if actual == &path {
+                        m.estado = nombre(&path);
+                        m.preview = Some((path, st));
+                    }
+                }
+            }
+            Msg::PreviewVecino(d) => {
+                if let Some((actual, _)) = &m.preview {
+                    if let Some(cur) = m.entries.iter().position(|p| p == actual) {
+                        let nuevo = (cur as i32 + d).clamp(0, m.entries.len() as i32 - 1) as usize;
+                        if nuevo != cur {
+                            m.seleccionado = Some(nuevo);
+                            abrir_preview(&mut m, nuevo, handle);
+                        }
+                    }
+                }
+            }
+            Msg::CerrarPreview => {
+                m.preview = None;
+            }
+            Msg::CiclarOrden => {
+                // Conservar la selección por path a través del reordenamiento.
+                let sel_path = m.seleccionado.and_then(|i| m.entries.get(i).cloned());
+                m.orden = m.orden.siguiente();
+                reordenar(&mut m.entries, m.orden);
+                m.seleccionado = sel_path.and_then(|p| m.entries.iter().position(|q| *q == p));
+                m.estado = format!("orden: {}", m.orden.etiqueta());
+                bombear(&mut m, handle);
+            }
         }
         m
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        let (path, st) = model.preview.as_ref()?;
+        let pal = ImageViewerPalette::from_theme(&model.theme);
+        let viewer = image_viewer_view::<Msg>(st, Some(path), &pal);
+        // Scrim a pantalla completa: cubre la grilla y, al clickear (fuera o
+        // sobre la imagen), cierra el preview. Esc y ←/→ los maneja on_key.
+        Some(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(model.theme.bg_app)
+            .on_click(Msg::CerrarPreview)
+            .children(vec![viewer]),
+        )
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -279,11 +402,12 @@ fn celda_contenido(model: &Model, path: &Path) -> View<Msg> {
 fn encabezado(model: &Model, v: &llimphi_widget_grid::VisibleWindow) -> View<Msg> {
     let theme = &model.theme;
     let texto = format!(
-        "📁 {}  ·  {} img  ·  fila {}/{}  ·  {}",
+        "📁 {}  ·  {} img  ·  fila {}/{}  ·  orden: {} (o)  ·  ⏎/espacio: ver  ·  {}",
         model.dir.display(),
         model.entries.len(),
         v.first_row + 1,
         v.total_rows.max(1),
+        model.orden.etiqueta(),
         model.estado,
     );
     View::new(Style {
@@ -352,6 +476,37 @@ fn asegurar_visible(m: &mut Model, sel: usize, cols: usize, filas_pantalla: usiz
         m.scroll_fila = fila_sel;
     } else if fila_sel >= m.scroll_fila + filas_pantalla {
         m.scroll_fila = fila_sel + 1 - filas_pantalla;
+    }
+}
+
+/// Abre el preview de la imagen `i`: marca el placeholder de carga y lanza
+/// la decodificación full-res en un thread, que reentra con `PreviewListo`.
+fn abrir_preview(m: &mut Model, i: usize, handle: &Handle<Msg>) {
+    let Some(path) = m.entries.get(i).cloned() else {
+        return;
+    };
+    m.seleccionado = Some(i);
+    m.estado = format!("cargando {}…", nombre(&path));
+    // Placeholder mientras carga (el viewer pinta "—").
+    m.preview = Some((path.clone(), ImagePreviewState::Empty));
+    let p = path.clone();
+    handle.spawn(move || {
+        let st = load_image(&p, MAX_PREVIEW_BYTES);
+        Msg::PreviewListo(p, st)
+    });
+}
+
+/// Reordena los paths según el criterio. `Tamano`/`Fecha` consultan
+/// `metadata` (un `stat` por archivo — se paga una vez por reorden).
+fn reordenar(entries: &mut [PathBuf], orden: Orden) {
+    match orden {
+        Orden::Nombre => entries.sort(),
+        Orden::Tamano => {
+            entries.sort_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        }
+        Orden::Fecha => {
+            entries.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+        }
     }
 }
 

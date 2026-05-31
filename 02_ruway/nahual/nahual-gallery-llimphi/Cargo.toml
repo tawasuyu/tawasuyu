@@ -16,3 +16,4 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-grid = { workspace = true }
 nahual-thumb-core = { workspace = true }
+nahual-image-viewer-llimphi = { workspace = true }
