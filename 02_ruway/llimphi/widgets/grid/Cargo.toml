@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-grid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-grid — grilla virtualizada 2D para Llimphi: celdas clicables en mosaico, selección, caption/hint opcionales, recorte de overflow. El caller hace la virtualización (calcula la ventana visible con `ventana_visible` y pasa sólo las celdas visibles); el widget las compone en filas. Base para galerías de miniaturas tipo gThumb/FastStone — agnóstico del contenido de la celda (el caller arma cada `View`: thumb, placeholder, lo que sea)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
