@@ -12615,4 +12615,61 @@ mod tests {
         assert_eq!(rt.eval("document.adoptedStyleSheets[0] === s").expect("e"), JsValue::Bool(true));
     }
 
+    // ---- Fase 7.155 — Scheduler API ----
+    #[test]
+    fn scheduler_post_task_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var out = null; scheduler.postTask(function(){ return 42; }).then(function(v){ out = v; });").expect("e");
+        assert_eq!(rt.eval("out").expect("e"), JsValue::Number(42.0));
+        assert_eq!(rt.eval("scheduler.isInputPending()").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn scheduler_orden_por_prioridad() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Encolado background-primero, pero user-blocking debe correr antes.
+        rt.eval("var seq = [];
+            scheduler.postTask(function(){ seq.push('bg'); }, { priority: 'background' });
+            scheduler.postTask(function(){ seq.push('uv'); }, { priority: 'user-visible' });
+            scheduler.postTask(function(){ seq.push('ub'); }, { priority: 'user-blocking' });").expect("e");
+        assert_eq!(rt.eval("seq.join(',')").expect("e"), JsValue::String("ub,uv,bg".into()));
+    }
+
+    #[test]
+    fn scheduler_signal_abortada_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var err = null; var c = new AbortController(); c.abort();
+            scheduler.postTask(function(){ return 1; }, { signal: c.signal }).catch(function(e){ err = String(e); });").expect("e");
+        assert_eq!(rt.eval("err !== null").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn scheduler_task_controller_prioridad() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var tc = new TaskController({ priority: 'user-blocking' });").expect("e");
+        assert_eq!(rt.eval("tc.signal.priority").expect("e"), JsValue::String("user-blocking".into()));
+        // setPriority dispara prioritychange con previousPriority.
+        rt.eval("var prev = null; tc.signal.onprioritychange = function(e){ prev = e.previousPriority; };
+            tc.setPriority('background');").expect("e");
+        assert_eq!(rt.eval("tc.signal.priority").expect("e"), JsValue::String("background".into()));
+        assert_eq!(rt.eval("prev").expect("e"), JsValue::String("user-blocking".into()));
+    }
+
+    #[test]
+    fn scheduler_yield_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var resumed = false; scheduler.yield().then(function(){ resumed = true; });").expect("e");
+        assert_eq!(rt.eval("resumed").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn scheduler_task_controller_abort_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // postTask con delay queda en espera; abortar el TaskController la cancela.
+        rt.eval("var err = null; var tc = new TaskController();
+            scheduler.postTask(function(){ return 9; }, { signal: tc.signal, delay: 1000 }).catch(function(e){ err = e; });
+            tc.abort();").expect("e");
+        assert_eq!(rt.eval("err !== null").expect("e"), JsValue::Bool(true));
+    }
+
 }
