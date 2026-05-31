@@ -58,7 +58,7 @@ use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette
 use nahual_file_explorer_llimphi::{
     file_explorer_view, FileExplorerState, OpenedFile,
 };
-use nahual_source_core::{Navigator, Opened, WawaImgSource};
+use nahual_source_core::{MingaSource, Navigator, NouserSource, Opened, WawaImgSource};
 use nahual_image_viewer_llimphi::{
     image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
     DEFAULT_IMAGE_BYTES_MAX,
@@ -166,6 +166,11 @@ enum Msg {
     Tick,
     /// Espacio: play/pausa del panel derecho si es video o audio.
     TogglePlay,
+    /// `m`: montar el directorio objetivo como Mónadas semánticas (nouser).
+    MountNouser,
+    /// `g`: montar el directorio objetivo como grafo CAS de minga, si parece
+    /// un repo `.minga` (guard anti-creación de sled en dirs ajenos).
+    MountMinga,
 }
 
 struct Shell;
@@ -218,6 +223,11 @@ impl App for Shell {
             Key::Named(NamedKey::Enter) => Some(Msg::OpenSelected),
             Key::Named(NamedKey::Backspace) => Some(Msg::Parent),
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
+            // Puntos de entrada del front universal: montar el directorio
+            // objetivo (el subdir seleccionado, o el cwd) como otra `Source`.
+            // Sólo desde POSIX — dentro de una fuente montada no aplican.
+            Key::Character(c) if c == "m" => Some(Msg::MountNouser),
+            Key::Character(c) if c == "g" => Some(Msg::MountMinga),
             _ => None,
         }
     }
@@ -338,6 +348,37 @@ impl App for Shell {
                 PreviewPane::Audio(state) => state.toggle_play(),
                 _ => {}
             },
+            Msg::MountNouser => {
+                // Sólo montamos desde POSIX (no anidamos fuentes). nouser sólo
+                // LEE el dir, así que no hay riesgo de efecto secundario.
+                if m.mounted.is_none() {
+                    let dir = target_dir(&m);
+                    if let Some(nav) = NouserSource::escanear(&dir, 1)
+                        .ok()
+                        .and_then(|src| Navigator::open(Box::new(src)).ok())
+                    {
+                        m.mounted = Some(nav);
+                        clear_preview(&mut m);
+                    }
+                }
+            }
+            Msg::MountMinga => {
+                // Guard: `PersistentRepo::open` (sled) CREA archivos si el dir
+                // no es un repo — sólo montamos si ya parece uno, para no
+                // ensuciar directorios ajenos.
+                if m.mounted.is_none() {
+                    let dir = target_dir(&m);
+                    if parece_repo_minga(&dir) {
+                        if let Some(nav) = MingaSource::abrir(&dir)
+                            .ok()
+                            .and_then(|src| Navigator::open(Box::new(src)).ok())
+                        {
+                            m.mounted = Some(nav);
+                            clear_preview(&mut m);
+                        }
+                    }
+                }
+            }
         }
         m
     }
@@ -453,7 +494,11 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
             // Montados sobre una fuente: mostramos su etiqueta + la miga de
             // pan dentro de ella, con un glifo que marca que no es POSIX.
             Some(nav) => format!("nahual · ⊟ {} · {}", nav.label(), nav.breadcrumb()),
-            None => format!("nahual · {}", model.explorer.cwd.display()),
+            // En POSIX: la ruta + los atajos para montar otras fuentes.
+            None => format!(
+                "nahual · {}   ·   m Mónadas · g grafo minga",
+                model.explorer.cwd.display()
+            ),
         },
         12.0,
         theme.fg_text,
@@ -475,6 +520,23 @@ fn clear_preview(m: &mut Model) {
 fn try_mount(path: &Path) -> Option<Navigator> {
     let src = WawaImgSource::abrir(path).ok()?;
     Navigator::open(Box::new(src)).ok()
+}
+
+/// El directorio que un montaje explícito (`m`/`g`) toma como objetivo: el
+/// subdirectorio seleccionado si lo hay, o el `cwd` del explorador POSIX.
+fn target_dir(m: &Model) -> PathBuf {
+    match m.explorer.selected_entry() {
+        Some(entry) if entry.is_dir => m.explorer.cwd.join(&entry.name),
+        _ => m.explorer.cwd.clone(),
+    }
+}
+
+/// Heurística no destructiva: ¿este directorio ya parece un repo minga
+/// (sled)? Chequea los artefactos que `sled::open` deja (`conf`/`db`) sin
+/// abrirlo — abrir crearía esos archivos en un dir cualquiera, justo lo que
+/// queremos evitar.
+fn parece_repo_minga(dir: &Path) -> bool {
+    dir.is_dir() && (dir.join("conf").exists() || dir.join("db").exists())
 }
 
 /// Abre la selección dentro de la fuente montada: si es contenedor desciende

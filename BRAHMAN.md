@@ -150,9 +150,15 @@ FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Ca
           14 tests con la feature (mete un AST real, lo lee de vuelta).
         ➡ ESPINA COMPLETA: los cuatro mundos del BRAHMAN.md (POSIX · wawa · nouser · minga)
           caben en un solo trait `Source` — jerarquía física · DAG de contenido · clusters
-          semánticos · DAG de AST. Front: el shell monta wawa (Paso B); nouser/minga quedan
-          como adapters listos a la espera de un punto de entrada en la UI ("montar Mónadas"/
-          "montar repo minga") — follow-up de UI, no de arquitectura.
+          semánticos · DAG de AST.
+        ✓ PASO E HECHO (2026-05-31): FRONT cablea los cuatro. El shell habilita las features
+          `nouser,minga` de nahual-source-core y monta por demanda: abrir un archivo con
+          magic wawa auto-monta `WawaImgSource` (Paso B); `m` monta el dir objetivo (subdir
+          seleccionado o cwd) como `NouserSource` (Mónadas, sólo lee); `g` lo monta como
+          `MingaSource` SI `parece_repo_minga` (chequea artefactos sled `conf`/`db` SIN abrir
+          — abrir crearía sled en un dir ajeno; guard anti-efecto-secundario verificado:
+          sled deja `["blobs","conf","db"]`). ⌫ desde la raíz de la fuente desmonta a POSIX.
+          Header POSIX muestra la pista de atajos. Front universal de los 4 mundos: realizado.
 ```
 
 ## Tesis de cierre
