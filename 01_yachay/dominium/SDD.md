@@ -318,3 +318,38 @@ Ninguno de estos cambia la base del §1.
 > grilla de tres dimensiones ocultas."
 
 Esa es la spec. El §1 la materializa en código.
+
+---
+
+## 7. Estado (2026-05-31)
+
+### Hecho
+
+- Base inamovible del §1 implementada y determinista: 5 capas, 7 vectores de
+  agente, 4 dimensiones ψ, 6 acciones atómicas, tick de 6 fases
+  (`dominium-core`, `dominium-physics`).
+- Conceptos metaprogramables como datos JSON (`apply_conceptos` +
+  `apply_hacks`) — el motor sigue tonto; la IA externa es opcional.
+- Proyección iso 30° + sombra Lambert (`dominium-iso`) y plan de render por
+  pintor (`dominium-render-plan`), ambos sin deps gráficas.
+- App Llimphi viva (`dominium-app-llimphi`): canvas + panel con editor visual
+  de Conceptos (click/drag para crear/mover/seleccionar), rename inline,
+  editor de hack (trigger + acción forzada + duración), glifos por sprite_id,
+  sliders de `LayerMods`/`SimParams`/`ZWeights`, capas concéntricas andinas,
+  toggle de sync físico y persistencia a `~/.config/dominium/pack.json`.
+- Mundo fractal a escala (240²) con mares persistentes, frenos termodinámicos,
+  Big Five, índice espacial, hipótesis canónicas, Spawn/Kill events,
+  Moran's I y k-means; HUD ψ.
+- `dominium-cli` headless determinista bit-exacto (run/step/dump CSV) + REPL
+  interactivo; mismo formato de pack que la app.
+- Menú principal + menús contextuales añadidos a la app.
+- Megafile `main.rs` splitteado en módulos del crate.
+
+### Pendiente
+
+- Exponer `SimParams`/`ZWeights` restantes como datos editables/serializables
+  desde el panel (varios siguen hardcoded — §2).
+- Librería visual de sprites reales (hoy glifos opacos por índice).
+- Profundizar emergencia social documentada (packs de Conceptos "iglesia",
+  "banco", etc.) como escenarios reproducibles.
+- Vista web vía `pluma-notebook-kernel-dominium` como demo estable.

@@ -27,6 +27,24 @@ pinta/dispara. Los procesadores de audio componen como wrappers de
 `AudioSource` (igual que `PausableAudio`/`VolumeAudio`/`MixerAudio`). Los
 formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 
+## Estado (2026-05-31)
+
+### Hecho
+- Decode/encode/captura nativos puro-Rust: AV1 (rav1d/rav1e) + Opus + FLAC + Vorbis + demux/mux WebM propio (sin ffmpeg); MP4/MKV/etc. vía puente `shared/foreign-av`.
+- Captura en vivo: cámara v4l2, pantalla X11 + Wayland, micrófono cpal → grabador unificado `.webm` AV1+Opus (`media-recorder-webm`, app `media-recorder-app`).
+- Reproductor: playlist m3u (prev/next, repeat Off/One/All, shuffle), mixer + volumen + pausa unificada, visores (waveform/spectrum/waterfall/levels), subtítulos SRT+WebVTT sincronizados, velocidad (varispeed nativo).
+- Controles configurables estilo VLC (CONTROLES.md, Fases A–E todas ✅): keymap RON en caliente + watch, scripts Rhai, command palette ejecutable, overlay de ayuda, layout de paneles persistente, timeline scrubbeable (`SeekTo` absoluto + widget `llimphi-widget-timeline`).
+- Fase A1 (ecualizador paramétrico, banco de biquads) ✅ + EQ gráfico wireado en `media-app`.
+- M1 (sync A/V) arrancado: política `AvSync` (kernel) + `FrameSource` ya lleva PTS.
+
+### Pendiente
+- M1 completo (reloj de presentación + drop/dup por PTS en `media-app`/`foreign-av`), M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
+- Track AUDIO A2–A6 (selección de pista, dispositivo de salida, delay, normalización/ReplayGain, gapless/crossfade).
+- Track VIDEO V1–V8 (fullscreen, aspect/crop/zoom, rotación, ajustes de color, deinterlacing, filtros/shaders, capítulos, HDR) — todo pendiente.
+- Track SUBTÍTULOS S1–S5 (ASS/SSA, pistas embebidas, estilo configurable, delay/sync, auto-carga).
+- Track RED R1–R4 (URL/HLS/RTSP, yt-dlp/plataformas, streaming server, DLNA/Chromecast) — totalmente ausente; prerequisito de FREETUBE.md.
+- Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
+
 ## Tracks y fases
 
 Ordenados por impacto. Cada fase es un bloque committeable.

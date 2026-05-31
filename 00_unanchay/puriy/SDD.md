@@ -621,3 +621,21 @@ La tesis original era **embebar Servo entero** (`script + style + layout + net`)
 - [[project-mirada]] — compositor Wayland donde puriy abre ventana en Linux
 - [[project-wawa]] — kernel SASOS donde puriy abre framebuffer bare-metal
 - [[project-pluma]] — visor markdown hermano (ambos en 00_unanchay, ambos visualizadores)
+
+## Estado (2026-05-31)
+
+### Hecho
+
+- Motor propio Fenix: `puriy-core` (tipos públicos) + `puriy-engine` (fetch + parse HTML5/CSS + StyleEngine + box/flex/inline layout) + `puriy-llimphi` (chrome: URL bar, tabs, scroll, links, BoxTree → View) + `puriy-app` (autodetecta Llimphi vs headless).
+- CSS3 subset amplio: selectores compound + combinadores + atributos + pseudoclases estructurales + nth-child/not, `width`/`max-width`, `text-align`, `line-height`, `border`/`border-radius`, `box-shadow`, `text-decoration`, `list-style-type`, `:hover` con scope limitado, `!important`, especificidad real, herencia real. Fase 4 (render fiel) cerrada — hito `puriy https://gioser.net`.
+- Red (`puriy-net`, frente net): DNS + TCP + TLS + HTTP/1.1, cache con TTL (`Cache-Control: max-age`) persistente en `$XDG_CACHE_HOME/puriy/`.
+- Motor JS propio (`puriy-js`): lexer/parser/intérprete con bootstrap modular en `bootstrap/` por feature.
+- Web APIs hasta Fase 7.170: DOM, Fetch/XHR, WebSocket, Service Workers, IndexedDB, WebRTC, Web Workers, Web Audio/WebCodecs/MediaSource, File System Access, Web Animations, WebTransport, Push/Background, Generic Sensor, NFC, Navigation, View Transitions, PiP/Document PiP, CloseWatcher, Shape Detection, EditContext, Virtual Keyboard, y más (registradas arriba en §Estado changelog).
+
+### Pendiente
+
+- Fase 7.171+: cerrar Web APIs restantes (Canvas/WebGL completos, etc.) y conformance (web-platform-tests).
+- Optimización del motor JS (JIT / bytecode caché); HTTP/2 y HTTP/3 (QUIC).
+- Integración con identidad gioser (agora) para navegación firmada.
+- Stylo (motor CSS de Firefox vía Servo) como Opción B para una fase posterior.
+- Pan/zoom de página y pulido de pestañas múltiples.

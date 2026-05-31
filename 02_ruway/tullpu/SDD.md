@@ -2,7 +2,42 @@
 
 > Tullpu (quechua: *teñir, dar color, pigmento*). Tipo: **Layered image editor over Llimphi**, edición no destructiva con operaciones IA como nodos del DAG.
 
-> Estado: **propuesta de diseño** (2026-05-29). Nada en disco todavía salvo este SDD. Referenciado en `PLAN.md` §6.ter (tabla office/PSD) y §6.quinquies (multimedia).
+> Estado: **implementado (MVP+)** — ya no es sólo diseño. Ver `## Estado (2026-05-31)` abajo. Referenciado en `PLAN.md` §6.ter (tabla office/PSD) y §6.quinquies (multimedia).
+
+## Estado (2026-05-31)
+
+### Hecho
+
+- **Núcleo + render + app forjados** (`tullpu-core`, `tullpu-render`,
+  `tullpu-app-llimphi`): modelo de capas como DAG content-addressed serializado a
+  `format::Objeto`, compositor top-down CPU → buffer Rgba8, y app Llimphi con lienzo +
+  panel de capas + paleta (pinta `peniko::Image`).
+- **Catálogo de blend modes completo Photoshop** (Fases 7–10): 12 modos por-canal,
+  4 HSL no-separables (W3C §10.3), comparativos por luminosidad (Darker/Lighter Color)
+  y Dissolve — los 28 discriminantes PSD upstream mapean sin degradado.
+- **Ops locales** (`tullpu-ops`): invertir/brillo/contraste/niveles/blur/opacidad/
+  saturación/tonalidad como nodos derivados con *stale tracking* (regenerar bajo demanda).
+- **Ops IA** (`pixel-verbo-{core,mock,daemon,daemon-bin}`): `regenerar_stale_con_ia`
+  cablea `TransformacionPixel::Ia` a un `Proveedor` por socket (calco rimay-verbo);
+  Mock determinista (segmentar/inpaint/restyle/generar), daemon thread-por-conexión.
+- **Capas editables** (Fases 51–54): curvas tonales con editor interactivo, máscaras de
+  capa editables, pintar sobre la máscara, thumbnail de máscara + pincel con gris arbitrario.
+- **Pincel pro** (Fases 44–50): mano alzada, radio ajustable, borrador, alpha,
+  dureza/suavidad (soft brush), línea recta con Shift+click, simetría de trazo (mirror),
+  degradé lineal, balde (flood fill); selección (Ctrl+A + expandir/contraer).
+- **Import/export ajenos por puente**: `shared/foreign-psd` (PSD real → capas raster
+  con dedup BLAKE3, blends mapeados) cargable desde la app; export del lienzo a PNG.
+- **Menús** (lote 4): menú principal + menús contextuales.
+
+### Pendiente
+
+- **Nodegraph visual** sobre `llimphi-widget-nodegraph` (espera `llimphi-surface`); hoy
+  la pila de ops/capas se opera por panel, no como grafo arrastrable.
+- **Proveedor IA real (ONNX)**: segment-anything, restyle, upscale — hoy sólo Mock.
+- **Tiling** para imágenes grandes (capa = grafo de tiles content-addressed).
+- **Compositing GPU** (compute shader vía wgpu); el compositor es CPU por ahora.
+- **PSD de salida** y máscaras/grupos/clipping/ajustes en el import PSD (post-MVP).
+- **File picker** para export (hoy genera `tullpu-export-<ts>.png` en CWD).
 
 ## Tesis
 

@@ -157,13 +157,24 @@ arje    : chasqui-nous-real podría persistir embeddings en CAS de wawa — expe
 ayni    : HEREDA la aspiración pub/sub de chasqui. Ayni-sync usa trait Transporte (EnlaceMinga), NO el broker chasqui.
 ```
 
+## Estado (2026-05-31)
+
+### Hecho
+- Subsistema A (Brahman): matching tipado determinista (Exact/Structural/ExactThenStructural) + context biases + handshake Unix-socket (card-handshake/sidecar) + observabilidad admin (`brahman-status`) + UI probe (`chasqui-broker-explorer-llimphi`).
+- Subsistema B (Nouser): scanner + clustering `by_directory` + `MonadDb` (sled) + pseudo-embeddings 32d deterministas + real 384d ONNX gated por feature + contrato Nous (mock/real intercambiables) + UI explorer semántico + CLI `nouser`.
+- Nexo A↔B: los proveedores de embeddings se registran como Cards; el broker elige mock vs real por `BRAHMAN_BROKER_CONTEXT`.
+- Las dos UIs portadas a Llimphi (GPUI extinto) + menú principal/contextual (lotes 1 y 5).
+
+### Pendiente
+- Persistencia del broker: hoy vive en memoria del Init, sin snapshot/recover al reboot.
+- Transporte remoto: Brahman es Unix-socket local; matching de módulos remotos (card-net/libp2p) sigue experimental, bloqueado por NAT traversal en minga.
+- real-nous en producción: la feature `embeddings` arrastra ~200 MB de ONNX runtime (trade-off tamaño↔capacidad).
+- Integración a fondo cross-dominio (rimay/shuma/arje) con nouser, aún superficial.
+- La aspiración pub/sub original migró a Ayni (chat P2P); chasqui hoy NO transporta mensajes app↔app en tiempo real.
+
 ## Estado vs aspiración
 
 ```
-HECHO (2026-05-29):
-  ✓ A: matching tipado (Exact/Structural/ExactThenStructural) + context biases + handshake + admin observabilidad + UI probe
-  ✓ B: scanner + clustering by_directory + MonadDb(sled) + pseudo-embeddings 32d + real 384d gated + contrato Nous + mock/real + UI explorer + CLI nouser
-
 DEUDA / ASPIRA_A:
   #1 PERSISTENCIA del broker: hoy vive en memoria del Init, sin snapshot/recover al reboot.
   #2 TRANSPORTE remoto: Brahman es Unix-socket local; matching de módulos remotos (card-net/libp2p) experimental.

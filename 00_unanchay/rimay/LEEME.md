@@ -46,6 +46,21 @@ Los consumidores que quieran fallar fuerte si no hay daemon usan `rimay_verbo::c
 | [`rimay-verbo-fastembed`](rimay-verbo-fastembed/) | Backend ONNX (`multilingual-e5-small` por defecto; catálogo E5/BGE). |
 | [`rimay-verbo-mock`](rimay-verbo-mock/) | Backend determinista (FNV + LCG; sin descargas, sin GPU). |
 
+## Estado (2026-05-31)
+
+### Hecho
+
+- Contrato model-agnostic `rimay-verbo-core` (trait `Provider`, `ModelId`, `EmbeddingVector` con `cosine` que rechaza cruzar modelos).
+- Daemon `rimay-verbo-daemon` + binario `rimay-verbo-daemon-bin`: IPC por socket Unix (frames postcard, 1 reintento transparente, apagado limpio SIGINT/SIGTERM, descubrimiento de socket con fallback `/tmp`).
+- Backends: `rimay-verbo-fastembed` (ONNX real, `multilingual-e5-small` por defecto, catálogo E5/BGE, sin API key) y `rimay-verbo-mock` (FNV+LCG determinista, ideal CI).
+- Fachada `rimay-verbo` one-line (`conectar_o_mock`/`conectar`) + `ping` health-check + reconnect. Consumida por pluma/khipu/chasqui.
+
+### Pendiente
+
+- Gating de permiso antes de la descarga del modelo ONNX (hoy descarga sin confirmar).
+- Compilar el daemon a WASM para Wawa (hoy es Linux/host-only).
+- Vertiente lingüística de rimay (morfología/conjugación quechua) más allá de embeddings — no presente en estos subcrates.
+
 ## Consideraciones
 
 - El backend `fastembed` descarga el modelo ONNX en el primer arranque sin pedir confirmación. La cache vive en `~/.cache/fastembed`; borrarla fuerza re-descarga. (El gating de permiso antes de la descarga está pendiente.)

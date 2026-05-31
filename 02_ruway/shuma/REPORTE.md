@@ -1,7 +1,45 @@
 # shuma — reporte técnico para IA
 
-> Estado: **2026-05-28** · rama `main` · compila limpio (`cargo build -p shuma-shell-llimphi -p shuma-daemon -p shuma-cli -p shuma-gateway`).
+> Estado: **2026-05-31** · rama `main` · compila limpio (`cargo build -p shuma-shell-llimphi -p shuma-daemon -p shuma-cli -p shuma-gateway`).
 > Audiencia: sesión de Claude futura u otra IA que retome el shell+plugins. Idioma del proyecto: español.
+
+## Estado (2026-05-31)
+
+### Hecho
+
+- **Chasis Llimphi completo** (`shuma-shell-llimphi`): slots TopBar/Main/BottomBar +
+  tabs, monitores (CPU/MEM) con splitter, i18n vía `rimay_localize`, theme/locale
+  vivos desde el bus `wawa-config`.
+- **Bloques A–F del roadmap cerrados (2026-05-28/29)**: REPL usable (streaming no
+  bloqueante, decoración clickeable del output, `LineState` con completion+ghost,
+  historial JSONL+fuzzy, PTY+vt100 con resize dinámico, paste con bracketed paste,
+  33/33 tests); daemon como ejecutor (local/daemon/`DaemonTcp` Noise_XK) + sidecar
+  al broker; launcher y commandbar reales (Cmd-P con nucleo_matcher); integración
+  wawa (watcher + theme/lang live); limpieza (SO_PEERCRED, parser de bindings, lienzo).
+- **Lienzo de intenciones shell↔canvas** (2026-05-29): cada `start_run` aparece como
+  `%cN` en el `SessionGraph`; nodo verde/rojo según exit; canvas clickeable que
+  inserta `%cN`/`%pN` en el cursor del shell.
+- **Adiós al Quake-drawer** (2026-05-29): el chasis es app standalone normal (tabs
+  siempre visibles); el overlay launcher vive en `mirada-launcher-llimphi`.
+- **vim como card themeable** (2026-05): PTY con skin app-aware, drag-to-select +
+  copia al clipboard, paste con click derecho/medio, iconitos por tipo en paths.
+- **Menús** (lote 4): menú principal + menús contextuales en el chasis.
+- **Stack matilda** (`baremetal/`): config declarativa multi-host (core/plan/discover/
+  config/apply/ghost/linker/app) + `shuma-module-matilda` (tab con SSH real).
+- **Refactors regla #1**: split de `shuma-module-shell` (3028 LOC), `shuma-core`
+  (1517) y `shuma-shell-llimphi` main (1522) en módulos.
+
+### Pendiente
+
+- **E2 — hover trigger del drawer**: bloqueado por dispatching de pointer enter/leave
+  en `llimphi-ui`.
+- **Mouse en el PTY**: vt100 ya parsea los eventos; falta cablear el mouse de Llimphi.
+- **Tooltip "what would clicking this do?"** en decoraciones (espera al hover de llimphi-ui).
+- **Cablear `shuma-line::decorate`** completo desde más consumidores (ya hace mucho,
+  poco consumido).
+- **Daemon**: lockfile + check de PID vivo (hoy ignora bind si el socket existe).
+- **Placeholders residuales**: aunque launcher/commandbar ya tienen impl real, varios
+  crates sandbox del listado siguen sin app que los consuma directamente.
 
 ---
 

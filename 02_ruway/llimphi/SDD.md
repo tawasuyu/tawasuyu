@@ -94,7 +94,24 @@ Apps actualmente en GPUI que deben portarse:
 
 **Estrategia:** Las apps mantienen su lógica de dominio en sus `*-core` agnósticos. Solo se reemplaza la capa de presentación: en lugar de `use gpui::*`, pasan a usar `use llimphi_ui::*`.
 
-## Estado
+## Estado (2026-05-31)
+
+### Hecho
+- Las 5 capas del framework en producción: `llimphi-hal` (wgpu+winit), `llimphi-raster` (vello), `llimphi-text` (parley, ahora con vello directo y texto multicolor en una pasada), `llimphi-layout` (taffy, con `LayoutTree::clear()` para reuso entre frames), `llimphi-ui` (bucle Elm + runtime winit).
+- Split compositor/runtime: `llimphi-compositor` (winit-free: View tree, mount, paint/paint_gpu, hit-test) separado de `llimphi-ui` (runtime winit) → habilita un futuro runtime sobre el framebuffer de `wawa` sin winit.
+- GPUI extinto (2026-05-26): toda app gráfica de la suite corre sobre Llimphi.
+- Backend GPU directo (sin vello) completo y validado en hardware real (Iris Xe): `GpuPipelines` + `GpuBatch` + `View::gpu_paint_with`; ~11× vs vello a 1M puntos persistente, >140 fps.
+- Catálogo de ~44 widgets: incluye text-editor (split en `-core` agnóstico + `-lsp`), nodegraph, tiled/panes/splitter, tree, list, grid (virtualizada 2D), gallery, timeline (scrub clickeable), menubar/edit-menu/context-menu, clipboard del sistema, tabs, modal, toast, y la familia de controles (button/field/slider/switch/segmented/...).
+- 10 módulos compuestos: command-palette, diff-viewer, fif (find-in-files), file-picker, bookmarks, mini-map, shuma-term, symbol-outline, selector, plugin-host.
+- `llimphi-workspace` (chasis tipo tmux) + `llimphi-gallery` (showcase) + `llimphi-motion`/`llimphi-icons`/`llimphi-surface` auxiliares.
+
+### Pendiente
+- Runtime sobre framebuffer de `wawa` (`WawaFramebufferSurface`) reusando el compositor winit-free — habilitado por el split pero aún no escrito.
+- Backend GPU directo: sin MSAA/AA fino, sin texto, una sola `line_width` por flush; falta primer caller real denso (cosmos starfield) que mida una falla concreta antes de extender shaders.
+- Widgets `llimphi-widget-{transport, waveform}` aún por extraer (la nota de media los deja como futuro no bloqueante).
+- Investigación abierta: cuelgue/deadlock de apps Llimphi tras click/scroll (hipótesis `get_current_texture` Wayland FIFO) — pendiente reproducir+backtrace.
+
+## Estado — bitácora histórica
 
 - **2026-05-25:** SDD escrito. Esqueletos de los 4 crates creados.
 - **2026-05-25 (tarde):** Las 4 fases en código y compilando. Examples:

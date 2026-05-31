@@ -53,3 +53,20 @@ El widget es **sin estado** (estilo Llimphi): el `Model` del host lleva qué
 menú está abierto y la lista de tarjetas flotantes; el widget aplana la
 `Surface` y emite `Msg`. El dock soporta tear-off (grip ⤢ desprende un ítem
 como tarjeta flotante; la × la cierra — `on_close` en el spec).
+
+## Estado (2026-05-31)
+
+### Hecho
+- Render de `Surface` (barras/dock/menú global/flotantes) a `View<Msg>`.
+- Binario `gioser-launcher` real: siembra + discovery de apps (`AppRegistry`),
+  carga de `launcher.toml`, lanzamiento por `ProcessLauncher`.
+- Módulos vivos del host (`clock`/`cpu`/`ram` desde `/proc`, tick 2 s) +
+  dropdown del menú global vía `llimphi-widget-context-menu`.
+- Dock con tear-off cerrable; API `launcher_view`/`launcher_overlay` para
+  montar el launcher en otra app. Consumido por `mirada-launcher-llimphi`.
+
+### Pendiente
+- Persistencia de tear-offs / layout editado por el usuario entre sesiones.
+- `volume`/`brightness` reales (hoy parciales/stub).
+- Empaquetado como sesión de escritorio (greeter → launcher).
+- Render del mismo `Surface` en el compositor de wawa.

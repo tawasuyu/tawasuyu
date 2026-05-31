@@ -65,6 +65,25 @@ cargo run --release -p pluma-notebook-app
 | [`pluma-notebook-graph-llimphi`](pluma-notebook-graph-llimphi/README.md) | Vista grafo del notebook (celdas como nodos). |
 | [`pluma-notebook-app`](pluma-notebook-app/README.md) | Binario del notebook. |
 
+## Estado (2026-05-31)
+
+### Hecho
+
+- Núcleo de documento vivo: `pluma-core`/`pluma-cuerpo`/`pluma-graph` (DAG de átomos con ids estables) + `pluma-graph-transform` + `pluma-store` (sled).
+- Transformaciones puras: `pluma-transform` + `pluma-transform-llm` (resumir/traducir) + `pluma-transform-tabla`, con diff visible y reversible.
+- Fachada LLM `pluma-llm` con autodetect + backends anthropic/gemini/cohere/openai-compatible/mock.
+- Alineación texto-texto (`pluma-align`) + por embeddings (`pluma-align-embeddings`) + anotaciones semánticas (`pluma-semantic`).
+- Editor visual `pluma-editor-llimphi` + binario `pluma-app`; reader web `pluma-md-reader-web`.
+- Notebook: `pluma-notebook-core`/`-exec`/`-store` + UI `pluma-notebook-llimphi` + vista grafo `pluma-notebook-graph-llimphi` + binario. Kernels reales: LLM, cosmos, dominium, media, tinkuy.
+- Deck: `pluma-deck-core`/`-web` + modo Recorrido tipo Prezi (`pluma-deck-recorrido-llimphi`) con autoría completa, persistencia (postcard), camino narrativo visible, modo presentador (autoplay/bucle) y undo/redo; binario `pluma-deck`.
+- Menú principal + menús contextuales cableados en las apps.
+
+### Pendiente
+
+- `pluma-notebook-kernel-python` (RustPython) y `-wasm` (wasmi): cimientos funcionando; falta el camino WASM-AOT cranelift completo y librerías nativas.
+- Puente `foreign-docx`: import/export DOCX aún parcial; resto de la familia `foreign-*` (xlsx/pptx/psd) no en disco.
+- Deuda del deck: split de tullpu + `Camara` (ver PLAN §6.sexies).
+
 ## Consideraciones
 
 - **El LLM no escribe; transforma.** No hay "modo redacción libre" — cada llamada devuelve una mutación atómica que el usuario aprueba o rechaza.

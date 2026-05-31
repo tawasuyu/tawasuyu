@@ -37,3 +37,32 @@ cargo run --release -p nakui-explorer-llimphi
 - **Sin `f64`**. `Decimal` exacto en todo el motor; los formatos numéricos viven en la vista, no en el dato.
 - **WAL antes que mutar**: cada operación pasa por log; el dato en memoria sólo cambia cuando el WAL se sincronizó.
 - **No es Excel.** No buscamos compatibilidad de fórmulas con XLSX; los formularios y el grafo son first-class, no addons.
+
+## Estado (2026-05-31)
+
+### Hecho
+
+- Motor `nakui-sheet`: modelo de celdas/valores (`cell.rs`, `value.rs`),
+  grafo de dependencias (`graph.rs`), cascada reactiva y workbook
+  (`sheet.rs`, `workbook.rs`), I/O CSV (`csv_io.rs`) y sinks (`sink.rs`).
+- Parser de fórmulas + catálogo de funciones por categoría
+  (`formula/`, splitteado desde el megafile `funcs.rs` de ~1.9k LOC).
+- `nakui-core`: motor de tokens/schema/DAG con cascada y WAL (base de las
+  tres vistas).
+- Bridge `nakui-sheet-nakuicore` entre la vista matriz y el motor de tokens.
+- UI Llimphi viva: `nakui-sheet-llimphi` (matriz), `nakui-ui-llimphi`
+  (shell + selector de vista), `nakui-explorer-llimphi` (grafo de morfismos
+  con zoom + fit-to-view). Menús principal y contextual de edición añadidos.
+- Métricas/desgloses: SumBySeries multi-serie, columnas apiladas, running
+  total, tesorería (saldo acumulado), count_distinct, labels legibles.
+- Megafiles de los binarios Llimphi (~2k LOC) splitteados en módulos.
+
+### Pendiente
+
+- Consolidar la vista **formulario** (record único guiado por `view_hint`)
+  con paridad funcional frente a matriz y grafo.
+- Editor de fórmulas en la matriz Llimphi con autocompletado y errores inline.
+- Cerrar persistencia WAL end-to-end desde la UI (`$XDG_DATA_HOME/nakui/`).
+- Time-travel navegable desde la interfaz (historial inmutable expuesto).
+- Avanzar hacia el meta-modelo de verticales (Fintech, IAM, Logística,
+  MedTech) sobre el motor de tokens.

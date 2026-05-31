@@ -64,3 +64,34 @@ cargo run --release -p cosmos-server
 - **Cero ejecución cliente con datos sensibles del usuario.** Latitud/longitud nunca dejan el binario sin permiso.
 - Los DE files se descargan **explícitamente** vía `cosmos-cli download`.
 - Astrología es separable: si no la querés, no enlazás `cosmos-astrology`.
+
+## Estado (2026-05-31)
+
+### Hecho
+
+- Suite astrométrica madura: tiempo IAU, coordenadas, efemérides JPL DE,
+  reducción topocéntrica, catálogos, WCS, salida/puesta, tránsitos, eclipses,
+  reloj de sol, mareas, órbitas LEO — validada contra Horizons/AstroPy
+  (`cosmos-validation`).
+- Refactor astrométrico puro consolidado: `cosmos-{ephemeris,skywatch,sundial,
+  tides,transits}` extraídos del motor astrológico (`cosmos-engine`).
+- Megafiles >1.5k LOC splitteados en módulos (`cosmos-images` xisf/fits,
+  `cosmos-render` sphere3d, `cosmos-coords` topocentric, `cosmos-engine` bridge).
+- App de escritorio `cosmos-app-llimphi`: shell profesional de 3 zonas
+  redimensionables (datos | gráfica | herramientas), menú principal + menús
+  contextuales, pestañas y gráficas astronómicas.
+- Árbol de datos jerárquico (grupos → contactos → cartas) sobre SQLite
+  (`cosmos-store`) con esfera 3D viva.
+- CRUD completo del árbol desde la UI: crear/renombrar inline/eliminar
+  (borrado recursivo) y menú Archivo › Guardar/Duplicar/Eliminar contra el
+  store.
+- `cosmos-cli` y `cosmos-server` (REST) operativos; bindings WASM (`cosmos-web`).
+
+### Pendiente
+
+- Cerrar el ciclo de edición de cartas en la UI (formularios de datos natales
+  ricos, no sólo nombre).
+- Visualizaciones astrológicas avanzadas (ruedas de aspectos, tránsitos
+  animados) en el canvas Llimphi.
+- Ampliar cobertura de `cosmos-validation` a los núcleos recién extraídos.
+- Pulir `cosmos-card` y los kernels de notebook como vistas embebibles.

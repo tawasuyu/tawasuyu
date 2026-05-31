@@ -164,6 +164,31 @@ Total al 2026-05-28: **130+ tests verdes**.
 | `RingBuffer` con `revision` u64 | Permite a los backends invalidar texturas cacheadas sin diff por valor. Mismo patrón en `HeatmapMatrix`. |
 | Painters dibujan ABSOLUTO en pixels del scene | Composición vía `View::paint_with`: el caller pasa `PaintRect` y el painter no necesita conocer transformations. |
 
+## Estado (2026-05-31)
+
+### Hecho
+
+- Catálogo cerrado: 14 crates viz/render/export (core, render, cartesian,
+  polar, mesh, treemap, phosphor, flow, heatmap, stream, financial,
+  hexbin, contour, umbrella) + export SVG/PNG/PDF + 11 demos ejecutables.
+- Algoritmos de grafo: Fruchterman-Reingold + Barnes-Hut O(n log n),
+  Sugiyama-lite layered, FDEB-lite para bundling.
+- Backends en producción: vello/llimphi (`SceneCanvas`), SVG vectorial,
+  PNG raster con AA 2×2, PDF writer propio (+ decimación LTTB contextual).
+- **GPU directo wgpu** (`GpuSceneCanvas`, Fase 4): mismo trait `Canvas`
+  sobre `llimphi-raster::GpuBatch`; pinta en `View::gpu_paint_with`.
+  Validado en Iris Xe (11.76×@1M, 141 fps).
+- Menú principal + contextual cableados en las 11 demos.
+- 130+ tests verdes.
+
+### Pendiente
+
+- Primera visualización densa real que ejercite `GpuSceneCanvas`
+  (candidata: cosmos starfield) — el camino GPU ya existe, falta el caso.
+- Texto y AA fino en el camino GPU (limitación documentada del backend).
+- El techo de >1M primitivos por frame en vello es horizontal de
+  `llimphi-raster`, no de pineal.
+
 ## 9. Roadmap
 
 El catálogo de pineal está cerrado: 14 crates de viz/render/export

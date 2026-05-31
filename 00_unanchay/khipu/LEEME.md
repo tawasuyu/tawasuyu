@@ -55,6 +55,22 @@ Para compartir en vivo sin copiar archivos: `publicar` levanta un servidor TCP q
 
 La lógica vive en `khipu-share`: `net` (transporte TCP) y `discovery` (baliza UDP). 15 tests + un test de integración que recorre la cadena completa descubrir→jalar→verificar en loopback.
 
+## Estado (2026-05-31)
+
+### Hecho
+
+- `khipu-core` (modelo de nota + store) + `khipu-gravity` (masa/decay con refuerzo por acceso).
+- `khipu-app`: UI Llimphi sobre el core, con menú principal y contextual.
+- Gravedad semántica: clustering por embeddings del `verbo-daemon` (rimay), con fallback trigram 16d offline; cálculo en worker que no bloquea la UI.
+- Compartir vía agora (`khipu-share`): sobres firmados Ed25519 + direccionados BLAKE3, identidad cifrada (Argon2id + ChaCha20-Poly1305 en keystore), compartir selectivo + procedencia del autor; transporte TCP/LAN + descubrimiento por baliza UDP (15 tests + integración loopback).
+- WAN/P2P (`khipu-brahman` sobre libp2p/BrahmanNet): stream cifrado Noise, NAT traversal (Circuit Relay v2 + DCUtR), AutoNAT, descubrimiento por DHT Kademlia (4 tests e2e localhost).
+
+### Pendiente
+
+- Sincronización bidireccional / resolución de conflictos entre cuadernos (hoy es import unidireccional de sobres).
+- Transferir física temporal opcional al compartir (hoy el contenido nace fresco en el receptor — decisión de diseño, no bug).
+- Endurecimiento de la malla DHT en WAN real (probado en localhost/LAN).
+
 ## Consideraciones
 
 - **No es un sistema de "todo"** — no hay due-dates ni recordatorios; es un cuaderno con física propia.

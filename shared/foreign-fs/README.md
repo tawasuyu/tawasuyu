@@ -126,3 +126,18 @@ Falta la pieza bare-metal/QEMU (el autor corre la imagen):
 Relacionado: el driver de bloque para hierro real (AHCI/NVMe) y el instalador
 USB son la fase 4 de la visión —el salto más caro—, y el punto donde la
 absorción in-cage se vuelve útil sobre un USB físico.
+
+## Estado (2026-05-31)
+
+### Hecho
+- Lectores `no_std` de FAT12/16/32 y ext2/3/4 sobre bytes crudos (sin montar),
+  tras el trait `Fuente`; tabla de particiones GPT/MBR + autodetección de FS.
+- Absorbedor con memoria acotada (ventanas de 256 KiB) byte-idéntico a
+  `agora-cli wawa importar`; validado en `wasm32-unknown-unknown`.
+- 12 tests, incluido stress ext4 (multi-grupo, dir multi-bloque, multi-MiB).
+
+### Pendiente
+- Sólo-lectura: no escribe, no repara, no verifica checksums.
+- NTFS / btrfs ausentes (la prioridad es Linux→wawa).
+- Pieza bare-metal: `sys_dispositivo_leer` + app WASM `absorbedor` in-cage (⬜).
+- Discos 4Kn y htree-index sin cobertura directa.

@@ -73,6 +73,39 @@ Meta: editar fuerzas y escenas como grafo Llimphi.
 - **F3** ✅ Syscall `sys_tinkuy_sim_positions(slot, out_ptr, cap_count) -> i32` gateada por `PERMISO_TINKUY`. Toma el AoS del kernel, lo trunca a `min(n_real, cap_count, MAX_PARTICULAS_VIZ)` y lo copia byte a byte a la memoria de la app con limites `rango()` verificados.
 - **F4** ✅ Testigo gana un visor 3D axonométrico (proyección `(x + 0.6z, y + 0.4z)` — la misma de `tinkuy-llimphi::visor`). Painter's algorithm con `depth_key = z + 0.3·x`, insertion-sort sobre índices `[u8; 64]` (zero-alloc), wireframe del cubo `[-50, +50]^3` (12 aristas, Bresenham), partículas como discos de 3 px coloreados por `z` (lerp azul→rojo). Layout 480×240: panel izquierdo con step/T/KE/CID+barra; panel derecho con el visor 228×184 + borde. `testigo.wasm` se sella a 7.01 KiB.
 
+## Estado (2026-05-31)
+
+### Hecho
+
+- **Las 5 capas del roadmap están cerradas** (B–F, ver detalle arriba):
+  motor Rust DOD, ABI WASM, DSL matemático, nodos visuales y visor 3D.
+- Motor `tinkuy-core`: ECS SoA alineado a 64 B, Grid3D con listas intrusivas,
+  Velocity-Verlet paralelo (rayon), walls reflectivas, observables (KE/T/Σp),
+  snapshots BLAKE3 con `restore_into` bit-exacto. Backend `wasm` single-thread.
+- `tinkuy-forces`: Lennard-Jones + Coulomb con neighbor-list 27-celdas +
+  `DslForce` enchufable.
+- `tinkuy-abi`: superficie plana C-friendly (12 exports `tk_*`, incl.
+  `tk_sim_positions`); cdylib WASM de ~30 KiB empotrado en el kernel Wawa con
+  syscalls `sys_tinkuy_*` gateadas por `PERMISO_TINKUY`. App `testigo` con
+  visor 3D axonométrico in-kernel.
+- `tinkuy-dsl` (`#![no_std]`): lexer + parser Pratt → AST → bytecode +
+  optimizer (const-fold + simplificaciones); ejemplos `.tnk` con tests.
+- `tinkuy-llimphi`: tiles draggables, grafo de fuerzas visual → bytecode,
+  visor 3D (`paint_with`), rewind por click sobre el ring de CIDs;
+  menú principal + contextual.
+- Kernel de notebook `pluma-notebook-kernel-tinkuy` (celda `tinkuy-lj` → PNG +
+  observables + CID, renderer headless propio).
+- `cargo check --workspace` y target `wasm32-unknown-unknown --features wasm`
+  verdes.
+
+### Pendiente
+
+- Paralelizar `DslForce::apply` no se justifica hoy (bench D4); reabrir sólo si
+  N crece o el DSL se vuelve fast-path. CSE / expansión `pow(_,6n)` queda fuera.
+- Escenas y condiciones iniciales editables desde el DSL/grafo (más allá de LJ).
+- Subir el techo de partículas del visor in-kernel (hoy `MAX_PARTICULAS_VIZ`).
+- Más fuerzas en el catálogo (Hooke nativo, ángulos/torsiones) si lo pide un caso.
+
 ## Reglas vivas
 
 - Capas estrictamente secuenciales — no abrir D antes de cerrar C, ni E antes de D.

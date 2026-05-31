@@ -108,13 +108,25 @@ wawa-config: preferencias (theme/lang) compartidas con el monorepo; watcher reac
 minga    : card-discovery (en minga) es el widget de descubrimiento de Cards consumido por nahual-shell.   ← NEXO BRAHMAN
 ```
 
+## Estado (2026-05-31)
+
+### Hecho
+- 11 visores en-proceso (Text/Image/Video/Audio/Card/Tree/Hex/Table/Markdown/Archive/Font), cada uno 200–600 LOC, bajo acoplamiento.
+- Shell con split draggable, navegación por teclado (↑↓ Enter Backspace Space) y despacho por contenido (no extensión) vía `shuma-discern` → `viewer_registry::pick`.
+- Galería de miniaturas (`nahual-gallery-llimphi`): `thumb-core` (generación + cache en disco + planificador), fast-path EXIF embebido, orientación EXIF, zoom de grilla, eviction RAM, badge de tamaño, slideshow, ordenamiento, preview a tamaño completo.
+- Espina del front universal: trait `Source` + 4 adapters (POSIX, wawa-image, NouserSource/Mónadas, MingaSource/DAG de AST); el shell monta nouser y minga por atajo.
+- Render vectorial directo en el font viewer; GIF reusa el video viewer sin crate nuevo. Menú principal + contextual en las vitrinas.
+
+### Pendiente
+- PDF: detectado por `shuma` pero sin rasterizador puro-Rust en el workspace → cae a Text (BLOQUEADO).
+- SVG: stub (1 LOC), en construcción.
+- Deck (presentaciones), seek/scrub real en video/audio (hoy sólo play/pausa), play por click.
+- AppBus / registro dinámico: hoy el `viewer_registry` es hardcode in-process; sin visores out-of-process registrados por `(lens, mime, priority)`.
+- Libs `meta-schema`/`meta-runtime` presentes pero aún NO consumidas por el shell (reservadas para visores data-driven en JSON).
+
 ## Estado vs aspiración
 
 ```
-HECHO (2026-05-30): 11 visores en-process · shell con split draggable · nav teclado (↑↓ Enter Backspace Space) ·
-  detección por contenido robusta · render vectorial directo (font) · reuso elegante (GIF anima en video sin crate nuevo).
-  MVP feo-primero: sin layout.json, sin persister, sin AppBus, sin hot-reload.
-
 ASPIRA_A:
   - PDF (bloqueado por rasterizador) · SVG (WIP) · Deck · seek/scrub · play por click.
   - AppBus / EntityType: visores FUERA-DE-PROCESO que se registran con (lens, mime, priority);

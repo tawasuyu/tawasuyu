@@ -37,6 +37,25 @@ El contrato — *sombra ≡ transpilado ≡ `.expected` verificado a mano* — s
 cargo test -p chaka-app --test corpus_e2e --release -- --ignored
 ```
 
+## Estado (2026-05-31)
+
+### Hecho
+
+- Pipeline completo `lexer → parser → ir → codegen` (8 subcrates: app/lexer/parser/ir/codegen/runtime/bcd/shadow) — fases F0-F3 cerradas.
+- Statements: `MOVE`, `IF`, `PERFORM`, `CALL`, `SEARCH`, `SORT/MERGE`, `REWRITE/DELETE/START`, `COPY`, `INSPECT`, `SET`.
+- `chaka-bcd`: aritmética decimal con semántica COBOL + codec packed-decimal (`COMP-3`).
+- `chaka-shadow`: intérprete en proceso + harness GnuCOBOL para diff diferencial; target JSON además de Rust.
+- Corpus de ~51 fixtures + test diferencial e2e (`chaka-app/tests/corpus_e2e.rs`).
+- UI de escritorio sobre Llimphi (`chaka-app-llimphi`): corpus + editor + sombra + Rust generado en vivo, con menú principal y contextual (la nota histórica «CLI-only» de §Fuera de alcance quedó superada).
+
+### Pendiente
+
+- Dialectos no-COBOL: sólo `Cobol` está implementado (enum `Dialect` enchufado).
+- Target WASM (`chaka-codegen`) + sandbox WASM (`chaka-runtime`), bloqueados por rework `no_std`.
+- Directiva `REPLACE` (hoy se descarta con un comentario).
+- Organizaciones de fichero indexada/relativa: `START`/`REWRITE`/`DELETE` son no-op sobre line-sequential.
+- COBOL CICS y SQL embebido.
+
 ## Fuera de alcance (v1)
 
 - Dialectos no-COBOL: el enum `Dialect` queda enchufado en `chaka-lexer` pero sólo `Cobol` tiene implementación.

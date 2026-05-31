@@ -217,3 +217,15 @@ es la cara de lectura del Engine.
 5. **Wawa no importa `sandokan` ni `card_core::Card`.** Comparte sólo `format`
    (no_std) + DAG.
 6. El **monitor observa por el contrato**, nunca por un canal paralelo.
+
+## Estado (2026-05-31)
+
+### Hecho
+- Crates del plano de control: `sandokan-core` (contrato `Engine` { run, stop, list, status, telemetry } + intent/event/error), `sandokan-lifecycle` (Backoff, RestartPolicy, RestartTracker, LifecycleState, quota, ttl), `sandokan-local` (LocalEngine no-PID1), `sandokan-daemon` (DaemonEngine + protocolo wire), `sandokan-remote` (RemoteEngine vía SSH socket-forward), `sandokan` umbrella (`Engine::auto()`), `sandokan-app` (CLI de prueba).
+- Dedup #1 ✅ (backoff unificado: `arje-zero` adopta `sandokan_lifecycle::Backoff`). Dedup #3 ✅ núcleo (`arje-bus` gana `EnteStatus`/`EnteTelemetry`; el control viaja por el bus del init). Dedup #2 ✅ vía bridge (`sandokan-arje-engine` implementa `Engine` hablando arje-bus a arje-zero, que queda bus-native).
+- Process monitor: `sandokan-monitor-core` ✅ (Fase 1, `observe(&dyn Engine) -> MonitorSnapshot`, cara de sólo-lectura agnóstica de transporte) + restarts visibles end-to-end ✅ (Fase 2/3, `↻N` en `arje-card-llimphi`).
+
+### Pendiente
+- Cleanup: deprecar/borrar el socket propio de `sandokan-daemon` (redundante con arje-bus, sin consumidores); soportar `RunCard{card}` arbitraria (hoy `run` mapea a `SpawnCardFromDisk{name}` store-based).
+- `RestartTracker::count` en `LocalEngine` (hoy restarts = 0 fuera de PID 1).
+- Monitor Fase 4 (lado Wawa): leer censo del executor + balizas del compositor — pieza futura, fuera de `sandokan-monitor-core`.
