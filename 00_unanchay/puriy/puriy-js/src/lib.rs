@@ -12453,4 +12453,92 @@ mod tests {
         assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
     }
 
+    // ---- Fase 7.153 — Geometry Interfaces ----
+    #[test]
+    fn geometry_dompoint_y_rect() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new DOMPoint(1, 2, 3); p.x = 10;").expect("e");
+        assert_eq!(rt.eval("p.x").expect("e"), JsValue::Number(10.0));
+        assert_eq!(rt.eval("p.w").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("new DOMPointReadOnly(5).x").expect("e"), JsValue::Number(5.0));
+        // DOMRect: width negativo → left/right normalizan.
+        rt.eval("var r = new DOMRect(10, 20, -5, 8);").expect("e");
+        assert_eq!(rt.eval("r.left").expect("e"), JsValue::Number(5.0));
+        assert_eq!(rt.eval("r.right").expect("e"), JsValue::Number(10.0));
+        assert_eq!(rt.eval("r.bottom").expect("e"), JsValue::Number(28.0));
+        assert_eq!(rt.eval("DOMRectReadOnly.fromRect({x:1,y:2,width:3,height:4}).top").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn geometry_matrix_identidad_y_translate() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var m = new DOMMatrix();").expect("e");
+        assert_eq!(rt.eval("m.isIdentity").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("m.is2D").expect("e"), JsValue::Bool(true));
+        rt.eval("var t = m.translate(5, 7);").expect("e");
+        assert_eq!(rt.eval("t.e").expect("e"), JsValue::Number(5.0));
+        assert_eq!(rt.eval("t.f").expect("e"), JsValue::Number(7.0));
+        assert_eq!(rt.eval("t.m41").expect("e"), JsValue::Number(5.0));
+        // El original no muta (translate es no-Self).
+        assert_eq!(rt.eval("m.isIdentity").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn geometry_matrix_multiply_y_transform_point() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // translate(10,20) luego scale(2): un punto (1,1) → (10+2, 20+2) = (12, 22).
+        rt.eval("var m = new DOMMatrix().translateSelf(10, 20).scaleSelf(2); var p = m.transformPoint(new DOMPoint(1, 1));").expect("e");
+        assert_eq!(rt.eval("p.x").expect("e"), JsValue::Number(12.0));
+        assert_eq!(rt.eval("p.y").expect("e"), JsValue::Number(22.0));
+        // a === m11, c === m21, e === m41 (mismo backing).
+        rt.eval("var n = new DOMMatrix(); n.a = 3;").expect("e");
+        assert_eq!(rt.eval("n.m11").expect("e"), JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn geometry_matrix_inverse() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // inverse de translate(5,7) deshace la traslación.
+        rt.eval("var m = new DOMMatrix().translateSelf(5, 7); var inv = m.inverse(); var id = m.multiply(inv);").expect("e");
+        assert_eq!(rt.eval("Math.round(id.e * 1e6) / 1e6").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("Math.round(id.f * 1e6) / 1e6").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("id.isIdentity").expect("e"), JsValue::Bool(true));
+        // Matriz singular (scale 0) → inversa con NaN.
+        rt.eval("var s = new DOMMatrix().scaleSelf(0).inverse();").expect("e");
+        assert_eq!(rt.eval("Number.isNaN(s.a)").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn geometry_matrix_from_array_y_float32() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // Array de 6 → matriz 2D afín.
+        rt.eval("var m = new DOMMatrix([1, 0, 0, 1, 30, 40]);").expect("e");
+        assert_eq!(rt.eval("m.e").expect("e"), JsValue::Number(30.0));
+        assert_eq!(rt.eval("m.is2D").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("m.toFloat32Array().length").expect("e"), JsValue::Number(16.0));
+        assert_eq!(rt.eval("m.toFloat32Array()[12]").expect("e"), JsValue::Number(30.0));
+        // toString 2D.
+        assert_eq!(rt.eval("new DOMMatrix().toString()").expect("e"),
+                   JsValue::String("matrix(1, 0, 0, 1, 0, 0)".into()));
+    }
+
+    #[test]
+    fn geometry_quad_y_bounds() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var q = DOMQuad.fromRect({x: 10, y: 20, width: 30, height: 40}); var b = q.getBounds();").expect("e");
+        assert_eq!(rt.eval("q.p3.x").expect("e"), JsValue::Number(40.0));
+        assert_eq!(rt.eval("b.x").expect("e"), JsValue::Number(10.0));
+        assert_eq!(rt.eval("b.width").expect("e"), JsValue::Number(30.0));
+        assert_eq!(rt.eval("b instanceof DOMRect").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn geometry_canvas_get_transform_es_dommatrix() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new OffscreenCanvas(10, 10).getContext('2d'); ctx.translate(5, 7); var m = ctx.getTransform();").expect("e");
+        assert_eq!(rt.eval("m instanceof DOMMatrix").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("m.e").expect("e"), JsValue::Number(5.0));
+        assert_eq!(rt.eval("m.is2D").expect("e"), JsValue::Bool(true));
+    }
+
 }

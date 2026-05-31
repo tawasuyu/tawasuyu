@@ -106,6 +106,7 @@ mod mediarecorder;
 mod mse;
 mod eme;
 mod mediacapabilities;
+mod geometry;
 mod canvas2d;
 mod webgl;
 mod fontface;
@@ -215,6 +216,7 @@ pub(crate) use mediarecorder::MEDIARECORDER_BOOTSTRAP;
 pub(crate) use mse::MSE_BOOTSTRAP;
 pub(crate) use eme::EME_BOOTSTRAP;
 pub(crate) use mediacapabilities::MEDIACAPABILITIES_BOOTSTRAP;
+pub(crate) use geometry::GEOMETRY_BOOTSTRAP;
 pub(crate) use canvas2d::CANVAS2D_BOOTSTRAP;
 pub(crate) use webgl::WEBGL_BOOTSTRAP;
 pub(crate) use fontface::FONTFACE_BOOTSTRAP;
@@ -326,6 +328,7 @@ pub(crate) const ALL: &[&str] = &[
     MSE_BOOTSTRAP,
     EME_BOOTSTRAP,
     MEDIACAPABILITIES_BOOTSTRAP,
+    GEOMETRY_BOOTSTRAP,
     CANVAS2D_BOOTSTRAP,
     WEBGL_BOOTSTRAP,
     FONTFACE_BOOTSTRAP,

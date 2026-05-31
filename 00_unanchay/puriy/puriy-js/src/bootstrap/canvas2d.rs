@@ -184,6 +184,7 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     C.resetTransform = function() { this._state.transform = [1, 0, 0, 1, 0, 0]; this._rec('resetTransform'); };
     C.getTransform = function() {
         var t = this._state.transform;
+        if (globalThis.DOMMatrix) return new globalThis.DOMMatrix([t[0], t[1], t[2], t[3], t[4], t[5]]);
         return { a: t[0], b: t[1], c: t[2], d: t[3], e: t[4], f: t[5],
                  m11: t[0], m12: t[1], m21: t[2], m22: t[3], m41: t[4], m42: t[5],
                  is2D: true, isIdentity: t[0] === 1 && t[1] === 0 && t[2] === 0 && t[3] === 1 && t[4] === 0 && t[5] === 0 };
