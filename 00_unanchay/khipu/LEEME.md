@@ -49,7 +49,9 @@ Para compartir en vivo sin copiar archivos: `publicar` levanta un servidor TCP q
 
 **WAN / libp2p**: el campo de dirección de `recibir` acepta dos formas, autodetectadas: `host:puerto` (TCP directo) o una **multiaddr libp2p** —directa `/ip4/…/p2p/<id>` o de circuito `/ip4/…/p2p/<relay>/p2p-circuit/p2p/<id>`. Al `publicar`, khipu sirve por libp2p (stream cifrado Noise sobre `BrahmanNet`, protocolo `/khipu/sobre/1.0.0`, vía `khipu-brahman`) y muestra tu dirección de marcado.
 
-**NAT traversal**: `BrahmanNet` ahora trae **Circuit Relay v2 + DCUtR** (`card-net`). Un nodo alcanzable hace de relay; uno detrás de NAT reserva un circuito ahí y queda accesible vía la dirección de circuito. Configurá `KHIPU_RELAY=/ip4/…/tcp/…/p2p/<relay-id>` antes de `publicar` y khipu reserva el circuito y muestra la dirección para compartir. Verificado end-to-end en localhost (relay + dos pares, 3 tests en `khipu-brahman`). La dirección externa se aprende del `observed_addr` de identify (lo principista sería AutoNAT, pendiente).
+**NAT traversal**: `BrahmanNet` ahora trae **Circuit Relay v2 + DCUtR** (`card-net`). Un nodo alcanzable hace de relay; uno detrás de NAT reserva un circuito ahí y queda accesible vía la dirección de circuito. Configurá `KHIPU_RELAY=/ip4/…/tcp/…/p2p/<relay-id>` antes de `publicar` y khipu reserva el circuito y muestra la dirección para compartir. La dirección externa se aprende del `observed_addr` de identify (lo principista sería AutoNAT, pendiente).
+
+**Descubrimiento por DHT**: con `KHIPU_BOOTSTRAP=/ip4/…/p2p/<id>` (un nodo de la malla), khipu se une a la DHT Kademlia al arrancar; `publicar` se anuncia bajo la clave khipu y `recibir` lista —además de los pares LAN— los pares hallados por DHT (filas `DHT · …<id>`), que se jalan por peer-id. Así dos khipu se encuentran sin compartir IP ni multiaddr a mano, sólo conociendo un bootstrap común. Verificado end-to-end en localhost (rendezvous + publicador + receptor; 4 tests en `khipu-brahman`).
 
 La lógica vive en `khipu-share`: `net` (transporte TCP) y `discovery` (baliza UDP). 15 tests + un test de integración que recorre la cadena completa descubrir→jalar→verificar en loopback.
 

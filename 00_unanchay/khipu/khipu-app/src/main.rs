@@ -294,6 +294,11 @@ impl App for KhipuApp {
             .ok()
             .and_then(|p| unlock_identity(&p));
         model.theme = Theme::dark();
+        // Con bootstrap configurado, arrancamos el nodo libp2p ya, para que
+        // la malla DHT esté caliente cuando el usuario quiera descubrir.
+        if std::env::var("KHIPU_BOOTSTRAP").is_ok() {
+            ensure_p2p(&mut model);
+        }
         // Elegimos la primera nota más pesada (decayendo on-the-fly);
         // si todo el cuaderno está en archivo, caemos al orden de
         // inserción para no abrir vacío.
@@ -382,27 +387,43 @@ impl App for KhipuApp {
                     model.peer_input.set_text(peer_addr());
                 }
                 model.focus = Focus::PeerAddr;
-                model.status = Some("buscando pares en la LAN… o escribí una dirección".into());
-                // El descubrimiento bloquea ~3s: va a un worker y reentra
-                // con la lista de pares (ya sin uno mismo).
+                model.status = Some("buscando pares (LAN + DHT)… o escribí una dirección".into());
+                // Si hay nodo libp2p (bootstrap configurado), también
+                // consultamos la DHT; lo capturamos para el worker.
+                let dht = model.p2p.as_ref().map(|p| (p.rt.clone(), p.node.clone()));
+                // El descubrimiento bloquea: va a un worker y reentra con la
+                // lista de pares (LAN por UDP + DHT por libp2p, sin uno mismo).
                 h.spawn(move || {
-                    let pares = khipu_share::discovery::descubrir(
-                        std::time::Duration::from_secs(3),
-                    )
-                    .unwrap_or_default();
-                    let infos: Vec<PeerInfo> = pares
-                        .into_iter()
-                        .filter(|p| Some(p.beacon.author) != my_key)
-                        .map(|p| PeerInfo {
-                            addr: p.fetch_addr.to_string(),
-                            label: format!(
-                                "{} · de:{} · {}",
-                                p.beacon.name,
-                                khipu_share::hex8(&p.beacon.author),
-                                p.fetch_addr
-                            ),
-                        })
-                        .collect();
+                    let mut infos: Vec<PeerInfo> =
+                        khipu_share::discovery::descubrir(std::time::Duration::from_secs(3))
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|p| Some(p.beacon.author) != my_key)
+                            .map(|p| PeerInfo {
+                                addr: p.fetch_addr.to_string(),
+                                label: format!(
+                                    "LAN · {} · de:{} · {}",
+                                    p.beacon.name,
+                                    khipu_share::hex8(&p.beacon.author),
+                                    p.fetch_addr
+                                ),
+                            })
+                            .collect();
+                    if let Some((rt, node)) = dht {
+                        let me = node.peer_id();
+                        for pid in rt.block_on(node.descubrir()) {
+                            if pid == me {
+                                continue;
+                            }
+                            let s = pid.to_string();
+                            let corto: String = s.chars().rev().take(8).collect::<Vec<_>>()
+                                .into_iter().rev().collect();
+                            infos.push(PeerInfo {
+                                label: format!("DHT · …{corto}"),
+                                addr: s,
+                            });
+                        }
+                    }
                     Msg::PeersFound(infos)
                 });
             }
@@ -429,25 +450,33 @@ impl App for KhipuApp {
                 model.receiving = false;
                 model.peers.clear();
                 model.focus = Focus::None;
-                if addr.trim().starts_with('/') {
-                    // Multiaddr libp2p (`/ip4/.../tcp/.../p2p/<id>`): vía
-                    // khipu-brahman. Arma el nodo si hace falta.
+                let destino = addr.trim().to_string();
+                if destino.starts_with('/') || !destino.contains(':') {
+                    // Vía libp2p: multiaddr (`/ip4/…/p2p/<id>`, incluido
+                    // circuito) o un peer-id pelado (descubierto por DHT).
+                    // Arma el nodo si hace falta.
                     if ensure_p2p(&mut model) {
                         let p = model.p2p.as_ref().expect("p2p recién armado");
                         let (rt, node) = (p.rt.clone(), p.node.clone());
-                        model.status = Some(format!("jalando por libp2p de {addr}…"));
-                        let destino = addr;
-                        h.spawn(move || match rt.block_on(node.fetch_addr_str(&destino)) {
-                            Ok(s) => Msg::Received(Ok(s)),
-                            Err(e) => Msg::Received(Err(format!("p2p: {e}"))),
+                        let es_multiaddr = destino.starts_with('/');
+                        model.status = Some(format!("jalando por libp2p de {destino}…"));
+                        h.spawn(move || {
+                            let res = if es_multiaddr {
+                                rt.block_on(node.fetch_addr_str(&destino))
+                            } else {
+                                rt.block_on(node.fetch_peer_str(&destino))
+                            };
+                            match res {
+                                Ok(s) => Msg::Received(Ok(s)),
+                                Err(e) => Msg::Received(Err(format!("p2p: {e}"))),
+                            }
                         });
                     } else {
                         model.status = Some("no se pudo iniciar el nodo libp2p".into());
                     }
                 } else {
                     // Dirección TCP `host:puerto` (LAN/WAN directa).
-                    model.status = Some(format!("jalando de {addr}…"));
-                    let destino = addr;
+                    model.status = Some(format!("jalando de {destino}…"));
                     h.spawn(move || match khipu_share::net::fetch(&destino) {
                         Ok(s) => Msg::Received(Ok(s)),
                         Err(e) => {
@@ -1903,6 +1932,11 @@ fn ensure_p2p(model: &mut Model) -> bool {
     let dial_addr = rt
         .block_on(node.listen_str("/ip4/0.0.0.0/tcp/0"))
         .unwrap_or_default();
+    // Si hay un nodo bootstrap configurado, nos unimos a la malla DHT para
+    // poder descubrir y ser descubiertos (`anunciar`/`descubrir`).
+    if let Ok(boot) = std::env::var("KHIPU_BOOTSTRAP") {
+        let _ = node.dial_str(&boot);
+    }
     model.p2p = Some(P2p {
         rt: Arc::new(rt),
         node,

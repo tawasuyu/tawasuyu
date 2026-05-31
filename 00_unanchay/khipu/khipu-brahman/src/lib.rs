@@ -185,6 +185,27 @@ impl KhipuNode {
         }
     }
 
+    /// Jala el sobre de un par dado por su **peer-id** como texto (la forma
+    /// que devuelve [`descubrir`](Self::descubrir)). Reintenta mientras el
+    /// swarm establece la conexión usando las direcciones que aprendió por
+    /// la DHT/identify. La app la usa para jalar de un par descubierto.
+    pub async fn fetch_peer_str(&self, peer: &str) -> Result<SignedBundle, BrahmanError> {
+        let pid: PeerId = peer
+            .parse()
+            .map_err(|e| BrahmanError::Nodo(format!("peer-id inválido: {e}")))?;
+        let mut intentos = 0u32;
+        loop {
+            match self.fetch(pid).await {
+                Ok(s) => return Ok(s),
+                Err(_) if intentos < 60 => {
+                    intentos += 1;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /// Abre un stream a `peer` y jala su sobre. **No lo verifica** — el
     /// caller debe pasarlo por [`khipu_share::open`] antes de confiar.
     pub async fn fetch(&self, peer: PeerId) -> Result<SignedBundle, BrahmanError> {

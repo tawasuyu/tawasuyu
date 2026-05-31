@@ -38,6 +38,65 @@ async fn jalar_por_direccion_str_como_la_app() {
     assert_eq!(bundle.notes[0].title, "via str");
 }
 
+/// Descubrimiento por DHT: A publica y se anuncia bajo la clave khipu en
+/// la DHT; B —unido a la malla por un rendezvous— la descubre con
+/// `descubrir()` y le jala el cuaderno por peer-id, sin conocer su
+/// dirección de antemano.
+#[tokio::test]
+async fn descubrir_por_dht_y_jalar() {
+    let autor = Keypair::from_seed([34u8; 32]);
+    let sobre = seal(
+        &autor,
+        vec![SharedNote {
+            title: "via dht".into(),
+            body: "descubierto por la DHT".into(),
+            tags: vec![],
+        }],
+        1,
+    )
+    .unwrap();
+    let bytes = sobre.to_bytes().unwrap();
+
+    // Rendezvous: nodo de la malla al que ambos se conectan.
+    let rendezvous = KhipuNode::standalone().unwrap();
+    let r_addr = rendezvous.listen_str("/ip4/127.0.0.1/tcp/0").await.unwrap();
+
+    // A publica, se une a la malla y se anuncia en la DHT.
+    let a = KhipuNode::standalone().unwrap();
+    let _a_listen = a.listen_str("/ip4/127.0.0.1/tcp/0").await.unwrap();
+    let _serve = a.run_serve(move || Some(bytes.clone()));
+    a.dial_str(&r_addr).unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    a.anunciar();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // B se une por el rendezvous y descubre a A por DHT.
+    let b = KhipuNode::standalone().unwrap();
+    b.dial_str(&r_addr).unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let mut peers = Vec::new();
+    for _ in 0..20 {
+        peers = b.descubrir().await;
+        if peers.contains(&a.peer_id()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(peers.contains(&a.peer_id()), "B debe descubrir a A por DHT");
+
+    // B jala de A por su peer-id (la dirección la aprendió por la DHT).
+    let recibido = tokio::time::timeout(
+        Duration::from_secs(20),
+        b.fetch_peer_str(&a.peer_id().to_string()),
+    )
+    .await
+    .expect("el fetch por peer-id no debería colgar")
+    .expect("recibir por peer-id descubierto");
+    let bundle = open(&recibido).expect("verifica");
+    assert_eq!(bundle.notes[0].title, "via dht");
+}
+
 /// NAT traversal: A reserva un circuito en un relay público y sirve;
 /// B le jala el cuaderno *a través del relay* (Circuit Relay v2), sin
 /// dirección directa a A. Verifica la maquinaria relay/dcutr de card-net.
