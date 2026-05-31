@@ -147,6 +147,28 @@ fn reload_settings() {
     eprintln!("media-app: controles recargados");
 }
 
+/// Vigila `controles.ron` en un hilo aparte: cada segundo compara el mtime
+/// y, si cambió, dispatcha `ReloadConfig` — recarga **automática** sin
+/// tener que apretar F5 (que sigue valiendo como recarga manual). Un poll
+/// liviano sobre un archivo diminuto, sin dependencias de FS-watch ni
+/// debounce. El hilo es daemon: muere con el proceso.
+fn spawn_controles_watcher(handle: &Handle<Msg>) {
+    let Some(path) = controles_path() else { return };
+    let handle = handle.clone();
+    std::thread::spawn(move || {
+        let mtime = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let mut last = mtime(&path);
+        loop {
+            std::thread::sleep(Duration::from_millis(1000));
+            let now = mtime(&path);
+            if now != last {
+                last = now;
+                handle.dispatch(Msg::ReloadConfig);
+            }
+        }
+    });
+}
+
 /// Resuelve el path de un archivo de config de media bajo
 /// `$XDG_CONFIG_HOME/gioser/media/<name>` (o `~/.config/...` si XDG no
 /// está set). Lo comparten `controles.ron` (mapeo de entrada) y
@@ -826,6 +848,21 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         catalog.push(pc);
         cmds.push(cmd);
     }
+    // Scripts Rhai de la biblioteca: descubribles y ejecutables desde el
+    // palette igual que las acciones nativas, agrupados aparte. El hint del
+    // atajo sale del mismo reverse-lookup sobre el keymap vivo.
+    for ns in &s.scripts {
+        let cmd = Script {
+            name: ns.name.clone(),
+        };
+        let id = cmds.len();
+        let mut pc = PaletteCommand::new(id.to_string(), cmd.describe(), "Scripts");
+        if let Some(sc) = shortcut_for(&s.keymap, &cmd) {
+            pc = pc.with_shortcut(sc);
+        }
+        catalog.push(pc);
+        cmds.push(cmd);
+    }
     (catalog, cmds)
 }
 
@@ -913,7 +950,77 @@ fn apply_command(cmd: MediaCommand) {
         }
         Snapshot => do_snapshot(),
         ToggleRecord => toggle_record(),
+        Script { name } => run_script(&name),
     }
+}
+
+/// Ejecuta el script Rhai `name` de la biblioteca de `settings()` contra
+/// la API del reproductor. Es el `MediaCommand::Script` hecho efecto: el
+/// core sólo nombra el script (agnóstico de Rhai), acá se resuelve el
+/// `source`, se compila y se corre sobre el runtime vivo. Falla silenciosa
+/// con log — un script roto o inexistente nunca debe tumbar la app.
+fn run_script(name: &str) {
+    let Some(src) = settings().script(name).map(str::to_string) else {
+        eprintln!("media-app: script «{name}» no existe en controles.ron");
+        return;
+    };
+    let engine = script_engine();
+    if let Err(e) = engine.run(&src) {
+        eprintln!("media-app: script «{name}»: {e}");
+    }
+}
+
+/// Velocidad de reproducción actual (1.0× si no hay playlist). Getter para
+/// la API de scripts.
+fn player_speed() -> f64 {
+    playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .map(|h| h.lock().current_speed() as f64)
+        .unwrap_or(1.0)
+}
+
+/// Arma un motor Rhai con la API del reproductor bindeada. Cada función
+/// reentra a los mismos primitivos que `apply_command` (los slots
+/// globales), así un script compone acciones nativas: `set_volume(1.0);
+/// set_speed(1.25);` o condicionales sobre `is_paused()`. El motor se
+/// construye por ejecución (microsegundos, una tecla es un evento raro) y
+/// lleva una cota de operaciones para que un script no cuelgue la UI.
+fn script_engine() -> rhai::Engine {
+    let mut engine = rhai::Engine::new();
+    engine.set_max_operations(50_000);
+    // Transporte / pausa.
+    engine.register_fn("toggle_pause", || {
+        pause().toggle();
+    });
+    engine.register_fn("pause", || pause().pause());
+    engine.register_fn("resume", || pause().resume());
+    engine.register_fn("is_paused", || pause().is_paused());
+    engine.register_fn("seek", |secs: i64| seek_audio_by(secs));
+    // Volumen.
+    engine.register_fn("volume", || volume().get() as f64);
+    engine.register_fn("set_volume", |level: f64| {
+        volume().update(|_| level as f32);
+    });
+    engine.register_fn("add_volume", |delta: f64| {
+        volume().update(|v| v + delta as f32);
+    });
+    // Velocidad.
+    engine.register_fn("speed", player_speed);
+    engine.register_fn("set_speed", |mult: f64| set_speed_abs(mult as f32));
+    engine.register_fn("step_speed", |dir: i64| step_speed(dir as i32));
+    // Playlist.
+    engine.register_fn("next_track", || apply_command(MediaCommand::NextTrack));
+    engine.register_fn("prev_track", || apply_command(MediaCommand::PrevTrack));
+    engine.register_fn("cycle_repeat", || apply_command(MediaCommand::CycleRepeat));
+    engine.register_fn("toggle_shuffle", || {
+        apply_command(MediaCommand::ToggleShuffle)
+    });
+    // Captura.
+    engine.register_fn("snapshot", do_snapshot);
+    engine.register_fn("toggle_record", toggle_record);
+    engine.register_fn("is_recording", || recorder().is_recording());
+    engine
 }
 
 /// Cicla la velocidad `dir` pasos por `settings().speed_steps` (wrap en
@@ -1153,6 +1260,7 @@ impl App for MediaApp {
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
+        spawn_controles_watcher(handle);
         let (palette_commands, palette_cmds) = build_command_catalog(&settings());
         Model {
             frames: 0,

@@ -51,6 +51,13 @@ pub enum MediaCommand {
     Snapshot,
     /// Arma/cierra una grabación.
     ToggleRecord,
+    /// Ejecuta el script Rhai nombrado de la biblioteca
+    /// [`ControlSettings::scripts`]. Es el escape hatch "más flexible que
+    /// VLC": una secuencia o condición sobre la API del reproductor en vez
+    /// de una sola acción atómica. El core sólo **nombra** el script —
+    /// sigue agnóstico de Rhai (no lo compila ni lo ejecuta); la app lo
+    /// resuelve contra su runtime vivo (ver `run_script` en `media-app`).
+    Script { name: String },
 }
 
 impl MediaCommand {
@@ -74,8 +81,20 @@ impl MediaCommand {
             ToggleShuffle => "Alternar aleatorio".to_string(),
             Snapshot => "Captura de pantalla".to_string(),
             ToggleRecord => "Grabar / detener".to_string(),
+            Script { name } => format!("Script «{name}»"),
         }
     }
+}
+
+/// Un script Rhai con nombre, guardado en la biblioteca de
+/// [`ControlSettings`]. El `source` es un snippet sobre la API del
+/// reproductor que la app bindea (`toggle_pause()`, `seek(s)`,
+/// `set_volume(x)`, `set_speed(x)`, `next_track()`…). Se referencia desde
+/// el keymap o el palette por [`MediaCommand::Script`] usando el `name`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedScript {
+    pub name: String,
+    pub source: String,
 }
 
 /// Una combinación de teclas normalizada, agnóstica de `winit`. `key`
@@ -183,6 +202,25 @@ pub struct ControlSettings {
     pub speed_steps: Vec<f32>,
     /// Mapa de teclas → comandos.
     pub keymap: Keymap,
+    /// Biblioteca de scripts Rhai con nombre, referenciables desde el
+    /// keymap o el palette por [`MediaCommand::Script`]. `#[serde(default)]`:
+    /// un `controles.ron` viejo (sin este campo) sigue cargando con la lista
+    /// vacía — agregar scripting nunca rompe una config existente (mismo
+    /// criterio que el layout en `media-core::layout`).
+    #[serde(default)]
+    pub scripts: Vec<NamedScript>,
+}
+
+impl ControlSettings {
+    /// Devuelve el `source` del script nombrado, si existe en la
+    /// biblioteca. Lo usa la app para resolver un [`MediaCommand::Script`]
+    /// antes de compilarlo y ejecutarlo.
+    pub fn script(&self, name: &str) -> Option<&str> {
+        self.scripts
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.source.as_str())
+    }
 }
 
 impl Default for ControlSettings {
@@ -191,11 +229,19 @@ impl Default for ControlSettings {
         let seek_step_secs = 5;
         let speed_steps = vec![0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
         let keymap = default_keymap(volume_step, seek_step_secs);
+        // Un script de ejemplo: documenta la API disponible en el
+        // `controles.ron` sembrado y deja la feature viva de fábrica
+        // (atado a `b` por `default_keymap`).
+        let scripts = vec![NamedScript {
+            name: "potenciar".to_string(),
+            source: "set_volume(1.0); set_speed(1.25);".to_string(),
+        }];
         ControlSettings {
             volume_step,
             seek_step_secs,
             speed_steps,
             keymap,
+            scripts,
         }
     }
 }
@@ -232,6 +278,12 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             b(KeyChord::key("="), SetSpeed { mult: 1.0 }),
             b(KeyChord::key("c"), ToggleRecord),
             b(KeyChord::shift("s"), Snapshot),
+            b(
+                KeyChord::key("b"),
+                Script {
+                    name: "potenciar".to_string(),
+                },
+            ),
         ],
     }
 }
@@ -333,6 +385,44 @@ mod tests {
             MediaCommand::SetSpeed { mult: 1.0 }.describe(),
             "Velocidad 1.00×"
         );
+    }
+
+    #[test]
+    fn describe_de_script_usa_el_nombre() {
+        assert_eq!(
+            MediaCommand::Script {
+                name: "potenciar".into()
+            }
+            .describe(),
+            "Script «potenciar»"
+        );
+    }
+
+    #[test]
+    fn default_trae_el_script_potenciar_y_lo_bindea_a_b() {
+        let s = ControlSettings::default();
+        assert!(s.script("potenciar").is_some());
+        assert_eq!(s.script("no-existe"), None);
+        assert_eq!(
+            s.keymap.resolve(&KeyChord::key("b")),
+            Some(&MediaCommand::Script {
+                name: "potenciar".into()
+            })
+        );
+    }
+
+    #[test]
+    fn controles_sin_scripts_carga_con_lista_vacia() {
+        // Backward-compat: un RON viejo sin el campo `scripts` debe
+        // deserializar con la biblioteca vacía, no fallar.
+        let viejo = r#"ControlSettings(
+            volume_step: 0.1,
+            seek_step_secs: 5,
+            speed_steps: [1.0],
+            keymap: Keymap(bindings: []),
+        )"#;
+        let s: ControlSettings = ron::from_str(viejo).expect("deserializa sin scripts");
+        assert!(s.scripts.is_empty());
     }
 
     #[test]

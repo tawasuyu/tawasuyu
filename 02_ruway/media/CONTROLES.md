@@ -1,6 +1,6 @@
 # Controles configurables de media (estilo VLC, más flexible)
 
-> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D5 (paleta) ✅ · D2 ⏳.
+> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D5 (paleta) ✅ · D2 (scripts Rhai + watch) ✅.
 > Autoritativo sobre cómo se mapean entradas → acciones en el dominio `media`.
 
 ## Problema
@@ -121,10 +121,26 @@ ControlSettings(
   `Msg::Command(cmd)`, el mismo punto que botones y teclado. Da descubribilidad
   total: el overlay de ayuda (D1) es read-only, esta paleta **ejecuta**. El scrim
   cierra al click; la caja intercepta el click para no cerrarse al tipear.
-- **D ⏳ — pendiente (futuro, no bloqueante)**:
-  - **D2 · Comandos Rhai** (`MediaCommand::Script(nombre)` → snippet con una API de
-    reproductor bindeada) — calco del Rhai de las `Transformacion` de pluma; es
-    el verdadero "más flexible que VLC". Heavy (mete `rhai` al dominio media).
-  - **Watch** del `controles.ron` (recarga automática, hoy es manual con F5).
-  - Reusar el sistema cuando se materialicen los widgets
-    `llimphi-widget-{transport,timeline,waveform}` y/o `nahual-video-viewer-llimphi`.
+- **D2 ✅ — comandos Rhai + watch**: el verdadero "más flexible que VLC".
+  - **Scripts Rhai**: `MediaCommand::Script { name }` nombra un script de la
+    biblioteca `ControlSettings::scripts: Vec<NamedScript>` (campo `#[serde(default)]`
+    — un `controles.ron` viejo sin scripts sigue cargando, igual que el layout).
+    El **core sigue agnóstico de Rhai**: sólo nombra el script y guarda su `source`
+    como dato; quien compila y ejecuta es la app (`run_script` + `script_engine` en
+    `media-app`), porque el runtime vivo del reproductor (pause/volume/playlist)
+    vive ahí. La API bindeada reentra a los mismos primitivos que `apply_command`:
+    `toggle_pause()/pause()/resume()/is_paused()`, `seek(s)`, `volume()/set_volume(x)/add_volume(d)`,
+    `speed()/set_speed(x)/step_speed(d)`, `next_track()/prev_track()/cycle_repeat()/toggle_shuffle()`,
+    `snapshot()/toggle_record()/is_recording()`. Un script compone y condiciona
+    (`set_volume(1.0); set_speed(1.25);`) donde un comando nativo hace una sola
+    cosa. El motor lleva `set_max_operations(50_000)` para que un script no cuelgue
+    la UI, y falla silencioso con log (script roto o inexistente nunca tumba la app).
+    El default siembra un script de ejemplo `"potenciar"` atado a `b` — la feature
+    queda viva de fábrica y el `controles.ron` sembrado documenta la API. Los
+    scripts entran al palette (D5) en su propio grupo "Scripts", descubribles y
+    ejecutables como cualquier acción nativa.
+  - **Watch ✅**: un hilo daemon poll-ea el mtime de `controles.ron` cada segundo y
+    dispatcha `ReloadConfig` al cambiar — recarga **automática**, F5 queda como
+    recarga manual. Sin dependencia de FS-watch ni debounce: el archivo es diminuto.
+- **Futuro (no bloqueante)**: reusar el sistema cuando se materialicen los widgets
+  `llimphi-widget-{transport,timeline,waveform}` y/o `nahual-video-viewer-llimphi`.
