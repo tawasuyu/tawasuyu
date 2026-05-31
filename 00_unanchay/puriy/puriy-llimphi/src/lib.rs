@@ -121,6 +121,40 @@ pub struct SelectState {
     pub open: bool,
 }
 
+/// Estado temporal del tween de `transition` de background en hover, por
+/// nodo (keyeado por `BoxNode.node_id`). A diferencia de las `@keyframes`
+/// (timeline absoluto), una transición arranca cuando el estado cambia y
+/// puede REVERTIR a mitad de camino si el cursor entra y sale rápido — por
+/// eso guardamos el progreso lineal en el momento del último toggle y el
+/// instante del toggle, y reconstruimos el progreso actual sumando/restando
+/// el tiempo según la dirección (`hovered`). El easing se aplica recién al
+/// pintar (no acá), para que la reversión sea continua en el espacio lineal.
+#[derive(Debug, Clone, Copy)]
+struct HoverTween {
+    /// `true` mientras el cursor está sobre el nodo (avanza hacia 1.0).
+    hovered: bool,
+    /// Progreso lineal `∈ [0,1]` capturado en el último cambio de estado.
+    progress_at_toggle: f32,
+    /// Reloj del `Model` (ms) del último toggle.
+    toggle_ms: u64,
+    /// Duración de la transición de background, en ms (de la binding CSS).
+    duration_ms: u32,
+}
+
+impl HoverTween {
+    /// Progreso lineal `∈ [0,1]` al instante `now_ms`: avanza desde
+    /// `progress_at_toggle` hacia 1.0 si `hovered`, o hacia 0.0 si no,
+    /// a razón de `1/duration`. Duración nula = salto inmediato.
+    fn sample_linear(&self, now_ms: u64) -> f32 {
+        if self.duration_ms == 0 {
+            return if self.hovered { 1.0 } else { 0.0 };
+        }
+        let dt = now_ms.saturating_sub(self.toggle_ms) as f32 / self.duration_ms as f32;
+        let delta = if self.hovered { dt } else { -dt };
+        (self.progress_at_toggle + delta).clamp(0.0, 1.0)
+    }
+}
+
 pub struct TabState {
     pub id: TabId,
     pub url: String,
@@ -186,6 +220,11 @@ pub struct TabState {
     /// Resumen del último batch de scripts ejecutados: contador de logs
     /// y errores. Se muestra en la status bar cuando es no-cero.
     pub js_summary: JsSummary,
+    /// Tweens de `transition` de background en hover, keyeados por
+    /// `BoxNode.node_id`. Se puebla lazily cuando el cursor entra/sale de un
+    /// nodo con `:hover { background }` + `transition`. Reset en cada
+    /// navegación/load para no arrastrar ids de un árbol viejo.
+    hover_tweens: std::collections::HashMap<u32, HoverTween>,
 }
 
 /// Resultado agregado de ejecutar todos los `<script>` de un load.
@@ -222,6 +261,7 @@ impl TabState {
             details_open: Vec::new(),
             js: None,
             js_summary: JsSummary::default(),
+            hover_tweens: std::collections::HashMap::new(),
         }
     }
 
@@ -515,6 +555,11 @@ pub enum Msg {
     /// `details_open` actual, el msg es no-op (ej: re-render durante una
     /// carga nueva).
     ToggleDetails(usize),
+    /// El cursor entró (`entering=true`) o salió de un nodo con
+    /// `:hover { background }` + `transition`. Ancla/reversa el tween de
+    /// background del nodo (keyeado por `node_id`). `duration_ms` viaja en
+    /// el msg porque el `update` no tiene el box tree a mano para mirarlo.
+    HoverTween { node_id: u32, entering: bool, duration_ms: u32 },
     /// Fase 7.31 — request HTTP iniciado por `fetch()` desde el JS. El
     /// chrome lo recibe vía `apply_dom_mutations` (kind 'fetch') y spawn-ea
     /// un worker que llama `puriy_engine::fetch::fetch_full`.
@@ -802,6 +847,8 @@ impl App for Puriy {
                         t.inputs_element_ids = inputs_element_ids;
                         t.selects_element_ids = selects_element_ids;
                         t.focused_input = autofocus_idx;
+                        // Árbol nuevo → los node_id viejos ya no aplican.
+                        t.hover_tweens.clear();
                         t.box_tree = Some(box_tree);
                         // Ancla el reloj de animaciones CSS de esta carga.
                         t.anim_start_ms = m.start.elapsed().as_millis() as u64;
@@ -1192,6 +1239,20 @@ impl App for Puriy {
                 if let Some(slot) = t.details_open.get_mut(idx) {
                     *slot = !*slot;
                 }
+            }
+            Msg::HoverTween { node_id, entering, duration_ms } => {
+                let now_ms = m.start.elapsed().as_millis() as u64;
+                let t = m.active_mut();
+                // Captura el progreso lineal al instante del toggle y reancla
+                // el reloj con la nueva dirección — así un enter→leave rápido
+                // revierte desde donde iba, sin saltar a 0/1.
+                let prev = t.hover_tweens.get(&node_id).copied();
+                let progress_at_toggle =
+                    prev.map(|tw| tw.sample_linear(now_ms)).unwrap_or(0.0);
+                t.hover_tweens.insert(
+                    node_id,
+                    HoverTween { hovered: entering, progress_at_toggle, toggle_ms: now_ms, duration_ms },
+                );
             }
             Msg::JsTick => {
                 let now_ms = m.start.elapsed().as_millis() as u64;
@@ -1601,6 +1662,7 @@ impl App for Puriy {
                     &matcher,
                     model.find_current,
                     anim_elapsed_ms,
+                    now_ms,
                 )
             }
         };
@@ -3511,6 +3573,11 @@ struct RenderCtx<'a> {
     /// `animation_overlay` lo usa para samplear el progreso de cada nodo
     /// animado al instante actual.
     anim_elapsed_ms: u64,
+    /// Reloj absoluto (ms desde `Model.start`) del frame actual — el tween
+    /// de `transition` en hover lo usa para samplear cada `HoverTween`.
+    now_ms: u64,
+    /// Tweens de transición en hover por `node_id` (estado de la pestaña).
+    hover_tweens: &'a std::collections::HashMap<u32, HoverTween>,
 }
 
 fn viewport(
@@ -3519,6 +3586,7 @@ fn viewport(
     matcher: &Matcher,
     find_current: usize,
     anim_elapsed_ms: u64,
+    now_ms: u64,
 ) -> View<Msg> {
     let Some(tree) = t.box_tree.as_ref() else {
         let msg = if t.url == NEW_TAB_URL {
@@ -3557,6 +3625,8 @@ fn viewport(
         selects: &t.selects,
         select_counter: 0,
         anim_elapsed_ms,
+        now_ms,
+        hover_tweens: &t.hover_tweens,
     };
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
@@ -3767,8 +3837,50 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, a));
         }
         if let Some(hbg) = b.hover_background {
-            let a = ((hbg.a as f32) * alpha_mul) as u8;
-            view = view.hover_fill(Color::from_rgba8(hbg.r, hbg.g, hbg.b, a));
+            // ¿El nodo declara una `transition` que cubre el background? Si
+            // sí, NO usamos el swap instantáneo del compositor (`hover_fill`):
+            // tweeneamos el fill nosotros frame a frame y anclamos el reloj
+            // con `on_pointer_enter/leave`. El find-in-page (find_hit_color)
+            // gana sobre la transición — no querés tweenear un highlight.
+            let bg_transition = puriy_engine::anim::transition_for(&b.transitions, "background-color")
+                .or_else(|| puriy_engine::anim::transition_for(&b.transitions, "background"));
+            match (find_hit_color, bg_transition) {
+                (None, Some(tr)) => {
+                    let duration_ms = (tr.duration_s * 1000.0).max(0.0) as u32;
+                    // `from` = background actual; si no hay, el color de hover
+                    // pero transparente (fade-in desde nada).
+                    let base = b.background.unwrap_or(puriy_engine::Color {
+                        r: hbg.r,
+                        g: hbg.g,
+                        b: hbg.b,
+                        a: 0,
+                    });
+                    let lin = ctx
+                        .hover_tweens
+                        .get(&b.node_id)
+                        .map(|tw| tw.sample_linear(ctx.now_ms))
+                        .unwrap_or(0.0);
+                    let eased = puriy_engine::anim::apply_easing(tr.timing, lin);
+                    let cur = puriy_engine::anim::lerp_color(&base, &hbg, eased);
+                    let a = ((cur.a as f32) * alpha_mul) as u8;
+                    view = view
+                        .fill(Color::from_rgba8(cur.r, cur.g, cur.b, a))
+                        .on_pointer_enter(Msg::HoverTween {
+                            node_id: b.node_id,
+                            entering: true,
+                            duration_ms,
+                        })
+                        .on_pointer_leave(Msg::HoverTween {
+                            node_id: b.node_id,
+                            entering: false,
+                            duration_ms,
+                        });
+                }
+                _ => {
+                    let a = ((hbg.a as f32) * alpha_mul) as u8;
+                    view = view.hover_fill(Color::from_rgba8(hbg.r, hbg.g, hbg.b, a));
+                }
+            }
         }
         view = apply_decorations(view, b, zoom);
     }
@@ -5345,6 +5457,54 @@ mod tests {
     #[test]
     fn transform_affine_vacio_es_none() {
         assert!(transform_affine(&[], 1.0).is_none());
+    }
+
+    #[test]
+    fn hover_tween_avanza_hacia_uno_mientras_hovered() {
+        let tw = HoverTween {
+            hovered: true,
+            progress_at_toggle: 0.0,
+            toggle_ms: 1000,
+            duration_ms: 1000,
+        };
+        assert!((tw.sample_linear(1500) - 0.5).abs() < 1e-6);
+        // pasada la duración, clampa a 1.0.
+        assert!((tw.sample_linear(9000) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hover_tween_revierte_hacia_cero_al_salir() {
+        // Salió con el tween a media transición: retrocede desde 1.0.
+        let tw = HoverTween {
+            hovered: false,
+            progress_at_toggle: 1.0,
+            toggle_ms: 1000,
+            duration_ms: 1000,
+        };
+        assert!((tw.sample_linear(1500) - 0.5).abs() < 1e-6);
+        assert!(tw.sample_linear(9000).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hover_tween_revierte_desde_progreso_parcial_sin_saltar() {
+        // Entró, llegó a 0.3, y salió: arranca el retroceso en 0.3, no en 1.0.
+        let tw = HoverTween {
+            hovered: false,
+            progress_at_toggle: 0.3,
+            toggle_ms: 2000,
+            duration_ms: 1000,
+        };
+        assert!((tw.sample_linear(2000) - 0.3).abs() < 1e-6);
+        assert!((tw.sample_linear(2100) - 0.2).abs() < 1e-6);
+        assert!(tw.sample_linear(3000).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hover_tween_duracion_nula_es_instantanea() {
+        let on = HoverTween { hovered: true, progress_at_toggle: 0.0, toggle_ms: 0, duration_ms: 0 };
+        let off = HoverTween { hovered: false, progress_at_toggle: 1.0, toggle_ms: 0, duration_ms: 0 };
+        assert_eq!(on.sample_linear(123), 1.0);
+        assert_eq!(off.sample_linear(123), 0.0);
     }
 
     #[test]
