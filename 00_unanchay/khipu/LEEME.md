@@ -42,9 +42,9 @@ Sin daemon, khipu cae al embebedor trigram de 16d — determinista y offline, id
 
 Lo que viaja es el **contenido** (título, cuerpo, etiquetas), nunca la física temporal: al importar, cada nota nace fresca (masa plena, acceso = ahora) — su gravedad arranca en el cuaderno que la recibe. Los wiki-links `[[Título]]` se rearman solos porque khipu resuelve enlaces por título. Reimportar el mismo sobre no duplica (se omiten títulos ya presentes). Un sobre alterado o con firma ajena se rechaza entero, sin autoridad central.
 
-Para compartir en vivo por la LAN sin copiar archivos: `publicar` levanta un servidor TCP que sirve el cuaderno (puerto `KHIPU_BIND`, default `127.0.0.1:7700`); `recibir` lo jala de un par (`KHIPU_PEER`). El transporte es `std::net` puro y **no necesita ser confiable** — el receptor verifica firma + hash antes de ingerir. Cruzar máquinas es apuntar `KHIPU_PEER=host:7700`.
+Para compartir en vivo por la LAN sin copiar archivos: `publicar` levanta un servidor TCP que sirve el cuaderno (puerto `KHIPU_BIND`, default `127.0.0.1:7700`) **y anuncia una baliza UDP** para que lo descubran. `recibir` escucha la LAN unos segundos, le jala el cuaderno al primer par que aparezca y, si nadie anuncia, cae a un par explícito (`KHIPU_PEER`). El transporte es `std::net` puro y **no necesita ser confiable** — el receptor verifica firma + hash antes de ingerir; la baliza sólo dice *dónde*, no *qué*.
 
-La lógica vive en `khipu-share` (`net` para el transporte; 11 tests, round-trip TCP incluido).
+La lógica vive en `khipu-share`: `net` (transporte TCP) y `discovery` (baliza UDP). 15 tests + un test de integración que recorre la cadena completa descubrir→jalar→verificar en loopback.
 
 ## Consideraciones
 

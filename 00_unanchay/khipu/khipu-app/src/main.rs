@@ -302,12 +302,30 @@ impl App for KhipuApp {
             }
             Msg::Receive => {
                 let peer = peer_addr();
-                model.status = Some(format!("recibiendo de {peer}…"));
-                // La red bloquea: la jalamos en un worker y reentramos con
-                // el resultado para no congelar la UI.
-                h.spawn(move || match khipu_share::net::fetch(&peer) {
-                    Ok(sobre) => Msg::Received(Ok(sobre)),
-                    Err(e) => Msg::Received(Err(format!("no se pudo recibir: {e}"))),
+                let my_key = model.keypair.as_ref().map(|k| k.public_key());
+                model.status = Some("buscando pares en la LAN…".into());
+                // La red bloquea: descubrir + jalar van en un worker y
+                // reentramos con el resultado para no congelar la UI.
+                h.spawn(move || {
+                    // Descubrir por LAN; jalar del primer par ajeno hallado.
+                    // Si nadie anuncia, caer al par explícito (KHIPU_PEER).
+                    let elegido = khipu_share::discovery::descubrir(
+                        std::time::Duration::from_secs(3),
+                    )
+                    .ok()
+                    .and_then(|pares| {
+                        pares
+                            .into_iter()
+                            .find(|p| Some(p.beacon.author) != my_key)
+                            .map(|p| p.fetch_addr.to_string())
+                    });
+                    let destino = elegido.unwrap_or(peer);
+                    match khipu_share::net::fetch(&destino) {
+                        Ok(sobre) => Msg::Received(Ok(sobre)),
+                        Err(e) => {
+                            Msg::Received(Err(format!("no se pudo recibir de {destino}: {e}")))
+                        }
+                    }
                 });
             }
             Msg::Received(res) => {
@@ -1495,12 +1513,24 @@ fn start_publishing(model: &mut Model) -> String {
         Ok(l) => l,
         Err(e) => return format!("no se pudo escuchar en {addr}: {e}"),
     };
+    // Puerto efectivo (resuelve `:0` si se usara) para anunciarlo en la baliza.
+    let tcp_port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
     let path = dir.join("compartido.khipu");
     std::thread::spawn(move || {
         khipu_share::net::serve_loop(listener, move || std::fs::read(&path));
     });
+    // Baliza periódica para que los pares nos descubran sin saber la IP.
+    let beacon = khipu_share::discovery::Beacon {
+        author: model.keypair.as_ref().map(|k| k.public_key()).unwrap_or([0u8; 32]),
+        port: tcp_port,
+        name: "khipu".into(),
+    };
+    std::thread::spawn(move || loop {
+        let _ = khipu_share::discovery::anunciar(&beacon);
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    });
     model.publishing = true;
-    format!("publicando el cuaderno en {addr}")
+    format!("publicando el cuaderno en {addr} (anunciando en LAN)")
 }
 
 /// Prefijo hex (4 bytes / 8 hex) de un hash, para mostrar una dirección
