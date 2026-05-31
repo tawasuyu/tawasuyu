@@ -13028,4 +13028,38 @@ mod tests {
             var err = null; queryLocalFonts().catch(function(e){ err = e.name; });").expect("e");
         assert_eq!(rt.eval("err").expect("e"), JsValue::String("SecurityError".into()));
     }
+
+    // ---- Fase 7.164 — WebOTP API ----
+    #[test]
+    fn webotp_otp_credential_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof OTPCredential === 'function'").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webotp_get_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var cred = null;
+            navigator.credentials.get({ otp: { transport: ['sms'] } }).then(function(c){ cred = c; });
+            var ks = Object.keys(__puriy_webotp_pending); __puriy_webotp_resolve(ks[ks.length - 1], '123456');").expect("e");
+        assert_eq!(rt.eval("cred !== null && cred.type === 'otp' && cred.code === '123456'").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("cred instanceof OTPCredential").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webotp_get_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var err = null;
+            navigator.credentials.get({ otp: { transport: ['sms'] } }).catch(function(e){ err = e.name; });
+            var ks = Object.keys(__puriy_webotp_pending); __puriy_webotp_reject(ks[ks.length - 1], 'AbortError');").expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("AbortError".into()));
+    }
+
+    #[test]
+    fn webotp_get_otp_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("globalThis.__puriy_dirty = [];
+            navigator.credentials.get({ otp: { transport: ['sms'] } });").expect("e");
+        assert_eq!(rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'webotp'; })").expect("e"), JsValue::Bool(true));
+    }
 }

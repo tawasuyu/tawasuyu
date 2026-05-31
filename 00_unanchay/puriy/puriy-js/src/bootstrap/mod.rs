@@ -120,6 +120,7 @@ mod imagecapture;
 mod compression;
 mod windowmanagement;
 mod localfonts;
+mod webotp;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -240,6 +241,7 @@ pub(crate) use imagecapture::IMAGECAPTURE_BOOTSTRAP;
 pub(crate) use compression::COMPRESSION_BOOTSTRAP;
 pub(crate) use windowmanagement::WINDOWMANAGEMENT_BOOTSTRAP;
 pub(crate) use localfonts::LOCALFONTS_BOOTSTRAP;
+pub(crate) use webotp::WEBOTP_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -362,5 +364,6 @@ pub(crate) const ALL: &[&str] = &[
     COMPRESSION_BOOTSTRAP,
     WINDOWMANAGEMENT_BOOTSTRAP,
     LOCALFONTS_BOOTSTRAP,
+    WEBOTP_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
