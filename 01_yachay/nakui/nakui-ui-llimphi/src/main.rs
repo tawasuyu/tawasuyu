@@ -116,6 +116,10 @@ use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_field::{field_view, FieldPalette, FieldSpec as FieldWidgetSpec};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_clipboard::SystemClipboard;
 use llimphi_widget_nodegraph::{
     nodegraph_view_styled, NodeId, NodeSpec, NodeTint, NodegraphMetrics, NodegraphPalette, Wire,
 };
@@ -262,6 +266,18 @@ enum Msg {
     },
     /// Encuadra todo el grafo en el lienzo (fit-to-view) y resetea el pan.
     FitGraph,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click en el área de trabajo → abre el menú de edición en
+    /// `(x, y)` de ventana, operando sobre el campo de texto con foco
+    /// (field del form o caja de búsqueda de la lista).
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición contextual.
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -352,6 +368,12 @@ struct Model {
     /// rueda hace zoom-a-cursor; los botones +/− y «ajustar» lo recentran.
     graph_zoom: f32,
     graph_pan: (f32, f32),
+    /// Menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
+    edit_menu: Option<(f32, f32)>,
+    /// Clipboard del sistema para el menú de edición (cut/copy/paste).
+    clipboard: SystemClipboard,
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
@@ -377,6 +399,33 @@ impl Model {
         self.list_search_focused = false;
         self.list_sort = None;
         self.list_page = 0;
+    }
+
+    /// Campo de texto con foco activo: el field del form (si hay uno
+    /// focuseado) o, en su defecto, la caja de búsqueda de la lista.
+    /// Es sobre éste que opera el menú de edición contextual.
+    fn focused_input(&self) -> Option<&TextInputState> {
+        if let Some(form) = &self.form {
+            if let Some(i) = form.focused {
+                return form.fields.get(i).map(|f| &f.input);
+            }
+        }
+        if self.list_search_focused {
+            return Some(&self.list_search);
+        }
+        None
+    }
+
+    fn focused_input_mut(&mut self) -> Option<&mut TextInputState> {
+        if let Some(form) = &mut self.form {
+            if let Some(i) = form.focused {
+                return form.fields.get_mut(i).map(|f| &mut f.input);
+            }
+        }
+        if self.list_search_focused {
+            return Some(&mut self.list_search);
+        }
+        None
     }
 }
 
@@ -509,10 +558,13 @@ impl App for NakuiApp {
             graph_selected: None,
             graph_zoom: 1.0,
             graph_pan: (0.0, 0.0),
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         }
     }
 
-    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let mut m = model;
         match msg {
             Msg::SelectModule(i) => {
@@ -821,11 +873,47 @@ impl App for NakuiApp {
                     }
                 }
             }
+            Msg::MenuOpen(idx) => {
+                m.menu_open = idx;
+                m.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                if let Some(msg) = menu_command_to_msg(&m, &cmd) {
+                    return NakuiApp::update(m, msg, handle);
+                }
+            }
+            Msg::EditMenuOpen(x, y) => {
+                // Sólo tiene sentido si hay un campo de texto con foco.
+                if m.focused_input().is_some() {
+                    m.menu_open = None;
+                    m.edit_menu = Some((x, y));
+                }
+            }
+            Msg::EditMenuAction(action) => {
+                m.edit_menu = None;
+                let mut clip = std::mem::replace(&mut m.clipboard, SystemClipboard::new());
+                if let Some(input) = m.focused_input_mut() {
+                    let _ = editmenu::apply(input.editor_mut(), action, &mut clip);
+                }
+                m.clipboard = clip;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.edit_menu = None;
+            }
         }
         m
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        // Un menú abierto captura el teclado: Esc (o cualquier tecla) lo
+        // cierra, sin caer al form/lista debajo.
+        if (model.menu_open.is_some() || model.edit_menu.is_some())
+            && event.state == KeyState::Pressed
+        {
+            return Some(Msg::CloseMenus);
+        }
         // El form gana el teclado cuando tiene un field de texto activo.
         if let Some(form) = &model.form {
             form.focused?;
@@ -866,6 +954,7 @@ impl App for NakuiApp {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = Theme::dark();
+        let menubar = menubar_view(&menubar_spec(&app_menu(model), model, &theme));
         let header = app_header::<Msg>(
             rimay_localize::t_args(
                 "nakui-header",
@@ -878,10 +967,13 @@ impl App for NakuiApp {
         let banners = build_banners(model);
         let body = build_body(model, &theme);
 
-        let mut children: Vec<View<Msg>> = vec![header];
+        let mut children: Vec<View<Msg>> = vec![menubar, header];
         children.extend(banners);
         children.push(body);
 
+        // El right-click se engancha en la raíz (origen 0,0 → las coords
+        // locales que llegan al handler ya son de ventana) y abre el menú
+        // de edición sobre el campo de texto con foco.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -891,7 +983,219 @@ impl App for NakuiApp {
             ..Default::default()
         })
         .fill(theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
         .children(children)
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        let theme = Theme::dark();
+        // 1) Menú de edición sobre el campo con foco: máxima prioridad.
+        if let Some((x, y)) = model.edit_menu {
+            let flags = match model.focused_input() {
+                Some(input) => EditFlags::from_editor(input.editor(), input.is_masked()),
+                None => EditFlags::default(),
+            };
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        // 2) Dropdown del menú principal (barra superior).
+        menubar_overlay(&menubar_spec(&app_menu(model), model, &theme))
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = NakuiApp::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Menú principal de Nakui. Refleja el estado real: el submenú "Editar"
+/// se atenúa cuando no hay campo de texto con foco / sin selección /
+/// historial; "Ver" y "Archivo" mapean a las acciones reales de la vista
+/// activa (export CSV/MD, nuevo record, limpiar drill, ajustar grafo).
+fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+
+    // --- Editar: estado del campo de texto con foco. ---
+    let input = model.focused_input();
+    let has_focus = input.is_some();
+    let has_sel = input.map(|i| i.editor().has_selection()).unwrap_or(false);
+    let can_undo = input.map(|i| i.editor().can_undo()).unwrap_or(false);
+    let can_redo = input.map(|i| i.editor().can_redo()).unwrap_or(false);
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo {
+        undo = undo.disabled();
+    }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo {
+        redo = redo.disabled();
+    }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel {
+        cut = cut.disabled();
+        copy = copy.disabled();
+    }
+    let mut paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+        .shortcut("Ctrl+A")
+        .separated();
+    if !has_focus {
+        paste = paste.disabled();
+        sel_all = sel_all.disabled();
+    }
+
+    // --- Archivo: depende de la vista activa. ---
+    let active = active_view_info(model);
+    let mut nuevo = MenuItem::new("Nuevo record", "file.new");
+    if active.as_ref().and_then(|v| v.entity.as_ref()).is_none() {
+        nuevo = nuevo.disabled();
+    }
+    let mut export_csv = MenuItem::new("Exportar lista (CSV)", "file.export_csv");
+    if !active.as_ref().map(|v| v.is_list).unwrap_or(false) {
+        export_csv = export_csv.disabled();
+    }
+    let mut export_md = MenuItem::new("Exportar reporte (.md)", "file.export_md").separated();
+    if !active.as_ref().map(|v| v.is_report).unwrap_or(false) {
+        export_md = export_md.disabled();
+    }
+
+    // --- Ver: navegación del módulo / grafo / drill. ---
+    let mut clear_drill = MenuItem::new("Limpiar filtro drill-down", "view.clear_drill");
+    if model.drill.is_none() {
+        clear_drill = clear_drill.disabled();
+    }
+    let is_graph = active_graph_module(model).is_some();
+    let mut fit = MenuItem::new("Ajustar grafo a la vista", "view.fit_graph");
+    let mut zoom_in = MenuItem::new("Acercar grafo", "view.zoom_in");
+    let mut zoom_out = MenuItem::new("Alejar grafo", "view.zoom_out");
+    if !is_graph {
+        fit = fit.disabled();
+        zoom_in = zoom_in.disabled();
+        zoom_out = zoom_out.disabled();
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(nuevo)
+                .item(export_csv)
+                .item(export_md)
+                .item(MenuItem::new("Cancelar formulario", "file.cancel_form")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(clear_drill)
+                .item(fit)
+                .item(zoom_in)
+                .item(zoom_out),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Acerca de Nakui", "help.about")),
+        )
+}
+
+/// Datos de la vista activa que el menú "Archivo" necesita: la entity
+/// asociada (para "Nuevo record") y si es lista/reporte (para los export).
+struct ActiveViewInfo {
+    entity: Option<String>,
+    is_list: bool,
+    is_report: bool,
+}
+
+fn active_view_info(model: &Model) -> Option<ActiveViewInfo> {
+    let mod_idx = model.selected_module?;
+    let module = model.modules.get(mod_idx)?;
+    let menu_idx = model.selected_menu?;
+    let item = module.menu.get(menu_idx)?;
+    match module.views.get(&item.view) {
+        Some(ModuleView::List(lv)) => Some(ActiveViewInfo {
+            entity: Some(lv.entity.clone()),
+            is_list: true,
+            is_report: false,
+        }),
+        Some(ModuleView::Report(_)) => Some(ActiveViewInfo {
+            entity: None,
+            is_list: false,
+            is_report: true,
+        }),
+        Some(ModuleView::Form(fv)) => Some(ActiveViewInfo {
+            entity: Some(fv.entity.clone()),
+            is_list: false,
+            is_report: false,
+        }),
+        _ => Some(ActiveViewInfo {
+            entity: None,
+            is_list: false,
+            is_report: false,
+        }),
+    }
+}
+
+/// Traduce el `command` del menú principal al `Msg` real de la app. Sólo
+/// mapea comandos cuya acción ya existe; `None` para los sin efecto
+/// (p.ej. "Acerca de", que no muta estado, o un export sin vista válida).
+fn menu_command_to_msg(model: &Model, command: &str) -> Option<Msg> {
+    let mod_idx = model.selected_module?;
+    let view_key = model
+        .selected_module
+        .and_then(|i| model.modules.get(i))
+        .and_then(|m| model.selected_menu.map(|j| (m, j)))
+        .and_then(|(m, j)| m.menu.get(j))
+        .map(|item| item.view.clone());
+    match command {
+        "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
+        "edit.redo" => Some(Msg::EditMenuAction(EditAction::Redo)),
+        "edit.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "file.new" => active_view_info(model)
+            .and_then(|v| v.entity)
+            .map(|entity| Msg::NewRecord { module_idx: mod_idx, entity }),
+        "file.export_csv" => active_view_info(model)
+            .and_then(|v| v.entity)
+            .map(|entity| Msg::ExportCsv { entity }),
+        "file.export_md" => view_key.map(|view_key| Msg::ExportReport {
+            module_idx: mod_idx,
+            view_key,
+        }),
+        "file.cancel_form" => Some(Msg::CancelForm),
+        "view.clear_drill" => Some(Msg::ClearDrill),
+        "view.fit_graph" => Some(Msg::FitGraph),
+        "view.zoom_in" => Some(Msg::ZoomGraph { mult: ZOOM_BASE, ancla: None }),
+        "view.zoom_out" => Some(Msg::ZoomGraph { mult: 1.0 / ZOOM_BASE, ancla: None }),
+        _ => None,
     }
 }
 
