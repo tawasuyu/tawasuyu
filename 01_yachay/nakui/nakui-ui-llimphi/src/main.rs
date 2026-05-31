@@ -81,6 +81,7 @@
 //! - [`export`] — volcado a CSV/Markdown en el cwd.
 
 mod backend;
+mod camera;
 mod charts;
 mod export;
 mod panels;
@@ -105,7 +106,10 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle as KurboCircle, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
+use llimphi_ui::{
+    App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, PaintRect, View,
+    WheelDelta,
+};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_styled, ButtonPalette};
@@ -133,6 +137,10 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::backend::{MorphismGraphData, NakuiBackend};
+use crate::camera::{
+    canvas_rect_get, dentro_de_rect, fit_to_view, pan_para_zoom_a_cursor, ZOOM_BASE, ZOOM_MAX,
+    ZOOM_MIN,
+};
 
 const SIDEBAR_WIDTH: f32 = 240.0;
 const ROW_HEIGHT: f32 = 22.0;
@@ -244,6 +252,16 @@ enum Msg {
         mod_idx: usize,
         id: NodeId,
     },
+    /// Zoom de la vista grafo. `mult` multiplica el zoom actual; `ancla` =
+    /// cursor en coords de ventana para fijar el punto bajo él (zoom-a-
+    /// cursor de la rueda). `None` ⇒ zoom hacia el centro del lienzo
+    /// (botones +/−).
+    ZoomGraph {
+        mult: f32,
+        ancla: Option<(f32, f32)>,
+    },
+    /// Encuadra todo el grafo en el lienzo (fit-to-view) y resetea el pan.
+    FitGraph,
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -329,6 +347,11 @@ struct Model {
     /// Click-derecho lo fija y resalta su cono (aguas arriba + abajo);
     /// volver a clickearlo lo limpia.
     graph_selected: Option<(usize, NodeId)>,
+    /// Cámara de la vista grafo: factor de zoom (1.0 = tamaño base) y pan
+    /// en coords locales al lienzo. `pantalla = mundo · zoom + pan`. La
+    /// rueda hace zoom-a-cursor; los botones +/− y «ajustar» lo recentran.
+    graph_zoom: f32,
+    graph_pan: (f32, f32),
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
@@ -484,6 +507,8 @@ impl App for NakuiApp {
             graph_pos: load_graph_layout(&layout_path),
             layout_path,
             graph_selected: None,
+            graph_zoom: 1.0,
+            graph_pan: (0.0, 0.0),
         }
     }
 
@@ -774,6 +799,28 @@ impl App for NakuiApp {
                     Some((mod_idx, id))
                 };
             }
+            Msg::ZoomGraph { mult, ancla } => {
+                let z_old = m.graph_zoom;
+                let z_new = (z_old * mult).clamp(ZOOM_MIN, ZOOM_MAX);
+                // Ancla = cursor (rueda) o centro del lienzo (botones +/−).
+                let rect = canvas_rect_get();
+                let anchor =
+                    ancla.or_else(|| rect.map(|r| (r.x + r.w * 0.5, r.y + r.h * 0.5)));
+                if let (Some(r), Some(c)) = (rect, anchor) {
+                    m.graph_pan = pan_para_zoom_a_cursor(r, c, z_old, z_new, m.graph_pan);
+                }
+                m.graph_zoom = z_new;
+            }
+            Msg::FitGraph => {
+                if let (Some(mod_idx), Some(rect)) = (m.selected_module, canvas_rect_get()) {
+                    if let Some((min, max)) = graph_world_bounds(&m, mod_idx) {
+                        if let Some((z, pan)) = fit_to_view(rect, min, max) {
+                            m.graph_zoom = z;
+                            m.graph_pan = pan;
+                        }
+                    }
+                }
+            }
         }
         m
     }
@@ -794,6 +841,27 @@ impl App for NakuiApp {
             return Some(Msg::ListSearchKey(event.clone()));
         }
         None
+    }
+
+    fn on_wheel(
+        model: &Model,
+        delta: WheelDelta,
+        cursor: (f32, f32),
+        _modifiers: Modifiers,
+    ) -> Option<Msg> {
+        // Sólo la vista grafo consume la rueda, y sólo si el cursor cae
+        // sobre su lienzo (en otra vista o panel, dejamos pasar).
+        active_graph_module(model)?;
+        let rect = canvas_rect_get()?;
+        if !dentro_de_rect(rect, cursor.0, cursor.1) {
+            return None;
+        }
+        // delta.y > 0 ⇒ scroll hacia abajo ⇒ zoom out (convención CSS).
+        let mult = ZOOM_BASE.powf(-delta.y);
+        Some(Msg::ZoomGraph {
+            mult,
+            ancla: Some(cursor),
+        })
     }
 
     fn view(model: &Model) -> View<Msg> {

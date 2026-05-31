@@ -108,13 +108,17 @@ pub(crate) fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, t
         .map(|(i, n)| (n.name.as_str(), i))
         .collect();
 
+    // Cámara: posición mundo → pantalla y métricas escaladas por el zoom.
+    let zoom = model.graph_zoom;
+    let pan = model.graph_pan;
+
     let nodes: Vec<NodeSpec> = data
         .nodes
         .iter()
         .enumerate()
         .map(|(i, n)| {
             let id = i as NodeId;
-            let (x, y) = model
+            let (wx, wy) = model
                 .graph_pos
                 .get(&(module.id.clone(), n.name.clone()))
                 .copied()
@@ -122,8 +126,8 @@ pub(crate) fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, t
             NodeSpec {
                 id,
                 label: n.name.clone(),
-                x,
-                y,
+                x: wx * zoom + pan.0,
+                y: wy * zoom + pan.1,
                 inputs: n.reads.clone(),
                 outputs: n.writes.clone(),
             }
@@ -156,7 +160,19 @@ pub(crate) fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, t
     }
 
     let palette = NodegraphPalette::from_theme(theme);
-    let metrics = NodegraphMetrics::default();
+    // Geometría escalada por el zoom: nodos, pins, texto y trazo crecen
+    // juntos para que el grafo se acerque/aleje como un todo.
+    let base_metrics = NodegraphMetrics::default();
+    let metrics = NodegraphMetrics {
+        node_width: base_metrics.node_width * zoom,
+        title_height: base_metrics.title_height * zoom,
+        pin_row_height: base_metrics.pin_row_height * zoom,
+        pin_radius: base_metrics.pin_radius * zoom,
+        pin_label_size: base_metrics.pin_label_size * zoom,
+        title_text_size: base_metrics.title_text_size * zoom,
+        wire_stroke: base_metrics.wire_stroke * zoom,
+        node_radius: base_metrics.node_radius * zoom as f64,
+    };
 
     // Selección activa (si el morfismo seleccionado pertenece a este
     // módulo y sigue existiendo) y su cono: nodos aguas abajo (lo que
@@ -229,6 +245,9 @@ pub(crate) fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, t
     // Capturas estables para la closure de arrastre (clave de persistencia).
     let drag_module_id = module.id.clone();
     let node_names: Vec<String> = data.nodes.iter().map(|n| n.name.clone()).collect();
+    // El widget reporta el delta en píxeles de pantalla; lo convertimos a
+    // mundo (÷zoom) porque `graph_pos` vive en coords de mundo.
+    let drag_zoom = zoom.max(0.001);
 
     let canvas = nodegraph_view_styled(
         &nodes,
@@ -242,8 +261,8 @@ pub(crate) fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, t
             Some(Msg::DragGraphNode {
                 module_id: drag_module_id.clone(),
                 morphism,
-                dx,
-                dy,
+                dx: dx / drag_zoom,
+                dy: dy / drag_zoom,
                 end: matches!(phase, DragPhase::End),
             })
         },
@@ -272,13 +291,16 @@ pub(crate) fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, t
             nodes[id as usize].label
         ),
         None => format!(
-            "{n_nodes} morfismos · {n_edges} aristas de flujo — arrastrá (botón izq.) para reorganizar; click-derecho sobre un morfismo resalta su cono."
+            "{n_nodes} morfismos · {n_edges} aristas de flujo — arrastrá (botón izq.) para reorganizar; rueda para zoom; click-derecho resalta el cono."
         ),
     };
     header.push(text_line(hint, 11.0, theme.fg_muted));
+    header.push(graph_zoom_controls(zoom, theme));
 
     // Lienzo dentro de una caja flex-grow para que ocupe el alto
-    // restante bajo el encabezado.
+    // restante bajo el encabezado. Su `paint_with` registra el rect del
+    // lienzo en el side-channel de la cámara para que `on_wheel`/`FitGraph`
+    // —que no ven el layout— sepan dónde y cuán grande es.
     let canvas_box = View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -291,10 +313,75 @@ pub(crate) fn build_graph_panel(model: &Model, mod_idx: usize, gv: &GraphView, t
         },
         ..Default::default()
     })
+    .paint_with(|_scene, _ts, rect| crate::camera::canvas_rect_set(rect))
     .children(vec![canvas]);
     header.push(canvas_box);
 
     column(header, 6.0)
+}
+
+/// Fila compacta de controles de cámara del grafo: zoom −/+, el porcentaje
+/// actual y «ajustar» (fit-to-view). Co-locada en el encabezado del panel
+/// para no sumar una toolbar aparte.
+fn graph_zoom_controls(zoom: f32, theme: &Theme) -> View<Msg> {
+    use crate::camera::ZOOM_STEP;
+    let pal = ButtonPalette::from_theme(theme);
+    let mini = || Style {
+        size: Size {
+            width: length(30.0),
+            height: length(26.0),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    };
+    let pct = View::new(Style {
+        size: Size {
+            width: length(52.0),
+            height: length(26.0),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{}%", (zoom * 100.0).round() as i32),
+        12.0,
+        theme.fg_muted,
+        Alignment::Center,
+    );
+    chip_row(vec![
+        button_styled(
+            "−",
+            mini(),
+            Alignment::Center,
+            &pal,
+            Msg::ZoomGraph {
+                mult: 1.0 / ZOOM_STEP,
+                ancla: None,
+            },
+        ),
+        pct,
+        button_styled(
+            "+",
+            mini(),
+            Alignment::Center,
+            &pal,
+            Msg::ZoomGraph {
+                mult: ZOOM_STEP,
+                ancla: None,
+            },
+        ),
+        button_styled(
+            "ajustar",
+            btn_style(78.0),
+            Alignment::Center,
+            &pal,
+            Msg::FitGraph,
+        ),
+    ])
 }
 
 /// Posiciones base `(x, y)` de los nodos del grafo de `data`, indexadas
@@ -366,6 +453,57 @@ pub(crate) fn graph_base_pos(model: &Model, module_id: &str, morphism: &str) -> 
         return fallback;
     };
     graph_layout(&data).get(idx).copied().unwrap_or(fallback)
+}
+
+/// `mod_idx` del módulo cuya vista activa es un grafo de morfismos, o
+/// `None` si la vista actual no es un grafo (hay un form/ficha encima, o
+/// el menú apunta a otra vista). La usa `on_wheel` para saber si la rueda
+/// debe hacer zoom del grafo.
+pub(crate) fn active_graph_module(model: &Model) -> Option<usize> {
+    if model.form.is_some() || model.detail.is_some() {
+        return None;
+    }
+    let mod_idx = model.selected_module?;
+    let menu_idx = model.selected_menu?;
+    let module = model.modules.get(mod_idx)?;
+    let item = module.menu.get(menu_idx)?;
+    matches!(module.views.get(&item.view)?, ModuleView::Graph(_)).then_some(mod_idx)
+}
+
+/// Bounding-box mundo `[min, max]` de todos los nodos del grafo del módulo
+/// `mod_idx` (posición override o base del layout, más el tamaño del nodo).
+/// La usa `FitGraph` para encuadrar. `None` si el módulo no tiene grafo.
+pub(crate) fn graph_world_bounds(
+    model: &Model,
+    mod_idx: usize,
+) -> Option<((f32, f32), (f32, f32))> {
+    let module = model.modules.get(mod_idx)?;
+    let data = model
+        .backend
+        .lock()
+        .ok()
+        .and_then(|b| b.morphism_graph(&module.id))?;
+    if data.nodes.is_empty() {
+        return None;
+    }
+    let base = graph_layout(&data);
+    let metrics = NodegraphMetrics::default();
+    let mut min = (f32::MAX, f32::MAX);
+    let mut max = (f32::MIN, f32::MIN);
+    for (i, n) in data.nodes.iter().enumerate() {
+        let (x, y) = model
+            .graph_pos
+            .get(&(module.id.clone(), n.name.clone()))
+            .copied()
+            .unwrap_or(base[i]);
+        let w = metrics.node_width;
+        let h = metrics.node_height(n.reads.len(), n.writes.len());
+        min.0 = min.0.min(x);
+        min.1 = min.1.min(y);
+        max.0 = max.0.max(x + w);
+        max.1 = max.1.max(y + h);
+    }
+    Some((min, max))
 }
 
 /// Cono de dependencias de `sel` sobre el grafo dado por `wires` (con
