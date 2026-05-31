@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use arje_brain::introspect::{call, IntrospectRequest, IntrospectResponse};
 use arje_incarnate::caps::{CapabilitySet, CgroupStatus, NsKind, UserNsStatus};
+use card_core::{Card, Payload, Supervision};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, AlignItems, Dimension, FlexDirection, Size, Style},
@@ -207,9 +208,97 @@ fn query_brain(path: &Path) -> Result<BrainSnapshot, String> {
     })
 }
 
+/// Una unidad del card store: una Card `.json` invocable por el Init
+/// (equivalente fractal de un `.service` de systemd).
+#[derive(Clone)]
+struct UnitRow {
+    /// `label` de la Card, o el stem del archivo si no parsea.
+    label: String,
+    /// Tipo de payload: wasm / nativo / virtual / legacy / "?" si no parsea.
+    payload: &'static str,
+    /// Política de supervisión: restart / oneshot / delegada / "?".
+    supervision: &'static str,
+    /// `true` si la Card parseó bien; `false` = `.json` ilegible/corrupto.
+    ok: bool,
+}
+
+/// Estado del card store leído del filesystem.
+#[derive(Clone)]
+struct UnitsSnapshot {
+    dir: String,
+    units: Vec<UnitRow>,
+}
+
+/// Directorio del card store. Misma convención que `arje_compat::cards_dir`
+/// (replicada para no arrastrar el árbol de deps de arje-compat por 4
+/// líneas): `$ARJE_CARDS_DIR`, default `/etc/arje/cards.d`.
+fn cards_dir() -> PathBuf {
+    std::env::var("ARJE_CARDS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/etc/arje/cards.d"))
+}
+
+fn payload_kind(p: &Payload) -> &'static str {
+    match p {
+        Payload::Wasm { .. } => "wasm",
+        Payload::Native { .. } => "nativo",
+        Payload::Virtual => "virtual",
+        Payload::Legacy { .. } => "legacy",
+    }
+}
+
+fn supervision_kind(s: &Supervision) -> &'static str {
+    match s {
+        Supervision::Restart { .. } => "restart",
+        Supervision::OneShot => "oneshot",
+        Supervision::Delegate => "delegada",
+    }
+}
+
+/// Lee el card store del filesystem y arma el snapshot de unidades. Una
+/// Card `.json` ilegible no rompe el listado — entra con `ok=false` y el
+/// stem del archivo como label, igual que `systemctl` muestra unidades
+/// dañadas. Dir ausente → lista vacía (no es error: puede no haber store).
+fn detect_units() -> UnitsSnapshot {
+    let dir = cards_dir();
+    let mut units = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for entry in rd.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(stem) = name.strip_suffix(".json") else {
+                continue;
+            };
+            let parsed = std::fs::read_to_string(entry.path())
+                .ok()
+                .and_then(|s| Card::from_json(&s).ok());
+            units.push(match parsed {
+                Some(card) => UnitRow {
+                    label: card.label,
+                    payload: payload_kind(&card.payload),
+                    supervision: supervision_kind(&card.supervision),
+                    ok: true,
+                },
+                None => UnitRow {
+                    label: stem.to_string(),
+                    payload: "?",
+                    supervision: "?",
+                    ok: false,
+                },
+            });
+        }
+    }
+    units.sort_by(|a, b| a.label.cmp(&b.label));
+    UnitsSnapshot {
+        dir: dir.display().to_string(),
+        units,
+    }
+}
+
 struct Model {
     theme: Theme,
     snapshot: CapsSnapshot,
+    units: UnitsSnapshot,
     last_detect_ms: u64,
     brain: BrainStatus,
     /// Mantiene vivo el watcher de wawa-config (su thread muere al dropear).
@@ -226,9 +315,9 @@ enum Msg {
     WawaChanged(wawa_config::WawaConfig),
 }
 
-struct Card;
+struct ArjeCard;
 
-impl App for Card {
+impl App for ArjeCard {
     type Model = Model;
     type Msg = Msg;
 
@@ -260,6 +349,7 @@ impl App for Card {
         Model {
             theme,
             snapshot: CapsSnapshot::detect(),
+            units: detect_units(),
             last_detect_ms: 0,
             brain: BrainStatus::Consultando,
             _wawa_watcher: watcher,
@@ -274,6 +364,7 @@ impl App for Card {
                 // no bloquea el hilo de UI, no necesita spawn.
                 let started = std::time::Instant::now();
                 m.snapshot = CapsSnapshot::detect();
+                m.units = detect_units();
                 m.last_detect_ms = started.elapsed().as_micros() as u64 / 1000;
                 // El brain sí es socket I/O: fuera del hilo de UI.
                 handle.spawn(move || Msg::BrainRefresh(query_brain(&brain_path())));
@@ -380,6 +471,27 @@ impl App for Card {
             &stat_palette,
         ));
 
+        // Card — unidades del card store (Cards .json invocables por el Init,
+        // equivalente fractal de los .service de systemd).
+        let accent_units = Color::from_rgba8(0x81, 0xa1, 0xc1, 0xff);
+        let unit_items: Vec<String> = model
+            .units
+            .units
+            .iter()
+            .map(|u| {
+                let mark = if u.ok { "" } else { "✗ " };
+                format!("{mark}{}  ·  {}  ·  {}", u.label, u.payload, u.supervision)
+            })
+            .collect();
+        body_children.push(stat_card_view::<Msg>(
+            "Unidades",
+            model.units.units.len().to_string(),
+            &model.units.dir,
+            accent_units,
+            &unit_items,
+            &stat_palette,
+        ));
+
         // Sección brain — opcional. El brain corre como daemon aparte; si no
         // está, la card de aislamiento sirve igual.
         match &model.brain {
@@ -473,7 +585,7 @@ fn theme_from_wawa(cfg: &wawa_config::WawaConfig) -> Theme {
 }
 
 fn main() {
-    llimphi_ui::run::<Card>();
+    llimphi_ui::run::<ArjeCard>();
 }
 
 #[cfg(test)]
@@ -508,5 +620,30 @@ mod tests {
         std::env::set_var("ENTE_BRAIN_SOCK", "/tmp/mi-brain.sock");
         assert_eq!(brain_path(), PathBuf::from("/tmp/mi-brain.sock"));
         std::env::remove_var("ENTE_BRAIN_SOCK");
+    }
+
+    #[test]
+    fn detect_units_parsea_y_tolera_corrupto() {
+        // Store temporal con una Card válida y un .json corrupto. El corrupto
+        // entra con ok=false (no rompe el listado); los no-.json se ignoran.
+        let dir = std::env::temp_dir().join(format!("arje-card-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let card = Card::new("demo");
+        std::fs::write(dir.join("demo.json"), card.to_json_pretty().unwrap()).unwrap();
+        std::fs::write(dir.join("roto.json"), b"{ no soy json").unwrap();
+        std::fs::write(dir.join("ignorame.txt"), b"x").unwrap();
+
+        std::env::set_var("ARJE_CARDS_DIR", &dir);
+        let snap = detect_units();
+        std::env::remove_var("ARJE_CARDS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(snap.units.len(), 2); // demo + roto, no el .txt
+        let roto = snap.units.iter().find(|u| u.label == "roto").unwrap();
+        assert!(!roto.ok);
+        let demo = snap.units.iter().find(|u| u.label == "demo").unwrap();
+        assert!(demo.ok);
+        assert_eq!(demo.payload, "virtual"); // default de Card::new
     }
 }
