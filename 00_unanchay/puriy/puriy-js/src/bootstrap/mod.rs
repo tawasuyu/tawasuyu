@@ -85,6 +85,9 @@ mod bluetooth;
 mod filesystem;
 mod animations;
 mod webauthn;
+mod transport;
+mod push;
+mod backgroundsync;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -170,6 +173,9 @@ pub(crate) use bluetooth::BLUETOOTH_BOOTSTRAP;
 pub(crate) use filesystem::FILESYSTEM_BOOTSTRAP;
 pub(crate) use animations::ANIMATIONS_BOOTSTRAP;
 pub(crate) use webauthn::WEBAUTHN_BOOTSTRAP;
+pub(crate) use transport::TRANSPORT_BOOTSTRAP;
+pub(crate) use push::PUSH_BOOTSTRAP;
+pub(crate) use backgroundsync::BACKGROUNDSYNC_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -257,5 +263,8 @@ pub(crate) const ALL: &[&str] = &[
     FILESYSTEM_BOOTSTRAP,
     ANIMATIONS_BOOTSTRAP,
     WEBAUTHN_BOOTSTRAP,
+    TRANSPORT_BOOTSTRAP,
+    PUSH_BOOTSTRAP,
+    BACKGROUNDSYNC_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

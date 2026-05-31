@@ -10252,4 +10252,225 @@ mod tests {
             JsValue::Bool(false)
         );
     }
+
+    // ---- Fase 7.129 — WebTransport ----
+
+    #[test]
+    fn transport_constructor_publica_connect_y_ready() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var listo = false; \
+             var wt = new WebTransport('https://example.com:443/echo'); \
+             wt.ready.then(function(){ listo = true; }); \
+             __puriy_wt_dispatch(wt._id, 'ready');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("listo").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'webtransport'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn transport_close_resuelve_closed() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var code = null; \
+             var wt = new WebTransport('https://example.com/x'); \
+             wt.closed.then(function(info){ code = info.closeCode; }); \
+             wt.close({ closeCode: 7, reason: 'fin' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("code").expect("e"), JsValue::Number(7.0));
+    }
+
+    #[test]
+    fn transport_dispatch_close_error_rechaza_ready() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             var wt = new WebTransport('https://example.com/x'); \
+             wt.ready.catch(function(e){ errName = e.name; }); \
+             __puriy_wt_dispatch(wt._id, 'close', 0, '', '1');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NetworkError".into()));
+    }
+
+    #[test]
+    fn transport_datagram_writer_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var wt = new WebTransport('https://example.com/x'); \
+             var w = wt.datagrams.writable.getWriter(); \
+             w.write('hola');",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval(
+                "__puriy_dirty.some(function(d){ \
+                   return d.kind === 'webtransport' && d.value.indexOf('datagram') !== -1; })"
+            )
+            .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn transport_create_bidirectional_stream() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var tieneReadable = false, tieneWritable = false; \
+             var wt = new WebTransport('https://example.com/x'); \
+             wt.createBidirectionalStream().then(function(s){ \
+                tieneReadable = (s.readable != null); \
+                tieneWritable = (typeof s.writable.getWriter === 'function'); \
+             });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("tieneReadable").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("tieneWritable").expect("e"), JsValue::Bool(true));
+    }
+
+    // ---- Fase 7.130 — Push API ----
+
+    // Helper: registra un service worker y deja la registration en `reg`.
+    const PUSH_REG: &str = "var reg = null; \
+         navigator.serviceWorker.register('/sw.js').then(function(r){ reg = r; }); \
+         __puriy_serviceworker_resolve(__puriy_sw_next_id - 1, '/');";
+
+    #[test]
+    fn push_manager_existe_en_registration() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        assert_eq!(
+            rt.eval("typeof reg.pushManager.subscribe").expect("e"),
+            JsValue::String("function".into())
+        );
+        assert_eq!(
+            rt.eval("reg.pushManager instanceof PushManager").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn push_subscribe_resuelve_subscription() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval(
+            "var endpoint = null, clave = null; \
+             reg.pushManager.subscribe({ userVisibleOnly: true }).then(function(sub){ \
+                endpoint = sub.endpoint; clave = sub.getKey('p256dh'); \
+             }); \
+             __puriy_push_resolve(__puriy_push_next_id - 1, \
+                { endpoint: 'https://push.example/abc', keys: { p256dh: 'KEY' } });",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("endpoint").expect("e"),
+            JsValue::String("https://push.example/abc".into())
+        );
+        assert_eq!(rt.eval("clave").expect("e"), JsValue::String("KEY".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'push-subscribe'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn push_subscribe_cancelado_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval(
+            "var errName = null; \
+             reg.pushManager.subscribe({}).catch(function(e){ errName = e.name; }); \
+             __puriy_push_reject(__puriy_push_next_id - 1);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotAllowedError".into()));
+    }
+
+    #[test]
+    fn push_get_subscription_devuelve_actual() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval(
+            "var same = false; \
+             reg.pushManager.subscribe({}).then(function(sub){ \
+                reg.pushManager.getSubscription().then(function(s){ same = (s === sub); }); \
+             }); \
+             __puriy_push_resolve(__puriy_push_next_id - 1, { endpoint: 'https://p/x' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("same").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn push_permission_state_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval("var a = null; reg.pushManager.permissionState().then(function(v){ a = v; });")
+            .expect("e");
+        assert_eq!(rt.eval("a").expect("e"), JsValue::String("prompt".into()));
+        rt.eval(
+            "__puriy_set_push_permission('granted'); var b = null; \
+             reg.pushManager.permissionState().then(function(v){ b = v; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("b").expect("e"), JsValue::String("granted".into()));
+    }
+
+    // ---- Fase 7.131 — Background Sync + Periodic Background Sync ----
+
+    #[test]
+    fn sync_manager_existe_en_registration() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        assert_eq!(
+            rt.eval("typeof reg.sync.register").expect("e"),
+            JsValue::String("function".into())
+        );
+        assert_eq!(rt.eval("reg.sync instanceof SyncManager").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sync_register_publica_y_get_tags() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval(
+            "var tags = null; \
+             reg.sync.register('subir-fotos').then(function(){ \
+                reg.sync.getTags().then(function(t){ tags = t.join(','); }); \
+             });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("tags").expect("e"), JsValue::String("subir-fotos".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'sync-register'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn periodicsync_register_y_unregister() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval(
+            "var antes = null, despues = null; \
+             reg.periodicSync.register('feed', { minInterval: 86400000 }).then(function(){ \
+                reg.periodicSync.getTags().then(function(t){ antes = t.join(','); }); \
+                reg.periodicSync.unregister('feed').then(function(){ \
+                    reg.periodicSync.getTags().then(function(t){ despues = t.length; }); \
+                }); \
+             });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("antes").expect("e"), JsValue::String("feed".into()));
+        assert_eq!(rt.eval("despues").expect("e"), JsValue::Number(0.0));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'periodicsync-register'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
 }
