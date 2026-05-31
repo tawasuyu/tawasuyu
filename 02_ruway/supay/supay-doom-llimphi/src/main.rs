@@ -40,7 +40,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
-use supay_core::{keys, DoomEngine, SnapshotPair, WallSeg, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH};
+use supay_core::{
+    keys, DoomEngine, SceneSnapshot, SnapshotPair, WallSeg, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH,
+};
 use supay_render_llimphi::{scene_view, RenderConfig, WadAtlas};
 use supay_wad::Wad;
 
@@ -479,6 +481,11 @@ impl App for Supay {
                 // post-capture para que el renderer 3D haga y-shear sobre
                 // este snapshot y los próximos interpolados.
                 snap.player.view_pitch = m.view_pitch;
+                // Fase 4.3: acústica por sector — el reverb se ajusta al
+                // tamaño/apertura del cuarto donde está el jugador.
+                if let Some(audio) = m.audio.as_mut() {
+                    audio.set_ambience(ambience_for(&snap));
+                }
                 // Fase 3.3: registrar en el atlas cualquier pic_idx
                 // nuevo que aparezca en sectores. WadAtlas usa interior
                 // mutability — el Arc compartido con el renderer ve
@@ -752,6 +759,34 @@ fn muzzle_alpha_now(model: &Model) -> f32 {
     };
     let elapsed = t0.elapsed().as_secs_f32();
     (1.0 - elapsed / MUZZLE_DECAY_SECS).clamp(0.0, 1.0)
+}
+
+/// Fase 4.3 — deriva la acústica del reverb desde el sector donde está
+/// el jugador. Un cuarto bajo suena seco; un hangar largo arrastra cola.
+/// Exterior (techo de cielo) lava la reflexión tardía: aire en vez de
+/// piedra. Sin mapa cargado → seco (`wet=0`).
+fn ambience_for(snap: &SceneSnapshot) -> supay_audio::RoomAmbience {
+    let Some(ac) = snap.player_acoustics() else {
+        return supay_audio::RoomAmbience::default();
+    };
+    // Cuartos Doom típicos: 64 (pasillo bajo) .. 512+ (hangar). Normaliza.
+    let t = (ac.ceiling_gap / 512.0).clamp(0.0, 1.0);
+    let lerp = |a: f32, b: f32| a + (b - a) * t;
+    if ac.outdoor {
+        // Aire abierto: poca cola, mucha amortiguación de agudos.
+        supay_audio::RoomAmbience {
+            wet: lerp(0.04, 0.12),
+            room_size: lerp(0.4, 0.7),
+            damping: 0.8,
+        }
+    } else {
+        // Recinto de piedra: cola que crece con la altura del cuarto.
+        supay_audio::RoomAmbience {
+            wet: lerp(0.08, 0.33),
+            room_size: lerp(0.3, 0.85),
+            damping: 0.45,
+        }
+    }
 }
 
 // =====================================================================

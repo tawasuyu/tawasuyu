@@ -391,6 +391,64 @@ impl SceneSnapshot {
             player_stats: PlayerStats::default(),
         }
     }
+
+    /// Subsector del BSP que contiene `(px, py)`, descendiendo el árbol
+    /// por el lado donde cae el punto en cada partición (misma convención
+    /// de signo que el renderer). `None` si el snapshot no tiene BSP
+    /// cargado (modo stub / pre-mapa) o el camino apunta fuera de rango.
+    /// O(log N) en BSPs balanceados.
+    pub fn subsector_at(&self, px: f32, py: f32) -> Option<u32> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let mut cur: u16 = (self.nodes.len() - 1) as u16;
+        for _ in 0..self.nodes.len() + 1 {
+            if cur & NF_SUBSECTOR != 0 {
+                return Some((cur & !NF_SUBSECTOR) as u32);
+            }
+            let node = self.nodes.get(cur as usize)?;
+            let side = node.partition_dx * (py - node.partition_y)
+                - node.partition_dy * (px - node.partition_x);
+            cur = if side > 0.0 {
+                node.children[0]
+            } else {
+                node.children[1]
+            };
+        }
+        None // ciclo en el árbol (mapa malformado) — corta el descenso.
+    }
+
+    /// Índice del sector donde está parado el jugador, resuelto por BSP.
+    /// `None` sin mapa cargado o si el subsector apunta fuera de rango.
+    pub fn player_sector(&self) -> Option<u32> {
+        let ss = self.subsector_at(self.player.x, self.player.y)?;
+        let sector = self.subsectors.get(ss as usize)?.sector;
+        ((sector as usize) < self.sectors.len()).then_some(sector)
+    }
+
+    /// Acústica de la sala que rodea al jugador — usada por el host para
+    /// fijar el reverb por sector. `None` sin mapa cargado.
+    pub fn player_acoustics(&self) -> Option<RoomAcoustics> {
+        let sector = self.player_sector()? as usize;
+        let s = self.sectors.get(sector)?;
+        Some(RoomAcoustics {
+            ceiling_gap: (s.ceiling_height - s.floor_height).max(0.0),
+            outdoor: self.sky_pic != NO_SKY_PIC && s.ceiling_pic == self.sky_pic,
+        })
+    }
+}
+
+/// Métricas acústicas crudas del sector donde está el jugador. El host
+/// las mapea a los parámetros concretos del reverb (`supay-audio` no
+/// conoce la geometría; `supay-scene` no conoce el motor de reverb).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoomAcoustics {
+    /// Altura libre techo−piso del sector (unidades Doom). Proxy del
+    /// "tamaño" percibido: un cuarto bajo suena seco, una catedral larga.
+    pub ceiling_gap: f32,
+    /// El techo del sector es cielo (`F_SKY`) → exterior abierto: menos
+    /// reflexión tardía, más amortiguación al aire.
+    pub outdoor: bool,
 }
 
 /// Buffer rotatorio de los dos últimos snapshots. El renderer consulta
@@ -590,6 +648,49 @@ mod tests {
         pair.push(SceneSnapshot::empty(3));
         assert_eq!(pair.prev().unwrap().tick, 2);
         assert_eq!(pair.next().unwrap().tick, 3);
+    }
+
+    #[test]
+    fn player_acoustics_resolves_sector_by_bsp() {
+        // BSP de 2 hojas partido por x=0: front (x>0) = ss0, back = ss1.
+        let mut snap = SceneSnapshot::empty(1);
+        snap.nodes = Arc::from(vec![NodeSnap {
+            partition_x: 0.0,
+            partition_y: 0.0,
+            partition_dx: 0.0,
+            partition_dy: 1.0, // partición vertical; side = -dy·(px) = -px
+            children: [NF_SUBSECTOR | 0, NF_SUBSECTOR | 1],
+        }]);
+        snap.subsectors = Arc::from(vec![
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+            SubsectorSnap { sector: 1, first_seg: 0, num_segs: 0 },
+        ]);
+        snap.sectors = Arc::from(vec![
+            SectorSnap { floor_height: 0.0, ceiling_height: 128.0, light_level: 200, floor_pic: 1, ceiling_pic: 2 },
+            SectorSnap { floor_height: 0.0, ceiling_height: 512.0, light_level: 200, floor_pic: 1, ceiling_pic: 9 },
+        ]);
+        snap.sky_pic = 9;
+
+        // side = -px: px<0 → side>0 → children[0]=ss0 (sector 0, indoor).
+        snap.player.x = -10.0;
+        assert_eq!(snap.player_sector(), Some(0));
+        let ac = snap.player_acoustics().unwrap();
+        assert_eq!(ac.ceiling_gap, 128.0);
+        assert!(!ac.outdoor, "sector 0 ceiling_pic=2 ≠ sky 9");
+
+        // px>0 → side<0 → children[1]=ss1 (sector 1, ceiling = sky → outdoor).
+        snap.player.x = 10.0;
+        assert_eq!(snap.player_sector(), Some(1));
+        let ac = snap.player_acoustics().unwrap();
+        assert_eq!(ac.ceiling_gap, 512.0);
+        assert!(ac.outdoor, "sector 1 ceiling_pic=9 == sky 9");
+    }
+
+    #[test]
+    fn player_acoustics_none_without_bsp() {
+        let snap = SceneSnapshot::empty(1);
+        assert_eq!(snap.player_sector(), None);
+        assert_eq!(snap.player_acoustics(), None);
     }
 
     #[test]

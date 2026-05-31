@@ -33,6 +33,17 @@ use supay_wad::Wad;
 /// da margen sin riesgo de saturar el mix.
 const MAX_VOICES: usize = 32;
 
+/// Paneo **constante-power** (equal-power): mapea `sep` de Doom (0 =
+/// izquierda total, 128 ≈ centro, 255 = derecha total) a ganancias L/R
+/// que conservan la energía percibida al barrer el campo estéreo. Un
+/// paneo lineal (`1-p` / `p`) cae −3 dB en el centro; con `cos`/`sin`
+/// la suma de potencias es constante (`cos²+sin² = 1`).
+fn equal_power_pan(sep: u8) -> (f32, f32) {
+    let pan = (sep as f32 / 255.0).clamp(0.0, 1.0);
+    let angle = pan * std::f32::consts::FRAC_PI_2;
+    (angle.cos(), angle.sin())
+}
+
 /// Una voz activa: muestras del sfx + cursor de reproducción (en
 /// unidades de muestra *source*) + ganancias por canal.
 struct Voice {
@@ -564,11 +575,147 @@ impl MusicSynth {
     }
 }
 
-/// Fuente de audio combinada: SFX (one-shots) + música (synth MUS). El
-/// `fill` deja que el sfx mixer escriba el buffer y luego suma la música.
+/// Acústica de sala que el host fija por sector (Fase 4.3). Modela el
+/// reverb que rodea al jugador: un cuarto chico suena seco, una caverna
+/// larga arrastra cola. `supay-scene` deriva la geometría; el host la
+/// traduce a estos parámetros y los pasa con [`AudioEngine::set_ambience`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoomAmbience {
+    /// Mezcla húmeda 0..1. `0` ⇒ reverb apagado (path seco bit-equivalente
+    /// a 4.2, sin costo de CPU).
+    pub wet: f32,
+    /// Tamaño de la sala 0..1 → realimentación de los combs (cola más
+    /// larga al subir).
+    pub room_size: f32,
+    /// Amortiguación de agudos en la cola 0..1 (1 = muy apagado, piedra;
+    /// 0 = brillante, baldosa).
+    pub damping: f32,
+}
+
+impl Default for RoomAmbience {
+    /// Default seco — sin mapa cargado el host no espacializa.
+    fn default() -> Self {
+        RoomAmbience { wet: 0.0, room_size: 0.5, damping: 0.5 }
+    }
+}
+
+// Afinaciones Freeverb (Schroeder–Moorer), medidas para 44100 Hz; se
+// reescalan al rate real del dispositivo. 8 combs en paralelo + 4
+// allpass en serie por canal, con offset estéreo en el canal derecho.
+const COMB_TUNING: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
+const ALLPASS_TUNING: [usize; 4] = [556, 441, 341, 225];
+const STEREO_SPREAD: usize = 23;
+const FV_RATE: f32 = 44_100.0;
+const ROOM_SCALE: f32 = 0.28;
+const ROOM_OFFSET: f32 = 0.7;
+const DAMP_SCALE: f32 = 0.4;
+const FV_GAIN: f32 = 0.015;
+
+/// Comb con amortiguación pasa-bajos en el lazo de realimentación.
+struct Comb {
+    buf: Vec<f32>,
+    idx: usize,
+    filt: f32,
+}
+impl Comb {
+    fn new(len: usize) -> Self {
+        Comb { buf: vec![0.0; len.max(1)], idx: 0, filt: 0.0 }
+    }
+    fn process(&mut self, input: f32, feedback: f32, damp: f32) -> f32 {
+        let out = self.buf[self.idx];
+        self.filt = out * (1.0 - damp) + self.filt * damp;
+        self.buf[self.idx] = input + self.filt * feedback;
+        self.idx = (self.idx + 1) % self.buf.len();
+        out
+    }
+}
+
+/// Allpass de Schroeder (difusor).
+struct Allpass {
+    buf: Vec<f32>,
+    idx: usize,
+}
+impl Allpass {
+    fn new(len: usize) -> Self {
+        Allpass { buf: vec![0.0; len.max(1)], idx: 0 }
+    }
+    fn process(&mut self, input: f32) -> f32 {
+        let buffered = self.buf[self.idx];
+        let out = -input + buffered;
+        self.buf[self.idx] = input + buffered * 0.5; // feedback fijo 0.5
+        self.idx = (self.idx + 1) % self.buf.len();
+        out
+    }
+}
+
+/// Reverb estéreo estilo Freeverb. Toma una entrada mono (la suma del
+/// mix) y produce una cola húmeda L/R. Los buffers se dimensionan al
+/// rate del dispositivo la primera vez (o si cambia).
+struct Reverb {
+    combs_l: Vec<Comb>,
+    combs_r: Vec<Comb>,
+    aps_l: Vec<Allpass>,
+    aps_r: Vec<Allpass>,
+    sr: f32,
+    amb: RoomAmbience,
+}
+
+impl Reverb {
+    fn new() -> Self {
+        Reverb {
+            combs_l: Vec::new(),
+            combs_r: Vec::new(),
+            aps_l: Vec::new(),
+            aps_r: Vec::new(),
+            sr: 0.0,
+            amb: RoomAmbience::default(),
+        }
+    }
+
+    /// (Re)construye las líneas de delay para `sr`. Escala las afinaciones
+    /// 44100 al rate real para mantener el carácter de la sala.
+    fn rebuild(&mut self, sr: f32) {
+        let scale = (sr / FV_RATE).max(0.1);
+        let len = |n: usize, off: usize| (((n + off) as f32) * scale) as usize;
+        self.combs_l = COMB_TUNING.iter().map(|&n| Comb::new(len(n, 0))).collect();
+        self.combs_r = COMB_TUNING.iter().map(|&n| Comb::new(len(n, STEREO_SPREAD))).collect();
+        self.aps_l = ALLPASS_TUNING.iter().map(|&n| Allpass::new(len(n, 0))).collect();
+        self.aps_r = ALLPASS_TUNING.iter().map(|&n| Allpass::new(len(n, STEREO_SPREAD))).collect();
+        self.sr = sr;
+    }
+
+    /// Procesa una muestra mono → (wet_l, wet_r). `feedback`/`damp` ya
+    /// mapeados desde [`RoomAmbience`].
+    fn process(&mut self, input: f32) -> (f32, f32) {
+        let feedback = self.amb.room_size * ROOM_SCALE + ROOM_OFFSET;
+        let damp = self.amb.damping * DAMP_SCALE;
+        let inp = input * FV_GAIN;
+        let mut l = 0.0;
+        let mut r = 0.0;
+        for c in self.combs_l.iter_mut() {
+            l += c.process(inp, feedback, damp);
+        }
+        for c in self.combs_r.iter_mut() {
+            r += c.process(inp, feedback, damp);
+        }
+        for a in self.aps_l.iter_mut() {
+            l = a.process(l);
+        }
+        for a in self.aps_r.iter_mut() {
+            r = a.process(r);
+        }
+        (l, r)
+    }
+}
+
+/// Fuente de audio combinada: SFX (one-shots) + música (synth MUS) +
+/// reverb por sector (Fase 4.3). El `fill` deja que el sfx mixer escriba
+/// el buffer, suma la música, y al final inyecta la cola húmeda del
+/// reverb sobre el mix seco.
 struct DoomAudio {
     sfx: DoomMixer,
     music: Option<MusicSynth>,
+    reverb: Reverb,
 }
 
 impl AudioSource for DoomAudio {
@@ -577,6 +724,32 @@ impl AudioSource for DoomAudio {
         self.sfx.fill(buf, sample_rate, channels);
         if let Some(m) = self.music.as_mut() {
             m.render_add(buf, sample_rate, channels);
+        }
+
+        // Reverb por sector. wet=0 ⇒ seco, sin costo (compat 4.2).
+        let wet = self.reverb.amb.wet;
+        if wet > 1e-4 {
+            let sr = sample_rate.max(1) as f32;
+            if (self.reverb.sr - sr).abs() > 0.5 {
+                self.reverb.rebuild(sr);
+            }
+            let ch = channels.max(1) as usize;
+            let frames = buf.len() / ch;
+            for f in 0..frames {
+                let base = f * ch;
+                let dry = if ch >= 2 {
+                    (buf[base] + buf[base + 1]) * 0.5
+                } else {
+                    buf[base]
+                };
+                let (wl, wr) = self.reverb.process(dry);
+                if ch >= 2 {
+                    buf[base] += wl * wet;
+                    buf[base + 1] += wr * wet;
+                } else {
+                    buf[base] += (wl + wr) * 0.5 * wet;
+                }
+            }
         }
     }
 }
@@ -606,6 +779,7 @@ impl AudioEngine {
         let audio = Arc::new(Mutex::new(DoomAudio {
             sfx: DoomMixer::new(),
             music: None,
+            reverb: Reverb::new(),
         }));
         let source: Arc<Mutex<dyn AudioSource + Send>> = audio.clone();
         let sink = AudioSink::open(source)?;
@@ -628,11 +802,10 @@ impl AudioEngine {
         let resolved = self.resolve(&lump);
         if let Some((samples, rate)) = resolved {
             let g = vol as f32 / 127.0;
-            // sep: 0 = izquierda total, 255 = derecha total, 128 = centro.
-            let pan = sep as f32 / 255.0;
-            let gain_l = g * (1.0 - pan);
-            let gain_r = g * pan;
-            self.audio.lock().sfx.add(samples, rate, gain_l, gain_r);
+            // Paneo constante-power (Fase 4.3): sin caída de loudness al
+            // centro, a diferencia del balance lineal de 4.0.
+            let (pl, pr) = equal_power_pan(sep);
+            self.audio.lock().sfx.add(samples, rate, g * pl, g * pr);
         }
     }
 
@@ -649,6 +822,12 @@ impl AudioEngine {
     /// Detiene la música actual (silencio inmediato).
     pub fn stop_music(&mut self) {
         self.audio.lock().music = None;
+    }
+
+    /// Fija la acústica de la sala (Fase 4.3). El host la recalcula por
+    /// tick desde el sector del jugador. `wet=0` deja el mix seco.
+    pub fn set_ambience(&mut self, amb: RoomAmbience) {
+        self.audio.lock().reverb.amb = amb;
     }
 
     fn resolve(&mut self, lump: &str) -> Option<(Arc<[f32]>, f32)> {
@@ -852,6 +1031,56 @@ mod tests {
         let mut buf = vec![0.0f32; 200];
         s.render_add(&mut buf, 8000, 1);
         assert_eq!(s.active_voices(), 1, "con banco, la percusión suena");
+    }
+
+    #[test]
+    fn equal_power_pan_center_is_minus_3db() {
+        // Centro (sep=128): ambos canales ≈ cos(π/4)=0.707, no 0.5.
+        let (l, r) = equal_power_pan(128);
+        assert!((l - 0.707).abs() < 0.01 && (r - 0.707).abs() < 0.01, "l={l} r={r}");
+        // Conserva potencia: l²+r² ≈ 1 en todo el barrido.
+        for sep in [0u8, 64, 128, 192, 255] {
+            let (l, r) = equal_power_pan(sep);
+            assert!((l * l + r * r - 1.0).abs() < 1e-3, "sep={sep}: {}", l * l + r * r);
+        }
+        // Extremos: 0 = todo izquierda, 255 = todo derecha.
+        assert!(equal_power_pan(0).0 > 0.99 && equal_power_pan(0).1 < 0.01);
+        assert!(equal_power_pan(255).1 > 0.99 && equal_power_pan(255).0 < 0.01);
+    }
+
+    #[test]
+    fn reverb_dry_when_wet_zero() {
+        // wet=0 ⇒ el reverb no toca el buffer (compat 4.2 bit-equivalente).
+        let mut da = DoomAudio {
+            sfx: DoomMixer::new(),
+            music: None,
+            reverb: Reverb::new(),
+        };
+        da.sfx.add(Arc::from(vec![1.0f32, 1.0, 1.0, 1.0]), 100.0, 1.0, 1.0);
+        let mut buf = vec![0.0f32; 8];
+        da.fill(&mut buf, 100, 2);
+        // Sin cola: las muestras son exactamente el dry del mixer (master 0.6).
+        assert!((buf[0] - 0.6).abs() < 1e-6, "buf0={}", buf[0]);
+    }
+
+    #[test]
+    fn reverb_adds_tail_when_wet() {
+        // Con wet>0 y un impulso, el reverb sigue sonando después de que
+        // la voz seca se agotó — eso es la cola.
+        let mut da = DoomAudio {
+            sfx: DoomMixer::new(),
+            music: None,
+            reverb: Reverb::new(),
+        };
+        da.reverb.amb = RoomAmbience { wet: 0.8, room_size: 0.9, damping: 0.2 };
+        // Impulso corto: 2 muestras, luego silencio seco.
+        da.sfx.add(Arc::from(vec![1.0f32, 1.0]), 1000.0, 1.0, 1.0);
+        let mut buf = vec![0.0f32; 2000]; // 1000 frames estéreo a 1000 Hz
+        da.fill(&mut buf, 1000, 2);
+        // Pasados los primeros frames (donde la voz seca ya terminó) debe
+        // haber energía de la cola.
+        let tail: f32 = buf[400..].iter().map(|x| x.abs()).sum();
+        assert!(tail > 1e-3, "el reverb debe dejar cola audible, tail={tail}");
     }
 
     #[test]
