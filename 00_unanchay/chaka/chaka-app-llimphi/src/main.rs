@@ -48,6 +48,10 @@ use llimphi_widget_text_editor::{
 };
 use llimphi_widget_theme_switcher::theme_switcher_view;
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_clipboard::SystemClipboard;
 
 const TREE_WIDTH: f32 = 240.0;
 const STATUS_H: f32 = 24.0;
@@ -87,6 +91,17 @@ enum Msg {
     Save,
     /// Cicla el theme.
     CycleTheme(Theme),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click en el área de trabajo → abre el menú de edición en
+    /// `(x, y)` de ventana, operando sobre el editor del .cob.
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición.
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -174,6 +189,12 @@ struct Model {
     theme: Theme,
     /// Mensaje del status bar (último evento — save, theme, error, etc.).
     status: String,
+    /// Portapapeles del sistema para cortar/copiar/pegar desde el menú.
+    clipboard: SystemClipboard,
+    /// Menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
+    edit_menu: Option<(f32, f32)>,
 }
 
 struct ChakaApp;
@@ -214,6 +235,9 @@ impl App for ChakaApp {
             active_tab: OutputTab::Salida,
             theme,
             status,
+            clipboard: SystemClipboard::new(),
+            menu_open: None,
+            edit_menu: None,
         };
         // Si hay corpus, abrimos el primero — pantalla inicial poblada
         // en vez de placeholders vacíos.
@@ -223,7 +247,7 @@ impl App for ChakaApp {
         model
     }
 
-    fn update(model: Model, msg: Msg, _handle: &Handle<Msg>) -> Model {
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::OpenFile(i) => open_entry(model, i),
             Msg::EditKey(ev) => apply_edit_key(model, ev),
@@ -243,6 +267,26 @@ impl App for ChakaApp {
                 let mut m = model;
                 m.theme = t;
                 m.status = format!("✓ tema: {}", t.name);
+                m
+            }
+            Msg::MenuOpen(i) => {
+                let mut m = model;
+                m.menu_open = i;
+                m.edit_menu = None;
+                m
+            }
+            Msg::MenuCommand(cmd) => handle_menu_command(model, cmd, handle),
+            Msg::EditMenuOpen(x, y) => {
+                let mut m = model;
+                m.edit_menu = Some((x, y));
+                m.menu_open = None;
+                m
+            }
+            Msg::EditMenuAction(action) => apply_edit_menu_action(model, action),
+            Msg::CloseMenus => {
+                let mut m = model;
+                m.menu_open = None;
+                m.edit_menu = None;
                 m
             }
         }
@@ -290,10 +334,15 @@ impl App for ChakaApp {
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let theme = model.theme;
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_view(model, &theme);
         let body = body_view(model, &theme);
         let status = status_bar(model, &theme);
 
+        // El right-click se engancha en la raíz (origen 0,0 → las coords
+        // locales que llegan ya son de ventana) y abre el menú de edición
+        // sobre el editor del .cob.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -303,8 +352,157 @@ impl App for ChakaApp {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, body, status])
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
+        .children(vec![menubar, header, body, status])
     }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // El menú de edición tiene prioridad si está abierto.
+        if let Some((x, y)) = model.edit_menu {
+            let flags = EditFlags::from_editor(&model.cobol, false);
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &model.theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = ChakaApp::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: std::sync::Arc::new(Msg::MenuOpen),
+        on_command: std::sync::Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+// ── Menú principal + menú de edición contextual ───────────────────────────
+
+/// Construye el menú principal reflejando el estado real del editor del
+/// .cob (ítems de Editar grises cuando no hay selección / historial).
+fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+    let has_open = model.open.is_some();
+    let has_sel = model.cobol.has_selection();
+    let can_undo = model.cobol.can_undo();
+    let can_redo = model.cobol.can_redo();
+    let has_text = !model.cobol.is_empty();
+
+    let mut guardar = MenuItem::new("Guardar", "file.save").shortcut("Ctrl+S");
+    if !has_open { guardar = guardar.disabled(); }
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo { undo = undo.disabled(); }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo { redo = redo.disabled(); }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel { cut = cut.disabled(); copy = copy.disabled(); }
+    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+        .shortcut("Ctrl+A")
+        .separated();
+    if !has_text { sel_all = sel_all.disabled(); }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(guardar),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all),
+        )
+        .menu(
+            Menu::new("Ejecutar")
+                .item(MenuItem::new("Correr pipeline", "run.run").shortcut("Ctrl+R")),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Salida", "view.tab.salida").shortcut("Ctrl+1"))
+                .item(MenuItem::new("Rust generado", "view.tab.rust").shortcut("Ctrl+2"))
+                .item(MenuItem::new("IR", "view.tab.ir").shortcut("Ctrl+3"))
+                .item(MenuItem::new("Diagnósticos", "view.tab.diag").shortcut("Ctrl+4"))
+                .item(MenuItem::new("Cambiar tema", "view.theme").separated()),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Acerca de chaka", "help.about")),
+        )
+}
+
+/// Traduce el `command` del menú principal al `Msg` real y lo despacha.
+/// Cierra el menú antes de actuar.
+fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
+    model.menu_open = None;
+    let target = match command.as_str() {
+        "file.save" => Some(Msg::Save),
+        "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
+        "edit.redo" => Some(Msg::EditMenuAction(EditAction::Redo)),
+        "edit.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "run.run" => Some(Msg::Run),
+        "view.tab.salida" => Some(Msg::SelectTab(OutputTab::Salida)),
+        "view.tab.rust" => Some(Msg::SelectTab(OutputTab::Rust)),
+        "view.tab.ir" => Some(Msg::SelectTab(OutputTab::Ir)),
+        "view.tab.diag" => Some(Msg::SelectTab(OutputTab::Diag)),
+        "view.theme" => Some(Msg::CycleTheme(Theme::next_after(model.theme.name))),
+        "help.about" => {
+            model.status =
+                "chaka · transpilador COBOL → Rust · pipeline lex→parse→ir→codegen→shadow".into();
+            None
+        }
+        _ => None,
+    };
+    match target {
+        Some(msg) => ChakaApp::update(model, msg, handle),
+        None => model,
+    }
+}
+
+/// Aplica una acción del menú de edición al editor del .cob, replicando
+/// el bookkeeping de `apply_edit_key` (dirty + recompute del pipeline +
+/// auto-scroll). Cierra el menú de edición.
+fn apply_edit_menu_action(mut model: Model, action: EditAction) -> Model {
+    model.edit_menu = None;
+    let before = model.cobol.text();
+    let r = editmenu::apply(&mut model.cobol, action, &mut model.clipboard);
+    if r.touched() {
+        model.cobol.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+    }
+    if r.changed() {
+        let after = model.cobol.text();
+        if after != before {
+            model.dirty = true;
+            model = recompute(model);
+        }
+    }
+    model
 }
 
 // ── Composición de la vista ───────────────────────────────────────────────

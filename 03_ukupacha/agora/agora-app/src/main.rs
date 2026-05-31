@@ -31,7 +31,13 @@ use agora_graph::{TrustGraph, TrustPolicy};
 use agora_keystore::Keystore;
 use format::{ConcesionCapacidad, ManifiestoFirmado};
 use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_text_input::TextInputState;
 use llimphi_widget_tiled::{tiled_view_reorderable, TileSpec, TiledPalette};
 use rand::RngCore;
@@ -118,6 +124,9 @@ impl App for AgoraApp {
             cap_current: None,
             cap_status: String::new(),
             status: None,
+            menu_open: None,
+            edit_menu: None,
+            clipboard: llimphi_clipboard::SystemClipboard::new(),
         };
 
         if !necesita_unlock {
@@ -128,7 +137,7 @@ impl App for AgoraApp {
         model
     }
 
-    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::SwapTile(from, to) => {
                 if from != to && from < model.tiles_order.len() && to < model.tiles_order.len() {
@@ -457,6 +466,24 @@ impl App for AgoraApp {
                 model.cap_current = None;
                 model.cap_status.clear();
             }
+
+            // ---- Menús ---------------------------------------------------
+            Msg::MenuOpen(idx) => model.menu_open = idx,
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                if let Some(real) = menu_command_to_msg(&model, &cmd) {
+                    return AgoraApp::update(model, real, handle);
+                }
+            }
+            Msg::EditMenuOpen(x, y) => model.edit_menu = Some((x, y)),
+            Msg::EditMenuAction(action) => {
+                model.edit_menu = None;
+                model.apply_edit_menu_action(action);
+            }
         }
         model
     }
@@ -527,11 +554,173 @@ impl App for AgoraApp {
         let tiled =
             tiled_view_reorderable(tiles, |from, to| Some(Msg::SwapTile(from, to)), &palette);
 
-        match &model.status {
+        let body = match &model.status {
             None => tiled,
             Some(banner) => status_layout(&theme, tiled, banner),
-        }
+        };
+
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
+
+        // Right-click en la raíz (origen 0,0 → coords locales == coords de
+        // ventana) abre el menú de edición sobre el input focuseado.
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
+        .children(vec![menubar, ui::grow(body)])
     }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        if matches!(model.screen, Screen::Unlock { .. }) {
+            return None;
+        }
+        let theme = Theme::dark();
+        // El menú de edición tiene prioridad sobre el dropdown principal.
+        if let Some((x, y)) = model.edit_menu {
+            let editor = model.focused_input_ref().editor();
+            let masked = model.focused_input_ref().is_masked();
+            let flags = EditFlags::from_editor(editor, masked);
+            let (w, h) = AgoraApp::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &theme))
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = AgoraApp::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: std::sync::Arc::new(Msg::MenuOpen),
+        on_command: std::sync::Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Construye el menú principal reflejando el estado real: el submenú
+/// Editar se grisa según el input focuseado; Archivo/Ver exponen firmar,
+/// verificar, exportar, limpiar y los toggles de tile. Sólo comandos que
+/// mapean a `Msg` reales (ver [`menu_command_to_msg`]).
+fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+
+    let editor = model.focused_input_ref().editor();
+    let masked = model.focused_input_ref().is_masked();
+    let has_sel = editor.has_selection();
+    let can_undo = editor.can_undo();
+    let can_redo = editor.can_redo();
+    let has_text = !editor.is_empty();
+    let can_copy = has_sel && !masked;
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo {
+        undo = undo.disabled();
+    }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo {
+        redo = redo.disabled();
+    }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !can_copy {
+        cut = cut.disabled();
+        copy = copy.disabled();
+    }
+    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+        .shortcut("Ctrl+A")
+        .separated();
+    if !has_text {
+        sel_all = sel_all.disabled();
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Nueva identidad", "file.nueva_identidad"))
+                .item(MenuItem::new("Firmar release", "file.firmar_release").separated())
+                .item(MenuItem::new("Verificar release", "file.verificar_release"))
+                .item(MenuItem::new("Exportar release", "file.exportar_release"))
+                .item(MenuItem::new("Firmar capacidad", "file.firmar_capacidad").separated())
+                .item(MenuItem::new("Verificar capacidad", "file.verificar_capacidad"))
+                .item(MenuItem::new("Exportar capacidad", "file.exportar_capacidad"))
+                .item(MenuItem::new("Firmar multifirma", "file.firmar_multi").separated())
+                .item(MenuItem::new("Exportar multifirma", "file.exportar_multi")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all)
+                .item(MenuItem::new("Atestar", "edit.atestar").separated()),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Limpiar release", "view.limpiar_release"))
+                .item(MenuItem::new("Limpiar capacidad", "view.limpiar_capacidad"))
+                .item(MenuItem::new("Limpiar multifirma", "view.limpiar_multi").separated())
+                .item(MenuItem::new("Cerrar aviso de estado", "view.descartar_status")),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Recargar grafo desde disco", "help.recargar")),
+        )
+}
+
+/// Traduce el `command` del menú principal al `Msg` real de la app. `None`
+/// si el comando no aplica (p. ej. Atestar sin sujeto se resuelve en el
+/// propio `update`). Mantener en sync con [`app_menu`].
+fn menu_command_to_msg(_model: &Model, command: &str) -> Option<Msg> {
+    Some(match command {
+        "file.nueva_identidad" => Msg::NuevaIdentidad,
+        "file.firmar_release" => Msg::FirmarRelease,
+        "file.verificar_release" => Msg::VerificarRelease,
+        "file.exportar_release" => Msg::ExportarRelease,
+        "file.firmar_capacidad" => Msg::FirmarCapacidad,
+        "file.verificar_capacidad" => Msg::VerificarCapacidad,
+        "file.exportar_capacidad" => Msg::ExportarCapacidad,
+        "file.firmar_multi" => Msg::FirmarMulti,
+        "file.exportar_multi" => Msg::ExportarMulti,
+        "edit.undo" => Msg::EditMenuAction(EditAction::Undo),
+        "edit.redo" => Msg::EditMenuAction(EditAction::Redo),
+        "edit.cut" => Msg::EditMenuAction(EditAction::Cut),
+        "edit.copy" => Msg::EditMenuAction(EditAction::Copy),
+        "edit.paste" => Msg::EditMenuAction(EditAction::Paste),
+        "edit.selectall" => Msg::EditMenuAction(EditAction::SelectAll),
+        "edit.atestar" => Msg::Atestar,
+        "view.limpiar_release" => Msg::LimpiarRelease,
+        "view.limpiar_capacidad" => Msg::LimpiarCapacidad,
+        "view.limpiar_multi" => Msg::LimpiarMulti,
+        "view.descartar_status" => Msg::DescartarStatus,
+        "help.recargar" => Msg::ArchivoCambio,
+        _ => return None,
+    })
 }
 
 /// Segundos UNIX actuales (0 si el reloj está antes de la época).

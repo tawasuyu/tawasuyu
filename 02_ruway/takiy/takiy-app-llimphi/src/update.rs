@@ -3,6 +3,7 @@
 //! automación, export y el blip de audition.
 
 use llimphi_ui::{DragPhase, Handle};
+use llimphi_widget_menubar::DEFAULT_HEIGHT as MENU_H;
 use takiy_app::{
     cell_at, default_save_path_for_save, gm_program_name, grid_geometry, header_beat_at,
     hit_test_note, pitch_range_with_offset, write_score, EditMsg, EditorState, HEADER_H, KEYBOARD_W,
@@ -396,6 +397,13 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                     handle,
                 );
             }
+            // El right-click no acertó a un objeto borrable. Si hay una
+            // nota seleccionada, abrimos el menú contextual sobre ella;
+            // las coords locales del canvas se llevan a coords de ventana
+            // sumando la altura de la barra de menú.
+            if model.editor.selected.is_some() {
+                return actualizar(model, Msg::ContextMenuOpen(lx, ly + MENU_H), handle);
+            }
         }
         Msg::DragNote { phase, dx, dy, lx0, ly0 } => {
             let Some((rw, rh)) = model.last_rect else {
@@ -605,6 +613,27 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                     eprintln!("takiy · save error en {}: {e}", path.display());
                     model.status = format!("save error: {e}");
                 }
+            }
+        }
+        Msg::MenuOpen(which) => {
+            model.menu_open = which;
+            // Abrir un menú raíz cierra cualquier contextual.
+            model.context_menu = None;
+        }
+        Msg::CloseMenus => {
+            model.menu_open = None;
+            model.context_menu = None;
+        }
+        Msg::MenuCommand(cmd) => {
+            model.menu_open = None;
+            model.context_menu = None;
+            crate::handle_menu_command(&cmd, handle);
+        }
+        Msg::ContextMenuOpen(x, y) => {
+            // Sólo si hay una nota seleccionada.
+            if model.editor.selected.is_some() {
+                model.menu_open = None;
+                model.context_menu = Some((x, y));
             }
         }
     }

@@ -26,4 +26,7 @@ takiy-midi = { path = "../takiy-midi" }
 takiy-playback = { path = "../takiy-playback" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
 serde_json = { workspace = true }

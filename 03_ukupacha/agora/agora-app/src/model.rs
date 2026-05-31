@@ -168,6 +168,14 @@ pub(crate) struct Model {
 
     /// Banner de estado de servicio al pie. Lo pinta el `view`.
     pub status: Option<StatusBanner>,
+
+    /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
+    pub menu_open: Option<usize>,
+    /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
+    /// Opera sobre el `TextInputState` focuseado (`focused_input`).
+    pub edit_menu: Option<(f32, f32)>,
+    /// Portapapeles del sistema, compartido por copiar/cortar/pegar.
+    pub clipboard: llimphi_clipboard::SystemClipboard,
 }
 
 impl Model {
@@ -194,6 +202,21 @@ impl Model {
             .map(Keypair::from_seed)
     }
 
+    /// Vista de sólo lectura del `TextInputState` focuseado (espeja
+    /// [`Self::focused_input_mut`]). Lo usan el menú de edición y el
+    /// submenú Editar para reflejar el estado real del campo.
+    pub fn focused_input_ref(&self) -> &TextInputState {
+        match self.focused_input {
+            FocusedInput::Compose(ComposeField::Predicate) => &self.compose_predicate,
+            FocusedInput::Compose(ComposeField::Value) => &self.compose_value,
+            FocusedInput::MultiMessage => &self.multi_message,
+            FocusedInput::ReleaseHash => &self.release_hash,
+            FocusedInput::ReleasePaste => &self.release_paste,
+            FocusedInput::CapBytecode => &self.cap_bytecode,
+            FocusedInput::CapPaste => &self.cap_paste,
+        }
+    }
+
     /// El `TextInputState` que recibe las teclas según `focused_input`. Un
     /// solo punto de ruteo para todos los inputs de la pantalla principal.
     pub fn focused_input_mut(&mut self) -> &mut TextInputState {
@@ -213,6 +236,31 @@ impl Model {
     pub fn edit_focused(&mut self, ev: &KeyEvent) {
         let focus = self.focused_input;
         self.focused_input_mut().apply_key(ev);
+        match focus {
+            FocusedInput::MultiMessage => self.multi_current = None,
+            FocusedInput::ReleaseHash => self.release_current = None,
+            FocusedInput::CapBytecode => self.cap_current = None,
+            _ => {}
+        }
+    }
+
+    /// Aplica una acción del menú de edición al `EditorState` del input
+    /// focuseado, reusando el clipboard del sistema. Invalida el artefacto
+    /// derivado del campo editado igual que [`Self::edit_focused`].
+    pub fn apply_edit_menu_action(&mut self, action: llimphi_widget_edit_menu::EditAction) {
+        let focus = self.focused_input;
+        // Borrow disjunto: el campo focuseado y el clipboard son campos
+        // distintos del Model, así que los tomamos por separado.
+        let input = match focus {
+            FocusedInput::Compose(ComposeField::Predicate) => &mut self.compose_predicate,
+            FocusedInput::Compose(ComposeField::Value) => &mut self.compose_value,
+            FocusedInput::MultiMessage => &mut self.multi_message,
+            FocusedInput::ReleaseHash => &mut self.release_hash,
+            FocusedInput::ReleasePaste => &mut self.release_paste,
+            FocusedInput::CapBytecode => &mut self.cap_bytecode,
+            FocusedInput::CapPaste => &mut self.cap_paste,
+        };
+        llimphi_widget_edit_menu::apply(input.editor_mut(), action, &mut self.clipboard);
         match focus {
             FocusedInput::MultiMessage => self.multi_current = None,
             FocusedInput::ReleaseHash => self.release_current = None,
@@ -348,4 +396,17 @@ pub(crate) enum Msg {
     ExportarCapacidad,
     /// Limpia el estado del tile Capacidad.
     LimpiarCapacidad,
+
+    // ---- Menús (barra principal + edición contextual) ---------------------
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click sobre la ventana → abre el menú de edición en `(x, y)`,
+    /// operando sobre el input focuseado.
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición contextual.
+    EditMenuAction(llimphi_widget_edit_menu::EditAction),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
 }

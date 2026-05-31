@@ -95,6 +95,16 @@ pub(crate) enum Msg {
     /// ventana de pitches visible. Positivo sube (pitches más agudos),
     /// negativo baja.
     ScrollMidi { delta: i32 },
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal o contextual — el string
+    /// se traduce al `Msg`/`EditMsg` real existente en `handle_menu_command`.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc / tras comando).
+    CloseMenus,
+    /// Abre el menú contextual sobre la nota seleccionada, anclado en
+    /// `(x, y)` de ventana. No-op si no hay nota seleccionada.
+    ContextMenuOpen(f32, f32),
     Quit,
 }
 

@@ -38,11 +38,18 @@ mod msg;
 mod paint;
 mod update;
 
+use std::sync::Arc;
+
+use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::{
     App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, PaintRect, View, WheelDelta,
 };
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use takiy_app::{describe_key, load_score_or_demo, pitch_range_with_offset, EditMsg};
 use takiy_playback::Player;
 
@@ -116,6 +123,8 @@ impl App for Takiy {
             auto_pending: None,
             midi_offset: 0,
             last_audition_at: None,
+            menu_open: None,
+            context_menu: None,
         }
     }
 
@@ -143,7 +152,7 @@ impl App for Takiy {
         Some(Msg::ScrollMidi { delta: steps })
     }
 
-    fn on_key(_model: &Model, event: &KeyEvent) -> Option<Msg> {
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
         }
@@ -165,6 +174,12 @@ impl App for Takiy {
             Key::Named(NamedKey::Space) if event.modifiers.ctrl => Some(Msg::PlayWithCountIn),
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
             Key::Named(NamedKey::Tab) => Some(Msg::Edit(EditMsg::CycleTrack)),
+            // Esc: si hay un menú abierto lo cierra; si no, sale.
+            Key::Named(NamedKey::Escape)
+                if model.menu_open.is_some() || model.context_menu.is_some() =>
+            {
+                Some(Msg::CloseMenus)
+            }
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
             Key::Named(NamedKey::ArrowLeft) => {
                 Some(Msg::Edit(EditMsg::MoveSelected { d_beat: -1.0, d_semitones: 0 }))
@@ -311,8 +326,13 @@ impl App for Takiy {
 
         let score_paint = score;
 
-        View::new(Style {
+        // Barra de menú principal arriba; el piano roll ocupa el resto.
+        let menu = app_menu();
+        let menubar = menubar_view(&menubar_spec(&menu, model));
+
+        let canvas = View::new(Style {
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            flex_grow: 1.0,
             ..Default::default()
         })
         .fill(theme.bg_app)
@@ -323,6 +343,10 @@ impl App for Takiy {
         .draggable_at(|phase, dx, dy, lx0, ly0| {
             Some(Msg::DragNote { phase, dx, dy, lx0, ly0 })
         })
+        // Right-click: el handler de update decide si borra el objeto
+        // bajo el cursor (nota/dot) o abre el menú contextual sobre la
+        // selección. El offset MENU_H lleva la coord local del canvas a
+        // coord de ventana para anclar el overlay.
         .on_right_click_at(|lx, ly, rw, rh| Some(Msg::RightPressAt { lx, ly, rw, rh }))
         .paint_with(move |scene, ts, rect: PaintRect| {
             paint_piano_roll(
@@ -332,8 +356,163 @@ impl App for Takiy {
                 &key_label, key_scale.as_ref(), snap_to_key,
                 min_midi, max_midi, total_beats, theme,
             );
+        });
+
+        View::new(Style {
+            flex_direction: llimphi_ui::llimphi_layout::taffy::style::FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
         })
+        .fill(theme.bg_app)
+        .children(vec![menubar, canvas])
     }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // Prioridad: menú contextual de la nota seleccionada.
+        if let Some((x, y)) = model.context_menu {
+            return Some(context_menu_for_selection(model, x, y));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu();
+        menubar_overlay(&menubar_spec(&menu, model))
+    }
+}
+
+/// Viewport para clampear overlays: último rect conocido del modelo
+/// (incluye la barra de menú) o `initial_size()` si todavía no se pintó.
+fn viewport_of(model: &Model) -> (f32, f32) {
+    match model.last_rect {
+        Some((w, h)) => (w, h + MENU_H),
+        None => {
+            let (w, h) = Takiy::initial_size();
+            (w as f32, h as f32)
+        }
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &'a Model) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme: &model.theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del piano roll. Sólo comandos que mapean a
+/// `Msg`/`EditMsg` reales ya existentes — nada inventado.
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Guardar", "file.save").shortcut("S"))
+                .item(MenuItem::new("Exportar MIDI…", "file.export_midi").shortcut("Ctrl+E"))
+                .item(MenuItem::new("Exportar WAV…", "file.export_wav").shortcut("Ctrl+R"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Esc").separated()),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z"))
+                .item(MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y"))
+                .item(MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C").separated())
+                .item(MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X"))
+                .item(MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V"))
+                .item(MenuItem::new("Duplicar", "edit.duplicate").shortcut("Ctrl+D"))
+                .item(MenuItem::new("Borrar selección", "edit.delete").shortcut("Del").separated())
+                .item(MenuItem::new("Pista nueva", "edit.new_track").shortcut("N"))
+                .item(MenuItem::new("Ciclar pista", "edit.cycle_track").shortcut("Tab"))
+                .item(MenuItem::new("Borrar pista activa", "edit.delete_track")),
+        )
+        .menu(
+            Menu::new("Reproducción")
+                .item(MenuItem::new("Tocar / Detener", "play.toggle").shortcut("Space"))
+                .item(MenuItem::new("Tocar con count-in", "play.countin").shortcut("Ctrl+Space"))
+                .item(MenuItem::new("Metrónomo", "play.metronome").shortcut("M").separated())
+                .item(MenuItem::new("Loop", "play.loop").shortcut("L")),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Ciclar snap", "view.snap").shortcut("Q"))
+                .item(MenuItem::new("Snap a tonalidad", "view.snap_key").shortcut("Alt+K")),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id (de la barra o del contextual) al `Msg`/`EditMsg`
+/// real y lo dispatcha. Todos los ids mapean a acciones que ya existían.
+fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
+    let msg = match cmd {
+        "file.save" => Some(Msg::Save),
+        "file.export_midi" => Some(Msg::ExportMidi),
+        "file.export_wav" => Some(Msg::ExportWav),
+        "file.quit" => Some(Msg::Quit),
+        "edit.undo" => Some(Msg::Undo),
+        "edit.redo" => Some(Msg::Redo),
+        "edit.copy" => Some(Msg::Edit(EditMsg::CopySelected)),
+        "edit.cut" => Some(Msg::Edit(EditMsg::CutSelected)),
+        "edit.paste" => Some(Msg::PasteAtPlayhead),
+        "edit.duplicate" => Some(Msg::Edit(EditMsg::DuplicateSelected)),
+        "edit.delete" => Some(Msg::Edit(EditMsg::DeleteSelected)),
+        "edit.new_track" => Some(Msg::Edit(EditMsg::NewTrack)),
+        "edit.cycle_track" => Some(Msg::Edit(EditMsg::CycleTrack)),
+        "edit.delete_track" => Some(Msg::Edit(EditMsg::DeleteActiveTrack)),
+        "play.toggle" => Some(Msg::TogglePlay),
+        "play.countin" => Some(Msg::PlayWithCountIn),
+        "play.metronome" => Some(Msg::ToggleMetronome),
+        "play.loop" => Some(Msg::ToggleLoop),
+        "view.snap" => Some(Msg::CycleSnap),
+        "view.snap_key" => Some(Msg::Edit(EditMsg::ToggleSnapToKey)),
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => None,
+    };
+    if let Some(msg) = msg {
+        handle.dispatch(msg);
+    }
+}
+
+/// Menú contextual sobre la nota seleccionada. Refleja en gris el estado
+/// real del editor (clipboard vacío deshabilita "Pegar"). Sólo acciones
+/// existentes.
+fn context_menu_for_selection(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let has_clipboard = !model.editor.clipboard.is_empty();
+    let header = model
+        .editor
+        .selected
+        .and_then(|(t, i)| model.editor.score.track(t).and_then(|tr| tr.notes().get(i)).copied())
+        .map(|n| format!("nota midi {}", n.pitch.midi()))
+        .unwrap_or_else(|| "selección".to_string());
+
+    let mut items = vec![
+        ContextMenuItem::action("Copiar").with_shortcut("Ctrl+C"),
+        ContextMenuItem::action("Cortar").with_shortcut("Ctrl+X"),
+        ContextMenuItem::action("Duplicar").with_shortcut("Ctrl+D"),
+    ];
+    let paste = ContextMenuItem::action("Pegar al playhead").with_shortcut("Ctrl+V");
+    items.push(if has_clipboard { paste } else { paste.disabled() });
+    items.push(ContextMenuItem::separator());
+    items.push(ContextMenuItem::action("Borrar").with_shortcut("Del").destructive());
+
+    // Mapeo de índice de item → command id de `handle_menu_command`.
+    let cmds: Vec<&'static str> =
+        vec!["edit.copy", "edit.cut", "edit.duplicate", "edit.paste", "", "edit.delete"];
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| {
+        Msg::MenuCommand(cmds.get(i).copied().unwrap_or("").to_string())
+    });
+
+    context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: viewport_of(model),
+        header: Some(header),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&model.theme),
+    })
 }
 
 fn main() {
