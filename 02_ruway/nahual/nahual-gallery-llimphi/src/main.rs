@@ -25,6 +25,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -54,21 +55,39 @@ const HEADER_H: f32 = 44.0;
 const BREADCRUMB_H: f32 = 30.0;
 
 /// Una entrada de la carpeta actual: subcarpeta navegable o archivo de
-/// imagen con miniatura. Las carpetas se listan primero.
+/// imagen con miniatura (y su tamaño en disco, para el badge). Las carpetas
+/// se listan primero.
 #[derive(Clone)]
 enum Entrada {
     Carpeta(PathBuf),
-    Imagen(PathBuf),
+    Imagen { path: PathBuf, size: u64 },
 }
 
 impl Entrada {
     fn path(&self) -> &Path {
         match self {
-            Entrada::Carpeta(p) | Entrada::Imagen(p) => p,
+            Entrada::Carpeta(p) => p,
+            Entrada::Imagen { path, .. } => path,
         }
     }
     fn es_carpeta(&self) -> bool {
         matches!(self, Entrada::Carpeta(_))
+    }
+}
+
+/// Formatea un tamaño en bytes de forma humana (B/KB/MB/GB).
+fn humano(n: u64) -> String {
+    const U: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < 3 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", U[i])
     }
 }
 
@@ -79,6 +98,16 @@ const EXTS: &[&str] = &["png", "jpg", "jpeg", "webp"];
 /// archivo — un PNG/JPEG así decodifica a cientos de MB, pero es el límite
 /// del visor existente).
 const MAX_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
+/// Tope de miniaturas en RAM. Al pasarlo, se descartan las más lejanas a la
+/// ventana visible (con margen) — acota la memoria en carpetas enormes.
+const CAP_THUMBS: usize = 800;
+/// Rango de tile permitido al hacer zoom con +/−.
+const TILE_MIN: f32 = 80.0;
+const TILE_MAX: f32 = 280.0;
+/// Alto del label bajo la miniatura (nombre + tamaño).
+const LABEL_H: f32 = 20.0;
+/// Intervalo del slideshow.
+const SLIDE_SECS: u64 = 3;
 
 /// Criterio de orden de la grilla.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -133,6 +162,12 @@ enum Msg {
     Subir,
     /// Navega al segmento `i` del breadcrumb (raíz → hoja).
     NavegarSegmento(usize),
+    /// Ajusta el tamaño del tile (zoom de grilla) por el delta dado en px.
+    Zoom(f32),
+    /// Alterna el slideshow (sólo con el preview abierto).
+    ToggleSlideshow,
+    /// Tick del slideshow: avanza a la imagen siguiente.
+    SlideAvanzar,
 }
 
 struct Model {
@@ -156,6 +191,8 @@ struct Model {
     vh: f32,
     /// Imagen abierta a tamaño completo (overlay). `None` = grilla normal.
     preview: Option<(PathBuf, ImagePreviewState)>,
+    /// Slideshow activo (avanza solo en el preview).
+    slideshow: bool,
     orden: Orden,
     estado: String,
     theme: Theme,
@@ -185,7 +222,7 @@ impl App for Gallery {
         let (w, h) = Self::initial_size();
         let metrics = GridMetrics {
             tile_w: 140.0,
-            tile_h: 162.0, // 140 imagen + ~22 label
+            tile_h: 140.0 + LABEL_H,
             gap: 10.0,
             pad: 12.0,
         };
@@ -203,6 +240,7 @@ impl App for Gallery {
             vw: w as f32,
             vh: h as f32 - HEADER_H - BREADCRUMB_H,
             preview: None,
+            slideshow: false,
             orden,
             estado,
             theme: Theme::dark(),
@@ -233,6 +271,7 @@ impl App for Gallery {
                 Key::Named(NamedKey::Escape) => Some(Msg::CerrarPreview),
                 Key::Named(NamedKey::ArrowRight) => Some(Msg::PreviewVecino(1)),
                 Key::Named(NamedKey::ArrowLeft) => Some(Msg::PreviewVecino(-1)),
+                Key::Character(c) if c == "s" => Some(Msg::ToggleSlideshow),
                 _ => None,
             };
         }
@@ -244,6 +283,9 @@ impl App for Gallery {
             }
             Key::Named(NamedKey::Backspace) => Some(Msg::Subir),
             Key::Character(c) if c == "o" => Some(Msg::CiclarOrden),
+            // Zoom de grilla: + / = agrandan, - achica.
+            Key::Character(c) if c == "+" || c == "=" => Some(Msg::Zoom(20.0)),
+            Key::Character(c) if c == "-" => Some(Msg::Zoom(-20.0)),
             _ => Some(Msg::Tecla(e.clone())),
         }
     }
@@ -292,24 +334,38 @@ impl App for Gallery {
                 }
             }
             Msg::PreviewVecino(d) => {
-                // Salta a la imagen vecina, ignorando carpetas.
-                if let Some((actual, _)) = &m.preview {
-                    if let Some(cur) = m.entries.iter().position(|e| e.path() == actual) {
-                        let mut i = cur as i32 + d;
-                        while i >= 0 && (i as usize) < m.entries.len() {
-                            if !m.entries[i as usize].es_carpeta() {
-                                let idx = i as usize;
-                                m.seleccionado = Some(idx);
-                                abrir_preview(&mut m, idx, handle);
-                                break;
-                            }
-                            i += d;
-                        }
-                    }
-                }
+                avanzar_imagen(&mut m, d, false, handle);
             }
             Msg::CerrarPreview => {
                 m.preview = None;
+                m.slideshow = false;
+            }
+            Msg::Zoom(d) => {
+                let w = (m.metrics.tile_w + d).clamp(TILE_MIN, TILE_MAX);
+                m.metrics.tile_w = w;
+                m.metrics.tile_h = w + LABEL_H;
+                m.estado = format!("tile {:.0}px", w);
+                bombear(&mut m, handle);
+            }
+            Msg::ToggleSlideshow => {
+                if m.preview.is_some() {
+                    m.slideshow = !m.slideshow;
+                    m.estado = if m.slideshow {
+                        "slideshow ▶".into()
+                    } else {
+                        "slideshow ⏸".into()
+                    };
+                    if m.slideshow {
+                        programar_slide(handle);
+                    }
+                }
+            }
+            Msg::SlideAvanzar => {
+                // Sólo avanza si el slideshow sigue activo y hay preview.
+                if m.slideshow && m.preview.is_some() {
+                    avanzar_imagen(&mut m, 1, true, handle);
+                    programar_slide(handle);
+                }
             }
             Msg::CiclarOrden => {
                 // Conservar la selección por path al re-listar (que reordena).
@@ -398,9 +454,15 @@ impl App for Gallery {
             let cells: Vec<GridCell<Msg>> = (v.first..v.first + v.count)
                 .map(|i| {
                     let e = &model.entries[i];
+                    let label = match e {
+                        Entrada::Imagen { path, size } => {
+                            format!("{}  ·  {}", nombre(path), humano(*size))
+                        }
+                        Entrada::Carpeta(p) => nombre(p),
+                    };
                     GridCell {
                         content: celda_contenido(model, e),
-                        label: Some(nombre(e.path())),
+                        label: Some(label),
                         selected: model.seleccionado == Some(i),
                         // Un clic en carpeta entra; en imagen selecciona
                         // (⏎/espacio la abre en preview).
@@ -527,7 +589,7 @@ fn navegar_a(m: &mut Model, dir: PathBuf, handle: &Handle<Msg>) {
 fn encabezado(model: &Model, v: &llimphi_widget_grid::VisibleWindow) -> View<Msg> {
     let theme = &model.theme;
     let texto = format!(
-        "{} ítems  ·  fila {}/{}  ·  orden: {} (o)  ·  ⏎/espacio: abrir  ·  ⌫ subir  ·  {}",
+        "{} ítems · fila {}/{} · orden:{} (o) · ⏎ abrir · ⌫ subir · +/− zoom · s slideshow · {}",
         model.entries.len(),
         v.first_row + 1,
         v.total_rows.max(1),
@@ -620,6 +682,45 @@ fn abrir_preview(m: &mut Model, i: usize, handle: &Handle<Msg>) {
     });
 }
 
+/// Mueve el preview a la imagen anterior/siguiente (`d` = ±1), saltando
+/// carpetas. Con `wrap`, da la vuelta en los extremos (para el slideshow).
+fn avanzar_imagen(m: &mut Model, d: i32, wrap: bool, handle: &Handle<Msg>) {
+    let Some((actual, _)) = m.preview.as_ref() else {
+        return;
+    };
+    let Some(cur) = m.entries.iter().position(|e| e.path() == actual) else {
+        return;
+    };
+    let n = m.entries.len() as i32;
+    let mut i = cur as i32 + d;
+    // A lo sumo `n` pasos: evita un loop infinito si todo son carpetas.
+    for _ in 0..n {
+        if i < 0 || i >= n {
+            if wrap {
+                i = (i % n + n) % n;
+            } else {
+                return;
+            }
+        }
+        if !m.entries[i as usize].es_carpeta() {
+            let idx = i as usize;
+            m.seleccionado = Some(idx);
+            abrir_preview(m, idx, handle);
+            return;
+        }
+        i += d;
+    }
+}
+
+/// Programa un tick de slideshow: un thread duerme `SLIDE_SECS` y reentra
+/// con `SlideAvanzar` (que reprograma el siguiente si el slideshow sigue).
+fn programar_slide(handle: &Handle<Msg>) {
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_secs(SLIDE_SECS));
+        Msg::SlideAvanzar
+    });
+}
+
 /// Ordena una lista de paths según el criterio. `Tamano`/`Fecha` consultan
 /// `metadata` (un `stat` por archivo — se paga una vez por reorden).
 fn ordenar_paths(paths: &mut [PathBuf], orden: Orden) {
@@ -656,6 +757,21 @@ fn bombear(m: &mut Model, handle: &Handle<Msg>) {
         }
     }
     m.plan.olvidar_excepto(&visibles);
+
+    // Eviction: si el cache RAM creció demasiado, conservar sólo las
+    // miniaturas de un rango de entradas alrededor de la ventana visible
+    // (con margen de varias pantallas) — el resto se regenera al volver.
+    if m.thumbs.len() > CAP_THUMBS {
+        let margen = v.cols.saturating_mul(30).max(60);
+        let lo = v.first.saturating_sub(margen);
+        let hi = (v.first + v.count + margen).min(m.entries.len());
+        let mantener: HashSet<PathBuf> = m.entries[lo..hi]
+            .iter()
+            .filter(|e| !e.es_carpeta())
+            .map(|e| e.path().to_path_buf())
+            .collect();
+        m.thumbs.retain(|p, _| mantener.contains(p));
+    }
 
     for path in m.plan.proximos() {
         let p = path.clone();
@@ -698,7 +814,10 @@ fn listar(dir: &Path, orden: Orden) -> Vec<Entrada> {
     carpetas
         .into_iter()
         .map(Entrada::Carpeta)
-        .chain(imagenes.into_iter().map(Entrada::Imagen))
+        .chain(imagenes.into_iter().map(|path| {
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            Entrada::Imagen { path, size }
+        }))
         .collect()
 }
 
