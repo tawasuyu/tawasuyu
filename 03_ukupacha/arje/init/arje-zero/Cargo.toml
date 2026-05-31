@@ -20,6 +20,8 @@ arje-wasm = { path = "../../runtime/arje-wasm" }
 arje-snapshot = { path = "../arje-snapshot" }
 arje-brain = { path = "../../runtime/arje-brain" }
 arje-echo = { path = "../../runtime/arje-echo" }   # solo para constantes del demo
+# Política de ciclo de vida canónica (backoff/restart) — fuente única (ver shared/sandokan/SDD.md §5 Fase 1)
+sandokan-lifecycle = { path = "../../../../shared/sandokan/sandokan-lifecycle" }
 
 # Brahman protocol — handshake para módulos brahman conscientes
 card-handshake = { path = "../../../../02_ruway/chasqui/card-handshake" }

@@ -70,9 +70,12 @@ pub(in crate::graph) const INHIBIT_TTL: std::time::Duration =
 
 #[derive(Default, Debug)]
 pub(in crate::graph) struct RestartState {
-    /// Intentos consecutivos cortos. Se resetea cuando un Ente vive el
-    /// suficiente tiempo para considerarse estable (≥ `max` de su Supervision).
-    pub attempts: u32,
+    /// Backoff exponencial canónico (`sandokan-lifecycle`). `None` hasta la
+    /// primera muerte: se construye con `(initial, max)` de la Supervision de
+    /// la Card. Se resetea cuando un Ente vive lo suficiente para considerarse
+    /// estable (≥ `max`). Antes esto era un `attempts: u32` + un `backoff_delay`
+    /// propio — duplicaba la política; ver `shared/sandokan/SDD.md` §5 Fase 1.
+    pub backoff: Option<sandokan_lifecycle::Backoff>,
     /// Instante en que el último spawn arrancó. None = nunca encarnado.
     pub last_started_at: Option<Instant>,
 }

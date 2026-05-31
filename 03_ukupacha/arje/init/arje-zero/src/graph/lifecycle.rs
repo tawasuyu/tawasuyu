@@ -7,18 +7,11 @@ use super::{EnteGraph, Incarnated};
 use crate::events::{ExitStatus, GraphEvent};
 use arje_bus::{BusMessage, BusPayload, BusRequest};
 use arje_card::{Capability, EntityCard, Payload, Supervision};
-use std::time::{Duration, Instant};
+use sandokan_lifecycle::Backoff;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use ulid::Ulid;
-
-/// Backoff exponencial con cap. attempts=1 → initial, attempts=2 → initial*2,
-/// hasta que se satura en `max`. attempts=0 nunca pasa por aquí (sería un
-/// primer spawn, no un reintento).
-fn backoff_delay(initial: Duration, max: Duration, attempts: u32) -> Duration {
-    let shift = attempts.saturating_sub(1).min(31);
-    initial.saturating_mul(1u32 << shift).min(max)
-}
 
 impl EnteGraph {
     /// Encarna las dependencias declaradas en la Semilla. Único punto donde
@@ -129,24 +122,23 @@ impl EnteGraph {
 
         match inc.card.supervision.clone() {
             Supervision::Restart { initial, max } => {
-                // Política: si el Ente sobrevivió al menos `max` (su propio
-                // cap de backoff), lo consideramos estable y reseteamos el
-                // contador. Si murió antes, lo incrementamos.
+                // Política: si el Ente sobrevivió al menos `max` (su propio cap
+                // de backoff), lo consideramos estable y reseteamos el backoff.
+                // Si murió antes, escala. La matemática del backoff vive en
+                // `sandokan-lifecycle` (fuente única; ver SDD §5 Fase 1) — acá
+                // sólo queda la *política* de cuándo resetear.
                 let st = self.restart_state.entry(inc.card.label.clone()).or_default();
-                let uptime = st.last_started_at.map(|t| t.elapsed());
-                let attempts = match uptime {
-                    Some(u) if u >= max => {
-                        st.attempts = 1;
-                        1
-                    }
-                    _ => {
-                        st.attempts = st.attempts.saturating_add(1);
-                        st.attempts
-                    }
-                };
-                let delay = backoff_delay(initial, max, attempts);
+                let stable = st
+                    .last_started_at
+                    .map(|t| t.elapsed() >= max)
+                    .unwrap_or(false);
+                let backoff = st.backoff.get_or_insert_with(|| Backoff::new(initial, max));
+                if stable {
+                    backoff.reset();
+                }
+                let delay = backoff.next_delay();
                 info!(
-                    label = %inc.card.label, attempts, delay_ms = delay.as_millis() as u64,
+                    label = %inc.card.label, delay_ms = delay.as_millis() as u64,
                     "Restart programado"
                 );
                 // No bloquear el bucle primordial: el restart vuelve como
@@ -202,50 +194,40 @@ impl EnteGraph {
 
 #[cfg(test)]
 mod tests {
-    use super::backoff_delay;
+    use sandokan_lifecycle::Backoff;
     use std::time::Duration;
 
-    #[test]
-    fn backoff_attempt_uno_devuelve_initial() {
-        let initial = Duration::from_millis(100);
-        let max = Duration::from_secs(60);
-        assert_eq!(backoff_delay(initial, max, 1), initial);
-    }
+    // La matemática del backoff ahora vive en `sandokan-lifecycle` (y tiene
+    // sus propios tests). Acá verificamos que el `Backoff` canónico reproduce
+    // la secuencia que antes daba el `backoff_delay` propio de arje-zero
+    // (initial, ×2, …, capeado a max) y la política de reset al estabilizarse.
 
     #[test]
-    fn backoff_duplica_por_intento_hasta_max() {
-        let initial = Duration::from_millis(100);
-        let max = Duration::from_secs(60);
-        assert_eq!(backoff_delay(initial, max, 1), Duration::from_millis(100));
-        assert_eq!(backoff_delay(initial, max, 2), Duration::from_millis(200));
-        assert_eq!(backoff_delay(initial, max, 3), Duration::from_millis(400));
-        assert_eq!(backoff_delay(initial, max, 4), Duration::from_millis(800));
+    fn backoff_reproduce_secuencia_previa() {
+        let mut b = Backoff::new(Duration::from_millis(100), Duration::from_secs(60));
+        assert_eq!(b.next_delay(), Duration::from_millis(100)); // 1er reintento
+        assert_eq!(b.next_delay(), Duration::from_millis(200));
+        assert_eq!(b.next_delay(), Duration::from_millis(400));
+        assert_eq!(b.next_delay(), Duration::from_millis(800));
     }
 
     #[test]
     fn backoff_satura_en_max() {
-        let initial = Duration::from_millis(100);
-        let max = Duration::from_secs(1);
-        // En el intento donde initial*2^n excede max, debe quedarse en max.
-        // 100ms * 2^10 = 102.4s; clampeado a 1s.
-        assert_eq!(backoff_delay(initial, max, 10), max);
-        assert_eq!(backoff_delay(initial, max, 30), max);
+        let mut b = Backoff::new(Duration::from_millis(100), Duration::from_secs(1));
+        for _ in 0..10 {
+            b.next_delay();
+        }
+        assert_eq!(b.next_delay(), Duration::from_secs(1)); // capeado a max
     }
 
     #[test]
-    fn backoff_attempts_extremos_no_panican() {
-        let initial = Duration::from_millis(1);
-        let max = Duration::from_secs(60);
-        // u32::MAX no debe overflowear (shift cap a 31).
-        assert_eq!(backoff_delay(initial, max, u32::MAX), max);
-    }
-
-    #[test]
-    fn backoff_attempt_cero_es_un_intento() {
-        // attempts=0 nunca debe llegar (sería un primer spawn, no reintento).
-        // Si llegara, no debe panicar — saturating_sub deja shift en 0.
-        let initial = Duration::from_millis(50);
-        let max = Duration::from_secs(60);
-        assert_eq!(backoff_delay(initial, max, 0), initial);
+    fn reset_al_estabilizarse_vuelve_a_initial() {
+        // Política de arje-zero: si el Ente vive ≥ max, reset → próximo
+        // reintento arranca de nuevo en initial.
+        let mut b = Backoff::new(Duration::from_millis(100), Duration::from_secs(60));
+        b.next_delay();
+        b.next_delay();
+        b.reset();
+        assert_eq!(b.next_delay(), Duration::from_millis(100));
     }
 }
