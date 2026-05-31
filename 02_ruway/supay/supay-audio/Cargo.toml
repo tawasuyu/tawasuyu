@@ -1,0 +1,11 @@
+[package]
+name = "supay-audio"
+version = "0.1.0"
+edition = "2021"
+description = "Mixer de SFX de Doom (supay) sobre cpal — Fase 4.0"
+
+[dependencies]
+supay-wad = { path = "../supay-wad" }
+media-core = { path = "../../media/media-core" }
+media-audio-cpal = { path = "../../media/media-audio-cpal" }
+parking_lot = { workspace = true }

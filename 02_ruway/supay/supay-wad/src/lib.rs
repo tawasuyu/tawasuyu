@@ -95,6 +95,19 @@ pub struct Wad {
     entries: Vec<DirEntry>,
 }
 
+/// Efecto de sonido digital decodificado desde un lump `DS*` en formato
+/// DMX. PCM mono normalizado a `f32 ∈ [-1, 1]`. El `sample_rate` nativo
+/// (típicamente 11025 Hz) viaja con las muestras para que el mixer
+/// resamplee a la frecuencia del dispositivo. Ver [`Wad::sound`].
+#[derive(Clone, Debug)]
+pub struct Sound {
+    /// Frecuencia de muestreo nativa del lump (Hz). Doom usa 11025.
+    pub sample_rate: u16,
+    /// Muestras mono normalizadas a `[-1, 1]` (128 = silencio en el
+    /// PCM original de 8-bit unsigned).
+    pub samples: Vec<f32>,
+}
+
 impl Wad {
     /// Abre y parsea un WAD desde disco. Lee el archivo completo a
     /// memoria — DOOM1.WAD ≈ 4 MB, no es problema; permite que `lump`
@@ -266,6 +279,47 @@ impl Wad {
             out.extend_from_slice(&[r, g, b, 0xFF]);
         }
         Some(out)
+    }
+
+    /// Decodifica un lump de sonido `DS*` en formato DMX a [`Sound`].
+    ///
+    /// Layout DMX: `u16 formato (==3) | u16 sample_rate | u32 count |
+    /// count × u8` (PCM unsigned, 128 = silencio). Las primeras 16 y
+    /// últimas 16 muestras son padding (copias del primer/último valor
+    /// real) que recortamos como hace Chocolate Doom. Devuelve `None`
+    /// si el lump no existe, no es formato 3, o está truncado.
+    pub fn sound(&self, name: &str) -> Option<Sound> {
+        let l = self.lump(name)?;
+        if l.len() < 8 {
+            return None;
+        }
+        let fmt = u16::from_le_bytes([l[0], l[1]]);
+        if fmt != 3 {
+            return None;
+        }
+        let rate = u16::from_le_bytes([l[2], l[3]]).max(1);
+        let count = u32::from_le_bytes([l[4], l[5], l[6], l[7]]) as usize;
+        if count == 0 {
+            return None;
+        }
+        // El count declarado a veces excede el payload real (lumps
+        // corruptos / truncados); clampeamos a lo que hay en disco.
+        let avail = l.len() - 8;
+        let payload = &l[8..8 + count.min(avail)];
+        // Recorte de padding: 16 lead + 16 trail si hay suficiente.
+        let body = if payload.len() >= 32 {
+            &payload[16..payload.len() - 16]
+        } else {
+            payload
+        };
+        let samples: Vec<f32> = body.iter().map(|&b| (b as f32 - 128.0) / 128.0).collect();
+        if samples.is_empty() {
+            return None;
+        }
+        Some(Sound {
+            sample_rate: rate,
+            samples,
+        })
     }
 
     /// Busca un sprite lump por (name, frame_letter, angle).
@@ -846,5 +900,74 @@ mod tests {
         assert_eq!(rgba.len(), FLAT_BYTES * 4);
         // Píxel (0,0) → x/8=0, y/8=0, par → índice 100 → (100,100,100,255).
         assert_eq!(&rgba[0..4], &[100, 100, 100, 255]);
+    }
+
+    /// WAD mínimo con un único lump de sonido DMX (`name`) cuyas
+    /// muestras son las dadas (sin padding — el builder agrega los 32
+    /// bytes de padding 0x80 alrededor para emular el formato real).
+    fn build_sound_wad(name: &str, body: &[u8], rate: u16) -> Vec<u8> {
+        // payload = 16 pad + body + 16 pad. count = payload.len().
+        let mut payload = vec![0x80u8; 16];
+        payload.extend_from_slice(body);
+        payload.extend(std::iter::repeat(0x80u8).take(16));
+        let count = payload.len() as u32;
+        let mut lump = Vec::new();
+        lump.extend_from_slice(&3u16.to_le_bytes()); // formato 3
+        lump.extend_from_slice(&rate.to_le_bytes());
+        lump.extend_from_slice(&count.to_le_bytes());
+        lump.extend_from_slice(&payload);
+
+        let mut out = Vec::new();
+        out.extend_from_slice(b"IWAD");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        let dir_off_ph = out.len();
+        out.extend_from_slice(&0u32.to_le_bytes());
+        let p1 = out.len();
+        out.extend_from_slice(&lump);
+        let dir_off = out.len() as u32;
+        out.extend_from_slice(&(p1 as u32).to_le_bytes());
+        out.extend_from_slice(&(lump.len() as u32).to_le_bytes());
+        let mut nm = [0u8; 8];
+        for (i, b) in name.bytes().take(8).enumerate() {
+            nm[i] = b;
+        }
+        out.extend_from_slice(&nm);
+        out[dir_off_ph..dir_off_ph + 4].copy_from_slice(&dir_off.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn sound_decode_trims_padding_and_normalizes() {
+        // body: 128 (silencio) → 0.0, 255 → ~+1, 0 → -1, 192 → +0.5.
+        let body = [128u8, 255, 0, 192];
+        let bytes = build_sound_wad("DSTEST", &body, 11025);
+        let wad = Wad::parse(bytes).unwrap();
+        let snd = wad.sound("DSTEST").expect("decode");
+        assert_eq!(snd.sample_rate, 11025);
+        // El padding (16+16) se recortó → quedan las 4 muestras del body.
+        assert_eq!(snd.samples.len(), 4);
+        assert!((snd.samples[0] - 0.0).abs() < 1e-6);
+        assert!((snd.samples[1] - (127.0 / 128.0)).abs() < 1e-6);
+        assert!((snd.samples[2] - (-1.0)).abs() < 1e-6);
+        assert!((snd.samples[3] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sound_rejects_wrong_format() {
+        // formato 0 (PC speaker) → None.
+        let mut bytes = build_sound_wad("DSTEST", &[10, 20, 30, 40], 11025);
+        // El header del lump arranca tras header WAD (12) — parchear el
+        // u16 de formato del lump a 0. p1 = 12.
+        bytes[12] = 0;
+        bytes[13] = 0;
+        let wad = Wad::parse(bytes).unwrap();
+        assert!(wad.sound("DSTEST").is_none());
+    }
+
+    #[test]
+    fn sound_missing_lump_is_none() {
+        let bytes = build_sound_wad("DSTEST", &[1, 2, 3, 4], 11025);
+        let wad = Wad::parse(bytes).unwrap();
+        assert!(wad.sound("DSNOPE").is_none());
     }
 }

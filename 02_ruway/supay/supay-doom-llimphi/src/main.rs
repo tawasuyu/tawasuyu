@@ -87,6 +87,10 @@ enum ViewMode {
 
 struct Model {
     engine: DoomEngine,
+    /// Fase 4.0: motor de audio (SFX). `None` si no hay dispositivo de
+    /// salida o el WAD no cargó — el juego corre mudo sin romperse. Cada
+    /// `Msg::Tick` drena `engine.poll_sounds()` y se los pasa.
+    audio: Option<supay_audio::AudioEngine>,
     tick: u64,
     /// Framebuffer del último frame del motor, ya en formato Rgba8
     /// (lo que `View::image` espera).
@@ -326,15 +330,18 @@ impl App for Supay {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
         handle.spawn_periodic(Duration::from_millis(FRAME_MS), || Msg::Frame);
         // Args estilo argv. `-iwad doom1.wad` busca el WAD en cwd.
-        // `-nosound` apaga el subsistema de audio entero: nuestros
-        // stubs devuelven 0 / NULL y eso confunde a `S_StartSound`
-        // que va a leer "lump 0" del WAD como si fuera un efecto
-        // de sonido — segfault. Con `-nosound` el motor ni intenta.
+        // Fase 4.0: quitamos `-nosound`. Ese flag sólo lo honra
+        // `i_sound.c`, que está EXCLUIDO del build (arrastra SDL_mixer);
+        // nuestro `audio_stubs.c` provee la API. `S_StartSound`
+        // (s_sound.c) llega a `I_StartSound` sin guard, así que ahora
+        // ese stub graba el evento (lump + vol + sep) en un ring buffer
+        // que drenamos cada tick y reproducimos con `supay-audio`. El
+        // stub no derefencia ningún lump → sin el segfault que motivó
+        // el flag histórico.
         let args = vec![
             "doomgeneric".to_string(),
             "-iwad".to_string(),
             "doom1.wad".to_string(),
-            "-nosound".to_string(),
         ];
         // Cargamos el WAD desde el mismo path que pasamos al motor.
         // Si falla (no existe, mal formato), seguimos sin atlas — el
@@ -346,8 +353,23 @@ impl App for Supay {
                 None
             }
         };
+        // Fase 4.0: motor de audio. Carga un segundo `Wad` (el del atlas
+        // lo consumió `WadAtlas::new`) y abre el dispositivo de salida
+        // por defecto. Si no hay WAD o no hay device, queda `None` y el
+        // juego corre mudo — el sink es best-effort.
+        let audio = match Wad::open("doom1.wad") {
+            Ok(wad) => match supay_audio::AudioEngine::new(wad) {
+                Ok(eng) => Some(eng),
+                Err(e) => {
+                    eprintln!("supay: audio no disponible ({e}) — juego mudo");
+                    None
+                }
+            },
+            Err(_) => None,
+        };
         Model {
             engine: DoomEngine::new(args),
+            audio,
             tick: 0,
             framebuffer_rgba: vec![0; DOOM_PIXELS * 4],
             snapshots: SnapshotPair::new(),
@@ -432,6 +454,15 @@ impl App for Supay {
             Msg::Tick => {
                 m.tick = m.tick.wrapping_add(1);
                 m.engine.tick();
+                // Fase 4.0: drenar los sfx que el motor encoló este tick
+                // y reproducirlos. `poll_sounds` y `audio` son campos
+                // distintos → no hay conflicto de borrow.
+                let sounds = m.engine.poll_sounds();
+                if let Some(audio) = m.audio.as_mut() {
+                    for ev in sounds {
+                        audio.play(&ev.name, ev.vol, ev.sep);
+                    }
+                }
                 refresh_framebuffer(&mut m);
                 // Fase 2: snapshot tras cada tick.
                 let mut snap = m.engine.capture_scene(m.tick);

@@ -323,6 +323,34 @@ extern "C" {
         maxammo: *mut std::ffi::c_int,
         cards: *mut u8,
     ) -> std::ffi::c_int;
+
+    /// Drena hasta `max` eventos de sonido del ring buffer C
+    /// (`audio_stubs.c`) al array `out`. Devuelve cuántos copió.
+    fn supay_sound_poll(out: *mut SupaySndEvent, max: std::ffi::c_int) -> std::ffi::c_int;
+}
+
+/// Layout C del evento de sonido (`supay_snd_event` en `audio_stubs.c`).
+/// `#[repr(C)]` para que el padding coincida byte-a-byte con el lado C.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SupaySndEvent {
+    name: [std::ffi::c_char; 9],
+    vol: std::ffi::c_int,
+    sep: std::ffi::c_int,
+}
+
+/// Evento de sonido emitido por el motor en un tick: qué sfx disparar y
+/// con qué volumen/balance. El consumidor (`supay-audio`) resuelve el
+/// lump `DS<name>` del WAD y lo mezcla. Ver [`DoomEngine::poll_sounds`].
+#[derive(Clone, Debug)]
+pub struct SoundEvent {
+    /// Nombre base del sfx (e.g. `"pistol"`). El lump real es
+    /// `DS` + uppercase (e.g. `DSPISTOL`).
+    pub name: String,
+    /// Volumen 0..127.
+    pub vol: u8,
+    /// Separación estéreo 0..255 (128 ≈ centro; 0 izquierda, 255 derecha).
+    pub sep: u8,
 }
 
 // =====================================================================
@@ -442,6 +470,55 @@ impl DoomEngine {
             }
             let bytes: Vec<u8> = buf[..end].iter().map(|&c| c as u8).collect();
             String::from_utf8(bytes).ok()
+        }
+    }
+
+    /// Drena los eventos de sonido que el motor encoló desde el último
+    /// tick. Cada uno es un sfx a reproducir (lump `DS<name>`) con su
+    /// volumen y balance estéreo. En modo stub devuelve vacío.
+    ///
+    /// Debe llamarse desde el mismo thread que [`Self::tick`] (el ring
+    /// buffer C no es thread-safe; el host de Llimphi lo cumple porque
+    /// tick y poll viven en el event loop).
+    pub fn poll_sounds(&mut self) -> Vec<SoundEvent> {
+        #[cfg(doomgeneric_stub)]
+        {
+            Vec::new()
+        }
+        #[cfg(not(doomgeneric_stub))]
+        {
+            const MAX: usize = 64;
+            let mut raw = [SupaySndEvent {
+                name: [0; 9],
+                vol: 0,
+                sep: 0,
+            }; MAX];
+            // SAFETY: raw vive en este stack frame; la fn C escribe a lo
+            // sumo `MAX` entradas y devuelve cuántas.
+            let n = unsafe { supay_sound_poll(raw.as_mut_ptr(), MAX as std::ffi::c_int) };
+            let n = (n.max(0) as usize).min(MAX);
+            let mut out = Vec::with_capacity(n);
+            for ev in &raw[..n] {
+                // name[9] null-terminated → String.
+                let mut end = ev.name.len();
+                for (i, &c) in ev.name.iter().enumerate() {
+                    if c == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                let bytes: Vec<u8> = ev.name[..end].iter().map(|&c| c as u8).collect();
+                if let Ok(name) = String::from_utf8(bytes) {
+                    if !name.is_empty() {
+                        out.push(SoundEvent {
+                            name,
+                            vol: ev.vol.clamp(0, 127) as u8,
+                            sep: ev.sep.clamp(0, 255) as u8,
+                        });
+                    }
+                }
+            }
+            out
         }
     }
 
