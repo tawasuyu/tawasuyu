@@ -53,11 +53,12 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_theme::Theme;
-use llimphi_widget_list::ListPalette;
+use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use nahual_file_explorer_llimphi::{
     file_explorer_view, FileExplorerState, OpenedFile,
 };
+use nahual_source_core::{Navigator, Opened, WawaImgSource};
 use nahual_image_viewer_llimphi::{
     image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
     DEFAULT_IMAGE_BYTES_MAX,
@@ -127,11 +128,22 @@ const FRAME_TICK: Duration = Duration::from_millis(33);
 
 struct Model {
     explorer: FileExplorerState,
+    /// Fuente no-POSIX montada sobre el panel izquierdo (Brahman Fase 3).
+    /// `Some` cuando descendimos a una imagen wawa u otra `Source`: mientras
+    /// dure, la navegación se rutea acá en vez de a `explorer`. Subir desde
+    /// su raíz la desmonta y vuelve a POSIX.
+    mounted: Option<Navigator>,
     /// Ancho del panel izquierdo en px. Lo muta el drag del splitter.
     list_width: f32,
     preview: PreviewPane,
     /// Path del archivo previsualizado (header del panel derecho).
     preview_of: Option<PathBuf>,
+    /// Materialización temporal de una hoja no-POSIX: los visores son
+    /// path-based (`load_image(path)`), así que los bytes de un objeto wawa
+    /// se vuelcan a un tempfile y se previsualizan por ahí. Vive mientras el
+    /// visor lo lea (audio/video streamean del path); se reemplaza al cambiar
+    /// de preview.
+    preview_temp: Option<tempfile::TempDir>,
     theme: Theme,
     /// Suscripción al bus de configuración del SO.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
@@ -186,9 +198,11 @@ impl App for Shell {
         handle.spawn_periodic(FRAME_TICK, || Msg::Tick);
         Model {
             explorer: FileExplorerState::new(cwd),
+            mounted: None,
             list_width: 400.0,
             preview: PreviewPane::Empty,
             preview_of: None,
+            preview_temp: None,
             theme,
             _wawa_watcher: watcher,
         }
@@ -226,35 +240,72 @@ impl App for Shell {
         let mut m = model;
         match msg {
             Msg::Up => {
-                if m.explorer.up() {
+                if m.mounted.is_some() {
+                    if m.mounted.as_mut().unwrap().up() {
+                        refresh_preview_nav(&mut m);
+                    }
+                } else if m.explorer.up() {
                     refresh_preview(&mut m);
                 }
             }
             Msg::Down => {
-                if m.explorer.down() {
+                if m.mounted.is_some() {
+                    if m.mounted.as_mut().unwrap().down() {
+                        refresh_preview_nav(&mut m);
+                    }
+                } else if m.explorer.down() {
                     refresh_preview(&mut m);
                 }
             }
             Msg::Select(idx) => {
-                if m.explorer.select(idx) {
+                if m.mounted.is_some() {
+                    if m.mounted.as_mut().unwrap().select(idx) {
+                        refresh_preview_nav(&mut m);
+                    }
+                } else if m.explorer.select(idx) {
                     refresh_preview(&mut m);
                 }
             }
             Msg::OpenSelected => {
-                match m.explorer.open_selected() {
-                    Some(OpenedFile::Directory) => {
-                        m.preview = PreviewPane::Empty;
-                        m.preview_of = None;
+                if m.mounted.is_some() {
+                    abrir_en_fuente(&mut m);
+                } else {
+                    match m.explorer.open_selected() {
+                        Some(OpenedFile::Directory) => clear_preview(&mut m),
+                        Some(OpenedFile::File(path)) => {
+                            // Content-based: si el archivo abre como imagen
+                            // wawa, montamos su DAG en el panel izquierdo en
+                            // vez de previsualizarlo. Cualquier otra cosa cae
+                            // al open-with universal de siempre.
+                            match try_mount(&path) {
+                                Some(nav) => {
+                                    m.mounted = Some(nav);
+                                    clear_preview(&mut m);
+                                }
+                                None => {
+                                    m.preview = load_for(&path);
+                                    m.preview_of = Some(path);
+                                    m.preview_temp = None;
+                                }
+                            }
+                        }
+                        None => {}
                     }
-                    Some(OpenedFile::File(path)) => {
-                        m.preview = load_for(&path);
-                        m.preview_of = Some(path);
-                    }
-                    None => {}
                 }
             }
             Msg::Parent => {
-                if m.explorer.parent() {
+                if m.mounted.is_some() {
+                    match m.mounted.as_mut().unwrap().parent() {
+                        Ok(true) => refresh_preview_nav(&mut m),
+                        // Subir desde la raíz de la fuente la desmonta:
+                        // volvemos al filesystem POSIX.
+                        Ok(false) => {
+                            m.mounted = None;
+                            clear_preview(&mut m);
+                        }
+                        Err(_) => {}
+                    }
+                } else if m.explorer.parent() {
                     refresh_preview(&mut m);
                 }
             }
@@ -262,9 +313,13 @@ impl App for Shell {
                 m.list_width = (m.list_width + dx).clamp(220.0, 900.0);
             }
             Msg::Scroll(steps) => {
-                // El explorer tiene su propio acumulador para
-                // touchpads — le pasamos el delta crudo (en líneas).
-                m.explorer.apply_wheel(steps as f32);
+                // El navegador (o el explorer) tiene su propio acumulador
+                // para touchpads — le pasamos el delta crudo (en líneas).
+                if let Some(nav) = m.mounted.as_mut() {
+                    nav.apply_wheel(steps as f32);
+                } else {
+                    m.explorer.apply_wheel(steps as f32);
+                }
             }
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);
@@ -302,11 +357,14 @@ impl App for Shell {
         let archive_palette = ArchiveViewerPalette::from_theme(&theme);
         let font_palette = FontViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
-        let list_pane = file_explorer_view::<Msg, _>(
-            &model.explorer,
-            ListPalette::from_theme(&theme),
-            Msg::Select,
-        );
+        let list_pane = match &model.mounted {
+            Some(nav) => navigator_list_view(nav, ListPalette::from_theme(&theme)),
+            None => file_explorer_view::<Msg, _>(
+                &model.explorer,
+                ListPalette::from_theme(&theme),
+                Msg::Select,
+            ),
+        };
         let viewer_pane = match &model.preview {
             PreviewPane::Empty => text_viewer_view::<Msg>(
                 &PreviewState::Empty,
@@ -391,11 +449,148 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .text_aligned(
-        format!("nahual · {}", model.explorer.cwd.display()),
+        match &model.mounted {
+            // Montados sobre una fuente: mostramos su etiqueta + la miga de
+            // pan dentro de ella, con un glifo que marca que no es POSIX.
+            Some(nav) => format!("nahual · ⊟ {} · {}", nav.label(), nav.breadcrumb()),
+            None => format!("nahual · {}", model.explorer.cwd.display()),
+        },
         12.0,
         theme.fg_text,
         Alignment::Start,
     )
+}
+
+/// Limpia el panel derecho y suelta cualquier tempfile de hoja no-POSIX.
+fn clear_preview(m: &mut Model) {
+    m.preview = PreviewPane::Empty;
+    m.preview_of = None;
+    m.preview_temp = None;
+}
+
+/// Intenta montar `path` como una fuente no-POSIX. Hoy sólo prueba imagen
+/// wawa: `WawaImgSource::abrir` hace un chequeo de magic barato y sólo carga
+/// el grafo si el archivo realmente es una imagen wawa — para todo lo demás
+/// falla rápido y devolvemos `None` (se previsualiza normal).
+fn try_mount(path: &Path) -> Option<Navigator> {
+    let src = WawaImgSource::abrir(path).ok()?;
+    Navigator::open(Box::new(src)).ok()
+}
+
+/// Abre la selección dentro de la fuente montada: si es contenedor desciende
+/// (limpia el preview); si es hoja, vuelca sus bytes a un tempfile y lo
+/// previsualiza con el open-with universal de siempre.
+fn abrir_en_fuente(m: &mut Model) {
+    let Some(nav) = m.mounted.as_mut() else { return };
+    match nav.open_selected() {
+        Ok(Some(Opened::Descended)) => clear_preview(m),
+        Ok(Some(Opened::Leaf(id))) => {
+            // Releemos por el nodo ya seleccionado (open_selected no movió la
+            // selección al ser hoja).
+            let nombre = nav
+                .selected_node()
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            match nav.read(&id) {
+                Ok(bytes) => preview_from_bytes(m, bytes, &nombre),
+                Err(_) => clear_preview(m),
+            }
+        }
+        Ok(None) | Err(_) => {}
+    }
+}
+
+/// Releé el preview tras moverse dentro de la fuente montada. Hoja → vuelca a
+/// tempfile y previsualiza; contenedor (o nada) → limpia.
+fn refresh_preview_nav(m: &mut Model) {
+    // Calculamos la acción soltando el préstamo de `m.mounted` antes de
+    // mutar el resto del modelo (el preview).
+    enum Accion {
+        Limpiar,
+        Mostrar(Vec<u8>, String),
+    }
+    let accion = match m.mounted.as_ref().and_then(|nav| nav.selected_node().map(|n| (nav, n))) {
+        Some((nav, node)) if !node.is_container => match nav.read(&node.id) {
+            Ok(bytes) => Accion::Mostrar(bytes, node.name.clone()),
+            Err(_) => Accion::Limpiar,
+        },
+        _ => Accion::Limpiar,
+    };
+    match accion {
+        Accion::Limpiar => clear_preview(m),
+        Accion::Mostrar(bytes, nombre) => preview_from_bytes(m, bytes, &nombre),
+    }
+}
+
+/// Materializa los bytes de una hoja no-POSIX en un tempfile y la
+/// previsualiza con [`load_for`]. El tempdir se guarda en el modelo para que
+/// el path siga válido mientras el visor lo lea (audio/video streamean).
+fn preview_from_bytes(m: &mut Model, bytes: Vec<u8>, nombre: &str) {
+    let Ok(dir) = tempfile::tempdir() else {
+        clear_preview(m);
+        return;
+    };
+    let path = dir.path().join(sanitizar_nombre(nombre));
+    if std::fs::write(&path, &bytes).is_ok() {
+        m.preview = load_for(&path);
+        m.preview_of = Some(path);
+        m.preview_temp = Some(dir); // mantener vivo el tempdir
+    } else {
+        clear_preview(m);
+    }
+}
+
+/// Vuelve un nombre de nodo apto para un filename de tempfile (los objetos
+/// wawa son hashes sin separadores, pero por las dudas sacamos `/` y `\`).
+fn sanitizar_nombre(nombre: &str) -> String {
+    let limpio: String = nombre
+        .chars()
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .collect();
+    if limpio.is_empty() {
+        "objeto".to_string()
+    } else {
+        limpio
+    }
+}
+
+/// Pinta los hijos del contenedor actual de la fuente montada como una lista
+/// `llimphi-widget-list` — el gemelo genérico de `file_explorer_view`.
+fn navigator_list_view(nav: &Navigator, palette: ListPalette) -> View<Msg> {
+    use std::cmp::min;
+    let nodes = nav.children();
+    let start = nav.visible_offset.min(nodes.len());
+    let end = min(nodes.len(), start + nav.visible_rows);
+    let rows: Vec<ListRow<Msg>> = (start..end)
+        .map(|idx| {
+            let n = &nodes[idx];
+            let icon = if n.is_container { "▸ " } else { "  " };
+            let label = if n.is_container {
+                format!("{icon}{}/", n.name)
+            } else {
+                format!("{icon}{}", n.name)
+            };
+            ListRow {
+                label,
+                selected: idx == nav.selected,
+                on_click: Msg::Select(idx),
+            }
+        })
+        .collect();
+    let caption = format!("{} entradas · ↑↓ navega · Enter abre · ⌫ vuelve", nodes.len());
+    let truncated_hint = if nodes.len() > end {
+        Some(format!("… y {} más (rueda o ↓ para ver más)", nodes.len() - end))
+    } else {
+        None
+    };
+    list_view(ListSpec {
+        rows,
+        total: nodes.len(),
+        caption: Some(caption),
+        truncated_hint,
+        row_height: 22.0,
+        palette,
+    })
 }
 
 /// Releé el preview del entry seleccionado tras un cambio de selección.

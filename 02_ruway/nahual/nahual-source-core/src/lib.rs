@@ -28,11 +28,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod navigator;
 pub mod posix;
 pub mod wawa;
 #[cfg(feature = "nouser")]
 pub mod nouser;
 
+pub use navigator::{Navigator, Opened};
 pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
 #[cfg(feature = "nouser")]

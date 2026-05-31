@@ -127,11 +127,18 @@ FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Ca
           navega el DAG BLAKE3 por hash vía wawa-explorer-core; puro local). 9 tests
           contra backends REALES (un .img sintético + un tmp POSIX). El shell todavía no
           lo consume — es la espina, no el wiring.
-        PASO B PENDIENTE: cablear al shell — panel izquierdo navega `Box<dyn Source>` en
-          vez de PathBuf; al seleccionar un `.img` POSIX, apilar `WawaImgSource` y descender
-          su DAG. Puente para hojas no-POSIX: los visores son path-based (`load_image(path)`),
-          así que materializar `source.read(id)` a un tempfile y discernir/visualizar por ahí
-          (o, follow-up mayor, refactorizar visores a bytes).
+        ✓ PASO B HECHO (2026-05-31): el shell consume `Source`. `nahual-source-core` ganó
+          `Navigator` (estado de navegación genérico sobre `Box<dyn Source>`: pila/selección/
+          scroll, gemelo agnóstico de FileExplorerState; 2 tests sobre POSIX). nahual-shell:
+          `Model.mounted: Option<Navigator>`. Al abrir un archivo se intenta `WawaImgSource::abrir`
+          (chequeo de magic barato, content-based) — si es imagen wawa se MONTA y el panel
+          izquierdo desciende su DAG; cualquier otra cosa cae al open-with de siempre. Subir
+          desde la raíz de la fuente la desmonta (vuelve a POSIX). Puente para hojas no-POSIX:
+          `nav.read(id)` → tempfile → `load_for` (los visores siguen path-based; el tempdir
+          vive en el Model mientras el visor streamea). Header muestra label+breadcrumb de la
+          fuente. cargo check del shell+core verde (workspace roto aparte por WIP de khipu de
+          otro agente). Limitación: extensión perdida en el tempfile ⇒ el demuxer de video cae
+          a AV1 crudo; el discernimiento es por contenido así que el visor igual se elige bien.
         ◑ PASO C EN CURSO (2026-05-31): `NouserSource` HECHO (feature opt-in `nouser`):
           Mónadas semánticas de chasqui-core (scan→cluster, pseudo-embeddings deterministas,
           sin daemon). Tercera FORMA de árbol —clusters que no existen en disco— detrás del
