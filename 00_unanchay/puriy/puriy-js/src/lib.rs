@@ -13105,4 +13105,33 @@ mod tests {
         assert_eq!(rt.eval("err").expect("e"), JsValue::String("NotAllowedError".into()));
         assert_eq!(rt.eval("document.pictureInPictureElement").expect("e"), JsValue::Null);
     }
+
+    // ---- Fase 7.166 — Document Picture-in-Picture API ----
+    #[test]
+    fn document_pip_api_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof documentPictureInPicture.requestWindow").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("documentPictureInPicture.window").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn document_pip_request_resuelve_y_dispara_enter() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var win = null, entered = 0;
+            documentPictureInPicture.addEventListener('enter', function(e){ entered++; });
+            documentPictureInPicture.requestWindow({ width: 400, height: 300 }).then(function(w){ win = w; });
+            var ks = Object.keys(__puriy_document_pip_pending); __puriy_document_pip_resolve(ks[ks.length - 1], null);").expect("e");
+        assert_eq!(rt.eval("win !== null && documentPictureInPicture.window === win").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("entered").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'document-pip-request'; })").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_pip_reject() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var err = null;
+            documentPictureInPicture.requestWindow().catch(function(e){ err = e.name; });
+            var ks = Object.keys(__puriy_document_pip_pending); __puriy_document_pip_reject(ks[ks.length - 1], 'NotAllowedError');").expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("NotAllowedError".into()));
+    }
 }

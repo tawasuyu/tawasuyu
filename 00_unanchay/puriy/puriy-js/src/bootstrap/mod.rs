@@ -122,6 +122,7 @@ mod windowmanagement;
 mod localfonts;
 mod webotp;
 mod pictureinpicture;
+mod documentpictureinpicture;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -244,6 +245,7 @@ pub(crate) use windowmanagement::WINDOWMANAGEMENT_BOOTSTRAP;
 pub(crate) use localfonts::LOCALFONTS_BOOTSTRAP;
 pub(crate) use webotp::WEBOTP_BOOTSTRAP;
 pub(crate) use pictureinpicture::PICTUREINPICTURE_BOOTSTRAP;
+pub(crate) use documentpictureinpicture::DOCUMENTPICTUREINPICTURE_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -368,5 +370,6 @@ pub(crate) const ALL: &[&str] = &[
     LOCALFONTS_BOOTSTRAP,
     WEBOTP_BOOTSTRAP,
     PICTUREINPICTURE_BOOTSTRAP,
+    DOCUMENTPICTUREINPICTURE_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
