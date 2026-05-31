@@ -58,7 +58,7 @@ use std::time::{Duration, Instant};
 use llimphi_surface::ExternalSurface;
 use llimphi_ui::llimphi_hal::wgpu;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{auto, length, percent, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, FlexDirection, Position, Size, Style},
     AlignItems, JustifyContent, Rect as TaffyRect,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
@@ -75,6 +75,10 @@ use media_core::control::{ControlSettings, KeyChord, MediaCommand};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
 use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
+};
+use llimphi_module_command_palette::{
+    self as palette, Command as PaletteCommand, PaletteAction, PaletteMsg, PalettePalette,
+    PaletteState,
 };
 use media_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use foreign_av::{FfmpegAudioSource, FfmpegVideoSource, MediaSession};
@@ -107,6 +111,10 @@ enum Msg {
     ToggleHelp,
     /// Relee `controles.ron` desde disco en caliente (`F5`).
     ReloadConfig,
+    /// Mensajes del módulo command palette (Ctrl+Shift+P). El palette es
+    /// agnóstico: emite `Invoke(id)` y la app mapea el id a un
+    /// [`MediaCommand`] vía el índice de su catálogo.
+    Palette(PaletteMsg),
 }
 
 // Los tiles del grid reorderable son los [`TileId`] (= `PanelId` del
@@ -255,6 +263,17 @@ struct Model {
     tile_order: Vec<TileId>,
     /// Si el overlay de ayuda de atajos está abierto (`?` lo alterna).
     help_open: bool,
+    /// Command palette (Ctrl+Shift+P); `None` = cerrado. El módulo se
+    /// lleva todas las teclas mientras está abierto.
+    palette: Option<PaletteState>,
+    /// Catálogo de acciones que muestra el palette. Se reconstruye con el
+    /// keymap vivo (para anexar el hint del atajo) y queda alineado
+    /// índice-a-índice con [`Model::palette_cmds`] — el `id` del palette
+    /// es el índice, y `Invoke(id)` lo resuelve a un [`MediaCommand`].
+    palette_commands: Vec<PaletteCommand>,
+    /// Comandos paralelos al catálogo: `palette_cmds[i]` es la acción del
+    /// `palette_commands[i]` cuyo `id` es `i`.
+    palette_cmds: Vec<MediaCommand>,
     /// Tamaño aproximado del viewport para centrar overlays. Sin hook de
     /// resize en llimphi-ui, lo fijamos al `initial_size` — mismo
     /// compromiso que la galería.
@@ -767,6 +786,86 @@ fn seek_audio_by(delta_secs: i64) {
     src.seek_to(Duration::from_secs_f64(new_s));
 }
 
+/// Construye el catálogo de acciones para el command palette a partir de
+/// los settings vivos. Cada acción del reproductor entra como un
+/// [`PaletteCommand`] con su grupo y, si hay una tecla atada en el
+/// keymap, el hint del atajo. El `id` es el índice — el vector paralelo
+/// devuelto lo mapea de vuelta al [`MediaCommand`] a ejecutar. El título
+/// sale de `MediaCommand::describe()`: una sola fuente, igual que la
+/// ayuda.
+fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<MediaCommand>) {
+    use MediaCommand::*;
+    let step = s.seek_step_secs;
+    let vstep = s.volume_step;
+    let acciones: Vec<(MediaCommand, &str)> = vec![
+        (TogglePause, "Transporte"),
+        (SeekBy { secs: step }, "Transporte"),
+        (SeekBy { secs: -step }, "Transporte"),
+        (PrevTrack, "Playlist"),
+        (NextTrack, "Playlist"),
+        (CycleRepeat, "Playlist"),
+        (ToggleShuffle, "Playlist"),
+        (VolumeBy { delta: vstep }, "Volumen"),
+        (VolumeBy { delta: -vstep }, "Volumen"),
+        (SetVolume { level: 1.0 }, "Volumen"),
+        (SetVolume { level: 0.5 }, "Volumen"),
+        (SetVolume { level: 0.0 }, "Volumen"),
+        (SpeedStep { dir: 1 }, "Velocidad"),
+        (SpeedStep { dir: -1 }, "Velocidad"),
+        (SetSpeed { mult: 1.0 }, "Velocidad"),
+        (Snapshot, "Captura"),
+        (ToggleRecord, "Captura"),
+    ];
+    let mut catalog = Vec::with_capacity(acciones.len());
+    let mut cmds = Vec::with_capacity(acciones.len());
+    for (i, (cmd, group)) in acciones.into_iter().enumerate() {
+        let mut pc = PaletteCommand::new(i.to_string(), cmd.describe(), group);
+        if let Some(sc) = shortcut_for(&s.keymap, &cmd) {
+            pc = pc.with_shortcut(sc);
+        }
+        catalog.push(pc);
+        cmds.push(cmd);
+    }
+    (catalog, cmds)
+}
+
+/// Reverse-lookup: el display del primer chord atado a `cmd` en el
+/// keymap, si hay alguno. Es el hint que el palette muestra a la derecha
+/// de la fila — refleja el binding vivo, no una constante.
+fn shortcut_for(km: &media_core::control::Keymap, cmd: &MediaCommand) -> Option<String> {
+    km.bindings
+        .iter()
+        .find(|b| &b.command == cmd)
+        .map(|b| b.chord.display())
+}
+
+/// Routea un `PaletteMsg` al módulo command-palette. Lazy-init en `Open`.
+/// En `Invoke(id)` cierra el palette y dispatcha el `MediaCommand` cuyo
+/// índice es `id` — el comando se ejecuta en el siguiente turno del loop,
+/// pasando por el mismo `apply_command` que botones y teclado.
+fn apply_palette(model: Model, pm: PaletteMsg, handle: &Handle<Msg>) -> Model {
+    let mut m = model;
+    if matches!(pm, PaletteMsg::Open) && m.palette.is_none() {
+        m.palette = Some(PaletteState::new(&m.palette_commands));
+        return m;
+    }
+    let action = match m.palette.as_mut() {
+        Some(state) => palette::apply(state, pm, &m.palette_commands),
+        None => return m,
+    };
+    match action {
+        PaletteAction::None => {}
+        PaletteAction::Close => m.palette = None,
+        PaletteAction::Invoke(id) => {
+            m.palette = None;
+            if let Some(cmd) = id.parse::<usize>().ok().and_then(|i| m.palette_cmds.get(i)) {
+                handle.dispatch(Msg::Command(cmd.clone()));
+            }
+        }
+    }
+    m
+}
+
 /// Ejecuta un [`MediaCommand`] sobre el estado vivo del reproductor.
 /// Único punto donde un comando se vuelve efecto — lo comparten botones
 /// (vía `Msg::Command`) y teclado (vía `on_key`).
@@ -1054,16 +1153,20 @@ impl App for MediaApp {
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
+        let (palette_commands, palette_cmds) = build_command_catalog(&settings());
         Model {
             frames: 0,
             started_at: Instant::now(),
             tile_order: load_layout(),
             help_open: false,
+            palette: None,
+            palette_commands,
+            palette_cmds,
             viewport: (960.0, 540.0),
         }
     }
 
-    fn update(model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
+    fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         match msg {
             Msg::Tick => Model {
                 frames: model.frames.wrapping_add(1),
@@ -1090,8 +1193,16 @@ impl App for MediaApp {
             }
             Msg::ReloadConfig => {
                 reload_settings();
-                model
+                // Los pasos y atajos pueden haber cambiado: reconstruimos
+                // el catálogo del palette para que refleje el keymap nuevo.
+                let (palette_commands, palette_cmds) = build_command_catalog(&settings());
+                Model {
+                    palette_commands,
+                    palette_cmds,
+                    ..model
+                }
             }
+            Msg::Palette(pm) => apply_palette(model, pm, handle),
         }
     }
 
@@ -1100,8 +1211,17 @@ impl App for MediaApp {
     /// de [`settings`]. media-app no tiene text-input, así que no hace
     /// falta routing de foco.
     fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        // Palette abierto: el módulo se lleva TODAS las teclas (filtro,
+        // ↓↑, Enter, Esc). Mismo patrón que nada.
+        if let Some(state) = model.palette.as_ref() {
+            return palette::on_key(state, event).map(Msg::Palette);
+        }
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Ctrl+Shift+P abre el palette (igual que VS Code).
+        if palette::open_shortcut(event) {
+            return Some(Msg::Palette(PaletteMsg::Open));
         }
         match &event.key {
             Key::Character(c) if c == "?" => return Some(Msg::ToggleHelp),
@@ -1114,6 +1234,10 @@ impl App for MediaApp {
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // El palette tiene prioridad sobre la ayuda (sólo uno visible).
+        if let Some(state) = model.palette.as_ref() {
+            return Some(palette_overlay(model, state));
+        }
         if !model.help_open {
             return None;
         }
@@ -1136,6 +1260,7 @@ impl App for MediaApp {
                         ShortcutEntry::new("?", "Mostrar/ocultar esta ayuda"),
                         ShortcutEntry::new("Esc", "Cerrar la ayuda"),
                         ShortcutEntry::new("F5", "Recargar controles.ron en caliente"),
+                        ShortcutEntry::new("Ctrl+Shift+P", "Paleta de comandos (buscar acción)"),
                     ],
                 ),
             ],
@@ -1274,6 +1399,49 @@ impl App for MediaApp {
         .fill(Color::from_rgba8(22, 26, 34, 255))
         .children(vec![title_text, canvas, subs_strip, tile_grid, footer])
     }
+}
+
+/// Overlay del command palette: scrim a pantalla completa con la caja del
+/// módulo centrada cerca del top. El scrim cierra al click; la caja
+/// intercepta el click (con un `Open` inerte — el palette ya está
+/// abierto) para no cerrarse al tipear en el input.
+fn palette_overlay(model: &Model, state: &PaletteState) -> View<Msg> {
+    let theme = llimphi_theme::Theme::dark();
+    let pal = PalettePalette::from_theme(&theme);
+    let inner = palette::view(state, &model.palette_commands, &pal, Msg::Palette);
+
+    let (vw, vh) = model.viewport;
+    let box_w = 560.0_f32.min(vw - 32.0);
+    let x = ((vw - box_w) * 0.5).max(0.0);
+    let y = (vh * 0.16).max(0.0);
+
+    let panel = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(x),
+            top: length(y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(box_w),
+            height: length(286.0_f32),
+        },
+        ..Default::default()
+    })
+    .on_click(Msg::Palette(PaletteMsg::Open))
+    .children(vec![inner]);
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0, 0, 0, 150))
+    .on_click(Msg::Palette(PaletteMsg::Close))
+    .children(vec![panel])
 }
 
 /// Despacha por TileId al builder concreto. Cada tile arma su propio

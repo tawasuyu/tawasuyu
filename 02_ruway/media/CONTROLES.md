@@ -1,6 +1,6 @@
 # Controles configurables de media (estilo VLC, más flexible)
 
-> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D2 ⏳.
+> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D5 (paleta) ✅ · D2 ⏳.
 > Autoritativo sobre cómo se mapean entradas → acciones en el dominio `media`.
 
 ## Problema
@@ -82,6 +82,7 @@ ControlSettings(
 | `Shift+s`    | Snapshot            | como VLC (Shift+S)             |
 | `?`          | (ayuda)             | overlay con el keymap vivo     |
 | `F5`         | (recargar)          | relee `controles.ron` en caliente |
+| `Ctrl+Shift+P` | (paleta)          | command palette: buscar y ejecutar acción |
 
 ## Fases
 
@@ -111,12 +112,19 @@ ControlSettings(
   `layout.ron` existente. El drag-to-swap por title bar reescribe el archivo en
   el acto; a diferencia de `controles.ron`, NO se siembra default en disco (sólo
   se escribe cuando el usuario reordena).
+- **D5 ✅ — paleta de comandos ejecutable** (`Ctrl+Shift+P`): reusa el módulo
+  agnóstico `llimphi-module-command-palette` (input + fuzzy match con
+  `nucleo-matcher` + navegación ↓↑/Enter/Esc). El catálogo se arma desde el
+  vocabulario de `MediaCommand` con `describe()` como título (misma fuente que la
+  ayuda) y el hint del atajo por reverse-lookup en el keymap vivo — se reconstruye
+  en cada `F5`. El `id` del palette es el índice; `Invoke(id)` cierra y dispatcha
+  `Msg::Command(cmd)`, el mismo punto que botones y teclado. Da descubribilidad
+  total: el overlay de ayuda (D1) es read-only, esta paleta **ejecuta**. El scrim
+  cierra al click; la caja intercepta el click para no cerrarse al tipear.
 - **D ⏳ — pendiente (futuro, no bloqueante)**:
   - **D2 · Comandos Rhai** (`MediaCommand::Script(nombre)` → snippet con una API de
     reproductor bindeada) — calco del Rhai de las `Transformacion` de pluma; es
     el verdadero "más flexible que VLC". Heavy (mete `rhai` al dominio media).
-  - **Paleta de comandos** con búsqueda fuzzy (el overlay de ayuda hoy es
-    read-only; una paleta ejecutable es el siguiente paso de descubribilidad).
   - **Watch** del `controles.ron` (recarga automática, hoy es manual con F5).
   - Reusar el sistema cuando se materialicen los widgets
     `llimphi-widget-{transport,timeline,waveform}` y/o `nahual-video-viewer-llimphi`.
