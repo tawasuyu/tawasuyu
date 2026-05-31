@@ -11873,4 +11873,127 @@ mod tests {
         // tras close, el host ya no entrega salida
         assert_eq!(rt.eval("__puriy_videoencoder_output(1, { type: 'key' })").expect("e"), JsValue::Bool(false));
     }
+
+    // ---- Fase 7.146 — MediaRecorder API ----
+
+    #[test]
+    fn media_recorder_existe_y_is_type_supported() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof MediaRecorder").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof BlobEvent").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("MediaRecorder.isTypeSupported('video/webm')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("MediaRecorder.isTypeSupported('application/zip')").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn media_recorder_start_cambia_estado_y_dispara_start() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var arrancado = false; \
+             var rec = new MediaRecorder(new MediaStream([]), { mimeType: 'video/webm' }); \
+             var antes = rec.state; \
+             rec.onstart = function(){ arrancado = true; }; \
+             rec.start();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("antes").expect("e"), JsValue::String("inactive".into()));
+        assert_eq!(rt.eval("rec.state").expect("e"), JsValue::String("recording".into()));
+        assert_eq!(rt.eval("arrancado").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'mediarecorder-start'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn media_recorder_data_host_dispara_dataavailable() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var tam = -1, tipo = null; \
+             var rec = new MediaRecorder(new MediaStream([]), { mimeType: 'video/webm' }); \
+             rec.ondataavailable = function(ev){ tam = ev.data.size; tipo = ev.data.type; }; \
+             rec.start();",
+        )
+        .expect("e");
+        rt.eval("__puriy_mediarecorder_data(1, new Uint8Array([1,2,3,4]), 'video/webm');").expect("e");
+        assert_eq!(rt.eval("tam").expect("e"), JsValue::Number(4.0));
+        assert_eq!(rt.eval("tipo").expect("e"), JsValue::String("video/webm".into()));
+    }
+
+    #[test]
+    fn media_recorder_stop_dispara_dataavailable_y_stop() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var orden = []; \
+             var rec = new MediaRecorder(new MediaStream([])); \
+             rec.ondataavailable = function(){ orden.push('data'); }; \
+             rec.onstop = function(){ orden.push('stop'); }; \
+             rec.start(); rec.stop();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("rec.state").expect("e"), JsValue::String("inactive".into()));
+        assert_eq!(rt.eval("orden.join(',')").expect("e"), JsValue::String("data,stop".into()));
+    }
+
+    #[test]
+    fn media_recorder_pause_resume() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ev = []; \
+             var rec = new MediaRecorder(new MediaStream([])); \
+             rec.onpause = function(){ ev.push('p'); }; rec.onresume = function(){ ev.push('r'); }; \
+             rec.start(); rec.pause(); rec.resume();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ev.join('')").expect("e"), JsValue::String("pr".into()));
+        assert_eq!(rt.eval("rec.state").expect("e"), JsValue::String("recording".into()));
+    }
+
+    #[test]
+    fn media_recorder_request_data() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var rec = new MediaRecorder(new MediaStream([])); \
+             rec.ondataavailable = function(){ n++; }; \
+             rec.start(); rec.requestData();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn media_recorder_mime_type_default() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var rec = new MediaRecorder(new MediaStream([]));").expect("e");
+        assert_eq!(rt.eval("rec.mimeType").expect("e"), JsValue::String("video/webm".into()));
+        assert_eq!(rt.eval("rec instanceof EventTarget").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn media_recorder_start_doble_lanza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; \
+             var rec = new MediaRecorder(new MediaStream([])); \
+             rec.start(); \
+             try { rec.start(); } catch (e) { err = e.name; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("InvalidStateError".into()));
+    }
+
+    #[test]
+    fn media_recorder_addeventlistener_dataavailable() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var visto = false; \
+             var rec = new MediaRecorder(new MediaStream([])); \
+             rec.addEventListener('dataavailable', function(ev){ visto = ev instanceof BlobEvent; }); \
+             rec.start();",
+        )
+        .expect("e");
+        rt.eval("__puriy_mediarecorder_data(1, new Uint8Array([9]), 'video/webm');").expect("e");
+        assert_eq!(rt.eval("visto").expect("e"), JsValue::Bool(true));
+    }
 }

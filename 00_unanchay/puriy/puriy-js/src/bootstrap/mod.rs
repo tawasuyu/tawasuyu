@@ -102,6 +102,7 @@ mod webrtc;
 mod workers;
 mod webaudio;
 mod webcodecs;
+mod mediarecorder;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -204,6 +205,7 @@ pub(crate) use webrtc::WEBRTC_BOOTSTRAP;
 pub(crate) use workers::WORKERS_BOOTSTRAP;
 pub(crate) use webaudio::WEBAUDIO_BOOTSTRAP;
 pub(crate) use webcodecs::WEBCODECS_BOOTSTRAP;
+pub(crate) use mediarecorder::MEDIARECORDER_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -308,5 +310,6 @@ pub(crate) const ALL: &[&str] = &[
     WORKERS_BOOTSTRAP,
     WEBAUDIO_BOOTSTRAP,
     WEBCODECS_BOOTSTRAP,
+    MEDIARECORDER_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
