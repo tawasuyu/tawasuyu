@@ -403,6 +403,55 @@ fn delete_selected(m: &mut Model) {
     m.status_note = Some("Elemento eliminado".into());
 }
 
+/// Mueve el nodo cortado (`nav_cut`) bajo el grupo seleccionado (o a la
+/// raíz si no hay selección). Grupos y contactos se mueven con
+/// `store.move_*`; las cartas no (no hay move_chart).
+fn paste_node(m: &mut Model) {
+    let Some(cut_key) = m.nav_cut.clone() else {
+        m.error = Some("Pegar: nada cortado".into());
+        return;
+    };
+    if library::parse_chart_key(&cut_key).is_some() {
+        m.error = Some("Pegar: las cartas no se mueven entre contactos".into());
+        return;
+    }
+    let target_group = match m.selected_node().map(|n| (n.kind, n.key.clone())) {
+        None => None,
+        Some((library::NavKind::Group, key)) => library::parse_group_key(&key),
+        Some(_) => {
+            m.error = Some("Pegar: elegí un grupo destino (o deseleccioná para la raíz)".into());
+            return;
+        }
+    };
+    if let Some(gid) = library::parse_group_key(&cut_key) {
+        if Some(gid) == target_group {
+            m.error = Some("Pegar: destino inválido".into());
+            return;
+        }
+    }
+    let res = m.store.as_ref().map(|s| {
+        if let Some(gid) = library::parse_group_key(&cut_key) {
+            s.move_group(gid, target_group)
+        } else if let Some(cid) = library::parse_contact_key(&cut_key) {
+            s.move_contact(cid, target_group)
+        } else {
+            Ok(())
+        }
+    });
+    match res {
+        Some(Ok(())) => {
+            if let Some(g) = target_group {
+                m.nav_expanded.insert(format!("g:{g}"));
+            }
+            m.nav_cut = None;
+            refresh_nav(m);
+            m.status_note = Some("Movido".into());
+        }
+        Some(Err(e)) => m.error = Some(format!("mover: {e}")),
+        None => {}
+    }
+}
+
 fn start_rename(m: &mut Model, key: String) {
     let current = m.node(&key).map(|n| n.label.clone()).unwrap_or_default();
     m.rename_input.set_text(current);
@@ -582,6 +631,7 @@ impl App for Cosmos {
             nav_selected: None,
             nav_rename: None,
             rename_input: llimphi_widget_text_input::TextInputState::new(),
+            nav_cut: None,
             nav_w: ui.nav_w,
             tools_w: ui.tools_w,
             nav_open: ui.nav_open,
@@ -627,6 +677,16 @@ impl App for Cosmos {
             Msg::NewContact => new_contact(&mut m),
             Msg::NewChart => new_chart(&mut m),
             Msg::DeleteSelected => delete_selected(&mut m),
+            Msg::CutNode => {
+                m.nav_cut = m.nav_selected.clone();
+                if m.nav_cut.is_some() {
+                    m.status_note = Some("Cortado — seleccioná un grupo destino y pegá".into());
+                }
+            }
+            Msg::PasteNode => {
+                paste_node(&mut m);
+                persist = true;
+            }
             Msg::RenameStart => {
                 if let Some(key) = m.nav_selected.clone() {
                     start_rename(&mut m, key);
