@@ -154,9 +154,9 @@ pub(crate) fn menu_entries(kind: MenuKind, m: &Model) -> Vec<MenuEntry> {
             MenuEntry::act("Duplicar carta actual", MenuCmd::Duplicar),
             MenuEntry::act("Recargar desde disco", MenuCmd::Recargar),
             MenuEntry::sep(),
-            MenuEntry::act("Eliminar carta seleccionada", MenuCmd::Eliminar)
+            MenuEntry::act("Eliminar selección", MenuCmd::Eliminar)
                 .destructive()
-                .enabled(m.selected_card.is_some()),
+                .enabled(m.nav_selected.is_some()),
         ],
         // No hay campos de texto editables: la carta se edita en el JSON
         // de disco y se recarga por watcher. El menú «Editar» reúne las
@@ -169,9 +169,9 @@ pub(crate) fn menu_entries(kind: MenuKind, m: &Model) -> Vec<MenuEntry> {
             MenuEntry::act("Guardar carta en biblioteca", MenuCmd::Guardar).shortcut("Ctrl+S"),
             MenuEntry::act("Duplicar carta actual", MenuCmd::Duplicar),
             MenuEntry::sep(),
-            MenuEntry::act("Eliminar carta seleccionada", MenuCmd::Eliminar)
+            MenuEntry::act("Eliminar selección", MenuCmd::Eliminar)
                 .destructive()
-                .enabled(m.selected_card.is_some()),
+                .enabled(m.nav_selected.is_some()),
         ],
         MenuKind::Vista => {
             let mut v = Vec::new();

@@ -229,63 +229,6 @@ pub(crate) fn load_card(name: &str) -> Option<Chart> {
 
 /// Elimina el archivo de una carta de la biblioteca. No toca la carta
 /// cargada (`cosmos-chart.json`).
-pub(crate) fn delete_card(name: &str) {
-    let Some(dir) = charts_dir() else { return };
-    let path = dir.join(format!("{name}.json"));
-    if let Err(e) = std::fs::remove_file(&path) {
-        eprintln!("cosmos · delete_card({name}): {e}");
-    }
-}
-
-pub(crate) fn save_card(name: &str, chart: &Chart) {
-    let Some(dir) = charts_dir() else { return };
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!("{name}.json"));
-    let f: ChartFile = chart.into();
-    if let Ok(json) = serde_json::to_vec_pretty(&f) {
-        if let Err(e) = std::fs::write(&path, json) {
-            eprintln!("cosmos · save_card({name}): {e}");
-        }
-    }
-}
-
-/// Genera un nombre de archivo único para `chart` — sluggea el label,
-/// concatena fecha de nacimiento, y agrega un sufijo numérico si hubiera
-/// colisión con un archivo ya existente.
-pub(crate) fn generate_card_name(chart: &Chart) -> String {
-    let bd = &chart.birth_data;
-    let slug: String = chart
-        .label
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let slug = slug
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    let base = format!("{slug}-{:04}-{:02}-{:02}", bd.year, bd.month, bd.day);
-    let mut name = base.clone();
-    let mut i = 2;
-    while let Some(dir) = charts_dir() {
-        if !dir.join(format!("{name}.json")).exists() {
-            break;
-        }
-        name = format!("{base}-{i}");
-        i += 1;
-        if i > 99 {
-            break;
-        }
-    }
-    name
-}
-
 pub(crate) fn save_chart_to_disk(chart: &Chart) {
     let Some(path) = chart_path() else { return };
     if let Some(parent) = path.parent() {

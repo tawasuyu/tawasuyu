@@ -38,8 +38,8 @@ use crate::chrome::MenuCmd;
 use crate::engine::{compute, sample_chart};
 use crate::model::{MenuKind, Model, Msg, ViewKind, WheelOpt};
 use crate::persist::{
-    delete_card, generate_card_name, load_chart_from_disk, load_ui_state, save_card,
-    save_chart_to_disk, save_ui_state, spawn_chart_watcher, UiState,
+    load_chart_from_disk, load_ui_state, save_chart_to_disk, save_ui_state, spawn_chart_watcher,
+    UiState,
 };
 
 const CORPUS_DEFAULT_RON: &str = include_str!("../../cosmos-corpus/ejemplo.ron");
@@ -138,23 +138,90 @@ fn do_nueva(m: &mut Model) {
     m.status_note = Some("Carta de ejemplo cargada".into());
 }
 
+/// Duplica la carta de trabajo como una carta nueva del store, bajo el
+/// contacto del nodo seleccionado (o el contacto padre de la carta sel.).
 fn do_duplicar(m: &mut Model) {
-    let name = generate_card_name(&m.chart);
-    save_card(&name, &m.chart);
-    m.selected_card = Some(name.clone());
-    m.status_note = Some(format!("Carta duplicada: {name}"));
+    let contact = m.selected_node().and_then(|n| match n.kind {
+        library::NavKind::Contact => library::parse_contact_key(&n.key),
+        library::NavKind::Chart => n.parent.as_deref().and_then(library::parse_contact_key),
+        library::NavKind::Group => None,
+    });
+    let Some(cid) = contact else {
+        m.error = Some("Duplicar: seleccioná una carta o un contacto".into());
+        return;
+    };
+    let label = format!("{} (copia)", m.chart.label);
+    let res = m.store.as_ref().map(|s| {
+        s.create_chart(
+            cid,
+            cosmos_model::ChartKind::Natal,
+            &label,
+            &m.chart.birth_data,
+            &m.chart.config,
+            None,
+        )
+    });
+    match res {
+        Some(Ok(ch)) => {
+            m.nav_expanded.insert(format!("c:{cid}"));
+            m.nav_selected = Some(format!("h:{}", ch.id));
+            refresh_nav(m);
+            m.status_note = Some(format!("Carta duplicada: {label}"));
+        }
+        Some(Err(e)) => m.error = Some(format!("duplicar: {e}")),
+        None => {}
+    }
 }
 
-/// Guarda la carta cargada en la biblioteca. Si hay una carta
-/// seleccionada, sobreescribe ese archivo; si no, genera un nombre nuevo.
+/// Persiste la carta de trabajo en el store. Si hay una carta
+/// seleccionada en el árbol, la sobrescribe; si hay un contacto
+/// seleccionado, crea una carta nueva bajo él.
 fn do_guardar(m: &mut Model) {
-    let name = m
-        .selected_card
-        .clone()
-        .unwrap_or_else(|| generate_card_name(&m.chart));
-    save_card(&name, &m.chart);
-    m.selected_card = Some(name.clone());
-    m.status_note = Some(format!("Carta guardada: {name}"));
+    let sel = m.selected_node().map(|n| (n.kind, n.key.clone()));
+    match sel {
+        Some((library::NavKind::Chart, key)) => {
+            let Some(id) = library::parse_chart_key(&key) else { return };
+            let res = m.store.as_ref().map(|s| {
+                s.update_chart(id, &m.chart.label, &m.chart.birth_data, &m.chart.config)
+            });
+            match res {
+                Some(Ok(())) => {
+                    refresh_nav(m);
+                    m.status_note = Some(format!("Carta guardada: {}", m.chart.label));
+                }
+                Some(Err(e)) => m.error = Some(format!("guardar: {e}")),
+                None => {}
+            }
+        }
+        Some((library::NavKind::Contact, key)) => {
+            let Some(cid) = library::parse_contact_key(&key) else { return };
+            let res = m.store.as_ref().map(|s| {
+                s.create_chart(
+                    cid,
+                    cosmos_model::ChartKind::Natal,
+                    &m.chart.label,
+                    &m.chart.birth_data,
+                    &m.chart.config,
+                    None,
+                )
+            });
+            match res {
+                Some(Ok(ch)) => {
+                    m.nav_expanded.insert(key.clone());
+                    m.selected_card = Some(ch.id.to_string());
+                    m.nav_selected = Some(format!("h:{}", ch.id));
+                    refresh_nav(m);
+                    m.status_note = Some(format!("Carta creada: {}", m.chart.label));
+                }
+                Some(Err(e)) => m.error = Some(format!("guardar: {e}")),
+                None => {}
+            }
+        }
+        _ => {
+            m.error =
+                Some("Guardar: seleccioná una carta (sobrescribe) o un contacto (crea)".into())
+        }
+    }
 }
 
 /// Reconstruye el snapshot del árbol desde el store (tras una mutación).
@@ -318,12 +385,10 @@ fn do_recargar(m: &mut Model) {
     }
 }
 
+/// Elimina el nodo seleccionado del árbol (carta/contacto/grupo) — misma
+/// ruta que el botón 🗑 del explorador.
 fn do_eliminar(m: &mut Model) {
-    if let Some(name) = m.selected_card.clone() {
-        delete_card(&name);
-        m.selected_card = None;
-        m.status_note = Some(format!("Carta eliminada: {name}"));
-    }
+    delete_selected(m);
 }
 
 fn apply_cmd(m: &mut Model, cmd: MenuCmd) {
