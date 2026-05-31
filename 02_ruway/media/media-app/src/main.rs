@@ -808,6 +808,19 @@ fn seek_audio_by(delta_secs: i64) {
     src.seek_to(Duration::from_secs_f64(new_s));
 }
 
+/// Salta a la posición **absoluta** `fraction` (0..1) de la duración del
+/// track actual. Lo dispara el click en el timeline (`MediaCommand::SeekTo`).
+/// No-op sin playlist (tono A4).
+fn seek_audio_to(fraction: f32) {
+    let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
+        return;
+    };
+    let mut src = handle.lock();
+    let dur_s = src.duration().unwrap_or(Duration::ZERO).as_secs_f64();
+    let f = fraction.clamp(0.0, 1.0) as f64;
+    src.seek_to(Duration::from_secs_f64(dur_s * f));
+}
+
 /// Construye el catálogo de acciones para el command palette a partir de
 /// los settings vivos. Cada acción del reproductor entra como un
 /// [`PaletteCommand`] con su grupo y, si hay una tecla atada en el
@@ -823,6 +836,7 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (TogglePause, "Transporte"),
         (SeekBy { secs: step }, "Transporte"),
         (SeekBy { secs: -step }, "Transporte"),
+        (SeekTo { fraction: 0.0 }, "Transporte"),
         (PrevTrack, "Playlist"),
         (NextTrack, "Playlist"),
         (CycleRepeat, "Playlist"),
@@ -913,6 +927,7 @@ fn apply_command(cmd: MediaCommand) {
             pause().toggle();
         }
         SeekBy { secs } => seek_audio_by(secs),
+        SeekTo { fraction } => seek_audio_to(fraction),
         VolumeBy { delta } => {
             volume().update(|v| v + delta);
         }
@@ -1425,6 +1440,7 @@ impl App for MediaApp {
         });
 
         let subs_strip = subtitle_strip();
+        let timeline = timeline_strip();
 
         // --- Grilla reorderable de controles + visores ---
         // 3 cols × 2 rows; el orden lo decide el usuario arrastrando
@@ -1505,7 +1521,7 @@ impl App for MediaApp {
             ..Default::default()
         })
         .fill(Color::from_rgba8(22, 26, 34, 255))
-        .children(vec![title_text, canvas, subs_strip, tile_grid, footer])
+        .children(vec![title_text, canvas, subs_strip, timeline, tile_grid, footer])
     }
 }
 
@@ -1833,6 +1849,72 @@ fn subtitle_strip<Msg: 'static>() -> View<Msg> {
 /// (mezcla de canales en mono para mostrarse en una sola línea).
 /// Cuando no hay probe (audio muteado) muestra una línea de centro
 /// con leyenda "audio off".
+/// Barra de progreso clickeable bajo el video: muestra el avance del track
+/// (fracción posición/duración) y, al click, salta a esa posición absoluta
+/// — scrubbing estilo VLC. El click reporta `local_x / rect_w` como
+/// fracción (`on_click_at`) y la app lo mapea a `MediaCommand::SeekTo`; el
+/// core no sabe la duración, sólo la fracción. Sin playlist (tono A4) queda
+/// inerte y vacía. Se redibuja cada Tick, así el playhead avanza solo.
+fn timeline_strip() -> View<Msg> {
+    let frac = playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .map(|h| {
+            let s = h.lock();
+            let dur = s.duration().unwrap_or(Duration::ZERO).as_secs_f64();
+            if dur <= 0.0 {
+                0.0
+            } else {
+                (s.position().as_secs_f64() / dur).clamp(0.0, 1.0) as f32
+            }
+        })
+        .unwrap_or(0.0);
+    let fill_color = Color::from_rgba8(120, 200, 255, 255);
+    let knob_color = Color::from_rgba8(220, 235, 250, 255);
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(14.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(30, 36, 46, 255))
+    .radius(7.0)
+    .paint_with(move |scene, _ts, rect| {
+        if rect.w <= 2.0 || rect.h <= 2.0 {
+            return;
+        }
+        let pad: f32 = 2.0;
+        let x0 = rect.x + pad;
+        let y0 = rect.y + pad;
+        let w = (rect.w - 2.0 * pad).max(1.0);
+        let h = (rect.h - 2.0 * pad).max(1.0);
+        // Tramo recorrido.
+        let fw = (w * frac).max(0.0);
+        if fw > 0.5 {
+            let fill = KurboRect::new(x0 as f64, y0 as f64, (x0 + fw) as f64, (y0 + h) as f64);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, fill_color, None, &fill);
+        }
+        // Playhead — fina barra vertical en la posición actual.
+        let kx = x0 + fw;
+        let kw: f32 = 3.0;
+        let knob = KurboRect::new(
+            (kx - kw * 0.5) as f64,
+            y0 as f64,
+            (kx + kw * 0.5) as f64,
+            (y0 + h) as f64,
+        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, knob_color, None, &knob);
+    })
+    .on_click_at(|lx, _ly, w, _h| {
+        if w <= 0.0 {
+            return None;
+        }
+        let fraction = (lx / w).clamp(0.0, 1.0);
+        Some(Msg::Command(MediaCommand::SeekTo { fraction }))
+    })
+}
+
 fn waveform_panel<Msg: 'static>() -> View<Msg> {
     let probe = audio_probe_slot().get().cloned().flatten();
     let scratch: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));

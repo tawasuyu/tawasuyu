@@ -1,6 +1,6 @@
 # Controles configurables de media (estilo VLC, más flexible)
 
-> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D5 (paleta) ✅ · D2 (scripts Rhai + watch) ✅.
+> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D5 (paleta) ✅ · D2 (scripts Rhai + watch) ✅ · E (timeline scrubbeable) ✅.
 > Autoritativo sobre cómo se mapean entradas → acciones en el dominio `media`.
 
 ## Problema
@@ -80,6 +80,8 @@ ControlSettings(
 | `=`          | SetSpeed 1.0×       | reset (más flexible que VLC)   |
 | `c`          | ToggleRecord        | capture                        |
 | `Shift+s`    | Snapshot            | como VLC (Shift+S)             |
+| `b`          | Script «potenciar»  | ejemplo Rhai (vol 100% + 1.25×) |
+| (click)      | SeekTo fracción     | timeline scrubbeable bajo el video |
 | `?`          | (ayuda)             | overlay con el keymap vivo     |
 | `F5`         | (recargar)          | relee `controles.ron` en caliente |
 | `Ctrl+Shift+P` | (paleta)          | command palette: buscar y ejecutar acción |
@@ -142,5 +144,16 @@ ControlSettings(
   - **Watch ✅**: un hilo daemon poll-ea el mtime de `controles.ron` cada segundo y
     dispatcha `ReloadConfig` al cambiar — recarga **automática**, F5 queda como
     recarga manual. Sin dependencia de FS-watch ni debounce: el archivo es diminuto.
-- **Futuro (no bloqueante)**: reusar el sistema cuando se materialicen los widgets
-  `llimphi-widget-{transport,timeline,waveform}` y/o `nahual-video-viewer-llimphi`.
+- **E ✅ — timeline scrubbeable (seek absoluto, estilo VLC)**: una barra de progreso
+  clickeable bajo el video. Comando agnóstico nuevo `MediaCommand::SeekTo { fraction }`
+  (0..1, **absoluto** — complementa al `SeekBy` relativo): la UI no sabe la duración,
+  sólo reporta `local_x / ancho_barra` como fracción vía `on_click_at`, y el reproductor
+  la resuelve a `Duration` (`seek_audio_to` → `Seekable::seek_to`). El playhead avanza
+  solo porque la barra se redibuja cada Tick (`paint_with` lee posición/duración del
+  player vivo). `SeekTo` es parametrizado: además del scrub se puede atar a teclas en
+  `controles.ron` (un dígito → un %, como los `1`–`9` de VLC) — `chord_from_event` ya
+  acepta dígitos. `describe()` pretty-fica los extremos ("Volver al inicio" / "Ir al
+  final") y el resto como "%". El palette suma "Volver al inicio" (`SeekTo 0.0`).
+- **Futuro (no bloqueante)**: extraer el timeline inline de `media-app` (+ transport/
+  waveform) como widgets reusables `llimphi-widget-{transport,timeline,waveform}` y/o
+  `nahual-video-viewer-llimphi`.

@@ -30,6 +30,12 @@ pub enum MediaCommand {
     /// Salta `secs` segundos relativos a la posición actual (negativo =
     /// hacia atrás). El paso ya no es una constante: vive en el binding.
     SeekBy { secs: i64 },
+    /// Salta a la posición **absoluta** `fraction` (0.0..=1.0) de la
+    /// duración total. Es el comando del timeline clickeable: la UI reporta
+    /// dónde se clickeó como fracción del ancho de la barra y el reproductor
+    /// lo resuelve a tiempo (el core no sabe la duración). Donde VLC scrubea
+    /// con el mouse, acá además se puede atar a teclas (un dígito → un %).
+    SeekTo { fraction: f32 },
     /// Ajusta el volumen sumando `delta` (clampeado por el reproductor).
     VolumeBy { delta: f32 },
     /// Fija el volumen absoluto en `level` (0.0..=1.0).
@@ -69,6 +75,9 @@ impl MediaCommand {
             TogglePause => "Play / pausa".to_string(),
             SeekBy { secs } if *secs < 0 => format!("Retroceder {}s", secs.abs()),
             SeekBy { secs } => format!("Avanzar {secs}s"),
+            SeekTo { fraction } if *fraction <= 0.0 => "Volver al inicio".to_string(),
+            SeekTo { fraction } if *fraction >= 1.0 => "Ir al final".to_string(),
+            SeekTo { fraction } => format!("Ir al {:.0}%", fraction * 100.0),
             VolumeBy { delta } if *delta < 0.0 => "Bajar volumen".to_string(),
             VolumeBy { .. } => "Subir volumen".to_string(),
             SetVolume { level } => format!("Volumen al {:.0}%", level * 100.0),
@@ -384,6 +393,22 @@ mod tests {
         assert_eq!(
             MediaCommand::SetSpeed { mult: 1.0 }.describe(),
             "Velocidad 1.00×"
+        );
+    }
+
+    #[test]
+    fn describe_de_seek_to_usa_extremos_y_porcentaje() {
+        assert_eq!(
+            MediaCommand::SeekTo { fraction: 0.0 }.describe(),
+            "Volver al inicio"
+        );
+        assert_eq!(
+            MediaCommand::SeekTo { fraction: 1.0 }.describe(),
+            "Ir al final"
+        );
+        assert_eq!(
+            MediaCommand::SeekTo { fraction: 0.5 }.describe(),
+            "Ir al 50%"
         );
     }
 
