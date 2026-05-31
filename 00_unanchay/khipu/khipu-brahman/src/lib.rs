@@ -20,8 +20,9 @@
 //! (postcard). Un sobre por stream — espejo del marco de `khipu-share::net`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use card_net::{BrahmanNet, Multiaddr, PeerId};
+use card_net::{BrahmanNet, Multiaddr, PeerId, Protocol};
 use futures::StreamExt;
 use khipu_share::SignedBundle;
 use libp2p::StreamProtocol;
@@ -82,6 +83,17 @@ impl KhipuNode {
         self.net.listen(addr).await
     }
 
+    /// Escucha en una multiaddr dada como texto y devuelve la **dirección
+    /// para compartir** ya con `/p2p/<peer-id>` — lista para pegarle a un
+    /// par. Pensada para callers que no quieren tocar tipos de libp2p.
+    pub async fn listen_str(&self, addr: &str) -> Result<String, BrahmanError> {
+        let m: Multiaddr = addr
+            .parse()
+            .map_err(|e| BrahmanError::Nodo(format!("multiaddr inválida: {e}")))?;
+        let bound = self.net.listen(m).await;
+        Ok(format!("{bound}/p2p/{}", self.net.peer_id))
+    }
+
     /// Marca a un par para conectarse.
     pub fn dial(&self, addr: Multiaddr) {
         self.net.dial(addr);
@@ -132,6 +144,30 @@ impl KhipuNode {
         })
     }
 
+    /// Jala el sobre de un par dado por su **dirección de marcado** como
+    /// texto (`/ip4/.../tcp/.../p2p/<peer-id>`): extrae el peer-id, dial-ea
+    /// y reintenta el fetch unos segundos mientras se establece la
+    /// conexión. La forma que usa la app.
+    pub async fn fetch_addr_str(&self, addr: &str) -> Result<SignedBundle, BrahmanError> {
+        let m: Multiaddr = addr
+            .parse()
+            .map_err(|e| BrahmanError::Nodo(format!("multiaddr inválida: {e}")))?;
+        let peer = peer_from_multiaddr(&m)
+            .ok_or_else(|| BrahmanError::Nodo("la multiaddr no trae /p2p/<peer-id>".into()))?;
+        self.net.dial(m);
+        let mut intentos = 0u32;
+        loop {
+            match self.fetch(peer).await {
+                Ok(s) => return Ok(s),
+                Err(_) if intentos < 60 => {
+                    intentos += 1;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /// Abre un stream a `peer` y jala su sobre. **No lo verifica** — el
     /// caller debe pasarlo por [`khipu_share::open`] antes de confiar.
     pub async fn fetch(&self, peer: PeerId) -> Result<SignedBundle, BrahmanError> {
@@ -144,6 +180,14 @@ impl KhipuNode {
         let bytes = read_frame(&mut compat).await?;
         SignedBundle::from_bytes(&bytes).map_err(|e| BrahmanError::Sobre(format!("{e:?}")))
     }
+}
+
+/// Extrae el `PeerId` del componente `/p2p/<id>` de una multiaddr, si lo trae.
+fn peer_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
+    addr.iter().find_map(|p| match p {
+        Protocol::P2p(id) => Some(id),
+        _ => None,
+    })
 }
 
 async fn write_frame<S>(stream: &mut S, payload: &[u8]) -> Result<(), BrahmanError>

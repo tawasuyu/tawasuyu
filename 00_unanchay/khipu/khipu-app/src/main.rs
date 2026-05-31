@@ -149,6 +149,17 @@ enum Focus {
     PeerAddr,
 }
 
+/// Nodo libp2p del cuaderno + su runtime tokio (que lo mantiene vivo). Se
+/// arma perezosamente la primera vez que se usa P2P (`ensure_p2p`).
+struct P2p {
+    rt: Arc<tokio::runtime::Runtime>,
+    node: Arc<khipu_brahman::KhipuNode>,
+    /// Nuestra dirección para compartir (`/ip4/.../tcp/.../p2p/<id>`).
+    dial_addr: String,
+    /// `true` cuando ya estamos sirviendo el cuaderno por libp2p.
+    serving: bool,
+}
+
 /// Un par descubierto en la red, en forma lista para la UI: dónde jalarle
 /// el cuaderno y una etiqueta legible. Datos planos (no `PeerVisto`) para
 /// viajar dentro de un `Msg`.
@@ -253,6 +264,8 @@ struct Model {
     /// Acción a reanudar tras desbloquear (lo que el usuario quiso hacer
     /// y disparó el prompt). Se redispatcha al lograr el unlock.
     pending: Option<Box<Msg>>,
+    /// Nodo libp2p (perezoso): `Some` una vez que se usó P2P.
+    p2p: Option<P2p>,
 }
 
 struct KhipuApp;
@@ -413,12 +426,32 @@ impl App for KhipuApp {
                 model.receiving = false;
                 model.peers.clear();
                 model.focus = Focus::None;
-                model.status = Some(format!("jalando de {addr}…"));
-                let destino = addr;
-                h.spawn(move || match khipu_share::net::fetch(&destino) {
-                    Ok(s) => Msg::Received(Ok(s)),
-                    Err(e) => Msg::Received(Err(format!("no se pudo recibir de {destino}: {e}"))),
-                });
+                if addr.trim().starts_with('/') {
+                    // Multiaddr libp2p (`/ip4/.../tcp/.../p2p/<id>`): vía
+                    // khipu-brahman. Arma el nodo si hace falta.
+                    if ensure_p2p(&mut model) {
+                        let p = model.p2p.as_ref().expect("p2p recién armado");
+                        let (rt, node) = (p.rt.clone(), p.node.clone());
+                        model.status = Some(format!("jalando por libp2p de {addr}…"));
+                        let destino = addr;
+                        h.spawn(move || match rt.block_on(node.fetch_addr_str(&destino)) {
+                            Ok(s) => Msg::Received(Ok(s)),
+                            Err(e) => Msg::Received(Err(format!("p2p: {e}"))),
+                        });
+                    } else {
+                        model.status = Some("no se pudo iniciar el nodo libp2p".into());
+                    }
+                } else {
+                    // Dirección TCP `host:puerto` (LAN/WAN directa).
+                    model.status = Some(format!("jalando de {addr}…"));
+                    let destino = addr;
+                    h.spawn(move || match khipu_share::net::fetch(&destino) {
+                        Ok(s) => Msg::Received(Ok(s)),
+                        Err(e) => {
+                            Msg::Received(Err(format!("no se pudo recibir de {destino}: {e}")))
+                        }
+                    });
+                }
             }
             Msg::CancelPeers => {
                 model.receiving = false;
@@ -957,7 +990,7 @@ fn receive_panel(
     // Fila de dirección manual + jalar.
     let addr_input = text_input_view(
         &model.peer_input,
-        "host:puerto",
+        "host:puerto  o  /ip4/…/p2p/…",
         model.focus == Focus::PeerAddr,
         input_palette,
         Msg::Focus(Focus::PeerAddr),
@@ -1837,6 +1870,42 @@ fn peer_addr() -> String {
     std::env::var("KHIPU_PEER").unwrap_or_else(|_| "127.0.0.1:7700".into())
 }
 
+/// Arma el nodo libp2p la primera vez que se necesita: runtime tokio
+/// dedicado + `KhipuNode` que empieza a escuchar (para ser alcanzable y
+/// obtener nuestra dirección de marcado). Idempotente. `false` si no se
+/// pudo (sin runtime o sin red).
+fn ensure_p2p(model: &mut Model) -> bool {
+    if model.p2p.is_some() {
+        return true;
+    }
+    let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+    else {
+        return false;
+    };
+    // `KhipuNode::standalone` arranca el swarm con `tokio::spawn`: hay que
+    // estar dentro del runtime.
+    let node = {
+        let _g = rt.enter();
+        match khipu_brahman::KhipuNode::standalone() {
+            Ok(n) => Arc::new(n),
+            Err(_) => return false,
+        }
+    };
+    let dial_addr = rt
+        .block_on(node.listen_str("/ip4/0.0.0.0/tcp/0"))
+        .unwrap_or_default();
+    model.p2p = Some(P2p {
+        rt: Arc::new(rt),
+        node,
+        dial_addr,
+        serving: false,
+    });
+    true
+}
+
 /// Levanta (una sola vez) el servidor TCP que sirve `compartido.khipu`.
 /// El hilo lee el archivo en cada conexión, así sirve siempre la versión
 /// vigente; vive hasta que el proceso termina. Devuelve la línea de estado.
@@ -1869,7 +1938,28 @@ fn start_publishing(model: &mut Model) -> String {
         std::thread::sleep(std::time::Duration::from_secs(2));
     });
     model.publishing = true;
-    format!("publicando el cuaderno en {addr} (anunciando en LAN)")
+
+    // Además del TCP/LAN, servimos por libp2p (cifrado, WAN). El nodo se
+    // arma perezoso; servimos `compartido.khipu` y nos anunciamos en la DHT.
+    let p2p_status = if ensure_p2p(model) {
+        let dir2 = dir.clone();
+        if let Some(p) = model.p2p.as_mut() {
+            if !p.serving {
+                let path2 = dir2.join("compartido.khipu");
+                let node = p.node.clone();
+                let _g = p.rt.enter();
+                node.run_serve(move || std::fs::read(&path2).ok());
+                node.anunciar();
+                p.serving = true;
+            }
+            format!(" · libp2p: {}", p.dial_addr)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    format!("publicando en {addr} (LAN){p2p_status}")
 }
 
 /// Prefijo hex (4 bytes / 8 hex) de un hash, para mostrar una dirección
@@ -2083,6 +2173,7 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         passphrase: TextInputState::masked(),
         unlocking: false,
         pending: None,
+        p2p: None,
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -2139,6 +2230,7 @@ fn seeded_model(embedder: Embedder) -> Model {
         passphrase: TextInputState::masked(),
         unlocking: false,
         pending: None,
+        p2p: None,
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [

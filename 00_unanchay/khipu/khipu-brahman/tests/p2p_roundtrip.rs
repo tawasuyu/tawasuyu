@@ -10,6 +10,34 @@ use card_net::Multiaddr;
 use khipu_brahman::KhipuNode;
 use khipu_share::{open, seal, SharedNote};
 
+/// Camino que usa la app: `listen_str` da la dirección para compartir y
+/// `fetch_addr_str` la consume (dial + reintento + fetch).
+#[tokio::test]
+async fn jalar_por_direccion_str_como_la_app() {
+    let autor = Keypair::from_seed([32u8; 32]);
+    let sobre = seal(
+        &autor,
+        vec![SharedNote {
+            title: "via str".into(),
+            body: "listen_str + fetch_addr_str".into(),
+            tags: vec![],
+        }],
+        1,
+    )
+    .unwrap();
+    let bytes = sobre.to_bytes().unwrap();
+
+    let server = KhipuNode::standalone().unwrap();
+    let client = KhipuNode::standalone().unwrap();
+    let dial = server.listen_str("/ip4/127.0.0.1/tcp/0").await.unwrap();
+    let _serve = server.run_serve(move || Some(bytes.clone()));
+
+    // fetch_addr_str ya reintenta internamente mientras se conecta.
+    let recibido = client.fetch_addr_str(&dial).await.expect("fetch por str");
+    let bundle = open(&recibido).expect("verifica tras el viaje");
+    assert_eq!(bundle.notes[0].title, "via str");
+}
+
 #[tokio::test]
 async fn jalar_un_sobre_entre_dos_nodos_libp2p() {
     // Sellar el cuaderno a servir.
