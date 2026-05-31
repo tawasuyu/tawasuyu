@@ -15,8 +15,13 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 let mut m = model;
                 m.edit_menu = Some((x, y));
                 m.menu_open = None;
+                // Animación de aparición: 0→1 con ease-out, autodirigida
+                // por ticks de llimphi-motion hasta terminar.
+                m.edit_menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(handle, motion::FAST, || Msg::MenuTick);
                 m
             }
+            Msg::MenuTick => model,
             Msg::EditMenuAction(action) => apply_edit_menu_action(model, action),
             Msg::CloseMenus => {
                 let mut m = model;

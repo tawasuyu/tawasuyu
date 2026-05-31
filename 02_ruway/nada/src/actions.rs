@@ -760,24 +760,24 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
     let can_redo = tab.map(|t| t.editor.can_redo()).unwrap_or(false);
     let has_tab = tab.is_some();
 
-    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").icon("\u{21A9}").shortcut("Ctrl+Z");
     if !can_undo { undo = undo.disabled(); }
-    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").icon("\u{21AA}").shortcut("Ctrl+Y");
     if !can_redo { redo = redo.disabled(); }
-    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
-    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    let mut cut = MenuItem::new("Cortar", "edit.cut").icon("\u{2702}").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").icon("\u{29C9}").shortcut("Ctrl+C");
     if !has_sel { cut = cut.disabled(); copy = copy.disabled(); }
-    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
-    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall").shortcut("Ctrl+A").separated();
+    let paste = MenuItem::new("Pegar", "edit.paste").icon("\u{2398}").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall").icon("\u{2750}").shortcut("Ctrl+A").separated();
     if !has_tab { sel_all = sel_all.disabled(); }
 
     AppMenu::new()
         .menu(
             Menu::new("Archivo")
-                .item(MenuItem::new("Abrir…", "file.open").shortcut("Ctrl+P"))
-                .item(MenuItem::new("Guardar", "file.save").shortcut("Ctrl+S"))
+                .item(MenuItem::new("Abrir…", "file.open").icon("\u{1F4C2}").shortcut("Ctrl+P"))
+                .item(MenuItem::new("Guardar", "file.save").icon("\u{1F4BE}").shortcut("Ctrl+S"))
                 .item(MenuItem::new("Guardar como…", "file.saveas").shortcut("Ctrl+Shift+S"))
-                .item(MenuItem::new("Cerrar pestaña", "file.close").shortcut("Ctrl+W").separated()),
+                .item(MenuItem::new("Cerrar pestaña", "file.close").icon("\u{2715}").shortcut("Ctrl+W").separated()),
         )
         .menu(
             Menu::new("Editar")
@@ -790,17 +790,17 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
         )
         .menu(
             Menu::new("Buscar")
-                .item(MenuItem::new("Buscar en archivo", "search.find").shortcut("Ctrl+F"))
+                .item(MenuItem::new("Buscar en archivo", "search.find").icon("\u{1F50D}").shortcut("Ctrl+F"))
                 .item(MenuItem::new("Buscar en proyecto", "search.fif").shortcut("Ctrl+Shift+F"))
-                .item(MenuItem::new("Símbolos", "search.outline").shortcut("Ctrl+Shift+O"))
+                .item(MenuItem::new("Símbolos", "search.outline").icon("\u{2261}").shortcut("Ctrl+Shift+O"))
                 .item(MenuItem::new("Ir a definición", "search.gotodef").shortcut("F12").separated()),
         )
         .menu(
             Menu::new("Ver")
-                .item(MenuItem::new("Terminal", "view.term").shortcut("Ctrl+`"))
+                .item(MenuItem::new("Terminal", "view.term").icon("\u{2328}").shortcut("Ctrl+`"))
                 .item(MenuItem::new("Paleta de comandos", "view.palette").shortcut("Ctrl+Shift+P"))
                 .item(MenuItem::new("Minimapa", "view.minimap"))
-                .item(MenuItem::new("Cambiar tema", "view.theme").shortcut("Ctrl+T").separated()),
+                .item(MenuItem::new("Cambiar tema", "view.theme").icon("\u{25D0}").shortcut("Ctrl+T").separated()),
         )
 }
 

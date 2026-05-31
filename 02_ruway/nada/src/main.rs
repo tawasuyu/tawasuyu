@@ -74,7 +74,8 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputStat
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_motion::{animate, motion, Tween};
 
 const TREE_WIDTH: f32 = 240.0;
 const TREE_ROW_H: f32 = 22.0;
@@ -201,6 +202,9 @@ enum Msg {
     EditMenuAction(EditAction),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Tick de la animación de aparición del menú de edición (no-op salvo
+    /// forzar el re-render mientras el tween avanza).
+    MenuTick,
 }
 
 #[derive(Debug, Clone)]
@@ -320,6 +324,8 @@ struct Model {
     menu_open: Option<usize>,
     /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
     edit_menu: Option<(f32, f32)>,
+    /// Animación de aparición del menú de edición (0→1, fade + slide).
+    edit_menu_anim: Tween<f32>,
 }
 
 const RECENT_FILES_CAP: usize = 20;
@@ -529,6 +535,7 @@ impl App for EditorApp {
             recent_files: std::collections::VecDeque::with_capacity(RECENT_FILES_CAP),
             menu_open: None,
             edit_menu: None,
+            edit_menu_anim: Tween::idle(1.0),
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
@@ -620,14 +627,21 @@ impl App for EditorApp {
                 None => EditFlags::default(),
             };
             let (w, h) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 &model.theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras {
+                    appear: model.edit_menu_anim.value(),
+                    ..ContextMenuExtras::default()
+                },
+            ));
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);

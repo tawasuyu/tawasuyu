@@ -35,6 +35,7 @@ llimphi-widget-tree = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-motion = { workspace = true }
 app-bus = { path = "../../shared/app-bus" }
 rimay-localize = { path = "../../shared/rimay-localize" }
 wawa-config = { path = "../../shared/wawa-config" }
