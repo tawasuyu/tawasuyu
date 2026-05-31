@@ -18,14 +18,19 @@ globalThis.XMLHttpRequest = function() {
     this.responseType = '';
     this.responseURL = '';
     this.onreadystatechange = null;
+    this.onloadstart = null;
+    this.onprogress = null;
     this.onload = null;
     this.onerror = null;
     this.onabort = null;
+    this.onloadend = null;
     this.ontimeout = null;
     this._method = 'GET';
     this._url = '';
     this._headers = [];
     this._response_headers = {};
+    // Fase 7.48 — listeners por tipo de evento (addEventListener).
+    this._listeners = {};
     this._aborted = false;
     this._sent = false;
 };
@@ -34,6 +39,42 @@ globalThis.XMLHttpRequest.OPENED = 1;
 globalThis.XMLHttpRequest.HEADERS_RECEIVED = 2;
 globalThis.XMLHttpRequest.LOADING = 3;
 globalThis.XMLHttpRequest.DONE = 4;
+// Fase 7.48 — EventTarget mínimo. `addEventListener`/`removeEventListener`
+// conviven con los handlers `on<tipo>`; `__puriy_fire` dispara ambos con un
+// objeto-evento `{ type, target, lengthComputable, loaded, total }`.
+globalThis.XMLHttpRequest.prototype.addEventListener = function(type, fn) {
+    if (typeof fn !== 'function') return;
+    type = String(type);
+    if (!this._listeners[type]) this._listeners[type] = [];
+    this._listeners[type].push(fn);
+};
+globalThis.XMLHttpRequest.prototype.removeEventListener = function(type, fn) {
+    type = String(type);
+    var arr = this._listeners[type];
+    if (!arr) return;
+    for (var i = arr.length - 1; i >= 0; i--) {
+        if (arr[i] === fn) arr.splice(i, 1);
+    }
+};
+globalThis.XMLHttpRequest.prototype.__puriy_fire = function(type, evt) {
+    evt = evt || {};
+    evt.type = type;
+    evt.target = this;
+    var on = this['on' + type];
+    if (typeof on === 'function') {
+        try { on.call(this, evt); }
+        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+    }
+    var arr = this._listeners[type];
+    if (arr) {
+        // Snapshot: un listener puede remover otro durante el dispatch.
+        var snapshot = arr.slice();
+        for (var i = 0; i < snapshot.length; i++) {
+            try { snapshot[i].call(this, evt); }
+            catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
+        }
+    }
+};
 globalThis.XMLHttpRequest.prototype.open = function(method, url, async_) {
     if (async_ === false) {
         throw new Error('XMLHttpRequest síncrono no soportado');
@@ -49,10 +90,7 @@ globalThis.XMLHttpRequest.prototype.open = function(method, url, async_) {
     this.response = '';
     this._sent = false;
     this._aborted = false;
-    if (typeof this.onreadystatechange === 'function') {
-        try { this.onreadystatechange(); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
+    this.__puriy_fire('readystatechange');
 };
 globalThis.XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
     this._headers.push(String(name));
@@ -68,8 +106,13 @@ globalThis.XMLHttpRequest.prototype.send = function(body) {
     this._sent = true;
     var id = globalThis.__puriy_fetch_next_id++;
     globalThis.__puriy_xhr_pending[id] = this;
-    var has_body = body != null;
-    var body_str = has_body ? String(body) : '';
+    // Fase 7.57 — serializa el body igual que fetch() (FormData → multipart,
+    // URLSearchParams/Blob → su Content-Type implícito) y agrega el
+    // Content-Type a `_headers` si el user no llamó setRequestHeader.
+    var ser = globalThis.__puriy_serialize_body(body);
+    var has_body = ser.hasBody;
+    var body_str = ser.text;
+    globalThis.__puriy_apply_content_type(this._headers, ser.contentType);
     var base = (globalThis.location && globalThis.location.href) || '';
     var resolved = globalThis.__puriy_resolve_url(this._url, base);
     this.responseURL = resolved;
@@ -83,14 +126,13 @@ globalThis.XMLHttpRequest.prototype.send = function(body) {
         kind: 'fetch',
         value: payload
     });
+    // Fase 7.48 — `loadstart` apenas se lanza la petición.
+    this.__puriy_fire('loadstart', { lengthComputable: false, loaded: 0, total: 0 });
     // Transición readyState 1→2: spec lo hace cuando llegan headers; acá
     // no hay streaming, así que disparamos al lanzar send() para que apps
     // que escuchan ese estado funcionen.
     this.readyState = 2;
-    if (typeof this.onreadystatechange === 'function') {
-        try { this.onreadystatechange(); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
+    this.__puriy_fire('readystatechange');
 };
 globalThis.XMLHttpRequest.prototype.abort = function() {
     if (this.readyState === 0 || this.readyState === 4) return;
@@ -98,14 +140,9 @@ globalThis.XMLHttpRequest.prototype.abort = function() {
     this.readyState = 4;
     this.status = 0;
     this.statusText = '';
-    if (typeof this.onreadystatechange === 'function') {
-        try { this.onreadystatechange(); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
-    if (typeof this.onabort === 'function') {
-        try { this.onabort(); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
+    this.__puriy_fire('readystatechange');
+    this.__puriy_fire('abort', { lengthComputable: false, loaded: 0, total: 0 });
+    this.__puriy_fire('loadend', { lengthComputable: false, loaded: 0, total: 0 });
 };
 globalThis.XMLHttpRequest.prototype.getResponseHeader = function(name) {
     var k = String(name).toLowerCase();
@@ -126,35 +163,53 @@ globalThis.XMLHttpRequest.prototype.__puriy_complete = function(status, statusTe
     if (this._aborted) return;
     this.status = status;
     this.statusText = statusText;
+    // `responseText` sólo es válido para responseType '' o 'text' (spec lo
+    // hace tirar para otros tipos); acá lo dejamos poblado siempre por
+    // lenidad — divergencia documentada. `response` sí respeta el tipo.
     this.responseText = body;
-    this.response = body;
     if (hdrPairs) {
         for (var i = 0; i + 1 < hdrPairs.length; i += 2) {
             this._response_headers[String(hdrPairs[i]).toLowerCase()] = hdrPairs[i + 1];
         }
     }
+    // Fase 7.47 — `response` según responseType.
+    var rtype = this.responseType || '';
+    if (rtype === '' || rtype === 'text') {
+        this.response = body;
+    } else if (rtype === 'json') {
+        // Spec: JSON inválido → response null (no tira).
+        try { this.response = JSON.parse(body); } catch (e) { this.response = null; }
+    } else if (rtype === 'arraybuffer') {
+        var len = body.length;
+        var buf = new ArrayBuffer(len);
+        var view = new Uint8Array(buf);
+        for (var i = 0; i < len; i++) view[i] = body.charCodeAt(i) & 0xff;
+        this.response = buf;
+    } else if (rtype === 'blob') {
+        this.response = new globalThis.Blob([body], { type: this.getResponseHeader('content-type') || '' });
+    } else {
+        // 'document' no soportado (no parseamos el response a DOM) → null.
+        this.response = null;
+    }
+    // Fase 7.48 — el body llega entero (sin transferencia chunked), así que
+    // emitimos un único `progress` con loaded == total antes de pasar a DONE.
+    var total = body ? body.length : 0;
+    this.__puriy_fire('progress', { lengthComputable: true, loaded: total, total: total });
     this.readyState = 4;
-    if (typeof this.onreadystatechange === 'function') {
-        try { this.onreadystatechange(); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
-    if (typeof this.onload === 'function') {
-        try { this.onload(); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
+    this.__puriy_fire('readystatechange');
+    this.__puriy_fire('load', { lengthComputable: true, loaded: total, total: total });
+    this.__puriy_fire('loadend', { lengthComputable: true, loaded: total, total: total });
 };
 globalThis.XMLHttpRequest.prototype.__puriy_error = function(msg) {
     if (this._aborted) return;
     this.status = 0;
     this.statusText = '';
     this.readyState = 4;
-    if (typeof this.onreadystatechange === 'function') {
-        try { this.onreadystatechange(); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
-    if (typeof this.onerror === 'function') {
-        try { this.onerror(new Error(msg)); }
-        catch (e) { globalThis.__puriy_stderr += String(e) + '\n'; }
-    }
+    this.__puriy_fire('readystatechange');
+    // El handler `onerror` históricamente recibía un Error; lo preservamos
+    // adjuntándolo al evento (`evt` también lleva type/target/loaded/total).
+    var evt = { lengthComputable: false, loaded: 0, total: 0, error: new Error(msg) };
+    this.__puriy_fire('error', evt);
+    this.__puriy_fire('loadend', { lengthComputable: false, loaded: 0, total: 0 });
 };
 "#;

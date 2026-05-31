@@ -8,10 +8,26 @@ pub(crate) const FETCH_BOOTSTRAP: &str = r#"
 globalThis.__puriy_fetch_next_id = 1;
 globalThis.__puriy_fetch_pending = {};
 globalThis.fetch = function(url, init) {
+    // Fase 7.56 — aceptar un Request como primer arg. El `init` explícito
+    // (segundo arg) pisa los campos que trae el Request.
+    if (globalThis.Request && url instanceof globalThis.Request) {
+        var req = url;
+        var over = init || {};
+        init = {
+            method: over.method || req.method,
+            headers: (over.headers != null) ? over.headers : req.headers,
+            body: (over.body != null) ? over.body : req._body,
+            signal: (over.signal != null) ? over.signal : req.signal
+        };
+        url = req.url;
+    }
     var id = globalThis.__puriy_fetch_next_id++;
     var method = (init && init.method) ? String(init.method).toUpperCase() : 'GET';
-    var body = (init && init.body != null) ? String(init.body) : '';
-    var has_body = (init && init.body != null);
+    // Fase 7.57 — serializa el body (FormData → multipart, URLSearchParams /
+    // Blob → su Content-Type implícito) en vez de un String() crudo.
+    var ser = globalThis.__puriy_serialize_body(init ? init.body : null);
+    var body = ser.text;
+    var has_body = ser.hasBody;
     // Headers serializados como "namevaluename2value2..."
     // — U+001F como Unit Separator (mismo sep que usa drain_dirty).
     var hdr_pairs = [];
@@ -31,6 +47,9 @@ globalThis.fetch = function(url, init) {
             }
         }
     }
+    // Fase 7.57 — aplica el Content-Type implícito del body serializado SÓLO
+    // si el user no seteó uno propio.
+    globalThis.__puriy_apply_content_type(hdr_pairs, ser.contentType);
     // Fase 7.34 — signal: si ya está aborted, reject inmediato.
     if (init && init.signal && init.signal.aborted) {
         return Promise.reject(new Error('AbortError: fetch aborted'));
@@ -63,12 +82,14 @@ globalThis.fetch = function(url, init) {
     });
     return promise;
 };
-// Fase 7.31 — Response class JS-puro. Construido por
+// Fase 7.31 — Response del lado net. Construido por
 // `__puriy_fetch_resolve(id, status, statusText, body, headers)` que el
-// chrome llama cuando el HTTP termina. Methods: .text() y .json()
-// devuelven Promises (matchea spec). .headers expone una Headers-like
-// (Fase 7.33). Múltiples llamadas a .text()/.json() funcionan porque
-// guardamos _body string crudo (sin "body locked" todavía).
+// chrome llama cuando el HTTP termina. Fase 7.55 — refactorizado para
+// delegar en el constructor público `new Response(body, init)` (módulo
+// `response`); acá sólo armamos los Headers desde los pares crudos y
+// marcamos `type = 'basic'` (respuesta de red). Métodos (text/json/
+// arrayBuffer/blob), `bodyUsed` enforcement y el getter `body`
+// (ReadableStream lazy) viven en `Response.prototype`.
 globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) {
     var headers = new globalThis.Headers();
     if (hdrPairs) {
@@ -76,43 +97,11 @@ globalThis.__puriy_make_response = function(status, statusText, body, hdrPairs) 
             headers.set(hdrPairs[i], hdrPairs[i + 1]);
         }
     }
-    return {
-        status: status,
-        statusText: statusText,
-        ok: status >= 200 && status < 300,
-        url: '',
-        type: 'basic',
-        bodyUsed: false,
-        headers: headers,
-        _body: body,
-        // Fase 7.35 — bodyUsed enforcement. Spec: tras consumir el body
-        // (.text()/.json()/.arrayBuffer()), bodyUsed pasa a true y un
-        // segundo intento rechaza con TypeError("body stream already read").
-        // Aplica también si el primer intento falló (JSON.parse roto).
-        text: function() {
-            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
-            this.bodyUsed = true;
-            return Promise.resolve(this._body);
-        },
-        json: function() {
-            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
-            this.bodyUsed = true;
-            try { return Promise.resolve(JSON.parse(this._body)); }
-            catch (e) { return Promise.reject(e); }
-        },
-        arrayBuffer: function() {
-            // Stub: devuelve un objeto pseudo-arrayBuffer con _body bytes
-            // mapeados a un Array de char codes. Apps que necesitan
-            // ArrayBuffer real verán divergencia; suficiente para JSON.
-            if (this.bodyUsed) return Promise.reject(new TypeError('body stream already read'));
-            this.bodyUsed = true;
-            var len = this._body.length;
-            var buf = new ArrayBuffer(len);
-            var view = new Uint8Array(buf);
-            for (var i = 0; i < len; i++) view[i] = this._body.charCodeAt(i) & 0xff;
-            return Promise.resolve(buf);
-        }
-    };
+    var resp = new globalThis.Response(body, {
+        status: status, statusText: statusText, headers: headers
+    });
+    resp.type = 'basic';
+    return resp;
 };
 // Fase 7.31 — resolve y reject los Promises pending. El chrome los
 // llama desde el handler de Msg::FetchComplete.

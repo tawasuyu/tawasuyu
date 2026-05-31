@@ -49,6 +49,15 @@ globalThis.AbortController = function() {
 // clase; acá la usamos como namespace para los dos helpers que faltaban.
 // `new AbortSignal()` no está soportado (spec real también lo prohíbe).
 globalThis.AbortSignal = {
+    // Fase 7.71 — AbortSignal.abort(reason) — devuelve un signal que YA nace
+    // abortado. Útil para pasar a fetch() y que rechace inmediato, o como
+    // valor centinela. Si `reason` se omite, el spec usa un AbortError; acá
+    // un Error('AbortError') (no tenemos DOMException).
+    abort: function(reason) {
+        var pair = globalThis.__puriy_make_abort_signal();
+        pair.abort(reason !== undefined ? reason : new Error('AbortError'));
+        return pair.signal;
+    },
     // AbortSignal.timeout(ms) — devuelve un signal que aborta solo tras
     // `ms` ms. Reusa setTimeout del harness de timers (Fase 4.x): el
     // host hace tick del reloj y dispara el closure. La razón del abort
