@@ -424,6 +424,10 @@ pub(crate) enum Msg {
     NewContact,
     NewChart,
     DeleteSelected,
+    /// Marca el nodo seleccionado para mover (cortar).
+    CutNode,
+    /// Mueve el nodo cortado bajo el seleccionado (pegar).
+    PasteNode,
     RenameStart,
     RenameKey(llimphi_ui::KeyEvent),
     RenameCommit,
@@ -504,6 +508,8 @@ pub(crate) struct Model {
     /// Clave del nodo en edición de nombre (`None` = no se renombra).
     pub(crate) nav_rename: Option<String>,
     pub(crate) rename_input: TextInputState,
+    /// Clave del nodo cortado, pendiente de pegar (mover).
+    pub(crate) nav_cut: Option<String>,
     // layout guardable (3 zonas resizables)
     pub(crate) nav_w: f32,
     pub(crate) tools_w: f32,

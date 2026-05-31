@@ -440,6 +440,7 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
 /// selección, renombrar y borrar.
 fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
     let has_sel = model.nav_selected.is_some();
+    let has_cut = model.nav_cut.is_some();
     let btn = |label: &str, msg: Msg, enabled: bool| -> View<Msg> {
         let mut v = View::new(Style {
             size: Size {
@@ -495,6 +496,8 @@ fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         btn("＋contacto", Msg::NewContact, true),
         btn("＋carta", Msg::NewChart, has_sel),
         btn("✎", Msg::RenameStart, has_sel),
+        btn("✂", Msg::CutNode, has_sel),
+        btn("📋", Msg::PasteNode, has_cut),
         btn("🗑", Msg::DeleteSelected, has_sel),
     ])
 }
