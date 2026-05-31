@@ -1,0 +1,11 @@
+[package]
+name = "nahual-thumb-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-thumb-core — pipeline de miniaturas agnóstico (sin Llimphi): genera thumbnails (decode + downscale), los cachea en RAM con invalidación por mtime, y planifica la cola de generación priorizada al viewport. Base para galerías tipo gThumb/FastStone. La concurrencia la pone el frontend con Handle::spawn; este crate sólo decide qué generar y guarda el resultado."
+
+[dependencies]
+image = { workspace = true }
