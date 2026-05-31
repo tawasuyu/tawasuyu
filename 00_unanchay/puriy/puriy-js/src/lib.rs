@@ -11442,4 +11442,124 @@ mod tests {
             JsValue::Bool(true)
         );
     }
+
+    // ---- Fase 7.143 — Web Workers ----
+
+    #[test]
+    fn workers_existen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof Worker").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof SharedWorker").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn worker_spawn_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var w = new Worker('/wkr.js', { name: 'calc' });").expect("e");
+        assert_eq!(rt.eval("w.url").expect("e"), JsValue::String("/wkr.js".into()));
+        assert_eq!(rt.eval("w.name").expect("e"), JsValue::String("calc".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'worker-spawn'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn worker_post_message_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var w = new Worker('/w.js'); w.postMessage({ op: 'sum', a: 2, b: 3 });").expect("e");
+        assert_eq!(
+            rt.eval(
+                "__puriy_dirty.some(function(d){ return d.kind === 'worker-message' && d.value.indexOf('sum') >= 0; })"
+            )
+            .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn worker_message_host_dispara_onmessage() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var recibido = null; \
+             var w = new Worker('/w.js'); \
+             w.onmessage = function(ev){ recibido = ev.data; };",
+        )
+        .expect("e");
+        rt.eval("__puriy_worker_message(1, 42);").expect("e");
+        assert_eq!(rt.eval("recibido").expect("e"), JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn worker_message_via_addeventlistener() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = null; \
+             var w = new Worker('/w.js'); \
+             w.addEventListener('message', function(ev){ r = ev.data; });",
+        )
+        .expect("e");
+        rt.eval("__puriy_worker_message(1, 'hola');").expect("e");
+        assert_eq!(rt.eval("r").expect("e"), JsValue::String("hola".into()));
+    }
+
+    #[test]
+    fn worker_error_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var msg = null; \
+             var w = new Worker('/w.js'); \
+             w.onerror = function(ev){ msg = ev.message; };",
+        )
+        .expect("e");
+        rt.eval("__puriy_worker_error(1, 'boom');").expect("e");
+        assert_eq!(rt.eval("msg").expect("e"), JsValue::String("boom".into()));
+    }
+
+    #[test]
+    fn worker_terminate_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var w = new Worker('/w.js'); w.terminate();").expect("e");
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'worker-terminate'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+        // tras terminate, el host ya no entrega
+        assert_eq!(rt.eval("__puriy_worker_message(1, 1)").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn shared_worker_tiene_port() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var sw = new SharedWorker('/sw.js');").expect("e");
+        assert_eq!(rt.eval("sw.port instanceof MessagePort").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'sharedworker-spawn'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn shared_worker_port_post_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var sw = new SharedWorker('/sw.js'); sw.port.postMessage('ping');").expect("e");
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'sharedworker-message'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn shared_worker_port_recibe_del_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var r = null; \
+             var sw = new SharedWorker('/sw.js'); \
+             sw.port.onmessage = function(ev){ r = ev.data; };",
+        )
+        .expect("e");
+        // el SharedWorker es el segundo worker creado en este runtime fresco → id 1
+        rt.eval("__puriy_sharedworker_message(1, 'desde-sw');").expect("e");
+        assert_eq!(rt.eval("r").expect("e"), JsValue::String("desde-sw".into()));
+    }
 }
