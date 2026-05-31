@@ -1,0 +1,18 @@
+[package]
+name = "nahual-gallery-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-gallery-llimphi — galería de miniaturas tipo gThumb/FastStone sobre Llimphi. Cose llimphi-widget-grid (virtualización 2D) + nahual-thumb-core (generación + cache + planificador): lista miles de imágenes de una carpeta, decodifica en background con Handle::spawn priorizado al viewport, y pinta sólo la ventana visible."
+
+[[bin]]
+name = "nahual-gallery"
+path = "src/main.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-grid = { workspace = true }
+nahual-thumb-core = { workspace = true }
