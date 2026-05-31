@@ -10473,4 +10473,230 @@ mod tests {
             JsValue::Bool(true)
         );
     }
+
+    // ---- Fase 7.132 — Generic Sensor API ----
+
+    #[test]
+    fn sensor_clases_existen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof Accelerometer").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof Gyroscope").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof AmbientLightSensor").expect("e"), JsValue::String("function".into()));
+        assert_eq!(
+            rt.eval("(new Accelerometer()) instanceof Sensor").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn sensor_start_activa_y_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var activado = false; \
+             var s = new Accelerometer({ frequency: 60 }); \
+             s.onactivate = function(){ activado = true; }; \
+             s.start();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("s.activated").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("activado").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'sensor-start' && d.value === 'accelerometer'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn sensor_reading_actualiza_campos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var leido = false; \
+             var s = new Accelerometer(); s.start(); \
+             s.onreading = function(){ leido = true; }; \
+             __puriy_sensor_reading('accelerometer', { x: 1, y: 2, z: 3, timestamp: 99 });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("leido").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("s.x").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("s.z").expect("e"), JsValue::Number(3.0));
+        assert_eq!(rt.eval("s.hasReading").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("s.timestamp").expect("e"), JsValue::Number(99.0));
+    }
+
+    #[test]
+    fn sensor_stop_deja_de_recibir() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var s = new Gyroscope(); s.start(); \
+             s.onreading = function(){ n++; }; \
+             __puriy_sensor_reading('gyroscope', { x: 1, y: 0, z: 0 }); \
+             s.stop(); \
+             __puriy_sensor_reading('gyroscope', { x: 9, y: 0, z: 0 });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("s.x").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("s.activated").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn sensor_ambient_light_y_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; \
+             var s = new AmbientLightSensor(); s.start(); \
+             s.onerror = function(ev){ err = ev.error.name; }; \
+             __puriy_sensor_reading('ambient-light', { illuminance: 320 }); \
+             __puriy_sensor_error('ambient-light', 'NotReadableError', 'sin acceso');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("s.illuminance").expect("e"), JsValue::Number(320.0));
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("NotReadableError".into()));
+    }
+
+    // ---- Fase 7.133 — Web NFC ----
+
+    #[test]
+    fn nfc_clases_existen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof NDEFReader").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof NDEFMessage").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof NDEFRecord").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn nfc_scan_publica_y_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ok = false; \
+             var r = new NDEFReader(); \
+             r.scan().then(function(){ ok = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'nfc-scan'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn nfc_reading_dispara_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var serie = null, tipo = null; \
+             var r = new NDEFReader(); r.scan(); \
+             r.onreading = function(ev){ serie = ev.serialNumber; tipo = ev.message.records[0].recordType; }; \
+             __puriy_nfc_reading('04:A2:3F', [{ recordType: 'url', data: 'https://x' }]);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("serie").expect("e"), JsValue::String("04:A2:3F".into()));
+        assert_eq!(rt.eval("tipo").expect("e"), JsValue::String("url".into()));
+    }
+
+    #[test]
+    fn nfc_write_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ok = false; \
+             var r = new NDEFReader(); \
+             r.write({ records: [{ recordType: 'text', data: 'hola' }] }).then(function(){ ok = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'nfc-write'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    // ---- Fase 7.134 — Presentation API ----
+
+    #[test]
+    fn presentation_request_y_navigator() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof PresentationRequest").expect("e"),
+            JsValue::String("function".into())
+        );
+        assert_eq!(
+            rt.eval("typeof navigator.presentation").expect("e"),
+            JsValue::String("object".into())
+        );
+        assert_eq!(
+            rt.eval("(new PresentationRequest('https://recv/x')).urls[0]").expect("e"),
+            JsValue::String("https://recv/x".into())
+        );
+    }
+
+    #[test]
+    fn presentation_start_resuelve_connection() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var estado = null, url = null; \
+             var pr = new PresentationRequest('https://recv/slides'); \
+             pr.start().then(function(c){ estado = c.state; url = c.url; }); \
+             __puriy_presentation_resolve(__puriy_presentation_next_id - 1, { id: 'c1', url: 'https://recv/slides' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("estado").expect("e"), JsValue::String("connected".into()));
+        assert_eq!(rt.eval("url").expect("e"), JsValue::String("https://recv/slides".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'presentation-start'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn presentation_start_cancelado_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             var pr = new PresentationRequest('https://recv/x'); \
+             pr.start().catch(function(e){ errName = e.name; }); \
+             __puriy_presentation_reject(__puriy_presentation_next_id - 1);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotAllowedError".into()));
+    }
+
+    #[test]
+    fn presentation_send_y_message() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var recibido = null; \
+             var pr = new PresentationRequest('https://recv/x'); \
+             pr.start().then(function(c){ \
+                c.onmessage = function(ev){ recibido = ev.data; }; \
+                c.send('ping'); \
+             }); \
+             __puriy_presentation_resolve(__puriy_presentation_next_id - 1, { id: 'conn-x', url: 'https://recv/x' });",
+        )
+        .expect("e");
+        rt.eval("__puriy_presentation_message('conn-x', 'pong');").expect("e");
+        assert_eq!(rt.eval("recibido").expect("e"), JsValue::String("pong".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'presentation-send'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn presentation_availability_refleja_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var a = null; \
+             var pr = new PresentationRequest('https://recv/x'); \
+             pr.getAvailability().then(function(av){ a = av.value; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("a").expect("e"), JsValue::Bool(false));
+        rt.eval(
+            "__puriy_set_presentation_availability(true); var b = null; \
+             pr.getAvailability().then(function(av){ b = av.value; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("b").expect("e"), JsValue::Bool(true));
+    }
 }

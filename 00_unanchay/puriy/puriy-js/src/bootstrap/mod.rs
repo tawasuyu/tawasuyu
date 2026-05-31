@@ -88,6 +88,9 @@ mod webauthn;
 mod transport;
 mod push;
 mod backgroundsync;
+mod sensors;
+mod nfc;
+mod presentation;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -176,6 +179,9 @@ pub(crate) use webauthn::WEBAUTHN_BOOTSTRAP;
 pub(crate) use transport::TRANSPORT_BOOTSTRAP;
 pub(crate) use push::PUSH_BOOTSTRAP;
 pub(crate) use backgroundsync::BACKGROUNDSYNC_BOOTSTRAP;
+pub(crate) use sensors::SENSORS_BOOTSTRAP;
+pub(crate) use nfc::NFC_BOOTSTRAP;
+pub(crate) use presentation::PRESENTATION_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -266,5 +272,8 @@ pub(crate) const ALL: &[&str] = &[
     TRANSPORT_BOOTSTRAP,
     PUSH_BOOTSTRAP,
     BACKGROUNDSYNC_BOOTSTRAP,
+    SENSORS_BOOTSTRAP,
+    NFC_BOOTSTRAP,
+    PRESENTATION_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
