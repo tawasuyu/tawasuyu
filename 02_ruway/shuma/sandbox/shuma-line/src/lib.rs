@@ -43,3 +43,6 @@ pub use ghost::ghost_suggestion;
 pub use lexer::tokenize;
 pub use pipeline::{split_pipeline, Pipeline, Stage};
 pub use token::{Token, TokenKind};
+
+pub mod icon;
+pub use icon::file_icon;

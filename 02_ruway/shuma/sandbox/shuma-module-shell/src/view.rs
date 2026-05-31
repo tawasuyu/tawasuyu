@@ -789,8 +789,18 @@ pub(crate) fn build_span_children<HostMsg: Clone + 'static>(
             p.deco,
             Some(Dk::Path { .. } | Dk::Url(_) | Dk::GrepRef { .. } | Dk::GitSha(_))
         );
+        // Para paths anteponemos un iconito por tipo: así un `ls` se lee
+        // como un explorador de archivos (carpeta/imagen/código/…) en
+        // vez de una lista de tokens sueltos.
+        let label = match &p.deco {
+            Some(Dk::Path { abs, is_dir, is_executable, is_symlink }) => {
+                let icon = shuma_line::file_icon(abs, *is_dir, *is_executable, *is_symlink);
+                format!("{icon} {}", p.text)
+            }
+            _ => p.text.clone(),
+        };
         let mut span_view: View<HostMsg> = View::new(Style { ..Default::default() })
-            .text_aligned(p.text, 12.0, p.color, Alignment::Start);
+            .text_aligned(label, 12.0, p.color, Alignment::Start);
         if let (true, Some(kind)) = (actionable, p.deco) {
             let l = lift.clone();
             span_view = span_view.on_click(l(Msg::OpenDecoration(kind)));
