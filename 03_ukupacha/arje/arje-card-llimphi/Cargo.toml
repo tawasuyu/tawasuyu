@@ -1,0 +1,21 @@
+[package]
+name = "arje-card-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Card de escritorio Llimphi con el estado vivo del init arje: capacidades de aislamiento (namespaces, cgroups, privilegios) detectadas runtime vía arje-incarnate. Cumple la intención del README de arje ('card escritorio'), que arje-card nunca llegó a ser (quedó como alias de card-core). Mismo patrón que minga-explorer-llimphi."
+
+[dependencies]
+arje-incarnate = { path = "../init/arje-incarnate" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-app-header = { workspace = true }
+llimphi-widget-banner = { workspace = true }
+llimphi-widget-stat-card = { workspace = true }
+wawa-config = { path = "../../../shared/wawa-config" }
+
+[[bin]]
+name = "arje-card-llimphi"
+path = "src/main.rs"

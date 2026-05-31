@@ -40,7 +40,8 @@ cargo run --release -p arje-absorb -- /path/to/system
 | [`arje-wasm`](arje-wasm/README.md) | Runtime WASM de init. |
 | [`arje-compat`](arje-compat/README.md) | Compat con userspace POSIX (shims). |
 | [`arje-getty-stub`](arje-getty-stub/README.md) | Login mínimo. |
-| [`arje-card`](arje-card/README.md) | Card escritorio (estado de arje). |
+| [`arje-card`](arje-card/README.md) | Alias histórico de `card-core` (re-exporta `EntityCard ≡ Card`); no es UI. |
+| [`arje-card-llimphi`](arje-card-llimphi/) | Card escritorio (estado de arje): capacidades de aislamiento del init, sobre Llimphi. |
 | [`arje-packager`](arje-packager/README.md) | Empaquetador (ISO, .img). |
 | [`arje-installer`](arje-installer/README.md) | Installer interactivo. |
 | [`arje-absorb`](arje-absorb/README.md) | Absorbe un sistema existente → objeto arje. |
