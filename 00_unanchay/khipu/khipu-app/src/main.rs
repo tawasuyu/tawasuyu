@@ -1782,9 +1782,8 @@ fn hex8(hash: &[u8; 32]) -> String {
     hash[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Prompt modal de passphrase: tarjeta centrada con el input y dos
-/// botones. La passphrase no se enmascara (MVP) — endurecerlo a puntos es
-/// un follow-up. Enter desbloquea, Esc cancela (ver `on_key`).
+/// Prompt modal de passphrase: tarjeta centrada con el input (enmascarado
+/// con •) y dos botones. Enter desbloquea, Esc cancela (ver `on_key`).
 fn unlock_view(model: &Model, input_palette: &TextInputPalette) -> View<Msg> {
     let titulo = View::new(Style {
         size: Size {
@@ -1983,7 +1982,7 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         status: None,
         publishing: false,
         peers: Vec::new(),
-        passphrase: TextInputState::new(),
+        passphrase: TextInputState::masked(),
         unlocking: false,
         pending: None,
     };
@@ -2037,7 +2036,7 @@ fn seeded_model(embedder: Embedder) -> Model {
         status: None,
         publishing: false,
         peers: Vec::new(),
-        passphrase: TextInputState::new(),
+        passphrase: TextInputState::masked(),
         unlocking: false,
         pending: None,
     };
