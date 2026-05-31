@@ -10,6 +10,13 @@ description = "nahual-source-core — abstracción de FUENTE navegable para el f
 
 [dependencies]
 wawa-explorer-core = { path = "../../../03_ukupacha/wawa-explorer/wawa-explorer-core" }
+chasqui-core = { path = "../../chasqui/chasqui-core", optional = true }
+
+[features]
+default = []
+# Mónadas semánticas de nouser. Opt-in porque arrastra chasqui-core (sled,
+# walkdir) — quien sólo quiere POSIX/wawa no paga ese peso.
+nouser = ["dep:chasqui-core"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

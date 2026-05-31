@@ -11,24 +11,32 @@
 //!
 //! La proliferación de exploradores NO se cura fusionando sus datos
 //! (incompatibles), sino poniéndolos detrás de esta interfaz común: el shell
-//! deja de saber de `PathBuf` y pasa a navegar `dyn Source`. Hoy hay dos
+//! deja de saber de `PathBuf` y pasa a navegar `dyn Source`. Hoy hay tres
 //! adapters reales:
 //!
 //! - [`posix::PosixSource`] — el filesystem POSIX vivo (lo que el shell ya
 //!   hacía, ahora detrás del trait).
 //! - [`wawa::WawaImgSource`] — los objetos content-addressed de una imagen
 //!   wawa `.img`, navegando el DAG por hash. Puro local, sin red ni daemon.
+//! - `nouser::NouserSource` (feature `nouser`) — las Mónadas semánticas de
+//!   `chasqui-core`: clusters de archivos, un árbol que NO existe en disco.
 //!
-//! Agregar nouser o minga como tercera/cuarta fuente = un `impl Source` más,
-//! sin tocar el shell.
+//! Cada uno es una *forma de árbol* distinta (jerarquía física, DAG de
+//! contenido, clusters semánticos) y aun así caben en el mismo trait — esa es
+//! la prueba de que la abstracción aguanta. Agregar minga como cuarta fuente
+//! = un `impl Source` más, sin tocar el shell.
 
 #![forbid(unsafe_code)]
 
 pub mod posix;
 pub mod wawa;
+#[cfg(feature = "nouser")]
+pub mod nouser;
 
 pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
+#[cfg(feature = "nouser")]
+pub use nouser::NouserSource;
 
 /// Identidad opaca de un nodo DENTRO de su fuente. El shell la trata como
 /// caja negra (la guarda para volver a pedir hijos o leer), salvo para

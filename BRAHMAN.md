@@ -132,8 +132,13 @@ FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Ca
           su DAG. Puente para hojas no-POSIX: los visores son path-based (`load_image(path)`),
           así que materializar `source.read(id)` a un tempfile y discernir/visualizar por ahí
           (o, follow-up mayor, refactorizar visores a bytes).
-        PASO C PENDIENTE: adapters `NouserSource` (Mónadas semánticas, degrada sin daemon
-          vía pseudo-embeddings) y `MingaSource` (raíz P2P, lee `.minga/` sled local).
+        ◑ PASO C EN CURSO (2026-05-31): `NouserSource` HECHO (feature opt-in `nouser`):
+          Mónadas semánticas de chasqui-core (scan→cluster, pseudo-embeddings deterministas,
+          sin daemon). Tercera FORMA de árbol —clusters que no existen en disco— detrás del
+          mismo trait: jerarquía física (POSIX) · DAG de contenido (wawa) · clusters
+          semánticos (nouser) caben en `Source`. 12 tests con la feature. Gated para no
+          arrastrar chasqui-core (sled/walkdir) a quien sólo quiere POSIX/wawa.
+          PENDIENTE: `MingaSource` (raíz P2P, lee `.minga/` sled local).
 ```
 
 ## Tesis de cierre
