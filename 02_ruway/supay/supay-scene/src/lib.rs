@@ -437,38 +437,72 @@ impl SceneSnapshot {
         })
     }
 
-    /// Fase 4.5 — oclusión geométrica del sonido entre el oyente `(lx,ly)`
-    /// y la fuente `(sx,sy)`: fracción `0..1` según cuántas paredes
-    /// **sólidas** (one-sided, sin sector trasero) cruza la línea recta
-    /// que los une. `0` = línea de visión libre; sube con cada muro
-    /// interpuesto y satura en `1` (dos muros ⇒ totalmente apagado). Los
-    /// portales de dos lados (vanos, puertas modeladas como two-sided) no
-    /// bloquean — el sonido pasa por ellos.
+    /// Fase 4.5/4.6 — oclusión geométrica del sonido entre el oyente
+    /// `(lx,ly)` y la fuente `(sx,sy)`: fracción `0..1` según las paredes
+    /// que cruza la línea recta que los une. `0` = línea de visión libre;
+    /// satura en `1` (sonido totalmente apagado, "tras el muro").
+    ///
+    /// Cada linedef cruzada aporta hasta `0.5` (dos muros ⇒ oclusión total):
+    /// - **Pared sólida** (one-sided, sin sector trasero): aporta `0.5`.
+    /// - **Portal de dos lados** (Fase 4.6): aporta según qué tan cerrado
+    ///   esté su vano vertical ([`Self::wall_opening`]). Un vano ancho deja
+    ///   pasar el sonido (`0`); una puerta bajándose/ascensor cerrando lo
+    ///   tapa progresivamente hasta igualar una pared sólida con vano `0`.
     ///
     /// MVP geométrico: escaneo lineal de las walls (las apariciones de
-    /// sfx son esporádicas; `numlines` ~ cientos/miles). No considera el
-    /// cierre vertical de un two-sided (puerta bajada): eso necesitaría
-    /// las alturas de ambos sectores y queda para una fase futura.
+    /// sfx son esporádicas; `numlines` ~ cientos/miles). Sin difracción ni
+    /// reflexión — sólo el bloqueo directo de la línea recta.
     pub fn occlusion(&self, lx: f32, ly: f32, sx: f32, sy: f32) -> f32 {
         if self.walls.is_empty() {
             return 0.0;
         }
-        let mut blockers = 0u32;
+        let mut occ = 0.0f32;
         for w in self.walls.iter() {
-            // Sólo las paredes sólidas bloquean; los portales dejan pasar.
-            if w.back_sector != NO_SECTOR {
+            // Cuánto tapa esta linedef si la cruzamos. `0` = no tapa
+            // (portal abierto) → ni siquiera testeamos la intersección.
+            let block = if w.back_sector == NO_SECTOR {
+                0.5 // pared sólida: bloqueo pleno.
+            } else {
+                // Portal: tapa según su vano. Sectores no resueltos ⇒
+                // asumimos abierto (no tapamos por falta de datos).
+                match self.wall_opening(w) {
+                    Some(gap) => (1.0 - gap / SOUND_OPENING).clamp(0.0, 1.0) * 0.5,
+                    None => 0.0,
+                }
+            };
+            if block <= 0.0 {
                 continue;
             }
             if segments_cross(lx, ly, sx, sy, w.x1, w.y1, w.x2, w.y2) {
-                blockers += 1;
-                if blockers >= 2 {
+                occ += block;
+                if occ >= 1.0 {
                     return 1.0; // saturado: cortamos el escaneo temprano.
                 }
             }
         }
-        blockers as f32 / 2.0
+        occ.min(1.0)
+    }
+
+    /// Fase 4.6 — altura del vano vertical de un portal de dos lados (la
+    /// "rendija" que comunica los dos sectores que flanquean la linedef):
+    /// `min(techos) − max(pisos)`, en unidades Doom. `0` ⇒ cerrado
+    /// (puerta bajada, ascensor al tope). `None` si alguno de los dos
+    /// sectores no se puede resolver (snapshot sin sectores cargados) —
+    /// el caller lo trata como abierto para no tapar por falta de datos.
+    fn wall_opening(&self, w: &WallSeg) -> Option<f32> {
+        let f = self.sectors.get(w.front_sector as usize)?;
+        let b = self.sectors.get(w.back_sector as usize)?;
+        Some(
+            (f.ceiling_height.min(b.ceiling_height) - f.floor_height.max(b.floor_height)).max(0.0),
+        )
     }
 }
+
+/// Fase 4.6 — umbral del vano (unidades Doom) bajo el cual un portal de
+/// dos lados empieza a tapar el sonido. `56` ≈ alto de una cabeza agachada:
+/// por encima el sonido pasa libre; al cerrarse la oclusión crece lineal
+/// hasta igualar una pared sólida con el vano en `0`.
+const SOUND_OPENING: f32 = 56.0;
 
 /// `true` si los segmentos `A(ax,ay)→B(bx,by)` y `C(cx,cy)→D(dx,dy)` se
 /// cruzan (intersección propia, vía signo de orientaciones). Tangencias y
@@ -802,6 +836,47 @@ mod tests {
             wall(70.0, -100.0, 70.0, 100.0, NO_SECTOR),
         ]);
         assert_eq!(snap.occlusion(0.0, 0.0, 100.0, 0.0), 1.0);
+    }
+
+    /// SectorSnap con sólo las alturas que importan a la oclusión.
+    fn sector(floor: f32, ceil: f32) -> SectorSnap {
+        SectorSnap {
+            floor_height: floor,
+            ceiling_height: ceil,
+            light_level: 200,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        }
+    }
+
+    #[test]
+    fn occlusion_closed_door_blocks_like_solid() {
+        // Portal de dos lados con el vano cerrado (back techo == back piso):
+        // tapa como una pared sólida (0.5).
+        let mut snap = SceneSnapshot::empty(1);
+        snap.sectors = Arc::from(vec![sector(0.0, 128.0), sector(0.0, 0.0)]);
+        // front_sector=0 (vano del cuarto), back_sector=1 (puerta bajada).
+        snap.walls = Arc::from(vec![wall(50.0, -100.0, 50.0, 100.0, 1)]);
+        assert_eq!(snap.occlusion(0.0, 0.0, 100.0, 0.0), 0.5);
+    }
+
+    #[test]
+    fn occlusion_open_door_passes() {
+        // Mismo portal con el vano abierto (128 ≫ SOUND_OPENING): pasa libre.
+        let mut snap = SceneSnapshot::empty(1);
+        snap.sectors = Arc::from(vec![sector(0.0, 128.0), sector(0.0, 128.0)]);
+        snap.walls = Arc::from(vec![wall(50.0, -100.0, 50.0, 100.0, 1)]);
+        assert_eq!(snap.occlusion(0.0, 0.0, 100.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn occlusion_half_closed_door_partial() {
+        // Vano a mitad de SOUND_OPENING (28 de 56): tapa la mitad → 0.25.
+        let mut snap = SceneSnapshot::empty(1);
+        snap.sectors = Arc::from(vec![sector(0.0, 128.0), sector(0.0, 28.0)]);
+        snap.walls = Arc::from(vec![wall(50.0, -100.0, 50.0, 100.0, 1)]);
+        let occ = snap.occlusion(0.0, 0.0, 100.0, 0.0);
+        assert!((occ - 0.25).abs() < 1e-6, "vano a medias → ~0.25, got {occ}");
     }
 
     #[test]
