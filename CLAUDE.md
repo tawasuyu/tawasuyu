@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Suite vertical en Rust (kernel propio, identidad, motor gráfico, navegador, ERP, shell, broker, simulador...) organizada como un solo Cargo workspace de ~210 crates. La arquitectura está embebida en el filesystem: cuatro cuadrantes (`00_unanchay`/`01_yachay`/`02_ruway`/`03_ukupacha`) corresponden a las cuatro fases del ciclo de la información (PERCIBIR / CONOCER / HACER / RAÍZ). Mover un dominio de cuadrante cambia su naturaleza — no son carpetas administrativas.
 
-Lectura previa obligatoria al tocar cualquier cosa de fondo: `README.md`, `PLAN.md`, `WAWA.md` (este último describe el SO bare‑metal `wawa`, que vive aparte del workspace global). Hay SDDs específicos para dominios complejos: `02_ruway/llimphi/SDD.md`, `02_ruway/wawa/SDD.md`, `02_ruway/supay/SDD.md`, `02_ruway/tullpu/SDD.md`, `01_yachay/dominium/SDD.md`, `00_unanchay/puriy/SDD.md` — son la fuente autoritativa cuando difieren con esta guía.
+Lectura previa obligatoria al tocar cualquier cosa de fondo: `README.md`, `PLAN.md`, `WAWA.md` (este último describe el SO bare‑metal `wawa`, que vive aparte del workspace global). Hay SDDs específicos para dominios complejos: `02_ruway/llimphi/SDD.md`, `02_ruway/wawa/SDD.md`, `02_ruway/supay/SDD.md`, `02_ruway/tullpu/SDD.md`, `01_yachay/dominium/SDD.md`, `00_unanchay/puriy/SDD.md`, `shared/sandokan/SDD.md` (plano de control: quién arranca/para/supervisa/observa unidades en Linux y Wawa, sin duplicados) — son la fuente autoritativa cuando difieren con esta guía.
 
 ## Reglas duras del repo
 

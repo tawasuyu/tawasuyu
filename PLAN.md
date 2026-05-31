@@ -151,7 +151,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 - **minga**: P2P VFS productivo.
 
 ### `shared/`
-- **sandokan**: orquestador hot-swap consumible por shuma y otros.
+- **sandokan**: plano de control del host (orquestador). **SDD autoritativo: `shared/sandokan/SDD.md`** — define el modelo único de control Linux+Wawa, los duplicados a resolver y el plan del process monitor.
 - **auth, card, ssh, format**: pulir APIs.
 
 ## 6. Disciplina técnica permanente
