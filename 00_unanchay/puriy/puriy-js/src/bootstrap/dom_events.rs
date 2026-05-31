@@ -721,6 +721,25 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     el.click = function() {
         globalThis.__puriy_dispatch(el._id, 'click', null);
     };
+    // Fase 7.123 — el.requestFullscreen(): delega en el hook global del
+    // módulo fullscreen.rs, que publica la mutación y devuelve la Promise
+    // pendiente resuelta por el chrome. Si el módulo no cargó, rechaza.
+    el.requestFullscreen = function(options) {
+        if (typeof globalThis.__puriy_request_fullscreen === 'function') {
+            return globalThis.__puriy_request_fullscreen(el._id);
+        }
+        return Promise.reject(new globalThis.DOMException(
+            'Fullscreen no disponible', 'TypeError'));
+    };
+    // Fase 7.124 — el.requestPointerLock(): mismo molde, delega en el hook
+    // del módulo pointerlock.rs. El spec moderno devuelve una Promise.
+    el.requestPointerLock = function(options) {
+        if (typeof globalThis.__puriy_request_pointer_lock === 'function') {
+            return globalThis.__puriy_request_pointer_lock(el._id);
+        }
+        return Promise.reject(new globalThis.DOMException(
+            'Pointer Lock no disponible', 'NotSupportedError'));
+    };
     // Fase 7.13 — focus()/blur() programáticos. Por ahora sólo
     // dispatchamos el evento JS correspondiente; el chrome no actualiza
     // su focused_input desde acá (eso requeriría un puente JS→chrome

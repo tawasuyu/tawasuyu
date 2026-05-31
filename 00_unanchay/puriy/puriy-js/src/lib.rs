@@ -9595,4 +9595,420 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("got").expect("e"), JsValue::Number(144.0));
     }
+
+    // ---- Fase 7.120 — Web Serial API ----
+
+    #[test]
+    fn fase_7_120_serial_namespace_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof navigator.serial.requestPort").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn fase_7_120_serial_request_port_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var vid = null; \
+             navigator.serial.requestPort().then(function(p){ vid = p.getInfo().usbVendorId; }); \
+             __puriy_serial_resolve({ usbVendorId: 9025, usbProductId: 67 });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("vid").expect("e"), JsValue::Number(9025.0));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'serial-request'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn fase_7_120_serial_request_port_rechaza_notfound() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.serial.requestPort().catch(function(e){ errName = e.name; }); \
+             __puriy_serial_reject();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotFoundError".into()));
+    }
+
+    #[test]
+    fn fase_7_120_serial_open_close_estado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var p = __puriy_serial_add_port({ usbVendorId: 1, usbProductId: 2 }); \
+             p.open({ baudRate: 9600 }); \
+             var abierto = (p.readable != null); \
+             p.close(); \
+             var cerrado = (p.readable == null);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("abierto").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("cerrado").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fase_7_120_serial_evento_connect() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var hit = false; \
+             navigator.serial.addEventListener('connect', function(){ hit = true; }); \
+             __puriy_serial_connect(null);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("hit").expect("e"), JsValue::Bool(true));
+    }
+
+    // ---- Fase 7.121 — Web HID API ----
+
+    #[test]
+    fn fase_7_121_hid_namespace_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof navigator.hid.requestDevice").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn fase_7_121_hid_request_device_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var nombre = null; \
+             navigator.hid.requestDevice({ filters: [] }).then(function(list){ nombre = list[0].productName; }); \
+             __puriy_hid_resolve([{ id: 'h1', productName: 'Macro' }]);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nombre").expect("e"), JsValue::String("Macro".into()));
+    }
+
+    #[test]
+    fn fase_7_121_hid_request_device_rechaza_notfound() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.hid.requestDevice({ filters: [] }).catch(function(e){ errName = e.name; }); \
+             __puriy_hid_reject();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotFoundError".into()));
+    }
+
+    #[test]
+    fn fase_7_121_hid_open_close_estado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var d = __puriy_hid_add_device({ id: 'h1', productName: 'X' }); \
+             d.open(); var ab = d.opened; \
+             d.close(); var ce = d.opened;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ab").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ce").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn fase_7_121_hid_inputreport_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var rid = null; \
+             var d = __puriy_hid_add_device({ id: 'h1', productName: 'X' }); \
+             d.addEventListener('inputreport', function(e){ rid = e.reportId; }); \
+             __puriy_hid_inputreport('h1', 7, [1, 2, 3]);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("rid").expect("e"), JsValue::Number(7.0));
+    }
+
+    // ---- Fase 7.122 — Web USB API ----
+
+    #[test]
+    fn fase_7_122_usb_namespace_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof navigator.usb.requestDevice").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn fase_7_122_usb_request_device_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var nombre = null; \
+             navigator.usb.requestDevice({ filters: [] }).then(function(d){ nombre = d.productName; }); \
+             __puriy_usb_resolve({ id: 'u1', productName: 'Lector' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nombre").expect("e"), JsValue::String("Lector".into()));
+    }
+
+    #[test]
+    fn fase_7_122_usb_request_device_rechaza_notfound() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.usb.requestDevice({ filters: [] }).catch(function(e){ errName = e.name; }); \
+             __puriy_usb_reject();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotFoundError".into()));
+    }
+
+    #[test]
+    fn fase_7_122_usb_open_select_config_estado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var d = __puriy_usb_add_device({ id: 'u1', productName: 'X' }); \
+             var ab = false, cfg = null; \
+             d.open().then(function(){ ab = d.opened; }); \
+             d.selectConfiguration(1).then(function(){ cfg = d.configuration.configurationValue; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ab").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("cfg").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn fase_7_122_usb_transfer_in_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var st = null; \
+             var d = __puriy_usb_add_device({ id: 'u1', productName: 'X' }); \
+             d.transferIn(1, 64).then(function(r){ st = r.status; }); \
+             __puriy_usb_transfer_resolve(1, { status: 'ok', data: null });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("st").expect("e"), JsValue::String("ok".into()));
+    }
+
+    #[test]
+    fn fase_7_122_usb_evento_disconnect() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var hit = false; \
+             navigator.usb.addEventListener('disconnect', function(){ hit = true; }); \
+             __puriy_usb_disconnect(null);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("hit").expect("e"), JsValue::Bool(true));
+    }
+
+    // Helper de tests DOM-element: registra un elemento real en
+    // __puriy_elements sin pasar por set_document (que reemplazaría el
+    // `document` aumentado por los bootstraps fullscreen/pointerlock).
+    const MAKE_EL: &str =
+        "var el = __puriy_make_element('el1', 'div', '', [], null, null, [], []); \
+         __puriy_elements['el1'] = el;";
+
+    // ---- Fase 7.123 — Fullscreen API ----
+
+    #[test]
+    fn fullscreen_api_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof document.exitFullscreen").expect("e"),
+            JsValue::String("function".into())
+        );
+        assert_eq!(rt.eval("document.fullscreenEnabled").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("document.fullscreenElement").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn fullscreen_request_publica_mutacion_y_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval(
+            "var ok = false; el.requestFullscreen().then(function(){ ok = true; }); \
+             __puriy_fullscreen_resolve('el1');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("document.fullscreenElement && document.fullscreenElement._id").expect("e"),
+            JsValue::String("el1".into())
+        );
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'fullscreen-request'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn fullscreen_exit_limpia_y_dispara_change() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval(
+            "var changes = 0; document.onfullscreenchange = function(){ changes++; }; \
+             el.requestFullscreen(); __puriy_fullscreen_resolve('el1'); \
+             document.exitFullscreen();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("document.fullscreenElement").expect("e"), JsValue::Null);
+        // Un change al entrar + uno al salir.
+        assert_eq!(rt.eval("changes").expect("e"), JsValue::Number(2.0));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'fullscreen-exit'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn fullscreen_reject_dispara_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval(
+            "var errName = null; var errs = 0; \
+             document.onfullscreenerror = function(){ errs++; }; \
+             el.requestFullscreen().catch(function(e){ errName = e.name; }); \
+             __puriy_fullscreen_reject('el1');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("TypeError".into()));
+        assert_eq!(rt.eval("errs").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("document.fullscreenElement").expect("e"), JsValue::Null);
+    }
+
+    // ---- Fase 7.124 — Pointer Lock API ----
+
+    #[test]
+    fn pointerlock_api_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof document.exitPointerLock").expect("e"),
+            JsValue::String("function".into())
+        );
+        assert_eq!(rt.eval("document.pointerLockElement").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn pointerlock_request_resuelve_y_setea_element() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval(
+            "var ok = false; el.requestPointerLock().then(function(){ ok = true; }); \
+             __puriy_pointerlock_resolve('el1');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("document.pointerLockElement && document.pointerLockElement._id").expect("e"),
+            JsValue::String("el1".into())
+        );
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'pointerlock-request'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn pointerlock_exit_limpia() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval(
+            "var changes = 0; document.onpointerlockchange = function(){ changes++; }; \
+             el.requestPointerLock(); __puriy_pointerlock_resolve('el1'); \
+             document.exitPointerLock();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("document.pointerLockElement").expect("e"), JsValue::Null);
+        assert_eq!(rt.eval("changes").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn pointerlock_reject_dispara_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval(
+            "var errName = null; var errs = 0; \
+             document.onpointerlockerror = function(){ errs++; }; \
+             el.requestPointerLock().catch(function(e){ errName = e.name; }); \
+             __puriy_pointerlock_reject('el1');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotSupportedError".into()));
+        assert_eq!(rt.eval("errs").expect("e"), JsValue::Number(1.0));
+    }
+
+    // ---- Fase 7.125 — Web Bluetooth API ----
+
+    #[test]
+    fn bluetooth_namespace_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof navigator.bluetooth.requestDevice").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn bluetooth_request_device_rechaza_sin_filtros() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.bluetooth.requestDevice({}).catch(function(e){ errName = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("TypeError".into()));
+    }
+
+    #[test]
+    fn bluetooth_request_device_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var nombre = null; \
+             navigator.bluetooth.requestDevice({ acceptAllDevices: true }).then(function(d){ nombre = d.name; }); \
+             __puriy_bluetooth_resolve({ id: 'w1', name: 'Reloj' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nombre").expect("e"), JsValue::String("Reloj".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'bluetooth-request'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn bluetooth_request_device_rechaza_notfound() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.bluetooth.requestDevice({ acceptAllDevices: true }).catch(function(e){ errName = e.name; }); \
+             __puriy_bluetooth_reject();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotFoundError".into()));
+    }
+
+    #[test]
+    fn bluetooth_gatt_connect_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var conectado = false; \
+             navigator.bluetooth.requestDevice({ acceptAllDevices: true }).then(function(d){ \
+                d.gatt.connect().then(function(srv){ conectado = srv.connected; }); \
+                __puriy_bluetooth_gatt_resolve(d.id); \
+             }); \
+             __puriy_bluetooth_resolve({ id: 'w1', name: 'Reloj' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("conectado").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bluetooth_get_availability_refleja_estado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var a = null; navigator.bluetooth.getAvailability().then(function(v){ a = v; });")
+            .expect("e");
+        assert_eq!(rt.eval("a").expect("e"), JsValue::Bool(true));
+        rt.eval(
+            "__puriy_set_bluetooth_availability(false); \
+             var b = null; navigator.bluetooth.getAvailability().then(function(v){ b = v; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("b").expect("e"), JsValue::Bool(false));
+    }
 }

@@ -79,6 +79,9 @@ mod midi;
 mod serial;
 mod hid;
 mod usb;
+mod fullscreen;
+mod pointerlock;
+mod bluetooth;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -158,6 +161,9 @@ pub(crate) use midi::MIDI_BOOTSTRAP;
 pub(crate) use serial::SERIAL_BOOTSTRAP;
 pub(crate) use hid::HID_BOOTSTRAP;
 pub(crate) use usb::USB_BOOTSTRAP;
+pub(crate) use fullscreen::FULLSCREEN_BOOTSTRAP;
+pub(crate) use pointerlock::POINTERLOCK_BOOTSTRAP;
+pub(crate) use bluetooth::BLUETOOTH_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -239,5 +245,8 @@ pub(crate) const ALL: &[&str] = &[
     SERIAL_BOOTSTRAP,
     HID_BOOTSTRAP,
     USB_BOOTSTRAP,
+    FULLSCREEN_BOOTSTRAP,
+    POINTERLOCK_BOOTSTRAP,
+    BLUETOOTH_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
