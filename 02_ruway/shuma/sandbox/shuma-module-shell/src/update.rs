@@ -192,6 +192,27 @@ pub fn update(state: State, msg: Msg) -> State {
             // no-op silencioso si no.
             forward_paste_to_pty(&s);
         }
+        Msg::VimDrag { end, dx, dy, ax, ay } => {
+            let fresh = s.vim_sel.map_or(true, |v| !v.active);
+            if fresh {
+                s.vim_sel = Some(VimSel {
+                    ax,
+                    ay,
+                    hx: ax + dx,
+                    hy: ay + dy,
+                    active: !end,
+                });
+            } else if let Some(v) = s.vim_sel.as_mut() {
+                v.hx += dx;
+                v.hy += dy;
+                if end {
+                    v.active = false;
+                }
+            }
+            if end {
+                copy_vim_selection(&s);
+            }
+        }
     }
     s
 }
@@ -432,6 +453,67 @@ pub(crate) fn key_to_pty_bytes(ev: &KeyEvent) -> Vec<u8> {
 pub(crate) fn read_clipboard() -> Option<String> {
     let mut clip = arboard::Clipboard::new().ok()?;
     clip.get_text().ok()
+}
+
+/// Escribe texto al clipboard del SO. No-op silencioso sin display server.
+pub(crate) fn set_clipboard(text: &str) {
+    if let Ok(mut clip) = arboard::Clipboard::new() {
+        let _ = clip.set_text(text.to_string());
+    }
+}
+
+/// Extrae el texto de la selección del card de vim sobre el screen
+/// actual del PTY y lo copia al clipboard. Selección lineal por filas
+/// (estilo terminal), cada fila recortada de espacios al final.
+pub(crate) fn copy_vim_selection(s: &State) {
+    let Some(vs) = s.vim_sel else { return };
+    let Some(arc) = s.running.as_ref() else { return };
+    let guard = match arc.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let Some(tui) = guard.tui.as_ref() else { return };
+    let screen = tui.parser.screen();
+    let (rows, cols) = screen.size();
+    let mut grid: Vec<Vec<char>> = Vec::with_capacity(rows as usize);
+    for r in 0..rows {
+        let mut line: Vec<char> = Vec::with_capacity(cols as usize);
+        for c in 0..cols {
+            let ch = match screen.cell(r, c) {
+                Some(cell) if cell.has_contents() => cell.contents().chars().next().unwrap_or(' '),
+                _ => ' ',
+            };
+            line.push(ch);
+        }
+        grid.push(line);
+    }
+    let (r0, c0) = crate::view::vim_px_to_cell(vs.ax as f64, vs.ay as f64);
+    let (r1, c1) = crate::view::vim_px_to_cell(vs.hx as f64, vs.hy as f64);
+    let (sr, sc, er, ec) = if (r0, c0) <= (r1, c1) {
+        (r0, c0, r1, c1)
+    } else {
+        (r1, c1, r0, c0)
+    };
+    if sr >= grid.len() {
+        return;
+    }
+    let er = er.min(grid.len() - 1);
+    let mut out = String::new();
+    for r in sr..=er {
+        let line = &grid[r];
+        let lo = if r == sr { sc.min(line.len()) } else { 0 };
+        let hi = if r == er { (ec + 1).min(line.len()) } else { line.len() };
+        if hi > lo {
+            let seg: String = line[lo..hi].iter().collect();
+            out.push_str(seg.trim_end());
+        }
+        if r != er {
+            out.push('\n');
+        }
+    }
+    if !out.trim().is_empty() {
+        set_clipboard(&out);
+    }
 }
 
 /// Pega el contenido del clipboard en el PTY del run activo. Si el TUI

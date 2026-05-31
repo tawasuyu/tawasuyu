@@ -242,6 +242,18 @@ const TUI_ALLOWLIST: &[&str] = &[
     "less", "more", "man", "claude", "tig", "tui", "watch",
 ];
 
+/// Selección activa/última en el card de vim, en coordenadas locales px
+/// del panel (`ax,ay` = ancla del press; `hx,hy` = cabeza/cursor).
+/// `active` = hay un drag en curso.
+#[derive(Debug, Clone, Copy)]
+pub struct VimSel {
+    pub ax: f32,
+    pub ay: f32,
+    pub hx: f32,
+    pub hy: f32,
+    pub active: bool,
+}
+
 #[derive(Clone)]
 pub struct State {
     pub source: Source,
@@ -287,6 +299,8 @@ pub struct State {
     /// Bytes acumulados de stdout+stderr del run actual; se vuelca al
     /// nodo del grafo cuando el comando cierra (`complete`).
     pub current_run_bytes: u64,
+    /// Selección del card de vim (drag-to-select). `None` = sin selección.
+    pub vim_sel: Option<VimSel>,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -318,6 +332,7 @@ impl State {
             intent_graph: SessionGraph::new(),
             current_run_node: None,
             current_run_bytes: 0,
+            vim_sel: None,
         }
     }
 
@@ -471,6 +486,9 @@ pub enum Msg {
     /// Pega el clipboard al PTY del TUI activo — click derecho o botón
     /// del medio sobre el panel de vim (paste estilo terminal).
     VimPaste,
+    /// Drag de selección sobre el card de vim. `dx`/`dy` = delta desde el
+    /// evento anterior; `ax`/`ay` = posición del press (local al panel).
+    VimDrag { end: bool, dx: f32, dy: f32, ax: f32, ay: f32 },
 }
 
 mod update;

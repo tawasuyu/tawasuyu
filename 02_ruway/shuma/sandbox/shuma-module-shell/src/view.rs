@@ -304,7 +304,7 @@ pub(crate) fn tui_panel<HostMsg: Clone + 'static>(
     };
     let rect_slot = Arc::clone(&state.last_tui_rect);
     if let AppSkin::Vim = skin {
-        return vim_panel::<HostMsg, _>(snapshot, theme, rect_slot, lift);
+        return vim_panel::<HostMsg, _>(snapshot, theme, rect_slot, state.vim_sel, lift);
     }
     generic_grid_panel::<HostMsg>(snapshot, theme, rect_slot)
 }
@@ -425,10 +425,24 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
 /// MVP: read-only (la selección/click-derecho-pegar nativos vienen
 /// después, sobre el widget de texto). El objetivo de este paso es que
 /// vim deje de verse "como por un vidrio".
+/// Geometría del card de vim — compartida entre el painter (resaltado)
+/// y `copy_vim_selection` (px → celda) para que las celdas coincidan.
+pub(crate) const VIM_PAD: f64 = 10.0;
+pub(crate) const VIM_LINE_H: f64 = 16.0;
+pub(crate) const VIM_CHAR_W: f64 = 7.8;
+
+/// Coordenadas locales (px, relativas al rect del panel) → celda (fila, col).
+pub(crate) fn vim_px_to_cell(x: f64, y: f64) -> (usize, usize) {
+    let col = (((x - VIM_PAD) / VIM_CHAR_W).floor()).max(0.0) as usize;
+    let row = (((y - VIM_PAD) / VIM_LINE_H).floor()).max(0.0) as usize;
+    (row, col)
+}
+
 pub(crate) fn vim_panel<HostMsg, L>(
     snapshot: Option<TuiSnapshot>,
     theme: &Theme,
     rect_slot: Arc<Mutex<(f32, f32)>>,
+    sel: Option<VimSel>,
     lift: L,
 ) -> View<HostMsg>
 where
@@ -436,6 +450,7 @@ where
     L: Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
 {
     let theme_clone = *theme;
+    let lift_drag = lift.clone();
     let painter = move |scene: &mut vello::Scene,
                         ts: &mut llimphi_ui::llimphi_text::Typesetter,
                         rect: llimphi_ui::PaintRect| {
@@ -447,13 +462,50 @@ where
             *g = (rect.w, rect.h);
         }
         let Some(snap) = &snapshot else { return };
-        let pad = 10.0_f64;
-        let line_h = 16.0_f64;
+        let pad = VIM_PAD;
+        let line_h = VIM_LINE_H;
         let font = 13.0_f32;
-        let char_w = 7.8_f64; // ancho aproximado del monospace a 13px
+        let char_w = VIM_CHAR_W;
         let origin_x = rect.x as f64 + pad;
         let origin_y = rect.y as f64 + pad;
         let n = snap.cells.len();
+        // Resaltado de la selección (drag): un rect translúcido por fila.
+        if let Some(vs) = sel {
+            let (r0, c0) = vim_px_to_cell(vs.ax as f64, vs.ay as f64);
+            let (r1, c1) = vim_px_to_cell(vs.hx as f64, vs.hy as f64);
+            let (sr, sc, er, ec) = if (r0, c0) <= (r1, c1) {
+                (r0, c0, r1, c1)
+            } else {
+                (r1, c1, r0, c0)
+            };
+            let ncols = snap.cells.first().map(|row| row.len()).unwrap_or(0);
+            let er = er.min(n.saturating_sub(1));
+            let bg = theme_clone.bg_selected;
+            let sel_color = Color::from_rgba8(
+                (bg.components[0] * 255.0) as u8,
+                (bg.components[1] * 255.0) as u8,
+                (bg.components[2] * 255.0) as u8,
+                120,
+            );
+            for r in sr..=er {
+                let lo = if r == sr { sc } else { 0 };
+                let hi = if r == er { (ec + 1).min(ncols) } else { ncols };
+                if hi <= lo {
+                    continue;
+                }
+                let x0 = origin_x + lo as f64 * char_w;
+                let x1 = origin_x + hi as f64 * char_w;
+                let y0 = origin_y + r as f64 * line_h;
+                let hrect = KurboRect::new(x0, y0, x1, y0 + line_h);
+                scene.fill(
+                    Fill::NonZero,
+                    vello::kurbo::Affine::IDENTITY,
+                    sel_color,
+                    None,
+                    &hrect,
+                );
+            }
+        }
         for (r, row) in snap.cells.iter().enumerate() {
             let raw: String = row.iter().map(|c| c.ch.as_str()).collect();
             let line_str = raw.trim_end();
@@ -527,6 +579,17 @@ where
     .fill(theme.bg_panel)
     .radius(3.0)
     .paint_with(painter)
+    // Selección estilo terminal: arrastrar con el botón izquierdo
+    // selecciona celdas; al soltar se copia al clipboard.
+    .draggable_at(move |phase, dx, dy, lx0, ly0| {
+        Some(lift_drag(Msg::VimDrag {
+            end: matches!(phase, llimphi_ui::DragPhase::End),
+            dx,
+            dy,
+            ax: lx0,
+            ay: ly0,
+        }))
+    })
     // Paste estilo terminal: click derecho y botón del medio pegan el
     // clipboard al PTY (vim sigue recibiendo las teclas aparte).
     .on_right_click(lift(Msg::VimPaste))
