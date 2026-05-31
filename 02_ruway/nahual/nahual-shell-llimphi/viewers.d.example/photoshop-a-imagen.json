@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "01KSXXGQ8BMS5SPDC1VWKNAQE8",
+  "lineage": null,
+  "label": "nahual.viewer.photoshop",
+  "provides": [],
+  "requires": [],
+  "permissions": {
+    "networking": "none",
+    "filesystem": "none",
+    "ipc": { "allow": [] },
+    "processes": false
+  },
+  "soma": {
+    "namespaces": {
+      "mount": false, "pid": false, "net": false, "uts": false,
+      "ipc": false, "user": false, "cgroup": false
+    },
+    "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+    "cgroup": { "path": "", "cpu_weight": null, "io_weight": null },
+    "cpu_affinity": null
+  },
+  "payload": "Virtual",
+  "supervision": "OneShot",
+  "lifecycle": "daemon",
+  "priority": "high",
+  "flow": { "input": [], "output": [] },
+  "service_socket": null,
+  "references": [],
+  "kind": "data",
+  "data": {
+    "summary": "Rutea archivos PSD al visor de imágenes del shell.",
+    "keywords": ["photoshop", "psd", "imagen"],
+    "centroid": [],
+    "member_count": 0,
+    "dispersion": 0.0,
+    "presentation_hint": "gallery"
+  },
+  "genesis": [],
+  "nahual.viewer_kind": "image",
+  "nahual.mime_exact": ["application/vnd.adobe.photoshop"],
+  "nahual.mime_prefixes": []
+}

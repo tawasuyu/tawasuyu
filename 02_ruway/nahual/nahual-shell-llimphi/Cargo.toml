@@ -31,5 +31,6 @@ nahual-font-viewer-llimphi = { workspace = true }
 nahual-text-viewer-llimphi = { workspace = true }
 shuma-discern = { path = "../../shuma/sandbox/shuma-discern" }
 card-core = { path = "../../../shared/card/card-core" }
+serde_json = { workspace = true }
 wawa-config = { path = "../../../shared/wawa-config" }
 wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }
