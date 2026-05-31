@@ -11996,4 +11996,93 @@ mod tests {
         rt.eval("__puriy_mediarecorder_data(1, new Uint8Array([9]), 'video/webm');").expect("e");
         assert_eq!(rt.eval("visto").expect("e"), JsValue::Bool(true));
     }
+
+    // ---- Fase 7.147 — Media Source Extensions ----
+    #[test]
+    fn mse_existe_y_is_type_supported() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof MediaSource").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof SourceBuffer").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof SourceBufferList").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof TimeRanges").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("MediaSource.isTypeSupported('video/mp4; codecs=\"avc1.42E01E\"')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("MediaSource.isTypeSupported('application/zip')").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("new MediaSource() instanceof EventTarget").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("typeof ManagedMediaSource").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn mse_estado_inicial_y_open_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var abierto = false; \
+             var ms = new MediaSource(); \
+             ms.onsourceopen = function(){ abierto = true; }; \
+             var url = URL.createObjectURL(ms); \
+             var antes = ms.readyState;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("antes").expect("e"), JsValue::String("closed".into()));
+        // El chrome resuelve el blob: URL → la fuente → la abre al adjuntar a un <video>.
+        assert_eq!(rt.eval("__puriy_mse_open(__puriy_resolve_blob_url(url)._id)").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ms.readyState").expect("e"), JsValue::String("open".into()));
+        assert_eq!(rt.eval("abierto").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mse_add_source_buffer_requiere_open() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; var ms = new MediaSource(); \
+             try { ms.addSourceBuffer('video/mp4'); } catch (e) { err = e.name; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("InvalidStateError".into()));
+        rt.eval("__puriy_mse_open(ms._id); var sb = ms.addSourceBuffer('video/mp4');").expect("e");
+        assert_eq!(rt.eval("ms.sourceBuffers.length").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("ms.sourceBuffers[0] === sb").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("sb instanceof SourceBuffer").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mse_append_buffer_ciclo_update() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var orden = []; \
+             var ms = new MediaSource(); __puriy_mse_open(ms._id); ms.duration = 10; \
+             var sb = ms.addSourceBuffer('video/mp4'); \
+             sb.onupdatestart = function(){ orden.push('start'); }; \
+             sb.onupdate = function(){ orden.push('update'); }; \
+             sb.onupdateend = function(){ orden.push('end'); }; \
+             sb.appendBuffer(new Uint8Array([1,2,3,4,5]));",
+        )
+        .expect("e");
+        // El ciclo update/updateend corre vía microtask (drenada por eval).
+        assert_eq!(rt.eval("orden.join(',')").expect("e"), JsValue::String("start,update,end".into()));
+        assert_eq!(rt.eval("sb.updating").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("sb.buffered.length").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("sb.buffered.end(0)").expect("e"), JsValue::Number(10.0));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'mse-append'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn mse_end_of_stream_y_remove_source_buffer() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var terminado = false; \
+             var ms = new MediaSource(); __puriy_mse_open(ms._id); \
+             ms.onsourceended = function(){ terminado = true; }; \
+             var sb = ms.addSourceBuffer('audio/mp4'); \
+             ms.endOfStream();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ms.readyState").expect("e"), JsValue::String("ended".into()));
+        assert_eq!(rt.eval("terminado").expect("e"), JsValue::Bool(true));
+        rt.eval("ms.removeSourceBuffer(sb);").expect("e");
+        assert_eq!(rt.eval("ms.sourceBuffers.length").expect("e"), JsValue::Number(0.0));
+    }
+
 }
