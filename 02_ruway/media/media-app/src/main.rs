@@ -64,13 +64,14 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{self, TextBlock};
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use media_audio_cpal::AudioSink;
 use media_core::{
     AudioProbe, AudioSource, FrameSource, Levels, MixerAudio, Pause, PausableAudio,
     PausableVideo, ProbedAudioSource, Seekable, SubtitleTrack, TestCard, ToneSource, Volume,
     VolumeAudio, Waterfall,
 };
+use media_core::control::{ControlSettings, KeyChord, MediaCommand};
 use media_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use foreign_av::{FfmpegAudioSource, FfmpegVideoSource, MediaSession};
 use media_source_gif::GifSource;
@@ -91,18 +92,10 @@ const PROBE_CAPACITY: usize = 8192;
 #[derive(Clone)]
 enum Msg {
     Tick,
-    TogglePause,
-    ToggleRecord,
-    Snapshot,
-    VolDown,
-    VolUp,
-    SeekBack,
-    SeekFwd,
-    PrevTrack,
-    NextTrack,
-    CycleSpeed,
-    CycleRepeat,
-    ToggleShuffle,
+    /// Acción de reproducción resuelta desde un botón o una tecla. Único
+    /// punto de despacho — los pasos (volumen/seek/velocidad) los hornea
+    /// quien construye el comando, leyendo de [`settings`].
+    Command(MediaCommand),
     /// Swap dos tiles del grid reorderable. `from`/`to` son índices
     /// sobre `Model::tile_order`.
     SwapTile { from: usize, to: usize },
@@ -144,12 +137,67 @@ impl TileId {
     }
 }
 
-const VOLUME_STEP: f32 = 0.1;
-const SEEK_STEP_SECS: u64 = 5;
-/// Multiplicadores de velocidad que cicla el botón `speed`. 1.0 es
-/// el natural; el resto va por debajo y por encima en pasos
-/// equivalentes a 1.25× del nivel anterior.
-const SPEED_STEPS: &[f32] = &[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+/// Settings de control (pasos + keymap) cargados al arrancar desde RON
+/// en XDG, o el default tipo VLC si no hay archivo. Ver `CONTROLES.md`.
+fn settings_slot() -> &'static OnceLock<ControlSettings> {
+    static SLOT: OnceLock<ControlSettings> = OnceLock::new();
+    &SLOT
+}
+
+/// Accessor de conveniencia. Asume que `main` ya pobló el slot.
+fn settings() -> &'static ControlSettings {
+    settings_slot().get().expect("settings set")
+}
+
+/// Resuelve el path del archivo de controles: `$XDG_CONFIG_HOME/gioser/
+/// media/controles.ron` (o `~/.config/...` si XDG no está set).
+fn controles_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("gioser").join("media").join("controles.ron"))
+}
+
+/// Carga los settings de control. Si el archivo no existe, escribe el
+/// default para que el usuario lo edite (estilo VLC: config descubrible
+/// en disco). Cualquier fallo cae al default sin abortar.
+fn load_settings() -> ControlSettings {
+    let Some(path) = controles_path() else {
+        return ControlSettings::default();
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(body) => match ron::from_str::<ControlSettings>(&body) {
+            Ok(s) => {
+                eprintln!("media-app: controles cargados de {}", path.display());
+                s
+            }
+            Err(e) => {
+                eprintln!(
+                    "media-app: controles.ron inválido ({e}) — uso default"
+                );
+                ControlSettings::default()
+            }
+        },
+        Err(_) => {
+            // No existe: sembramos el default para que sea editable.
+            let def = ControlSettings::default();
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            match ron::ser::to_string_pretty(&def, ron::ser::PrettyConfig::default()) {
+                Ok(txt) => match std::fs::write(&path, txt) {
+                    Ok(()) => eprintln!(
+                        "media-app: sembré controles default en {}",
+                        path.display()
+                    ),
+                    Err(e) => eprintln!("media-app: no pude escribir controles: {e}"),
+                },
+                Err(e) => eprintln!("media-app: no pude serializar controles: {e}"),
+            }
+            def
+        }
+    }
+}
 
 struct Model {
     frames: u64,
@@ -665,23 +713,158 @@ fn seek_audio_by(delta_secs: i64) {
     src.seek_to(Duration::from_secs_f64(new_s));
 }
 
-/// Cicla a la siguiente velocidad de [`SPEED_STEPS`]. No-op sin
-/// playlist activo.
-fn cycle_speed() {
+/// Ejecuta un [`MediaCommand`] sobre el estado vivo del reproductor.
+/// Único punto donde un comando se vuelve efecto — lo comparten botones
+/// (vía `Msg::Command`) y teclado (vía `on_key`).
+fn apply_command(cmd: MediaCommand) {
+    use MediaCommand::*;
+    match cmd {
+        TogglePause => {
+            pause().toggle();
+        }
+        SeekBy { secs } => seek_audio_by(secs),
+        VolumeBy { delta } => {
+            volume().update(|v| v + delta);
+        }
+        SetVolume { level } => {
+            volume().update(|_| level);
+        }
+        PrevTrack => {
+            if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                h.lock().prev();
+            }
+        }
+        NextTrack => {
+            if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                h.lock().next();
+            }
+        }
+        SpeedStep { dir } => step_speed(dir),
+        SetSpeed { mult } => set_speed_abs(mult),
+        CycleRepeat => {
+            if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                let mut pl = h.lock();
+                pl.cycle_repeat();
+                eprintln!("media-app: repeat {}", pl.repeat_mode().label());
+            }
+        }
+        ToggleShuffle => {
+            if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                let mut pl = h.lock();
+                pl.toggle_shuffle();
+                eprintln!(
+                    "media-app: shuffle {}",
+                    if pl.shuffle_on() { "on" } else { "off" }
+                );
+            }
+        }
+        Snapshot => do_snapshot(),
+        ToggleRecord => toggle_record(),
+    }
+}
+
+/// Cicla la velocidad `dir` pasos por `settings().speed_steps` (wrap en
+/// ambos sentidos). No-op sin playlist activo o sin pasos configurados.
+fn step_speed(dir: i32) {
     let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
         return;
     };
+    let steps = &settings().speed_steps;
+    if steps.is_empty() {
+        return;
+    }
     let mut pl = handle.lock();
     let cur = pl.current_speed();
-    // Próximo step (con tolerancia ε para evitar problemas de f32).
-    let next_idx = SPEED_STEPS
+    // Índice actual (con tolerancia ε para evitar problemas de f32).
+    let idx = steps
         .iter()
         .position(|&s| (s - cur).abs() < 1e-3)
-        .map(|i| (i + 1) % SPEED_STEPS.len())
-        .unwrap_or(0);
-    let next = SPEED_STEPS[next_idx];
+        .unwrap_or(0) as i32;
+    let n = steps.len() as i32;
+    let next_idx = ((idx + dir) % n + n) % n;
+    let next = steps[next_idx as usize];
     pl.set_speed(next);
     eprintln!("media-app: speed {:.2}×", next);
+}
+
+/// Fija una velocidad absoluta (p.ej. `=` → 1.0×). No-op sin playlist.
+fn set_speed_abs(mult: f32) {
+    if let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) {
+        handle.lock().set_speed(mult);
+        eprintln!("media-app: speed {:.2}×", mult);
+    }
+}
+
+/// Arma/cierra la grabación WAV del stream de audio en el cwd.
+fn toggle_record() {
+    let rec = recorder();
+    if rec.is_recording() {
+        match rec.stop() {
+            Ok(p) => eprintln!("media-app: recording cerrada en {}", p.display()),
+            Err(e) => eprintln!("media-app: stop recording: {e}"),
+        }
+    } else {
+        let path = default_recording_path(".");
+        match rec.start(&path) {
+            Ok(p) => eprintln!("media-app: grabando en {}", p.display()),
+            Err(e) => eprintln!("media-app: start recording: {e}"),
+        }
+    }
+}
+
+/// Escribe un PNG con el frame de video pendiente. No-op (con log) si la
+/// pipeline aún no montó o no hay frame consistente.
+fn do_snapshot() {
+    let Some(pipe) = pipeline_slot().get() else {
+        eprintln!("media-app: pipeline aún no montada");
+        return;
+    };
+    let (w, h) = *pipe.last_dim.lock();
+    let buf = pipe.buf.lock().clone();
+    let expected = (w as usize) * (h as usize) * 4;
+    if w == 0 || h == 0 || buf.len() != expected {
+        eprintln!("media-app: no hay frame para snapshot todavía");
+        return;
+    }
+    let path = default_snapshot_path();
+    match image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(w, h, buf) {
+        Some(img) => match img.save(&path) {
+            Ok(()) => eprintln!(
+                "media-app: snapshot {}×{} guardado en {}",
+                w,
+                h,
+                path.display()
+            ),
+            Err(e) => eprintln!("media-app: save snapshot: {e}"),
+        },
+        None => eprintln!("media-app: buf inconsistente para snapshot"),
+    }
+}
+
+/// Traduce un evento de teclado de Llimphi al [`KeyChord`] canónico y
+/// agnóstico que entiende el keymap. Sólo dispara en `Pressed`; los
+/// caracteres se normalizan a minúscula (el estado de Shift viaja en el
+/// flag, no en el case). Teclas que no mapeamos devuelven `None`.
+fn chord_from_event(ev: &KeyEvent) -> Option<KeyChord> {
+    if ev.state != KeyState::Pressed {
+        return None;
+    }
+    let key = match &ev.key {
+        Key::Named(NamedKey::Space) => "Space".to_string(),
+        Key::Named(NamedKey::ArrowLeft) => "ArrowLeft".to_string(),
+        Key::Named(NamedKey::ArrowRight) => "ArrowRight".to_string(),
+        Key::Named(NamedKey::ArrowUp) => "ArrowUp".to_string(),
+        Key::Named(NamedKey::ArrowDown) => "ArrowDown".to_string(),
+        Key::Named(NamedKey::Enter) => "Enter".to_string(),
+        Key::Character(c) => c.to_lowercase(),
+        _ => return None,
+    };
+    Some(KeyChord {
+        key,
+        ctrl: ev.modifiers.ctrl,
+        shift: ev.modifiers.shift,
+        alt: ev.modifiers.alt,
+    })
 }
 
 /// Carga un .m3u simple: una línea por archivo, líneas vacías y `#`
@@ -836,108 +1019,19 @@ impl App for MediaApp {
                 }
                 m
             }
-            Msg::TogglePause => {
-                pause().toggle();
-                model
-            }
-            Msg::ToggleRecord => {
-                let rec = recorder();
-                if rec.is_recording() {
-                    match rec.stop() {
-                        Ok(p) => eprintln!(
-                            "media-app: recording cerrada en {}",
-                            p.display()
-                        ),
-                        Err(e) => eprintln!("media-app: stop recording: {e}"),
-                    }
-                } else {
-                    let path = default_recording_path(".");
-                    match rec.start(&path) {
-                        Ok(p) => eprintln!("media-app: grabando en {}", p.display()),
-                        Err(e) => eprintln!("media-app: start recording: {e}"),
-                    }
-                }
-                model
-            }
-            Msg::VolDown => {
-                volume().update(|v| v - VOLUME_STEP);
-                model
-            }
-            Msg::VolUp => {
-                volume().update(|v| v + VOLUME_STEP);
-                model
-            }
-            Msg::SeekBack => {
-                seek_audio_by(-(SEEK_STEP_SECS as i64));
-                model
-            }
-            Msg::SeekFwd => {
-                seek_audio_by(SEEK_STEP_SECS as i64);
-                model
-            }
-            Msg::PrevTrack => {
-                if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
-                    h.lock().prev();
-                }
-                model
-            }
-            Msg::NextTrack => {
-                if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
-                    h.lock().next();
-                }
-                model
-            }
-            Msg::CycleSpeed => {
-                cycle_speed();
-                model
-            }
-            Msg::CycleRepeat => {
-                if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
-                    let mut pl = h.lock();
-                    pl.cycle_repeat();
-                    eprintln!("media-app: repeat {}", pl.repeat_mode().label());
-                }
-                model
-            }
-            Msg::ToggleShuffle => {
-                if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
-                    let mut pl = h.lock();
-                    pl.toggle_shuffle();
-                    eprintln!(
-                        "media-app: shuffle {}",
-                        if pl.shuffle_on() { "on" } else { "off" }
-                    );
-                }
-                model
-            }
-            Msg::Snapshot => {
-                if let Some(pipe) = pipeline_slot().get() {
-                    let (w, h) = *pipe.last_dim.lock();
-                    let buf = pipe.buf.lock().clone();
-                    let expected = (w as usize) * (h as usize) * 4;
-                    if w == 0 || h == 0 || buf.len() != expected {
-                        eprintln!("media-app: no hay frame para snapshot todavía");
-                    } else {
-                        let path = default_snapshot_path();
-                        match image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(w, h, buf) {
-                            Some(img) => match img.save(&path) {
-                                Ok(()) => eprintln!(
-                                    "media-app: snapshot {}×{} guardado en {}",
-                                    w,
-                                    h,
-                                    path.display()
-                                ),
-                                Err(e) => eprintln!("media-app: save snapshot: {e}"),
-                            },
-                            None => eprintln!("media-app: buf inconsistente para snapshot"),
-                        }
-                    }
-                } else {
-                    eprintln!("media-app: pipeline aún no montada");
-                }
+            Msg::Command(cmd) => {
+                apply_command(cmd);
                 model
             }
         }
+    }
+
+    /// Atajos globales: traduce la tecla a un [`KeyChord`] y la resuelve
+    /// contra el keymap de [`settings`]. media-app no tiene text-input,
+    /// así que no hace falta routing de foco.
+    fn on_key(_model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        let chord = chord_from_event(event)?;
+        settings().keymap.resolve(&chord).cloned().map(Msg::Command)
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
@@ -1096,7 +1190,7 @@ fn transport_tile() -> View<Msg> {
             Color::from_rgba8(55, 65, 80, 255)
         },
         Color::from_rgba8(220, 230, 245, 255),
-        Msg::TogglePause,
+        Msg::Command(MediaCommand::TogglePause),
     );
 
     let playlist_active = playlist_slot()
@@ -1114,8 +1208,8 @@ fn transport_tile() -> View<Msg> {
     } else {
         Color::from_rgba8(100, 110, 125, 255)
     };
-    let prev_btn = chip_button("⟨trk", pl_bg, pl_fg, Msg::PrevTrack);
-    let next_btn = chip_button("trk⟩", pl_bg, pl_fg, Msg::NextTrack);
+    let prev_btn = chip_button("⟨trk", pl_bg, pl_fg, Msg::Command(MediaCommand::PrevTrack));
+    let next_btn = chip_button("trk⟩", pl_bg, pl_fg, Msg::Command(MediaCommand::NextTrack));
 
     let seekable = playlist_slot().get().and_then(|o| o.as_ref()).is_some();
     let seek_bg = if seekable {
@@ -1128,8 +1222,19 @@ fn transport_tile() -> View<Msg> {
     } else {
         Color::from_rgba8(100, 110, 125, 255)
     };
-    let back_btn = chip_button("«5s", seek_bg, seek_fg, Msg::SeekBack);
-    let fwd_btn = chip_button("5s»", seek_bg, seek_fg, Msg::SeekFwd);
+    let step = settings().seek_step_secs;
+    let back_btn = chip_button(
+        &format!("«{step}s"),
+        seek_bg,
+        seek_fg,
+        Msg::Command(MediaCommand::SeekBy { secs: -step }),
+    );
+    let fwd_btn = chip_button(
+        &format!("{step}s»"),
+        seek_bg,
+        seek_fg,
+        Msg::Command(MediaCommand::SeekBy { secs: step }),
+    );
 
     tile_chip_grid(vec![prev_btn, pause_btn, next_btn, back_btn, fwd_btn])
 }
@@ -1149,17 +1254,18 @@ fn volume_tile() -> View<Msg> {
         ..Default::default()
     })
     .text(vol_label, 13.0, Color::from_rgba8(180, 195, 215, 255));
+    let vstep = settings().volume_step;
     let vol_dn = chip_button(
         "vol−",
         Color::from_rgba8(55, 65, 80, 255),
         Color::from_rgba8(220, 230, 245, 255),
-        Msg::VolDown,
+        Msg::Command(MediaCommand::VolumeBy { delta: -vstep }),
     );
     let vol_up = chip_button(
         "vol+",
         Color::from_rgba8(55, 65, 80, 255),
         Color::from_rgba8(220, 230, 245, 255),
-        Msg::VolUp,
+        Msg::Command(MediaCommand::VolumeBy { delta: vstep }),
     );
 
     let row = View::new(Style {
@@ -1221,7 +1327,12 @@ fn playlist_tile() -> View<Msg> {
         .map(|h| h.lock().current_speed())
         .unwrap_or(1.0);
     let speed_label = format!("{:.2}×", current_speed);
-    let speed_btn = chip_button(&speed_label, bg, fg, Msg::CycleSpeed);
+    let speed_btn = chip_button(
+        &speed_label,
+        bg,
+        fg,
+        Msg::Command(MediaCommand::SpeedStep { dir: 1 }),
+    );
 
     let (repeat_label, shuffle_on) = playlist_slot()
         .get()
@@ -1231,7 +1342,7 @@ fn playlist_tile() -> View<Msg> {
             (pl.repeat_mode().label(), pl.shuffle_on())
         })
         .unwrap_or(("rep-", false));
-    let loop_btn = chip_button(repeat_label, bg, fg, Msg::CycleRepeat);
+    let loop_btn = chip_button(repeat_label, bg, fg, Msg::Command(MediaCommand::CycleRepeat));
     let shuf_bg = if shuffle_on {
         Color::from_rgba8(60, 110, 150, 255)
     } else {
@@ -1241,7 +1352,7 @@ fn playlist_tile() -> View<Msg> {
         if shuffle_on { "shuf!" } else { "shuf-" },
         shuf_bg,
         fg,
-        Msg::ToggleShuffle,
+        Msg::Command(MediaCommand::ToggleShuffle),
     );
 
     tile_chip_grid(vec![loop_btn, shuf_btn, speed_btn])
@@ -1259,13 +1370,13 @@ fn recorder_tile() -> View<Msg> {
             Color::from_rgba8(55, 65, 80, 255)
         },
         Color::from_rgba8(245, 235, 235, 255),
-        Msg::ToggleRecord,
+        Msg::Command(MediaCommand::ToggleRecord),
     );
     let snap_btn = chip_button(
         "snap",
         Color::from_rgba8(55, 65, 80, 255),
         Color::from_rgba8(220, 230, 245, 255),
-        Msg::Snapshot,
+        Msg::Command(MediaCommand::Snapshot),
     );
     tile_chip_grid(vec![rec_btn, snap_btn])
 }
@@ -1810,6 +1921,7 @@ fn main() {
         },
     };
     config_slot().set(cfg).ok();
+    settings_slot().set(load_settings()).ok();
 
     // Si el video es un archivo decodificado por ffmpeg, abrimos UNA
     // session compartida antes que cualquier otra cosa — el audio del

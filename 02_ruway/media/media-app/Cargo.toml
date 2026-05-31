@@ -23,3 +23,4 @@ media-source-image = { path = "../media-source-image" }
 media-source-mp3 = { path = "../media-source-mp3" }
 media-source-wav = { path = "../media-source-wav" }
 parking_lot = { workspace = true }
+ron = { workspace = true }
