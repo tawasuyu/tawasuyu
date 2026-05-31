@@ -13134,4 +13134,40 @@ mod tests {
             var ks = Object.keys(__puriy_document_pip_pending); __puriy_document_pip_reject(ks[ks.length - 1], 'NotAllowedError');").expect("e");
         assert_eq!(rt.eval("err").expect("e"), JsValue::String("NotAllowedError".into()));
     }
+
+    // ---- Fase 7.167 — CloseWatcher API ----
+    #[test]
+    fn closewatcher_api_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof CloseWatcher").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn closewatcher_request_close_dispara_close() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var closed = 0; var cw = new CloseWatcher();
+            cw.onclose = function(){ closed++; }; cw.requestClose();").expect("e");
+        assert_eq!(rt.eval("closed").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn closewatcher_cancel_previene_close() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var closed = 0; var cw = new CloseWatcher();
+            cw.oncancel = function(e){ e.preventDefault(); }; cw.onclose = function(){ closed++; };
+            cw.requestClose();").expect("e");
+        assert_eq!(rt.eval("closed").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn closewatcher_host_request_close_cierra_el_tope() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var a = 0, b = 0;
+            var cwa = new CloseWatcher(); cwa.onclose = function(){ a++; };
+            var cwb = new CloseWatcher(); cwb.onclose = function(){ b++; };
+            __puriy_close_watcher_request_close();").expect("e");
+        // El último creado (cwb) está en el tope del stack → cierra primero.
+        assert_eq!(rt.eval("a").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("b").expect("e"), JsValue::Number(1.0));
+    }
 }
