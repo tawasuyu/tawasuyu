@@ -12995,4 +12995,37 @@ mod tests {
         assert_eq!(rt.eval("err").expect("e"), JsValue::String("NotAllowedError".into()));
     }
 
+
+    // ---- Fase 7.163 — Local Font Access API ----
+    #[test]
+    fn localfonts_query_resuelve_array() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var fonts = null; queryLocalFonts().then(function(f){ fonts = f; });").expect("e");
+        assert_eq!(rt.eval("Array.isArray(fonts) && fonts.length >= 1 && typeof fonts[0].family === 'string'").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("fonts[0] instanceof FontData").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn localfonts_blob_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var b = null; queryLocalFonts().then(function(f){ f[0].blob().then(function(x){ b = x; }); });").expect("e");
+        assert_eq!(rt.eval("b instanceof Blob && b.type === 'font/opentype'").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn localfonts_filtro_postscript() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_local_fonts([{ postscriptName: 'Foo', family: 'Foo' }, { postscriptName: 'Bar', family: 'Bar' }]);
+            var fonts = null; queryLocalFonts({ postscriptNames: ['Bar'] }).then(function(f){ fonts = f; });").expect("e");
+        assert_eq!(rt.eval("fonts.length").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("fonts[0].postscriptName").expect("e"), JsValue::String("Bar".into()));
+    }
+
+    #[test]
+    fn localfonts_permiso_denegado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_local_fonts_permission(false);
+            var err = null; queryLocalFonts().catch(function(e){ err = e.name; });").expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("SecurityError".into()));
+    }
 }
