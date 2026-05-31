@@ -160,19 +160,50 @@ impl BackendHandle {
     }
 }
 
+/// Skin de render para un programa bajo PTY. `Generic` pinta la grilla
+/// vt100 cruda; los demás reconstruyen la pantalla como un card
+/// themeable propio del programa (deja de verse "como por un vidrio").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppSkin {
+    /// Grilla de celdas vt100 (htop, less, man, btop, …).
+    Generic,
+    /// vim/nvim/vi: el buffer como texto en la paleta del tema.
+    Vim,
+    /// claude code: un card grande que engloba la sesión (por ahora cae
+    /// al genérico hasta que esté el parser de bloques).
+    Claude,
+}
+
+/// Elige el skin a partir del nombre del programa (acepta un path —
+/// toma el basename).
+pub fn app_skin_for(program: &str) -> AppSkin {
+    let base = program.rsplit('/').next().unwrap_or(program);
+    match base {
+        "vi" | "vim" | "nvim" | "view" | "nvi" => AppSkin::Vim,
+        "claude" => AppSkin::Claude,
+        _ => AppSkin::Generic,
+    }
+}
+
 /// Sesión TUI sobre PTY — bufferea el parser vt100 y los dims actuales.
 pub struct TuiSession {
     pub parser: vt100::Parser,
     pub rows: u16,
     pub cols: u16,
+    /// Programa bajo el PTY (basename incluido) — define el skin.
+    pub program: String,
+    /// Skin de render elegido al arrancar.
+    pub skin: AppSkin,
 }
 
 impl TuiSession {
-    pub fn new(rows: u16, cols: u16) -> Self {
+    pub fn new(program: &str, rows: u16, cols: u16) -> Self {
         Self {
             parser: vt100::Parser::new(rows, cols, 0),
             rows,
             cols,
+            program: program.to_string(),
+            skin: app_skin_for(program),
         }
     }
 

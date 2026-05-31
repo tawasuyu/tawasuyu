@@ -903,7 +903,7 @@ pub(crate) fn build_spec(line: &str, cwd: &str) -> (CommandSpec, Option<TuiSessi
         program: parts[0].clone(),
         args: parts[1..].to_vec(),
     };
-    (spec, Some(TuiSession::new(PTY_ROWS, PTY_COLS)))
+    (spec, Some(TuiSession::new(&program, PTY_ROWS, PTY_COLS)))
 }
 
 pub(crate) fn drain_run(mut s: State) -> State {

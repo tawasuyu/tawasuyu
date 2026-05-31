@@ -285,17 +285,33 @@ pub(crate) fn state_dialect_default() -> shuma_line::Dialect {
     shuma_line::Dialect::default()
 }
 
-/// Panel de TUI: pinta la pantalla del PTY como grid monoespaciado.
-/// Se invoca cuando `is_tui_active(state)` es `true`.
+/// Panel de TUI app-aware: según el programa bajo el PTY elige un skin.
+/// `is_tui_active(state)` ya garantiza que hay un run con PTY. vim se
+/// pinta como un card themeable; el resto cae al grid vt100 crudo.
 pub(crate) fn tui_panel<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<HostMsg> {
-    // Tomar un snapshot del estado actual del screen para que la
-    // closure de paint pueda ser `Send + Sync` (no captura el Mutex).
-    let snapshot: Option<TuiSnapshot> = state
-        .running
-        .as_ref()
-        .and_then(|arc| arc.lock().ok().and_then(|g| capture_tui(&g)));
-    let theme_clone = *theme;
+    // Snapshot + skin en un solo lock; la closure de paint debe ser
+    // `Send + Sync`, así que no captura el Mutex.
+    let (snapshot, skin) = match state.running.as_ref().and_then(|arc| arc.lock().ok()) {
+        Some(g) => {
+            let skin = g.tui.as_ref().map(|t| t.skin).unwrap_or(AppSkin::Generic);
+            (capture_tui(&g), skin)
+        }
+        None => (None, AppSkin::Generic),
+    };
     let rect_slot = Arc::clone(&state.last_tui_rect);
+    if let AppSkin::Vim = skin {
+        return vim_panel::<HostMsg>(snapshot, theme, rect_slot);
+    }
+    generic_grid_panel::<HostMsg>(snapshot, theme, rect_slot)
+}
+
+/// Render de grilla vt100 cruda — el camino histórico para htop/less/man.
+pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
+    snapshot: Option<TuiSnapshot>,
+    theme: &Theme,
+    rect_slot: Arc<Mutex<(f32, f32)>>,
+) -> View<HostMsg> {
+    let theme_clone = *theme;
 
     let painter = move |scene: &mut vello::Scene,
                         ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -379,6 +395,114 @@ pub(crate) fn tui_panel<HostMsg: Clone + 'static>(state: &State, theme: &Theme) 
                 Color::from_rgba8(214, 222, 232, 220),
                 None,
                 &rect,
+            );
+        }
+    };
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(3.0)
+    .paint_with(painter)
+}
+
+/// Skin de vim: reconstruye cada fila del `Screen` como una línea de
+/// texto en la paleta del tema — sin la grilla de celdas ni los `~` de
+/// relleno —, con la última fila como barra de estado. El contenido se
+/// lee como un output normal, dentro del card del panel; las teclas
+/// siguen yendo al PTY (vim sigue siendo interactivo).
+///
+/// MVP: read-only (la selección/click-derecho-pegar nativos vienen
+/// después, sobre el widget de texto). El objetivo de este paso es que
+/// vim deje de verse "como por un vidrio".
+pub(crate) fn vim_panel<HostMsg: Clone + 'static>(
+    snapshot: Option<TuiSnapshot>,
+    theme: &Theme,
+    rect_slot: Arc<Mutex<(f32, f32)>>,
+) -> View<HostMsg> {
+    let theme_clone = *theme;
+    let painter = move |scene: &mut vello::Scene,
+                        ts: &mut llimphi_ui::llimphi_text::Typesetter,
+                        rect: llimphi_ui::PaintRect| {
+        use llimphi_ui::llimphi_raster::kurbo::Rect as KurboRect;
+        use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
+        use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment as TAlign, TextBlock};
+        // Publica el rect para que el próximo Tick dispare resize si cambió.
+        if let Ok(mut g) = rect_slot.lock() {
+            *g = (rect.w, rect.h);
+        }
+        let Some(snap) = &snapshot else { return };
+        let pad = 10.0_f64;
+        let line_h = 16.0_f64;
+        let font = 13.0_f32;
+        let char_w = 7.8_f64; // ancho aproximado del monospace a 13px
+        let origin_x = rect.x as f64 + pad;
+        let origin_y = rect.y as f64 + pad;
+        let n = snap.cells.len();
+        for (r, row) in snap.cells.iter().enumerate() {
+            let raw: String = row.iter().map(|c| c.ch.as_str()).collect();
+            let line_str = raw.trim_end();
+            // La última fila es la barra de estado / línea de comando de vim.
+            let is_status = n > 1 && r + 1 == n;
+            // Relleno de vim: una fila cuyo único contenido es `~`.
+            if !is_status && line_str.trim_start() == "~" {
+                continue;
+            }
+            let y = origin_y + r as f64 * line_h;
+            let color = if is_status {
+                theme_clone.accent
+            } else {
+                theme_clone.fg_text
+            };
+            if is_status {
+                // Fondo sutil para distinguir la barra de estado del buffer.
+                let bar = KurboRect::new(
+                    rect.x as f64,
+                    y - 2.0,
+                    (rect.x + rect.w) as f64,
+                    y + line_h,
+                );
+                scene.fill(
+                    Fill::NonZero,
+                    vello::kurbo::Affine::IDENTITY,
+                    theme_clone.bg_input,
+                    None,
+                    &bar,
+                );
+            }
+            if !line_str.is_empty() {
+                let block = TextBlock {
+                    text: line_str,
+                    size_px: font,
+                    color,
+                    origin: (origin_x, y),
+                    max_width: None,
+                    alignment: TAlign::Start,
+                    line_height: 1.0,
+                    italic: false,
+                    font_family: None,
+                };
+                let layout = layout_block(ts, &block);
+                draw_layout(scene, &layout, color, (origin_x, y));
+            }
+        }
+        // Cursor: barra vertical en la posición del cursor de vim.
+        if !snap.hide_cursor {
+            let x0 = origin_x + snap.cursor_c as f64 * char_w;
+            let y0 = origin_y + snap.cursor_r as f64 * line_h;
+            let cur = KurboRect::new(x0, y0 + 2.0, x0 + 2.0, y0 + line_h);
+            scene.fill(
+                Fill::NonZero,
+                vello::kurbo::Affine::IDENTITY,
+                Color::from_rgba8(214, 222, 232, 220),
+                None,
+                &cur,
             );
         }
     };
