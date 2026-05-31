@@ -495,10 +495,18 @@ pub enum AnimationFillMode {
     Both,
 }
 
+/// `animation-play-state`. `Paused` congela el progreso de la animación en
+/// el frame actual (lo consume el runtime de tween en `anim.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationPlayState {
+    Running,
+    Paused,
+}
+
 /// `animation: <name> <duration> <timing> <delay> <iteration> <direction>
-/// <fill>` colapsado en una sola binding. `play-state` se ignora. Si el
-/// shorthand lista varias animaciones separadas por coma nos quedamos con
-/// la primera (el runtime de tween todavía no existe — Fase B4+). Los
+/// <fill> <play-state>` colapsado en una sola binding. Si el shorthand
+/// lista varias animaciones separadas por coma nos quedamos con la primera.
+/// El runtime de tween vive en `anim.rs` (rescatado del frente engine). Los
 /// tokens se clasifican por forma, no por posición, así que el orden
 /// laxo del wild (`animation: spin 2s linear infinite`) se tolera.
 #[derive(Debug, Clone, PartialEq)]
@@ -512,6 +520,7 @@ pub struct AnimationBinding {
     pub iterations: AnimationIterations,
     pub direction: AnimationDirection,
     pub fill_mode: AnimationFillMode,
+    pub play_state: AnimationPlayState,
 }
 
 /// `transition: <property> <duration> <timing> <delay>`. Una lista
@@ -2370,6 +2379,7 @@ fn parse_one_animation(seg: &str) -> Option<AnimationBinding> {
     let mut iterations: Option<AnimationIterations> = None;
     let mut direction: Option<AnimationDirection> = None;
     let mut fill: Option<AnimationFillMode> = None;
+    let mut play_state: Option<AnimationPlayState> = None;
     for tok in &tokens {
         let lt = tok.to_ascii_lowercase();
         // Duración primero, delay después (orden posicional de los dos
@@ -2427,6 +2437,14 @@ fn parse_one_animation(seg: &str) -> Option<AnimationBinding> {
                 fill = Some(AnimationFillMode::Both);
                 continue;
             }
+            "running" => {
+                play_state = Some(AnimationPlayState::Running);
+                continue;
+            }
+            "paused" => {
+                play_state = Some(AnimationPlayState::Paused);
+                continue;
+            }
             // `none` acá sería `animation-name: none` o `fill-mode: none` —
             // ambiguo y raro en shorthand; lo tratamos como "sin nombre".
             "none" => continue,
@@ -2445,6 +2463,7 @@ fn parse_one_animation(seg: &str) -> Option<AnimationBinding> {
         iterations: iterations.unwrap_or(AnimationIterations::Count(1.0)),
         direction: direction.unwrap_or(AnimationDirection::Normal),
         fill_mode: fill.unwrap_or(AnimationFillMode::None),
+        play_state: play_state.unwrap_or(AnimationPlayState::Running),
     })
 }
 
@@ -3618,7 +3637,7 @@ pub(crate) fn parse_color_named_or_hex(s: &str) -> Option<Color> {
     parse_color(s)
 }
 
-fn parse_color(s: &str) -> Option<Color> {
+pub(crate) fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim();
     // hex #RRGGBB / #RGB / #RRGGBBAA / #RGBA
     if let Some(hex) = s.strip_prefix('#') {
@@ -3981,7 +4000,7 @@ fn parse_text_transform(s: &str) -> Option<TextTransform> {
 }
 
 /// Acepta `0..1` o `0%..100%`. Clampa.
-fn parse_opacity(s: &str) -> Option<f32> {
+pub(crate) fn parse_opacity(s: &str) -> Option<f32> {
     let s = s.trim();
     if let Some(num) = s.strip_suffix('%') {
         let pct: f32 = num.trim().parse().ok()?;
@@ -4347,7 +4366,7 @@ fn parse_one_text_shadow(s: &str) -> Option<TextShadow> {
 /// translate(10px, 20px)`). Acepta `translate(x)`, `translate(x, y)`,
 /// `translateX(x)`, `translateY(y)`, `scale(s)`, `scale(sx, sy)`,
 /// `scaleX(sx)`, `scaleY(sy)`, `rotate(Ndeg|Nrad|Nturn)`.
-fn parse_transforms(value: &str) -> Option<Vec<Transform>> {
+pub(crate) fn parse_transforms(value: &str) -> Option<Vec<Transform>> {
     let v = value.trim();
     if v.eq_ignore_ascii_case("none") {
         return Some(Vec::new());

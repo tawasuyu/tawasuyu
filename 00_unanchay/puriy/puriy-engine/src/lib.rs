@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anim;
 pub mod boxes;
 pub mod cache;
 pub mod cookies;
