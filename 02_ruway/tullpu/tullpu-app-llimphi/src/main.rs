@@ -56,6 +56,8 @@
 //! - `Shift`+click (pincel/borrador) — traza una línea recta desde el
 //!   último punto pintado hasta el click
 //! - `s`              — cicla la simetría del trazo (✕/↔/↕/✛)
+//! - `d`              — herramienta degradé; drag rellena un degradado
+//!   lineal del color activo a transparente (acotado a la selección)
 //! - `←` `↑` `↓` `→`  — con selección activa, mueve sus píxeles 1 px
 //!   (10 px con `Shift`) dentro de la capa raster
 //!
@@ -772,6 +774,59 @@ impl App for Tullpu {
             Msg::CiclarSimetria => {
                 model.simetria = model.simetria.siguiente();
                 model.estado = format!("simetría: {}", model.simetria.etiqueta());
+            }
+            Msg::IniciarDegradado { lx, ly, rw, rh } => {
+                if let Some((ix, iy)) = local_a_imagen(
+                    lx,
+                    ly,
+                    rw,
+                    rh,
+                    model.lienzo.width,
+                    model.lienzo.height,
+                    model.factor_zoom,
+                    model.pan_x,
+                    model.pan_y,
+                ) {
+                    model.gradiente_drag = Some(GradienteDrag {
+                        ancla_ix: ix as f32,
+                        ancla_iy: iy as f32,
+                        cur_lx: lx,
+                        cur_ly: ly,
+                        rw,
+                        rh,
+                    });
+                }
+            }
+            Msg::AjustarDegradado { dx, dy } => {
+                if let Some(g) = model.gradiente_drag.as_mut() {
+                    g.cur_lx += dx;
+                    g.cur_ly += dy;
+                }
+            }
+            Msg::FinalizarDegradado => {
+                if let Some(g) = model.gradiente_drag.take() {
+                    if let Some((bx, by)) = local_a_imagen(
+                        g.cur_lx,
+                        g.cur_ly,
+                        g.rw,
+                        g.rh,
+                        model.lienzo.width,
+                        model.lienzo.height,
+                        model.factor_zoom,
+                        model.pan_x,
+                        model.pan_y,
+                    ) {
+                        if rellenar_gradiente_en_capa(
+                            &mut model,
+                            g.ancla_ix,
+                            g.ancla_iy,
+                            bx as f32,
+                            by as f32,
+                        ) {
+                            pushear_snapshot(&mut model, None);
+                        }
+                    }
+                }
             }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app

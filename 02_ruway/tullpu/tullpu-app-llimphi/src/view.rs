@@ -660,6 +660,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Borrador),
     )));
+    let etiqueta_degradado = if model.herramienta == Herramienta::Degradado {
+        "● degradé (d)"
+    } else {
+        "○ degradé (d)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_degradado.to_string(),
+        if model.herramienta == Herramienta::Degradado {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Degradado),
+    )));
     // Control de radio: sólo visible con herramienta de trazo activa
     // (co-locado con lo que afecta). Diámetro = 2·r+1.
     if model.herramienta.es_trazo() {
@@ -1228,6 +1242,14 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                     .draggable_at(|fase, dx, dy, _lx0, _ly0| match fase {
                         DragPhase::Move => Some(Msg::ContinuarTrazo { dx, dy }),
                         DragPhase::End => Some(Msg::FinalizarTrazo),
+                    }),
+                Herramienta::Degradado => cuerpo_paint
+                    .on_click_at(|lx, ly, rw, rh| {
+                        Some(Msg::IniciarDegradado { lx, ly, rw, rh })
+                    })
+                    .draggable_at(|fase, dx, dy, _lx0, _ly0| match fase {
+                        DragPhase::Move => Some(Msg::AjustarDegradado { dx, dy }),
+                        DragPhase::End => Some(Msg::FinalizarDegradado),
                     }),
             }
         }

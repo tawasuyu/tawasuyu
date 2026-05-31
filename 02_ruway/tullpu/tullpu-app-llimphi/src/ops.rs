@@ -1103,6 +1103,68 @@ pub(crate) fn pincel_segmento_en_capa(
     })
 }
 
+/// Rellena un degradé lineal sobre un buffer Rgba8 `w × h`: para cada
+/// píxel proyecta su centro sobre el eje `(ax,ay) → (bx,by)`, obtiene
+/// `t ∈ [0,1]` (clamp), y compone src-over `color` con su alfa escalado
+/// por `(1 - t)` — `t=0` en el ancla (color pleno), `t=1` en el extremo
+/// (transparente). Si el eje tiene longitud cero, `t=0` en todo el área
+/// (relleno sólido). Acotado a `bounds` (half-open) si `Some`. Devuelve
+/// un buffer nuevo. Pura.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rellenar_gradiente(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+    color: [u8; 4],
+    bounds: Option<(u32, u32, u32, u32)>,
+) -> Vec<u8> {
+    let mut out = src.to_vec();
+    let dx = bx - ax;
+    let dy = by - ay;
+    let len2 = dx * dx + dy * dy;
+    let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
+    let bx1 = bx1.min(w);
+    let by1 = by1.min(h);
+    for y in by0..by1 {
+        for x in bx0..bx1 {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let t = if len2 <= 0.0 {
+                0.0
+            } else {
+                (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0)
+            };
+            let a = (color[3] as f32 * (1.0 - t)).round() as u8;
+            let i = ((y as usize) * w as usize + x as usize) * 4;
+            mezclar_src_over(
+                &mut out[i..i + 4],
+                [color[0], color[1], color[2], a],
+            );
+        }
+    }
+    out
+}
+
+/// Rellena un degradé del color activo (en el ancla) a transparente (en
+/// el extremo) sobre la capa raster seleccionada, acotado a la selección.
+/// Reusa [`pincel_aplicar`] (validación raster + color + bounds + snapshot
+/// implícito por el caller). No-op si la capa es derivada o nada cambia.
+pub(crate) fn rellenar_gradiente_en_capa(
+    model: &mut Model,
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+) -> bool {
+    pincel_aplicar(model, |buf, w, h, color, bounds| {
+        *buf = rellenar_gradiente(buf, w, h, ax, ay, bx, by, color, bounds);
+    })
+}
+
 /// Compone (alpha src-over, Rgba8 NO premultiplicado) un `clip` de
 /// `clip_w × clip_h` sobre `dst` (`dst_w × dst_h`) con la esquina
 /// superior izquierda en el offset CON SIGNO `(dx, dy)`. Los píxeles del

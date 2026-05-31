@@ -71,6 +71,7 @@
             shift_held: false,
             ultimo_pincel: None,
             simetria: Simetria::Ninguna,
+            gradiente_drag: None,
             portapapeles: None,
         }
     }
@@ -4559,4 +4560,97 @@
         assert_eq!(alfa(6, 2), 255);
         assert_eq!(alfa(1, 5), 255);
         assert_eq!(alfa(6, 5), 255);
+    }
+
+    // ---- Fase 50: herramienta degradé (linear gradient) -----------------
+
+    #[test]
+    fn rellenar_gradiente_horizontal_fade_de_opaco_a_transparente() {
+        // Fondo transparente 5×1; eje horizontal de x=0 a x=4; color rojo
+        // opaco. t crece de 0 a 1 → alfa de 255 a 0.
+        let buf = vec![0u8; 5 * 1 * 4];
+        let out = rellenar_gradiente(
+            &buf, 5, 1, 0.0, 0.0, 4.0, 0.0, [255, 0, 0, 255], None,
+        );
+        let alfa = |x: usize| out[x * 4 + 3];
+        // x=0 (centro 0.5, t≈0.125) alfa alto; x=4 (centro 4.5 → t clamp 1) alfa 0.
+        assert!(alfa(0) > alfa(2), "{} vs {}", alfa(0), alfa(2));
+        assert!(alfa(2) > alfa(4));
+        assert_eq!(alfa(4), 0);
+        // Componente roja presente donde hay alfa.
+        assert_eq!(out[0], 255);
+    }
+
+    #[test]
+    fn rellenar_gradiente_eje_cero_es_relleno_solido() {
+        // Eje de longitud 0 → t=0 en todo → color pleno en todos lados.
+        let buf = vec![0u8; 3 * 1 * 4];
+        let out = rellenar_gradiente(
+            &buf, 3, 1, 1.0, 0.0, 1.0, 0.0, [10, 20, 30, 255], None,
+        );
+        for x in 0..3 {
+            assert_eq!(&out[x * 4..x * 4 + 4], &[10, 20, 30, 255]);
+        }
+    }
+
+    #[test]
+    fn rellenar_gradiente_respeta_bounds() {
+        let buf = vec![0u8; 4 * 4 * 4];
+        let out = rellenar_gradiente(
+            &buf, 4, 4, 0.0, 0.0, 4.0, 0.0, [9, 9, 9, 255],
+            Some((0, 0, 2, 2)),
+        );
+        // Dentro del rect: tocado (alfa > 0 cerca del ancla).
+        assert!(out[(0 * 4 + 0) * 4 + 3] > 0);
+        // Fuera del rect: intacto.
+        assert_eq!(out[(2 * 4 + 2) * 4 + 3], 0);
+        assert_eq!(out[(0 * 4 + 3) * 4 + 3], 0);
+    }
+
+    #[test]
+    fn hotkey_d_emite_degradado() {
+        let m = modelo_minimo();
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("d", Modifiers::default())),
+            Some(Msg::CambiarHerramienta(Herramienta::Degradado))
+        ));
+    }
+
+    #[test]
+    fn degradado_drag_completo_rellena_y_snapshotea() {
+        let mut model = modelo_minimo();
+        let buf = vec![0u8; 8 * 8 * 4];
+        let h = model.almacen.insertar(buf);
+        let cap = Capa::raster("base", h);
+        let id = cap.id;
+        let mut lienzo = Lienzo::nuevo(8, 8);
+        lienzo.apilar(cap);
+        model.lienzo = lienzo;
+        model.seleccionada = Some(id);
+        model.color_picked = Some([0, 0, 255, 255]);
+        model.herramienta = Herramienta::Degradado;
+        aplicar_y_recomponer(&mut model);
+        model.historial = vec![model.lienzo.clone()];
+        model.cursor_historial = 0;
+        let hash0 = model.lienzo.capa(id).unwrap().contenido;
+        // Press en (0,0), arrastre +8 en X, soltar.
+        model = <Tullpu as App>::update(
+            model,
+            Msg::IniciarDegradado { lx: 0.0, ly: 0.0, rw: 8.0, rh: 8.0 },
+            &Handle::for_test(),
+        );
+        model = <Tullpu as App>::update(
+            model,
+            Msg::AjustarDegradado { dx: 8.0, dy: 0.0 },
+            &Handle::for_test(),
+        );
+        model = <Tullpu as App>::update(
+            model,
+            Msg::FinalizarDegradado,
+            &Handle::for_test(),
+        );
+        // Drag cerrado, capa cambiada, snapshot pusheado.
+        assert!(model.gradiente_drag.is_none());
+        assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash0);
+        assert_eq!(model.historial.len(), 2);
     }

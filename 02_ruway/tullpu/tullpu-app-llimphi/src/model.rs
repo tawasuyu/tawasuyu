@@ -115,6 +115,8 @@ pub(crate) struct Model {
     pub(crate) ultimo_pincel: Option<(i32, i32)>,
     /// Simetría activa del trazo (espejo sobre ejes del lienzo).
     pub(crate) simetria: Simetria,
+    /// Drag en curso del degradé. `None` fuera de un drag.
+    pub(crate) gradiente_drag: Option<GradienteDrag>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -141,6 +143,10 @@ pub(crate) enum Herramienta {
     Pincel,
     /// Como `Pincel` pero borra (alfa=0) en vez de pintar.
     Borrador,
+    /// Drag define un eje; al soltar rellena un degradé lineal del color
+    /// activo (en el ancla) a transparente (en el extremo), compuesto
+    /// src-over sobre la capa raster (acotado a la selección).
+    Degradado,
 }
 
 impl Herramienta {
@@ -152,6 +158,7 @@ impl Herramienta {
             Herramienta::Balde => "balde",
             Herramienta::Pincel => "pincel",
             Herramienta::Borrador => "borrador",
+            Herramienta::Degradado => "degradé",
         }
     }
 
@@ -275,6 +282,20 @@ impl Simetria {
             Simetria::Ambas => "✛",
         }
     }
+}
+
+/// Estado del drag del degradé: ancla en coords-imagen (donde empezó) +
+/// posición local actual del cursor (acumulando los `dx, dy` de cada
+/// Move). Al soltar, se convierte la posición local a coord-imagen para
+/// el extremo del eje. `rw, rh` se capturan al inicio.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GradienteDrag {
+    pub(crate) ancla_ix: f32,
+    pub(crate) ancla_iy: f32,
+    pub(crate) cur_lx: f32,
+    pub(crate) cur_ly: f32,
+    pub(crate) rw: f32,
+    pub(crate) rh: f32,
 }
 
 /// Radio inicial del pincel en px-imagen (disco lleno; diámetro ≈ `2·r+1`).
@@ -483,6 +504,13 @@ pub(crate) enum Msg {
     SetShift(bool),
     /// Cicla la simetría del trazo (Ninguna→V→H→Ambas). No toca el lienzo.
     CiclarSimetria,
+    /// Press con la herramienta Degradado: fija el ancla del eje en el
+    /// píxel local `(lx, ly)`.
+    IniciarDegradado { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Move del degradé: acumula `(dx, dy)` para ubicar el extremo.
+    AjustarDegradado { dx: f32, dy: f32 },
+    /// End del degradé: rellena el degradado del ancla al extremo actual.
+    FinalizarDegradado,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

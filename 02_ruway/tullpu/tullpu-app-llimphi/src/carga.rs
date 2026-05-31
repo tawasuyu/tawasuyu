@@ -222,6 +222,7 @@ pub(crate) fn inicializar() -> Model {
         shift_held: false,
         ultimo_pincel: None,
         simetria: Simetria::Ninguna,
+        gradiente_drag: None,
         portapapeles: None,
     };
     sincronizar_thumbs(&mut model);
