@@ -27,5 +27,5 @@ pub mod workspace;
 
 pub use geometry::Rect;
 pub use layout::{tile, LayoutMode, LayoutParams};
-pub use outputs::{disponer, envolvente, Disposicion};
+pub use outputs::{disponer, disponer_logico, envolvente, Disposicion, Salida, ESCALA_100};
 pub use workspace::{Workspace, WindowId};

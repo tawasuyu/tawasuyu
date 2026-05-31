@@ -55,6 +55,68 @@ pub fn disponer(tamanos: &[(i32, i32)], modo: Disposicion) -> Vec<Rect> {
     rects
 }
 
+/// Factor de escala HiDPI expresado en 120-avos, la convención de
+/// `wp_fractional_scale` de Wayland: `120` = 100 %, `180` = 150 %, `240` = 200 %.
+/// Mantener la escala como entero sobre 120 deja toda la matemática en `i32`
+/// —sin `f32`, apto para el kernel de wawa— y casa exacto con el protocolo.
+pub const ESCALA_100: i32 = 120;
+
+/// Un output físico con su factor de escala HiDPI. `ancho`/`alto` son los
+/// píxeles reales del scanout; `escala_120`, cuántos 120-avos de aumento aplica
+/// el cliente (ver [`ESCALA_100`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Salida {
+    pub ancho: i32,
+    pub alto: i32,
+    pub escala_120: i32,
+}
+
+impl Salida {
+    /// Una salida a 100 % (`escala_120 = ESCALA_100`).
+    pub fn new(ancho: i32, alto: i32) -> Self {
+        Self {
+            ancho,
+            alto,
+            escala_120: ESCALA_100,
+        }
+    }
+
+    /// La misma salida con otra escala.
+    pub fn con_escala(self, escala_120: i32) -> Self {
+        Self { escala_120, ..self }
+    }
+
+    /// Tamaño lógico `(ancho, alto)` del output: los píxeles físicos divididos
+    /// por la escala. Un 4K (3840×2160) a 200 % mide 1920×1080 lógicos. Una
+    /// escala no positiva se trata como 100 % (sin escalar). La división trunca
+    /// —el píxel lógico parcial no existe—.
+    pub fn logico(&self) -> (i32, i32) {
+        let escala = if self.escala_120 > 0 {
+            self.escala_120
+        } else {
+            ESCALA_100
+        };
+        let w = self.ancho.max(0) as i64 * ESCALA_100 as i64 / escala as i64;
+        let h = self.alto.max(0) as i64 * ESCALA_100 as i64 / escala as i64;
+        (w as i32, h as i32)
+    }
+}
+
+/// Como [`disponer`], pero en **coordenadas lógicas**: cada output aporta su
+/// tamaño *lógico* (físico ÷ escala) al encadenado. Es lo que un compositor
+/// multi-DPI necesita: las ventanas viajan por un plano lógico continuo, y cada
+/// output traduce de vuelta a físico con su propia escala al componer, así un
+/// monitor 1× junto a uno 2× no abre un salto en el escritorio. Mismo orden de
+/// entrada; el primero queda anclado en `(0, 0)`.
+///
+/// Ejemplo (un 1080p a 100 % junto a un 4K a 200 %): ambos miden 1920×1080
+/// lógicos, así que quedan `[Rect{0,0,1920,1080}, Rect{1920,0,1920,1080}]` —el
+/// 4K, con el doble de píxeles físicos, ocupa el mismo ancho lógico—.
+pub fn disponer_logico(salidas: &[Salida], modo: Disposicion) -> Vec<Rect> {
+    let tamanos: Vec<(i32, i32)> = salidas.iter().map(Salida::logico).collect();
+    disponer(&tamanos, modo)
+}
+
 /// El rectángulo que envuelve a todos los outputs dispuestos: el tamaño del
 /// escritorio compuesto. Útil para dimensionar un framebuffer global o validar
 /// que el espacio cabe. Vacío (`0×0` en el origen) si no hay outputs.
@@ -119,5 +181,50 @@ mod tests {
         // Un output "apagado" (0 de ancho) no desplaza al siguiente.
         let r = disponer(&[(0, 0), (640, 480)], Disposicion::Horizontal);
         assert_eq!(r[1], Rect::new(0, 0, 640, 480));
+    }
+
+    #[test]
+    fn logico_divide_los_fisicos_por_la_escala() {
+        // 4K a 200 % mide 1920×1080 lógicos.
+        assert_eq!(Salida::new(3840, 2160).con_escala(240).logico(), (1920, 1080));
+        // 150 %: 2560×1440 → 1706×960 (trunca el píxel parcial).
+        assert_eq!(Salida::new(2560, 1440).con_escala(180).logico(), (1706, 960));
+    }
+
+    #[test]
+    fn escala_100_equivale_a_los_fisicos() {
+        let s = Salida::new(1920, 1080);
+        assert_eq!(s.escala_120, ESCALA_100);
+        assert_eq!(s.logico(), (1920, 1080));
+    }
+
+    #[test]
+    fn escala_no_positiva_se_trata_como_100() {
+        // Un output que aún no reportó escala (0) no se encoge a infinito.
+        assert_eq!(Salida::new(1280, 720).con_escala(0).logico(), (1280, 720));
+        assert_eq!(Salida::new(1280, 720).con_escala(-5).logico(), (1280, 720));
+    }
+
+    #[test]
+    fn disponer_logico_continua_el_plano_entre_dpis_distintas() {
+        // Un 1080p@100 % junto a un 4K@200 %: ambos 1920×1080 lógicos, plano
+        // continuo (el segundo arranca justo donde acaba el primero).
+        let salidas = [
+            Salida::new(1920, 1080),
+            Salida::new(3840, 2160).con_escala(240),
+        ];
+        let r = disponer_logico(&salidas, Disposicion::Horizontal);
+        assert_eq!(r[0], Rect::new(0, 0, 1920, 1080));
+        assert_eq!(r[1], Rect::new(1920, 0, 1920, 1080));
+        // El escritorio lógico mide 3840×1080 pese a los 7680 px físicos.
+        assert_eq!(envolvente(&r), Rect::new(0, 0, 3840, 1080));
+    }
+
+    #[test]
+    fn disponer_logico_sin_escala_coincide_con_disponer() {
+        let salidas = [Salida::new(1920, 1080), Salida::new(1280, 1024)];
+        let logico = disponer_logico(&salidas, Disposicion::Horizontal);
+        let fisico = disponer(&[(1920, 1080), (1280, 1024)], Disposicion::Horizontal);
+        assert_eq!(logico, fisico);
     }
 }
