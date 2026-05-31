@@ -10,5 +10,8 @@ description = "Lapaloma — demo polar: pie/donut a la izquierda, radar a la der
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
 pineal-render = { path = "../../pineal-render" }
 pineal-polar = { path = "../../pineal-polar" }

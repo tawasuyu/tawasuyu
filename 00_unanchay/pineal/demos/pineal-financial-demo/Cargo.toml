@@ -13,3 +13,7 @@ llimphi-theme = { workspace = true }
 pineal-render = { path = "../../pineal-render" }
 pineal-cartesian = { path = "../../pineal-cartesian" }
 pineal-financial = { path = "../../pineal-financial" }
+
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }

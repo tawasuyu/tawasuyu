@@ -8,11 +8,19 @@
 //! Pan por drag pendiente: requiere callbacks mouse_move/down/up que
 //! llimphi-ui aún no expone.
 
+use std::sync::Arc;
+
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, FlexDirection, Size, Style};
 use llimphi_ui::llimphi_layout::taffy::Rect;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Modifiers, View, WheelDelta};
+
+use app_bus::{AppMenu, Menu, MenuItem};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 
 use pineal_cartesian::ChartViewport;
 use pineal_financial::{lapaloma_candlestick_view, Bar, CandlestickStyle, OhlcBuffer};
@@ -24,7 +32,19 @@ const WHEEL_SENSITIVITY: f64 = 0.04;
 #[derive(Clone)]
 enum Msg {
     Zoom { factor: f64, anchor_x: f64, anchor_y: f64 },
+    /// Zoom de paso fijo alrededor del centro — el que disparan los menús.
+    ZoomStep(f64),
     Reset,
+    /// Cicla el preset de tema (sólo viste la barra de menú y overlays).
+    CycleTheme,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en la barra o el contextual → `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click sobre el plot → abre el contextual anclado en `(x, y)`.
+    ContextMenuOpen(f32, f32),
 }
 
 struct Model {
@@ -33,6 +53,9 @@ struct Model {
     initial_viewport: ChartViewport,
     win_w: f32,
     win_h: f32,
+    theme: Theme,
+    menu_open: Option<usize>,
+    context_menu: Option<(f32, f32)>,
 }
 
 struct FinancialDemo;
@@ -58,16 +81,48 @@ impl App for FinancialDemo {
             (lo - pad) as f64,
             (hi + pad) as f64,
         );
-        Model { data, viewport, initial_viewport: viewport, win_w: 960.0, win_h: 560.0 }
+        Model {
+            data,
+            viewport,
+            initial_viewport: viewport,
+            win_w: 960.0,
+            win_h: 560.0,
+            theme: Theme::dark(),
+            menu_open: None,
+            context_menu: None,
+        }
     }
 
-    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::Zoom { factor, anchor_x, anchor_y } => {
                 model.viewport.zoom_uniform(factor, (anchor_x, anchor_y));
             }
+            Msg::ZoomStep(factor) => {
+                model.viewport.zoom_uniform(factor, (0.5, 0.5));
+            }
             Msg::Reset => {
                 model.viewport = model.initial_viewport;
+            }
+            Msg::CycleTheme => {
+                model.theme = Theme::next_after(model.theme.name);
+            }
+            Msg::MenuOpen(which) => {
+                model.menu_open = which;
+                model.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                model.menu_open = None;
+                model.context_menu = Some((x, y));
+            }
+            Msg::MenuCommand(cmd) => {
+                model.menu_open = None;
+                model.context_menu = None;
+                handle_menu_command(&cmd, handle);
             }
         }
         model
@@ -89,8 +144,11 @@ impl App for FinancialDemo {
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
+        let theme = &model.theme;
         let plot_bg = Color::rgba(0.06, 0.08, 0.10, 1.0);
+
+        let menu = app_menu();
+        let menubar = menubar_view(&menubar_spec(&menu, model));
 
         let style = CandlestickStyle {
             bull_color: Color::rgb(0.639, 0.745, 0.549),
@@ -135,9 +193,10 @@ impl App for FinancialDemo {
         .children(vec![chart])
         .on_click(Msg::Reset);
 
-        View::new(Style {
+        let body = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            flex_grow: 1.0,
             padding: Rect {
                 left: length(16.0_f32),
                 right: length(16.0_f32),
@@ -148,8 +207,101 @@ impl App for FinancialDemo {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, stats_row, plot_panel])
+        .children(vec![header, stats_row, plot_panel]);
+
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, body])
     }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        if let Some((x, y)) = model.context_menu {
+            return Some(context_menu_for_plot(model, x, y));
+        }
+        let menu = app_menu();
+        menubar_overlay(&menubar_spec(&menu, model))
+    }
+}
+
+// =====================================================================
+// Menú principal + contextual del plot
+// =====================================================================
+
+fn viewport_of(model: &Model) -> (f32, f32) {
+    (model.win_w, model.win_h)
+}
+
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &'a Model) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme: &model.theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(Menu::new("Archivo").item(MenuItem::new("Salir", "app.quit").shortcut("Esc")))
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Reiniciar vista", "view.reset"))
+                .item(MenuItem::new("Acercar", "view.zoom_in").shortcut("+").separated())
+                .item(MenuItem::new("Alejar", "view.zoom_out").shortcut("-"))
+                .item(MenuItem::new("Cambiar tema", "view.theme").separated()),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+const ZOOM_IN_FACTOR: f64 = 0.8;
+const ZOOM_OUT_FACTOR: f64 = 1.25;
+
+fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
+    let msg = match cmd {
+        "app.quit" => {
+            std::process::exit(0);
+        }
+        "view.reset" => Some(Msg::Reset),
+        "view.zoom_in" => Some(Msg::ZoomStep(ZOOM_IN_FACTOR)),
+        "view.zoom_out" => Some(Msg::ZoomStep(ZOOM_OUT_FACTOR)),
+        "view.theme" => Some(Msg::CycleTheme),
+        _ => None,
+    };
+    if let Some(msg) = msg {
+        handle.dispatch(msg);
+    }
+}
+
+fn context_menu_for_plot(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let items = vec![
+        ContextMenuItem::action("Reiniciar vista"),
+        ContextMenuItem::separator(),
+        ContextMenuItem::action("Acercar").with_shortcut("+"),
+        ContextMenuItem::action("Alejar").with_shortcut("-"),
+    ];
+    let cmds: Vec<&'static str> = vec!["view.reset", "", "view.zoom_in", "view.zoom_out"];
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| {
+        Msg::MenuCommand(cmds.get(i).copied().unwrap_or("").to_string())
+    });
+
+    context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: viewport_of(model),
+        header: Some("vista".to_string()),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&model.theme),
+    })
 }
 
 /// xorshift32 inline — RNG determinístico mínimo. No criptográfico,

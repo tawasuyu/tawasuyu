@@ -10,6 +10,9 @@ description = "Lapaloma — demo del trail CRT (phosphor) sobre un RingBuffer st
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
 pineal-core = { path = "../../pineal-core" }
 pineal-render = { path = "../../pineal-render" }
 pineal-phosphor = { path = "../../pineal-phosphor" }
