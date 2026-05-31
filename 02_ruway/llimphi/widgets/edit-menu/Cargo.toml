@@ -1,0 +1,14 @@
+[package]
+name = "llimphi-widget-edit-menu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-edit-menu — el menú de edición estándar (Deshacer/Rehacer/Cortar/Copiar/Pegar/Eliminar/Seleccionar todo) para cualquier campo que use EditorState (input single-line e IDE enriquecido). Arma el ContextMenuSpec desde flags derivados del estado y aplica las acciones reutilizando apply_key_with_clipboard."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+llimphi-widget-text-editor = { workspace = true }

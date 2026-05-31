@@ -213,6 +213,8 @@ members = [
     "02_ruway/llimphi/widgets/button",
     "02_ruway/llimphi/widgets/card",
     "02_ruway/llimphi/widgets/context-menu",
+    "02_ruway/llimphi/widgets/edit-menu",
+    "02_ruway/llimphi/widgets/menubar",
     "02_ruway/llimphi/widgets/gallery",
     "02_ruway/llimphi/widgets/wawa-mark",
     "02_ruway/llimphi/widgets/tooltip",
@@ -599,6 +601,8 @@ llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }
 llimphi-widget-button = { path = "02_ruway/llimphi/widgets/button" }
 llimphi-widget-card = { path = "02_ruway/llimphi/widgets/card" }
 llimphi-widget-context-menu = { path = "02_ruway/llimphi/widgets/context-menu" }
+llimphi-widget-edit-menu = { path = "02_ruway/llimphi/widgets/edit-menu" }
+llimphi-widget-menubar = { path = "02_ruway/llimphi/widgets/menubar" }
 llimphi-widget-list = { path = "02_ruway/llimphi/widgets/list" }
 llimphi-widget-grid = { path = "02_ruway/llimphi/widgets/grid" }
 llimphi-widget-slider = { path = "02_ruway/llimphi/widgets/slider" }

@@ -1,0 +1,15 @@
+[package]
+name = "llimphi-widget-menubar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-menubar — barra de menú principal in-window (Archivo/Editar/Ver/Ayuda) que cualquier app Llimphi monta a partir de un app_bus::AppMenu. menubar_view() pinta la fila de títulos; menubar_overlay() el dropdown (vía context-menu) para App::view_overlay. Decoplado del Surface del launcher: sirve dentro de la ventana de cada app."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-button = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { path = "../../../../shared/app-bus" }

@@ -325,6 +325,35 @@ impl EditorState {
         self.cursor.desired_col = col;
     }
 
+    /// Selecciona todo el buffer: anchor en `(0,0)`, caret al final de
+    /// la última línea. Colapsa los multi-cursor extras. Operación de
+    /// sólo-cursor (no edita) — la usan el menú de edición y Ctrl+A.
+    pub fn select_all(&mut self) {
+        self.collapse_to_primary();
+        let last_line = self.buffer.len_lines().saturating_sub(1);
+        let last_col = self.buffer.line_len_chars(last_line);
+        self.cursor.anchor = Some(Pos::ORIGIN);
+        self.cursor.caret = Pos::new(last_line, last_col);
+        self.cursor.desired_col = last_col;
+    }
+
+    /// `true` si hay algo que deshacer (para habilitar "Deshacer" en el
+    /// menú de edición).
+    pub fn can_undo(&self) -> bool {
+        self.undo.can_undo()
+    }
+
+    /// `true` si hay algo que rehacer.
+    pub fn can_redo(&self) -> bool {
+        self.undo.can_redo()
+    }
+
+    /// `true` si hay una selección no-vacía (para habilitar Cortar/
+    /// Copiar/Eliminar en el menú de edición).
+    pub fn has_selection(&self) -> bool {
+        self.cursor.has_selection()
+    }
+
     /// Texto seleccionado, si hay selección no-vacía. `None` cuando el
     /// cursor está colapsado.
     pub fn selected_text(&self) -> Option<String> {
