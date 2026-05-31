@@ -15,6 +15,7 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 let mut m = model;
                 m.edit_menu = Some((x, y));
                 m.menu_open = None;
+                m.edit_sub = None;
                 // Animación de aparición: 0→1 con ease-out, autodirigida
                 // por ticks de llimphi-motion hasta terminar.
                 m.edit_menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
@@ -23,10 +24,30 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             }
             Msg::MenuTick => model,
             Msg::EditMenuAction(action) => apply_edit_menu_action(model, action),
+            Msg::EditSubHover(opt) => {
+                let mut m = model;
+                m.edit_sub = opt;
+                m
+            }
+            Msg::EditSubPick(_parent, child) => {
+                // El submenú "Buscar": child → el Msg real de búsqueda.
+                let mut m = model;
+                m.edit_menu = None;
+                m.edit_sub = None;
+                let target = match child {
+                    0 => Msg::FindOpen,
+                    1 => Msg::Fif(FifMsg::Open),
+                    2 => Msg::Outline(OutlineMsg::Open),
+                    3 => Msg::GotoDefinitionRequest,
+                    _ => return m,
+                };
+                return dispatch(m, target, handle);
+            }
             Msg::CloseMenus => {
                 let mut m = model;
                 m.menu_open = None;
                 m.edit_menu = None;
+                m.edit_sub = None;
                 m
             }
             Msg::EditKey(ev) => apply_editor_key(model, ev),

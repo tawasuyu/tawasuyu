@@ -74,7 +74,9 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputStat
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_widget_context_menu::{
+    context_menu_view_ex, ContextMenuExtras, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
 use llimphi_motion::{animate, motion, Tween};
 
 const TREE_WIDTH: f32 = 240.0;
@@ -200,6 +202,11 @@ enum Msg {
     EditMenuOpen(f32, f32),
     /// Acción elegida en el menú de edición.
     EditMenuAction(EditAction),
+    /// Hover sobre un item raíz del menú de edición: `Some(idx)` abre su
+    /// submenú (flyout), `None` lo cierra.
+    EditSubHover(Option<usize>),
+    /// Pick en el submenú "Buscar" del menú de edición: `(padre, hijo)`.
+    EditSubPick(usize, usize),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
     /// Tick de la animación de aparición del menú de edición (no-op salvo
@@ -326,6 +333,9 @@ struct Model {
     edit_menu: Option<(f32, f32)>,
     /// Animación de aparición del menú de edición (0→1, fade + slide).
     edit_menu_anim: Tween<f32>,
+    /// Índice del item raíz cuyo submenú está desplegado (flyout). `None`
+    /// = ninguno. Hoy sólo lo usa el item "Buscar" del menú de edición.
+    edit_sub: Option<usize>,
 }
 
 const RECENT_FILES_CAP: usize = 20;
@@ -536,6 +546,7 @@ impl App for EditorApp {
             menu_open: None,
             edit_menu: None,
             edit_menu_anim: Tween::idle(1.0),
+            edit_sub: None,
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
@@ -622,26 +633,7 @@ impl App for EditorApp {
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
         // El menú de edición tiene prioridad si está abierto.
         if let Some((x, y)) = model.edit_menu {
-            let flags = match model.active_tab() {
-                Some(tab) => EditFlags::from_editor(&tab.editor, false),
-                None => EditFlags::default(),
-            };
-            let (w, h) = Self::initial_size();
-            let spec = editmenu::edit_context_menu(
-                (x, y),
-                (w as f32, h as f32),
-                &model.theme,
-                flags,
-                Msg::EditMenuAction,
-                Msg::CloseMenus,
-            );
-            return Some(context_menu_view_ex(
-                spec,
-                ContextMenuExtras {
-                    appear: model.edit_menu_anim.value(),
-                    ..ContextMenuExtras::default()
-                },
-            ));
+            return Some(edit_menu_view(model, x, y));
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
@@ -665,6 +657,118 @@ fn menubar_spec<'a>(
         on_open: std::sync::Arc::new(Msg::MenuOpen),
         on_command: std::sync::Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
     }
+}
+
+/// Acción de cada fila del menú de edición contextual. `Copy` para que el
+/// `on_pick` la capture en un `Arc<Vec<_>>` sin tomar un `Msg` crudo (así
+/// el closure es `Send + Sync` sin exigirle esos bounds al `Msg`).
+#[derive(Clone, Copy)]
+enum CtxPick {
+    Edit(EditAction),
+    /// Abrir el submenú del item raíz `idx`.
+    OpenSub(usize),
+    /// Separador / no-clickable.
+    Noop,
+}
+
+/// Índice del item raíz "Buscar" (el que tiene submenú) dentro del menú
+/// de edición. Lo necesitan el builder y el `update` para abrirlo.
+const EDIT_BUSCAR_IDX: usize = 9;
+
+/// Construye el menú de edición contextual de nada: el bloque estándar
+/// (Deshacer…Seleccionar todo) + un submenú "Buscar ▸" en flyout. Es la
+/// vitrina viva de íconos + submenús + animación.
+fn edit_menu_view(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let (ed, masked) = match model.active_tab() {
+        Some(tab) => (Some(&tab.editor), false),
+        None => (None, false),
+    };
+    let flags = match ed {
+        Some(e) => EditFlags::from_editor(e, masked),
+        None => EditFlags::default(),
+    };
+
+    let dis = |it: ContextMenuItem, on: bool| if on { it } else { it.disabled() };
+    let mut items: Vec<ContextMenuItem> = Vec::new();
+    let mut picks: Vec<CtxPick> = Vec::new();
+    let mut push = |it: ContextMenuItem, p: CtxPick| {
+        items.push(it);
+        picks.push(p);
+    };
+    let sel = flags.has_selection;
+
+    push(
+        dis(ContextMenuItem::action("Deshacer").icon("\u{21A9}").with_shortcut("Ctrl+Z"), flags.can_undo),
+        CtxPick::Edit(EditAction::Undo),
+    );
+    push(
+        dis(ContextMenuItem::action("Rehacer").icon("\u{21AA}").with_shortcut("Ctrl+Y"), flags.can_redo),
+        CtxPick::Edit(EditAction::Redo),
+    );
+    push(ContextMenuItem::separator(), CtxPick::Noop);
+    push(
+        dis(ContextMenuItem::action("Cortar").icon("\u{2702}").with_shortcut("Ctrl+X"), sel),
+        CtxPick::Edit(EditAction::Cut),
+    );
+    push(
+        dis(ContextMenuItem::action("Copiar").icon("\u{29C9}").with_shortcut("Ctrl+C"), sel),
+        CtxPick::Edit(EditAction::Copy),
+    );
+    push(
+        ContextMenuItem::action("Pegar").icon("\u{2398}").with_shortcut("Ctrl+V"),
+        CtxPick::Edit(EditAction::Paste),
+    );
+    push(
+        dis(ContextMenuItem::action("Eliminar").icon("\u{2717}").with_shortcut("Supr").destructive(), sel),
+        CtxPick::Edit(EditAction::Delete),
+    );
+    push(ContextMenuItem::separator(), CtxPick::Noop);
+    push(
+        dis(ContextMenuItem::action("Seleccionar todo").icon("\u{2750}").with_shortcut("Ctrl+A"), flags.has_text),
+        CtxPick::Edit(EditAction::SelectAll),
+    );
+    // Índice EDIT_BUSCAR_IDX (= 9): el item con submenú (8 ítems + 2
+    // separadores antes).
+    push(
+        ContextMenuItem::action("Buscar")
+            .icon("\u{1F50D}")
+            .submenu(vec![
+                ContextMenuItem::action("Buscar en archivo").with_shortcut("Ctrl+F"),
+                ContextMenuItem::action("Buscar en proyecto").with_shortcut("Ctrl+Shift+F"),
+                ContextMenuItem::action("Símbolos").with_shortcut("Ctrl+Shift+O"),
+                ContextMenuItem::action("Ir a definición").with_shortcut("F12"),
+            ]),
+        CtxPick::OpenSub(EDIT_BUSCAR_IDX),
+    );
+
+    let picks = std::sync::Arc::new(picks);
+    let on_pick: std::sync::Arc<dyn Fn(usize) -> Msg + Send + Sync> = {
+        let picks = picks.clone();
+        std::sync::Arc::new(move |i: usize| match picks.get(i).copied().unwrap_or(CtxPick::Noop) {
+            CtxPick::Edit(a) => Msg::EditMenuAction(a),
+            CtxPick::OpenSub(p) => Msg::EditSubHover(Some(p)),
+            CtxPick::Noop => Msg::CloseMenus,
+        })
+    };
+
+    let (w, h) = EditorApp::initial_size();
+    let spec = ContextMenuSpec {
+        anchor: (x, y),
+        viewport: (w as f32, h as f32),
+        header: Some("Edición".to_string()),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&model.theme),
+    };
+    let extras = ContextMenuExtras {
+        open_sub: model.edit_sub,
+        appear: model.edit_menu_anim.value(),
+        on_pick_sub: Some(std::sync::Arc::new(|p: usize, c: usize| Msg::EditSubPick(p, c))),
+        on_hover: Some(std::sync::Arc::new(|opt: Option<usize>| Msg::EditSubHover(opt))),
+    };
+    context_menu_view_ex(spec, extras)
 }
 
 mod actions;

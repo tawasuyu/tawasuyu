@@ -840,6 +840,7 @@ pub(crate) fn handle_menu_command(mut model: Model, command: String, handle: &Ha
 /// auto-scroll). Cierra el menú de edición.
 pub(crate) fn apply_edit_menu_action(mut model: Model, action: EditAction) -> Model {
     model.edit_menu = None;
+    model.edit_sub = None;
     let Some(idx) = model.active else { return model };
     let r = editmenu::apply(&mut model.tabs[idx].editor, action, &mut model.clipboard);
     if r.changed() {
