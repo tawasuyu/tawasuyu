@@ -1,6 +1,6 @@
 # Controles configurables de media (estilo VLC, más flexible)
 
-> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D ⏳ (futuro).
+> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D4 (reload) ✅ · D2/D3 ⏳.
 > Autoritativo sobre cómo se mapean entradas → acciones en el dominio `media`.
 
 ## Problema
@@ -80,6 +80,8 @@ ControlSettings(
 | `=`          | SetSpeed 1.0×       | reset (más flexible que VLC)   |
 | `c`          | ToggleRecord        | capture                        |
 | `Shift+s`    | Snapshot            | como VLC (Shift+S)             |
+| `?`          | (ayuda)             | overlay con el keymap vivo     |
+| `F5`         | (recargar)          | relee `controles.ron` en caliente |
 
 ## Fases
 
@@ -89,14 +91,23 @@ ControlSettings(
   botones derivan el comando de `settings`. Adiós a los `Msg` por-acción y a las
   constantes hardcodeadas.
 - **C ✅ — config persistente**: carga/escritura de `controles.ron` en XDG.
-- **D ⏳ — más flexible que VLC** (futuro, no bloqueante):
-  - **Paleta de comandos** (overlay con búsqueda fuzzy de todas las acciones) —
-    descubribilidad sin memorizar teclas. Encaja en `App::view_overlay`.
-  - **Comandos Rhai** (`MediaCommand::Script(nombre)` → snippet con una API de
+- **D1 ✅ — overlay de ayuda ("press ? for help")**: `?` abre un overlay
+  (`llimphi-widget-shortcuts-help`) con un entry por binding del keymap vivo —
+  refleja exactamente `controles.ron`. `MediaCommand::describe()` +
+  `KeyChord::display()` en el core (agnósticos, reutilizables para docs).
+- **D4 ✅ — recarga en caliente**: `settings` pasó de `OnceLock` a `RwLock`; `F5`
+  relee `controles.ron` sin reiniciar. Editás el archivo, apretás F5, los nuevos
+  bindings/pasos están vivos.
+- **D ⏳ — pendiente (futuro, no bloqueante)**:
+  - **D2 · Comandos Rhai** (`MediaCommand::Script(nombre)` → snippet con una API de
     reproductor bindeada) — calco del Rhai de las `Transformacion` de pluma; es
-    el verdadero "más flexible que VLC".
-  - **Layout de controles configurable**: qué tiles/chips aparecen y su orden
-    (ya hay base con `TileId` + drag-to-swap; falta persistirlo en settings).
-  - **Recarga en caliente** del `controles.ron` (watch del archivo).
+    el verdadero "más flexible que VLC". Heavy (mete `rhai` al dominio media).
+  - **D3 · Layout de controles configurable**: qué tiles/chips aparecen y su orden
+    (ya hay base con `TileId` + drag-to-swap; falta persistir el orden). Nota de
+    diseño: el layout es otro eje que el mapeo de entrada — evaluar si va en
+    `ControlSettings` o en un settings de UI aparte.
+  - **Paleta de comandos** con búsqueda fuzzy (el overlay de ayuda hoy es
+    read-only; una paleta ejecutable es el siguiente paso de descubribilidad).
+  - **Watch** del `controles.ron` (recarga automática, hoy es manual con F5).
   - Reusar el sistema cuando se materialicen los widgets
     `llimphi-widget-{transport,timeline,waveform}` y/o `nahual-video-viewer-llimphi`.

@@ -104,6 +104,8 @@ enum Msg {
     SwapTile { from: usize, to: usize },
     /// Abre/cierra el overlay de ayuda de atajos (`?`).
     ToggleHelp,
+    /// Relee `controles.ron` desde disco en caliente (`F5`).
+    ReloadConfig,
 }
 
 /// Tiles del grid reorderable bajo el canvas. El orden por defecto
@@ -144,14 +146,27 @@ impl TileId {
 
 /// Settings de control (pasos + keymap) cargados al arrancar desde RON
 /// en XDG, o el default tipo VLC si no hay archivo. Ver `CONTROLES.md`.
-fn settings_slot() -> &'static OnceLock<ControlSettings> {
-    static SLOT: OnceLock<ControlSettings> = OnceLock::new();
-    &SLOT
+/// Settings vivos tras un `RwLock` — a diferencia de los demás slots
+/// (inmutables tras el arranque), éste se reemplaza en caliente cuando
+/// el usuario edita `controles.ron` y aprieta F5.
+fn settings_slot() -> &'static std::sync::RwLock<ControlSettings> {
+    static SLOT: OnceLock<std::sync::RwLock<ControlSettings>> = OnceLock::new();
+    SLOT.get_or_init(|| std::sync::RwLock::new(ControlSettings::default()))
 }
 
-/// Accessor de conveniencia. Asume que `main` ya pobló el slot.
-fn settings() -> &'static ControlSettings {
-    settings_slot().get().expect("settings set")
+/// Accessor de conveniencia: devuelve un clon del snapshot actual. El
+/// struct es chico, así que clonar por frame es despreciable y evita
+/// repartir guards del lock por todo el render.
+fn settings() -> ControlSettings {
+    settings_slot().read().expect("settings lock").clone()
+}
+
+/// Recarga `controles.ron` en caliente. Reemplaza el contenido del lock
+/// con lo que haya en disco (o el default si no se puede leer).
+fn reload_settings() {
+    let nuevo = load_settings();
+    *settings_slot().write().expect("settings lock") = nuevo;
+    eprintln!("media-app: controles recargados");
 }
 
 /// Resuelve el path del archivo de controles: `$XDG_CONFIG_HOME/gioser/
@@ -780,7 +795,8 @@ fn step_speed(dir: i32) {
     let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
         return;
     };
-    let steps = &settings().speed_steps;
+    let s = settings();
+    let steps = &s.speed_steps;
     if steps.is_empty() {
         return;
     }
@@ -1041,6 +1057,10 @@ impl App for MediaApp {
                 m.help_open = !m.help_open;
                 m
             }
+            Msg::ReloadConfig => {
+                reload_settings();
+                model
+            }
         }
     }
 
@@ -1055,6 +1075,7 @@ impl App for MediaApp {
         match &event.key {
             Key::Character(c) if c == "?" => return Some(Msg::ToggleHelp),
             Key::Named(NamedKey::Escape) if model.help_open => return Some(Msg::ToggleHelp),
+            Key::Named(NamedKey::F5) => return Some(Msg::ReloadConfig),
             _ => {}
         }
         let chord = chord_from_event(event)?;
@@ -1083,6 +1104,7 @@ impl App for MediaApp {
                     vec![
                         ShortcutEntry::new("?", "Mostrar/ocultar esta ayuda"),
                         ShortcutEntry::new("Esc", "Cerrar la ayuda"),
+                        ShortcutEntry::new("F5", "Recargar controles.ron en caliente"),
                     ],
                 ),
             ],
@@ -1979,7 +2001,7 @@ fn main() {
         },
     };
     config_slot().set(cfg).ok();
-    settings_slot().set(load_settings()).ok();
+    *settings_slot().write().expect("settings lock") = load_settings();
 
     // Si el video es un archivo decodificado por ffmpeg, abrimos UNA
     // session compartida antes que cualquier otra cosa — el audio del
