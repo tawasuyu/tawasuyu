@@ -148,6 +148,17 @@ enum Focus {
     Tags,
 }
 
+/// Un par descubierto en la red, en forma lista para la UI: dónde jalarle
+/// el cuaderno y una etiqueta legible. Datos planos (no `PeerVisto`) para
+/// viajar dentro de un `Msg`.
+#[derive(Clone)]
+struct PeerInfo {
+    /// Dirección TCP de fetch, como string (`ip:puerto`).
+    addr: String,
+    /// Etiqueta para la fila: nombre · de:autor · dirección.
+    label: String,
+}
+
 #[derive(Clone)]
 enum Msg {
     SelectNote(NoteId),
@@ -170,9 +181,15 @@ enum Msg {
     Import,
     /// Empieza a servir el cuaderno por TCP para que un par lo jale.
     Publish,
-    /// Jala el cuaderno de un par (`KHIPU_PEER`) por TCP.
+    /// Busca pares en la LAN para jalarles el cuaderno.
     Receive,
-    /// Resultado async de [`Msg::Receive`]: el sobre recibido o un error.
+    /// Resultado del descubrimiento: los pares vistos (ya sin uno mismo).
+    PeersFound(Vec<PeerInfo>),
+    /// Jala el cuaderno del par en esta dirección TCP.
+    FetchFrom(String),
+    /// Descarta la lista de pares sin jalar nada.
+    CancelPeers,
+    /// Resultado async de un fetch: el sobre recibido o un error.
     Received(Result<SignedBundle, String>),
 }
 
@@ -213,6 +230,9 @@ struct Model {
     /// `true` cuando ya hay un servidor TCP sirviendo el cuaderno. Evita
     /// rebindear el puerto si se pulsa «publicar» dos veces.
     publishing: bool,
+    /// Pares descubiertos pendientes de elegir. No vacío ⇒ el panel
+    /// izquierdo muestra la lista de pares en vez de las notas.
+    peers: Vec<PeerInfo>,
 }
 
 struct KhipuApp;
@@ -301,34 +321,62 @@ impl App for KhipuApp {
                 model.status = Some(start_publishing(&mut model));
             }
             Msg::Receive => {
-                let peer = peer_addr();
                 let my_key = model.keypair.as_ref().map(|k| k.public_key());
                 model.status = Some("buscando pares en la LAN…".into());
-                // La red bloquea: descubrir + jalar van en un worker y
-                // reentramos con el resultado para no congelar la UI.
+                // El descubrimiento bloquea ~3s: va a un worker y reentra
+                // con la lista de pares (ya sin uno mismo).
                 h.spawn(move || {
-                    // Descubrir por LAN; jalar del primer par ajeno hallado.
-                    // Si nadie anuncia, caer al par explícito (KHIPU_PEER).
-                    let elegido = khipu_share::discovery::descubrir(
+                    let pares = khipu_share::discovery::descubrir(
                         std::time::Duration::from_secs(3),
                     )
-                    .ok()
-                    .and_then(|pares| {
-                        pares
-                            .into_iter()
-                            .find(|p| Some(p.beacon.author) != my_key)
-                            .map(|p| p.fetch_addr.to_string())
-                    });
-                    let destino = elegido.unwrap_or(peer);
-                    match khipu_share::net::fetch(&destino) {
-                        Ok(sobre) => Msg::Received(Ok(sobre)),
-                        Err(e) => {
-                            Msg::Received(Err(format!("no se pudo recibir de {destino}: {e}")))
-                        }
-                    }
+                    .unwrap_or_default();
+                    let infos: Vec<PeerInfo> = pares
+                        .into_iter()
+                        .filter(|p| Some(p.beacon.author) != my_key)
+                        .map(|p| PeerInfo {
+                            addr: p.fetch_addr.to_string(),
+                            label: format!(
+                                "{} · de:{} · {}",
+                                p.beacon.name,
+                                khipu_share::hex8(&p.beacon.author),
+                                p.fetch_addr
+                            ),
+                        })
+                        .collect();
+                    Msg::PeersFound(infos)
                 });
             }
+            Msg::PeersFound(peers) => {
+                if peers.is_empty() {
+                    // Nadie anunció: caer al par explícito (KHIPU_PEER).
+                    let peer = peer_addr();
+                    model.status = Some(format!("ningún par en la LAN; probando {peer}…"));
+                    h.spawn(move || match khipu_share::net::fetch(&peer) {
+                        Ok(s) => Msg::Received(Ok(s)),
+                        Err(e) => Msg::Received(Err(format!("no se pudo recibir de {peer}: {e}"))),
+                    });
+                } else {
+                    // Dejamos que el usuario elija de quién jalar — el panel
+                    // izquierdo pasa a mostrar la lista de pares.
+                    model.status = Some(format!("{} pares en la red — elegí uno", peers.len()));
+                    model.peers = peers;
+                }
+            }
+            Msg::FetchFrom(addr) => {
+                model.peers.clear();
+                model.status = Some(format!("jalando de {addr}…"));
+                let destino = addr;
+                h.spawn(move || match khipu_share::net::fetch(&destino) {
+                    Ok(s) => Msg::Received(Ok(s)),
+                    Err(e) => Msg::Received(Err(format!("no se pudo recibir de {destino}: {e}"))),
+                });
+            }
+            Msg::CancelPeers => {
+                model.peers.clear();
+                model.status = Some("descarté la lista de pares".into());
+            }
             Msg::Received(res) => {
+                model.peers.clear();
                 model.status = Some(match res {
                     Ok(sobre) => match khipu_share::open(&sobre) {
                         Ok(bundle) => {
@@ -422,7 +470,13 @@ impl App for KhipuApp {
         let editor_palette = EditorPalette::from_theme(&model.theme);
 
         let header = header_view(model);
-        let list = list_panel(model, &palette, &input_palette);
+        // Mientras hay pares pendientes de elegir, el panel izquierdo
+        // muestra la lista de pares en vez de las notas.
+        let list = if model.peers.is_empty() {
+            list_panel(model, &palette, &input_palette)
+        } else {
+            peers_panel(model, &palette)
+        };
         let editor = editor_panel(model, &input_palette, &editor_palette);
         let gravity = gravity_panel(model);
 
@@ -757,6 +811,80 @@ fn list_panel(
         ..Default::default()
     })
     .children(vec![search_row, list_wrap])
+}
+
+/// Panel izquierdo en modo "elegir par": una fila por par descubierto
+/// (click ⇒ jalar de él) y un botón para descartar la lista. Reemplaza
+/// transitoriamente la lista de notas.
+fn peers_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
+    let rows: Vec<ListRow<Msg>> = model
+        .peers
+        .iter()
+        .map(|p| ListRow {
+            label: p.label.clone(),
+            selected: false,
+            on_click: Msg::FetchFrom(p.addr.clone()),
+        })
+        .collect();
+
+    let spec = ListSpec {
+        total: rows.len(),
+        rows,
+        caption: Some(format!("pares en la red · {} (click para jalar)", model.peers.len())),
+        truncated_hint: None,
+        row_height: ROW_H,
+        palette: *palette,
+    };
+
+    let cancel = button(
+        "cancelar",
+        model.theme.bg_button,
+        model.theme.fg_muted,
+        Msg::CancelPeers,
+    );
+    let cancel_row = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(36.0_f32),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(model.theme.bg_panel_alt)
+    .children(vec![cancel]);
+
+    let list_wrap = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![list_view(spec)]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(LIST_WIDTH),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![cancel_row, list_wrap])
 }
 
 /// Coincidencia sobre título, cuerpo y etiquetas. Case-insensitive.
@@ -1653,6 +1781,7 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         keypair: None,
         status: None,
         publishing: false,
+        peers: Vec::new(),
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -1703,6 +1832,7 @@ fn seeded_model(embedder: Embedder) -> Model {
         keypair: None,
         status: None,
         publishing: false,
+        peers: Vec::new(),
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [
