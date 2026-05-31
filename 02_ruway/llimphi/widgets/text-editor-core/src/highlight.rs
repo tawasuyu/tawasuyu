@@ -10,7 +10,7 @@
 //!   strings, números, keywords típicos del subset MVP).
 //! - **Plain**: un solo span por línea con `TokenKind::Other`.
 
-use llimphi_ui::llimphi_raster::peniko::Color;
+use peniko::Color;
 
 /// Lenguajes soportados — la matriz se extiende sumando un variant +
 /// una rama en [`Highlighter::tokenize_line`].
@@ -89,29 +89,12 @@ impl SyntaxPalette {
             TokenKind::Other => self.other,
         }
     }
-
-    /// Paleta dark sobria — derivada del `Theme::dark` + colores
-    /// hardcoded para las categorías que el theme no tiene como
-    /// semánticas (string, number, comment, keyword).
-    pub fn dark_default(theme: &llimphi_theme::Theme) -> Self {
-        // Helper: color rgb opaco.
-        fn rgb(r: u8, g: u8, b: u8) -> Color {
-            Color::from_rgb8(r, g, b)
-        }
-        Self {
-            keyword: rgb(198, 120, 221),     // morado: keywords
-            typ: rgb(229, 192, 123),         // amarillo cálido: tipos
-            function: rgb(97, 175, 239),     // azul: funciones
-            string: rgb(152, 195, 121),      // verde: strings
-            number: rgb(209, 154, 102),      // naranja: números
-            comment: theme.fg_muted,          // muted: comentarios
-            operator: theme.fg_text,
-            punctuation: theme.fg_muted,
-            identifier: theme.fg_text,
-            other: theme.fg_text,
-        }
-    }
 }
+
+// El constructor `dark_default(theme)` — única pieza que dependía de
+// `llimphi_theme` — vive ahora en `llimphi-widget-text-editor`
+// (`syntax_palette_dark`), para que este núcleo no arrastre el stack de
+// render. Aquí queda sólo el modelo de color puro (peniko::Color).
 
 // Pool thread-local de parsers tree-sitter. Reconstruir el parser
 // (con `set_language`) es caro; reusarlo entre highlights del mismo
@@ -122,11 +105,11 @@ thread_local! {
     static PARSER_POOL: std::cell::RefCell<std::collections::HashMap<Language, tree_sitter::Parser>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
     /// Cache del último árbol parseado por lenguaje. Se pasa como hint
-    /// al siguiente `parse(source, Some(&old_tree))` — tree-sitter
-    /// puede aprovechar partes del árbol viejo aunque no apliquemos
-    /// InputEdits explícitos (lo cual sería el "verdadero incremental";
-    /// queda pendiente como TODO). Este cache ya ayuda en parsers que
-    /// re-usan subtrees por valor de hash.
+    /// al siguiente `parse(source, Some(&old_tree))`. El "verdadero
+    /// incremental" (aplicar `InputEdit`s al tree antes de reparsear)
+    /// ya está cableado: `EditorState` acumula los edits por delta y
+    /// llama a [`apply_pending_edits`] antes de cada highlight, de modo
+    /// que tree-sitter sólo reconstruye los subtrees afectados.
     static TREE_CACHE: std::cell::RefCell<std::collections::HashMap<Language, tree_sitter::Tree>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
 }

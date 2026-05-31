@@ -177,8 +177,11 @@ impl Theme {
         }
     }
 
-    /// Tema claro — pendiente de pulir contraste cuando llegue una app
-    /// que lo pida. Calculado por inversión parcial del dark.
+    /// Tema claro — contraste revisado para WCAG AA sobre `bg_app`:
+    /// `fg_text` ~12:1, `fg_muted` ~5.4:1 (texto secundario legible),
+    /// `fg_destructive` y `accent` oscurecidos para superar 4.5:1 sobre
+    /// fondos claros. `fg_placeholder` queda deliberadamente tenue
+    /// (hint, no contenido).
     pub const fn light() -> Self {
         Self {
             name: "Light",
@@ -191,13 +194,13 @@ impl Theme {
             bg_button_hover: Color::from_rgba8(200, 210, 226, 255),
             bg_selected: Color::from_rgba8(160, 180, 220, 255),
             bg_row_hover: Color::from_rgba8(214, 222, 236, 255),
-            fg_text: Color::from_rgba8(28, 36, 50, 255),
-            fg_muted: Color::from_rgba8(100, 112, 130, 255),
-            fg_placeholder: Color::from_rgba8(150, 160, 178, 255),
-            fg_destructive: Color::from_rgba8(180, 60, 60, 255),
-            border: Color::from_rgba8(196, 204, 218, 255),
-            border_focus: Color::from_rgba8(60, 100, 200, 255),
-            accent: Color::from_rgba8(60, 100, 200, 255),
+            fg_text: Color::from_rgba8(24, 32, 45, 255),
+            fg_muted: Color::from_rgba8(86, 98, 116, 255),
+            fg_placeholder: Color::from_rgba8(140, 150, 168, 255),
+            fg_destructive: Color::from_rgba8(168, 48, 48, 255),
+            border: Color::from_rgba8(190, 199, 214, 255),
+            border_focus: Color::from_rgba8(48, 92, 196, 255),
+            accent: Color::from_rgba8(48, 92, 196, 255),
         }
     }
 

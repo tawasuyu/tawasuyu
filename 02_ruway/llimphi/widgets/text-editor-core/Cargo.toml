@@ -1,0 +1,18 @@
+[package]
+name = "llimphi-widget-text-editor-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-text-editor-core — núcleo agnóstico del editor de código: rope buffer (ropey), cursor + selección, undo/redo, bracket matching, find, diagnostics y syntax highlighting (tree-sitter). Sin dependencias de render — reutilizable en TUI/web/headless. La capa Llimphi (state + view) vive en `llimphi-widget-text-editor`."
+
+[dependencies]
+ropey = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-python = { workspace = true }
+# peniko sólo aporta el tipo de color (peniko::Color) para SyntaxPalette;
+# es un crate de tipos sin GPU — no arrastra wgpu/vello. Versión alineada
+# con la que expone vello 0.5 (ver workspace root).
+peniko = "0.4"

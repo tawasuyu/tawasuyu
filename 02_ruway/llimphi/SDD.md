@@ -110,7 +110,8 @@ Apps actualmente en GPUI que deben portarse:
   - **Paint-order fix:** `mount_recursive` registraba en post-orden y el background del root tapaba a los hijos. Ahora pre-orden depth-first.
   - **Parley:** llimphi-text reescrito sobre parley. API nueva: `Typesetter` (cachea FontContext + LayoutContext), `TextBlock { text, size_px, color, origin, max_width, alignment, line_height }`, `Alignment { Start, Center, End, Justify }`, `measure(&mut ts, &block)`. Bidi + ligatures + fallback CJK/emoji vía fontique. `hello_text` muestra título + párrafo justificado con script mixto Latin/Arabic/CJK.
 - **2026-05-25 (cierre+1):** teclado en `llimphi-ui`. `App` gana `fn on_key(model, &KeyEvent) -> Option<Msg>` con default `None`. Re-export `Key` y `NamedKey` de winit. Runtime mantiene `Modifiers` state vía `ModifiersChanged`. `TextSpec` gana `alignment` (default `Center`, los labels de botón siguen igual) + `View::text_aligned(...)`. Example nuevo `editor`: text field con char insertion, backspace, enter, tab→4-spaces, ctrl+L limpia.
-- **Próximo:** migración GPUI → Llimphi (Pluma editor primero, valida text editing real).
+- **2026-05-26:** migración GPUI → Llimphi **completada**. GPUI queda extinto: toda app gráfica de la suite (pluma, mirada, cosmos, dominium, nahual, iniy, khipu, chasqui…) corre sobre Llimphi. No se agrega código nuevo sobre GPUI (ver regla dura §3 de `CLAUDE.md`).
+- **2026-05-31:** split de `llimphi-widget-text-editor` (4328 LOC) → núcleo agnóstico `llimphi-widget-text-editor-core` (buffer/cursor/ops/undo/bracket/find/diagnostics/clipboard/highlight, sin render: sólo `peniko::Color`) + widget Llimphi (state + view) que lo re-exporta. Núcleo reutilizable en TUI/web/headless. `LayoutTree::clear()` para reusar el árbol taffy entre frames (`llimphi-layout`).
 
 ## Roadmap — GPU directo wgpu (sin vello)
 

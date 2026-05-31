@@ -42,6 +42,8 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             cursor: PhysicalPosition::new(0.0, 0.0),
             modifiers: Modifiers::default(),
             typesetter,
+            layout: LayoutTree::new(),
+            overlay_layout: LayoutTree::new(),
             last_render: None,
             drag: None,
         });
@@ -485,18 +487,22 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 let model_ref = state.model.as_ref().expect("model");
                 let view = A::view(model_ref);
                 let overlay_view = A::view_overlay(model_ref);
-                let mut layout = LayoutTree::new();
-                let mounted: Mounted<A::Msg> = mount(&mut layout, view);
-                let computed = layout
+                // Reusamos los árboles de layout del runtime: `clear()` +
+                // `mount` evita re-allocar el slotmap de taffy por frame.
+                state.layout.clear();
+                let mounted: Mounted<A::Msg> = mount(&mut state.layout, view);
+                let computed = state
+                    .layout
                     .compute(mounted.root, (w as f32, h as f32))
                     .expect("layout");
                 // Mount + layout del overlay en un árbol aparte. Lo
                 // computamos con el mismo tamaño de viewport para que
                 // un scrim a percent(1.0) cubra toda la pantalla.
-                let overlay_built = overlay_view.map(|v| {
-                    let mut olayout = LayoutTree::new();
-                    let omounted: Mounted<A::Msg> = mount(&mut olayout, v);
-                    let ocomputed = olayout
+                let overlay_built = if let Some(v) = overlay_view {
+                    state.overlay_layout.clear();
+                    let omounted: Mounted<A::Msg> = mount(&mut state.overlay_layout, v);
+                    let ocomputed = state
+                        .overlay_layout
                         .compute(omounted.root, (w as f32, h as f32))
                         .expect("layout overlay");
                     let ohover = hit_test_hover(
@@ -505,12 +511,14 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         state.cursor.x as f32,
                         state.cursor.y as f32,
                     );
-                    OverlayCache {
+                    Some(OverlayCache {
                         mounted: omounted,
                         computed: ocomputed,
                         hover_idx: ohover,
-                    }
-                });
+                    })
+                } else {
+                    None
+                };
                 // Hover en el main solo si NO hay overlay — durante un
                 // menú abierto, el fondo no debe reaccionar al ratón.
                 let hover_idx = if overlay_built.is_some() {

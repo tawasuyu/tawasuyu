@@ -555,6 +555,12 @@ struct RuntimeState<A: App> {
     cursor: PhysicalPosition<f64>,
     modifiers: Modifiers,
     typesetter: llimphi_text::Typesetter,
+    /// Árboles de layout reusados entre frames: `clear()` + `mount` en
+    /// vez de re-allocar el slotmap de taffy en cada redraw. Uno para el
+    /// árbol principal, otro para el overlay (sus `NodeId` no deben
+    /// colisionar dentro del mismo frame).
+    layout: LayoutTree,
+    overlay_layout: LayoutTree,
     /// Último frame renderizado: árbol montado + rects absolutos +
     /// nodo con hover. Lo consume el handler de click para hit-testear
     /// sin reconstruir `view` + layout, y CursorMoved para detectar si

@@ -65,6 +65,16 @@ impl LayoutTree {
         }
     }
 
+    /// Vacía el árbol conservando la capacidad ya asignada. Permite
+    /// reusar la misma `LayoutTree` entre frames sin re-allocar el
+    /// slotmap interno de taffy: `clear()` + `mount` en vez de
+    /// `LayoutTree::new()` por frame. Los `NodeId` emitidos antes de
+    /// `clear()` quedan inválidos (el caller ya volcó lo que necesitaba
+    /// a un `ComputedLayout`, que es dueño de sus rects).
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+
     /// Crea una hoja (nodo sin hijos).
     pub fn leaf(&mut self, style: Style) -> Result<NodeId, LayoutError> {
         self.inner

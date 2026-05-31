@@ -255,7 +255,7 @@ pub fn text_editor_view_full<Msg: Clone + 'static>(
     on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
     let caret = state.cursor.caret;
-    let syntax = SyntaxPalette::dark_default(&llimphi_theme::Theme::dark());
+    let syntax = crate::syntax_palette_dark(&llimphi_theme::Theme::dark());
 
     let visible = visible_lines.max(1).min(200);
     let line_count = state.line_count();
