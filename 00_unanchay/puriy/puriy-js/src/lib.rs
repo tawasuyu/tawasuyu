@@ -12780,4 +12780,64 @@ mod tests {
         assert_eq!(rt.eval("GPUShaderStage.FRAGMENT").expect("e"), JsValue::Number(2.0));
         assert_eq!(rt.eval("GPUMapMode.READ").expect("e"), JsValue::Number(1.0));
     }
+
+    // ---- Fase 7.158 — WebXR Device API ----
+    #[test]
+    fn webxr_navigator_xr_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("navigator.xr != null && typeof navigator.xr.requestSession === 'function'").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webxr_is_session_supported() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var r = {};
+            navigator.xr.isSessionSupported('inline').then(function(v){ r.inline = v; });
+            navigator.xr.isSessionSupported('immersive-vr').then(function(v){ r.vr = v; });").expect("e");
+        assert_eq!(rt.eval("r.inline").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("r.vr").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn webxr_request_session_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var sess = null; var ended = false;
+            navigator.xr.requestSession('inline').then(function(s){ sess = s; });
+            var ks = Object.keys(__puriy_xr_pending); __puriy_xr_session_resolve(ks[ks.length - 1]);").expect("e");
+        assert_eq!(rt.eval("sess !== null && typeof sess.requestAnimationFrame === 'function'").expect("e"), JsValue::Bool(true));
+        // end() dispara onend.
+        rt.eval("sess.onend = function(){ ended = true; }; sess.end();").expect("e");
+        assert_eq!(rt.eval("ended").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webxr_request_session_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var err = null;
+            navigator.xr.requestSession('immersive-vr').catch(function(e){ err = String(e); });
+            var ks = Object.keys(__puriy_xr_pending); __puriy_xr_session_reject(ks[ks.length - 1], 'NotSupportedError');").expect("e");
+        assert_eq!(rt.eval("err !== null").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webxr_session_raf_y_frame() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var sess = null;
+            navigator.xr.requestSession('inline').then(function(s){ sess = s; });
+            var ks = Object.keys(__puriy_xr_pending); __puriy_xr_session_resolve(ks[ks.length - 1]);").expect("e");
+        rt.eval("var views = -1;
+            sess.requestAnimationFrame(function(time, frame){ views = frame.getViewerPose({}).views.length; });
+            __puriy_xr_frame(sess._id, 16);").expect("e");
+        assert_eq!(rt.eval("views").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn webxr_rigid_transform_matrix_es_float32() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var t = new XRRigidTransform({ x: 1, y: 2, z: 3 }, { x: 0, y: 0, z: 0, w: 1 });").expect("e");
+        assert_eq!(rt.eval("t.matrix instanceof Float32Array && t.matrix.length === 16").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("t.matrix[12] === 1 && t.matrix[13] === 2 && t.matrix[14] === 3").expect("e"), JsValue::Bool(true));
+        // inverse vía DOMMatrix (Fase 7.153): traslación inversa.
+        assert_eq!(rt.eval("Math.abs(t.inverse.matrix[12] + 1) < 1e-6").expect("e"), JsValue::Bool(true));
+    }
 }
