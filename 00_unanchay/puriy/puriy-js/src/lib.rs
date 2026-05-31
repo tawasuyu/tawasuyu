@@ -513,6 +513,13 @@ impl JsRuntime {
             b = js_string_literal(body_text),
         );
         self.eval_raw(&script)?;
+        // createEvent vive como hook instalable (bootstrap create_event.rs);
+        // como acá reemplazamos `document` por un objeto nuevo, re-montamos el
+        // factory legacy sobre él. Idempotente y guardado.
+        self.eval_raw(
+            "if (typeof globalThis.__puriy_install_create_event === 'function') { \
+                globalThis.__puriy_install_create_event(globalThis.document); }",
+        )?;
         Ok(())
     }
 
@@ -13271,5 +13278,134 @@ mod tests {
             h = navigator.virtualKeyboard.boundingRect.height; }; \
             __puriy_virtual_keyboard_geometry(0, 500, 360, 260);").expect("e");
         assert_eq!(rt.eval("h").expect("e"), JsValue::Number(260.0));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Sistema de eventos DOM reunido desde el frente `events`.
+    // ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn evt_subtipos_ui_construyen_y_heredan() {
+        // KeyboardEvent: key + keyCode derivado (US layout: 'a' → 65).
+        assert_eq!(
+            eval("new KeyboardEvent('keydown', {key:'a'}).keyCode"),
+            JsValue::Number(65.0)
+        );
+        assert_eq!(
+            eval("new KeyboardEvent('keydown', {key:'Enter'}).keyCode"),
+            JsValue::Number(13.0)
+        );
+        // MouseEvent: clientX + cadena de herencia UIEvent → Event.
+        assert_eq!(eval("new MouseEvent('click', {clientX:42}).clientX"), JsValue::Number(42.0));
+        assert_eq!(eval("(new MouseEvent('click')) instanceof UIEvent"), JsValue::Bool(true));
+        assert_eq!(eval("(new MouseEvent('click')) instanceof Event"), JsValue::Bool(true));
+        // UIEvent.detail, FocusEvent, InputEvent.data, WheelEvent.deltaY.
+        assert_eq!(eval("new UIEvent('x', {detail:3}).detail"), JsValue::Number(3.0));
+        assert_eq!(eval("(new FocusEvent('focus')) instanceof UIEvent"), JsValue::Bool(true));
+        match eval("new InputEvent('input', {data:'z'}).data") {
+            JsValue::String(s) => assert_eq!(s, "z"),
+            o => panic!("InputEvent.data: {o:?}"),
+        }
+        assert_eq!(eval("new WheelEvent('wheel', {deltaY:7}).deltaY"), JsValue::Number(7.0));
+    }
+
+    #[test]
+    fn evt_pointer_y_touch() {
+        assert_eq!(eval("new PointerEvent('pointerdown', {pointerId:5}).pointerId"), JsValue::Number(5.0));
+        match eval("new PointerEvent('pointerdown', {pointerType:'pen'}).pointerType") {
+            JsValue::String(s) => assert_eq!(s, "pen"),
+            o => panic!("pointerType: {o:?}"),
+        }
+        // TouchEvent con lista de toques.
+        assert_eq!(
+            eval("new TouchEvent('touchstart', {touches:[{clientX:1},{clientX:2}]}).touches.length"),
+            JsValue::Number(2.0)
+        );
+    }
+
+    #[test]
+    fn evt_lifecycle_y_form() {
+        match eval("new HashChangeEvent('hashchange', {newURL:'http://x/#a'}).newURL") {
+            JsValue::String(s) => assert_eq!(s, "http://x/#a"),
+            o => panic!("newURL: {o:?}"),
+        }
+        assert_eq!(eval("new PopStateEvent('popstate', {state:{n:1}}).state.n"), JsValue::Number(1.0));
+        match eval("new AnimationEvent('animationend', {animationName:'spin'}).animationName") {
+            JsValue::String(s) => assert_eq!(s, "spin"),
+            o => panic!("animationName: {o:?}"),
+        }
+        match eval("new TransitionEvent('transitionend', {propertyName:'opacity'}).propertyName") {
+            JsValue::String(s) => assert_eq!(s, "opacity"),
+            o => panic!("propertyName: {o:?}"),
+        }
+        // SubmitEvent.submitter (verbatim del init).
+        assert_eq!(eval("new SubmitEvent('submit', {submitter:{tag:'button'}}).submitter.tag === 'button'"), JsValue::Bool(true));
+        // FormDataEvent (form_events) construye.
+        assert_eq!(eval("typeof FormDataEvent === 'function'"), JsValue::Bool(true));
+        assert_eq!(eval("typeof BeforeUnloadEvent === 'function'"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn evt_storage_event_de_net_sigue_intacto() {
+        // No debe ser pisado por el lifecycle_events portado (le quitamos su
+        // StorageEvent justamente para preservar el de net + su dispatch).
+        match eval("new StorageEvent('storage', {key:'k', newValue:'v'}).key") {
+            JsValue::String(s) => assert_eq!(s, "k"),
+            o => panic!("StorageEvent.key: {o:?}"),
+        }
+    }
+
+    #[test]
+    fn evt_transfer_drag_y_clipboard() {
+        assert_eq!(eval("typeof DragEvent === 'function'"), JsValue::Bool(true));
+        assert_eq!(eval("typeof ClipboardEvent === 'function'"), JsValue::Bool(true));
+        assert_eq!(eval("typeof DataTransfer === 'function'"), JsValue::Bool(true));
+        // DragEvent hereda de MouseEvent (coordenadas).
+        assert_eq!(eval("(new DragEvent('drop')) instanceof MouseEvent"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn evt_base_completa_event() {
+        // Constantes de fase.
+        assert_eq!(eval("Event.AT_TARGET"), JsValue::Number(2.0));
+        assert_eq!(eval("Event.BUBBLING_PHASE"), JsValue::Number(3.0));
+        // isTrusted siempre false en eventos sintéticos.
+        assert_eq!(eval("new Event('x').isTrusted"), JsValue::Bool(false));
+        // composedPath() existe y devuelve array.
+        assert_eq!(eval("Array.isArray(new Event('x').composedPath())"), JsValue::Bool(true));
+        // initEvent legacy.
+        assert_eq!(eval("var e = new Event(''); e.initEvent('go', true, false); e.type === 'go' && e.bubbles"), JsValue::Bool(true));
+        // cancelBubble ↔ _stopped.
+        assert_eq!(eval("var e = new Event('x'); e.cancelBubble = true; e.cancelBubble"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn evt_custom_elements_registry() {
+        assert_eq!(
+            eval("function C(){}; customElements.define('mi-tag', C); customElements.get('mi-tag') === C"),
+            JsValue::Bool(true)
+        );
+        // Nombre inválido (sin guion) debe tirar.
+        assert_eq!(
+            eval("var ok=false; try{ customElements.define('notag', function(){}); }catch(e){ ok=true; } ok"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn evt_apis_dom_de_interaccion_presentes() {
+        assert_eq!(eval("typeof document.createTreeWalker === 'function'"), JsValue::Bool(true));
+        assert_eq!(eval("typeof NodeFilter === 'object' || typeof NodeFilter === 'function'"), JsValue::Bool(true));
+        assert_eq!(eval("typeof XMLSerializer === 'function'"), JsValue::Bool(true));
+        assert_eq!(eval("typeof getSelection === 'function'"), JsValue::Bool(true));
+        assert_eq!(eval("typeof visualViewport === 'object' && visualViewport.width > 0"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn evt_create_event_legacy() {
+        assert_eq!(
+            eval("var e = document.createEvent('Event'); e.initEvent('boom', true, true); e.type === 'boom' && e.bubbles && e.cancelable"),
+            JsValue::Bool(true)
+        );
     }
 }

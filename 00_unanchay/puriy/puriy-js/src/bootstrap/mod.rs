@@ -128,6 +128,22 @@ mod shapedetection;
 mod editcontext;
 mod virtualkeyboard;
 mod computed_style;
+// Sistema de eventos DOM reunido desde el frente `events` (subtipos tipados,
+// custom elements, tree walker, serializer, selection, viewport).
+mod keycode_table;
+mod ui_events;
+mod keyboard_events;
+mod pointer_touch;
+mod lifecycle_events;
+mod form_events;
+mod transfer_events;
+mod custom_elements;
+mod tree_walker;
+mod xml_serializer;
+mod selection;
+mod visual_viewport;
+mod event_base;
+mod create_event;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
 pub(crate) use console::CONSOLE_BOOTSTRAP;
@@ -255,6 +271,20 @@ pub(crate) use shapedetection::SHAPEDETECTION_BOOTSTRAP;
 pub(crate) use editcontext::EDITCONTEXT_BOOTSTRAP;
 pub(crate) use virtualkeyboard::VIRTUALKEYBOARD_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
+pub(crate) use keycode_table::KEYCODE_TABLE_BOOTSTRAP;
+pub(crate) use ui_events::UI_EVENTS_BOOTSTRAP;
+pub(crate) use keyboard_events::KEYBOARD_EVENTS_BOOTSTRAP;
+pub(crate) use pointer_touch::POINTER_TOUCH_BOOTSTRAP;
+pub(crate) use lifecycle_events::LIFECYCLE_EVENTS_BOOTSTRAP;
+pub(crate) use form_events::FORM_EVENTS_BOOTSTRAP;
+pub(crate) use transfer_events::TRANSFER_EVENTS_BOOTSTRAP;
+pub(crate) use custom_elements::CUSTOM_ELEMENTS_BOOTSTRAP;
+pub(crate) use tree_walker::TREE_WALKER_BOOTSTRAP;
+pub(crate) use xml_serializer::XML_SERIALIZER_BOOTSTRAP;
+pub(crate) use selection::SELECTION_BOOTSTRAP;
+pub(crate) use visual_viewport::VISUAL_VIEWPORT_BOOTSTRAP;
+pub(crate) use event_base::EVENT_BASE_BOOTSTRAP;
+pub(crate) use create_event::CREATE_EVENT_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
 pub(crate) const ALL: &[&str] = &[
@@ -384,4 +414,22 @@ pub(crate) const ALL: &[&str] = &[
     EDITCONTEXT_BOOTSTRAP,
     VIRTUALKEYBOARD_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
+    // ── Sistema de eventos DOM (reunido desde `events`) ──
+    // Orden: tabla de keycodes → subtipos tipados → DOM APIs → event_base
+    // (re-parenta los stragglers tras definirlos) → create_event (último,
+    // depende de todos los constructores tipados).
+    KEYCODE_TABLE_BOOTSTRAP,
+    UI_EVENTS_BOOTSTRAP,
+    KEYBOARD_EVENTS_BOOTSTRAP,
+    POINTER_TOUCH_BOOTSTRAP,
+    LIFECYCLE_EVENTS_BOOTSTRAP,
+    FORM_EVENTS_BOOTSTRAP,
+    TRANSFER_EVENTS_BOOTSTRAP,
+    CUSTOM_ELEMENTS_BOOTSTRAP,
+    TREE_WALKER_BOOTSTRAP,
+    XML_SERIALIZER_BOOTSTRAP,
+    SELECTION_BOOTSTRAP,
+    VISUAL_VIEWPORT_BOOTSTRAP,
+    EVENT_BASE_BOOTSTRAP,
+    CREATE_EVENT_BOOTSTRAP,
 ];
