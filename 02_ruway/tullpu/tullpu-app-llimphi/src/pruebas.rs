@@ -74,6 +74,8 @@
             gradiente_drag: None,
             portapapeles: None,
             editando_mascara: false,
+            valor_mascara: 255,
+            thumbs_mascara: HashMap::new(),
             curva_arrastrando: None,
         }
     }
@@ -4970,6 +4972,111 @@
         assert_eq!(buf[1 * 3 + 1], 200);
         // Los vecinos no se tocan con radio 0.
         assert_eq!(buf[0], 0);
+    }
+
+    // === Fase 54: valor de gris arbitrario + thumb de máscara ===
+
+    #[test]
+    fn valor_mascara_default_es_255() {
+        // El default calca fase 53 (pincel revela del todo).
+        let model = modelo_minimo();
+        assert_eq!(model.valor_mascara, 255);
+    }
+
+    #[test]
+    fn bump_valor_mascara_clampa() {
+        let mut model = modelo_minimo();
+        model.valor_mascara = 128;
+        model = <Tullpu as App>::update(model, Msg::BumpValorMascara(-200), &Handle::for_test());
+        assert_eq!(model.valor_mascara, 0, "no baja de 0");
+        model = <Tullpu as App>::update(model, Msg::BumpValorMascara(300), &Handle::for_test());
+        assert_eq!(model.valor_mascara, 255, "no sube de 255");
+        model = <Tullpu as App>::update(model, Msg::BumpValorMascara(-100), &Handle::for_test());
+        assert_eq!(model.valor_mascara, 155, "delta intermedio");
+    }
+
+    #[test]
+    fn pincel_mascara_escribe_valor_gris_arbitrario() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(agregar_mascara(&mut model)); // blanca (255)
+        assert!(invertir_mascara(&mut model)); // todo 0, para ver el cambio
+        model.editando_mascara = true;
+        // Gris parcial: 100 (no 0/255).
+        model.valor_mascara = 100;
+        assert!(pincel_punto_en_capa(&mut model, 1, 1, 0, false, 1.0, Simetria::Ninguna));
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        let w = model.lienzo.width as usize;
+        assert_eq!(buf[1 * w + 1], 100, "el pincel escribe el gris elegido");
+        assert_eq!(buf[0], 0, "el resto no se toca");
+    }
+
+    #[test]
+    fn borrador_mascara_ignora_valor_y_oculta() {
+        // El borrador siempre apunta a 0 aunque valor_mascara sea alto.
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(agregar_mascara(&mut model)); // blanca (255)
+        model.editando_mascara = true;
+        model.valor_mascara = 200;
+        assert!(pincel_punto_en_capa(&mut model, 2, 2, 0, true, 1.0, Simetria::Ninguna));
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        let w = model.lienzo.width as usize;
+        assert_eq!(buf[2 * w + 2], 0, "borrador oculta sin importar valor_mascara");
+    }
+
+    #[test]
+    fn balde_mascara_rellena_con_valor_gris() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(agregar_mascara(&mut model));
+        assert!(invertir_mascara(&mut model)); // todo 0
+        model.editando_mascara = true;
+        model.valor_mascara = 64;
+        assert!(rellenar_flood_en_capa(&mut model, 0, 0));
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        assert!(buf.iter().all(|&b| b == 64), "balde rellena al gris elegido");
+    }
+
+    #[test]
+    fn thumbnail_de_mascara_expande_gris_opaco() {
+        // Buffer de 1 canal del tamaño exacto del thumb (THUMB_LADO²): así
+        // `thumbnail` no reescala y la expansión a (v,v,v,255) es exacta.
+        let lado = THUMB_LADO;
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let hash = alm.insertar(vec![128u8; (lado * lado) as usize]);
+        let img = thumbnail_de_mascara(hash, lado, lado, &alm).expect("thumb");
+        assert_eq!((img.width, img.height), (lado, lado));
+        let data = img.data.data();
+        // Cada byte de la máscara se expande a gris medio opaco.
+        for px in data.chunks_exact(4) {
+            assert_eq!(px, &[128, 128, 128, 255]);
+        }
+    }
+
+    #[test]
+    fn thumbnail_de_mascara_rechaza_tamano_incorrecto() {
+        // Buffer que no mide w*h (4 bytes para 3×3 = 9) → None.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let hash = alm.insertar(vec![0u8; 4]);
+        assert!(thumbnail_de_mascara(hash, 3, 3, &alm).is_none());
+    }
+
+    #[test]
+    fn sincronizar_thumbs_cachea_la_mascara() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(agregar_mascara(&mut model));
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        sincronizar_thumbs(&mut model);
+        assert!(model.thumbs_mascara.contains_key(&mh), "thumb de máscara cacheado");
+        // Quitar la máscara y resync barre la entrada muerta.
+        assert!(quitar_mascara(&mut model));
+        sincronizar_thumbs(&mut model);
+        assert!(!model.thumbs_mascara.contains_key(&mh), "entrada muerta barrida");
     }
 
     #[test]

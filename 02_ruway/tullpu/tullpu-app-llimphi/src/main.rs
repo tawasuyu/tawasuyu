@@ -875,10 +875,18 @@ impl App for Tullpu {
             Msg::ToggleEditarMascara => {
                 model.editando_mascara = !model.editando_mascara;
                 model.estado = if model.editando_mascara {
-                    "editando máscara (pincel revela · borrador oculta)".into()
+                    format!(
+                        "editando máscara (pincel → {} · borrador oculta)",
+                        model.valor_mascara
+                    )
                 } else {
                     "editando contenido".into()
                 };
+            }
+            Msg::BumpValorMascara(delta) => {
+                let nuevo = (model.valor_mascara as i32 + delta).clamp(0, 255);
+                model.valor_mascara = nuevo as u8;
+                model.estado = format!("valor pincel máscara {} (gris)", model.valor_mascara);
             }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app

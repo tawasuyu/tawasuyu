@@ -225,6 +225,8 @@ pub(crate) fn inicializar() -> Model {
         gradiente_drag: None,
         portapapeles: None,
         editando_mascara: false,
+        valor_mascara: 255,
+        thumbs_mascara: HashMap::new(),
         curva_arrastrando: None,
     };
     sincronizar_thumbs(&mut model);

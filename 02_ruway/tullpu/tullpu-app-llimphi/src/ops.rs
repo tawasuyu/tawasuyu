@@ -996,15 +996,16 @@ pub(crate) fn rellenar_flood_en_capa(
     // En modo máscara, el balde rellena la región contigua de máscara a
     // 255 (revelar). Reusa `mascara_aplicar` (recompone sin propagar stale).
     if pintando_en_mascara(model) {
+        let valor = model.valor_mascara;
         let ok = mascara_aplicar(model, |buf, w, h, bounds| {
             if let Some(nuevo) =
-                flood_fill_mascara(buf, w, h, sx, sy, 255, TOL_BALDE, bounds)
+                flood_fill_mascara(buf, w, h, sx, sy, valor, TOL_BALDE, bounds)
             {
                 *buf = nuevo;
             }
         });
         if ok {
-            model.estado = format!("balde máscara @ ({}, {}) → revelar", sx, sy);
+            model.estado = format!("balde máscara @ ({}, {}) → {valor}", sx, sy);
         } else {
             model.estado = "balde máscara: nada que rellenar".into();
         }
@@ -1231,7 +1232,7 @@ pub(crate) fn pincel_punto_en_capa(
     sim: Simetria,
 ) -> bool {
     if pintando_en_mascara(model) {
-        let valor = if borrar { 0u8 } else { 255u8 };
+        let valor = if borrar { 0u8 } else { model.valor_mascara };
         return mascara_aplicar(model, |buf, w, h, bounds| {
             for eje in ejes_simetria(sim) {
                 let (x, y) = aplicar_eje(cx, cy, w, h, eje);
@@ -1264,7 +1265,7 @@ pub(crate) fn pincel_segmento_en_capa(
     sim: Simetria,
 ) -> bool {
     if pintando_en_mascara(model) {
-        let valor = if borrar { 0u8 } else { 255u8 };
+        let valor = if borrar { 0u8 } else { model.valor_mascara };
         return mascara_aplicar(model, |buf, w, h, bounds| {
             for eje in ejes_simetria(sim) {
                 let (ax, ay) = aplicar_eje(x0, y0, w, h, eje);
@@ -1344,10 +1345,12 @@ pub(crate) fn rellenar_gradiente_en_capa(
     by: f32,
 ) -> bool {
     if pintando_en_mascara(model) {
-        // Degradé sobre máscara: revela (255) en el ancla, se desvanece
-        // hacia el extremo. Para un degradé que oculta, invertí la máscara.
+        // Degradé sobre máscara: revela (valor_mascara) en el ancla, se
+        // desvanece hacia el extremo. Para un degradé que oculta, invertí
+        // la máscara.
+        let valor = model.valor_mascara;
         return mascara_aplicar(model, |buf, w, h, bounds| {
-            *buf = rellenar_gradiente_mascara(buf, w, h, ax, ay, bx, by, 255, bounds);
+            *buf = rellenar_gradiente_mascara(buf, w, h, ax, ay, bx, by, valor, bounds);
         });
     }
     pincel_aplicar(model, |buf, w, h, color, bounds| {

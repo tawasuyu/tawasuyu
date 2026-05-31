@@ -80,6 +80,7 @@ pub(crate) fn fila_capa(
     capa: &Capa,
     seleccionada: bool,
     thumb: Option<&Image>,
+    thumb_mascara: Option<&Image>,
     renombrando_input: Option<&TextInputState>,
 ) -> View<Msg> {
     let btn_pal = ButtonPalette::from_theme(theme);
@@ -236,6 +237,34 @@ pub(crate) fn fila_capa(
         .fill(theme.bg_panel_alt),
     };
 
+    // Thumb de la máscara: aparece sólo si la capa tiene una. Es más
+    // angosto (16 px) — es un acompañante del thumb de contenido, no un
+    // par. El 🎭 del nombre ya delata la presencia; esto muestra su forma.
+    let thumb_mascara_view: Option<View<Msg>> = thumb_mascara.map(|img| {
+        View::new(Style {
+            size: Size {
+                width: length(16.0_f32),
+                height: length(24.0_f32),
+            },
+            padding: Rect {
+                left: length(0.0_f32),
+                right: length(3.0_f32),
+                top: length(1.0_f32),
+                bottom: length(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .image(img.clone())
+    });
+
+    let mut hijos_fila: Vec<View<Msg>> = vec![thumb_view];
+    if let Some(tm) = thumb_mascara_view {
+        hijos_fila.push(tm);
+    }
+    hijos_fila.extend([
+        nombre, toggle, opacidad, blend, subir, bajar, dup, merge, elim,
+    ]);
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -251,9 +280,7 @@ pub(crate) fn fila_capa(
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .children(vec![
-        thumb_view, nombre, toggle, opacidad, blend, subir, bajar, dup, merge, elim,
-    ])
+    .children(hijos_fila)
 }
 
 /// Slider compacto pensado para vivir embedded en la fila de capa: sin
@@ -665,12 +692,15 @@ pub(crate) fn panel_capas(theme: &llimphi_theme::Theme, model: &Model) -> View<M
     for capa in model.lienzo.capas.iter().rev() {
         let sel = model.seleccionada == Some(capa.id);
         let thumb = model.thumbs.get(&capa.contenido);
+        let thumb_mascara = capa
+            .mascara
+            .and_then(|h| model.thumbs_mascara.get(&h));
         let renombrando = model
             .renombrando
             .as_ref()
             .filter(|(id, _)| *id == capa.id)
             .map(|(_, input)| input);
-        hijos.push(fila_capa(theme, capa, sel, thumb, renombrando));
+        hijos.push(fila_capa(theme, capa, sel, thumb, thumb_mascara, renombrando));
     }
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -1151,6 +1181,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         etiqueta_editar,
         if model.editando_mascara { &pal_mascara_activo } else { &pal },
         Msg::ToggleEditarMascara,
+    )));
+    // Valor de gris que el pincel/balde/degradé escriben en la máscara:
+    // 255 revela del todo, 0 oculta, intermedios dan transparencia
+    // parcial. El borrador ignora esto (siempre 0). Slider en [0,255].
+    hijos.push(envolver_fila(slider_view(
+        &format!("pincel → {} gris", model.valor_mascara),
+        model.valor_mascara as f32,
+        0.0,
+        255.0,
+        &slider_pal_parametros(theme),
+        |fase, dv| match fase {
+            DragPhase::Move => Some(Msg::BumpValorMascara(dv.round() as i32)),
+            DragPhase::End => None,
+        },
     )));
     let etiqueta_add_mascara = if tiene_mascara {
         "🎭 + máscara (ya tiene)".to_string()

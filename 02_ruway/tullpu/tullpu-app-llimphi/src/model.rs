@@ -124,10 +124,21 @@ pub(crate) struct Model {
     /// Modo "editar máscara": cuando es `true` y la capa seleccionada
     /// tiene máscara, las herramientas de trazo (pincel/borrador/balde/
     /// degradé) pintan sobre el buffer de máscara (1 canal) en vez del
-    /// contenido Rgba8. Pincel revela (255), borrador oculta (0). Es un
-    /// flag puro de UI: si la capa no tiene máscara, el trazo cae al
-    /// contenido como siempre. Persiste al cambiar de capa.
+    /// contenido Rgba8. Pincel/balde/degradé escriben `valor_mascara`
+    /// (gris arbitrario), borrador oculta (0). Es un flag puro de UI: si
+    /// la capa no tiene máscara, el trazo cae al contenido como siempre.
+    /// Persiste al cambiar de capa.
     pub(crate) editando_mascara: bool,
+    /// Valor de gris (0..255) que el pincel escribe en la máscara cuando
+    /// `editando_mascara` está activo: 255 revela del todo, 0 oculta del
+    /// todo, intermedios dan transparencia parcial. Balde y degradé usan
+    /// el mismo valor como pico de revelado. El borrador ignora esto y
+    /// siempre apunta a 0 (ocultar). Default 255 (calco de fase 53).
+    pub(crate) valor_mascara: u8,
+    /// Cache de thumbnails de máscara por hash del buffer de 1 canal. Se
+    /// expande a Rgba8 gris (v,v,v,255) para mostrarse junto al thumb de
+    /// contenido en la fila de capa. Espejo de [`Model::thumbs`].
+    pub(crate) thumbs_mascara: HashMap<Hash, Image>,
     /// Drag en curso en el editor de curvas (sección "parámetros" cuando
     /// la capa es una derivada `Curvas`). `None` fuera de un drag. El press
     /// sobre el canvas de la curva lo fija (índice del punto activo + dims
@@ -584,6 +595,9 @@ pub(crate) enum Msg {
     /// Alterna el modo "editar máscara": las herramientas de trazo pintan
     /// el buffer de máscara en vez del contenido. No toca el lienzo.
     ToggleEditarMascara,
+    /// Ajusta el valor de gris (0..255) que el pincel escribe en la
+    /// máscara, por el delta dado (clamped). No toca el lienzo.
+    BumpValorMascara(i32),
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

@@ -67,6 +67,48 @@ pub(crate) fn sincronizar_thumbs(model: &mut Model) {
             model.thumbs.insert(capa.contenido, img);
         }
     }
+    // Espejo para máscaras: thumb gris de cada buffer de 1 canal. Sólo
+    // las capas con máscara aportan hashes; las demás no tocan el cache.
+    let mascaras_vivas: std::collections::HashSet<Hash> =
+        model.lienzo.capas.iter().filter_map(|c| c.mascara).collect();
+    model.thumbs_mascara.retain(|h, _| mascaras_vivas.contains(h));
+    for hash in mascaras_vivas {
+        if model.thumbs_mascara.contains_key(&hash) {
+            continue;
+        }
+        if let Some(img) = thumbnail_de_mascara(hash, lienzo_w, lienzo_h, &model.almacen) {
+            model.thumbs_mascara.insert(hash, img);
+        }
+    }
+}
+
+/// Thumbnail de un buffer de máscara de 1 canal (`w*h` bytes): cada valor
+/// `v` se expande a un píxel gris opaco `(v,v,v,255)` y luego se reescala
+/// como cualquier thumb Rgba8. Devuelve `None` si el hash no está en el
+/// almacén o el tamaño no cuadra con `w*h`.
+pub(crate) fn thumbnail_de_mascara(
+    hash: Hash,
+    w: u32,
+    h: u32,
+    fuente: &impl FuenteBuffers,
+) -> Option<Image> {
+    let buf = fuente.obtener(hash)?;
+    if buf.len() != (w as usize) * (h as usize) {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(buf.len() * 4);
+    for &v in buf {
+        rgba.extend_from_slice(&[v, v, v, 255]);
+    }
+    let rgba = image::RgbaImage::from_raw(w, h, rgba)?;
+    let thumb = image::imageops::thumbnail(&rgba, THUMB_LADO, THUMB_LADO);
+    let (tw, th) = (thumb.width(), thumb.height());
+    Some(Image::new(
+        Blob::from(thumb.into_raw()),
+        ImageFormat::Rgba8,
+        tw,
+        th,
+    ))
 }
 
 /// Construye un thumbnail `peniko::Image` de lado máximo `THUMB_LADO`
