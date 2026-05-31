@@ -210,6 +210,9 @@ enum Msg {
     Unlock,
     /// Cierra el prompt de passphrase sin desbloquear.
     CancelUnlock,
+    /// Resultado async de reservar un circuito en un relay: la dirección de
+    /// marcado vía circuito (o un mensaje de error) para mostrar.
+    RelayReady(String),
 }
 
 struct Model {
@@ -365,7 +368,7 @@ impl App for KhipuApp {
                     // levanta (una vez) el servidor TCP que lo sirve.
                     commit_edits(&mut model, h);
                     let _ = export_notebook(&model);
-                    model.status = Some(start_publishing(&mut model));
+                    model.status = Some(start_publishing(&mut model, h));
                 }
             }
             Msg::Receive => {
@@ -511,6 +514,9 @@ impl App for KhipuApp {
                 model.passphrase.clear();
                 model.focus = Focus::None;
                 model.status = Some("desbloqueo cancelado".into());
+            }
+            Msg::RelayReady(addr) => {
+                model.status = Some(format!("alcanzable vía relay: {addr}"));
             }
             Msg::DeleteSelected => {
                 if let Some(id) = model.selected {
@@ -1909,7 +1915,7 @@ fn ensure_p2p(model: &mut Model) -> bool {
 /// Levanta (una sola vez) el servidor TCP que sirve `compartido.khipu`.
 /// El hilo lee el archivo en cada conexión, así sirve siempre la versión
 /// vigente; vive hasta que el proceso termina. Devuelve la línea de estado.
-fn start_publishing(model: &mut Model) -> String {
+fn start_publishing(model: &mut Model, h: &Handle<Msg>) -> String {
     if model.publishing {
         return format!("ya publicando en {}", bind_addr());
     }
@@ -1951,6 +1957,23 @@ fn start_publishing(model: &mut Model) -> String {
                 node.run_serve(move || std::fs::read(&path2).ok());
                 node.anunciar();
                 p.serving = true;
+            }
+            // Si hay un relay configurado (KHIPU_RELAY=/ip4/.../p2p/<id>),
+            // reservamos un circuito ahí para ser alcanzables detrás de NAT.
+            // Async (dial + identify + reserva tardan ~2s): cuando termina,
+            // reentra con Msg::RelayReady para mostrar la dirección.
+            if let Ok(relay) = std::env::var("KHIPU_RELAY") {
+                let (rt, node, h2) = (p.rt.clone(), p.node.clone(), h.clone());
+                rt.spawn(async move {
+                    let _ = node.dial_str(&relay);
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let circuit = format!("{relay}/p2p-circuit");
+                    let msg = match node.listen_str(&circuit).await {
+                        Ok(addr) => addr,
+                        Err(e) => format!("falló reservar circuito: {e}"),
+                    };
+                    h2.dispatch(Msg::RelayReady(msg));
+                });
             }
             format!(" · libp2p: {}", p.dial_addr)
         } else {

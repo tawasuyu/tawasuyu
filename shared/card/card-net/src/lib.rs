@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use libp2p::{
-    identify, identity, kad, noise,
+    dcutr, identify, identity, kad, noise, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Swarm, SwarmBuilder,
 };
@@ -80,6 +80,16 @@ struct BrahmanBehaviour {
     stream: stream::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
     identify: identify::Behaviour,
+    /// Relay server (Circuit Relay v2): un nodo alcanzable presta su
+    /// conexión para que dos pares detrás de NAT se contacten. Pasivo —
+    /// sólo actúa ante reservas/solicitudes de circuito.
+    relay: relay::Behaviour,
+    /// Relay client: permite reservar un circuito en un relay y ser
+    /// alcanzable vía `…/p2p/<relay>/p2p-circuit/p2p/<self>`.
+    relay_client: relay::client::Behaviour,
+    /// DCUtR: tras conectar por relay, intenta promover a conexión
+    /// directa (hole-punching) coordinando por el circuito.
+    dcutr: dcutr::Behaviour,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -163,7 +173,12 @@ impl BrahmanNet {
                 yamux::Config::default,
             )
             .map_err(|e| NodeError::Build(format!("{e}")))?
-            .with_behaviour(|key| {
+            // Inyecta el transporte de relay-client: habilita marcar y
+            // escuchar direcciones `…/p2p-circuit`. Provee el
+            // `relay_client` behaviour al closure de abajo.
+            .with_relay_client(noise::Config::new, yamux::Config::default)
+            .map_err(|e| NodeError::Build(format!("{e}")))?
+            .with_behaviour(|key, relay_client| {
                 let local = key.public().to_peer_id();
                 let mut kad =
                     kad::Behaviour::new(local, kad::store::MemoryStore::new(local));
@@ -181,6 +196,9 @@ impl BrahmanNet {
                     stream: stream::Behaviour::new(),
                     kad,
                     identify,
+                    relay: relay::Behaviour::new(local, Default::default()),
+                    relay_client,
+                    dcutr: dcutr::Behaviour::new(local),
                 }
             })
             .map_err(|e| NodeError::Build(format!("{e}")))?
@@ -262,6 +280,14 @@ impl BrahmanNet {
                             SwarmEvent::Behaviour(BrahmanBehaviourEvent::Identify(
                                 identify::Event::Received { peer_id, info, .. }
                             )) => {
+                                // El peer nos dice en qué dirección nos ve:
+                                // la confirmamos como externa. Sin esto el
+                                // relay server no tiene direcciones que poner
+                                // en las reservas (`NoAddressesInReservation`)
+                                // y los circuitos no se establecen. Lo
+                                // principista sería confirmarla vía AutoNAT;
+                                // por ahora confiamos en el observed_addr.
+                                swarm.add_external_address(info.observed_addr.clone());
                                 for addr in info.listen_addrs {
                                     swarm.behaviour_mut().kad.add_address(&peer_id, addr);
                                 }

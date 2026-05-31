@@ -91,12 +91,29 @@ impl KhipuNode {
             .parse()
             .map_err(|e| BrahmanError::Nodo(format!("multiaddr inválida: {e}")))?;
         let bound = self.net.listen(m).await;
-        Ok(format!("{bound}/p2p/{}", self.net.peer_id))
+        let s = bound.to_string();
+        // Una reserva de circuito ya viene con `…/p2p-circuit/p2p/<self>`:
+        // no le agregamos otro `/p2p/`. Un tcp pelado no trae peer-id, así
+        // que sí se lo anexamos para que sea una dirección de marcado.
+        if s.contains("/p2p/") {
+            Ok(s)
+        } else {
+            Ok(format!("{s}/p2p/{}", self.net.peer_id))
+        }
     }
 
     /// Marca a un par para conectarse.
     pub fn dial(&self, addr: Multiaddr) {
         self.net.dial(addr);
+    }
+
+    /// Marca a un par dado como texto (multiaddr).
+    pub fn dial_str(&self, addr: &str) -> Result<(), BrahmanError> {
+        let m: Multiaddr = addr
+            .parse()
+            .map_err(|e| BrahmanError::Nodo(format!("multiaddr inválida: {e}")))?;
+        self.net.dial(m);
+        Ok(())
     }
 
     /// Siembra la tabla DHT con un par conocido (bootstrap para descubrir).
@@ -182,12 +199,17 @@ impl KhipuNode {
     }
 }
 
-/// Extrae el `PeerId` del componente `/p2p/<id>` de una multiaddr, si lo trae.
+/// Extrae el `PeerId` **destino** de una multiaddr: el ÚLTIMO componente
+/// `/p2p/<id>`. En una directa (`…/tcp/P/p2p/<peer>`) es el único; en un
+/// circuito (`…/p2p/<relay>/p2p-circuit/p2p/<destino>`) es el de después
+/// del relay, no el relay.
 fn peer_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
-    addr.iter().find_map(|p| match p {
-        Protocol::P2p(id) => Some(id),
-        _ => None,
-    })
+    addr.iter()
+        .filter_map(|p| match p {
+            Protocol::P2p(id) => Some(id),
+            _ => None,
+        })
+        .last()
 }
 
 async fn write_frame<S>(stream: &mut S, payload: &[u8]) -> Result<(), BrahmanError>
