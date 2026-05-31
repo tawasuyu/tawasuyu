@@ -14,6 +14,7 @@ mod typed_events;
 mod domexception;
 mod window_scroll;
 mod window_events;
+mod document_events;
 mod error_events;
 mod url;
 mod streams;
@@ -157,6 +158,7 @@ pub(crate) use typed_events::TYPED_EVENTS_BOOTSTRAP;
 pub(crate) use domexception::DOMEXCEPTION_BOOTSTRAP;
 pub(crate) use window_scroll::WINDOW_SCROLL_BOOTSTRAP;
 pub(crate) use window_events::WINDOW_EVENTS_BOOTSTRAP;
+pub(crate) use document_events::DOCUMENT_EVENTS_BOOTSTRAP;
 pub(crate) use error_events::ERROR_EVENTS_BOOTSTRAP;
 pub(crate) use url::URL_BOOTSTRAP;
 pub(crate) use streams::STREAMS_BOOTSTRAP;
@@ -300,6 +302,7 @@ pub(crate) const ALL: &[&str] = &[
     DOMEXCEPTION_BOOTSTRAP,
     WINDOW_SCROLL_BOOTSTRAP,
     WINDOW_EVENTS_BOOTSTRAP,
+    DOCUMENT_EVENTS_BOOTSTRAP,
     ERROR_EVENTS_BOOTSTRAP,
     URL_BOOTSTRAP,
     STREAMS_BOOTSTRAP,

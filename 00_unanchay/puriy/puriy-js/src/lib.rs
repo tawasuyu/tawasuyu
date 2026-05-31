@@ -520,6 +520,13 @@ impl JsRuntime {
             "if (typeof globalThis.__puriy_install_create_event === 'function') { \
                 globalThis.__puriy_install_create_event(globalThis.document); }",
         )?;
+        // document.addEventListener — el document recién creado no trae los
+        // métodos; re-montamos el installer (bootstrap document_events.rs)
+        // sobre él, igual que createEvent. Reset de listeners = página nueva.
+        self.eval_raw(
+            "if (typeof globalThis.__puriy_install_document_events === 'function') { \
+                globalThis.__puriy_install_document_events(globalThis.document); }",
+        )?;
         Ok(())
     }
 
@@ -714,6 +721,53 @@ impl JsRuntime {
             "globalThis.__puriy_dispatch_window({type_}, {init})",
             type_ = js_string_literal(event_type),
             init = init_lit,
+        );
+        let v = self.eval(&script)?;
+        let s = match v {
+            JsValue::String(s) => s,
+            _ => return Ok(DispatchResult::default()),
+        };
+        let mut parts = s.splitn(2, ',');
+        let count: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let default_prevented = parts.next() == Some("1");
+        Ok(DispatchResult {
+            count,
+            default_prevented,
+        })
+    }
+
+    /// Dispatcha un evento a nivel `document` (`document.addEventListener`).
+    /// Cubre `DOMContentLoaded` (disparado por el chrome al terminar el
+    /// parse) y eventos que bubblean desde un elemento hasta `document`
+    /// (event delegation: `document.addEventListener('click', ...)`). Si
+    /// `target_element_id` está presente y el elemento existe en
+    /// `__puriy_elements`, viaja como `event.target` (con `currentTarget`
+    /// fijo en `document`); si no, el target es el propio `document`.
+    /// Corre `document.on<type>` + los listeners del store. Devuelve
+    /// `DispatchResult` con count y default_prevented (igual que las otras
+    /// rutas de dispatch).
+    pub fn dispatch_document_event(
+        &mut self,
+        event_type: &str,
+        init: Option<&EventInit>,
+        target_element_id: Option<&str>,
+    ) -> Result<DispatchResult, JsError> {
+        let init_lit = match init {
+            Some(i) => i.to_js_literal(),
+            None => "null".to_string(),
+        };
+        let target_expr = match target_element_id {
+            Some(id) => format!(
+                "((globalThis.__puriy_elements && globalThis.__puriy_elements[{}]) || null)",
+                js_string_literal(id)
+            ),
+            None => "null".to_string(),
+        };
+        let script = format!(
+            "globalThis.__puriy_dispatch_document({type_}, {init}, {target})",
+            type_ = js_string_literal(event_type),
+            init = init_lit,
+            target = target_expr,
         );
         let v = self.eval(&script)?;
         let s = match v {
@@ -5314,6 +5368,96 @@ mod tests {
     }
 
     // ============= Fase 7.39 — window events =============
+
+    #[test]
+    fn document_add_event_listener_domcontentloaded_corre() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var ready = false; \
+             document.addEventListener('DOMContentLoaded', function() { ready = true; });",
+        )
+        .expect("e");
+        let r = rt.dispatch_document_event("DOMContentLoaded", None, None).expect("d");
+        assert_eq!(r.count, 1);
+        assert_eq!(rt.eval("ready").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_on_property_y_listener_corren_juntos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var n = 0; \
+             document.onclick = function() { n++; }; \
+             document.addEventListener('click', function() { n++; });",
+        )
+        .expect("e");
+        let r = rt.dispatch_document_event("click", None, None).expect("d");
+        assert_eq!(r.count, 2);
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn document_remove_event_listener_cancela() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var n = 0; var h = function() { n++; }; \
+             document.addEventListener('click', h); \
+             document.removeEventListener('click', h);",
+        )
+        .expect("e");
+        let r = rt.dispatch_document_event("click", None, None).expect("d");
+        assert_eq!(r.count, 0);
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn document_listener_once_se_dispara_una_sola_vez() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var n = 0; \
+             document.addEventListener('foo', function() { n++; }, { once: true });",
+        )
+        .expect("e");
+        rt.dispatch_document_event("foo", None, None).expect("d");
+        rt.dispatch_document_event("foo", None, None).expect("d");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn document_click_delegacion_trae_target_y_currenttarget() {
+        // Modelo de delegación: el evento bubbleó desde #btn; event.target es
+        // el botón, event.currentTarget es el document.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.set_elements(&[snap("btn", "button", "Click")]).expect("els");
+        rt.eval(
+            "var tgt = null; var cur = null; \
+             document.addEventListener('click', function(e) { tgt = e.target.id; cur = (e.currentTarget === document); });",
+        )
+        .expect("e");
+        let r = rt
+            .dispatch_document_event("click", None, Some("btn"))
+            .expect("d");
+        assert_eq!(r.count, 1);
+        assert_eq!(rt.eval("tgt").expect("e"), JsValue::String("btn".into()));
+        assert_eq!(rt.eval("cur").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_prevent_default_se_refleja_en_result() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "document.addEventListener('click', function(e) { e.preventDefault(); });",
+        )
+        .expect("e");
+        let r = rt.dispatch_document_event("click", None, None).expect("d");
+        assert!(r.default_prevented);
+    }
 
     #[test]
     fn window_add_event_listener_scroll_corre_handler() {
