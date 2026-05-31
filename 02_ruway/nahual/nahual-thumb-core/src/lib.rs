@@ -83,12 +83,21 @@ impl std::error::Error for ThumbError {}
 /// usamos en vez de decodificar el full-res. Para una foto de 24 MP es la
 /// diferencia entre leer ~10 KB y decodificar ~70 MB.
 pub fn generar_thumb_de_bytes(bytes: &[u8], lado_max: u32) -> Result<ThumbRgba, ThumbError> {
+    // Orientación EXIF (rotación del sensor) para aplicar tanto al thumb
+    // embebido como al full-res — ambos vienen "crudos" del sensor.
+    let orient = if es_jpeg(bytes) {
+        exif_orientacion(bytes).unwrap_or(1)
+    } else {
+        1
+    };
+
     // Fast-path EXIF: sólo si el thumb embebido cubre razonablemente el
     // lado pedido (si es diminuto, mejor el full-res). El umbral `*2` deja
     // pasar un embebido de 112 px para un lado de 224.
     if es_jpeg(bytes) {
         if let Some(emb) = jpeg_exif_thumb(bytes) {
             if let Ok(img) = image::load_from_memory(&emb) {
+                let img = aplicar_orientacion(img, orient);
                 let t = reducir(img, lado_max);
                 if t.w.max(t.h).saturating_mul(2) >= lado_max {
                     return Ok(t);
@@ -106,6 +115,7 @@ pub fn generar_thumb_de_bytes(bytes: &[u8], lado_max: u32) -> Result<ThumbRgba, 
         return Err(ThumbError::FormatoNoSoportado);
     }
     let img = reader.decode().map_err(|e| ThumbError::Decode(e.to_string()))?;
+    let img = aplicar_orientacion(img, orient);
     Ok(reducir(img, lado_max))
 }
 
@@ -134,13 +144,11 @@ fn es_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
 }
 
-/// Extrae el JPEG del thumbnail embebido en el EXIF de un JPEG, si existe.
-/// Recorre los segmentos hasta el APP1 (`FFE1`) que empiece con `Exif\0\0`,
-/// y dentro de su bloque TIFF baja a IFD1 para leer los tags
-/// `JPEGInterchangeFormat` (0x0201, offset) y `JPEGInterchangeFormatLength`
-/// (0x0202, longitud). Devuelve los bytes del JPEG embebido. Tolerante:
-/// cualquier inconsistencia devuelve `None` (se cae al decode full-res).
-fn jpeg_exif_thumb(bytes: &[u8]) -> Option<Vec<u8>> {
+/// Devuelve el bloque TIFF del EXIF de un JPEG (los bytes que siguen a
+/// `Exif\0\0` en el segmento APP1), o `None` si no hay EXIF. Recorre los
+/// segmentos JPEG hasta el APP1 (`FFE1`). Tolerante: cualquier
+/// inconsistencia devuelve `None`.
+fn exif_tiff(bytes: &[u8]) -> Option<&[u8]> {
     if !es_jpeg(bytes) {
         return None;
     }
@@ -171,14 +179,24 @@ fn jpeg_exif_thumb(bytes: &[u8]) -> Option<Vec<u8>> {
         if marker == 0xE1 {
             let seg = &bytes[seg_ini..seg_fin];
             if seg.len() >= 6 && &seg[0..6] == b"Exif\0\0" {
-                if let Some(t) = tiff_ifd1_thumb(&seg[6..]) {
-                    return Some(t);
-                }
+                return Some(&seg[6..]);
             }
         }
         i = seg_fin;
     }
     None
+}
+
+/// Extrae el JPEG del thumbnail embebido en el EXIF, si existe: baja a IFD1
+/// y lee `JPEGInterchangeFormat` (0x0201, offset) + `Length` (0x0202).
+fn jpeg_exif_thumb(bytes: &[u8]) -> Option<Vec<u8>> {
+    tiff_ifd1_thumb(exif_tiff(bytes)?)
+}
+
+/// Orientación EXIF (tag 0x0112 en IFD0): 1 = normal, 3 = 180°, 6 = 90° CW,
+/// 8 = 270° CW, 2/4/5/7 = espejados. `None` si no hay EXIF/tag.
+fn exif_orientacion(bytes: &[u8]) -> Option<u16> {
+    tiff_orientacion(exif_tiff(bytes)?)
 }
 
 /// Dado el bloque TIFF de un EXIF (empezando en "II"/"MM"), baja a IFD1 y
@@ -239,6 +257,65 @@ fn tiff_ifd1_thumb(tiff: &[u8]) -> Option<Vec<u8>> {
         Some(emb.to_vec())
     } else {
         None
+    }
+}
+
+/// Lee el tag Orientation (0x0112, tipo SHORT) de IFD0 del bloque TIFF.
+fn tiff_orientacion(tiff: &[u8]) -> Option<u16> {
+    if tiff.len() < 8 {
+        return None;
+    }
+    let le = match &tiff[0..2] {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let rd16 = |o: usize| -> Option<u16> {
+        tiff.get(o..o + 2).map(|b| {
+            if le {
+                u16::from_le_bytes([b[0], b[1]])
+            } else {
+                u16::from_be_bytes([b[0], b[1]])
+            }
+        })
+    };
+    let rd32 = |o: usize| -> Option<u32> {
+        tiff.get(o..o + 4).map(|b| {
+            if le {
+                u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+            } else {
+                u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+            }
+        })
+    };
+    if rd16(2)? != 0x002A {
+        return None;
+    }
+    let ifd0 = rd32(4)? as usize;
+    let n0 = rd16(ifd0)? as usize;
+    for e in 0..n0 {
+        let eo = ifd0 + 2 + e * 12;
+        if rd16(eo)? == 0x0112 {
+            // SHORT, count 1 → valor inline en los 2 bytes en eo+8.
+            return rd16(eo + 8);
+        }
+    }
+    None
+}
+
+/// Aplica la rotación/espejo de la orientación EXIF a una imagen. Los casos
+/// 1/3/6/8 (los de fotos de teléfono) son rotaciones puras; 2/4/5/7 incluyen
+/// espejo. Cualquier otro valor se deja sin tocar.
+fn aplicar_orientacion(img: image::DynamicImage, orient: u16) -> image::DynamicImage {
+    match orient {
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img,
     }
 }
 
@@ -640,6 +717,49 @@ mod pruebas {
         assert!(jpeg_exif_thumb(&j).is_none());
         let t = generar_thumb_de_bytes(&j, 64).unwrap();
         assert_eq!((t.w, t.h), (30, 30));
+    }
+
+    /// Empotra un EXIF con sólo el tag Orientation en IFD0 (sin thumbnail).
+    fn empotrar_exif_orient(main_jpeg: &[u8], orient: u16) -> Vec<u8> {
+        let mut tiff: Vec<u8> = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&0x002Au16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes()); // IFD0 @ 8
+        tiff.extend_from_slice(&1u16.to_le_bytes()); // count 1
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes()); // tag Orientation
+        tiff.extend_from_slice(&3u16.to_le_bytes()); // type SHORT
+        tiff.extend_from_slice(&1u32.to_le_bytes()); // count
+        tiff.extend_from_slice(&orient.to_le_bytes()); // valor (2 B)
+        tiff.extend_from_slice(&[0u8, 0u8]); // pad a 4
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // next IFD = 0
+        let mut datos = Vec::new();
+        datos.extend_from_slice(b"Exif\0\0");
+        datos.extend_from_slice(&tiff);
+        let seg_len = (datos.len() + 2) as u16;
+        let mut out = Vec::new();
+        out.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xE1]);
+        out.extend_from_slice(&seg_len.to_be_bytes());
+        out.extend_from_slice(&datos);
+        out.extend_from_slice(&main_jpeg[2..]);
+        out
+    }
+
+    #[test]
+    fn orientacion_exif_rota_el_thumb() {
+        // 40×20 con Orientation=6 (90° CW) ⇒ el thumb sale 20×40.
+        let main = jpeg_solido(40, 20, [0, 200, 0]);
+        let host = empotrar_exif_orient(&main, 6);
+        assert_eq!(exif_orientacion(&host), Some(6));
+        let t = generar_thumb_de_bytes(&host, 224).unwrap();
+        assert_eq!((t.w, t.h), (20, 40), "rotado 90°: w/h intercambiados");
+    }
+
+    #[test]
+    fn orientacion_1_no_rota() {
+        let main = jpeg_solido(40, 20, [0, 200, 0]);
+        let host = empotrar_exif_orient(&main, 1);
+        let t = generar_thumb_de_bytes(&host, 224).unwrap();
+        assert_eq!((t.w, t.h), (40, 20), "orientación normal: sin cambio");
     }
 
     #[test]
