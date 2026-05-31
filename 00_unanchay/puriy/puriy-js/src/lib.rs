@@ -12967,4 +12967,32 @@ mod tests {
             var got = null; cs.readable.getReader().read().then(function(r){ got = r.value; });").expect("e");
         assert_eq!(rt.eval("got").expect("e"), JsValue::Number(42.0));
     }
+
+    // ---- Fase 7.162 — Window Management API ----
+    #[test]
+    fn windowmanagement_get_screen_details() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var det = null; getScreenDetails().then(function(d){ det = d; });").expect("e");
+        assert_eq!(rt.eval("det instanceof ScreenDetails && det.screens.length >= 1 && det.currentScreen != null").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("det.screens[0] instanceof ScreenDetailed").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn windowmanagement_multi_monitor() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_screen_details([{ label: 'A', isPrimary: true }, { label: 'B', left: 1920, isPrimary: false }]);
+            var det = null; getScreenDetails().then(function(d){ det = d; });").expect("e");
+        assert_eq!(rt.eval("det.screens.length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("det.screens[1].label").expect("e"), JsValue::String("B".into()));
+        assert_eq!(rt.eval("screen.isExtended").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn windowmanagement_permiso_denegado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_set_window_management_permission(false);
+            var err = null; getScreenDetails().catch(function(e){ err = e.name; });").expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("NotAllowedError".into()));
+    }
+
 }

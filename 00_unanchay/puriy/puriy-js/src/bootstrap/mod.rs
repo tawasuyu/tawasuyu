@@ -118,6 +118,7 @@ mod webxr;
 mod backgroundfetch;
 mod imagecapture;
 mod compression;
+mod windowmanagement;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -236,6 +237,7 @@ pub(crate) use webxr::WEBXR_BOOTSTRAP;
 pub(crate) use backgroundfetch::BACKGROUNDFETCH_BOOTSTRAP;
 pub(crate) use imagecapture::IMAGECAPTURE_BOOTSTRAP;
 pub(crate) use compression::COMPRESSION_BOOTSTRAP;
+pub(crate) use windowmanagement::WINDOWMANAGEMENT_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -356,5 +358,6 @@ pub(crate) const ALL: &[&str] = &[
     BACKGROUNDFETCH_BOOTSTRAP,
     IMAGECAPTURE_BOOTSTRAP,
     COMPRESSION_BOOTSTRAP,
+    WINDOWMANAGEMENT_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
