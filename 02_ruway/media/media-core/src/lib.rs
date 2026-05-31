@@ -38,6 +38,17 @@ pub mod sync;
 /// entre llamadas para evitar realocs.
 pub trait FrameSource {
     fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)>;
+
+    /// PTS (presentation timestamp) del último frame que `tick` dejó en
+    /// `buf`, si la fuente lo conoce: el momento, desde el inicio del
+    /// stream, en que ese frame debe mostrarse. Lo consume la política de
+    /// [`crate::sync`] para atar el video al reloj de audio (M1 de
+    /// `PARIDAD.md`). Default `None` — fuentes sin noción de tiempo
+    /// (imágenes fijas) o que aún no lo implementan. Sólo es válido
+    /// leerlo justo después de un `tick` que devolvió `Some`.
+    fn pts(&self) -> Option<Duration> {
+        None
+    }
 }
 
 // ============================================================
@@ -90,6 +101,9 @@ impl<T: FrameSource + ?Sized> FrameSource for Box<T> {
     fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
         (**self).tick(dt, buf)
     }
+    fn pts(&self) -> Option<Duration> {
+        (**self).pts()
+    }
 }
 
 /// Generador procedural: gradiente animado + círculo que rebota.
@@ -102,6 +116,10 @@ pub struct TestCard {
     fps: f32,
     elapsed: f32,
     accum_since_frame: f32,
+    /// Frames emitidos hasta ahora — define el PTS del próximo (índice/fps).
+    emitted: u64,
+    /// PTS del último frame emitido, expuesto por [`FrameSource::pts`].
+    last_pts: Option<Duration>,
 }
 
 impl TestCard {
@@ -112,6 +130,8 @@ impl TestCard {
             fps: fps.max(1.0),
             elapsed: 0.0,
             accum_since_frame: f32::INFINITY,
+            emitted: 0,
+            last_pts: None,
         }
     }
 
@@ -131,6 +151,11 @@ impl FrameSource for TestCard {
             return None;
         }
         self.accum_since_frame = 0.0;
+        // PTS = índice/fps: tiempo de presentación estable contra el reloj
+        // de audio (ver crate::sync). Se fija antes de pintar; se lee con
+        // pts() tras este tick.
+        self.last_pts = Some(Duration::from_secs_f32(self.emitted as f32 / self.fps));
+        self.emitted += 1;
 
         let w = self.width as usize;
         let h = self.height as usize;
@@ -176,6 +201,10 @@ impl FrameSource for TestCard {
             }
         }
         Some((self.width, self.height))
+    }
+
+    fn pts(&self) -> Option<Duration> {
+        self.last_pts
     }
 }
 
@@ -594,6 +623,9 @@ impl<S: FrameSource> FrameSource for PausableVideo<S> {
         }
         self.inner.tick(dt, buf)
     }
+    fn pts(&self) -> Option<Duration> {
+        self.inner.pts()
+    }
 }
 
 // ============================================================
@@ -827,6 +859,64 @@ impl FrameSource for VideoSwitcher {
         let n = self.sources.len();
         let i = self.switch.get() % n;
         self.sources[i].tick(dt, buf)
+    }
+    fn pts(&self) -> Option<Duration> {
+        if self.sources.is_empty() {
+            return None;
+        }
+        let n = self.sources.len();
+        let i = self.switch.get() % n;
+        self.sources[i].pts()
+    }
+}
+
+#[cfg(test)]
+mod tests_frame_pts {
+    use super::*;
+
+    struct Dummy;
+    impl FrameSource for Dummy {
+        fn tick(&mut self, _dt: Duration, _buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+            None
+        }
+    }
+
+    #[test]
+    fn pts_default_es_none() {
+        // Una fuente que no implementa pts() devuelve None por el default
+        // del trait — no rompe a las fuentes sin noción de tiempo.
+        assert_eq!(Dummy.pts(), None);
+    }
+
+    #[test]
+    fn testcard_pts_avanza_por_frame() {
+        // 10 fps → 100 ms por frame; PTS = índice/fps.
+        let mut tc = TestCard::new(16, 16, 10.0);
+        let mut buf = Vec::new();
+        assert_eq!(tc.pts(), None, "sin frames todavía no hay PTS");
+        // Primer tick emite (accum arranca en infinito) → frame 0, PTS 0.
+        assert!(tc.tick(Duration::from_millis(100), &mut buf).is_some());
+        assert_eq!(tc.pts(), Some(Duration::ZERO));
+        // Segundo frame → PTS = 1/10 s = 100 ms.
+        assert!(tc.tick(Duration::from_millis(100), &mut buf).is_some());
+        let p = tc.pts().expect("hay PTS tras el segundo frame");
+        assert!((p.as_secs_f32() - 0.1).abs() < 1e-4, "pts = {p:?}");
+    }
+
+    #[test]
+    fn pausable_reenvia_pts_del_inner() {
+        let mut pv = PausableVideo::new(TestCard::new(16, 16, 10.0), Pause::new());
+        let mut buf = Vec::new();
+        pv.tick(Duration::from_millis(100), &mut buf);
+        assert_eq!(pv.pts(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn box_dyn_reenvia_pts() {
+        let mut b: Box<dyn FrameSource + Send> = Box::new(TestCard::new(16, 16, 10.0));
+        let mut buf = Vec::new();
+        b.tick(Duration::from_millis(100), &mut buf);
+        assert_eq!(b.pts(), Some(Duration::ZERO));
     }
 }
 
