@@ -304,6 +304,12 @@ pub struct TextSpec {
     /// CSS-style font-family string (acepta lista con fallbacks). `None`
     /// = la fuente default de parley.
     pub font_family: Option<String>,
+    /// Colores por rango de **bytes** sobre `content`, para texto multicolor
+    /// (syntax highlighting) en una sola pasada de shaping. `None` = color
+    /// uniforme (`color`). Cuando es `Some`, el runtime usa
+    /// `Typesetter::layout_runs` + `draw_layout_runs`, y `color` actúa como
+    /// color por defecto de lo no cubierto por ningún run.
+    pub runs: Option<Vec<(usize, usize, Color)>>,
 }
 
 /// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el

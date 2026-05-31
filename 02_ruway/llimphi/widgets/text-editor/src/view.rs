@@ -617,49 +617,35 @@ fn line_text_tokens<Msg: Clone + 'static>(
     palette: &EditorPalette,
     syntax: &SyntaxPalette,
 ) -> View<Msg> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut children: Vec<View<Msg>> = Vec::with_capacity(spans.len());
+    // char-col → byte-offset: parley rangea por bytes, los spans por chars.
+    let mut byte_at: Vec<usize> = Vec::with_capacity(text.len() + 1);
+    let mut acc = 0usize;
+    byte_at.push(0);
+    for ch in text.chars() {
+        acc += ch.len_utf8();
+        byte_at.push(acc);
+    }
+    let nchars = byte_at.len() - 1;
 
+    // Un run de color por span no-Other (el default_color cubre el resto).
+    let mut runs: Vec<(usize, usize, Color)> = Vec::with_capacity(spans.len());
     for span in spans {
-        if span.start_col >= chars.len() {
+        if span.start_col >= nchars || matches!(span.kind, TokenKind::Other) {
             continue;
         }
-        let end = span.end_col.min(chars.len());
+        let end = span.end_col.min(nchars);
         if end <= span.start_col {
             continue;
         }
-        let token: String = chars[span.start_col..end].iter().collect();
-        if token.chars().all(|c| c.is_whitespace()) && !matches!(span.kind, TokenKind::String) {
-            continue;
-        }
-        let x = 4.0 + span.start_col as f32 * metrics.char_width;
-        let w = (end - span.start_col) as f32 * metrics.char_width + metrics.char_width;
-        let color = if matches!(span.kind, TokenKind::Other) {
-            palette.fg_text
-        } else {
-            syntax.color(span.kind)
-        };
-        children.push(
-            View::new(Style {
-                position: Position::Absolute,
-                inset: Rect {
-                    left: length(x),
-                    top: length(0.0_f32),
-                    right: auto(),
-                    bottom: auto(),
-                },
-                size: Size { width: length(w), height: length(metrics.line_height) },
-                align_items: Some(AlignItems::Center),
-                ..Default::default()
-            })
-            .text_aligned(token, metrics.font_size, color, Alignment::Start),
-        );
+        runs.push((byte_at[span.start_col], byte_at[end], syntax.color(span.kind)));
     }
 
+    // Una sola línea shapeada de una vez, multicolor, en lugar de un nodo
+    // (+ layout parley) por token. El `+4` de gutter va en el inset del nodo.
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
-            left: length(0.0_f32),
+            left: length(4.0_f32),
             top: length(line as f32 * metrics.line_height),
             right: auto(),
             bottom: auto(),
@@ -667,7 +653,13 @@ fn line_text_tokens<Msg: Clone + 'static>(
         size: Size { width: length(2000.0_f32), height: length(metrics.line_height) },
         ..Default::default()
     })
-    .children(children)
+    .text_runs(
+        text.to_string(),
+        metrics.font_size,
+        palette.fg_text,
+        runs,
+        Alignment::Start,
+    )
 }
 
 fn caret_rect<Msg: Clone + 'static>(

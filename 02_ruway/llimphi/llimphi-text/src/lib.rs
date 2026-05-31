@@ -17,6 +17,10 @@ pub use parley;
 pub struct Typesetter {
     font_cx: parley::FontContext,
     layout_cx: parley::LayoutContext<()>,
+    /// Contexto separado para layouts multicolor (`Brush` por rango). El
+    /// brush genérico de parley no puede ser `()` y `RunBrush` a la vez en
+    /// el mismo `LayoutContext`, así que mantenemos uno por sabor.
+    runs_cx: parley::LayoutContext<RunBrush>,
 }
 
 impl Default for Typesetter {
@@ -30,6 +34,7 @@ impl Typesetter {
         Self {
             font_cx: parley::FontContext::new(),
             layout_cx: parley::LayoutContext::new(),
+            runs_cx: parley::LayoutContext::new(),
         }
     }
 
@@ -78,6 +83,52 @@ impl Typesetter {
             parley::AlignmentOptions::default(),
         );
         layout
+    }
+
+    /// Construye un layout **multicolor** en una sola pasada de shaping:
+    /// `default_color` cubre todo el texto y cada `(start_byte, end_byte,
+    /// color)` lo sobreescribe en su rango (offsets en **bytes**, no chars —
+    /// la convención de parley). Pensado para syntax highlighting: shapear
+    /// la línea entera una vez con un color por token, en vez de un layout
+    /// por token. Sin wrap (`max_width = None`); el caller posiciona la línea.
+    pub fn layout_runs(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        default_color: Color,
+        runs: &[(usize, usize, Color)],
+        alignment: Alignment,
+        line_height: f32,
+    ) -> parley::Layout<RunBrush> {
+        let mut builder = self
+            .runs_cx
+            .ranged_builder(&mut self.font_cx, text, 1.0, true);
+        builder.push_default(parley::StyleProperty::FontSize(size_px));
+        builder.push_default(parley::StyleProperty::LineHeight(line_height));
+        builder.push_default(parley::StyleProperty::Brush(RunBrush(default_color)));
+        let len = text.len();
+        for &(start, end, color) in runs {
+            if start < end && end <= len {
+                builder.push(parley::StyleProperty::Brush(RunBrush(color)), start..end);
+            }
+        }
+        let mut layout = builder.build(text);
+        layout.break_all_lines(None);
+        layout.align(None, alignment.into(), parley::AlignmentOptions::default());
+        layout
+    }
+}
+
+/// Brush por-run para texto multicolor. Newtype sobre [`Color`] porque
+/// parley exige que el brush genérico implemente `Default` (que `Color` no
+/// garantiza); aquí proveemos uno explícito (negro opaco) que nunca se ve
+/// en la práctica: todo run lleva su color o el `default_color` del bloque.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RunBrush(pub Color);
+
+impl Default for RunBrush {
+    fn default() -> Self {
+        RunBrush(Color::from_rgba8(0, 0, 0, 255))
     }
 }
 
@@ -195,6 +246,40 @@ pub fn draw_layout_xf(
     for line in layout.lines() {
         for item in line.items() {
             if let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item {
+                let run = glyph_run.run();
+                let font = run.font().clone();
+                let font_size = run.font_size();
+                scene
+                    .draw_glyphs(&font)
+                    .font_size(font_size)
+                    .brush(&brush)
+                    .transform(transform)
+                    .draw(
+                        peniko::Fill::NonZero,
+                        glyph_run.positioned_glyphs().map(|g| vello::Glyph {
+                            id: g.id as u32,
+                            x: g.x,
+                            y: g.y,
+                        }),
+                    );
+            }
+        }
+    }
+}
+
+/// Pinta un layout **multicolor** ([`Typesetter::layout_runs`]): cada
+/// `glyph_run` usa el color de su propio brush ([`RunBrush`]) en vez de un
+/// color uniforme. `origin` es la esquina superior-izquierda del bloque.
+pub fn draw_layout_runs(
+    scene: &mut vello::Scene,
+    layout: &parley::Layout<RunBrush>,
+    origin: (f64, f64),
+) {
+    let transform = vello::kurbo::Affine::translate(origin);
+    for line in layout.lines() {
+        for item in line.items() {
+            if let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item {
+                let brush = Brush::Solid(glyph_run.style().brush.0);
                 let run = glyph_run.run();
                 let font = run.font().clone();
                 let font_size = run.font_size();

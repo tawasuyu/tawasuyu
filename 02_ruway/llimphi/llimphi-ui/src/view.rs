@@ -120,6 +120,7 @@ impl<Msg> View<Msg> {
             alignment: llimphi_text::Alignment::Center,
             italic: false,
             font_family: None,
+            runs: None,
         });
         self
     }
@@ -138,6 +139,7 @@ impl<Msg> View<Msg> {
             alignment,
             italic: false,
             font_family: None,
+            runs: None,
         });
         self
     }
@@ -159,6 +161,7 @@ impl<Msg> View<Msg> {
             alignment,
             italic,
             font_family: None,
+            runs: None,
         });
         self
     }
@@ -182,6 +185,32 @@ impl<Msg> View<Msg> {
             alignment,
             italic,
             font_family,
+            runs: None,
+        });
+        self
+    }
+
+    /// Texto **multicolor** en una sola pasada de shaping: `content` se pinta
+    /// con `default_color` y cada `(start_byte, end_byte, color)` de `runs`
+    /// sobreescribe su rango (offsets en bytes). Pensado para syntax
+    /// highlighting — un nodo por línea en vez de uno por token. Anclado
+    /// arriba-izquierda (sin centrado vertical); el caller dimensiona el rect.
+    pub fn text_runs(
+        mut self,
+        content: impl Into<String>,
+        size_px: f32,
+        default_color: Color,
+        runs: Vec<(usize, usize, Color)>,
+        alignment: llimphi_text::Alignment,
+    ) -> Self {
+        self.text = Some(TextSpec {
+            content: content.into(),
+            size_px,
+            color: default_color,
+            alignment,
+            italic: false,
+            font_family: None,
+            runs: Some(runs),
         });
         self
     }

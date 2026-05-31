@@ -184,33 +184,49 @@ pub(crate) fn paint<Msg>(
             );
         }
         if let Some(text) = node.text.as_ref() {
-            // Parley resuelve la alineación horizontal vía max_width + alignment.
-            // Para Center también centramos verticalmente; para Start/End/Justify
-            // anclamos arriba (comportamiento esperado de párrafo/editor).
-            let block = llimphi_text::TextBlock {
-                text: &text.content,
-                size_px: text.size_px,
-                color: text.color,
-                origin: (r.x as f64, r.y as f64),
-                max_width: Some(r.w),
-                alignment: text.alignment,
-                line_height: 1.2,
-                italic: text.italic,
-                font_family: text.font_family.clone(),
-            };
-            // Shaping una sola vez: el `Layout` retornado se reusa para
-            // medir (cuando hay centrado vertical) y para pintar.
-            let layout = llimphi_text::layout_block(typesetter, &block);
-            let origin = if matches!(text.alignment, llimphi_text::Alignment::Center) {
-                let m = llimphi_text::measurement(&layout);
-                (
-                    r.x as f64,
-                    r.y as f64 + ((r.h - m.height) as f64 * 0.5).max(0.0),
-                )
+            if let Some(runs) = text.runs.as_ref() {
+                // Texto multicolor (syntax highlighting): una sola pasada de
+                // shaping con color por rango, anclado arriba-izquierda. Cae
+                // por el flujo normal (clip/alpha se cierran como siempre).
+                let layout = typesetter.layout_runs(
+                    &text.content,
+                    text.size_px,
+                    text.color,
+                    runs,
+                    text.alignment,
+                    1.2,
+                );
+                llimphi_text::draw_layout_runs(scene, &layout, (r.x as f64, r.y as f64));
             } else {
-                block.origin
-            };
-            llimphi_text::draw_layout(scene, &layout, text.color, origin);
+                // Parley resuelve la alineación horizontal vía max_width +
+                // alignment. Para Center también centramos verticalmente; para
+                // Start/End/Justify anclamos arriba (párrafo/editor).
+                let block = llimphi_text::TextBlock {
+                    text: &text.content,
+                    size_px: text.size_px,
+                    color: text.color,
+                    origin: (r.x as f64, r.y as f64),
+                    max_width: Some(r.w),
+                    alignment: text.alignment,
+                    line_height: 1.2,
+                    italic: text.italic,
+                    font_family: text.font_family.clone(),
+                };
+                // Shaping una sola vez: el `Layout` retornado se reusa para
+                // medir (cuando hay centrado vertical) y para pintar.
+                let layout = llimphi_text::layout_block(typesetter, &block);
+                let origin =
+                    if matches!(text.alignment, llimphi_text::Alignment::Center) {
+                        let m = llimphi_text::measurement(&layout);
+                        (
+                            r.x as f64,
+                            r.y as f64 + ((r.h - m.height) as f64 * 0.5).max(0.0),
+                        )
+                    } else {
+                        block.origin
+                    };
+                llimphi_text::draw_layout(scene, &layout, text.color, origin);
+            }
         }
         if node.clip {
             let clip_rect = KurboRect::new(
