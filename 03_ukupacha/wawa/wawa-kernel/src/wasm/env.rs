@@ -224,6 +224,23 @@ pub(crate) fn enlazar_capacidades(
     enlazador: &mut Linker<ContextoCapacidades>,
     permisos: Permisos,
 ) -> Result<(), Error> {
+    // Una familia de capacidades por función; los gates de permiso viven
+    // dentro de cada una (per-syscall, intactos). Este despachador es el
+    // mapa legible de qué superficie expone el kernel al userspace WASM.
+    enlazar_presentacion(enlazador)?;
+    enlazar_grafo(enlazador, permisos)?;
+    enlazar_objeto(enlazador)?;
+    enlazar_raiz_canal(enlazador, permisos)?;
+    enlazar_estado_dispositivos(enlazador, permisos)?;
+    enlazar_red(enlazador, permisos)?;
+    enlazar_config(enlazador, permisos)?;
+    enlazar_anuncio_tinkuy(enlazador, permisos)?;
+    Ok(())
+}
+
+fn enlazar_presentacion(
+    enlazador: &mut Linker<ContextoCapacidades>,
+) -> Result<(), Error> {
     // --- CAPACIDAD 1 :: sys_render_frame(ptr, len) ---
     // El modulo entrega (ptr, len) hacia su PROPIA memoria lineal; el kernel
     // valida esos limites y, solo entonces, compone el fotograma DENTRO de la
@@ -309,7 +326,13 @@ pub(crate) fn enlazar_capacidades(
             Ok(5)
         },
     )?;
+    Ok(())
+}
 
+fn enlazar_grafo(
+    enlazador: &mut Linker<ContextoCapacidades>,
+    permisos: Permisos,
+) -> Result<(), Error> {
     // --- CAPACIDAD 3 :: sys_object_put(datos, datos_len, hijos, hijos_cnt, salida) -> i32 ---
     // Graba un objeto en el grafo. El modulo entrega, en su memoria lineal, la
     // carga util y un arreglo de `hijos_cnt` hashes de 32 bytes (las aristas).
@@ -1511,7 +1534,12 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA (solicitar_firma_host)
+    Ok(())
+}
 
+fn enlazar_objeto(
+    enlazador: &mut Linker<ContextoCapacidades>,
+) -> Result<(), Error> {
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---
     // Copia la carga util del objeto `hash` en `salida`. Devuelve el numero de
     // bytes copiados, o -1 si el objeto no existe, -2 si `capacidad` no basta,
@@ -1637,7 +1665,13 @@ pub(crate) fn enlazar_capacidades(
             }
         },
     )?;
+    Ok(())
+}
 
+fn enlazar_raiz_canal(
+    enlazador: &mut Linker<ContextoCapacidades>,
+    permisos: Permisos,
+) -> Result<(), Error> {
     // --- CAPACIDAD 7 :: sys_object_fijar_raiz(hash) -> i32 ---
     // Corona el objeto `hash` como raiz del grafo. CodigoError::Ok si se logro,
     // CodigoError::AlmacenamientoFallo si el almacenamiento fallo.
@@ -1913,7 +1947,13 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_COMPACTAR
+    Ok(())
+}
 
+fn enlazar_estado_dispositivos(
+    enlazador: &mut Linker<ContextoCapacidades>,
+    permisos: Permisos,
+) -> Result<(), Error> {
     // --- CAPACIDAD 8 :: sys_estado_cargar(salida, capacidad) -> i32 ---
     // Copia el estado persistido de ESTA app —el objeto que su `EntradaApp` del
     // manifiesto tiene anclado— en `salida`. Devuelve el numero de bytes
@@ -2043,7 +2083,13 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_ALTAVOZ
+    Ok(())
+}
 
+fn enlazar_red(
+    enlazador: &mut Linker<ContextoCapacidades>,
+    permisos: Permisos,
+) -> Result<(), Error> {
     // --- CAPACIDADES 12-15 (gateadas por PERMISO_RED) ---
     // Las cuatro capacidades de red (`sys_net_mac`, `sys_net_enviar`,
     // `sys_net_recibir`, `sys_red_solicitar`) viajan juntas: una app que
@@ -2187,7 +2233,13 @@ pub(crate) fn enlazar_capacidades(
     )?;
 
     } // PERMISO_RED
+    Ok(())
+}
 
+fn enlazar_config(
+    enlazador: &mut Linker<ContextoCapacidades>,
+    permisos: Permisos,
+) -> Result<(), Error> {
     // --- CAPACIDAD 16 :: sys_config_idioma() -> u32 ---
     // Lectura PASIVA del idioma activo: el kernel ya copio el valor en el
     // `ContextoCapacidades` antes de cederle el `tick` a la app. No hay sondeo
@@ -2294,7 +2346,13 @@ pub(crate) fn enlazar_capacidades(
             Ok(CodigoError::Ok.como_i32())
         },
     )?;
+    Ok(())
+}
 
+fn enlazar_anuncio_tinkuy(
+    enlazador: &mut Linker<ContextoCapacidades>,
+    permisos: Permisos,
+) -> Result<(), Error> {
     // --- CAPACIDAD pasiva :: sys_canal_anuncio(salida, capacidad) -> i32 ---
     // Fase 64 :: vuelca el ULTIMO `AnunciarCanal` recibido por Akasha a la
     // memoria de la app, en un layout fijo de 168 B —idéntico al `anuncio.bin`
@@ -2566,6 +2624,6 @@ pub(crate) fn enlazar_capacidades(
             },
         )?;
     } // PERMISO_TINKUY
-
     Ok(())
 }
+
