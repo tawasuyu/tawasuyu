@@ -21,7 +21,7 @@ Cerrada en commits `436007b`/`0b0f685`/`67d6dbf`:
 - Forces: Lennard-Jones + Coulomb con neighbor-list 27-celdas.
 - Demo `tinkuy-sim` LJ end-to-end con reporte BLAKE3.
 
-## Capa 2 — ABI WASM (PRÓXIMO)
+## Capa 2 — ABI WASM (HECHO)
 
 Meta: `tinkuy-core` ejecutable dentro de Wawa userspace como app WASM.
 
@@ -46,7 +46,7 @@ Meta: `tinkuy-core` ejecutable dentro de Wawa userspace como app WASM.
 - **C4 — Integración kernel wawa.** ✅ Módulo `wawa-kernel/src/tinkuy.rs` instala `assets/tinkuy.wasm` UNA sola vez en su propia sub-jaula `wasmi` (Store independiente, fuel desactivado por ser código del kernel, Linker vacío — el cdylib no importa nada). Resuelve los 9 `TypedFunc` `tk_*` y crece 64 páginas extras como scratch: dlmalloc del modulo nunca toca esas páginas, así que el kernel las usa indefinidamente como buzón de parámetros para los punteros que exigen `tk_sim_new`/`tk_sim_step_lj`/`tk_sim_snapshot_cid`. Tabla `[Option<Slot>; 8]` por `indice_app` aísla sims entre apps (matemática, no permisos). Cleanup automático en `AplicacionWasm::drop` (`liberar_owner`) evita sims huérfanas si una app cae. Nueva matriz de capacidades `sys_tinkuy_*` (7 syscalls: sim_new, sim_spawn, sim_rebuild_grid, sim_step_lj, sim_len, sim_observables, sim_snapshot_cid, sim_free) gateada por `PERMISO_TINKUY = 1 << 6` en `format`. App userspace `apps/testigo` ejerce el ciclo completo: `sim_new → spawn × 64 (lattice 4³ con velocidades xorshift32) → rebuild_grid → step_lj × 4/tick → observables → snapshot_cid` y pinta step / T / KE / CID[..16] con la 8×8 escalada ×2 + mini-barra de KE. Sembrada en GENESIS como app 15 con `PERMISO_TINKUY`, región `(600, 520, 480, 240)`, FUEL_COMUN. `cargo +nightly check --target x86_64-unknown-none -Z build-std=core,alloc` verde sobre el kernel; `cargo check --workspace` verde; `cargo build -p testigo --target wasm32-unknown-unknown --release` → 7.55 KB crudo / 5.35 KB sellado (`scripts/build-testigo.sh`).
 - **C5 — `scripts/build-tinkuy.sh`.** ✅ cargo build wasm32-unknown-unknown → `wasm-opt -Os --strip-debug --strip-producers --enable-{bulk-memory,sign-ext,nontrapping-float-to-int,mutable-globals}` → consolida `wawa-kernel/assets/tinkuy.wasm`. Tamaño actual: **30 KB** (techo plan: 200 KB).
 
-## Capa 3 — DSL matemático
+## Capa 3 — DSL matemático (HECHO)
 
 Meta: definir fuerzas y condiciones iniciales sin recompilar Rust.
 
@@ -56,7 +56,7 @@ Meta: definir fuerzas y condiciones iniciales sin recompilar Rust.
 - **D4** ✅ Módulo `tinkuy_dsl::optimize`. Const-fold (Add/Sub/Mul/Div/Neg/Pow entero/Inv/Sqrt) + simplificaciones algebraicas (x+0, x*1, x*0, x/1, pow(x,0), pow(x,1), inv(inv(x)), -(-x)) hasta fix-point. Mismo `nr_sqrt` que la VM → cero divergencia numérica. Tests 13/13: idempotencia, equivalencia LJ pre/post optimize (Δ < 1e-3), no crece el número de ops. Bench criterion `tinkuy-dsl/benches/optimize` (2026-05-29): LJ 13.2→17.3 Me/s (×1.31), Coulomb 35.8→35.5 Me/s (×1.00), Hooke 46.7→68.6 Me/s (×1.47). El target ≥50% del plan original no se alcanza con las simplificaciones actuales — más speedup exigiría CSE o expansión `pow(_, 6n) → x²·x²·x²`, fuera del alcance de D4. Cierra la pregunta abierta de D3: `DslForce::apply` queda single-thread (`tinkuy-forces/src/dsl.rs`), porque a 13–46 Me/s escalar y N≤256 el coste pairwise es < 10 µs/step y el kernel nativo paralelizado sigue siendo el fast path.
 - **D5** ✅ `tinkuy-dsl/examples/{lj,coulomb,hooke}.tnk` con comentarios `#` documentando la convención `F_over_r`. El lexer ignora líneas `#…`. Test `example_tnk_files_all_compile` carga los 3 con `include_str!` y verifica parse + optimize + compile.
 
-## Capa 4 — Nodos visuales
+## Capa 4 — Nodos visuales (HECHO)
 
 Meta: editar fuerzas y escenas como grafo Llimphi.
 
