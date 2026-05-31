@@ -12243,4 +12243,90 @@ mod tests {
         rt.eval("var err = null; navigator.mediaCapabilities.decodingInfo({ type: 'file' }).catch(function(e){ err = e.name; });").expect("e");
         assert_eq!(rt.eval("err").expect("e"), JsValue::String("TypeError".into()));
     }
+
+    // ---- Fase 7.150 — Canvas 2D ----
+    #[test]
+    fn canvas2d_offscreen_y_contexto() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var cv = new OffscreenCanvas(320, 240); var ctx = cv.getContext('2d');").expect("e");
+        assert_eq!(rt.eval("cv.width").expect("e"), JsValue::Number(320.0));
+        assert_eq!(rt.eval("cv.height").expect("e"), JsValue::Number(240.0));
+        assert_eq!(rt.eval("ctx instanceof CanvasRenderingContext2D").expect("e"), JsValue::Bool(true));
+        // getContext('2d') es idempotente: misma instancia.
+        assert_eq!(rt.eval("cv.getContext('2d') === ctx").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ctx.canvas === cv").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas2d_fill_rect_registra_comando() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new OffscreenCanvas(10, 10).getContext('2d'); ctx.fillStyle = '#ff0000'; ctx.fillRect(1, 2, 3, 4);").expect("e");
+        assert_eq!(rt.eval("ctx._cmds.length").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("ctx._cmds[0][0]").expect("e"), JsValue::String("fillRect".into()));
+        assert_eq!(rt.eval("ctx._cmds[0][3]").expect("e"), JsValue::Number(3.0));
+        assert_eq!(rt.eval("ctx._cmds[0][5]").expect("e"), JsValue::String("#ff0000".into()));
+    }
+
+    #[test]
+    fn canvas2d_save_restore_estado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new OffscreenCanvas(10, 10).getContext('2d'); ctx.fillStyle = 'red'; ctx.save(); ctx.fillStyle = 'blue';").expect("e");
+        assert_eq!(rt.eval("ctx.fillStyle").expect("e"), JsValue::String("blue".into()));
+        rt.eval("ctx.restore();").expect("e");
+        assert_eq!(rt.eval("ctx.fillStyle").expect("e"), JsValue::String("red".into()));
+    }
+
+    #[test]
+    fn canvas2d_transform_acumula() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new OffscreenCanvas(10, 10).getContext('2d'); ctx.translate(5, 7); ctx.scale(2, 2); var m = ctx.getTransform();").expect("e");
+        assert_eq!(rt.eval("m.e").expect("e"), JsValue::Number(5.0));
+        assert_eq!(rt.eval("m.f").expect("e"), JsValue::Number(7.0));
+        assert_eq!(rt.eval("m.a").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("m.isIdentity").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn canvas2d_path2d_y_beginpath() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var p = new Path2D(); p.moveTo(0, 0); p.lineTo(10, 10); p.closePath();").expect("e");
+        assert_eq!(rt.eval("p._cmds.length").expect("e"), JsValue::Number(3.0));
+        assert_eq!(rt.eval("p._cmds[1][0]").expect("e"), JsValue::String("lineTo".into()));
+        // ctx delega su path actual.
+        rt.eval("var ctx = new OffscreenCanvas(10, 10).getContext('2d'); ctx.beginPath(); ctx.moveTo(1, 1); ctx.lineTo(2, 2);").expect("e");
+        assert_eq!(rt.eval("ctx._path._cmds.length").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn canvas2d_image_data() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new OffscreenCanvas(10, 10).getContext('2d'); var id = ctx.createImageData(4, 5);").expect("e");
+        assert_eq!(rt.eval("id.width").expect("e"), JsValue::Number(4.0));
+        assert_eq!(rt.eval("id.height").expect("e"), JsValue::Number(5.0));
+        assert_eq!(rt.eval("id.data.length").expect("e"), JsValue::Number(80.0));
+        assert_eq!(rt.eval("id.data instanceof Uint8ClampedArray").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("new ImageData(2, 2).colorSpace").expect("e"), JsValue::String("srgb".into()));
+        // getImageData devuelve ceros (el host lo rellena con el framebuffer real).
+        assert_eq!(rt.eval("ctx.getImageData(0, 0, 3, 3).data.length").expect("e"), JsValue::Number(36.0));
+    }
+
+    #[test]
+    fn canvas2d_measure_text() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new OffscreenCanvas(10, 10).getContext('2d'); ctx.font = '20px serif'; var tm = ctx.measureText('hola');").expect("e");
+        assert_eq!(rt.eval("tm.width").expect("e"), JsValue::Number(40.0));
+        assert_eq!(rt.eval("tm.fontBoundingBoxAscent").expect("e"), JsValue::Number(18.0));
+    }
+
+    #[test]
+    fn canvas2d_gradient_y_image_bitmap() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new OffscreenCanvas(10, 10).getContext('2d'); var g = ctx.createLinearGradient(0, 0, 100, 0); g.addColorStop(0, 'red'); g.addColorStop(1, 'blue');").expect("e");
+        assert_eq!(rt.eval("g instanceof CanvasGradient").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("g._stops.length").expect("e"), JsValue::Number(2.0));
+        rt.eval("var bmp = null; createImageBitmap({ width: 64, height: 32 }).then(function(b){ bmp = b; });").expect("e");
+        assert_eq!(rt.eval("bmp.width").expect("e"), JsValue::Number(64.0));
+        assert_eq!(rt.eval("bmp instanceof ImageBitmap").expect("e"), JsValue::Bool(true));
+    }
+
 }
