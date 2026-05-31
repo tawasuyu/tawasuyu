@@ -610,6 +610,10 @@ const ROOM_SCALE: f32 = 0.28;
 const ROOM_OFFSET: f32 = 0.7;
 const DAMP_SCALE: f32 = 0.4;
 const FV_GAIN: f32 = 0.015;
+/// Constante de tiempo (segundos) del crossfade de ambiente entre
+/// sectores. ~100 ms: rápido para seguir al jugador, lento para no
+/// clickear al cruzar una puerta.
+const AMB_TAU: f32 = 0.10;
 
 /// Comb con amortiguación pasa-bajos en el lazo de realimentación.
 struct Comb {
@@ -657,7 +661,12 @@ struct Reverb {
     aps_l: Vec<Allpass>,
     aps_r: Vec<Allpass>,
     sr: f32,
+    /// Acústica **actual** (suavizada). Persigue a `target` con una
+    /// constante de tiempo de [`AMB_TAU`] para que un cambio de cuarto no
+    /// reasiente el reverb de golpe (Fase 4.4).
     amb: RoomAmbience,
+    /// Acústica destino que fija el host por sector.
+    target: RoomAmbience,
 }
 
 impl Reverb {
@@ -669,7 +678,17 @@ impl Reverb {
             aps_r: Vec::new(),
             sr: 0.0,
             amb: RoomAmbience::default(),
+            target: RoomAmbience::default(),
         }
+    }
+
+    /// Mueve `amb` un paso hacia `target` (lerp exponencial 1-polo).
+    /// `coef ∈ (0,1]` = fracción del gap cerrada por frame.
+    fn smooth(&mut self, coef: f32) {
+        let l = |a: f32, b: f32| a + (b - a) * coef;
+        self.amb.wet = l(self.amb.wet, self.target.wet);
+        self.amb.room_size = l(self.amb.room_size, self.target.room_size);
+        self.amb.damping = l(self.amb.damping, self.target.damping);
     }
 
     /// (Re)construye las líneas de delay para `sr`. Escala las afinaciones
@@ -726,16 +745,22 @@ impl AudioSource for DoomAudio {
             m.render_add(buf, sample_rate, channels);
         }
 
-        // Reverb por sector. wet=0 ⇒ seco, sin costo (compat 4.2).
-        let wet = self.reverb.amb.wet;
-        if wet > 1e-4 {
+        // Reverb por sector con crossfade de ambiente (Fase 4.4). Corre
+        // mientras la mezcla actual *o* el destino sean audibles — así la
+        // cola se desvanece suave al entrar a un cuarto seco. Seco de los
+        // dos lados ⇒ bypass sin costo (compat 4.2).
+        if self.reverb.amb.wet > 1e-4 || self.reverb.target.wet > 1e-4 {
             let sr = sample_rate.max(1) as f32;
             if (self.reverb.sr - sr).abs() > 0.5 {
                 self.reverb.rebuild(sr);
             }
+            // coef 1-polo: fracción del gap cerrada por frame para AMB_TAU.
+            let coef = 1.0 - (-1.0 / (AMB_TAU * sr)).exp();
             let ch = channels.max(1) as usize;
             let frames = buf.len() / ch;
             for f in 0..frames {
+                self.reverb.smooth(coef);
+                let wet = self.reverb.amb.wet;
                 let base = f * ch;
                 let dry = if ch >= 2 {
                     (buf[base] + buf[base + 1]) * 0.5
@@ -824,10 +849,12 @@ impl AudioEngine {
         self.audio.lock().music = None;
     }
 
-    /// Fija la acústica de la sala (Fase 4.3). El host la recalcula por
-    /// tick desde el sector del jugador. `wet=0` deja el mix seco.
+    /// Fija la acústica **destino** de la sala (Fase 4.3). El host la
+    /// recalcula por tick desde el sector del jugador; el reverb la
+    /// persigue con un crossfade de ~100 ms (Fase 4.4) en vez de saltar.
+    /// `wet=0` lleva el mix a seco (desvaneciendo la cola en vuelo).
     pub fn set_ambience(&mut self, amb: RoomAmbience) {
-        self.audio.lock().reverb.amb = amb;
+        self.audio.lock().reverb.target = amb;
     }
 
     fn resolve(&mut self, lump: &str) -> Option<(Arc<[f32]>, f32)> {
@@ -1072,7 +1099,9 @@ mod tests {
             music: None,
             reverb: Reverb::new(),
         };
-        da.reverb.amb = RoomAmbience { wet: 0.8, room_size: 0.9, damping: 0.2 };
+        let amb = RoomAmbience { wet: 0.8, room_size: 0.9, damping: 0.2 };
+        da.reverb.amb = amb;
+        da.reverb.target = amb; // ya asentado: sin crossfade en este test.
         // Impulso corto: 2 muestras, luego silencio seco.
         da.sfx.add(Arc::from(vec![1.0f32, 1.0]), 1000.0, 1.0, 1.0);
         let mut buf = vec![0.0f32; 2000]; // 1000 frames estéreo a 1000 Hz
@@ -1081,6 +1110,28 @@ mod tests {
         // haber energía de la cola.
         let tail: f32 = buf[400..].iter().map(|x| x.abs()).sum();
         assert!(tail > 1e-3, "el reverb debe dejar cola audible, tail={tail}");
+    }
+
+    #[test]
+    fn reverb_crossfades_toward_target() {
+        // Arranca seco (default). Fijamos un target húmedo: la mezcla
+        // actual debe ramplear hacia él, no saltar.
+        let mut da = DoomAudio {
+            sfx: DoomMixer::new(),
+            music: None,
+            reverb: Reverb::new(),
+        };
+        da.reverb.target = RoomAmbience { wet: 0.5, room_size: 0.8, damping: 0.3 };
+        // Un buffer corto (mucho menor que AMB_TAU): no debe llegar al target.
+        let mut buf = vec![0.0f32; 20]; // 10 frames a 1000 Hz = 0.01 s ≪ 0.1 s
+        da.fill(&mut buf, 1000, 2);
+        assert!(da.reverb.amb.wet > 0.0, "el wet arrancó a subir");
+        assert!(da.reverb.amb.wet < 0.5, "no debe saltar al target en 0.01 s: {}", da.reverb.amb.wet);
+        // Tras muchos frames converge al target.
+        let mut buf2 = vec![0.0f32; 4000]; // 2000 frames = 2 s ≫ 0.1 s
+        da.fill(&mut buf2, 1000, 2);
+        assert!((da.reverb.amb.wet - 0.5).abs() < 1e-3, "converge al target: {}", da.reverb.amb.wet);
+        assert!((da.reverb.amb.room_size - 0.8).abs() < 1e-3);
     }
 
     #[test]
