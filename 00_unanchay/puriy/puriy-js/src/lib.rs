@@ -11705,4 +11705,172 @@ mod tests {
         rt.eval("var ctx = new AudioContext(); ctx.close();").expect("e");
         assert_eq!(rt.eval("ctx.state").expect("e"), JsValue::String("closed".into()));
     }
+
+    // ---- Fase 7.145 — WebCodecs ----
+
+    #[test]
+    fn webcodecs_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof VideoEncoder").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof VideoDecoder").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof AudioEncoder").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof EncodedVideoChunk").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof VideoFrame").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn webcodecs_video_encoder_configure_cambia_estado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var enc = new VideoEncoder({ output: function(){}, error: function(){} }); \
+             var antes = enc.state; \
+             enc.configure({ codec: 'avc1.42001f', width: 640, height: 480 });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("antes").expect("e"), JsValue::String("unconfigured".into()));
+        assert_eq!(rt.eval("enc.state").expect("e"), JsValue::String("configured".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'videoencoder-configure'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn webcodecs_video_encoder_encode_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var enc = new VideoEncoder({ output: function(){}, error: function(){} }); \
+             enc.configure({ codec: 'avc1.42001f' }); \
+             var f = new VideoFrame(null, { codedWidth: 4, codedHeight: 4, timestamp: 1000 }); \
+             enc.encode(f);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("enc.encodeQueueSize").expect("e"), JsValue::Number(1.0));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'videoencoder-encode'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn webcodecs_video_encoder_output_entrega_chunk() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var tipo = null, bytes = -1; \
+             var enc = new VideoEncoder({ output: function(chunk){ tipo = chunk.type; bytes = chunk.byteLength; }, error: function(){} }); \
+             enc.configure({ codec: 'avc1.42001f' }); \
+             enc.encode(new VideoFrame(null, { codedWidth: 2, codedHeight: 2, timestamp: 0 }));",
+        )
+        .expect("e");
+        rt.eval("__puriy_videoencoder_output(1, { type: 'key', timestamp: 0, data: new Uint8Array([1,2,3,4,5]) });")
+            .expect("e");
+        assert_eq!(rt.eval("tipo").expect("e"), JsValue::String("key".into()));
+        assert_eq!(rt.eval("bytes").expect("e"), JsValue::Number(5.0));
+        assert_eq!(rt.eval("enc.encodeQueueSize").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn webcodecs_encoded_chunk_copyto() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var c = new EncodedVideoChunk({ type: 'delta', timestamp: 7, data: new Uint8Array([9,8,7]) }); \
+             var out = new Uint8Array(3); c.copyTo(out);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("c.type").expect("e"), JsValue::String("delta".into()));
+        assert_eq!(rt.eval("c.timestamp").expect("e"), JsValue::Number(7.0));
+        assert_eq!(rt.eval("out[0]").expect("e"), JsValue::Number(9.0));
+        assert_eq!(rt.eval("out[2]").expect("e"), JsValue::Number(7.0));
+    }
+
+    #[test]
+    fn webcodecs_video_frame_propiedades_y_close() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var f = new VideoFrame(null, { codedWidth: 320, codedHeight: 240, timestamp: 5000 }); \
+             var alloc = f.allocationSize(); f.close();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("f.codedWidth").expect("e"), JsValue::Number(320.0));
+        assert_eq!(rt.eval("f.displayWidth").expect("e"), JsValue::Number(320.0));
+        assert_eq!(rt.eval("alloc").expect("e"), JsValue::Number(115200.0));
+        assert_eq!(rt.eval("f._closed").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webcodecs_video_decoder_output_frame() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var w = -1; \
+             var dec = new VideoDecoder({ output: function(frame){ w = frame.codedWidth; }, error: function(){} }); \
+             dec.configure({ codec: 'avc1.42001f' }); \
+             dec.decode(new EncodedVideoChunk({ type: 'key', timestamp: 0, data: new Uint8Array([1]) }));",
+        )
+        .expect("e");
+        rt.eval("__puriy_videodecoder_output(1, { codedWidth: 128, codedHeight: 96, timestamp: 0 });").expect("e");
+        assert_eq!(rt.eval("w").expect("e"), JsValue::Number(128.0));
+    }
+
+    #[test]
+    fn webcodecs_audio_encoder_flujo() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var bytes = -1; \
+             var enc = new AudioEncoder({ output: function(chunk){ bytes = chunk.byteLength; }, error: function(){} }); \
+             enc.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 }); \
+             enc.encode(new AudioData({ numberOfFrames: 960, numberOfChannels: 2, sampleRate: 48000, timestamp: 0 }));",
+        )
+        .expect("e");
+        rt.eval("__puriy_audioencoder_output(1, { type: 'key', timestamp: 0, data: new Uint8Array([1,2,3,4,5,6]) });")
+            .expect("e");
+        assert_eq!(rt.eval("bytes").expect("e"), JsValue::Number(6.0));
+    }
+
+    #[test]
+    fn webcodecs_audio_data_propiedades() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var d = new AudioData({ numberOfFrames: 480, numberOfChannels: 2, sampleRate: 48000, timestamp: 0 });")
+            .expect("e");
+        assert_eq!(rt.eval("d.numberOfFrames").expect("e"), JsValue::Number(480.0));
+        assert_eq!(rt.eval("d.allocationSize()").expect("e"), JsValue::Number(3840.0));
+        assert_eq!(rt.eval("Math.round(d.duration)").expect("e"), JsValue::Number(10000.0));
+    }
+
+    #[test]
+    fn webcodecs_is_config_supported() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var sup = null; \
+             VideoEncoder.isConfigSupported({ codec: 'avc1.42001f', width: 640, height: 480 }) \
+                 .then(function(r){ sup = r.supported; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("sup").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webcodecs_codec_error_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; \
+             var enc = new VideoEncoder({ output: function(){}, error: function(e){ err = e.name; } }); \
+             enc.configure({ codec: 'avc1.42001f' });",
+        )
+        .expect("e");
+        rt.eval("__puriy_codec_error(1, 'codec no soportado');").expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("EncodingError".into()));
+    }
+
+    #[test]
+    fn webcodecs_encoder_close_cambia_estado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var enc = new VideoEncoder({ output: function(){}, error: function(){} }); \
+             enc.configure({ codec: 'avc1.42001f' }); enc.close();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("enc.state").expect("e"), JsValue::String("closed".into()));
+        // tras close, el host ya no entrega salida
+        assert_eq!(rt.eval("__puriy_videoencoder_output(1, { type: 'key' })").expect("e"), JsValue::Bool(false));
+    }
 }
