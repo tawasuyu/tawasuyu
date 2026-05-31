@@ -10,6 +10,11 @@
 //! planificador entrega, lanzamos un thread que decodifica y reentra con
 //! `Msg::ThumbListo`. Mientras tanto la celda muestra un placeholder.
 //!
+//! Navegación: la grilla mezcla subcarpetas (ícono 📁, primero) e
+//! imágenes. Un clic en carpeta entra; en imagen selecciona (⏎/espacio
+//! abre el preview). `⌫` sube al padre y el breadcrumb salta a cualquier
+//! ancestro. `o` cicla el orden de las imágenes (nombre/tamaño/fecha).
+//!
 //! Uso: `cargo run -p nahual-gallery-llimphi --release -- <carpeta>`
 //! (sin argumento usa el directorio actual).
 //!
@@ -29,6 +34,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
 use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, GridPalette};
 use nahual_image_viewer_llimphi::{
     image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
@@ -44,6 +50,27 @@ const THUMB_LADO: u32 = 224;
 const MAX_EN_VUELO: usize = 6;
 /// Alto reservado para el header en px (descontado del viewport útil).
 const HEADER_H: f32 = 44.0;
+/// Alto de la barra de breadcrumb (ruta navegable).
+const BREADCRUMB_H: f32 = 30.0;
+
+/// Una entrada de la carpeta actual: subcarpeta navegable o archivo de
+/// imagen con miniatura. Las carpetas se listan primero.
+#[derive(Clone)]
+enum Entrada {
+    Carpeta(PathBuf),
+    Imagen(PathBuf),
+}
+
+impl Entrada {
+    fn path(&self) -> &Path {
+        match self {
+            Entrada::Carpeta(p) | Entrada::Imagen(p) => p,
+        }
+    }
+    fn es_carpeta(&self) -> bool {
+        matches!(self, Entrada::Carpeta(_))
+    }
+}
 
 /// Extensiones que tratamos como imagen (alineadas con las features del
 /// crate `image` en el workspace: png/jpeg/webp).
@@ -100,11 +127,17 @@ enum Msg {
     CerrarPreview,
     /// Cambia el criterio de orden de la grilla.
     CiclarOrden,
+    /// Activa la entrada `i`: entra a la carpeta o abre el preview.
+    Activar(usize),
+    /// Sube a la carpeta padre.
+    Subir,
+    /// Navega al segmento `i` del breadcrumb (raíz → hoja).
+    NavegarSegmento(usize),
 }
 
 struct Model {
     dir: PathBuf,
-    entries: Vec<PathBuf>,
+    entries: Vec<Entrada>,
     scroll_fila: usize,
     seleccionado: Option<usize>,
     /// Miniaturas ya listas para pintar (peniko). Es el cache RAM del lado
@@ -147,7 +180,8 @@ impl App for Gallery {
             .nth(1)
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let entries = listar_imagenes(&dir);
+        let orden = Orden::Nombre;
+        let entries = listar(&dir, orden);
         let (w, h) = Self::initial_size();
         let metrics = GridMetrics {
             tile_w: 140.0,
@@ -155,11 +189,7 @@ impl App for Gallery {
             gap: 10.0,
             pad: 12.0,
         };
-        let estado = if entries.is_empty() {
-            format!("sin imágenes en {}", dir.display())
-        } else {
-            format!("{} imágenes", entries.len())
-        };
+        let estado = format!("{} ítems", entries.len());
         let mut m = Model {
             dir,
             entries,
@@ -171,9 +201,9 @@ impl App for Gallery {
             cache_disco: CacheDisco::por_defecto().ok(),
             metrics,
             vw: w as f32,
-            vh: h as f32 - HEADER_H,
+            vh: h as f32 - HEADER_H - BREADCRUMB_H,
             preview: None,
-            orden: Orden::Nombre,
+            orden,
             estado,
             theme: Theme::dark(),
         };
@@ -206,11 +236,13 @@ impl App for Gallery {
                 _ => None,
             };
         }
-        // Enter / Espacio abren el preview de la imagen seleccionada.
+        // Enter / Espacio activan la entrada seleccionada (entrar a la
+        // carpeta o abrir el preview); Backspace sube a la carpeta padre.
         match &e.key {
             Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
-                model.seleccionado.map(Msg::AbrirPreview)
+                model.seleccionado.map(Msg::Activar)
             }
+            Key::Named(NamedKey::Backspace) => Some(Msg::Subir),
             Key::Character(c) if c == "o" => Some(Msg::CiclarOrden),
             _ => Some(Msg::Tecla(e.clone())),
         }
@@ -227,7 +259,7 @@ impl App for Gallery {
             Msg::Seleccionar(i) => {
                 if i < m.entries.len() {
                     m.seleccionado = Some(i);
-                    m.estado = nombre(&m.entries[i]);
+                    m.estado = nombre(m.entries[i].path());
                 }
             }
             Msg::ThumbListo(path, t) => {
@@ -260,12 +292,18 @@ impl App for Gallery {
                 }
             }
             Msg::PreviewVecino(d) => {
+                // Salta a la imagen vecina, ignorando carpetas.
                 if let Some((actual, _)) = &m.preview {
-                    if let Some(cur) = m.entries.iter().position(|p| p == actual) {
-                        let nuevo = (cur as i32 + d).clamp(0, m.entries.len() as i32 - 1) as usize;
-                        if nuevo != cur {
-                            m.seleccionado = Some(nuevo);
-                            abrir_preview(&mut m, nuevo, handle);
+                    if let Some(cur) = m.entries.iter().position(|e| e.path() == actual) {
+                        let mut i = cur as i32 + d;
+                        while i >= 0 && (i as usize) < m.entries.len() {
+                            if !m.entries[i as usize].es_carpeta() {
+                                let idx = i as usize;
+                                m.seleccionado = Some(idx);
+                                abrir_preview(&mut m, idx, handle);
+                                break;
+                            }
+                            i += d;
                         }
                     }
                 }
@@ -274,13 +312,34 @@ impl App for Gallery {
                 m.preview = None;
             }
             Msg::CiclarOrden => {
-                // Conservar la selección por path a través del reordenamiento.
-                let sel_path = m.seleccionado.and_then(|i| m.entries.get(i).cloned());
+                // Conservar la selección por path al re-listar (que reordena).
+                let sel_path = m.seleccionado.and_then(|i| m.entries.get(i).map(|e| e.path().to_path_buf()));
                 m.orden = m.orden.siguiente();
-                reordenar(&mut m.entries, m.orden);
-                m.seleccionado = sel_path.and_then(|p| m.entries.iter().position(|q| *q == p));
+                m.entries = listar(&m.dir, m.orden);
+                m.seleccionado =
+                    sel_path.and_then(|p| m.entries.iter().position(|e| e.path() == p));
                 m.estado = format!("orden: {}", m.orden.etiqueta());
                 bombear(&mut m, handle);
+            }
+            Msg::Activar(i) => {
+                if let Some(e) = m.entries.get(i) {
+                    if e.es_carpeta() {
+                        let dir = e.path().to_path_buf();
+                        navegar_a(&mut m, dir, handle);
+                    } else {
+                        abrir_preview(&mut m, i, handle);
+                    }
+                }
+            }
+            Msg::Subir => {
+                if let Some(padre) = m.dir.parent().map(|p| p.to_path_buf()) {
+                    navegar_a(&mut m, padre, handle);
+                }
+            }
+            Msg::NavegarSegmento(i) => {
+                if let Some(dir) = ancestros(&m.dir).get(i).cloned() {
+                    navegar_a(&mut m, dir, handle);
+                }
             }
         }
         m
@@ -317,6 +376,7 @@ impl App for Gallery {
         );
 
         let header = encabezado(model, &v);
+        let ruta = barra_ruta(model);
 
         let cuerpo: View<Msg> = if model.entries.is_empty() {
             View::new(Style {
@@ -330,19 +390,25 @@ impl App for Gallery {
             })
             .fill(theme.bg_panel)
             .text(
-                format!("sin imágenes en {}", model.dir.display()),
+                format!("sin imágenes ni subcarpetas en {}", model.dir.display()),
                 14.0,
                 theme.fg_muted,
             )
         } else {
             let cells: Vec<GridCell<Msg>> = (v.first..v.first + v.count)
                 .map(|i| {
-                    let path = &model.entries[i];
+                    let e = &model.entries[i];
                     GridCell {
-                        content: celda_contenido(model, path),
-                        label: Some(nombre(path)),
+                        content: celda_contenido(model, e),
+                        label: Some(nombre(e.path())),
                         selected: model.seleccionado == Some(i),
-                        on_click: Msg::Seleccionar(i),
+                        // Un clic en carpeta entra; en imagen selecciona
+                        // (⏎/espacio la abre en preview).
+                        on_click: if e.es_carpeta() {
+                            Msg::Activar(i)
+                        } else {
+                            Msg::Seleccionar(i)
+                        },
                     }
                 })
                 .collect();
@@ -367,13 +433,14 @@ impl App for Gallery {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, cuerpo])
+        .children(vec![header, ruta, cuerpo])
     }
 }
 
-/// Cuerpo de una celda: la miniatura si está lista, un ⚠ si falló, o un
-/// placeholder mientras se genera.
-fn celda_contenido(model: &Model, path: &Path) -> View<Msg> {
+/// Cuerpo de una celda: un ícono 📁 para carpetas; para imágenes la
+/// miniatura si está lista, un ⚠ si falló, o un placeholder mientras se
+/// genera.
+fn celda_contenido(model: &Model, e: &Entrada) -> View<Msg> {
     let theme = &model.theme;
     let lado = model.metrics.tile_w - 8.0;
     let base = || Style {
@@ -385,6 +452,12 @@ fn celda_contenido(model: &Model, path: &Path) -> View<Msg> {
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     };
+    if e.es_carpeta() {
+        return View::new(base())
+            .fill(theme.bg_panel_alt)
+            .text("📁".to_string(), 44.0, theme.fg_text);
+    }
+    let path = e.path();
     if let Some(img) = model.thumbs.get(path) {
         View::new(base()).image(img.clone())
     } else if model.fallidos.contains(path) {
@@ -398,12 +471,63 @@ fn celda_contenido(model: &Model, path: &Path) -> View<Msg> {
     }
 }
 
+/// Breadcrumb de la ruta actual: cada segmento (raíz → hoja) es clicable y
+/// navega a ese ancestro.
+fn barra_ruta(model: &Model) -> View<Msg> {
+    let anc = ancestros(&model.dir);
+    let segs: Vec<String> = anc
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.to_string_lossy().into_owned())
+        })
+        .collect();
+    let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+    let pal = BreadcrumbPalette::from_theme(&model.theme);
+    let bc = breadcrumb_view::<Msg, _>(&refs, Msg::NavegarSegmento, &pal);
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(BREADCRUMB_H),
+        },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(model.theme.bg_panel)
+    .children(vec![bc])
+}
+
+/// Ancestros de un directorio en orden raíz → hoja (incluye el propio dir).
+fn ancestros(dir: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = dir.ancestors().map(|p| p.to_path_buf()).collect();
+    v.reverse();
+    v
+}
+
+/// Cambia la carpeta actual: re-lista, resetea scroll/selección/preview y
+/// arranca la generación de miniaturas de la nueva ventana.
+fn navegar_a(m: &mut Model, dir: PathBuf, handle: &Handle<Msg>) {
+    m.dir = dir;
+    m.entries = listar(&m.dir, m.orden);
+    m.scroll_fila = 0;
+    m.seleccionado = None;
+    m.preview = None;
+    m.estado = format!("{} ítems", m.entries.len());
+    bombear(m, handle);
+}
+
 /// Barra superior: carpeta, conteo, fila actual y estado.
 fn encabezado(model: &Model, v: &llimphi_widget_grid::VisibleWindow) -> View<Msg> {
     let theme = &model.theme;
     let texto = format!(
-        "📁 {}  ·  {} img  ·  fila {}/{}  ·  orden: {} (o)  ·  ⏎/espacio: ver  ·  {}",
-        model.dir.display(),
+        "{} ítems  ·  fila {}/{}  ·  orden: {} (o)  ·  ⏎/espacio: abrir  ·  ⌫ subir  ·  {}",
         model.entries.len(),
         v.first_row + 1,
         v.total_rows.max(1),
@@ -462,7 +586,7 @@ fn manejar_tecla(m: &mut Model, ev: &KeyEvent, handle: &Handle<Msg>) {
 
     if let Some(sel) = nuevo {
         m.seleccionado = Some(sel);
-        m.estado = nombre(&m.entries[sel]);
+        m.estado = nombre(m.entries[sel].path());
         asegurar_visible(m, sel, cols, filas_pantalla);
         bombear(m, handle);
     }
@@ -482,7 +606,7 @@ fn asegurar_visible(m: &mut Model, sel: usize, cols: usize, filas_pantalla: usiz
 /// Abre el preview de la imagen `i`: marca el placeholder de carga y lanza
 /// la decodificación full-res en un thread, que reentra con `PreviewListo`.
 fn abrir_preview(m: &mut Model, i: usize, handle: &Handle<Msg>) {
-    let Some(path) = m.entries.get(i).cloned() else {
+    let Some(path) = m.entries.get(i).map(|e| e.path().to_path_buf()) else {
         return;
     };
     m.seleccionado = Some(i);
@@ -496,16 +620,16 @@ fn abrir_preview(m: &mut Model, i: usize, handle: &Handle<Msg>) {
     });
 }
 
-/// Reordena los paths según el criterio. `Tamano`/`Fecha` consultan
+/// Ordena una lista de paths según el criterio. `Tamano`/`Fecha` consultan
 /// `metadata` (un `stat` por archivo — se paga una vez por reorden).
-fn reordenar(entries: &mut [PathBuf], orden: Orden) {
+fn ordenar_paths(paths: &mut [PathBuf], orden: Orden) {
     match orden {
-        Orden::Nombre => entries.sort(),
+        Orden::Nombre => paths.sort(),
         Orden::Tamano => {
-            entries.sort_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+            paths.sort_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
         }
         Orden::Fecha => {
-            entries.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+            paths.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
         }
     }
 }
@@ -519,7 +643,11 @@ fn bombear(m: &mut Model, handle: &Handle<Msg>) {
 
     let mut visibles: HashSet<PathBuf> = HashSet::with_capacity(v.count);
     for (orden, i) in (v.first..v.first + v.count).enumerate() {
-        let path = m.entries[i].clone();
+        // Las carpetas no generan miniatura (pintan un ícono).
+        if m.entries[i].es_carpeta() {
+            continue;
+        }
+        let path = m.entries[i].path().to_path_buf();
         visibles.insert(path.clone());
         if !m.thumbs.contains_key(&path) && !m.fallidos.contains(&path) {
             // Prioridad = orden de aparición en la ventana (lo de arriba
@@ -547,17 +675,31 @@ fn bombear(m: &mut Model, handle: &Handle<Msg>) {
     }
 }
 
-/// Lista los archivos de imagen de un directorio, ordenados por nombre.
-fn listar_imagenes(dir: &Path) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = match std::fs::read_dir(dir) {
-        Ok(rd) => rd
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file() && es_imagen(p))
-            .collect(),
-        Err(_) => Vec::new(),
+/// Lista el contenido navegable de un directorio: subcarpetas (ordenadas
+/// por nombre) primero, luego los archivos de imagen (ordenados por
+/// `orden`). Lo demás se ignora.
+fn listar(dir: &Path, orden: Orden) -> Vec<Entrada> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
     };
-    v.sort();
-    v
+    let mut carpetas: Vec<PathBuf> = Vec::new();
+    let mut imagenes: Vec<PathBuf> = Vec::new();
+    for entrada in rd.flatten() {
+        let p = entrada.path();
+        if p.is_dir() {
+            carpetas.push(p);
+        } else if es_imagen(&p) {
+            imagenes.push(p);
+        }
+    }
+    carpetas.sort();
+    ordenar_paths(&mut imagenes, orden);
+    carpetas
+        .into_iter()
+        .map(Entrada::Carpeta)
+        .chain(imagenes.into_iter().map(Entrada::Imagen))
+        .collect()
 }
 
 fn es_imagen(p: &Path) -> bool {
