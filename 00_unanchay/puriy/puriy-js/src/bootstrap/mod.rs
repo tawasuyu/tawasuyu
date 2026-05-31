@@ -110,6 +110,7 @@ mod geometry;
 mod canvas2d;
 mod webgl;
 mod fontface;
+mod cssom;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -220,6 +221,7 @@ pub(crate) use geometry::GEOMETRY_BOOTSTRAP;
 pub(crate) use canvas2d::CANVAS2D_BOOTSTRAP;
 pub(crate) use webgl::WEBGL_BOOTSTRAP;
 pub(crate) use fontface::FONTFACE_BOOTSTRAP;
+pub(crate) use cssom::CSSOM_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -332,5 +334,6 @@ pub(crate) const ALL: &[&str] = &[
     CANVAS2D_BOOTSTRAP,
     WEBGL_BOOTSTRAP,
     FONTFACE_BOOTSTRAP,
+    CSSOM_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

@@ -12541,4 +12541,78 @@ mod tests {
         assert_eq!(rt.eval("m.is2D").expect("e"), JsValue::Bool(true));
     }
 
+    // ---- Fase 7.154 — CSS Object Model ----
+    #[test]
+    fn cssom_supports() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("CSS.supports('display', 'grid')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("CSS.supports('gap', '1rem')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("CSS.supports('no-such-prop', 'x')").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("CSS.supports('', '')").expect("e"), JsValue::Bool(false));
+        // Forma de condición de un argumento.
+        assert_eq!(rt.eval("CSS.supports('(display: flex)')").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("CSS.supports('color: var(--x)')").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cssom_escape() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("CSS.escape('foo')").expect("e"), JsValue::String("foo".into()));
+        assert_eq!(rt.eval("CSS.escape('.foo#bar')").expect("e"), JsValue::String("\\.foo\\#bar".into()));
+        // Empieza con dígito → escape hex.
+        assert_eq!(rt.eval("CSS.escape('1a')").expect("e"), JsValue::String("\\31 a".into()));
+    }
+
+    #[test]
+    fn cssom_register_property() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("CSS.registerProperty({ name: '--my-color', syntax: '<color>', inherits: false, initialValue: 'red' });").expect("e");
+        // Re-registrar la misma tira.
+        rt.eval("var err = null; try { CSS.registerProperty({ name: '--my-color' }); } catch (e) { err = e; }").expect("e");
+        assert_eq!(rt.eval("err !== null").expect("e"), JsValue::Bool(true));
+        // Nombre sin -- tira SyntaxError.
+        rt.eval("var e2 = null; try { CSS.registerProperty({ name: 'nope' }); } catch (e) { e2 = e.constructor.name; }").expect("e");
+        assert_eq!(rt.eval("e2").expect("e"), JsValue::String("SyntaxError".into()));
+    }
+
+    #[test]
+    fn cssom_typed_om_numerico() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var v = CSS.px(10);").expect("e");
+        assert_eq!(rt.eval("v.value").expect("e"), JsValue::Number(10.0));
+        assert_eq!(rt.eval("v.unit").expect("e"), JsValue::String("px".into()));
+        assert_eq!(rt.eval("CSS.px(10).toString()").expect("e"), JsValue::String("10px".into()));
+        assert_eq!(rt.eval("CSS.percent(50).toString()").expect("e"), JsValue::String("50%".into()));
+        assert_eq!(rt.eval("CSS.number(3).toString()").expect("e"), JsValue::String("3".into()));
+    }
+
+    #[test]
+    fn cssom_constructable_stylesheet() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var sheet = new CSSStyleSheet(); sheet.replaceSync('a { color: red; } p { margin: 0; }');").expect("e");
+        assert_eq!(rt.eval("sheet.cssRules.length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("sheet.cssRules[0].selectorText").expect("e"), JsValue::String("a".into()));
+        assert_eq!(rt.eval("sheet.cssRules[0].style.getPropertyValue('color')").expect("e"), JsValue::String("red".into()));
+        // insertRule / deleteRule.
+        rt.eval("sheet.insertRule('div { width: 100px; }', 0);").expect("e");
+        assert_eq!(rt.eval("sheet.cssRules.length").expect("e"), JsValue::Number(3.0));
+        assert_eq!(rt.eval("sheet.cssRules[0].selectorText").expect("e"), JsValue::String("div".into()));
+        rt.eval("sheet.deleteRule(0);").expect("e");
+        assert_eq!(rt.eval("sheet.cssRules.length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("sheet instanceof CSSStyleSheet").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("sheet.cssRules[0] instanceof CSSRule").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cssom_replace_promise_y_adopted() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var done = false; var s = new CSSStyleSheet(); s.replace('b { font-weight: bold; }').then(function(r){ done = (r === s); });").expect("e");
+        assert_eq!(rt.eval("done").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("s.cssRules.length").expect("e"), JsValue::Number(1.0));
+        // document.adoptedStyleSheets.
+        rt.eval("document.adoptedStyleSheets = [s];").expect("e");
+        assert_eq!(rt.eval("document.adoptedStyleSheets.length").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("document.adoptedStyleSheets[0] === s").expect("e"), JsValue::Bool(true));
+    }
+
 }
