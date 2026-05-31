@@ -38,7 +38,7 @@ Sin daemon, khipu cae al embebedor trigram de 16d — determinista y offline, id
 
 ## Compartir (agora)
 
-`exportar` sella **todo el cuaderno** en `compartido.khipu`: un sobre firmado Ed25519 con la identidad del cuaderno (`identidad.seed`, autogenerada al primer uso) y direccionado por su hash BLAKE3 de contenido. `importar` verifica firma + hash de ese sobre y, si cuadra, ingiere las notas.
+`exportar` sella en `compartido.khipu` un sobre firmado Ed25519 con la identidad del cuaderno (`identidad.seed`, autogenerada al primer uso) y direccionado por su hash BLAKE3 de contenido. Comparte **lo que el buscador esté filtrando** (vacío = todo el cuaderno), así que escribir en la búsqueda y exportar manda sólo ese subconjunto. `importar` verifica firma + hash y, si cuadra, ingiere las notas, marcándolas con una etiqueta de procedencia `de:<autor>` (visible en el editor como «✎ de: …»).
 
 Lo que viaja es el **contenido** (título, cuerpo, etiquetas), nunca la física temporal: al importar, cada nota nace fresca (masa plena, acceso = ahora) — su gravedad arranca en el cuaderno que la recibe. Los wiki-links `[[Título]]` se rearman solos porque khipu resuelve enlaces por título. Reimportar el mismo sobre no duplica (se omiten títulos ya presentes). Un sobre alterado o con firma ajena se rechaza entero, sin autoridad central.
 

@@ -66,7 +66,9 @@ fn descubrir_jalar_y_verificar_de_punta_a_punta() {
     assert_eq!(resultado.created.len(), 1);
     let nota = store.get(resultado.created[0]).unwrap();
     assert_eq!(nota.title, "Compartida por LAN");
-    assert_eq!(nota.tags, vec!["red".to_string()]);
+    assert!(nota.tags.contains(&"red".to_string()));
+    // La nota lleva la procedencia del autor que la selló.
+    assert!(nota.tags.contains(&khipu_share::tag_de(&autor.public_key())));
     // Gravedad fresca en el receptor.
     assert_eq!(nota.mass, 1.0);
     assert_eq!(nota.last_access, 9_000);

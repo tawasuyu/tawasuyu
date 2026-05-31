@@ -158,9 +158,15 @@ pub struct ImportOutcome {
 /// duplica. Los wiki-links `[[Título]]` sobreviven solos: khipu resuelve
 /// enlaces por título, así que si las notas enlazadas también se importan,
 /// el grafo se rearma sin remapear ids.
+///
+/// Cada nota importada recibe una etiqueta de procedencia [`tag_de`]
+/// (`de:<hex8 del autor>`) — así queda asentado de quién vino sin tocar
+/// el modelo `Note` ni la persistencia. Es una etiqueta normal: visible,
+/// buscable y removible.
 pub fn import_into(store: &mut NoteStore, bundle: &Bundle, now: u64) -> ImportOutcome {
     let mut existing: HashSet<String> =
         store.iter().map(|n| n.title.to_lowercase()).collect();
+    let marca = tag_de(&bundle.author);
     let mut out = ImportOutcome::default();
     for sn in &bundle.notes {
         let key = sn.title.to_lowercase();
@@ -170,11 +176,26 @@ pub fn import_into(store: &mut NoteStore, bundle: &Bundle, now: u64) -> ImportOu
             out.skipped += 1;
             continue;
         }
-        let id = store.create(sn.title.clone(), sn.body.clone(), sn.tags.clone(), now);
+        let mut tags = sn.tags.clone();
+        if !tags.iter().any(|t| t == &marca) {
+            tags.push(marca.clone());
+        }
+        let id = store.create(sn.title.clone(), sn.body.clone(), tags, now);
         existing.insert(key);
         out.created.push(id);
     }
     out
+}
+
+/// Prefijo hex (4 bytes / 8 hex) de una clave o hash — identifica un
+/// autor de forma legible sin volcar los 32 bytes.
+pub fn hex8(bytes: &[u8; 32]) -> String {
+    bytes[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// La etiqueta de procedencia para un autor: `de:<hex8>`.
+pub fn tag_de(author: &[u8; 32]) -> String {
+    format!("de:{}", hex8(author))
 }
 
 /// Falla al sellar, abrir o transportar un sobre.
@@ -262,11 +283,24 @@ mod tests {
 
         let n = store.get(out.created[0]).unwrap();
         assert_eq!(n.title, "Receta");
-        assert_eq!(n.tags, vec!["cocina".to_string()]);
+        // Conserva sus etiquetas y suma la de procedencia.
+        assert!(n.tags.contains(&"cocina".to_string()));
+        assert!(n.tags.iter().any(|t| t.starts_with("de:")));
         // Gravedad fresca: masa plena y acceso = ahora del receptor.
         assert_eq!(n.mass, 1.0);
         assert_eq!(n.last_access, 5_000);
         assert_eq!(n.created_at, 5_000);
+    }
+
+    #[test]
+    fn import_marks_author_provenance() {
+        let kp = Keypair::from_seed([13u8; 32]);
+        let sobre = seal(&kp, vec![nota("N", "c", &[])], 1).unwrap();
+        let bundle = open(&sobre).unwrap();
+        let mut store = NoteStore::new();
+        let out = import_into(&mut store, bundle, 1);
+        let n = store.get(out.created[0]).unwrap();
+        assert!(n.tags.contains(&tag_de(&kp.public_key())));
     }
 
     #[test]

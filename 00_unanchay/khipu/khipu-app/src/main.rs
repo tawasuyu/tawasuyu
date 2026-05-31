@@ -1007,11 +1007,23 @@ fn stats_view(model: &Model) -> View<Msg> {
         })
         .collect();
 
-    let lines = vec![
+    let mut lines = vec![
         format!("→ enlaza a: {}", join_or_dash(&fwd_titles)),
         format!("← backlinks: {}", join_or_dash(&back_titles)),
         format!("∼ vecinos: {}", join_or_dash(&nearest)),
     ];
+    // Procedencia: si la nota llegó por compartir, lleva una etiqueta
+    // `de:<autor>`. La mostramos explícita.
+    if let Some(n) = model.store.get(id) {
+        let autores: Vec<&str> = n
+            .tags
+            .iter()
+            .filter_map(|t| t.strip_prefix("de:"))
+            .collect();
+        if !autores.is_empty() {
+            lines.push(format!("✎ de: {}", autores.join(", ")));
+        }
+    }
 
     let nodes: Vec<View<Msg>> = lines
         .into_iter()
@@ -1427,14 +1439,20 @@ fn export_notebook(model: &Model) -> String {
     let Some(dir) = khipu_dir() else {
         return "sin directorio de datos".into();
     };
+    // Compartir selectivo: si hay texto en el buscador, exportamos sólo
+    // las notas que filtra (mismo criterio que la lista); si está vacío,
+    // todo el cuaderno.
+    let query = model.search.text();
+    let q = query.trim();
     let notes: Vec<SharedNote> = model
         .order
         .iter()
         .filter_map(|id| model.store.get(*id))
+        .filter(|n| q.is_empty() || note_matches(n, q))
         .map(SharedNote::from_note)
         .collect();
     if notes.is_empty() {
-        return "no hay notas para exportar".into();
+        return "no hay notas para exportar (¿el filtro no coincide?)".into();
     }
     let n = notes.len();
     let sobre = match khipu_share::seal(kp, notes, now_secs()) {
@@ -1453,7 +1471,15 @@ fn export_notebook(model: &Model) -> String {
         return "no se pudo escribir el sobre".into();
     }
     let hash = sobre.content_address().unwrap_or([0u8; 32]);
-    format!("exportadas {n} notas → compartido.khipu · {}", hex8(&hash))
+    let filtro = if q.is_empty() {
+        String::new()
+    } else {
+        format!(" (filtro «{q}»)")
+    };
+    format!(
+        "exportadas {n} notas{filtro} → compartido.khipu · {}",
+        hex8(&hash)
+    )
 }
 
 /// Verifica e ingiere `compartido.khipu`. Las notas nuevas nacen con
