@@ -497,8 +497,12 @@ pub(crate) fn copy_vim_selection(s: &State) {
         }
         grid.push(line);
     }
-    let (r0, c0) = crate::view::vim_px_to_cell(vs.ax as f64, vs.ay as f64);
-    let (r1, c1) = crate::view::vim_px_to_cell(vs.hx as f64, vs.hy as f64);
+    let (cw, lh) = match s.vim_metrics.lock() {
+        Ok(g) if g.0 > 1.0 && g.1 > 1.0 => (g.0 as f64, g.1 as f64),
+        _ => (crate::view::VIM_CHAR_W, crate::view::VIM_LINE_H),
+    };
+    let (r0, c0) = crate::view::vim_px_to_cell(vs.ax as f64, vs.ay as f64, cw, lh);
+    let (r1, c1) = crate::view::vim_px_to_cell(vs.hx as f64, vs.hy as f64, cw, lh);
     let (sr, sc, er, ec) = if (r0, c0) <= (r1, c1) {
         (r0, c0, r1, c1)
     } else {

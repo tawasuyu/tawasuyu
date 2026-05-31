@@ -304,7 +304,8 @@ pub(crate) fn tui_panel<HostMsg: Clone + 'static>(
     };
     let rect_slot = Arc::clone(&state.last_tui_rect);
     if let AppSkin::Vim = skin {
-        return vim_panel::<HostMsg, _>(snapshot, theme, rect_slot, state.vim_sel, lift);
+        let metrics_slot = Arc::clone(&state.vim_metrics);
+        return vim_panel::<HostMsg, _>(snapshot, theme, rect_slot, metrics_slot, state.vim_sel, lift);
     }
     generic_grid_panel::<HostMsg>(snapshot, theme, rect_slot)
 }
@@ -427,14 +428,19 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
 /// vim deje de verse "como por un vidrio".
 /// Geometría del card de vim — compartida entre el painter (resaltado)
 /// y `copy_vim_selection` (px → celda) para que las celdas coincidan.
+/// `VIM_PAD` es fijo (margen del panel); el avance horizontal y el alto
+/// de línea son *fallbacks* — los reales los mide el painter sobre el
+/// layout de parley y los publica en `State::vim_metrics`.
 pub(crate) const VIM_PAD: f64 = 10.0;
 pub(crate) const VIM_LINE_H: f64 = 16.0;
 pub(crate) const VIM_CHAR_W: f64 = 7.8;
+pub(crate) const VIM_FONT_PX: f32 = 13.0;
 
-/// Coordenadas locales (px, relativas al rect del panel) → celda (fila, col).
-pub(crate) fn vim_px_to_cell(x: f64, y: f64) -> (usize, usize) {
-    let col = (((x - VIM_PAD) / VIM_CHAR_W).floor()).max(0.0) as usize;
-    let row = (((y - VIM_PAD) / VIM_LINE_H).floor()).max(0.0) as usize;
+/// Coordenadas locales (px, relativas al rect del panel) → celda (fila,
+/// col), con las métricas reales del monospace (`char_w`, `line_h`).
+pub(crate) fn vim_px_to_cell(x: f64, y: f64, char_w: f64, line_h: f64) -> (usize, usize) {
+    let col = (((x - VIM_PAD) / char_w).floor()).max(0.0) as usize;
+    let row = (((y - VIM_PAD) / line_h).floor()).max(0.0) as usize;
     (row, col)
 }
 
@@ -442,6 +448,7 @@ pub(crate) fn vim_panel<HostMsg, L>(
     snapshot: Option<TuiSnapshot>,
     theme: &Theme,
     rect_slot: Arc<Mutex<(f32, f32)>>,
+    metrics_slot: Arc<Mutex<(f32, f32)>>,
     sel: Option<VimSel>,
     lift: L,
 ) -> View<HostMsg>
@@ -463,16 +470,45 @@ where
         }
         let Some(snap) = &snapshot else { return };
         let pad = VIM_PAD;
-        let line_h = VIM_LINE_H;
-        let font = 13.0_f32;
-        let char_w = VIM_CHAR_W;
+        let font = VIM_FONT_PX;
+        // Métricas reales del monospace: medimos un bloque-sonda de 40
+        // glifos idénticos y dividimos para el avance horizontal; el alto
+        // del layout (line_height 1.0) da el alto de línea. Adivinar las
+        // constantes desfasa el resaltado al acumularse por columna.
+        const PROBE: &str = "0000000000000000000000000000000000000000"; // 40
+        let probe = TextBlock {
+            text: PROBE,
+            size_px: font,
+            color: theme_clone.fg_text,
+            origin: (0.0, 0.0),
+            max_width: None,
+            alignment: TAlign::Start,
+            line_height: 1.0,
+            italic: false,
+            font_family: None,
+        };
+        let m = llimphi_ui::llimphi_text::measure(ts, &probe);
+        let char_w = if m.width > 1.0 {
+            (m.width as f64) / PROBE.len() as f64
+        } else {
+            VIM_CHAR_W
+        };
+        let line_h = if m.height > 1.0 {
+            m.height as f64
+        } else {
+            VIM_LINE_H
+        };
+        // Publica las métricas para que `copy_vim_selection` use las mismas.
+        if let Ok(mut g) = metrics_slot.lock() {
+            *g = (char_w as f32, line_h as f32);
+        }
         let origin_x = rect.x as f64 + pad;
         let origin_y = rect.y as f64 + pad;
         let n = snap.cells.len();
         // Resaltado de la selección (drag): un rect translúcido por fila.
         if let Some(vs) = sel {
-            let (r0, c0) = vim_px_to_cell(vs.ax as f64, vs.ay as f64);
-            let (r1, c1) = vim_px_to_cell(vs.hx as f64, vs.hy as f64);
+            let (r0, c0) = vim_px_to_cell(vs.ax as f64, vs.ay as f64, char_w, line_h);
+            let (r1, c1) = vim_px_to_cell(vs.hx as f64, vs.hy as f64, char_w, line_h);
             let (sr, sc, er, ec) = if (r0, c0) <= (r1, c1) {
                 (r0, c0, r1, c1)
             } else {

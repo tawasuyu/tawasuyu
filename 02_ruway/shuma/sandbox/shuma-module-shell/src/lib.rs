@@ -284,6 +284,10 @@ pub struct State {
     /// y lo lee `drain_run` para disparar resize si cambia. Cero =
     /// "todavía no se pintó".
     pub last_tui_rect: Arc<Mutex<(f32, f32)>>,
+    /// Métricas reales (char_w, line_h) del monospace del card de vim,
+    /// medidas por el painter sobre el layout de parley y leídas por
+    /// `copy_vim_selection`. Cero = todavía sin medir (usar fallback).
+    pub vim_metrics: Arc<Mutex<(f32, f32)>>,
     /// Jobs en background — arrancados con sufijo `&` en la línea. No
     /// son el "foreground" (ese es `running`); su output se mergea al
     /// buffer prefijado por `[N]`. Builtins `:jobs`, `:term N`,
@@ -328,6 +332,7 @@ impl State {
             history_cursor: None,
             history_search: None,
             last_tui_rect: Arc::new(Mutex::new((0.0, 0.0))),
+            vim_metrics: Arc::new(Mutex::new((0.0, 0.0))),
             bg_jobs: Vec::new(),
             intent_graph: SessionGraph::new(),
             current_run_node: None,
