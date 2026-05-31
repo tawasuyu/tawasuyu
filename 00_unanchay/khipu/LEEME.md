@@ -21,6 +21,7 @@ cargo run --release -p khipu-app
 |---|---|
 | [`khipu-core`](khipu-core/README.md) | Modelo de nota + store; sin UI. |
 | [`khipu-gravity`](khipu-gravity/README.md) | Algoritmo de masa/decay; refuerzo por acceso. |
+| `khipu-share` | Sobres de notas firmados (Ed25519) y direccionados por contenido (BLAKE3) sobre agora. |
 | [`khipu-app`](khipu-app/README.md) | UI Llimphi sobre el core. |
 
 ## Gravedad semántica (embeddings)
@@ -35,8 +36,14 @@ cargo run --release -p khipu-app                              # lo detecta solo 
 
 Sin daemon, khipu cae al embebedor trigram de 16d — determinista y offline, idéntico al comportamiento histórico. El cálculo nunca bloquea la UI: viaja a un worker y reentra al bucle cuando termina. Si el espacio vectorial cambia entre dos arranques (arrancó/cayó el daemon, otro modelo), los vectores se recalculan automáticamente.
 
+## Compartir (agora)
+
+`exportar` sella **todo el cuaderno** en `compartido.khipu`: un sobre firmado Ed25519 con la identidad del cuaderno (`identidad.seed`, autogenerada al primer uso) y direccionado por su hash BLAKE3 de contenido. `importar` verifica firma + hash de ese sobre y, si cuadra, ingiere las notas.
+
+Lo que viaja es el **contenido** (título, cuerpo, etiquetas), nunca la física temporal: al importar, cada nota nace fresca (masa plena, acceso = ahora) — su gravedad arranca en el cuaderno que la recibe. Los wiki-links `[[Título]]` se rearman solos porque khipu resuelve enlaces por título. Reimportar el mismo sobre no duplica (se omiten títulos ya presentes). Un sobre alterado o con firma ajena se rechaza entero, sin autoridad central. La lógica vive en `khipu-share` (8 tests).
+
 ## Consideraciones
 
 - **No es un sistema de "todo"** — no hay due-dates ni recordatorios; es un cuaderno con física propia.
 - El decay es transparente: cada nota expone su masa actual; el usuario decide si la salva.
-- Compatible con la red `agora` (03_ukupacha): notas pueden compartirse sin perder su gravedad local.
+- La gravedad es local y no transferible: compartir mueve el contenido, no la atención.

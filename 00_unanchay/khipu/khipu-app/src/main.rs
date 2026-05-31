@@ -30,7 +30,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agora_core::Keypair;
 use directories::ProjectDirs;
+use khipu_share::{SharedNote, SignedBundle};
+use rand::RngCore;
 use rimay_verbo::Provider;
 use khipu_core::{Note, NoteId, NoteStore};
 use khipu_gravity::{Gravity, GravityConfig, NotePlacement, Params, SemanticField};
@@ -161,6 +164,10 @@ enum Msg {
     /// aplica sólo si `secuencia` sigue siendo la más reciente para esa
     /// nota — descarta cálculos que ediciones posteriores dejaron viejos.
     EmbeddingReady(NoteId, u64, Vec<f32>),
+    /// Sella todo el cuaderno en un sobre firmado (`compartido.khipu`).
+    Export,
+    /// Verifica e ingiere `compartido.khipu` como notas nuevas.
+    Import,
 }
 
 struct Model {
@@ -191,6 +198,12 @@ struct Model {
     embed_latest: BTreeMap<NoteId, u64>,
     /// Contador monótono de pedidos de embedding.
     embed_seq: u64,
+    /// Identidad Ed25519 del cuaderno, para firmar/exportar sobres
+    /// (`khipu-share`). `None` si no hay directorio de datos.
+    keypair: Option<Keypair>,
+    /// Última línea de estado (export/import). Se pinta en una barra al
+    /// pie cuando es `Some`.
+    status: Option<String>,
 }
 
 struct KhipuApp;
@@ -209,6 +222,7 @@ impl App for KhipuApp {
             None => seeded_model(embedder),
         };
         model.data_path = data_path;
+        model.keypair = load_or_create_keypair();
         model.theme = Theme::dark();
         // Elegimos la primera nota más pesada (decayendo on-the-fly);
         // si todo el cuaderno está en archivo, caemos al orden de
@@ -260,6 +274,15 @@ impl App for KhipuApp {
                     model.field.insert(id, v);
                     persist(&model);
                 }
+            }
+            Msg::Export => {
+                commit_edits(&mut model, h);
+                model.status = Some(export_notebook(&model));
+            }
+            Msg::Import => {
+                let report = import_notebook(&mut model, h);
+                persist(&model);
+                model.status = Some(report);
             }
             Msg::DeleteSelected => {
                 if let Some(id) = model.selected {
@@ -351,6 +374,11 @@ impl App for KhipuApp {
         })
         .children(vec![list, editor, gravity]);
 
+        let mut children = vec![header, body];
+        if let Some(bar) = status_bar(model) {
+            children.push(bar);
+        }
+
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -360,7 +388,7 @@ impl App for KhipuApp {
             ..Default::default()
         })
         .fill(model.theme.bg_app)
-        .children(vec![header, body])
+        .children(children)
     }
 
     fn on_key(_model: &Model, event: &KeyEvent) -> Option<Msg> {
@@ -435,6 +463,18 @@ fn header_view(model: &Model) -> View<Msg> {
         model.theme.fg_muted,
         Msg::DeleteSelected,
     );
+    let export_btn = button(
+        "exportar",
+        model.theme.bg_button,
+        model.theme.fg_muted,
+        Msg::Export,
+    );
+    let import_btn = button(
+        "importar",
+        model.theme.bg_button,
+        model.theme.fg_muted,
+        Msg::Import,
+    );
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -457,7 +497,9 @@ fn header_view(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .fill(model.theme.bg_panel_alt)
-    .children(vec![title_node, new_btn, archive_btn, del_btn])
+    .children(vec![
+        title_node, new_btn, archive_btn, del_btn, export_btn, import_btn,
+    ])
 }
 
 fn button(label: &str, bg: Color, fg: Color, msg: Msg) -> View<Msg> {
@@ -1247,11 +1289,136 @@ struct PersistedStateV1 {
     order: Vec<NoteId>,
 }
 
-fn data_file_path() -> Option<PathBuf> {
+/// Directorio de datos de khipu (`$XDG_DATA_HOME/khipu/`), creándolo si
+/// hace falta. Raíz de `notes.bin`, `identidad.seed` y `compartido.khipu`.
+fn khipu_dir() -> Option<PathBuf> {
     let dirs = ProjectDirs::from("org", "gioser", "khipu")?;
     let dir = dirs.data_dir().to_path_buf();
     std::fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("notes.bin"))
+    Some(dir)
+}
+
+fn data_file_path() -> Option<PathBuf> {
+    Some(khipu_dir()?.join("notes.bin"))
+}
+
+/// Carga la identidad Ed25519 del cuaderno desde `identidad.seed`, o
+/// genera una nueva (semilla de 32 bytes vía `OsRng`) y la persiste. La
+/// semilla queda en claro junto a las notas — mismo nivel de confianza
+/// que el cuaderno local. Endurecer a `agora-keystore` (passphrase) es un
+/// follow-up.
+fn load_or_create_keypair() -> Option<Keypair> {
+    let path = khipu_dir()?.join("identidad.seed");
+    if let Ok(bytes) = std::fs::read(&path) {
+        if let Ok(seed) = <[u8; 32]>::try_from(bytes.as_slice()) {
+            return Some(Keypair::from_seed(seed));
+        }
+    }
+    let mut seed = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut seed);
+    let tmp = path.with_extension("seed.tmp");
+    if std::fs::write(&tmp, seed).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+    Some(Keypair::from_seed(seed))
+}
+
+/// Sella todas las notas del cuaderno en `compartido.khipu` (sobre
+/// firmado, direccionado por contenido). Devuelve la línea de estado.
+fn export_notebook(model: &Model) -> String {
+    let Some(kp) = model.keypair.as_ref() else {
+        return "sin identidad para firmar".into();
+    };
+    let Some(dir) = khipu_dir() else {
+        return "sin directorio de datos".into();
+    };
+    let notes: Vec<SharedNote> = model
+        .order
+        .iter()
+        .filter_map(|id| model.store.get(*id))
+        .map(SharedNote::from_note)
+        .collect();
+    if notes.is_empty() {
+        return "no hay notas para exportar".into();
+    }
+    let n = notes.len();
+    let sobre = match khipu_share::seal(kp, notes, now_secs()) {
+        Ok(s) => s,
+        Err(_) => return "falló el sellado".into(),
+    };
+    let Ok(bytes) = sobre.to_bytes() else {
+        return "falló serializar el sobre".into();
+    };
+    let path = dir.join("compartido.khipu");
+    let tmp = path.with_extension("khipu.tmp");
+    if std::fs::write(&tmp, &bytes)
+        .and_then(|_| std::fs::rename(&tmp, &path))
+        .is_err()
+    {
+        return "no se pudo escribir el sobre".into();
+    }
+    let hash = sobre.content_address().unwrap_or([0u8; 32]);
+    format!("exportadas {n} notas → compartido.khipu · {}", hex8(&hash))
+}
+
+/// Verifica e ingiere `compartido.khipu`. Las notas nuevas nacen con
+/// gravedad fresca; sus embeddings se recalculan en segundo plano. Un
+/// sobre con firma inválida se rechaza entero. Devuelve la línea de estado.
+fn import_notebook(model: &mut Model, h: &Handle<Msg>) -> String {
+    let Some(dir) = khipu_dir() else {
+        return "sin directorio de datos".into();
+    };
+    let path = dir.join("compartido.khipu");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return "no hay compartido.khipu para importar".into();
+    };
+    let sobre = match SignedBundle::from_bytes(&bytes) {
+        Ok(s) => s,
+        Err(_) => return "sobre ilegible".into(),
+    };
+    let outcome = match khipu_share::open(&sobre) {
+        Ok(bundle) => khipu_share::import_into(&mut model.store, bundle, now_secs()),
+        Err(_) => return "firma inválida — sobre rechazado".into(),
+    };
+    for id in &outcome.created {
+        model.order.push(*id);
+        schedule_embedding(model, *id, h);
+    }
+    format!(
+        "importadas {} · omitidas {} (ya existían)",
+        outcome.created.len(),
+        outcome.skipped
+    )
+}
+
+/// Prefijo hex (4 bytes / 8 hex) de un hash, para mostrar una dirección
+/// de contenido sin abrumar.
+fn hex8(hash: &[u8; 32]) -> String {
+    hash[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Barra de estado al pie: muestra el último mensaje de export/import.
+fn status_bar(model: &Model) -> Option<View<Msg>> {
+    let text = model.status.as_ref()?;
+    Some(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(22.0_f32),
+            },
+            flex_shrink: 0.0,
+            padding: Rect {
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(2.0_f32),
+                bottom: length(2.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(model.theme.bg_panel_alt)
+        .text_aligned(text.clone(), 11.0, model.theme.fg_muted, Alignment::Start),
+    )
 }
 
 fn load_state(path: &PathBuf) -> Option<PersistedState> {
@@ -1315,6 +1482,8 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         embedder,
         embed_latest: BTreeMap::new(),
         embed_seq: 0,
+        keypair: None,
+        status: None,
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -1362,6 +1531,8 @@ fn seeded_model(embedder: Embedder) -> Model {
         embedder,
         embed_latest: BTreeMap::new(),
         embed_seq: 0,
+        keypair: None,
+        status: None,
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [

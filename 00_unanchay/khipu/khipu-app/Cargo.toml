@@ -19,6 +19,9 @@ path = "examples/demo_cli.rs"
 [dependencies]
 khipu-core = { path = "../khipu-core" }
 khipu-gravity = { path = "../khipu-gravity" }
+khipu-share = { path = "../khipu-share" }
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+rand = { workspace = true }
 rimay-verbo = { path = "../../rimay/rimay-verbo" }
 tokio = { workspace = true }
 llimphi-ui = { workspace = true }

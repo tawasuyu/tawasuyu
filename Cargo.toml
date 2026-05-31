@@ -22,6 +22,7 @@ members = [
     "00_unanchay/khipu/khipu-app",
     "00_unanchay/khipu/khipu-core",
     "00_unanchay/khipu/khipu-gravity",
+    "00_unanchay/khipu/khipu-share",
     "00_unanchay/pineal/demos/pineal-contour-demo",
     "00_unanchay/pineal/demos/pineal-demo",
     "00_unanchay/pineal/demos/pineal-financial-demo",

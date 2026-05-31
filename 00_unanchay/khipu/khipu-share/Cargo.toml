@@ -1,0 +1,18 @@
+[package]
+name = "khipu-share"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "khipu-share — sobres de notas portables, firmados Ed25519 y direccionados por contenido (BLAKE3) sobre agora. La gravedad temporal es local: se comparte el contenido, no la atención."
+
+[dependencies]
+khipu-core = { path = "../khipu-core" }
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+blake3 = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }
+serde-big-array = "0.5"
+thiserror = { workspace = true }
