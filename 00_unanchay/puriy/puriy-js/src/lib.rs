@@ -12927,4 +12927,44 @@ mod tests {
         assert_eq!(rt.eval("caps.imageWidth.max").expect("e"), JsValue::Number(1920.0));
         assert_eq!(rt.eval("sett.imageWidth").expect("e"), JsValue::Number(1280.0));
     }
+
+    // ---- Fase 7.161 — Compression Streams API ----
+    #[test]
+    fn compression_stream_formato_invalido() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var threw = false; try { new CompressionStream('lzma'); } catch(e){ threw = (e instanceof TypeError); }").expect("e");
+        assert_eq!(rt.eval("threw").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_stream_tiene_readable_y_writable() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var cs = new CompressionStream('gzip');").expect("e");
+        assert_eq!(rt.eval("cs.readable instanceof ReadableStream && typeof cs.writable.getWriter === 'function'").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn decompression_stream_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ds = new DecompressionStream('deflate');").expect("e");
+        assert_eq!(rt.eval("ds._format").expect("e"), JsValue::String("deflate".into()));
+    }
+
+    #[test]
+    fn compression_write_publica_mutacion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("globalThis.__puriy_dirty = [];
+            var cs = new CompressionStream('gzip'); var w = cs.writable.getWriter(); w.write(new Uint8Array([1, 2, 3]));").expect("e");
+        assert_eq!(rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'compress'; })").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_host_output_llega_a_readable() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var cs = new CompressionStream('gzip');
+            var w = cs.writable.getWriter(); w.write(new Uint8Array([1]));
+            __puriy_compress_output(cs._id, 42); __puriy_compress_end(cs._id);
+            var got = null; cs.readable.getReader().read().then(function(r){ got = r.value; });").expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::Number(42.0));
+    }
 }
