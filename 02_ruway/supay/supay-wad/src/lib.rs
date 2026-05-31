@@ -121,6 +121,9 @@ pub enum MusEvent {
     NoteOff { channel: u8, note: u8 },
     /// Cambio de volumen del canal (controller #3), 0-127.
     Volume { channel: u8, vol: u8 },
+    /// Cambio de instrumento del canal (controller #0 / program change),
+    /// patch GM 0-127. El synth lo mapea al instrumento GENMIDI.
+    Program { channel: u8, patch: u8 },
     /// Fin de la partitura (loop o stop según el modo de reproducción).
     End,
 }
@@ -139,6 +142,180 @@ pub struct MusStep {
 #[derive(Clone, Debug, Default)]
 pub struct MusSong {
     pub steps: Vec<MusStep>,
+}
+
+/// Un operador FM del chip OPL2, tal como lo declara el lump GENMIDI
+/// (6 bytes). Los métodos extraen los campos empaquetados en bits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GenMidiOp {
+    /// am/vib/eg-type/ksr/mult.
+    pub am_vib: u8,
+    /// attack rate (hi nibble) / decay rate (lo nibble).
+    pub att_dec: u8,
+    /// sustain level (hi nibble) / release rate (lo nibble).
+    pub sus_rel: u8,
+    /// waveform select (bits 0-2).
+    pub waveform: u8,
+    /// key scale level (bits 6-7) — atenuación por octava.
+    pub ksl: u8,
+    /// total level (bits 0-5): atenuación de salida, 0=máx volumen.
+    pub level: u8,
+}
+
+/// Tabla de multiplicadores de frecuencia del OPL (`mult` 0-15).
+pub const OPL_MULT: [f32; 16] = [
+    0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 10.0, 12.0, 12.0, 15.0, 15.0,
+];
+
+impl GenMidiOp {
+    /// Multiplicador de frecuencia (ratio op/nota).
+    pub fn mult(&self) -> f32 {
+        OPL_MULT[(self.am_vib & 0x0f) as usize]
+    }
+    /// Attack rate 0-15 (mayor = más rápido).
+    pub fn attack_rate(&self) -> u8 {
+        (self.att_dec >> 4) & 0x0f
+    }
+    pub fn decay_rate(&self) -> u8 {
+        self.att_dec & 0x0f
+    }
+    /// Sustain level 0-15 (atenuación: 0=fuerte, 15=débil).
+    pub fn sustain_level(&self) -> u8 {
+        (self.sus_rel >> 4) & 0x0f
+    }
+    pub fn release_rate(&self) -> u8 {
+        self.sus_rel & 0x0f
+    }
+    /// Waveform 0-7 (0=seno, 1=medio-seno, 2=abs-seno, 3=cuarto-seno...).
+    pub fn waveform_select(&self) -> u8 {
+        self.waveform & 0x07
+    }
+    /// Total level 0-63 (atenuación de salida en pasos de ~0.75 dB).
+    pub fn total_level(&self) -> u8 {
+        self.level & 0x3f
+    }
+    /// `true` si la envolvente sostiene (eg-type bit) — instrumentos
+    /// como órgano; `false` = decae hasta cero (percusivo, piano).
+    pub fn sustaining(&self) -> bool {
+        self.am_vib & 0x20 != 0
+    }
+}
+
+/// Una voz FM de GENMIDI: modulador + portadora + feedback + offset de
+/// nota base (16 bytes en disco).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GenMidiVoice {
+    pub modulator: GenMidiOp,
+    /// feedback (bits 1-3) / connection (bit 0).
+    pub feedback: u8,
+    pub carrier: GenMidiOp,
+    /// Ajuste de nota base (semitonos) de esta voz.
+    pub base_note_offset: i16,
+}
+
+impl GenMidiVoice {
+    /// Cantidad de feedback 0-7 del modulador sobre sí mismo.
+    pub fn feedback_amount(&self) -> u8 {
+        (self.feedback >> 1) & 0x07
+    }
+    /// `true` = conexión aditiva (AM, ambos ops a la salida); `false` =
+    /// FM (modulador modula a la portadora).
+    pub fn additive(&self) -> bool {
+        self.feedback & 0x01 != 0
+    }
+}
+
+/// Un instrumento GENMIDI (36 bytes): flags + tuning + dos voces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GenMidiInstr {
+    pub flags: u16,
+    pub fine_tuning: u8,
+    /// Nota fija (para percusión); se usa si `flags` trae el bit fixed.
+    pub fixed_note: u8,
+    pub voices: [GenMidiVoice; 2],
+}
+
+impl GenMidiInstr {
+    /// `true` si el instrumento toca siempre `fixed_note` (percusión).
+    pub fn fixed_pitch(&self) -> bool {
+        self.flags & 0x01 != 0
+    }
+    /// `true` si usa las dos voces (doble voz OPL3).
+    pub fn double_voice(&self) -> bool {
+        self.flags & 0x04 != 0
+    }
+}
+
+/// Banco de instrumentos OPL de Doom (lump `GENMIDI`): 128 melódicos
+/// (índice = patch GM) + 47 de percusión (índice 128.. = nota GM-35).
+#[derive(Clone, Debug)]
+pub struct GenMidi {
+    pub instruments: Vec<GenMidiInstr>,
+}
+
+/// Cantidad de instrumentos en un lump GENMIDI estándar (128 melódicos
+/// + 47 percusión).
+pub const GENMIDI_COUNT: usize = 175;
+
+impl GenMidi {
+    /// Instrumento melódico por patch GM (0-127). Clampea fuera de rango.
+    pub fn melodic(&self, patch: u8) -> Option<&GenMidiInstr> {
+        self.instruments.get((patch as usize).min(127))
+    }
+    /// Instrumento de percusión por nota GM (35-81). Mapea a 128+.
+    pub fn percussion(&self, note: u8) -> Option<&GenMidiInstr> {
+        let idx = 128usize + (note as usize).saturating_sub(35);
+        self.instruments
+            .get(idx.min(self.instruments.len().saturating_sub(1)))
+    }
+}
+
+fn parse_genmidi_op(b: &[u8]) -> GenMidiOp {
+    GenMidiOp {
+        am_vib: b[0],
+        att_dec: b[1],
+        sus_rel: b[2],
+        waveform: b[3],
+        ksl: b[4],
+        level: b[5],
+    }
+}
+
+/// Parsea el lump `GENMIDI` (banco de instrumentos OPL). Header
+/// `#OPL_II#` (8 bytes) + 175 records de 36 bytes. Los nombres (32 bytes
+/// c/u tras los records) se ignoran. Devuelve `None` si el magic no
+/// valida o faltan bytes.
+pub fn parse_genmidi(bytes: &[u8]) -> Option<GenMidi> {
+    const HEADER: usize = 8;
+    const REC: usize = 36;
+    if bytes.len() < HEADER + GENMIDI_COUNT * REC || &bytes[0..HEADER] != b"#OPL_II#" {
+        return None;
+    }
+    let mut instruments = Vec::with_capacity(GENMIDI_COUNT);
+    for i in 0..GENMIDI_COUNT {
+        let r = &bytes[HEADER + i * REC..HEADER + (i + 1) * REC];
+        let flags = u16::from_le_bytes([r[0], r[1]]);
+        let fine_tuning = r[2];
+        let fixed_note = r[3];
+        let mut voices = [GenMidiVoice::default(); 2];
+        for (v, voice) in voices.iter_mut().enumerate() {
+            let vb = &r[4 + v * 16..4 + (v + 1) * 16];
+            *voice = GenMidiVoice {
+                modulator: parse_genmidi_op(&vb[0..6]),
+                feedback: vb[6],
+                carrier: parse_genmidi_op(&vb[7..13]),
+                // vb[13] = unused; vb[14..16] = base note offset i16 LE.
+                base_note_offset: i16::from_le_bytes([vb[14], vb[15]]),
+            };
+        }
+        instruments.push(GenMidiInstr {
+            flags,
+            fine_tuning,
+            fixed_note,
+            voices,
+        });
+    }
+    Some(GenMidi { instruments })
 }
 
 /// Parsea un lump en formato MUS de Doom a un timeline de [`MusStep`].
@@ -224,8 +401,12 @@ pub fn parse_mus(bytes: &[u8]) -> Option<MusSong> {
                 let ctrl = score[pos];
                 let val = score[pos + 1] & 0x7f;
                 pos += 2;
-                if ctrl == 3 {
-                    materialized = Some(MusEvent::Volume { channel: ch, vol: val });
+                match ctrl {
+                    // Controller 0 = cambio de instrumento (program change).
+                    0 => materialized = Some(MusEvent::Program { channel: ch, patch: val }),
+                    // Controller 3 = volumen del canal.
+                    3 => materialized = Some(MusEvent::Volume { channel: ch, vol: val }),
+                    _ => {}
                 }
             }
             6 => {
@@ -487,6 +668,12 @@ impl Wad {
     /// es `MUS\x1a` o el header está truncado. Ver [`parse_mus`].
     pub fn music_song(&self, name: &str) -> Option<MusSong> {
         parse_mus(self.lump(name)?)
+    }
+
+    /// Parsea el lump `GENMIDI` (banco de instrumentos OPL). `None` si
+    /// el WAD no lo trae o el magic no valida. Ver [`parse_genmidi`].
+    pub fn genmidi(&self) -> Option<GenMidi> {
+        parse_genmidi(self.lump("GENMIDI")?)
     }
 
     /// Busca un sprite lump por (name, frame_letter, angle).
@@ -1230,5 +1417,50 @@ mod tests {
     fn parse_mus_rejects_non_mus() {
         assert!(parse_mus(b"MThd\0\0\0\0").is_none());
         assert!(parse_mus(&[0u8; 4]).is_none());
+    }
+
+    #[test]
+    fn parse_mus_program_change() {
+        // controller (tipo 4) ch0, ctrl=0 (instrumento), patch=48.
+        let score = [0x40, 0, 48, 0x60];
+        let song = parse_mus(&build_mus(&score)).unwrap();
+        assert_eq!(song.steps[0].event, MusEvent::Program { channel: 0, patch: 48 });
+    }
+
+    #[test]
+    fn parse_genmidi_extracts_fields() {
+        const HEADER: usize = 8;
+        const REC: usize = 36;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"#OPL_II#");
+        bytes.resize(HEADER + GENMIDI_COUNT * REC, 0u8);
+        // Instrumento 10: voz0 modulador am_vib con mult=2 (índice 2),
+        // att_dec=0x9A (attack 9, decay 10), total level=0x25 (=37).
+        let base = HEADER + 10 * REC;
+        // flags=0, fine=0, fixed=0, luego voz0 (16): mod en [4..10].
+        bytes[base + 4] = 0x02; // am_vib: mult=2
+        bytes[base + 5] = 0x9A; // att_dec
+        bytes[base + 4 + 5] = 0x25; // mod.level (byte 5 del op) → offset 4+5
+        // Instrumento de percusión 130: fixed_note=49, flag fixed.
+        let pbase = HEADER + 130 * REC;
+        bytes[pbase] = 0x01; // flags bit0 = fixed pitch
+        bytes[pbase + 3] = 49; // fixed_note
+        let gm = parse_genmidi(&bytes).expect("parse");
+        assert_eq!(gm.instruments.len(), GENMIDI_COUNT);
+        let i10 = gm.melodic(10).unwrap();
+        assert_eq!(i10.voices[0].modulator.mult(), 2.0);
+        assert_eq!(i10.voices[0].modulator.attack_rate(), 9);
+        assert_eq!(i10.voices[0].modulator.decay_rate(), 10);
+        assert_eq!(i10.voices[0].modulator.total_level(), 0x25);
+        // percussion(note) mapea note→128+(note-35); 130 = 128+(37-35).
+        let perc = gm.percussion(37).unwrap();
+        assert!(perc.fixed_pitch());
+        assert_eq!(perc.fixed_note, 49);
+    }
+
+    #[test]
+    fn parse_genmidi_rejects_bad_magic() {
+        let bytes = vec![0u8; 8 + GENMIDI_COUNT * 36];
+        assert!(parse_genmidi(&bytes).is_none());
     }
 }
