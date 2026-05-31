@@ -12840,4 +12840,56 @@ mod tests {
         // inverse vía DOMMatrix (Fase 7.153): traslación inversa.
         assert_eq!(rt.eval("Math.abs(t.inverse.matrix[12] + 1) < 1e-6").expect("e"), JsValue::Bool(true));
     }
+
+    // ---- Fase 7.159 — Background Fetch API ----
+    #[test]
+    fn backgroundfetch_manager_existe_en_registration() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        assert_eq!(rt.eval("reg.backgroundFetch instanceof BackgroundFetchManager").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn backgroundfetch_fetch_resuelve_registration() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval("var out = null;
+            reg.backgroundFetch.fetch('media', ['/a.mp4', '/b.mp4'], { downloadTotal: 100 }).then(function(r){ out = r; });").expect("e");
+        assert_eq!(rt.eval("out instanceof BackgroundFetchRegistration").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("out.id").expect("e"), JsValue::String("media".into()));
+        assert_eq!(rt.eval("out.downloadTotal").expect("e"), JsValue::Number(100.0));
+    }
+
+    #[test]
+    fn backgroundfetch_fetch_id_duplicado_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval("var err = null;
+            reg.backgroundFetch.fetch('dup', ['/x']);
+            reg.backgroundFetch.fetch('dup', ['/y']).catch(function(e){ err = String(e); });").expect("e");
+        assert_eq!(rt.eval("err !== null").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn backgroundfetch_get_y_getids() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval("reg.backgroundFetch.fetch('z', ['/z']);
+            var got = null; reg.backgroundFetch.get('z').then(function(r){ got = r ? r.id : null; });
+            var ids = null; reg.backgroundFetch.getIds().then(function(l){ ids = l.join(','); });").expect("e");
+        assert_eq!(rt.eval("got").expect("e"), JsValue::String("z".into()));
+        assert_eq!(rt.eval("ids").expect("e"), JsValue::String("z".into()));
+    }
+
+    #[test]
+    fn backgroundfetch_progress_dispara_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(PUSH_REG).expect("reg");
+        rt.eval("var bgreg = null;
+            reg.backgroundFetch.fetch('p', ['/p']).then(function(r){ bgreg = r; });").expect("e");
+        rt.eval("var prog = null; bgreg.onprogress = function(e){ prog = bgreg.downloaded; };
+            __puriy_backgroundfetch_progress(bgreg._uid, { downloaded: 50, downloadTotal: 100 });").expect("e");
+        assert_eq!(rt.eval("prog").expect("e"), JsValue::Number(50.0));
+    }
+
 }

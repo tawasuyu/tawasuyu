@@ -115,6 +115,7 @@ mod scheduler;
 mod urlpattern;
 mod webgpu;
 mod webxr;
+mod backgroundfetch;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -230,6 +231,7 @@ pub(crate) use scheduler::SCHEDULER_BOOTSTRAP;
 pub(crate) use urlpattern::URLPATTERN_BOOTSTRAP;
 pub(crate) use webgpu::WEBGPU_BOOTSTRAP;
 pub(crate) use webxr::WEBXR_BOOTSTRAP;
+pub(crate) use backgroundfetch::BACKGROUNDFETCH_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -347,5 +349,6 @@ pub(crate) const ALL: &[&str] = &[
     URLPATTERN_BOOTSTRAP,
     WEBGPU_BOOTSTRAP,
     WEBXR_BOOTSTRAP,
+    BACKGROUNDFETCH_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
