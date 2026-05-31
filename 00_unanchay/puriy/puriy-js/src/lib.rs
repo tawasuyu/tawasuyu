@@ -12329,4 +12329,65 @@ mod tests {
         assert_eq!(rt.eval("bmp instanceof ImageBitmap").expect("e"), JsValue::Bool(true));
     }
 
+    // ---- Fase 7.151 — WebGL ----
+    #[test]
+    fn webgl_contexto_via_offscreen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var gl = new OffscreenCanvas(64, 64).getContext('webgl');").expect("e");
+        assert_eq!(rt.eval("typeof gl").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("gl.drawingBufferWidth").expect("e"), JsValue::Number(64.0));
+        assert_eq!(rt.eval("typeof new OffscreenCanvas(1,1).getContext('webgl2')").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("typeof WebGLRenderingContext").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn webgl_constantes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var gl = new OffscreenCanvas(1, 1).getContext('webgl');").expect("e");
+        assert_eq!(rt.eval("gl.TRIANGLES").expect("e"), JsValue::Number(4.0));
+        assert_eq!(rt.eval("gl.COLOR_BUFFER_BIT").expect("e"), JsValue::Number(16384.0));
+        assert_eq!(rt.eval("gl.FLOAT").expect("e"), JsValue::Number(5126.0));
+        assert_eq!(rt.eval("WebGLRenderingContext.ARRAY_BUFFER").expect("e"), JsValue::Number(34962.0));
+    }
+
+    #[test]
+    fn webgl_crea_recursos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var gl = new OffscreenCanvas(1, 1).getContext('webgl');").expect("e");
+        assert_eq!(rt.eval("gl.createBuffer() instanceof WebGLBuffer").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("gl.createProgram() instanceof WebGLProgram").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("gl.createTexture() instanceof WebGLTexture").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("gl.isBuffer(gl.createBuffer())").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webgl_compile_link_exitoso() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var gl = new OffscreenCanvas(1, 1).getContext('webgl'); \
+                 var sh = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(sh, 'void main(){}'); gl.compileShader(sh); \
+                 var pr = gl.createProgram(); gl.attachShader(pr, sh); gl.linkProgram(pr);").expect("e");
+        assert_eq!(rt.eval("gl.getShaderParameter(sh, gl.COMPILE_STATUS)").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("gl.getProgramParameter(pr, gl.LINK_STATUS)").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("gl.getShaderSource(sh)").expect("e"), JsValue::String("void main(){}".into()));
+    }
+
+    #[test]
+    fn webgl_get_error_y_parameter() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var gl = new OffscreenCanvas(1, 1).getContext('webgl');").expect("e");
+        assert_eq!(rt.eval("gl.getError()").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("gl.getParameter(gl.MAX_TEXTURE_SIZE)").expect("e"), JsValue::Number(4096.0));
+        assert_eq!(rt.eval("typeof gl.getParameter(gl.VERSION)").expect("e"), JsValue::String("string".into()));
+        assert_eq!(rt.eval("gl.checkFramebufferStatus() === gl.FRAMEBUFFER_COMPLETE").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webgl_draw_publica_comando() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("globalThis.__puriy_dirty = []; var gl = new OffscreenCanvas(1, 1).getContext('webgl'); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);").expect("e");
+        assert_eq!(rt.eval("gl._cmds.length").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("gl._cmds[1][0]").expect("e"), JsValue::String("drawArrays".into()));
+        assert_eq!(rt.eval("__puriy_dirty.filter(function(d){return d.kind==='webgl-call';}).length").expect("e"), JsValue::Number(2.0));
+    }
+
 }
