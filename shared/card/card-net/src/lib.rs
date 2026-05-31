@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use libp2p::{
-    dcutr, identify, identity, kad, noise, relay,
+    autonat, dcutr, identify, identity, kad, noise, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Swarm, SwarmBuilder,
 };
@@ -90,6 +90,11 @@ struct BrahmanBehaviour {
     /// DCUtR: tras conectar por relay, intenta promover a conexión
     /// directa (hole-punching) coordinando por el circuito.
     dcutr: dcutr::Behaviour,
+    /// AutoNAT: confirma qué direcciones externas son realmente alcanzables
+    /// pidiéndole a otros peers que nos disquen de vuelta. Sustituye el
+    /// "confiar a ciegas en el observed_addr de identify" por direcciones
+    /// verificadas — sólo esas se anuncian (y entran en reservas de relay).
+    autonat: autonat::Behaviour,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -199,6 +204,21 @@ impl BrahmanNet {
                     relay: relay::Behaviour::new(local, Default::default()),
                     relay_client,
                     dcutr: dcutr::Behaviour::new(local),
+                    autonat: autonat::Behaviour::new(
+                        local,
+                        autonat::Config {
+                            // Confirmamos también IPs privadas/loopback: la
+                            // malla Brahman vive tanto en LAN como en WAN, no
+                            // sólo en IPs globales (default `true` las
+                            // ignoraría y nada se confirmaría en LAN).
+                            only_global_ips: false,
+                            // Sondeo pronto tras arrancar (default ~15 s es
+                            // demasiado para el flujo de reservas de relay).
+                            boot_delay: Duration::from_secs(2),
+                            retry_interval: Duration::from_secs(5),
+                            ..Default::default()
+                        },
+                    ),
                 }
             })
             .map_err(|e| NodeError::Build(format!("{e}")))?
@@ -280,17 +300,25 @@ impl BrahmanNet {
                             SwarmEvent::Behaviour(BrahmanBehaviourEvent::Identify(
                                 identify::Event::Received { peer_id, info, .. }
                             )) => {
-                                // El peer nos dice en qué dirección nos ve:
-                                // la confirmamos como externa. Sin esto el
-                                // relay server no tiene direcciones que poner
-                                // en las reservas (`NoAddressesInReservation`)
-                                // y los circuitos no se establecen. Lo
-                                // principista sería confirmarla vía AutoNAT;
-                                // por ahora confiamos en el observed_addr.
-                                swarm.add_external_address(info.observed_addr.clone());
+                                // El observed_addr que nos reporta identify se
+                                // emite como CANDIDATO a externa; AutoNAT lo
+                                // prueba pidiendo dial-backs y, si es
+                                // alcanzable, dispara StatusChanged(Public) —
+                                // ahí recién lo confirmamos (abajo). Las
+                                // listen-addrs del peer pueblan la routing
+                                // table de Kad.
                                 for addr in info.listen_addrs {
                                     swarm.behaviour_mut().kad.add_address(&peer_id, addr);
                                 }
+                            }
+                            // AutoNAT confirmó (vía dial-back de otros peers)
+                            // que somos alcanzables en `addr`: recién entonces
+                            // la anunciamos como externa — la usa el relay
+                            // server en las reservas y la ven los pares.
+                            SwarmEvent::Behaviour(BrahmanBehaviourEvent::Autonat(
+                                autonat::Event::StatusChanged { new: autonat::NatStatus::Public(addr), .. }
+                            )) => {
+                                swarm.add_external_address(addr);
                             }
                             SwarmEvent::Behaviour(BrahmanBehaviourEvent::Kad(
                                 kad::Event::OutboundQueryProgressed { id, result, step, .. }

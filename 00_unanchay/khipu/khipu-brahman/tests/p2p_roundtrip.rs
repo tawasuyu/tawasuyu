@@ -123,11 +123,11 @@ async fn jalar_a_traves_de_un_relay() {
     // `…/p2p/<relay>/p2p-circuit/p2p/<A>`).
     let a = KhipuNode::standalone().unwrap();
     let _serve = a.run_serve(move || Some(bytes.clone()));
-    // A se conecta al relay; el intercambio identify le confirma al relay
-    // su dirección externa (para que la incluya en la reserva). Recién
-    // entonces reservamos el circuito.
+    // A se conecta al relay; AutoNAT (con el dial-back de A) le confirma al
+    // relay su dirección externa, necesaria para la reserva. Esperamos a
+    // que ese sondeo (boot_delay + round-trip) ocurra antes de reservar.
     a.dial_str(&relay_addr).unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
     let circuit = format!("{relay_addr}/p2p-circuit");
     let a_addr = tokio::time::timeout(Duration::from_secs(15), a.listen_str(&circuit))
         .await

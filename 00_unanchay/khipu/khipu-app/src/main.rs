@@ -2000,7 +2000,9 @@ fn start_publishing(model: &mut Model, h: &Handle<Msg>) -> String {
                 let (rt, node, h2) = (p.rt.clone(), p.node.clone(), h.clone());
                 rt.spawn(async move {
                     let _ = node.dial_str(&relay);
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    // Esperamos a que AutoNAT confirme la dirección del relay
+                    // (boot_delay + dial-back) antes de pedir la reserva.
+                    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
                     let circuit = format!("{relay}/p2p-circuit");
                     let msg = match node.listen_str(&circuit).await {
                         Ok(addr) => addr,
