@@ -257,6 +257,13 @@ pub struct BoxNode {
     /// Bindings `transition` declarados en el nodo. El chrome los consulta
     /// (`anim::transition_for`) para tweenear cambios de estado (hover, etc.).
     pub transitions: Vec<crate::style::TransitionBinding>,
+    /// Identidad estable del nodo dentro del árbol (1..N en orden DFS
+    /// pre-orden), asignada por un post-pass de `build`. Permite al chrome
+    /// llevar estado por-nodo (p. ej. el tween de `transition` en hover)
+    /// keyeado por id, sin depender de contar índices en walks paralelos
+    /// frágiles. `0` = sin asignar (raíz vacía o nodos sintetizados por
+    /// mutaciones JS post-load, que no participan de transiciones).
+    pub node_id: u32,
 }
 
 /// Animación CSS lista para tween: el binding parseado + la definición de
@@ -1019,7 +1026,24 @@ pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
     let mut form_stack: Vec<usize> = Vec::new();
     let mut form_cursor: usize = 0;
     assign_form_idx(&mut root, &mut form_stack, &mut form_cursor);
+    // Identidad estable por nodo (1..N en DFS pre-orden). El chrome la usa
+    // para llevar estado por-nodo (tween de `transition` en hover) keyeado
+    // por id, sin contar índices en walks paralelos frágiles.
+    let mut node_cursor: u32 = 1;
+    assign_node_ids(&mut root, &mut node_cursor);
     BoxTree { root, forms }
+}
+
+/// Post-pass: numera cada nodo del árbol en orden DFS pre-orden empezando
+/// en `*next`. Determinista y estable mientras la estructura del árbol no
+/// cambie — exactamente la garantía que necesita el estado de hover del
+/// chrome (keyeado por `node_id`).
+fn assign_node_ids(node: &mut BoxNode, next: &mut u32) {
+    node.node_id = *next;
+    *next += 1;
+    for child in &mut node.children {
+        assign_node_ids(child, next);
+    }
 }
 
 fn collect_forms_dom(node: &Handle, base: Option<&url::Url>, out: &mut Vec<FormInfo>) {
@@ -1471,6 +1495,7 @@ fn empty_root() -> BoxNode {
         attributes: Vec::new(),
         animation: None,
         transitions: Vec::new(),
+        node_id: 0,
     }
 }
 
@@ -1851,6 +1876,7 @@ fn build_node(
                         })
                 }),
                 transitions: style.transitions.clone(),
+                node_id: 0,
             })
         }
         NodeData::Text { contents } => {
@@ -1969,6 +1995,7 @@ fn build_node(
         attributes: Vec::new(),
                 animation: None,
                 transitions: Vec::new(),
+                node_id: 0,
             })
         }
     }
@@ -2057,6 +2084,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         attributes: Vec::new(),
         animation: None,
         transitions: Vec::new(),
+        node_id: 0,
     }
 }
 
@@ -2691,6 +2719,22 @@ mod tests {
         let eng = Engine::new();
         let doc = eng.load_html("about:test", html);
         assert!(doc.box_tree.descendants_count() >= 3);
+    }
+
+    #[test]
+    fn node_ids_son_unicos_y_no_cero() {
+        let html = "<html><body><div><h1>Hola</h1><p>Mundo</p></div></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut ids = Vec::new();
+        doc.box_tree.walk(|b| ids.push(b.node_id));
+        assert!(ids.iter().all(|&id| id != 0), "ningún nodo queda en 0");
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "los node_id son únicos");
+        // DFS pre-orden arranca en 1 sobre la raíz (body).
+        assert_eq!(doc.box_tree.root.node_id, 1);
     }
 
     #[test]
