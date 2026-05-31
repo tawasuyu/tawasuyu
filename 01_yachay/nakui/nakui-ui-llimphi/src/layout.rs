@@ -1,0 +1,163 @@
+use super::*;
+
+pub(crate) fn build_banners(model: &Model) -> Vec<View<Msg>> {
+    let mut out: Vec<View<Msg>> = Vec::new();
+    if let Some(t) = &model.toast {
+        out.push(
+            banner_view::<Msg>(t.kind, t.text.clone()).on_click(Msg::DismissToast),
+        );
+    }
+    if let Some(msg) = &model.initial_toast {
+        out.push(banner_view::<Msg>(BannerKind::Info, msg.clone()));
+    }
+    if let Some(msg) = &model.load_error {
+        out.push(banner_view::<Msg>(BannerKind::Error, msg.clone()));
+    }
+    out
+}
+
+pub(crate) fn build_body(model: &Model, theme: &Theme) -> View<Msg> {
+    let sidebar = build_sidebar(model, theme);
+    let main = build_main(model, theme);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .children(vec![sidebar, main])
+}
+
+pub(crate) fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
+    let palette = ListPalette::from_theme(theme);
+
+    // Sección 1: lista de módulos.
+    let module_rows: Vec<ListRow<Msg>> = model
+        .modules
+        .iter()
+        .enumerate()
+        .map(|(i, m)| ListRow {
+            label: m.label.clone(),
+            selected: model.selected_module == Some(i),
+            on_click: Msg::SelectModule(i),
+        })
+        .collect();
+
+    let modules_panel = list_view(ListSpec {
+        rows: module_rows,
+        total: model.modules.len(),
+        caption: Some(rimay_localize::t_args(
+            "nakui-sidebar-modules",
+            &[("count", model.modules.len().to_string().into())],
+        )),
+        truncated_hint: None,
+        row_height: ROW_HEIGHT,
+        palette,
+    });
+
+    // Sección 2: menú del módulo activo.
+    let menu_panel = match model.selected_module {
+        Some(mod_idx) => {
+            let m = &model.modules[mod_idx];
+            let rows: Vec<ListRow<Msg>> = m
+                .menu
+                .iter()
+                .enumerate()
+                .map(|(i, item)| ListRow {
+                    label: match &item.icon {
+                        Some(ic) => format!("{ic}  {}", item.label),
+                        None => item.label.clone(),
+                    },
+                    selected: model.selected_menu == Some(i),
+                    on_click: Msg::SelectMenu(i),
+                })
+                .collect();
+            list_view(ListSpec {
+                rows,
+                total: m.menu.len(),
+                caption: Some(rimay_localize::t("nakui-sidebar-menu")),
+                truncated_hint: None,
+                row_height: ROW_HEIGHT,
+                palette,
+            })
+        }
+        None => empty_panel(theme, &rimay_localize::t("nakui-empty-no-modules")),
+    };
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(SIDEBAR_WIDTH),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![modules_panel, menu_panel])
+}
+
+pub(crate) fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
+    // Prioridad del área principal: form > ficha de detalle > vista
+    // seleccionada en el menú.
+    let inner = if let Some(form) = &model.form {
+        build_form_panel(model, form, theme)
+    } else if let Some(detail) = &model.detail {
+        build_detail_panel(model, detail, theme)
+    } else {
+        match (model.selected_module, model.selected_menu) {
+            (Some(mod_idx), Some(menu_idx)) => {
+                let m = &model.modules[mod_idx];
+                let item = &m.menu[menu_idx];
+                match m.views.get(&item.view) {
+                    Some(view) => build_view_panel(model, mod_idx, &item.view, view, theme),
+                    None => empty_panel(
+                        theme,
+                        &format!("vista '{}' no existe en el manifest del módulo", item.view),
+                    ),
+                }
+            }
+            (Some(_), None) => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-menu")),
+            _ => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-module")),
+        }
+    };
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![inner])
+}
+
+/// Clave del Form view dentro del módulo (para `Msg::OpenForm`).
+pub(crate) fn form_view_key(module: &Module, fv: &FormView) -> String {
+    module
+        .views
+        .iter()
+        .find_map(|(k, v)| match v {
+            ModuleView::Form(f) if f.entity == fv.entity && f.title == fv.title => {
+                Some(k.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
