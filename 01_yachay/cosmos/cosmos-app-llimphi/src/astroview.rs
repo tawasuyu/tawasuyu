@@ -27,6 +27,7 @@ use crate::model::Msg;
 use crate::view::{line, section_label, tile_container};
 
 /// Lecturas astronómicas cacheadas para el instante/lugar vigente.
+#[derive(Clone)]
 pub(crate) struct AstroState {
     pub(crate) instant_iso: String,
     pub(crate) place_label: String,
@@ -115,6 +116,17 @@ pub(crate) fn compute_astro(chart: &Chart, use_now: bool) -> AstroState {
 // =====================================================================
 // Renderers
 // =====================================================================
+
+/// Placeholder mientras el cómputo astronómico (orto/ocaso/efemérides, la
+/// parte cara: 144 muestras × 10 cuerpos) corre en un worker. La UI nunca se
+/// bloquea esperándolo; se reemplaza por las lecturas reales al reentrar el
+/// `Msg::AstroComputed`.
+pub(crate) fn calculando(theme: &Theme) -> View<Msg> {
+    tile_container(
+        vec![line("calculando…".to_string(), 12.0, theme.fg_muted)],
+        theme,
+    )
+}
 
 /// Cabecera común: instante + lugar.
 fn astro_header(a: &AstroState, theme: &Theme) -> View<Msg> {

@@ -112,15 +112,34 @@ impl Hal {
     pub async fn new(
         compatible_surface: Option<&wgpu::Surface<'static>>,
     ) -> Result<Self, HalError> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface,
-            })
-            .await
-            .ok_or(HalError::NoAdapter)?;
+        let opts = wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface,
+        };
+        // Preferimos backends PRIMARY (Vulkan/Metal/DX12). El backend GL de
+        // wgpu sobre Mesa/Wayland tiene un bug de teardown: al soltar la
+        // instancia, `eglTerminate` marshalea sobre una conexión Wayland ya
+        // muerta (`wl_proxy_marshal`) y revienta con SIGSEGV. Con
+        // `Backends::all()` (el default), wgpu puede elegir GL aun habiendo
+        // Vulkan, y la app crashea al cerrar/teardown. Forzamos PRIMARY; si la
+        // máquina no tiene Vulkan/Metal/DX12 (VM vieja, etc.) caemos a todos
+        // los backends —incluido GL— para no dejarla sin gráficos. En el
+        // camino de escritorio `compatible_surface` es `None` (la surface se
+        // crea después contra esta misma instancia), así que cambiar de
+        // instancia aquí es seguro.
+        let primary = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            ..Default::default()
+        });
+        let (instance, adapter) = match primary.request_adapter(&opts).await {
+            Some(a) => (primary, a),
+            None => {
+                let all = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+                let a = all.request_adapter(&opts).await.ok_or(HalError::NoAdapter)?;
+                (all, a)
+            }
+        };
         // `Limits::default()` cubre los 5 storage buffers/stage que vello
         // necesita. `downlevel_defaults()` solo expone 4 y rompe el raster.
         // Si el adapter no lo aguanta, `using_resolution` recorta lo recortable

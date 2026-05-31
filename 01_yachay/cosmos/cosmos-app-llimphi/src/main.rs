@@ -26,6 +26,8 @@ mod persist;
 mod tools;
 mod view;
 
+use std::sync::Arc;
+
 use cosmos_engine::Corpus;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
@@ -78,8 +80,12 @@ fn compute_render(m: &Model, chart: &cosmos_model::Chart) -> cosmos_render::Rend
     compute(chart, &m.overlays, m.harmonic, m.cfg.minor_aspects).0
 }
 
+// El cómputo astronómico es el pesado (144 muestras × 10 cuerpos): NO corre
+// en el hilo de UI. Esto sólo marca sucio; el despacho a un worker ocurre al
+// final de `update` (que tiene el Handle). El render de la carta sí es barato
+// y queda síncrono (ver `recompute_chart`).
 fn recompute_astro(m: &mut Model) {
-    m.astro = compute_astro(&m.chart, m.cfg.use_now);
+    m.astro_dirty = true;
 }
 
 /// Activa la carta-pestaña `i`: la vuelve la carta de trabajo y recomputa.
@@ -522,8 +528,17 @@ impl App for Cosmos {
             Theme::light()
         };
         let theme = theme_from_wawa(&cfg_wawa, &base);
+        // El render de la carta es barato → síncrono. El astro (orto/ocaso/
+        // efemérides) es el caro: arranca en `None` ("calculando…") y se
+        // computa en un worker que reentra con `AstroComputed`. `init` corre
+        // en winit DESPUÉS de crear la ventana, así que un cómputo pesado aquí
+        // congelaría la ventana recién abierta. Generación 1 = la del arranque.
         let (render, error) = compute(&chart, &ui.overlays, ui.harmonic, ui.cfg.minor_aspects);
-        let astro = compute_astro(&chart, ui.cfg.use_now);
+        let astro = None;
+        {
+            let (c, use_now) = (chart.clone(), ui.cfg.use_now);
+            handle.spawn(move || Msg::AstroComputed(1, Arc::new(compute_astro(&c, use_now))));
+        }
         let corpus = Corpus::desde_ron(CORPUS_DEFAULT_RON).unwrap_or_default();
         let chart_watcher = spawn_chart_watcher(handle);
 
@@ -549,6 +564,8 @@ impl App for Cosmos {
             harmonic: ui.harmonic,
             render,
             astro,
+            astro_dirty: false,
+            astro_gen: 1,
             corpus,
             cfg: ui.cfg,
             theme,
@@ -579,13 +596,14 @@ impl App for Cosmos {
         }
     }
 
-    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let mut m = model;
         let mut persist = false;
         // Cualquier interacción que no sea abrir un menú limpia la nota
-        // efímera de estado.
+        // efímera de estado. El resultado del worker (AstroComputed) tampoco
+        // la toca: es un evento de fondo, no una acción del usuario.
         match &msg {
-            Msg::OpenMenu(_) | Msg::WawaConfigChanged(_) => {}
+            Msg::OpenMenu(_) | Msg::WawaConfigChanged(_) | Msg::AstroComputed(..) => {}
             _ => m.status_note = None,
         }
         match msg {
@@ -707,9 +725,29 @@ impl App for Cosmos {
                 m.chart_view = v;
                 persist = true;
             }
+            // Resultado del worker astronómico. Se aplica sólo si su
+            // generación sigue vigente (si no, un recálculo posterior ya lo
+            // dejó viejo y lo descartamos). `try_unwrap` recupera el dueño sin
+            // copiar: el `Arc` llega con refcount 1 porque el Msg no se clona.
+            Msg::AstroComputed(gen, astro) => {
+                if gen == m.astro_gen {
+                    m.astro = Some(Arc::try_unwrap(astro).unwrap_or_else(|a| (*a).clone()));
+                }
+            }
         }
         if persist {
             save_ui(&m);
+        }
+        // Cómputo astronómico FUERA del hilo de UI. Si algo lo marcó sucio,
+        // bumpeamos la generación y lo despachamos a un worker; el resultado
+        // reentra como `AstroComputed` y la UI sigue respondiendo (muestra el
+        // astro previo —o "calculando…"— hasta que llega).
+        if m.astro_dirty {
+            m.astro_dirty = false;
+            m.astro_gen = m.astro_gen.wrapping_add(1);
+            let gen = m.astro_gen;
+            let (c, use_now) = (m.chart.clone(), m.cfg.use_now);
+            handle.spawn(move || Msg::AstroComputed(gen, Arc::new(compute_astro(&c, use_now))));
         }
         m
     }

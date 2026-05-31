@@ -455,6 +455,11 @@ pub(crate) enum Msg {
     ToggleToolPanel(ToolPanel),
     // tipo de gráfica del centro
     SetChartView(ChartView),
+    /// Resultado del cómputo astronómico PESADO (orto/ocaso/efemérides),
+    /// hecho en un worker en vez de bloquear el hilo de UI. `u64` es la
+    /// generación: `update` descarta resultados viejos si entretanto se pidió
+    /// otro recálculo. `Arc` evita que `Msg: Clone` copie el `AstroState`.
+    AstroComputed(u64, std::sync::Arc<crate::astroview::AstroState>),
 }
 
 // =====================================================================
@@ -466,10 +471,17 @@ pub(crate) struct Model {
     pub(crate) overlays: Vec<OverlayKind>,
     pub(crate) harmonic: u32,
     pub(crate) render: RenderModel,
-    /// Lecturas astronómicas cacheadas (alt/az, sundial, mareas,
-    /// orto/ocaso, eclipses). Recalculadas sólo al cambiar carta o el
-    /// instante — nunca por frame.
-    pub(crate) astro: AstroState,
+    /// Lecturas astronómicas cacheadas (alt/az, sundial, mareas, orto/ocaso,
+    /// eclipses). `None` mientras el worker las calcula —la UI pinta
+    /// "calculando…" en vez de bloquearse—. El cómputo (caro: 144 muestras ×
+    /// 10 cuerpos) corre SIEMPRE fuera del hilo de UI.
+    pub(crate) astro: Option<AstroState>,
+    /// `astro` está sucio y hay que recalcularlo. Lo marca `recompute_astro`
+    /// dentro de `update`; el despacho al worker ocurre al final de `update`
+    /// (que tiene el Handle). La generación evita que un resultado tardío pise
+    /// a uno más nuevo.
+    pub(crate) astro_dirty: bool,
+    pub(crate) astro_gen: u64,
     pub(crate) corpus: Corpus,
     pub(crate) cfg: CosmosConfig,
     pub(crate) theme: Theme,

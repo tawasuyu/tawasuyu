@@ -1004,16 +1004,12 @@ pub(crate) fn config_view(model: &Model, theme: &Theme) -> View<Msg> {
         &sw_pal,
         theme,
     ));
-    rows.push(view::line(
-        format!("instante: {}", model.astro.instant_iso),
-        11.0,
-        theme.fg_muted,
-    ));
-    rows.push(view::line(
-        format!("lugar: {}", model.astro.place_label),
-        11.0,
-        theme.fg_muted,
-    ));
+    let (instante, lugar) = match &model.astro {
+        Some(a) => (a.instant_iso.clone(), a.place_label.clone()),
+        None => ("calculando…".to_string(), "calculando…".to_string()),
+    };
+    rows.push(view::line(format!("instante: {instante}"), 11.0, theme.fg_muted));
+    rows.push(view::line(format!("lugar: {lugar}"), 11.0, theme.fg_muted));
 
     rows.push(view::section_label("Capas".to_string(), theme));
     for k in OverlayKind::all() {

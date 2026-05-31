@@ -236,12 +236,32 @@ fn body_for(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
             theme,
         ),
         ToolPanel::Corpus => view::tile_corpus(r, &model.corpus, theme),
-        ToolPanel::Cielo => astroview::view_cielo(&model.astro, theme),
-        ToolPanel::OrtoOcaso => astroview::view_ortoocaso(&model.astro, theme),
-        ToolPanel::Sundial => astroview::view_sundial(&model.astro, theme),
-        ToolPanel::Mareas => astroview::view_mareas(&model.astro, theme),
-        ToolPanel::Eclipses => astroview::view_eclipses(&model.astro, theme),
-        ToolPanel::Efemerides => astroview::view_efemerides(&model.astro, theme),
+        // Paneles astronómicos: si `astro` aún se calcula en el worker,
+        // pintamos "calculando…" en vez de bloquear el hilo de UI.
+        ToolPanel::Cielo => match &model.astro {
+            Some(a) => astroview::view_cielo(a, theme),
+            None => astroview::calculando(theme),
+        },
+        ToolPanel::OrtoOcaso => match &model.astro {
+            Some(a) => astroview::view_ortoocaso(a, theme),
+            None => astroview::calculando(theme),
+        },
+        ToolPanel::Sundial => match &model.astro {
+            Some(a) => astroview::view_sundial(a, theme),
+            None => astroview::calculando(theme),
+        },
+        ToolPanel::Mareas => match &model.astro {
+            Some(a) => astroview::view_mareas(a, theme),
+            None => astroview::calculando(theme),
+        },
+        ToolPanel::Eclipses => match &model.astro {
+            Some(a) => astroview::view_eclipses(a, theme),
+            None => astroview::calculando(theme),
+        },
+        ToolPanel::Efemerides => match &model.astro {
+            Some(a) => astroview::view_efemerides(a, theme),
+            None => astroview::calculando(theme),
+        },
         ToolPanel::Configuracion => chrome::config_view(model, theme),
     }
 }
