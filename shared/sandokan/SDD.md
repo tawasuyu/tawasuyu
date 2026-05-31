@@ -122,27 +122,34 @@ materialización; Wawa es deliberadamente separado.
 
 ## 5. Roadmap de dedup (orden por riesgo)
 
-### Fase 1 — backoff a `sandokan-lifecycle` *(menor riesgo)*
+### Fase 1 — backoff a `sandokan-lifecycle` *(menor riesgo)* — ✅ 2026-05-31
 arje-zero depende de `sandokan-lifecycle`. `restart_state` guarda un `Backoff`
 por label en vez de `attempts: u32`; `on_death` llama `backoff.next_delay()` /
 `backoff.reset()` (cuando uptime ≥ max). Se borra la fn pura `backoff_delay` y
 sus tests migran a verificar equivalencia vía el `Backoff` canónico. Sin cambio
 de comportamiento observable.
 
-### Fase 2 — un solo transporte de control *(medio)*
-El subconjunto de control de `arje-bus` (`SpawnCardFromDisk`/`KillEnte`/
-`ListEntes`) se vuelve el wire del `DaemonEngine`. Se elimina el socket propio
-de `sandokan-daemon` (o se reduce a un adaptador delgado sobre `arje-bus`).
-Objetivo: que `systemctl-compat`, `arje-card` y un cliente sandokan hablen el
-mismo bus.
+### Fase 2 — un solo transporte de control *(medio)* — ✅ (núcleo) 2026-05-31
+El subconjunto de control de `arje-bus` se vuelve el wire del `Engine`.
+- **Paso A ✅**: `arje-bus` ganó `EnteStatus`/`EnteTelemetry` (+ `Liveness`/
+  `ResourceSample`), respondidos por arje-zero (telemetry lee `/proc`). Era el
+  vocabulario que faltaba para cubrir el contrato.
+- **Paso B ✅**: `sandokan-arje-engine` implementa `sandokan-core::Engine`
+  hablando arje-bus a arje-zero. El `Engine` delegado YA viaja por el bus del
+  init, no por un socket paralelo.
+- **Pendiente (cleanup)**: deprecar/borrar el socket propio de `sandokan-daemon`
+  (hoy redundante, sin consumidores). `run` por ahora mapea a
+  `SpawnCardFromDisk{name:label}` (store-based); `RunCard{card}` arbitraria
+  queda como opción futura.
 
-### Fase 3 — arje-zero detrás de `Engine` *(mayor riesgo, toca PID 1)*
-arje-zero implementa la semántica de `sandokan-core::Engine` (run = spawn de
-Card; stop = SIGTERM+grace; list = grafo vivo; status = estado del Ente;
-telemetry = recursos). `sandokan-local` queda explícitamente como el Engine
-para contextos no-PID1 (shuma, sandboxes anidados, tests). Ambos comparten
-`sandokan-lifecycle` y `arje-incarnate`. Hacer ÚLTIMO, con la suite de arje-zero
-verde antes y después.
+### Fase 3 — arje-zero detrás de `Engine` *(mayor riesgo, toca PID 1)* — ✅ (vía bridge) 2026-05-31
+arje-zero queda alcanzable como `sandokan-core::Engine` a través de
+`sandokan-arje-engine` (Paso B de Fase 2): los clientes hablan el contrato
+`Engine`, backed by arje-zero sobre el bus. Decisión de diseño: el init queda
+**bus-native** y el `impl Engine` vive en el bridge —más limpio que meter un
+trait async dentro de PID 1—. `sandokan-local` queda explícitamente como el
+Engine para contextos no-PID1 (shuma, sandboxes, tests). Ambos comparten
+`sandokan-lifecycle` y `arje-incarnate`. Suite de arje-zero verde antes/después.
 
 **Invariante de cierre**: tras las 3 fases, `grep -r backoff` da un solo
 calculador; hay un solo trait de control consumido; hay un solo wire de control
@@ -176,7 +183,8 @@ estático del store.
 `UnitObservation = { card_id, label, state: LifecycleState, telemetry: Option<TelemetryFrame>, restarts: u32 }`.
 
 ### Fases del monitor
-1. **`sandokan-monitor-core`**: `fn observe(engine: &dyn Engine) -> MonitorSnapshot`
+*(Fase 1 ✅ y Fase 3 ✅ entregadas 2026-05-31; Fase 2 pendiente; Fase 4 futura.)*
+1. **`sandokan-monitor-core`** ✅: `fn observe(engine: &dyn Engine) -> MonitorSnapshot`
    (async): `list()` → por cada handle `status()` + `telemetry()`. Agnóstico de
    transporte (sirve LocalEngine para tests, DaemonEngine en vivo). Tests con un
    Engine mock.
