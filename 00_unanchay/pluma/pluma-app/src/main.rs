@@ -45,7 +45,7 @@ use llimphi_ui::View;
 use crate::init::init_modelo;
 use crate::model::{Model, Msg};
 use crate::update::actualizar;
-use crate::view::vista;
+use crate::view::{vista, vista_overlay};
 
 fn main() {
     llimphi_ui::run::<Pluma>();
@@ -151,5 +151,9 @@ impl App for Pluma {
 
     fn view(model: &Model) -> View<Msg> {
         vista(model)
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        vista_overlay(model)
     }
 }

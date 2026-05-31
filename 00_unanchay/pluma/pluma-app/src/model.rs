@@ -68,6 +68,18 @@ pub(crate) enum Msg {
     LlmError(String),
     ResizeIzq(f32),
     ResizeDer(f32),
+
+    // --- Menú principal + menú de edición contextual ---
+    /// Abre/cierra un dropdown del menú principal (índice del menú raíz).
+    MenuOpen(Option<usize>),
+    /// Comando string del menú principal (rebota desde `on_command`).
+    MenuCommand(String),
+    /// Right-click: abre el menú de edición anclado en (x, y) de ventana.
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición contextual.
+    EditMenuAction(llimphi_widget_edit_menu::EditAction),
+    /// Cierra cualquier menú abierto (dropdown o edición).
+    CloseMenus,
 }
 
 pub(crate) struct Model {
@@ -113,4 +125,10 @@ pub(crate) struct Model {
 
     pub(crate) side_izq_w: f32,
     pub(crate) side_der_w: f32,
+
+    /// Índice del menú raíz cuyo dropdown está abierto (`None` = cerrado).
+    pub(crate) menu_open: Option<usize>,
+    /// Ancla (x, y) en coords de ventana del menú de edición contextual,
+    /// o `None` si no está abierto.
+    pub(crate) edit_menu: Option<(f32, f32)>,
 }

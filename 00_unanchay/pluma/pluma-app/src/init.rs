@@ -99,6 +99,8 @@ pub(crate) fn init_modelo() -> Model {
         diff_visible: false,
         side_izq_w: 280.0,
         side_der_w: 340.0,
+        menu_open: None,
+        edit_menu: None,
     }
 }
 

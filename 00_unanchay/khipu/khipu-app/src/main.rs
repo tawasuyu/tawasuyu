@@ -51,6 +51,10 @@ use llimphi_widget_text_editor::{
     text_editor_view, EditorMetrics, EditorPalette, EditorState, PointerEvent,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_clipboard::SystemClipboard;
 use serde::{Deserialize, Serialize};
 
 /// Dimensión del embebedor local (fallback sin daemon).
@@ -213,6 +217,17 @@ enum Msg {
     /// Resultado async de reservar un circuito en un relay: la dirección de
     /// marcado vía circuito (o un mensaje de error) para mostrar.
     RelayReady(String),
+    /// Abre/cierra un dropdown de la barra de menú principal (índice del menú).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en la barra de menú (`command` de cada `MenuItem`).
+    MenuCommand(String),
+    /// Abre el menú de edición contextual (right-click) en coords de ventana.
+    EditMenuOpen(f32, f32),
+    /// Acción de edición (undo/redo/cut/copy/paste/delete/selectall) sobre
+    /// el campo focuseado.
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú abierto (principal o de edición).
+    CloseMenus,
 }
 
 struct Model {
@@ -269,6 +284,12 @@ struct Model {
     pending: Option<Box<Msg>>,
     /// Nodo libp2p (perezoso): `Some` una vez que se usó P2P.
     p2p: Option<P2p>,
+    /// Dropdown abierto de la barra de menú (índice), o `None` si cerrada.
+    menu_open: Option<usize>,
+    /// Posición (coords de ventana) del menú de edición contextual, si abierto.
+    edit_menu: Option<(f32, f32)>,
+    /// Portapapeles del sistema, compartido por todas las acciones de edición.
+    clipboard: SystemClipboard,
 }
 
 struct KhipuApp;
@@ -617,6 +638,24 @@ impl App for KhipuApp {
                 }
                 model.focus = Focus::Body;
             }
+            Msg::MenuOpen(idx) => {
+                model.menu_open = idx;
+                model.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                return handle_menu_command(model, cmd, h);
+            }
+            Msg::EditMenuOpen(x, y) => {
+                model.edit_menu = Some((x, y));
+                model.menu_open = None;
+            }
+            Msg::EditMenuAction(action) => {
+                return apply_edit_menu_action(model, action, h);
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.edit_menu = None;
+            }
         }
         model
     }
@@ -670,11 +709,18 @@ impl App for KhipuApp {
         })
         .children(vec![list, editor, gravity]);
 
-        let mut children = vec![header, body];
+        // Barra de menú principal: primer hijo del column raíz.
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &model.theme));
+
+        let mut children = vec![menubar, header, body];
         if let Some(bar) = status_bar(model) {
             children.push(bar);
         }
 
+        // El right-click se engancha en la raíz (origen 0,0 → coords
+        // locales == coords de ventana) y abre el menú de edición sobre
+        // el campo focuseado.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -684,7 +730,35 @@ impl App for KhipuApp {
             ..Default::default()
         })
         .fill(model.theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
         .children(children)
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El prompt modal de passphrase no convive con menús.
+        if model.unlocking {
+            return None;
+        }
+        // Prioridad: menú de edición contextual sobre el menú principal.
+        if let Some((x, y)) = model.edit_menu {
+            let (editor, masked) = focused_editor(model);
+            let flags = match editor {
+                Some(ed) => EditFlags::from_editor(ed, masked),
+                None => EditFlags::default(),
+            };
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &model.theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
@@ -1674,6 +1748,179 @@ fn commit_edits(model: &mut Model, h: &Handle<Msg>) {
     }
 }
 
+// =====================================================================
+// Menú principal + menú de edición contextual
+// =====================================================================
+
+/// Devuelve el `EditorState` del campo focuseado (referencia inmutable) y
+/// si está enmascarado (passphrase). Search/PeerAddr/Title/Tags son
+/// `TextInputState` (su `.editor()`); Body es el `EditorState` directo.
+/// Sin foco editable devuelve `None`.
+fn focused_editor(model: &Model) -> (Option<&EditorState>, bool) {
+    match model.focus {
+        Focus::Body => (Some(&model.body), false),
+        Focus::Title => (Some(model.title.editor()), false),
+        Focus::Tags => (Some(model.tags.editor()), false),
+        Focus::Search => (Some(model.search.editor()), false),
+        Focus::PeerAddr => (Some(model.peer_input.editor()), false),
+        Focus::Passphrase => (Some(model.passphrase.editor()), model.passphrase.is_masked()),
+        Focus::None => (None, false),
+    }
+}
+
+/// Construye el menú principal de khipu reflejando el estado del campo
+/// focuseado (ítems de Editar grises sin selección / historial).
+fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+    let (editor, _masked) = focused_editor(model);
+    let has_sel = editor.map(|e| e.has_selection()).unwrap_or(false);
+    let can_undo = editor.map(|e| e.can_undo()).unwrap_or(false);
+    let can_redo = editor.map(|e| e.can_redo()).unwrap_or(false);
+    let has_field = editor.is_some();
+    let has_sel_note = model.selected.is_some();
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo {
+        undo = undo.disabled();
+    }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo {
+        redo = redo.disabled();
+    }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel {
+        cut = cut.disabled();
+        copy = copy.disabled();
+    }
+    let mut paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    if !has_field {
+        paste = paste.disabled();
+    }
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+        .shortcut("Ctrl+A")
+        .separated();
+    if !has_field {
+        sel_all = sel_all.disabled();
+    }
+
+    let mut delete_note = MenuItem::new("Borrar nota", "note.delete");
+    if !has_sel_note {
+        delete_note = delete_note.disabled();
+    }
+    let archive_label = if model.show_archive {
+        "Ocultar archivadas"
+    } else {
+        "Ver archivadas"
+    };
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Nueva nota", "note.new").shortcut("Ctrl+N"))
+                .item(delete_note)
+                .item(MenuItem::new(archive_label, "note.archive").separated())
+                .item(MenuItem::new("Exportar sobre…", "share.export"))
+                .item(MenuItem::new("Importar sobre…", "share.import")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all),
+        )
+        .menu(
+            Menu::new("Compartir")
+                .item(MenuItem::new("Publicar (P2P)", "share.publish"))
+                .item(MenuItem::new("Recibir de un par…", "share.receive")),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Buscar (foco)", "view.search").shortcut("Ctrl+F"))
+                .item(MenuItem::new("Acerca de khipu", "help.about")),
+        )
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = KhipuApp::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: std::sync::Arc::new(Msg::MenuOpen),
+        on_command: std::sync::Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Traduce el `command` del menú principal al `Msg` real y lo redespacha
+/// por el `update`. Cierra el menú antes de actuar.
+fn handle_menu_command(mut model: Model, command: String, h: &Handle<Msg>) -> Model {
+    model.menu_open = None;
+    let target = match command.as_str() {
+        "note.new" => Some(Msg::NewNote),
+        "note.delete" => Some(Msg::DeleteSelected),
+        "note.archive" => Some(Msg::ToggleArchive),
+        "share.export" => Some(Msg::Export),
+        "share.import" => Some(Msg::Import),
+        "share.publish" => Some(Msg::Publish),
+        "share.receive" => Some(Msg::Receive),
+        "view.search" => Some(Msg::Focus(Focus::Search)),
+        "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
+        "edit.redo" => Some(Msg::EditMenuAction(EditAction::Redo)),
+        "edit.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "help.about" => {
+            model.status = Some("khipu · cuaderno de notas P2P soberano".into());
+            None
+        }
+        _ => None,
+    };
+    match target {
+        Some(msg) => KhipuApp::update(model, msg, h),
+        None => model,
+    }
+}
+
+/// Aplica una acción del menú de edición al editor del campo focuseado,
+/// usando el portapapeles del sistema, y replica el bookkeeping que khipu
+/// hace tras editar (commit al store + embedding si cambió un campo que
+/// vive en la nota). Cierra el menú de edición.
+fn apply_edit_menu_action(mut model: Model, action: EditAction, h: &Handle<Msg>) -> Model {
+    model.edit_menu = None;
+    let focus = model.focus;
+    let clip = &mut model.clipboard;
+    let result = match focus {
+        Focus::Body => Some(editmenu::apply(&mut model.body, action, clip)),
+        Focus::Title => Some(editmenu::apply(model.title.editor_mut(), action, clip)),
+        Focus::Tags => Some(editmenu::apply(model.tags.editor_mut(), action, clip)),
+        Focus::Search => Some(editmenu::apply(model.search.editor_mut(), action, clip)),
+        Focus::PeerAddr => Some(editmenu::apply(model.peer_input.editor_mut(), action, clip)),
+        Focus::Passphrase => Some(editmenu::apply(model.passphrase.editor_mut(), action, clip)),
+        Focus::None => None,
+    };
+    // Si la acción cambió un campo persistente de la nota (título, cuerpo o
+    // tags), corremos el mismo commit que las teclas. Search/PeerAddr/
+    // Passphrase no tocan el store.
+    if let Some(r) = result {
+        if r.changed() && matches!(focus, Focus::Body | Focus::Title | Focus::Tags) {
+            commit_edits(&mut model, h);
+        }
+    }
+    model
+}
+
 fn parse_tags(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(|t| t.trim().to_string())
@@ -2233,6 +2480,9 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         unlocking: false,
         pending: None,
         p2p: None,
+        menu_open: None,
+        edit_menu: None,
+        clipboard: SystemClipboard::new(),
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -2290,6 +2540,9 @@ fn seeded_model(embedder: Embedder) -> Model {
         unlocking: false,
         pending: None,
         p2p: None,
+        menu_open: None,
+        edit_menu: None,
+        clipboard: SystemClipboard::new(),
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [

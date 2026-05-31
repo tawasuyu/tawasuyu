@@ -33,6 +33,13 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 
+use llimphi_theme::Theme;
+use llimphi_widget_text_input::TextInputState;
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_clipboard::SystemClipboard;
+
 /// Cuántos mensajes pinta la ventana visible del hilo (con scroll por rueda).
 const VISIBLES: usize = 16;
 
@@ -52,12 +59,24 @@ enum Msg {
     ToggleRecibos,
     /// Desplazar el hilo: +N hacia mensajes más viejos, -N hacia los recientes.
     Scroll(i32),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click en el área de trabajo → abre el menú de edición en
+    /// `(x, y)` de ventana, operando sobre el input de mensaje.
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición.
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
 }
 
 struct Modelo {
     nucleo: Nucleo,
     enlace: Arc<Enlace>,
-    entrada: String,
+    /// El input de mensaje, sobre `EditorState` (selección/undo/clipboard).
+    entrada: TextInputState,
     nombre: String,
     transporte: &'static str,
     /// El blanco de las acciones de membresía/confianza.
@@ -66,6 +85,14 @@ struct Modelo {
     scroll: usize,
     /// Línea de estado: resultado del último comando/adjuntar.
     aviso: String,
+    /// Tema semántico para los widgets reutilizados (menú/edición).
+    theme: Theme,
+    /// Menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
+    edit_menu: Option<(f32, f32)>,
+    /// Clipboard del sistema para Cortar/Copiar/Pegar del menú de edición.
+    clipboard: SystemClipboard,
 }
 
 struct Ayni;
@@ -119,12 +146,16 @@ impl App for Ayni {
         Modelo {
             nucleo,
             enlace,
-            entrada: String::new(),
+            entrada: TextInputState::new(),
             nombre,
             transporte,
             seleccionado: None,
             scroll: 0,
             aviso: format!("escuchando en {dir} · {transporte}"),
+            theme: Theme::dark(),
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         }
     }
 
@@ -154,22 +185,13 @@ impl App for Ayni {
     fn update(mut model: Self::Model, msg: Self::Msg, _handle: &Handle<Self::Msg>) -> Self::Model {
         let enlace = model.enlace.clone();
         match msg {
-            Msg::Tecla(e) => match &e.key {
-                Key::Named(NamedKey::Backspace) => {
-                    model.entrada.pop();
-                }
-                _ => {
-                    if let Some(t) = &e.text {
-                        for c in t.chars() {
-                            if !c.is_control() {
-                                model.entrada.push(c);
-                            }
-                        }
-                    }
-                }
-            },
+            Msg::Tecla(e) => {
+                // Todo el tecleo (incluido Backspace/Delete, selección con
+                // Shift+flechas, undo/redo) lo maneja el `EditorState` del input.
+                model.entrada.apply_key(&e);
+            }
             Msg::Enviar => {
-                let texto = model.entrada.trim().to_string();
+                let texto = model.entrada.text().trim().to_string();
                 model.entrada.clear();
                 if texto.is_empty() {
                     // nada
@@ -222,6 +244,25 @@ impl App for Ayni {
             Msg::Red(evento) => {
                 model.nucleo.al_evento(enlace.as_ref(), evento);
             }
+            Msg::MenuOpen(idx) => {
+                model.menu_open = idx;
+                model.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                model = handle_menu_command(model, cmd, enlace.as_ref());
+            }
+            Msg::EditMenuOpen(x, y) => {
+                model.edit_menu = Some((x, y));
+                model.menu_open = None;
+            }
+            Msg::EditMenuAction(action) => {
+                model.edit_menu = None;
+                editmenu::apply(model.entrada.editor_mut(), action, &mut model.clipboard);
+            }
+            Msg::CloseMenus => {
+                model.menu_open = None;
+                model.edit_menu = None;
+            }
         }
         model
     }
@@ -229,6 +270,8 @@ impl App for Ayni {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let fondo = Color::from_rgba8(18, 21, 28, 255);
 
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model));
         let barra = barra_superior(model);
         let cuerpo = View::new(Style {
             flex_direction: FlexDirection::Row,
@@ -241,6 +284,9 @@ impl App for Ayni {
         })
         .children(vec![panel_gente(model), columna_charla(model)]);
 
+        // El right-click se engancha en la raíz (origen 0,0 → las coords
+        // locales que llegan al handler ya son de ventana) y abre el menú
+        // de edición sobre el input de mensaje.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -250,8 +296,197 @@ impl App for Ayni {
             ..Default::default()
         })
         .fill(fondo)
-        .children(vec![barra, cuerpo, barra_estado(model)])
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
+        .children(vec![menubar, barra, cuerpo, barra_estado(model)])
     }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // El menú de edición tiene prioridad si está abierto.
+        if let Some((x, y)) = model.edit_menu {
+            let flags = EditFlags::from_editor(model.entrada.editor(), model.entrada.is_masked());
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &model.theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model))
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a app_bus::AppMenu, model: &'a Modelo) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = Ayni::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme: &model.theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+// === Menú principal + comandos ===============================================
+
+/// Construye el menú principal de ayni reflejando el estado actual: los
+/// ítems de «Editar» se ponen grises cuando el input no tiene selección /
+/// historial / texto; los de «Ayni» según haya alguien seleccionado.
+fn app_menu(model: &Modelo) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+    let ed = model.entrada.editor();
+    let has_sel = ed.has_selection();
+    let can_undo = ed.can_undo();
+    let can_redo = ed.can_redo();
+    let has_text = !ed.is_empty();
+    let masked = model.entrada.is_masked();
+    let hay_sel = model.seleccionado.is_some();
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo {
+        undo = undo.disabled();
+    }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo {
+        redo = redo.disabled();
+    }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel || masked {
+        cut = cut.disabled();
+        copy = copy.disabled();
+    }
+    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+        .shortcut("Ctrl+A")
+        .separated();
+    if !has_text {
+        sel_all = sel_all.disabled();
+    }
+
+    let mut admitir = MenuItem::new("Admitir seleccionado", "ayni.admitir");
+    let mut atestar = MenuItem::new("Atestar seleccionado", "ayni.atestar");
+    let mut expulsar = MenuItem::new("Expulsar seleccionado", "ayni.expulsar").separated();
+    if !hay_sel {
+        admitir = admitir.disabled();
+        atestar = atestar.disabled();
+        expulsar = expulsar.disabled();
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Enviar mensaje", "msg.enviar").shortcut("Enter"))
+                .item(MenuItem::new("Adjuntar archivo…", "msg.adjuntar").separated())
+                .item(MenuItem::new("Acuse de recibo", "ayni.recibo")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all),
+        )
+        .menu(
+            Menu::new("Ayni")
+                .item(MenuItem::new("Cifrado E2EE", "ayni.cifrar"))
+                .item(MenuItem::new("Recibos de lectura", "ayni.recibos").separated())
+                .item(admitir)
+                .item(atestar)
+                .item(expulsar),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Comandos de la barra /", "ayuda.comandos")),
+        )
+}
+
+/// Traduce el `command` del menú principal a la acción real y la ejecuta.
+/// Cierra el menú antes de actuar.
+fn handle_menu_command(mut model: Modelo, command: String, enlace: &Enlace) -> Modelo {
+    model.menu_open = None;
+    match command.as_str() {
+        // Edición → rebota a la acción del menú de edición sobre el input.
+        "edit.undo" => {
+            editmenu::apply(model.entrada.editor_mut(), EditAction::Undo, &mut model.clipboard);
+        }
+        "edit.redo" => {
+            editmenu::apply(model.entrada.editor_mut(), EditAction::Redo, &mut model.clipboard);
+        }
+        "edit.cut" => {
+            editmenu::apply(model.entrada.editor_mut(), EditAction::Cut, &mut model.clipboard);
+        }
+        "edit.copy" => {
+            editmenu::apply(model.entrada.editor_mut(), EditAction::Copy, &mut model.clipboard);
+        }
+        "edit.paste" => {
+            editmenu::apply(model.entrada.editor_mut(), EditAction::Paste, &mut model.clipboard);
+        }
+        "edit.selectall" => {
+            editmenu::apply(model.entrada.editor_mut(), EditAction::SelectAll, &mut model.clipboard);
+        }
+        // Mensajería.
+        "msg.enviar" => {
+            let texto = model.entrada.text().trim().to_string();
+            model.entrada.clear();
+            if !texto.is_empty() {
+                if let Some(cmd) = texto.strip_prefix('/') {
+                    model.aviso = ejecutar_comando(&mut model.nucleo, enlace, cmd);
+                } else {
+                    model.nucleo.enviar_texto(enlace, &texto);
+                    model.scroll = 0;
+                }
+            }
+        }
+        "msg.adjuntar" => {
+            model.aviso = "adjuntar: escribí «/adjuntar <ruta>» en el compose".into();
+        }
+        // Ayni — membresía / confianza / transporte.
+        "ayni.recibo" => {
+            model.nucleo.acusar_cabezas(enlace);
+            model.aviso = "acuse de recibo enviado".into();
+        }
+        "ayni.cifrar" => {
+            model.nucleo.cifrar = !model.nucleo.cifrar;
+            model.aviso = format!("cifrado {}", si_no(model.nucleo.cifrar));
+        }
+        "ayni.recibos" => {
+            model.nucleo.recibos = !model.nucleo.recibos;
+            model.aviso = format!("recibos {}", si_no(model.nucleo.recibos));
+        }
+        "ayni.admitir" => {
+            if let Some(s) = model.seleccionado {
+                model.nucleo.admitir(enlace, s);
+                model.aviso = format!("admitiste a {}", hex_corto(&s));
+            }
+        }
+        "ayni.atestar" => {
+            if let Some(s) = model.seleccionado {
+                model.nucleo.atestar(enlace, s, 5);
+                model.aviso = format!("das fe de {} (nivel 5)", hex_corto(&s));
+            }
+        }
+        "ayni.expulsar" => {
+            if let Some(s) = model.seleccionado {
+                model.nucleo.expulsar(enlace, s);
+                model.aviso = format!("expulsaste a {}", hex_corto(&s));
+            }
+        }
+        "ayuda.comandos" => {
+            model.aviso = ejecutar_comando(&mut model.nucleo, enlace, "ayuda");
+        }
+        _ => {}
+    }
+    model
 }
 
 // === Paleta ==================================================================
@@ -542,13 +777,14 @@ fn columna_charla(model: &Modelo) -> View<Msg> {
 }
 
 fn fila_compose(model: &Modelo, hint: &str) -> View<Msg> {
-    let (texto, color) = if model.entrada.is_empty() {
+    let actual = model.entrada.text();
+    let (texto, color) = if actual.is_empty() {
         (
             format!("{hint}escribí un mensaje, o /adjuntar <ruta>, /atestar <hex> …"),
             TENUE,
         )
     } else {
-        (format!("{}▏", model.entrada), CLARO)
+        (format!("{actual}▏"), CLARO)
     };
     let caja = View::new(Style {
         size: Size {

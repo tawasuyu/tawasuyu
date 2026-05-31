@@ -30,6 +30,11 @@ llimphi-widget-list = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-tiled = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-edit-menu = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+llimphi-clipboard = { workspace = true }
+app-bus = { workspace = true }
 directories = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }

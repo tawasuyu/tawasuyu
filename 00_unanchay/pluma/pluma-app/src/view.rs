@@ -12,6 +12,11 @@ use llimphi_ui::{DragPhase, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_edit_menu::{self as editmenu, EditFlags};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_text_editor::{EditorPalette as TEPalette, Language};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use pluma_align::CartaHebras;
@@ -25,14 +30,39 @@ use pluma_transform::Transformacion;
 use uuid::Uuid;
 
 use crate::model::{Model, Msg, BACKENDS, METRICS, VISIBLE_LINES};
-use crate::update::contar_stale_del_activo;
+use crate::update::{contar_stale_del_activo, menu_principal};
 use crate::util::{etiqueta_backend, etiqueta_intencion, etiqueta_tipo, recortar};
+
+/// Tamaño de ventana del init — usado como viewport para clampear los
+/// dropdowns del menú (la app no trackea el tamaño real hoy).
+const VIEWPORT: (f32, f32) = (1600.0, 900.0);
+
+/// Arma el `MenuBarSpec` compartido entre `menubar_view` (barra) y
+/// `menubar_overlay` (dropdown). El `menu` se construye afuera y se
+/// presta por referencia para no clonarlo dos veces.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: VIEWPORT,
+        height: MENU_H,
+        on_open: std::sync::Arc::new(Msg::MenuOpen),
+        on_command: std::sync::Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
 
 pub(crate) fn vista(model: &Model) -> View<Msg> {
     let theme = Theme::dark();
     let editor_palette = TEPalette::default();
     let splitter_palette = SplitterPalette::from_theme(&theme);
 
+    let menu = menu_principal(model);
+    let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
     let status = barra_status(model, &theme);
     let panel_izq = panel_documentos(model, &theme);
     let panel_centro = panel_editor(model, &editor_palette);
@@ -64,6 +94,9 @@ pub(crate) fn vista(model: &Model) -> View<Msg> {
         &splitter_palette,
     );
 
+    // El right-click se engancha en la raíz (origen 0,0 → las coords
+    // locales que llegan al handler ya son de ventana) y abre el menú de
+    // edición sobre el cuerpo_ide. La barra de menú va de primer hijo.
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -73,7 +106,28 @@ pub(crate) fn vista(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![status, body])
+    .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
+    .children(vec![menubar, status, body])
+}
+
+/// Overlay flotante: el menú de edición contextual tiene prioridad; si no
+/// está abierto, cae al dropdown del menú principal. La app no tenía otros
+/// popups flotantes (find es inline), así que estos dos son todo.
+pub(crate) fn vista_overlay(model: &Model) -> Option<View<Msg>> {
+    let theme = Theme::dark();
+    if let Some((x, y)) = model.edit_menu {
+        let flags = EditFlags::from_editor(&model.ide.state, false);
+        return Some(context_menu_view(editmenu::edit_context_menu(
+            (x, y),
+            VIEWPORT,
+            &theme,
+            flags,
+            Msg::EditMenuAction,
+            Msg::CloseMenus,
+        )));
+    }
+    let menu = menu_principal(model);
+    menubar_overlay(&menubar_spec(&menu, model, &theme))
 }
 
 fn barra_status(model: &Model, theme: &Theme) -> View<Msg> {

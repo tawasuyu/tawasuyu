@@ -38,6 +38,13 @@ use llimphi_ui::{App, Handle, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_card::{card_view, CardOptions, CardPalette};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+
+use app_bus::{AppMenu, Menu, MenuItem};
+use std::sync::Arc;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -51,12 +58,39 @@ struct Model {
     /// Última fuente del socket activo: "discovery"/"broker"/"cache"/
     /// "default-path". Sólo informativo en el header.
     socket_source: Option<&'static str>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Mónada seleccionada (índice en `snapshot.monads`). `None` si
+    /// ninguna. La selección sólo resalta y habilita el menú contextual;
+    /// el explorer es de sólo lectura.
+    selected: Option<usize>,
+    /// Menú contextual sobre una Mónada: `(idx, x, y)` ancla en ventana.
+    /// `None` cerrado.
+    context_menu: Option<(usize, f32, f32)>,
 }
 
 #[derive(Clone)]
 enum Msg {
     Tick,
     Refresh(TickOutcome),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Cicla el tema claro/oscuro.
+    CycleTheme,
+    /// Fuerza re-descubrimiento del socket: invalida el cacheado y
+    /// dispara un Tick. Mapea "Reconectar" del menú Ver.
+    Reconnect,
+    /// Selecciona una Mónada por índice (resalta).
+    SelectMonad(usize),
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` de ventana sobre la Mónada seleccionada. Sin selección
+    /// es no-op.
+    ContextMenuOpen(f32, f32),
 }
 
 #[derive(Clone)]
@@ -97,6 +131,9 @@ impl App for Explorer {
             snapshot: None,
             error: None,
             socket_source: None,
+            menu_open: None,
+            selected: None,
+            context_menu: None,
         }
     }
 
@@ -113,6 +150,13 @@ impl App for Explorer {
                     m.socket_source = Some(source);
                     m.snapshot = Some(*snapshot);
                     m.error = None;
+                    // Si la selección quedó fuera de rango tras el
+                    // refresh, la descartamos.
+                    let count = m.snapshot.as_ref().map(|s| s.monads.len()).unwrap_or(0);
+                    if m.selected.map(|i| i >= count).unwrap_or(false) {
+                        m.selected = None;
+                        m.context_menu = None;
+                    }
                 }
                 TickOutcome::DiscoveryFailed(msg) => {
                     m.socket = None;
@@ -127,12 +171,49 @@ impl App for Explorer {
                     m.error = Some(msg);
                 }
             },
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, &cmd, handle);
+            }
+            Msg::CycleTheme => {
+                m.theme = Theme::next_after(m.theme.name);
+            }
+            Msg::Reconnect => {
+                // Invalida el socket cacheado y re-dispara discovery.
+                m.socket = None;
+                m.socket_source = None;
+                m.error = None;
+                handle.dispatch(Msg::Tick);
+            }
+            Msg::SelectMonad(i) => {
+                m.selected = Some(i);
+                m.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                // Sólo si hay una Mónada seleccionada válida.
+                let count = m.snapshot.as_ref().map(|s| s.monads.len()).unwrap_or(0);
+                if let Some(i) = m.selected.filter(|i| *i < count) {
+                    m.menu_open = None;
+                    m.context_menu = Some((i, x, y));
+                }
+            }
         }
         m
     }
 
     fn view(model: &Model) -> View<Msg> {
         let theme = &model.theme;
+        let menu = app_menu();
+        let menubar = menubar_view(&menubar_spec(&menu, model, theme));
         let header_palette = AppHeaderPalette::from_theme(theme);
         let card_palette = CardPalette::from_theme(theme);
 
@@ -178,8 +259,20 @@ impl App for Explorer {
 
         if let Some(snap) = &model.snapshot {
             body_children.push(engine_card(snap, accent_engine, theme, &card_palette));
-            for m in &snap.monads {
-                body_children.push(monad_card(m, accent_data, theme, &card_palette));
+            for (i, m) in snap.monads.iter().enumerate() {
+                let selected = model.selected == Some(i);
+                let card = monad_card(m, accent_data, theme, &card_palette);
+                // Click selecciona la Mónada. El menú contextual se abre
+                // por right-click en la raíz (coords de ventana) sobre la
+                // selección actual — ver `view()`.
+                let card = card.on_click(Msg::SelectMonad(i));
+                let card = if selected {
+                    // Resalte sutil de la card seleccionada.
+                    card.fill(theme.bg_selected)
+                } else {
+                    card
+                };
+                body_children.push(card);
             }
         }
 
@@ -214,7 +307,109 @@ impl App for Explorer {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, body])
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual sobre la Mónada seleccionada.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, body])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual de la Mónada tiene prioridad si está abierto.
+        if let Some((idx, x, y)) = model.context_menu {
+            let label = model
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.monads.get(idx))
+                .map(|m| m.label.clone())
+                .unwrap_or_else(|| "Mónada".to_string());
+            let viewport = viewport_of(model);
+            // Acciones reales del explorer: ver/seleccionar y refrescar.
+            // El explorer es de sólo lectura, no inventamos edición.
+            let items = vec![
+                ContextMenuItem::action("Ver detalle"),
+                ContextMenuItem::action("Refrescar"),
+            ];
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| match i {
+                0 => Msg::SelectMonad(idx),
+                _ => Msg::Tick,
+            });
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport,
+                header: Some(label),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu();
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Viewport para clampear overlays: tamaño de ventana del Model si lo
+/// llevara; como el explorer no lo trackea, usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Explorer::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del explorer. Archivo / Ver / Ayuda — sólo comandos
+/// que mapean a acciones reales (refrescar, reconectar, tema). Sin
+/// "Editar": el explorer no tiene campos de texto editables.
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Refrescar", "file.refresh").shortcut("Ctrl+R"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Reconectar", "view.reconnect"))
+                .item(MenuItem::new("Cambiar tema", "view.theme").separated()),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.refresh" => {
+            handle.dispatch(Msg::Tick);
+            model
+        }
+        "file.quit" => std::process::exit(0),
+        "view.reconnect" => {
+            handle.dispatch(Msg::Reconnect);
+            model
+        }
+        "view.theme" => {
+            handle.dispatch(Msg::CycleTheme);
+            model
+        }
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => model,
     }
 }
 

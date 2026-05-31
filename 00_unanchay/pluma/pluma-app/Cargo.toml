@@ -33,6 +33,10 @@ llimphi-widget-splitter = { workspace = true }
 llimphi-widget-list = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-edit-menu = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 arboard = { workspace = true }

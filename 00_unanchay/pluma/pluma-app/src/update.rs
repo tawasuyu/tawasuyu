@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use llimphi_ui::Handle;
+use llimphi_widget_edit_menu::EditAction;
 use llimphi_widget_text_editor::PointerEvent;
 use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
@@ -167,7 +168,156 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             // dx>0 = divisor a la derecha = panel der encoge.
             model.side_der_w = (model.side_der_w - dx).clamp(220.0, 520.0);
         }
+
+        // --- Menú principal + menú de edición contextual ---
+        Msg::MenuOpen(idx) => {
+            model.menu_open = idx;
+            model.edit_menu = None;
+        }
+        Msg::CloseMenus => {
+            model.menu_open = None;
+            model.edit_menu = None;
+        }
+        Msg::EditMenuOpen(x, y) => {
+            model.edit_menu = Some((x, y));
+            model.menu_open = None;
+        }
+        Msg::EditMenuAction(action) => {
+            return aplicar_edit_menu(model, action);
+        }
+        Msg::MenuCommand(cmd) => {
+            return ejecutar_menu_command(model, cmd, handle);
+        }
     }
+    model
+}
+
+/// Construye el menú principal de pluma reflejando el estado actual: los
+/// ítems de Editar quedan grises cuando no hay selección (Cortar/Copiar) o
+/// historial (Deshacer/Rehacer). El editor focuseado es el `cuerpo_ide`
+/// central (único editor de texto rico de la app).
+pub(crate) fn menu_principal(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+
+    let ed = &model.ide.state;
+    let has_sel = ed.has_selection();
+    let can_undo = ed.can_undo();
+    let can_redo = ed.can_redo();
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo {
+        undo = undo.disabled();
+    }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo {
+        redo = redo.disabled();
+    }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel {
+        cut = cut.disabled();
+        copy = copy.disabled();
+    }
+    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+        .shortcut("Ctrl+A")
+        .separated();
+
+    // El botón de regenerar stale sólo tiene sentido si hay alguna hija
+    // stale del activo — lo grisamos cuando no.
+    let mut regen = MenuItem::new("Regenerar stale", "llm.regen");
+    if contar_stale_del_activo(model) == 0 {
+        regen = regen.disabled();
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Nuevo documento", "file.nuevo").shortcut("Ctrl+N"))
+                .item(MenuItem::new("Guardar", "file.guardar").shortcut("Ctrl+S"))
+                .item(MenuItem::new("Abrir archivo (ruta)", "file.abrir").separated())
+                .item(MenuItem::new("Exportar (md/docx)", "file.exportar")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all),
+        )
+        .menu(
+            Menu::new("Buscar")
+                .item(MenuItem::new("Buscar en documento", "search.find").shortcut("Ctrl+F")),
+        )
+        .menu(
+            Menu::new("Multilienzo")
+                .item(MenuItem::new("Diff madre ↔ hija", "mult.diff").shortcut("Ctrl+D"))
+                .item(MenuItem::new("Togglear fusión (zona)", "mult.fusion").shortcut("Ctrl+J"))
+                .item(MenuItem::new("Zona siguiente", "mult.zona_sig").separated())
+                .item(MenuItem::new("Zona anterior", "mult.zona_ant")),
+        )
+        .menu(
+            Menu::new("LLM")
+                .item(MenuItem::new("Ciclar backend", "llm.backend"))
+                .item(MenuItem::new("Traducir → qu", "llm.trad_qu"))
+                .item(MenuItem::new("Traducir → en", "llm.trad_en"))
+                .item(MenuItem::new("Tono formal", "llm.tono"))
+                .item(MenuItem::new("Resumir 30p", "llm.resumir"))
+                .item(MenuItem::new("Tocar madre", "llm.tocar").separated())
+                .item(regen),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("pluma · editor multilienzo", "help.about").disabled()),
+        )
+}
+
+/// Traduce el `command` string del menú principal al `Msg` real de la app
+/// y lo aplica. Cierra el dropdown antes de actuar. Los comandos `edit.*`
+/// se enrutan al menú de edición sobre el `cuerpo_ide`.
+fn ejecutar_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
+    model.menu_open = None;
+    let target = match command.as_str() {
+        "file.nuevo" => Some(Msg::NuevoDoc),
+        "file.guardar" => Some(Msg::Guardar),
+        "file.abrir" => Some(Msg::AbrirArchivo),
+        "file.exportar" => Some(Msg::ExportarMd),
+        "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
+        "edit.redo" => Some(Msg::EditMenuAction(EditAction::Redo)),
+        "edit.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "search.find" => Some(Msg::FindToggle),
+        "mult.diff" => Some(Msg::DiffToggle),
+        "mult.fusion" => Some(Msg::ToglearFusion),
+        "mult.zona_sig" => Some(Msg::ZonaSiguiente),
+        "mult.zona_ant" => Some(Msg::ZonaAnterior),
+        "llm.backend" => Some(Msg::CicloBackend),
+        "llm.trad_qu" => Some(Msg::PedirTraducir("qu".into())),
+        "llm.trad_en" => Some(Msg::PedirTraducir("en".into())),
+        "llm.tono" => Some(Msg::PedirTono("formal".into())),
+        "llm.resumir" => Some(Msg::PedirResumir(Some(30))),
+        "llm.tocar" => Some(Msg::TocarMadre),
+        "llm.regen" => Some(Msg::RegenerarStale),
+        _ => None,
+    };
+    match target {
+        Some(msg) => actualizar(model, msg, handle),
+        None => model,
+    }
+}
+
+/// Aplica una acción del menú de edición al `EditorState` del cuerpo_ide,
+/// reusando `editmenu::apply` (mismo camino que las teclas de edición).
+/// Cierra el menú. Como `apply_key_with_clipboard`, no necesita marcar
+/// dirty manual: el `CuerpoIde` deriva el pendiente_sync de su `edit_seq`.
+fn aplicar_edit_menu(mut model: Model, action: EditAction) -> Model {
+    model.edit_menu = None;
+    let _ = llimphi_widget_edit_menu::apply(&mut model.ide.state, action, &mut model.clipboard);
+    model.ide.state.ensure_caret_visible(VISIBLE_LINES);
     model
 }
 
