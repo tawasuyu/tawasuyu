@@ -12085,4 +12085,105 @@ mod tests {
         assert_eq!(rt.eval("ms.sourceBuffers.length").expect("e"), JsValue::Number(0.0));
     }
 
+    // ---- Fase 7.148 — Encrypted Media Extensions ----
+    #[test]
+    fn eme_clases_existen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof MediaKeys").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof MediaKeySession").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof MediaKeySystemAccess").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof MediaKeyStatusMap").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof navigator.requestMediaKeySystemAccess").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn eme_request_access_clearkey_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ks = null, keys = null; \
+             navigator.requestMediaKeySystemAccess('org.w3.clearkey', \
+                 [{ initDataTypes: ['cenc'], videoCapabilities: [{ contentType: 'video/mp4; codecs=\"avc1.42E01E\"' }] }]) \
+               .then(function(a){ ks = a.keySystem; return a.createMediaKeys(); }) \
+               .then(function(mk){ keys = (mk instanceof MediaKeys); });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ks").expect("e"), JsValue::String("org.w3.clearkey".into()));
+        assert_eq!(rt.eval("keys").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn eme_request_access_no_soportado_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; \
+             navigator.requestMediaKeySystemAccess('com.widevine.alpha', \
+                 [{ videoCapabilities: [{ contentType: 'video/mp4' }] }]) \
+               .catch(function(e){ err = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("NotSupportedError".into()));
+        // El chrome puede ampliar la lista soportada.
+        rt.eval(
+            "__puriy_eme_set_supported(['com.widevine.alpha']); var ok = false; \
+             navigator.requestMediaKeySystemAccess('com.widevine.alpha', \
+                 [{ videoCapabilities: [{ contentType: 'video/mp4' }] }]) \
+               .then(function(){ ok = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn eme_session_generate_request_y_message_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var mensaje = null, tipo = null; \
+             var session = new MediaKeys('org.w3.clearkey').createSession(); \
+             session.onmessage = function(ev){ mensaje = ev.message.byteLength; tipo = ev.messageType; }; \
+             session.generateRequest('cenc', new Uint8Array([1,2,3]));",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'eme-message'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+        // El host responde con el mensaje de licencia.
+        rt.eval("__puriy_eme_message(session._id, 'license-request', new Uint8Array([9,9,9,9]));").expect("e");
+        assert_eq!(rt.eval("mensaje").expect("e"), JsValue::Number(4.0));
+        assert_eq!(rt.eval("tipo").expect("e"), JsValue::String("license-request".into()));
+    }
+
+    #[test]
+    fn eme_update_y_keystatus_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var cambio = false; \
+             var session = new MediaKeys('org.w3.clearkey').createSession(); \
+             session.generateRequest('cenc', new Uint8Array([1])); \
+             session.onkeystatuseschange = function(){ cambio = true; }; \
+             session.update(new Uint8Array([5,6,7]));",
+        )
+        .expect("e");
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'eme-update'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+        rt.eval("__puriy_eme_keystatus(session._id, 'kid-1', 'usable');").expect("e");
+        assert_eq!(rt.eval("cambio").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("session.keyStatuses.size").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("session.keyStatuses.get('kid-1')").expect("e"), JsValue::String("usable".into()));
+    }
+
+    #[test]
+    fn eme_session_close_resuelve_closed() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var cerrado = false; \
+             var session = new MediaKeys('org.w3.clearkey').createSession(); \
+             session.closed.then(function(){ cerrado = true; }); \
+             session.close();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("cerrado").expect("e"), JsValue::Bool(true));
+    }
 }
