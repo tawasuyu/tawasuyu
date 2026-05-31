@@ -56,6 +56,12 @@ impl ArjeEngine {
         Ok(Self::new(p))
     }
 
+    /// ¿Hay un init escuchando en el bus? Sonda barata (un `ListEntes`).
+    /// La usa `sandokan::auto` para preferir el Engine de sistema.
+    pub async fn is_reachable(&self) -> bool {
+        self.list().await.is_ok()
+    }
+
     /// Una request-response contra el bus. Un fallo de conexión/transporte es
     /// `EngineError::Transport`; la semántica de la respuesta la mapea el caller.
     async fn call(&self, req: BusRequest) -> Result<BusResponse, EngineError> {
