@@ -131,7 +131,7 @@ impl QuakeInput {
         }
 
         // Card adaptativa: más alta si hay resultado para mostrar.
-        let card_height = if self.result.is_some() || self.pending { 132.0 } else { 96.0 };
+        let card_height = if self.result.is_some() || self.pending { 132.0_f32 } else { 96.0_f32 };
 
         let card = View::new(Style {
             flex_direction: FlexDirection::Column,
