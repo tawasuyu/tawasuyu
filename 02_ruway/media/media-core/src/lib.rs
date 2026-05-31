@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub mod control;
+pub mod layout;
 
 /// Productor de frames RGBA. `tick` avanza el tiempo `dt` y, si hay
 /// un nuevo frame disponible, lo deja escrito en `buf` y devuelve

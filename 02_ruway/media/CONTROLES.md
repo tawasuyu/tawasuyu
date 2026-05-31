@@ -1,6 +1,6 @@
 # Controles configurables de media (estilo VLC, más flexible)
 
-> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D4 (reload) ✅ · D2/D3 ⏳.
+> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D2 ⏳.
 > Autoritativo sobre cómo se mapean entradas → acciones en el dominio `media`.
 
 ## Problema
@@ -98,14 +98,23 @@ ControlSettings(
 - **D4 ✅ — recarga en caliente**: `settings` pasó de `OnceLock` a `RwLock`; `F5`
   relee `controles.ron` sin reiniciar. Editás el archivo, apretás F5, los nuevos
   bindings/pasos están vivos.
+- **D3 ✅ — layout de paneles persistente**: el orden del grid de controles
+  sobrevive entre sesiones. Decisión de diseño (la duda que dejaba la nota
+  original): el layout es **otro eje** que el mapeo de entrada, así que NO cuelga
+  de `ControlSettings` — va en su propio `media-core::layout::{PanelId,
+  LayoutSettings}` y se persiste en un **`layout.ron` aparte** (junto a
+  `controles.ron` en XDG). Editar atajos no toca el layout y viceversa. El
+  vocabulario de paneles vive en el core (regla #2: el dominio no sabe cómo se
+  pintan), la app sólo mapea `PanelId → tile`. `LayoutSettings::sanitized()`
+  tolera archivos viejos: paneles nuevos se anexan, entradas
+  desconocidas/duplicadas se descartan — agregar un panel nunca rompe un
+  `layout.ron` existente. El drag-to-swap por title bar reescribe el archivo en
+  el acto; a diferencia de `controles.ron`, NO se siembra default en disco (sólo
+  se escribe cuando el usuario reordena).
 - **D ⏳ — pendiente (futuro, no bloqueante)**:
   - **D2 · Comandos Rhai** (`MediaCommand::Script(nombre)` → snippet con una API de
     reproductor bindeada) — calco del Rhai de las `Transformacion` de pluma; es
     el verdadero "más flexible que VLC". Heavy (mete `rhai` al dominio media).
-  - **D3 · Layout de controles configurable**: qué tiles/chips aparecen y su orden
-    (ya hay base con `TileId` + drag-to-swap; falta persistir el orden). Nota de
-    diseño: el layout es otro eje que el mapeo de entrada — evaluar si va en
-    `ControlSettings` o en un settings de UI aparte.
   - **Paleta de comandos** con búsqueda fuzzy (el overlay de ayuda hoy es
     read-only; una paleta ejecutable es el siguiente paso de descubribilidad).
   - **Watch** del `controles.ron` (recarga automática, hoy es manual con F5).

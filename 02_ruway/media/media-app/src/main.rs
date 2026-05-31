@@ -72,6 +72,7 @@ use media_core::{
     VolumeAudio, Waterfall,
 };
 use media_core::control::{ControlSettings, KeyChord, MediaCommand};
+use media_core::layout::{LayoutSettings, PanelId as TileId};
 use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
 };
@@ -108,41 +109,10 @@ enum Msg {
     ReloadConfig,
 }
 
-/// Tiles del grid reorderable bajo el canvas. El orden por defecto
-/// agrupa por afinidad: transporte/volumen/playlist arriba (cosas que
-/// el usuario toca seguido), recorder/visores abajo. El usuario los
-/// arrastra de la title bar para reorganizar.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TileId {
-    Transport,
-    Volume,
-    Playlist,
-    Recorder,
-    Waveform,
-    Waterfall,
-}
-
-const DEFAULT_TILE_ORDER: &[TileId] = &[
-    TileId::Transport,
-    TileId::Volume,
-    TileId::Playlist,
-    TileId::Recorder,
-    TileId::Waveform,
-    TileId::Waterfall,
-];
-
-impl TileId {
-    fn label(self) -> &'static str {
-        match self {
-            TileId::Transport => "transport",
-            TileId::Volume => "volume",
-            TileId::Playlist => "playlist",
-            TileId::Recorder => "recorder",
-            TileId::Waveform => "waveform",
-            TileId::Waterfall => "waterfall",
-        }
-    }
-}
+// Los tiles del grid reorderable son los [`TileId`] (= `PanelId` del
+// core): el vocabulario de paneles y su orden por defecto viven en
+// `media-core::layout`, agnósticos de cómo los pinta esta app. Acá sólo
+// los mapeamos a vistas concretas (ver `tile_content`).
 
 /// Settings de control (pasos + keymap) cargados al arrancar desde RON
 /// en XDG, o el default tipo VLC si no hay archivo. Ver `CONTROLES.md`.
@@ -169,13 +139,71 @@ fn reload_settings() {
     eprintln!("media-app: controles recargados");
 }
 
-/// Resuelve el path del archivo de controles: `$XDG_CONFIG_HOME/gioser/
-/// media/controles.ron` (o `~/.config/...` si XDG no está set).
-fn controles_path() -> Option<PathBuf> {
+/// Resuelve el path de un archivo de config de media bajo
+/// `$XDG_CONFIG_HOME/gioser/media/<name>` (o `~/.config/...` si XDG no
+/// está set). Lo comparten `controles.ron` (mapeo de entrada) y
+/// `layout.ron` (orden de paneles) — dos ejes, dos archivos.
+fn config_file(name: &str) -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("gioser").join("media").join("controles.ron"))
+    Some(base.join("gioser").join("media").join(name))
+}
+
+/// Path del archivo de controles (mapeo de entrada).
+fn controles_path() -> Option<PathBuf> {
+    config_file("controles.ron")
+}
+
+/// Path del archivo de layout (orden de los paneles del grid).
+fn layout_path() -> Option<PathBuf> {
+    config_file("layout.ron")
+}
+
+/// Carga el orden de paneles desde `layout.ron`. Si no existe o no
+/// parsea, cae al default. El resultado pasa por
+/// [`LayoutSettings::sanitized`] para tolerar archivos viejos (paneles
+/// nuevos se anexan, entradas desconocidas/duplicadas se descartan) — no
+/// sembramos el default en disco como con los controles: el layout sólo
+/// se escribe cuando el usuario reordena algo.
+fn load_layout() -> Vec<TileId> {
+    let Some(path) = layout_path() else {
+        return LayoutSettings::default().panels;
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(body) => match ron::from_str::<LayoutSettings>(&body) {
+            Ok(l) => {
+                let s = l.sanitized();
+                eprintln!("media-app: layout cargado de {}", path.display());
+                s.panels
+            }
+            Err(e) => {
+                eprintln!("media-app: layout.ron inválido ({e}) — uso default");
+                LayoutSettings::default().panels
+            }
+        },
+        Err(_) => LayoutSettings::default().panels,
+    }
+}
+
+/// Persiste el orden actual de paneles a `layout.ron`. Falla silenciosa
+/// con log — no reordenar nunca debe abortar la app.
+fn save_layout(order: &[TileId]) {
+    let Some(path) = layout_path() else { return };
+    let settings = LayoutSettings {
+        panels: order.to_vec(),
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
+        Ok(txt) => {
+            if let Err(e) = std::fs::write(&path, txt) {
+                eprintln!("media-app: no pude escribir layout: {e}");
+            }
+        }
+        Err(e) => eprintln!("media-app: no pude serializar layout: {e}"),
+    }
 }
 
 /// Carga los settings de control. Si el archivo no existe, escribe el
@@ -1029,7 +1057,7 @@ impl App for MediaApp {
         Model {
             frames: 0,
             started_at: Instant::now(),
-            tile_order: DEFAULT_TILE_ORDER.to_vec(),
+            tile_order: load_layout(),
             help_open: false,
             viewport: (960.0, 540.0),
         }
@@ -1045,6 +1073,9 @@ impl App for MediaApp {
                 let mut m = model;
                 if from != to && from < m.tile_order.len() && to < m.tile_order.len() {
                     m.tile_order.swap(from, to);
+                    // El nuevo orden se persiste en el acto: la próxima
+                    // sesión arranca con el layout que dejó el usuario.
+                    save_layout(&m.tile_order);
                 }
                 m
             }
@@ -1174,7 +1205,7 @@ impl App for MediaApp {
             .tile_order
             .iter()
             .map(|&id| TileSpec {
-                label: id.label().into(),
+                label: id.slug().into(),
                 content: tile_content(id),
             })
             .collect();
