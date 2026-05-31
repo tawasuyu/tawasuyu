@@ -20,11 +20,14 @@
 //!   wawa `.img`, navegando el DAG por hash. Puro local, sin red ni daemon.
 //! - `nouser::NouserSource` (feature `nouser`) — las Mónadas semánticas de
 //!   `chasqui-core`: clusters de archivos, un árbol que NO existe en disco.
+//! - `minga::MingaSource` (feature `minga`) — el grafo CAS de AST de un repo
+//!   minga: un DAG de nodos de código etiquetados por su `kind`.
 //!
 //! Cada uno es una *forma de árbol* distinta (jerarquía física, DAG de
-//! contenido, clusters semánticos) y aun así caben en el mismo trait — esa es
-//! la prueba de que la abstracción aguanta. Agregar minga como cuarta fuente
-//! = un `impl Source` más, sin tocar el shell.
+//! contenido, clusters semánticos, DAG de AST) y aun así caben en el mismo
+//! trait — esa es la prueba de que la abstracción aguanta. Los cuatro mundos
+//! que el BRAHMAN.md nombra (POSIX · wawa · nouser · minga) son ahora una
+//! sola espina.
 
 #![forbid(unsafe_code)]
 
@@ -33,12 +36,16 @@ pub mod posix;
 pub mod wawa;
 #[cfg(feature = "nouser")]
 pub mod nouser;
+#[cfg(feature = "minga")]
+pub mod minga;
 
 pub use navigator::{Navigator, Opened};
 pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
 #[cfg(feature = "nouser")]
 pub use nouser::NouserSource;
+#[cfg(feature = "minga")]
+pub use minga::MingaSource;
 
 /// Identidad opaca de un nodo DENTRO de su fuente. El shell la trata como
 /// caja negra (la guarda para volver a pedir hijos o leer), salvo para

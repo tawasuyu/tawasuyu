@@ -139,13 +139,20 @@ FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Ca
           fuente. cargo check del shell+core verde (workspace roto aparte por WIP de khipu de
           otro agente). Limitación: extensión perdida en el tempfile ⇒ el demuxer de video cae
           a AV1 crudo; el discernimiento es por contenido así que el visor igual se elige bien.
-        ◑ PASO C EN CURSO (2026-05-31): `NouserSource` HECHO (feature opt-in `nouser`):
+        ✓ PASO C HECHO (2026-05-31): `NouserSource` (feature opt-in `nouser`):
           Mónadas semánticas de chasqui-core (scan→cluster, pseudo-embeddings deterministas,
           sin daemon). Tercera FORMA de árbol —clusters que no existen en disco— detrás del
-          mismo trait: jerarquía física (POSIX) · DAG de contenido (wawa) · clusters
-          semánticos (nouser) caben en `Source`. 12 tests con la feature. Gated para no
-          arrastrar chasqui-core (sled/walkdir) a quien sólo quiere POSIX/wawa.
-          PENDIENTE: `MingaSource` (raíz P2P, lee `.minga/` sled local).
+          mismo trait. Gated para no arrastrar chasqui-core (sled/walkdir).
+        ✓ PASO D HECHO (2026-05-31): `MingaSource` (feature opt-in `minga`): el grafo CAS de
+          AST de un repo minga (`.minga/` sled vía `PersistentRepo`). CUARTA forma —DAG de
+          `StoredNode{kind,leaf_text,children:[hash]}` etiquetado por `kind`—: raíz lista
+          todos los nodos, descender muestra hijos del AST, hoja lee su token (`leaf_text`).
+          14 tests con la feature (mete un AST real, lo lee de vuelta).
+        ➡ ESPINA COMPLETA: los cuatro mundos del BRAHMAN.md (POSIX · wawa · nouser · minga)
+          caben en un solo trait `Source` — jerarquía física · DAG de contenido · clusters
+          semánticos · DAG de AST. Front: el shell monta wawa (Paso B); nouser/minga quedan
+          como adapters listos a la espera de un punto de entrada en la UI ("montar Mónadas"/
+          "montar repo minga") — follow-up de UI, no de arquitectura.
 ```
 
 ## Tesis de cierre
