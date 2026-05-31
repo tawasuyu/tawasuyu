@@ -6,11 +6,16 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+# vello directo (no llimphi-raster): el motor de texto sólo necesita
+# Scene/peniko/kurbo para construir y pintar layouts — nada del Renderer ni
+# de llimphi-hal. Eso mantiene llimphi-text (y quien lo use: el compositor)
+# libre de winit, condición para correr sobre el framebuffer de wawa.
 [dependencies]
-llimphi-raster = { path = "../llimphi-raster" }
+vello = { workspace = true }
 parley = { workspace = true }
 
 [dev-dependencies]
+llimphi-raster = { path = "../llimphi-raster" }
 llimphi-hal = { path = "../llimphi-hal" }
 pollster = { workspace = true }
 

@@ -315,10 +315,10 @@ impl<Msg> View<Msg> {
     pub fn gpu_paint_with<F>(mut self, painter: F) -> Self
     where
         F: Fn(
-                &llimphi_hal::wgpu::Device,
-                &llimphi_hal::wgpu::Queue,
-                &mut llimphi_hal::wgpu::CommandEncoder,
-                &llimphi_hal::wgpu::TextureView,
+                &wgpu::Device,
+                &wgpu::Queue,
+                &mut wgpu::CommandEncoder,
+                &wgpu::TextureView,
                 PaintRect,
                 (u32, u32),
             ) + Send

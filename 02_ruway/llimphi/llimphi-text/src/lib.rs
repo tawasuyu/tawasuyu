@@ -5,11 +5,11 @@
 //! Aquí lo envolvemos en una API mínima centrada en el caso común: un
 //! bloque de texto con color uniforme, ancho máximo opcional y alineación.
 
-use llimphi_raster::peniko::{Brush, Color};
-use llimphi_raster::vello;
+use vello::peniko::{Brush, Color};
 
-pub use llimphi_raster::peniko;
 pub use parley;
+pub use vello;
+pub use vello::peniko;
 
 /// Estado compartido del motor de texto. Una instancia por proceso es lo
 /// recomendado: `FontContext` cachea la base de fuentes y `LayoutContext`

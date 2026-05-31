@@ -1,10 +1,11 @@
-//! llimphi-ui — Árbol de Estado Monádico (DAG UI).
+//! llimphi-ui — Runtime Elm sobre winit.
 //!
-//! Bucle Elm sobre llimphi-hal + llimphi-layout + llimphi-raster:
-//!
-//! ```text
-//!   input → update(model, msg) → view(model) → layout → raster → present
-//! ```
+//! Maneja el bucle `input → update(model, msg) → view(model) → layout →
+//! raster → present` sobre una ventana winit + GPU (`llimphi-hal` +
+//! `llimphi-raster`). La parte declarativa y winit-agnóstica (el árbol
+//! `View<Msg>`, `mount`, `paint`, hit-test) vive en `llimphi-compositor` y
+//! se re-exporta tal cual, así los consumidores siguen escribiendo
+//! `llimphi_ui::View` sin enterarse del split.
 //!
 //! El estado del [`App`] es inmutable: cada evento produce un `Model`
 //! nuevo. La vista (`view`) es una función pura `&Model -> View<Msg>`.
@@ -20,16 +21,20 @@ use llimphi_hal::winit::window::{Window, WindowAttributes, WindowId};
 use llimphi_hal::{Hal, Surface, WinitSurface};
 
 pub use llimphi_hal::winit::keyboard::{Key, NamedKey};
-use llimphi_layout::taffy::NodeId;
-use llimphi_layout::{ComputedLayout, LayoutTree, Style};
-use llimphi_raster::kurbo::{Affine, Rect as KurboRect, RoundedRect};
-use llimphi_raster::peniko::{color::palette, Color, Fill, Image, Mix};
+use llimphi_layout::{ComputedLayout, LayoutTree};
+use llimphi_raster::peniko::color::palette;
 use llimphi_raster::{vello, Renderer};
 
 pub use llimphi_hal;
 pub use llimphi_layout;
 pub use llimphi_raster;
 pub use llimphi_text;
+
+// El compositor declarativo (View, mount, paint, hit-test, tipos de
+// handler) se re-exporta entero: `llimphi_ui::View`, `llimphi_ui::DragFn`,
+// etc. siguen resolviendo igual que antes del split.
+pub use llimphi_compositor;
+pub use llimphi_compositor::*;
 
 /// Aplicación Elm: estado inmutable, transición pura, vista pura.
 ///
@@ -291,260 +296,11 @@ impl From<ModifiersState> for Modifiers {
     }
 }
 
-/// Texto a pintar dentro de un nodo. Alineación por defecto `Center`
-/// (horizontal y vertical), apta para labels de botón. Para layouts tipo
-/// editor o párrafo, usar `.text_aligned(...)` con `Alignment::Start`.
-pub struct TextSpec {
-    pub content: String,
-    pub size_px: f32,
-    pub color: Color,
-    pub alignment: llimphi_text::Alignment,
-    /// `true` = forzar variante italic en la fuente activa. Default false.
-    pub italic: bool,
-    /// CSS-style font-family string (acepta lista con fallbacks). `None`
-    /// = la fuente default de parley.
-    pub font_family: Option<String>,
-    /// Colores por rango de **bytes** sobre `content`, para texto multicolor
-    /// (syntax highlighting) en una sola pasada de shaping. `None` = color
-    /// uniforme (`color`). Cuando es `Some`, el runtime usa
-    /// `Typesetter::layout_runs` + `draw_layout_runs`, y `color` actúa como
-    /// color por defecto de lo no cubierto por ningún run.
-    pub runs: Option<Vec<(usize, usize, Color)>>,
-}
-
-/// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
-/// delta desde el evento anterior; `End` se emite al soltar el botón.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DragPhase {
-    Move,
-    End,
-}
-
-/// Handler de drag. Recibe la fase + delta (`dx`, `dy`) **desde el evento
-/// anterior** (no acumulado desde el press). Devolver `None` deja el drag
-/// activo sin disparar Msg. `Arc<dyn Fn>` para que el runtime pueda
-/// clonarlo barato al iniciar el drag y mantenerlo vivo aunque el cache
-/// de la vista se regenere mientras tanto.
-pub type DragFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32) -> Option<Msg> + Send + Sync>;
-
-/// Handler de drop. El runtime lo invoca cuando un drag activo se suelta
-/// sobre este nodo. Recibe el `payload` `u64` que el origen del drag
-/// declaró vía [`View::drag_payload`]. Devolver `None` ignora el drop.
-///
-/// Los IDs `u64` son opacos para el runtime: el widget elige una
-/// convención (índice de tile, hash del item, etc.) y el handler decide
-/// qué Msg emitir en función de ese ID.
-pub type DropFn<Msg> = Arc<dyn Fn(u64) -> Option<Msg> + Send + Sync>;
-
-/// Handler de click con posición. Recibe `(x_local, y_local, rect_w,
-/// rect_h)`: las dos primeras son la posición del cursor **relativa a
-/// la esquina superior-izquierda del nodo** y las dos últimas son el
-/// ancho/alto actual del nodo en pixels — útil cuando el caller
-/// necesita centrar o normalizar. Devolver `None` no dispara update.
-pub type ClickAtFn<Msg> = Arc<dyn Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
-
-/// Variante de [`DragFn`] que **conoce la posición inicial del press**
-/// relativa al rect del nodo. Útil cuando el caller necesita identificar
-/// qué entidad (Concepto, lemming, etc.) bajo el cursor agarró el drag.
-/// Recibe `(phase, dx, dy, initial_lx, initial_ly)`.
-pub type DragAtFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
-
-/// Rect absoluto del nodo (en coordenadas físicas del frame). Lo
-/// recibe el callback de [`View::paint_with`] para que pueda
-/// posicionar sus primitivas custom dentro del nodo.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PaintRect {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-}
-
-/// Callback de pintura custom. El runtime lo invoca durante el paint
-/// del nodo (entre el `fill`/`image` y el `text`) con el `Scene` vivo
-/// + el `Typesetter` cacheado del runtime + el rect absoluto del nodo.
-/// Pensado para "canvas elements" tipo `dominium-canvas`,
-/// `pluma-editor` (osciloscopio de coherencia), `cosmos` (charts).
-///
-/// El `Typesetter` se pasa porque crearlo por frame es caro
-/// (`FontContext::new` enumera las fontes del sistema vía fontique).
-/// Los callers que no necesiten texto pueden ignorar el argumento.
-///
-/// El callback no debe llamar a `scene.push_layer` sin un `pop_layer`
-/// correspondiente, ni reset el scene — sólo agregar primitivas que
-/// pertenezcan al rect del nodo.
-pub type PaintFn = Arc<
-    dyn Fn(&mut vello::Scene, &mut llimphi_text::Typesetter, PaintRect) + Send + Sync,
->;
-
-/// Callback de pintura GPU directo, sin vello intermedio. Recibe el
-/// `device`/`queue` ya construidos por el runtime más un
-/// `CommandEncoder` y la `TextureView` del frame (la intermediate
-/// `Rgba8Unorm` de `WinitSurface`), todo durante el paint del nodo.
-///
-/// El caller abre su propio `begin_render_pass` con `LoadOp::Load` para
-/// no sobrescribir lo que ya pintó vello, dibuja sus primitivas y
-/// cierra el pass. El runtime se encarga de dispatchear (`queue.submit`)
-/// el encoder ya con todas las pasadas de todos los nodos acumuladas —
-/// es un solo submit por frame.
-///
-/// **Orden de pintura en Fase 1**: todos los `gpu_painter` corren
-/// DESPUÉS de la pasada completa de vello (fill, image, painter,
-/// text) sobre el `mounted` tree. Entre sí mantienen el orden DFS
-/// pre-orden. Si una app necesita pintar texto **encima** del render
-/// GPU directo, la forma idiomática es ponerlo en `App::view_overlay`,
-/// que se renderiza como una segunda Scene de vello encima de todo.
-///
-/// Pensado para apps con volumen masivo de primitivos (cosmos
-/// starfield Gaia, tinkuy particle viewer, nakui viewport, pineal
-/// denso) — el hook que paga el costo de mantener pipelines WGSL
-/// propias en `llimphi-raster` (ver `02_ruway/llimphi/SDD.md`
-/// §"Roadmap — GPU directo wgpu").
-pub type GpuPaintFn = Arc<
-    dyn Fn(
-            &llimphi_hal::wgpu::Device,
-            &llimphi_hal::wgpu::Queue,
-            &mut llimphi_hal::wgpu::CommandEncoder,
-            &llimphi_hal::wgpu::TextureView,
-            PaintRect,
-            (u32, u32),
-        ) + Send
-        + Sync,
->;
-
-/// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
-/// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
-pub struct View<Msg> {
-    pub style: Style,
-    pub fill: Option<Color>,
-    /// Relleno cuando el cursor está sobre este nodo. Sin valor (`None`)
-    /// = no se reacciona al hover.
-    pub hover_fill: Option<Color>,
-    pub radius: f64,
-    pub text: Option<TextSpec>,
-    /// Imagen a pintar dentro del rect del nodo. Se centra y escala
-    /// preservando aspect ratio (`min(rect.w/img.w, rect.h/img.h)`).
-    /// El alfa por píxel de la imagen y el `Image::alpha` global se
-    /// respetan; el `fill` (si lo hay) se pinta debajo como background.
-    pub image: Option<Image>,
-    /// Callback de pintura custom. Si está presente, el runtime lo
-    /// invoca durante el paint del nodo con el `Scene` vivo + el rect
-    /// absoluto. Pensado para "canvas elements" (dominium, pluma,
-    /// cosmos) que pintan primitivas custom no expresables como una
-    /// composición de Views.
-    pub painter: Option<PaintFn>,
-    /// Pintor GPU directo. Se invoca DESPUÉS de la pasada vello del
-    /// frame; comparte tree y orden DFS con los demás. Ver
-    /// [`GpuPaintFn`].
-    pub gpu_painter: Option<GpuPaintFn>,
-    pub on_click: Option<Msg>,
-    /// Handler de click que recibe la posición **relativa al rect del
-    /// nodo** (esquina superior-izquierda del nodo = `(0, 0)`). Útil
-    /// para canvas elements que quieren mapear el click a coordenadas
-    /// de mundo. Si está presente, gana sobre `on_click`. Devolver
-    /// `None` no dispara update.
-    pub on_click_at: Option<ClickAtFn<Msg>>,
-    /// Equivalente a `on_click` pero para el botón derecho del ratón.
-    /// Pensado para menús contextuales: el nodo declara qué `Msg`
-    /// emitir cuando se le hace right-click, y la app abre el overlay
-    /// con el menú.
-    pub on_right_click: Option<Msg>,
-    /// Variante posicional de [`Self::on_right_click`]. Útil para
-    /// grillas que necesitan saber *qué celda* del rect recibió el
-    /// click derecho (la celda no es un nodo aparte, sino una región
-    /// dentro del nodo). Si está presente, gana sobre `on_right_click`.
-    pub on_right_click_at: Option<ClickAtFn<Msg>>,
-    /// Equivalente a `on_click` pero para el botón del medio del ratón
-    /// (rueda presionada). Pensado para abrir en pestaña nueva — los
-    /// browsers usan middle-click como atajo equivalente a Ctrl+Click.
-    pub on_middle_click: Option<Msg>,
-    /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
-    /// `on_click` al presionar — un nodo es uno u otro).
-    pub drag: Option<DragFn<Msg>>,
-    /// Variante de drag que recibe la posición inicial del press relativa
-    /// al rect del nodo. Gana sobre `drag` si ambos están presentes.
-    pub drag_at: Option<DragAtFn<Msg>>,
-    /// Payload `u64` que viaja con el drag iniciado sobre este nodo. Lo
-    /// recibe el handler [`Self::on_drop`] del drop target. Sin payload,
-    /// el drag funciona igual pero ningún drop target reacciona.
-    pub drag_payload: Option<u64>,
-    /// Handler invocado al soltar un drag sobre este nodo (drop target).
-    pub on_drop: Option<DropFn<Msg>>,
-    /// Color a pintar mientras un drag activo está hovereando este drop
-    /// target. Sobrepone a `fill`/`hover_fill` cuando aplica.
-    pub drop_hover_fill: Option<Color>,
-    /// Si `true`, los descendientes se recortan al rect del nodo (vía
-    /// `scene.push_layer` con `Mix::Clip`). El hit-test también respeta
-    /// el recorte: clicks fuera del rect ignoran a los hijos.
-    pub clip: bool,
-    /// Msg a emitir cuando el cursor entra al rect del nodo (transición
-    /// no-hover → hover). Útil para previews tipo "URL del link al
-    /// pasar el mouse".
-    pub on_pointer_enter: Option<Msg>,
-    /// Msg a emitir cuando el cursor sale del rect del nodo.
-    pub on_pointer_leave: Option<Msg>,
-    /// Opacidad multiplicada sobre TODO el subtree (este nodo + hijos),
-    /// en `[0.0, 1.0]`. Se realiza con `scene.push_layer(Mix::Normal, a, …)`
-    /// alrededor del rect del nodo: el subárbol se rasteriza en una capa
-    /// intermedia y se compone al alfa indicado contra lo que ya hay
-    /// detrás. `None` = sin capa (caso de la abrumadora mayoría de
-    /// nodos). Útil para fade-in/out de overlays, ghosts mientras se
-    /// arrastra, modales que aparecen, panels "vidrio". Note que la
-    /// composición tiene costo (allocate + blit), por lo que sólo
-    /// poblar este slot cuando hace falta — no es un atributo gratis.
-    pub alpha: Option<f32>,
-    pub children: Vec<View<Msg>>,
-}
-
-
-// --- Submódulos internos del runtime. Los tipos (View, Mounted, Runtime,
-// caches) viven aquí en el root; los módulos acceden sus campos privados
-// por la regla descendiente vía `use super::*`. Las free-fns de render se
-// re-exportan pub(crate) para que el event-loop las llame bare; el impl
-// ApplicationHandler de `eventloop` se registra solo (no necesita re-export). ---
+// --- Runtime winit. El event loop (impl ApplicationHandler) vive en
+// `eventloop` y accede los campos privados de estos structs vía
+// `use super::*`. La composición declarativa (View, mount, paint,
+// hit-test) la trae el re-export de `llimphi_compositor`. ---
 mod eventloop;
-mod render;
-mod view;
-pub(crate) use render::*;
-
-
-/// Versión "instalada" del árbol: cada nodo tiene su NodeId de taffy, color
-/// y handler. Se mantiene en orden de inserción (recorrido pre-orden), así
-/// el hit-test puede iterar al revés para honrar el orden de pintado.
-struct Mounted<Msg> {
-    root: NodeId,
-    nodes: Vec<MountedNode<Msg>>,
-}
-
-struct MountedNode<Msg> {
-    id: NodeId,
-    fill: Option<Color>,
-    hover_fill: Option<Color>,
-    radius: f64,
-    text: Option<TextSpec>,
-    image: Option<Image>,
-    painter: Option<PaintFn>,
-    gpu_painter: Option<GpuPaintFn>,
-    on_click: Option<Msg>,
-    on_click_at: Option<ClickAtFn<Msg>>,
-    on_right_click: Option<Msg>,
-    on_right_click_at: Option<ClickAtFn<Msg>>,
-    on_middle_click: Option<Msg>,
-    drag: Option<DragFn<Msg>>,
-    drag_at: Option<DragAtFn<Msg>>,
-    drag_payload: Option<u64>,
-    on_drop: Option<DropFn<Msg>>,
-    drop_hover_fill: Option<Color>,
-    clip: bool,
-    on_pointer_enter: Option<Msg>,
-    on_pointer_leave: Option<Msg>,
-    alpha: Option<f32>,
-    /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
-    /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
-    /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.
-    subtree_end: usize,
-}
-
 
 struct Runtime<A: App> {
     handle: Handle<A::Msg>,
@@ -619,7 +375,6 @@ struct DragState<Msg> {
     /// targets sólo reaccionan cuando hay payload.
     payload: Option<u64>,
 }
-
 
 /// Punto de entrada: corre el bucle Elm hasta que el usuario cierre la
 /// ventana (o la app llame [`Handle::quit`]).

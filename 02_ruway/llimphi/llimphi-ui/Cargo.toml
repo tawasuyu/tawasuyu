@@ -11,6 +11,8 @@ llimphi-hal = { path = "../llimphi-hal" }
 llimphi-layout = { path = "../llimphi-layout" }
 llimphi-raster = { path = "../llimphi-raster" }
 llimphi-text = { path = "../llimphi-text" }
+# El compositor declarativo (winit-free): View, mount, paint, hit-test.
+llimphi-compositor = { path = "../llimphi-compositor" }
 pollster = { workspace = true }
 
 [[example]]

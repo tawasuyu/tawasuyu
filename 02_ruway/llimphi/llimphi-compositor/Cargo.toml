@@ -1,0 +1,16 @@
+[package]
+name = "llimphi-compositor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-compositor — el núcleo declarativo de Llimphi sin winit: el árbol `View<Msg>`, el mount sobre taffy, el paint a `vello::Scene` y el hit-test. No depende de llimphi-hal ni de una surface concreta, así que la misma composición sirve sobre winit (llimphi-ui) o, a futuro, sobre el framebuffer del kernel wawa. `wgpu` entra sólo por la firma de `GpuPaintFn` (tipos, no windowing)."
+
+[dependencies]
+llimphi-layout = { path = "../llimphi-layout" }
+llimphi-text = { path = "../llimphi-text" }
+vello = { workspace = true }
+# Sólo para los tipos de la firma de GpuPaintFn (Device/Queue/Encoder/View).
+# wgpu NO depende de winit — el compositor sigue libre de windowing.
+wgpu = { workspace = true }

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn mount<Msg: Clone>(layout: &mut LayoutTree, v: View<Msg>) -> Mounted<Msg> {
+pub fn mount<Msg: Clone>(layout: &mut LayoutTree, v: View<Msg>) -> Mounted<Msg> {
     let mut nodes = Vec::new();
     let root = mount_recursive(layout, v, &mut nodes);
     Mounted { root, nodes }
@@ -9,7 +9,7 @@ pub(crate) fn mount<Msg: Clone>(layout: &mut LayoutTree, v: View<Msg>) -> Mounte
 /// Mount en pre-orden directo sobre `out`: pusheamos el padre como
 /// placeholder (id real desconocido hasta crear el taffy node), recursamos
 /// hijos sobre el mismo `out`, y al volver completamos `id` + `subtree_end`.
-pub(crate) fn mount_recursive<Msg: Clone>(
+pub fn mount_recursive<Msg: Clone>(
     layout: &mut LayoutTree,
     v: View<Msg>,
     out: &mut Vec<MountedNode<Msg>>,
@@ -79,7 +79,7 @@ pub(crate) fn mount_recursive<Msg: Clone>(
     id
 }
 
-pub(crate) fn paint<Msg>(
+pub fn paint<Msg>(
     scene: &mut vello::Scene,
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
@@ -252,13 +252,13 @@ pub(crate) fn paint<Msg>(
 /// callbacks corren, así que su `LoadOp` debe ser `Load`. Devuelve si
 /// se invocó al menos un painter (para que el caller decida si vale la
 /// pena finalizar y submitir el encoder).
-pub(crate) fn paint_gpu<Msg>(
+pub fn paint_gpu<Msg>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
-    device: &llimphi_hal::wgpu::Device,
-    queue: &llimphi_hal::wgpu::Queue,
-    encoder: &mut llimphi_hal::wgpu::CommandEncoder,
-    view: &llimphi_hal::wgpu::TextureView,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
     viewport: (u32, u32),
 ) -> bool {
     let mut any = false;
@@ -291,7 +291,7 @@ pub(crate) fn paint_gpu<Msg>(
 /// más al frente (último en pre-orden) cuyo rect contiene `(x, y)` y para
 /// el cual `pred` devuelve `true`, respetando `clip`: si el punto cae
 /// afuera de un nodo con clip, el subárbol entero es invisible.
-pub(crate) fn hit_test_pred<Msg, F>(
+pub fn hit_test_pred<Msg, F>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     x: f32,
@@ -334,7 +334,7 @@ where
 }
 
 /// Hit-test específico para clicks (incluye nodos draggables).
-pub(crate) fn hit_test_click<Msg>(
+pub fn hit_test_click<Msg>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     x: f32,
@@ -352,7 +352,7 @@ pub(crate) fn hit_test_click<Msg>(
 /// declararon `on_right_click` o `on_right_click_at` — un right-click
 /// sobre un nodo sin handler no hace nada (no se "filtra" al click
 /// izquierdo).
-pub(crate) fn hit_test_right_click<Msg>(
+pub fn hit_test_right_click<Msg>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     x: f32,
@@ -365,7 +365,7 @@ pub(crate) fn hit_test_right_click<Msg>(
 
 /// Hit-test específico para middle-click. Mismo modelo que right-click:
 /// sólo nodos que declararon `on_middle_click` reaccionan.
-pub(crate) fn hit_test_middle_click<Msg>(
+pub fn hit_test_middle_click<Msg>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     x: f32,
@@ -375,7 +375,7 @@ pub(crate) fn hit_test_middle_click<Msg>(
 }
 
 /// Hit-test específico para hover (nodos con `hover_fill`).
-pub(crate) fn hit_test_hover<Msg>(
+pub fn hit_test_hover<Msg>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     x: f32,
@@ -387,7 +387,7 @@ pub(crate) fn hit_test_hover<Msg>(
 /// Hit-test específico para drop targets (nodos con `on_drop`). Usado
 /// durante un drag activo para resaltar el destino y para invocar el
 /// handler al soltar.
-pub(crate) fn hit_test_drop<Msg>(
+pub fn hit_test_drop<Msg>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     x: f32,
