@@ -8,7 +8,9 @@
 //!   - Cleanup en cierre de conexión
 
 use super::{EnteGraph, INHIBIT_TTL, SERVER_SEQ_FLAG};
-use arje_bus::{BusMessage, BusPayload, BusRequest, BusResponse, EnteInfo, PeerCreds};
+use arje_bus::{
+    BusMessage, BusPayload, BusRequest, BusResponse, EnteInfo, Liveness, PeerCreds, ResourceSample,
+};
 use arje_card::Capability;
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
@@ -38,6 +40,20 @@ fn cards_dir() -> std::path::PathBuf {
     std::env::var("ARJE_CARDS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/etc/arje/cards.d"))
+}
+
+/// Lee memoria residente + nº de hilos de `/proc/<pid>`. `None` si el proceso
+/// desapareció o `/proc` no es legible. RSS = 2º campo de `statm` (páginas) ×
+/// tamaño de página; los hilos se cuentan por entradas en `task/`.
+fn read_proc_resources(pid: i32) -> Option<ResourceSample> {
+    const PAGE_SIZE: u64 = 4096; // x86_64 estándar
+    let statm = std::fs::read_to_string(format!("/proc/{pid}/statm")).ok()?;
+    let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    let mem_bytes = resident_pages.saturating_mul(PAGE_SIZE);
+    let nproc = std::fs::read_dir(format!("/proc/{pid}/task"))
+        .map(|rd| rd.flatten().count() as u32)
+        .unwrap_or(1);
+    Some(ResourceSample { mem_bytes, nproc })
 }
 
 impl EnteGraph {
@@ -151,6 +167,31 @@ impl EnteGraph {
             BusRequest::SpawnCardFromDisk { name } => {
                 let caller = from_authenticated.expect("auth-required guarantees Some");
                 let resp = self.spawn_card_from_disk(caller, name).await;
+                let _ = reply.send(resp);
+            }
+            BusRequest::EnteStatus { target } => {
+                // Observabilidad anónima. Vivo = está en el grafo; arje-zero no
+                // guarda exit codes tras la muerte, así que sólo Running/Gone.
+                let liveness = match self.incarnated.get(&target) {
+                    Some(inc) => Liveness::Running {
+                        pid: inc.pid.map(|p| p.as_raw()),
+                    },
+                    None => Liveness::Gone,
+                };
+                let _ = reply.send(BusResponse::Status(liveness));
+            }
+            BusRequest::EnteTelemetry { target } => {
+                let resp = match self.incarnated.get(&target).and_then(|i| i.pid) {
+                    Some(pid) => match read_proc_resources(pid.as_raw()) {
+                        Some(s) => BusResponse::Telemetry(s),
+                        None => BusResponse::Error(format!(
+                            "telemetría no disponible para pid {}",
+                            pid.as_raw()
+                        )),
+                    },
+                    // Sin PID: Ente Virtual/Wasm (sin proceso) o ya ido.
+                    None => BusResponse::Error("ente sin proceso o no vivo".into()),
+                };
                 let _ = reply.send(resp);
             }
         }
@@ -442,5 +483,25 @@ impl EnteGraph {
             let reasons: Vec<&str> = self.inhibits.keys().map(|s| s.as_str()).collect();
             Some(reasons.join(", "))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_proc_resources;
+
+    #[test]
+    fn read_proc_resources_lee_el_proceso_actual() {
+        // El propio runner de tests existe en /proc — debe dar RSS > 0 y ≥1 hilo.
+        let pid = std::process::id() as i32;
+        let s = read_proc_resources(pid).expect("el proceso actual existe en /proc");
+        assert!(s.mem_bytes > 0, "RSS debería ser > 0");
+        assert!(s.nproc >= 1, "al menos un hilo");
+    }
+
+    #[test]
+    fn read_proc_resources_pid_inexistente_es_none() {
+        // PID imposible (fuera de rango) → None, sin panic.
+        assert!(read_proc_resources(i32::MAX).is_none());
     }
 }

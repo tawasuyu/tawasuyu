@@ -106,6 +106,36 @@ pub enum BusRequest {
     /// Semilla como `requester` para satisfacer Capability::Spawn sin
     /// distribuirla a cada shim de compat.
     SpawnCardFromDisk { name: String },
+
+    /// Estado de vida de un Ente. arje-zero sólo distingue "vivo" (en el
+    /// grafo) de "ido" (muerto/inexistente): no retiene exit codes tras la
+    /// muerte. Observabilidad — anónimo, como `ListEntes`. Es el vocabulario
+    /// que faltaba para que arje-bus cubra el contrato `sandokan-core::Engine`
+    /// (ver `shared/sandokan/SDD.md` §5 Fase 2).
+    EnteStatus { target: Ulid },
+
+    /// Telemetría puntual de un Ente: arje-zero lee `/proc/<pid>` y devuelve
+    /// memoria residente + nº de hilos. Anónimo. `Error` si el Ente no vive o
+    /// no tiene PID (Virtual/Wasm).
+    EnteTelemetry { target: Ulid },
+}
+
+/// Estado de vida de un Ente, tal como lo conoce arje-zero.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Liveness {
+    /// Vivo en el grafo. `pid` None para Entes Virtual/Wasm (sin proceso).
+    Running { pid: Option<i32> },
+    /// No está en el grafo: murió o nunca existió.
+    Gone,
+}
+
+/// Muestra puntual de recursos de un Ente (leída de `/proc/<pid>`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceSample {
+    /// Memoria residente en bytes (RSS).
+    pub mem_bytes: u64,
+    /// Número de hilos del proceso.
+    pub nproc: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +144,8 @@ pub enum BusResponse {
     Error(String),
     Entes(Vec<EnteInfo>),
     Invoked { result: Vec<u8> },
+    Status(Liveness),
+    Telemetry(ResourceSample),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
