@@ -29,6 +29,7 @@ pub(crate) fn op_etiqueta(op: &OpLocal) -> &'static str {
         OpLocal::Tonalidad { .. } => "tonalidad",
         OpLocal::EspejarHorizontal => "espejar ↔",
         OpLocal::EspejarVertical => "espejar ↕",
+        OpLocal::Curvas { .. } => "curvas",
     }
 }
 
@@ -251,6 +252,125 @@ pub(crate) fn ajustar_parametro_derivada(
     }
     *estado = Frescura::Stale;
     model.lienzo.propagar_stale(id);
+    true
+}
+
+/// Acceso mutable a los puntos de control de una capa derivada `Curvas`.
+/// `None` si la capa no existe, no es derivada local, o su op no es
+/// `Curvas`.
+fn puntos_curva_mut(model: &mut Model, id: Uuid) -> Option<&mut Vec<(f32, f32)>> {
+    let capa = model.lienzo.capa_mut(id)?;
+    match &mut capa.origen {
+        OrigenCapa::Derivada {
+            op: TransformacionPixel::Local(OpLocal::Curvas { puntos }),
+            ..
+        } => Some(puntos),
+        _ => None,
+    }
+}
+
+/// Marca la capa derivada `id` como stale, propaga al cono descendiente y
+/// recompone. Helper común de las tres mutaciones del editor de curvas.
+fn marcar_stale_curva_y_recomponer(model: &mut Model, id: Uuid) {
+    if let Some(capa) = model.lienzo.capa_mut(id) {
+        if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
+            *estado = Frescura::Stale;
+        }
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+}
+
+/// Press sobre el canvas del editor de curvas: convierte `(lx, ly)` a
+/// coords-curva `[0,1]` (invierte `y` — arriba = salida 1.0), engancha el
+/// punto de control más cercano dentro de un umbral, o inserta uno nuevo si
+/// el click cae lejos de todos. Arma el `CurvaDrag` y recompone. Devuelve
+/// `false` (sin tocar nada) si `id` no es una capa derivada `Curvas`.
+pub(crate) fn curva_press(
+    model: &mut Model,
+    id: Uuid,
+    lx: f32,
+    ly: f32,
+    rw: f32,
+    rh: f32,
+) -> bool {
+    if rw <= 0.0 || rh <= 0.0 {
+        return false;
+    }
+    let x = (lx / rw).clamp(0.0, 1.0);
+    let y = (1.0 - ly / rh).clamp(0.0, 1.0);
+    let Some(puntos) = puntos_curva_mut(model, id) else {
+        return false;
+    };
+    // Umbral de enganche en coords-curva (radio del "imán" sobre un punto
+    // existente). ~5% del lado del canvas.
+    const UMBRAL: f32 = 0.06;
+    let mut mejor: Option<(usize, f32)> = None;
+    for (i, (px, py)) in puntos.iter().enumerate() {
+        let d = ((px - x).powi(2) + (py - y).powi(2)).sqrt();
+        if d < UMBRAL && mejor.map_or(true, |(_, md)| d < md) {
+            mejor = Some((i, d));
+        }
+    }
+    let idx = if let Some((i, _)) = mejor {
+        i
+    } else {
+        // Inserta manteniendo el orden por x. El nuevo punto toma la
+        // posición exacta del click; el drag posterior lo refina.
+        let pos = puntos
+            .iter()
+            .position(|(px, _)| *px > x)
+            .unwrap_or(puntos.len());
+        puntos.insert(pos, (x, y));
+        pos
+    };
+    model.curva_arrastrando = Some(CurvaDrag { idx, rw, rh });
+    marcar_stale_curva_y_recomponer(model, id);
+    true
+}
+
+/// Move durante el drag de un punto de la curva: normaliza los deltas-px
+/// con las dims guardadas en `curva_arrastrando` y reubica el punto activo.
+/// Los extremos (idx 0 y último) sólo se mueven en `y` (x fijo en 0/1); los
+/// interiores se acotan en `x` entre sus vecinos para no cruzarlos. No-op si
+/// no hay drag activo o la capa cambió.
+pub(crate) fn curva_arrastrar(model: &mut Model, id: Uuid, dx: f32, dy: f32) -> bool {
+    let Some(drag) = model.curva_arrastrando else {
+        return false;
+    };
+    let dxn = dx / drag.rw;
+    let dyn_curva = -dy / drag.rh; // pantalla: y crece hacia abajo; curva: al revés.
+    let Some(puntos) = puntos_curva_mut(model, id) else {
+        return false;
+    };
+    let n = puntos.len();
+    if drag.idx >= n {
+        return false;
+    }
+    let (mut nx, mut ny) = puntos[drag.idx];
+    ny = (ny + dyn_curva).clamp(0.0, 1.0);
+    if drag.idx == 0 {
+        nx = 0.0;
+    } else if drag.idx == n - 1 {
+        nx = 1.0;
+    } else {
+        let lo = puntos[drag.idx - 1].0 + 1e-3;
+        let hi = puntos[drag.idx + 1].0 - 1e-3;
+        nx = (nx + dxn).clamp(lo, hi);
+    }
+    puntos[drag.idx] = (nx, ny);
+    marcar_stale_curva_y_recomponer(model, id);
+    true
+}
+
+/// Resetea la curva de `id` a la diagonal identidad `(0,0)→(1,1)`.
+/// Devuelve `false` si `id` no es una capa derivada `Curvas`.
+pub(crate) fn curva_reset(model: &mut Model, id: Uuid) -> bool {
+    let Some(puntos) = puntos_curva_mut(model, id) else {
+        return false;
+    };
+    *puntos = vec![(0.0, 0.0), (1.0, 1.0)];
+    marcar_stale_curva_y_recomponer(model, id);
     true
 }
 

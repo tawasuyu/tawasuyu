@@ -379,6 +379,25 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, Some((id, param.clave_coalesce())));
                 }
             }
+            Msg::CurvaPress { id, lx, ly, rw, rh } => {
+                // El press recompone en vivo (muestra el punto recién
+                // enganchado/insertado); el snapshot lo difiere al
+                // `CurvaSoltar` para que todo el gesto sea 1 sola entrada
+                // de historial.
+                curva_press(&mut model, id, lx, ly, rw, rh);
+            }
+            Msg::CurvaArrastrar { id, dx, dy } => {
+                curva_arrastrar(&mut model, id, dx, dy);
+            }
+            Msg::CurvaSoltar { id } => {
+                model.curva_arrastrando = None;
+                pushear_snapshot(&mut model, Some((id, "curva")));
+            }
+            Msg::CurvaReset { id } => {
+                if curva_reset(&mut model, id) {
+                    pushear_snapshot(&mut model, Some((id, "curva-reset")));
+                }
+            }
             Msg::IniciarSeleccion { lx, ly, rw, rh } => {
                 // Capturamos el ancla en coords-imagen y empezamos el
                 // drag. Si la conversión local→imagen falla (lienzo

@@ -121,6 +121,23 @@ pub(crate) struct Model {
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
     pub(crate) portapapeles: Option<PortaPixeles>,
+    /// Drag en curso en el editor de curvas (sección "parámetros" cuando
+    /// la capa es una derivada `Curvas`). `None` fuera de un drag. El press
+    /// sobre el canvas de la curva lo fija (índice del punto activo + dims
+    /// del canvas para convertir deltas-px a coords `[0,1]`); el `End` lo
+    /// limpia.
+    pub(crate) curva_arrastrando: Option<CurvaDrag>,
+}
+
+/// Punto activo de un drag en el editor de curvas tonales. `rw`/`rh` son
+/// las dimensiones en px del canvas de la curva al momento del press —
+/// permiten que el handler de drag (que sólo recibe deltas-px) los
+/// normalice a `[0,1]`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CurvaDrag {
+    pub(crate) idx: usize,
+    pub(crate) rw: f32,
+    pub(crate) rh: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,6 +415,39 @@ pub(crate) enum Msg {
         id: Uuid,
         param: ParametroSlider,
         dv: f32,
+    },
+    /// Press sobre el canvas del editor de curvas de la capa derivada
+    /// `id`. `(lx, ly)` es la posición local del click y `(rw, rh)` las
+    /// dimensiones del canvas — `update` convierte a coords-curva `[0,1]`
+    /// (y se invierte: arriba = salida 1.0), engancha el punto de control
+    /// más cercano (o inserta uno nuevo si el click cae lejos de todos) y
+    /// arranca el drag. Emitido por `on_click_at`.
+    CurvaPress {
+        id: Uuid,
+        lx: f32,
+        ly: f32,
+        rw: f32,
+        rh: f32,
+    },
+    /// Move durante el drag de un punto de la curva `id`. `(dx, dy)` son
+    /// deltas-px incrementales; `update` los normaliza con las dims
+    /// guardadas en `curva_arrastrando` y reubica el punto activo
+    /// (clamp en `y∈[0,1]`, y en `x` acotado entre vecinos para no
+    /// cruzarlos). Marca la capa stale y recompone en vivo.
+    CurvaArrastrar {
+        id: Uuid,
+        dx: f32,
+        dy: f32,
+    },
+    /// End del drag de la curva: limpia `curva_arrastrando` y snapshotea
+    /// el resultado (1 sola entrada de historial por gesto, vía coalesce).
+    CurvaSoltar {
+        id: Uuid,
+    },
+    /// Resetea la curva de la capa `id` a la diagonal identidad
+    /// `(0,0)→(1,1)`. Botón del editor.
+    CurvaReset {
+        id: Uuid,
     },
     /// Press sobre el lienzo en modo Marco: setea el ancla del drag
     /// en coords-imagen y captura el rect del panel para conversión

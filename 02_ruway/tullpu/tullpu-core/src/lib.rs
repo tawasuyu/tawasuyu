@@ -196,6 +196,27 @@ pub enum OpLocal {
     /// Espeja el buffer verticalmente (swap de filas alrededor del eje
     /// horizontal central). No cambia dimensiones.
     EspejarVertical,
+    /// Curva tonal maestra: una función de transferencia `entrada→salida`
+    /// definida por puntos de control en `[0,1]²` (`(x_entrada, y_salida)`),
+    /// aplicada por igual a los tres canales RGB (alfa intacto). `tullpu-ops`
+    /// interpola los puntos a una LUT de 256 entradas (Hermite monótona, sin
+    /// overshoot) y la mapea por canal. Es la generalización de `Niveles`:
+    /// donde Niveles ofrece negro/blanco/gamma, una curva permite cualquier
+    /// forma (S de contraste, inversión parcial, solarizado…). Convención: los
+    /// puntos viajan sin ordenar — `tullpu-ops` los ordena por `x` y clampa a
+    /// `[0,1]`; con < 2 puntos válidos la LUT cae a identidad.
+    Curvas { puntos: Vec<(f32, f32)> },
+}
+
+impl OpLocal {
+    /// Curva tonal identidad: la diagonal `(0,0)→(1,1)`. Punto de partida
+    /// para una capa de ajuste de curvas recién creada (la UI luego arrastra
+    /// los puntos).
+    pub fn curvas_identidad() -> OpLocal {
+        OpLocal::Curvas {
+            puntos: vec![(0.0, 0.0), (1.0, 1.0)],
+        }
+    }
 }
 
 /// La operación que produce una capa derivada a partir de su madre. Local =
@@ -231,6 +252,7 @@ impl TransformacionPixel {
                 OpLocal::Tonalidad { .. } => "tonalidad".into(),
                 OpLocal::EspejarHorizontal => "espejar ↔".into(),
                 OpLocal::EspejarVertical => "espejar ↕".into(),
+                OpLocal::Curvas { .. } => "curvas".into(),
             },
             TransformacionPixel::Ia { modelo, .. } => format!("ia:{modelo}"),
         }

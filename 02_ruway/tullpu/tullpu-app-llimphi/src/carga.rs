@@ -224,6 +224,7 @@ pub(crate) fn inicializar() -> Model {
         simetria: Simetria::Ninguna,
         gradiente_drag: None,
         portapapeles: None,
+        curva_arrastrando: None,
     };
     sincronizar_thumbs(&mut model);
     // Cómputo inicial del histograma desde el composite recién armado.

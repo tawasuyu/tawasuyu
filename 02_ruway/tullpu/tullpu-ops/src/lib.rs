@@ -102,8 +102,105 @@ pub fn aplicar_op_local(op: &OpLocal, src: &[u8], w: u32, h: u32) -> Result<Vec<
         }
         OpLocal::EspejarHorizontal => espejar_horizontal(src, w, h),
         OpLocal::EspejarVertical => espejar_vertical(src, w, h),
+        OpLocal::Curvas { puntos } => {
+            let lut = lut_curva(puntos);
+            mapear_rgb(src, |c| lut[c as usize])
+        }
     };
     Ok(salida)
+}
+
+/// Construye la LUT de 256 entradas de una curva tonal a partir de sus
+/// puntos de control `(x_entrada, y_salida)` en `[0,1]²`. El frontend la
+/// usa para dibujar la curva; `aplicar_op_local` la usa para mapear los
+/// canales. Pura y determinista.
+///
+/// Algoritmo: ordena los puntos por `x`, clampa a `[0,1]`, deduplica `x`
+/// colapsados (gana el primero), y si quedan < 2 puntos válidos devuelve la
+/// identidad (`lut[i] = i`). Con ≥ 2 puntos interpola por Hermite cúbica con
+/// tangentes monótonas de **Fritsch–Carlson** — la misma receta que evita el
+/// overshoot típico de Catmull-Rom (una curva de contraste no debe "rebotar"
+/// fuera de `[0,1]` ni invertir su pendiente entre puntos). Fuera del dominio
+/// cubierto por los puntos, la salida se aplana al extremo más cercano
+/// (clamp, como el panel Curves de Photoshop).
+pub fn lut_curva(puntos: &[(f32, f32)]) -> [u8; 256] {
+    // Saneo: clamp a [0,1], orden por x, dedup de x repetidos.
+    let mut pts: Vec<(f32, f32)> = puntos
+        .iter()
+        .map(|&(x, y)| (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
+        .collect();
+    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
+
+    let mut lut = [0u8; 256];
+    if pts.len() < 2 {
+        for (i, slot) in lut.iter_mut().enumerate() {
+            *slot = i as u8;
+        }
+        return lut;
+    }
+
+    let n = pts.len();
+    let xs: Vec<f32> = pts.iter().map(|p| p.0).collect();
+    let ys: Vec<f32> = pts.iter().map(|p| p.1).collect();
+
+    // Secantes entre puntos consecutivos.
+    let mut d = vec![0.0f32; n - 1];
+    for k in 0..n - 1 {
+        let h = (xs[k + 1] - xs[k]).max(1e-6);
+        d[k] = (ys[k + 1] - ys[k]) / h;
+    }
+    // Tangentes iniciales: secantes en los extremos, promedio en el interior.
+    let mut m = vec![0.0f32; n];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for k in 1..n - 1 {
+        m[k] = (d[k - 1] + d[k]) / 2.0;
+    }
+    // Corrección de Fritsch–Carlson: garantiza monotonía por tramo.
+    for k in 0..n - 1 {
+        if d[k].abs() < 1e-12 {
+            // Tramo plano ⇒ tangentes nulas a ambos lados (sin overshoot).
+            m[k] = 0.0;
+            m[k + 1] = 0.0;
+        } else {
+            let alpha = m[k] / d[k];
+            let beta = m[k + 1] / d[k];
+            let s = alpha * alpha + beta * beta;
+            if s > 9.0 {
+                let tau = 3.0 / s.sqrt();
+                m[k] = tau * alpha * d[k];
+                m[k + 1] = tau * beta * d[k];
+            }
+        }
+    }
+
+    for (i, slot) in lut.iter_mut().enumerate() {
+        let x = i as f32 / 255.0;
+        let y = if x <= xs[0] {
+            ys[0] // clamp izquierdo
+        } else if x >= xs[n - 1] {
+            ys[n - 1] // clamp derecho
+        } else {
+            // Localiza el tramo [xs[k], xs[k+1]] que contiene x.
+            let mut k = 0;
+            while k < n - 1 && x > xs[k + 1] {
+                k += 1;
+            }
+            let h = (xs[k + 1] - xs[k]).max(1e-6);
+            let t = ((x - xs[k]) / h).clamp(0.0, 1.0);
+            let t2 = t * t;
+            let t3 = t2 * t;
+            // Base de Hermite.
+            let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+            let h10 = t3 - 2.0 * t2 + t;
+            let h01 = -2.0 * t3 + 3.0 * t2;
+            let h11 = t3 - t2;
+            h00 * ys[k] + h10 * h * m[k] + h01 * ys[k + 1] + h11 * h * m[k + 1]
+        };
+        *slot = clamp_u8(y);
+    }
+    lut
 }
 
 /// Aplica una [`TransformacionPixel`] entera. Las Ia devuelven
@@ -661,6 +758,104 @@ mod tests {
         assert_eq!(p[0], 255);
         assert!((p[1] as i32 - 128).abs() <= 1);
         assert_eq!(p[2], 0);
+    }
+
+    #[test]
+    fn curva_identidad_es_identidad() {
+        // La diagonal (0,0)→(1,1) debe dejar la LUT en lut[i]=i, así que
+        // mapear cualquier color lo devuelve intacto.
+        let lut = lut_curva(&[(0.0, 0.0), (1.0, 1.0)]);
+        for i in 0..256 {
+            assert_eq!(lut[i], i as u8, "lut[{i}] no es identidad");
+        }
+        let src = buffer_solido(1, 1, [10, 128, 240, 77]);
+        let out = aplicar_op_local(
+            &OpLocal::Curvas {
+                puntos: vec![(0.0, 0.0), (1.0, 1.0)],
+            },
+            &src,
+            1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(px(&out, 0), [10, 128, 240, 77]); // alfa intacto también.
+    }
+
+    #[test]
+    fn curva_menos_de_dos_puntos_cae_a_identidad() {
+        let lut = lut_curva(&[(0.5, 0.9)]);
+        for i in 0..256 {
+            assert_eq!(lut[i], i as u8);
+        }
+        // Vacío también.
+        let lut0 = lut_curva(&[]);
+        assert_eq!(lut0[200], 200);
+    }
+
+    #[test]
+    fn curva_respeta_extremos_y_punto_medio_levantado() {
+        // Curva que sube el medio: (0,0)-(0.5,0.75)-(1,1). Extremos exactos,
+        // el centro queda por encima de la diagonal.
+        let lut = lut_curva(&[(0.0, 0.0), (0.5, 0.75), (1.0, 1.0)]);
+        assert_eq!(lut[0], 0);
+        assert_eq!(lut[255], 255);
+        // En x=0.5 (idx 128) la salida ~0.75*255 ≈ 191; tolerancia por el
+        // muestreo de la LUT.
+        assert!(
+            (lut[128] as i32 - 191).abs() <= 4,
+            "centro={} esperado ~191",
+            lut[128]
+        );
+        assert!(lut[128] > 128, "el medio debe quedar levantado");
+    }
+
+    #[test]
+    fn curva_es_monotona_no_decreciente_y_dentro_de_rango() {
+        // Una curva en S de contraste no debe rebotar fuera de [0,1] ni
+        // invertir su pendiente — eso valida la corrección Fritsch–Carlson.
+        let lut = lut_curva(&[(0.0, 0.0), (0.25, 0.15), (0.75, 0.85), (1.0, 1.0)]);
+        for i in 1..256 {
+            assert!(
+                lut[i] >= lut[i - 1],
+                "no monótona en {i}: {} < {}",
+                lut[i],
+                lut[i - 1]
+            );
+        }
+        // Sombras bajadas, luces subidas respecto a la diagonal.
+        assert!(lut[64] < 64, "sombras={} deberían bajar", lut[64]);
+        assert!(lut[192] > 192, "luces={} deberían subir", lut[192]);
+    }
+
+    #[test]
+    fn curva_clampa_fuera_de_dominio() {
+        // Puntos que no cubren los extremos del eje: dominio [0.3, 0.7].
+        // Antes de 0.3 la salida se aplana a y(0.3)=0.2; después de 0.7 a
+        // y(0.7)=0.9.
+        let lut = lut_curva(&[(0.3, 0.2), (0.7, 0.9)]);
+        let y_lo = (0.2_f32 * 255.0).round() as u8;
+        let y_hi = (0.9_f32 * 255.0).round() as u8;
+        assert_eq!(lut[0], y_lo);
+        assert_eq!(lut[10], y_lo);
+        assert_eq!(lut[255], y_hi);
+        assert_eq!(lut[250], y_hi);
+    }
+
+    #[test]
+    fn curva_puntos_desordenados_se_ordenan() {
+        // Los mismos puntos en cualquier orden producen la misma LUT.
+        let a = lut_curva(&[(1.0, 1.0), (0.0, 0.0), (0.5, 0.3)]);
+        let b = lut_curva(&[(0.5, 0.3), (1.0, 1.0), (0.0, 0.0)]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn curva_invertida_baja_todo() {
+        // (0,1)→(1,0) es una inversión lineal: lut[i] ≈ 255-i.
+        let lut = lut_curva(&[(0.0, 1.0), (1.0, 0.0)]);
+        assert_eq!(lut[0], 255);
+        assert_eq!(lut[255], 0);
+        assert!((lut[128] as i32 - 127).abs() <= 2);
     }
 
     #[test]

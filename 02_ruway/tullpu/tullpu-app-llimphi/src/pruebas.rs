@@ -73,6 +73,7 @@
             simetria: Simetria::Ninguna,
             gradiente_drag: None,
             portapapeles: None,
+            curva_arrastrando: None,
         }
     }
 
@@ -1628,6 +1629,97 @@
             }
             other => panic!("esperaba Brillo derivada: {:?}", other),
         }
+    }
+
+    /// Extrae los puntos de control de una capa derivada `Curvas`.
+    fn puntos_de(model: &Model, id: Uuid) -> Vec<(f32, f32)> {
+        match &model.lienzo.capa(id).unwrap().origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Curvas { puntos }),
+                ..
+            } => puntos.clone(),
+            other => panic!("esperaba Curvas: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn curva_press_lejano_inserta_punto_y_engancha() {
+        let (mut model, _madre, deriv) =
+            modelo_con_derivada(OpLocal::curvas_identidad());
+        // Canvas 100×100; click al centro (0.5, 0.5) — lejos de ambos
+        // extremos (dist ≈ 0.707 > umbral) ⇒ inserta un 3er punto.
+        let ok = curva_press(&mut model, deriv, 50.0, 50.0, 100.0, 100.0);
+        assert!(ok);
+        let pts = puntos_de(&model, deriv);
+        assert_eq!(pts.len(), 3, "debió insertar un punto medio");
+        assert!((pts[1].0 - 0.5).abs() < 1e-3 && (pts[1].1 - 0.5).abs() < 1e-3);
+        // Drag enganchado al punto recién insertado (idx 1).
+        assert_eq!(model.curva_arrastrando.map(|d| d.idx), Some(1));
+    }
+
+    #[test]
+    fn curva_press_cercano_engancha_sin_insertar() {
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::curvas_identidad());
+        // Click cerca del extremo negro (0,0) → mapea a pantalla (0,100).
+        let ok = curva_press(&mut model, deriv, 2.0, 98.0, 100.0, 100.0);
+        assert!(ok);
+        let pts = puntos_de(&model, deriv);
+        assert_eq!(pts.len(), 2, "no debió insertar — enganchó el extremo");
+        assert_eq!(model.curva_arrastrando.map(|d| d.idx), Some(0));
+    }
+
+    #[test]
+    fn curva_arrastrar_mueve_el_punto_activo() {
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::curvas_identidad());
+        curva_press(&mut model, deriv, 50.0, 50.0, 100.0, 100.0);
+        // dy=-20 px sobre rh=100 ⇒ +0.2 en y-curva (sube la salida).
+        let ok = curva_arrastrar(&mut model, deriv, 0.0, -20.0);
+        assert!(ok);
+        let pts = puntos_de(&model, deriv);
+        assert!((pts[1].1 - 0.7).abs() < 1e-3, "y={}", pts[1].1);
+    }
+
+    #[test]
+    fn curva_arrastrar_extremo_fija_x_en_cero() {
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::curvas_identidad());
+        curva_press(&mut model, deriv, 2.0, 98.0, 100.0, 100.0); // engancha idx 0
+        // Intentar moverlo en x (+30 px) no debe sacarlo de x=0.
+        curva_arrastrar(&mut model, deriv, 30.0, 0.0);
+        let pts = puntos_de(&model, deriv);
+        assert_eq!(pts[0].0, 0.0, "el extremo negro mantiene x=0");
+    }
+
+    #[test]
+    fn curva_arrastrar_sin_drag_es_noop() {
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::curvas_identidad());
+        // Sin press previo no hay `curva_arrastrando` ⇒ no-op.
+        assert!(!curva_arrastrar(&mut model, deriv, 10.0, 10.0));
+        assert_eq!(puntos_de(&model, deriv).len(), 2);
+    }
+
+    #[test]
+    fn curva_reset_vuelve_a_identidad() {
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::curvas_identidad());
+        curva_press(&mut model, deriv, 50.0, 50.0, 100.0, 100.0);
+        curva_arrastrar(&mut model, deriv, 0.0, -30.0);
+        assert_eq!(puntos_de(&model, deriv).len(), 3);
+        let ok = curva_reset(&mut model, deriv);
+        assert!(ok);
+        let pts = puntos_de(&model, deriv);
+        assert_eq!(pts, vec![(0.0, 0.0), (1.0, 1.0)]);
+    }
+
+    #[test]
+    fn curva_press_sobre_capa_no_curva_es_noop() {
+        let (mut model, _, deriv) =
+            modelo_con_derivada(OpLocal::Brillo { delta: 0.0 });
+        assert!(!curva_press(&mut model, deriv, 50.0, 50.0, 100.0, 100.0));
+        assert!(model.curva_arrastrando.is_none());
     }
 
     #[test]

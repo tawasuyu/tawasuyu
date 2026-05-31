@@ -8,7 +8,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect, Stroke};
+use llimphi_ui::llimphi_raster::kurbo::{
+    Affine, BezPath, Line, Point, Rect as KurboRect, Stroke,
+};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Image, Mix};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, View};
@@ -20,6 +22,8 @@ use llimphi_module_file_picker::PickerMsg;
 use pixel_verbo_core::OpPixel;
 use tullpu_core::{Capa, Frescura, Lienzo, OpLocal, OrigenCapa, TransformacionPixel};
 use tullpu_render::FormatoExport;
+
+use tullpu_ops::lut_curva;
 
 use crate::blend::etiqueta_blend;
 use crate::ops::etiqueta_color_activo;
@@ -336,6 +340,153 @@ pub(crate) fn vista_histograma(theme: &llimphi_theme::Theme, model: &Model) -> V
             }
         }
     })
+}
+
+/// Alto fijo (px) del canvas del editor de curvas tonales.
+const CURVA_ALTO: f32 = 170.0;
+
+/// Si la capa seleccionada es una derivada `Curvas`, devuelve el canvas
+/// interactivo del editor (curva + puntos de control sobre el histograma
+/// tenue) más un botón de reset. `None` cuando no aplica. Click sobre el
+/// canvas engancha/inserta un punto (`CurvaPress`) y el drag lo mueve
+/// (`CurvaArrastrar`/`CurvaSoltar`).
+pub(crate) fn vista_editor_curva(
+    theme: &llimphi_theme::Theme,
+    model: &Model,
+) -> Option<Vec<View<Msg>>> {
+    let id = model.seleccionada?;
+    let capa = model.lienzo.capa(id)?;
+    let puntos: Vec<(f32, f32)> = match &capa.origen {
+        OrigenCapa::Derivada {
+            op: TransformacionPixel::Local(OpLocal::Curvas { puntos }),
+            ..
+        } => puntos.clone(),
+        _ => return None,
+    };
+    let activo = model.curva_arrastrando.map(|d| d.idx);
+    let hist = model.histograma;
+    let bg = theme.bg_input;
+    let col_curva = theme.fg_text;
+
+    let lut = lut_curva(&puntos);
+
+    let canvas = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(CURVA_ALTO),
+        },
+        ..Default::default()
+    })
+    .fill(bg)
+    .paint_with(move |scene, _ts, r| {
+        if r.w <= 1.0 || r.h <= 1.0 {
+            return;
+        }
+        let x0 = r.x as f64;
+        let y0 = r.y as f64;
+        let w = r.w as f64;
+        let h = r.h as f64;
+        // Mapea coords-curva [0,1]² → pixel del canvas (y invertida).
+        let map = |cx: f64, cy: f64| Point::new(x0 + cx * w, y0 + (1.0 - cy) * h);
+
+        // 1) Histograma de luminancia, tenue, de fondo. Suma los 3 canales
+        //    por bin y normaliza por el pico — sirve de referencia para
+        //    decidir dónde están las sombras/luces a corregir.
+        if let Some(hist) = hist {
+            let mut suma = [0u32; 256];
+            let mut max = 0u32;
+            for (v, slot) in suma.iter_mut().enumerate() {
+                let s = hist[0][v] + hist[1][v] + hist[2][v];
+                *slot = s;
+                if s > max {
+                    max = s;
+                }
+            }
+            if max > 0 {
+                let max = max as f64;
+                let bin_w = w / 256.0;
+                let col_hist = Color::from_rgba8(150, 150, 160, 60);
+                for (v, &s) in suma.iter().enumerate() {
+                    let bar = (s as f64 / max) * h;
+                    if bar <= 0.0 {
+                        continue;
+                    }
+                    let bx0 = x0 + v as f64 * bin_w;
+                    let rect = KurboRect::new(bx0, y0 + h - bar, bx0 + bin_w.max(1.0), y0 + h);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, col_hist, None, &rect);
+                }
+            }
+        }
+
+        // 2) Grilla: marco + cuartos + diagonal identidad (referencia de
+        //    "sin cambio").
+        let trazo_grid = Stroke::new(1.0);
+        let col_grid = Color::from_rgba8(120, 120, 130, 90);
+        for q in 1..4 {
+            let t = q as f64 / 4.0;
+            scene.stroke(&trazo_grid, Affine::IDENTITY, col_grid, None, &Line::new(map(t, 0.0), map(t, 1.0)));
+            scene.stroke(&trazo_grid, Affine::IDENTITY, col_grid, None, &Line::new(map(0.0, t), map(1.0, t)));
+        }
+        // Diagonal identidad punteada-equivalente (sólida tenue).
+        scene.stroke(
+            &Stroke::new(1.0),
+            Affine::IDENTITY,
+            Color::from_rgba8(120, 120, 130, 120),
+            None,
+            &Line::new(map(0.0, 0.0), map(1.0, 1.0)),
+        );
+        // Marco.
+        scene.stroke(
+            &Stroke::new(1.0),
+            Affine::IDENTITY,
+            col_grid,
+            None,
+            &KurboRect::new(x0, y0, x0 + w, y0 + h),
+        );
+
+        // 3) La curva: polilínea de la LUT (256 muestras).
+        let mut path = BezPath::new();
+        for i in 0..256 {
+            let cx = i as f64 / 255.0;
+            let cy = lut[i] as f64 / 255.0;
+            let p = map(cx, cy);
+            if i == 0 {
+                path.move_to(p);
+            } else {
+                path.line_to(p);
+            }
+        }
+        scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, col_curva, None, &path);
+
+        // 4) Puntos de control: cuadritos. El activo, resaltado.
+        for (i, &(cx, cy)) in puntos.iter().enumerate() {
+            let c = map(cx as f64, cy as f64);
+            let lado = if Some(i) == activo { 5.0 } else { 4.0 };
+            let cuadro = KurboRect::new(c.x - lado, c.y - lado, c.x + lado, c.y + lado);
+            let relleno = if Some(i) == activo {
+                Color::from_rgba8(255, 200, 80, 255)
+            } else {
+                Color::from_rgba8(240, 240, 245, 255)
+            };
+            scene.fill(Fill::NonZero, Affine::IDENTITY, relleno, None, &cuadro);
+            scene.stroke(
+                &Stroke::new(1.0),
+                Affine::IDENTITY,
+                Color::from_rgba8(30, 30, 35, 255),
+                None,
+                &cuadro,
+            );
+        }
+    })
+    .on_click_at(move |lx, ly, rw, rh| Some(Msg::CurvaPress { id, lx, ly, rw, rh }))
+    .draggable_at(move |fase, dx, dy, _lx0, _ly0| match fase {
+        DragPhase::Move => Some(Msg::CurvaArrastrar { id, dx, dy }),
+        DragPhase::End => Some(Msg::CurvaSoltar { id }),
+    });
+
+    let pal = ButtonPalette::from_theme(theme);
+    let reset = button_view("↺ reset curva".to_string(), &pal, Msg::CurvaReset { id });
+    Some(vec![canvas, envolver_fila(reset)])
 }
 
 /// Si la capa seleccionada es una derivada con un `OpLocal`
@@ -782,6 +933,13 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         hijos.extend(rows.into_iter().map(envolver_fila));
     }
 
+    // "curva": editor interactivo si la capa seleccionada es una derivada
+    // `Curvas`. El canvas y el botón de reset ya vienen envueltos.
+    if let Some(vistas) = vista_editor_curva(theme, model) {
+        hijos.push(subtitulo("curva"));
+        hijos.extend(vistas);
+    }
+
     // "histograma": chart RGB del composite vigente. Sólo se renderiza
     // si hay imagen ya recompuesta (caso típico al arrancar la app).
     if model.histograma.is_some() {
@@ -1030,6 +1188,7 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
             gamma: 1.2,
         },
     )));
+    hijos.push(envolver_fila(mk_local("+ Curvas", OpLocal::curvas_identidad())));
 
     hijos.push(subtitulo("ia"));
     hijos.push(envolver_fila(mk_ia(
