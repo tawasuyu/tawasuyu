@@ -72,6 +72,9 @@ use llimphi_widget_text_editor_lsp::{
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_context_menu::context_menu_view;
 
 const TREE_WIDTH: f32 = 240.0;
 const TREE_ROW_H: f32 = 22.0;
@@ -187,6 +190,17 @@ enum Msg {
     SaveAsKey(KeyEvent),
     SaveAsSubmit,
     SaveAsClose,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click en el área de trabajo → abre el menú de edición en
+    /// `(x, y)` de ventana, operando sobre el editor del tab activo.
+    EditMenuOpen(f32, f32),
+    /// Acción elegida en el menú de edición.
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +316,10 @@ struct Model {
     /// los muestra al tope cuando se abre — mejor que tener que escribir
     /// el nombre para encontrar algo que acabás de cerrar.
     recent_files: std::collections::VecDeque<PathBuf>,
+    /// Menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
+    edit_menu: Option<(f32, f32)>,
 }
 
 const RECENT_FILES_CAP: usize = 20;
@@ -509,6 +527,8 @@ impl App for EditorApp {
             save_as: None,
             git_status: GitStatusMap::new(),
             recent_files: std::collections::VecDeque::with_capacity(RECENT_FILES_CAP),
+            menu_open: None,
+            edit_menu: None,
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
@@ -564,23 +584,72 @@ impl App for EditorApp {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = model.theme.clone();
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_bar(model, &theme);
         let body = body_view(model, &theme);
         let status = status_bar(model, &theme);
 
+        // El right-click se engancha en la raíz (origen 0,0 → las coords
+        // locales que llega al handler ya son de ventana) y abre el menú
+        // de edición sobre el editor activo. Un nodo más profundo con su
+        // propio handler de right-click ganaría; hoy nadie lo pone, así
+        // que la raíz es el catch-all.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(theme.bg_app)
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
         .children(vec![
+            menubar,
             header,
             separator_line(&theme),
             body,
             separator_line(&theme),
             status,
         ])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú de edición tiene prioridad si está abierto.
+        if let Some((x, y)) = model.edit_menu {
+            let flags = match model.active_tab() {
+                Some(tab) => EditFlags::from_editor(&tab.editor, false),
+                None => EditFlags::default(),
+            };
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &model.theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a app_bus::AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = EditorApp::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: std::sync::Arc::new(Msg::MenuOpen),
+        on_command: std::sync::Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
     }
 }
 

@@ -745,3 +745,111 @@ pub(crate) fn save_open_file(model: Model, handle: &Handle<Msg>) -> Model {
     m.status = "guardando…".to_string();
     m
 }
+
+// =====================================================================
+// Menú principal + menú de edición contextual
+// =====================================================================
+
+/// Construye el menú principal de nada reflejando el estado actual
+/// (ítems de Editar grises cuando no hay editor / selección / historial).
+pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+    let tab = model.active_tab();
+    let has_sel = tab.map(|t| t.editor.has_selection()).unwrap_or(false);
+    let can_undo = tab.map(|t| t.editor.can_undo()).unwrap_or(false);
+    let can_redo = tab.map(|t| t.editor.can_redo()).unwrap_or(false);
+    let has_tab = tab.is_some();
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo { undo = undo.disabled(); }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo { redo = redo.disabled(); }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel { cut = cut.disabled(); copy = copy.disabled(); }
+    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall").shortcut("Ctrl+A").separated();
+    if !has_tab { sel_all = sel_all.disabled(); }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Abrir…", "file.open").shortcut("Ctrl+P"))
+                .item(MenuItem::new("Guardar", "file.save").shortcut("Ctrl+S"))
+                .item(MenuItem::new("Guardar como…", "file.saveas").shortcut("Ctrl+Shift+S"))
+                .item(MenuItem::new("Cerrar pestaña", "file.close").shortcut("Ctrl+W").separated()),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all),
+        )
+        .menu(
+            Menu::new("Buscar")
+                .item(MenuItem::new("Buscar en archivo", "search.find").shortcut("Ctrl+F"))
+                .item(MenuItem::new("Buscar en proyecto", "search.fif").shortcut("Ctrl+Shift+F"))
+                .item(MenuItem::new("Símbolos", "search.outline").shortcut("Ctrl+Shift+O"))
+                .item(MenuItem::new("Ir a definición", "search.gotodef").shortcut("F12").separated()),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Terminal", "view.term").shortcut("Ctrl+`"))
+                .item(MenuItem::new("Paleta de comandos", "view.palette").shortcut("Ctrl+Shift+P"))
+                .item(MenuItem::new("Minimapa", "view.minimap"))
+                .item(MenuItem::new("Cambiar tema", "view.theme").shortcut("Ctrl+T").separated()),
+        )
+}
+
+/// Traduce el `command` del menú principal al `Msg` real y lo despacha.
+/// Cierra el menú antes de actuar.
+pub(crate) fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
+    model.menu_open = None;
+    let target = match command.as_str() {
+        "file.open" => Some(Msg::Picker(PickerMsg::Open)),
+        "file.save" => Some(Msg::Save),
+        "file.saveas" => Some(Msg::SaveAsOpen),
+        "file.close" => model.active.map(Msg::CloseTab),
+        "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
+        "edit.redo" => Some(Msg::EditMenuAction(EditAction::Redo)),
+        "edit.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "search.find" => Some(Msg::FindOpen),
+        "search.fif" => Some(Msg::Fif(FifMsg::Open)),
+        "search.outline" => Some(Msg::Outline(OutlineMsg::Open)),
+        "search.gotodef" => Some(Msg::GotoDefinitionRequest),
+        "view.term" => Some(Msg::Term(ShumaTermMsg::Open)),
+        "view.palette" => Some(Msg::Palette(PaletteMsg::Open)),
+        "view.minimap" => Some(Msg::MiniMap(MiniMapMsg::Open)),
+        "view.theme" => Some(Msg::CycleTheme),
+        _ => None,
+    };
+    match target {
+        Some(msg) => crate::update::dispatch(model, msg, handle),
+        None => model,
+    }
+}
+
+/// Aplica una acción del menú de edición al editor del tab activo,
+/// replicando el bookkeeping de `apply_editor_key` (dirty + LSP +
+/// auto-scroll). Cierra el menú de edición.
+pub(crate) fn apply_edit_menu_action(mut model: Model, action: EditAction) -> Model {
+    model.edit_menu = None;
+    let Some(idx) = model.active else { return model };
+    let r = editmenu::apply(&mut model.tabs[idx].editor, action, &mut model.clipboard);
+    if r.changed() {
+        model.tabs[idx].dirty = true;
+        let path = model.tabs[idx].path.clone();
+        let text = model.tabs[idx].editor.text();
+        model.lsp.did_change(&path, &text);
+    }
+    if r.touched() {
+        model.tabs[idx].editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+    }
+    model
+}

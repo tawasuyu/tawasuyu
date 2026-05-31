@@ -4,6 +4,26 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::ToggleNode(i) => toggle_node(model, i),
             Msg::SelectNode(i) => select_node(model, i),
+            Msg::MenuOpen(idx) => {
+                let mut m = model;
+                m.menu_open = idx;
+                m.edit_menu = None;
+                m
+            }
+            Msg::MenuCommand(cmd) => handle_menu_command(model, cmd, handle),
+            Msg::EditMenuOpen(x, y) => {
+                let mut m = model;
+                m.edit_menu = Some((x, y));
+                m.menu_open = None;
+                m
+            }
+            Msg::EditMenuAction(action) => apply_edit_menu_action(model, action),
+            Msg::CloseMenus => {
+                let mut m = model;
+                m.menu_open = None;
+                m.edit_menu = None;
+                m
+            }
             Msg::EditKey(ev) => apply_editor_key(model, ev),
             Msg::EditorPointer(ev) => apply_editor_pointer(model, ev),
             Msg::Save => {
