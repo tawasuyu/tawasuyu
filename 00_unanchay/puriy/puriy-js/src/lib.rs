@@ -13170,4 +13170,52 @@ mod tests {
         assert_eq!(rt.eval("a").expect("e"), JsValue::Number(0.0));
         assert_eq!(rt.eval("b").expect("e"), JsValue::Number(1.0));
     }
+
+    // ---- Fase 7.168 — Shape Detection API ----
+    #[test]
+    fn shape_detection_clases_existen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof BarcodeDetector").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof FaceDetector").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof TextDetector").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn barcode_detector_supported_formats() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ok = false; BarcodeDetector.getSupportedFormats().then(function(f){ \
+            ok = Array.isArray(f) && f.indexOf('qr_code') >= 0; });").expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn barcode_detector_formato_invalido_lanza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("var threw = false; try { new BarcodeDetector({formats:['nope']}); } \
+            catch (e) { threw = e instanceof TypeError; } threw").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn shape_detect_sin_hook_resuelve_vacio() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var n = -1; new TextDetector().detect({}).then(function(r){ n = r.length; });").expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn shape_detect_usa_hook_del_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_shape_detect_hook = function(type, src, opts){ \
+            return type === 'barcode' ? [{ rawValue: 'X', format: 'qr_code' }] : []; }; \
+            var v = null; new BarcodeDetector().detect({}).then(function(r){ v = r[0].rawValue; });").expect("e");
+        assert_eq!(rt.eval("v").expect("e"), JsValue::String("X".into()));
+    }
+
+    #[test]
+    fn face_detector_respeta_max_detected_faces() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("__puriy_shape_detect_hook = function(){ return [{},{},{}]; }; \
+            var n = -1; new FaceDetector({maxDetectedFaces:2}).detect({}).then(function(r){ n = r.length; });").expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
+    }
 }
