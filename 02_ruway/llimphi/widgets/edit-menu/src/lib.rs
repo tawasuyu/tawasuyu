@@ -132,12 +132,12 @@ fn entries(flags: EditFlags) -> (Vec<ContextMenuItem>, Vec<EditAction>) {
         actions.push(action);
     };
 
-    let undo = ContextMenuItem::action("Deshacer").with_shortcut("Ctrl+Z");
+    let undo = ContextMenuItem::action("Deshacer").icon("\u{21A9}").with_shortcut("Ctrl+Z");
     push(
         if flags.can_undo { undo } else { undo.disabled() },
         EditAction::Undo,
     );
-    let redo = ContextMenuItem::action("Rehacer").with_shortcut("Ctrl+Y");
+    let redo = ContextMenuItem::action("Rehacer").icon("\u{21AA}").with_shortcut("Ctrl+Y");
     push(
         if flags.can_redo { redo } else { redo.disabled() },
         EditAction::Redo,
@@ -146,16 +146,17 @@ fn entries(flags: EditFlags) -> (Vec<ContextMenuItem>, Vec<EditAction>) {
     push(ContextMenuItem::separator(), FILL);
 
     let can_copy = flags.has_selection && !flags.masked;
-    let cut = ContextMenuItem::action("Cortar").with_shortcut("Ctrl+X");
+    let cut = ContextMenuItem::action("Cortar").icon("\u{2702}").with_shortcut("Ctrl+X");
     push(if can_copy { cut } else { cut.disabled() }, EditAction::Cut);
-    let copy = ContextMenuItem::action("Copiar").with_shortcut("Ctrl+C");
+    let copy = ContextMenuItem::action("Copiar").icon("\u{29C9}").with_shortcut("Ctrl+C");
     push(if can_copy { copy } else { copy.disabled() }, EditAction::Copy);
-    let paste = ContextMenuItem::action("Pegar").with_shortcut("Ctrl+V");
+    let paste = ContextMenuItem::action("Pegar").icon("\u{2398}").with_shortcut("Ctrl+V");
     push(
         if flags.can_paste { paste } else { paste.disabled() },
         EditAction::Paste,
     );
     let del = ContextMenuItem::action("Eliminar")
+        .icon("\u{2717}")
         .with_shortcut("Supr")
         .destructive();
     push(
@@ -165,7 +166,7 @@ fn entries(flags: EditFlags) -> (Vec<ContextMenuItem>, Vec<EditAction>) {
 
     push(ContextMenuItem::separator(), FILL);
 
-    let sel = ContextMenuItem::action("Seleccionar todo").with_shortcut("Ctrl+A");
+    let sel = ContextMenuItem::action("Seleccionar todo").icon("\u{2750}").with_shortcut("Ctrl+A");
     push(
         if flags.has_text { sel } else { sel.disabled() },
         EditAction::SelectAll,

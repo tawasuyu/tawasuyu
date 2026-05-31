@@ -26,7 +26,7 @@ use std::sync::Arc;
 use app_bus::AppMenu;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, AlignItems, FlexDirection, JustifyContent, Size, Style},
+    prelude::{auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
     Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
@@ -75,7 +75,11 @@ fn title_palette_active(theme: &Theme) -> ButtonPalette {
 
 /// La fila de títulos (Archivo / Editar / …). Click sobre un título
 /// togglea su dropdown vía `on_open`. El abierto se resalta con el accent.
-pub fn menubar_view<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> View<Msg> {
+/// `hover_switch = true` agrega `on_pointer_enter` a cada título para que,
+/// con un menú ya abierto, pasar el mouse sobre otro título cambie de menú
+/// (comportamiento clásico de barra de menú) — sólo se usa en el overlay,
+/// donde los títulos quedan por encima del scrim y son hovereables.
+fn titles_row<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>, hover_switch: bool) -> View<Msg> {
     let pal = title_palette(spec.theme);
     let pal_on = title_palette_active(spec.theme);
 
@@ -83,13 +87,18 @@ pub fn menubar_view<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> View<Msg> 
     for (i, root) in spec.menu.menus.iter().enumerate() {
         let open = spec.open == Some(i);
         let target = if open { None } else { Some(i) };
-        titles.push(button_styled(
+        let mut title = button_styled(
             root.label.clone(),
             title_style(),
             Alignment::Center,
             if open { &pal_on } else { &pal },
             (spec.on_open)(target),
-        ));
+        );
+        // Con un menú abierto, hover sobre otro título lo abre.
+        if hover_switch && !open {
+            title = title.on_pointer_enter((spec.on_open)(Some(i)));
+        }
+        titles.push(title);
     }
 
     View::new(Style {
@@ -116,8 +125,15 @@ pub fn menubar_view<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> View<Msg> 
     .children(titles)
 }
 
+/// La barra de menú principal — primer hijo del column raíz de `view()`.
+pub fn menubar_view<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> View<Msg> {
+    titles_row(spec, false)
+}
+
 /// El dropdown del menú abierto, para `App::view_overlay`. `None` si no
-/// hay menú abierto.
+/// hay menú abierto. Hospeda además una copia de la fila de títulos por
+/// encima del scrim: así, con el menú abierto, mover el mouse a otro
+/// título cambia de menú (hover-switch).
 pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<View<Msg>> {
     let idx = spec.open?;
     let root = spec.menu.menus.get(idx)?;
@@ -143,6 +159,9 @@ pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<
         if let Some(s) = &src.shortcut {
             cm = cm.with_shortcut(s.clone());
         }
+        if let Some(ic) = &src.icon {
+            cm = cm.icon(ic.clone());
+        }
         if !src.enabled {
             cm = cm.disabled();
         }
@@ -160,7 +179,7 @@ pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<
         }
     });
 
-    Some(context_menu_view(ContextMenuSpec {
+    let dropdown = context_menu_view(ContextMenuSpec {
         anchor: (x, spec.height),
         viewport: spec.viewport,
         header: Some(root.label.clone()),
@@ -169,7 +188,38 @@ pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<
         on_pick,
         on_dismiss: (spec.on_open)(None),
         palette: ContextMenuPalette::from_theme(spec.theme),
-    }))
+    });
+
+    // Fila de títulos por encima del scrim del dropdown: queda hovereable
+    // para cambiar de menú con el mouse. Absoluta al tope para no consumir
+    // el layout; se pinta después del dropdown ⇒ arriba en z-order ⇒ gana
+    // el hit-test.
+    let titles = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(spec.height),
+        },
+        ..Default::default()
+    })
+    .children(vec![titles_row(spec, true)]);
+
+    Some(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![dropdown, titles]),
+    )
 }
 
 fn title_style() -> Style {

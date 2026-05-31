@@ -122,30 +122,46 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     if need_redraw {
                         state.window.request_redraw();
                     }
-                } else if let Some(cache) = state.last_render.as_ref() {
+                } else {
                     // Sin drag: chequear hover. Si hay overlay, el
                     // hover-test va contra él; el árbol principal queda
                     // congelado mientras el overlay esté arriba.
-                    if let Some(ov) = cache.overlay.as_ref() {
+                    //
+                    // Además del repintado (para el `hover_fill`), si el
+                    // nodo recién hovereado declara un `on_pointer_enter`,
+                    // lo dispatcheamos: es lo que permite, p.ej., cambiar
+                    // de menú con el mouse o abrir un submenú al pasar por
+                    // encima. Extraemos el Msg en un scope para soltar el
+                    // borrow del cache antes de mutar el modelo.
+                    let mut enter_msg: Option<A::Msg> = None;
+                    let mut hovered_changed = false;
+                    if let Some(cache) = state.last_render.as_ref() {
+                        let (mounted, computed, prev_idx) = match cache.overlay.as_ref() {
+                            Some(ov) => (&ov.mounted, &ov.computed, ov.hover_idx),
+                            None => (&cache.mounted, &cache.computed, cache.hover_idx),
+                        };
                         let new_hover = hit_test_hover(
-                            &ov.mounted,
-                            &ov.computed,
+                            mounted,
+                            computed,
                             position.x as f32,
                             position.y as f32,
                         );
-                        if new_hover != ov.hover_idx {
-                            state.window.request_redraw();
+                        if new_hover != prev_idx {
+                            hovered_changed = true;
+                            enter_msg = new_hover
+                                .and_then(|i| mounted.nodes.get(i))
+                                .and_then(|n| n.on_pointer_enter.clone());
                         }
-                    } else {
-                        let new_hover = hit_test_hover(
-                            &cache.mounted,
-                            &cache.computed,
-                            position.x as f32,
-                            position.y as f32,
-                        );
-                        if new_hover != cache.hover_idx {
-                            state.window.request_redraw();
-                        }
+                    }
+                    if hovered_changed {
+                        state.window.request_redraw();
+                    }
+                    if let Some(msg) = enter_msg {
+                        let model = state.model.take().expect("model");
+                        state.model = Some(A::update(model, msg, &self.handle));
+                        // El estado cambió → invalidamos el cache para
+                        // re-render (p.ej. el submenú que se abre).
+                        state.last_render = None;
                     }
                     let _ = prev_cursor;
                 }

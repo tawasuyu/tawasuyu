@@ -308,6 +308,9 @@ pub struct MenuItem {
     pub command: String,
     #[serde(default)]
     pub shortcut: Option<String>,
+    /// Glifo (unicode) opcional para el gutter de íconos del dropdown.
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(default = "yes")]
     pub enabled: bool,
     /// Dibujar un separador *antes* de este ítem.
@@ -325,6 +328,7 @@ impl MenuItem {
             label: label.into(),
             command: command.into(),
             shortcut: None,
+            icon: None,
             enabled: true,
             separator_before: false,
         }
@@ -332,6 +336,12 @@ impl MenuItem {
 
     pub fn shortcut(mut self, s: impl Into<String>) -> Self {
         self.shortcut = Some(s.into());
+        self
+    }
+
+    /// Glifo del gutter izquierdo (unicode).
+    pub fn icon(mut self, glyph: impl Into<String>) -> Self {
+        self.icon = Some(glyph.into());
         self
     }
 
