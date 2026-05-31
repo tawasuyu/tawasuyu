@@ -25,6 +25,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use llimphi_theme::Theme;
@@ -43,6 +44,13 @@ use nahual_image_viewer_llimphi::{
 use nahual_thumb_core::{
     generar_thumb_de_archivo, obtener_o_generar, CacheDisco, Planificador, ThumbRgba,
 };
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
+use app_bus::{AppMenu, Menu, MenuItem};
 
 /// Lado máximo de la miniatura generada (px). Un poco mayor que el tile
 /// para que se vea nítida; el grid la reduce al pintar.
@@ -168,6 +176,16 @@ enum Msg {
     ToggleSlideshow,
     /// Tick del slideshow: avanza a la imagen siguiente.
     SlideAvanzar,
+    /// Abre/cierra un menú raíz de la barra (índice del menú).
+    MenuOpen(Option<usize>),
+    /// Comando del menú principal (command id → acción real).
+    MenuCommand(String),
+    /// Cierra todo overlay de menú (raíz y contextual).
+    CloseMenus,
+    /// Abre el menú contextual en coords de ventana, sobre la selección.
+    ContextMenuOpen(f32, f32),
+    /// Cicla la paleta de tema.
+    CiclarTema,
 }
 
 struct Model {
@@ -196,6 +214,10 @@ struct Model {
     orden: Orden,
     estado: String,
     theme: Theme,
+    /// Menú raíz abierto en la barra (índice), si lo hay.
+    menu_open: Option<usize>,
+    /// Menú contextual abierto en (x, y) de ventana, si lo hay.
+    context_menu: Option<(f32, f32)>,
 }
 
 struct Gallery;
@@ -238,12 +260,14 @@ impl App for Gallery {
             cache_disco: CacheDisco::por_defecto().ok(),
             metrics,
             vw: w as f32,
-            vh: h as f32 - HEADER_H - BREADCRUMB_H,
+            vh: h as f32 - MENU_H - HEADER_H - BREADCRUMB_H,
             preview: None,
             slideshow: false,
             orden,
             estado,
             theme: Theme::dark(),
+            menu_open: None,
+            context_menu: None,
         };
         bombear(&mut m, handle);
         m
@@ -397,28 +421,111 @@ impl App for Gallery {
                     navegar_a(&mut m, dir, handle);
                 }
             }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                m.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, &cmd, handle);
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                m.menu_open = None;
+                m.context_menu = Some((x, y));
+            }
+            Msg::CiclarTema => {
+                m.theme = Theme::next_after(m.theme.name);
+            }
         }
         m
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
-        let (path, st) = model.preview.as_ref()?;
-        let pal = ImageViewerPalette::from_theme(&model.theme);
-        let viewer = image_viewer_view::<Msg>(st, Some(path), &pal);
-        // Scrim a pantalla completa: cubre la grilla y, al clickear (fuera o
-        // sobre la imagen), cierra el preview. Esc y ←/→ los maneja on_key.
-        Some(
-            View::new(Style {
-                size: Size {
-                    width: percent(1.0_f32),
-                    height: percent(1.0_f32),
-                },
-                ..Default::default()
-            })
-            .fill(model.theme.bg_app)
-            .on_click(Msg::CerrarPreview)
-            .children(vec![viewer]),
-        )
+        // El preview a pantalla completa manda mientras esté abierto.
+        if let Some((path, st)) = model.preview.as_ref() {
+            let pal = ImageViewerPalette::from_theme(&model.theme);
+            let viewer = image_viewer_view::<Msg>(st, Some(path), &pal);
+            // Scrim a pantalla completa: cubre la grilla y, al clickear (fuera o
+            // sobre la imagen), cierra el preview. Esc y ←/→ los maneja on_key.
+            return Some(
+                View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: percent(1.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .fill(model.theme.bg_app)
+                .on_click(Msg::CerrarPreview)
+                .children(vec![viewer]),
+            );
+        }
+
+        // Menú contextual sobre la entrada seleccionada: prioridad sobre el
+        // dropdown del menú principal.
+        if let Some((x, y)) = model.context_menu {
+            let sel = model.seleccionado.and_then(|i| model.entries.get(i));
+            let header = sel
+                .map(|e| nombre(e.path()))
+                .unwrap_or_else(|| "galería".to_string());
+            let es_carpeta = sel.map(|e| e.es_carpeta()).unwrap_or(false);
+            // Acciones reales según la entrada: carpeta ⇒ entrar; imagen ⇒
+            // abrir preview. Más reset de zoom / ciclar orden, siempre útiles.
+            let items = if es_carpeta {
+                vec![
+                    ContextMenuItem::action("Entrar a la carpeta"),
+                    ContextMenuItem::action("Reiniciar zoom"),
+                    ContextMenuItem::action("Ciclar orden"),
+                ]
+            } else if sel.is_some() {
+                vec![
+                    ContextMenuItem::action("Abrir imagen"),
+                    ContextMenuItem::action("Reiniciar zoom"),
+                    ContextMenuItem::action("Ciclar orden"),
+                ]
+            } else {
+                vec![
+                    ContextMenuItem::action("Reiniciar zoom"),
+                    ContextMenuItem::action("Ciclar orden"),
+                ]
+            };
+            let idx = model.seleccionado;
+            let tile_w = model.metrics.tile_w;
+            let tiene_sel = sel.is_some();
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
+                Arc::new(move |i: usize| {
+                    if tiene_sel {
+                        match i {
+                            0 => idx.map(Msg::Activar).unwrap_or(Msg::CloseMenus),
+                            1 => Msg::Zoom(140.0 - tile_w),
+                            _ => Msg::CiclarOrden,
+                        }
+                    } else {
+                        match i {
+                            0 => Msg::Zoom(140.0 - tile_w),
+                            _ => Msg::CiclarOrden,
+                        }
+                    }
+                });
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport: viewport_of(model),
+                header: Some(header),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu();
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -431,6 +538,8 @@ impl App for Gallery {
             &model.metrics,
         );
 
+        let menu = app_menu();
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = encabezado(model, &v);
         let ruta = barra_ruta(model);
 
@@ -495,7 +604,10 @@ impl App for Gallery {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, ruta, cuerpo])
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual sobre la entrada seleccionada.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, ruta, cuerpo])
     }
 }
 
@@ -833,6 +945,79 @@ fn nombre(p: &Path) -> String {
         .and_then(|n| n.to_str())
         .unwrap_or("?")
         .to_string()
+}
+
+/// Viewport para clampear overlays. La galería trackea `vw` pero `vh` es
+/// el área útil bajo las barras; reconstruimos el alto total de ventana.
+fn viewport_of(model: &Model) -> (f32, f32) {
+    (model.vw, model.vh + MENU_H + HEADER_H + BREADCRUMB_H)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Menú principal de la galería. Archivo / Ver / Ayuda — sólo comandos que
+/// mapean a `Msg` reales. Sin "Editar": no hay campos de texto editables.
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Subir a carpeta padre", "file.up").shortcut("Backspace"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Acercar (zoom +)", "view.zoom_in").shortcut("+"))
+                .item(MenuItem::new("Alejar (zoom −)", "view.zoom_out").shortcut("-"))
+                .item(MenuItem::new("Reiniciar zoom", "view.zoom_reset"))
+                .item(MenuItem::new("Ciclar orden", "view.orden").shortcut("o").separated())
+                .item(MenuItem::new("Cambiar tema", "view.theme")),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal a su efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.up" => {
+            handle.dispatch(Msg::Subir);
+            model
+        }
+        "file.quit" => std::process::exit(0),
+        "view.zoom_in" => {
+            handle.dispatch(Msg::Zoom(20.0));
+            model
+        }
+        "view.zoom_out" => {
+            handle.dispatch(Msg::Zoom(-20.0));
+            model
+        }
+        "view.zoom_reset" => {
+            // 140px es el tile inicial; pedimos el delta hasta ahí.
+            handle.dispatch(Msg::Zoom(140.0 - model.metrics.tile_w));
+            model
+        }
+        "view.orden" => {
+            handle.dispatch(Msg::CiclarOrden);
+            model
+        }
+        "view.theme" => {
+            handle.dispatch(Msg::CiclarTema);
+            model
+        }
+        // help.about y desconocidos: no-op.
+        _ => model,
+    }
 }
 
 fn main() {

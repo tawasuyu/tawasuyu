@@ -27,6 +27,9 @@ use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_icons::{icon_view, Icon};
 use llimphi_theme::Theme;
 
+use app_bus::{AppMenu, Menu, MenuItem};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+
 use llimphi_widget_avatar::avatar_view;
 use llimphi_widget_badge::{count_badge_view, dot_badge_view, BadgeKind};
 use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
@@ -70,6 +73,10 @@ enum Msg {
     OpenContextMenu,
     CloseContextMenu,
     ContextMenuPick(usize),
+    /// Abrir/cerrar un menú raíz de la barra principal (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en la barra principal (id `menu.<verbo>`).
+    MenuCommand(String),
 }
 
 struct Model {
@@ -88,6 +95,8 @@ struct Model {
     menu_active: usize,
     /// Última opción elegida del menú — se muestra como toast.
     menu_last_pick: Option<String>,
+    /// Índice del menú raíz de la barra principal abierto. `None` = ninguno.
+    menubar_open: Option<usize>,
 }
 
 struct Gallery;
@@ -121,10 +130,11 @@ impl App for Gallery {
             menu_open: None,
             menu_active: usize::MAX,
             menu_last_pick: None,
+            menubar_open: None,
         }
     }
 
-    fn update(model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
+    fn update(model: Self::Model, msg: Self::Msg, _handle: &Handle<Self::Msg>) -> Self::Model {
         let mut m = model;
         // Filtrar toasts expirados oportunamente.
         let now = Instant::now();
@@ -166,6 +176,7 @@ impl App for Gallery {
                 // ventana cambie de tamaño.
                 m.menu_open = Some((m.viewport.0 * 0.72, m.viewport.1 * 0.55));
                 m.menu_active = usize::MAX;
+                m.menubar_open = None;
             }
             Msg::CloseContextMenu => {
                 m.menu_open = None;
@@ -185,6 +196,35 @@ impl App for Gallery {
                     format!("Menú → {label}"),
                     Duration::from_secs(3),
                 ));
+            }
+            Msg::MenuOpen(idx) => {
+                m.menubar_open = idx;
+                // El dropdown de la barra y el contextual son mutuamente
+                // excluyentes.
+                m.menu_open = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menubar_open = None;
+                match cmd.as_str() {
+                    "app.quit" => std::process::exit(0),
+                    "view.toast" => return Self::update(m, Msg::PushToast, _handle),
+                    "view.modal" => m.modal_open = true,
+                    "view.context" => {
+                        m.menu_open = Some((m.viewport.0 * 0.5, m.viewport.1 * 0.45));
+                        m.menu_active = usize::MAX;
+                    }
+                    "help.shortcuts" => m.shortcuts_open = true,
+                    "help.about" => {
+                        let id = m.next_toast_id;
+                        m.next_toast_id += 1;
+                        m.toasts.push(Toast::info(
+                            id,
+                            "llimphi · gallery — vitrina del kit de elegancia",
+                            Duration::from_secs(4),
+                        ));
+                    }
+                    _ => {}
+                }
             }
         }
         m
@@ -247,6 +287,9 @@ impl App for Gallery {
             &StatusBarPalette::from_theme(&theme),
         );
 
+        let menu = app_menu();
+        let bar = menubar_view(&menubar_spec(&menu, model, &theme));
+
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -256,7 +299,7 @@ impl App for Gallery {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![cols, status])
+        .children(vec![bar, cols, status])
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
@@ -320,6 +363,11 @@ impl App for Gallery {
                 palette: ContextMenuPalette::from_theme(&theme),
             }));
         }
+        // Dropdown de la barra de menú principal.
+        let menu = app_menu();
+        if let Some(v) = menubar_overlay(&menubar_spec(&menu, model, &theme)) {
+            return Some(v);
+        }
         if !model.toasts.is_empty() {
             return Some(toast_stack_view(
                 &model.toasts,
@@ -328,6 +376,40 @@ impl App for Gallery {
             ));
         }
         None
+    }
+}
+
+// ---------------------------------------------------------------------
+// Barra de menú principal
+// ---------------------------------------------------------------------
+
+/// Menú principal de la vitrina. Sólo comandos que mapean a `Msg` reales.
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(Menu::new("Archivo").item(MenuItem::new("Salir", "app.quit").shortcut("Ctrl+Q")))
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Mostrar toast", "view.toast"))
+                .item(MenuItem::new("Abrir modal", "view.modal"))
+                .item(MenuItem::new("Menú contextual", "view.context").separated()),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Atajos", "help.shortcuts").shortcut("?"))
+                .item(MenuItem::new("Acerca de", "help.about")),
+        )
+}
+
+/// Arma el `MenuBarSpec` compartido entre `view` y `view_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menubar_open,
+        theme,
+        viewport: model.viewport,
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|cmd: &str| Msg::MenuCommand(cmd.to_string())),
     }
 }
 

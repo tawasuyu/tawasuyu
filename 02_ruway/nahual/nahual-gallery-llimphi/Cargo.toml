@@ -18,3 +18,6 @@ llimphi-widget-grid = { workspace = true }
 llimphi-widget-breadcrumb = { workspace = true }
 nahual-thumb-core = { workspace = true }
 nahual-image-viewer-llimphi = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
