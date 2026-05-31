@@ -1,0 +1,16 @@
+[package]
+name = "nahual-source-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-source-core — abstracción de FUENTE navegable para el front universal de nahual. Un trait `Source` agnóstico (raíz + hijos + leer hoja) con adapters: filesystem POSIX y objetos content-addressed de una imagen wawa (.img). La costura de Brahman Fase 3: cada explorador (POSIX/wawa/nouser/minga) es una Source detrás de la misma interfaz, y nahual-shell la front."
+
+[dependencies]
+wawa-explorer-core = { path = "../../../03_ukupacha/wawa-explorer/wawa-explorer-core" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+format = { path = "../../../shared/format" }

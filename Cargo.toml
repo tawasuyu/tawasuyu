@@ -258,6 +258,7 @@ members = [
     "02_ruway/llimphi/modules/symbol-outline",
     "02_ruway/llimphi/modules/selector",
     "02_ruway/nahual/nahual-shell-llimphi",
+    "02_ruway/nahual/nahual-source-core",
     "02_ruway/nahual/nahual-file-explorer-llimphi",
     "02_ruway/nahual/nahual-image-viewer-llimphi",
     "02_ruway/nahual/nahual-thumb-core",

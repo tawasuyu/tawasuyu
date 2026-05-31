@@ -120,6 +120,20 @@ FASE 2b agora personas → discovery por DhtKey::Persona.  REALIZA "gente entra 
             anunciar_gossip: primitiva lista, espera el daemon que también la llame.
 FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Cards;
         nahual-shell = front universal.  VISIÓN ORIGINAL REALIZADA.                     [visión realizada]
+        ◑ PASO A HECHO (2026-05-31): crate `02_ruway/nahual/nahual-source-core` —
+          trait `Source` agnóstico (label/root/children/read) + `Node{id,name,is_container}`
+          object-safe. DOS adapters reales detrás de la misma interfaz: `PosixSource`
+          (filesystem vivo) y `WawaImgSource` (objetos content-addressed de un `.img`,
+          navega el DAG BLAKE3 por hash vía wawa-explorer-core; puro local). 9 tests
+          contra backends REALES (un .img sintético + un tmp POSIX). El shell todavía no
+          lo consume — es la espina, no el wiring.
+        PASO B PENDIENTE: cablear al shell — panel izquierdo navega `Box<dyn Source>` en
+          vez de PathBuf; al seleccionar un `.img` POSIX, apilar `WawaImgSource` y descender
+          su DAG. Puente para hojas no-POSIX: los visores son path-based (`load_image(path)`),
+          así que materializar `source.read(id)` a un tempfile y discernir/visualizar por ahí
+          (o, follow-up mayor, refactorizar visores a bytes).
+        PASO C PENDIENTE: adapters `NouserSource` (Mónadas semánticas, degrada sin daemon
+          vía pseudo-embeddings) y `MingaSource` (raíz P2P, lee `.minga/` sled local).
 ```
 
 ## Tesis de cierre
