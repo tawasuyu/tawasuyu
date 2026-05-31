@@ -740,6 +740,16 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         return Promise.reject(new globalThis.DOMException(
             'Pointer Lock no disponible', 'NotSupportedError'));
     };
+    // Fase 7.165 — el.requestPictureInPicture(): delega en el hook del
+    // módulo pictureinpicture.rs, que publica la mutación y devuelve la
+    // Promise pendiente resuelta por el chrome con una PictureInPictureWindow.
+    el.requestPictureInPicture = function() {
+        if (typeof globalThis.__puriy_request_pip === 'function') {
+            return globalThis.__puriy_request_pip(el._id);
+        }
+        return Promise.reject(new globalThis.DOMException(
+            'Picture-in-Picture no disponible', 'NotSupportedError'));
+    };
     // Fase 7.127 — el.animate(keyframes, options): delega en el hook del
     // módulo animations.rs, que crea la Animation y arranca su timing.
     el.animate = function(keyframes, options) {

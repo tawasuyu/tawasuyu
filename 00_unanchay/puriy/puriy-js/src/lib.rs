@@ -13062,4 +13062,47 @@ mod tests {
             navigator.credentials.get({ otp: { transport: ['sms'] } });").expect("e");
         assert_eq!(rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'webotp'; })").expect("e"), JsValue::Bool(true));
     }
+
+    // ---- Fase 7.165 — Picture-in-Picture API ----
+    #[test]
+    fn pip_api_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof document.exitPictureInPicture").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("document.pictureInPictureEnabled").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("document.pictureInPictureElement").expect("e"), JsValue::Null);
+        assert_eq!(rt.eval("typeof PictureInPictureWindow").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn pip_request_resuelve_con_window() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval("var win = null; el.requestPictureInPicture().then(function(w){ win = w; });
+            __puriy_pip_resolve('el1', 640, 360);").expect("e");
+        assert_eq!(rt.eval("win instanceof PictureInPictureWindow && win.width === 640 && win.height === 360").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("document.pictureInPictureElement && document.pictureInPictureElement._id").expect("e"), JsValue::String("el1".into()));
+        assert_eq!(rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'pip-request'; })").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pip_exit_limpia_y_dispara_leave() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval("var left = 0; el.addEventListener('leavepictureinpicture', function(){ left++; });
+            el.requestPictureInPicture(); __puriy_pip_resolve('el1', 320, 180);
+            var p = document.exitPictureInPicture();").expect("e");
+        assert_eq!(rt.eval("document.pictureInPictureElement").expect("e"), JsValue::Null);
+        assert_eq!(rt.eval("left").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'pip-exit'; })").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pip_reject_dispara_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval("var err = null; el.requestPictureInPicture().catch(function(e){ err = e.name; });
+            __puriy_pip_reject('el1', 'NotAllowedError');").expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("NotAllowedError".into()));
+        assert_eq!(rt.eval("document.pictureInPictureElement").expect("e"), JsValue::Null);
+    }
 }
