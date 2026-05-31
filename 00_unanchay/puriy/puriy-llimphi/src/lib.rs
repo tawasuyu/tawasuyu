@@ -5136,10 +5136,12 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
 }
 
 fn box_style(b: &BoxNode, zoom: f32) -> Style {
-    // Si el nodo es una hoja de texto, le damos un height ≈ line-height
-    // para que el row del padre tenga altura real — sin esto, taffy
-    // colapsa los inlines al top del bloque. Para inlines con hijos
-    // dejamos auto y que el padre mida.
+    // Las hojas de texto se miden con parley en el runtime
+    // (`compute_with_measure`): taffy reserva el alto real del texto
+    // envuelto (N líneas) en lugar de una sola. Por eso dejamos su height
+    // en `auto` — si lo fijáramos a una línea, los párrafos que envuelven
+    // se aplastarían unos sobre otros. Mantenemos `line_h` como piso
+    // (min_height) para que un nodo de texto vacío no colapse a cero.
     let is_text_leaf = b.text.is_some();
     let lh_mult = b.line_height.unwrap_or(1.2);
     let line_h = b.font_size * lh_mult * zoom;
@@ -5157,8 +5159,8 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
         Display::Grid => (FlexDirection::Column, percent(1.0_f32), auto()),
         Display::InlineGrid => (FlexDirection::Column, auto(), auto()),
         Display::InlineBlock | Display::Inline => {
-            let h = if is_text_leaf { length(line_h) } else { auto() };
-            (FlexDirection::Row, auto(), h)
+            // Texto: height auto → lo dimensiona la medición con parley.
+            (FlexDirection::Row, auto(), auto())
         }
         Display::None => (FlexDirection::Column, length(0.0_f32), length(0.0_f32)),
     };
@@ -5194,7 +5196,10 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
     };
     let min_size = Size {
         width: length_to_taffy(b.min_width, zoom).unwrap_or_else(|| length(0.0_f32)),
-        height: length_to_taffy(b.min_height, zoom).unwrap_or_else(|| length(0.0_f32)),
+        height: length_to_taffy(b.min_height, zoom).unwrap_or_else(|| {
+            // Piso de una línea para hojas de texto (el resto: 0).
+            if is_text_leaf { length(line_h) } else { length(0.0_f32) }
+        }),
     };
 
     // justify/align: si es flex, vienen del autor; sino, sólo derivamos

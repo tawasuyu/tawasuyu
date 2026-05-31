@@ -109,6 +109,41 @@ impl LayoutTree {
         Ok(out)
     }
 
+    /// Como [`Self::compute`] pero pasando una función de medición por
+    /// nodo. Taffy la invoca sobre las **hojas** que necesita dimensionar
+    /// (texto que envuelve, contenido intrínseco) con el `NodeId`, las
+    /// dimensiones ya conocidas y el espacio disponible; el caller devuelve
+    /// el tamaño en px. Devolver `Size::ZERO` deja que el estilo decida (el
+    /// comportamiento de [`Self::compute`] para hojas sin contenido). El
+    /// `NodeId` permite al caller mantener su propio mapa nodo→contenido
+    /// (p. ej. texto a shapear con parley) sin acoplar este crate a la capa
+    /// de tipografía.
+    pub fn compute_with_measure<F>(
+        &mut self,
+        root: NodeId,
+        viewport: (f32, f32),
+        mut measure: F,
+    ) -> Result<ComputedLayout, LayoutError>
+    where
+        F: FnMut(NodeId, taffy::Size<Option<f32>>, taffy::Size<AvailableSpace>) -> taffy::Size<f32>,
+    {
+        self.inner
+            .compute_layout_with_measure(
+                root,
+                taffy::Size {
+                    width: AvailableSpace::Definite(viewport.0),
+                    height: AvailableSpace::Definite(viewport.1),
+                },
+                |known, available, node_id, _ctx, _style| {
+                    measure(node_id, known, available)
+                },
+            )
+            .map_err(|e| LayoutError::Taffy(e.to_string()))?;
+        let mut out = ComputedLayout::default();
+        flatten(&self.inner, root, 0.0, 0.0, &mut out.rects)?;
+        Ok(out)
+    }
+
     pub fn inner(&self) -> &TaffyTree<()> {
         &self.inner
     }

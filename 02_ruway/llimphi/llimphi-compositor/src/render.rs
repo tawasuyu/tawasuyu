@@ -2,8 +2,9 @@ use super::*;
 
 pub fn mount<Msg: Clone>(layout: &mut LayoutTree, v: View<Msg>) -> Mounted<Msg> {
     let mut nodes = Vec::new();
-    let root = mount_recursive(layout, v, &mut nodes);
-    Mounted { root, nodes }
+    let mut text_measures = std::collections::HashMap::new();
+    let root = mount_recursive(layout, v, &mut nodes, &mut text_measures);
+    Mounted { root, nodes, text_measures }
 }
 
 /// Mount en pre-orden directo sobre `out`: pusheamos el padre como
@@ -13,6 +14,7 @@ pub fn mount_recursive<Msg: Clone>(
     layout: &mut LayoutTree,
     v: View<Msg>,
     out: &mut Vec<MountedNode<Msg>>,
+    text_measures: &mut std::collections::HashMap<NodeId, TextMeasure>,
 ) -> NodeId {
     let View {
         style,
@@ -69,7 +71,7 @@ pub fn mount_recursive<Msg: Clone>(
     });
     let mut child_ids = Vec::with_capacity(children.len());
     for child in children {
-        child_ids.push(mount_recursive(layout, child, out));
+        child_ids.push(mount_recursive(layout, child, out, text_measures));
     }
     let id = if child_ids.is_empty() {
         layout.leaf(style).expect("layout leaf")
@@ -78,7 +80,59 @@ pub fn mount_recursive<Msg: Clone>(
     };
     out[parent_idx].id = id;
     out[parent_idx].subtree_end = out.len();
+    // Hoja de texto uniforme: registrá su contenido para que el runtime lo
+    // mida con parley. El texto multicolor (`runs`) lo dimensiona el caller
+    // (editor: un nodo por línea), así que no lo medimos acá.
+    if child_ids.is_empty() {
+        if let Some(text) = out[parent_idx].text.as_ref() {
+            if text.runs.is_none() {
+                text_measures.insert(
+                    id,
+                    TextMeasure {
+                        content: text.content.clone(),
+                        size_px: text.size_px,
+                        alignment: text.alignment,
+                        italic: text.italic,
+                        font_family: text.font_family.clone(),
+                    },
+                );
+            }
+        }
+    }
     id
+}
+
+/// Mide una hoja de texto para taffy: shaping + line-break con parley contra
+/// el ancho disponible, devolviendo el bounding box. Si el ancho ya está
+/// resuelto (`known.width`) se usa ese; si no, se deriva del `available`
+/// (Definite → ese ancho; MaxContent → sin límite = una línea; MinContent →
+/// 0 = envuelve a la palabra más ancha). El `line_height` 1.2 espeja el que
+/// usa `paint`, así medida y pintado coinciden.
+pub fn measure_text_node(
+    ts: &mut llimphi_text::Typesetter,
+    tm: &TextMeasure,
+    known: llimphi_layout::taffy::Size<Option<f32>>,
+    available: llimphi_layout::taffy::Size<llimphi_layout::taffy::AvailableSpace>,
+) -> llimphi_layout::taffy::Size<f32> {
+    use llimphi_layout::taffy::AvailableSpace;
+    let max_width: Option<f32> = known.width.or(match available.width {
+        AvailableSpace::Definite(w) => Some(w),
+        AvailableSpace::MaxContent => None,
+        AvailableSpace::MinContent => Some(0.0),
+    });
+    let block = llimphi_text::TextBlock {
+        text: &tm.content,
+        size_px: tm.size_px,
+        color: Color::BLACK,
+        origin: (0.0, 0.0),
+        max_width,
+        alignment: tm.alignment,
+        line_height: 1.2,
+        italic: tm.italic,
+        font_family: tm.font_family.clone(),
+    };
+    let m = llimphi_text::measure(ts, &block);
+    llimphi_layout::taffy::Size { width: m.width, height: m.height }
 }
 
 pub fn paint<Msg>(

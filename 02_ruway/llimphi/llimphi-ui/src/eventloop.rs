@@ -277,15 +277,32 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     let mut layout = LayoutTree::new();
                     let mounted: Mounted<A::Msg> = mount(&mut layout, view);
                     let (w, h) = state.surface.size();
-                    let computed = layout
-                        .compute(mounted.root, (w as f32, h as f32))
-                        .expect("layout");
+                    let ts = &mut state.typesetter;
+                    let computed = {
+                        let tmap = &mounted.text_measures;
+                        layout
+                            .compute_with_measure(mounted.root, (w as f32, h as f32), |nid, known, avail| {
+                                match tmap.get(&nid) {
+                                    Some(tm) => measure_text_node(ts, tm, known, avail),
+                                    None => llimphi_layout::taffy::Size::ZERO,
+                                }
+                            })
+                            .expect("layout")
+                    };
                     if let Some(ov) = overlay_view {
                         let mut olay = LayoutTree::new();
                         let omounted: Mounted<A::Msg> = mount(&mut olay, ov);
-                        let ocomp = olay
-                            .compute(omounted.root, (w as f32, h as f32))
-                            .expect("layout overlay");
+                        let ocomp = {
+                            let tmap = &omounted.text_measures;
+                            olay
+                                .compute_with_measure(omounted.root, (w as f32, h as f32), |nid, known, avail| {
+                                    match tmap.get(&nid) {
+                                        Some(tm) => measure_text_node(ts, tm, known, avail),
+                                        None => llimphi_layout::taffy::Size::ZERO,
+                                    }
+                                })
+                                .expect("layout overlay")
+                        };
                         lookup_hit(&omounted, &ocomp)
                     } else {
                         lookup_hit(&mounted, &computed)
@@ -507,20 +524,38 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // `mount` evita re-allocar el slotmap de taffy por frame.
                 state.layout.clear();
                 let mounted: Mounted<A::Msg> = mount(&mut state.layout, view);
-                let computed = state
-                    .layout
-                    .compute(mounted.root, (w as f32, h as f32))
-                    .expect("layout");
+                let computed = {
+                    let ts = &mut state.typesetter;
+                    let tmap = &mounted.text_measures;
+                    state
+                        .layout
+                        .compute_with_measure(mounted.root, (w as f32, h as f32), |nid, known, avail| {
+                            match tmap.get(&nid) {
+                                Some(tm) => measure_text_node(ts, tm, known, avail),
+                                None => llimphi_layout::taffy::Size::ZERO,
+                            }
+                        })
+                        .expect("layout")
+                };
                 // Mount + layout del overlay en un árbol aparte. Lo
                 // computamos con el mismo tamaño de viewport para que
                 // un scrim a percent(1.0) cubra toda la pantalla.
                 let overlay_built = if let Some(v) = overlay_view {
                     state.overlay_layout.clear();
                     let omounted: Mounted<A::Msg> = mount(&mut state.overlay_layout, v);
-                    let ocomputed = state
-                        .overlay_layout
-                        .compute(omounted.root, (w as f32, h as f32))
-                        .expect("layout overlay");
+                    let ocomputed = {
+                        let ts = &mut state.typesetter;
+                        let tmap = &omounted.text_measures;
+                        state
+                            .overlay_layout
+                            .compute_with_measure(omounted.root, (w as f32, h as f32), |nid, known, avail| {
+                                match tmap.get(&nid) {
+                                    Some(tm) => measure_text_node(ts, tm, known, avail),
+                                    None => llimphi_layout::taffy::Size::ZERO,
+                                }
+                            })
+                            .expect("layout overlay")
+                    };
                     let ohover = hit_test_hover(
                         &omounted,
                         &ocomputed,

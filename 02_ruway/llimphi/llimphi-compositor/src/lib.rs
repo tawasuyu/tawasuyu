@@ -14,6 +14,7 @@
 //! Encoder/TextureView); `wgpu` no depende de winit, así que el compositor
 //! sigue libre de windowing.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use llimphi_layout::taffy::NodeId;
@@ -252,6 +253,25 @@ pub struct View<Msg> {
 pub struct Mounted<Msg> {
     pub root: NodeId,
     pub nodes: Vec<MountedNode<Msg>>,
+    /// Contenido de texto por nodo-hoja, para que el runtime lo mida con
+    /// parley durante `compute_with_measure` y taffy reserve el alto real
+    /// del texto envuelto (varias líneas) en vez de una sola. Sin esto un
+    /// párrafo que envuelve a N líneas se aplastaría en la altura de una
+    /// (el bug clásico de "textos aplastados"). Sólo se pueblan hojas con
+    /// texto uniforme (sin `runs` multicolor, que el caller dimensiona).
+    pub text_measures: HashMap<NodeId, TextMeasure>,
+}
+
+/// Datos de un nodo-hoja de texto necesarios para medirlo (shaping +
+/// line-break) sin volver a tocar el `View`. Lo consume el runtime en la
+/// función de medición que le pasa a [`LayoutTree::compute_with_measure`].
+#[derive(Clone)]
+pub struct TextMeasure {
+    pub content: String,
+    pub size_px: f32,
+    pub alignment: llimphi_text::Alignment,
+    pub italic: bool,
+    pub font_family: Option<String>,
 }
 
 pub struct MountedNode<Msg> {
