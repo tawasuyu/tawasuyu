@@ -33,6 +33,7 @@
 #![forbid(unsafe_code)]
 
 pub mod discovery;
+pub mod identity;
 pub mod net;
 
 use std::collections::HashSet;

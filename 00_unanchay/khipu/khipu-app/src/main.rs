@@ -33,7 +33,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use agora_core::Keypair;
 use directories::ProjectDirs;
 use khipu_share::{SharedNote, SignedBundle};
-use rand::RngCore;
 use rimay_verbo::Provider;
 use khipu_core::{Note, NoteId, NoteStore};
 use khipu_gravity::{Gravity, GravityConfig, NotePlacement, Params, SemanticField};
@@ -146,6 +145,7 @@ enum Focus {
     Title,
     Body,
     Tags,
+    Passphrase,
 }
 
 /// Un par descubierto en la red, en forma lista para la UI: dónde jalarle
@@ -191,6 +191,10 @@ enum Msg {
     CancelPeers,
     /// Resultado async de un fetch: el sobre recibido o un error.
     Received(Result<SignedBundle, String>),
+    /// Intenta desbloquear la identidad con la passphrase tipeada.
+    Unlock,
+    /// Cierra el prompt de passphrase sin desbloquear.
+    CancelUnlock,
 }
 
 struct Model {
@@ -233,6 +237,13 @@ struct Model {
     /// Pares descubiertos pendientes de elegir. No vacío ⇒ el panel
     /// izquierdo muestra la lista de pares en vez de las notas.
     peers: Vec<PeerInfo>,
+    /// Input de la passphrase para desbloquear la identidad.
+    passphrase: TextInputState,
+    /// `true` mientras se muestra el prompt de passphrase (modal).
+    unlocking: bool,
+    /// Acción a reanudar tras desbloquear (lo que el usuario quiso hacer
+    /// y disparó el prompt). Se redispatcha al lograr el unlock.
+    pending: Option<Box<Msg>>,
 }
 
 struct KhipuApp;
@@ -251,7 +262,12 @@ impl App for KhipuApp {
             None => seeded_model(embedder),
         };
         model.data_path = data_path;
-        model.keypair = load_or_create_keypair();
+        // Identidad: si `KHIPU_PASSPHRASE` está en el entorno, desbloqueamos
+        // (o creamos/migramos) sin prompt — útil headless. Si no, queda
+        // bloqueada y se pide la passphrase al primer intento de compartir.
+        model.keypair = std::env::var("KHIPU_PASSPHRASE")
+            .ok()
+            .and_then(|p| unlock_identity(&p));
         model.theme = Theme::dark();
         // Elegimos la primera nota más pesada (decayendo on-the-fly);
         // si todo el cuaderno está en archivo, caemos al orden de
@@ -305,8 +321,14 @@ impl App for KhipuApp {
                 }
             }
             Msg::Export => {
-                commit_edits(&mut model, h);
-                model.status = Some(export_notebook(&model));
+                // Firmar requiere identidad: si está bloqueada, pedimos la
+                // passphrase y reanudamos el export al desbloquear.
+                if model.keypair.is_none() {
+                    start_unlock(&mut model, Msg::Export);
+                } else {
+                    commit_edits(&mut model, h);
+                    model.status = Some(export_notebook(&model));
+                }
             }
             Msg::Import => {
                 let report = import_notebook(&mut model, h);
@@ -314,11 +336,15 @@ impl App for KhipuApp {
                 model.status = Some(report);
             }
             Msg::Publish => {
-                // Asegura que el sobre en disco refleje lo editado, luego
-                // levanta (una vez) el servidor TCP que lo sirve.
-                commit_edits(&mut model, h);
-                let _ = export_notebook(&model);
-                model.status = Some(start_publishing(&mut model));
+                if model.keypair.is_none() {
+                    start_unlock(&mut model, Msg::Publish);
+                } else {
+                    // Asegura que el sobre en disco refleje lo editado, luego
+                    // levanta (una vez) el servidor TCP que lo sirve.
+                    commit_edits(&mut model, h);
+                    let _ = export_notebook(&model);
+                    model.status = Some(start_publishing(&mut model));
+                }
             }
             Msg::Receive => {
                 let my_key = model.keypair.as_ref().map(|k| k.public_key());
@@ -399,6 +425,34 @@ impl App for KhipuApp {
                     Err(e) => e,
                 });
             }
+            Msg::Unlock => {
+                let pass = model.passphrase.text();
+                match unlock_identity(&pass) {
+                    Some(kp) => {
+                        let id = khipu_share::hex8(&kp.public_key());
+                        model.keypair = Some(kp);
+                        model.unlocking = false;
+                        model.passphrase.clear();
+                        model.focus = Focus::None;
+                        model.status = Some(format!("identidad desbloqueada · {id}"));
+                        // Reanudar lo que el usuario quería hacer.
+                        if let Some(accion) = model.pending.take() {
+                            h.dispatch(*accion);
+                        }
+                    }
+                    None => {
+                        model.status =
+                            Some("passphrase incorrecta o sin acceso al keystore".into());
+                    }
+                }
+            }
+            Msg::CancelUnlock => {
+                model.unlocking = false;
+                model.pending = None;
+                model.passphrase.clear();
+                model.focus = Focus::None;
+                model.status = Some("desbloqueo cancelado".into());
+            }
             Msg::DeleteSelected => {
                 if let Some(id) = model.selected {
                     model.store.remove(id);
@@ -428,6 +482,11 @@ impl App for KhipuApp {
                         // El search no muta el store: filtramos al
                         // renderizar. Sólo consumimos el evento.
                         let _ = model.search.apply_key(&ev);
+                        false
+                    }
+                    Focus::Passphrase => {
+                        // La passphrase no toca el store; sólo el input.
+                        let _ = model.passphrase.apply_key(&ev);
                         false
                     }
                     Focus::None => false,
@@ -468,6 +527,24 @@ impl App for KhipuApp {
         let palette = ListPalette::from_theme(&model.theme);
         let input_palette = TextInputPalette::from_theme(&model.theme);
         let editor_palette = EditorPalette::from_theme(&model.theme);
+
+        // Prompt de passphrase: ocupa toda la ventana hasta resolverse.
+        if model.unlocking {
+            let mut children = vec![header_view(model), unlock_view(model, &input_palette)];
+            if let Some(bar) = status_bar(model) {
+                children.push(bar);
+            }
+            return View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(model.theme.bg_app)
+            .children(children);
+        }
 
         let header = header_view(model);
         // Mientras hay pares pendientes de elegir, el panel izquierdo
@@ -512,7 +589,20 @@ impl App for KhipuApp {
         .children(children)
     }
 
-    fn on_key(_model: &Model, event: &KeyEvent) -> Option<Msg> {
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        // Con el prompt de passphrase abierto, las teclas son sólo suyas:
+        // Enter desbloquea, Esc cancela, el resto va al input.
+        if model.unlocking {
+            if event.state == KeyState::Pressed && !event.repeat {
+                if matches!(&event.key, Key::Named(NamedKey::Enter)) {
+                    return Some(Msg::Unlock);
+                }
+                if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                    return Some(Msg::CancelUnlock);
+                }
+            }
+            return Some(Msg::Key(event.clone()));
+        }
         // Atajo global: Ctrl+N (sin foco en input necesario) crea
         // nota. Esc libera el foco. Cualquier otra tecla la dispatcha
         // como `Key` al input/editor focado.
@@ -1537,25 +1627,24 @@ fn data_file_path() -> Option<PathBuf> {
     Some(khipu_dir()?.join("notes.bin"))
 }
 
-/// Carga la identidad Ed25519 del cuaderno desde `identidad.seed`, o
-/// genera una nueva (semilla de 32 bytes vía `OsRng`) y la persiste. La
-/// semilla queda en claro junto a las notas — mismo nivel de confianza
-/// que el cuaderno local. Endurecer a `agora-keystore` (passphrase) es un
-/// follow-up.
-fn load_or_create_keypair() -> Option<Keypair> {
-    let path = khipu_dir()?.join("identidad.seed");
-    if let Ok(bytes) = std::fs::read(&path) {
-        if let Ok(seed) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            return Some(Keypair::from_seed(seed));
-        }
-    }
-    let mut seed = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut seed);
-    let tmp = path.with_extension("seed.tmp");
-    if std::fs::write(&tmp, seed).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
-    Some(Keypair::from_seed(seed))
+/// Desbloquea (o crea, o migra) la identidad del cuaderno con `passphrase`,
+/// vía [`khipu_share::identity::unlock`]. La semilla vive cifrada en
+/// `<datos>/keys/`; si existe un `identidad.seed` en claro de versiones
+/// viejas, se migra al keystore y se borra el claro. `None` si no hay
+/// directorio de datos o la passphrase no descifra.
+fn unlock_identity(passphrase: &str) -> Option<Keypair> {
+    let dir = khipu_dir()?;
+    let legacy = dir.join("identidad.seed");
+    khipu_share::identity::unlock(&dir.join("keys"), Some(&legacy), passphrase).ok()
+}
+
+/// Arranca el prompt de passphrase y memoriza la acción a reanudar.
+fn start_unlock(model: &mut Model, accion: Msg) {
+    model.unlocking = true;
+    model.pending = Some(Box::new(accion));
+    model.focus = Focus::Passphrase;
+    model.passphrase.clear();
+    model.status = Some("ingresá tu passphrase para desbloquear la identidad".into());
 }
 
 /// Sella todas las notas del cuaderno en `compartido.khipu` (sobre
@@ -1693,6 +1782,118 @@ fn hex8(hash: &[u8; 32]) -> String {
     hash[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Prompt modal de passphrase: tarjeta centrada con el input y dos
+/// botones. La passphrase no se enmascara (MVP) — endurecerlo a puntos es
+/// un follow-up. Enter desbloquea, Esc cancela (ver `on_key`).
+fn unlock_view(model: &Model, input_palette: &TextInputPalette) -> View<Msg> {
+    let titulo = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        "Desbloqueá tu identidad para firmar".to_string(),
+        14.0,
+        model.theme.fg_text,
+        Alignment::Start,
+    );
+
+    let hint = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        "La semilla vive cifrada (Argon2id). La primera vez, esta passphrase la crea."
+            .to_string(),
+        11.0,
+        model.theme.fg_muted,
+        Alignment::Start,
+    );
+
+    let input = text_input_view(
+        &model.passphrase,
+        "passphrase",
+        model.focus == Focus::Passphrase,
+        input_palette,
+        Msg::Focus(Focus::Passphrase),
+    );
+    let input_row = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![input]);
+
+    let unlock_btn = button(
+        "desbloquear (Enter)",
+        model.theme.bg_button,
+        model.theme.accent,
+        Msg::Unlock,
+    );
+    let cancel_btn = button(
+        "cancelar (Esc)",
+        model.theme.bg_button,
+        model.theme.fg_muted,
+        Msg::CancelUnlock,
+    );
+    let buttons = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![unlock_btn, cancel_btn]);
+
+    let card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(420.0_f32),
+            height: Dimension::auto(),
+        },
+        padding: Rect {
+            left: length(18.0_f32),
+            right: length(18.0_f32),
+            top: length(16.0_f32),
+            bottom: length(16.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(10.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(model.theme.bg_panel)
+    .radius(6.0)
+    .children(vec![titulo, hint, input_row, buttons]);
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(model.theme.bg_app)
+    .children(vec![card])
+}
+
 /// Barra de estado al pie: muestra el último mensaje de export/import.
 fn status_bar(model: &Model) -> Option<View<Msg>> {
     let text = model.status.as_ref()?;
@@ -1782,6 +1983,9 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         status: None,
         publishing: false,
         peers: Vec::new(),
+        passphrase: TextInputState::new(),
+        unlocking: false,
+        pending: None,
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -1833,6 +2037,9 @@ fn seeded_model(embedder: Embedder) -> Model {
         status: None,
         publishing: false,
         peers: Vec::new(),
+        passphrase: TextInputState::new(),
+        unlocking: false,
+        pending: None,
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [

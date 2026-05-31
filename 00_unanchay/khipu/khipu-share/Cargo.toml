@@ -11,6 +11,8 @@ description = "khipu-share — sobres de notas portables, firmados Ed25519 y dir
 [dependencies]
 khipu-core = { path = "../khipu-core" }
 agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+agora-keystore = { path = "../../../03_ukupacha/agora/agora-keystore" }
+rand = { workspace = true }
 blake3 = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
