@@ -12892,4 +12892,39 @@ mod tests {
         assert_eq!(rt.eval("prog").expect("e"), JsValue::Number(50.0));
     }
 
+
+    // ---- Fase 7.160 — ImageCapture API ----
+    #[test]
+    fn imagecapture_requiere_video_track() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var threw = false; try { new ImageCapture({ kind: 'audio' }); } catch(e){ threw = (e.name === 'NotSupportedError'); }").expect("e");
+        assert_eq!(rt.eval("threw").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("(new ImageCapture({ kind: 'video' })) instanceof ImageCapture").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn imagecapture_take_photo_resuelve_blob() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var b = null;
+            new ImageCapture({ kind: 'video', readyState: 'live' }).takePhoto().then(function(x){ b = x; });").expect("e");
+        assert_eq!(rt.eval("b instanceof Blob && b.type === 'image/png'").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn imagecapture_grab_frame_resuelve_imagebitmap() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var bmp = null;
+            new ImageCapture({ kind: 'video' }).grabFrame().then(function(x){ bmp = x; });").expect("e");
+        assert_eq!(rt.eval("bmp instanceof ImageBitmap && bmp.width === 1280").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn imagecapture_capabilities_y_settings() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var caps = null; var sett = null; var ic = new ImageCapture({ kind: 'video' });
+            ic.getPhotoCapabilities().then(function(c){ caps = c; });
+            ic.getPhotoSettings().then(function(s){ sett = s; });").expect("e");
+        assert_eq!(rt.eval("caps.imageWidth.max").expect("e"), JsValue::Number(1920.0));
+        assert_eq!(rt.eval("sett.imageWidth").expect("e"), JsValue::Number(1280.0));
+    }
 }
