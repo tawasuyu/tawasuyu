@@ -105,6 +105,7 @@ mod webcodecs;
 mod mediarecorder;
 mod mse;
 mod eme;
+mod mediacapabilities;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -210,6 +211,7 @@ pub(crate) use webcodecs::WEBCODECS_BOOTSTRAP;
 pub(crate) use mediarecorder::MEDIARECORDER_BOOTSTRAP;
 pub(crate) use mse::MSE_BOOTSTRAP;
 pub(crate) use eme::EME_BOOTSTRAP;
+pub(crate) use mediacapabilities::MEDIACAPABILITIES_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -317,5 +319,6 @@ pub(crate) const ALL: &[&str] = &[
     MEDIARECORDER_BOOTSTRAP,
     MSE_BOOTSTRAP,
     EME_BOOTSTRAP,
+    MEDIACAPABILITIES_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

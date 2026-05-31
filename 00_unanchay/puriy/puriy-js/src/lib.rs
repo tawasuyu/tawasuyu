@@ -12186,4 +12186,61 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("cerrado").expect("e"), JsValue::Bool(true));
     }
+
+    // ---- Fase 7.149 — Media Capabilities API ----
+    #[test]
+    fn media_capabilities_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof navigator.mediaCapabilities").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("typeof navigator.mediaCapabilities.decodingInfo").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof navigator.mediaCapabilities.encodingInfo").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("navigator.mediaCapabilities instanceof MediaCapabilities").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn media_capabilities_decoding_soportado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var info = null; \
+             navigator.mediaCapabilities.decodingInfo({ type: 'media-source', \
+                 video: { contentType: 'video/mp4; codecs=\"avc1.42E01E\"', width: 1920, height: 1080, bitrate: 4000000, framerate: 30 } }) \
+               .then(function(r){ info = r; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("info.supported").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("info.smooth").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("info.powerEfficient").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn media_capabilities_codec_desconocido_no_soportado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var info = null; \
+             navigator.mediaCapabilities.decodingInfo({ type: 'file', \
+                 video: { contentType: 'video/quicktime; codecs=\"xyz\"', width: 100, height: 100, bitrate: 1000, framerate: 24 } }) \
+               .then(function(r){ info = r; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("info.supported").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("info.smooth").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn media_capabilities_hints_host_y_config_invalida() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // El chrome baja smooth según el hardware real.
+        rt.eval(
+            "__puriy_set_media_capabilities({ smooth: false }); var info = null; \
+             navigator.mediaCapabilities.encodingInfo({ type: 'record', \
+                 audio: { contentType: 'audio/webm; codecs=\"opus\"' } }).then(function(r){ info = r; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("info.supported").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("info.smooth").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("info.powerEfficient").expect("e"), JsValue::Bool(true));
+        // Config sin video ni audio → rechaza TypeError.
+        rt.eval("var err = null; navigator.mediaCapabilities.decodingInfo({ type: 'file' }).catch(function(e){ err = e.name; });").expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("TypeError".into()));
+    }
 }
