@@ -31,6 +31,11 @@ use llimphi_raster::peniko::{
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_clipboard::SystemClipboard;
+use llimphi_theme::Theme;
 
 use puriy_engine::{
     AlignItems as CssAlignItems, AlignSelf as CssAlignSelf, BoxNode, BoxShadow,
@@ -263,6 +268,17 @@ pub struct Model {
     /// reactor JS le pasa a `setTimeout`/`setInterval`. Cada `JsTick`
     /// calcula `start.elapsed().as_millis()` y avanza el runtime.
     pub start: std::time::Instant,
+    /// Índice del menú principal abierto (barra Archivo/Editar/Navegar/
+    /// Ver/Ayuda). `None` = todos cerrados. Lo gobierna `menubar_view` /
+    /// `menubar_overlay` vía `Msg::MenuOpen`.
+    pub menu_open: Option<usize>,
+    /// Ancla `(x, y)` del menú contextual de edición (right-click sobre
+    /// un campo de texto). `None` = cerrado. El contenido lo arma
+    /// `editmenu::edit_context_menu` con los flags del input focuseado.
+    pub edit_menu: Option<(f32, f32)>,
+    /// Clipboard del sistema — lo consumen las acciones Cut/Copy/Paste
+    /// del menú de edición sobre el `EditorState` del campo focuseado.
+    pub clipboard: SystemClipboard,
 }
 
 /// Periodo del poll del reactor JS — disparo de `Msg::JsTick`. ~30 fps
@@ -305,6 +321,32 @@ impl Model {
                 whole_word: self.find_whole_word,
             },
         )
+    }
+
+    /// Devuelve una referencia compartida al `TextInputState` que tiene
+    /// el foco de teclado en este momento, junto con su flag `masked`, o
+    /// `None` si el foco no está sobre ningún campo editable (página sin
+    /// input focuseado, address bar sin foco, etc). La prioridad de foco
+    /// replica `on_key`: find bar > filtro de panel > input de página >
+    /// address bar. Lo consume el menú de edición para pintar los flags
+    /// (undo/redo/selección) del campo correcto.
+    fn focused_text_input(&self) -> Option<(&TextInputState, bool)> {
+        if self.find_active {
+            return Some((&self.find_input, false));
+        }
+        if self.panel.is_some() {
+            return Some((&self.panel_filter, false));
+        }
+        let t = self.active();
+        if let Some(idx) = t.focused_input {
+            if let Some(s) = t.inputs.get(idx) {
+                return Some((s, s.is_masked()));
+            }
+        }
+        if t.addr_focused {
+            return Some((&t.addr, false));
+        }
+        None
     }
 
     /// `Ctrl+F` — levanta la find bar con query fresca.
@@ -512,6 +554,20 @@ pub enum Msg {
         event_type: String,
         fallback: Option<Box<Msg>>,
     },
+    /// Abre/cierra un menú de la barra principal (`Some(idx)` lo abre,
+    /// `None` cierra). Lo dispara `menubar_view`/`menubar_overlay`.
+    MenuOpen(Option<usize>),
+    /// Pick de un ítem del menú principal — el string es el `command`
+    /// del `MenuItem`. `handle_menu_command` lo mapea al `Msg` real.
+    MenuCommand(String),
+    /// Cierra todos los menús (principal y contextual de edición).
+    CloseMenus,
+    /// Right-click sobre la ventana — abre el menú contextual de edición
+    /// anclado en `(x, y)` (coords de ventana) sobre el campo focuseado.
+    EditMenuOpen(f32, f32),
+    /// Acción del menú de edición a aplicar sobre el `EditorState` del
+    /// campo de texto focuseado.
+    EditMenuAction(EditAction),
 }
 
 impl App for Puriy {
@@ -557,6 +613,9 @@ impl App for Puriy {
             panel_filter: TextInputState::new(),
             hover_link: None,
             start: std::time::Instant::now(),
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         }
     }
 
@@ -1431,11 +1490,51 @@ impl App for Puriy {
                     }
                 }
             }
+            Msg::MenuOpen(idx) => {
+                m.menu_open = idx;
+                m.edit_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                return handle_menu_command(m, cmd, handle);
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.edit_menu = None;
+            }
+            Msg::EditMenuOpen(x, y) => {
+                m.edit_menu = Some((x, y));
+                m.menu_open = None;
+            }
+            Msg::EditMenuAction(action) => {
+                apply_edit_menu_action(&mut m, action);
+            }
         }
         m
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // Prioridad: menú contextual de edición > dropdown del menú
+        // principal > overlay del `<select>` abierto.
+        if let Some((x, y)) = model.edit_menu {
+            let flags = match model.focused_text_input() {
+                Some((input, masked)) => EditFlags::from_editor(input.editor(), masked),
+                None => EditFlags::default(),
+            };
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                menu_theme(),
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        let menu = app_menu(model);
+        if let Some(ov) = menubar_overlay(&menubar_spec(&menu, model)) {
+            return Some(ov);
+        }
+
         // Si algún `<select>` está abierto, mostramos su lista como un
         // overlay centrado. Sin layout positioning real (no sabemos
         // dónde quedó el header del select en pantalla), el centrado
@@ -1486,7 +1585,11 @@ impl App for Puriy {
             None => viewport(model.active(), model.zoom, &matcher, model.find_current),
         };
 
-        let mut children: Vec<View<Msg>> = vec![tabs_bar, header];
+        // Barra de menú principal — PRIMER hijo del column raíz.
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model));
+
+        let mut children: Vec<View<Msg>> = vec![menubar, tabs_bar, header];
         if model.find_active {
             children.push(find_bar(
                 &model.find_input,
@@ -1498,13 +1601,205 @@ impl App for Puriy {
         }
         children.push(body);
 
+        // Right-click en la raíz (origen 0,0 → las coords locales que
+        // llegan al handler ya son de ventana) abre el menú contextual de
+        // edición sobre el campo de texto focuseado.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(Color::from_rgb8(245, 245, 248))
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
         .children(children)
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a app_bus::AppMenu, model: &Model) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = Puriy::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme: menu_theme(),
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: std::sync::Arc::new(Msg::MenuOpen),
+        on_command: std::sync::Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Tema fijo para la barra/menús — puriy no trackea un `Theme` en su
+/// Model (su chrome usa colores claros hard-coded), así que sostenemos un
+/// `Theme::dark()` fijo y compartido para los menús. `OnceLock` lo
+/// inicializa una sola vez sin `unsafe`.
+fn menu_theme() -> &'static Theme {
+    static CELL: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
+    CELL.get_or_init(Theme::dark)
+}
+
+/// Menú principal del navegador. Sólo expone comandos que mapean a
+/// `Msg` reales ya existentes. El submenú Editar refleja en gris el
+/// estado del campo de texto focuseado (find/filtro/input de página/
+/// address bar).
+fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+
+    let focused = model.focused_text_input();
+    let has_sel = focused.map(|(s, _)| s.editor().has_selection()).unwrap_or(false);
+    let can_undo = focused.map(|(s, _)| s.editor().can_undo()).unwrap_or(false);
+    let can_redo = focused.map(|(s, _)| s.editor().can_redo()).unwrap_or(false);
+    let has_input = focused.is_some();
+
+    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    if !can_undo { undo = undo.disabled(); }
+    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    if !can_redo { redo = redo.disabled(); }
+    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    if !has_sel { cut = cut.disabled(); copy = copy.disabled(); }
+    let mut paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all =
+        MenuItem::new("Seleccionar todo", "edit.selectall").shortcut("Ctrl+A").separated();
+    if !has_input { paste = paste.disabled(); sel_all = sel_all.disabled(); }
+
+    let t = model.active();
+    let can_back = t.can_back();
+    let can_fwd = t.can_fwd();
+    let mut back = MenuItem::new("Atrás", "nav.back").shortcut("Alt+←");
+    if !can_back { back = back.disabled(); }
+    let mut fwd = MenuItem::new("Adelante", "nav.fwd").shortcut("Alt+→");
+    if !can_fwd { fwd = fwd.disabled(); }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Nueva pestaña", "file.newtab").shortcut("Ctrl+T"))
+                .item(MenuItem::new("Cerrar pestaña", "file.close").shortcut("Ctrl+W").separated())
+                .item(MenuItem::new("Recargar", "file.reload").shortcut("F5"))
+                .item(MenuItem::new("Ver código fuente", "file.source").shortcut("Ctrl+U"))
+                .item(MenuItem::new("Agregar marcador", "file.bookmark").shortcut("Ctrl+D")),
+        )
+        .menu(
+            Menu::new("Editar")
+                .item(undo)
+                .item(redo)
+                .item(cut)
+                .item(copy)
+                .item(paste)
+                .item(sel_all),
+        )
+        .menu(
+            Menu::new("Navegar")
+                .item(back)
+                .item(fwd)
+                .item(MenuItem::new("Ir a la barra de dirección", "nav.addr").shortcut("Ctrl+L").separated())
+                .item(MenuItem::new("Buscar en la página", "nav.find").shortcut("Ctrl+F")),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Acercar", "view.zoomin").shortcut("Ctrl++"))
+                .item(MenuItem::new("Alejar", "view.zoomout").shortcut("Ctrl+-"))
+                .item(MenuItem::new("Restablecer zoom", "view.zoomreset").shortcut("Ctrl+0").separated())
+                .item(MenuItem::new("Marcadores", "view.bookmarks").shortcut("Ctrl+B"))
+                .item(MenuItem::new("Historial", "view.history").shortcut("Ctrl+H")),
+        )
+        .menu(
+            Menu::new("Ayuda")
+                .item(MenuItem::new("Acerca de puriy", "help.about")),
+        )
+}
+
+/// Traduce el `command` del menú principal al `Msg` real existente y lo
+/// despacha por el `update`. Cierra el menú antes de actuar.
+fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
+    model.menu_open = None;
+    let target = match command.as_str() {
+        "file.newtab" => Some(Msg::NewTab),
+        "file.close" => Some(Msg::CloseTab(model.active)),
+        "file.reload" => Some(Msg::Reload),
+        "file.source" => Some(Msg::ViewSource),
+        "file.bookmark" => Some(Msg::Bookmark),
+        "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
+        "edit.redo" => Some(Msg::EditMenuAction(EditAction::Redo)),
+        "edit.cut" => Some(Msg::EditMenuAction(EditAction::Cut)),
+        "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
+        "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
+        "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "nav.back" => Some(Msg::Back),
+        "nav.fwd" => Some(Msg::Forward),
+        "nav.addr" => Some(Msg::FocusAddr),
+        "nav.find" => Some(Msg::FindOpen),
+        "view.zoomin" => Some(Msg::ZoomIn),
+        "view.zoomout" => Some(Msg::ZoomOut),
+        "view.zoomreset" => Some(Msg::ZoomReset),
+        "view.bookmarks" => Some(Msg::ToggleBookmarks),
+        "view.history" => Some(Msg::ToggleHistory),
+        // "help.about" no tiene acción real — no-op silencioso.
+        _ => None,
+    };
+    match target {
+        Some(msg) => Puriy::update(model, msg, handle),
+        None => model,
+    }
+}
+
+/// Identifica qué campo de texto tiene el foco, para resolver borrows
+/// disjuntos sin `unsafe` en `apply_edit_menu_action` (el clipboard y el
+/// input son campos distintos del `Model`).
+enum FocusTarget {
+    Find,
+    PanelFilter,
+    PageInput(usize),
+    Addr,
+}
+
+impl Model {
+    /// Determina el `FocusTarget` con la misma prioridad que
+    /// `focused_text_input`, sin tomar un borrow del input — así el caller
+    /// puede pedir luego `&mut clipboard` + `&mut input` por separado.
+    fn focus_target(&self) -> Option<FocusTarget> {
+        if self.find_active {
+            return Some(FocusTarget::Find);
+        }
+        if self.panel.is_some() {
+            return Some(FocusTarget::PanelFilter);
+        }
+        let t = self.active();
+        if let Some(idx) = t.focused_input {
+            if idx < t.inputs.len() {
+                return Some(FocusTarget::PageInput(idx));
+            }
+        }
+        if t.addr_focused {
+            return Some(FocusTarget::Addr);
+        }
+        None
+    }
+}
+
+/// Aplica una `EditAction` del menú de edición sobre el `EditorState` del
+/// campo de texto focuseado. Resuelve `clipboard` e `input` como borrows
+/// disjuntos del `Model` (sin `unsafe`). Cierra el menú de edición.
+fn apply_edit_menu_action(model: &mut Model, action: EditAction) {
+    model.edit_menu = None;
+    let Some(target) = model.focus_target() else { return };
+    let active = model.active;
+    match target {
+        FocusTarget::Find => {
+            editmenu::apply(model.find_input.editor_mut(), action, &mut model.clipboard);
+        }
+        FocusTarget::PanelFilter => {
+            editmenu::apply(model.panel_filter.editor_mut(), action, &mut model.clipboard);
+        }
+        FocusTarget::PageInput(idx) => {
+            if let Some(input) = model.tabs[active].inputs.get_mut(idx) {
+                editmenu::apply(input.editor_mut(), action, &mut model.clipboard);
+            }
+        }
+        FocusTarget::Addr => {
+            editmenu::apply(model.tabs[active].addr.editor_mut(), action, &mut model.clipboard);
+        }
     }
 }
 
@@ -5091,6 +5386,9 @@ mod tests {
             panel_filter: TextInputState::new(),
             hover_link: None,
             start: std::time::Instant::now(),
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         }
     }
 
@@ -5374,6 +5672,9 @@ mod tests {
             panel_filter: TextInputState::new(),
             hover_link: None,
             start: std::time::Instant::now(),
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         }
     }
 
@@ -5405,6 +5706,9 @@ mod tests {
             panel_filter: TextInputState::new(),
             hover_link: None,
             start: std::time::Instant::now(),
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         };
         tick_js_runtimes(&mut m, 1234);
         assert!(m.tabs[0].js.is_none());

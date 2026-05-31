@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use arje_brain::introspect::{call, IntrospectRequest, IntrospectResponse};
@@ -42,6 +43,13 @@ use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
+use app_bus::{AppMenu, Menu, MenuItem};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -364,6 +372,15 @@ struct Model {
     /// Último resultado de "Verificar audit": `(ok, mensaje)`. `None` = aún
     /// no se pidió.
     verify: Option<(bool, String)>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Unidad seleccionada (índice en `units.units`). `None` si ninguna. La
+    /// card es de sólo lectura — la selección sólo resalta y habilita el
+    /// menú contextual.
+    selected_unit: Option<usize>,
+    /// Menú contextual sobre la unidad seleccionada: `(x, y)` ancla en
+    /// ventana. `None` cerrado.
+    context_menu: Option<(f32, f32)>,
     /// Mantiene vivo el watcher de wawa-config (su thread muere al dropear).
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
@@ -382,6 +399,17 @@ enum Msg {
     VerifyDone(bool, String),
     /// El bus de wawa-config cambió: re-aplicar theme/accent.
     WawaChanged(wawa_config::WawaConfig),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Selecciona una unidad del store por índice (resalta).
+    SelectUnit(usize),
+    /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
+    /// de ventana sobre la unidad seleccionada. Sin selección es no-op.
+    ContextMenuOpen(f32, f32),
 }
 
 struct ArjeCard;
@@ -423,6 +451,9 @@ impl App for ArjeCard {
             last_detect_ms: 0,
             brain: BrainStatus::Consultando,
             verify: None,
+            menu_open: None,
+            selected_unit: None,
+            context_menu: None,
             _wawa_watcher: watcher,
         }
     }
@@ -437,6 +468,13 @@ impl App for ArjeCard {
                 m.snapshot = CapsSnapshot::detect();
                 m.units = detect_units();
                 m.last_detect_ms = started.elapsed().as_micros() as u64 / 1000;
+                // Si la selección quedó fuera de rango tras el re-scan, la
+                // descartamos (junto al contextual que colgaba de ella).
+                let count = unit_count(&m);
+                if m.selected_unit.map(|i| i >= count).unwrap_or(false) {
+                    m.selected_unit = None;
+                    m.context_menu = None;
+                }
                 // El brain sí es socket I/O: fuera del hilo de UI.
                 handle.spawn(move || Msg::BrainRefresh(query_brain(&brain_path())));
                 // Observación de unidades vivas por el Engine (socket I/O).
@@ -464,12 +502,39 @@ impl App for ArjeCard {
             Msg::WawaChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg);
             }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, &cmd, handle);
+            }
+            Msg::SelectUnit(i) => {
+                m.selected_unit = Some(i);
+                m.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                // Sólo si hay una unidad seleccionada válida.
+                let count = unit_count(&m);
+                if m.selected_unit.filter(|i| *i < count).is_some() {
+                    m.menu_open = None;
+                    m.context_menu = Some((x, y));
+                }
+            }
         }
         m
     }
 
     fn view(model: &Model) -> View<Msg> {
         let theme = &model.theme;
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, theme));
         let header_palette = AppHeaderPalette::from_theme(theme);
         let stat_palette = StatCardPalette::from_theme(theme);
         let snap = &model.snapshot;
@@ -632,6 +697,45 @@ impl App for ArjeCard {
             }
         }
 
+        // Filas seleccionables de unidades (sobre las MISMAS unidades que la
+        // card de arriba muestra). Click selecciona; right-click en la raíz
+        // abre el contextual sobre la seleccionada. La card es de sólo
+        // lectura — la selección sólo resalta y habilita el contextual.
+        let unit_labels = unit_labels(model);
+        if !unit_labels.is_empty() {
+            for (i, label) in unit_labels.iter().enumerate() {
+                let selected = model.selected_unit == Some(i);
+                let bg = if selected {
+                    theme.bg_selected
+                } else {
+                    theme.bg_panel
+                };
+                let row = View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(22.0_f32),
+                    },
+                    align_items: Some(AlignItems::Center),
+                    padding: Rect {
+                        left: length(8.0_f32),
+                        right: length(8.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .fill(bg)
+                .text_aligned(
+                    label.clone(),
+                    12.0,
+                    theme.fg_text,
+                    llimphi_ui::llimphi_text::Alignment::Start,
+                )
+                .on_click(Msg::SelectUnit(i));
+                body_children.push(row);
+            }
+        }
+
         // Sección brain — opcional. El brain corre como daemon aparte; si no
         // está, la card de aislamiento sirve igual.
         match &model.brain {
@@ -705,7 +809,149 @@ impl App for ArjeCard {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, body])
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual sobre la unidad seleccionada.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, body])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual de la unidad tiene prioridad si está abierto.
+        if let Some((x, y)) = model.context_menu {
+            let label = model
+                .selected_unit
+                .and_then(|i| unit_labels(model).into_iter().nth(i))
+                .unwrap_or_else(|| "Unidad".to_string());
+            let viewport = viewport_of(model);
+            // Acciones reales de la card (sólo lectura): refrescar el scan y
+            // verificar el audit del brain (sólo si está vivo). No inventamos
+            // edición — las Cards no se editan desde acá.
+            let mut items = vec![ContextMenuItem::action("Refrescar")];
+            let brain_live = matches!(model.brain, BrainStatus::Live(_));
+            if brain_live {
+                items.push(ContextMenuItem::action("Verificar audit"));
+            }
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
+                Arc::new(move |i: usize| match i {
+                    0 => Msg::Tick,
+                    _ => Msg::VerifyAudit,
+                });
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport,
+                header: Some(label),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Viewport para clampear overlays: la card no trackea el tamaño de
+/// ventana, así que usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = ArjeCard::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Cuántas unidades muestra la card ahora mismo: las vivas si hay Engine
+/// alcanzable, si no las del scan del store. Determina el rango válido de
+/// `selected_unit`.
+fn unit_count(model: &Model) -> usize {
+    match &model.monitor {
+        Some(snap) => snap.units.len(),
+        None => model.units.units.len(),
+    }
+}
+
+/// Etiquetas presentables de las unidades visibles (mismas que la card),
+/// para resaltar las filas seleccionables y titular el menú contextual.
+fn unit_labels(model: &Model) -> Vec<String> {
+    match &model.monitor {
+        Some(snap) => snap
+            .units
+            .iter()
+            .map(|u| {
+                let dot = if matches!(u.state, LifecycleState::Running) {
+                    "●"
+                } else {
+                    "○"
+                };
+                format!("{dot} {}", u.label)
+            })
+            .collect(),
+        None => model
+            .units
+            .units
+            .iter()
+            .map(|u| {
+                let mark = if u.ok { "" } else { "✗ " };
+                format!("{mark}{}  ·  {}", u.label, u.payload)
+            })
+            .collect(),
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal de la card. Archivo / Ver / Ayuda — sólo comandos que
+/// mapean a acciones REALES (refrescar, verificar audit, salir). Sin
+/// "Editar": la card es un visor de sólo lectura, sin campos de texto.
+/// "Verificar audit" sale en gris si el brain no está vivo.
+fn app_menu(model: &Model) -> AppMenu {
+    let brain_live = matches!(model.brain, BrainStatus::Live(_));
+    let mut verify = MenuItem::new("Verificar audit", "view.verify");
+    if !brain_live {
+        verify = verify.disabled();
+    }
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Refrescar", "file.refresh").shortcut("Ctrl+R"))
+                .item(
+                    MenuItem::new("Salir", "file.quit")
+                        .shortcut("Ctrl+Q")
+                        .separated(),
+                ),
+        )
+        .menu(Menu::new("Ver").item(verify))
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.refresh" => {
+            handle.dispatch(Msg::Tick);
+            model
+        }
+        "file.quit" => std::process::exit(0),
+        "view.verify" => {
+            // Sólo tiene efecto con el brain vivo; si no, no-op.
+            if matches!(model.brain, BrainStatus::Live(_)) {
+                handle.dispatch(Msg::VerifyAudit);
+            }
+            model
+        }
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => model,
     }
 }
 

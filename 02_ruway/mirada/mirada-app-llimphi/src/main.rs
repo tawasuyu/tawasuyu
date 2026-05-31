@@ -35,9 +35,15 @@
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, AlignItems, Dimension, FlexDirection, JustifyContent, Position, Size, Style},
     Rect,
@@ -79,6 +85,13 @@ struct Model {
     keymap_watch: Option<KeymapWatch>,
     /// Socket del API de control externo (`mirada-ctl`).
     ctl: Option<CtlServer>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual sobre la ventana enfocada: ancla `(x, y)` en
+    /// coordenadas de ventana. `None` cerrado. No hay edición de texto,
+    /// así que el contextual sólo ofrece acciones de gestión de ventana.
+    context_menu: Option<(f32, f32)>,
 }
 
 #[derive(Clone)]
@@ -91,6 +104,18 @@ enum Msg {
     SwitchWorkspace(usize),
     /// Click en una ventana del lienzo.
     FocusWindow(WindowId),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce a acciones reales.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` sobre la ventana enfocada. Sin ventana enfocada es no-op.
+    ContextMenuOpen(f32, f32),
+    /// Ejecuta una acción de escritorio (usado por el menú contextual y
+    /// el principal sobre la ventana enfocada).
+    Act(DesktopAction),
 }
 
 struct Mirada;
@@ -146,6 +171,8 @@ impl App for Mirada {
             keymap_path,
             keymap_watch,
             ctl,
+            menu_open: None,
+            context_menu: None,
         };
         if let Some(link) = model.link.as_mut() {
             let _ = link.send(&model.desktop.grab_keys());
@@ -185,12 +212,40 @@ impl App for Mirada {
             Msg::Key(ev) => handle_key(&mut m, &ev),
             Msg::SwitchWorkspace(i) => act(&mut m, DesktopAction::SwitchWorkspace(i)),
             Msg::FocusWindow(id) => act(&mut m, DesktopAction::FocusWindow(id)),
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                // Sólo tiene sentido con una ventana enfocada.
+                if m.desktop.focused_window().is_some() {
+                    m.menu_open = None;
+                    m.context_menu = Some((x, y));
+                }
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                handle_menu_command(&mut m, &cmd);
+            }
+            Msg::Act(action) => {
+                m.menu_open = None;
+                m.context_menu = None;
+                act(&mut m, action);
+            }
         }
         m
     }
 
     fn view(model: &Model) -> View<Msg> {
         let theme = &model.theme;
+        // Barra de menú principal — primer hijo del column raíz.
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, theme));
         // Colores cromáticos heredados del original (HSL → RGB hardcoded).
         let win_bg = Color::from_rgba8(28, 32, 41, 255);
         let bar_bg = Color::from_rgba8(19, 22, 30, 255);
@@ -250,7 +305,62 @@ impl App for Mirada {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![bar, canvas_wrap, status])
+        // El origen de la raíz es (0,0) ⇒ coords locales == coords de
+        // ventana. Right-click abre el contextual sobre la ventana
+        // enfocada.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, bar, canvas_wrap, status])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual de la ventana enfocada tiene prioridad.
+        if let Some((x, y)) = model.context_menu {
+            let focused = model.desktop.focused_window();
+            let label = focused
+                .and_then(|id| model.desktop.window_info(id))
+                .map(|i| i.title.clone())
+                .unwrap_or_else(|| "ventana".to_string());
+            // Acciones reales del Desktop sobre la enfocada. Sin edición
+            // de texto: el contextual es de gestión de ventana.
+            let actions: [(&str, DesktopAction); 6] = [
+                ("Promover a maestra", DesktopAction::PromoteToMaster),
+                ("Flotar / anclar", DesktopAction::ToggleFloat),
+                ("Pantalla completa", DesktopAction::ToggleFullscreen),
+                ("Enviar al scratchpad", DesktopAction::SendToScratchpad),
+                ("Siguiente monitor", DesktopAction::FocusOutputNext),
+                ("Cerrar", DesktopAction::CloseFocused),
+            ];
+            // "Cerrar" (último) se marca como destructivo.
+            let last = actions.len() - 1;
+            let items: Vec<ContextMenuItem> = actions
+                .iter()
+                .enumerate()
+                .map(|(i, (l, _))| {
+                    let it = ContextMenuItem::action(*l);
+                    if i == last {
+                        it.destructive()
+                    } else {
+                        it
+                    }
+                })
+                .collect();
+            let acts: Vec<DesktopAction> = actions.iter().map(|(_, a)| a.clone()).collect();
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
+                Arc::new(move |i: usize| Msg::Act(acts[i].clone()));
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport: viewport_of(model),
+                header: Some(label),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
     }
 }
 
@@ -446,6 +556,137 @@ fn mode_name(m: LayoutMode) -> &'static str {
         LayoutMode::Rows => "filas",
         LayoutMode::CenteredMaster => "maestro centrado",
         LayoutMode::Spiral => "espiral",
+    }
+}
+
+// ─── Menú principal y contextual ────────────────────────────────────
+
+/// Viewport para clampear overlays. El Model no trackea el tamaño de
+/// ventana, así que usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Mirada::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal de mirada. Archivo / Ver / Ayuda — sólo comandos que
+/// mapean a acciones reales del `Desktop`. Sin "Editar": no hay campos de
+/// texto editables. Los items que actúan sobre la enfocada se inhabilitan
+/// cuando no hay ventana enfocada. Abrir ventana/monitor sólo tiene
+/// sentido en simulación (sin Cuerpo conectado).
+fn app_menu(model: &Model) -> AppMenu {
+    let has_focus = model.desktop.focused_window().is_some();
+    let sim = model.link.is_none();
+    let mode = model.desktop.active_workspace().params().mode;
+
+    let mut abrir = MenuItem::new("Abrir ventana", "file.new_window").shortcut("n");
+    let mut abrir_mon = MenuItem::new("Abrir monitor", "file.new_output").shortcut("Shift+n");
+    if !sim {
+        // Con Cuerpo conectado, las ventanas las crea el compositor real.
+        abrir = abrir.disabled();
+        abrir_mon = abrir_mon.disabled();
+    }
+    let mut cerrar = MenuItem::new("Cerrar enfocada", "win.close").shortcut("w").separated();
+    if !has_focus {
+        cerrar = cerrar.disabled();
+    }
+
+    // Submenú de layouts: el modo vigente queda en gris (ya aplicado).
+    let layout_item = |label: &str, cmd: &str, m: LayoutMode| {
+        let it = MenuItem::new(label, cmd);
+        if mode == m {
+            it.disabled()
+        } else {
+            it
+        }
+    };
+
+    let mut promover = MenuItem::new("Promover a maestra", "win.promote").shortcut("Enter");
+    let mut flotar = MenuItem::new("Flotar / anclar", "win.float").shortcut("f");
+    let mut fullscreen = MenuItem::new("Pantalla completa", "win.fullscreen").shortcut("Shift+f");
+    let mut scratch = MenuItem::new("Enviar al scratchpad", "win.scratchpad").shortcut("Shift+`");
+    if !has_focus {
+        promover = promover.disabled();
+        flotar = flotar.disabled();
+        fullscreen = fullscreen.disabled();
+        scratch = scratch.disabled();
+    }
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(abrir)
+                .item(abrir_mon)
+                .item(cerrar)
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Ciclar layout", "view.cycle").shortcut("Tab"))
+                .item(layout_item("Maestro + pila", "layout.master", LayoutMode::MasterStack).separated())
+                .item(layout_item("Monóculo", "layout.monocle", LayoutMode::Monocle))
+                .item(layout_item("Rejilla", "layout.grid", LayoutMode::Grid))
+                .item(layout_item("Columnas", "layout.columns", LayoutMode::Columns))
+                .item(layout_item("Filas", "layout.rows", LayoutMode::Rows))
+                .item(layout_item("Maestro centrado", "layout.centered", LayoutMode::CenteredMaster))
+                .item(layout_item("Espiral", "layout.spiral", LayoutMode::Spiral))
+                .item(MenuItem::new("Achicar maestra", "view.shrink").shortcut("h").separated())
+                .item(MenuItem::new("Agrandar maestra", "view.grow").shortcut("l"))
+                .item(MenuItem::new("Siguiente monitor", "view.output_next").shortcut("o").separated()),
+        )
+        .menu(
+            Menu::new("Ventana")
+                .item(promover)
+                .item(flotar)
+                .item(fullscreen)
+                .item(scratch),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal a la acción real del Desktop.
+fn handle_menu_command(m: &mut Model, cmd: &str) {
+    match cmd {
+        "file.new_window" if m.link.is_none() => open_window(m),
+        "file.new_output" if m.link.is_none() => {
+            let id = m.desktop.outputs().len() as u32;
+            feed(m, BodyEvent::OutputAdded {
+                id,
+                width: SCREEN_W,
+                height: SCREEN_H,
+            });
+        }
+        "win.close" => act(m, DesktopAction::CloseFocused),
+        "file.quit" => std::process::exit(0),
+        "view.cycle" => act(m, DesktopAction::CycleLayout),
+        "layout.master" => act(m, DesktopAction::SetLayout(LayoutMode::MasterStack)),
+        "layout.monocle" => act(m, DesktopAction::SetLayout(LayoutMode::Monocle)),
+        "layout.grid" => act(m, DesktopAction::SetLayout(LayoutMode::Grid)),
+        "layout.columns" => act(m, DesktopAction::SetLayout(LayoutMode::Columns)),
+        "layout.rows" => act(m, DesktopAction::SetLayout(LayoutMode::Rows)),
+        "layout.centered" => act(m, DesktopAction::SetLayout(LayoutMode::CenteredMaster)),
+        "layout.spiral" => act(m, DesktopAction::SetLayout(LayoutMode::Spiral)),
+        "view.shrink" => act(m, DesktopAction::ShrinkMaster),
+        "view.grow" => act(m, DesktopAction::GrowMaster),
+        "view.output_next" => act(m, DesktopAction::FocusOutputNext),
+        "win.promote" => act(m, DesktopAction::PromoteToMaster),
+        "win.float" => act(m, DesktopAction::ToggleFloat),
+        "win.fullscreen" => act(m, DesktopAction::ToggleFullscreen),
+        "win.scratchpad" => act(m, DesktopAction::SendToScratchpad),
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => {}
     }
 }
 

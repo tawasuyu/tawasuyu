@@ -28,6 +28,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use card_handshake::messages::SessionList;
@@ -42,11 +43,20 @@ use llimphi_ui::llimphi_layout::taffy::{
     Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use ulid::Ulid;
+
+use app_bus::{AppMenu, Menu, MenuItem};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -87,6 +97,16 @@ struct Model {
     sessions: Option<SessionList>,
     last_match_keys: HashSet<MatchKey>,
     timeline: VecDeque<TimelineEntry>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Entry del timeline seleccionada (índice en `timeline`). `None`
+    /// si ninguna. La selección sólo habilita el menú contextual; el
+    /// probe es de sólo lectura.
+    selected: Option<usize>,
+    /// Menú contextual sobre una entry: `(idx, x, y)` ancla en ventana.
+    /// `None` cerrado.
+    context_menu: Option<(usize, f32, f32)>,
 }
 
 #[derive(Clone)]
@@ -98,6 +118,22 @@ enum Msg {
         matches: Option<card_handshake::messages::MatchList>,
         elapsed_ms: u64,
     },
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Cicla el tema entre presets.
+    CycleTheme,
+    /// Selecciona una entry del timeline por índice (resalta).
+    SelectEntry(usize),
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` de ventana sobre la entry seleccionada. Sin selección
+    /// es no-op.
+    ContextMenuOpen(f32, f32),
+    /// Limpia el timeline acumulado.
+    ClearTimeline,
 }
 
 struct Explorer;
@@ -133,6 +169,9 @@ impl App for Explorer {
             sessions: None,
             last_match_keys: HashSet::new(),
             timeline: VecDeque::new(),
+            menu_open: None,
+            selected: None,
+            context_menu: None,
         }
     }
 
@@ -151,6 +190,44 @@ impl App for Explorer {
                     m.diff_matches_into_timeline(&list);
                 }
                 m.last_probe_ms = elapsed_ms;
+                // Si la selección quedó fuera de rango tras el refresh
+                // del timeline, la descartamos.
+                if m.selected.map(|i| i >= m.timeline.len()).unwrap_or(false) {
+                    m.selected = None;
+                    m.context_menu = None;
+                }
+            }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, &cmd, handle);
+            }
+            Msg::CycleTheme => {
+                m.theme = Theme::next_after(m.theme.name);
+            }
+            Msg::SelectEntry(i) => {
+                m.selected = Some(i);
+                m.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                // Sólo si hay una entry seleccionada válida.
+                if let Some(i) = m.selected.filter(|i| *i < m.timeline.len()) {
+                    m.menu_open = None;
+                    m.context_menu = Some((i, x, y));
+                }
+            }
+            Msg::ClearTimeline => {
+                m.timeline.clear();
+                m.selected = None;
+                m.context_menu = None;
             }
         }
         m
@@ -158,6 +235,8 @@ impl App for Explorer {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = &model.theme;
+        let menu = app_menu();
+        let menubar = menubar_view(&menubar_spec(&menu, model, theme));
         let header_palette = AppHeaderPalette::from_theme(theme);
         let stat_palette = StatCardPalette::from_theme(theme);
 
@@ -255,27 +334,51 @@ impl App for Explorer {
             &stat_palette,
         ));
 
-        // Timeline card.
-        let timeline_items: Vec<String> = model
-            .timeline
-            .iter()
-            .take(20)
-            .map(format_timeline_entry)
-            .collect();
+        // Timeline card de cabecera (contador + ayuda); las entries
+        // van debajo como filas seleccionables (click selecciona,
+        // right-click en la raíz abre el contextual).
         let timeline_value = model.timeline.len().to_string();
         let timeline_descr = if model.timeline.is_empty() {
             "esperando primer match…".to_string()
         } else {
-            "↑ más reciente · ↓ más viejo · cap 50 entries".to_string()
+            "click selecciona · right-click = menú · cap 50 entries".to_string()
         };
         body_children.push(stat_card_view::<Msg>(
             "Timeline de matches",
             timeline_value,
             &timeline_descr,
             accent_partial,
-            &timeline_items,
+            &[],
             &stat_palette,
         ));
+
+        for (i, e) in model.timeline.iter().take(20).enumerate() {
+            let selected = model.selected == Some(i);
+            let mut row = View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(18.0_f32),
+                },
+                padding: Rect {
+                    left: length(8.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(
+                format_timeline_entry(e),
+                11.0,
+                theme.fg_text,
+                Alignment::Start,
+            )
+            .on_click(Msg::SelectEntry(i));
+            if selected {
+                row = row.fill(theme.bg_selected);
+            }
+            body_children.push(row);
+        }
 
         let body = View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -308,7 +411,113 @@ impl App for Explorer {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, body])
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual sobre la entry seleccionada.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![menubar, header, body])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual de la entry tiene prioridad si está abierto.
+        if let Some((idx, x, y)) = model.context_menu {
+            let label = model
+                .timeline
+                .get(idx)
+                .map(format_timeline_entry)
+                .unwrap_or_else(|| "Entry".to_string());
+            let viewport = viewport_of(model);
+            // Acciones reales del probe (sólo lectura): refrescar el
+            // probe y limpiar el timeline. No inventamos edición.
+            let items = vec![
+                ContextMenuItem::action("Refrescar probe"),
+                ContextMenuItem::action("Limpiar timeline"),
+            ];
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
+                Arc::new(move |i: usize| match i {
+                    0 => Msg::Tick,
+                    _ => Msg::ClearTimeline,
+                });
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport,
+                header: Some(label),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu();
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Viewport para clampear overlays: el probe no trackea el tamaño de
+/// ventana, así que usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Explorer::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a AppMenu,
+    model: &Model,
+    theme: &'a Theme,
+) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del probe. Archivo / Ver / Ayuda — sólo comandos
+/// que mapean a acciones reales (refrescar probe, limpiar timeline,
+/// reconectar, tema). Sin "Editar": el probe no tiene campos de texto
+/// editables.
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Refrescar probe", "file.refresh").shortcut("Ctrl+R"))
+                .item(MenuItem::new("Limpiar timeline", "file.clear"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Reconectar", "view.reconnect"))
+                .item(MenuItem::new("Cambiar tema", "view.theme").separated()),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        // Reconectar == re-disparar el probe; el ProbeResult refresca
+        // estado/sesiones/matches.
+        "file.refresh" | "view.reconnect" => {
+            handle.dispatch(Msg::Tick);
+            model
+        }
+        "file.clear" => {
+            handle.dispatch(Msg::ClearTimeline);
+            model
+        }
+        "file.quit" => std::process::exit(0),
+        "view.theme" => {
+            handle.dispatch(Msg::CycleTheme);
+            model
+        }
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => model,
     }
 }
 

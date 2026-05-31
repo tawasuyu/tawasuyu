@@ -37,7 +37,13 @@ use llimphi_ui::{App, Handle, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_card::{card_view, CardOptions, CardPalette};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use wawa_config_llimphi::theme_from_wawa;
+
+use app_bus::{AppMenu, Menu, MenuItem};
 
 use nahual_meta_runtime::format::{preview_value, short_hash, short_uuid};
 use nakui_core::event_log::{EventLog, LogEntry};
@@ -53,6 +59,23 @@ enum Msg {
     Reload,
     /// El bus `wawa-config` publicó una versión nueva.
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Cicla el tema claro/oscuro.
+    CycleTheme,
+    /// Selecciona una entrada por índice en la lista RENDERIZADA (más
+    /// recientes primero). Resalta y habilita el menú contextual.
+    SelectEntry(usize),
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` de ventana sobre la entrada seleccionada. Sin selección
+    /// es no-op.
+    ContextMenuOpen(f32, f32),
+    /// Fuerza una relectura síncrona del log (Refrescar del menú).
+    ForceReload,
 }
 
 struct Model {
@@ -64,6 +87,16 @@ struct Model {
     theme: Theme,
     /// Suscripción al bus de configuración del SO.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Entrada seleccionada — índice en la lista RENDERIZADA (rev, las
+    /// más recientes primero, capada a `MAX_VISIBLE`). El explorer es de
+    /// sólo lectura; la selección sólo resalta y habilita el contextual.
+    selected: Option<usize>,
+    /// Menú contextual sobre una entrada: `(idx_render, x, y)` ancla en
+    /// ventana. `None` cerrado.
+    context_menu: Option<(usize, f32, f32)>,
 }
 
 struct SharedState {
@@ -120,21 +153,66 @@ impl App for Explorer {
         .map_err(|e| eprintln!("nakui-explorer · wawa-config watcher: {e}"))
         .ok();
 
-        Model { log_path, shared, theme, _wawa_watcher: watcher }
+        Model {
+            log_path,
+            shared,
+            theme,
+            _wawa_watcher: watcher,
+            menu_open: None,
+            selected: None,
+            context_menu: None,
+        }
     }
 
-    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let mut m = model;
         match msg {
             Msg::Reload => {
                 // El sampler ya escribió en `shared` antes de
                 // despachar. El update sólo dispara el re-render — el
-                // `view` lee del `shared` lockeando.
+                // `view` lee del `shared` lockeando. Si la selección
+                // quedó fuera de rango tras el refresh, la descartamos.
+                let count = visible_count(&m.shared);
+                if m.selected.map(|i| i >= count).unwrap_or(false) {
+                    m.selected = None;
+                    m.context_menu = None;
+                }
             }
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);
                 if cfg.lang != rimay_localize::current_locale() {
                     let _ = rimay_localize::set_locale(&cfg.lang);
+                }
+            }
+            Msg::MenuOpen(which) => {
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+            }
+            Msg::CloseMenus => {
+                m.menu_open = None;
+                m.context_menu = None;
+            }
+            Msg::MenuCommand(cmd) => {
+                m.menu_open = None;
+                return handle_menu_command(m, &cmd, handle);
+            }
+            Msg::CycleTheme => {
+                m.theme = Theme::next_after(m.theme.name);
+            }
+            Msg::ForceReload => {
+                reload_into(&m.log_path, &m.shared);
+                handle.dispatch(Msg::Reload);
+            }
+            Msg::SelectEntry(i) => {
+                m.selected = Some(i);
+                m.context_menu = None;
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                let count = visible_count(&m.shared);
+                if let Some(i) = m.selected.filter(|i| *i < count) {
+                    m.menu_open = None;
+                    m.context_menu = Some((i, x, y));
                 }
             }
         }
@@ -143,6 +221,8 @@ impl App for Explorer {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = model.theme;
+        let menu = app_menu();
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let snapshot = model.shared.lock().unwrap();
         let entries = &snapshot.entries;
 
@@ -164,7 +244,7 @@ impl App for Explorer {
             &AppHeaderPalette::from_theme(&theme),
         );
 
-        let mut chrome: Vec<View<Msg>> = vec![header];
+        let mut chrome: Vec<View<Msg>> = vec![menubar, header];
 
         let breakdown_line = if top_breakdown.is_empty() {
             None
@@ -212,7 +292,16 @@ impl App for Explorer {
             .iter()
             .rev()
             .take(MAX_VISIBLE)
-            .map(|e| entry_card(e, &theme, &card_palette))
+            .enumerate()
+            .map(|(i, e)| {
+                let card = entry_card(e, &theme, &card_palette).on_click(Msg::SelectEntry(i));
+                if model.selected == Some(i) {
+                    // Resalte sutil de la entrada seleccionada.
+                    card.fill(theme.bg_selected)
+                } else {
+                    card
+                }
+            })
             .collect();
 
         let body = View::new(Style {
@@ -249,7 +338,119 @@ impl App for Explorer {
             ..Default::default()
         })
         .fill(theme.bg_app)
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual sobre la entrada seleccionada.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
         .children(chrome)
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El menú contextual sobre la entrada tiene prioridad si está
+        // abierto.
+        if let Some((idx, x, y)) = model.context_menu {
+            let header = {
+                let snap = model.shared.lock().unwrap();
+                // `idx` es índice en la lista renderizada (rev). Mapear al
+                // entry real para el header del menú.
+                snap.entries
+                    .iter()
+                    .rev()
+                    .nth(idx)
+                    .map(entry_label)
+                    .unwrap_or_else(|| "Entrada".to_string())
+            };
+            let viewport = viewport_of(model);
+            // Acciones reales: el explorer es de sólo lectura, no
+            // inventamos edición. Seleccionar/refrescar son las únicas
+            // acciones reales que existen.
+            let items = vec![
+                ContextMenuItem::action("Ver detalle"),
+                ContextMenuItem::action("Refrescar log"),
+            ];
+            let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
+                Arc::new(move |i: usize| match i {
+                    0 => Msg::SelectEntry(idx),
+                    _ => Msg::ForceReload,
+                });
+            return Some(context_menu_view(ContextMenuSpec {
+                anchor: (x, y),
+                viewport,
+                header: Some(header),
+                items,
+                active: usize::MAX,
+                on_pick,
+                on_dismiss: Msg::CloseMenus,
+                palette: ContextMenuPalette::from_theme(&model.theme),
+            }));
+        }
+        // Si no, el dropdown del menú principal.
+        let menu = app_menu();
+        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    }
+}
+
+/// Viewport para clampear overlays: el explorer no trackea el tamaño de
+/// ventana, así que usamos `initial_size()`.
+fn viewport_of(_model: &Model) -> (f32, f32) {
+    let (w, h) = Explorer::initial_size();
+    (w as f32, h as f32)
+}
+
+/// Cuántas entradas se renderizan (rev, capadas a `MAX_VISIBLE`). Define
+/// el rango válido de la selección.
+fn visible_count(shared: &Arc<Mutex<SharedState>>) -> usize {
+    shared.lock().unwrap().entries.len().min(MAX_VISIBLE)
+}
+
+/// Etiqueta corta de un entry para el header del menú contextual.
+fn entry_label(entry: &LogEntry) -> String {
+    match entry {
+        LogEntry::Seed { seq, entity, .. } => format!("#{seq} seed · {entity}"),
+        LogEntry::Morphism { seq, morphism, .. } => format!("#{seq} morph · {morphism}"),
+    }
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: viewport_of(model),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del explorer. Archivo / Ver / Ayuda — sólo comandos
+/// que mapean a acciones reales (refrescar log, tema, salir). Sin
+/// "Editar": el explorer no tiene campos de texto editables.
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Refrescar log", "file.refresh").shortcut("Ctrl+R"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú principal al `Msg`/efecto real.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    match cmd {
+        "file.refresh" => {
+            handle.dispatch(Msg::ForceReload);
+            model
+        }
+        "file.quit" => std::process::exit(0),
+        "view.theme" => {
+            handle.dispatch(Msg::CycleTheme);
+            model
+        }
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => model,
     }
 }
 

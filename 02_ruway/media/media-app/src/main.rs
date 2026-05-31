@@ -78,6 +78,13 @@ use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
 };
 use llimphi_widget_timeline::{timeline_view, TimelinePalette};
+use llimphi_widget_menubar::{
+    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
+use llimphi_widget_context_menu::{
+    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
+use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_module_command_palette::{
     self as palette, Command as PaletteCommand, PaletteAction, PaletteMsg, PalettePalette,
     PaletteState,
@@ -117,6 +124,16 @@ enum Msg {
     /// agnóstico: emite `Invoke(id)` y la app mapea el id a un
     /// [`MediaCommand`] vía el índice de su catálogo.
     Palette(PaletteMsg),
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
+    MenuOpen(Option<usize>),
+    /// Comando elegido en el menú principal — se traduce al `Msg`/efecto
+    /// real (un `MediaCommand`, toggle de ayuda/tema, recarga, salir).
+    MenuCommand(String),
+    /// Cierra cualquier menú abierto (click-fuera / Esc).
+    CloseMenus,
+    /// Right-click en la raíz → abre el menú contextual anclado en
+    /// `(x, y)` de ventana. Origen de la raíz es 0,0 ⇒ local == ventana.
+    ContextMenuOpen(f32, f32),
 }
 
 // Los tiles del grid reorderable son los [`TileId`] (= `PanelId` del
@@ -302,6 +319,14 @@ struct Model {
     /// resize en llimphi-ui, lo fijamos al `initial_size` — mismo
     /// compromiso que la galería.
     viewport: (f32, f32),
+    /// Barra de menú principal: índice del menú raíz abierto (`None`
+    /// cerrado).
+    menu_open: Option<usize>,
+    /// Menú contextual del reproductor: ancla `(x, y)` en ventana sobre el
+    /// área de video/controles. `None` cerrado. media-app no tiene campos
+    /// de texto editables, así que el contextual mapea a comandos de
+    /// transporte/captura reales — no a edición.
+    context_menu: Option<(f32, f32)>,
 }
 
 struct Pipeline {
@@ -1329,6 +1354,8 @@ impl App for MediaApp {
             palette_commands,
             palette_cmds,
             viewport: (960.0, 540.0),
+            menu_open: None,
+            context_menu: None,
         }
     }
 
@@ -1369,6 +1396,31 @@ impl App for MediaApp {
                 }
             }
             Msg::Palette(pm) => apply_palette(model, pm, handle),
+            Msg::MenuOpen(which) => {
+                let mut m = model;
+                m.menu_open = which;
+                // Abrir un menú raíz cierra cualquier contextual.
+                m.context_menu = None;
+                m
+            }
+            Msg::CloseMenus => {
+                let mut m = model;
+                m.menu_open = None;
+                m.context_menu = None;
+                m
+            }
+            Msg::MenuCommand(cmd) => {
+                let mut m = model;
+                m.menu_open = None;
+                m.context_menu = None;
+                handle_menu_command(m, &cmd, handle)
+            }
+            Msg::ContextMenuOpen(x, y) => {
+                let mut m = model;
+                m.menu_open = None;
+                m.context_menu = Some((x, y));
+                m
+            }
         }
     }
 
@@ -1389,6 +1441,12 @@ impl App for MediaApp {
         if palette::open_shortcut(event) {
             return Some(Msg::Palette(PaletteMsg::Open));
         }
+        // Esc cierra cualquier menú abierto antes que nada.
+        if matches!(event.key, Key::Named(NamedKey::Escape))
+            && (model.menu_open.is_some() || model.context_menu.is_some())
+        {
+            return Some(Msg::CloseMenus);
+        }
         match &event.key {
             Key::Character(c) if c == "?" => return Some(Msg::ToggleHelp),
             Key::Named(NamedKey::Escape) if model.help_open => return Some(Msg::ToggleHelp),
@@ -1400,6 +1458,15 @@ impl App for MediaApp {
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // Prioridad: menú contextual > dropdown del menú principal >
+        // palette > ayuda.
+        if let Some((x, y)) = model.context_menu {
+            return Some(context_menu(model, x, y));
+        }
+        let menu = app_menu();
+        if let Some(v) = menubar_overlay(&menubar_spec(&menu, model, &llimphi_theme::Theme::dark())) {
+            return Some(v);
+        }
         // El palette tiene prioridad sobre la ayuda (sólo uno visible).
         if let Some(state) = model.palette.as_ref() {
             return Some(palette_overlay(model, state));
@@ -1440,6 +1507,11 @@ impl App for MediaApp {
         let cfg = config_slot().get().expect("config set");
         let secs = model.started_at.elapsed().as_secs_f32().max(0.001);
         let fps = model.frames as f32 / secs;
+
+        // Barra de menú principal — primer hijo del column raíz.
+        let theme = llimphi_theme::Theme::dark();
+        let menu = app_menu();
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
 
         // --- Hero: canvas de video con título overlay arriba ---
         let title_text = View::new(Style {
@@ -1564,7 +1636,12 @@ impl App for MediaApp {
             ..Default::default()
         })
         .fill(Color::from_rgba8(22, 26, 34, 255))
-        .children(vec![title_text, canvas, subs_strip, timeline, tile_grid, footer])
+        // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
+        // menú contextual del reproductor.
+        .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+        .children(vec![
+            menubar, title_text, canvas, subs_strip, timeline, tile_grid, footer,
+        ])
     }
 }
 
@@ -1609,6 +1686,115 @@ fn palette_overlay(model: &Model, state: &PaletteState) -> View<Msg> {
     .fill(Color::from_rgba8(0, 0, 0, 150))
     .on_click(Msg::Palette(PaletteMsg::Close))
     .children(vec![panel])
+}
+
+/// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
+fn menubar_spec<'a>(
+    menu: &'a AppMenu,
+    model: &Model,
+    theme: &'a llimphi_theme::Theme,
+) -> MenuBarSpec<'a, Msg> {
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: model.viewport,
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// El menú principal del reproductor. Archivo / Reproducción / Ver / Ayuda.
+/// Sin "Editar": media-app no tiene campos de texto editables. Sólo entran
+/// comandos que mapean a acciones reales (transporte, captura, ayuda,
+/// recarga de controles). Los atajos espejan el keymap default tipo VLC.
+fn app_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(
+            Menu::new("Archivo")
+                .item(MenuItem::new("Capturar fotograma", "file.snapshot"))
+                .item(MenuItem::new("Grabar / detener", "file.record").separated())
+                .item(MenuItem::new("Recargar controles", "file.reload").shortcut("F5"))
+                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(
+            Menu::new("Reproducción")
+                .item(MenuItem::new("Reproducir / pausar", "play.toggle").shortcut("Space"))
+                .item(MenuItem::new("Retroceder", "play.back").shortcut("←"))
+                .item(MenuItem::new("Avanzar", "play.fwd").shortcut("→").separated())
+                .item(MenuItem::new("Pista anterior", "play.prev"))
+                .item(MenuItem::new("Pista siguiente", "play.next").separated())
+                .item(MenuItem::new("Subir volumen", "play.vol_up"))
+                .item(MenuItem::new("Bajar volumen", "play.vol_dn")),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Paleta de comandos", "view.palette").shortcut("Ctrl+Shift+P"))
+                .item(MenuItem::new("Ayuda de atajos", "view.help").shortcut("?")),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// Traduce un command id del menú (principal o contextual) al `Msg`/efecto
+/// real. Los ids de transporte/captura despachan `Msg::Command` con un
+/// [`MediaCommand`] — exactamente lo que ya disparan botones y teclado.
+fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    use MediaCommand::*;
+    let step = settings().seek_step_secs;
+    let vstep = settings().volume_step;
+    let dispatch = |c: MediaCommand| handle.dispatch(Msg::Command(c));
+    match cmd {
+        "file.snapshot" => dispatch(Snapshot),
+        "file.record" => dispatch(ToggleRecord),
+        "file.reload" => handle.dispatch(Msg::ReloadConfig),
+        "file.quit" => std::process::exit(0),
+        "play.toggle" => dispatch(TogglePause),
+        "play.back" => dispatch(SeekBy { secs: -step }),
+        "play.fwd" => dispatch(SeekBy { secs: step }),
+        "play.prev" => dispatch(PrevTrack),
+        "play.next" => dispatch(NextTrack),
+        "play.vol_up" => dispatch(VolumeBy { delta: vstep }),
+        "play.vol_dn" => dispatch(VolumeBy { delta: -vstep }),
+        "view.palette" => handle.dispatch(Msg::Palette(PaletteMsg::Open)),
+        "view.help" => handle.dispatch(Msg::ToggleHelp),
+        // "help.about" y desconocidos: no-op (sin diálogo todavía).
+        _ => {}
+    }
+    model
+}
+
+/// Menú contextual del reproductor sobre el área de video/controles.
+/// Como media-app no tiene campos de texto editables, el contextual NO
+/// ofrece edición: mapea a comandos de transporte y captura reales (los
+/// mismos que botones, teclado y menú principal).
+fn context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let paused = pause().is_paused();
+    let recording = recorder().is_recording();
+    let items = vec![
+        ContextMenuItem::action(if paused { "Reproducir" } else { "Pausar" }),
+        ContextMenuItem::action("Capturar fotograma"),
+        ContextMenuItem::action(if recording { "Detener grabación" } else { "Grabar audio" }),
+        ContextMenuItem::action("Paleta de comandos"),
+        ContextMenuItem::action("Ayuda de atajos"),
+    ];
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(|i: usize| match i {
+        0 => Msg::Command(MediaCommand::TogglePause),
+        1 => Msg::Command(MediaCommand::Snapshot),
+        2 => Msg::Command(MediaCommand::ToggleRecord),
+        3 => Msg::Palette(PaletteMsg::Open),
+        _ => Msg::ToggleHelp,
+    });
+    context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: model.viewport,
+        header: Some("media".to_string()),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&llimphi_theme::Theme::dark()),
+    })
 }
 
 /// Despacha por TileId al builder concreto. Cada tile arma su propio
