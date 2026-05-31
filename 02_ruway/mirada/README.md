@@ -30,7 +30,7 @@ Crates listed in [README.md](README.md).
 
 ### Hecho
 - `mirada-launcher-llimphi`: barra de escritorio configurable sobre Llimphi (MVP → iteraciones): widgets builtin (reloj/timezone, brillo, volumen, clipboard, hotkeys configurables), barra inferior con `shuma_bar` (shell), overlay quake con cards flotantes estilo conky, y submit que ejecuta shell + IA.
-- `mirada-layout::outputs`: geometría pura de disposición multi-monitor.
+- `mirada-layout::outputs`: geometría pura de disposición multi-monitor, ahora **multi-DPI** (`Salida` + `disponer_logico`: reparte en coordenadas lógicas según la escala fraccional de cada output, así un 1× y un 2× comparten un plano continuo). Lista para cuando aterrice la enumeración de scanouts.
 - `asistente-puente` / `mirada-asistente-llimphi`: pipeline de propuestas extremo a extremo (modo daemon Unix socket + codec testeado, firma humana de propuestas por hash — Fase 60).
 - Compositor/portal/greeter sobre Llimphi-HAL; portal XDG completo (file pickers genéricos sin código por app). Menú principal + contextual (lotes 4–6).
 

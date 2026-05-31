@@ -57,7 +57,7 @@ Los % son juicio anclado en código + git + tests, redondeados a múltiplos de 5
 | **nahual** | 68% | Visor PDF (falta rasterizador) + SVG + seek/scrub | AppBus out-of-process, meta-schema |
 | **media** | 68% | **M1: sincronización A/V por PTS completa** (hoy parcial) | HW decode, streaming de red (RTMP/HLS) |
 | **chasqui** | 62% | Persistencia del broker + transporte/discovery P2P | Routing tipo MQTT, ACLs + cifrado |
-| **mirada** | 55% | Estabilidad del compositor + sesión/DM en hardware real | Compositor sobre framebuffer Wawa, greeter/DRM, multi-DPI |
+| **mirada** | 55% | Estabilidad del compositor + sesión/DM en hardware real | Compositor sobre framebuffer Wawa, greeter/DRM (multi-DPI: matemática lógica ✓, falta cablear a multi-scanout) |
 
 ## 03_ukupacha — RAÍZ
 
