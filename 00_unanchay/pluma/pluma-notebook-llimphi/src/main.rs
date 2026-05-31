@@ -39,6 +39,11 @@ use llimphi_widget_text_editor::{
     text_editor_view_highlighted, EditorMetrics, EditorPalette, EditorState, Language,
     PointerEvent,
 };
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
+use llimphi_widget_context_menu::context_menu_view;
+use llimphi_clipboard::SystemClipboard;
+use std::sync::Arc;
 use pluma_notebook_core::{
     Cell, CellId, CellKind, CellOutput, CellState, Notebook, Position as CanvasPos,
 };
@@ -77,6 +82,17 @@ enum Msg {
     CommitEdit,
     /// Descarta el draft y sale del modo edición.
     CancelEdit,
+    /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Comando del menú principal — se traduce al `Msg` real.
+    MenuCommand(String),
+    /// Right-click → menú de edición en `(x,y)` de ventana sobre la celda
+    /// en edición (si la hay).
+    EditMenuOpen(f32, f32),
+    /// Acción del menú de edición sobre la celda en edición.
+    EditMenuAction(EditAction),
+    /// Cierra cualquier menú abierto.
+    CloseMenus,
 }
 
 /// Estado de una celda en edición. Editor completo: rope buffer + flechas
@@ -116,6 +132,12 @@ struct Model {
     source: Option<PathBuf>,
     /// Mensaje de error si load falló — se muestra en el header.
     load_error: Option<String>,
+    /// Menú principal: índice del menú raíz abierto (`None` cerrado).
+    menu_open: Option<usize>,
+    /// Menú de edición contextual: ancla `(x,y)` en ventana (`None` cerrado).
+    edit_menu: Option<(f32, f32)>,
+    /// Portapapeles del sistema para cortar/copiar/pegar en las celdas.
+    clipboard: SystemClipboard,
 }
 
 struct Viewer;
@@ -155,6 +177,9 @@ impl App for Viewer {
             editing: None,
             source,
             load_error,
+            menu_open: None,
+            edit_menu: None,
+            clipboard: SystemClipboard::new(),
         }
     }
 
@@ -217,11 +242,25 @@ impl App for Viewer {
             }
             Msg::EditKey(ev) => {
                 let mut model = model;
-                if let Some(edit) = model.editing.as_mut() {
-                    let _ = edit.editor.apply_key(&ev);
+                let Model { editing, clipboard, .. } = &mut model;
+                if let Some(edit) = editing.as_mut() {
+                    let _ = edit.editor.apply_key_with_clipboard(&ev, clipboard);
                 }
                 model
             }
+            Msg::MenuOpen(idx) => Model { menu_open: idx, edit_menu: None, ..model },
+            Msg::MenuCommand(cmd) => handle_menu_command(model, cmd),
+            Msg::EditMenuOpen(x, y) => Model { edit_menu: Some((x, y)), menu_open: None, ..model },
+            Msg::EditMenuAction(action) => {
+                let mut model = model;
+                model.edit_menu = None;
+                let Model { editing, clipboard, .. } = &mut model;
+                if let Some(edit) = editing.as_mut() {
+                    let _ = editmenu::apply(&mut edit.editor, action, clipboard);
+                }
+                model
+            }
+            Msg::CloseMenus => Model { menu_open: None, edit_menu: None, ..model },
             Msg::EditorPointer(ev) => {
                 let mut model = model;
                 if let Some(edit) = model.editing.as_mut() {
@@ -316,6 +355,8 @@ impl App for Viewer {
         let theme = Theme::dark();
         let palette = Palette::from_theme(&theme);
 
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_bar(model, &palette);
         let body = match model.mode {
             Mode::Linear => linear_view(&model.notebook, &palette),
@@ -334,7 +375,103 @@ impl App for Viewer {
             ..Default::default()
         })
         .fill(palette.bg)
-        .children(vec![header, body])
+        .on_right_click_at(|x, y, _, _| Some(Msg::EditMenuOpen(x, y)))
+        .children(vec![menubar, header, body])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        let theme = Theme::dark();
+        if let Some((x, y)) = model.edit_menu {
+            let flags = match model.editing.as_ref() {
+                Some(e) => EditFlags::from_editor(&e.editor, false),
+                None => EditFlags::default(),
+            };
+            let (w, h) = Self::initial_size();
+            return Some(context_menu_view(editmenu::edit_context_menu(
+                (x, y),
+                (w as f32, h as f32),
+                &theme,
+                flags,
+                Msg::EditMenuAction,
+                Msg::CloseMenus,
+            )));
+        }
+        let menu = app_menu(model);
+        menubar_overlay(&menubar_spec(&menu, model, &theme))
+    }
+}
+
+/// `MenuBarSpec` compartido por `view` y `view_overlay`.
+fn menubar_spec<'a>(menu: &'a app_bus::AppMenu, model: &Model, theme: &'a Theme) -> MenuBarSpec<'a, Msg> {
+    let (w, h) = Viewer::initial_size();
+    MenuBarSpec {
+        menu,
+        open: model.menu_open,
+        theme,
+        viewport: (w as f32, h as f32),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    }
+}
+
+/// Menú principal del notebook. Editar refleja en gris el estado real de
+/// la celda en edición (si no hay celda en edición, todo gris).
+fn app_menu(model: &Model) -> app_bus::AppMenu {
+    use app_bus::{AppMenu, Menu, MenuItem};
+    let ed = model.editing.as_ref().map(|e| &e.editor);
+    let has_sel = ed.map(|e| e.has_selection()).unwrap_or(false);
+    let can_undo = ed.map(|e| e.can_undo()).unwrap_or(false);
+    let can_redo = ed.map(|e| e.can_redo()).unwrap_or(false);
+    let editing = ed.is_some();
+
+    let dis = |it: MenuItem, on: bool| if on { it } else { it.disabled() };
+
+    AppMenu::new()
+        .menu(
+            Menu::new("Editar")
+                .item(dis(MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z"), can_undo))
+                .item(dis(MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y"), can_redo))
+                .item(dis(MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated(), has_sel))
+                .item(dis(MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C"), has_sel))
+                .item(MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V"))
+                .item(dis(MenuItem::new("Seleccionar todo", "edit.selectall").shortcut("Ctrl+A").separated(), editing)),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Ajustar todo", "view.fitall").shortcut("F"))
+                .item(MenuItem::new("Centrar", "view.reset").shortcut("Inicio"))
+                .item(MenuItem::new("Zoom 100%", "view.zoomreset").separated()),
+        )
+}
+
+/// Traduce el comando del menú al `Msg` real y lo aplica. Cierra el menú.
+fn handle_menu_command(mut model: Model, command: String) -> Model {
+    model.menu_open = None;
+    let action = match command.as_str() {
+        "edit.undo" => Some(EditAction::Undo),
+        "edit.redo" => Some(EditAction::Redo),
+        "edit.cut" => Some(EditAction::Cut),
+        "edit.copy" => Some(EditAction::Copy),
+        "edit.paste" => Some(EditAction::Paste),
+        "edit.selectall" => Some(EditAction::SelectAll),
+        _ => None,
+    };
+    if let Some(a) = action {
+        let Model { editing, clipboard, .. } = &mut model;
+        if let Some(edit) = editing.as_mut() {
+            let _ = editmenu::apply(&mut edit.editor, a, clipboard);
+        }
+        return model;
+    }
+    match command.as_str() {
+        "view.fitall" => {
+            let (zoom, viewport) = fit_all(&model.notebook);
+            Model { zoom, viewport, ..model }
+        }
+        "view.reset" => Model { viewport: viewport_to_fit(&model.notebook), ..model },
+        "view.zoomreset" => Model { zoom: 1.0, ..model },
+        _ => model,
     }
 }
 
