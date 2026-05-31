@@ -11274,4 +11274,172 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("completo").expect("e"), JsValue::Bool(true));
     }
+
+    // ---- Fase 7.142 — WebRTC ----
+
+    #[test]
+    fn rtc_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof RTCPeerConnection").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof RTCSessionDescription").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof RTCIceCandidate").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("RTCPeerConnection === webkitRTCPeerConnection").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn rtc_create_offer_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var tipo = null, tieneSdp = false; \
+             var pc = new RTCPeerConnection(); \
+             pc.createOffer().then(function(o){ tipo = o.type; tieneSdp = o.sdp.length > 0; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("tipo").expect("e"), JsValue::String("offer".into()));
+        assert_eq!(rt.eval("tieneSdp").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn rtc_set_local_description_cambia_signaling_state() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var estado = null; \
+             var pc = new RTCPeerConnection(); \
+             pc.createOffer().then(function(o){ \
+                return pc.setLocalDescription(o); \
+             }).then(function(){ estado = pc.signalingState; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("estado").expect("e"), JsValue::String("have-local-offer".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'rtc-local-description'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn rtc_data_channel_abre_y_envia() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var abierto = false; \
+             var pc = new RTCPeerConnection(); \
+             var ch = pc.createDataChannel('chat'); \
+             ch.onopen = function(){ abierto = true; ch.send('hola'); };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("abierto").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ch.readyState").expect("e"), JsValue::String("open".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'rtc-datachannel-send'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn rtc_ice_candidate_host_dispara_evento() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var cand = null; \
+             var pc = new RTCPeerConnection(); \
+             pc.onicecandidate = function(ev){ cand = ev.candidate ? ev.candidate.candidate : null; };",
+        )
+        .expect("e");
+        rt.eval("__puriy_rtc_ice_candidate(1, { candidate: 'candidate:1 1 udp 2 1.2.3.4 5 typ host' });")
+            .expect("e");
+        assert_eq!(
+            rt.eval("cand").expect("e"),
+            JsValue::String("candidate:1 1 udp 2 1.2.3.4 5 typ host".into())
+        );
+    }
+
+    #[test]
+    fn rtc_state_host_dispara_connectionstatechange() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var est = null; \
+             var pc = new RTCPeerConnection(); \
+             pc.onconnectionstatechange = function(){ est = pc.connectionState; };",
+        )
+        .expect("e");
+        rt.eval("__puriy_rtc_state(1, 'connection', 'connected');").expect("e");
+        assert_eq!(rt.eval("est").expect("e"), JsValue::String("connected".into()));
+    }
+
+    #[test]
+    fn rtc_incoming_datachannel() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var label = null, estado = null; \
+             var pc = new RTCPeerConnection(); \
+             pc.ondatachannel = function(ev){ label = ev.channel.label; estado = ev.channel.readyState; };",
+        )
+        .expect("e");
+        rt.eval("__puriy_rtc_datachannel(1, { label: 'entrante' });").expect("e");
+        assert_eq!(rt.eval("label").expect("e"), JsValue::String("entrante".into()));
+        assert_eq!(rt.eval("estado").expect("e"), JsValue::String("open".into()));
+    }
+
+    #[test]
+    fn rtc_datachannel_message_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var msg = null; \
+             var pc = new RTCPeerConnection(); \
+             var ch = pc.createDataChannel('d'); \
+             ch.onmessage = function(ev){ msg = ev.data; };",
+        )
+        .expect("e");
+        rt.eval("__puriy_rtc_datachannel_message(1, 'd', 'pong');").expect("e");
+        assert_eq!(rt.eval("msg").expect("e"), JsValue::String("pong".into()));
+    }
+
+    #[test]
+    fn rtc_close() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var pc = new RTCPeerConnection(); pc.close();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("pc.signalingState").expect("e"), JsValue::String("closed".into()));
+        assert_eq!(rt.eval("pc.connectionState").expect("e"), JsValue::String("closed".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'rtc-close'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn rtc_session_description_tojson() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var d = new RTCSessionDescription({ type: 'answer', sdp: 'v=0' }); var j = d.toJSON();")
+            .expect("e");
+        assert_eq!(rt.eval("j.type").expect("e"), JsValue::String("answer".into()));
+        assert_eq!(rt.eval("j.sdp").expect("e"), JsValue::String("v=0".into()));
+    }
+
+    #[test]
+    fn rtc_ice_candidate_tojson() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var c = new RTCIceCandidate({ candidate: 'abc', sdpMid: '0', sdpMLineIndex: 0 }); var j = c.toJSON();")
+            .expect("e");
+        assert_eq!(rt.eval("j.candidate").expect("e"), JsValue::String("abc".into()));
+        assert_eq!(rt.eval("j.sdpMid").expect("e"), JsValue::String("0".into()));
+        assert_eq!(rt.eval("j.sdpMLineIndex").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn rtc_add_ice_candidate_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ok = false; \
+             var pc = new RTCPeerConnection(); \
+             pc.addIceCandidate({ candidate: 'x' }).then(function(){ ok = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'rtc-add-ice'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
 }
