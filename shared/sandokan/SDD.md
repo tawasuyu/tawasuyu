@@ -188,9 +188,11 @@ estático del store.
    (async): `list()` → por cada handle `status()` + `telemetry()`. Agnóstico de
    transporte (sirve LocalEngine para tests, DaemonEngine en vivo). Tests con un
    Engine mock.
-2. **Restarts visibles**: exponer el conteo de restarts. Requiere que el Engine
-   lo reporte — depende de Fase 1 del dedup (el `RestartTracker::count` de
-   `sandokan-lifecycle`). Hasta entonces, `restarts: 0` documentado como TODO.
+2. **Restarts visibles** ✅ 2026-05-31: `TelemetryFrame.restarts` (contrato) +
+   `ResourceSample.restarts` (bus) + contador en `arje-zero` (`RestartState`,
+   reset al estabilizarse) → el bridge lo mapea, `observe` lo surfacea y la card
+   lo muestra (`↻N`). `LocalEngine` aún lo deja en 0 (pendiente sobre
+   `RestartTracker::count`).
 3. **Frontend**: la sección "Unidades" de `arje-card-llimphi` pasa a consumir
    `MonitorSnapshot` cuando hay un Engine alcanzable; cae al scan del store si no
    (degradación, igual que el brain). Estado por color, telemetría en los items.

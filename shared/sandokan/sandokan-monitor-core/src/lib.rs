@@ -27,9 +27,8 @@ pub struct UnitObservation {
     /// Telemetría puntual (mem/cpu/threads). `None` si el Engine no la pudo
     /// dar en este instante (la unidad pudo salir entre `list` y `telemetry`).
     pub telemetry: Option<TelemetryFrame>,
-    /// Restarts acumulados. **Pendiente** hasta que el Engine lo reporte
-    /// (SDD §6 monitor Fase 2, sobre `sandokan-lifecycle::RestartTracker`);
-    /// hoy queda en 0.
+    /// Restarts acumulados que el supervisor aplicó (del `TelemetryFrame`).
+    /// `0` si no hay telemetría o el Engine no los trackea (SDD §6 Fase 2).
     pub restarts: u32,
 }
 
@@ -70,12 +69,13 @@ pub async fn observe(engine: &dyn Engine) -> Result<MonitorSnapshot, EngineError
             }
         });
         let telemetry = engine.telemetry(h.card_id).await.ok();
+        let restarts = telemetry.as_ref().map(|t| t.restarts).unwrap_or(0);
         units.push(UnitObservation {
             card_id: h.card_id,
             label: h.label,
             state,
             telemetry,
-            restarts: 0,
+            restarts,
         });
     }
     Ok(MonitorSnapshot { units })
@@ -122,6 +122,7 @@ mod tests {
                     mem_bytes: 1024,
                     nproc: 2,
                     cpu_pct: 3.5,
+                    restarts: 5,
                 })
             } else {
                 Err(EngineError::NotFound(id))
@@ -150,6 +151,7 @@ mod tests {
         assert_eq!(snap.running(), 2);
         assert!(snap.units[0].telemetry.is_some());
         assert_eq!(snap.units[0].telemetry.as_ref().unwrap().mem_bytes, 1024);
+        assert_eq!(snap.units[0].restarts, 5); // surfaceado del frame
     }
 
     #[tokio::test]

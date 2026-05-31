@@ -78,6 +78,9 @@ pub(in crate::graph) struct RestartState {
     pub backoff: Option<sandokan_lifecycle::Backoff>,
     /// Instante en que el último spawn arrancó. None = nunca encarnado.
     pub last_started_at: Option<Instant>,
+    /// Restarts acumulados desde el último período estable. Se expone como
+    /// telemetría de ciclo de vida (EnteTelemetry → SDD §6 Fase 2).
+    pub restarts: u32,
 }
 
 pub(in crate::graph) struct Incarnated {

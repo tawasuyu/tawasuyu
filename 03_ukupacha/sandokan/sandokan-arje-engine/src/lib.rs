@@ -106,6 +106,7 @@ fn sample_to_frame(card_id: Ulid, at: SystemTime, s: ResourceSample) -> Telemetr
         mem_bytes: s.mem_bytes,
         nproc: s.nproc,
         cpu_pct: 0.0,
+        restarts: s.restarts,
     }
 }
 
@@ -208,12 +209,14 @@ mod tests {
             ResourceSample {
                 mem_bytes: 4096,
                 nproc: 3,
+                restarts: 2,
             },
         );
         assert_eq!(f.card_id, id);
         assert_eq!(f.mem_bytes, 4096);
         assert_eq!(f.nproc, 3);
         assert_eq!(f.cpu_pct, 0.0); // el bus no muestrea CPU
+        assert_eq!(f.restarts, 2);
     }
 
     #[test]

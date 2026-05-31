@@ -42,10 +42,12 @@ fn cards_dir() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("/etc/arje/cards.d"))
 }
 
-/// Lee memoria residente + nº de hilos de `/proc/<pid>`. `None` si el proceso
-/// desapareció o `/proc` no es legible. RSS = 2º campo de `statm` (páginas) ×
-/// tamaño de página; los hilos se cuentan por entradas en `task/`.
-fn read_proc_resources(pid: i32) -> Option<ResourceSample> {
+/// Lee `(memoria residente, nº de hilos)` de `/proc/<pid>`. `None` si el
+/// proceso desapareció o `/proc` no es legible. RSS = 2º campo de `statm`
+/// (páginas) × tamaño de página; los hilos se cuentan por entradas en `task/`.
+/// El conteo de restarts NO sale de `/proc` (lo conoce el supervisor) — lo
+/// agrega el handler.
+fn read_proc_resources(pid: i32) -> Option<(u64, u32)> {
     const PAGE_SIZE: u64 = 4096; // x86_64 estándar
     let statm = std::fs::read_to_string(format!("/proc/{pid}/statm")).ok()?;
     let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
@@ -53,7 +55,7 @@ fn read_proc_resources(pid: i32) -> Option<ResourceSample> {
     let nproc = std::fs::read_dir(format!("/proc/{pid}/task"))
         .map(|rd| rd.flatten().count() as u32)
         .unwrap_or(1);
-    Some(ResourceSample { mem_bytes, nproc })
+    Some((mem_bytes, nproc))
 }
 
 impl EnteGraph {
@@ -181,16 +183,31 @@ impl EnteGraph {
                 let _ = reply.send(BusResponse::Status(liveness));
             }
             BusRequest::EnteTelemetry { target } => {
-                let resp = match self.incarnated.get(&target).and_then(|i| i.pid) {
-                    Some(pid) => match read_proc_resources(pid.as_raw()) {
-                        Some(s) => BusResponse::Telemetry(s),
-                        None => BusResponse::Error(format!(
-                            "telemetría no disponible para pid {}",
-                            pid.as_raw()
-                        )),
+                let resp = match self.incarnated.get(&target) {
+                    Some(inc) => match inc.pid {
+                        Some(pid) => match read_proc_resources(pid.as_raw()) {
+                            Some((mem_bytes, nproc)) => {
+                                // restarts: del supervisor, no de /proc.
+                                let restarts = self
+                                    .restart_state
+                                    .get(&inc.card.label)
+                                    .map(|s| s.restarts)
+                                    .unwrap_or(0);
+                                BusResponse::Telemetry(ResourceSample {
+                                    mem_bytes,
+                                    nproc,
+                                    restarts,
+                                })
+                            }
+                            None => BusResponse::Error(format!(
+                                "telemetría no disponible para pid {}",
+                                pid.as_raw()
+                            )),
+                        },
+                        // Sin PID: Ente Virtual/Wasm (sin proceso).
+                        None => BusResponse::Error("ente sin proceso (Virtual/Wasm)".into()),
                     },
-                    // Sin PID: Ente Virtual/Wasm (sin proceso) o ya ido.
-                    None => BusResponse::Error("ente sin proceso o no vivo".into()),
+                    None => BusResponse::Error("ente no vivo".into()),
                 };
                 let _ = reply.send(resp);
             }
@@ -494,9 +511,9 @@ mod tests {
     fn read_proc_resources_lee_el_proceso_actual() {
         // El propio runner de tests existe en /proc — debe dar RSS > 0 y ≥1 hilo.
         let pid = std::process::id() as i32;
-        let s = read_proc_resources(pid).expect("el proceso actual existe en /proc");
-        assert!(s.mem_bytes > 0, "RSS debería ser > 0");
-        assert!(s.nproc >= 1, "al menos un hilo");
+        let (mem_bytes, nproc) = read_proc_resources(pid).expect("el proceso actual existe en /proc");
+        assert!(mem_bytes > 0, "RSS debería ser > 0");
+        assert!(nproc >= 1, "al menos un hilo");
     }
 
     #[test]

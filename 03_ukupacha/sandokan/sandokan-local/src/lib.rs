@@ -198,6 +198,9 @@ impl Engine for LocalEngine {
             nproc: proc::read_thread_count(pid),
             // v1: CPU% requiere dos samples espaciados — pendiente.
             cpu_pct: 0.0,
+            // LocalEngine aún no trackea restarts (lo haría vía
+            // sandokan-lifecycle::RestartTracker) — pendiente.
+            restarts: 0,
         })
     }
 }

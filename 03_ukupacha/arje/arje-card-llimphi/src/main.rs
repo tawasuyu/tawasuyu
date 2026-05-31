@@ -664,7 +664,12 @@ impl App for ArjeCard {
                             .map(|t| format!("{} KiB", t.mem_bytes / 1024))
                             .unwrap_or_else(|| "—".into());
                         let thr = u.telemetry.as_ref().map(|t| t.nproc).unwrap_or(0);
-                        format!("{dot} {}  ·  {}  ·  {} hilos", u.label, mem, thr)
+                        let restarts = if u.restarts > 0 {
+                            format!("  ·  ↻{}", u.restarts)
+                        } else {
+                            String::new()
+                        };
+                        format!("{dot} {}  ·  {}  ·  {} hilos{restarts}", u.label, mem, thr)
                     })
                     .collect();
                 body_children.push(stat_card_view::<Msg>(

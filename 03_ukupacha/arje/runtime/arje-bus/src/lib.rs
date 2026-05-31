@@ -129,13 +129,17 @@ pub enum Liveness {
     Gone,
 }
 
-/// Muestra puntual de recursos de un Ente (leída de `/proc/<pid>`).
+/// Muestra puntual de recursos de un Ente (leída de `/proc/<pid>`) + su
+/// conteo de restarts (que sólo conoce el supervisor, no `/proc`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceSample {
     /// Memoria residente en bytes (RSS).
     pub mem_bytes: u64,
     /// Número de hilos del proceso.
     pub nproc: u32,
+    /// Restarts acumulados que el Init le aplicó (0 si OneShot/Delegate o
+    /// nunca reinició).
+    pub restarts: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

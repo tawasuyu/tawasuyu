@@ -132,6 +132,10 @@ impl EnteGraph {
                     .last_started_at
                     .map(|t| t.elapsed() >= max)
                     .unwrap_or(false);
+                if stable {
+                    st.restarts = 0;
+                }
+                st.restarts = st.restarts.saturating_add(1);
                 let backoff = st.backoff.get_or_insert_with(|| Backoff::new(initial, max));
                 if stable {
                     backoff.reset();

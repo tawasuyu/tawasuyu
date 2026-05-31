@@ -39,6 +39,11 @@ pub struct TelemetryFrame {
     pub nproc: u32,
     /// Porcentaje de CPU (100.0 = 1 core saturado).
     pub cpu_pct: f64,
+    /// Restarts acumulados que el supervisor le aplicó a esta unidad. `0` si
+    /// el Engine no lo trackea. Es observabilidad de ciclo de vida, no de
+    /// recursos, pero viaja en el frame de telemetría por simplicidad del
+    /// contrato (SDD §6 Fase 2).
+    pub restarts: u32,
 }
 
 #[cfg(test)]
