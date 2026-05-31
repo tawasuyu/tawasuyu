@@ -1134,6 +1134,24 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         .map(|c| c.mascara.is_some())
         .unwrap_or(false);
     hijos.push(subtitulo("máscara"));
+    // Toggle "editar máscara": resaltado cuando está activo. Las
+    // herramientas de trazo pintan la máscara (pincel revela, borrador
+    // oculta) sólo si la capa tiene una.
+    let pal_mascara_activo = ButtonPalette {
+        bg: theme.bg_selected,
+        fg: theme.fg_text,
+        ..pal.clone()
+    };
+    let etiqueta_editar = if model.editando_mascara {
+        "✎ editando: máscara 🎭".to_string()
+    } else {
+        "✎ editando: contenido".to_string()
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_editar,
+        if model.editando_mascara { &pal_mascara_activo } else { &pal },
+        Msg::ToggleEditarMascara,
+    )));
     let etiqueta_add_mascara = if tiene_mascara {
         "🎭 + máscara (ya tiene)".to_string()
     } else {

@@ -73,6 +73,7 @@
             simetria: Simetria::Ninguna,
             gradiente_drag: None,
             portapapeles: None,
+            editando_mascara: false,
             curva_arrastrando: None,
         }
     }
@@ -4879,6 +4880,96 @@
         assert_eq!(buf.len(), 2 * 2, "máscara recortada al nuevo tamaño");
         // El render no debe fallar por tamaño de máscara.
         assert!(tullpu_render::componer(&model.lienzo, &model.almacen).is_ok());
+    }
+
+    // ---- Pintar sobre la máscara (fase 53) ----
+
+    #[test]
+    fn pintando_en_mascara_requiere_modo_y_mascara() {
+        let mut model = modelo_minimo();
+        // Sin modo ni máscara.
+        assert!(!pintando_en_mascara(&model));
+        // Modo activo pero sin máscara → sigue pintando contenido.
+        model.editando_mascara = true;
+        assert!(!pintando_en_mascara(&model));
+        // Con máscara + modo → pinta la máscara.
+        assert!(agregar_mascara(&mut model));
+        assert!(pintando_en_mascara(&model));
+        // Apagar el modo lo desactiva aunque haya máscara.
+        model.editando_mascara = false;
+        assert!(!pintando_en_mascara(&model));
+    }
+
+    #[test]
+    fn pincel_en_modo_mascara_pinta_mascara_no_contenido() {
+        let mut model = modelo_minimo();
+        opacar_capa(&mut model);
+        let id = model.seleccionada.unwrap();
+        // Máscara blanca + invertir → todo oculto (0), para que pintar
+        // (revelar=255) sea un cambio observable.
+        assert!(agregar_mascara(&mut model));
+        assert!(invertir_mascara(&mut model));
+        let contenido_antes = model.lienzo.capa(id).unwrap().contenido;
+        let mascara_antes = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        model.editando_mascara = true;
+        // Pincel duro radio 0 en (1,1): un solo píxel a 255.
+        assert!(pincel_punto_en_capa(&mut model, 1, 1, 0, false, 1.0, Simetria::Ninguna));
+        // El contenido NO cambió; la máscara SÍ.
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, contenido_antes);
+        let mascara_despues = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        assert_ne!(mascara_despues, mascara_antes);
+        let buf = model.almacen.obtener(mascara_despues).unwrap();
+        let w = model.lienzo.width as usize;
+        assert_eq!(buf[1 * w + 1], 255, "el píxel pintado revela");
+        assert_eq!(buf[0], 0, "el resto sigue oculto");
+    }
+
+    #[test]
+    fn borrador_en_modo_mascara_oculta() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(agregar_mascara(&mut model)); // blanca (255 = visible)
+        model.editando_mascara = true;
+        // Borrador (borrar=true) → valor 0 (ocultar) en (2,2).
+        assert!(pincel_punto_en_capa(&mut model, 2, 2, 0, true, 1.0, Simetria::Ninguna));
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        let w = model.lienzo.width as usize;
+        assert_eq!(buf[2 * w + 2], 0, "borrador oculta");
+        assert_eq!(buf[0], 255, "el resto sigue visible");
+    }
+
+    #[test]
+    fn balde_en_modo_mascara_rellena_a_255() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(agregar_mascara(&mut model));
+        assert!(invertir_mascara(&mut model)); // todo 0
+        model.editando_mascara = true;
+        assert!(rellenar_flood_en_capa(&mut model, 0, 0));
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        assert!(buf.iter().all(|&b| b == 255), "balde revela toda la región");
+    }
+
+    #[test]
+    fn flood_fill_mascara_un_canal() {
+        // 2×2 todo 0; flood desde (0,0) a 255 cubre el cuadro entero.
+        let src = vec![0u8; 4];
+        let out = flood_fill_mascara(&src, 2, 2, 0, 0, 255, 0, None).unwrap();
+        assert_eq!(out, vec![255u8; 4]);
+        // Sin cambio si ya está en el valor.
+        assert!(flood_fill_mascara(&out, 2, 2, 0, 0, 255, 0, None).is_none());
+    }
+
+    #[test]
+    fn estampar_disco_mascara_lerp_por_cobertura() {
+        // 1 px, dureza dura: el centro va exacto a `valor`.
+        let mut buf = vec![0u8; 9]; // 3×3
+        estampar_disco_mascara(&mut buf, 3, 3, 1, 1, 0, 200, 1.0, None);
+        assert_eq!(buf[1 * 3 + 1], 200);
+        // Los vecinos no se tocan con radio 0.
+        assert_eq!(buf[0], 0);
     }
 
     #[test]

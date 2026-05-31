@@ -121,6 +121,13 @@ pub(crate) struct Model {
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
     pub(crate) portapapeles: Option<PortaPixeles>,
+    /// Modo "editar máscara": cuando es `true` y la capa seleccionada
+    /// tiene máscara, las herramientas de trazo (pincel/borrador/balde/
+    /// degradé) pintan sobre el buffer de máscara (1 canal) en vez del
+    /// contenido Rgba8. Pincel revela (255), borrador oculta (0). Es un
+    /// flag puro de UI: si la capa no tiene máscara, el trazo cae al
+    /// contenido como siempre. Persiste al cambiar de capa.
+    pub(crate) editando_mascara: bool,
     /// Drag en curso en el editor de curvas (sección "parámetros" cuando
     /// la capa es una derivada `Curvas`). `None` fuera de un drag. El press
     /// sobre el canvas de la curva lo fija (índice del punto activo + dims
@@ -574,6 +581,9 @@ pub(crate) enum Msg {
     QuitarMascara,
     /// Hornea la máscara al alfa del raster y la quita (destructivo).
     AplicarMascara,
+    /// Alterna el modo "editar máscara": las herramientas de trazo pintan
+    /// el buffer de máscara en vez del contenido. No toca el lienzo.
+    ToggleEditarMascara,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

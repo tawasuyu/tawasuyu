@@ -224,6 +224,7 @@ pub(crate) fn inicializar() -> Model {
         simetria: Simetria::Ninguna,
         gradiente_drag: None,
         portapapeles: None,
+        editando_mascara: false,
         curva_arrastrando: None,
     };
     sincronizar_thumbs(&mut model);

@@ -872,6 +872,14 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::ToggleEditarMascara => {
+                model.editando_mascara = !model.editando_mascara;
+                model.estado = if model.editando_mascara {
+                    "editando máscara (pincel revela · borrador oculta)".into()
+                } else {
+                    "editando contenido".into()
+                };
+            }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app
                 // todavía no tiene). La extensión la elige el formato; el

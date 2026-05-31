@@ -993,6 +993,23 @@ pub(crate) fn rellenar_flood_en_capa(
         model.estado = "balde fuera del lienzo".into();
         return false;
     }
+    // En modo máscara, el balde rellena la región contigua de máscara a
+    // 255 (revelar). Reusa `mascara_aplicar` (recompone sin propagar stale).
+    if pintando_en_mascara(model) {
+        let ok = mascara_aplicar(model, |buf, w, h, bounds| {
+            if let Some(nuevo) =
+                flood_fill_mascara(buf, w, h, sx, sy, 255, TOL_BALDE, bounds)
+            {
+                *buf = nuevo;
+            }
+        });
+        if ok {
+            model.estado = format!("balde máscara @ ({}, {}) → revelar", sx, sy);
+        } else {
+            model.estado = "balde máscara: nada que rellenar".into();
+        }
+        return ok;
+    }
     let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
         return false;
     };
@@ -1213,6 +1230,15 @@ pub(crate) fn pincel_punto_en_capa(
     dureza: f32,
     sim: Simetria,
 ) -> bool {
+    if pintando_en_mascara(model) {
+        let valor = if borrar { 0u8 } else { 255u8 };
+        return mascara_aplicar(model, |buf, w, h, bounds| {
+            for eje in ejes_simetria(sim) {
+                let (x, y) = aplicar_eje(cx, cy, w, h, eje);
+                estampar_disco_mascara(buf, w, h, x, y, radio, valor, dureza, bounds);
+            }
+        });
+    }
     pincel_aplicar(model, |buf, w, h, color, bounds| {
         for eje in ejes_simetria(sim) {
             let (x, y) = aplicar_eje(cx, cy, w, h, eje);
@@ -1237,6 +1263,18 @@ pub(crate) fn pincel_segmento_en_capa(
     dureza: f32,
     sim: Simetria,
 ) -> bool {
+    if pintando_en_mascara(model) {
+        let valor = if borrar { 0u8 } else { 255u8 };
+        return mascara_aplicar(model, |buf, w, h, bounds| {
+            for eje in ejes_simetria(sim) {
+                let (ax, ay) = aplicar_eje(x0, y0, w, h, eje);
+                let (bx, by) = aplicar_eje(x1, y1, w, h, eje);
+                trazar_linea_mascara(
+                    buf, w, h, ax, ay, bx, by, radio, valor, dureza, bounds,
+                );
+            }
+        });
+    }
     pincel_aplicar(model, |buf, w, h, color, bounds| {
         for eje in ejes_simetria(sim) {
             let (ax, ay) = aplicar_eje(x0, y0, w, h, eje);
@@ -1305,9 +1343,251 @@ pub(crate) fn rellenar_gradiente_en_capa(
     bx: f32,
     by: f32,
 ) -> bool {
+    if pintando_en_mascara(model) {
+        // Degradé sobre máscara: revela (255) en el ancla, se desvanece
+        // hacia el extremo. Para un degradé que oculta, invertí la máscara.
+        return mascara_aplicar(model, |buf, w, h, bounds| {
+            *buf = rellenar_gradiente_mascara(buf, w, h, ax, ay, bx, by, 255, bounds);
+        });
+    }
     pincel_aplicar(model, |buf, w, h, color, bounds| {
         *buf = rellenar_gradiente(buf, w, h, ax, ay, bx, by, color, bounds);
     })
+}
+
+// =============================================================================
+//  Pintar sobre la máscara (fase 53) — buffers de un canal
+// =============================================================================
+//
+// Cuando `Model.editando_mascara` está activo y la capa tiene máscara, las
+// herramientas de trazo escriben el buffer de máscara (1 byte/píxel) en
+// lugar del contenido Rgba8. La semántica es value-lerp por cobertura:
+// pincel apunta a 255 (revelar), borrador a 0 (ocultar). No hay color ni
+// src-over — es más simple que el estampado Rgba8.
+
+/// `true` si el trazo debe ir a la máscara: el modo está activo Y la capa
+/// seleccionada tiene una máscara adjunta. Si no, el trazo cae al contenido.
+pub(crate) fn pintando_en_mascara(model: &Model) -> bool {
+    model.editando_mascara
+        && model
+            .seleccionada
+            .and_then(|id| model.lienzo.capas.iter().find(|c| c.id == id))
+            .map(|c| c.mascara.is_some())
+            .unwrap_or(false)
+}
+
+/// Estampa un disco de radio `radio` en `(cx, cy)` sobre un buffer de
+/// máscara de un canal `w × h`, llevando cada píxel cubierto hacia `valor`
+/// (255 revela, 0 oculta) por su cobertura: `m = m + (valor - m)·cob`.
+/// Recorta al canvas y a `bounds` (half-open) si `Some`. Pura (muta `buf`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn estampar_disco_mascara(
+    buf: &mut [u8],
+    w: u32,
+    h: u32,
+    cx: i32,
+    cy: i32,
+    radio: i32,
+    valor: u8,
+    dureza: f32,
+    bounds: Option<(u32, u32, u32, u32)>,
+) {
+    let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
+    let bx1 = bx1.min(w) as i32;
+    let by1 = by1.min(h) as i32;
+    let bx0 = bx0 as i32;
+    let by0 = by0 as i32;
+    let r2 = radio * radio;
+    let rf = radio as f32;
+    for dy in -radio..=radio {
+        let y = cy + dy;
+        if y < by0 || y >= by1 {
+            continue;
+        }
+        for dx in -radio..=radio {
+            let x = cx + dx;
+            if x < bx0 || x >= bx1 {
+                continue;
+            }
+            if dx * dx + dy * dy <= r2 {
+                let d = ((dx * dx + dy * dy) as f32).sqrt();
+                let cob = cobertura_pincel(d, rf, dureza);
+                if cob <= 0.0 {
+                    continue;
+                }
+                let i = (y as usize) * w as usize + x as usize;
+                let m = buf[i] as f32;
+                buf[i] = (m + (valor as f32 - m) * cob).round() as u8;
+            }
+        }
+    }
+}
+
+/// Versión máscara de [`trazar_linea_pincel`]: estampa discos de máscara a
+/// lo largo del segmento `(x0,y0) → (x1,y1)`. Pura (muta `buf`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn trazar_linea_mascara(
+    buf: &mut [u8],
+    w: u32,
+    h: u32,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    radio: i32,
+    valor: u8,
+    dureza: f32,
+    bounds: Option<(u32, u32, u32, u32)>,
+) {
+    let n = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+    for k in 0..=n {
+        let t = k as f32 / n as f32;
+        let x = x0 + ((x1 - x0) as f32 * t).round() as i32;
+        let y = y0 + ((y1 - y0) as f32 * t).round() as i32;
+        estampar_disco_mascara(buf, w, h, x, y, radio, valor, dureza, bounds);
+    }
+}
+
+/// Flood fill de un canal: desde `(sx, sy)` expande en 4-conexión a los
+/// píxeles cuyo valor de máscara difiera del semilla en ≤ `tol`, y los
+/// fija a `valor`. Confinado a `bounds` si `Some`. Devuelve `Some(buf)` si
+/// cambió algo. Análogo a [`flood_fill`] pero sobre un solo byte. Pura.
+pub(crate) fn flood_fill_mascara(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    sx: u32,
+    sy: u32,
+    valor: u8,
+    tol: u32,
+    bounds: Option<(u32, u32, u32, u32)>,
+) -> Option<Vec<u8>> {
+    let w_us = w as usize;
+    let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
+    let bx1 = bx1.min(w);
+    let by1 = by1.min(h);
+    if sx < bx0 || sx >= bx1 || sy < by0 || sy >= by1 {
+        return None;
+    }
+    let seed = src[sy as usize * w_us + sx as usize];
+    let mut out = src.to_vec();
+    let mut visto = vec![false; w_us * h as usize];
+    let mut pila = vec![(sx, sy)];
+    let mut cambio = false;
+    while let Some((x, y)) = pila.pop() {
+        let vi = y as usize * w_us + x as usize;
+        if visto[vi] {
+            continue;
+        }
+        visto[vi] = true;
+        let d = (out[vi] as i32 - seed as i32).unsigned_abs();
+        if d > tol {
+            continue;
+        }
+        if out[vi] != valor {
+            out[vi] = valor;
+            cambio = true;
+        }
+        if x + 1 < bx1 {
+            pila.push((x + 1, y));
+        }
+        if x > bx0 {
+            pila.push((x - 1, y));
+        }
+        if y + 1 < by1 {
+            pila.push((x, y + 1));
+        }
+        if y > by0 {
+            pila.push((x, y - 1));
+        }
+    }
+    if cambio {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// Degradé sobre máscara: para cada píxel proyecta su centro sobre el eje
+/// `(ax,ay) → (bx,by)`, obtiene `t ∈ [0,1]` y lleva el píxel hacia `valor`
+/// con peso `(1 - t)` — pleno en el ancla, sin efecto en el extremo (calco
+/// del degradé Rgba8, que se desvanece a transparente). Confinado a
+/// `bounds`. Devuelve un buffer nuevo. Pura.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rellenar_gradiente_mascara(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+    valor: u8,
+    bounds: Option<(u32, u32, u32, u32)>,
+) -> Vec<u8> {
+    let mut out = src.to_vec();
+    let dx = bx - ax;
+    let dy = by - ay;
+    let len2 = dx * dx + dy * dy;
+    let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
+    let bx1 = bx1.min(w);
+    let by1 = by1.min(h);
+    for y in by0..by1 {
+        for x in bx0..bx1 {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let t = if len2 <= 0.0 {
+                0.0
+            } else {
+                (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0)
+            };
+            let peso = 1.0 - t;
+            let i = (y as usize) * w as usize + x as usize;
+            let m = out[i] as f32;
+            out[i] = (m + (valor as f32 - m) * peso).round() as u8;
+        }
+    }
+    out
+}
+
+/// Cableado común de las ops de trazo sobre la MÁSCARA de la capa
+/// seleccionada (espejo de [`pincel_aplicar`] para 1 canal). Resuelve el
+/// buffer de máscara, aplica `dibujar`, y si cambió el hash repunta
+/// `capa.mascara` + recompone. NO propaga stale: la máscara no entra en el
+/// cómputo de las derivadas, sólo en el composite. Devuelve `true` si hubo
+/// cambio. Pre: el caller garantizó que la capa tiene máscara
+/// ([`pintando_en_mascara`]).
+fn mascara_aplicar(
+    model: &mut Model,
+    dibujar: impl FnOnce(&mut Vec<u8>, u32, u32, Option<(u32, u32, u32, u32)>),
+) -> bool {
+    let Some(id) = model.seleccionada else {
+        return false;
+    };
+    let mh = match model.lienzo.capas.iter().find(|c| c.id == id) {
+        Some(capa) => match capa.mascara {
+            Some(m) => m,
+            None => return false,
+        },
+        None => return false,
+    };
+    let bounds = model.seleccion.map(|r| (r.x0, r.y0, r.x1, r.y1));
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let Some(src) = model.almacen.obtener(mh) else {
+        return false;
+    };
+    let mut buf = src.to_vec();
+    dibujar(&mut buf, w, h, bounds);
+    let new_hash = model.almacen.insertar(buf);
+    if new_hash == mh {
+        return false;
+    }
+    if let Some(capa_mut) = model.lienzo.capa_mut(id) {
+        capa_mut.mascara = Some(new_hash);
+    }
+    aplicar_y_recomponer(model);
+    true
 }
 
 /// Compone (alpha src-over, Rgba8 NO premultiplicado) un `clip` de
