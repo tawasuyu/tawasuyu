@@ -146,6 +146,7 @@ enum Focus {
     Body,
     Tags,
     Passphrase,
+    PeerAddr,
 }
 
 /// Un par descubierto en la red, en forma lista para la UI: dónde jalarle
@@ -187,7 +188,10 @@ enum Msg {
     PeersFound(Vec<PeerInfo>),
     /// Jala el cuaderno del par en esta dirección TCP.
     FetchFrom(String),
-    /// Descarta la lista de pares sin jalar nada.
+    /// Jala de la dirección escrita a mano (input) — habilita WAN: cualquier
+    /// `host:puerto` alcanzable, no sólo pares descubiertos en la LAN.
+    FetchManual,
+    /// Cierra el panel de recibir sin jalar nada.
     CancelPeers,
     /// Resultado async de un fetch: el sobre recibido o un error.
     Received(Result<SignedBundle, String>),
@@ -234,9 +238,14 @@ struct Model {
     /// `true` cuando ya hay un servidor TCP sirviendo el cuaderno. Evita
     /// rebindear el puerto si se pulsa «publicar» dos veces.
     publishing: bool,
-    /// Pares descubiertos pendientes de elegir. No vacío ⇒ el panel
-    /// izquierdo muestra la lista de pares en vez de las notas.
+    /// `true` mientras el panel izquierdo está en modo "recibir": input de
+    /// dirección + lista de pares descubiertos.
+    receiving: bool,
+    /// Pares descubiertos en la última búsqueda (filas clickeables).
     peers: Vec<PeerInfo>,
+    /// Dirección manual del par para recibir (habilita WAN). Prellenada
+    /// con `KHIPU_PEER` o el default; editable.
+    peer_input: TextInputState,
     /// Input de la passphrase para desbloquear la identidad.
     passphrase: TextInputState,
     /// `true` mientras se muestra el prompt de passphrase (modal).
@@ -348,7 +357,16 @@ impl App for KhipuApp {
             }
             Msg::Receive => {
                 let my_key = model.keypair.as_ref().map(|k| k.public_key());
-                model.status = Some("buscando pares en la LAN…".into());
+                // Abrimos el panel de recibir ya: input de dirección
+                // (prellenado, editable para WAN) + lista que se irá
+                // poblando con lo que aparezca en la LAN.
+                model.receiving = true;
+                model.peers.clear();
+                if model.peer_input.is_empty() {
+                    model.peer_input.set_text(peer_addr());
+                }
+                model.focus = Focus::PeerAddr;
+                model.status = Some("buscando pares en la LAN… o escribí una dirección".into());
                 // El descubrimiento bloquea ~3s: va a un worker y reentra
                 // con la lista de pares (ya sin uno mismo).
                 h.spawn(move || {
@@ -373,23 +391,28 @@ impl App for KhipuApp {
                 });
             }
             Msg::PeersFound(peers) => {
-                if peers.is_empty() {
-                    // Nadie anunció: caer al par explícito (KHIPU_PEER).
-                    let peer = peer_addr();
-                    model.status = Some(format!("ningún par en la LAN; probando {peer}…"));
-                    h.spawn(move || match khipu_share::net::fetch(&peer) {
-                        Ok(s) => Msg::Received(Ok(s)),
-                        Err(e) => Msg::Received(Err(format!("no se pudo recibir de {peer}: {e}"))),
+                // Sólo aplica si seguimos en modo recibir (no cancelado).
+                if model.receiving {
+                    model.status = Some(if peers.is_empty() {
+                        "ningún par en la LAN — escribí una dirección y jalá".into()
+                    } else {
+                        format!("{} pares en la red — elegí uno o escribí una dirección", peers.len())
                     });
-                } else {
-                    // Dejamos que el usuario elija de quién jalar — el panel
-                    // izquierdo pasa a mostrar la lista de pares.
-                    model.status = Some(format!("{} pares en la red — elegí uno", peers.len()));
                     model.peers = peers;
                 }
             }
+            Msg::FetchManual => {
+                let addr = model.peer_input.text().trim().to_string();
+                if addr.is_empty() {
+                    model.status = Some("escribí una dirección host:puerto".into());
+                } else {
+                    h.dispatch(Msg::FetchFrom(addr));
+                }
+            }
             Msg::FetchFrom(addr) => {
+                model.receiving = false;
                 model.peers.clear();
+                model.focus = Focus::None;
                 model.status = Some(format!("jalando de {addr}…"));
                 let destino = addr;
                 h.spawn(move || match khipu_share::net::fetch(&destino) {
@@ -398,10 +421,13 @@ impl App for KhipuApp {
                 });
             }
             Msg::CancelPeers => {
+                model.receiving = false;
                 model.peers.clear();
-                model.status = Some("descarté la lista de pares".into());
+                model.focus = Focus::None;
+                model.status = Some("recibir cancelado".into());
             }
             Msg::Received(res) => {
+                model.receiving = false;
                 model.peers.clear();
                 model.status = Some(match res {
                     Ok(sobre) => match khipu_share::open(&sobre) {
@@ -489,6 +515,10 @@ impl App for KhipuApp {
                         let _ = model.passphrase.apply_key(&ev);
                         false
                     }
+                    Focus::PeerAddr => {
+                        let _ = model.peer_input.apply_key(&ev);
+                        false
+                    }
                     Focus::None => false,
                 };
                 if changed {
@@ -549,10 +579,10 @@ impl App for KhipuApp {
         let header = header_view(model);
         // Mientras hay pares pendientes de elegir, el panel izquierdo
         // muestra la lista de pares en vez de las notas.
-        let list = if model.peers.is_empty() {
-            list_panel(model, &palette, &input_palette)
+        let list = if model.receiving {
+            receive_panel(model, &palette, &input_palette)
         } else {
-            peers_panel(model, &palette)
+            list_panel(model, &palette, &input_palette)
         };
         let editor = editor_panel(model, &input_palette, &editor_palette);
         let gravity = gravity_panel(model);
@@ -599,6 +629,18 @@ impl App for KhipuApp {
                 }
                 if matches!(&event.key, Key::Named(NamedKey::Escape)) {
                     return Some(Msg::CancelUnlock);
+                }
+            }
+            return Some(Msg::Key(event.clone()));
+        }
+        // En modo recibir con foco en la dirección: Enter jala, Esc cancela.
+        if model.receiving && model.focus == Focus::PeerAddr {
+            if event.state == KeyState::Pressed && !event.repeat {
+                if matches!(&event.key, Key::Named(NamedKey::Enter)) {
+                    return Some(Msg::FetchManual);
+                }
+                if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                    return Some(Msg::CancelPeers);
                 }
             }
             return Some(Msg::Key(event.clone()));
@@ -903,28 +945,60 @@ fn list_panel(
     .children(vec![search_row, list_wrap])
 }
 
-/// Panel izquierdo en modo "elegir par": una fila por par descubierto
-/// (click ⇒ jalar de él) y un botón para descartar la lista. Reemplaza
+/// Panel izquierdo en modo "recibir": arriba un input de dirección manual
+/// (`host:puerto`, habilita WAN) con botones jalar/cancelar; debajo, la
+/// lista de pares descubiertos en la LAN (click ⇒ jalar de él). Reemplaza
 /// transitoriamente la lista de notas.
-fn peers_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
-    let rows: Vec<ListRow<Msg>> = model
-        .peers
-        .iter()
-        .map(|p| ListRow {
-            label: p.label.clone(),
-            selected: false,
-            on_click: Msg::FetchFrom(p.addr.clone()),
-        })
-        .collect();
-
-    let spec = ListSpec {
-        total: rows.len(),
-        rows,
-        caption: Some(format!("pares en la red · {} (click para jalar)", model.peers.len())),
-        truncated_hint: None,
-        row_height: ROW_H,
-        palette: *palette,
-    };
+fn receive_panel(
+    model: &Model,
+    palette: &ListPalette,
+    input_palette: &TextInputPalette,
+) -> View<Msg> {
+    // Fila de dirección manual + jalar.
+    let addr_input = text_input_view(
+        &model.peer_input,
+        "host:puerto",
+        model.focus == Focus::PeerAddr,
+        input_palette,
+        Msg::Focus(Focus::PeerAddr),
+    );
+    let addr_wrap = View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(26.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .children(vec![addr_input]);
+    let jalar = button(
+        "jalar",
+        model.theme.bg_button,
+        model.theme.accent,
+        Msg::FetchManual,
+    );
+    let addr_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(34.0_f32),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(model.theme.bg_panel_alt)
+    .children(vec![addr_wrap, jalar]);
 
     let cancel = button(
         "cancelar",
@@ -935,13 +1009,13 @@ fn peers_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
     let cancel_row = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(36.0_f32),
+            height: length(34.0_f32),
         },
         flex_shrink: 0.0,
         padding: Rect {
             left: length(6.0_f32),
             right: length(6.0_f32),
-            top: length(4.0_f32),
+            top: length(2.0_f32),
             bottom: length(4.0_f32),
         },
         align_items: Some(AlignItems::Center),
@@ -950,6 +1024,28 @@ fn peers_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
     .fill(model.theme.bg_panel_alt)
     .children(vec![cancel]);
 
+    let rows: Vec<ListRow<Msg>> = model
+        .peers
+        .iter()
+        .map(|p| ListRow {
+            label: p.label.clone(),
+            selected: false,
+            on_click: Msg::FetchFrom(p.addr.clone()),
+        })
+        .collect();
+    let caption = if model.peers.is_empty() {
+        "pares en la LAN: ninguno aún".to_string()
+    } else {
+        format!("pares en la LAN · {} (click para jalar)", model.peers.len())
+    };
+    let spec = ListSpec {
+        total: rows.len(),
+        rows,
+        caption: Some(caption),
+        truncated_hint: None,
+        row_height: ROW_H,
+        palette: *palette,
+    };
     let list_wrap = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -974,7 +1070,7 @@ fn peers_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![cancel_row, list_wrap])
+    .children(vec![addr_row, cancel_row, list_wrap])
 }
 
 /// Coincidencia sobre título, cuerpo y etiquetas. Case-insensitive.
@@ -1981,7 +2077,9 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         keypair: None,
         status: None,
         publishing: false,
+        receiving: false,
         peers: Vec::new(),
+        peer_input: TextInputState::new(),
         passphrase: TextInputState::masked(),
         unlocking: false,
         pending: None,
@@ -2035,7 +2133,9 @@ fn seeded_model(embedder: Embedder) -> Model {
         keypair: None,
         status: None,
         publishing: false,
+        receiving: false,
         peers: Vec::new(),
+        peer_input: TextInputState::new(),
         passphrase: TextInputState::masked(),
         unlocking: false,
         pending: None,
