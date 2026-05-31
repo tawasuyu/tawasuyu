@@ -18,7 +18,7 @@ Seis secciones, refrescadas por polling cada 2 s (mismo patrón que
 | **Aislamiento** | `arje_incarnate::caps::CapabilitySet::detect()` — namespaces creables (N/7) | no (solo `/proc`) |
 | **Privilegios** | idem — `CAP_SYS_ADMIN`, user-ns, `max_user_namespaces` | no |
 | **cgroups** | idem — v2 unified/híbrido/legacy + delegación + ruta | no |
-| **Unidades** | card store (`$ARJE_CARDS_DIR`, default `/etc/arje/cards.d`); cada `<n>.json` parseado con `card_core::Card` | no (filesystem) |
+| **Unidades** | **vivas** vía `Engine` sobre arje-bus (`sandokan-monitor-core` + `sandokan-arje-engine`): estado + telemetría reales. Sin bus alcanzable, cae al scan estático del card store (`$ARJE_CARDS_DIR`) | no (Engine si hay bus; si no, filesystem) |
 | **Brain** | socket introspect — reglas vivas + entropía/muestras/tipos de evento | sí (brain) |
 | **Audit log** | socket introspect — seq del head + últimas 6 entradas | sí (brain) |
 

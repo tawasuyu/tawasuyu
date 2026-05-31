@@ -28,6 +28,9 @@ use std::time::Duration;
 use arje_brain::introspect::{call, IntrospectRequest, IntrospectResponse};
 use arje_incarnate::caps::{CapabilitySet, CgroupStatus, NsKind, UserNsStatus};
 use card_core::{Card, Payload, Supervision};
+use sandokan_arje_engine::ArjeEngine;
+use sandokan_lifecycle::LifecycleState;
+use sandokan_monitor_core::MonitorSnapshot;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, AlignItems, Dimension, FlexDirection, Size, Style},
@@ -335,10 +338,27 @@ fn detect_units() -> UnitsSnapshot {
     }
 }
 
+/// Observa las unidades VIVAS por el contrato `Engine` sobre arje-bus
+/// (`ArjeEngine::from_env`, lee `$ENTE_BUS_SOCK`). `None` si no hay bus
+/// alcanzable (típico en una máquina de dev sin arje-zero): la card cae al
+/// scan estático del store. Runtime tokio efímero, fuera del hilo de UI.
+/// Esta es la cara de lectura del MISMO plano que controla (SDD §6).
+fn observe_units() -> Option<MonitorSnapshot> {
+    let engine = ArjeEngine::from_env().ok()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    rt.block_on(async { sandokan_monitor_core::observe(&engine).await.ok() })
+}
+
 struct Model {
     theme: Theme,
     snapshot: CapsSnapshot,
     units: UnitsSnapshot,
+    /// Unidades vivas observadas por el Engine. `Some` = hay bus alcanzable y
+    /// mostramos estado/telemetría reales; `None` = caemos al scan del store.
+    monitor: Option<MonitorSnapshot>,
     last_detect_ms: u64,
     brain: BrainStatus,
     /// Último resultado de "Verificar audit": `(ok, mensaje)`. `None` = aún
@@ -354,6 +374,8 @@ enum Msg {
     Tick,
     /// Resultado de una consulta al brain (vivo o caído).
     BrainRefresh(Result<BrainSnapshot, String>),
+    /// Resultado de observar el Engine: unidades vivas, o `None` si no hay bus.
+    MonitorRefresh(Option<MonitorSnapshot>),
     /// Click en "Verificar audit": dispara la verificación de la cadena.
     VerifyAudit,
     /// Resultado de la verificación: `(ok, mensaje)`.
@@ -397,6 +419,7 @@ impl App for ArjeCard {
             theme,
             snapshot: CapsSnapshot::detect(),
             units: detect_units(),
+            monitor: None,
             last_detect_ms: 0,
             brain: BrainStatus::Consultando,
             verify: None,
@@ -416,6 +439,11 @@ impl App for ArjeCard {
                 m.last_detect_ms = started.elapsed().as_micros() as u64 / 1000;
                 // El brain sí es socket I/O: fuera del hilo de UI.
                 handle.spawn(move || Msg::BrainRefresh(query_brain(&brain_path())));
+                // Observación de unidades vivas por el Engine (socket I/O).
+                handle.spawn(move || Msg::MonitorRefresh(observe_units()));
+            }
+            Msg::MonitorRefresh(snap) => {
+                m.monitor = snap;
             }
             Msg::BrainRefresh(res) => {
                 m.brain = match res {
@@ -549,26 +577,60 @@ impl App for ArjeCard {
             &stat_palette,
         ));
 
-        // Card — unidades del card store (Cards .json invocables por el Init,
-        // equivalente fractal de los .service de systemd).
+        // Card — unidades. Si hay un Engine alcanzable (arje-bus), mostramos las
+        // unidades VIVAS (estado + telemetría reales) por el contrato que también
+        // las controla; si no, caemos al scan estático del card store (lo que
+        // PODRÍA correr). Ver shared/sandokan/SDD.md §6.
         let accent_units = Color::from_rgba8(0x81, 0xa1, 0xc1, 0xff);
-        let unit_items: Vec<String> = model
-            .units
-            .units
-            .iter()
-            .map(|u| {
-                let mark = if u.ok { "" } else { "✗ " };
-                format!("{mark}{}  ·  {}  ·  {}", u.label, u.payload, u.supervision)
-            })
-            .collect();
-        body_children.push(stat_card_view::<Msg>(
-            "Unidades",
-            model.units.units.len().to_string(),
-            &model.units.dir,
-            accent_units,
-            &unit_items,
-            &stat_palette,
-        ));
+        match &model.monitor {
+            Some(snap) => {
+                let items: Vec<String> = snap
+                    .units
+                    .iter()
+                    .map(|u| {
+                        let dot = if matches!(u.state, LifecycleState::Running) {
+                            "●"
+                        } else {
+                            "○"
+                        };
+                        let mem = u
+                            .telemetry
+                            .as_ref()
+                            .map(|t| format!("{} KiB", t.mem_bytes / 1024))
+                            .unwrap_or_else(|| "—".into());
+                        let thr = u.telemetry.as_ref().map(|t| t.nproc).unwrap_or(0);
+                        format!("{dot} {}  ·  {}  ·  {} hilos", u.label, mem, thr)
+                    })
+                    .collect();
+                body_children.push(stat_card_view::<Msg>(
+                    "Unidades (vivas)",
+                    format!("{}/{}", snap.running(), snap.len()),
+                    "estado + telemetría vía Engine sobre arje-bus",
+                    accent_units,
+                    &items,
+                    &stat_palette,
+                ));
+            }
+            None => {
+                let unit_items: Vec<String> = model
+                    .units
+                    .units
+                    .iter()
+                    .map(|u| {
+                        let mark = if u.ok { "" } else { "✗ " };
+                        format!("{mark}{}  ·  {}  ·  {}", u.label, u.payload, u.supervision)
+                    })
+                    .collect();
+                body_children.push(stat_card_view::<Msg>(
+                    "Unidades (store)",
+                    model.units.units.len().to_string(),
+                    &model.units.dir,
+                    accent_units,
+                    &unit_items,
+                    &stat_palette,
+                ));
+            }
+        }
 
         // Sección brain — opcional. El brain corre como daemon aparte; si no
         // está, la card de aislamiento sirve igual.
