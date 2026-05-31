@@ -11,6 +11,7 @@ llimphi-surface = { path = "../../llimphi/llimphi-surface" }
 llimphi-theme = { workspace = true }
 llimphi-ui = { path = "../../llimphi/llimphi-ui" }
 llimphi-widget-tiled = { workspace = true }
+llimphi-widget-shortcuts-help = { workspace = true }
 image = { workspace = true }
 media-audio-cpal = { path = "../media-audio-cpal" }
 media-core = { path = "../media-core" }

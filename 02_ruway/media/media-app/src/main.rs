@@ -72,6 +72,9 @@ use media_core::{
     VolumeAudio, Waterfall,
 };
 use media_core::control::{ControlSettings, KeyChord, MediaCommand};
+use llimphi_widget_shortcuts_help::{
+    shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
+};
 use media_recorder_wav::{default_recording_path, RecordedAudioSource, WavRecorder};
 use foreign_av::{FfmpegAudioSource, FfmpegVideoSource, MediaSession};
 use media_source_gif::GifSource;
@@ -99,6 +102,8 @@ enum Msg {
     /// Swap dos tiles del grid reorderable. `from`/`to` son índices
     /// sobre `Model::tile_order`.
     SwapTile { from: usize, to: usize },
+    /// Abre/cierra el overlay de ayuda de atajos (`?`).
+    ToggleHelp,
 }
 
 /// Tiles del grid reorderable bajo el canvas. El orden por defecto
@@ -205,6 +210,12 @@ struct Model {
     /// Orden actual de los tiles del grid de controles. Drag-to-swap
     /// vía `Msg::SwapTile` lo permuta in-place.
     tile_order: Vec<TileId>,
+    /// Si el overlay de ayuda de atajos está abierto (`?` lo alterna).
+    help_open: bool,
+    /// Tamaño aproximado del viewport para centrar overlays. Sin hook de
+    /// resize en llimphi-ui, lo fijamos al `initial_size` — mismo
+    /// compromiso que la galería.
+    viewport: (f32, f32),
 }
 
 struct Pipeline {
@@ -1003,6 +1014,8 @@ impl App for MediaApp {
             frames: 0,
             started_at: Instant::now(),
             tile_order: DEFAULT_TILE_ORDER.to_vec(),
+            help_open: false,
+            viewport: (960.0, 540.0),
         }
     }
 
@@ -1023,15 +1036,60 @@ impl App for MediaApp {
                 apply_command(cmd);
                 model
             }
+            Msg::ToggleHelp => {
+                let mut m = model;
+                m.help_open = !m.help_open;
+                m
+            }
         }
     }
 
-    /// Atajos globales: traduce la tecla a un [`KeyChord`] y la resuelve
-    /// contra el keymap de [`settings`]. media-app no tiene text-input,
-    /// así que no hace falta routing de foco.
-    fn on_key(_model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+    /// Atajos globales: `?` alterna la ayuda, `Esc` la cierra; el resto
+    /// traduce la tecla a un [`KeyChord`] y la resuelve contra el keymap
+    /// de [`settings`]. media-app no tiene text-input, así que no hace
+    /// falta routing de foco.
+    fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        match &event.key {
+            Key::Character(c) if c == "?" => return Some(Msg::ToggleHelp),
+            Key::Named(NamedKey::Escape) if model.help_open => return Some(Msg::ToggleHelp),
+            _ => {}
+        }
         let chord = chord_from_event(event)?;
         settings().keymap.resolve(&chord).cloned().map(Msg::Command)
+    }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        if !model.help_open {
+            return None;
+        }
+        let theme = llimphi_theme::Theme::dark();
+        // Un entry por binding del keymap vivo — la ayuda refleja
+        // exactamente lo que el usuario configuró en controles.ron.
+        let acciones: Vec<ShortcutEntry> = settings()
+            .keymap
+            .bindings
+            .iter()
+            .map(|b| ShortcutEntry::new(b.chord.display(), b.command.describe()))
+            .collect();
+        Some(shortcuts_help_view(ShortcutsHelpSpec {
+            title: "media · atajos".to_string(),
+            groups: vec![
+                ShortcutGroup::new("Reproducción", acciones),
+                ShortcutGroup::new(
+                    "Ayuda",
+                    vec![
+                        ShortcutEntry::new("?", "Mostrar/ocultar esta ayuda"),
+                        ShortcutEntry::new("Esc", "Cerrar la ayuda"),
+                    ],
+                ),
+            ],
+            viewport: model.viewport,
+            on_dismiss: Msg::ToggleHelp,
+            palette: ShortcutsHelpPalette::from_theme(&theme),
+        }))
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {

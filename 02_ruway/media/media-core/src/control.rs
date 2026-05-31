@@ -53,6 +53,31 @@ pub enum MediaCommand {
     ToggleRecord,
 }
 
+impl MediaCommand {
+    /// Etiqueta humana de la acción, para overlays de ayuda y docs.
+    /// Agnóstica de idioma de UI — el repo trabaja en español.
+    pub fn describe(&self) -> String {
+        use MediaCommand::*;
+        match self {
+            TogglePause => "Play / pausa".to_string(),
+            SeekBy { secs } if *secs < 0 => format!("Retroceder {}s", secs.abs()),
+            SeekBy { secs } => format!("Avanzar {secs}s"),
+            VolumeBy { delta } if *delta < 0.0 => "Bajar volumen".to_string(),
+            VolumeBy { .. } => "Subir volumen".to_string(),
+            SetVolume { level } => format!("Volumen al {:.0}%", level * 100.0),
+            NextTrack => "Pista siguiente".to_string(),
+            PrevTrack => "Pista anterior".to_string(),
+            SpeedStep { dir } if *dir < 0 => "Velocidad más lenta".to_string(),
+            SpeedStep { .. } => "Velocidad más rápida".to_string(),
+            SetSpeed { mult } => format!("Velocidad {mult:.2}×"),
+            CycleRepeat => "Ciclar repetición".to_string(),
+            ToggleShuffle => "Alternar aleatorio".to_string(),
+            Snapshot => "Captura de pantalla".to_string(),
+            ToggleRecord => "Grabar / detener".to_string(),
+        }
+    }
+}
+
 /// Una combinación de teclas normalizada, agnóstica de `winit`. `key`
 /// es la forma canónica en `String`: para teclas con nombre el nombre
 /// (`"Space"`, `"ArrowLeft"`, `"Enter"`), para caracteres el carácter
@@ -89,6 +114,33 @@ impl KeyChord {
             shift: true,
             alt: false,
         }
+    }
+
+    /// Forma legible para overlays de ayuda: `"Shift+S"`, `"Espacio"`,
+    /// `"→"`. Las flechas y la barra espaciadora se prettyfican; el
+    /// resto va en mayúscula. El orden de modificadores es estable
+    /// (Ctrl, Alt, Shift) para que la ayuda no baile entre sesiones.
+    pub fn display(&self) -> String {
+        let key = match self.key.as_str() {
+            "ArrowLeft" => "←".to_string(),
+            "ArrowRight" => "→".to_string(),
+            "ArrowUp" => "↑".to_string(),
+            "ArrowDown" => "↓".to_string(),
+            "Space" => "Espacio".to_string(),
+            other => other.to_uppercase(),
+        };
+        let mut s = String::new();
+        if self.ctrl {
+            s.push_str("Ctrl+");
+        }
+        if self.alt {
+            s.push_str("Alt+");
+        }
+        if self.shift {
+            s.push_str("Shift+");
+        }
+        s.push_str(&key);
+        s
     }
 }
 
@@ -250,6 +302,37 @@ mod tests {
         let txt = ron::ser::to_string(&s).expect("serializa");
         let back: ControlSettings = ron::from_str(&txt).expect("deserializa");
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn display_prettyfica_y_ordena_modificadores() {
+        assert_eq!(KeyChord::key("Space").display(), "Espacio");
+        assert_eq!(KeyChord::key("ArrowRight").display(), "→");
+        assert_eq!(KeyChord::shift("s").display(), "Shift+S");
+        assert_eq!(
+            KeyChord {
+                key: "k".into(),
+                ctrl: true,
+                shift: true,
+                alt: false,
+            }
+            .display(),
+            "Ctrl+Shift+K"
+        );
+    }
+
+    #[test]
+    fn describe_refleja_signo_y_parametros() {
+        assert_eq!(MediaCommand::SeekBy { secs: -5 }.describe(), "Retroceder 5s");
+        assert_eq!(MediaCommand::SeekBy { secs: 30 }.describe(), "Avanzar 30s");
+        assert_eq!(
+            MediaCommand::VolumeBy { delta: -0.1 }.describe(),
+            "Bajar volumen"
+        );
+        assert_eq!(
+            MediaCommand::SetSpeed { mult: 1.0 }.describe(),
+            "Velocidad 1.00×"
+        );
     }
 
     #[test]
