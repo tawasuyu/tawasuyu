@@ -168,6 +168,12 @@ enum Msg {
     Export,
     /// Verifica e ingiere `compartido.khipu` como notas nuevas.
     Import,
+    /// Empieza a servir el cuaderno por TCP para que un par lo jale.
+    Publish,
+    /// Jala el cuaderno de un par (`KHIPU_PEER`) por TCP.
+    Receive,
+    /// Resultado async de [`Msg::Receive`]: el sobre recibido o un error.
+    Received(Result<SignedBundle, String>),
 }
 
 struct Model {
@@ -201,9 +207,12 @@ struct Model {
     /// Identidad Ed25519 del cuaderno, para firmar/exportar sobres
     /// (`khipu-share`). `None` si no hay directorio de datos.
     keypair: Option<Keypair>,
-    /// Última línea de estado (export/import). Se pinta en una barra al
-    /// pie cuando es `Some`.
+    /// Última línea de estado (export/import/red). Se pinta en una barra
+    /// al pie cuando es `Some`.
     status: Option<String>,
+    /// `true` cuando ya hay un servidor TCP sirviendo el cuaderno. Evita
+    /// rebindear el puerto si se pulsa «publicar» dos veces.
+    publishing: bool,
 }
 
 struct KhipuApp;
@@ -283,6 +292,46 @@ impl App for KhipuApp {
                 let report = import_notebook(&mut model, h);
                 persist(&model);
                 model.status = Some(report);
+            }
+            Msg::Publish => {
+                // Asegura que el sobre en disco refleje lo editado, luego
+                // levanta (una vez) el servidor TCP que lo sirve.
+                commit_edits(&mut model, h);
+                let _ = export_notebook(&model);
+                model.status = Some(start_publishing(&mut model));
+            }
+            Msg::Receive => {
+                let peer = peer_addr();
+                model.status = Some(format!("recibiendo de {peer}…"));
+                // La red bloquea: la jalamos en un worker y reentramos con
+                // el resultado para no congelar la UI.
+                h.spawn(move || match khipu_share::net::fetch(&peer) {
+                    Ok(sobre) => Msg::Received(Ok(sobre)),
+                    Err(e) => Msg::Received(Err(format!("no se pudo recibir: {e}"))),
+                });
+            }
+            Msg::Received(res) => {
+                model.status = Some(match res {
+                    Ok(sobre) => match khipu_share::open(&sobre) {
+                        Ok(bundle) => {
+                            let now = now_secs();
+                            let outcome =
+                                khipu_share::import_into(&mut model.store, bundle, now);
+                            for id in &outcome.created {
+                                model.order.push(*id);
+                                schedule_embedding(&mut model, *id, h);
+                            }
+                            persist(&model);
+                            format!(
+                                "recibidas {} · omitidas {} (ya existían)",
+                                outcome.created.len(),
+                                outcome.skipped
+                            )
+                        }
+                        Err(_) => "firma inválida — sobre rechazado".into(),
+                    },
+                    Err(e) => e,
+                });
             }
             Msg::DeleteSelected => {
                 if let Some(id) = model.selected {
@@ -475,6 +524,27 @@ fn header_view(model: &Model) -> View<Msg> {
         model.theme.fg_muted,
         Msg::Import,
     );
+    let publish_label = if model.publishing {
+        "publicando"
+    } else {
+        "publicar"
+    };
+    let publish_btn = button(
+        publish_label,
+        model.theme.bg_button,
+        if model.publishing {
+            model.theme.accent
+        } else {
+            model.theme.fg_muted
+        },
+        Msg::Publish,
+    );
+    let receive_btn = button(
+        "recibir",
+        model.theme.bg_button,
+        model.theme.fg_muted,
+        Msg::Receive,
+    );
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -498,7 +568,14 @@ fn header_view(model: &Model) -> View<Msg> {
     })
     .fill(model.theme.bg_panel_alt)
     .children(vec![
-        title_node, new_btn, archive_btn, del_btn, export_btn, import_btn,
+        title_node,
+        new_btn,
+        archive_btn,
+        del_btn,
+        export_btn,
+        import_btn,
+        publish_btn,
+        receive_btn,
     ])
 }
 
@@ -1391,6 +1468,41 @@ fn import_notebook(model: &mut Model, h: &Handle<Msg>) -> String {
     )
 }
 
+/// Dirección donde el servidor escucha. `KHIPU_BIND` la sobrescribe;
+/// default localhost para no exponerse sin querer.
+fn bind_addr() -> String {
+    std::env::var("KHIPU_BIND").unwrap_or_else(|_| "127.0.0.1:7700".into())
+}
+
+/// Dirección del par a quien jalarle el cuaderno. `KHIPU_PEER` la
+/// sobrescribe; default coincide con [`bind_addr`] para probar en local.
+fn peer_addr() -> String {
+    std::env::var("KHIPU_PEER").unwrap_or_else(|_| "127.0.0.1:7700".into())
+}
+
+/// Levanta (una sola vez) el servidor TCP que sirve `compartido.khipu`.
+/// El hilo lee el archivo en cada conexión, así sirve siempre la versión
+/// vigente; vive hasta que el proceso termina. Devuelve la línea de estado.
+fn start_publishing(model: &mut Model) -> String {
+    if model.publishing {
+        return format!("ya publicando en {}", bind_addr());
+    }
+    let Some(dir) = khipu_dir() else {
+        return "sin directorio de datos".into();
+    };
+    let addr = bind_addr();
+    let listener = match std::net::TcpListener::bind(&addr) {
+        Ok(l) => l,
+        Err(e) => return format!("no se pudo escuchar en {addr}: {e}"),
+    };
+    let path = dir.join("compartido.khipu");
+    std::thread::spawn(move || {
+        khipu_share::net::serve_loop(listener, move || std::fs::read(&path));
+    });
+    model.publishing = true;
+    format!("publicando el cuaderno en {addr}")
+}
+
 /// Prefijo hex (4 bytes / 8 hex) de un hash, para mostrar una dirección
 /// de contenido sin abrumar.
 fn hex8(hash: &[u8; 32]) -> String {
@@ -1484,6 +1596,7 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         embed_seq: 0,
         keypair: None,
         status: None,
+        publishing: false,
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -1533,6 +1646,7 @@ fn seeded_model(embedder: Embedder) -> Model {
         embed_seq: 0,
         keypair: None,
         status: None,
+        publishing: false,
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [

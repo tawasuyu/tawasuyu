@@ -40,7 +40,11 @@ Sin daemon, khipu cae al embebedor trigram de 16d — determinista y offline, id
 
 `exportar` sella **todo el cuaderno** en `compartido.khipu`: un sobre firmado Ed25519 con la identidad del cuaderno (`identidad.seed`, autogenerada al primer uso) y direccionado por su hash BLAKE3 de contenido. `importar` verifica firma + hash de ese sobre y, si cuadra, ingiere las notas.
 
-Lo que viaja es el **contenido** (título, cuerpo, etiquetas), nunca la física temporal: al importar, cada nota nace fresca (masa plena, acceso = ahora) — su gravedad arranca en el cuaderno que la recibe. Los wiki-links `[[Título]]` se rearman solos porque khipu resuelve enlaces por título. Reimportar el mismo sobre no duplica (se omiten títulos ya presentes). Un sobre alterado o con firma ajena se rechaza entero, sin autoridad central. La lógica vive en `khipu-share` (8 tests).
+Lo que viaja es el **contenido** (título, cuerpo, etiquetas), nunca la física temporal: al importar, cada nota nace fresca (masa plena, acceso = ahora) — su gravedad arranca en el cuaderno que la recibe. Los wiki-links `[[Título]]` se rearman solos porque khipu resuelve enlaces por título. Reimportar el mismo sobre no duplica (se omiten títulos ya presentes). Un sobre alterado o con firma ajena se rechaza entero, sin autoridad central.
+
+Para compartir en vivo por la LAN sin copiar archivos: `publicar` levanta un servidor TCP que sirve el cuaderno (puerto `KHIPU_BIND`, default `127.0.0.1:7700`); `recibir` lo jala de un par (`KHIPU_PEER`). El transporte es `std::net` puro y **no necesita ser confiable** — el receptor verifica firma + hash antes de ingerir. Cruzar máquinas es apuntar `KHIPU_PEER=host:7700`.
+
+La lógica vive en `khipu-share` (`net` para el transporte; 11 tests, round-trip TCP incluido).
 
 ## Consideraciones
 

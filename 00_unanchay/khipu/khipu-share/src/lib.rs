@@ -32,6 +32,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod net;
+
 use std::collections::HashSet;
 
 use agora_core::{verify_signature, Keypair};
