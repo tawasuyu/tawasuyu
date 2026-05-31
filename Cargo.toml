@@ -405,6 +405,7 @@ members = [
     "03_ukupacha/sandokan/sandokan",
     "03_ukupacha/sandokan/sandokan-app",
     "03_ukupacha/sandokan/sandokan-daemon",
+    "03_ukupacha/sandokan/sandokan-arje-engine",
     "03_ukupacha/sandokan/sandokan-local",
     "03_ukupacha/sandokan/sandokan-remote",
     "03_ukupacha/wawa-explorer/wawa-explorer-aoe",

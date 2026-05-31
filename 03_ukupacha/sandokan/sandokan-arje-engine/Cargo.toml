@@ -1,0 +1,19 @@
+[package]
+name = "sandokan-arje-engine"
+description = "Bridge: implementa sandokan-core::Engine hablando arje-bus a arje-zero (PID 1). Es el transporte único de control en Linux (ver shared/sandokan/SDD.md §5 Fase 2-3) — el DaemonEngine sobre el bus del init, no un socket paralelo."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandokan-core = { path = "../../../shared/sandokan/sandokan-core" }
+sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
+arje-bus = { path = "../../arje/runtime/arje-bus" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+card-core = { path = "../../../shared/card/card-core" }
