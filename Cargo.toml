@@ -244,6 +244,7 @@ members = [
     "02_ruway/llimphi/widgets/stat-card",
     "02_ruway/llimphi/widgets/tabs",
     "02_ruway/llimphi/widgets/theme-switcher",
+    "02_ruway/llimphi/widgets/timeline",
     "02_ruway/llimphi/widgets/text-area",
     "02_ruway/llimphi/widgets/text-editor",
     "02_ruway/llimphi/widgets/text-editor-lsp",
@@ -642,6 +643,7 @@ llimphi-widget-modal = { path = "02_ruway/llimphi/widgets/modal" }
 llimphi-widget-empty = { path = "02_ruway/llimphi/widgets/empty" }
 llimphi-widget-status-bar = { path = "02_ruway/llimphi/widgets/status-bar" }
 llimphi-widget-shortcuts-help = { path = "02_ruway/llimphi/widgets/shortcuts-help" }
+llimphi-widget-timeline = { path = "02_ruway/llimphi/widgets/timeline" }
 llimphi-widget-splash = { path = "02_ruway/llimphi/widgets/splash" }
 # Controles de formulario y signaling (switch, segmented, breadcrumb,
 # badge, avatar, skeleton, field).

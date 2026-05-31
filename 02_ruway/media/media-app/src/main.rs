@@ -76,6 +76,7 @@ use media_core::layout::{LayoutSettings, PanelId as TileId};
 use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
 };
+use llimphi_widget_timeline::{timeline_view, TimelinePalette};
 use llimphi_module_command_palette::{
     self as palette, Command as PaletteCommand, PaletteAction, PaletteMsg, PalettePalette,
     PaletteState,
@@ -1849,12 +1850,12 @@ fn subtitle_strip<Msg: 'static>() -> View<Msg> {
 /// (mezcla de canales en mono para mostrarse en una sola línea).
 /// Cuando no hay probe (audio muteado) muestra una línea de centro
 /// con leyenda "audio off".
-/// Barra de progreso clickeable bajo el video: muestra el avance del track
-/// (fracción posición/duración) y, al click, salta a esa posición absoluta
-/// — scrubbing estilo VLC. El click reporta `local_x / rect_w` como
-/// fracción (`on_click_at`) y la app lo mapea a `MediaCommand::SeekTo`; el
-/// core no sabe la duración, sólo la fracción. Sin playlist (tono A4) queda
-/// inerte y vacía. Se redibuja cada Tick, así el playhead avanza solo.
+/// Barra de progreso clickeable bajo el video — scrubbing estilo VLC.
+/// Delega en el widget reusable `llimphi-widget-timeline`: la app sólo
+/// calcula la fracción de avance (posición/duración del player vivo) y
+/// mapea el click (fracción del ancho) a `MediaCommand::SeekTo` — el core
+/// no sabe la duración, sólo la fracción. Sin playlist (tono A4) queda en
+/// cero. Se redibuja cada Tick, así el playhead avanza solo.
 fn timeline_strip() -> View<Msg> {
     let frac = playlist_slot()
         .get()
@@ -1869,48 +1870,8 @@ fn timeline_strip() -> View<Msg> {
             }
         })
         .unwrap_or(0.0);
-    let fill_color = Color::from_rgba8(120, 200, 255, 255);
-    let knob_color = Color::from_rgba8(220, 235, 250, 255);
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(14.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(Color::from_rgba8(30, 36, 46, 255))
-    .radius(7.0)
-    .paint_with(move |scene, _ts, rect| {
-        if rect.w <= 2.0 || rect.h <= 2.0 {
-            return;
-        }
-        let pad: f32 = 2.0;
-        let x0 = rect.x + pad;
-        let y0 = rect.y + pad;
-        let w = (rect.w - 2.0 * pad).max(1.0);
-        let h = (rect.h - 2.0 * pad).max(1.0);
-        // Tramo recorrido.
-        let fw = (w * frac).max(0.0);
-        if fw > 0.5 {
-            let fill = KurboRect::new(x0 as f64, y0 as f64, (x0 + fw) as f64, (y0 + h) as f64);
-            scene.fill(Fill::NonZero, Affine::IDENTITY, fill_color, None, &fill);
-        }
-        // Playhead — fina barra vertical en la posición actual.
-        let kx = x0 + fw;
-        let kw: f32 = 3.0;
-        let knob = KurboRect::new(
-            (kx - kw * 0.5) as f64,
-            y0 as f64,
-            (kx + kw * 0.5) as f64,
-            (y0 + h) as f64,
-        );
-        scene.fill(Fill::NonZero, Affine::IDENTITY, knob_color, None, &knob);
-    })
-    .on_click_at(|lx, _ly, w, _h| {
-        if w <= 0.0 {
-            return None;
-        }
-        let fraction = (lx / w).clamp(0.0, 1.0);
+    let palette = TimelinePalette::from_theme(&llimphi_theme::Theme::dark());
+    timeline_view(frac, &palette, |fraction| {
         Some(Msg::Command(MediaCommand::SeekTo { fraction }))
     })
 }

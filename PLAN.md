@@ -239,7 +239,7 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 |---|---|---|
 | `media-core` | nuevo (agnóstico) | Decode AV1/Opus → frames a `llimphi-surface` + sink de audio (`cpal`, fuera de Llimphi) con sync A/V por PTS. Hook para frame-ya-en-GPU (Vulkan Video futuro). |
 | `nahual-video-viewer-llimphi` | `02_ruway/nahual` | **Reproductor** (viewer, no editor → cae en nahual). Sobre `media-core` + `llimphi-surface` + widgets de transporte. |
-| `llimphi-widget-{transport,timeline,waveform}` | `02_ruway/llimphi/widgets` | Controles play/scrub, línea de tiempo, forma de onda — todo `paint_with` + input ya existente. |
+| `llimphi-widget-{transport,timeline,waveform}` | `02_ruway/llimphi/widgets` | Controles play/scrub, línea de tiempo, forma de onda — todo `paint_with` + input ya existente. **`llimphi-widget-timeline` ✅** (scrub clickeable stateless, `timeline_view(progress, &palette, on_seek)`, lo usa `media-app`); transport/waveform pendientes (hoy inline en `media-app`). |
 | `tullpu` (editor de capas IA) | `02_ruway/tullpu/*` | Editor de imágenes por capas; capas = DAG, ops IA = `Transformacion` (calco del haz de cuerpos de pluma). **Ver `02_ruway/tullpu/SDD.md`** (autoritativo) y §6.ter. |
 | `shared/foreign-av` | nuevo | Puente H.264/H.265/AAC opcional (transcode-a-AV1 al importar). |
 

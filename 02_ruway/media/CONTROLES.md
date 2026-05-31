@@ -1,6 +1,6 @@
 # Controles configurables de media (estilo VLC, más flexible)
 
-> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D5 (paleta) ✅ · D2 (scripts Rhai + watch) ✅ · E (timeline scrubbeable) ✅.
+> Estado: **plan vivo**. Fase A ✅ · Fase B+C ✅ · Fase D1 (ayuda) ✅ · D3 (layout) ✅ · D4 (reload) ✅ · D5 (paleta) ✅ · D2 (scripts Rhai + watch) ✅ · E (timeline scrubbeable) ✅ · E.1 (widget `llimphi-widget-timeline`) ✅.
 > Autoritativo sobre cómo se mapean entradas → acciones en el dominio `media`.
 
 ## Problema
@@ -154,6 +154,13 @@ ControlSettings(
   `controles.ron` (un dígito → un %, como los `1`–`9` de VLC) — `chord_from_event` ya
   acepta dígitos. `describe()` pretty-fica los extremos ("Volver al inicio" / "Ir al
   final") y el resto como "%". El palette suma "Volver al inicio" (`SeekTo 0.0`).
-- **Futuro (no bloqueante)**: extraer el timeline inline de `media-app` (+ transport/
-  waveform) como widgets reusables `llimphi-widget-{transport,timeline,waveform}` y/o
-  `nahual-video-viewer-llimphi`.
+- **E.1 ✅ — timeline extraído a widget reusable**: el scrub bar inline de `media-app`
+  pasó a `llimphi-widget-timeline` (stateless, pattern de `slider`/`progress`):
+  `timeline_view(progress, &TimelinePalette, on_seek)` — el caller pasa la fracción de
+  avance y un handler `Fn(f32) -> Option<Msg>` que recibe la fracción clickeada; el
+  widget pinta track+fill+playhead y reporta `local_x/ancho` vía `on_click_at`, sin
+  saber de tiempo ni duración. `media-app::timeline_strip` ahora sólo calcula la
+  fracción del player vivo y mapea el click a `SeekTo`. Reusable por cualquier app
+  Llimphi con reproducción (`nahual-video-viewer-llimphi`, decks, etc.).
+- **Futuro (no bloqueante)**: extraer también transport/waveform como
+  `llimphi-widget-{transport,waveform}` siguiendo el mismo molde.

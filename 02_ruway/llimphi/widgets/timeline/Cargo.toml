@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-timeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-timeline — barra de progreso/scrub clickeable (seek absoluto). El widget es stateless: el caller pasa la fracción de avance y un handler fracción→Msg."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
