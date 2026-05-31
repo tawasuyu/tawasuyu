@@ -132,6 +132,10 @@ pub struct TabState {
     /// Stack de URLs visitadas. `history[cursor]` es la actual.
     pub history: Vec<String>,
     pub cursor: usize,
+    /// Reloj base (ms desde `Model.start`) anclado al cargar la página. El
+    /// runtime de animaciones CSS computa `elapsed = now_ms - anim_start_ms`
+    /// y se lo pasa a `anim::animation_progress` por cada nodo animado.
+    pub anim_start_ms: u64,
     pub box_tree: Option<BoxTree>,
     /// HTML crudo de la respuesta. Lo usamos para `Ctrl+U` (page source).
     /// `None` si la pestaña todavía no cargó.
@@ -205,6 +209,7 @@ impl TabState {
             addr_focused: false,
             history: vec![url],
             cursor: 0,
+            anim_start_ms: 0,
             box_tree: None,
             source: None,
             gen: 0,
@@ -798,6 +803,8 @@ impl App for Puriy {
                         t.selects_element_ids = selects_element_ids;
                         t.focused_input = autofocus_idx;
                         t.box_tree = Some(box_tree);
+                        // Ancla el reloj de animaciones CSS de esta carga.
+                        t.anim_start_ms = m.start.elapsed().as_millis() as u64;
                         // Ejecuta los `<script>` inline del documento.
                         // Destruimos cualquier JsRuntime previo (var x = ...
                         // de la página anterior no debe fugar). Si esta
@@ -1582,7 +1589,20 @@ impl App for Puriy {
                 model.active().source.as_deref(),
                 model.zoom,
             ),
-            None => viewport(model.active(), model.zoom, &matcher, model.find_current),
+            None => {
+                // Elapsed para el runtime de animaciones CSS: now − ancla de
+                // la carga. El tick periódico (JsTick, ~30fps) re-renderiza,
+                // así que leer el reloj acá avanza la animación cada frame.
+                let now_ms = model.start.elapsed().as_millis() as u64;
+                let anim_elapsed_ms = now_ms.saturating_sub(model.active().anim_start_ms);
+                viewport(
+                    model.active(),
+                    model.zoom,
+                    &matcher,
+                    model.find_current,
+                    anim_elapsed_ms,
+                )
+            }
         };
 
         // Barra de menú principal — PRIMER hijo del column raíz.
@@ -3487,9 +3507,19 @@ struct RenderCtx<'a> {
     input_counter: usize,
     selects: &'a [SelectState],
     select_counter: usize,
+    /// Tiempo transcurrido (ms) desde el `anim_start_ms` de la pestaña —
+    /// `animation_overlay` lo usa para samplear el progreso de cada nodo
+    /// animado al instante actual.
+    anim_elapsed_ms: u64,
 }
 
-fn viewport(t: &TabState, zoom: f32, matcher: &Matcher, find_current: usize) -> View<Msg> {
+fn viewport(
+    t: &TabState,
+    zoom: f32,
+    matcher: &Matcher,
+    find_current: usize,
+    anim_elapsed_ms: u64,
+) -> View<Msg> {
     let Some(tree) = t.box_tree.as_ref() else {
         let msg = if t.url == NEW_TAB_URL {
             "(pestaña vacía · escribí una URL arriba)"
@@ -3526,6 +3556,7 @@ fn viewport(t: &TabState, zoom: f32, matcher: &Matcher, find_current: usize) -> 
         input_counter: 0,
         selects: &t.selects,
         select_counter: 0,
+        anim_elapsed_ms,
     };
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
@@ -3549,7 +3580,43 @@ fn viewport(t: &TabState, zoom: f32, matcher: &Matcher, find_current: usize) -> 
     .children(vec![content])
 }
 
+/// Samplea la animación CSS del nodo (`b.animation`) al instante actual
+/// (`ctx.anim_elapsed_ms`) y devuelve un clon del `BoxNode` con el overlay
+/// aplicado, o `None` si el nodo no anima o el overlay está vacío. `opacity`/
+/// `color`/`background` los pinta el flujo normal de `render_box`; `transforms`
+/// se setea para cuando el chrome los aplique (hoy no los renderiza todavía).
+fn animation_overlay(b: &BoxNode, ctx: &RenderCtx<'_>) -> Option<BoxNode> {
+    let inst = b.animation.as_ref()?;
+    let elapsed_s = ctx.anim_elapsed_ms as f32 / 1000.0;
+    let progress = puriy_engine::anim::animation_progress(&inst.binding, elapsed_s)?;
+    let ov = puriy_engine::anim::sample_keyframes(&inst.keyframes, progress);
+    if ov.is_empty() {
+        return None;
+    }
+    let mut nb = b.clone();
+    if let Some(o) = ov.opacity {
+        nb.opacity = o.clamp(0.0, 1.0);
+    }
+    if let Some(c) = ov.color {
+        nb.color = c;
+    }
+    if let Some(bg) = ov.background {
+        nb.background = Some(bg);
+    }
+    if let Some(ts) = ov.transforms {
+        nb.transforms = ts;
+    }
+    Some(nb)
+}
+
 fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
+    // Animación CSS: si el nodo tiene una `@keyframes` resuelta, sampleamos
+    // el overlay al instante actual y renderizamos un clon con las props
+    // animadas pisadas (el resto del flujo pinta `opacity`/`background`/
+    // `color` desde el BoxNode, así que el overlay "se ve" gratis). El clon
+    // se computa una sola vez por llamada → sin recursión.
+    let overlaid = animation_overlay(b, ctx);
+    let b = overlaid.as_ref().unwrap_or(b);
     let zoom = ctx.zoom;
     // <input>/<textarea>: reservar slot y devolver un text_input_view
     // independiente del flujo normal.

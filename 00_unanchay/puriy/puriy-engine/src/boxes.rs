@@ -247,6 +247,26 @@ pub struct BoxNode {
     /// Fase 7.16. Antes (7.11) este campo se llamaba `dataset` y sólo
     /// guardaba los `data-*` sin prefijo.
     pub attributes: Vec<(String, String)>,
+    /// Animación CSS resuelta para el runtime de tween (`anim.rs`). `Some`
+    /// sólo cuando el nodo tiene `animation: <name> …` Y el `<name>` matchea
+    /// un `@keyframes` conocido. El chrome la consume por frame:
+    /// `anim::animation_progress(&binding, elapsed)` da el progreso eased y
+    /// `anim::sample_keyframes(&keyframes, p)` el overlay a mergear sobre el
+    /// estilo base. `None` = nodo no animado.
+    pub animation: Option<AnimationInstance>,
+    /// Bindings `transition` declarados en el nodo. El chrome los consulta
+    /// (`anim::transition_for`) para tweenear cambios de estado (hover, etc.).
+    pub transitions: Vec<crate::style::TransitionBinding>,
+}
+
+/// Animación CSS lista para tween: el binding parseado + la definición de
+/// `@keyframes` ya resuelta por nombre. Vive en el `BoxNode` para que el
+/// chrome no tenga que cargar la tabla de keyframes del `StyleEngine`.
+/// Rescatado del frente engine.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimationInstance {
+    pub binding: crate::style::AnimationBinding,
+    pub keyframes: crate::style::Keyframes,
 }
 
 impl BoxNode {
@@ -1449,6 +1469,8 @@ fn empty_root() -> BoxNode {
         element_id: None,
         class_list: Vec::new(),
         attributes: Vec::new(),
+        animation: None,
+        transitions: Vec::new(),
     }
 }
 
@@ -1817,6 +1839,18 @@ fn build_node(
                     })
                     .unwrap_or_default(),
                 attributes: dom::all_attrs(node),
+                // Resuelve `animation: <name>` contra la tabla de @keyframes
+                // del stylesheet; sólo Some si el nombre matchea.
+                animation: style.animation.as_ref().and_then(|b| {
+                    styles
+                        .keyframes()
+                        .get(&b.name)
+                        .map(|kf| AnimationInstance {
+                            binding: b.clone(),
+                            keyframes: kf.clone(),
+                        })
+                }),
+                transitions: style.transitions.clone(),
             })
         }
         NodeData::Text { contents } => {
@@ -1933,6 +1967,8 @@ fn build_node(
         element_id: None,
         class_list: Vec::new(),
         attributes: Vec::new(),
+                animation: None,
+                transitions: Vec::new(),
             })
         }
     }
@@ -2019,6 +2055,8 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         element_id: None,
         class_list: Vec::new(),
         attributes: Vec::new(),
+        animation: None,
+        transitions: Vec::new(),
     }
 }
 
@@ -3869,5 +3907,49 @@ mod tests {
         assert!(texts.contains(&"X".to_string()), "texts: {texts:?}");
         assert!(texts.contains(&"dos".to_string()), "texts: {texts:?}");
         assert!(!texts.contains(&"uno".to_string()), "texts: {texts:?}");
+    }
+
+    #[test]
+    fn box_tree_resuelve_animation_contra_keyframes() {
+        // `animation: fade …` + `@keyframes fade` debe poblar BoxNode.animation
+        // (Tier B: wiring del runtime de tween rescatado de engine).
+        let html = r##"<html><head><style>
+            @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+            #target { animation: fade 2s linear }
+        </style></head><body><div id="target">hola</div></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found = false;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("target") {
+                let inst = b.animation.as_ref().expect("div animado sin AnimationInstance");
+                assert_eq!(inst.binding.name, "fade");
+                // A mitad de los 2s (linear) la opacity interpolada ≈ 0.5.
+                let p = crate::anim::animation_progress(&inst.binding, 1.0).unwrap();
+                let ov = crate::anim::sample_keyframes(&inst.keyframes, p);
+                let op = ov.opacity.expect("keyframes fade interpola opacity");
+                assert!((op - 0.5).abs() < 0.05, "opacity a mitad: {op}");
+                found = true;
+            }
+        });
+        assert!(found, "no se encontró #target en el box tree");
+    }
+
+    #[test]
+    fn box_tree_animation_none_sin_keyframes_match() {
+        // `animation: <name>` sin `@keyframes <name>` → animation: None.
+        let html = r##"<html><head><style>
+            #x { animation: noexiste 1s }
+        </style></head><body><div id="x">a</div></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut checked = false;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("x") {
+                assert!(b.animation.is_none(), "no debería resolver sin @keyframes");
+                checked = true;
+            }
+        });
+        assert!(checked);
     }
 }
