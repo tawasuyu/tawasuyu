@@ -97,6 +97,7 @@ mod pressure;
 mod navigation;
 mod viewtransitions;
 mod cookiestore;
+mod indexeddb;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -194,6 +195,7 @@ pub(crate) use pressure::PRESSURE_BOOTSTRAP;
 pub(crate) use navigation::NAVIGATION_BOOTSTRAP;
 pub(crate) use viewtransitions::VIEWTRANSITIONS_BOOTSTRAP;
 pub(crate) use cookiestore::COOKIESTORE_BOOTSTRAP;
+pub(crate) use indexeddb::INDEXEDDB_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -293,5 +295,6 @@ pub(crate) const ALL: &[&str] = &[
     NAVIGATION_BOOTSTRAP,
     VIEWTRANSITIONS_BOOTSTRAP,
     COOKIESTORE_BOOTSTRAP,
+    INDEXEDDB_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

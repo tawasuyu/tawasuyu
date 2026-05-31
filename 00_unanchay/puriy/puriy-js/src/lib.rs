@@ -11055,4 +11055,223 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("cambiado").expect("e"), JsValue::String("nuevo".into()));
     }
+
+    // ---- Fase 7.141 — IndexedDB ----
+
+    #[test]
+    fn indexeddb_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof indexedDB").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("typeof indexedDB.open").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof IDBKeyRange.bound").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn indexeddb_open_dispara_upgradeneeded_y_success() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var fases = []; \
+             var req = indexedDB.open('t_open', 1); \
+             req.onupgradeneeded = function(){ fases.push('up'); req.result.createObjectStore('s', {keyPath:'id'}); }; \
+             req.onsuccess = function(){ fases.push('ok'); };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("fases.join(',')").expect("e"), JsValue::String("up,ok".into()));
+    }
+
+    #[test]
+    fn indexeddb_add_y_get() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var nombre = null; \
+             var req = indexedDB.open('t_add', 1); \
+             req.onupgradeneeded = function(){ req.result.createObjectStore('s', {keyPath:'id'}); }; \
+             req.onsuccess = function(){ \
+               var db = req.result; \
+               db.transaction('s','readwrite').objectStore('s').add({id:5, nombre:'eva'}); \
+               var g = db.transaction('s').objectStore('s').get(5); \
+               g.onsuccess = function(){ nombre = g.result ? g.result.nombre : null; }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nombre").expect("e"), JsValue::String("eva".into()));
+    }
+
+    #[test]
+    fn indexeddb_put_sobrescribe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var val = null; \
+             var req = indexedDB.open('t_put', 1); \
+             req.onupgradeneeded = function(){ req.result.createObjectStore('s', {keyPath:'id'}); }; \
+             req.onsuccess = function(){ \
+               var db = req.result; var st = db.transaction('s','readwrite').objectStore('s'); \
+               st.put({id:1, v:'a'}); st.put({id:1, v:'b'}); \
+               var g = db.transaction('s').objectStore('s').get(1); \
+               g.onsuccess = function(){ val = g.result.v; }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("val").expect("e"), JsValue::String("b".into()));
+    }
+
+    #[test]
+    fn indexeddb_autoincrement() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var k1 = null, k2 = null; \
+             var req = indexedDB.open('t_auto', 1); \
+             req.onupgradeneeded = function(){ req.result.createObjectStore('s', {autoIncrement:true}); }; \
+             req.onsuccess = function(){ \
+               var st = req.result.transaction('s','readwrite').objectStore('s'); \
+               var a = st.add({x:1}); a.onsuccess = function(){ k1 = a.result; }; \
+               var b = st.add({x:2}); b.onsuccess = function(){ k2 = b.result; }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("k1").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("k2").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn indexeddb_getall_ordenado() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var orden = null; \
+             var req = indexedDB.open('t_all', 1); \
+             req.onupgradeneeded = function(){ req.result.createObjectStore('s', {keyPath:'id'}); }; \
+             req.onsuccess = function(){ \
+               var db = req.result; var st = db.transaction('s','readwrite').objectStore('s'); \
+               st.add({id:3}); st.add({id:1}); st.add({id:2}); \
+               var g = db.transaction('s').objectStore('s').getAll(); \
+               g.onsuccess = function(){ orden = g.result.map(function(r){ return r.id; }).join(','); }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("orden").expect("e"), JsValue::String("1,2,3".into()));
+    }
+
+    #[test]
+    fn indexeddb_delete_y_count() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = -1; \
+             var req = indexedDB.open('t_del', 1); \
+             req.onupgradeneeded = function(){ req.result.createObjectStore('s', {keyPath:'id'}); }; \
+             req.onsuccess = function(){ \
+               var db = req.result; var st = db.transaction('s','readwrite').objectStore('s'); \
+               st.add({id:1}); st.add({id:2}); st.add({id:3}); st.delete(2); \
+               var c = db.transaction('s').objectStore('s').count(); \
+               c.onsuccess = function(){ n = c.result; }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn indexeddb_index_get() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var id = null; \
+             var req = indexedDB.open('t_idx', 1); \
+             req.onupgradeneeded = function(){ \
+               var st = req.result.createObjectStore('p', {keyPath:'id'}); \
+               st.createIndex('byName', 'name', {unique:false}); \
+             }; \
+             req.onsuccess = function(){ \
+               var db = req.result; var st = db.transaction('p','readwrite').objectStore('p'); \
+               st.add({id:1, name:'ana'}); st.add({id:2, name:'beto'}); \
+               var g = db.transaction('p').objectStore('p').index('byName').get('beto'); \
+               g.onsuccess = function(){ id = g.result ? g.result.id : null; }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("id").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn indexeddb_cursor_itera_en_orden() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var keys = []; \
+             var req = indexedDB.open('t_cur', 1); \
+             req.onupgradeneeded = function(){ req.result.createObjectStore('s', {keyPath:'id'}); }; \
+             req.onsuccess = function(){ \
+               var db = req.result; var st = db.transaction('s','readwrite').objectStore('s'); \
+               st.add({id:3}); st.add({id:1}); st.add({id:2}); \
+               var c = db.transaction('s').objectStore('s').openCursor(); \
+               c.onsuccess = function(){ var cur = c.result; if (cur) { keys.push(cur.key); cur.continue(); } }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("keys.join(',')").expect("e"), JsValue::String("1,2,3".into()));
+    }
+
+    #[test]
+    fn indexeddb_keyrange_bound() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = -1; \
+             var req = indexedDB.open('t_kr', 1); \
+             req.onupgradeneeded = function(){ req.result.createObjectStore('s', {keyPath:'id'}); }; \
+             req.onsuccess = function(){ \
+               var db = req.result; var st = db.transaction('s','readwrite').objectStore('s'); \
+               for (var i = 1; i <= 5; i++) st.add({id:i}); \
+               var g = db.transaction('s').objectStore('s').getAll(IDBKeyRange.bound(2, 4)); \
+               g.onsuccess = function(){ n = g.result.length; }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn indexeddb_cmp() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("indexedDB.cmp(1, 2)").expect("e"), JsValue::Number(-1.0));
+        assert_eq!(rt.eval("indexedDB.cmp(2, 2)").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("indexedDB.cmp(3, 1)").expect("e"), JsValue::Number(1.0));
+        // number < string en el orden de claves
+        assert_eq!(rt.eval("indexedDB.cmp(9, 'a')").expect("e"), JsValue::Number(-1.0));
+    }
+
+    #[test]
+    fn indexeddb_persiste_entre_conexiones() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var v = null; \
+             var r1 = indexedDB.open('t_persist', 1); \
+             r1.onupgradeneeded = function(){ r1.result.createObjectStore('s', {keyPath:'id'}); }; \
+             r1.onsuccess = function(){ \
+               var db = r1.result; \
+               db.transaction('s','readwrite').objectStore('s').add({id:1, v:'guardado'}); \
+               db.close(); \
+               var r2 = indexedDB.open('t_persist'); \
+               r2.onsuccess = function(){ \
+                 var g = r2.result.transaction('s').objectStore('s').get(1); \
+                 g.onsuccess = function(){ v = g.result ? g.result.v : null; }; \
+               }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("v").expect("e"), JsValue::String("guardado".into()));
+    }
+
+    #[test]
+    fn indexeddb_transaction_oncomplete() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var completo = false; \
+             var req = indexedDB.open('t_tx', 1); \
+             req.onupgradeneeded = function(){ req.result.createObjectStore('s', {autoIncrement:true}); }; \
+             req.onsuccess = function(){ \
+               var tx = req.result.transaction('s','readwrite'); \
+               tx.objectStore('s').add({a:1}); \
+               tx.oncomplete = function(){ completo = true; }; \
+             };",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("completo").expect("e"), JsValue::Bool(true));
+    }
 }
