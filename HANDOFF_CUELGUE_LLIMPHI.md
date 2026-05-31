@@ -1,5 +1,18 @@
 # Handoff — cuelgue de apps Llimphi (deadlock tras click/scroll)
 
+> **✅ RESUELTO (2026-05-31).** NO era un deadlock ni infra Llimphi ni Wayland.
+> Era un **loop infinito en el solver de Kepler** de `cosmos-ephemeris`
+> (`src/planets/mod.rs`, `elements_to_cartesian`): un `loop {}` sin cota cuyo
+> corte `dl.abs() < 1e-15` está pegado al epsilon de f64. Para ciertos inputs
+> (Venus en el instante de una carta de Lima) la iteración entra en ciclo límite
+> y nunca converge → el hilo de UI queda atascado en `compute_astro` → "Not
+> Responding", no cierra. Sólo en **debug**: release fusiona/reordena los flops
+> (FMA) y converge, por eso `cargo run` colgaba y el binario `--release` no.
+> **Fix:** acotar la iteración (`for _ in 0..50`). compute_astro pasa de no
+> terminar nunca a completar (~9 s en debug, instantáneo en release) y la app
+> queda idle estable. Tests: cosmos-ephemeris 115/115, cosmos-rise-set 13/13.
+> Lo de abajo es el rastro de la investigación (hipótesis descartadas).
+
 > Documento de traspaso para continuar la investigación en **la laptop** (donde
 > sí hay display gráfico). En la máquina anterior era un TTY headless y no se
 > pudo reproducir. Pegá este archivo (o pedile a Claude que lo lea) al arrancar.
@@ -26,7 +39,46 @@ Síntoma confirmado por el usuario:
   *después* de que el cuelgue ya ocurría → no pueden ser la causa raíz.
 - **No es el split de `lib.rs`** (`35a6579f`, 2026-05-31 01:11) — también posterior.
 
-## Hipótesis principal
+## Hallazgos en la laptop (2026-05-31, sesión de diagnóstico)
+
+Reproducción en **esta** laptop: `Wayland` nativo, compositor = **`kwin_wayland`**
+(KDE Plasma), NO `mirada-compositor`. `ptrace_scope=1` ⇒ gdb/strace no pueden
+attachar a procesos no-hijos; se diagnosticó vía `/proc/$pid/{wchan,syscall}`.
+
+- **`counter` bajo XWayland + clicks reales (xdotool): NO se cuelga.** Incrementa
+  bien; sólo termina al cerrar la ventana. Hilo principal ocioso en `do_epoll_wait`.
+- **Sonda `spawn_periodic` (~10 Hz) en Wayland nativo: NO se cuelga.** Corrió
+  **1593 updates / 1629 redraws** seguidos; cada `tick → update → request_redraw →
+  acquire/present` completa y el hilo principal vuelve a `do_epoll_wait`.
+  ⇒ **La hipótesis del present FIFO bloqueante queda DESCARTADA en este setup.**
+  El mecanismo de entrega de `request_redraw` y el `present` funcionan en Wayland.
+- Como `request_redraw()` es idéntico se dispare desde `user_event` (probado) o
+  desde `window_event` (click/scroll), el camino de redraw del runtime en HEAD
+  **no cuelga genéricamente**. Los splits del 05-31 (`ce830aaf` compositor/runtime,
+  `a1c5d8c7`, `82480a0f`, `35a6579f`) son posteriores y pueden haber tocado el
+  camino donde vivía el bug original.
+- **Gap no cubierto:** no se pudo inyectar un click REAL en Wayland nativo
+  (`/dev/uinput` es root-only, sin `ydotool`/`wtype`; KWin no acepta xdotool).
+  Para cerrarlo: reproducir el cuelgue a mano y correr `scripts/diag-cuelgue.sh
+  <app>` — imprime el `wchan` congelado, que delata la causa (futex=deadlock de
+  locks, dma_fence/drm=GPU, poll sobre fd wl=frame callback).
+
+### Sospechoso concreto reordenado: clipboard por-acción (no es "casi todas")
+
+El antipatrón `arboard::Clipboard::new()` **por acción** (cada `new()` levanta un
+hilo servidor de selección y el `drop` hace un handoff que BLOQUEA con CPU baja)
+existe sólo en estos sitios — explica cuelgues al copiar/pegar en ESAS apps, no en
+"casi todas":
+- `02_ruway/mirada/mirada-greeter/src/main.rs:480`  (`mem::replace(... new())`)
+- `01_yachay/nakui/nakui-ui-llimphi/src/main.rs:895` (`mem::replace(... new())`)
+- `01_yachay/nakui/nakui-sheet-llimphi/src/main.rs:514,534` + `logic.rs:120`
+- `02_ruway/shuma/sandbox/shuma-module-shell/src/update.rs:464,470`
+
+El resto de los `SystemClipboard::new()` son de **init** (una vez, en la
+construcción del Model) → inofensivos. El widget `text-editor` usa `MemClipboard`
+(en memoria) → **no** es el culpable universal que haría caer "casi todas".
+
+## Hipótesis principal (ORIGINAL — ver Hallazgos arriba: parcialmente refutada)
 
 El bloqueo está en el camino de redraw compartido:
 

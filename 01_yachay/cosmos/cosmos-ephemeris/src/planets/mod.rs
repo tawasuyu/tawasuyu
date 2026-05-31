@@ -103,7 +103,18 @@ fn elements_to_cartesian(el: &OrbitalElements) -> AstroResult<Vector3> {
         + 0.5 * ex.powi(2) * libm::sin(2.0 * gm)
         + 0.375 * ex.powi(3) * libm::sin(3.0 * gm);
 
-    loop {
+    // Newton-Raphson sobre la ecuación de Kepler (anomalía excéntrica).
+    // La convergencia es cuadrática: en la práctica basta una decena de
+    // iteraciones. La cota es un guardarrail OBLIGATORIO: con la tolerancia
+    // `1e-15` pegada al epsilon de f64 (~2.2e-16), ciertos inputs (p. ej.
+    // Marte a determinadas épocas) entran en un ciclo límite donde `dl`
+    // oscila apenas por encima del umbral y NUNCA corta — un `loop {}` sin
+    // cota se cuelga ahí. El comportamiento dependía del build (release
+    // fusiona/reordena los flops y converge; debug, con IEEE estricto, no),
+    // lo que volvía el cuelgue intermitente. 50 iteraciones dejan `e_anom`
+    // con precisión ~1e-14 incluso en el peor caso, de sobra para
+    // astrometría de arcosegundos.
+    for _ in 0..50 {
         let (sin_e, cos_e) = libm::sincos(e_anom);
         let z3_real = xk * cos_e + xh * sin_e;
         let z3_imag = xk * sin_e - xh * cos_e;
