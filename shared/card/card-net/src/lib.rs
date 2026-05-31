@@ -55,6 +55,9 @@ use libp2p_allow_block_list::{self as allow_block_list, BlockedPeers};
 use libp2p_stream as stream;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+pub mod key;
+pub use key::{DhtKey, RecordKind, DHT_KEY_LEN};
+
 pub use libp2p::{
     identity::{Keypair, PublicKey},
     multiaddr::Protocol,

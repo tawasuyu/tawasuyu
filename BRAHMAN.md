@@ -105,6 +105,19 @@ FASE 2a nahual viewer_registry → Cards: visores se registran por (lens,mime,pr
           verde + ejemplo en `viewers.d.example/`. discover_viewer_cards() es la costura final:
           cambiar "directorio en disco" por "broker" no toca el ranking.
 FASE 2b agora personas → discovery por DhtKey::Persona.  REALIZA "gente entra a la espina". [refactor medio]
+        ✓ HECHA (2026-05-31). Dos movimientos:
+        (1) DhtKey/RecordKind — la "primitiva unificadora"— SE MUDÓ de minga-dht a
+            `shared/card/card-net` (Capa 1, su lugar real: namespace COMÚN, no de un
+            dominio). minga-dht la re-exporta (cero churn en minga-p2p/card-discovery).
+        (2) AgoraNet (agora-net-brahman) ganó `anunciar_persona(&Identity)` /
+            `anunciar_mis_personas()` / `dejar_de_anunciar_persona(&IdentityId)` /
+            `descubrir_proveedores_de_persona(&IdentityId)->Vec<PeerId>`, sobre la MISMA
+            BrahmanNet compartida. Clave = `DhtKey::for_hash(Persona, IdentityId)` =
+            `[0x03]++blake3(pubkey)` (IdentityId YA es blake3(pubkey), no re-hashea).
+            Gente entra a la espina con la misma primitiva que código (minga) y Cards.
+            Test E2E real sobre el DHT (anunciar_y_descubrir_persona_via_dht) + example
+            convergencia_minga extendido (un nodo, tres namespaces). Mismo tier que
+            anunciar_gossip: primitiva lista, espera el daemon que también la llame.
 FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Cards;
         nahual-shell = front universal.  VISIÓN ORIGINAL REALIZADA.                     [visión realizada]
 ```

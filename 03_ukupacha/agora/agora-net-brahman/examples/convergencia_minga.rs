@@ -21,7 +21,7 @@ use std::sync::Arc;
 use agora_core::{IdentityKind, Keypair as AgoraKeypair};
 use agora_graph::TrustGraph;
 use agora_net_brahman::{AgoraNet, GOSSIP_PROTOCOL};
-use card_net::BrahmanNet;
+use card_net::{BrahmanNet, DhtKey, RecordKind};
 use minga_core::Keypair as MingaKeypair;
 use minga_p2p::{network::SYNC_PROTOCOL, MingaPeer};
 
@@ -62,7 +62,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  /p2p/{peer_id}/<protocolo>");
     println!("  donde <protocolo> ∈ {{ {SYNC_PROTOCOL}, {GOSSIP_PROTOCOL} }}");
 
-    println!("\nUn solo nodo, dos protocolos. Convergencia: ✓");
+    // 5. Gente entra a la espina (Brahman Fase 2b): ágora publica sus
+    //    identidades bajo `RecordKind::Persona` en el MISMO DHT que minga
+    //    usa para código y card-discovery para Cards. Cualquier nodo puede
+    //    ahora descubrir a Yumaira por su `IdentityId`, con la misma
+    //    primitiva `DhtKey` — gente, código y Cards en un namespace común.
+    let publicadas = agora.anunciar_mis_personas().await;
+    let yumaira_id = yumaira.identity_id();
+    let clave = DhtKey::for_hash(RecordKind::Persona, *yumaira_id.as_bytes());
+    println!("\n· ágora anunció {publicadas} persona(s) en el DHT compartido");
+    println!(
+        "  DhtKey(Persona) de Yumaira: {} bytes  [0x{:02x} ++ blake3(pubkey)]",
+        clave.to_bytes().len(),
+        RecordKind::Persona.tag()
+    );
+
+    println!("\nUn solo nodo, tres namespaces (código · Cards · gente). Convergencia: ✓");
 
     Ok(())
 }

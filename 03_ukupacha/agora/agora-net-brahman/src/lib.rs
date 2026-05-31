@@ -48,10 +48,10 @@ pub mod rate_limit;
 
 use std::sync::Arc;
 
-use agora_core::Attestation;
+use agora_core::{Attestation, Identity, IdentityId};
 use agora_gossip::{al_recibir_announce, al_recibir_bundle, al_recibir_request, Digest, GossipStats, Message};
 use agora_graph::TrustGraph;
-use card_net::{BrahmanNet, Multiaddr, NodeError, PeerId};
+use card_net::{BrahmanNet, DhtKey, Multiaddr, NodeError, PeerId, RecordKind};
 use futures::StreamExt;
 use libp2p::{Stream, StreamProtocol};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -221,6 +221,74 @@ impl AgoraNet {
     /// gossipear con uno mismo y `sync_with(self)` cuelga.
     pub async fn descubrir_peers_gossip(&self) -> Vec<PeerId> {
         let mut peers = self.net.find_providers(GOSSIP_DHT_KEY).await;
+        let me = self.net.peer_id;
+        peers.retain(|p| *p != me);
+        peers
+    }
+
+    // --- Personas en la espina (Brahman Fase 2b) ---
+    //
+    // `descubrir_peers_gossip` arriba descubre *peers que sirven gossip* bajo
+    // una clave fija (`GOSSIP_DHT_KEY`) — "¿quién habla ágora?". Lo de acá es
+    // más fino: anunciar/descubrir **una persona concreta** en el namespace
+    // común del DHT (`RecordKind::Persona`), de modo que cualquier nodo —no
+    // sólo los que ya gossipean conmigo— pueda preguntar "¿quién conoce a
+    // esta identidad?" y caer en sus proveedores. Es lo que el BRAHMAN.md
+    // llama "rutear el discovery de gente por DhtKey::Persona": gente entra a
+    // la espina con la MISMA primitiva (`DhtKey`) que código (minga) y Cards.
+    //
+    // La clave se deriva del `IdentityId` (que YA es `blake3(pubkey)`), así
+    // que usamos `for_hash` para no re-hashear: el wire es
+    // `[0x03] ++ blake3(pubkey)`, estable mientras la clave no rote.
+
+    /// Clave DHT de una persona — `[RecordKind::Persona] ++ blake3(pubkey)`.
+    fn clave_persona(id: &IdentityId) -> DhtKey {
+        DhtKey::for_hash(RecordKind::Persona, *id.as_bytes())
+    }
+
+    /// Anuncia en el DHT compartido que este nodo conoce/sirve la persona
+    /// `identity` (provee atestaciones sobre ella, su perfil, etc.). Otros
+    /// nodos la encuentran con [`Self::descubrir_proveedores_de_persona`] sin
+    /// coordinación previa — sólo necesitan su `IdentityId`.
+    ///
+    /// Best-effort e idempotente, igual que [`Self::anunciar_gossip`]. Pareja
+    /// de [`Self::dejar_de_anunciar_persona`].
+    pub fn anunciar_persona(&self, identity: &Identity) {
+        self.net.start_providing(&Self::clave_persona(&identity.id()).to_bytes());
+    }
+
+    /// Anuncia todas las identidades del grafo local de las que tengo la
+    /// clave privada (las "mías"): las publica bajo `RecordKind::Persona`.
+    /// Devuelve cuántas anunció. Pensado para llamarse al arrancar el daemon,
+    /// análogo a `anunciar_gossip` pero por-persona.
+    pub async fn anunciar_mis_personas(&self) -> usize {
+        let graph = self.graph.lock().await;
+        let mut n = 0;
+        for identity in graph.identities() {
+            self.net.start_providing(&Self::clave_persona(&identity.id()).to_bytes());
+            n += 1;
+        }
+        n
+    }
+
+    /// Retira el anuncio de una persona. Los peers remotos lo verán expirar
+    /// por TTL; los locales lo borran al instante. Pareja de
+    /// [`Self::anunciar_persona`].
+    pub fn dejar_de_anunciar_persona(&self, id: &IdentityId) {
+        self.net.stop_providing(&Self::clave_persona(id).to_bytes());
+    }
+
+    /// Pregunta al DHT por nodos que anunciaron conocer la persona `id`. El
+    /// propio `PeerId` se filtra (no tiene sentido descubrirse a uno mismo).
+    /// Lista vacía si nadie la anuncia o si el routing table aún está vacío.
+    ///
+    /// El caller típico encadena con [`Self::pull_from`]/[`Self::sync_with`]
+    /// sobre los `PeerId` devueltos para traer atestaciones sobre esa persona.
+    pub async fn descubrir_proveedores_de_persona(&self, id: &IdentityId) -> Vec<PeerId> {
+        let mut peers = self
+            .net
+            .find_providers(&Self::clave_persona(id).to_bytes())
+            .await;
         let me = self.net.peer_id;
         peers.retain(|p| *p != me);
         peers
@@ -1017,6 +1085,49 @@ mod tests {
             }
             if std::time::Instant::now() > deadline {
                 panic!("alice no descubrió a bob en el DHT; peers={peers:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn anunciar_y_descubrir_persona_via_dht() {
+        // Bob registra una identidad y la anuncia bajo RecordKind::Persona;
+        // Alice la descubre por su IdentityId sin coordinación previa —
+        // sólo necesita el id (blake3 de la pubkey), no la multiaddr de Bob.
+        let nube = Keypair::from_seed([42; 32]);
+        let persona = nube.identity(IdentityKind::Person, "Nube");
+        let persona_id = persona.id();
+
+        let mut g_bob = TrustGraph::new();
+        g_bob.register(persona);
+
+        let alice = AgoraNet::standalone(TrustGraph::new()).expect("alice");
+        let bob = AgoraNet::standalone(g_bob).expect("bob");
+
+        let bob_pid = bob.peer_id();
+        let alice_pid = alice.peer_id();
+        let bob_listen = bob.listen("/ip4/127.0.0.1/tcp/0".parse().unwrap()).await;
+        let alice_listen = alice.listen("/ip4/127.0.0.1/tcp/0".parse().unwrap()).await;
+        alice.add_dht_peer(bob_pid, bob_listen);
+        bob.add_dht_peer(alice_pid, alice_listen);
+
+        // Bob publica todas las identidades de su grafo (sólo Nube).
+        assert_eq!(bob.anunciar_mis_personas().await, 1);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let peers = alice.descubrir_proveedores_de_persona(&persona_id).await;
+            if peers.contains(&bob_pid) {
+                // self-filter: Alice no aparece en su propio resultado.
+                assert!(!peers.contains(&alice_pid));
+                // Una persona que nadie anunció no tiene proveedores.
+                let otra = Keypair::from_seed([99; 32]).identity_id();
+                assert!(alice.descubrir_proveedores_de_persona(&otra).await.is_empty());
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("alice no descubrió la persona en el DHT; peers={peers:?}");
             }
             tokio::time::sleep(Duration::from_millis(150)).await;
         }

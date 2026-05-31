@@ -11,8 +11,6 @@ description = "Brahman — capa de discovery typed sobre el Kademlia compartido 
 [dependencies]
 card-net = { path = "../../../shared/card/card-net" }
 libp2p = { workspace = true }
-blake3 = { workspace = true }
-serde = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
