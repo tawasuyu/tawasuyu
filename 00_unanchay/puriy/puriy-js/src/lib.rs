@@ -10011,4 +10011,245 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("b").expect("e"), JsValue::Bool(false));
     }
+
+    // ---- Fase 7.126 — File System Access API ----
+
+    #[test]
+    fn filesystem_pickers_existen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof showOpenFilePicker").expect("e"),
+            JsValue::String("function".into())
+        );
+        assert_eq!(
+            rt.eval("typeof showSaveFilePicker + ',' + typeof showDirectoryPicker").expect("e"),
+            JsValue::String("function,function".into())
+        );
+    }
+
+    #[test]
+    fn filesystem_open_picker_resuelve_via_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var nombre = null, kind = null; \
+             showOpenFilePicker().then(function(list){ nombre = list[0].name; kind = list[0].kind; }); \
+             var id = __puriy_fs_next_id - 1; \
+             __puriy_fs_open_resolve(id, [{ name: 'notas.txt', content: 'hola' }]);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nombre").expect("e"), JsValue::String("notas.txt".into()));
+        assert_eq!(rt.eval("kind").expect("e"), JsValue::String("file".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'fs-open-picker'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn filesystem_open_picker_cancelado_rechaza_abort() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             showOpenFilePicker().catch(function(e){ errName = e.name; }); \
+             var id = __puriy_fs_next_id - 1; \
+             __puriy_fs_reject(id);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("AbortError".into()));
+    }
+
+    #[test]
+    fn filesystem_writable_buffer_round_trip() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var leido = null; \
+             showSaveFilePicker().then(function(h){ \
+                h.createWritable().then(function(w){ \
+                    w.write('contenido'); \
+                    w.close().then(function(){ \
+                        h.getFile().then(function(f){ leido = h._content; }); \
+                    }); \
+                }); \
+             }); \
+             var id = __puriy_fs_next_id - 1; \
+             __puriy_fs_save_resolve(id, { name: 'out.txt' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("leido").expect("e"), JsValue::String("contenido".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'fs-write'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn filesystem_directory_get_file_handle_create() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var nombre = null; \
+             showDirectoryPicker().then(function(dir){ \
+                dir.getFileHandle('nuevo.txt', { create: true }).then(function(h){ nombre = h.name; }); \
+             }); \
+             var id = __puriy_fs_next_id - 1; \
+             __puriy_fs_directory_resolve(id, { name: 'docs' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("nombre").expect("e"), JsValue::String("nuevo.txt".into()));
+    }
+
+    // ---- Fase 7.127 — Web Animations API ----
+
+    #[test]
+    fn animations_animate_devuelve_animation_running() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval("var a = el.animate([{ opacity: 0 }, { opacity: 1 }], 1000);").expect("e");
+        assert_eq!(
+            rt.eval("a instanceof Animation").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(rt.eval("a.playState").expect("e"), JsValue::String("running".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'animate'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn animations_finish_resuelve_finished_y_dispara_onfinish() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval(
+            "var done = false, fired = 0; \
+             var a = el.animate([], 1000); \
+             a.onfinish = function(){ fired++; }; \
+             a.finished.then(function(){ done = true; }); \
+             a.finish();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("a.playState").expect("e"), JsValue::String("finished".into()));
+        assert_eq!(rt.eval("done").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("fired").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn animations_pause_cambia_play_state() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval("var a = el.animate([], 1000); a.pause();").expect("e");
+        assert_eq!(rt.eval("a.playState").expect("e"), JsValue::String("paused".into()));
+    }
+
+    #[test]
+    fn animations_cancel_rechaza_finished_y_dispara_oncancel() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(MAKE_EL).expect("el");
+        rt.eval(
+            "var errName = null, fired = 0; \
+             var a = el.animate([], 1000); \
+             a.oncancel = function(){ fired++; }; \
+             a.finished.catch(function(e){ errName = e.name; }); \
+             a.cancel();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("a.playState").expect("e"), JsValue::String("idle".into()));
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("AbortError".into()));
+        assert_eq!(rt.eval("fired").expect("e"), JsValue::Number(1.0));
+    }
+
+    // ---- Fase 7.128 — Web Authentication (WebAuthn) ----
+
+    #[test]
+    fn webauthn_public_key_credential_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(
+            rt.eval("typeof PublicKeyCredential").expect("e"),
+            JsValue::String("function".into())
+        );
+        assert_eq!(
+            rt.eval("typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn webauthn_create_publickey_resuelve_credential() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var tipo = null, attest = null; \
+             navigator.credentials.create({ publicKey: { challenge: 'x' } }).then(function(c){ \
+                tipo = c.type; attest = c.response.attestationObject; \
+             }); \
+             var id = __puriy_webauthn_next_id - 1; \
+             __puriy_webauthn_resolve(id, { id: 'cred1', response: { attestationObject: 'AAA', clientDataJSON: '{}' } });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("tipo").expect("e"), JsValue::String("public-key".into()));
+        assert_eq!(rt.eval("attest").expect("e"), JsValue::String("AAA".into()));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'webauthn-create'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn webauthn_get_publickey_resuelve_assertion() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var sig = null; \
+             navigator.credentials.get({ publicKey: { challenge: 'y' } }).then(function(c){ \
+                sig = c.response.signature; \
+             }); \
+             var id = __puriy_webauthn_next_id - 1; \
+             __puriy_webauthn_resolve(id, { id: 'cred1', response: { signature: 'SIG', authenticatorData: 'AD' } });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("sig").expect("e"), JsValue::String("SIG".into()));
+    }
+
+    #[test]
+    fn webauthn_create_cancelado_rechaza_not_allowed() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             navigator.credentials.create({ publicKey: {} }).catch(function(e){ errName = e.name; }); \
+             var id = __puriy_webauthn_next_id - 1; \
+             __puriy_webauthn_reject(id);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotAllowedError".into()));
+    }
+
+    #[test]
+    fn webauthn_uvpaa_refleja_estado_host() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var a = null; \
+             PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(function(v){ a = v; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("a").expect("e"), JsValue::Bool(false));
+        rt.eval(
+            "__puriy_set_uvpaa(true); var b = null; \
+             PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(function(v){ b = v; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("b").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webauthn_sin_publickey_delega_en_credentials_original() {
+        let mut rt = JsRuntime::new().expect("rt");
+        // create() sin publicKey publica la mutación 'credentials' (Fase 7.110),
+        // no 'webauthn-create'.
+        rt.eval("navigator.credentials.create({ password: { id: 'a' } });").expect("e");
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'credentials'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'webauthn-create'; })").expect("e"),
+            JsValue::Bool(false)
+        );
+    }
 }

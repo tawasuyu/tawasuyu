@@ -740,6 +740,14 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         return Promise.reject(new globalThis.DOMException(
             'Pointer Lock no disponible', 'NotSupportedError'));
     };
+    // Fase 7.127 — el.animate(keyframes, options): delega en el hook del
+    // módulo animations.rs, que crea la Animation y arranca su timing.
+    el.animate = function(keyframes, options) {
+        if (typeof globalThis.__puriy_animate === 'function') {
+            return globalThis.__puriy_animate(el._id, keyframes, options);
+        }
+        return null;
+    };
     // Fase 7.13 — focus()/blur() programáticos. Por ahora sólo
     // dispatchamos el evento JS correspondiente; el chrome no actualiza
     // su focused_input desde acá (eso requeriría un puente JS→chrome

@@ -82,6 +82,9 @@ mod usb;
 mod fullscreen;
 mod pointerlock;
 mod bluetooth;
+mod filesystem;
+mod animations;
+mod webauthn;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -164,6 +167,9 @@ pub(crate) use usb::USB_BOOTSTRAP;
 pub(crate) use fullscreen::FULLSCREEN_BOOTSTRAP;
 pub(crate) use pointerlock::POINTERLOCK_BOOTSTRAP;
 pub(crate) use bluetooth::BLUETOOTH_BOOTSTRAP;
+pub(crate) use filesystem::FILESYSTEM_BOOTSTRAP;
+pub(crate) use animations::ANIMATIONS_BOOTSTRAP;
+pub(crate) use webauthn::WEBAUTHN_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -248,5 +254,8 @@ pub(crate) const ALL: &[&str] = &[
     FULLSCREEN_BOOTSTRAP,
     POINTERLOCK_BOOTSTRAP,
     BLUETOOTH_BOOTSTRAP,
+    FILESYSTEM_BOOTSTRAP,
+    ANIMATIONS_BOOTSTRAP,
+    WEBAUTHN_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
