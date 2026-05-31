@@ -91,6 +91,9 @@ mod backgroundsync;
 mod sensors;
 mod nfc;
 mod presentation;
+mod trustedtypes;
+mod reporting;
+mod pressure;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -182,6 +185,9 @@ pub(crate) use backgroundsync::BACKGROUNDSYNC_BOOTSTRAP;
 pub(crate) use sensors::SENSORS_BOOTSTRAP;
 pub(crate) use nfc::NFC_BOOTSTRAP;
 pub(crate) use presentation::PRESENTATION_BOOTSTRAP;
+pub(crate) use trustedtypes::TRUSTEDTYPES_BOOTSTRAP;
+pub(crate) use reporting::REPORTING_BOOTSTRAP;
+pub(crate) use pressure::PRESSURE_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -275,5 +281,8 @@ pub(crate) const ALL: &[&str] = &[
     SENSORS_BOOTSTRAP,
     NFC_BOOTSTRAP,
     PRESENTATION_BOOTSTRAP,
+    TRUSTEDTYPES_BOOTSTRAP,
+    REPORTING_BOOTSTRAP,
+    PRESSURE_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];

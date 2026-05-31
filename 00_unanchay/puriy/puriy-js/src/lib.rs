@@ -10699,4 +10699,185 @@ mod tests {
         .expect("e");
         assert_eq!(rt.eval("b").expect("e"), JsValue::Bool(true));
     }
+
+    // ---- Fase 7.135 — Trusted Types ----
+
+    #[test]
+    fn trusted_types_factory_y_clases_existen() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof trustedTypes").expect("e"), JsValue::String("object".into()));
+        assert_eq!(rt.eval("typeof trustedTypes.createPolicy").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof TrustedHTML").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("trustedTypes.defaultPolicy").expect("e"), JsValue::Null);
+    }
+
+    #[test]
+    fn trusted_types_policy_envuelve_y_es_reconocida() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var p = trustedTypes.createPolicy('mi', { createHTML: function(s){ return s.replace('<', '&lt;'); } }); \
+             var h = p.createHTML('<b>x');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("h instanceof TrustedHTML").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("h.toString()").expect("e"), JsValue::String("&lt;b>x".into()));
+        assert_eq!(rt.eval("trustedTypes.isHTML(h)").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("trustedTypes.isScript(h)").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn trusted_types_metodo_faltante_tira_type_error() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; \
+             var p = trustedTypes.createPolicy('solohtml', { createHTML: function(s){ return s; } }); \
+             try { p.createScript('alert(1)'); } catch (e) { err = e.constructor.name; }",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("TypeError".into()));
+    }
+
+    #[test]
+    fn trusted_types_wrapper_no_construible_y_default_policy() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var err = null; try { new TrustedHTML(); } catch (e) { err = e.constructor.name; } \
+             trustedTypes.createPolicy('default', { createHTML: function(s){ return s; } });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("err").expect("e"), JsValue::String("TypeError".into()));
+        assert_eq!(rt.eval("trustedTypes.defaultPolicy.name").expect("e"), JsValue::String("default".into()));
+    }
+
+    // ---- Fase 7.136 — Reporting API ----
+
+    #[test]
+    fn reporting_observer_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof ReportingObserver").expect("e"), JsValue::String("function".into()));
+        assert_eq!(
+            rt.eval("typeof (new ReportingObserver(function(){})).observe").expect("e"),
+            JsValue::String("function".into())
+        );
+    }
+
+    #[test]
+    fn reporting_observe_recibe_reportes() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var got = null; \
+             var o = new ReportingObserver(function(recs){ got = recs[0]; }); \
+             o.observe(); \
+             __puriy_queue_report({ type: 'deprecation', url: 'https://x', body: { id: 'foo' } });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("got.type").expect("e"), JsValue::String("deprecation".into()));
+        assert_eq!(rt.eval("got.body.id").expect("e"), JsValue::String("foo".into()));
+    }
+
+    #[test]
+    fn reporting_types_filtra() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var o = new ReportingObserver(function(recs){ n += recs.length; }, { types: ['deprecation'] }); \
+             o.observe(); \
+             __puriy_queue_report({ type: 'intervention' }); \
+             __puriy_queue_report({ type: 'deprecation' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn reporting_buffered_reentrega_previos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "__puriy_queue_report({ type: 'deprecation', url: 'https://prev' }); \
+             var got = null; \
+             var o = new ReportingObserver(function(recs){ got = recs[0]; }, { buffered: true }); \
+             o.observe();",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("got.url").expect("e"), JsValue::String("https://prev".into()));
+    }
+
+    #[test]
+    fn reporting_disconnect_detiene() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var o = new ReportingObserver(function(recs){ n += recs.length; }); \
+             o.observe(); o.disconnect(); \
+             __puriy_queue_report({ type: 'deprecation' });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
+
+    // ---- Fase 7.137 — Compute Pressure API ----
+
+    #[test]
+    fn pressure_observer_existe_y_known_sources() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof PressureObserver").expect("e"), JsValue::String("function".into()));
+        assert_eq!(
+            rt.eval("PressureObserver.knownSources.indexOf('cpu') >= 0").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn pressure_observe_resuelve_y_publica() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ok = false; \
+             var o = new PressureObserver(function(){}); \
+             o.observe('cpu').then(function(){ ok = true; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ok").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'pressure-observe' && d.value === 'cpu'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn pressure_observe_fuente_desconocida_rechaza() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var errName = null; \
+             var o = new PressureObserver(function(){}); \
+             o.observe('gpu').catch(function(e){ errName = e.name; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("errName").expect("e"), JsValue::String("NotSupportedError".into()));
+    }
+
+    #[test]
+    fn pressure_sample_invoca_callback() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var estado = null; \
+             var o = new PressureObserver(function(recs){ estado = recs[0].state; }); \
+             o.observe('cpu'); \
+             __puriy_pressure_sample('cpu', 'serious');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("estado").expect("e"), JsValue::String("serious".into()));
+    }
+
+    #[test]
+    fn pressure_unobserve_detiene() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var o = new PressureObserver(function(recs){ n += recs.length; }); \
+             o.observe('cpu'); o.unobserve('cpu'); \
+             __puriy_pressure_sample('cpu', 'fair');",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(0.0));
+    }
 }
