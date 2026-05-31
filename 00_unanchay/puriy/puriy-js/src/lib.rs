@@ -11562,4 +11562,147 @@ mod tests {
         rt.eval("__puriy_sharedworker_message(1, 'desde-sw');").expect("e");
         assert_eq!(rt.eval("r").expect("e"), JsValue::String("desde-sw".into()));
     }
+
+    // ---- Fase 7.144 — Web Audio API ----
+
+    #[test]
+    fn audio_context_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("typeof AudioContext").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("AudioContext === webkitAudioContext").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("typeof OfflineAudioContext").expect("e"), JsValue::String("function".into()));
+        assert_eq!(rt.eval("typeof AudioParam").expect("e"), JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn audio_context_estado_y_resume() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new AudioContext(); var antes = ctx.state; ctx.resume();").expect("e");
+        assert_eq!(rt.eval("antes").expect("e"), JsValue::String("suspended".into()));
+        assert_eq!(rt.eval("ctx.state").expect("e"), JsValue::String("running".into()));
+        assert_eq!(rt.eval("ctx.sampleRate").expect("e"), JsValue::Number(44100.0));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'audio-state'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn audio_create_oscillator_y_gain() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new AudioContext(); var osc = ctx.createOscillator(); var g = ctx.createGain();")
+            .expect("e");
+        assert_eq!(rt.eval("osc.type").expect("e"), JsValue::String("sine".into()));
+        assert_eq!(rt.eval("osc.frequency.value").expect("e"), JsValue::Number(440.0));
+        assert_eq!(rt.eval("g.gain.value").expect("e"), JsValue::Number(1.0));
+        assert_eq!(rt.eval("osc instanceof OscillatorNode").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("osc instanceof AudioNode").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn audio_param_set_value_at_time() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ctx = new AudioContext(); var g = ctx.createGain(); \
+             g.gain.setValueAtTime(0.5, 0); g.gain.linearRampToValueAtTime(0.8, 1);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("g.gain.value").expect("e"), JsValue::Number(0.8));
+    }
+
+    #[test]
+    fn audio_oscillator_start_stop_y_onended() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var terminado = false; \
+             var ctx = new AudioContext(); var osc = ctx.createOscillator(); \
+             osc.onended = function(){ terminado = true; }; \
+             osc.connect(ctx.destination); osc.start(); osc.stop(1);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("terminado").expect("e"), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'audio-node-start'; })").expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn audio_connect_encadena() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ctx = new AudioContext(); var osc = ctx.createOscillator(); var g = ctx.createGain(); \
+             var ret = osc.connect(g);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("ret === g").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("osc._outputs.length").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn audio_create_buffer_y_channel_data() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var ctx = new AudioContext(); var buf = ctx.createBuffer(2, 100, 48000); \
+             var data = buf.getChannelData(0); data[0] = 0.25;",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("buf.numberOfChannels").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("buf.length").expect("e"), JsValue::Number(100.0));
+        assert_eq!(rt.eval("data.length").expect("e"), JsValue::Number(100.0));
+        assert_eq!(rt.eval("data[0]").expect("e"), JsValue::Number(0.25));
+    }
+
+    #[test]
+    fn audio_analyser_bin_count() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new AudioContext(); var an = ctx.createAnalyser(); an.fftSize = 1024;").expect("e");
+        // frequencyBinCount se fija al construir (fftSize default 2048 → 1024)
+        assert_eq!(rt.eval("ctx.createAnalyser().frequencyBinCount").expect("e"), JsValue::Number(1024.0));
+        assert_eq!(
+            rt.eval("var a = new Uint8Array(8); an.getByteTimeDomainData(a); a[0]").expect("e"),
+            JsValue::Number(128.0)
+        );
+    }
+
+    #[test]
+    fn audio_biquad_filter() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new AudioContext(); var f = ctx.createBiquadFilter(); f.type = 'highpass';")
+            .expect("e");
+        assert_eq!(rt.eval("f.type").expect("e"), JsValue::String("highpass".into()));
+        assert_eq!(rt.eval("typeof f.frequency.value").expect("e"), JsValue::String("number".into()));
+        assert_eq!(rt.eval("f.Q.value").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn audio_decode_audio_data_resuelve() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var canales = -1; \
+             var ctx = new AudioContext(); var ab = new ArrayBuffer(800); \
+             ctx.decodeAudioData(ab).then(function(buf){ canales = buf.numberOfChannels; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("canales").expect("e"), JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn audio_offline_context_render() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var len = -1; \
+             var oc = new OfflineAudioContext(1, 256, 44100); \
+             oc.startRendering().then(function(buf){ len = buf.length; });",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("len").expect("e"), JsValue::Number(256.0));
+    }
+
+    #[test]
+    fn audio_context_close() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ctx = new AudioContext(); ctx.close();").expect("e");
+        assert_eq!(rt.eval("ctx.state").expect("e"), JsValue::String("closed".into()));
+    }
 }

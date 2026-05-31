@@ -100,6 +100,7 @@ mod cookiestore;
 mod indexeddb;
 mod webrtc;
 mod workers;
+mod webaudio;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -200,6 +201,7 @@ pub(crate) use cookiestore::COOKIESTORE_BOOTSTRAP;
 pub(crate) use indexeddb::INDEXEDDB_BOOTSTRAP;
 pub(crate) use webrtc::WEBRTC_BOOTSTRAP;
 pub(crate) use workers::WORKERS_BOOTSTRAP;
+pub(crate) use webaudio::WEBAUDIO_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -302,5 +304,6 @@ pub(crate) const ALL: &[&str] = &[
     INDEXEDDB_BOOTSTRAP,
     WEBRTC_BOOTSTRAP,
     WORKERS_BOOTSTRAP,
+    WEBAUDIO_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
