@@ -33,6 +33,7 @@ llimphi-widget-tabs = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-widget-segmented = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
 llimphi-widget-switch = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 notify = { workspace = true }

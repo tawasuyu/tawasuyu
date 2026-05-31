@@ -7,10 +7,47 @@
 //! arrancar (y tras mutaciones) y deja un `Vec<NavNode>` cacheado en el
 //! `Model`. Cargar una carta sí va al store por id (`get_chart`).
 
-use cosmos_model::{Chart, ChartKind, GroupId};
+use cosmos_model::{Chart, ChartId, ChartKind, ContactId, GroupId};
 use cosmos_store::Store;
 
 use crate::persist::{list_cards, load_card};
+
+/// Parsea la parte `<id>` de una clave `"<prefijo>:<id>"`.
+fn key_id(key: &str, prefix: &str) -> Option<String> {
+    key.strip_prefix(prefix).map(|s| s.to_string())
+}
+
+pub(crate) fn parse_group_key(key: &str) -> Option<GroupId> {
+    key_id(key, "g:")?.parse().ok()
+}
+
+pub(crate) fn parse_contact_key(key: &str) -> Option<ContactId> {
+    key_id(key, "c:")?.parse().ok()
+}
+
+pub(crate) fn parse_chart_key(key: &str) -> Option<ChartId> {
+    key_id(key, "h:")?.parse().ok()
+}
+
+/// Borra un contacto y todas sus cartas.
+pub(crate) fn delete_contact_recursive(store: &Store, id: ContactId) {
+    for ch in store.list_charts(id).unwrap_or_default() {
+        let _ = store.delete_chart(ch.id);
+    }
+    let _ = store.delete_contact(id);
+}
+
+/// Borra un grupo, sus subgrupos, contactos y cartas (en cascada manual —
+/// `delete_group` del store no cascadea).
+pub(crate) fn delete_group_recursive(store: &Store, id: GroupId) {
+    for sub in store.list_groups(Some(id)).unwrap_or_default() {
+        delete_group_recursive(store, sub.id);
+    }
+    for c in store.list_contacts(Some(id)).unwrap_or_default() {
+        delete_contact_recursive(store, c.id);
+    }
+    let _ = store.delete_group(id);
+}
 
 /// Tipo de nodo del árbol de datos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

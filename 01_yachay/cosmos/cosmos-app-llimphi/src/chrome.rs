@@ -13,7 +13,7 @@ use cosmos_canvas_llimphi::{canvas_view, canvas_view_clickable};
 use cosmos_render::{compose_sphere, compose_wheel_with_hits, CompositionOpts, Palette, SphereOpts, SphereView};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -24,6 +24,7 @@ use llimphi_widget_context_menu::{
 };
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use llimphi_widget_switch::{switch_view, SwitchPalette};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
@@ -372,14 +373,12 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
             continue;
         }
         let is_container = n.kind != NavKind::Chart;
-        let selected = match &n.chart_id {
-            Some(id) => model.selected_card.as_deref() == Some(id.as_str()),
-            None => false,
-        };
-        let msg = if is_container {
+        let selected = model.nav_selected.as_deref() == Some(n.key.as_str());
+        let click = Msg::NavClick(n.key.clone());
+        let toggle = if is_container {
             Msg::ToggleNavNode(n.key.clone())
         } else {
-            Msg::CargarCarta(n.chart_id.clone().unwrap_or_default())
+            click.clone()
         };
         rows.push(TreeRow {
             label: n.label.clone(),
@@ -387,8 +386,8 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
             has_children: is_container,
             expanded: is_container && model.nav_expanded.contains(&n.key),
             selected,
-            on_toggle: msg.clone(),
-            on_select: msg,
+            on_toggle: toggle,
+            on_select: click,
         });
     }
 
@@ -411,6 +410,12 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         palette: TreePalette::from_theme(theme),
     });
 
+    let mut kids: Vec<View<Msg>> = vec![nav_toolbar(model, theme)];
+    if model.nav_rename.is_some() {
+        kids.push(rename_bar(model, theme));
+    }
+    kids.push(tree);
+
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -424,7 +429,98 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![tree])
+    .children(kids)
+}
+
+/// Barra de acciones del explorador: crear grupo/contacto/carta sobre la
+/// selección, renombrar y borrar.
+fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
+    let has_sel = model.nav_selected.is_some();
+    let btn = |label: &str, msg: Msg, enabled: bool| -> View<Msg> {
+        let mut v = View::new(Style {
+            size: Size {
+                width: auto(),
+                height: length(22.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            padding: Rect {
+                left: length(7.0_f32),
+                right: length(7.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .radius(4.0);
+        if enabled {
+            v = v
+                .text_aligned(label.to_string(), 12.0, theme.fg_text, Alignment::Center)
+                .hover_fill(theme.bg_row_hover)
+                .on_click(msg);
+        } else {
+            v = v.text_aligned(label.to_string(), 12.0, theme.fg_muted, Alignment::Center);
+        }
+        v
+    };
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(3.0_f32),
+            height: length(0.0_f32),
+        },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(3.0_f32),
+            bottom: length(3.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![
+        btn("＋grupo", Msg::NewGroup, true),
+        btn("＋contacto", Msg::NewContact, true),
+        btn("＋carta", Msg::NewChart, has_sel),
+        btn("✎", Msg::RenameStart, has_sel),
+        btn("🗑", Msg::DeleteSelected, has_sel),
+    ])
+}
+
+/// Caja de texto para renombrar el nodo seleccionado (Enter confirma,
+/// Escape cancela — el ruteo de teclas lo hace `App::on_key`).
+fn rename_bar(model: &Model, theme: &Theme) -> View<Msg> {
+    let input = text_input_view(
+        &model.rename_input,
+        "nombre…",
+        true,
+        &TextInputPalette::from_theme(theme),
+        Msg::RenameStart,
+    );
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(3.0_f32),
+            bottom: length(3.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![input])
 }
 
 // =====================================================================

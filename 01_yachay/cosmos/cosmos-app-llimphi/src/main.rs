@@ -157,6 +157,153 @@ fn do_guardar(m: &mut Model) {
     m.status_note = Some(format!("Carta guardada: {name}"));
 }
 
+/// Reconstruye el snapshot del árbol desde el store (tras una mutación).
+fn refresh_nav(m: &mut Model) {
+    if let Some(s) = &m.store {
+        m.nav_nodes = library::snapshot(s);
+    }
+}
+
+/// El nodo seleccionado interpretado como ids del store (según su tipo).
+fn nav_click(m: &mut Model, key: String) {
+    m.nav_selected = Some(key.clone());
+    match m.node(&key).map(|n| n.kind) {
+        Some(library::NavKind::Chart) => {
+            if let Some(id) = m.node(&key).and_then(|n| n.chart_id.clone()) {
+                do_cargar(m, id);
+            }
+        }
+        Some(_) => m.toggle_nav(key),
+        None => {}
+    }
+}
+
+fn new_group(m: &mut Model) {
+    let Some(store) = &m.store else { return };
+    // Bajo el grupo seleccionado si lo hay; si no, a la raíz.
+    let parent = m
+        .selected_node()
+        .and_then(|n| library::parse_group_key(&n.key));
+    match store.create_group(parent, "Grupo nuevo", None) {
+        Ok(g) => {
+            if let Some(pk) = m.nav_selected.clone() {
+                m.nav_expanded.insert(pk);
+            }
+            refresh_nav(m);
+            start_rename(m, format!("g:{}", g.id));
+        }
+        Err(e) => m.error = Some(format!("crear grupo: {e}")),
+    }
+}
+
+fn new_contact(m: &mut Model) {
+    let Some(store) = &m.store else { return };
+    // Grupo destino: el seleccionado, o el grupo del contacto/carta
+    // seleccionados; si nada, raíz.
+    let group = m.selected_node().and_then(|n| match n.kind {
+        library::NavKind::Group => library::parse_group_key(&n.key),
+        _ => n.parent.as_deref().and_then(library::parse_group_key),
+    });
+    match store.create_contact(group, "Contacto nuevo", None) {
+        Ok(c) => {
+            if let Some(g) = group {
+                m.nav_expanded.insert(format!("g:{g}"));
+            }
+            refresh_nav(m);
+            start_rename(m, format!("c:{}", c.id));
+        }
+        Err(e) => m.error = Some(format!("crear contacto: {e}")),
+    }
+}
+
+fn new_chart(m: &mut Model) {
+    let Some(store) = &m.store else { return };
+    // Contacto destino: el seleccionado, o el contacto padre de la carta
+    // seleccionada.
+    let contact = m.selected_node().and_then(|n| match n.kind {
+        library::NavKind::Contact => library::parse_contact_key(&n.key),
+        library::NavKind::Chart => n.parent.as_deref().and_then(library::parse_contact_key),
+        library::NavKind::Group => None,
+    });
+    let Some(contact) = contact else {
+        m.error = Some("seleccioná un contacto para crear la carta".into());
+        return;
+    };
+    // Clona los datos de nacimiento/config de la carta actual.
+    let res = store.create_chart(
+        contact,
+        cosmos_model::ChartKind::Natal,
+        "Carta nueva",
+        &m.chart.birth_data,
+        &m.chart.config,
+        None,
+    );
+    match res {
+        Ok(ch) => {
+            m.nav_expanded.insert(format!("c:{contact}"));
+            refresh_nav(m);
+            start_rename(m, format!("h:{}", ch.id));
+        }
+        Err(e) => m.error = Some(format!("crear carta: {e}")),
+    }
+}
+
+fn delete_selected(m: &mut Model) {
+    let Some(store) = &m.store else { return };
+    let Some(node) = m.selected_node() else { return };
+    let key = node.key.clone();
+    match node.kind {
+        library::NavKind::Group => {
+            if let Some(id) = library::parse_group_key(&key) {
+                library::delete_group_recursive(store, id);
+            }
+        }
+        library::NavKind::Contact => {
+            if let Some(id) = library::parse_contact_key(&key) {
+                library::delete_contact_recursive(store, id);
+            }
+        }
+        library::NavKind::Chart => {
+            if let Some(id) = library::parse_chart_key(&key) {
+                let _ = store.delete_chart(id);
+            }
+        }
+    }
+    m.nav_selected = None;
+    refresh_nav(m);
+    m.status_note = Some("Elemento eliminado".into());
+}
+
+fn start_rename(m: &mut Model, key: String) {
+    let current = m.node(&key).map(|n| n.label.clone()).unwrap_or_default();
+    m.rename_input.set_text(current);
+    m.nav_selected = Some(key.clone());
+    m.nav_rename = Some(key);
+}
+
+fn commit_rename(m: &mut Model) {
+    let Some(key) = m.nav_rename.take() else { return };
+    let name = m.rename_input.text();
+    if let Some(store) = &m.store {
+        if name.trim().is_empty() {
+            return;
+        }
+        let r = if let Some(id) = library::parse_group_key(&key) {
+            store.rename_group(id, &name)
+        } else if let Some(id) = library::parse_contact_key(&key) {
+            store.rename_contact(id, &name)
+        } else if let Some(id) = library::parse_chart_key(&key) {
+            store.rename_chart(id, &name)
+        } else {
+            Ok(())
+        };
+        if let Err(e) = r {
+            m.error = Some(format!("renombrar: {e}"));
+        }
+    }
+    refresh_nav(m);
+}
+
 fn set_theme_dark(m: &mut Model, dark: bool) {
     m.cfg.theme_dark = dark;
     m.theme = if dark { Theme::dark() } else { Theme::light() };
@@ -287,6 +434,9 @@ impl App for Cosmos {
             store,
             nav_nodes,
             nav_expanded,
+            nav_selected: None,
+            nav_rename: None,
+            rename_input: llimphi_widget_text_input::TextInputState::new(),
             nav_w: ui.nav_w,
             tools_w: ui.tools_w,
             nav_open: ui.nav_open,
@@ -323,7 +473,23 @@ impl App for Cosmos {
                 persist = true;
             }
             Msg::ToggleNavNode(key) => m.toggle_nav(key),
-            Msg::CargarCarta(name) => do_cargar(&mut m, name),
+            Msg::NavClick(key) => nav_click(&mut m, key),
+            Msg::NewGroup => new_group(&mut m),
+            Msg::NewContact => new_contact(&mut m),
+            Msg::NewChart => new_chart(&mut m),
+            Msg::DeleteSelected => delete_selected(&mut m),
+            Msg::RenameStart => {
+                if let Some(key) = m.nav_selected.clone() {
+                    start_rename(&mut m, key);
+                }
+            }
+            Msg::RenameKey(ev) => {
+                if m.nav_rename.is_some() {
+                    m.rename_input.apply_key(&ev);
+                }
+            }
+            Msg::RenameCommit => commit_rename(&mut m),
+            Msg::RenameCancel => m.nav_rename = None,
             Msg::ChartFileChanged => {
                 if let Some(c) = load_chart_from_disk() {
                     m.chart = c;
@@ -491,6 +657,18 @@ impl App for Cosmos {
     }
 
     fn on_key(model: &Model, ev: &llimphi_ui::KeyEvent) -> Option<Msg> {
+        // Renombrar un nodo del árbol captura el teclado: Enter confirma,
+        // Escape cancela, el resto alimenta el buffer de texto.
+        if model.nav_rename.is_some() {
+            if ev.state == KeyState::Pressed {
+                match &ev.key {
+                    Key::Named(NamedKey::Enter) => return Some(Msg::RenameCommit),
+                    Key::Named(NamedKey::Escape) => return Some(Msg::RenameCancel),
+                    _ => {}
+                }
+            }
+            return Some(Msg::RenameKey(ev.clone()));
+        }
         if ev.state != KeyState::Pressed {
             return None;
         }

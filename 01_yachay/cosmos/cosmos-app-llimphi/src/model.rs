@@ -15,6 +15,7 @@ use cosmos_model::Chart;
 use cosmos_render::RenderModel;
 use cosmos_store::Store;
 use llimphi_theme::Theme;
+use llimphi_widget_text_input::TextInputState;
 use serde::{Deserialize, Serialize};
 
 use crate::astroview::AstroState;
@@ -446,8 +447,17 @@ pub(crate) enum Msg {
     CloseTab(usize),
     /// Expande/colapsa un nodo (grupo o contacto) del árbol de datos.
     ToggleNavNode(String),
-    /// Carga una carta por su id de store.
-    CargarCarta(String),
+    /// Selecciona un nodo del árbol; carta→carga, contenedor→toggle.
+    NavClick(String),
+    // CRUD del árbol de datos (cosmos-store)
+    NewGroup,
+    NewContact,
+    NewChart,
+    DeleteSelected,
+    RenameStart,
+    RenameKey(llimphi_ui::KeyEvent),
+    RenameCommit,
+    RenameCancel,
     /// `cosmos-chart.json` cambió en disco — recargar.
     ChartFileChanged,
     SelectBody(Option<String>),
@@ -505,6 +515,11 @@ pub(crate) struct Model {
     pub(crate) store: Option<Store>,
     pub(crate) nav_nodes: Vec<NavNode>,
     pub(crate) nav_expanded: HashSet<String>,
+    /// Nodo seleccionado en el árbol (clave de [`NavNode`]).
+    pub(crate) nav_selected: Option<String>,
+    /// Clave del nodo en edición de nombre (`None` = no se renombra).
+    pub(crate) nav_rename: Option<String>,
+    pub(crate) rename_input: TextInputState,
     // layout guardable (3 zonas resizables)
     pub(crate) nav_w: f32,
     pub(crate) tools_w: f32,
@@ -536,6 +551,17 @@ impl Model {
         if !self.nav_expanded.remove(&key) {
             self.nav_expanded.insert(key);
         }
+    }
+
+    /// El nodo actualmente seleccionado en el árbol, si existe.
+    pub(crate) fn selected_node(&self) -> Option<&NavNode> {
+        let key = self.nav_selected.as_deref()?;
+        self.nav_nodes.iter().find(|n| n.key == key)
+    }
+
+    /// Busca un nodo por su clave.
+    pub(crate) fn node(&self, key: &str) -> Option<&NavNode> {
+        self.nav_nodes.iter().find(|n| n.key == key)
     }
 
     pub(crate) fn panel_expanded(&self, p: ToolPanel) -> bool {
