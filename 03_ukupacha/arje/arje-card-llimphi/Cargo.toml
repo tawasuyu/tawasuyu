@@ -9,6 +9,8 @@ description = "Card de escritorio Llimphi con el estado vivo del init arje: capa
 
 [dependencies]
 arje-incarnate = { path = "../init/arje-incarnate" }
+arje-brain = { path = "../runtime/arje-brain" }
+tokio = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-app-header = { workspace = true }

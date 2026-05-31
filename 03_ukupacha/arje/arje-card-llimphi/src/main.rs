@@ -22,8 +22,10 @@
 
 #![forbid(unsafe_code)]
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use arje_brain::introspect::{call, IntrospectRequest, IntrospectResponse};
 use arje_incarnate::caps::{CapabilitySet, CgroupStatus, NsKind, UserNsStatus};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -107,18 +109,119 @@ fn human_cgroup(s: &CgroupStatus) -> &'static str {
     }
 }
 
+/// Snapshot del brain (motor de reglas + observador + audit) leído por su
+/// socket introspect. Sólo los datos que la card muestra.
+#[derive(Clone)]
+struct BrainSnapshot {
+    /// Reglas vivas en el motor.
+    rules: usize,
+    /// Entropía de Shannon de la distribución de eventos observados.
+    entropy_bits: f64,
+    /// Eventos muestreados en la ventana del observador.
+    sample_size: u64,
+    /// Tipos de evento distintos vistos.
+    distinct_kinds: usize,
+    /// Seq del head del audit log (None si está vacío).
+    head_seq: Option<u64>,
+    /// Últimas entradas del audit, más recientes primero.
+    recent_audit: Vec<String>,
+}
+
+/// Estado del brain en el modelo: aún consultando, caído/no-corriendo, o vivo.
+/// El brain es opcional — la card de aislamiento sirve igual sin él.
+#[derive(Clone)]
+enum BrainStatus {
+    Consultando,
+    Offline(String),
+    Live(BrainSnapshot),
+}
+
+/// Path del socket introspect del brain. Misma convención que arje-zero:
+/// `$ENTE_BRAIN_SOCK`, o `$XDG_RUNTIME_DIR/ente-brain.sock` (fallback
+/// `$TMPDIR`, `/tmp`).
+fn brain_path() -> PathBuf {
+    if let Ok(p) = std::env::var("ENTE_BRAIN_SOCK") {
+        return p.into();
+    }
+    let runtime = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into()));
+    format!("{runtime}/ente-brain.sock").into()
+}
+
+/// Consulta el brain por su socket introspect con un runtime tokio efímero
+/// (current-thread). Pensado para correr fuera del hilo de UI vía
+/// `Handle::spawn`. Cualquier fallo de conexión/protocolo → `Err`: la UI lo
+/// pinta como "brain offline" y nunca tumba la card.
+fn query_brain(path: &Path) -> Result<BrainSnapshot, String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime tokio: {e}"))?;
+    rt.block_on(async {
+        let rules = match call(path, IntrospectRequest::ListRules).await {
+            Ok(IntrospectResponse::Rules(v)) => v.len(),
+            Ok(IntrospectResponse::Error(e)) => return Err(e),
+            Ok(_) => return Err("respuesta inesperada a ListRules".into()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let (entropy_bits, sample_size, distinct_kinds) =
+            match call(path, IntrospectRequest::EntropySnapshot).await {
+                Ok(IntrospectResponse::Entropy {
+                    value_bits,
+                    sample_size,
+                    distinct_kinds,
+                    ..
+                }) => (value_bits, sample_size, distinct_kinds),
+                Ok(IntrospectResponse::Error(e)) => return Err(e),
+                Ok(_) => return Err("respuesta inesperada a EntropySnapshot".into()),
+                Err(e) => return Err(e.to_string()),
+            };
+        let recent = match call(
+            path,
+            IntrospectRequest::ListAudit {
+                limit: 6,
+                filter: Default::default(),
+            },
+        )
+        .await
+        {
+            Ok(IntrospectResponse::AuditEntries(v)) => v,
+            Ok(IntrospectResponse::Error(e)) => return Err(e),
+            Ok(_) => return Err("respuesta inesperada a ListAudit".into()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let head_seq = recent.iter().map(|e| e.seq).max();
+        let recent_audit = recent
+            .iter()
+            .rev()
+            .map(|e| format!("#{}  {}", e.seq, e.action.kind().as_str()))
+            .collect();
+        Ok(BrainSnapshot {
+            rules,
+            entropy_bits,
+            sample_size,
+            distinct_kinds,
+            head_seq,
+            recent_audit,
+        })
+    })
+}
+
 struct Model {
     theme: Theme,
     snapshot: CapsSnapshot,
     last_detect_ms: u64,
+    brain: BrainStatus,
     /// Mantiene vivo el watcher de wawa-config (su thread muere al dropear).
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
 #[derive(Clone)]
 enum Msg {
-    /// Tick del scheduler: re-detecta capacidades y refresca el modelo.
+    /// Tick del scheduler: re-detecta capacidades y relanza la consulta al brain.
     Tick,
+    /// Resultado de una consulta al brain (vivo o caído).
+    BrainRefresh(Result<BrainSnapshot, String>),
     /// El bus de wawa-config cambió: re-aplicar theme/accent.
     WawaChanged(wawa_config::WawaConfig),
 }
@@ -151,15 +254,19 @@ impl App for Card {
         })
         .ok();
 
+        // Consulta inicial al brain en background (no esperar al primer tick).
+        handle.spawn(move || Msg::BrainRefresh(query_brain(&brain_path())));
+
         Model {
             theme,
             snapshot: CapsSnapshot::detect(),
             last_detect_ms: 0,
+            brain: BrainStatus::Consultando,
             _wawa_watcher: watcher,
         }
     }
 
-    fn update(model: Model, msg: Msg, _handle: &Handle<Msg>) -> Model {
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let mut m = model;
         match msg {
             Msg::Tick => {
@@ -168,6 +275,14 @@ impl App for Card {
                 let started = std::time::Instant::now();
                 m.snapshot = CapsSnapshot::detect();
                 m.last_detect_ms = started.elapsed().as_micros() as u64 / 1000;
+                // El brain sí es socket I/O: fuera del hilo de UI.
+                handle.spawn(move || Msg::BrainRefresh(query_brain(&brain_path())));
+            }
+            Msg::BrainRefresh(res) => {
+                m.brain = match res {
+                    Ok(snap) => BrainStatus::Live(snap),
+                    Err(e) => BrainStatus::Offline(e),
+                };
             }
             Msg::WawaChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg);
@@ -265,6 +380,47 @@ impl App for Card {
             &stat_palette,
         ));
 
+        // Sección brain — opcional. El brain corre como daemon aparte; si no
+        // está, la card de aislamiento sirve igual.
+        match &model.brain {
+            BrainStatus::Consultando => {}
+            BrainStatus::Offline(e) => {
+                body_children.push(banner_view::<Msg>(
+                    BannerKind::Info,
+                    format!("brain no disponible ({e})"),
+                ));
+            }
+            BrainStatus::Live(b) => {
+                let accent_brain = Color::from_rgba8(0xb4, 0x8e, 0xad, 0xff);
+                let accent_audit = Color::from_rgba8(0xd0, 0x87, 0x70, 0xff);
+
+                let brain_items = vec![
+                    format!("entropía  {:.2} bits", b.entropy_bits),
+                    format!("muestras  {}", b.sample_size),
+                    format!("tipos de evento  {}", b.distinct_kinds),
+                ];
+                body_children.push(stat_card_view::<Msg>(
+                    "Brain",
+                    b.rules.to_string(),
+                    "reglas vivas en el motor",
+                    accent_brain,
+                    &brain_items,
+                    &stat_palette,
+                ));
+
+                body_children.push(stat_card_view::<Msg>(
+                    "Audit log",
+                    b.head_seq
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "—".into()),
+                    "seq del head — cadena de decisiones del brain",
+                    accent_audit,
+                    &b.recent_audit,
+                    &stat_palette,
+                ));
+            }
+        }
+
         let body = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -336,5 +492,21 @@ mod tests {
     fn human_labels_cubren_variantes() {
         assert_eq!(human_user_ns(&UserNsStatus::Allowed), "permitidos");
         assert_eq!(human_cgroup(&CgroupStatus::Unified), "v2 unificado");
+    }
+
+    #[test]
+    fn query_brain_offline_es_err_no_panic() {
+        // Sin daemon en ese path, query_brain degrada a Err (la card lo pinta
+        // como "brain offline"), nunca paniquea.
+        let res = query_brain(Path::new("/nonexistent/arje-card-test.sock"));
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn brain_path_respeta_env() {
+        // Variable explícita gana sobre el fallback de runtime dir.
+        std::env::set_var("ENTE_BRAIN_SOCK", "/tmp/mi-brain.sock");
+        assert_eq!(brain_path(), PathBuf::from("/tmp/mi-brain.sock"));
+        std::env::remove_var("ENTE_BRAIN_SOCK");
     }
 }
