@@ -212,6 +212,7 @@ members = [
     "02_ruway/llimphi/widgets/banner",
     "02_ruway/llimphi/widgets/button",
     "02_ruway/llimphi/widgets/card",
+    "02_ruway/llimphi/widgets/clipboard",
     "02_ruway/llimphi/widgets/context-menu",
     "02_ruway/llimphi/widgets/edit-menu",
     "02_ruway/llimphi/widgets/menubar",
@@ -451,6 +452,8 @@ publish = false
 repository = "https://gitea.gioser.net/sergio/gioser"
 
 [workspace.dependencies]
+# === Registro de apps / menú global ===
+app-bus = { path = "shared/app-bus" }
 # === Serialización ===
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -519,7 +522,7 @@ tower = "0.5"
 instant-distance = "0.6"
 
 # === P2P (minga) ===
-libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macros", "kad", "identify", "relay", "dcutr"] }
+libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macros", "kad", "identify", "relay", "dcutr", "autonat"] }
 libp2p-stream = "=0.4.0-alpha"
 libp2p-allow-block-list = "0.6"
 
@@ -600,6 +603,7 @@ llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }
 llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }
 llimphi-widget-button = { path = "02_ruway/llimphi/widgets/button" }
 llimphi-widget-card = { path = "02_ruway/llimphi/widgets/card" }
+llimphi-clipboard = { path = "02_ruway/llimphi/widgets/clipboard" }
 llimphi-widget-context-menu = { path = "02_ruway/llimphi/widgets/context-menu" }
 llimphi-widget-edit-menu = { path = "02_ruway/llimphi/widgets/edit-menu" }
 llimphi-widget-menubar = { path = "02_ruway/llimphi/widgets/menubar" }

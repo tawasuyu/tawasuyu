@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-clipboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-clipboard — backend de portapapeles del sistema (vía arboard) que implementa el trait Clipboard del text-editor. Una línea para que el menú de edición y los atajos Ctrl+C/X/V de cualquier app Llimphi usen el clipboard real del SO, con degradación silenciosa a no-op si no hay display."
+
+[dependencies]
+llimphi-widget-text-editor = { workspace = true }
+arboard = { workspace = true }
