@@ -76,7 +76,27 @@ impl std::error::Error for ThumbError {}
 /// Decodifica una imagen en memoria y la reduce a un cuadro de `lado_max`
 /// px (preservando aspect ratio). Usa `DynamicImage::thumbnail`, que es un
 /// downscale rápido — suficiente para miniaturas. **Función pura.**
+///
+/// Fast-path (paso 4): si los bytes son un JPEG con un thumbnail embebido
+/// en su EXIF (típico en fotos de cámara/teléfono — un JPEG de ~160 px en
+/// el IFD1) y ese thumb es suficientemente grande para el lado pedido, lo
+/// usamos en vez de decodificar el full-res. Para una foto de 24 MP es la
+/// diferencia entre leer ~10 KB y decodificar ~70 MB.
 pub fn generar_thumb_de_bytes(bytes: &[u8], lado_max: u32) -> Result<ThumbRgba, ThumbError> {
+    // Fast-path EXIF: sólo si el thumb embebido cubre razonablemente el
+    // lado pedido (si es diminuto, mejor el full-res). El umbral `*2` deja
+    // pasar un embebido de 112 px para un lado de 224.
+    if es_jpeg(bytes) {
+        if let Some(emb) = jpeg_exif_thumb(bytes) {
+            if let Ok(img) = image::load_from_memory(&emb) {
+                let t = reducir(img, lado_max);
+                if t.w.max(t.h).saturating_mul(2) >= lado_max {
+                    return Ok(t);
+                }
+            }
+        }
+    }
+
     let reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|e| ThumbError::Io(e.to_string()))?;
@@ -86,11 +106,15 @@ pub fn generar_thumb_de_bytes(bytes: &[u8], lado_max: u32) -> Result<ThumbRgba, 
         return Err(ThumbError::FormatoNoSoportado);
     }
     let img = reader.decode().map_err(|e| ThumbError::Decode(e.to_string()))?;
+    Ok(reducir(img, lado_max))
+}
+
+/// Reduce una imagen decodificada a un cuadro de `lado_max` px preservando
+/// aspecto. **Sólo reduce**: `thumbnail` también agranda, pero upscalear
+/// una miniatura desperdicia RAM y se ve borrosa — si ya entra, se deja.
+fn reducir(img: image::DynamicImage, lado_max: u32) -> ThumbRgba {
     let lado = lado_max.max(1) as f32;
     let (ow, oh) = (img.width(), img.height());
-    // Sólo reducir: `thumbnail` también agranda, pero upscalear una
-    // miniatura desperdicia RAM y se ve borrosa. Si ya entra en el cuadro,
-    // se deja igual.
     let escala = (lado / ow as f32).min(lado / oh as f32).min(1.0);
     let rgba = if escala < 1.0 {
         let tw = ((ow as f32 * escala).round() as u32).max(1);
@@ -99,16 +123,128 @@ pub fn generar_thumb_de_bytes(bytes: &[u8], lado_max: u32) -> Result<ThumbRgba, 
     } else {
         img.to_rgba8()
     };
-    Ok(ThumbRgba {
+    ThumbRgba {
         w: rgba.width(),
         h: rgba.height(),
         rgba: rgba.into_raw(),
-    })
+    }
 }
 
-/// Lee un archivo y genera su miniatura. Para el MVP lee el archivo entero
-/// a memoria antes de decodificar; el paso 4 del plan (thumb embebido
-/// EXIF + downscale-on-decode) evitará decodificar el full-res.
+fn es_jpeg(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+}
+
+/// Extrae el JPEG del thumbnail embebido en el EXIF de un JPEG, si existe.
+/// Recorre los segmentos hasta el APP1 (`FFE1`) que empiece con `Exif\0\0`,
+/// y dentro de su bloque TIFF baja a IFD1 para leer los tags
+/// `JPEGInterchangeFormat` (0x0201, offset) y `JPEGInterchangeFormatLength`
+/// (0x0202, longitud). Devuelve los bytes del JPEG embebido. Tolerante:
+/// cualquier inconsistencia devuelve `None` (se cae al decode full-res).
+fn jpeg_exif_thumb(bytes: &[u8]) -> Option<Vec<u8>> {
+    if !es_jpeg(bytes) {
+        return None;
+    }
+    let mut i = 2;
+    while i + 4 <= bytes.len() {
+        // Saltar padding 0xFF entre marcadores.
+        if bytes[i] != 0xFF {
+            return None;
+        }
+        let marker = bytes[i + 1];
+        if marker == 0xFF {
+            i += 1;
+            continue;
+        }
+        // SOS (inicio del scan) o EOI: ya no hay más segmentos de cabecera.
+        if marker == 0xDA || marker == 0xD9 {
+            return None;
+        }
+        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+        if len < 2 {
+            return None;
+        }
+        let seg_ini = i + 4;
+        let seg_fin = i + 2 + len;
+        if seg_fin > bytes.len() {
+            return None;
+        }
+        if marker == 0xE1 {
+            let seg = &bytes[seg_ini..seg_fin];
+            if seg.len() >= 6 && &seg[0..6] == b"Exif\0\0" {
+                if let Some(t) = tiff_ifd1_thumb(&seg[6..]) {
+                    return Some(t);
+                }
+            }
+        }
+        i = seg_fin;
+    }
+    None
+}
+
+/// Dado el bloque TIFF de un EXIF (empezando en "II"/"MM"), baja a IFD1 y
+/// extrae los bytes del thumbnail JPEG. Respeta el endianness del header.
+fn tiff_ifd1_thumb(tiff: &[u8]) -> Option<Vec<u8>> {
+    if tiff.len() < 8 {
+        return None;
+    }
+    let le = match &tiff[0..2] {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let rd16 = |o: usize| -> Option<u16> {
+        tiff.get(o..o + 2).map(|b| {
+            if le {
+                u16::from_le_bytes([b[0], b[1]])
+            } else {
+                u16::from_be_bytes([b[0], b[1]])
+            }
+        })
+    };
+    let rd32 = |o: usize| -> Option<u32> {
+        tiff.get(o..o + 4).map(|b| {
+            if le {
+                u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+            } else {
+                u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+            }
+        })
+    };
+    if rd16(2)? != 0x002A {
+        return None;
+    }
+    let ifd0 = rd32(4)? as usize;
+    let n0 = rd16(ifd0)? as usize;
+    // El offset al siguiente IFD (IFD1) viene tras las `n0` entradas de 12 B.
+    let ifd1 = rd32(ifd0 + 2 + n0 * 12)? as usize;
+    if ifd1 == 0 {
+        return None;
+    }
+    let n1 = rd16(ifd1)? as usize;
+    let mut off = None;
+    let mut largo = None;
+    for e in 0..n1 {
+        let eo = ifd1 + 2 + e * 12;
+        match rd16(eo)? {
+            // tipo LONG, count 1 → valor inline en los 4 bytes en eo+8.
+            0x0201 => off = Some(rd32(eo + 8)? as usize),
+            0x0202 => largo = Some(rd32(eo + 8)? as usize),
+            _ => {}
+        }
+    }
+    let (off, largo) = (off?, largo?);
+    let emb = tiff.get(off..off.checked_add(largo)?)?;
+    // Sanidad: debe ser un JPEG.
+    if emb.len() >= 2 && emb[0] == 0xFF && emb[1] == 0xD8 {
+        Some(emb.to_vec())
+    } else {
+        None
+    }
+}
+
+/// Lee un archivo y genera su miniatura. Lee el archivo entero a memoria y
+/// delega en [`generar_thumb_de_bytes`] — que aprovecha el thumbnail EXIF
+/// embebido cuando lo hay (sin decodificar el full-res).
 pub fn generar_thumb_de_archivo(path: &Path, lado_max: u32) -> Result<ThumbRgba, ThumbError> {
     let bytes = std::fs::read(path).map_err(|e| ThumbError::Io(e.to_string()))?;
     generar_thumb_de_bytes(&bytes, lado_max)
@@ -399,6 +535,111 @@ mod pruebas {
             .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
             .unwrap();
         bytes
+    }
+
+    /// Codifica un JPEG sólido `w×h` del color RGB dado, en memoria.
+    fn jpeg_solido(w: u32, h: u32, color: [u8; 3]) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb(color));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Jpeg)
+            .unwrap();
+        bytes
+    }
+
+    /// Empotra `thumb_jpeg` como thumbnail EXIF (IFD1) dentro de `main_jpeg`,
+    /// devolviendo un JPEG válido con su APP1/Exif. Construye a mano el
+    /// bloque TIFF: IFD0 vacío → IFD1 con JPEGInterchangeFormat(0x0201) y
+    /// Length(0x0202), little-endian.
+    fn empotrar_exif_thumb(main_jpeg: &[u8], thumb_jpeg: &[u8]) -> Vec<u8> {
+        // Layout TIFF (offsets desde el inicio del bloque):
+        //  0 "II" | 2 2A00 | 4 IFD0=08 | 8 IFD0(count=0) | 10 nextIFD=14
+        //  14 IFD1(count=2) | 16 entry0201 | 28 entry0202 | 40 next=0 | 44 thumb
+        let thumb_off: u32 = 44;
+        let thumb_len = thumb_jpeg.len() as u32;
+        let mut tiff: Vec<u8> = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&0x002Au16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes()); // IFD0 @ 8
+        tiff.extend_from_slice(&0u16.to_le_bytes()); // IFD0 count
+        tiff.extend_from_slice(&14u32.to_le_bytes()); // next IFD (IFD1) @ 14
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // IFD1 count
+        let entrada = |tag: u16, valor: u32| -> Vec<u8> {
+            let mut e = Vec::with_capacity(12);
+            e.extend_from_slice(&tag.to_le_bytes());
+            e.extend_from_slice(&4u16.to_le_bytes()); // type LONG
+            e.extend_from_slice(&1u32.to_le_bytes()); // count 1
+            e.extend_from_slice(&valor.to_le_bytes());
+            e
+        };
+        tiff.extend_from_slice(&entrada(0x0201, thumb_off));
+        tiff.extend_from_slice(&entrada(0x0202, thumb_len));
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // next IFD = 0
+        debug_assert_eq!(tiff.len() as u32, thumb_off);
+        tiff.extend_from_slice(thumb_jpeg);
+
+        let mut datos = Vec::new();
+        datos.extend_from_slice(b"Exif\0\0");
+        datos.extend_from_slice(&tiff);
+        let seg_len = (datos.len() + 2) as u16;
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        out.extend_from_slice(&[0xFF, 0xE1]); // APP1
+        out.extend_from_slice(&seg_len.to_be_bytes());
+        out.extend_from_slice(&datos);
+        out.extend_from_slice(&main_jpeg[2..]); // resto del JPEG principal (sin su SOI)
+        out
+    }
+
+    #[test]
+    fn extrae_thumb_exif_embebido() {
+        let thumb = jpeg_solido(16, 12, [255, 0, 0]);
+        let main = jpeg_solido(40, 40, [0, 255, 0]);
+        let host = empotrar_exif_thumb(&main, &thumb);
+        let extraido = jpeg_exif_thumb(&host).expect("hay thumb embebido");
+        assert_eq!(extraido, thumb, "extrae exactamente el JPEG embebido");
+    }
+
+    #[test]
+    fn fast_path_usa_el_thumb_embebido_no_el_full() {
+        // Embebido rojo 16×12, imagen principal verde 40×40. Si el fast-path
+        // funciona, el thumb resultante es ROJO (del embebido), no verde.
+        let thumb = jpeg_solido(16, 12, [255, 0, 0]);
+        let main = jpeg_solido(40, 40, [0, 255, 0]);
+        let host = empotrar_exif_thumb(&main, &thumb);
+        // lado 24: el embebido (16 máx) pasa el umbral *2 (32 ≥ 24).
+        let t = generar_thumb_de_bytes(&host, 24).unwrap();
+        // El embebido 16×12 ≤ 24 ⇒ se deja igual.
+        assert_eq!((t.w, t.h), (16, 12));
+        // Rojo dominante (JPEG es lossy → tolerancia).
+        assert!(
+            t.rgba[0] > 170 && t.rgba[1] < 80 && t.rgba[2] < 80,
+            "esperaba rojo del embebido, vino {:?}",
+            &t.rgba[0..4]
+        );
+    }
+
+    #[test]
+    fn fast_path_ignora_thumb_embebido_diminuto() {
+        // Embebido 4×3: demasiado chico para un lado de 224 (8 < 224) ⇒ se
+        // descarta y se usa el full-res (verde 40×40).
+        let thumb = jpeg_solido(4, 3, [255, 0, 0]);
+        let main = jpeg_solido(40, 40, [0, 200, 0]);
+        let host = empotrar_exif_thumb(&main, &thumb);
+        let t = generar_thumb_de_bytes(&host, 224).unwrap();
+        // Vino del full-res 40×40 (≤224 ⇒ sin reducir).
+        assert_eq!((t.w, t.h), (40, 40));
+        assert!(t.rgba[1] > 150 && t.rgba[0] < 90, "esperaba verde del full-res");
+    }
+
+    #[test]
+    fn jpeg_sin_exif_no_rompe() {
+        // Un JPEG normal sin APP1/Exif → sin fast-path, decode normal.
+        let j = jpeg_solido(30, 30, [50, 60, 70]);
+        assert!(jpeg_exif_thumb(&j).is_none());
+        let t = generar_thumb_de_bytes(&j, 64).unwrap();
+        assert_eq!((t.w, t.h), (30, 30));
     }
 
     #[test]
