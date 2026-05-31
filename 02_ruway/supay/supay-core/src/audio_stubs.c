@@ -35,12 +35,32 @@ typedef struct {
     char name[9];
     int  vol;   /* 0..127 */
     int  sep;   /* 0..255, 128 ≈ centro */
+    /* Fase 4.5: posición de la fuente en fixed-point 16.16 (unidades
+     * Doom). `has_pos==0` ⇒ sonido sin posición (menú, jugador) → sin
+     * oclusión. Rust convierte px/py a float dividiendo por 65536. */
+    int  has_pos;
+    int  px;
+    int  py;
 } supay_snd_event;
 
 #define SUPAY_SND_RING 64
 static supay_snd_event supay_snd_ring[SUPAY_SND_RING];
 static int supay_snd_head = 0; /* índice de escritura */
 static int supay_snd_tail = 0; /* índice de lectura  */
+
+/* Fase 4.5: la sonda en s_sound.c (`supay_snd_set_origin`) deja acá la
+ * posición de la fuente justo antes de cada I_StartSound. `supay_snd_push`
+ * la consume y la resetea — un disparo sin sonda fresca queda sin posición
+ * en vez de heredar la vieja. */
+static int supay_org_has = 0;
+static int supay_org_x   = 0;
+static int supay_org_y   = 0;
+
+void supay_snd_set_origin(int has, int x, int y) {
+    supay_org_has = has;
+    supay_org_x   = x;
+    supay_org_y   = y;
+}
 
 static void supay_snd_push(sfxinfo_t *sfxinfo, int vol, int sep) {
     int next = (supay_snd_head + 1) % SUPAY_SND_RING;
@@ -58,7 +78,12 @@ static void supay_snd_push(sfxinfo_t *sfxinfo, int vol, int sep) {
     }
     e->vol = vol;
     e->sep = sep;
+    e->has_pos = supay_org_has;
+    e->px = supay_org_x;
+    e->py = supay_org_y;
     supay_snd_head = next;
+    /* Consumimos la posición: el próximo push sin sonda fresca no la hereda. */
+    supay_org_has = 0;
 }
 
 /* Drena hasta `max` eventos al array `out`. Devuelve cuántos copió.

@@ -187,6 +187,11 @@ pub fn update(state: State, msg: Msg) -> State {
             s.input.insert(&text);
             s.focused = true;
         }
+        Msg::VimPaste => {
+            // Sólo aplica si hay un TUI vivo; `forward_paste_to_pty` es
+            // no-op silencioso si no.
+            forward_paste_to_pty(&s);
+        }
     }
     s
 }

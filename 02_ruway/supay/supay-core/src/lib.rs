@@ -358,6 +358,11 @@ struct SupaySndEvent {
     name: [std::ffi::c_char; 9],
     vol: std::ffi::c_int,
     sep: std::ffi::c_int,
+    /// Fase 4.5: `0` = sin posición (menú/jugador), `!=0` = `px`/`py` válidos.
+    has_pos: std::ffi::c_int,
+    /// Posición de la fuente en fixed-point 16.16 (unidades Doom).
+    px: std::ffi::c_int,
+    py: std::ffi::c_int,
 }
 
 /// Evento de sonido emitido por el motor en un tick: qué sfx disparar y
@@ -372,6 +377,11 @@ pub struct SoundEvent {
     pub vol: u8,
     /// Separación estéreo 0..255 (128 ≈ centro; 0 izquierda, 255 derecha).
     pub sep: u8,
+    /// Fase 4.5: posición world `(x, y)` de la fuente en unidades Doom, o
+    /// `None` para sonidos sin origen (menú) o emitidos por el propio
+    /// jugador (arma en la mano). El host la usa para calcular la oclusión
+    /// geométrica contra las paredes de la escena.
+    pub pos: Option<(f32, f32)>,
 }
 
 // =====================================================================
@@ -517,6 +527,9 @@ impl DoomEngine {
                 name: [0; 9],
                 vol: 0,
                 sep: 0,
+                has_pos: 0,
+                px: 0,
+                py: 0,
             }; MAX];
             // SAFETY: raw vive en este stack frame; la fn C escribe a lo
             // sumo `MAX` entradas y devuelve cuántas.
@@ -535,10 +548,15 @@ impl DoomEngine {
                 let bytes: Vec<u8> = ev.name[..end].iter().map(|&c| c as u8).collect();
                 if let Ok(name) = String::from_utf8(bytes) {
                     if !name.is_empty() {
+                        // Fase 4.5: fixed-point 16.16 → float (1 unidad Doom).
+                        let pos = (ev.has_pos != 0).then(|| {
+                            (ev.px as f32 / 65536.0, ev.py as f32 / 65536.0)
+                        });
                         out.push(SoundEvent {
                             name,
                             vol: ev.vol.clamp(0, 127) as u8,
                             sep: ev.sep.clamp(0, 255) as u8,
+                            pos,
                         });
                     }
                 }

@@ -456,15 +456,29 @@ impl App for Supay {
             Msg::Tick => {
                 m.tick = m.tick.wrapping_add(1);
                 m.engine.tick();
-                // Fase 4.0: drenar los sfx que el motor encoló este tick
-                // y reproducirlos. `poll_sounds` y `audio` son campos
-                // distintos → no hay conflicto de borrow.
-                let sounds = m.engine.poll_sounds();
+                // Fase 4.0: drenar los sfx que el motor encoló este tick.
                 // Fase 4.1: cambio de música (arranque de nivel, idmus, etc.).
+                let sounds = m.engine.poll_sounds();
                 let music = m.engine.poll_music();
+                refresh_framebuffer(&mut m);
+                // Fase 2: snapshot tras cada tick.
+                let mut snap = m.engine.capture_scene(m.tick);
+                // Fase 3.17: el motor C deja `view_pitch=0`; lo inyectamos
+                // post-capture para que el renderer 3D haga y-shear sobre
+                // este snapshot y los próximos interpolados.
+                snap.player.view_pitch = m.view_pitch;
+                // Audio: reproducción + acústica. Se hace tras capturar el
+                // snapshot porque la oclusión (Fase 4.5) necesita la geometría
+                // de la escena y la posición del oyente de este mismo tick.
                 if let Some(audio) = m.audio.as_mut() {
+                    let (lx, ly) = (snap.player.x, snap.player.y);
                     for ev in sounds {
-                        audio.play(&ev.name, ev.vol, ev.sep);
+                        // Fase 4.5: oclusión geométrica de los sfx con origen
+                        // (los emitidos por el jugador no traen pos → 0, secos).
+                        let occ = ev
+                            .pos
+                            .map_or(0.0, |(sx, sy)| snap.occlusion(lx, ly, sx, sy));
+                        audio.play(&ev.name, ev.vol, ev.sep, occ);
                     }
                     match music {
                         Some(supay_core::MusicCommand::Play { data, looping }) => {
@@ -473,17 +487,8 @@ impl App for Supay {
                         Some(supay_core::MusicCommand::Stop) => audio.stop_music(),
                         None => {}
                     }
-                }
-                refresh_framebuffer(&mut m);
-                // Fase 2: snapshot tras cada tick.
-                let mut snap = m.engine.capture_scene(m.tick);
-                // Fase 3.17: el motor C deja `view_pitch=0`; lo inyectamos
-                // post-capture para que el renderer 3D haga y-shear sobre
-                // este snapshot y los próximos interpolados.
-                snap.player.view_pitch = m.view_pitch;
-                // Fase 4.3: acústica por sector — el reverb se ajusta al
-                // tamaño/apertura del cuarto donde está el jugador.
-                if let Some(audio) = m.audio.as_mut() {
+                    // Fase 4.3: acústica por sector — el reverb se ajusta al
+                    // tamaño/apertura del cuarto donde está el jugador.
                     audio.set_ambience(ambience_for(&snap));
                 }
                 // Fase 3.3: registrar en el atlas cualquier pic_idx

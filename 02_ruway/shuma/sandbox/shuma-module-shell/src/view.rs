@@ -7,7 +7,7 @@ pub fn view<HostMsg: Clone + 'static>(
 ) -> View<HostMsg> {
     let header = shell_header(state, theme);
     let main_panel: View<HostMsg> = if is_tui_active(state) {
-        tui_panel::<HostMsg>(state, theme)
+        tui_panel::<HostMsg>(state, theme, lift.clone())
     } else {
         output_pane::<HostMsg>(state, theme, &lift)
     };
@@ -288,7 +288,11 @@ pub(crate) fn state_dialect_default() -> shuma_line::Dialect {
 /// Panel de TUI app-aware: según el programa bajo el PTY elige un skin.
 /// `is_tui_active(state)` ya garantiza que hay un run con PTY. vim se
 /// pinta como un card themeable; el resto cae al grid vt100 crudo.
-pub(crate) fn tui_panel<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<HostMsg> {
+pub(crate) fn tui_panel<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
     // Snapshot + skin en un solo lock; la closure de paint debe ser
     // `Send + Sync`, así que no captura el Mutex.
     let (snapshot, skin) = match state.running.as_ref().and_then(|arc| arc.lock().ok()) {
@@ -300,7 +304,7 @@ pub(crate) fn tui_panel<HostMsg: Clone + 'static>(state: &State, theme: &Theme) 
     };
     let rect_slot = Arc::clone(&state.last_tui_rect);
     if let AppSkin::Vim = skin {
-        return vim_panel::<HostMsg>(snapshot, theme, rect_slot);
+        return vim_panel::<HostMsg, _>(snapshot, theme, rect_slot, lift);
     }
     generic_grid_panel::<HostMsg>(snapshot, theme, rect_slot)
 }
@@ -421,11 +425,16 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
 /// MVP: read-only (la selección/click-derecho-pegar nativos vienen
 /// después, sobre el widget de texto). El objetivo de este paso es que
 /// vim deje de verse "como por un vidrio".
-pub(crate) fn vim_panel<HostMsg: Clone + 'static>(
+pub(crate) fn vim_panel<HostMsg, L>(
     snapshot: Option<TuiSnapshot>,
     theme: &Theme,
     rect_slot: Arc<Mutex<(f32, f32)>>,
-) -> View<HostMsg> {
+    lift: L,
+) -> View<HostMsg>
+where
+    HostMsg: Clone + 'static,
+    L: Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+{
     let theme_clone = *theme;
     let painter = move |scene: &mut vello::Scene,
                         ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -518,6 +527,10 @@ pub(crate) fn vim_panel<HostMsg: Clone + 'static>(
     .fill(theme.bg_panel)
     .radius(3.0)
     .paint_with(painter)
+    // Paste estilo terminal: click derecho y botón del medio pegan el
+    // clipboard al PTY (vim sigue recibiendo las teclas aparte).
+    .on_right_click(lift(Msg::VimPaste))
+    .on_middle_click(lift(Msg::VimPaste))
 }
 
 /// Snapshot copiable del Screen para enviar a una closure `paint_with`.

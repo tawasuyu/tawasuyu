@@ -44,6 +44,22 @@ fn equal_power_pan(sep: u8) -> (f32, f32) {
     (angle.cos(), angle.sin())
 }
 
+/// Fase 4.5 — coeficiente de un pasa-bajos 1-polo (`y += coef·(x−y)`) para
+/// la oclusión `occ ∈ [0,1]`. `occ==0` ⇒ `1.0` (bypass exacto: `y = x`).
+/// Al subir, el corte baja de ~`0.45·sr` (transparente) a `700 Hz` (sonido
+/// tapado tras la pared). `coef = 1 − exp(−2π·fc/sr)`, independiente del
+/// sample rate.
+fn occlusion_lp_coef(occ: f32, sr: f32) -> f32 {
+    let occ = occ.clamp(0.0, 1.0);
+    if occ <= 1e-3 || sr <= 1.0 {
+        return 1.0;
+    }
+    let fc_open = sr * 0.45;
+    let fc = 700.0 + (1.0 - occ) * (fc_open - 700.0);
+    let coef = 1.0 - (-2.0 * std::f32::consts::PI * fc / sr).exp();
+    coef.clamp(0.0, 1.0)
+}
+
 /// Una voz activa: muestras del sfx + cursor de reproducción (en
 /// unidades de muestra *source*) + ganancias por canal.
 struct Voice {
@@ -54,6 +70,13 @@ struct Voice {
     cursor: f64,
     gain_l: f32,
     gain_r: f32,
+    /// Fase 4.5 — oclusión geométrica `0..1` (cuántas paredes sólidas hay
+    /// entre la fuente y el oyente). `0` = sin filtrar; al subir baja el
+    /// corte del pasa-bajos de la voz (sonido apagado, "tras la pared").
+    occlusion: f32,
+    /// Estado del pasa-bajos 1-polo de oclusión (memoria de la muestra
+    /// anterior). `0` cuando `occlusion == 0` (filtro inerte).
+    lp: f32,
 }
 
 /// Mixer de SFX. Implementa [`AudioSource`]: en cada callback del sink
@@ -82,7 +105,14 @@ impl DoomMixer {
 
     /// Encola una voz nueva. Si se alcanzó [`MAX_VOICES`], dropea la más
     /// vieja (probablemente casi terminada).
-    fn add(&mut self, samples: Arc<[f32]>, src_rate: f32, gain_l: f32, gain_r: f32) {
+    fn add(
+        &mut self,
+        samples: Arc<[f32]>,
+        src_rate: f32,
+        gain_l: f32,
+        gain_r: f32,
+        occlusion: f32,
+    ) {
         if samples.is_empty() {
             return;
         }
@@ -95,6 +125,8 @@ impl DoomMixer {
             cursor: 0.0,
             gain_l,
             gain_r,
+            occlusion: occlusion.clamp(0.0, 1.0),
+            lp: 0.0,
         });
     }
 
@@ -114,9 +146,17 @@ impl AudioSource for DoomMixer {
         let dev_rate = sample_rate.max(1) as f64;
         let master = self.master;
 
+        let dev_rate_f = dev_rate as f32;
         for v in self.voices.iter_mut() {
             let step = v.src_rate as f64 / dev_rate;
             let n = v.samples.len();
+            // Fase 4.5 — coef del pasa-bajos 1-polo de oclusión, constante
+            // dentro del callback (sr fijo). `occlusion==0` ⇒ coef 1.0 =
+            // bypass bit-exacto (compat 4.4). Al subir, baja el corte:
+            // 0→~0.45·sr (sin filtro), 1→700 Hz (apagado, tras la pared).
+            let lp_coef = occlusion_lp_coef(v.occlusion, dev_rate_f);
+            // La oclusión también atenúa ~−4.5 dB a tope (la pared absorbe).
+            let occ_gain = 1.0 - 0.4 * v.occlusion;
             for f in 0..frames {
                 let i0 = v.cursor.floor() as usize;
                 if i0 >= n {
@@ -125,7 +165,12 @@ impl AudioSource for DoomMixer {
                 let frac = (v.cursor - i0 as f64) as f32;
                 let s0 = v.samples[i0];
                 let s1 = if i0 + 1 < n { v.samples[i0 + 1] } else { s0 };
-                let s = (s0 + (s1 - s0) * frac) * master;
+                let mut s = s0 + (s1 - s0) * frac;
+                if lp_coef < 1.0 {
+                    v.lp += lp_coef * (s - v.lp);
+                    s = v.lp * occ_gain;
+                }
+                let s = s * master;
                 let base = f * ch;
                 if ch >= 2 {
                     buf[base] += s * v.gain_l;
@@ -820,9 +865,11 @@ impl AudioEngine {
     }
 
     /// Reproduce un sfx por su nombre base (e.g. `"pistol"` → lump
-    /// `DSPISTOL`). `vol` 0..127, `sep` 0..255 (128 ≈ centro). Si el
+    /// `DSPISTOL`). `vol` 0..127, `sep` 0..255 (128 ≈ centro). `occlusion`
+    /// `0..1` (Fase 4.5): cuántas paredes sólidas hay entre la fuente y el
+    /// oyente — `0` suena seco/directo, `1` apagado tras la pared. Si el
     /// lump no existe, no hace nada.
-    pub fn play(&mut self, name: &str, vol: u8, sep: u8) {
+    pub fn play(&mut self, name: &str, vol: u8, sep: u8, occlusion: f32) {
         let lump = format!("DS{}", name.to_uppercase());
         let resolved = self.resolve(&lump);
         if let Some((samples, rate)) = resolved {
@@ -830,7 +877,10 @@ impl AudioEngine {
             // Paneo constante-power (Fase 4.3): sin caída de loudness al
             // centro, a diferencia del balance lineal de 4.0.
             let (pl, pr) = equal_power_pan(sep);
-            self.audio.lock().sfx.add(samples, rate, g * pl, g * pr);
+            self.audio
+                .lock()
+                .sfx
+                .add(samples, rate, g * pl, g * pr, occlusion);
         }
     }
 
@@ -884,7 +934,7 @@ mod tests {
         let mut m = DoomMixer::new();
         m.master = 1.0;
         // pan a la derecha: gain_l=0, gain_r=1.
-        m.add(voice_samples(), 100.0, 0.0, 1.0);
+        m.add(voice_samples(), 100.0, 0.0, 1.0, 0.0);
         let mut buf = vec![0.0f32; 8]; // 4 frames estéreo
         m.fill(&mut buf, 100, 2);
         // Canal izquierdo (índices pares) en silencio.
@@ -900,7 +950,7 @@ mod tests {
         let mut m = DoomMixer::new();
         m.master = 1.0;
         // src_rate = mitad del dev_rate → cada muestra source dura 2 frames.
-        m.add(voice_samples(), 50.0, 1.0, 1.0);
+        m.add(voice_samples(), 50.0, 1.0, 1.0, 0.0);
         let mut buf = vec![0.0f32; 4]; // 4 frames mono
         m.fill(&mut buf, 100, 1);
         // step = 0.5: cursors 0.0, 0.5, 1.0, 1.5.
@@ -915,7 +965,7 @@ mod tests {
     #[test]
     fn mixer_drops_finished_voices() {
         let mut m = DoomMixer::new();
-        m.add(voice_samples(), 100.0, 1.0, 1.0);
+        m.add(voice_samples(), 100.0, 1.0, 1.0, 0.0);
         assert_eq!(m.active_voices(), 1);
         // Buffer largo: consume las 4 muestras y deja la voz agotada.
         let mut buf = vec![0.0f32; 16];
@@ -929,6 +979,42 @@ mod tests {
         let mut buf = vec![0.3f32; 8];
         m.fill(&mut buf, 100, 2);
         assert!(buf.iter().all(|&s| s == 0.0), "sin voces el buffer es silencio");
+    }
+
+    #[test]
+    fn occlusion_lp_coef_passthrough_at_zero() {
+        // Sin oclusión: coef 1.0 ⇒ el pasa-bajos es inerte (y = x).
+        assert_eq!(occlusion_lp_coef(0.0, 44100.0), 1.0);
+        // Con oclusión el coef baja de 1 (filtra).
+        assert!(occlusion_lp_coef(1.0, 44100.0) < 1.0);
+    }
+
+    #[test]
+    fn occlusion_muffles_high_frequencies() {
+        // Señal a Nyquist (alterna ±1): el pasa-bajos de oclusión la mata.
+        let nyquist: Arc<[f32]> =
+            Arc::from((0..64).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect::<Vec<_>>());
+
+        // Sample rate realista: el corte de oclusión (700 Hz a tope) sólo
+        // tiene sentido por debajo de Nyquist. A 44.1 kHz, la onda Nyquist
+        // queda muy por encima del corte → fuertemente atenuada.
+        let energy = |occ: f32| {
+            let mut m = DoomMixer::new();
+            m.master = 1.0;
+            m.add(nyquist.clone(), 44100.0, 1.0, 1.0, occ);
+            let mut buf = vec![0.0f32; 64];
+            m.fill(&mut buf, 44100, 1);
+            buf.iter().map(|x| x.abs()).sum::<f32>()
+        };
+
+        let clear = energy(0.0);
+        let occluded = energy(1.0);
+        // La voz seca pasa la onda completa; la ocluida queda muy atenuada.
+        assert!(clear > 50.0, "señal directa conserva energía: {clear}");
+        assert!(
+            occluded < clear * 0.25,
+            "oclusión total apaga los agudos: clear={clear} occluded={occluded}"
+        );
     }
 
     use supay_wad::{
@@ -1083,7 +1169,7 @@ mod tests {
             music: None,
             reverb: Reverb::new(),
         };
-        da.sfx.add(Arc::from(vec![1.0f32, 1.0, 1.0, 1.0]), 100.0, 1.0, 1.0);
+        da.sfx.add(Arc::from(vec![1.0f32, 1.0, 1.0, 1.0]), 100.0, 1.0, 1.0, 0.0);
         let mut buf = vec![0.0f32; 8];
         da.fill(&mut buf, 100, 2);
         // Sin cola: las muestras son exactamente el dry del mixer (master 0.6).
@@ -1103,7 +1189,7 @@ mod tests {
         da.reverb.amb = amb;
         da.reverb.target = amb; // ya asentado: sin crossfade en este test.
         // Impulso corto: 2 muestras, luego silencio seco.
-        da.sfx.add(Arc::from(vec![1.0f32, 1.0]), 1000.0, 1.0, 1.0);
+        da.sfx.add(Arc::from(vec![1.0f32, 1.0]), 1000.0, 1.0, 1.0, 0.0);
         let mut buf = vec![0.0f32; 2000]; // 1000 frames estéreo a 1000 Hz
         da.fill(&mut buf, 1000, 2);
         // Pasados los primeros frames (donde la voz seca ya terminó) debe

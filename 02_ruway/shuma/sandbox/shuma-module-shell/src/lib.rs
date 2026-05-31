@@ -468,6 +468,9 @@ pub enum Msg {
     /// al REPL. Cierra los overlays de búsqueda y deja el cursor justo
     /// después del texto insertado.
     InsertAtCursor(String),
+    /// Pega el clipboard al PTY del TUI activo — click derecho o botón
+    /// del medio sobre el panel de vim (paste estilo terminal).
+    VimPaste,
 }
 
 mod update;

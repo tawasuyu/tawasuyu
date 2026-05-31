@@ -436,6 +436,63 @@ impl SceneSnapshot {
             outdoor: self.sky_pic != NO_SKY_PIC && s.ceiling_pic == self.sky_pic,
         })
     }
+
+    /// Fase 4.5 — oclusión geométrica del sonido entre el oyente `(lx,ly)`
+    /// y la fuente `(sx,sy)`: fracción `0..1` según cuántas paredes
+    /// **sólidas** (one-sided, sin sector trasero) cruza la línea recta
+    /// que los une. `0` = línea de visión libre; sube con cada muro
+    /// interpuesto y satura en `1` (dos muros ⇒ totalmente apagado). Los
+    /// portales de dos lados (vanos, puertas modeladas como two-sided) no
+    /// bloquean — el sonido pasa por ellos.
+    ///
+    /// MVP geométrico: escaneo lineal de las walls (las apariciones de
+    /// sfx son esporádicas; `numlines` ~ cientos/miles). No considera el
+    /// cierre vertical de un two-sided (puerta bajada): eso necesitaría
+    /// las alturas de ambos sectores y queda para una fase futura.
+    pub fn occlusion(&self, lx: f32, ly: f32, sx: f32, sy: f32) -> f32 {
+        if self.walls.is_empty() {
+            return 0.0;
+        }
+        let mut blockers = 0u32;
+        for w in self.walls.iter() {
+            // Sólo las paredes sólidas bloquean; los portales dejan pasar.
+            if w.back_sector != NO_SECTOR {
+                continue;
+            }
+            if segments_cross(lx, ly, sx, sy, w.x1, w.y1, w.x2, w.y2) {
+                blockers += 1;
+                if blockers >= 2 {
+                    return 1.0; // saturado: cortamos el escaneo temprano.
+                }
+            }
+        }
+        blockers as f32 / 2.0
+    }
+}
+
+/// `true` si los segmentos `A(ax,ay)→B(bx,by)` y `C(cx,cy)→D(dx,dy)` se
+/// cruzan (intersección propia, vía signo de orientaciones). Tangencias y
+/// colinealidades cuentan como "no cruza" — irrelevante para oclusión:
+/// un sonido que roza el extremo exacto de una pared no se considera
+/// tapado.
+fn segments_cross(
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+    cx: f32,
+    cy: f32,
+    dx: f32,
+    dy: f32,
+) -> bool {
+    let orient = |px: f32, py: f32, qx: f32, qy: f32, rx: f32, ry: f32| {
+        (qx - px) * (ry - py) - (qy - py) * (rx - px)
+    };
+    let d1 = orient(cx, cy, dx, dy, ax, ay);
+    let d2 = orient(cx, cy, dx, dy, bx, by);
+    let d3 = orient(ax, ay, bx, by, cx, cy);
+    let d4 = orient(ax, ay, bx, by, dx, dy);
+    (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0)
 }
 
 /// Métricas acústicas crudas del sector donde está el jugador. El host
@@ -691,6 +748,66 @@ mod tests {
         let snap = SceneSnapshot::empty(1);
         assert_eq!(snap.player_sector(), None);
         assert_eq!(snap.player_acoustics(), None);
+    }
+
+    /// Construye un WallSeg mínimo entre dos vértices. `back` = `NO_SECTOR`
+    /// lo hace sólido (bloquea sonido); cualquier otro lo hace portal.
+    fn wall(x1: f32, y1: f32, x2: f32, y2: f32, back: u32) -> WallSeg {
+        WallSeg {
+            x1,
+            y1,
+            x2,
+            y2,
+            front_sector: 0,
+            back_sector: back,
+            flags: 0,
+            textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
+        }
+    }
+
+    #[test]
+    fn occlusion_clear_line_of_sight() {
+        // Una pared sólida a un costado: el segmento oyente→fuente no la cruza.
+        let mut snap = SceneSnapshot::empty(1);
+        snap.walls = Arc::from(vec![wall(100.0, -100.0, 100.0, 100.0, NO_SECTOR)]);
+        // oyente (0,0) → fuente (50,0): no llega a x=100.
+        assert_eq!(snap.occlusion(0.0, 0.0, 50.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn occlusion_one_solid_wall_between() {
+        // Pared sólida vertical en x=50, cruzada por el segmento (0,0)→(100,0).
+        let mut snap = SceneSnapshot::empty(1);
+        snap.walls = Arc::from(vec![wall(50.0, -100.0, 50.0, 100.0, NO_SECTOR)]);
+        assert_eq!(snap.occlusion(0.0, 0.0, 100.0, 0.0), 0.5);
+    }
+
+    #[test]
+    fn occlusion_portal_does_not_block() {
+        // La misma geometría pero la pared es un portal (two-sided): el
+        // sonido pasa, oclusión 0.
+        let mut snap = SceneSnapshot::empty(1);
+        snap.walls = Arc::from(vec![wall(50.0, -100.0, 50.0, 100.0, 7)]);
+        assert_eq!(snap.occlusion(0.0, 0.0, 100.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn occlusion_two_walls_saturate() {
+        // Dos paredes sólidas en el camino → oclusión total (1.0).
+        let mut snap = SceneSnapshot::empty(1);
+        snap.walls = Arc::from(vec![
+            wall(30.0, -100.0, 30.0, 100.0, NO_SECTOR),
+            wall(70.0, -100.0, 70.0, 100.0, NO_SECTOR),
+        ]);
+        assert_eq!(snap.occlusion(0.0, 0.0, 100.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn occlusion_zero_without_walls() {
+        let snap = SceneSnapshot::empty(1);
+        assert_eq!(snap.occlusion(0.0, 0.0, 100.0, 0.0), 0.0);
     }
 
     #[test]
