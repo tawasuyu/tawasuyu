@@ -170,6 +170,14 @@ minga-card-attestations-desc = Ed25519 signatures over nodes
 minga-card-mst-title = MST Keys
 minga-card-mst-desc = Merkle Search Tree entries
 minga-empty = Waiting for first refresh…
+minga-menu-file = File
+minga-menu-view = View
+minga-menu-help = Help
+minga-menu-refresh = Refresh
+minga-menu-quit = Quit
+minga-menu-theme = Toggle theme
+minga-menu-about = About
+minga-menu-context-title = Repo
 
 # === nakui-explorer (event log) ===
 nakui-explorer-header = Log: { $path }  ·  { $entries } entries ({ $seeds } seeds, { $morphisms } morphisms)  ·  reload { $ms } ms

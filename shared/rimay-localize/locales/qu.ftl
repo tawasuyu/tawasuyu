@@ -176,6 +176,14 @@ minga-card-attestations-desc = nodos hawapi Ed25519 firmakuna
 minga-card-mst-title = MST Llaves
 minga-card-mst-desc = Merkle Search Tree-pi yaykuq
 minga-empty = Ñawpaq refresh suyachkan…
+minga-menu-file = Willay
+minga-menu-view = Qhaway
+minga-menu-help = Yanapay
+minga-menu-refresh = Musuqchay
+minga-menu-quit = Lluqsiy
+minga-menu-theme = Tema tikray
+minga-menu-about = Paymanta
+minga-menu-context-title = Repo
 
 # === nakui-explorer (event log) ===
 nakui-explorer-header = Log: { $path }  ·  { $entries } yaykuq ({ $seeds } seeds, { $morphisms } morphisms)  ·  watiq apamuy { $ms } ms
