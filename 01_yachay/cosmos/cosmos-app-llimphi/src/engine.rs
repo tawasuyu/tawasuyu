@@ -40,6 +40,7 @@ pub(crate) fn compute(
     chart: &Chart,
     overlays: &[OverlayKind],
     harmonic: u32,
+    show_minors: bool,
 ) -> (RenderModel, Option<String>) {
     let target_age = 35.0;
     let requests: Vec<PipelineRequest> = overlays
@@ -48,7 +49,7 @@ pub(crate) fn compute(
         .collect();
     let opts = NatalOptions {
         show_majors: true,
-        show_minors: false,
+        show_minors,
         orb_multiplier: 1.0,
         show_dignities: true,
         harmonic,

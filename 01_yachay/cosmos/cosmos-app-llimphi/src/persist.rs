@@ -8,7 +8,7 @@ use cosmos_model::{Chart, ChartId, ChartKind, ContactId, StoredBirthData, Stored
 use llimphi_ui::Handle;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{overlay_tile, Msg, OverlayKind, TileId, DEFAULT_ORDER};
+use crate::model::{CosmosConfig, Msg, OverlayKind, ViewKind};
 
 /// Subdirectorio dentro del config dir donde viven las cartas guardadas
 /// como archivos individuales `<nombre>.json`. El usuario lo gestiona
@@ -29,23 +29,33 @@ const CHART_FILE: &str = "cosmos-chart.json";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct UiState {
     #[serde(default)]
-    pub(crate) panel_order: Vec<TileId>,
-    #[serde(default)]
     pub(crate) overlays: Vec<OverlayKind>,
     #[serde(default = "default_harmonic")]
     pub(crate) harmonic: u32,
+    #[serde(default = "default_tabs")]
+    pub(crate) tabs: Vec<ViewKind>,
+    #[serde(default)]
+    pub(crate) active_tab: usize,
+    #[serde(default)]
+    pub(crate) cfg: CosmosConfig,
 }
 
 fn default_harmonic() -> u32 {
     1
 }
 
+fn default_tabs() -> Vec<ViewKind> {
+    vec![ViewKind::Rueda]
+}
+
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            panel_order: DEFAULT_ORDER.to_vec(),
             overlays: Vec::new(),
             harmonic: 1,
+            tabs: default_tabs(),
+            active_tab: 0,
+            cfg: CosmosConfig::default(),
         }
     }
 }
@@ -174,6 +184,16 @@ pub(crate) fn load_card(name: &str) -> Option<Chart> {
         .map(|f| f.into_chart())
 }
 
+/// Elimina el archivo de una carta de la biblioteca. No toca la carta
+/// cargada (`cosmos-chart.json`).
+pub(crate) fn delete_card(name: &str) {
+    let Some(dir) = charts_dir() else { return };
+    let path = dir.join(format!("{name}.json"));
+    if let Err(e) = std::fs::remove_file(&path) {
+        eprintln!("cosmos · delete_card({name}): {e}");
+    }
+}
+
 pub(crate) fn save_card(name: &str, chart: &Chart) {
     let Some(dir) = charts_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
@@ -245,18 +265,14 @@ pub(crate) fn load_ui_state() -> UiState {
     };
     match serde_json::from_slice::<UiState>(&bytes) {
         Ok(mut s) => {
-            // Garantía: las always-on tienen que estar. Si el archivo viejo
-            // tiene un order corto o le falta alguna, completamos al final
-            // sin perder el orden que el usuario ya eligió.
-            for tid in DEFAULT_ORDER {
-                if !s.panel_order.contains(tid) {
-                    s.panel_order.push(*tid);
-                }
+            // Garantía: siempre hay al menos una pestaña y `active_tab` es
+            // un índice válido.
+            if s.tabs.is_empty() {
+                s.tabs = default_tabs();
             }
-            // Reconciliar tiles gated con overlays activos: si el archivo
-            // dice "Uranian on" pero no hay TileId::Uraniano en el order,
-            // lo agregamos. Y al revés: tile dinámico sin overlay → fuera.
-            reconcile(&mut s);
+            if s.active_tab >= s.tabs.len() {
+                s.active_tab = 0;
+            }
             s
         }
         Err(e) => {
@@ -264,29 +280,6 @@ pub(crate) fn load_ui_state() -> UiState {
             UiState::default()
         }
     }
-}
-
-/// Reescribe `s.panel_order` para mantener la invariante:
-///   - todas las always-on están presentes
-///   - cada TileId gated existe sii su overlay está en `s.overlays`
-fn reconcile(s: &mut UiState) {
-    let active_gated: Vec<TileId> = s
-        .overlays
-        .iter()
-        .filter_map(|k| overlay_tile(*k))
-        .collect();
-    s.panel_order.retain(|tid| {
-        is_always_on(*tid) || active_gated.contains(tid)
-    });
-    for tid in &active_gated {
-        if !s.panel_order.contains(tid) {
-            s.panel_order.push(*tid);
-        }
-    }
-}
-
-fn is_always_on(tid: TileId) -> bool {
-    DEFAULT_ORDER.contains(&tid)
 }
 
 pub(crate) fn save_ui_state(s: &UiState) {

@@ -1,7 +1,10 @@
-//! Vistas: barras top/bottom, el sidebar con tiled drag-to-swap y cada uno
-//! de los tiles (carta, módulos, armónico, cuerpos, aspectos, box-graph,
-//! cualidades, cartas, corpus, uraniano, layers genéricas). El tile
-//! AstroCarto vive aparte en [`crate::astrocarto`] por su carga matemática.
+//! Renderers de contenido de los paneles astrológicos. Cada función
+//! devuelve el `View` que se monta en el área central cuando su pestaña
+//! está activa (carta, cuerpos, aspectos, aspectario, cualidades,
+//! uraniano, lotes/estrellas/puntos como layers genéricas, corpus). El
+//! chrome (menú, árbol, pestañas, barra de estado, menús contextuales)
+//! vive en [`crate::chrome`]; las gráficas astronómicas en
+//! [`crate::astroview`].
 
 use cosmos_engine::{combinaciones_de_carta, corpus_inputs, Corpus};
 use cosmos_render::{AspectSummary, LayerKind, RenderModel, UranianGroup};
@@ -13,154 +16,13 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
-use llimphi_widget_button::{button_styled, ButtonPalette};
-use llimphi_widget_tiled::{tiled_view_reorderable_cols, TileSpec, TiledPalette};
-use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
-use crate::astrocarto::tile_astrocarto;
 use crate::format::{fmt_deg_sign, fmt_dms, signo_de_longitud, simbolo_aspecto, simbolo_cuerpo};
-use crate::model::{Model, Msg, OverlayKind, TileId, HARMONICS, SIDEBAR_WIDTH};
-use crate::persist::{chart_path, charts_dir, list_cards};
+use crate::model::{Model, Msg};
 
 // =====================================================================
-// Barras top/bottom
+// Helpers compartidos
 // =====================================================================
-
-pub(crate) fn header_bar(m: &RenderModel, theme: &Theme) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(28.0_f32),
-        },
-        flex_shrink: 0.0,
-        padding: Rect {
-            left: length(14.0_f32),
-            right: length(14.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .text_aligned(
-        rimay_localize::t_args(
-            "cosmos-header",
-            &[
-                ("title", m.title.as_str().into()),
-                ("asc", format!("{:.1}", m.ascendant_deg).into()),
-                ("mc", format!("{:.1}", m.midheaven_deg).into()),
-            ],
-        ),
-        12.0,
-        theme.fg_text,
-        Alignment::Start,
-    )
-}
-
-pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let txt = if let Some(err) = &model.error {
-        rimay_localize::t_args("cosmos-status-error", &[("err", err.as_str().into())])
-    } else {
-        rimay_localize::t_args(
-            "cosmos-status",
-            &[
-                ("ms", model.render.compute_ms.to_string().into()),
-                ("layers", model.render.layers.len().to_string().into()),
-                ("overlays", model.render.overlays.len().to_string().into()),
-                ("aspects", model.render.aspect_summary.len().to_string().into()),
-            ],
-        )
-    };
-    let color = if model.error.is_some() {
-        theme.fg_text
-    } else {
-        theme.fg_muted
-    };
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(22.0_f32),
-        },
-        flex_shrink: 0.0,
-        padding: Rect {
-            left: length(14.0_f32),
-            right: length(14.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .text_aligned(txt, 11.0, color, Alignment::Start)
-}
-
-// =====================================================================
-// Sidebar — un solo panel con tiled vertical drag-to-swap
-// =====================================================================
-
-pub(crate) fn side_panel(model: &Model, theme: &Theme) -> View<Msg> {
-    let palette = TiledPalette::from_theme(theme);
-    let specs: Vec<TileSpec<Msg>> = model
-        .panel_order
-        .iter()
-        .map(|tid| build_tile(*tid, model, theme))
-        .collect();
-
-    let tiled = tiled_view_reorderable_cols(
-        specs,
-        1,
-        |from, to| {
-            if from == to {
-                None
-            } else {
-                Some(Msg::SwapTiles(from, to))
-            }
-        },
-        &palette,
-    );
-
-    View::new(Style {
-        size: Size {
-            width: length(SIDEBAR_WIDTH),
-            height: percent(1.0_f32),
-        },
-        flex_shrink: 0.0,
-        flex_direction: FlexDirection::Column,
-        ..Default::default()
-    })
-    .fill(theme.bg_panel_alt)
-    .children(vec![tiled])
-}
-
-fn build_tile(tid: TileId, model: &Model, theme: &Theme) -> TileSpec<Msg> {
-    let label = rimay_localize::t(tid.label_key());
-    let content = match tid {
-        TileId::Carta => tile_carta(model, theme),
-        TileId::Modulos => tile_modulos(model, theme),
-        TileId::Armonico => tile_armonico(model, theme),
-        TileId::Cuerpos => tile_cuerpos(&model.render, theme),
-        TileId::Aspectos => tile_aspectos(&model.render, "natal", theme),
-        TileId::BoxGraph => tile_box_graph(&model.render, theme),
-        TileId::Cualidades => tile_cualidades(&model.render, theme),
-        TileId::AstroCarto => tile_astrocarto(&model.chart, &model.render, theme),
-        TileId::Cartas => tile_cartas(model, theme),
-        TileId::Corpus => tile_corpus(&model.render, &model.corpus, theme),
-        TileId::Uraniano => tile_uraniano(&model.render.uranian_groups, theme),
-        TileId::Lotes => tile_layer_glyphs(&model.render, LayerKind::Lots, "lots", theme),
-        TileId::EstrellasFijas => {
-            tile_layer_glyphs(&model.render, LayerKind::FixedStars, "fixed_stars", theme)
-        }
-        TileId::PuntosMedios => {
-            tile_layer_glyphs(&model.render, LayerKind::Midpoints, "midpoints", theme)
-        }
-        TileId::CrossTransit => tile_aspectos(&model.render, "transit", theme),
-        TileId::CrossProgression => tile_aspectos(&model.render, "progression", theme),
-        TileId::CrossSolarArc => tile_aspectos(&model.render, "solar_arc", theme),
-    };
-    TileSpec { label, content }
-}
 
 pub(crate) fn tile_container<I>(rows: I, theme: &Theme) -> View<Msg>
 where
@@ -180,14 +42,14 @@ where
             height: length(0.0_f32),
         },
         padding: Rect {
-            left: length(8.0_f32),
-            right: length(8.0_f32),
-            top: length(6.0_f32),
-            bottom: length(6.0_f32),
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
         },
         gap: Size {
             width: length(0.0_f32),
-            height: length(2.0_f32),
+            height: length(3.0_f32),
         },
         ..Default::default()
     })
@@ -208,170 +70,30 @@ pub(crate) fn line(text: String, size: f32, color: Color) -> View<Msg> {
     .text_aligned(text, size, color, Alignment::Start)
 }
 
-/// Fila de la tabla de aspectos — columnas: tipo (con color), par
-/// de cuerpos, orbe, dirección (applying/separating). Usamos un Row
-/// con cells de ancho fijo para que las columnas se alineen entre
-/// filas.
-#[allow(clippy::too_many_arguments)]
-fn aspect_row(
-    kind_code: &str,
-    from: &str,
-    to: &str,
-    orb_dms: &str,
-    dir: &str,
-    kind_id: &str,
-    theme: &Theme,
-) -> View<Msg> {
-    let size = 11.0_f32;
-    let kind_color = aspecto_color(kind_id);
-    let cell = |text: String, color: Color, w: f32| -> View<Msg> {
-        View::new(Style {
-            size: Size {
-                width: length(w),
-                height: length(size + 4.0_f32),
-            },
-            flex_shrink: 0.0,
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text_aligned(text, size, color, Alignment::Start)
-    };
+pub(crate) fn section_label(text: String, theme: &Theme) -> View<Msg> {
     View::new(Style {
-        flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(size + 4.0_f32),
+            height: length(16.0_f32),
         },
         flex_shrink: 0.0,
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(6.0_f32),
+            bottom: length(0.0_f32),
+        },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .children(vec![
-        cell(kind_code.to_string(), kind_color, 28.0),
-        cell(from.to_string(), theme.fg_text, 38.0),
-        cell(to.to_string(), theme.fg_text, 38.0),
-        cell(orb_dms.to_string(), theme.fg_muted, 56.0),
-        cell(dir.to_string(), theme.fg_muted, 22.0),
-    ])
+    .text_aligned(text, 11.0, theme.accent, Alignment::Start)
 }
 
-// ----- Cartas (librería multi-archivo como árbol) -----
+// =====================================================================
+// Carta (datos del nacimiento)
+// =====================================================================
 
-const TREE_ROW_H: f32 = 20.0;
-
-/// Tile de navegación: el botón "duplicar actual" arriba y, debajo, el
-/// árbol de la biblioteca de cartas (`llimphi-widget-tree`). El nodo raíz
-/// "Biblioteca" agrupa cada `<nombre>.json` del `cosmos-charts/` como hoja
-/// clickeable — click carga la carta (`Msg::CargarCarta`), click en el
-/// chevron expande/colapsa (`Msg::ToggleBiblioteca`). La hoja de la carta
-/// cargada queda resaltada.
-fn tile_cartas(model: &Model, theme: &Theme) -> View<Msg> {
-    let pal_btn = ButtonPalette::from_theme(theme);
-    let mut rows: Vec<View<Msg>> = Vec::new();
-
-    // Botón "duplicar actual" arriba — captura el chart presente en disco.
-    rows.push(button_styled(
-        rimay_localize::t("cosmos-cartas-duplicar"),
-        Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(22.0_f32),
-            },
-            flex_shrink: 0.0,
-            padding: Rect {
-                left: length(8.0_f32),
-                right: length(8.0_f32),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
-            },
-            margin: Rect {
-                left: length(0.0_f32),
-                right: length(0.0_f32),
-                top: length(0.0_f32),
-                bottom: length(4.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Start),
-            ..Default::default()
-        },
-        Alignment::Start,
-        &pal_btn,
-        Msg::DuplicarActual,
-    ));
-
-    let cards = list_cards();
-    if cards.is_empty() {
-        rows.push(line(
-            rimay_localize::t("cosmos-cartas-vacio"),
-            10.0,
-            theme.fg_muted,
-        ));
-    } else {
-        // Raíz "Biblioteca (N)" + una hoja por carta. El caller (acá)
-        // aplana el árbol: sólo emitimos las hojas si el nodo está
-        // expandido. El chevron togglea; la fila carga.
-        let mut tree_rows: Vec<TreeRow<Msg>> = Vec::with_capacity(cards.len() + 1);
-        tree_rows.push(TreeRow {
-            label: format!("Biblioteca ({})", cards.len()),
-            depth: 0,
-            has_children: true,
-            expanded: model.lib_expanded,
-            selected: false,
-            on_toggle: Msg::ToggleBiblioteca,
-            on_select: Msg::ToggleBiblioteca,
-        });
-        if model.lib_expanded {
-            for name in &cards {
-                let selected = model.selected_card.as_deref() == Some(name.as_str());
-                tree_rows.push(TreeRow {
-                    label: name.clone(),
-                    depth: 1,
-                    has_children: false,
-                    expanded: false,
-                    selected,
-                    // Hoja: `on_toggle` no se usa (sin chevron); igual debe
-                    // ser un Msg válido — reusamos el de carga.
-                    on_toggle: Msg::CargarCarta(name.clone()),
-                    on_select: Msg::CargarCarta(name.clone()),
-                });
-            }
-        }
-
-        // El widget pide altura definida (su contenedor es percent(1.0)):
-        // se la damos según la cantidad de filas visibles, con tope para no
-        // empujar al resto de los tiles fuera de pantalla.
-        let n = tree_rows.len() as f32;
-        let tree_h = (n * TREE_ROW_H + 8.0).min(360.0);
-        let tree = tree_view(TreeSpec {
-            rows: tree_rows,
-            row_height: TREE_ROW_H,
-            indent_px: 14.0,
-            palette: TreePalette::from_theme(theme),
-        });
-        rows.push(
-            View::new(Style {
-                size: Size {
-                    width: percent(1.0_f32),
-                    height: length(tree_h),
-                },
-                flex_shrink: 0.0,
-                ..Default::default()
-            })
-            .children(vec![tree]),
-        );
-    }
-
-    let path_hint = charts_dir()
-        .map(|p| format!("dir: {}", p.display()))
-        .unwrap_or_default();
-    rows.push(line(path_hint, 9.0, theme.fg_muted));
-
-    tile_container(rows, theme)
-}
-
-// ----- Carta -----
-
-fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
+pub(crate) fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
     let bd = &model.chart.birth_data;
     let lugar = bd
         .birthplace_label
@@ -401,129 +123,24 @@ fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
         fmt_deg_sign(model.render.imum_coeli_deg),
     );
 
-    let path_hint = chart_path()
-        .map(|p| format!("edit: {}", p.display()))
-        .unwrap_or_default();
     tile_container(
         vec![
-            line(model.chart.label.clone(), 12.0, theme.fg_text),
-            line(lugar, 10.0, theme.fg_muted),
-            line(fecha, 10.0, theme.fg_muted),
-            line(lat_long, 10.0, theme.fg_muted),
-            line(angles, 10.0, theme.fg_text),
-            line(path_hint, 9.0, theme.fg_muted),
+            line(model.chart.label.clone(), 14.0, theme.fg_text),
+            line(lugar, 11.0, theme.fg_muted),
+            line(fecha, 11.0, theme.fg_muted),
+            line(lat_long, 11.0, theme.fg_muted),
+            section_label("Ángulos".to_string(), theme),
+            line(angles, 11.0, theme.fg_text),
         ],
         theme,
     )
 }
 
-// ----- Módulos (toggles de overlays) -----
+// =====================================================================
+// Cuerpos
+// =====================================================================
 
-fn tile_modulos(model: &Model, theme: &Theme) -> View<Msg> {
-    let pal_off = ButtonPalette::from_theme(theme);
-    let pal_on = ButtonPalette {
-        bg: theme.accent,
-        bg_hover: theme.accent,
-        fg: theme.bg_panel,
-        radius: pal_off.radius,
-    };
-
-    let rows: Vec<View<Msg>> = OverlayKind::all()
-        .iter()
-        .map(|kind| {
-            let active = model.overlays.contains(kind);
-            let palette = if active { &pal_on } else { &pal_off };
-            button_styled(
-                rimay_localize::t(kind.label()),
-                Style {
-                    size: Size {
-                        width: percent(1.0_f32),
-                        height: length(22.0_f32),
-                    },
-                    flex_shrink: 0.0,
-                    padding: Rect {
-                        left: length(8.0_f32),
-                        right: length(8.0_f32),
-                        top: length(0.0_f32),
-                        bottom: length(0.0_f32),
-                    },
-                    align_items: Some(AlignItems::Center),
-                    justify_content: Some(JustifyContent::Start),
-                    ..Default::default()
-                },
-                Alignment::Start,
-                palette,
-                Msg::ToggleOverlay(*kind),
-            )
-        })
-        .collect();
-
-    tile_container(rows, theme)
-}
-
-// ----- Armónico (selector H1/H4/H5/H7/H9) -----
-
-fn tile_armonico(model: &Model, theme: &Theme) -> View<Msg> {
-    let pal_off = ButtonPalette::from_theme(theme);
-    let pal_on = ButtonPalette {
-        bg: theme.accent,
-        bg_hover: theme.accent,
-        fg: theme.bg_panel,
-        radius: pal_off.radius,
-    };
-
-    let btns: Vec<View<Msg>> = HARMONICS
-        .iter()
-        .map(|h| {
-            let active = model.harmonic == *h;
-            let palette = if active { &pal_on } else { &pal_off };
-            button_styled(
-                format!("H{h}"),
-                Style {
-                    size: Size {
-                        width: length(44.0_f32),
-                        height: length(22.0_f32),
-                    },
-                    margin: Rect {
-                        left: length(0.0_f32),
-                        right: length(4.0_f32),
-                        top: length(0.0_f32),
-                        bottom: length(0.0_f32),
-                    },
-                    padding: Rect {
-                        left: length(0.0_f32),
-                        right: length(0.0_f32),
-                        top: length(0.0_f32),
-                        bottom: length(0.0_f32),
-                    },
-                    align_items: Some(AlignItems::Center),
-                    justify_content: Some(JustifyContent::Center),
-                    ..Default::default()
-                },
-                Alignment::Center,
-                palette,
-                Msg::SetHarmonic(*h),
-            )
-        })
-        .collect();
-
-    let row = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(26.0_f32),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .children(btns);
-
-    tile_container(vec![row], theme)
-}
-
-// ----- Cuerpos -----
-
-fn tile_cuerpos(render: &RenderModel, theme: &Theme) -> View<Msg> {
+pub(crate) fn tile_cuerpos(render: &RenderModel, theme: &Theme) -> View<Msg> {
     let rows: Vec<View<Msg>> = render
         .layers
         .iter()
@@ -534,22 +151,20 @@ fn tile_cuerpos(render: &RenderModel, theme: &Theme) -> View<Msg> {
             let dms = fmt_dms(g.deg.rem_euclid(30.0) as f64);
             let body = simbolo_cuerpo(&g.symbol);
             let casa = g.house.map(|h| format!(" h{h}")).unwrap_or_default();
-            // "℞" (U+211E) no está en LiberationSans — usamos "(R)".
+            // "℞" no está en LiberationSans — usamos "(R)".
             let retro = if g.retrograde { " (R)" } else { "" };
             let dignity = g.dignity_marker.clone().unwrap_or_default();
             let line_str = format!("{body} {dms} {sign}{casa}{retro}{dignity}");
-            line(line_str, 11.0, theme.fg_text)
+            line(line_str, 12.0, theme.fg_text)
         })
         .collect();
     tile_container(rows, theme)
 }
 
-// ----- Aspectos (filtrado por module_id) -----
+// =====================================================================
+// Aspectos (filtrado por module_id) + aspectario triangular
+// =====================================================================
 
-/// Ranking de importancia del aspecto: 0 = mayor (con/opp/squ/tri/sex),
-/// 1 = menor (quincunx/semi-sextile/semi-square/sesquiquadrate/quintile).
-/// Sortear primero por esta clave, después por orb ascendente, da la
-/// tabla con los aspectos más fuertes y cerrados arriba.
 fn aspecto_importancia(kind: &str) -> u8 {
     match kind {
         "conjunction" | "opposition" | "square" | "trine" | "sextile" => 0,
@@ -557,10 +172,6 @@ fn aspecto_importancia(kind: &str) -> u8 {
     }
 }
 
-/// Color del aspecto desde la paleta agnóstica de `cosmos-render`,
-/// traducido al `peniko::Color` que usa Llimphi. Mismas decisiones
-/// cromáticas que el wheel — así el color del aspecto en la tabla
-/// concuerda con el color de la línea en el wheel.
 fn aspecto_color(kind: &str) -> Color {
     let pal = cosmos_render::Palette::dark();
     let c = pal.aspect(kind);
@@ -568,14 +179,55 @@ fn aspecto_color(kind: &str) -> Color {
     Color::from_rgba8(to_byte(c.r), to_byte(c.g), to_byte(c.b), to_byte(c.a))
 }
 
-fn tile_aspectos(render: &RenderModel, module_id: &str, theme: &Theme) -> View<Msg> {
+#[allow(clippy::too_many_arguments)]
+fn aspect_row(
+    kind_code: &str,
+    from: &str,
+    to: &str,
+    orb_dms: &str,
+    dir: &str,
+    kind_id: &str,
+    theme: &Theme,
+) -> View<Msg> {
+    let size = 12.0_f32;
+    let kind_color = aspecto_color(kind_id);
+    let cell = |text: String, color: Color, w: f32| -> View<Msg> {
+        View::new(Style {
+            size: Size {
+                width: length(w),
+                height: length(size + 4.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(text, size, color, Alignment::Start)
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(size + 4.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![
+        cell(kind_code.to_string(), kind_color, 34.0),
+        cell(from.to_string(), theme.fg_text, 44.0),
+        cell(to.to_string(), theme.fg_text, 44.0),
+        cell(orb_dms.to_string(), theme.fg_muted, 60.0),
+        cell(dir.to_string(), theme.fg_muted, 24.0),
+    ])
+}
+
+pub(crate) fn tile_aspectos(render: &RenderModel, module_id: &str, theme: &Theme) -> View<Msg> {
     let mut asps: Vec<&AspectSummary> = render
         .aspect_summary
         .iter()
         .filter(|a| a.module_id == module_id)
         .collect();
-    // Orden: primero los mayores; dentro de cada grupo, por orbe
-    // ascendente (los más exactos arriba).
     asps.sort_by(|a, b| {
         aspecto_importancia(&a.kind)
             .cmp(&aspecto_importancia(&b.kind))
@@ -587,22 +239,17 @@ fn tile_aspectos(render: &RenderModel, module_id: &str, theme: &Theme) -> View<M
     });
     let rows: Vec<View<Msg>> = asps
         .into_iter()
-        .take(20)
+        .take(40)
         .map(|a| {
             let from = simbolo_cuerpo(&a.from_body);
             let to = simbolo_cuerpo(&a.to_body);
             let kind = simbolo_aspecto(&a.kind);
             let dms = fmt_dms(a.orb_deg);
-            // ◂ ▸ (U+25C2/B8) no están en LiberationSans — usamos
-            // ◄ ► (U+25C4/BA) que sí, y son visualmente idénticos.
             let dir = match a.applying {
                 Some(true) => " ◄",
                 Some(false) => " ►",
                 None => "",
             };
-            // El kind va coloreado por la paleta de aspectos; el
-            // resto en fg_text — así la columna de tipo se distingue
-            // visualmente de los nombres de cuerpo.
             aspect_row(kind, from, to, &dms, dir, a.kind.as_str(), theme)
         })
         .collect();
@@ -610,7 +257,7 @@ fn tile_aspectos(render: &RenderModel, module_id: &str, theme: &Theme) -> View<M
         return tile_container(
             vec![line(
                 rimay_localize::t("cosmos-empty"),
-                11.0,
+                12.0,
                 theme.fg_muted,
             )],
             theme,
@@ -619,14 +266,17 @@ fn tile_aspectos(render: &RenderModel, module_id: &str, theme: &Theme) -> View<M
     tile_container(rows, theme)
 }
 
-// ----- Uraniano (grupos del dial de 90°) -----
+// =====================================================================
+// Uraniano (grupos del dial de 90°)
+// =====================================================================
 
-fn tile_uraniano(groups: &[UranianGroup], theme: &Theme) -> View<Msg> {
+pub(crate) fn tile_uraniano(groups: &[UranianGroup], theme: &Theme) -> View<Msg> {
     if groups.is_empty() {
         return tile_container(
             vec![line(
-                rimay_localize::t("cosmos-empty"),
-                11.0,
+                "Activá la capa «Uraniano» (menú Capas) para ver los grupos del dial de 90°."
+                    .to_string(),
+                12.0,
                 theme.fg_muted,
             )],
             theme,
@@ -634,12 +284,12 @@ fn tile_uraniano(groups: &[UranianGroup], theme: &Theme) -> View<Msg> {
     }
     let rows: Vec<View<Msg>> = groups
         .iter()
-        .take(16)
+        .take(40)
         .map(|g| {
             let bodies: Vec<String> = g.bodies.iter().map(|b| simbolo_cuerpo(b).into()).collect();
             line(
                 format!("{:.1}°  {}", g.mod90_deg, bodies.join(" ")),
-                11.0,
+                12.0,
                 theme.fg_text,
             )
         })
@@ -647,9 +297,11 @@ fn tile_uraniano(groups: &[UranianGroup], theme: &Theme) -> View<Msg> {
     tile_container(rows, theme)
 }
 
-// ----- Cualidades (elementos + modalidades + polaridad) -----
+// =====================================================================
+// Cualidades (elementos + modalidades + polaridad)
+// =====================================================================
 
-fn tile_cualidades(render: &RenderModel, theme: &Theme) -> View<Msg> {
+pub(crate) fn tile_cualidades(render: &RenderModel, theme: &Theme) -> View<Msg> {
     let bodies: Vec<(&str, f32)> = render
         .layers
         .iter()
@@ -658,11 +310,8 @@ fn tile_cualidades(render: &RenderModel, theme: &Theme) -> View<Msg> {
         .map(|g| (g.symbol.as_str(), g.deg))
         .collect();
 
-    // Elementos: sign_idx % 4 → 0=Fuego, 1=Tierra, 2=Aire, 3=Agua.
     let mut elementos: [Vec<&'static str>; 4] = Default::default();
-    // Modalidades: sign_idx % 3 → 0=Cardinal, 1=Fijo, 2=Mutable.
     let mut modalidades: [Vec<&'static str>; 3] = Default::default();
-    // Polaridad: sign_idx % 2 → 0=Yang (fuego/aire), 1=Yin (tierra/agua).
     let mut polaridad: [Vec<&'static str>; 2] = Default::default();
 
     for (name, deg) in &bodies {
@@ -673,73 +322,40 @@ fn tile_cualidades(render: &RenderModel, theme: &Theme) -> View<Msg> {
         polaridad[sign_idx % 2].push(glyph);
     }
 
-    let elem_labels = [
-        rimay_localize::t("cosmos-elem-fuego"),
-        rimay_localize::t("cosmos-elem-tierra"),
-        rimay_localize::t("cosmos-elem-aire"),
-        rimay_localize::t("cosmos-elem-agua"),
-    ];
-    let mod_labels = [
-        rimay_localize::t("cosmos-mod-cardinal"),
-        rimay_localize::t("cosmos-mod-fijo"),
-        rimay_localize::t("cosmos-mod-mutable"),
-    ];
-    let pol_labels = [
-        rimay_localize::t("cosmos-pol-yang"),
-        rimay_localize::t("cosmos-pol-yin"),
-    ];
+    let elem_labels = ["Fuego", "Tierra", "Aire", "Agua"];
+    let mod_labels = ["Cardinal", "Fijo", "Mutable"];
+    let pol_labels = ["Yang", "Yin"];
 
     let mut rows: Vec<View<Msg>> = Vec::new();
-    rows.push(seccion_label(rimay_localize::t("cosmos-elementos"), theme));
+    rows.push(section_label("Elementos".to_string(), theme));
     for (i, label) in elem_labels.iter().enumerate() {
         rows.push(fila_cualidad(label, &elementos[i], theme));
     }
-    rows.push(seccion_label(rimay_localize::t("cosmos-modalidades"), theme));
+    rows.push(section_label("Modalidades".to_string(), theme));
     for (i, label) in mod_labels.iter().enumerate() {
         rows.push(fila_cualidad(label, &modalidades[i], theme));
     }
-    rows.push(seccion_label(rimay_localize::t("cosmos-polaridad"), theme));
+    rows.push(section_label("Polaridad".to_string(), theme));
     for (i, label) in pol_labels.iter().enumerate() {
         rows.push(fila_cualidad(label, &polaridad[i], theme));
     }
     tile_container(rows, theme)
 }
 
-fn seccion_label(text: String, theme: &Theme) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(14.0_f32),
-        },
-        flex_shrink: 0.0,
-        margin: Rect {
-            left: length(0.0_f32),
-            right: length(0.0_f32),
-            top: length(2.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .text_aligned(text, 10.0, theme.fg_muted, Alignment::Start)
-}
-
 fn fila_cualidad(label: &str, glyphs: &[&str], theme: &Theme) -> View<Msg> {
     let count = glyphs.len();
     let bar_len = count.min(10);
-    // █ y ░ existen en LiberationSans/AdwaitaSans; ▰/▱ no, por eso
-    // antes salían como cajitas .notdef.
     let bar: String = "█".repeat(bar_len) + &"░".repeat(10_usize.saturating_sub(bar_len));
     let glyph_str = glyphs.join(" ");
     let txt = format!("{label:>9}  {bar}  {count}  {glyph_str}");
-    line(txt, 11.0, theme.fg_text)
+    line(txt, 12.0, theme.fg_text)
 }
 
-// ----- Box graph (aspectarian triangular) -----
+// =====================================================================
+// Aspectario triangular
+// =====================================================================
 
-fn tile_box_graph(render: &RenderModel, theme: &Theme) -> View<Msg> {
-    // 1. cuerpos natales en orden de longitud (estable porque la layer ya
-    //    los emite en el orden canónico).
+pub(crate) fn tile_box_graph(render: &RenderModel, theme: &Theme) -> View<Msg> {
     let bodies: Vec<String> = render
         .layers
         .iter()
@@ -751,13 +367,12 @@ fn tile_box_graph(render: &RenderModel, theme: &Theme) -> View<Msg> {
         return tile_container(
             vec![line(
                 rimay_localize::t("cosmos-empty"),
-                11.0,
+                12.0,
                 theme.fg_muted,
             )],
             theme,
         );
     }
-    // 2. mapa (par ordenado) → símbolo de aspecto.
     let mut aspects: std::collections::HashMap<(String, String), String> =
         std::collections::HashMap::new();
     for a in &render.aspect_summary {
@@ -767,9 +382,8 @@ fn tile_box_graph(render: &RenderModel, theme: &Theme) -> View<Msg> {
         let key = sorted_pair(&a.from_body, &a.to_body);
         aspects.insert(key, a.kind.clone());
     }
-    // 3. filas triangulares: fila i = etiqueta cuerpo i + i celdas.
-    const CELL: f32 = 22.0;
-    const LBL: f32 = 24.0;
+    const CELL: f32 = 24.0;
+    const LBL: f32 = 26.0;
     let rows: Vec<View<Msg>> = bodies
         .iter()
         .enumerate()
@@ -825,60 +439,11 @@ fn box_cell(
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(text.to_string(), 11.0, fg, Alignment::Center);
+    .text_aligned(text.to_string(), 12.0, fg, Alignment::Center);
     if let Some(c) = bg {
         v = v.fill(c).radius(2.0);
     }
     v
-}
-
-// ----- Tile genérico: lista de glyphs de una layer -----
-
-fn tile_layer_glyphs(
-    render: &RenderModel,
-    kind: LayerKind,
-    module_id: &str,
-    theme: &Theme,
-) -> View<Msg> {
-    let glyphs: Vec<&cosmos_render::Glyph> = render
-        .layers
-        .iter()
-        .filter(|l| l.module_id == module_id && std::mem::discriminant(&l.kind) == std::mem::discriminant(&kind))
-        .flat_map(|l| l.glyphs.iter())
-        .collect();
-    if glyphs.is_empty() {
-        return tile_container(
-            vec![line(
-                rimay_localize::t("cosmos-empty"),
-                11.0,
-                theme.fg_muted,
-            )],
-            theme,
-        );
-    }
-    let rows: Vec<View<Msg>> = glyphs
-        .into_iter()
-        .take(20)
-        .map(|g| {
-            // Para lots viene "lot:Fo" — recortamos el prefijo y usamos annotation.
-            let label = if g.symbol.starts_with("lot:") {
-                g.annotation.clone().unwrap_or_else(|| g.symbol.clone())
-            } else if g.symbol.starts_with("✦") {
-                g.annotation.clone().unwrap_or_else(|| g.symbol.clone())
-            } else {
-                simbolo_cuerpo(&g.symbol).to_string()
-            };
-            let casa = g.house.map(|h| format!(" h{h}")).unwrap_or_default();
-            let dms = fmt_dms(g.deg.rem_euclid(30.0) as f64);
-            let sign = signo_de_longitud(g.deg);
-            line(
-                format!("{label}  {dms} {sign}{casa}"),
-                11.0,
-                theme.fg_text,
-            )
-        })
-        .collect();
-    tile_container(rows, theme)
 }
 
 fn sorted_pair(a: &str, b: &str) -> (String, String) {
@@ -889,9 +454,54 @@ fn sorted_pair(a: &str, b: &str) -> (String, String) {
     }
 }
 
-// ----- Corpus (pasajes interpretativos) -----
+// =====================================================================
+// Layer genérica (lotes / estrellas fijas / puntos medios)
+// =====================================================================
 
-fn tile_corpus(render: &RenderModel, corpus: &Corpus, theme: &Theme) -> View<Msg> {
+pub(crate) fn tile_layer_glyphs(
+    render: &RenderModel,
+    kind: LayerKind,
+    module_id: &str,
+    hint: &str,
+    theme: &Theme,
+) -> View<Msg> {
+    let glyphs: Vec<&cosmos_render::Glyph> = render
+        .layers
+        .iter()
+        .filter(|l| {
+            l.module_id == module_id
+                && std::mem::discriminant(&l.kind) == std::mem::discriminant(&kind)
+        })
+        .flat_map(|l| l.glyphs.iter())
+        .collect();
+    if glyphs.is_empty() {
+        return tile_container(vec![line(hint.to_string(), 12.0, theme.fg_muted)], theme);
+    }
+    let rows: Vec<View<Msg>> = glyphs
+        .into_iter()
+        .take(40)
+        .map(|g| {
+            let label = if g.symbol.starts_with("lot:") {
+                g.annotation.clone().unwrap_or_else(|| g.symbol.clone())
+            } else if g.symbol.starts_with('✦') {
+                g.annotation.clone().unwrap_or_else(|| g.symbol.clone())
+            } else {
+                simbolo_cuerpo(&g.symbol).to_string()
+            };
+            let casa = g.house.map(|h| format!(" h{h}")).unwrap_or_default();
+            let dms = fmt_dms(g.deg.rem_euclid(30.0) as f64);
+            let sign = signo_de_longitud(g.deg);
+            line(format!("{label}  {dms} {sign}{casa}"), 12.0, theme.fg_text)
+        })
+        .collect();
+    tile_container(rows, theme)
+}
+
+// =====================================================================
+// Corpus (pasajes interpretativos)
+// =====================================================================
+
+pub(crate) fn tile_corpus(render: &RenderModel, corpus: &Corpus, theme: &Theme) -> View<Msg> {
     let (colocaciones, aspectos) = corpus_inputs(render);
     let combinaciones = combinaciones_de_carta(&colocaciones, &aspectos);
     let pasajes = corpus.interpretar(&combinaciones);
@@ -911,16 +521,14 @@ fn tile_corpus(render: &RenderModel, corpus: &Corpus, theme: &Theme) -> View<Msg
     if pasajes.is_empty() {
         rows.push(line(
             rimay_localize::t("cosmos-corpus-vacio"),
-            11.0,
+            12.0,
             theme.fg_muted,
         ));
     } else {
-        for p in pasajes.iter().take(8) {
-            rows.push(line(p.combinacion.to_string(), 10.0, theme.fg_muted));
-            // Texto del pasaje: lo cortamos a ~140 chars para que la fila
-            // siga siendo de una sola línea visible en el sidebar.
-            let txt = recortar(&p.texto, 140);
-            rows.push(line(txt, 11.0, theme.fg_text));
+        for p in pasajes.iter().take(16) {
+            rows.push(line(p.combinacion.to_string(), 10.0, theme.accent));
+            let txt = recortar(&p.texto, 200);
+            rows.push(line(txt, 12.0, theme.fg_text));
         }
     }
     tile_container(rows, theme)
