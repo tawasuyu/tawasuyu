@@ -64,6 +64,14 @@ pub enum MediaCommand {
     /// sigue agnóstico de Rhai (no lo compila ni lo ejecuta); la app lo
     /// resuelve contra su runtime vivo (ver `run_script` en `media-app`).
     Script { name: String },
+    /// Enciende/apaga el ecualizador (bypass real, sin costo de procesado).
+    EqToggle,
+    /// Ajusta la ganancia (dB) de la banda `idx` del EQ sumando `delta_db`
+    /// (la app clampea al rango válido). Parametrizado: el mismo comando
+    /// sirve para un realce o un corte de cualquier tamaño según el binding.
+    EqBandBy { idx: usize, delta_db: f32 },
+    /// Aplana el ecualizador (todas las bandas a 0 dB).
+    EqReset,
 }
 
 impl MediaCommand {
@@ -91,6 +99,20 @@ impl MediaCommand {
             Snapshot => "Captura de pantalla".to_string(),
             ToggleRecord => "Grabar / detener".to_string(),
             Script { name } => format!("Script «{name}»"),
+            EqToggle => "Ecualizador on/off".to_string(),
+            EqReset => "Ecualizador plano".to_string(),
+            EqBandBy { idx, delta_db } => {
+                // Etiqueta por frecuencia ISO de la banda (mismo banco que
+                // `crate::eq::Equalizer::graphic_10band`) en vez del índice
+                // crudo — más legible en la ayuda y el palette.
+                let banda = match crate::eq::ISO_10_BANDS_HZ.get(*idx).copied() {
+                    Some(hz) if hz >= 1000.0 => format!("{:.0} kHz", hz / 1000.0),
+                    Some(hz) => format!("{hz:.0} Hz"),
+                    None => format!("#{idx}"),
+                };
+                let signo = if *delta_db >= 0.0 { "+" } else { "" };
+                format!("EQ {banda} {signo}{delta_db:.0} dB")
+            }
         }
     }
 }
@@ -287,6 +309,7 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             b(KeyChord::key("="), SetSpeed { mult: 1.0 }),
             b(KeyChord::key("c"), ToggleRecord),
             b(KeyChord::shift("s"), Snapshot),
+            b(KeyChord::key("e"), EqToggle),
             b(
                 KeyChord::key("b"),
                 Script {

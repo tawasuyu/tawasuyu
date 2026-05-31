@@ -25,6 +25,8 @@ pub enum PanelId {
     Transport,
     /// Volumen + medidores peak/RMS.
     Volume,
+    /// Ecualizador gráfico de 10 bandas (on/off + flat + gráfico de barras).
+    Equalizer,
     /// Playlist: repeat/shuffle/velocidad.
     Playlist,
     /// Captura: grabación WAV + snapshot PNG.
@@ -41,6 +43,7 @@ impl PanelId {
     pub const ALL: &'static [PanelId] = &[
         PanelId::Transport,
         PanelId::Volume,
+        PanelId::Equalizer,
         PanelId::Playlist,
         PanelId::Recorder,
         PanelId::Waveform,
@@ -53,6 +56,7 @@ impl PanelId {
         match self {
             PanelId::Transport => "transport",
             PanelId::Volume => "volume",
+            PanelId::Equalizer => "equalizer",
             PanelId::Playlist => "playlist",
             PanelId::Recorder => "recorder",
             PanelId::Waveform => "waveform",
@@ -160,6 +164,7 @@ mod tests {
                 PanelId::Waveform,
                 PanelId::Recorder,
                 PanelId::Playlist,
+                PanelId::Equalizer,
                 PanelId::Volume,
                 PanelId::Transport,
             ],

@@ -72,6 +72,7 @@ use media_core::{
     VolumeAudio, Waterfall,
 };
 use media_core::control::{ControlSettings, KeyChord, MediaCommand};
+use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
 use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
@@ -377,6 +378,15 @@ fn recorder() -> &'static WavRecorder {
 fn volume() -> &'static Volume {
     static SLOT: OnceLock<Volume> = OnceLock::new();
     SLOT.get_or_init(|| Volume::new(1.0))
+}
+
+/// Ecualizador gráfico de 10 bandas compartido con el wrapper
+/// [`EqualizerAudio`] en la cadena de audio. [`EqControl`] es clonable y
+/// lock-free en el callback realtime (compara una versión atómica); la UI
+/// (tile + palette + tecla `e`) lo ajusta desde otro hilo. Default plano.
+fn eq() -> &'static EqControl {
+    static SLOT: OnceLock<EqControl> = OnceLock::new();
+    SLOT.get_or_init(EqControl::graphic_10band)
 }
 
 /// Handle al [`Playlist`] activo cuando hay tracks WAV/MP3. `None`
@@ -850,6 +860,8 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (SpeedStep { dir: 1 }, "Velocidad"),
         (SpeedStep { dir: -1 }, "Velocidad"),
         (SetSpeed { mult: 1.0 }, "Velocidad"),
+        (EqToggle, "Ecualizador"),
+        (EqReset, "Ecualizador"),
         (Snapshot, "Captura"),
         (ToggleRecord, "Captura"),
     ];
@@ -877,6 +889,21 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         }
         catalog.push(pc);
         cmds.push(cmd);
+    }
+    // Ecualizador: cada banda con un realce y un corte de 3 dB,
+    // descubribles y ejecutables desde el palette. El título sale de
+    // `describe()` (frecuencia ISO + signo) — misma fuente que la ayuda.
+    for idx in 0..ISO_10_BANDS_HZ.len() {
+        for delta_db in [3.0_f32, -3.0] {
+            let cmd = EqBandBy { idx, delta_db };
+            let id = cmds.len();
+            let mut pc = PaletteCommand::new(id.to_string(), cmd.describe(), "Ecualizador");
+            if let Some(sc) = shortcut_for(&s.keymap, &cmd) {
+                pc = pc.with_shortcut(sc);
+            }
+            catalog.push(pc);
+            cmds.push(cmd);
+        }
     }
     (catalog, cmds)
 }
@@ -967,6 +994,21 @@ fn apply_command(cmd: MediaCommand) {
         Snapshot => do_snapshot(),
         ToggleRecord => toggle_record(),
         Script { name } => run_script(&name),
+        EqToggle => {
+            let e = eq();
+            let on = !e.is_enabled();
+            e.set_enabled(on);
+            eprintln!("media-app: eq {}", if on { "on" } else { "off" });
+        }
+        EqBandBy { idx, delta_db } => {
+            let e = eq();
+            let cur = e.gains().get(idx).copied().unwrap_or(0.0);
+            e.set_gain(idx, (cur + delta_db).clamp(-12.0, 12.0));
+        }
+        EqReset => {
+            eq().set_all_gains(&[0.0; ISO_10_BANDS_HZ.len()]);
+            eprintln!("media-app: eq plano");
+        }
     }
 }
 
@@ -1575,6 +1617,7 @@ fn tile_content(id: TileId) -> View<Msg> {
     match id {
         TileId::Transport => transport_tile(),
         TileId::Volume => volume_tile(),
+        TileId::Equalizer => equalizer_tile(),
         TileId::Playlist => playlist_tile(),
         TileId::Recorder => recorder_tile(),
         TileId::Waveform => waveform_panel(),
@@ -1712,6 +1755,121 @@ fn volume_tile() -> View<Msg> {
         ..Default::default()
     })
     .children(vec![row, meters])
+}
+
+/// Tile del ecualizador: gráfico de las 10 bandas (barras desde -12..+12
+/// dB respecto a la línea 0 dB) + chips on/off y flat. El ajuste fino por
+/// banda vive en el command palette (grupo "Ecualizador") y la tecla `e`
+/// togglea el EQ entero. Apagado, las barras se pintan grises (bypass).
+fn equalizer_tile() -> View<Msg> {
+    let enabled = eq().is_enabled();
+    let gains = eq().gains();
+
+    let graph = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(96.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(14, 16, 22, 255))
+    .radius(8.0)
+    .paint_with(move |scene, _ts, rect| {
+        if rect.w <= 4.0 || rect.h <= 4.0 {
+            return;
+        }
+        let pad: f32 = 6.0;
+        let inner_x = rect.x + pad;
+        let inner_y = rect.y + pad;
+        let inner_w = (rect.w - 2.0 * pad).max(1.0);
+        let inner_h = (rect.h - 2.0 * pad).max(1.0);
+        let mid_y = inner_y + inner_h * 0.5;
+
+        // Línea 0 dB de referencia.
+        let mut zero = BezPath::new();
+        zero.move_to((inner_x as f64, mid_y as f64));
+        zero.line_to(((inner_x + inner_w) as f64, mid_y as f64));
+        scene.stroke(
+            &Stroke::new(1.0),
+            Affine::IDENTITY,
+            Color::from_rgba8(80, 92, 110, 255),
+            None,
+            &zero,
+        );
+
+        let n = gains.len().max(1);
+        let slot_w = inner_w / n as f32;
+        let bar_w = (slot_w * 0.6).max(2.0);
+        let half = inner_h * 0.5;
+        for (i, &g) in gains.iter().enumerate() {
+            let norm = (g / 12.0).clamp(-1.0, 1.0);
+            let h = (norm.abs() * half).max(1.0);
+            let cx = inner_x + (i as f32 + 0.5) * slot_w;
+            let x0 = cx - bar_w * 0.5;
+            let (y0, y1) = if norm >= 0.0 {
+                (mid_y - h, mid_y)
+            } else {
+                (mid_y, mid_y + h)
+            };
+            let bar = KurboRect::new(x0 as f64, y0 as f64, (x0 + bar_w) as f64, y1 as f64);
+            let col = if !enabled {
+                Color::from_rgba8(70, 80, 95, 255)
+            } else if norm >= 0.0 {
+                Color::from_rgba8(110, 200, 150, 255)
+            } else {
+                Color::from_rgba8(210, 150, 90, 255)
+            };
+            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &bar);
+        }
+    });
+
+    let toggle = chip_button(
+        if enabled { "eq on" } else { "eq off" },
+        if enabled {
+            Color::from_rgba8(60, 110, 150, 255)
+        } else {
+            Color::from_rgba8(40, 46, 56, 255)
+        },
+        Color::from_rgba8(220, 230, 245, 255),
+        Msg::Command(MediaCommand::EqToggle),
+    );
+    let flat = chip_button(
+        "flat",
+        Color::from_rgba8(55, 65, 80, 255),
+        Color::from_rgba8(220, 230, 245, 255),
+        Msg::Command(MediaCommand::EqReset),
+    );
+    let controls = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(40.0_f32),
+        },
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![toggle, flat]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![graph, controls])
 }
 
 /// Tile de playlist: repeat/shuffle/speed. Los tres están apagados si
@@ -2463,7 +2621,8 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
                     pause().clone(),
                 );
                 let voled = VolumeAudio::new(pausable, volume().clone());
-                let recorded = RecordedAudioSource::new(voled, recorder().clone());
+                let equalized = EqualizerAudio::new(voled, eq().clone());
+                let recorded = RecordedAudioSource::new(equalized, recorder().clone());
                 let probed = ProbedAudioSource::new(recorded, probe.clone());
                 return (Arc::new(Mutex::new(probed)), probe);
             }
@@ -2548,7 +2707,11 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     // lo que realmente se reproduce.
     let pausable = PausableAudio::new(inner, pause().clone());
     let voled = VolumeAudio::new(pausable, volume().clone());
-    let recorded = RecordedAudioSource::new(voled, recorder().clone());
+    // EQ después del volumen: el probe (visor) y el recorder ven el audio
+    // ya ecualizado — el visor refleja lo que realmente suena y la
+    // grabación queda con el mismo tono que se escuchó.
+    let equalized = EqualizerAudio::new(voled, eq().clone());
+    let recorded = RecordedAudioSource::new(equalized, recorder().clone());
     let probed = ProbedAudioSource::new(recorded, probe.clone());
     (Arc::new(Mutex::new(probed)), probe)
 }
