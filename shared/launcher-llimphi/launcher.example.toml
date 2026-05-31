@@ -1,0 +1,57 @@
+# Ejemplo de ~/.config/gioser/launcher.toml — la Surface del launcher.
+#
+# Copiá esto a ~/.config/gioser/launcher.toml y editalo. Si el archivo no
+# existe, gioser-launcher usa Surface::desktop_default() y llena el dock con
+# las apps descubiertas en ~/.config/gioser/apps/*.toml.
+#
+# El mismo schema (launcher-core::Surface) se monta idéntico en host, shuma
+# y wawa — sólo cambia quién lo renderiza y quién ejecuta el lanzamiento.
+
+# --- Barra de menú global (estilo mac), arriba ---
+# Adopta el menú de la app focuseada. `trailing` son módulos a la derecha.
+[app_menu]
+edge = "top"
+thickness = 30.0
+
+[[app_menu.trailing]]
+kind = "clock"        # módulo vivo del host (hora del sistema)
+
+# --- Barra inferior (estilo eww), con slots start / center / end ---
+[[bars]]
+edge = "bottom"
+thickness = 60.0
+
+[[bars.start]]
+kind = "ram"          # RAM% de /proc/meminfo
+
+[[bars.start]]
+kind = "cpu"          # CPU% de /proc/stat (delta por tick)
+
+[[bars.center]]
+kind = "dock"         # inserta el dock con id "principal"
+id = "principal"
+
+[[bars.end]]
+kind = "volume"
+
+# --- Dock con tear-off ---
+# Cada entry referencia una app del registro (app-bus) por app_id. label e
+# icon son overrides opcionales; si faltan, se toman del AppRegistry.
+# Si `entries` queda vacío, gioser-launcher lo auto-llena con lo descubierto.
+[[docks]]
+id = "principal"
+edge = "bottom"
+thickness = 56.0
+tear_off = true
+
+[[docks.entries]]
+app_id = "cosmos"
+
+[[docks.entries]]
+app_id = "nada"
+
+[[docks.entries]]
+app_id = "pluma"
+
+[[docks.entries]]
+app_id = "nahual"

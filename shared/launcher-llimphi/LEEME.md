@@ -1,0 +1,55 @@
+# launcher-llimphi
+
+Frontend Llimphi del **motor de launcher único** de gioser. Renderiza un
+`launcher-core::Surface` a `View<Msg>` y trae el binario `gioser-launcher`,
+el launcher real del escritorio.
+
+No es un launcher más al lado de `mirada-launcher` / `shuma-module-launcher`:
+es la pieza que ésos están llamados a montar en vez de reimplementar su
+propio despacho. Los datos (`Surface`, `Bar`, `Dock`, `Module`,
+`AppMenuBar`) viven en `launcher-core` (`no_std`); la ejecución la resuelve
+un `app_bus::Launcher` inyectado; acá vive sólo el render.
+
+## Correr
+
+```bash
+cargo run -p launcher-llimphi --bin gioser-launcher --release
+```
+
+La primera vez siembra `~/.config/gioser/apps/*.toml` con el set base de
+apps del repo (cosmos, nada, pluma, nahual, dominium, tinkuy, takiy, media,
+tullpu, supay) y las descubre vía `app_bus::AppRegistry`. El dock se llena
+con lo descubierto; click en un ítem lanza el binario (`ProcessLauncher`).
+
+El demo sin descubrimiento ni config (apps de juguete, módulos estáticos):
+
+```bash
+cargo run -p launcher-llimphi --example launcher_demo
+```
+
+## Configurar
+
+La superficie se describe en `~/.config/gioser/launcher.toml` (respeta
+`XDG_CONFIG_HOME`). Si no existe, cae a `Surface::desktop_default()` y
+auto-llena el dock. Ver `launcher.example.toml` en este crate para el
+schema completo. Mismo TOML/JSON sirve idéntico en host, shuma y wawa.
+
+Kinds de módulo builtin que el render conoce: `app_menu` (slot del menú
+global), `launch` (botón que lanza `app_id`), `dock` (inserta el dock por
+`id`), `spacer`. Los módulos vivos del host — `clock`, `cpu`, `ram`,
+`volume` — los pinta `host.rs` (reloj del sistema, CPU% de `/proc/stat`,
+RAM% de `/proc/meminfo`), refrescados por un tick de 2 s. Cualquier otro
+`kind` es un widget propio que el host inyecta vía `render_module`.
+
+## API (para montar el launcher en otra app)
+
+- `launcher_view(&LauncherSpec)` → árbol raíz, para `App::view`.
+- `launcher_overlay(&LauncherSpec)` → dropdown del menú abierto, para
+  `App::view_overlay` (`None` si no hay nada abierto).
+- `host::module_view(m, &SysStats, &theme)` → el hook de módulos vivos de
+  referencia para `LauncherSpec::render_module`.
+
+El widget es **sin estado** (estilo Llimphi): el `Model` del host lleva qué
+menú está abierto y la lista de tarjetas flotantes; el widget aplana la
+`Surface` y emite `Msg`. El dock soporta tear-off (grip ⤢ desprende un ítem
+como tarjeta flotante; la × la cierra — `on_close` en el spec).
