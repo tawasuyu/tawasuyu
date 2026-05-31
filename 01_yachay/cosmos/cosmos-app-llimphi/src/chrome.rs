@@ -136,6 +136,9 @@ impl MenuEntry {
     }
 }
 
+/// Lado del lienzo de cada carta en modo mosaico.
+const TILE_SIZE: f32 = 360.0;
+
 fn check(label: &str, on: bool) -> String {
     if on {
         format!("✓ {label}")
@@ -532,14 +535,42 @@ fn rename_bar(model: &Model, theme: &Theme) -> View<Msg> {
 /// el panel de herramientas (derecha).
 pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
     let switcher = chart_switcher(model, theme);
-    let graphic = match model.chart_view {
-        ChartView::Estandar => wheel_canvas(model, theme),
-        ChartView::Carto => crate::astrocarto::tile_astrocarto(&model.chart, &model.render, theme),
-        ChartView::Esfera3d => sphere_canvas(model),
-        ChartView::Cielo => pending_view(
-            "Cielo del observador (gráfico) — pendiente; la tabla alt/az está en Herramientas › Astronomía.",
-            theme,
-        ),
+
+    // Mosaico (cartas lado a lado) sólo si hay >1 abierta; si no, la activa.
+    let inner = if model.tile_mode && model.open.len() > 1 {
+        let tiles: Vec<View<Msg>> = model
+            .open
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| tile_cell(model, i, tab, theme))
+            .collect();
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            gap: Size {
+                width: length(10.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(tiles)
+    } else {
+        let g = graphic_for(model, &model.chart, &model.render, WHEEL_SIZE, theme);
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .children(vec![g])
     };
 
     let graphic_area = View::new(Style {
@@ -557,7 +588,7 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .children(vec![graphic]);
+    .children(vec![inner]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -574,6 +605,64 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .children(vec![chart_tabs(model, theme), switcher, graphic_area])
+}
+
+/// Una celda del mosaico: etiqueta (clickeable → activa la carta) + su
+/// gráfica a tamaño reducido.
+fn tile_cell(model: &Model, i: usize, tab: &crate::model::OpenTab, theme: &Theme) -> View<Msg> {
+    let active = i == model.active_tab;
+    let label = View::new(Style {
+        size: Size {
+            width: length(TILE_SIZE),
+            height: length(22.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(if active { theme.bg_selected } else { theme.bg_panel })
+    .radius(4.0)
+    .text_aligned(tab.label().to_string(), 11.0, theme.fg_text, Alignment::Center)
+    .on_click(Msg::ActivateChartTab(i));
+
+    let g = graphic_for(model, &tab.chart, &tab.render, TILE_SIZE, theme);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(TILE_SIZE),
+            height: auto(),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![label, g])
+}
+
+/// La gráfica elegida (según `chart_view`) para una carta/render dados, al
+/// tamaño `size`. Reusada por la vista única y por cada celda del mosaico.
+fn graphic_for(
+    model: &Model,
+    chart: &cosmos_model::Chart,
+    render: &cosmos_render::RenderModel,
+    size: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    match model.chart_view {
+        ChartView::Estandar => wheel_canvas(model, render, size),
+        ChartView::Carto => crate::astrocarto::tile_astrocarto(chart, render, theme),
+        ChartView::Esfera3d => sphere_canvas(render, size),
+        ChartView::Cielo => pending_view(
+            "Cielo del observador (gráfico) — pendiente; la tabla alt/az está en Herramientas › Astronomía.",
+            theme,
+        ),
+    }
 }
 
 /// Tira de pestañas de cartas abiertas (multi-carta). Cada pestaña: label
@@ -635,6 +724,40 @@ fn chart_tabs(model: &Model, theme: &Theme) -> View<Msg> {
         };
         kids.push(tabv);
     }
+
+    // Relleno + botón de alternar pestañas/mosaico (a la derecha).
+    kids.push(
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: auto(),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        }),
+    );
+    let toggle_glyph = if model.tile_mode { "▭ pestañas" } else { "▦ mosaico" };
+    kids.push(
+        View::new(Style {
+            size: Size {
+                width: auto(),
+                height: percent(1.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(toggle_glyph.to_string(), 11.0, theme.fg_muted, Alignment::Center)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(Msg::ToggleTileMode),
+    );
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -704,19 +827,19 @@ fn chart_switcher(model: &Model, theme: &Theme) -> View<Msg> {
 /// Esfera celeste 3D (wireframe) — compone con `cosmos-render::sphere3d`
 /// y pinta los `DrawCommand` en el mismo canvas que la rueda. Vista fija
 /// por ahora (rotación con drag pendiente de que el canvas exponga drag).
-fn sphere_canvas(model: &Model) -> View<Msg> {
+fn sphere_canvas(render: &cosmos_render::RenderModel, size: f32) -> View<Msg> {
     let opts = SphereOpts {
-        size: WHEEL_SIZE,
+        size,
         palette: Palette::dark(),
         ..Default::default()
     };
-    let commands = compose_sphere(&model.render, &SphereView::default(), &opts);
+    let commands = compose_sphere(render, &SphereView::default(), &opts);
     let canvas_bg = Color::from_rgba8(8, 10, 16, 255);
-    let canvas = canvas_view::<Msg>(commands, WHEEL_SIZE, Some(canvas_bg));
+    let canvas = canvas_view::<Msg>(commands, size, Some(canvas_bg));
     View::new(Style {
         size: Size {
-            width: length(WHEEL_SIZE),
-            height: length(WHEEL_SIZE),
+            width: length(size),
+            height: length(size),
         },
         flex_shrink: 0.0,
         ..Default::default()
@@ -731,11 +854,11 @@ fn pending_view(msg: &str, theme: &Theme) -> View<Msg> {
     )
 }
 
-/// La rueda natal 2D como canvas clickeable (sólo el gráfico).
-fn wheel_canvas(model: &Model, theme: &Theme) -> View<Msg> {
-    let _ = theme;
+/// La rueda natal 2D como canvas clickeable (sólo el gráfico), de la carta
+/// cuyo `render` se pasa, al tamaño `size`.
+fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32) -> View<Msg> {
     let opts = CompositionOpts {
-        size: WHEEL_SIZE,
+        size,
         rot_offset_deg: model.cfg.rot_offset_deg,
         include_bodies: true,
         palette: Palette::dark(),
@@ -745,12 +868,12 @@ fn wheel_canvas(model: &Model, theme: &Theme) -> View<Msg> {
         dial_3d: model.cfg.dial_3d,
         selected_body: model.selected_body.clone(),
     };
-    let (commands, hits) = compose_wheel_with_hits(&model.render, &opts);
+    let (commands, hits) = compose_wheel_with_hits(render, &opts);
     let canvas_bg = Color::from_rgba8(8, 10, 16, 255);
     // Offset del menú contextual: origen del centro ≈ nav (resizable) +
-    // barra de menú + cabecera del switcher.
+    // barra de menú + cabecera del switcher. (Aprox. en mosaico.)
     let nav_off = model.nav_w + if model.nav_open { 6.0 } else { 0.0 };
-    let canvas = canvas_view_clickable::<Msg, _>(commands, WHEEL_SIZE, Some(canvas_bg), move |wx, wy| {
+    let canvas = canvas_view_clickable::<Msg, _>(commands, size, Some(canvas_bg), move |wx, wy| {
         let picked: Option<String> = hits.pick(wx, wy).map(str::to_string);
         Some(Msg::SelectBody(picked))
     })
@@ -760,8 +883,8 @@ fn wheel_canvas(model: &Model, theme: &Theme) -> View<Msg> {
 
     View::new(Style {
         size: Size {
-            width: length(WHEEL_SIZE),
-            height: length(WHEEL_SIZE),
+            width: length(size),
+            height: length(size),
         },
         flex_shrink: 0.0,
         ..Default::default()

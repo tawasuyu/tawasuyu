@@ -50,10 +50,32 @@ struct Cosmos;
 // Helpers de transición (reusados por mensajes directos y menú)
 // =====================================================================
 
+/// Recomputa el render de TODAS las cartas abiertas (mosaico siempre
+/// consistente al cambiar capas/armónico) y refresca `m.render` con el de
+/// la pestaña activa. Las cartas abiertas son pocas; el costo es marginal.
 fn recompute_chart(m: &mut Model) {
-    let (render, error) = compute(&m.chart, &m.overlays, m.harmonic, m.cfg.minor_aspects);
-    m.render = render;
-    m.error = error;
+    if m.open.is_empty() {
+        let (render, error) = compute(&m.chart, &m.overlays, m.harmonic, m.cfg.minor_aspects);
+        m.render = render;
+        m.error = error;
+        return;
+    }
+    let overlays = m.overlays.clone();
+    let (h, minor) = (m.harmonic, m.cfg.minor_aspects);
+    let active = m.active_tab.min(m.open.len() - 1);
+    for i in 0..m.open.len() {
+        let (render, error) = compute(&m.open[i].chart, &overlays, h, minor);
+        m.open[i].render = render;
+        if i == active {
+            m.render = m.open[i].render.clone();
+            m.error = error;
+        }
+    }
+}
+
+/// Render puntual de una carta con las opciones globales actuales.
+fn compute_render(m: &Model, chart: &cosmos_model::Chart) -> cosmos_render::RenderModel {
+    compute(chart, &m.overlays, m.harmonic, m.cfg.minor_aspects).0
 }
 
 fn recompute_astro(m: &mut Model) {
@@ -84,6 +106,7 @@ fn close_chart_tab(m: &mut Model, i: usize) {
         m.open.push(OpenTab {
             id: None,
             chart: m.chart.clone(),
+            render: m.render.clone(),
         });
         activate_tab(m, 0);
         return;
@@ -139,9 +162,11 @@ fn do_cargar(m: &mut Model, id: String) {
         .as_ref()
         .and_then(|s| id.parse().ok().and_then(|cid| s.get_chart(cid).ok()));
     if let Some(chart) = chart {
+        let render = compute_render(m, &chart);
         m.open.push(OpenTab {
             id: Some(id),
             chart,
+            render,
         });
         let i = m.open.len() - 1;
         activate_tab(m, i);
@@ -152,9 +177,12 @@ fn do_cargar(m: &mut Model, id: String) {
 
 /// Abre una carta de ejemplo como pestaña nueva (scratch, sin id).
 fn do_nueva(m: &mut Model) {
+    let chart = sample_chart();
+    let render = compute_render(m, &chart);
     m.open.push(OpenTab {
         id: None,
-        chart: sample_chart(),
+        chart,
+        render,
     });
     let i = m.open.len() - 1;
     activate_tab(m, i);
@@ -455,6 +483,7 @@ fn save_ui(m: &Model) {
         chart_view: m.chart_view,
         tool_cat: m.tool_cat,
         expanded_panels: m.expanded_panels.clone(),
+        tile_mode: m.tile_mode,
     });
 }
 
@@ -511,6 +540,7 @@ impl App for Cosmos {
         let open = vec![OpenTab {
             id: None,
             chart: chart.clone(),
+            render: render.clone(),
         }];
 
         Model {
@@ -526,6 +556,7 @@ impl App for Cosmos {
             status_note: None,
             open,
             active_tab: 0,
+            tile_mode: ui.tile_mode,
             selected_card: None,
             selected_body: None,
             store,
@@ -567,6 +598,10 @@ impl App for Cosmos {
             // multi-carta (tabs del centro)
             Msg::ActivateChartTab(i) => activate_tab(&mut m, i),
             Msg::CloseChartTab(i) => close_chart_tab(&mut m, i),
+            Msg::ToggleTileMode => {
+                m.tile_mode = !m.tile_mode;
+                persist = true;
+            }
             // navegación
             Msg::ToggleNavNode(key) => m.toggle_nav(key),
             Msg::NavClick(key) => nav_click(&mut m, key),

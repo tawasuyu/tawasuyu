@@ -241,6 +241,9 @@ pub(crate) struct OpenTab {
     /// Id de la carta en el store (`None` = scratch / ejemplo no guardado).
     pub(crate) id: Option<String>,
     pub(crate) chart: Chart,
+    /// Render cacheado de esta carta — permite pintar varias en mosaico
+    /// sin recomputar por frame. Se recomputa al cambiar capas/armónico.
+    pub(crate) render: RenderModel,
 }
 
 impl OpenTab {
@@ -410,6 +413,8 @@ pub(crate) enum Msg {
     // multi-carta (tabs del centro)
     ActivateChartTab(usize),
     CloseChartTab(usize),
+    /// Alterna entre vista de pestañas y mosaico (cartas lado a lado).
+    ToggleTileMode,
     /// Expande/colapsa un nodo (grupo o contacto) del árbol de datos.
     ToggleNavNode(String),
     /// Selecciona un nodo del árbol; carta→carga, contenedor→toggle.
@@ -474,6 +479,8 @@ pub(crate) struct Model {
     // multi-carta (tabs del centro)
     pub(crate) open: Vec<OpenTab>,
     pub(crate) active_tab: usize,
+    /// `true` = mosaico (todas las cartas lado a lado); `false` = pestañas.
+    pub(crate) tile_mode: bool,
     pub(crate) selected_card: Option<String>,
     pub(crate) selected_body: Option<String>,
     // árbol de datos (cosmos-store)

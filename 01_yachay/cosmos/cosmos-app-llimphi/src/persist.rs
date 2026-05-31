@@ -51,6 +51,8 @@ pub(crate) struct UiState {
     pub(crate) tool_cat: ToolCat,
     #[serde(default = "ToolPanel::defaults_expanded")]
     pub(crate) expanded_panels: Vec<ToolPanel>,
+    #[serde(default)]
+    pub(crate) tile_mode: bool,
 }
 
 fn default_harmonic() -> u32 {
@@ -88,6 +90,7 @@ impl Default for UiState {
             chart_view: ChartView::default(),
             tool_cat: ToolCat::default(),
             expanded_panels: ToolPanel::defaults_expanded(),
+            tile_mode: false,
         }
     }
 }
