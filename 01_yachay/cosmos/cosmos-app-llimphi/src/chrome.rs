@@ -14,6 +14,7 @@ use cosmos_render::{compose_sphere, compose_wheel_with_hits, CompositionOpts, Pa
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Size, Style},
+    style::FlexWrap,
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -546,6 +547,7 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
             .collect();
         View::new(Style {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             size: Size {
                 width: percent(1.0_f32),
                 height: percent(1.0_f32),
@@ -554,7 +556,7 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
             justify_content: Some(JustifyContent::Center),
             gap: Size {
                 width: length(10.0_f32),
-                height: length(0.0_f32),
+                height: length(10.0_f32),
             },
             ..Default::default()
         })
