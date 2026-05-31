@@ -12714,4 +12714,70 @@ mod tests {
         assert_eq!(rt.eval("p.exec('https://api.example.com/x').hostname.groups.sub").expect("e"), JsValue::String("api".into()));
     }
 
+
+    // ---- Fase 7.157 — WebGPU ----
+    #[test]
+    fn webgpu_navigator_gpu_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("navigator.gpu != null && typeof navigator.gpu.requestAdapter === 'function'").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("navigator.gpu.getPreferredCanvasFormat()").expect("e"), JsValue::String("bgra8unorm".into()));
+    }
+
+    #[test]
+    fn webgpu_request_adapter_y_device() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ok = {};
+            navigator.gpu.requestAdapter().then(function(a){ ok.adapter = (a instanceof GPUAdapter); return a.requestDevice(); })
+                .then(function(d){ ok.device = (d instanceof GPUDevice); ok.queue = (typeof d.queue.submit === 'function'); ok.limit = d.limits.maxBindGroups; });").expect("e");
+        assert_eq!(rt.eval("ok.adapter").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ok.device").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ok.queue").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ok.limit").expect("e"), JsValue::Number(4.0));
+    }
+
+    #[test]
+    fn webgpu_crea_buffer_y_shader() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var ok = {};
+            navigator.gpu.requestAdapter().then(function(a){ return a.requestDevice(); }).then(function(d){
+                var buf = d.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM });
+                var sm = d.createShaderModule({ code: '@vertex fn main(){}' });
+                ok.size = buf.size; ok.usage = buf.usage; ok.sm = (sm instanceof GPUShaderModule);
+            });").expect("e");
+        assert_eq!(rt.eval("ok.size").expect("e"), JsValue::Number(256.0));
+        assert_eq!(rt.eval("ok.usage").expect("e"), JsValue::Number(64.0));
+        assert_eq!(rt.eval("ok.sm").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webgpu_command_encoder_render_pass_submit() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("globalThis.__puriy_dirty = [];
+            navigator.gpu.requestAdapter().then(function(a){ return a.requestDevice(); }).then(function(d){
+                var enc = d.createCommandEncoder();
+                var pass = enc.beginRenderPass({ colorAttachments: [] });
+                pass.setPipeline({}); pass.draw(3); pass.end();
+                d.queue.submit([enc.finish()]);
+            });").expect("e");
+        assert_eq!(rt.eval("__puriy_dirty.some(function(d){ return d.kind === 'webgpu-submit'; })").expect("e"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn webgpu_canvas_context() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval("var c = new OffscreenCanvas(64, 32); var ctx = c.getContext('webgpu');
+            ctx.configure({ format: 'rgba8unorm' }); var t = ctx.getCurrentTexture();").expect("e");
+        assert_eq!(rt.eval("ctx instanceof GPUCanvasContext").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("t.width").expect("e"), JsValue::Number(64.0));
+        assert_eq!(rt.eval("t.format").expect("e"), JsValue::String("rgba8unorm".into()));
+    }
+
+    #[test]
+    fn webgpu_flags_estaticos() {
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("GPUBufferUsage.VERTEX").expect("e"), JsValue::Number(32.0));
+        assert_eq!(rt.eval("GPUTextureUsage.RENDER_ATTACHMENT").expect("e"), JsValue::Number(16.0));
+        assert_eq!(rt.eval("GPUShaderStage.FRAGMENT").expect("e"), JsValue::Number(2.0));
+        assert_eq!(rt.eval("GPUMapMode.READ").expect("e"), JsValue::Number(1.0));
+    }
 }

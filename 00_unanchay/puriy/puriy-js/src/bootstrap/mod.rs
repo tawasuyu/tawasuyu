@@ -113,6 +113,7 @@ mod fontface;
 mod cssom;
 mod scheduler;
 mod urlpattern;
+mod webgpu;
 mod computed_style;
 
 pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
@@ -226,6 +227,7 @@ pub(crate) use fontface::FONTFACE_BOOTSTRAP;
 pub(crate) use cssom::CSSOM_BOOTSTRAP;
 pub(crate) use scheduler::SCHEDULER_BOOTSTRAP;
 pub(crate) use urlpattern::URLPATTERN_BOOTSTRAP;
+pub(crate) use webgpu::WEBGPU_BOOTSTRAP;
 pub(crate) use computed_style::COMPUTED_STYLE_BOOTSTRAP;
 
 /// Lista ordenada — JsRuntime::new() corre eval_raw sobre cada elemento.
@@ -341,5 +343,6 @@ pub(crate) const ALL: &[&str] = &[
     CSSOM_BOOTSTRAP,
     SCHEDULER_BOOTSTRAP,
     URLPATTERN_BOOTSTRAP,
+    WEBGPU_BOOTSTRAP,
     COMPUTED_STYLE_BOOTSTRAP,
 ];
