@@ -4746,3 +4746,156 @@
         assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash0);
         assert_eq!(model.historial.len(), 2);
     }
+
+    // ---- Máscaras de capa (fase 52) ----
+
+    /// Reemplaza el buffer de la capa seleccionada por uno opaco blanco
+    /// (alfa 255 en todo), para que el efecto de una máscara sobre el
+    /// alfa sea observable en el composite.
+    fn opacar_capa(model: &mut Model) {
+        let id = model.seleccionada.unwrap();
+        let n = (model.lienzo.width * model.lienzo.height) as usize;
+        let hash = model.almacen.insertar(vec![255u8; n * 4]);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+    }
+
+    #[test]
+    fn agregar_mascara_set_y_snapshotea() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(model.lienzo.capa(id).unwrap().mascara.is_none());
+        model = <Tullpu as App>::update(model, Msg::AgregarMascara, &Handle::for_test());
+        let mh = model.lienzo.capa(id).unwrap().mascara;
+        assert!(mh.is_some(), "la capa debe quedar con máscara");
+        // Máscara blanca = todo 255 (nada oculto), tamaño W·H.
+        let buf = model.almacen.obtener(mh.unwrap()).unwrap();
+        assert_eq!(buf.len(), (model.lienzo.width * model.lienzo.height) as usize);
+        assert!(buf.iter().all(|&b| b == 255));
+        assert_eq!(model.historial.len(), 2);
+    }
+
+    #[test]
+    fn agregar_mascara_es_idempotente() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        model = <Tullpu as App>::update(model, Msg::AgregarMascara, &Handle::for_test());
+        let mh1 = model.lienzo.capa(id).unwrap().mascara;
+        let hist1 = model.historial.len();
+        // Segunda vez: no-op (no pisa la máscara ni snapshotea).
+        model = <Tullpu as App>::update(model, Msg::AgregarMascara, &Handle::for_test());
+        assert_eq!(model.lienzo.capa(id).unwrap().mascara, mh1);
+        assert_eq!(model.historial.len(), hist1);
+    }
+
+    #[test]
+    fn mascara_de_seleccion_visible_dentro_oculto_fuera() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
+        assert!(agregar_mascara_de_seleccion(&mut model));
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        let w = model.lienzo.width as usize;
+        // Dentro del rect (1,1)..(3,3): 255; fuera: 0.
+        assert_eq!(buf[1 * w + 1], 255);
+        assert_eq!(buf[2 * w + 2], 255);
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[3 * w + 3], 0);
+    }
+
+    #[test]
+    fn invertir_mascara_intercambia_visible_oculto() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(agregar_mascara(&mut model)); // blanca (255)
+        assert!(invertir_mascara(&mut model));
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        assert!(buf.iter().all(|&b| b == 0), "invertir 255 → 0");
+    }
+
+    #[test]
+    fn quitar_mascara_no_toca_pixeles() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let contenido0 = model.lienzo.capa(id).unwrap().contenido;
+        assert!(agregar_mascara(&mut model));
+        assert!(quitar_mascara(&mut model));
+        assert!(model.lienzo.capa(id).unwrap().mascara.is_none());
+        // El contenido raster no cambió (no destructivo).
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, contenido0);
+        // Sin máscara, quitar de nuevo es no-op.
+        assert!(!quitar_mascara(&mut model));
+    }
+
+    #[test]
+    fn aplicar_mascara_hornea_alfa_y_la_quita() {
+        let mut model = modelo_minimo();
+        opacar_capa(&mut model);
+        let id = model.seleccionada.unwrap();
+        model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
+        assert!(agregar_mascara_de_seleccion(&mut model));
+        assert!(aplicar_mascara(&mut model));
+        // La máscara se consumió.
+        assert!(model.lienzo.capa(id).unwrap().mascara.is_none());
+        // El alfa del raster quedó horneado: 255 dentro, 0 fuera.
+        let contenido = model.lienzo.capa(id).unwrap().contenido;
+        let buf = model.almacen.obtener(contenido).unwrap();
+        let w = model.lienzo.width as usize;
+        assert_eq!(buf[(1 * w + 1) * 4 + 3], 255, "alfa visible adentro");
+        assert_eq!(buf[(0 * w + 0) * 4 + 3], 0, "alfa oculto afuera");
+    }
+
+    #[test]
+    fn aplicar_mascara_rechaza_derivada() {
+        // Una capa derivada no debe poder hornear su máscara (su buffer
+        // es cache regenerable). Construimos una derivada con máscara.
+        let mut model = modelo_minimo();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::Agregar(OpLocal::Invertir),
+            &Handle::for_test(),
+        );
+        // La derivada queda seleccionada; le ponemos una máscara directa.
+        let id = model.seleccionada.unwrap();
+        assert!(matches!(
+            model.lienzo.capa(id).unwrap().origen,
+            OrigenCapa::Derivada { .. }
+        ));
+        assert!(agregar_mascara(&mut model));
+        assert!(!aplicar_mascara(&mut model), "derivada: aplicar es no-op");
+        assert!(model.lienzo.capa(id).unwrap().mascara.is_some());
+    }
+
+    #[test]
+    fn recortar_lienzo_mantiene_mascara_valida() {
+        let mut model = modelo_minimo();
+        opacar_capa(&mut model);
+        let id = model.seleccionada.unwrap();
+        assert!(agregar_mascara(&mut model)); // 4×4 = 16 bytes
+        recortar_lienzo_a(&mut model, 1, 1, 3, 3); // → 2×2
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        assert_eq!(buf.len(), 2 * 2, "máscara recortada al nuevo tamaño");
+        // El render no debe fallar por tamaño de máscara.
+        assert!(tullpu_render::componer(&model.lienzo, &model.almacen).is_ok());
+    }
+
+    #[test]
+    fn rotar_lienzo_mantiene_mascara_valida() {
+        let mut model = modelo_minimo();
+        // Lienzo no cuadrado para detectar trasposición incorrecta.
+        model.lienzo.width = 4;
+        model.lienzo.height = 2;
+        let id = model.seleccionada.unwrap();
+        let hash = model.almacen.insertar(vec![255u8; 4 * 2 * 4]);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        assert!(agregar_mascara(&mut model)); // 4×2 = 8 bytes
+        assert!(rotar_lienzo(&mut model, true)); // → 2×4
+        assert_eq!(model.lienzo.width, 2);
+        assert_eq!(model.lienzo.height, 4);
+        let mh = model.lienzo.capa(id).unwrap().mascara.unwrap();
+        let buf = model.almacen.obtener(mh).unwrap();
+        assert_eq!(buf.len(), 2 * 4, "máscara rotada conserva conteo");
+        assert!(tullpu_render::componer(&model.lienzo, &model.almacen).is_ok());
+    }

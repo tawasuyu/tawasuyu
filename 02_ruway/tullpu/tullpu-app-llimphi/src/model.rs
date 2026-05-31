@@ -561,6 +561,19 @@ pub(crate) enum Msg {
     AjustarDegradado { dx: f32, dy: f32 },
     /// End del degradé: rellena el degradado del ancla al extremo actual.
     FinalizarDegradado,
+    /// Agrega una máscara blanca (todo visible) a la capa seleccionada.
+    /// No-op si ya tiene máscara.
+    AgregarMascara,
+    /// Construye una máscara desde la selección: visible dentro del rect,
+    /// oculto fuera. Reemplaza la máscara existente. No-op sin selección.
+    AgregarMascaraDeSeleccion,
+    /// Invierte la máscara de la capa seleccionada (visible ↔ oculto).
+    InvertirMascara,
+    /// Quita la máscara de la capa (no destructivo — la imagen vuelve
+    /// entera).
+    QuitarMascara,
+    /// Hornea la máscara al alfa del raster y la quita (destructivo).
+    AplicarMascara,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

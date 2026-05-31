@@ -93,8 +93,13 @@ pub(crate) fn fila_capa(
             format!("{}{suf}", op.etiqueta())
         }
     };
+    // Marcador de máscara: un 🎭 antes del nombre delata que la capa
+    // tiene una máscara alfa adjunta (se compone, pero no se ve en el
+    // thumb del contenido).
+    let marca_mascara = if capa.mascara.is_some() { "🎭 " } else { "" };
     let etiqueta = format!(
-        "{}  ·  {}  ·  α {:.2}  ·  {}",
+        "{}{}  ·  {}  ·  α {:.2}  ·  {}",
+        marca_mascara,
         capa.nombre,
         nombre_op,
         capa.opacidad,
@@ -1119,6 +1124,55 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
             mini_btn("▶", Msg::MoverSeleccion { dx: 1, dy: 0 }, &pal),
         ]),
     );
+
+    // "máscara": no destructiva sobre la capa seleccionada. Las etiquetas
+    // reflejan si la capa ya tiene máscara para que los botones sean
+    // discoverable también sin una activa.
+    let tiene_mascara = model
+        .seleccionada
+        .and_then(|id| model.lienzo.capas.iter().find(|c| c.id == id))
+        .map(|c| c.mascara.is_some())
+        .unwrap_or(false);
+    hijos.push(subtitulo("máscara"));
+    let etiqueta_add_mascara = if tiene_mascara {
+        "🎭 + máscara (ya tiene)".to_string()
+    } else {
+        "🎭 + máscara (blanca)".to_string()
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_add_mascara,
+        &pal,
+        Msg::AgregarMascara,
+    )));
+    let etiqueta_mascara_sel = match model.seleccion {
+        Some(r) => format!(
+            "🎭 máscara desde selección ({}×{})",
+            r.x1 - r.x0,
+            r.y1 - r.y0
+        ),
+        None => "🎭 máscara desde selección (—)".to_string(),
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_mascara_sel,
+        &pal,
+        Msg::AgregarMascaraDeSeleccion,
+    )));
+    let suf_mascara = if tiene_mascara { "" } else { " (—)" };
+    hijos.push(envolver_fila(button_view(
+        format!("🔄 invertir máscara{suf_mascara}"),
+        &pal,
+        Msg::InvertirMascara,
+    )));
+    hijos.push(envolver_fila(button_view(
+        format!("✕ quitar máscara{suf_mascara}"),
+        &pal,
+        Msg::QuitarMascara,
+    )));
+    hijos.push(envolver_fila(button_view(
+        format!("⬇ aplicar máscara al alfa{suf_mascara}"),
+        &pal,
+        Msg::AplicarMascara,
+    )));
 
     // "salida": no requiere selección, siempre activa.
     hijos.push(subtitulo("salida"));

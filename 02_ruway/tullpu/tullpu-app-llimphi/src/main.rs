@@ -847,6 +847,31 @@ impl App for Tullpu {
                     }
                 }
             }
+            Msg::AgregarMascara => {
+                if agregar_mascara(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
+            Msg::AgregarMascaraDeSeleccion => {
+                if agregar_mascara_de_seleccion(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
+            Msg::InvertirMascara => {
+                if invertir_mascara(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
+            Msg::QuitarMascara => {
+                if quitar_mascara(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
+            Msg::AplicarMascara => {
+                if aplicar_mascara(&mut model) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::Exportar(formato) => {
                 // Path en CWD con timestamp Unix — sin file picker (la app
                 // todavía no tiene). La extensión la elige el formato; el

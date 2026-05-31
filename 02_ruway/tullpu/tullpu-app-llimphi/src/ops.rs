@@ -421,13 +421,28 @@ pub(crate) fn bbox_no_transparente(data: &[u8], w: u32, h: u32) -> Option<(u32, 
 /// `(x1 - x0) × (y1 - y0)`. Asume el rect dentro de los bounds
 /// (validación aguas arriba). Pura.
 pub(crate) fn recortar_buffer(src: &[u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> Vec<u8> {
+    recortar_buffer_bpp(src, w, x0, y0, x1, y1, 4)
+}
+
+/// Variante de [`recortar_buffer`] parametrizada por bytes-por-píxel:
+/// `bpp=4` para buffers Rgba8, `bpp=1` para máscaras alfa de un canal.
+/// La aritmética de filas es idéntica salvo el factor de canal.
+pub(crate) fn recortar_buffer_bpp(
+    src: &[u8],
+    w: u32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+    bpp: usize,
+) -> Vec<u8> {
     let w = w as usize;
     let new_w = (x1 - x0) as usize;
     let new_h = (y1 - y0) as usize;
-    let mut out = Vec::with_capacity(new_w * new_h * 4);
+    let mut out = Vec::with_capacity(new_w * new_h * bpp);
     for y in y0..y1 {
-        let row_start = (y as usize * w + x0 as usize) * 4;
-        let row_end = row_start + new_w * 4;
+        let row_start = (y as usize * w + x0 as usize) * bpp;
+        let row_end = row_start + new_w * bpp;
         out.extend_from_slice(&src[row_start..row_end]);
     }
     out
@@ -455,6 +470,16 @@ pub(crate) fn recortar_lienzo_a(model: &mut Model, x0: u32, y0: u32, x1: u32, y1
         let cropped = recortar_buffer(&src, w, x0, y0, x1, y1);
         let new_hash = model.almacen.insertar(cropped);
         capa.contenido = new_hash;
+        // La máscara (1 byte/píxel) acompaña al contenido: si no la
+        // recortáramos, el render fallaría con `MascaraInvalida` por
+        // tamaño tras cambiar las dims del lienzo.
+        if let Some(mh) = capa.mascara {
+            if let Some(ms) = model.almacen.obtener(mh) {
+                let ms = ms.to_vec();
+                let mc = recortar_buffer_bpp(&ms, w, x0, y0, x1, y1, 1);
+                capa.mascara = Some(model.almacen.insertar(mc));
+            }
+        }
     }
     model.lienzo.width = new_w;
     model.lienzo.height = new_h;
@@ -1525,6 +1550,190 @@ pub(crate) fn rellenar_seleccion_en_capa(model: &mut Model) -> bool {
     )
 }
 
+// =============================================================================
+//  Máscaras de capa (fase 52)
+// =============================================================================
+//
+// Una máscara es un buffer de un canal (W·H bytes) que multiplica el alfa
+// de la capa al componer (lo aplica `tullpu-render`): 255 = totalmente
+// visible, 0 = totalmente oculto. Es no destructiva — vive en el campo
+// `Capa::mascara` aparte del contenido y se puede invertir o quitar sin
+// tocar los píxeles. "Aplicar" la hornea al alfa del raster y la borra.
+
+/// Agrega una máscara blanca (todo 255 = nada oculto) del tamaño del
+/// lienzo a la capa seleccionada. No-op si no hay capa seleccionada o la
+/// capa ya tiene máscara (para no pisar una existente).
+pub(crate) fn agregar_mascara(model: &mut Model) -> bool {
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    if let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) {
+        if capa.mascara.is_some() {
+            model.estado = "la capa ya tiene máscara".into();
+            return false;
+        }
+    } else {
+        return false;
+    }
+    let buffer = tullpu_render::buffer_mascara(w, h, 255);
+    let hash = model.almacen.insertar(buffer);
+    if let Some(capa) = model.lienzo.capa_mut(id) {
+        capa.mascara = Some(hash);
+    }
+    aplicar_y_recomponer(model);
+    model.estado = "máscara agregada (blanca · nada oculto)".into();
+    true
+}
+
+/// Agrega una máscara construida desde la selección activa: 255 dentro
+/// del rect (visible), 0 fuera (oculto). Reemplaza cualquier máscara
+/// existente. No-op si no hay selección o capa seleccionada. Es la vía
+/// no destructiva equivalente a "recortar a selección" sin perder los
+/// píxeles de afuera.
+pub(crate) fn agregar_mascara_de_seleccion(model: &mut Model) -> bool {
+    let Some(rect) = model.seleccion else {
+        model.estado = "no hay selección — `r` y arrastrar".into();
+        return false;
+    };
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let x0 = rect.x0.min(w);
+    let y0 = rect.y0.min(h);
+    let x1 = rect.x1.min(w);
+    let y1 = rect.y1.min(h);
+    if x1 <= x0 || y1 <= y0 {
+        model.estado = "selección fuera del lienzo".into();
+        return false;
+    }
+    let mut buffer = vec![0u8; (w as usize) * (h as usize)];
+    for y in y0..y1 {
+        let fila = (y as usize) * (w as usize);
+        for x in x0..x1 {
+            buffer[fila + x as usize] = 255;
+        }
+    }
+    let hash = model.almacen.insertar(buffer);
+    if let Some(capa) = model.lienzo.capa_mut(id) {
+        capa.mascara = Some(hash);
+    }
+    aplicar_y_recomponer(model);
+    model.estado = format!("máscara desde selección {}×{}", x1 - x0, y1 - y0);
+    true
+}
+
+/// Invierte la máscara de la capa seleccionada (255 ↔ 0): lo visible se
+/// oculta y viceversa. No-op si no hay capa o la capa no tiene máscara.
+pub(crate) fn invertir_mascara(model: &mut Model) -> bool {
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let mh = match model.lienzo.capas.iter().find(|c| c.id == id) {
+        Some(capa) => match capa.mascara {
+            Some(h) => h,
+            None => {
+                model.estado = "la capa no tiene máscara que invertir".into();
+                return false;
+            }
+        },
+        None => return false,
+    };
+    let Some(src) = model.almacen.obtener(mh) else {
+        return false;
+    };
+    let inv: Vec<u8> = src.iter().map(|b| 255 - b).collect();
+    let hash = model.almacen.insertar(inv);
+    if let Some(capa) = model.lienzo.capa_mut(id) {
+        capa.mascara = Some(hash);
+    }
+    aplicar_y_recomponer(model);
+    model.estado = "máscara invertida".into();
+    true
+}
+
+/// Quita la máscara de la capa seleccionada (vuelve a `None` — la capa
+/// se compone entera). No destruye píxeles. No-op si no hay máscara.
+pub(crate) fn quitar_mascara(model: &mut Model) -> bool {
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    match model.lienzo.capas.iter().find(|c| c.id == id) {
+        Some(capa) if capa.mascara.is_none() => {
+            model.estado = "la capa no tiene máscara".into();
+            return false;
+        }
+        Some(_) => {}
+        None => return false,
+    }
+    if let Some(capa) = model.lienzo.capa_mut(id) {
+        capa.mascara = None;
+    }
+    aplicar_y_recomponer(model);
+    model.estado = "máscara quitada".into();
+    true
+}
+
+/// Hornea (aplica) la máscara al alfa del raster seleccionado y la
+/// quita: `alfa_nuevo = alfa · mascara / 255` por píxel. Operación
+/// destructiva (a diferencia de quitar, que preserva la imagen entera).
+/// Sólo para capas raster — el buffer de una derivada es cache y se
+/// regeneraría en el próximo recompose. No-op si no hay máscara.
+pub(crate) fn aplicar_mascara(model: &mut Model) -> bool {
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let (contenido, mh) = match model.lienzo.capas.iter().find(|c| c.id == id) {
+        Some(capa) => {
+            if !matches!(capa.origen, OrigenCapa::Raster) {
+                model.estado =
+                    "la capa es derivada — aplicar máscara sólo en raster".into();
+                return false;
+            }
+            match capa.mascara {
+                Some(m) => (capa.contenido, m),
+                None => {
+                    model.estado = "la capa no tiene máscara que aplicar".into();
+                    return false;
+                }
+            }
+        }
+        None => return false,
+    };
+    let Some(src) = model.almacen.obtener(contenido).map(|s| s.to_vec()) else {
+        return false;
+    };
+    let Some(mask) = model.almacen.obtener(mh).map(|s| s.to_vec()) else {
+        return false;
+    };
+    // El alfa de cada píxel se escala por el byte de máscara. Buffers
+    // siempre del mismo conteo de píxeles (mantenido por crop/rotar).
+    let n = src.len() / 4;
+    let mut out = src.clone();
+    for i in 0..n.min(mask.len()) {
+        let a = out[i * 4 + 3] as u16;
+        let m = mask[i] as u16;
+        out[i * 4 + 3] = ((a * m) / 255) as u8;
+    }
+    let new_hash = model.almacen.insertar(out);
+    if let Some(capa) = model.lienzo.capa_mut(id) {
+        capa.contenido = new_hash;
+        capa.mascara = None;
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+    model.estado = "máscara aplicada al alfa".into();
+    true
+}
+
 /// Etiqueta corta del color activo: hex `#RRGGBB` si el cuentagotas
 /// leyó alguno, o `"gris"` (el `RELLENO_DEFAULT`) si todavía no.
 /// Compartida por el botón "+ relleno" y "rellenar selección".
@@ -1542,15 +1751,21 @@ pub(crate) fn etiqueta_color_activo(picked: Option<[u8; 4]>) -> String {
 ///
 /// Mapeo: src `(x, y)` → dst `(h-1-y, x)` con `w_new = h`.
 pub(crate) fn rotar_buffer_90_cw(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    rotar_buffer_90_cw_bpp(src, w, h, 4)
+}
+
+/// Variante de [`rotar_buffer_90_cw`] parametrizada por bytes-por-píxel
+/// (`4` Rgba8, `1` máscara alfa). Mismo mapeo geométrico.
+pub(crate) fn rotar_buffer_90_cw_bpp(src: &[u8], w: u32, h: u32, bpp: usize) -> Vec<u8> {
     let w = w as usize;
     let h = h as usize;
     let mut out = vec![0u8; src.len()];
     let w_new = h;
     for y in 0..h {
         for x in 0..w {
-            let i_src = (y * w + x) * 4;
-            let i_dst = (x * w_new + (h - 1 - y)) * 4;
-            out[i_dst..i_dst + 4].copy_from_slice(&src[i_src..i_src + 4]);
+            let i_src = (y * w + x) * bpp;
+            let i_dst = (x * w_new + (h - 1 - y)) * bpp;
+            out[i_dst..i_dst + bpp].copy_from_slice(&src[i_src..i_src + bpp]);
         }
     }
     out
@@ -1559,15 +1774,20 @@ pub(crate) fn rotar_buffer_90_cw(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 /// Rota 90° en sentido antihorario. Mapeo: src `(x, y)` → dst
 /// `(y, w-1-x)` con `w_new = h`. Inversa exacta de `rotar_buffer_90_cw`.
 pub(crate) fn rotar_buffer_90_ccw(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    rotar_buffer_90_ccw_bpp(src, w, h, 4)
+}
+
+/// Variante de [`rotar_buffer_90_ccw`] parametrizada por bytes-por-píxel.
+pub(crate) fn rotar_buffer_90_ccw_bpp(src: &[u8], w: u32, h: u32, bpp: usize) -> Vec<u8> {
     let w = w as usize;
     let h = h as usize;
     let mut out = vec![0u8; src.len()];
     let w_new = h;
     for y in 0..h {
         for x in 0..w {
-            let i_src = (y * w + x) * 4;
-            let i_dst = ((w - 1 - x) * w_new + y) * 4;
-            out[i_dst..i_dst + 4].copy_from_slice(&src[i_src..i_src + 4]);
+            let i_src = (y * w + x) * bpp;
+            let i_dst = ((w - 1 - x) * w_new + y) * bpp;
+            out[i_dst..i_dst + bpp].copy_from_slice(&src[i_src..i_src + bpp]);
         }
     }
     out
@@ -1607,6 +1827,19 @@ pub(crate) fn rotar_lienzo(model: &mut Model, cw: bool) -> bool {
         };
         let new_hash = model.almacen.insertar(rotated);
         capa.contenido = new_hash;
+        // La máscara (1 byte/píxel) rota con su capa — si no, quedaría
+        // con dims traspuestas y el render fallaría por tamaño.
+        if let Some(mh) = capa.mascara {
+            if let Some(ms) = model.almacen.obtener(mh) {
+                let ms = ms.to_vec();
+                let mr = if cw {
+                    rotar_buffer_90_cw_bpp(&ms, w_old, h_old, 1)
+                } else {
+                    rotar_buffer_90_ccw_bpp(&ms, w_old, h_old, 1)
+                };
+                capa.mascara = Some(model.almacen.insertar(mr));
+            }
+        }
     }
     // Paso 2: swap de dimensiones.
     model.lienzo.width = h_old;
