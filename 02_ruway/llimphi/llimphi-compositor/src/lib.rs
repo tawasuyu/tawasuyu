@@ -227,6 +227,18 @@ pub struct View<Msg> {
     /// composición tiene costo (allocate + blit), por lo que sólo
     /// poblar este slot cuando hace falta — no es un atributo gratis.
     pub alpha: Option<f32>,
+    /// Transformación afín 2D aplicada a este nodo y todo su subtree
+    /// **alrededor del centro de su propio rect** (convención CSS
+    /// `transform-origin: 50% 50%`). El runtime resuelve el centro en
+    /// `paint` (sólo entonces conoce el layout computado) y compone
+    /// `T(centro) · transform · T(-centro)` sobre la transformación
+    /// acumulada del padre, así nodos anidados transforman en el espacio
+    /// ya transformado de su ancestro — igual que CSS. `None` = identidad
+    /// (la abrumadora mayoría de nodos). Pensado para `transform`/
+    /// `@keyframes` CSS de puriy (rotate/scale/translate). Limitaciones:
+    /// el hit-test usa los rects sin transformar, y los `painter`/`runs`
+    /// custom no heredan el afín.
+    pub transform: Option<Affine>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -265,6 +277,9 @@ pub struct MountedNode<Msg> {
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub alpha: Option<f32>,
+    /// Transformación afín 2D del nodo (alrededor del centro de su rect).
+    /// Ver [`View::transform`]. `paint` la compone con la del padre.
+    pub transform: Option<Affine>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.

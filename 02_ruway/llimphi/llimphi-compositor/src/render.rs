@@ -37,6 +37,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_enter,
         on_pointer_leave,
         alpha,
+        transform,
         children,
     } = v;
     let parent_idx = out.len();
@@ -63,6 +64,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_enter,
         on_pointer_leave,
         alpha,
+        transform,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());
@@ -93,6 +95,14 @@ pub fn paint<Msg>(
     // Dos entradas con el mismo `subtree_end` (alpha + clip sobre el
     // mismo nodo) se cierran en el orden inverso al push.
     let mut layer_stack: Vec<usize> = Vec::new();
+    // Stack de transformaciones afines de subtree. Cada entrada guarda el
+    // `subtree_end` y la `cur_xf` previa para restaurarla al salir del
+    // subárbol. `cur_xf` es el producto acumulado de todos los `transform`
+    // de los ancestros activos — se multiplica en cada draw call. Cuando
+    // ningún nodo transforma, queda en `IDENTITY` y el paint es idéntico
+    // al previo (cero regresión).
+    let mut xf_stack: Vec<(usize, Affine)> = Vec::new();
+    let mut cur_xf = Affine::IDENTITY;
     for (idx, node) in mounted.nodes.iter().enumerate() {
         // Cierre de capas que ya quedaron atrás (idx ≥ subtree_end).
         while let Some(&end) = layer_stack.last() {
@@ -103,9 +113,30 @@ pub fn paint<Msg>(
                 break;
             }
         }
+        // Restaurá la transformación al salir de subárboles transformados.
+        while let Some(&(end, prev)) = xf_stack.last() {
+            if idx >= end {
+                cur_xf = prev;
+                xf_stack.pop();
+            } else {
+                break;
+            }
+        }
         let Some(r) = computed.get(node.id) else {
             continue;
         };
+        // Transform CSS del nodo: se aplica alrededor del centro de su rect
+        // (`transform-origin: 50% 50%`) y se compone sobre la del padre. Se
+        // empuja ANTES del alpha/fill para que toda la pintura del subtree
+        // (incl. la capa de alpha y el clip) caiga en el espacio transformado.
+        if let Some(local) = node.transform {
+            let cx = (r.x + r.w * 0.5) as f64;
+            let cy = (r.y + r.h * 0.5) as f64;
+            let centered =
+                Affine::translate((cx, cy)) * local * Affine::translate((-cx, -cy));
+            xf_stack.push((node.subtree_end, cur_xf));
+            cur_xf *= centered;
+        }
         // Alpha de subtree: push ANTES de cualquier paint de este nodo
         // para que fill/text/image/painter/children entren en la misma
         // capa y se compongan juntos al alfa indicado. Si el nodo tiene
@@ -121,7 +152,7 @@ pub fn paint<Msg>(
                 (r.x + r.w) as f64,
                 (r.y + r.h) as f64,
             );
-            scene.push_layer(Mix::Normal, a, Affine::IDENTITY, &rect);
+            scene.push_layer(Mix::Normal, a, cur_xf, &rect);
             layer_stack.push(node.subtree_end);
         }
         // Prioridad de pintura: drop-hover (drag activo) > hover normal >
@@ -142,7 +173,7 @@ pub fn paint<Msg>(
                 (r.y + r.h) as f64,
                 node.radius,
             );
-            scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &rr);
+            scene.fill(Fill::NonZero, cur_xf, color, None, &rr);
         }
         if let Some(image) = node.image.as_ref() {
             // Aspect-fit centrado: el min de las dos escalas ocupa
@@ -166,8 +197,8 @@ pub fn paint<Msg>(
                     (r.x + r.w) as f64,
                     (r.y + r.h) as f64,
                 );
-                scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &node_rect);
-                scene.draw_image(image, transform);
+                scene.push_layer(Mix::Clip, 1.0, cur_xf, &node_rect);
+                scene.draw_image(image, cur_xf * transform);
                 scene.pop_layer();
             }
         }
@@ -225,7 +256,12 @@ pub fn paint<Msg>(
                     } else {
                         block.origin
                     };
-                llimphi_text::draw_layout(scene, &layout, text.color, origin);
+                llimphi_text::draw_layout_xf(
+                    scene,
+                    &layout,
+                    text.color,
+                    cur_xf * Affine::translate(origin),
+                );
             }
         }
         if node.clip {
@@ -235,7 +271,7 @@ pub fn paint<Msg>(
                 (r.x + r.w) as f64,
                 (r.y + r.h) as f64,
             );
-            scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &clip_rect);
+            scene.push_layer(Mix::Clip, 1.0, cur_xf, &clip_rect);
             layer_stack.push(node.subtree_end);
         }
     }

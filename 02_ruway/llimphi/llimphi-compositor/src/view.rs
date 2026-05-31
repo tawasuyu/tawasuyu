@@ -25,8 +25,21 @@ impl<Msg> View<Msg> {
             drop_hover_fill: None,
             clip: false,
             alpha: None,
+            transform: None,
             children: Vec::new(),
         }
+    }
+
+    /// Aplica una transformación afín 2D a este nodo y todo su subtree,
+    /// **alrededor del centro de su rect** (CSS `transform-origin: 50%
+    /// 50%`). El centro se resuelve en `paint` contra el layout computado;
+    /// el caller sólo provee el afín "local" (producto de sus
+    /// `rotate`/`scale`/`translate`). Nodos anidados componen en el
+    /// espacio ya transformado del padre. Pensado para `transform` y
+    /// `@keyframes` CSS de puriy. `Affine::IDENTITY` equivale a no setear.
+    pub fn transform(mut self, xf: Affine) -> Self {
+        self.transform = Some(xf);
+        self
     }
 
     pub fn fill(mut self, color: Color) -> Self {

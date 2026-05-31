@@ -3609,6 +3609,32 @@ fn animation_overlay(b: &BoxNode, ctx: &RenderCtx<'_>) -> Option<BoxNode> {
     Some(nb)
 }
 
+/// Construye el afín 2D a partir de la lista de `transform` CSS del nodo
+/// (`translate`/`scale`/`rotate`, ya sea de la regla estática o del overlay
+/// de `@keyframes`). El compositor lo aplica alrededor del centro del rect
+/// (CSS `transform-origin: 50% 50%`), así que acá sólo componemos el afín
+/// "local" en orden de declaración: `transform: A B C` → matriz `A·B·C`.
+/// `translate` se escala por el zoom de página (es px de layout); `scale`/
+/// `rotate` son unitless. `None` si la lista está vacía → el nodo no
+/// declara transform y el compositor no toca su pintura.
+fn transform_affine(transforms: &[puriy_engine::style::Transform], zoom: f32) -> Option<Affine> {
+    use puriy_engine::style::Transform as T;
+    if transforms.is_empty() {
+        return None;
+    }
+    let mut a = Affine::IDENTITY;
+    for t in transforms {
+        a *= match *t {
+            T::Translate(x, y) => {
+                Affine::translate(((x * zoom) as f64, (y * zoom) as f64))
+            }
+            T::Scale(sx, sy) => Affine::scale_non_uniform(sx as f64, sy as f64),
+            T::Rotate(deg) => Affine::rotate((deg as f64).to_radians()),
+        };
+    }
+    Some(a)
+}
+
 fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // Animación CSS: si el nodo tiene una `@keyframes` resuelta, sampleamos
     // el overlay al instante actual y renderizamos un clon con las props
@@ -3892,6 +3918,12 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             render_children_z_ordered(&b.children, ctx)
         };
         view = view.children(kids);
+    }
+    // Transform CSS (estático o animado por `@keyframes`): el compositor lo
+    // aplica al nodo y todo su subtree alrededor del centro de su rect. Se
+    // setea al final para que cubra fill/text/decorations/children juntos.
+    if let Some(xf) = transform_affine(&b.transforms, zoom) {
+        view = view.transform(xf);
     }
     view
 }
@@ -5308,6 +5340,51 @@ mod tests {
     fn parse(html: &str) -> BoxTree {
         let engine = Engine::new();
         engine.load_html("about:test", html).box_tree
+    }
+
+    #[test]
+    fn transform_affine_vacio_es_none() {
+        assert!(transform_affine(&[], 1.0).is_none());
+    }
+
+    #[test]
+    fn transform_affine_translate_escala_por_zoom() {
+        use puriy_engine::style::Transform as T;
+        let a = transform_affine(&[T::Translate(10.0, 20.0)], 2.0).unwrap();
+        // translate(10,20) @ zoom 2 → mueve el origen a (20, 40).
+        let p = a * Point::new(0.0, 0.0);
+        assert!((p.x - 20.0).abs() < 1e-6, "x = {}", p.x);
+        assert!((p.y - 40.0).abs() < 1e-6, "y = {}", p.y);
+    }
+
+    #[test]
+    fn transform_affine_scale_no_depende_del_zoom() {
+        use puriy_engine::style::Transform as T;
+        let a = transform_affine(&[T::Scale(3.0, 4.0)], 2.0).unwrap();
+        let p = a * Point::new(1.0, 1.0);
+        assert!((p.x - 3.0).abs() < 1e-6, "x = {}", p.x);
+        assert!((p.y - 4.0).abs() < 1e-6, "y = {}", p.y);
+    }
+
+    #[test]
+    fn transform_affine_rotate_90_grados() {
+        use puriy_engine::style::Transform as T;
+        let a = transform_affine(&[T::Rotate(90.0)], 1.0).unwrap();
+        // rotate(90°) horario en pantalla: (1,0) → (0,1).
+        let p = a * Point::new(1.0, 0.0);
+        assert!(p.x.abs() < 1e-6, "x = {}", p.x);
+        assert!((p.y - 1.0).abs() < 1e-6, "y = {}", p.y);
+    }
+
+    #[test]
+    fn transform_affine_compone_en_orden_de_declaracion() {
+        use puriy_engine::style::Transform as T;
+        // `transform: translate(10,0) scale(2)` → matriz T·S: el punto (1,0)
+        // se escala a (2,0) y luego se traslada a (12,0).
+        let a = transform_affine(&[T::Translate(10.0, 0.0), T::Scale(2.0, 2.0)], 1.0)
+            .unwrap();
+        let p = a * Point::new(1.0, 0.0);
+        assert!((p.x - 12.0).abs() < 1e-6, "x = {}", p.x);
     }
 
     #[test]
