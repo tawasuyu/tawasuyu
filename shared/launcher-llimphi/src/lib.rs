@@ -18,6 +18,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod host;
+
 use std::sync::Arc;
 
 use app_bus::{AppMenu, AppRegistry};
@@ -27,6 +29,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
     Rect,
 };
+use llimphi_icons::app_icons::{app_icon_view, AppIcon};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_widget_button::{button_styled, ButtonPalette};
@@ -38,6 +41,8 @@ use llimphi_widget_context_menu::{
 /// del host. `Send + Sync` porque el dropdown lo exige (context-menu).
 type MsgFromStr<Msg> = Arc<dyn Fn(&str) -> Msg + Send + Sync>;
 type MsgFromMenu<Msg> = Arc<dyn Fn(Option<usize>) -> Msg + Send + Sync>;
+/// Mapea un índice (de tarjeta flotante) al `Msg` del host.
+type MsgFromUsize<Msg> = Arc<dyn Fn(usize) -> Msg + Send + Sync>;
 /// Hook del host para módulos dinámicos: `clock`, `cpu`, widgets propios…
 type ModuleRenderer<Msg> = Arc<dyn Fn(&Module) -> Option<View<Msg>> + Send + Sync>;
 
@@ -61,6 +66,8 @@ pub struct LauncherSpec<'a, Msg: Clone + 'static> {
     pub on_command: MsgFromStr<Msg>,
     /// app_id → Msg: arrancar un ítem del dock como tarjeta flotante.
     pub on_tear_off: MsgFromStr<Msg>,
+    /// índice → Msg: cerrar la tarjeta flotante `n` (la × de su cabecera).
+    pub on_close: MsgFromUsize<Msg>,
     /// Render de módulos que este crate no conoce (reloj, cpu, custom).
     pub render_module: ModuleRenderer<Msg>,
 }
@@ -121,8 +128,8 @@ pub fn launcher_view<Msg: Clone + 'static>(spec: &LauncherSpec<Msg>) -> View<Msg
     root_children.extend(bottom);
 
     // Tarjetas flotantes (tear-off / conky) como hijos absolutos.
-    for card in &spec.surface.floating {
-        root_children.push(floating_view(card, spec));
+    for (i, card) in spec.surface.floating.iter().enumerate() {
+        root_children.push(floating_view(i, card, spec));
     }
 
     View::new(Style {
@@ -254,19 +261,60 @@ fn launch_button<Msg: Clone + 'static>(
         .and_then(prop_str)
         .map(str::to_string)
         .or_else(|| entry.and_then(|e| e.icon.clone()));
-    let text = match &icon {
-        Some(ic) => format!("{ic} {label}"),
-        None => label,
-    };
     let on_launch = spec.on_launch.clone();
     let id_owned = app_id.to_string();
-    button_styled(
-        text,
-        chip_style(),
-        Alignment::Center,
-        &btn_palette(spec.theme),
-        (on_launch)(&id_owned),
-    )
+    app_chip(app_id, label, icon, spec.theme, (on_launch)(&id_owned))
+}
+
+/// Chip de lanzamiento: si la app tiene un icono de marca vectorial
+/// ([`AppIcon`]), pinta `[glifo en color de marca]  label`; si no, cae al
+/// comportamiento clásico (emoji/glyph del registro embebido en el texto).
+fn app_chip<Msg: Clone + 'static>(
+    app_id: &str,
+    label: String,
+    glyph: Option<String>,
+    theme: &Theme,
+    msg: Msg,
+) -> View<Msg> {
+    match AppIcon::from_app_id(app_id) {
+        Some(icon) => {
+            let icon_box = View::new(Style {
+                size: Size {
+                    width: length(16.0_f32),
+                    height: length(16.0_f32),
+                },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .children(vec![app_icon_view(icon, 1.8)]);
+            let text = View::new(Style {
+                size: Size {
+                    width: auto(),
+                    height: auto(),
+                },
+                ..Default::default()
+            })
+            .text(label, 12.0, theme.fg_text);
+            View::new(chip_row_style())
+                .hover_fill(theme.bg_row_hover)
+                .radius(6.0)
+                .on_click(msg)
+                .children(vec![icon_box, text])
+        }
+        None => {
+            let text = match &glyph {
+                Some(ic) => format!("{ic} {label}"),
+                None => label,
+            };
+            button_styled(
+                text,
+                chip_style(),
+                Alignment::Center,
+                &btn_palette(theme),
+                msg,
+            )
+        }
+    }
 }
 
 // =====================================================================
@@ -292,18 +340,8 @@ fn dock_view<Msg: Clone + 'static>(dock: &Dock, spec: &LauncherSpec<Msg>) -> Vie
             .icon
             .clone()
             .or_else(|| entry.and_then(|x| x.icon.clone()));
-        let text = match &icon {
-            Some(ic) => format!("{ic} {label}"),
-            None => label,
-        };
         let launch = (spec.on_launch)(&e.app_id);
-        let mut item = button_styled(
-            text,
-            chip_style(),
-            Alignment::Center,
-            &btn_palette(spec.theme),
-            launch,
-        );
+        let mut item = app_chip(&e.app_id, label, icon, spec.theme, launch);
         // Tear-off: un grip diminuto que arranca el ítem como flotante.
         if dock.tear_off {
             let grip = View::new(Style {
@@ -475,22 +513,46 @@ pub fn launcher_overlay<Msg: Clone + 'static>(spec: &LauncherSpec<Msg>) -> Optio
 // =====================================================================
 
 fn floating_view<Msg: Clone + 'static>(
+    index: usize,
     card: &launcher_core::FloatingCard,
     spec: &LauncherSpec<Msg>,
 ) -> View<Msg> {
     let mut children: Vec<View<Msg>> = Vec::new();
-    if let Some(t) = &card.title {
-        children.push(
-            View::new(Style {
-                size: Size {
-                    width: auto(),
-                    height: length(18.0_f32),
-                },
-                ..Default::default()
-            })
-            .text(t.clone(), 11.0, spec.theme.fg_muted),
-        );
-    }
+    // Cabecera: título (crece) + botón × que cierra la tarjeta.
+    let title = View::new(Style {
+        size: Size {
+            width: auto(),
+            height: length(18.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text(card.title.clone().unwrap_or_default(), 11.0, spec.theme.fg_muted);
+    let close = View::new(Style {
+        size: Size {
+            width: length(16.0_f32),
+            height: length(16.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned("×".to_string(), 12.0, spec.theme.fg_muted, Alignment::Center)
+    .hover_fill(spec.theme.bg_row_hover)
+    .radius(4.0)
+    .on_click((spec.on_close)(index));
+    children.push(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(18.0_f32),
+            },
+            flex_direction: FlexDirection::Row,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![title, close]),
+    );
     for m in &card.modules {
         children.push(module_view(m, spec));
     }
@@ -553,6 +615,30 @@ fn chip_style() -> Style {
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    }
+}
+
+/// Chip con icono de marca + label en fila. Mismo alto que [`chip_style`].
+fn chip_row_style() -> Style {
+    Style {
+        size: Size {
+            width: auto(),
+            height: length(24.0_f32),
+        },
+        flex_shrink: 0.0,
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
         ..Default::default()
     }
 }

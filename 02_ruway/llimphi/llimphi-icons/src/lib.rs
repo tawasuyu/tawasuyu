@@ -47,6 +47,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod app_icons;
+
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{percent, Size, Style},
     Position,
@@ -559,7 +561,7 @@ mod tests {
         for icon in all {
             let p = icon.path();
             assert!(
-                p.elements().count() > 0,
+                p.elements().len() > 0,
                 "icono {} produjo path vacío",
                 icon.name()
             );

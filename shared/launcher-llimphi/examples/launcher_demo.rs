@@ -33,6 +33,7 @@ enum Msg {
     OpenMenu(Option<usize>),
     Command(String),
     TearOff(String),
+    Close(usize),
 }
 
 fn sample_registry() -> AppRegistry {
@@ -100,6 +101,7 @@ fn spec_for(model: &Model) -> LauncherSpec<'_, Msg> {
         on_open_menu: Arc::new(|o: Option<usize>| Msg::OpenMenu(o)),
         on_command: Arc::new(|c: &str| Msg::Command(c.to_string())),
         on_tear_off: Arc::new(|id: &str| Msg::TearOff(id.to_string())),
+        on_close: Arc::new(Msg::Close),
         render_module: Arc::new(move |m: &Module| chip(m, &theme)),
     }
 }
@@ -185,6 +187,12 @@ impl App for Demo {
                     modules: vec![Module::new("launch").with("app_id", Prop::Str(id.clone()))],
                 });
                 m.status = format!("desprendí {id}");
+            }
+            Msg::Close(i) => {
+                if i < m.surface.floating.len() {
+                    m.surface.floating.remove(i);
+                }
+                m.status = "cerré una tarjeta".into();
             }
         }
         m

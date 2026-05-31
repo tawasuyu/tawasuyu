@@ -248,6 +248,52 @@ impl AppRegistry {
     }
 }
 
+/// Siembra manifests por defecto en [`apps_dir`] si todavía no hay
+/// ninguno, para que [`AppRegistry::discover`] devuelva las apps del repo
+/// en una máquina recién instalada. No pisa nada si ya existe algún
+/// `*.toml`. Devuelve cuántos manifests escribió.
+#[cfg(feature = "std")]
+pub fn seed_default_apps() -> std::io::Result<usize> {
+    let Some(dir) = apps_dir() else {
+        return Ok(0);
+    };
+    // Si ya hay manifests, respetar la config del usuario y no tocar nada.
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        let ya_hay = rd.flatten().any(|e| {
+            e.path().extension().and_then(|s| s.to_str()) == Some("toml")
+        });
+        if ya_hay {
+            return Ok(0);
+        }
+    }
+    std::fs::create_dir_all(&dir)?;
+
+    // (id, label, icono, binario, cuadrante). Los binarios son los nombres
+    // de crate ejecutables del workspace; el cuadrante alimenta la grilla.
+    const DEFAULTS: &[(&str, &str, &str, &str, &str)] = &[
+        ("cosmos", "Cosmos", "✶", "cosmos-app-llimphi", "yachay"),
+        ("nada", "Nada", "✎", "nada", "ruway"),
+        ("pluma", "Pluma", "✒", "pluma-editor-llimphi", "unanchay"),
+        ("nahual", "Nahual", "❖", "nahual-shell-llimphi", "ruway"),
+        ("dominium", "Dominium", "◉", "dominium-app-llimphi", "yachay"),
+        ("tinkuy", "Tinkuy", "⚛", "tinkuy-llimphi", "yachay"),
+        ("takiy", "Takiy", "♪", "takiy-app-llimphi", "ruway"),
+        ("media", "Media", "▶", "media-app", "ruway"),
+        ("tullpu", "Tullpu", "✦", "tullpu-app-llimphi", "ruway"),
+        ("supay", "Supay", "✷", "supay-app-llimphi", "ruway"),
+    ];
+
+    let mut escritos = 0;
+    for (id, label, icon, exec, cat) in DEFAULTS {
+        let toml = alloc::format!(
+            "id = \"{id}\"\nlabel = \"{label}\"\nicon = \"{icon}\"\ncategory = \"{cat}\"\n\n[launch]\nexec = \"{exec}\"\n"
+        );
+        std::fs::write(dir.join(alloc::format!("{id}.toml")), toml)?;
+        escritos += 1;
+    }
+    Ok(escritos)
+}
+
 // =====================================================================
 // Menú global (Archivo / Editar / Ayuda …)
 // =====================================================================
