@@ -28,6 +28,10 @@ pub struct Event {
     /// Regla de recurrencia cruda (`FREQ=WEEKLY;BYDAY=MO,WE`…); `None` = único.
     #[serde(default)]
     pub rrule: Option<String>,
+    /// Instantes (s Unix UTC) de **instancias excluidas** de la serie (`EXDATE`).
+    /// Cada uno es el `start` exacto de la ocurrencia que se borró puntualmente.
+    #[serde(default)]
+    pub exdates: Vec<i64>,
     /// Quién organiza (si lo declara el `ORGANIZER`).
     #[serde(default)]
     pub organizer: Option<Address>,
@@ -76,6 +80,7 @@ mod tests {
             end,
             all_day: false,
             rrule: None,
+            exdates: vec![],
             organizer: None,
             attendees: vec![],
             calendar: "personal".into(),

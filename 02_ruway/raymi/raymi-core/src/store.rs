@@ -97,6 +97,9 @@ impl CalStore {
                 let dur = e.duration();
                 let rule = e.rrule.as_deref().unwrap_or("");
                 for s in recur::occurrences(e.start, rule, from - dur, to) {
+                    if e.exdates.contains(&s) {
+                        continue; // instancia excluida puntualmente (EXDATE)
+                    }
                     let end = s + dur;
                     if s < to && end > from {
                         out.push(Occurrence { start: s, end, event: e.clone() });
@@ -201,6 +204,7 @@ mod tests {
             end,
             all_day: false,
             rrule: rrule.map(str::to_string),
+            exdates: vec![],
             organizer: None,
             attendees: vec![],
             calendar: "personal".into(),
@@ -219,6 +223,19 @@ mod tests {
         assert_eq!(occ[0].event.uid, "standup"); // 1-jun 9:00
         assert_eq!(occ[1].event.uid, "standup"); // 2-jun 9:00
         assert_eq!(occ[2].event.uid, "almuerzo"); // 2-jun 12:00
+    }
+
+    #[test]
+    fn exdate_excluye_una_instancia() {
+        let mut store = CalStore::new();
+        let mut daily = ev("standup", at(2026, 6, 1, 9), at(2026, 6, 1, 9) + 1800, Some("FREQ=DAILY;COUNT=5"));
+        // excluir la instancia del 2-jun
+        daily.exdates = vec![at(2026, 6, 2, 9)];
+        store.ingest_events("personal", vec![daily]);
+        let occ = store.occurrences_in(at(2026, 6, 1, 0), at(2026, 6, 6, 0));
+        // 5 - 1 excluida = 4, y ninguna arranca el 2-jun 9:00
+        assert_eq!(occ.len(), 4);
+        assert!(occ.iter().all(|o| o.start != at(2026, 6, 2, 9)));
     }
 
     #[test]

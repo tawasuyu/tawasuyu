@@ -159,6 +159,7 @@ mod tests {
             end: 200,
             all_day: false,
             rrule: None,
+            exdates: vec![],
             organizer: None,
             attendees: vec![],
             calendar: cal.into(),

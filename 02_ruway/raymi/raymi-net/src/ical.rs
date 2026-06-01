@@ -63,6 +63,13 @@ pub fn write_event(ev: &Event) -> String {
             s.push_str(&format!("RRULE:{}\r\n", rrule.trim_start_matches("RRULE:")));
         }
     }
+    for &x in &ev.exdates {
+        if ev.all_day {
+            s.push_str(&format!("EXDATE;VALUE=DATE:{}\r\n", fmt_date(x)));
+        } else {
+            s.push_str(&format!("EXDATE:{}\r\n", fmt_datetime(x)));
+        }
+    }
     if let Some(org) = &ev.organizer {
         s.push_str(&format!("ORGANIZER:mailto:{}\r\n", org.email));
     }
@@ -79,6 +86,7 @@ fn event_from_props(props: &[(String, String, String)], calendar: &str) -> Optio
     let mut description = String::new();
     let mut location = String::new();
     let mut rrule = None;
+    let mut exdates = Vec::new();
     let mut organizer = None;
     let mut attendees = Vec::new();
     let mut start = None;
@@ -92,6 +100,14 @@ fn event_from_props(props: &[(String, String, String)], calendar: &str) -> Optio
             "DESCRIPTION" => description = unescape(value),
             "LOCATION" => location = unescape(value),
             "RRULE" => rrule = Some(value.clone()),
+            "EXDATE" => {
+                // Una o varias fechas separadas por comas en un mismo EXDATE.
+                for part in value.split(',') {
+                    if let Some((ts, _)) = parse_dt(params, part.trim()) {
+                        exdates.push(ts);
+                    }
+                }
+            }
             "ORGANIZER" => organizer = parse_cal_address(value),
             "ATTENDEE" => {
                 if let Some(a) = parse_cal_address(value) {
@@ -127,6 +143,7 @@ fn event_from_props(props: &[(String, String, String)], calendar: &str) -> Optio
         end,
         all_day,
         rrule,
+        exdates,
         organizer,
         attendees,
         calendar: calendar.to_string(),
@@ -231,6 +248,14 @@ END:VEVENT\r\nEND:VCALENDAR\r\n";
         assert_eq!(back[0].summary, "Reunión de equipo");
         assert_eq!(back[0].start, evs[0].start);
         assert_eq!(back[0].rrule, evs[0].rrule);
+    }
+
+    #[test]
+    fn exdate_roundtrip() {
+        let mut e = parse_calendar(SAMPLE, "personal").remove(0);
+        e.exdates = vec![e.start + time::DAY, e.start + 3 * time::DAY];
+        let back = parse_calendar(&write_event(&e), "personal").remove(0);
+        assert_eq!(back.exdates, e.exdates, "EXDATE sobrevive escribir+parsear");
     }
 
     #[test]

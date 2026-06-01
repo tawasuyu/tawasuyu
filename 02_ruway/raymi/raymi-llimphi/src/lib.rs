@@ -26,7 +26,10 @@ mod editor;
 pub mod demo;
 mod view;
 
-pub use editor::{ContactDraft, ContactField, Editor, EventDraft, EventField, Repeat, RepeatEnd};
+pub use editor::{
+    ContactDraft, ContactField, EditScope, Editor, EventDraft, EventField, Repeat, RepeatEnd,
+};
+use raymi_core::CalError;
 
 /// Modo activo de la app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +58,9 @@ pub struct Model {
     selected_contact: Option<String>,
     /// Editor abierto (evento/contacto) o ninguno.
     editor: Editor,
+    /// Alcance elegido para guardar/borrar un recurrente (sólo aplica al editor
+    /// de evento sobre una instancia).
+    edit_scope: EditScope,
     /// Caché en disco (offline-first). `None` → sin persistencia (demo).
     db: Option<CalDb>,
     /// Id de cuenta — clave de la caché en disco.
@@ -109,6 +115,7 @@ impl Model {
             search_focused: false,
             selected_contact: None,
             editor: Editor::None,
+            edit_scope: EditScope::Series,
             db,
             account_id,
             status: String::from("raymi"),
@@ -171,15 +178,25 @@ impl Model {
     }
 
     fn open_new_event(&mut self) {
+        self.edit_scope = EditScope::Series;
         match self.default_calendar() {
             Some(cal) => self.editor = Editor::Event(EventDraft::new(cal, self.selected_day)),
             None => self.status = "no hay calendarios donde crear un evento".into(),
         }
     }
 
-    fn open_edit_event(&mut self, calendar: &str, uid: &str) {
+    /// Abre el editor de un evento existente. Si `occ_start` apunta a una
+    /// instancia concreta y el evento es recurrente, ancla el formulario a ese día.
+    fn open_edit_event(&mut self, calendar: &str, uid: &str, occ_start: Option<i64>) {
+        self.edit_scope = EditScope::Series;
         if let Some(e) = self.store.events(calendar).iter().find(|e| e.uid == uid).cloned() {
-            self.editor = Editor::Event(EventDraft::from_event(&e));
+            let mut draft = EventDraft::from_event(&e);
+            if e.is_recurring() {
+                if let Some(s) = occ_start {
+                    draft.focus_instance(s);
+                }
+            }
+            self.editor = Editor::Event(draft);
         }
     }
 
@@ -208,8 +225,25 @@ impl Model {
 
     /// Guarda el evento en edición: lo envía al backend y, si lo acepta, lo
     /// aplica a la caché y la persiste. En error, deja el editor abierto y avisa.
+    /// Para un recurrente abierto por instancia con alcance acotado, delega en
+    /// [`Model::save_event_scoped`].
     fn save_event(&mut self) {
         let Editor::Event(d) = std::mem::replace(&mut self.editor, Editor::None) else { return };
+
+        if d.is_recurring_instance() && self.edit_scope != EditScope::Series {
+            match self.save_event_scoped(&d) {
+                Ok(()) => {
+                    self.persist();
+                    self.recount();
+                }
+                Err(e) => {
+                    self.status = format!("no se pudo guardar: {e}");
+                    self.editor = Editor::Event(d);
+                }
+            }
+            return;
+        }
+
         let uid = d.uid.clone().unwrap_or_else(|| new_uid("evt"));
         match d.build(uid) {
             Some(ev) => match self.backend.put_event(&ev) {
@@ -230,13 +264,59 @@ impl Model {
         }
     }
 
-    /// Borra el evento en edición (si era existente).
+    /// Guarda una edición acotada de un recurrente. `ThisOnly` excluye la
+    /// instancia de la base (`EXDATE`) y crea un evento suelto con lo editado;
+    /// `ThisAndFuture` corta la base con `UNTIL` y abre una serie nueva desde la
+    /// instancia. Aplica ambos cambios al backend y a la caché.
+    fn save_event_scoped(&mut self, d: &EventDraft) -> Result<(), CalError> {
+        let inst = d.instance_start.ok_or_else(|| CalError::Parse("sin instancia".into()))?;
+        let uid = d.uid.clone().ok_or_else(|| CalError::Parse("sin uid".into()))?;
+        let mut base = self
+            .store
+            .events(&d.calendar)
+            .iter()
+            .find(|e| e.uid == uid)
+            .cloned()
+            .ok_or_else(|| CalError::UnknownCollection(d.calendar.clone()))?;
+        let mut edited =
+            d.build(new_uid("evt")).ok_or_else(|| CalError::Parse("fecha u hora inválida".into()))?;
+
+        match self.edit_scope {
+            EditScope::ThisOnly => {
+                base.exdates.push(inst);
+                edited.rrule = None; // override puntual: una sola instancia
+                edited.exdates.clear();
+            }
+            EditScope::ThisAndFuture => {
+                base.rrule = until_before(base.rrule.as_deref(), inst);
+                // reparte las exclusiones por el corte
+                edited.exdates = base.exdates.iter().copied().filter(|&x| x >= inst).collect();
+                base.exdates.retain(|&x| x < inst);
+            }
+            EditScope::Series => return Ok(()),
+        }
+
+        self.backend.put_event(&base)?;
+        self.store.upsert_event(base);
+        self.backend.put_event(&edited)?;
+        self.store.upsert_event(edited);
+        Ok(())
+    }
+
+    /// Borra el evento en edición. Para un recurrente por instancia: `ThisOnly`
+    /// lo excluye (`EXDATE`); `ThisAndFuture` corta la serie con `UNTIL`; en
+    /// cualquier otro caso borra el evento entero.
     fn delete_event(&mut self) {
         let Editor::Event(d) = std::mem::replace(&mut self.editor, Editor::None) else { return };
         let Some(uid) = d.uid.clone() else { return }; // nuevo sin guardar: sólo cierra
-        match self.backend.delete_event(&d.calendar, &uid) {
+
+        let res = if d.is_recurring_instance() && self.edit_scope != EditScope::Series {
+            self.delete_event_scoped(&d, &uid)
+        } else {
+            self.backend.delete_event(&d.calendar, &uid).map(|()| self.store.remove_event(&d.calendar, &uid))
+        };
+        match res {
             Ok(()) => {
-                self.store.remove_event(&d.calendar, &uid);
                 self.persist();
                 self.recount();
             }
@@ -245,6 +325,25 @@ impl Model {
                 self.editor = Editor::Event(d);
             }
         }
+    }
+
+    fn delete_event_scoped(&mut self, d: &EventDraft, uid: &str) -> Result<(), CalError> {
+        let inst = d.instance_start.ok_or_else(|| CalError::Parse("sin instancia".into()))?;
+        let mut base = self
+            .store
+            .events(&d.calendar)
+            .iter()
+            .find(|e| e.uid == uid)
+            .cloned()
+            .ok_or_else(|| CalError::UnknownCollection(d.calendar.clone()))?;
+        match self.edit_scope {
+            EditScope::ThisOnly => base.exdates.push(inst),
+            EditScope::ThisAndFuture => base.rrule = until_before(base.rrule.as_deref(), inst),
+            EditScope::Series => {}
+        }
+        self.backend.put_event(&base)?;
+        self.store.upsert_event(base);
+        Ok(())
     }
 
     fn save_contact(&mut self) {
@@ -307,6 +406,11 @@ impl Model {
     fn selected_contact_uid(&self) -> Option<&str> {
         self.selected_contact.as_deref()
     }
+
+    /// Alcance de edición actual (para la vista del editor).
+    pub(crate) fn edit_scope(&self) -> EditScope {
+        self.edit_scope
+    }
 }
 
 /// Las transiciones de la UI.
@@ -333,8 +437,11 @@ pub enum Msg {
     // ── editores ──────────────────────────────────────────────────────────
     /// Abrir el editor de evento nuevo (en el día seleccionado).
     NewEvent,
-    /// Abrir el editor de un evento existente (`calendar`, `uid`).
-    EditEvent { calendar: String, uid: String },
+    /// Abrir el editor de un evento existente (`calendar`, `uid`). `occ_start`
+    /// es el inicio de la instancia clickeada (para recurrentes).
+    EditEvent { calendar: String, uid: String, occ_start: Option<i64> },
+    /// Ciclar el alcance de edición (Toda la serie → Esta → Esta y siguientes).
+    EventCycleScope,
     /// Enfocar un campo del editor de evento.
     EventFocus(EventField),
     /// Tecla en el editor de evento.
@@ -405,7 +512,10 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
 
         // ── editores ──────────────────────────────────────────────────────
         Msg::NewEvent => model.open_new_event(),
-        Msg::EditEvent { calendar, uid } => model.open_edit_event(&calendar, &uid),
+        Msg::EditEvent { calendar, uid, occ_start } => {
+            model.open_edit_event(&calendar, &uid, occ_start)
+        }
+        Msg::EventCycleScope => model.edit_scope = model.edit_scope.next(),
         Msg::EventFocus(field) => {
             if let Editor::Event(d) = &mut model.editor {
                 d.focus = field;
@@ -591,5 +701,106 @@ fn new_uid(prefix: &str) -> String {
     format!("{prefix}-{nanos:x}@raymi")
 }
 
+/// Recorta una `RRULE` para que no genere instancias en/desde `instant`: fija
+/// `UNTIL = instant - 1s` (y descarta `COUNT`, excluyente con `UNTIL`). Si la
+/// regla no parsea o es `None`, devuelve la entrada tal cual.
+fn until_before(rrule: Option<&str>, instant: i64) -> Option<String> {
+    let raw = rrule?;
+    match raymi_core::recur::parse(raw) {
+        Some(mut r) => {
+            r.count = None;
+            r.until = Some(instant - 1);
+            Some(r.to_rrule())
+        }
+        None => Some(raw.to_string()),
+    }
+}
+
 // Reexport para que el binario del demo arme su `impl App` con tipos estables.
 pub use llimphi_ui::Handle;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use raymi_core::time::{to_unix, CivilDate, DAY};
+    use raymi_core::{Calendar, Event, MockBackend};
+
+    /// Modelo con un único evento diario recurrente “serie” en el calendario
+    /// “cal”, anclado al 2026-06-01 09:00.
+    fn recurring_model() -> Model {
+        let mock = MockBackend::new(vec![Calendar::new("cal", "Cal")], vec![]);
+        let start = to_unix(CivilDate { year: 2026, month: 6, day: 1 }, 9, 0, 0);
+        mock.seed_events(
+            "cal",
+            vec![Event {
+                uid: "serie".into(),
+                summary: "Standup".into(),
+                description: String::new(),
+                location: String::new(),
+                start,
+                end: start + 1800,
+                all_day: false,
+                rrule: Some("FREQ=DAILY".into()),
+                exdates: vec![],
+                organizer: None,
+                attendees: vec![],
+                calendar: "cal".into(),
+            }],
+        );
+        Model::new(Box::new(mock), Theme::dark())
+    }
+
+    fn instance(day: u32) -> i64 {
+        to_unix(CivilDate { year: 2026, month: 6, day }, 9, 0, 0)
+    }
+
+    #[test]
+    fn borrar_esta_instancia_agrega_exdate() {
+        let mut m = recurring_model();
+        let inst = instance(3);
+        m.open_edit_event("cal", "serie", Some(inst));
+        m.edit_scope = EditScope::ThisOnly;
+        m.delete_event();
+        let base = m.store.events("cal").iter().find(|e| e.uid == "serie").unwrap();
+        assert!(base.exdates.contains(&inst), "la base excluye la instancia");
+        let occ = m.store.occurrences_in(inst, inst + DAY);
+        assert!(occ.iter().all(|o| o.start != inst), "ya no aparece esa instancia");
+    }
+
+    #[test]
+    fn editar_esta_instancia_crea_override_suelto() {
+        let mut m = recurring_model();
+        let inst = instance(3);
+        m.open_edit_event("cal", "serie", Some(inst));
+        m.edit_scope = EditScope::ThisOnly;
+        if let Editor::Event(d) = &mut m.editor {
+            d.summary.set_text("Standup especial");
+        }
+        m.save_event();
+        let evs = m.store.events("cal");
+        let base = evs.iter().find(|e| e.uid == "serie").unwrap();
+        assert!(base.exdates.contains(&inst));
+        let override_ev = evs.iter().find(|e| e.uid != "serie").expect("hay un override");
+        assert_eq!(override_ev.summary, "Standup especial");
+        assert!(override_ev.rrule.is_none(), "el override es un evento suelto");
+    }
+
+    #[test]
+    fn esta_y_siguientes_corta_y_abre_serie() {
+        let mut m = recurring_model();
+        let inst = instance(3);
+        m.open_edit_event("cal", "serie", Some(inst));
+        m.edit_scope = EditScope::ThisAndFuture;
+        if let Editor::Event(d) = &mut m.editor {
+            d.summary.set_text("Standup v2");
+        }
+        m.save_event();
+        let evs = m.store.events("cal");
+        let base = evs.iter().find(|e| e.uid == "serie").unwrap();
+        assert!(base.rrule.as_deref().unwrap().contains("UNTIL"), "la base se corta con UNTIL");
+        assert!(
+            evs.iter().any(|e| e.uid != "serie" && e.summary == "Standup v2" && e.rrule.is_some()),
+            "hay una serie nueva desde la instancia"
+        );
+    }
+}

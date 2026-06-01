@@ -60,6 +60,36 @@ impl EventField {
     }
 }
 
+/// Alcance al guardar/borrar un evento **recurrente** abierto por una instancia.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditScope {
+    /// Toda la serie (la base).
+    Series,
+    /// Sólo esta instancia (vía `EXDATE` + un evento suelto si se edita).
+    ThisOnly,
+    /// Esta y las siguientes (corta la base con `UNTIL` y abre una serie nueva).
+    ThisAndFuture,
+}
+
+impl EditScope {
+    pub fn next(self) -> Self {
+        use EditScope::*;
+        match self {
+            Series => ThisOnly,
+            ThisOnly => ThisAndFuture,
+            ThisAndFuture => Series,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EditScope::Series => "Toda la serie",
+            EditScope::ThisOnly => "Esta instancia",
+            EditScope::ThisAndFuture => "Esta y siguientes",
+        }
+    }
+}
+
 /// Cadencia de repetición elegida en la UI (`Freq` + “no se repite”).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repeat {
@@ -182,6 +212,11 @@ pub struct EventDraft {
     /// `RRULE` cruda preservada sólo si no la sabemos representar (no parsea).
     keep_rrule: Option<String>,
     keep_organizer: Option<raymi_core::Address>,
+    /// `EXDATE`s preservadas de la serie (las gestiona el alcance de edición).
+    keep_exdates: Vec<i64>,
+    /// Inicio de la **instancia** abierta desde la agenda (para editar “esta”),
+    /// si el evento es recurrente; `None` para la base o eventos únicos.
+    pub instance_start: Option<i64>,
 }
 
 impl EventDraft {
@@ -210,6 +245,8 @@ impl EventDraft {
             focus: EventField::Summary,
             keep_rrule: None,
             keep_organizer: None,
+            keep_exdates: Vec::new(),
+            instance_start: None,
         }
     }
 
@@ -289,7 +326,26 @@ impl EventDraft {
             focus: EventField::Summary,
             keep_rrule,
             keep_organizer: e.organizer.clone(),
+            keep_exdates: e.exdates.clone(),
+            instance_start: None,
         }
+    }
+
+    /// Marca la instancia abierta (el `start` de la ocurrencia clickeada) y,
+    /// si es recurrente, ancla el formulario a **ese** día/hora en vez del base.
+    pub fn focus_instance(&mut self, instance_start: i64) {
+        self.instance_start = Some(instance_start);
+        let (date, h, mi, _) = time::to_civil(instance_start);
+        self.date.set_text(fmt_date(date));
+        if !self.all_day {
+            // Conserva la duración: corre fin según el desplazamiento del inicio.
+            self.start_hm.set_text(format!("{h:02}:{mi:02}"));
+        }
+    }
+
+    /// `true` si edita un evento recurrente existente abierto por una instancia.
+    pub fn is_recurring_instance(&self) -> bool {
+        self.uid.is_some() && self.instance_start.is_some() && self.repeat != Repeat::None
     }
 
     pub fn focused_mut(&mut self) -> &mut TextInputState {
@@ -355,6 +411,7 @@ impl EventDraft {
             end,
             all_day: self.all_day,
             rrule,
+            exdates: self.keep_exdates.clone(),
             organizer: self.keep_organizer.clone(),
             attendees: self.attendees.clone(),
             calendar: self.calendar.clone(),
@@ -555,6 +612,7 @@ mod tests {
             end: time::to_unix(CivilDate { year: 2026, month: 6, day: 1 }, 9, 30, 0),
             all_day: false,
             rrule: Some("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE".into()),
+            exdates: vec![],
             organizer: None,
             attendees: vec![],
             calendar: "personal".into(),

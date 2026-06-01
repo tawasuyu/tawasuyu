@@ -441,7 +441,11 @@ fn agenda_row(theme: &Theme, o: &Occurrence, color: Color) -> View<Msg> {
     .fill(theme.bg_panel)
     .radius(6.0)
     .hover_fill(theme.bg_row_hover)
-    .on_click(Msg::EditEvent { calendar: o.event.calendar.clone(), uid: o.event.uid.clone() })
+    .on_click(Msg::EditEvent {
+        calendar: o.event.calendar.clone(),
+        uid: o.event.uid.clone(),
+        occ_start: Some(o.start),
+    })
     .children(vec![bar, texts])
 }
 
@@ -701,12 +705,19 @@ pub fn event_editor(model: &Model, d: &EventDraft) -> View<Msg> {
     let allday = checkbox(theme, "Día completo", d.all_day, Msg::EventToggleAllDay);
     let date = ev_field(&d.date, "AAAA-MM-DD", d.focus == EventField::Date, &pal, EventField::Date);
 
-    let mut col: Vec<View<Msg>> = vec![
-        labeled(theme, "Calendario", cal_chip),
-        labeled(theme, "Asunto", summary),
-        allday,
-        labeled(theme, "Fecha", date),
-    ];
+    let mut col: Vec<View<Msg>> = Vec::new();
+    // Selector de alcance — sólo al editar una instancia de un recurrente.
+    if d.is_recurring_instance() {
+        col.push(labeled(
+            theme,
+            "Aplicar a",
+            cycle_chip(theme, model.edit_scope().label(), Msg::EventCycleScope),
+        ));
+    }
+    col.push(labeled(theme, "Calendario", cal_chip));
+    col.push(labeled(theme, "Asunto", summary));
+    col.push(allday);
+    col.push(labeled(theme, "Fecha", date));
     if !d.all_day {
         let start = ev_field(&d.start_hm, "HH:MM", d.focus == EventField::Start, &pal, EventField::Start);
         let end = ev_field(&d.end_hm, "HH:MM", d.focus == EventField::End, &pal, EventField::End);

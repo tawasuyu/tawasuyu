@@ -171,11 +171,30 @@ intercambiables, como el resto de la suite.
     siembra “Reunión con clientes” con Ana y Bruno para verlo de una.
   - `cargo check --workspace` verde.
 
+- **Fase 10 (2026-06-01):** **editar serie vs. instancia** de un recurrente, sin
+  `RECURRENCE-ID` multi-VEVENT — sólo `EXDATE` + `UNTIL` + uids distintos.
+  - `Event` gana `exdates: Vec<i64>` (instancias excluidas, `EXDATE`); `serde`
+    `default` para no romper la caché. `CalStore::occurrences_in` salta las
+    excluidas (+1 test). `raymi-net::ical` escribe/parsea `EXDATE` (+1 roundtrip).
+  - **Tres alcances** (chip “Aplicar a”, visible sólo al abrir una instancia de un
+    recurrente): *Toda la serie* (edita la base, como antes), *Esta instancia*
+    (excluye la instancia en la base vía `EXDATE`; al editar, además crea un evento
+    **suelto** con lo cambiado), *Esta y siguientes* (corta la base con
+    `UNTIL = instancia−1` y abre una **serie nueva** desde la instancia con la
+    misma cadencia). Borrar respeta el mismo alcance.
+  - La agenda pasa el `start` de la instancia clickeada (`EditEvent.occ_start`);
+    `EventDraft::focus_instance` ancla el formulario a ese día. `until_before`
+    recorta la `RRULE` (limpia `COUNT`, excluyente con `UNTIL`). +3 tests de
+    integración en `raymi-llimphi` (13 en total). `cargo check --workspace` verde.
+  - **Límite conocido:** “Esta instancia” usa un evento de uid propio en vez de un
+    `RECURRENCE-ID` en el mismo recurso; internamente consistente, pero un servidor
+    CalDAV real preferiría el override en el mismo `.ics` (lo afinará el puente).
+
 ## Pendiente (orden sugerido)
 
 1. **Verificar `raymi-net` contra servidor real** (Nextcloud/Radicale) en la
-   laptop: discover + sync + put/delete end-to-end.
+   laptop: discover + sync + put/delete + `EXDATE`/`UNTIL` end-to-end.
 2. **“Crear evento desde correo”** en paloma (la otra mitad del cruce): un mensaje
    con fecha/hora detectada o un `.ics` adjunto → evento en raymi.
-3. **Editar serie vs. instancia** de un evento recurrente (hoy se edita siempre la
-   serie base; falta `RECURRENCE-ID` / `EXDATE` para excepciones puntuales).
+3. **Overrides fieles con `RECURRENCE-ID`** (mismo UID, multi-VEVENT por recurso)
+   para que “esta instancia” viaje 1:1 a un servidor real.
