@@ -27,6 +27,7 @@
 //!   `cargo run -p media-app --release`
 //!   `cargo run -p media-app --release -- /ruta/al/anim.gif`
 //!   `cargo run -p media-app --release -- /ruta/foto.png`
+//!   `cargo run -p media-app --release -- https://host/stream.m3u8`
 //!   `MEDIA_WAV=/ruta/clip.wav cargo run -p media-app --release`
 //!   `MEDIA_MP3=/ruta/cancion.mp3 cargo run -p media-app --release`
 //!   `MEDIA_MUTE=1 cargo run -p media-app --release`
@@ -34,9 +35,12 @@
 //! El primer argumento posicional es el video; la extensión decide
 //! la fuente (`.gif` → anim, `.png/.jpg/.webp/.bmp/.tiff/.jpeg` →
 //! imagen fija, `.mp4/.webm/.mkv/.mov/.avi/.flv/.m4v/.ogv` → video
-//! real vía ffmpeg subprocess). Cuando es video file, audio y video
-//! salen del MISMO ffmpeg via pipes dup'eados a fd 3/4 — un proceso
-//! por archivo, no dos. La pista de audio cuando NO hay video file
+//! real vía ffmpeg subprocess). Si el argumento es una **URL de red**
+//! (`http(s)://`, `rtsp://`, `rtmp://`, `hls://`, `udp://`…) se deriva
+//! al decoder ffmpeg sin mirar la extensión — libavformat resuelve el
+//! protocolo (R1 de PARIDAD.md). Cuando es video file (o stream), audio
+//! y video salen del MISMO ffmpeg via pipes dup'eados a fd 3/4 — un
+//! proceso por fuente, no dos. La pista de audio cuando NO hay video file
 //! se elige con `MEDIA_WAV` o `MEDIA_MP3` — sin ninguna,
 //! suena un tono A4 sintético.
 //!
@@ -2813,9 +2817,40 @@ fn heat_color(v: f32) -> Color {
     }
 }
 
+/// `true` si `s` parece una **URL de red** (un esquema `algo://` que no sea
+/// `file`). ffmpeg/libavformat abre http/https/hls/rtsp/rtmp/udp/srt… de
+/// forma transparente, así que basta con derivar la fuente al decoder
+/// ffmpeg y pasarle la URL tal cual — la extensión de la URL no es fiable.
+/// R1 de `PARIDAD.md`.
+fn is_network_url(s: &str) -> bool {
+    match s.split_once("://") {
+        Some((scheme, rest)) => {
+            !scheme.is_empty()
+                && !rest.is_empty()
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+                && !scheme.eq_ignore_ascii_case("file")
+        }
+        None => false,
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cfg = match args.first() {
+        // Stream de red: forzamos el decoder ffmpeg (resuelve el protocolo)
+        // y le pasamos la URL tal cual; el audio del mismo stream sale de la
+        // misma MediaSession. Si no hay red o ffmpeg, el fallback de abajo
+        // cae a testcard + tono sin romper.
+        Some(arg) if is_network_url(arg) => {
+            eprintln!("media-app: stream de red {arg} → decoder ffmpeg");
+            video_path_slot().set(PathBuf::from(arg)).ok();
+            Config {
+                label: format!("stream {arg}"),
+                kind: VideoKind::Ffmpeg,
+            }
+        }
         Some(path) => {
             let path = PathBuf::from(path);
             let kind = match path
@@ -3066,4 +3101,39 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     let recorded = RecordedAudioSource::new(equalized, recorder().clone());
     let probed = ProbedAudioSource::new(recorded, probe.clone());
     (Arc::new(Mutex::new(probed)), probe)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_network_url;
+
+    #[test]
+    fn reconoce_urls_de_red() {
+        for u in [
+            "http://host/a.mp4",
+            "https://host/stream.m3u8",
+            "rtsp://cam.local/live",
+            "rtmp://srv/app/key",
+            "udp://239.0.0.1:1234",
+            "srt://host:9000",
+        ] {
+            assert!(is_network_url(u), "debería ser URL: {u}");
+        }
+    }
+
+    #[test]
+    fn rechaza_paths_locales_y_file() {
+        for p in [
+            "/ruta/al/clip.mp4",
+            "clip.mkv",
+            "./rel/foto.png",
+            "C:\\videos\\x.avi",
+            // file:// es local, no stream de red — lo maneja la rama de path.
+            "file:///home/u/v.mp4",
+            // sin esquema separado por '://'.
+            "espacio raro://no",
+        ] {
+            assert!(!is_network_url(p), "no debería ser URL de red: {p}");
+        }
+    }
 }

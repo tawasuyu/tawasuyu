@@ -42,7 +42,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 - Track AUDIO A2/A3/A5/A6 (selección de pista, dispositivo de salida, normalización/ReplayGain, gapless/crossfade). **A4 (delay/sync) ✅.**
 - Track VIDEO V1–V8 (fullscreen, aspect/crop/zoom, rotación, ajustes de color, deinterlacing, filtros/shaders, capítulos, HDR) — todo pendiente.
 - Track SUBTÍTULOS S2–S5 (pistas embebidas, estilo configurable, delay/sync, auto-carga). **S1 (ASS/SSA texto+timing) ✅.**
-- Track RED R1–R4 (URL/HLS/RTSP, yt-dlp/plataformas, streaming server, DLNA/Chromecast) — totalmente ausente; prerequisito de FREETUBE.md.
+- Track RED R2–R4 (yt-dlp/plataformas, streaming server, DLNA/Chromecast); prerequisito de FREETUBE.md. **R1 (URL/HLS/RTSP) ✅.**
 - Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
 
 ## Tracks y fases
@@ -122,7 +122,14 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 
 ### Track RED (totalmente ausente; vía `shared/foreign-*`)
 
-- **R1 — Reproducción desde URL** (http/https/hls/rtsp).
+- **R1 — Reproducción desde URL** (http/https/hls/rtsp). ✅ *Cerrado
+  (2026-06-01).* `media-app` detecta un argumento que sea URL de red
+  (`is_network_url`: esquema `algo://` ≠ `file`) y lo deriva al decoder
+  ffmpeg sin mirar la extensión — libavformat resuelve http/https/hls/rtsp/
+  rtmp/udp/srt… y A/V salen de la misma `MediaSession` (un solo subprocess).
+  Si no hay red/ffmpeg, el fallback cae a testcard + tono sin romper. No
+  necesitó tocar `foreign-av` (ffprobe/ffmpeg ya reciben la URL vía `.arg`).
+  Falta R2 (yt-dlp) para resolver páginas de plataforma a un stream.
 - **R2 — yt-dlp / plataformas** (la killer feature de mpv) — se cruza con
   el plan `FREETUBE.md`.
 - **R3 — Salida de streaming / transcoding** (modo servidor de VLC).
