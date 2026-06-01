@@ -150,15 +150,19 @@ borde; shuma provee el contenido.
     `WinitSurface`). Es la costura: el render de Llimphi ya era winit-free salvo
     la creación de la surface.
   - `pata-llimphi::layer` — backend `wlr-layer-shell` con
-    `smithay-client-toolkit`: crea una layer surface anclada según la config
-    (anchor + `set_exclusive_zone(thickness)`), saca la `wgpu::Surface` de los
-    punteros `wl_display`/`wl_surface`, y pinta la barra reusando
-    `mount → compute → paint → render` vía [`render::bar_view`]. `main` elige
-    layer-shell si hay `WAYLAND_DISPLAY` (salvo `PATA_BACKEND=winit`), con
-    fallback a la ventana winit.
+    `smithay-client-toolkit`: crea **una layer surface por cada superficie
+    `Bar`** de la config (cada una anclada a su borde + `set_exclusive_zone`),
+    saca su `wgpu::Surface` de los punteros `wl_display`/`wl_surface`, y la pinta
+    reusando `mount → compute → paint → render` vía [`render::bar_view`]. Un
+    `Hal` (instancia/device de wgpu) compartido; estado wgpu por panel
+    (`PanelGpu`). Muestreo 1Hz compartido + flag `dirty` por panel (no
+    re-rasteriza a 60fps). `main` elige layer-shell si hay `WAYLAND_DISPLAY`
+    (salvo `PATA_BACKEND=winit`), con fallback a la ventana winit.
   - **Compila; runtime sin verificar** (se itera en un compositor real).
-    Pinta la **primera** barra `Bar` de la config. Falta (próximo incremento):
-    input (teclado→Quake, clicks→toggle/start_button), las demás superficies
-    (N layer surfaces) y el drawer Quake como layer `Overlay`.
+    Pinta **todas** las barras de la config (varios bordes a la vez: p. ej. top
+    + shuma abajo, ambas reservando su franja). Falta (próximos incrementos):
+    input (teclado→Quake, clicks→toggle/start_button), y el drawer Quake como
+    layer `Overlay`. El `shuma_input` en una barra se ve como su cabezal, pero
+    su despliegue necesita el input + el overlay.
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
