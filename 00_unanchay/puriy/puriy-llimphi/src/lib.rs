@@ -642,6 +642,26 @@ pub enum Msg {
     EditActivate,
 }
 
+/// Decide qué hace un evento de rueda según los modifiers: con `Ctrl`
+/// hace zoom de página (gesto estándar del navegador), si no scrollea.
+/// Pura para poder testearla sin construir un `Model`.
+///
+/// Convención CSS de `WheelDelta`: `y > 0` = rueda hacia abajo
+/// (contenido baja) → alejar; `y < 0` = rueda hacia arriba → acercar.
+/// Cada notch da un paso, igual que `Ctrl+=`/`Ctrl+-`.
+fn wheel_to_msg(delta: WheelDelta, mods: Modifiers) -> Option<Msg> {
+    if mods.ctrl {
+        return if delta.y < 0.0 {
+            Some(Msg::ZoomIn)
+        } else if delta.y > 0.0 {
+            Some(Msg::ZoomOut)
+        } else {
+            None
+        };
+    }
+    Some(Msg::Scroll(delta.y * LINE_PX * 3.0))
+}
+
 impl App for Puriy {
     type Model = Model;
     type Msg = Msg;
@@ -827,9 +847,9 @@ impl App for Puriy {
         _model: &Self::Model,
         delta: WheelDelta,
         _cursor: (f32, f32),
-        _mods: Modifiers,
+        mods: Modifiers,
     ) -> Option<Self::Msg> {
-        Some(Msg::Scroll(delta.y * LINE_PX * 3.0))
+        wheel_to_msg(delta, mods)
     }
 
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
@@ -5777,6 +5797,20 @@ mod tests {
     #[test]
     fn transform_affine_vacio_es_none() {
         assert!(transform_affine(&[], 1.0).is_none());
+    }
+
+    #[test]
+    fn ctrl_rueda_zoomea_sin_ctrl_scrollea() {
+        let arriba = WheelDelta { x: 0.0, y: -1.0 };
+        let abajo = WheelDelta { x: 0.0, y: 1.0 };
+        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        let sin = Modifiers::default();
+        // Ctrl + rueda arriba = acercar; Ctrl + rueda abajo = alejar.
+        assert!(matches!(wheel_to_msg(arriba, ctrl), Some(Msg::ZoomIn)));
+        assert!(matches!(wheel_to_msg(abajo, ctrl), Some(Msg::ZoomOut)));
+        // Sin Ctrl la rueda scrollea, no zoomea.
+        assert!(matches!(wheel_to_msg(abajo, sin), Some(Msg::Scroll(_))));
+        assert!(matches!(wheel_to_msg(arriba, sin), Some(Msg::Scroll(_))));
     }
 
     #[test]
