@@ -79,20 +79,21 @@ Barrido transversal, mecánico, alto valor por esfuerzo. **Estado al 2026-06-01:
   - cosmos compute (13 crates): **1267/1271 ✅**, 3 skipped, **4 lentos en debug**
     (búsquedas de eclipses/tránsitos de ventana larga — uno verificado: pasa en
     149 s; no son bugs). → marcarlos release-only o subir su timeout.
-  - **`nakui-core`: 100/133 — 32 FALLAN** 🟡 (empezó en 60/133 → 73 fallos). Los
-    tests cargan módulos de `01_yachay/nakui/modules/{treasury,inventory,sales,crm}`,
-    dir que **nunca se commiteó**. Recorrido de esta sesión:
-    - **`treasury` recuperado** (`42c1b605`) del ejemplo `tesoro/nakui`.
+  - **`nakui-core`: 133/133 ✅** (empezó en 60/133 → 73 fallos). Cerrado esta
+    sesión, en orden:
+    - **`treasury` recuperado** del ejemplo `tesoro/nakui`, luego **curado** al
+      diseño que esperan los tests (sólo `register_cash_move` + `transfer_between_cajas`;
+      se quitaron los 5 morfismos UI tesoro que contaminaban el data-flow graph).
     - **skeletons `crm`/`inventory`/`sales` autorados** (nsmc.json + schema.ncl +
       scripts .rhai) alineados al contrato de cada test.
-    - **records Nickel abiertos (`, ..`)**: el validador cierra records por defecto
-      y rebotaba el campo `id`. Con esto **crm 16/16, inventory 8/8, sales verdes**,
-      y la Caja de treasury dejó de exigir `estado`.
-    - **Lo que resta (32, TODOS treasury):** faltan los morfismos
-      `register_cash_move` y `transfer_between_cajas` (el ejemplo tesoro nunca los
-      tuvo) + un check de `monto` negativo en `Movimiento`. Es **autoría de dominio
-      de treasury** — análoga a `transferir_stock` de inventory, pero sobre
-      `Caja.saldo` agrupado por `currency`. Tu terreno (ver 2B).
+    - **records Nickel abiertos (`, ..`)** — el validador cierra records por
+      defecto y rebotaba el campo `id`.
+    - **morfismos treasury** `register_cash_move` (in/out sobre saldo + Movimiento)
+      y `transfer_between_cajas` (conserva Caja.saldo por currency + Transferencia);
+      `saldo`/`monto` no-negativos; scripts bajo `morphisms/` (convención que los
+      tests de schema_versioning hardcodean).
+    - **Lección transversal:** records Nickel cerrados por defecto (`, ..` para
+      abrir) y la convención `morphisms/` para scripts de módulo.
   - dominium/tinkuy/supay/tullpu/media/takiy/chasqui/sandokan cores: verdes en lo
     corrido (sin fallos), corrida no exhaustiva.
 - **1.4.bis — 2 bugs reales arreglados** (`1fa3d60f`, `0c556c62`): los examples de
@@ -149,7 +150,7 @@ de lo automatizable.
 | **wawa-explorer** (78) | Sacar process-monitor a su crate | 🤖 |
 | **wawa host** (72) | Toggles de módulos con efecto real, accent→theme global | 🧑+🤖 |
 | **takiy** (72) | Pulir `takiy-midi` (núcleo ya cerrado) | 🤖 |
-| **nakui** (70) | **Editor de fórmulas en UI + WAL desde UI + vista formulario.** Módulos de producción: crm/inventory/sales **autorados y verdes**; treasury recuperado. Resta autorar 2 morfismos de treasury (`register_cash_move`, `transfer_between_cajas`) + check de monto negativo → cierra los últimos 32 tests (ver 1.4). | 🧑 — UX + contenido de dominio, tuya |
+| **nakui** (70) | **Editor de fórmulas en UI + WAL desde UI + vista formulario.** Módulos de producción (crm/inventory/sales/treasury) **completos y verdes — nakui-core 133/133** (ver 1.4). El hueco de core que resta es el de UI/persistencia desde la app, no la lógica de dominio. | 🧑 — UX, tuya |
 | **nahual** (68) | Visor PDF (falta rasterizador) + SVG + seek/scrub | 🤝 (svg-viewer untracked ya empezado: ver 0.2) |
 | **media** (68) | **M1: sync A/V por PTS completa** | 🤖 — es el cuello de media |
 | **iniy** (65 ⚠️) | **Pipeline e2e *probado* + NLI local** (hoy piezas sueltas/mock) | 🤖 — primero *verlo correr*, recién después subir % |
