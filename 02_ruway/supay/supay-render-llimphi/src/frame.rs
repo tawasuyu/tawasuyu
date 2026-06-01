@@ -83,6 +83,17 @@ pub(crate) fn render_frame(
         Vec::new()
     };
 
+    // Fase 3.13b: rank back-to-front por subsector — clave PRIMARIA del
+    // painter's sort para TODAS las primitivas (planos, paredes, sprites,
+    // decals), no sólo los planos. Indexado por subsector. Vacío sin BSP
+    // ⇒ todas las primitivas quedan en rank 0 y el sort delega al `depth`
+    // euclidiano, reproduciendo exactamente el comportamiento histórico.
+    let bsp_ranks: Vec<u32> = if use_subsectors && !snap.nodes.is_empty() {
+        compute_bsp_ranks(snap)
+    } else {
+        Vec::new()
+    };
+
     // Fase 3.23: si la oclusión sectorial está activa y hay BSP, calculamos
     // el conjunto de sectores iluminables por el muzzle flash una sola vez
     // por frame. `None` ⇒ "iluminar todo" (modo stub o toggle apagado),
@@ -114,6 +125,7 @@ pub(crate) fn render_frame(
     if use_subsectors {
         for (idx, sub) in snap.subsectors.iter().enumerate() {
             let bsp_depth = bsp_order_depths.get(idx).copied().flatten();
+            let bsp_rank = bsp_ranks.get(idx).copied().unwrap_or(0);
             gather_subsector_planes(
                 &mut renderables,
                 sub,
@@ -123,6 +135,7 @@ pub(crate) fn render_frame(
                 &rect,
                 cfg,
                 bsp_depth,
+                bsp_rank,
                 lit_ref,
                 world_lights_ref,
             );
@@ -139,6 +152,7 @@ pub(crate) fn render_frame(
             &rect,
             cfg,
             use_subsectors,
+            &bsp_ranks,
             lit_ref,
             world_lights_ref,
         );
@@ -151,6 +165,7 @@ pub(crate) fn render_frame(
             &cam,
             &proj,
             cfg,
+            &bsp_ranks,
             lit_ref,
             world_lights_ref,
         );
@@ -162,10 +177,20 @@ pub(crate) fn render_frame(
             &mut renderables, cfg, snap, &cam, &proj, lit_ref, world_lights_ref,
         );
     }
+    // Painter's sort unificado (Fase 3.13b): clave primaria = rank BSP
+    // back-to-front del subsector (alto = más lejano = pintado primero),
+    // desempate por `depth` euclidiano descendente dentro de un mismo
+    // subsector. Sin BSP todos comparten rank 0 ⇒ desempata sólo por
+    // `depth`, exactamente como antes. Esto ordena correctamente el cruce
+    // pared↔sprite↔plano entre subsectores que el euclidiano puro fallaba.
     renderables.sort_by(|a, b| {
-        b.depth
-            .partial_cmp(&a.depth)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        b.bsp_rank
+            .cmp(&a.bsp_rank)
+            .then_with(|| {
+                b.depth
+                    .partial_cmp(&a.depth)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
     for r in &renderables {
         match &r.kind {

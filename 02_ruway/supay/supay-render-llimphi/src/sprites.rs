@@ -26,6 +26,7 @@ pub(crate) fn gather_sprite_shadow(
     sprite_x_cam: f32,
     floor: f32,
     sprite_depth: f32,
+    bsp_rank: u32,
 ) {
     // Radio en world units. Si tenemos el patch decodificado del atlas
     // usamos su mitad de width — así un enemigo grande (caco/baron) tira
@@ -92,6 +93,7 @@ pub(crate) fn gather_sprite_shadow(
         return;
     }
     out.push(Renderable {
+        bsp_rank,
         depth: sprite_depth + 0.5,
         color: Color::from_rgba8(0, 0, 0, a),
         path,
@@ -115,6 +117,10 @@ pub(crate) fn gather_decals(
     lit_sectors: Option<&HashSet<u32>>,
     world_lights: &[WorldLight],
 ) {
+    // Fase 3.13b: tabla de ranks BSP por subsector — clave primaria del
+    // painter's sort. La calculamos una vez por llamada (los decals son
+    // pocos); vacía/cero en modo stub → orden euclidiano histórico.
+    let ranks = compute_bsp_ranks(snap);
     for d in &cfg.decals {
         let a = (d.alpha.clamp(0.0, 1.0) * 255.0) as u8;
         if a == 0 {
@@ -139,6 +145,7 @@ pub(crate) fn gather_decals(
                 .map(|ss| ss.sector)
         };
         let sector_snap = sector.and_then(|s| snap.sectors.get(s as usize));
+        let bsp_rank = bsp_rank_at(&snap.nodes, &ranks, d.x, d.y);
         // Fase 3.47: si hay tangente de pared, el quad yace **plano**
         // sobre el lineseg (eje horizontal = tangente mundo, vertical =
         // +Z) — se ve en perspectiva, no de cara a la cámara. Sin
@@ -314,6 +321,7 @@ pub(crate) fn gather_decals(
         }
         path.close_path();
         out.push(Renderable {
+        bsp_rank,
             depth: depth - 0.5,
             color: col,
             path,
@@ -330,6 +338,7 @@ pub(crate) fn gather_sprite(
     cam: &Camera,
     proj: &Projection,
     cfg: &RenderConfig,
+    bsp_ranks: &[u32],
     lit_sectors: Option<&HashSet<u32>>,
     world_lights: &[WorldLight],
 ) {
@@ -340,6 +349,13 @@ pub(crate) fn gather_sprite(
     let sec = snap.sectors.get(sprite.sector as usize);
     let floor = sec.map(|s| s.floor_height).unwrap_or(0.0);
     let depth = (x_cam * x_cam + y_cam * y_cam).sqrt();
+    // Fase 3.13b: rank BSP del subsector donde está parado el sprite —
+    // clave primaria del painter's sort. Un sprite es un punto, así que
+    // su subsector es inequívoco (a diferencia de una pared en el borde).
+    // Esto corrige el bug conocido: un sprite cercano en distancia
+    // euclidiana dejaba de atravesar una pared que el BSP pone delante.
+    // Sin BSP (`bsp_ranks` vacío) cae a 0 → orden euclidiano histórico.
+    let bsp_rank = bsp_rank_at(&snap.nodes, bsp_ranks, sprite.x, sprite.y);
     // Fase 3.35: punto de muestreo vertical para BRDF 3D — base del
     // billboard relativo al ojo del jugador.
     // Fase 3.38: subimos el sample al **centro** vertical del billboard
@@ -356,7 +372,7 @@ pub(crate) fn gather_sprite(
     // mismo. `gather_sprite_shadow` decide su tamaño usando el patch
     // del atlas (si está) o `cfg.sprite_half_width` como fallback.
     if cfg.sprite_shadows {
-        gather_sprite_shadow(out, sprite, sec, cam, proj, cfg, x_cam, floor, depth);
+        gather_sprite_shadow(out, sprite, sec, cam, proj, cfg, x_cam, floor, depth, bsp_rank);
     }
 
     // ---- Camino texturizado: hay atlas + patch decodificado ----
@@ -444,6 +460,7 @@ pub(crate) fn gather_sprite(
                 Affine::translate((tl.x, tl.y)) * Affine::scale_non_uniform(sx, sy)
             };
             out.push(Renderable {
+        bsp_rank,
                 depth,
                 color: Color::WHITE,
                 path: BezPath::new(),
@@ -482,6 +499,7 @@ pub(crate) fn gather_sprite(
         cfg.sprite_rim_directional,
     );
     out.push(Renderable {
+        bsp_rank,
         depth,
         color: apply_color_boost(sprite_color(sprite, sec, depth, cfg), boost),
         path,

@@ -1,6 +1,13 @@
 use super::*;
 
 pub(crate) struct Renderable {
+    /// **Clave primaria** del painter's sort: rank back-to-front del
+    /// subsector que contiene esta primitiva (alto = más lejano = pintado
+    /// primero). 0 = sin BSP (modo stub) → el sort cae enteramente a
+    /// [`Self::depth`], reproduciendo el orden euclidiano histórico.
+    pub(crate) bsp_rank: u32,
+    /// Clave secundaria (desempate dentro de un subsector): distancia
+    /// euclidiana en cámara + micro-offsets de capa (overlays, gradientes).
     pub(crate) depth: f32,
     pub(crate) color: Color,
     pub(crate) path: BezPath,

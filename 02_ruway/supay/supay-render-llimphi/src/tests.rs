@@ -705,6 +705,46 @@
         assert!(d1 > BSP_DEPTH_BASE);
     }
 
+    #[test]
+    fn bsp_ranks_far_subsector_outranks_near() {
+        // Fase 3.13b: la tabla de ranks debe darle al subsector más lejano
+        // (visitado primero en la travesía back-to-front) el rank más alto,
+        // para que el painter's sort lo pinte antes. Mismo escenario que
+        // `bsp_compute_depths_assigns_decreasing_values`: viewer en (+10,0)
+        // ⇒ travesía [ss0(far), ss1(near)].
+        let mut snap = SceneSnapshot::empty(0);
+        snap.player.x = 10.0;
+        snap.player.y = 0.0;
+        snap.subsectors = Arc::from(vec![
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+        ]);
+        snap.nodes = Arc::from(simple_two_leaf_bsp());
+        let ranks = compute_bsp_ranks(&snap);
+        assert_eq!(ranks.len(), 2);
+        assert!(ranks[0] > ranks[1], "ss0 (far) {} > ss1 (near) {}", ranks[0], ranks[1]);
+        assert!(ranks[1] >= 1, "ningún subsector alcanzado debe quedar en 0");
+        // bsp_rank_at: el punto del jugador cae en el subsector near (ss1).
+        assert_eq!(bsp_rank_at(&snap.nodes, &ranks, 10.0, 0.0), ranks[1]);
+        // Un punto del lado opuesto cae en el subsector far (ss0).
+        assert_eq!(bsp_rank_at(&snap.nodes, &ranks, -10.0, 0.0), ranks[0]);
+    }
+
+    #[test]
+    fn bsp_ranks_empty_without_bsp() {
+        // Sin nodos (modo stub) la tabla queda en ceros ⇒ el sort delega
+        // al depth euclidiano, preservando el comportamiento histórico.
+        let mut snap = SceneSnapshot::empty(0);
+        snap.subsectors = Arc::from(vec![SubsectorSnap {
+            sector: 0,
+            first_seg: 0,
+            num_segs: 0,
+        }]);
+        let ranks = compute_bsp_ranks(&snap);
+        assert_eq!(ranks, vec![0]);
+        assert_eq!(bsp_rank_at(&snap.nodes, &ranks, 0.0, 0.0), 0);
+    }
+
     // -----------------------------------------------------------------
     // Fase 3.22: muzzle world light
     // -----------------------------------------------------------------

@@ -35,4 +35,4 @@ cargo run --release -p supay-doom-llimphi
 - **WAD legal:** sólo shareware (`doom1.wad`) viene mencionado; el resto los aportás vos.
 - `vendor/doomgeneric/`: clonalo del repo upstream antes de build (el `build.rs` detecta su presencia).
 - **`FEATURE_SOUND=0`** por ahora; el bus de audio va por `takiy` cuando esté listo.
-- Renderer 3D simplificado (sin BSP-walking real); sprites direccionales sólo en ángulo 1 hasta Fase 3.5.
+- Renderer 3D con ordering BSP-correcto (Fase 3.13b: rank back-to-front por subsector para paredes/sprites/planos/decals), pero sin clipping de oclusión por columna todavía — se resuelve la visibilidad por overdraw del painter's.

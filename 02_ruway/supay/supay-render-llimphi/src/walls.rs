@@ -10,6 +10,7 @@ pub(crate) fn gather_wall(
     rect: &PaintRect,
     cfg: &RenderConfig,
     skip_fake_floor: bool,
+    bsp_ranks: &[u32],
     lit_sectors: Option<&HashSet<u32>>,
     world_lights: &[WorldLight],
 ) {
@@ -95,6 +96,19 @@ pub(crate) fn gather_wall(
     let mid_x = (x1 + x2) * 0.5;
     let mid_y = (y1 + y2) * 0.5;
     let depth = (mid_x * mid_x + mid_y * mid_y).sqrt();
+    // Fase 3.13b: rank BSP del subsector del lado que mira el jugador —
+    // clave primaria del painter's sort. Nudge del midpoint mundo 1 unidad
+    // hacia la cámara para caer dentro del subsector "near" (no en el borde
+    // ambiguo entre los dos). Sin BSP (`bsp_ranks` vacío) cae a 0 → el sort
+    // delega al `depth` euclidiano como en la convención histórica.
+    let bsp_rank = {
+        let wmx = (wall.x1 + wall.x2) * 0.5;
+        let wmy = (wall.y1 + wall.y2) * 0.5;
+        let ddx = cam.px - wmx;
+        let ddy = cam.py - wmy;
+        let dlen = (ddx * ddx + ddy * ddy).sqrt().max(1e-3);
+        bsp_rank_at(&snap.nodes, bsp_ranks, wmx + ddx / dlen, wmy + ddy / dlen)
+    };
     // Fase 3.22: boost del muzzle flash en el midpoint de la pared.
     // Cae con distancia² desde el jugador (en cam-space player = origen).
     // Fase 3.23: gateado por el sector "near" del wall (el lado del que
@@ -153,6 +167,7 @@ pub(crate) fn gather_wall(
             path.line_to(Point::new(br_floor.x, screen_bot));
             path.close_path();
             out.push(Renderable {
+                bsp_rank,
                 depth: depth + 0.5,
                 color: apply_color_boost(floor_color(near_sec, depth, cfg), boost_rgb),
                 path,
@@ -168,6 +183,7 @@ pub(crate) fn gather_wall(
             path.line_to(bl_ceil);
             path.close_path();
             out.push(Renderable {
+                bsp_rank,
                 depth: depth + 0.5,
                 color: apply_color_boost(
                     ceiling_color(near_sec, depth, cfg, snap.sky_pic),
@@ -292,6 +308,7 @@ pub(crate) fn gather_wall(
                 s_path.line_to(s_br);
                 s_path.close_path();
                 out.push(Renderable {
+                bsp_rank,
                     depth,
                     color: Color::WHITE,
                     path: s_path,
@@ -351,6 +368,7 @@ pub(crate) fn gather_wall(
                 let dark_grad =
                     Gradient::new_linear(start, end).with_stops(dark_stops.as_slice());
                 out.push(Renderable {
+                bsp_rank,
                     depth: depth - 0.001,
                     color: Color::WHITE,
                     path: path.clone(),
@@ -362,6 +380,7 @@ pub(crate) fn gather_wall(
                     let tint_grad =
                         Gradient::new_linear(start, end).with_stops(tint_stops.as_slice());
                     out.push(Renderable {
+                bsp_rank,
                         depth: depth - 0.002,
                         color: Color::WHITE,
                         path,
@@ -376,6 +395,7 @@ pub(crate) fn gather_wall(
                 if lit_shade < 0.95 {
                     let alpha = ((1.0 - lit_shade) * 255.0) as u8;
                     out.push(Renderable {
+                bsp_rank,
                         depth: depth - 0.001,
                         color: Color::from_rgba8(0, 0, 0, alpha),
                         path: path.clone(),
@@ -384,6 +404,7 @@ pub(crate) fn gather_wall(
                 }
                 if let Some((or, og, ob, oa)) = overlay_color_alpha_from_boost(boost_rgb) {
                     out.push(Renderable {
+                bsp_rank,
                         depth: depth - 0.002,
                         color: Color::from_rgba8(or, og, ob, oa),
                         path,
@@ -431,6 +452,7 @@ pub(crate) fn gather_wall(
                     if lit_band < 0.95 {
                         let alpha = ((1.0 - lit_band) * 255.0) as u8;
                         out.push(Renderable {
+                bsp_rank,
                             depth: depth - 0.001,
                             color: Color::from_rgba8(0, 0, 0, alpha),
                             path: band_path.clone(),
@@ -441,6 +463,7 @@ pub(crate) fn gather_wall(
                         overlay_color_alpha_from_boost(band_boost)
                     {
                         out.push(Renderable {
+                bsp_rank,
                             depth: depth - 0.002,
                             color: Color::from_rgba8(or, og, ob, oa),
                             path: band_path,
@@ -467,6 +490,7 @@ pub(crate) fn gather_wall(
                 p.line_to(br_b);
                 p.close_path();
                 out.push(Renderable {
+                bsp_rank,
                     depth,
                     color: apply_color_boost(
                         wall_color(wall_idx, wall, sec, depth, b, bands, cfg),

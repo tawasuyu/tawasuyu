@@ -37,6 +37,45 @@ pub(crate) fn compute_bsp_order_depths(snap: &SceneSnapshot) -> Vec<Option<f32>>
     depths
 }
 
+/// **Fase 3.13b** — rank back-to-front por subsector para el painter's
+/// sort unificado de TODAS las primitivas (planos, paredes, sprites,
+/// decals). El subsector más lejano recibe el rank más alto; el del
+/// jugador, el más bajo (1). Subsectores no alcanzados o snapshot sin
+/// BSP quedan en 0, lo que en el sort los empata con el resto y delega
+/// el orden a la distancia euclidiana (comportamiento histórico).
+///
+/// A diferencia de [`compute_bsp_order_depths`] (que devuelve f32 con un
+/// base enorme sólo para planos), esto devuelve el rank entero crudo,
+/// usable como clave primaria comparable entre tipos de primitiva.
+pub(crate) fn compute_bsp_ranks(snap: &SceneSnapshot) -> Vec<u32> {
+    let n_subs = snap.subsectors.len();
+    let mut ranks = vec![0u32; n_subs];
+    if snap.nodes.is_empty() || n_subs == 0 {
+        return ranks;
+    }
+    let mut traversal: Vec<u32> = Vec::with_capacity(n_subs);
+    let root_child = (snap.nodes.len() - 1) as u16;
+    walk_bsp(&snap.nodes, root_child, snap.player.x, snap.player.y, &mut traversal);
+    let total = traversal.len();
+    for (step, &ss) in traversal.iter().enumerate() {
+        if let Some(slot) = ranks.get_mut(ss as usize) {
+            // step 0 = más lejano → rank alto (pintado primero en sort desc).
+            *slot = (total - step) as u32;
+        }
+    }
+    ranks
+}
+
+/// Rank BSP del subsector que contiene `(x, y)`, o 0 si no hay BSP o el
+/// punto cae fuera. Combina [`subsector_at_point`] con la tabla de
+/// [`compute_bsp_ranks`]. Usado por walls/sprites/decals para asignar su
+/// clave primaria de painter's sort.
+pub(crate) fn bsp_rank_at(nodes: &[NodeSnap], ranks: &[u32], x: f32, y: f32) -> u32 {
+    subsector_at_point(nodes, x, y)
+        .and_then(|ss| ranks.get(ss as usize).copied())
+        .unwrap_or(0)
+}
+
 /// Light level por default cuando no podemos determinar el sector del
 /// punto consultado (mapa sin BSP, índices fuera de rango). 192 es el
 /// valor "habitación tipica iluminada" de Doom — coincide con el
@@ -147,6 +186,7 @@ pub(crate) fn gather_subsector_planes(
     rect: &PaintRect,
     cfg: &RenderConfig,
     bsp_depth_override: Option<f32>,
+    bsp_rank: u32,
     lit_sectors: Option<&HashSet<u32>>,
     world_lights: &[WorldLight],
 ) {
@@ -320,6 +360,7 @@ pub(crate) fn gather_subsector_planes(
                             tri.line_to(screen_pts[i2]);
                             tri.close_path();
                             out.push(Renderable {
+                                bsp_rank,
                                 depth: depth + 1.0,
                                 color: Color::WHITE,
                                 path: tri,
@@ -417,6 +458,7 @@ pub(crate) fn gather_subsector_planes(
                                 let dgrad = Gradient::new_linear(start, end)
                                     .with_stops(dstops.as_slice());
                                 out.push(Renderable {
+                                bsp_rank,
                                     depth: depth + 0.999,
                                     color: Color::WHITE,
                                     path: path.clone(),
@@ -426,6 +468,7 @@ pub(crate) fn gather_subsector_planes(
                                     let tgrad = Gradient::new_linear(start, end)
                                         .with_stops(tstops.as_slice());
                                     out.push(Renderable {
+                                bsp_rank,
                                         depth: depth + 0.998,
                                         color: Color::WHITE,
                                         path,
@@ -451,6 +494,7 @@ pub(crate) fn gather_subsector_planes(
                         if lit_shade < 0.95 {
                             let alpha = ((1.0 - lit_shade) * 255.0).clamp(0.0, 255.0) as u8;
                             out.push(Renderable {
+                                bsp_rank,
                                 depth: depth + 0.999,
                                 color: Color::from_rgba8(0, 0, 0, alpha),
                                 path: path.clone(),
@@ -459,6 +503,7 @@ pub(crate) fn gather_subsector_planes(
                         }
                         if let Some((or, og, ob, oa)) = overlay_color_alpha_from_boost(boost_rgb) {
                             out.push(Renderable {
+                                bsp_rank,
                                 depth: depth + 0.998,
                                 color: Color::from_rgba8(or, og, ob, oa),
                                 path,
@@ -477,6 +522,7 @@ pub(crate) fn gather_subsector_planes(
             ceiling_color(sec, shade_depth, cfg, snap.sky_pic)
         };
         out.push(Renderable {
+                                bsp_rank,
             depth: depth + 1.0,
             color: apply_color_boost(color, boost_rgb),
             path,

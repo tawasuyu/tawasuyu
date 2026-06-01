@@ -24,7 +24,7 @@ Crates listed in [README.md](README.md).
 - **Legal WAD:** only shareware `doom1.wad` is referenced; others come from you.
 - `vendor/doomgeneric/`: clone it from upstream before build (`build.rs` detects).
 - **`FEATURE_SOUND=0`** for now; audio bus goes through `takiy` when ready.
-- Simplified 3D rendering (no real BSP-walking); directional sprites only at angle 1 until Phase 3.5.
+- Simplified 3D rendering: BSP-correct painter's ordering (Phase 3.13b) but no per-column BSP occlusion clipping yet — see "Estado" below.
 
 ## Estado (2026-05-31)
 
@@ -36,6 +36,12 @@ Crates listed in [README.md](README.md).
   animados, full-bright.
 - **Sprites reales del WAD** con rotación direccional, atenuación por luz y sample
   point con altura real del patch.
+- **Painter's ordering BSP unificado (Fase 3.13b)**: paredes, sprites, planos y decals
+  comparten una clave primaria de orden — el rank back-to-front del subsector que los
+  contiene (`compute_bsp_ranks` + `bsp_rank_at`), con la distancia euclidiana sólo como
+  desempate intra-subsector. Cierra el bug del cruce pared↔sprite (un sprite cercano en
+  distancia euclidiana ya no atraviesa una pared que el BSP pone delante). Sin BSP (stub)
+  cae al orden euclidiano histórico.
 - **Iluminación avanzada (Fases 3.22–3.39)**: world point lights desde mobjs
   `FF_FULLBRIGHT`, muzzle world light con oclusión sectorial (BFS multi-hop, radio
   acumulativo Dijkstra-lite), BRDF 3D direccional (rim) para paredes, pisos/techos,
@@ -52,8 +58,10 @@ Crates listed in [README.md](README.md).
 
 ### Pendiente
 
-- **BSP-walking real** (hoy es una aproximación por strips/triángulos; no se camina el
-  BSP del nivel para visibilidad exacta).
+- **BSP-walking de visibilidad** (oclusión exacta). El *ordering* ya es BSP-correcto
+  (Fase 3.13b, ver arriba), pero la *visibilidad* sigue resolviéndose por overdraw del
+  painter's: no hay clipping por columna de segmentos sólidos como el R_RenderBSPNode
+  original, así que se dibuja geometría que quedaría oculta. Funciona, pero malgasta fill.
 - **Sound vía takiy**: el audio vive hoy en `supay-audio`; integrarlo al bus `takiy`
   cuando esté listo (`FEATURE_SOUND` del motor C sigue en 0).
 - **Wawa**: `supay-core/scene/wad` compilan a WASM, pero el renderer sobre el HAL Wawa
