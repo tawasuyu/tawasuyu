@@ -25,6 +25,7 @@ media-recorder-wav = { path = "../media-recorder-wav" }
 media-source-av1 = { path = "../media-source-av1" }
 media-source-opus = { path = "../media-source-opus" }
 foreign-av = { path = "../../../shared/foreign-av" }
+foreign-ytdlp = { path = "../../../shared/foreign-ytdlp" }
 media-source-gif = { path = "../media-source-gif" }
 media-source-image = { path = "../media-source-image" }
 media-source-mp3 = { path = "../media-source-mp3" }

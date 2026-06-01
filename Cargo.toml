@@ -439,6 +439,7 @@ members = [
     "shared/foreign-av",
     "shared/foreign-fs",
     "shared/foreign-psd",
+    "shared/foreign-ytdlp",
     "shared/format",
     "shared/forth-emisor",
     "shared/launcher-core",

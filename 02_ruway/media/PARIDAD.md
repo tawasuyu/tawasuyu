@@ -42,7 +42,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 - Track AUDIO A2/A3/A5/A6 (selección de pista, dispositivo de salida, normalización/ReplayGain, gapless/crossfade). **A4 (delay/sync) ✅.**
 - Track VIDEO V1–V8 (fullscreen, aspect/crop/zoom, rotación, ajustes de color, deinterlacing, filtros/shaders, capítulos, HDR) — todo pendiente.
 - Track SUBTÍTULOS S2–S5 (pistas embebidas, estilo configurable, delay/sync, auto-carga). **S1 (ASS/SSA texto+timing) ✅.**
-- Track RED R2–R4 (yt-dlp/plataformas, streaming server, DLNA/Chromecast); prerequisito de FREETUBE.md. **R1 (URL/HLS/RTSP) ✅.**
+- Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
 - Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
 
 ## Tracks y fases
@@ -131,7 +131,14 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   necesitó tocar `foreign-av` (ffprobe/ffmpeg ya reciben la URL vía `.arg`).
   Falta R2 (yt-dlp) para resolver páginas de plataforma a un stream.
 - **R2 — yt-dlp / plataformas** (la killer feature de mpv) — se cruza con
-  el plan `FREETUBE.md`.
+  el plan `FREETUBE.md`. ✅ *Cerrado (2026-06-01, formato muxeado).* Puente
+  nuevo `shared/foreign-ytdlp` (regla #4: el único que sabe que `yt-dlp`
+  existe): `is_platform_url` (allowlist de hosts, match exacto/sufijo) +
+  `resolve` (`yt-dlp -f b -g` → URL de stream directo). `media-app` resuelve
+  la página antes de pasarla al decoder de red (R1) y cae a la URL original
+  si yt-dlp falta o falla. Pide **un formato muxeado** (`-f b`) para una sola
+  entrada ffmpeg; el DASH con A/V separados (YouTube > 720p) queda pendiente
+  (necesita dos entradas o muxeo previo).
 - **R3 — Salida de streaming / transcoding** (modo servidor de VLC).
 - **R4 — DLNA/UPnP, Chromecast.**
 

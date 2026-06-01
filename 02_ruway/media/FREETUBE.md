@@ -65,7 +65,7 @@ repo (local-first, soberano, direccionado por contenido):
 
 | Feature FreeTube | Pieza gioser |
 |---|---|
-| Reproducir el stream | `media` (`FrameSource`/`AudioSource`, decoders nativos + `foreign-av`) — necesita **R1/R2 de `PARIDAD.md`** (URL + yt-dlp) |
+| Reproducir el stream | `media` (`FrameSource`/`AudioSource`, decoders nativos + `foreign-av`) — **R1/R2 de `PARIDAD.md` ✅** (URL + yt-dlp vía `shared/foreign-ytdlp`) |
 | Backend YouTube/Invidious | **nuevo puente `shared/foreign-youtube`** (regla #4: formato/protocolo ajeno por puente) — Innertube/Invidious client |
 | Suscripciones/historial/playlists locales | almacenamiento local direccionado por contenido (BLAKE3 + DAG + postcard), **sin cuenta** — ya es el modelo nativo |
 | Perfiles + identidad | **`agora`** (identidad Ed25519 + grafo de confianza): perfiles soberanos, y un modelo de recomendación/feed federado sobre el grafo en vez de un DB central |
@@ -87,7 +87,14 @@ repo (local-first, soberano, direccionado por contenido):
    catálogo se centraliza o se federa sobre `agora`/`minga`.
 
 ### Prerrequisitos
-Antes de un FreeTube útil hay que cerrar de `PARIDAD.md`: **R1** (URL),
-**R2** (yt-dlp/plataformas) y conviene **M1** (sync A/V) para que el video de
-red no derive. Por eso este frente va **después** del arranque del
-reproductor.
+De `PARIDAD.md` ya están cerrados los que bloqueaban este frente: **R1**
+(URL/HLS/RTSP) ✅, **R2** (yt-dlp/plataformas vía `shared/foreign-ytdlp`,
+formato muxeado) ✅ y **M1** (sync A/V) ✅ para que el video de red no derive.
+Es decir: `media` ya **reproduce** desde una URL de plataforma. Lo que falta
+para un FreeTube útil es la capa de **navegación/descubrimiento** (búsqueda,
+canales, suscripciones, comentarios), que es el puente `shared/foreign-youtube`
+(Innertube/Invidious) + un frontend Llimphi — no el reproductor.
+
+Pendiente de R2 para calidad alta: el DASH con audio y video en URLs
+separadas (YouTube > 720p) — hoy `resolve` pide un único formato muxeado
+(`-f b`), suficiente para reproducir pero topado en resolución.

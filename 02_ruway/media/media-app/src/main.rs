@@ -28,6 +28,7 @@
 //!   `cargo run -p media-app --release -- /ruta/al/anim.gif`
 //!   `cargo run -p media-app --release -- /ruta/foto.png`
 //!   `cargo run -p media-app --release -- https://host/stream.m3u8`
+//!   `cargo run -p media-app --release -- https://youtu.be/<id>` (yt-dlp)
 //!   `MEDIA_WAV=/ruta/clip.wav cargo run -p media-app --release`
 //!   `MEDIA_MP3=/ruta/cancion.mp3 cargo run -p media-app --release`
 //!   `MEDIA_MUTE=1 cargo run -p media-app --release`
@@ -2843,9 +2844,28 @@ fn main() {
         // y le pasamos la URL tal cual; el audio del mismo stream sale de la
         // misma MediaSession. Si no hay red o ffmpeg, el fallback de abajo
         // cae a testcard + tono sin romper.
+        //
+        // R2: si la URL es una página de plataforma conocida (YouTube/Vimeo/
+        // Twitch…), la resolvemos antes con yt-dlp a su stream directo; si
+        // yt-dlp no está o falla, pasamos la URL original a ffmpeg igual
+        // (puede ser ya directa, o degradar a testcard).
         Some(arg) if is_network_url(arg) => {
-            eprintln!("media-app: stream de red {arg} → decoder ffmpeg");
-            video_path_slot().set(PathBuf::from(arg)).ok();
+            let stream = if foreign_ytdlp::is_platform_url(arg) {
+                match foreign_ytdlp::resolve(arg) {
+                    Ok(r) => {
+                        eprintln!("media-app: yt-dlp resolvió {arg} → stream directo");
+                        r.stream_url
+                    }
+                    Err(e) => {
+                        eprintln!("media-app: yt-dlp falló ({e}) — pruebo la URL directo");
+                        arg.clone()
+                    }
+                }
+            } else {
+                arg.clone()
+            };
+            eprintln!("media-app: stream de red → decoder ffmpeg");
+            video_path_slot().set(PathBuf::from(stream)).ok();
             Config {
                 label: format!("stream {arg}"),
                 kind: VideoKind::Ffmpeg,

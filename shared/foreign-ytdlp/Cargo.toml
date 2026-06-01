@@ -1,0 +1,23 @@
+# =============================================================================
+#  gioser :: foreign-ytdlp — puente al binario `yt-dlp` (R2 de PARIDAD.md)
+# -----------------------------------------------------------------------------
+#  CLAUDE.md regla #4: los protocolos/servicios ajenos entran por puentes
+#  `shared/foreign-*`, nunca al núcleo de las apps. Este crate es la ÚNICA pieza
+#  del workspace que sabe que el binario `yt-dlp` existe: resuelve una página de
+#  plataforma (YouTube/Vimeo/Twitch/…) a una URL de stream directo que después
+#  consume el decoder de red de `media` (R1, vía ffmpeg/libavformat).
+#
+#  Espejo conceptual de `shared/foreign-av` (puente a ffmpeg): ingerir lo ajeno,
+#  dejar el resto del dominio agnóstico — `media-app` ve sólo una URL más.
+# =============================================================================
+
+[package]
+name = "foreign-ytdlp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media/foreign-ytdlp — puente al binario yt-dlp: resuelve páginas de plataforma (YouTube/Vimeo/Twitch…) a una URL de stream directo para el decoder de red de media."
+
+[dependencies]
