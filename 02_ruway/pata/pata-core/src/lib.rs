@@ -12,6 +12,8 @@
 //!   [`Surface`]s (bar/panel/dock), cada una anclada a un borde y con widgets
 //!   colocables en sus slots. Es lo que un archivo de config (TOML en Linux,
 //!   akasha en wawa) materializa.
+//! - [`layout`] — la geometría: resuelve un `Config` + pantalla en superficies
+//!   colocadas en píxeles + el área de trabajo que queda para las ventanas.
 //!
 //! No pinta, no toca el SO, no sabe quién lo renderiza. Por eso es `no_std` +
 //! `alloc`: el mismo modelo sirve al frontend Llimphi sobre Linux y al kernel
@@ -25,5 +27,7 @@
 extern crate alloc;
 
 pub mod config;
+pub mod layout;
 
 pub use config::{Anchor, Config, FloatingCard, General, Prop, Surface, SurfaceKind, WidgetSpec};
+pub use layout::{resolve, Frame, Placed, Rect};
