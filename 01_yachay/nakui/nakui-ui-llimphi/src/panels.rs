@@ -970,20 +970,77 @@ pub(crate) fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Th
         return column(children, 8.0);
     };
 
-    // Campos del record (label fijo a la izquierda · valor).
+    // Campos del record (label fijo a la izquierda · valor editable
+    // in-situ). El Form view del módulo dice qué columnas son editables;
+    // click en una de ellas abre el editor en el lugar (no un form aparte).
+    let form_view = find_form_view(module, &detail.entity);
+    let input_palette = TextInputPalette::from_theme(theme);
     for col in &dv.fields {
-        let value = match guard.as_ref() {
-            Some(b) => cell_display(b, col, lookup_field(&record, &col.field)),
-            None => render_value(lookup_field(&record, &col.field)),
-        };
         let label = cell_text(col.label.clone(), 160.0, theme.fg_muted);
-        let val = cell_flex(value, theme.fg_text);
+        let editing = model
+            .inline_edit
+            .as_ref()
+            .filter(|fr| fr.spec.name == col.field);
+
+        let row_children: Vec<View<Msg>> = if let Some(fr) = editing {
+            // Campo en edición: editor + confirmar/cancelar en la fila.
+            let control = build_inline_control(model, fr, &input_palette, theme);
+            let editor_wrap = View::new(Style {
+                flex_grow: 1.0,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                gap: Size {
+                    width: length(8.0),
+                    height: length(0.0),
+                },
+                ..Default::default()
+            })
+            .children(vec![control]);
+            vec![
+                label,
+                editor_wrap,
+                button_styled(
+                    "✓",
+                    btn_style(34.0),
+                    Alignment::Center,
+                    &accent_btn(theme),
+                    Msg::DetailInlineCommit,
+                ),
+                button_styled(
+                    "✗",
+                    btn_style(34.0),
+                    Alignment::Center,
+                    &ButtonPalette::from_theme(theme),
+                    Msg::DetailInlineCancel,
+                ),
+            ]
+        } else {
+            // Sólo-lectura: clickeable si hay un FieldSpec editable detrás.
+            let value = match guard.as_ref() {
+                Some(b) => cell_display(b, col, lookup_field(&record, &col.field)),
+                None => render_value(lookup_field(&record, &col.field)),
+            };
+            let editable = form_view.is_some_and(|fv| {
+                fv.fields
+                    .iter()
+                    .any(|fs| fs.name == col.field && fs.kind != FieldKind::AutoId)
+            });
+            let mut val = cell_flex(value, theme.fg_text);
+            if editable {
+                val = val.on_click(Msg::DetailEditField {
+                    field: col.field.clone(),
+                });
+            }
+            vec![label, val]
+        };
+
+        let height = if editing.is_some() { 34.0 } else { 26.0 };
         children.push(
             View::new(Style {
                 flex_direction: FlexDirection::Row,
                 size: Size {
                     width: percent(1.0_f32),
-                    height: length(26.0),
+                    height: length(height),
                 },
                 align_items: Some(AlignItems::Center),
                 gap: Size {
@@ -992,7 +1049,7 @@ pub(crate) fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Th
                 },
                 ..Default::default()
             })
-            .children(vec![label, val]),
+            .children(row_children),
         );
     }
 
@@ -1251,6 +1308,114 @@ pub(crate) fn build_form_panel(model: &Model, form: &FormState, theme: &Theme) -
     children.push(actions);
 
     column(children, 10.0)
+}
+
+/// Control de edición in-situ de un campo en la ficha de detalle.
+/// Espeja [`build_field_control`] pero el input siempre va con foco y los
+/// mensajes son los `DetailInline*` (no los del form indexado).
+pub(crate) fn build_inline_control(
+    model: &Model,
+    fr: &FieldRuntime,
+    input_palette: &TextInputPalette,
+    theme: &Theme,
+) -> View<Msg> {
+    match fr.spec.kind {
+        FieldKind::Text | FieldKind::Multiline | FieldKind::Number | FieldKind::Date => {
+            let placeholder = fr.spec.help.clone().unwrap_or_default();
+            text_input_view(
+                &fr.input,
+                &placeholder,
+                true,
+                input_palette,
+                Msg::DetailInlineFocus,
+            )
+        }
+        FieldKind::Boolean => {
+            let on = fr.raw() == "true";
+            let pal = if on {
+                accent_btn(theme)
+            } else {
+                ButtonPalette::from_theme(theme)
+            };
+            button_styled(
+                if on { "Sí" } else { "No" },
+                btn_style(80.0),
+                Alignment::Center,
+                &pal,
+                Msg::DetailInlineSet(if on { "false" } else { "true" }.to_string()),
+            )
+        }
+        FieldKind::AutoId => cell_flex(fr.raw(), theme.fg_muted),
+        FieldKind::Select => {
+            let current = fr.raw();
+            let chips: Vec<View<Msg>> = fr
+                .spec
+                .options
+                .iter()
+                .map(|opt| {
+                    let selected = current == opt.value;
+                    let pal = if selected {
+                        accent_btn(theme)
+                    } else {
+                        ButtonPalette::from_theme(theme)
+                    };
+                    button_styled(
+                        opt.display().to_string(),
+                        btn_style_auto(),
+                        Alignment::Center,
+                        &pal,
+                        Msg::DetailInlineSet(opt.value.clone()),
+                    )
+                })
+                .collect();
+            chip_row(chips)
+        }
+        FieldKind::EntityRef => {
+            let target = fr.spec.ref_entity.clone().unwrap_or_default();
+            let current = fr.raw();
+            let records = model
+                .backend
+                .lock()
+                .map(|b| b.list_records(&target))
+                .unwrap_or_default();
+            let total = records.len();
+            let mut chips: Vec<View<Msg>> = records
+                .iter()
+                .take(ENTITY_REF_LIMIT)
+                .map(|(id, rec)| {
+                    let id_str = id.to_string();
+                    let selected = current == id_str;
+                    let label = entity_ref_label(id, rec);
+                    let pal = if selected {
+                        accent_btn(theme)
+                    } else {
+                        ButtonPalette::from_theme(theme)
+                    };
+                    button_styled(
+                        label,
+                        btn_style_auto(),
+                        Alignment::Center,
+                        &pal,
+                        Msg::DetailInlineSet(id_str),
+                    )
+                })
+                .collect();
+            if total == 0 {
+                chips.push(cell_text(
+                    format!("(sin records en '{target}')"),
+                    240.0,
+                    theme.fg_muted,
+                ));
+            } else if total > ENTITY_REF_LIMIT {
+                chips.push(cell_text(
+                    format!("… +{} más", total - ENTITY_REF_LIMIT),
+                    120.0,
+                    theme.fg_muted,
+                ));
+            }
+            chip_row(chips)
+        }
+    }
 }
 
 /// Renderea el control de un field según su `FieldKind`.

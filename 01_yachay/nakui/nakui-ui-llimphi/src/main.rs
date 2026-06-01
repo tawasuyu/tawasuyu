@@ -201,6 +201,22 @@ enum Msg {
         id: Uuid,
     },
     CloseDetail,
+    /// Edición in-situ: click en el valor de un campo de la ficha de
+    /// detalle abre el editor en el lugar (sin form aparte). `field` es
+    /// el nombre del campo (== `Column.field` == `FieldSpec.name`).
+    DetailEditField {
+        field: String,
+    },
+    /// Tecla ruteada al campo en edición in-situ (kinds de texto).
+    DetailInlineKey(KeyEvent),
+    /// Click en el editor in-situ (mantiene el foco; no-op).
+    DetailInlineFocus,
+    /// Setea el value crudo del campo in-situ (chips de select/ref/bool).
+    DetailInlineSet(String),
+    /// Confirma la edición in-situ: persiste sólo ese campo vía `update`.
+    DetailInlineCommit,
+    /// Descarta la edición in-situ.
+    DetailInlineCancel,
     /// Foco a la caja de búsqueda de la lista activa.
     FocusListSearch,
     /// Tecla ruteada a la caja de búsqueda.
@@ -350,6 +366,10 @@ struct Model {
     selected_menu: Option<usize>,
     form: Option<FormState>,
     detail: Option<DetailState>,
+    /// Sesión de edición in-situ de un único campo de la ficha de detalle
+    /// activa (el record vive en `detail`). `spec` + buffer; confirmar
+    /// persiste sólo ese campo. Mutuamente excluyente con `form`.
+    inline_edit: Option<FieldRuntime>,
     toast: Option<Toast>,
     /// Estado de la lista activa (se resetea al cambiar de vista).
     list_search: TextInputState,
@@ -427,6 +447,11 @@ impl Model {
     /// focuseado) o, en su defecto, la caja de búsqueda de la lista.
     /// Es sobre éste que opera el menú de edición contextual.
     fn focused_input(&self) -> Option<&TextInputState> {
+        if let Some(fr) = &self.inline_edit {
+            if is_text_field(fr.spec.kind) {
+                return Some(&fr.input);
+            }
+        }
         if let Some(form) = &self.form {
             if let Some(i) = form.focused {
                 return form.fields.get(i).map(|f| &f.input);
@@ -439,6 +464,11 @@ impl Model {
     }
 
     fn focused_input_mut(&mut self) -> Option<&mut TextInputState> {
+        if let Some(fr) = &mut self.inline_edit {
+            if is_text_field(fr.spec.kind) {
+                return Some(&mut fr.input);
+            }
+        }
         if let Some(form) = &mut self.form {
             if let Some(i) = form.focused {
                 return form.fields.get_mut(i).map(|f| &mut f.input);
@@ -568,6 +598,7 @@ impl App for NakuiApp {
             selected_menu,
             form: None,
             detail: None,
+            inline_edit: None,
             toast: None,
             list_search: TextInputState::new(),
             list_search_focused: false,
@@ -659,6 +690,7 @@ impl App for NakuiApp {
                     (Some(module), Some(rec)) => match find_form_view(module, &entity) {
                         Some(fv) => {
                             m.form = Some(build_form(module_idx, fv, Some((id, rec))));
+                            m.inline_edit = None;
                             m.toast = None;
                         }
                         None => {
@@ -755,10 +787,108 @@ impl App for NakuiApp {
                     id,
                 });
                 m.form = None;
+                m.inline_edit = None;
                 m.toast = None;
             }
             Msg::CloseDetail => {
                 m.detail = None;
+                m.inline_edit = None;
+            }
+            Msg::DetailEditField { field } => {
+                // Resolver el FieldSpec del campo desde el Form view del
+                // módulo (la ficha sólo declara columnas de display); si no
+                // hay spec o es un AutoId, no se edita.
+                let target = m.detail.as_ref().map(|d| (d.module_idx, d.entity.clone(), d.id));
+                if let Some((module_idx, entity, id)) = target {
+                    let spec = m
+                        .modules
+                        .get(module_idx)
+                        .and_then(|module| find_form_view(module, &entity))
+                        .and_then(|fv| fv.fields.iter().find(|fs| fs.name == field).cloned());
+                    if let Some(spec) = spec {
+                        if spec.kind != FieldKind::AutoId {
+                            let raw = m
+                                .backend
+                                .lock()
+                                .ok()
+                                .and_then(|b| b.load_record(&entity, id))
+                                .and_then(|rec| rec.get(&field).map(value_to_raw))
+                                .unwrap_or_default();
+                            let mut input = TextInputState::new();
+                            input.set_text(raw);
+                            m.inline_edit = Some(FieldRuntime { spec, input });
+                        }
+                    }
+                }
+            }
+            Msg::DetailInlineKey(ev) => {
+                if let Some(fr) = &mut m.inline_edit {
+                    fr.input.apply_key(&ev);
+                }
+            }
+            Msg::DetailInlineFocus => {}
+            Msg::DetailInlineSet(value) => {
+                if let Some(fr) = &mut m.inline_edit {
+                    fr.input.set_text(value);
+                }
+            }
+            Msg::DetailInlineCommit => {
+                let target = m.detail.as_ref().map(|d| (d.entity.clone(), d.id));
+                if let (Some((entity, id)), Some(fr)) = (target, m.inline_edit.take()) {
+                    let raw = fr.raw();
+                    let name = fr.spec.name.clone();
+                    // 1. Validar + parsear el único campo (sin lock).
+                    let parsed: Result<(serde_json::Map<String, Value>, Vec<String>), String> =
+                        if fr.spec.required
+                            && raw.trim().is_empty()
+                            && fr.spec.kind != FieldKind::AutoId
+                        {
+                            Err(format!("campo '{}' es obligatorio", fr.spec.label))
+                        } else if raw.is_empty() && !fr.spec.required {
+                            Ok((serde_json::Map::new(), vec![name.clone()]))
+                        } else {
+                            match parse_field_value(fr.spec.kind, &raw) {
+                                Ok(value) => {
+                                    let mut obj = serde_json::Map::new();
+                                    obj.insert(name.clone(), value);
+                                    Ok((obj, Vec::new()))
+                                }
+                                Err(e) => Err(format!("campo '{}': {e}", fr.spec.label)),
+                            }
+                        };
+                    // 2. Resolver contra el backend (delta de un solo campo).
+                    let result: Result<WriteOutcome, String> = match parsed {
+                        Err(e) => Err(e),
+                        Ok((obj, to_clear)) => match m.backend.lock() {
+                            Ok(mut backend) => {
+                                let current =
+                                    backend.load_record(&entity, id).unwrap_or(Value::Null);
+                                let set = compute_field_delta(&current, &obj);
+                                let clear = compute_clear_fields(&current, &to_clear);
+                                backend.update(&entity, id, set, clear)
+                            }
+                            Err(_) => Err("backend lock envenenado".into()),
+                        },
+                    };
+                    // 3. Toast (sin navegar: la ficha sigue abierta).
+                    m.toast = Some(match result {
+                        Ok(outcome) => Toast {
+                            kind: BannerKind::Success,
+                            text: if outcome.changed == 0 {
+                                format!("{entity}: sin cambios")
+                            } else {
+                                format!("{entity} guardado ✓")
+                            },
+                        },
+                        Err(e) => Toast {
+                            kind: BannerKind::Error,
+                            text: e,
+                        },
+                    });
+                }
+            }
+            Msg::DetailInlineCancel => {
+                m.inline_edit = None;
             }
             Msg::FocusListSearch => {
                 m.list_search_focused = true;
@@ -1008,6 +1138,24 @@ impl App for NakuiApp {
                     Key::Named(NamedKey::Enter) => Msg::EditActivate,
                     _ => Msg::CloseMenus,
                 });
+            }
+            return None;
+        }
+        // Edición in-situ de un campo de la ficha: Esc cancela, Enter
+        // confirma (salvo multiline, donde Enter inserta salto), y el
+        // resto de teclas se rutean al buffer si es un kind de texto.
+        if let Some(fr) = &model.inline_edit {
+            if event.state == KeyState::Pressed {
+                match &event.key {
+                    Key::Named(NamedKey::Escape) => return Some(Msg::DetailInlineCancel),
+                    Key::Named(NamedKey::Enter) if fr.spec.kind != FieldKind::Multiline => {
+                        return Some(Msg::DetailInlineCommit);
+                    }
+                    _ => {}
+                }
+            }
+            if is_text_field(fr.spec.kind) {
+                return Some(Msg::DetailInlineKey(event.clone()));
             }
             return None;
         }
