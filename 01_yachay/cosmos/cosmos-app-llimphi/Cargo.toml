@@ -28,6 +28,7 @@ cosmos-eclipses = { path = "../cosmos-eclipses" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
+llimphi-widget-panel = { workspace = true }
 llimphi-widget-tree = { workspace = true }
 llimphi-widget-tabs = { workspace = true }
 llimphi-widget-splitter = { workspace = true }

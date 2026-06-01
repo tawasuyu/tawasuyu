@@ -27,6 +27,7 @@ use llimphi_widget_context_menu::{
     context_menu_view, context_menu_view_ex, ContextMenuExtras, ContextMenuItem,
     ContextMenuPalette, ContextMenuSpec,
 };
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
@@ -621,20 +622,34 @@ fn tile_cell(model: &Model, i: usize, tab: &crate::model::OpenTab, theme: &Theme
 
     let g = graphic_for(model, &tab.chart, &tab.render, TILE_SIZE, theme);
 
+    // Firma del kit: cada carta del mosaico queda enmarcada como card
+    // tallada (gradiente vertical ~4% + hairline accent) en vez de un
+    // label + gráfica sueltos sobre el fondo. El contenedor se ensancha
+    // para alojar el padding sin achicar la gráfica.
+    let ps = PanelStyle::from_theme(theme);
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(TILE_SIZE),
+            width: length(TILE_SIZE + 16.0_f32),
             height: auto(),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+        },
         gap: Size {
             width: length(0.0_f32),
             height: length(6.0_f32),
         },
         ..Default::default()
     })
+    .paint_with(panel_signature_painter(ps))
+    .radius(ps.radius)
+    .clip(true)
     .children(vec![label, g])
 }
 
