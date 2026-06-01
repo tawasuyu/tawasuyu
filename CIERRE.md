@@ -63,7 +63,11 @@ Barrido transversal, mecánico, alto valor por esfuerzo. **Estado al 2026-06-01:
   `needless_range_loop`). **No se aplicó `--fix` en bloque** a propósito (regla
   "no embellecer sin pedido" + tocaría decenas de dominios en un commit
   arriesgado). Queda como pase opt-in cuando lo pidas.
-- **1.3 — Inventario de `todo!()`/`unimplemented!()`.** ⬜ ~67 marcas sin triar.
+- **1.3 — Inventario de `todo!()`/`unimplemented!()`.** ✅ Triado: en **código de
+  producción** hay **uno solo** (`tinkuy-core/integrator.rs`), y está gateado tras
+  `cfg(not(feature cpu|wasm))` con mensaje útil — guard de config, no deuda. Las
+  ~67 marcas iniciales eran comentarios `TODO` y código de test. Ningún camino
+  `todo!()` alcanzable por un usuario en build normal. **Limpio para publicar.**
 - **1.4 — Tests ejecutados (no sólo compilados).** ✅ Corridos con **nextest**
   (timeout por test, mata cuelgues). Cobertura: **cores de lógica de dominio** de
   todos los cuadrantes (no GUI/`-llimphi`, no daemons, no wawa-excluido). Total
