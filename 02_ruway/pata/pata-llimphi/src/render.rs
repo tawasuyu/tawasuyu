@@ -291,7 +291,17 @@ fn slots_de(
         let items: Vec<View<Msg>> = ws
             .iter()
             .map(|sw| match sw {
-                SlotWidget::Core(w) => widget_view(&w.view(), theme),
+                SlotWidget::Core { widget, exec } => {
+                    let v = widget_view(&widget.view(), theme);
+                    match exec {
+                        // Con `exec`: clickeable (lanza el comando) + realce al hover.
+                        Some(cmd) => v
+                            .radius(6.0)
+                            .hover_fill(theme.bg_button_hover)
+                            .on_click(Msg::Spawn(cmd.clone())),
+                        None => v,
+                    }
+                }
                 SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
             })
             .collect();

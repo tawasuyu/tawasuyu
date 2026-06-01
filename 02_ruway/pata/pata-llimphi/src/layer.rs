@@ -438,13 +438,13 @@ impl LayerApp {
         self.latido(pi, qh);
     }
 
-    /// Aplica el `Msg` que produjo un click. Hoy el único que emiten los nodos
-    /// es `ShumaToggle` (el cabezal de shuma); el resto se ignora.
+    /// Aplica el `Msg` que produjo un click: togglear shuma (su cabezal) o lanzar
+    /// el comando de un widget con `exec`. El resto no sale de un click.
     fn handle_msg(&mut self, msg: Msg) {
         match msg {
             Msg::ShumaToggle => self.set_shuma_open(!self.shuma.open),
+            Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
             Msg::Quit => self.exit = true,
-            // Char/Backspace/Submit/Result/Tick no salen de un click.
             _ => {}
         }
     }

@@ -54,6 +54,8 @@ pub enum Msg {
     ShumaResult(Result<String, String>),
     /// Tick de la animación de despliegue (sólo re-render).
     ShumaAnim,
+    /// Lanzar un programa (click sobre un widget con prop `exec`).
+    Spawn(String),
     /// Cerrar la app.
     Quit,
 }
@@ -61,10 +63,20 @@ pub enum Msg {
 /// Un widget dentro de un slot: o un widget de `pata-core` (que emite un
 /// view-model), o el `shuma_input` —interacción que pinta el frontend—.
 pub enum SlotWidget {
-    /// Un widget builtin de `pata-core`.
-    Core(Box<dyn Widget>),
+    /// Un widget builtin de `pata-core`. `exec` es el comando que lanza al
+    /// clickearlo (de la prop `exec` del spec), o `None` si no es clickeable.
+    Core {
+        widget: Box<dyn Widget>,
+        exec: Option<String>,
+    },
     /// El cabezal del shell; su estado vive en [`Model::shuma`].
     Shuma,
+}
+
+/// Lanza `cmd` por `sh -c` como proceso hijo, sin esperarlo (no bloquea). Lo
+/// usan ambos backends al recibir [`Msg::Spawn`].
+pub fn spawn_cmd(cmd: &str) {
+    let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
 }
 
 /// Los widgets vivos de una superficie, repartidos por slot.
@@ -85,7 +97,7 @@ impl SurfaceWidgets {
             .chain(self.center.iter_mut())
             .chain(self.end.iter_mut())
             .filter_map(|sw| match sw {
-                SlotWidget::Core(w) => Some(w),
+                SlotWidget::Core { widget, .. } => Some(widget),
                 SlotWidget::Shuma => None,
             })
     }
@@ -124,7 +136,11 @@ impl Model {
                         }
                         SlotWidget::Shuma
                     } else {
-                        SlotWidget::Core(build(spec))
+                        let exec = spec.str_prop("exec", "");
+                        SlotWidget::Core {
+                            widget: build(spec),
+                            exec: (!exec.is_empty()).then(|| exec.to_string()),
+                        }
                     }
                 })
                 .collect()
@@ -243,6 +259,7 @@ impl App for PataApp {
                 model.shuma.output = Some(res);
             }
             Msg::ShumaAnim => {}
+            Msg::Spawn(cmd) => spawn_cmd(&cmd),
         }
         model
     }

@@ -19,6 +19,9 @@ padding = 12
 
 [[surfaces.start]]
 kind = "start_button"
+# Cualquier widget con `exec` se vuelve clickeable y lanza ese comando (sh -c).
+# Ej.: abrir un lanzador de apps al clickear el botón de inicio.
+exec = "wofi --show drun"
 
 [[surfaces.start]]
 kind = "clock"

@@ -174,9 +174,12 @@ borde; shuma provee el contenido.
     ubica el nodo bajo el puntero y dispara su `on_click` (vía `handle_msg`). El
     cabezal `› shuma` togglea con precisión (abre y cierra); clickear el reloj o
     un medidor no hace nada. Reemplaza al "cualquier click en la barra abre".
-  - Falta: acciones por widget (que `start_button` lance algo — cablear un
-    `exec`/Msg en el render desde la prop del spec), exec asíncrono (hoy `sh -c`
-    bloquea el loop), y los widgets placeholder
-    (`window_list`/`tray`/`clipboard`, Fase 6).
+  - **Acciones por widget** ✅ — cualquier widget con una prop `exec` se vuelve
+    clickeable (estilo waybar): `SlotWidget::Core { widget, exec }` lleva el
+    comando; el render le pone `on_click(Msg::Spawn(cmd))` + `hover_fill`; ambos
+    backends lo lanzan con `spawn_cmd` (`sh -c`, sin esperar). Ej. en el asset:
+    `start_button` con `exec = "wofi --show drun"`.
+  - Falta: exec asíncrono del Quake (el `Enter` aún bloquea con `sh -c`) y los
+    widgets placeholder (`window_list`/`tray`/`clipboard`, Fase 6).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
