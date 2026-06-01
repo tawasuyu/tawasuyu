@@ -234,6 +234,48 @@ fn surface_view(
     .children(slots_de(surface, widgets, shuma_state, theme, dir))
 }
 
+/// La barra de shuma **desplegada**: la propia layer surface creció hacia
+/// arriba, así que pintamos el cuerpo del drawer (input + salida) llenando lo
+/// alto y la barra (su cabezal) abajo, con su grosor original `bar_px`. Asume
+/// anclaje inferior (el caso del preset).
+pub fn shuma_open_view(
+    surface: &Surface,
+    widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    theme: &Theme,
+    bar_px: f32,
+) -> View<Msg> {
+    // El cuerpo del drawer ocupa todo lo que sobra por encima de la barra.
+    let mut body_style = Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style).children(vec![shuma::drawer_body_view(shuma_state, theme)]);
+
+    let bar = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(bar_px),
+        },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, widgets, shuma_state, theme)]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![body, bar])
+}
+
 /// Construye los tres slots (start/center/end) de una superficie a lo largo de
 /// su eje. Compartido por [`surface_view`] (una superficie colocada en su rect
 /// dentro de una ventana grande) y [`bar_view`] (la barra llenando su propia

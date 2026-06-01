@@ -158,11 +158,19 @@ borde; shuma provee el contenido.
     (`PanelGpu`). Muestreo 1Hz compartido + flag `dirty` por panel (no
     re-rasteriza a 60fps). `main` elige layer-shell si hay `WAYLAND_DISPLAY`
     (salvo `PATA_BACKEND=winit`), con fallback a la ventana winit.
-  - **Compila; runtime sin verificar** (se itera en un compositor real).
-    Pinta **todas** las barras de la config (varios bordes a la vez: p. ej. top
-    + shuma abajo, ambas reservando su franja). Falta (próximos incrementos):
-    input (teclado→Quake, clicks→toggle/start_button), y el drawer Quake como
-    layer `Overlay`. El `shuma_input` en una barra se ve como su cabezal, pero
-    su despliegue necesita el input + el overlay.
+    Verificado en runtime (Hyprland): salen todas las barras ancladas, sin
+    error, y el muestreo/leyenda quietos.
+  - **Input + Quake** (compila, runtime por verificar): seat/keyboard/pointer
+    vía sctk. Un cliente layer-shell **no recibe hotkeys globales**, así que el
+    Quake se abre con **click** en la barra de shuma (foco de teclado vía
+    `OnDemand` → al abrir pasa a `Exclusive`). En vez de una segunda surface, la
+    propia barra de shuma **crece hacia arriba** hasta `DRAWER_H` (su exclusive
+    zone queda en el grosor de la barra, así no recoloca el teselado);
+    `render::shuma_open_view` pinta el cuerpo del drawer (input + salida) arriba
+    y el cabezal abajo. Teclado con foco: Esc cierra, Backspace, Enter ejecuta
+    (`shuma::ejecutar_stand_in`, `sh -c` bloqueante), texto → buffer.
+  - Falta: clicks por hit-test (hoy cualquier click en la barra de shuma abre;
+    `start_button` y demás aún sin acción), exec asíncrono (hoy bloquea el loop),
+    y los widgets placeholder (`window_list`/`tray`/`clipboard`, Fase 6).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).

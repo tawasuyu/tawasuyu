@@ -24,21 +24,27 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        keyboard::{KeyEvent as KbEvent, KeyboardHandler, Keysym, Modifiers},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT},
+        Capability, SeatHandler, SeatState,
+    },
     shell::{
         wlr_layer::{
-            Anchor as LayerAnchor, Layer, LayerShell, LayerShellHandler, LayerSurface,
-            LayerSurfaceConfigure,
+            Anchor as LayerAnchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler,
+            LayerSurface, LayerSurfaceConfigure,
         },
         WaylandSurface,
     },
 };
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_output, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
     Connection, Proxy, QueueHandle,
 };
 
@@ -77,17 +83,28 @@ struct Panel {
     gpu: Option<PanelGpu>,
 }
 
+/// Alto del drawer Quake cuando se despliega (px). El compositor lo clampa a la
+/// salida; la barra crece hacia arriba hasta este alto.
+const DRAWER_H: u32 = 420;
+
 /// El cliente Wayland del backend layer-shell.
 struct LayerApp {
     registry_state: RegistryState,
     output_state: OutputState,
+    seat_state: SeatState,
     conn: Connection,
     /// `Hal` compartido (una instancia/device de wgpu para todas las barras).
     hal: Option<Hal>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    pointer: Option<wl_pointer::WlPointer>,
     theme: Theme,
     cfg: Config,
     surfaces: Vec<crate::SurfaceWidgets>,
     shuma: crate::shuma::ShumaState,
+    /// Índice (en `panels`) de la barra que hospeda el `shuma_input`, si hay.
+    shuma_panel: Option<usize>,
+    /// Grosor original (px) de esa barra — al que vuelve al replegar el drawer.
+    shuma_bar_px: u32,
     sampler: Sampler,
     /// Último snapshot del sistema y cuándo se tomó: los frame-callbacks corren a
     /// ~60fps, pero re-muestrear (y cambiar el CPU%) sólo tiene sentido ~1Hz.
@@ -171,16 +188,41 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         });
     }
 
+    // ¿Qué barra hospeda el shuma_input? Esa recibe foco de teclado al clickearla
+    // (OnDemand) para poder desplegar el Quake y escribir.
+    let shuma_panel = panels.iter().position(|p| {
+        let s = &cfg.surfaces[p.idx];
+        s.start
+            .iter()
+            .chain(&s.center)
+            .chain(&s.end)
+            .any(|w| w.kind == "shuma_input")
+    });
+    let shuma_bar_px = shuma_panel
+        .map(|pi| cfg.surfaces[panels[pi].idx].thickness.max(1.0) as u32)
+        .unwrap_or(40);
+    if let Some(pi) = shuma_panel {
+        panels[pi]
+            .layer
+            .set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        panels[pi].layer.commit();
+    }
+
     let (surfaces, shuma) = Model::construir(&cfg);
     let mut app = LayerApp {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
+        seat_state: SeatState::new(&globals, &qh),
         conn,
         hal: None,
+        keyboard: None,
+        pointer: None,
         theme: Theme::dark(),
         cfg,
         surfaces,
         shuma,
+        shuma_panel,
+        shuma_bar_px,
         sampler: Sampler::new(),
         ctx: WidgetCtx::default(),
         ultimo_sample: None,
@@ -200,6 +242,44 @@ impl LayerApp {
         self.panels
             .iter()
             .position(|p| p.layer.wl_surface() == surface)
+    }
+
+    /// Marca la barra de shuma para re-pintar (tras teclear, etc.).
+    fn marcar_shuma_dirty(&mut self) {
+        if let Some(pi) = self.shuma_panel {
+            self.panels[pi].dirty = true;
+        }
+    }
+
+    /// Despliega o repliega el drawer Quake: agranda/encoge la layer surface de
+    /// la barra de shuma hacia arriba (su exclusive zone queda en el grosor de la
+    /// barra, así no recoloca el teselado) y toma/suelta el foco de teclado.
+    fn set_shuma_open(&mut self, open: bool) {
+        let Some(pi) = self.shuma_panel else { return };
+        if self.shuma.open == open {
+            return;
+        }
+        self.shuma.open = open;
+        let h = if open { DRAWER_H } else { self.shuma_bar_px };
+        let layer = &self.panels[pi].layer;
+        layer.set_size(0, h);
+        layer.set_keyboard_interactivity(if open {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::OnDemand
+        });
+        layer.commit();
+        self.panels[pi].dirty = true;
+    }
+
+    /// Enter en el drawer: corre el comando (sustituto `sh -c`, bloqueante) y
+    /// guarda su salida. El puente real a `shuma` reemplaza a esto.
+    fn shuma_submit(&mut self) {
+        let cmd = std::mem::take(&mut self.shuma.buffer);
+        if !cmd.is_empty() {
+            self.shuma.output = Some(crate::shuma::ejecutar_stand_in(&cmd));
+        }
+        self.marcar_shuma_dirty();
     }
 
     /// Re-muestrea el sistema si pasó ~1s; si lo hace, marca todas las barras
@@ -286,12 +366,24 @@ impl LayerApp {
 
         let idx = self.panels[pi].idx;
         let (w, h) = (self.panels[pi].width, self.panels[pi].height);
-        let view = render::bar_view(
-            &self.cfg.surfaces[idx],
-            &self.surfaces[idx],
-            &self.shuma,
-            &self.theme,
-        );
+        // La barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el
+        // resto pinta su barra normal.
+        let view = if self.shuma_panel == Some(pi) && self.shuma.open {
+            render::shuma_open_view(
+                &self.cfg.surfaces[idx],
+                &self.surfaces[idx],
+                &self.shuma,
+                &self.theme,
+                self.shuma_bar_px as f32,
+            )
+        } else {
+            render::bar_view(
+                &self.cfg.surfaces[idx],
+                &self.surfaces[idx],
+                &self.shuma,
+                &self.theme,
+            )
+        };
 
         let hal = self.hal.as_ref().expect("hal");
         let gpu = match self.panels[pi].gpu.as_mut() {
@@ -424,14 +516,169 @@ impl OutputHandler for LayerApp {
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
+impl SeatHandler for LayerApp {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Keyboard if self.keyboard.is_none() => {
+                if let Ok(kbd) = self.seat_state.get_keyboard(qh, &seat, None) {
+                    self.keyboard = Some(kbd);
+                }
+            }
+            Capability::Pointer if self.pointer.is_none() => {
+                if let Ok(ptr) = self.seat_state.get_pointer(qh, &seat) {
+                    self.pointer = Some(ptr);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Keyboard => {
+                if let Some(k) = self.keyboard.take() {
+                    k.release();
+                }
+            }
+            Capability::Pointer => {
+                if let Some(p) = self.pointer.take() {
+                    p.release();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl KeyboardHandler for LayerApp {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+    }
+
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KbEvent,
+    ) {
+        // El teclado sólo nos importa con el drawer abierto (foco Exclusive).
+        if !self.shuma.open {
+            return;
+        }
+        match event.keysym {
+            Keysym::Escape => self.set_shuma_open(false),
+            Keysym::BackSpace => {
+                self.shuma.buffer.pop();
+                self.marcar_shuma_dirty();
+            }
+            Keysym::Return | Keysym::KP_Enter => self.shuma_submit(),
+            _ => {
+                if let Some(txt) = event.utf8 {
+                    if !txt.is_empty() && !txt.chars().any(|c| c.is_control()) {
+                        self.shuma.buffer.push_str(&txt);
+                        self.marcar_shuma_dirty();
+                    }
+                }
+            }
+        }
+    }
+
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KbEvent,
+    ) {
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: Modifiers,
+        _: u32,
+    ) {
+    }
+}
+
+impl PointerHandler for LayerApp {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for e in events {
+            if let PointerEventKind::Press { button, .. } = e.kind {
+                if button != BTN_LEFT {
+                    continue;
+                }
+                // Un click izquierdo sobre la barra de shuma (cerrada) despliega
+                // el Quake. El click le dio foco de teclado (OnDemand), así que
+                // ya se puede escribir. Cerrar es con Esc.
+                if self.panel_de(&e.surface) == self.shuma_panel && !self.shuma.open {
+                    self.set_shuma_open(true);
+                }
+            }
+        }
+    }
+}
+
 impl ProvidesRegistryState for LayerApp {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_compositor!(LayerApp);
 delegate_output!(LayerApp);
 delegate_layer!(LayerApp);
+delegate_seat!(LayerApp);
+delegate_keyboard!(LayerApp);
+delegate_pointer!(LayerApp);
 delegate_registry!(LayerApp);

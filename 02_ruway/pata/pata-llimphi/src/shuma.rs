@@ -252,6 +252,75 @@ pub fn drawer_overlay(state: &ShumaState, screen: (i32, i32), theme: &Theme) -> 
     Some(scrim)
 }
 
+/// El **cuerpo** del drawer (sin scrim ni posición absoluta), pensado para
+/// llenar el contenedor que le da el backend `wlr-layer-shell`: ahí la propia
+/// layer surface ya *es* el panel del Quake (la barra crece hacia arriba), así
+/// que no hace falta scrim ni animación. Línea de input (prompt + buffer +
+/// cursor) arriba, salida del último comando debajo.
+pub fn drawer_body_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
+    let mut buf = state.buffer.clone();
+    buf.push('▏'); // cursor
+    let linea = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        chip_text(&state.prompt, 16.0, theme.accent),
+        chip_text(&buf, 16.0, theme.fg_text),
+    ]);
+
+    let (texto, color) = if state.pending {
+        ("…".to_string(), theme.fg_muted)
+    } else {
+        match &state.output {
+            Some(Ok(out)) => (out.clone(), theme.fg_text),
+            Some(Err(err)) => (err.clone(), theme.fg_destructive),
+            None => (
+                "shuma se despliega aquí — escribí un comando y Enter (Esc cierra)".to_string(),
+                theme.fg_muted,
+            ),
+        }
+    };
+    let cuerpo = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .text(texto, 13.0, color);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(20.0_f32),
+            right: length(20.0_f32),
+            top: length(16.0_f32),
+            bottom: length(16.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![linea, cuerpo])
+}
+
 /// Un texto suelto, centrado verticalmente.
 fn chip_text(t: &str, size: f32, color: llimphi_theme::Color) -> View<Msg> {
     View::new(Style {
