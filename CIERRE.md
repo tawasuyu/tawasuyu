@@ -144,12 +144,12 @@ de lo automatizable.
 | **agora** (80) | Tabla de capacidades por bytecode hash (§14.1.3 — *primitivos YA existen*) | 🤖 — alto valor, es el "norte" de wawa |
 | **minga** (80) | `MingaPeer` genérico para escala | 🤖 |
 | **arje** (78) | Cleanup socket daemon + `RestartTracker` en `LocalEngine` | 🤖 |
-| **supay** (78) | BSP-walking real (orden de render) | 🤖 |
+| **supay** (78) | BSP-walking real (orden de render). *Audio vía takiy: ✅ hecho (`play_takiy_score`).* | 🤖 |
 | **shuma** (78) | Mouse en PTY + lockfile del daemon | 🤖 |
 | **puriy** (78) | Cerrar APIs Web restantes + conformance | 🤖 (largo) |
 | **wawa-explorer** (78) | Sacar process-monitor a su crate | 🤖 |
 | **wawa host** (72) | Toggles de módulos con efecto real, accent→theme global | 🧑+🤖 |
-| **takiy** (72) | Pulir `takiy-midi` (núcleo ya cerrado) | 🤖 |
+| **takiy** (72) | Pulir `takiy-midi` (núcleo ya cerrado). *Primer consumidor real: supay (`play_takiy_score`).* | 🤖 |
 | **nakui** (70) | **Editor de fórmulas en UI + WAL desde UI + vista formulario.** Módulos de producción (crm/inventory/sales/treasury) **completos y verdes — nakui-core 133/133** (ver 1.4). El hueco de core que resta es el de UI/persistencia desde la app, no la lógica de dominio. | 🧑 — UX, tuya |
 | **nahual** (68) | Visor PDF (falta rasterizador) + SVG + seek/scrub | 🤝 (svg-viewer untracked ya empezado: ver 0.2) |
 | **media** (68) | **M1: sync A/V por PTS completa** | 🤖 — es el cuello de media |
@@ -169,20 +169,37 @@ de lo automatizable.
 ## Nivel 3 — Integraciones cruzadas (🤖, pero con orden de dependencias)
 
 El inventario las marca como el patrón que arrastra varias apps a la vez.
-Cerrarlas sube el % de *múltiples* apps de un golpe — alto apalancamiento.
+**Mapeo de esta sesión** (con archivo:línea verificado): varias estaban más
+hechas de lo que el plan asumía.
 
-1. **NAT traversal en minga** → desbloquea `ayni`, `chasqui`, `khipu` (WAN/P2P
-   real). card-net ya heredó relay/dcutr/autonat — falta cablearlo arriba.
-2. **Transporte/discovery de chasqui** → bus vivo para `takiy` (audio),
-   notebook, AppBus.
-3. **Audio supay ↔ takiy** → cierra el camino de sonido del motor de juego.
-4. **AppBus out-of-process** (nahual meta-app open-with) → despacho de visores
-   entre procesos; hoy in-process.
-5. **§14.1.3 wawa** (capacidades derivadas de firma) → cierra agora *y* sube la
-   seguridad del kernel. Primitivos ya existen (`agora-core` + `claves.rs`).
+1. **NAT traversal** → ✅ **YA HECHO** (no era deuda). `shared/card/card-net`
+   cablea relay + dcutr + autonat + Kademlia DHT, *vivo y testeado* (el test
+   `jalar_a_traves_de_un_relay` de khipu jala un sobre por circuito relay).
+   minga/agora/ayni/chasqui/khipu **ya consumen** card-net (`MingaPeer`,
+   `EnlaceMinga`, `card-handshake::network`, `KhipuNode`). El único pendiente es
+   un refactor `MemStore→NodeStore` en minga, *trigger-driven* (>100k nodos), no
+   bloqueante. Corregidos los comentarios/docs obsoletos que decían lo contrario.
+2. **Discovery de chasqui** → 🟡 parcial. El transporte (card-net) está; falta
+   **cablear el discovery por DHT**: el daemon Nouser no llama `announce_outputs()`
+   y no hay `find_remote_providers(flow_type)` en `card-sidecar`. *(La
+   "persistencia del broker" del inventario está **mal planteada**: el broker
+   indexa por `SessionId` = conexiones vivas → es efímero por diseño; lo durable
+   ya es el sled de Nouser + el keypair libp2p.)*
+3. **Audio supay ↔ takiy** → ✅ **HECHO** esta sesión.
+   `AudioEngine::play_takiy_score(score, vol, sep)` renderiza una partitura takiy
+   (OscRenderer), la colapsa a mono y la encola como voz del `DoomMixer`. +2
+   tests device-free; supay-audio 20/20.
+4. **AppBus out-of-process** (nahual open-with) → ⬜ pendiente, arquitectural.
+   `shared/app-bus` tiene `AppRegistry` + `Bus` pub/sub **in-process**; nahual
+   despacha visores in-process (`viewer_registry::pick` → enum). Enganche futuro:
+   `pick()` consulta `AppRegistry::handlers_for(mime)` → `Bus::LaunchRequested`
+   → `ProcessLauncher` spawnea + IPC de archivo (a diseñar).
+5. **§14.1.3 wawa** (capacidades derivadas de firma) → ⬜ pendiente. Primitivos
+   ya existen (`agora-core` + `claves.rs`).
 
-> Regla: hacer 1 y 2 **antes** de marcar como cerradas las apps que dependen de
-> ellas. No subas el % de ayni/khipu/chasqui sin el transporte abajo.
+> Realidad tras el mapeo: el "transporte abajo" (1) **ya estaba**; lo que de
+> verdad apalanca varias apps ahora es **2 (discovery por DHT)**. ayni/khipu ya
+> no están NAT-bloqueadas.
 
 ---
 
@@ -242,7 +259,7 @@ cruza a "lista para mostrar".
 ```
 Nivel 0  (días)      → licencias, untracked, CI, decisión de alcance   [DESBLOQUEA TODO]
 Nivel 1  (días)      → workspace 100% limpio: clippy, tests, warnings
-Nivel 3.1–3.2        → transporte minga/chasqui   [APALANCA varias apps]
+Nivel 3.2            → discovery por DHT en chasqui (3.1 NAT ya hecho) [APALANCA]
 Nivel 2A             → empujón corto a las ≥80% que ya casi cierran
 Nivel 2B             → el grueso del core (agora/§14.1.3, media M1, iniy e2e…)
 Nivel 4  (en paralelo, tuyo) → pulido app por app a medida que cierran
