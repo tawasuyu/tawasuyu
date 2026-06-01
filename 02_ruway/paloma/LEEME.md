@@ -17,7 +17,7 @@ paloma-net         — puente MIME + IMAP (fetch) + SMTP (envío);
                      implementa MailBackend contra servidores reales.  [HECHO]
 paloma-store       — persistencia nativa (BLAKE3 + postcard) + sync
                      incremental + búsqueda (rimay).                    [pendiente]
-paloma-llimphi     — frontend: lista de hilos + lectura + redacción.   [pendiente]
+paloma-llimphi     — frontend: lista de hilos + lectura + redacción.   [HECHO]
 paloma-app         — binario lanzable.                                  [pendiente]
 ```
 
@@ -46,11 +46,26 @@ intercambiables, como el resto de la suite.
   - `NetBackend` — IMAP+SMTP tras el trait `MailBackend`. MIME testeado; los
     caminos IMAP/SMTP compilan, se verifican contra servidor real en la laptop.
 
+- **Fase 3 (2026-06-01):** `paloma-llimphi` — frontend tres-paneles + redacción.
+  - Paneles: **buzones** (rol + no-leídos) · **hilos** (asunto, remitente,
+    extracto, fecha, punto de no-leído, contador) · **lectura** (mensajes del
+    hilo apilados, de · para · fecha · cuerpo).
+  - Selección: click en buzón sincroniza y abre; click en hilo lo marca leído.
+  - Redacción: modal (scrim + tarjeta) con Para/Asunto/Cuerpo + Enviar/Cancelar;
+    `c` redacta, `r` responde (prellena Re: + References), Tab cicla, Esc cierra.
+    Envía por el backend y refleja en `Sent`.
+  - Scroll de la lista de hilos por rueda; fecha formateada sin crate de tiempo
+    (civil-from-days). Crate **agnóstico al backend**: `lib` expone `Model`/`Msg`
+    + funciones libres; el anfitrión arma su `impl App` e inyecta el backend.
+  - Demo: `cargo run -p paloma-llimphi --example buzon_demo --release`
+    (MockBackend sembrado: un hilo de 3, suelto sin leer, boletín).
+
 ## Pendiente (orden sugerido)
 
-1. **`paloma-llimphi`** — tres-paneles (buzones · hilos · lectura) + redacción,
-   sobre `MockBackend` primero, luego `NetBackend`.
+1. **`paloma-app`** — binario lanzable: arma el `impl App` sobre `NetBackend`
+   (lee cuenta/credenciales de config) con fallback a `MockBackend` sin red.
 2. **Verificar `paloma-net` contra un servidor real** (laptop, con credenciales).
 3. **STARTTLS/plain en IMAP** + límite de fetch a los últimos N (sync incremental).
 4. **`paloma-store`** — persistencia nativa (BLAKE3 + postcard) + búsqueda (`rimay`).
 5. **Calendario/Contactos** (CalDAV/CardDAV) compartiendo la capa de cuentas.
+6. **Scroll del panel de lectura** + cuerpo HTML vía puriy cuando haga falta.
