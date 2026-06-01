@@ -79,6 +79,13 @@ pub enum SlotWidget {
     /// los datos los provee el backend (vía wlr-foreign-toplevel en layer-shell)
     /// y se pasan al render aparte, no por el view-model de core.
     WindowList,
+    /// El portapapeles: muestra el texto copiado actual. Dato del host (vía
+    /// `wl-paste`), no del view-model de core. `exec` (opcional) es el comando a
+    /// lanzar al clickearlo — típicamente un selector de historial (cliphist).
+    Clipboard {
+        /// Comando del selector de historial, o `None` si no es clickeable.
+        exec: Option<String>,
+    },
 }
 
 /// Lanza `cmd` por `sh -c` como proceso hijo, sin esperarlo (no bloquea). Lo
@@ -106,7 +113,7 @@ impl SurfaceWidgets {
             .chain(self.end.iter_mut())
             .filter_map(|sw| match sw {
                 SlotWidget::Core { widget, .. } => Some(widget),
-                SlotWidget::Shuma | SlotWidget::WindowList => None,
+                SlotWidget::Shuma | SlotWidget::WindowList | SlotWidget::Clipboard { .. } => None,
             })
     }
 }
@@ -145,6 +152,11 @@ impl Model {
                         SlotWidget::Shuma
                     } else if spec.kind == "window_list" {
                         SlotWidget::WindowList
+                    } else if spec.kind == "clipboard" {
+                        let exec = spec.str_prop("exec", "");
+                        SlotWidget::Clipboard {
+                            exec: (!exec.is_empty()).then(|| exec.to_string()),
+                        }
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {

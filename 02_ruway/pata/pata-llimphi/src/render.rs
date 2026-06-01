@@ -30,6 +30,21 @@ use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 /// recortar con `…`. Evita que un título largo empuje el resto de la barra.
 const WINDOW_LABEL_MAX: usize = 22;
 
+/// Largo máximo del preview del portapapeles antes de recortar con `…`.
+const CLIPBOARD_PREVIEW_MAX: usize = 28;
+
+/// Los datos del host que el render necesita además del view-model de los
+/// widgets de core: lo dinámico que vive en el backend (ventanas abiertas,
+/// portapapeles) y se pasa aparte. Agrupado para no inflar cada firma a medida
+/// que se suman widgets de este tipo (mañana, el tray).
+#[derive(Default)]
+pub struct BarData<'a> {
+    /// Las ventanas abiertas, para el `window_list`.
+    pub windows: &'a [WindowEntry],
+    /// El texto del portapapeles (ya en una línea), para el `clipboard`.
+    pub clipboard: Option<&'a str>,
+}
+
 /// Ancho de la barrita de un medidor, en píxeles.
 const BARRA_W: f32 = 48.0;
 
@@ -183,9 +198,9 @@ pub fn root(model: &Model) -> View<Msg> {
             placed.rect,
             widgets,
             &model.shuma,
-            // Bajo el compositor mirada (este path winit) el window_list aún no
-            // recibe ventanas; llegará por el IPC de mirada.
-            &[],
+            // Bajo el compositor mirada (este path winit) los datos del host
+            // (ventanas, portapapeles) aún no se muestrean; llegarán por su IPC.
+            &BarData::default(),
             &model.theme,
         ));
     }
@@ -207,7 +222,7 @@ fn surface_view(
     rect: Rect,
     widgets: &SurfaceWidgets,
     shuma_state: &ShumaState,
-    windows: &[WindowEntry],
+    data: &BarData,
     theme: &Theme,
 ) -> View<Msg> {
     let dir = if surface.anchor.es_horizontal() {
@@ -240,7 +255,7 @@ fn surface_view(
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(slots_de(surface, widgets, shuma_state, windows, theme, dir))
+    .children(slots_de(surface, widgets, shuma_state, data, theme, dir))
 }
 
 /// La barra de shuma **desplegada**: la propia layer surface creció hacia
@@ -251,7 +266,7 @@ pub fn shuma_open_view(
     surface: &Surface,
     widgets: &SurfaceWidgets,
     shuma_state: &ShumaState,
-    windows: &[WindowEntry],
+    data: &BarData,
     theme: &Theme,
     bar_px: f32,
 ) -> View<Msg> {
@@ -273,7 +288,7 @@ pub fn shuma_open_view(
         },
         ..Default::default()
     })
-    .children(vec![bar_view(surface, widgets, shuma_state, windows, theme)]);
+    .children(vec![bar_view(surface, widgets, shuma_state, data, theme)]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -294,7 +309,7 @@ fn slots_de(
     surface: &Surface,
     widgets: &SurfaceWidgets,
     shuma_state: &ShumaState,
-    windows: &[WindowEntry],
+    data: &BarData,
     theme: &Theme,
     dir: FlexDirection,
 ) -> Vec<View<Msg>> {
@@ -314,7 +329,10 @@ fn slots_de(
                     }
                 }
                 SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
-                SlotWidget::WindowList => window_list_view(windows, surface.gap, dir, theme),
+                SlotWidget::WindowList => window_list_view(data.windows, surface.gap, dir, theme),
+                SlotWidget::Clipboard { exec } => {
+                    clipboard_view(data.clipboard, exec.as_deref(), theme)
+                }
             })
             .collect();
         let mut style = Style {
@@ -378,6 +396,25 @@ fn window_list_view(
     .children(chips)
 }
 
+/// El `clipboard`: un chip con el ícono 📋 y un preview del texto copiado
+/// (recortado). Si `exec` está, clickearlo lanza ese comando —típicamente un
+/// selector de historial (cliphist)— con realce al hover. Sin texto copiado
+/// muestra sólo el ícono tenue.
+fn clipboard_view(text: Option<&str>, exec: Option<&str>, theme: &Theme) -> View<Msg> {
+    let (etiqueta, fg) = match text {
+        Some(t) if !t.is_empty() => (format!("📋 {}", recortar(t, CLIPBOARD_PREVIEW_MAX)), theme.fg_text),
+        _ => ("📋".to_string(), theme.fg_muted),
+    };
+    let v = chip(theme).text(etiqueta, 12.0, fg);
+    match exec {
+        Some(cmd) => v
+            .radius(6.0)
+            .hover_fill(theme.bg_button_hover)
+            .on_click(Msg::Spawn(cmd.to_string())),
+        None => v,
+    }
+}
+
 /// Recorta una cadena a `max` caracteres, agregando `…` si sobró.
 fn recortar(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -396,7 +433,7 @@ pub fn bar_view(
     surface: &Surface,
     widgets: &SurfaceWidgets,
     shuma_state: &ShumaState,
-    windows: &[WindowEntry],
+    data: &BarData,
     theme: &Theme,
 ) -> View<Msg> {
     let dir = if surface.anchor.es_horizontal() {
@@ -421,5 +458,5 @@ pub fn bar_view(
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(slots_de(surface, widgets, shuma_state, windows, theme, dir))
+    .children(slots_de(surface, widgets, shuma_state, data, theme, dir))
 }

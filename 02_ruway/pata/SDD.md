@@ -201,6 +201,15 @@ borde; shuma provee el contenido.
     sino que lo intercepta el frontend (`SlotWidget::WindowList`); los datos se
     pasan al render aparte del view-model. El asset `launcher.toml` ya lo tiene en
     el centro de la barra superior.
-  - Falta: los widgets placeholder restantes (`tray`/`clipboard`, Fase 6).
+  - **`clipboard`** ✅ — preview del texto copiado. El sampler lo lee con
+    `wl-paste --no-newline --type text/plain` (subproceso ~1Hz, como el volumen
+    con `wpctl`) y lo colapsa a una línea (`sampler::preview_clipboard`, testeada);
+    el render pinta `📋 <preview>` recortado. Como `window_list`, es dato del host
+    interceptado por el frontend (`SlotWidget::Clipboard`), no view-model de core;
+    los datos del host (ventanas + portapapeles) viajan juntos en `render::BarData`.
+    Una prop `exec` lo vuelve clickeable → selector de historial (en el asset:
+    `cliphist list | wofi --dmenu | cliphist decode | wl-copy`). Sólo en
+    layer-shell (el path winit pasa `BarData::default()`).
+  - Falta: el último placeholder, `tray` (StatusNotifierItem sobre D-Bus, Fase 6).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).

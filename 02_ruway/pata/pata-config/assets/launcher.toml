@@ -36,7 +36,9 @@ kind = "astro"          # posición zodiacal del sol + ciclo lunar (aporte)
 moon = true
 
 [[surfaces.end]]
-kind = "clipboard"
+kind = "clipboard"          # preview del texto copiado (vía wl-paste)
+# Click → selector de historial. Ejemplo con cliphist + wofi:
+exec = "cliphist list | wofi --dmenu | cliphist decode | wl-copy"
 
 [[surfaces.end]]
 kind = "volume"

@@ -196,6 +196,13 @@ mod tests {
     }
 
     #[test]
+    fn preview_clipboard_colapsa_a_una_linea() {
+        assert_eq!(preview_clipboard("  hola\n  mundo\t!  "), "hola mundo !");
+        assert_eq!(preview_clipboard("una sola"), "una sola");
+        assert_eq!(preview_clipboard("   \n\t  "), "");
+    }
+
+    #[test]
     fn parse_pactl_pct_toma_el_primer_porcentaje() {
         let s = "Volume: front-left: 42598 / 65% / -9.58 dB,   front-right: 42598 / 65% / -9.58 dB";
         assert_eq!(parse_pactl_pct(s), Some(0.65));
@@ -295,6 +302,25 @@ fn sample_volume() -> Option<(f32, bool)> {
         .map(|o| o.contains("yes"))
         .unwrap_or(false);
     Some((vol, muted))
+}
+
+/// El texto del portapapeles vía `wl-paste` (wl-clipboard), ya colapsado a una
+/// línea. `None` si `wl-paste` no está, si el portapapeles está vacío o no es
+/// texto (p. ej. una imagen). Corre un subproceso por muestreo (~1Hz), como el
+/// volumen — barato a esa frecuencia.
+pub fn leer_clipboard() -> Option<String> {
+    // `--no-newline`: sin salto final. `--type text/plain`: sólo texto, así una
+    // imagen en el portapapeles no entra (wl-paste falla y devolvemos None).
+    let raw = run("wl-paste", &["--no-newline", "--type", "text/plain"])?;
+    let prev = preview_clipboard(&raw);
+    (!prev.is_empty()).then_some(prev)
+}
+
+/// Colapsa el texto del portapapeles a una sola línea para la barra: saltos y
+/// tabs pasan a espacios y los espacios repetidos se comprimen. No trunca —de eso
+/// se encarga el render con su `recortar`—.
+pub fn preview_clipboard(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Corre `cmd args` y devuelve su stdout si salió bien.

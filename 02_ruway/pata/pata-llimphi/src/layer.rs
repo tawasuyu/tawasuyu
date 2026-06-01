@@ -124,6 +124,9 @@ struct LayerApp {
     toplevels: Vec<Toplevel>,
     /// Contador para asignar [`Toplevel::id`] estables.
     next_toplevel_id: u32,
+    /// Texto del portapapeles (una línea), para el widget `clipboard`. Se
+    /// re-muestrea con el resto del sistema (~1Hz) vía `wl-paste`.
+    clipboard: Option<String>,
     theme: Theme,
     cfg: Config,
     surfaces: Vec<crate::SurfaceWidgets>,
@@ -261,6 +264,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         toplevel_mgr,
         toplevels: Vec::new(),
         next_toplevel_id: 0,
+        clipboard: None,
         theme: Theme::dark(),
         cfg,
         surfaces,
@@ -385,6 +389,7 @@ impl LayerApp {
             return;
         }
         self.ctx = self.sampler.sample();
+        self.clipboard = crate::sampler::leer_clipboard();
         self.ultimo_sample = Some(Instant::now());
         let ctx = self.ctx;
         for sw in &mut self.surfaces {
@@ -460,6 +465,10 @@ impl LayerApp {
         let idx = self.panels[pi].idx;
         let (w, h) = (self.panels[pi].width, self.panels[pi].height);
         let windows = self.window_entries();
+        let data = render::BarData {
+            windows: &windows,
+            clipboard: self.clipboard.as_deref(),
+        };
         // La barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el
         // resto pinta su barra normal.
         let view = if self.shuma_panel == Some(pi) && self.shuma.open {
@@ -467,7 +476,7 @@ impl LayerApp {
                 &self.cfg.surfaces[idx],
                 &self.surfaces[idx],
                 &self.shuma,
-                &windows,
+                &data,
                 &self.theme,
                 self.shuma_bar_px as f32,
             )
@@ -476,7 +485,7 @@ impl LayerApp {
                 &self.cfg.surfaces[idx],
                 &self.surfaces[idx],
                 &self.shuma,
-                &windows,
+                &data,
                 &self.theme,
             )
         };
@@ -493,7 +502,8 @@ impl LayerApp {
         let frame = match gpu.surface.acquire() {
             Ok(f) => f,
             Err(_) => {
-                drop(gpu);
+                // Soltamos el préstamo mutable de `gpu` antes de tocar `self`.
+                let _ = gpu;
                 self.latido(pi, qh);
                 return;
             }
