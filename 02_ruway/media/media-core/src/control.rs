@@ -96,6 +96,12 @@ pub enum MediaCommand {
     FlipV,
     /// Vuelve a la orientación original (sin rotar ni espejar).
     OrientReset,
+    /// Ajusta el delay de subtítulos sumando `ms` (la app clampea). Positivo
+    /// **retrasa** el subtítulo (aparece más tarde), negativo lo adelanta.
+    /// Es el `--sub-delay` de mpv / el H/G de VLC. S4 de PARIDAD.md.
+    SubDelayBy { ms: i64 },
+    /// Vuelve el delay de subtítulos a cero.
+    SubDelayReset,
 }
 
 /// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
@@ -174,6 +180,11 @@ impl MediaCommand {
             FlipH => "Espejar horizontal".to_string(),
             FlipV => "Espejar vertical".to_string(),
             OrientReset => "Orientación original".to_string(),
+            SubDelayBy { ms } if *ms < 0 => {
+                format!("Subtítulo −{}ms (adelantar)", ms.abs())
+            }
+            SubDelayBy { ms } => format!("Subtítulo +{ms}ms (retrasar)"),
+            SubDelayReset => "Subtítulo sin delay".to_string(),
         }
     }
 }
@@ -376,6 +387,11 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             b(KeyChord::key("j"), AvSyncBy { ms: -50 }),
             b(KeyChord::key("k"), AvSyncBy { ms: 50 }),
             b(KeyChord::shift("j"), AvSyncReset),
+            // Delay de subtítulo: g adelanta, h retrasa, Shift+G a cero
+            // (como el G/H de VLC). Pasos de 100 ms.
+            b(KeyChord::key("g"), SubDelayBy { ms: -100 }),
+            b(KeyChord::key("h"), SubDelayBy { ms: 100 }),
+            b(KeyChord::shift("g"), SubDelayReset),
             b(
                 KeyChord::key("b"),
                 Script {

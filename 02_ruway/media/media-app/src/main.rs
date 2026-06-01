@@ -60,6 +60,7 @@
 //! se carga solo (S5, auto-carga sidecar).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -477,6 +478,11 @@ fn subtitles_slot() -> &'static OnceLock<Option<SubtitleTrack>> {
     static SLOT: OnceLock<Option<SubtitleTrack>> = OnceLock::new();
     &SLOT
 }
+
+/// Delay de subtítulos en ms (S4). Positivo retrasa el subtítulo; se aplica
+/// al consultar el cue activo (`subtitle_strip`). Tope ±60 s.
+static SUB_DELAY_MS: AtomicI64 = AtomicI64::new(0);
+const MAX_SUB_DELAY_MS: i64 = 60_000;
 
 /// Lee y parsea un archivo de subtítulos (autodetect SRT/WebVTT/ASS por
 /// cabecera). Log a stderr; `None` si no se puede leer o no hay cues.
@@ -1030,6 +1036,9 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (FlipH, "Orientación"),
         (FlipV, "Orientación"),
         (OrientReset, "Orientación"),
+        (SubDelayBy { ms: -100 }, "Subtítulos"),
+        (SubDelayBy { ms: 100 }, "Subtítulos"),
+        (SubDelayReset, "Subtítulos"),
         (Snapshot, "Captura"),
         (ToggleRecord, "Captura"),
     ];
@@ -1218,6 +1227,16 @@ fn apply_command(cmd: MediaCommand) {
         OrientReset => {
             transform().reset();
             eprintln!("media-app: orientación original");
+        }
+        SubDelayBy { ms } => {
+            let new = (SUB_DELAY_MS.load(Ordering::Relaxed) + ms)
+                .clamp(-MAX_SUB_DELAY_MS, MAX_SUB_DELAY_MS);
+            SUB_DELAY_MS.store(new, Ordering::Relaxed);
+            eprintln!("media-app: subtítulo {new:+}ms");
+        }
+        SubDelayReset => {
+            SUB_DELAY_MS.store(0, Ordering::Relaxed);
+            eprintln!("media-app: subtítulo sin delay");
         }
     }
 }
@@ -2457,8 +2476,12 @@ fn subtitle_strip<Msg: 'static>() -> View<Msg> {
         .and_then(|o| o.as_ref())
         .map(|h| h.lock().position())
         .unwrap_or(Duration::ZERO);
+    // S4: delay de subtítulo. Positivo retrasa = al instante `t` mostramos
+    // el cue que normalmente caería en `t - delay`. Clamp a >= 0.
+    let q = position.as_millis() as i64 - SUB_DELAY_MS.load(Ordering::Relaxed);
+    let adjusted = Duration::from_millis(q.max(0) as u64);
     let text = track
-        .at(position)
+        .at(adjusted)
         .map(|c| c.text.clone())
         .unwrap_or_default();
     View::new(Style {
