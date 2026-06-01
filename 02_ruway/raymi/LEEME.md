@@ -117,9 +117,36 @@ intercambiables, como el resto de la suite.
   - Añadidos en `raymi-llimphi`: `Model::with_persistence(backend, theme, CalDb,
     account_id)` + constructor común `build`; `resync` persiste tras éxito.
 
+- **Fase 7 (2026-06-01):** crear / editar / borrar **eventos y contactos** desde
+  la UI (`raymi-llimphi`), escribiendo a través del backend (`put_*`/`delete_*`
+  ya en el trait) y a la caché.
+  - `raymi-core::CalStore` gana `upsert_event`/`remove_event` y
+    `upsert_contact`/`remove_contact`: mantienen la caché en memoria consistente
+    sin re-sincronizar la colección entera (+2 tests, 29 en core).
+  - `raymi-llimphi::editor` — borradores (`EventDraft`/`ContactDraft`) con campos
+    de texto, ciclo de foco con **Tab**, parseo `AAAA-MM-DD` / `HH:MM` y
+    conversión borrador → modelo nativo. Día completo ancla a medianoche y dura
+    un día; si el fin ≤ inicio se corrige a +1h; sin título → “(sin título)”;
+    contacto sin nombre no se guarda. Correos/teléfonos se editan en una línea
+    separada por comas. Al editar un evento existente se **preservan** los campos
+    no editables (recurrencia, organizador, invitados). +6 tests.
+  - **Modal** (`view_overlay`): selector de calendario (clic cicla), asunto,
+    checkbox día completo, fecha, horas (inicio/fin lado a lado), lugar,
+    descripción; abajo Eliminar · Cancelar · Guardar. Backdrop oscuro cierra; la
+    tarjeta absorbe el click (`Msg::Noop`).
+  - **Disparadores**: botones “＋ Evento” / “＋ Contacto” en la barra; clic en una
+    fila de agenda edita ese evento; “✎ Editar” en la ficha de contacto; tecla
+    `n` abre el editor según el modo. Con el editor abierto, el teclado es suyo
+    (Esc cierra, Tab cicla foco, el resto escribe).
+  - `save_*`/`delete_*` envían al backend y, si lo acepta, aplican a la caché y la
+    persisten (offline-first); en error dejan el editor abierto y avisan en la
+    barra de estado. `raymi-app` cablea `view_overlay`. En modo demo todo funciona
+    (el `MockBackend` ya guarda). `cargo check --workspace` verde.
+
 ## Pendiente (orden sugerido)
 
 1. **Verificar `raymi-net` contra servidor real** (Nextcloud/Radicale) en la
    laptop: discover + sync + put/delete end-to-end.
-2. **Crear/editar eventos y contactos** desde la UI (put/delete ya en el trait).
-3. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.
+2. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.
+3. **Recurrencia editable** en la UI (hoy se preserva la `RRULE` cruda pero no se
+   edita) y elegir entre editar la serie o una instancia.

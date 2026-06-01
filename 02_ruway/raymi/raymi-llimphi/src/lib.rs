@@ -22,8 +22,11 @@ use raymi_core::time::{self, CivilDate};
 use raymi_core::{CalStore, DavBackend};
 use raymi_store::CalDb;
 
+mod editor;
 pub mod demo;
 mod view;
+
+pub use editor::{ContactDraft, ContactField, Editor, EventDraft, EventField};
 
 /// Modo activo de la app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +53,8 @@ pub struct Model {
     search_focused: bool,
     /// `UID` del contacto seleccionado.
     selected_contact: Option<String>,
+    /// Editor abierto (evento/contacto) o ninguno.
+    editor: Editor,
     /// Caché en disco (offline-first). `None` → sin persistencia (demo).
     db: Option<CalDb>,
     /// Id de cuenta — clave de la caché en disco.
@@ -103,6 +108,7 @@ impl Model {
             search: TextInputState::new(),
             search_focused: false,
             selected_contact: None,
+            editor: Editor::None,
             db,
             account_id,
             status: String::from("raymi"),
@@ -131,15 +137,156 @@ impl Model {
                 let _ = self.store.sync_contacts(&*self.backend, b);
             }
         }
-        // Persistir el snapshot fresco (best-effort: un fallo de disco no rompe la UI).
+        self.persist();
+        self.recount();
+    }
+
+    /// Vuelca la caché a disco si hay persistencia (best-effort: un fallo de
+    /// disco no rompe la UI).
+    fn persist(&self) {
         if let Some(db) = &self.db {
             let _ = db.snapshot(&self.account_id, &self.store);
         }
+    }
+
+    /// Recalcula la barra de estado con los conteos actuales.
+    fn recount(&mut self) {
         self.status = format!(
             "{} calendario(s) · {} contacto(s)",
             self.store.calendars().len(),
             self.store.search_contacts("").len(),
         );
+    }
+
+    // ── editores: crear / editar / borrar ─────────────────────────────────
+
+    /// Primer calendario disponible (destino por defecto de un evento nuevo).
+    fn default_calendar(&self) -> Option<String> {
+        self.store.calendars().first().map(|c| c.id.clone())
+    }
+
+    /// Primera libreta disponible (destino por defecto de un contacto nuevo).
+    fn default_book(&self) -> Option<String> {
+        self.store.address_books().first().map(|b| b.id.clone())
+    }
+
+    fn open_new_event(&mut self) {
+        match self.default_calendar() {
+            Some(cal) => self.editor = Editor::Event(EventDraft::new(cal, self.selected_day)),
+            None => self.status = "no hay calendarios donde crear un evento".into(),
+        }
+    }
+
+    fn open_edit_event(&mut self, calendar: &str, uid: &str) {
+        if let Some(e) = self.store.events(calendar).iter().find(|e| e.uid == uid).cloned() {
+            self.editor = Editor::Event(EventDraft::from_event(&e));
+        }
+    }
+
+    fn open_new_contact(&mut self) {
+        match self.default_book() {
+            Some(book) => self.editor = Editor::Contact(ContactDraft::new(book)),
+            None => self.status = "no hay libretas donde crear un contacto".into(),
+        }
+    }
+
+    fn open_edit_contact(&mut self, uid: &str) {
+        if let Some(c) = self.store.search_contacts("").into_iter().find(|c| c.uid == uid).cloned() {
+            self.editor = Editor::Contact(ContactDraft::from_contact(&c));
+        }
+    }
+
+    /// Avanza el calendario destino del evento en edición al siguiente de la lista.
+    fn cycle_event_calendar(&mut self) {
+        let ids: Vec<String> = self.store.calendars().iter().map(|c| c.id.clone()).collect();
+        if let Editor::Event(d) = &mut self.editor {
+            if let Some(pos) = ids.iter().position(|id| id == &d.calendar) {
+                d.calendar = ids[(pos + 1) % ids.len()].clone();
+            }
+        }
+    }
+
+    /// Guarda el evento en edición: lo envía al backend y, si lo acepta, lo
+    /// aplica a la caché y la persiste. En error, deja el editor abierto y avisa.
+    fn save_event(&mut self) {
+        let Editor::Event(d) = std::mem::replace(&mut self.editor, Editor::None) else { return };
+        let uid = d.uid.clone().unwrap_or_else(|| new_uid("evt"));
+        match d.build(uid) {
+            Some(ev) => match self.backend.put_event(&ev) {
+                Ok(()) => {
+                    self.store.upsert_event(ev);
+                    self.persist();
+                    self.recount();
+                }
+                Err(e) => {
+                    self.status = format!("no se pudo guardar el evento: {e}");
+                    self.editor = Editor::Event(d);
+                }
+            },
+            None => {
+                self.status = "fecha u hora inválida (usá AAAA-MM-DD y HH:MM)".into();
+                self.editor = Editor::Event(d);
+            }
+        }
+    }
+
+    /// Borra el evento en edición (si era existente).
+    fn delete_event(&mut self) {
+        let Editor::Event(d) = std::mem::replace(&mut self.editor, Editor::None) else { return };
+        let Some(uid) = d.uid.clone() else { return }; // nuevo sin guardar: sólo cierra
+        match self.backend.delete_event(&d.calendar, &uid) {
+            Ok(()) => {
+                self.store.remove_event(&d.calendar, &uid);
+                self.persist();
+                self.recount();
+            }
+            Err(e) => {
+                self.status = format!("no se pudo borrar el evento: {e}");
+                self.editor = Editor::Event(d);
+            }
+        }
+    }
+
+    fn save_contact(&mut self) {
+        let Editor::Contact(d) = std::mem::replace(&mut self.editor, Editor::None) else { return };
+        let uid = d.uid.clone().unwrap_or_else(|| new_uid("card"));
+        match d.build(uid.clone()) {
+            Some(c) => match self.backend.put_contact(&c) {
+                Ok(()) => {
+                    self.store.upsert_contact(c);
+                    self.selected_contact = Some(uid);
+                    self.persist();
+                    self.recount();
+                }
+                Err(e) => {
+                    self.status = format!("no se pudo guardar el contacto: {e}");
+                    self.editor = Editor::Contact(d);
+                }
+            },
+            None => {
+                self.status = "el contacto necesita un nombre".into();
+                self.editor = Editor::Contact(d);
+            }
+        }
+    }
+
+    fn delete_contact(&mut self) {
+        let Editor::Contact(d) = std::mem::replace(&mut self.editor, Editor::None) else { return };
+        let Some(uid) = d.uid.clone() else { return };
+        match self.backend.delete_contact(&d.address_book, &uid) {
+            Ok(()) => {
+                self.store.remove_contact(&d.address_book, &uid);
+                if self.selected_contact.as_deref() == Some(uid.as_str()) {
+                    self.selected_contact = None;
+                }
+                self.persist();
+                self.recount();
+            }
+            Err(e) => {
+                self.status = format!("no se pudo borrar el contacto: {e}");
+                self.editor = Editor::Contact(d);
+            }
+        }
     }
 
     /// Avanza/retrocede el mes mostrado por `delta` meses.
@@ -182,6 +329,38 @@ pub enum Msg {
     ContactSearchKey(KeyEvent),
     /// Seleccionar un contacto por `UID`.
     SelectContact(String),
+
+    // ── editores ──────────────────────────────────────────────────────────
+    /// Abrir el editor de evento nuevo (en el día seleccionado).
+    NewEvent,
+    /// Abrir el editor de un evento existente (`calendar`, `uid`).
+    EditEvent { calendar: String, uid: String },
+    /// Enfocar un campo del editor de evento.
+    EventFocus(EventField),
+    /// Tecla en el editor de evento.
+    EventKey(KeyEvent),
+    /// Alternar "día completo".
+    EventToggleAllDay,
+    /// Pasar el evento al siguiente calendario.
+    EventCycleCalendar,
+    /// Guardar / borrar el evento en edición.
+    SaveEvent,
+    DeleteEvent,
+    /// Abrir el editor de contacto nuevo.
+    NewContact,
+    /// Editar el contacto seleccionado (`uid`).
+    EditContact(String),
+    /// Enfocar un campo del editor de contacto.
+    ContactFocus(ContactField),
+    /// Tecla en el editor de contacto.
+    ContactKey(KeyEvent),
+    /// Guardar / borrar el contacto en edición.
+    SaveContact,
+    DeleteContact,
+    /// Cerrar cualquier editor sin guardar.
+    CloseEditor,
+    /// No hace nada (absorbe clicks dentro de la tarjeta del editor).
+    Noop,
 }
 
 /// La transición Elm.
@@ -211,8 +390,64 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
                 }
             }
         }
+
+        // ── editores ──────────────────────────────────────────────────────
+        Msg::NewEvent => model.open_new_event(),
+        Msg::EditEvent { calendar, uid } => model.open_edit_event(&calendar, &uid),
+        Msg::EventFocus(field) => {
+            if let Editor::Event(d) = &mut model.editor {
+                d.focus = field;
+            }
+        }
+        Msg::EventToggleAllDay => {
+            if let Editor::Event(d) = &mut model.editor {
+                d.all_day = !d.all_day;
+            }
+        }
+        Msg::EventCycleCalendar => model.cycle_event_calendar(),
+        Msg::EventKey(event) => apply_editor_key(&mut model, event, true),
+        Msg::SaveEvent => model.save_event(),
+        Msg::DeleteEvent => model.delete_event(),
+        Msg::NewContact => model.open_new_contact(),
+        Msg::EditContact(uid) => model.open_edit_contact(&uid),
+        Msg::ContactFocus(field) => {
+            if let Editor::Contact(d) = &mut model.editor {
+                d.focus = field;
+            }
+        }
+        Msg::ContactKey(event) => apply_editor_key(&mut model, event, false),
+        Msg::SaveContact => model.save_contact(),
+        Msg::DeleteContact => model.delete_contact(),
+        Msg::CloseEditor => model.editor = Editor::None,
+        Msg::Noop => {}
     }
     model
+}
+
+/// Encamina una tecla al campo enfocado del editor abierto. Escape cierra; Tab
+/// cicla el foco; el resto va al `TextInputState` activo. `is_event` distingue
+/// qué editor está activo (las dos ramas comparten estructura).
+fn apply_editor_key(model: &mut Model, event: KeyEvent, is_event: bool) {
+    if event.state != KeyState::Pressed {
+        return;
+    }
+    match &event.key {
+        Key::Named(NamedKey::Escape) => model.editor = Editor::None,
+        Key::Named(NamedKey::Tab) => match &mut model.editor {
+            Editor::Event(d) if is_event => d.focus = d.focus.next(),
+            Editor::Contact(d) if !is_event => d.focus = d.focus.next(),
+            _ => {}
+        },
+        _ => match &mut model.editor {
+            Editor::Event(d) if is_event => {
+                d.focused_mut().apply_key(&event);
+            }
+            Editor::Contact(d) if !is_event => {
+                d.focused_mut().apply_key(&event);
+            }
+            _ => {}
+        },
+    }
 }
 
 /// El árbol de la UI.
@@ -220,9 +455,24 @@ pub fn view(model: &Model) -> View<Msg> {
     view::root(model)
 }
 
+/// La capa modal: el editor de evento/contacto cuando hay uno abierto.
+pub fn view_overlay(model: &Model) -> Option<View<Msg>> {
+    match &model.editor {
+        Editor::None => None,
+        Editor::Event(d) => Some(view::event_editor(model, d)),
+        Editor::Contact(d) => Some(view::contact_editor(model, d)),
+    }
+}
+
 /// Atajos globales. Con la búsqueda enfocada, las teclas van a ella. Si no:
 /// flechas ←/→ cambian de mes, `t` va a hoy, `c`/`g` alternan modo.
 pub fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+    // Con un editor abierto, las teclas son suyas (Esc/Tab/escritura).
+    match &model.editor {
+        Editor::Event(_) => return Some(Msg::EventKey(event.clone())),
+        Editor::Contact(_) => return Some(Msg::ContactKey(event.clone())),
+        Editor::None => {}
+    }
     if model.mode == Mode::Contacts && model.search_focused {
         return Some(Msg::ContactSearchKey(event.clone()));
     }
@@ -236,6 +486,10 @@ pub fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(ch) if ch.eq_ignore_ascii_case("t") => Some(Msg::Today),
         Key::Character(ch) if ch.eq_ignore_ascii_case("g") => Some(Msg::SetMode(Mode::Calendar)),
         Key::Character(ch) if ch.eq_ignore_ascii_case("k") => Some(Msg::SetMode(Mode::Contacts)),
+        Key::Character(ch) if ch.eq_ignore_ascii_case("n") => Some(match model.mode {
+            Mode::Calendar => Msg::NewEvent,
+            Mode::Contacts => Msg::NewContact,
+        }),
         _ => None,
     }
 }
@@ -264,6 +518,13 @@ pub fn on_wheel(
 /// puede leer el reloj del sistema (a diferencia del núcleo agnóstico).
 fn now_unix() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// Un `UID` razonablemente único para un evento o contacto nuevo: nanos del
+/// reloj (monótonos en la práctica para clicks humanos) + sufijo de dominio.
+fn new_uid(prefix: &str) -> String {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("{prefix}-{nanos:x}@raymi")
 }
 
 // Reexport para que el binario del demo arme su `impl App` con tipos estables.

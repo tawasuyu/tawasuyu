@@ -16,7 +16,8 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use raymi_core::time::{self, CivilDate, DAY};
 use raymi_core::{CalStore, Contact, Occurrence};
 
-use crate::{Mode, Model, Msg};
+use crate::{ContactDraft, ContactField, EventDraft, EventField, Mode, Model, Msg};
+use llimphi_widget_text_input::TextInputState;
 
 const AGENDA_W: f32 = 340.0;
 const CONTACTS_W: f32 = 340.0;
@@ -75,6 +76,7 @@ fn toolbar(model: &Model) -> View<Msg> {
 
     let mut children = vec![brand, tabs, spacer()];
     if model.mode == Mode::Calendar {
+        children.push(button("＋ Evento", theme.accent, theme.bg_app, Msg::NewEvent));
         let label = format!("{}  {}", MONTHS[(model.view_month - 1) as usize], model.view_year);
         children.push(button("‹", theme.bg_button, theme.fg_text, Msg::PrevMonth));
         children.push(
@@ -88,6 +90,8 @@ fn toolbar(model: &Model) -> View<Msg> {
         );
         children.push(button("›", theme.bg_button, theme.fg_text, Msg::NextMonth));
         children.push(button("Hoy", theme.accent, theme.bg_app, Msg::Today));
+    } else {
+        children.push(button("＋ Contacto", theme.accent, theme.bg_app, Msg::NewContact));
     }
 
     View::new(Style {
@@ -433,6 +437,8 @@ fn agenda_row(theme: &Theme, o: &Occurrence, color: Color) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .radius(6.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::EditEvent { calendar: o.event.calendar.clone(), uid: o.event.uid.clone() })
     .children(vec![bar, texts])
 }
 
@@ -587,6 +593,7 @@ fn contact_detail(model: &Model) -> View<Msg> {
             View::new(Style { size: Size { width: percent(1.0_f32), height: length(15.0_f32) }, ..Default::default() })
                 .text_aligned(c.org.clone().unwrap_or_default(), 12.0, theme.fg_muted, Alignment::Start),
         ]),
+        button("✎ Editar", theme.bg_button, theme.fg_text, Msg::EditContact(c.uid.clone())),
     ]);
 
     let mut fields: Vec<View<Msg>> = Vec::new();
@@ -637,6 +644,218 @@ fn detail_field(theme: &Theme, icon: &str, value: &str) -> View<Msg> {
         View::new(Style { size: Size { width: Dimension::auto(), height: percent(1.0_f32) }, flex_grow: 1.0, align_items: Some(AlignItems::Center), ..Default::default() })
             .text_aligned(value.to_string(), 13.0, theme.fg_text, Alignment::Start),
     ])
+}
+
+// ── editores (overlay modal) ─────────────────────────────────────────────────
+
+const EDITOR_W: f32 = 520.0;
+
+/// Modal del editor de **evento**: selector de calendario, asunto, día completo,
+/// fecha, horas, lugar y descripción, con acciones abajo.
+pub fn event_editor(model: &Model, d: &EventDraft) -> View<Msg> {
+    let theme = &model.theme;
+    let pal = TextInputPalette::from_theme(theme);
+
+    let title = if d.uid.is_some() { "Editar evento" } else { "Nuevo evento" };
+
+    // Selector de calendario (clic → siguiente). Muestra punto de color + nombre.
+    let colors = calendar_colors(model);
+    let cal_name = model
+        .store_ref()
+        .calendars()
+        .iter()
+        .find(|c| c.id == d.calendar)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| d.calendar.clone());
+    let cal_color = colors.get(&d.calendar).copied().unwrap_or(theme.accent);
+    let cal_dot = View::new(Style {
+        size: Size { width: length(12.0_f32), height: length(12.0_f32) },
+        ..Default::default()
+    })
+    .fill(cal_color)
+    .radius(6.0);
+    let cal_chip = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(10.0, 0.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_input)
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::EventCycleCalendar)
+    .children(vec![
+        cal_dot,
+        View::new(Style { size: Size { width: Dimension::auto(), height: percent(1.0_f32) }, flex_grow: 1.0, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text_aligned(cal_name, 13.0, theme.fg_text, Alignment::Start),
+        View::new(Style { size: Size { width: length(80.0_f32), height: percent(1.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text_aligned("cambiar ⟳".to_string(), 11.0, theme.fg_muted, Alignment::End),
+    ]);
+
+    let summary = ev_field(&d.summary, "Asunto", d.focus == EventField::Summary, &pal, EventField::Summary);
+    let allday = checkbox(theme, "Día completo", d.all_day, Msg::EventToggleAllDay);
+    let date = ev_field(&d.date, "AAAA-MM-DD", d.focus == EventField::Date, &pal, EventField::Date);
+
+    let mut col: Vec<View<Msg>> = vec![
+        labeled(theme, "Calendario", cal_chip),
+        labeled(theme, "Asunto", summary),
+        allday,
+        labeled(theme, "Fecha", date),
+    ];
+    if !d.all_day {
+        let start = ev_field(&d.start_hm, "HH:MM", d.focus == EventField::Start, &pal, EventField::Start);
+        let end = ev_field(&d.end_hm, "HH:MM", d.focus == EventField::End, &pal, EventField::End);
+        let hours = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+            gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![labeled(theme, "Inicio", start), labeled(theme, "Fin", end)]);
+        col.push(hours);
+    }
+    col.push(labeled(
+        theme,
+        "Lugar",
+        ev_field(&d.location, "Lugar (opcional)", d.focus == EventField::Location, &pal, EventField::Location),
+    ));
+    col.push(labeled(
+        theme,
+        "Descripción",
+        ev_field(&d.description, "Notas (opcional)", d.focus == EventField::Description, &pal, EventField::Description),
+    ));
+
+    let actions = editor_actions(theme, d.uid.is_some(), Msg::SaveEvent, Msg::DeleteEvent);
+    col.push(actions);
+
+    editor_card(theme, title, col)
+}
+
+/// Modal del editor de **contacto**.
+pub fn contact_editor(model: &Model, d: &ContactDraft) -> View<Msg> {
+    let theme = &model.theme;
+    let pal = TextInputPalette::from_theme(theme);
+    let title = if d.uid.is_some() { "Editar contacto" } else { "Nuevo contacto" };
+
+    let col: Vec<View<Msg>> = vec![
+        labeled(theme, "Nombre", ct_field(&d.name, "Nombre y apellido", d.focus == ContactField::Name, &pal, ContactField::Name)),
+        labeled(theme, "Correos", ct_field(&d.emails, "correo@dominio, otro@…", d.focus == ContactField::Emails, &pal, ContactField::Emails)),
+        labeled(theme, "Teléfonos", ct_field(&d.phones, "+58 412…, …", d.focus == ContactField::Phones, &pal, ContactField::Phones)),
+        labeled(theme, "Organización", ct_field(&d.org, "Empresa (opcional)", d.focus == ContactField::Org, &pal, ContactField::Org)),
+        labeled(theme, "Nota", ct_field(&d.note, "Nota (opcional)", d.focus == ContactField::Note, &pal, ContactField::Note)),
+        editor_actions(theme, d.uid.is_some(), Msg::SaveContact, Msg::DeleteContact),
+    ];
+
+    editor_card(theme, title, col)
+}
+
+/// Envoltorio común: backdrop oscuro + tarjeta centrada. Click en el backdrop
+/// cierra; click en la tarjeta no se propaga (re-enfoca el campo activo es
+/// trabajo del propio campo).
+fn editor_card(theme: &Theme, title: &str, mut children: Vec<View<Msg>>) -> View<Msg> {
+    let title_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(title.to_string(), 16.0, theme.fg_text, Alignment::Start);
+    let mut all = vec![title_view];
+    all.append(&mut children);
+
+    let card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(EDITOR_W), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        padding: pad_xy(20.0, 18.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .on_click(Msg::Noop)
+    .children(all);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0, 0, 0, 150))
+    .on_click(Msg::CloseEditor)
+    .children(vec![card])
+}
+
+/// Fila inferior de acciones: Eliminar (si es edición) · Cancelar · Guardar.
+fn editor_actions(theme: &Theme, editing: bool, save: Msg, delete: Msg) -> View<Msg> {
+    let mut row: Vec<View<Msg>> = Vec::new();
+    if editing {
+        row.push(button("Eliminar", theme.bg_button, theme.fg_destructive, delete));
+    }
+    row.push(spacer());
+    row.push(button("Cancelar", theme.bg_button, theme.fg_text, Msg::CloseEditor));
+    row.push(button("Guardar", theme.accent, theme.bg_app, save));
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        padding: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(6.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(row)
+}
+
+/// Campo con etiqueta arriba.
+fn labeled(theme: &Theme, label: &str, field: View<Msg>) -> View<Msg> {
+    let lbl = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(label.to_string(), 11.0, theme.fg_muted, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: Dimension::auto(), height: Dimension::auto() },
+        flex_grow: 1.0,
+        gap: Size { width: length(0.0_f32), height: length(3.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![lbl, field])
+}
+
+fn ev_field(state: &TextInputState, ph: &str, focused: bool, pal: &TextInputPalette, which: EventField) -> View<Msg> {
+    text_input_view(state, ph, focused, pal, Msg::EventFocus(which))
+}
+
+fn ct_field(state: &TextInputState, ph: &str, focused: bool, pal: &TextInputPalette, which: ContactField) -> View<Msg> {
+    text_input_view(state, ph, focused, pal, Msg::ContactFocus(which))
+}
+
+/// Casilla de verificación con etiqueta a la derecha.
+fn checkbox(theme: &Theme, label: &str, on: bool, msg: Msg) -> View<Msg> {
+    let (glyph, color) = if on { ("☑", theme.accent) } else { ("☐", theme.fg_muted) };
+    let mark = View::new(Style {
+        size: Size { width: length(20.0_f32), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(glyph, 16.0, color);
+    let lbl = View::new(Style {
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(label.to_string(), 12.0, theme.fg_text, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: Dimension::auto(), height: length(26.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .on_click(msg)
+    .children(vec![mark, lbl])
 }
 
 // ── primitivas ──────────────────────────────────────────────────────────────

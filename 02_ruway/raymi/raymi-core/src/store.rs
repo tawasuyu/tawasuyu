@@ -60,6 +60,24 @@ impl CalStore {
         self.events.insert(calendar.to_string(), events);
     }
 
+    /// Inserta o reemplaza (por `uid`) un evento en su calendario, manteniendo la
+    /// caché en memoria consistente sin re-sincronizar la colección entera. El
+    /// calendario destino es `event.calendar`.
+    pub fn upsert_event(&mut self, event: Event) {
+        let list = self.events.entry(event.calendar.clone()).or_default();
+        match list.iter_mut().find(|e| e.uid == event.uid) {
+            Some(slot) => *slot = event,
+            None => list.push(event),
+        }
+    }
+
+    /// Quita un evento por `uid` de un calendario. No-op si no estaba.
+    pub fn remove_event(&mut self, calendar: &str, uid: &str) {
+        if let Some(list) = self.events.get_mut(calendar) {
+            list.retain(|e| e.uid != uid);
+        }
+    }
+
     pub fn calendars(&self) -> &[Calendar] {
         &self.calendars
     }
@@ -112,6 +130,23 @@ impl CalStore {
 
     pub fn ingest_contacts(&mut self, book: &str, contacts: Vec<Contact>) {
         self.contacts.insert(book.to_string(), contacts);
+    }
+
+    /// Inserta o reemplaza (por `uid`) un contacto en su libreta
+    /// (`contact.address_book`), sin re-sincronizar la colección entera.
+    pub fn upsert_contact(&mut self, contact: Contact) {
+        let list = self.contacts.entry(contact.address_book.clone()).or_default();
+        match list.iter_mut().find(|c| c.uid == contact.uid) {
+            Some(slot) => *slot = contact,
+            None => list.push(contact),
+        }
+    }
+
+    /// Quita un contacto por `uid` de una libreta. No-op si no estaba.
+    pub fn remove_contact(&mut self, book: &str, uid: &str) {
+        if let Some(list) = self.contacts.get_mut(book) {
+            list.retain(|c| c.uid != uid);
+        }
     }
 
     pub fn address_books(&self) -> &[AddressBook] {
@@ -225,5 +260,45 @@ mod tests {
         assert_eq!(store.search_contacts("ana").len(), 1);
         assert!(store.contact_by_email("ANA@X.COM").is_some());
         let _ = DAY;
+    }
+
+    #[test]
+    fn upsert_y_remove_event() {
+        let mut store = CalStore::new();
+        store.upsert_event(ev("a", 100, 200, None)); // crea el calendario "personal"
+        store.upsert_event(ev("b", 300, 400, None));
+        assert_eq!(store.events("personal").len(), 2);
+        // mismo uid reemplaza, no duplica.
+        let mut a2 = ev("a", 100, 200, None);
+        a2.summary = "nuevo".into();
+        store.upsert_event(a2);
+        assert_eq!(store.events("personal").len(), 2);
+        assert_eq!(store.events("personal").iter().find(|e| e.uid == "a").unwrap().summary, "nuevo");
+        store.remove_event("personal", "a");
+        assert_eq!(store.events("personal").len(), 1);
+        store.remove_event("personal", "inexistente"); // no-op
+        assert_eq!(store.events("personal").len(), 1);
+    }
+
+    #[test]
+    fn upsert_y_remove_contact() {
+        let mut store = CalStore::new();
+        let mut c = Contact {
+            uid: "u1".into(),
+            full_name: "Ana".into(),
+            emails: vec!["ana@x.com".into()],
+            phones: vec![],
+            org: None,
+            note: String::new(),
+            address_book: "def".into(),
+        };
+        store.upsert_contact(c.clone());
+        assert_eq!(store.contacts("def").len(), 1);
+        c.full_name = "Ana María".into();
+        store.upsert_contact(c.clone());
+        assert_eq!(store.contacts("def").len(), 1);
+        assert_eq!(store.contacts("def")[0].full_name, "Ana María");
+        store.remove_contact("def", "u1");
+        assert!(store.contacts("def").is_empty());
     }
 }
