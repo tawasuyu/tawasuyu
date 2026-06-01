@@ -16,5 +16,6 @@
     cantidad | Number,
     total | Number,
     currency | String,
+    ..
   },
 }

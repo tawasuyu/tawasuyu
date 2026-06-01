@@ -11,6 +11,7 @@
     nombre | String,
     email | String,
     empresa | String,
+    ..
   },
 
   # Una oportunidad de venta. La crea `abrir_oportunidad` en etapa "prospecto"
@@ -21,6 +22,7 @@
     monto | Number,
     currency | String,
     etapa | String,
+    ..
   },
 
   # Un toque/contacto con un cliente (llamada, email, reunión…).
@@ -29,5 +31,6 @@
     canal | String,
     nota | String,
     timestamp | String,
+    ..
   },
 }

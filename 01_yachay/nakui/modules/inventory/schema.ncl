@@ -12,10 +12,12 @@ let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0
     sku_id | String,
     ubicacion | String,
     cantidad | NoNegativo,
+    ..
   },
 
   # Registro append-only de un movimiento de stock (recepción/transferencia).
   MovimientoStock = {
     cantidad | Number,
+    ..
   },
 }
