@@ -24,6 +24,9 @@ pub struct ProcRaw {
     /// `utime + stime` acumulados (jiffies). El %CPU es el delta sobre el
     /// delta del total de la CPU.
     pub cpu_jiffies: u64,
+    /// Momento de arranque del proceso, en ticks desde el boot (campo 22 de
+    /// `stat`). Con `uptime_secs`/`clk_tck` del `Scan` se deriva la antigüedad.
+    pub starttime_ticks: u64,
     pub uid: u32,
     pub cmd: String,
 }
@@ -38,8 +41,12 @@ pub struct Scan {
     pub mem_total_kb: u64,
     /// Memoria disponible (`MemAvailable`), para derivar la usada.
     pub mem_avail_kb: u64,
-    /// Por core: `(jiffies_totales, jiffies_idle)` para derivar %uso por delta.
-    pub cores: Vec<(u64, u64)>,
+    /// Por core, **ordenado por número**: `(id, jiffies_totales, jiffies_idle)`.
+    pub cores: Vec<(u32, u64, u64)>,
+    /// Uptime del sistema en segundos (`/proc/uptime`).
+    pub uptime_secs: f64,
+    /// Ticks por segundo (`sysconf(_SC_CLK_TCK)`), para convertir starttime.
+    pub clk_tck: u64,
 }
 
 impl Default for Scan {
@@ -51,6 +58,8 @@ impl Default for Scan {
             mem_total_kb: 0,
             mem_avail_kb: 0,
             cores: Vec::new(),
+            uptime_secs: 0.0,
+            clk_tck: 100,
         }
     }
 }
@@ -78,9 +87,9 @@ fn parse_cpu_line(line: &str) -> (u64, u64) {
     (total, idle)
 }
 
-/// Línea agregada `cpu ` (total de jiffies) + una entrada `(total, idle)` por
-/// core (`cpu0`, `cpu1`, …).
-fn cpu_stat() -> (u64, Vec<(u64, u64)>) {
+/// Línea agregada `cpu ` (total de jiffies) + una entrada `(id, total, idle)`
+/// por core (`cpu0`, `cpu1`, …), **ordenada por id**.
+fn cpu_stat() -> (u64, Vec<(u32, u64, u64)>) {
     let Ok(stat) = fs::read_to_string("/proc/stat") else {
         return (0, Vec::new());
     };
@@ -90,14 +99,38 @@ fn cpu_stat() -> (u64, Vec<(u64, u64)>) {
         if let Some(rest) = line.strip_prefix("cpu") {
             if rest.starts_with(char::is_whitespace) {
                 total = parse_cpu_line(line).0; // línea agregada `cpu `
-            } else if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                cores.push(parse_cpu_line(line)); // `cpuN`
+            } else if let Some(id) = rest
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse::<u32>().ok())
+            {
+                let (t, idle) = parse_cpu_line(line);
+                cores.push((id, t, idle)); // `cpuN`
             }
         } else {
             break; // las líneas cpu van primero
         }
     }
+    cores.sort_by_key(|&(id, _, _)| id);
     (total, cores)
+}
+
+/// Uptime del sistema en segundos (primer número de `/proc/uptime`).
+fn system_uptime() -> f64 {
+    fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|n| n.parse().ok()))
+        .unwrap_or(0.0)
+}
+
+fn clk_tck() -> u64 {
+    // SAFETY: sysconf sin estado; ticks de reloj por segundo.
+    let v = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if v > 0 {
+        v as u64
+    } else {
+        100
+    }
 }
 
 /// `(MemTotal, MemAvailable)` en kB desde `/proc/meminfo`.
@@ -131,6 +164,7 @@ fn parse_one(pid: i32, page: u64) -> Option<ProcRaw> {
     let utime: u64 = f.get(11).and_then(|s| s.parse().ok()).unwrap_or(0);
     let stime: u64 = f.get(12).and_then(|s| s.parse().ok()).unwrap_or(0);
     let threads: u32 = f.get(17).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let starttime_ticks: u64 = f.get(19).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     // RSS desde statm (campo 2 = residente, en páginas).
     let rss_kb = fs::read_to_string(format!("{base}/statm"))
@@ -169,6 +203,7 @@ fn parse_one(pid: i32, page: u64) -> Option<ProcRaw> {
         rss_kb,
         threads,
         cpu_jiffies: utime + stime,
+        starttime_ticks,
         uid,
         cmd,
     })
@@ -205,6 +240,8 @@ pub fn scan() -> Scan {
         mem_total_kb,
         mem_avail_kb,
         cores,
+        uptime_secs: system_uptime(),
+        clk_tck: clk_tck(),
     }
 }
 
@@ -243,11 +280,14 @@ mod tests {
     }
 
     #[test]
-    fn scan_lee_cores() {
+    fn scan_lee_cores_ordenados() {
         let s = scan();
         assert!(!s.cores.is_empty(), "debería leer al menos un core");
         assert_eq!(s.ncpu as usize, s.cores.len());
-        assert!(s.cores.iter().all(|&(t, i)| t >= i));
+        assert!(s.cores.iter().all(|&(_id, t, i)| t >= i));
+        // ordenados por número de core ascendente
+        assert!(s.cores.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(s.uptime_secs > 0.0 && s.clk_tck > 0);
     }
 
     #[test]

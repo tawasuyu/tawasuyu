@@ -1,0 +1,17 @@
+[package]
+name = "pineal-bars-demo"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — demo de barras: columnas simples, horizontales, agrupadas, apiladas e histograma, todo en una grilla estática."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
+pineal-render = { path = "../../pineal-render" }
+pineal-bars = { path = "../../pineal-bars" }

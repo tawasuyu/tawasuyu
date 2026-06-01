@@ -40,8 +40,8 @@ pineal-render ──── trait Canvas
                   ├── SceneCanvas (backend vello/llimphi)
                   └── PlanRecorder (replay diferido)
 
-pineal-{cartesian, polar, mesh, treemap, phosphor,
-        flow, heatmap, stream, financial} ── painters
+pineal-{cartesian, polar, mesh, treemap, phosphor, flow,
+        heatmap, stream, financial, hexbin, contour, bars} ── painters
 
 pineal-export ── consume RenderPlan → SVG + PNG
 
@@ -103,6 +103,7 @@ samples por pixel) da AA suficiente para reportes y dashboards.
 | `pineal-financial` | `paint_candles` | OHLC + agregación por bucket temporal |
 | `pineal-hexbin` | `paint_hexbin` | Bineado hexagonal pointy-top + ramp Viridis |
 | `pineal-contour` | `paint_contours` | Marching squares 16 casos → polilíneas por nivel |
+| `pineal-bars` | `paint_bars`, `paint_grouped`, `paint_stacked` | Columnas/barras vertical u horizontal, agrupadas y apiladas, baseline con negativos; `Histogram` binea `&[f32]` → barras |
 
 ### 5.1 Barnes-Hut (added 2026-05-28)
 
@@ -168,9 +169,15 @@ Total al 2026-05-28: **130+ tests verdes**.
 
 ### Hecho
 
-- Catálogo cerrado: 14 crates viz/render/export (core, render, cartesian,
+- Catálogo: 15 crates viz/render/export (core, render, cartesian,
   polar, mesh, treemap, phosphor, flow, heatmap, stream, financial,
-  hexbin, contour, umbrella) + export SVG/PNG/PDF + 12 demos ejecutables.
+  hexbin, contour, bars, umbrella) + export SVG/PNG/PDF + 14 demos
+  ejecutables (incluyendo `pineal-galeria-demo`, que muestra 11 painters
+  en una sola ventana, y `pineal-bars-demo`).
+- **bars** (added 2026-06-01, a pedido): el gráfico común que faltaba.
+  `paint_bars`/`paint_grouped`/`paint_stacked` (vertical u horizontal,
+  baseline con negativos) + `Histogram` para bineado de muestras. 10
+  tests propios con `PlanRecorder`.
 - Algoritmos de grafo: Fruchterman-Reingold + Barnes-Hut O(n log n),
   Sugiyama-lite layered, FDEB-lite para bundling.
 - Backends en producción: vello/llimphi (`SceneCanvas`), SVG vectorial,
@@ -185,8 +192,8 @@ Total al 2026-05-28: **130+ tests verdes**.
   Densidad cicable 50K→200K→500K→1M (tecla `D` / menú), pausa con
   `espacio`. Cierra el pendiente que el SDD arrastraba: el camino GPU ya
   no es sólo teoría + tests, hay una app que lo ejercita end-to-end.
-- Menú principal + contextual cableados en las 12 demos.
-- 130+ tests verdes.
+- Menú principal + contextual cableados en las demos.
+- 140+ tests verdes (los 10 de bars incluidos).
 
 ### Pendiente
 
@@ -199,9 +206,12 @@ Total al 2026-05-28: **130+ tests verdes**.
 
 ## 9. Roadmap
 
-El catálogo de pineal está cerrado: 14 crates de viz/render/export
-+ 12 demos ejecutables + SDD propio. **Pineal no tiene roadmap propio
-pendiente.**
+El catálogo de pineal cubre 15 crates de viz/render/export
++ 14 demos ejecutables + SDD propio. **Pineal no tiene roadmap propio
+pendiente.** El catálogo no está congelado por dogma: cuando aparece un
+tipo de gráfico genuinamente común que falta (como `bars`, agregado el
+2026-06-01), entra — siempre que respete las tres reglas y hable sólo
+contra el trait `Canvas`.
 
 El único techo es el del motor (vello no aguanta >1M primitivos por
 frame), y ése es un asunto horizontal de `llimphi-raster`, no de pineal

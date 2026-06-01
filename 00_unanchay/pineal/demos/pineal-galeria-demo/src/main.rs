@@ -29,6 +29,7 @@ use llimphi_ui::{App, Handle, View};
 use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 
+use pineal_bars::{paint_bars, Bar, BarStyle, Histogram};
 use pineal_contour::paint_contours;
 use pineal_flow::{compute_layout, paint_sankey, SankeyLink, SankeyNode};
 use pineal_heatmap::{paint as paint_heatmap, HeatmapMatrix, Ramp};
@@ -122,7 +123,7 @@ impl App for GaleriaDemo {
             ..Default::default()
         })
         .text_aligned(
-            "9 tiles · cartesian · pie · radar · treemap · heatmap · hexbin · contour · sankey · mesh".to_string(),
+            "11 tiles · cartesian · pie · radar · treemap · heatmap · hexbin · contour · sankey · mesh · bars · histograma".to_string(),
             11.0,
             theme.fg_muted,
             Alignment::Start,
@@ -144,6 +145,10 @@ impl App for GaleriaDemo {
             tile("flow · sankey", theme, sankey_tile()),
             tile("mesh (force-directed)", theme, mesh_tile(model.graph.clone())),
         ]);
+        let row3 = grid_row(theme, vec![
+            tile("bars (con negativo)", theme, bars_tile()),
+            tile("histograma", theme, histogram_tile()),
+        ]);
 
         let grid = View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -152,7 +157,7 @@ impl App for GaleriaDemo {
             gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
             ..Default::default()
         })
-        .children(vec![row0, row1, row2]);
+        .children(vec![row0, row1, row2, row3]);
 
         let body = View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -269,6 +274,43 @@ fn cartesian_tile(phase: f32) -> View<Msg> {
             coords.push(py);
         }
         canvas.stroke_polyline(&coords, StrokeStyle::new(1.8, Color::from_hex(0x88c0d0)));
+    })
+}
+
+/// Barras — una serie de columnas con un valor negativo para mostrar el
+/// baseline.
+fn bars_tile() -> View<Msg> {
+    canvas_view(move |canvas, outer| {
+        let bars = [
+            Bar::new(4.0, Color::from_hex(0x88c0d0)),
+            Bar::new(7.0, Color::from_hex(0x88c0d0)),
+            Bar::new(2.0, Color::from_hex(0x88c0d0)),
+            Bar::new(-3.0, Color::from_hex(0xd08770)),
+            Bar::new(5.0, Color::from_hex(0x88c0d0)),
+            Bar::new(6.5, Color::from_hex(0x88c0d0)),
+        ];
+        let area = Rect::new(outer.x + 8.0, outer.y + 8.0, outer.w - 16.0, outer.h - 16.0);
+        paint_bars(&bars, area, &BarStyle::vertical(), canvas);
+    })
+}
+
+/// Histograma — muestra ~gaussiana (suma de uniformes de un LCG
+/// sembrado) bineada en 24 bins.
+fn histogram_tile() -> View<Msg> {
+    canvas_view(move |canvas, outer| {
+        let mut rng: u32 = 0x0BAD_F00D;
+        let mut next = || {
+            rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (rng >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let mut sample = Vec::with_capacity(3000);
+        for _ in 0..3000 {
+            let g: f32 = (0..6).map(|_| next()).sum::<f32>() / 6.0;
+            sample.push((g - 0.5) * 6.0);
+        }
+        let bars = Histogram::new(&sample, 24).to_bars(Color::from_hex(0xb48ead));
+        let area = Rect::new(outer.x + 8.0, outer.y + 8.0, outer.w - 16.0, outer.h - 16.0);
+        paint_bars(&bars, area, &BarStyle::vertical().with_gap(0.05), canvas);
     })
 }
 

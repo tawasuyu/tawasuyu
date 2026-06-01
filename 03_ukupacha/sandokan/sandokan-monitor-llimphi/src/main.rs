@@ -110,6 +110,8 @@ struct SysProc {
     rss_kb: u64,
     threads: u32,
     uid: u32,
+    /// Antigüedad del proceso en segundos (uptime del sistema − starttime).
+    uptime_secs: u64,
     cmd: String,
 }
 
@@ -195,6 +197,8 @@ struct Model {
     mem_avail_kb: u64,
     /// Historial de %uso por core + historial de %MEM (un punto por barrido).
     core_hist: Vec<VecDeque<f32>>,
+    /// Números de core (ordenados), para etiquetar los gráficos `CPUn`.
+    core_ids: Vec<u32>,
     mem_hist: VecDeque<f32>,
     /// Lectura previa `(total, idle)` por core, para derivar %uso por delta.
     prev_core: Vec<(u64, u64)>,
@@ -320,6 +324,11 @@ fn ingest_system(model: &mut Model, scan: Scan) {
         // delta_proc / delta_total_de_una_cpu = delta_proc / (dtotal/ncpu).
         let cpu_pct = (dproc / (dtotal / ncpu)).clamp(0.0, 100.0 * ncpu);
         next_prev.insert(p.pid, p.cpu_jiffies);
+        let uptime_secs = if scan.clk_tck > 0 {
+            (scan.uptime_secs - p.starttime_ticks as f64 / scan.clk_tck as f64).max(0.0) as u64
+        } else {
+            0
+        };
         out.push(SysProc {
             pid: p.pid,
             ppid: p.ppid,
@@ -330,6 +339,7 @@ fn ingest_system(model: &mut Model, scan: Scan) {
             rss_kb: p.rss_kb,
             threads: p.threads,
             uid: p.uid,
+            uptime_secs,
             cmd: p.cmd.clone(),
         });
     }
@@ -339,7 +349,7 @@ fn ingest_system(model: &mut Model, scan: Scan) {
         model.core_hist = vec![VecDeque::new(); scan.cores.len()];
         model.prev_core = vec![(0, 0); scan.cores.len()];
     }
-    for (i, &(total, idle)) in scan.cores.iter().enumerate() {
+    for (i, &(_id, total, idle)) in scan.cores.iter().enumerate() {
         let (ptotal, pidle) = model.prev_core[i];
         let dtot = total.saturating_sub(ptotal) as f32;
         let didle = idle.saturating_sub(pidle) as f32;
@@ -350,7 +360,8 @@ fn ingest_system(model: &mut Model, scan: Scan) {
         };
         push_capped(&mut model.core_hist[i], usage);
     }
-    model.prev_core = scan.cores.clone();
+    model.core_ids = scan.cores.iter().map(|&(id, _, _)| id).collect();
+    model.prev_core = scan.cores.iter().map(|&(_, t, i)| (t, i)).collect();
 
     // % de memoria usada para el gráfico de memoria.
     let mem_used_pct = if scan.mem_total_kb > 0 {
@@ -564,6 +575,7 @@ impl App for Monitor {
             mem_total_kb: 0,
             mem_avail_kb: 0,
             core_hist: Vec::new(),
+            core_ids: Vec::new(),
             mem_hist: VecDeque::new(),
             prev_core: Vec::new(),
             prev_proc: HashMap::new(),
@@ -1138,6 +1150,7 @@ const W_RSS: f32 = 78.0;
 const W_ST: f32 = 28.0;
 const W_THR: f32 = 46.0;
 const W_UID: f32 = 54.0;
+const W_TIME: f32 = 66.0;
 const ROW_H: f32 = 21.0;
 
 fn system_body(model: &Model) -> View<Msg> {
@@ -1219,8 +1232,9 @@ fn sys_graphs(model: &Model) -> View<Msg> {
 
     let mut items: Vec<View<Msg>> = Vec::with_capacity(model.core_hist.len() + 1);
     for (i, hist) in model.core_hist.iter().enumerate() {
+        let id = model.core_ids.get(i).copied().unwrap_or(i as u32);
         let now = hist.back().copied().unwrap_or(0.0);
-        items.push(meter(t, &format!("CPU{i}"), &format!("{now:.0}%"), hist, cpu_col, 126.0));
+        items.push(meter(t, &format!("CPU{id}"), &format!("{now:.0}%"), hist, cpu_col, 126.0));
     }
     let mem_now = model.mem_hist.back().copied().unwrap_or(0.0);
     let used_kb = model.mem_total_kb.saturating_sub(model.mem_avail_kb);
@@ -1498,6 +1512,7 @@ fn sys_header_row(model: &Model) -> View<Msg> {
         hcell("S", W_ST, None),
         hcell("HILOS", W_THR, None),
         hcell("UID", W_UID, None),
+        hcell("TIEMPO", W_TIME, None),
         cmd,
     ])
 }
@@ -1609,6 +1624,7 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
         cell(p.state.to_string(), W_ST, state_color(t, p.state)),
         cell(p.threads.to_string(), W_THR, t.fg_muted),
         cell(p.uid.to_string(), W_UID, t.fg_muted),
+        cell(fmt_dur(p.uptime_secs), W_TIME, t.fg_muted),
         cmd_cell,
     ])
 }
@@ -1910,6 +1926,23 @@ fn fmt_mem(bytes: u64) -> String {
     }
 }
 
+/// Duración compacta: `3d4h`, `5h02`, `12:34` (mm:ss), `45s`.
+fn fmt_dur(secs: u64) -> String {
+    let d = secs / 86_400;
+    let h = (secs % 86_400) / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if d > 0 {
+        format!("{d}d{h}h")
+    } else if h > 0 {
+        format!("{h}h{m:02}")
+    } else if m > 0 {
+        format!("{m}:{s:02}")
+    } else {
+        format!("{s}s")
+    }
+}
+
 /// Padding horizontal/vertical uniforme.
 fn pad(h: f32, v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPercentage> {
     Rect {
@@ -1939,6 +1972,7 @@ mod tests {
             rss_kb: 0,
             threads: 1,
             uid: 0,
+            uptime_secs: 0,
             cmd: format!("p{pid}"),
         }
     }

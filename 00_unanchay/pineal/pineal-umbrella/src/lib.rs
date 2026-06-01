@@ -57,3 +57,6 @@ pub use pineal_hexbin as hexbin;
 
 #[cfg(feature = "contour")]
 pub use pineal_contour as contour;
+
+#[cfg(feature = "bars")]
+pub use pineal_bars as bars;

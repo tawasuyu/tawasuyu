@@ -1,0 +1,12 @@
+[package]
+name = "pineal-bars"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — barras: columnas/barras simples, agrupadas y apiladas (vertical u horizontal) + histograma. Painter agnóstico sobre el trait Canvas."
+
+[dependencies]
+pineal-core = { path = "../pineal-core" }
+pineal-render = { path = "../pineal-render" }

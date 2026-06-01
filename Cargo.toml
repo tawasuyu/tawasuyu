@@ -24,6 +24,7 @@ members = [
     "00_unanchay/khipu/khipu-core",
     "00_unanchay/khipu/khipu-gravity",
     "00_unanchay/khipu/khipu-share",
+    "00_unanchay/pineal/demos/pineal-bars-demo",
     "00_unanchay/pineal/demos/pineal-contour-demo",
     "00_unanchay/pineal/demos/pineal-demo",
     "00_unanchay/pineal/demos/pineal-financial-demo",
@@ -37,6 +38,7 @@ members = [
     "00_unanchay/pineal/demos/pineal-polar-demo",
     "00_unanchay/pineal/demos/pineal-stream-demo",
     "00_unanchay/pineal/demos/pineal-treemap-demo",
+    "00_unanchay/pineal/pineal-bars",
     "00_unanchay/pineal/pineal-cartesian",
     "00_unanchay/pineal/pineal-contour",
     "00_unanchay/pineal/pineal-core",
@@ -767,6 +769,7 @@ pineal-phosphor = { path = "00_unanchay/pineal/pineal-phosphor" }
 pineal-export = { path = "00_unanchay/pineal/pineal-export" }
 pineal-hexbin = { path = "00_unanchay/pineal/pineal-hexbin" }
 pineal-contour = { path = "00_unanchay/pineal/pineal-contour" }
+pineal-bars = { path = "00_unanchay/pineal/pineal-bars" }
 pineal = { path = "00_unanchay/pineal/pineal-umbrella" }
 
 # ============================================================

@@ -20,3 +20,4 @@ pineal-hexbin = { path = "../../pineal-hexbin" }
 pineal-contour = { path = "../../pineal-contour" }
 pineal-flow = { path = "../../pineal-flow" }
 pineal-mesh = { path = "../../pineal-mesh" }
+pineal-bars = { path = "../../pineal-bars" }
