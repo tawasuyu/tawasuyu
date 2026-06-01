@@ -195,6 +195,28 @@ impl BodyState {
         BodyEvent::OutputResized { id, width, height }
     }
 
+    /// Reserva —o libera— franjas en los bordes de una salida: las zonas
+    /// exclusivas (px desde cada borde) que el teselado debe esquivar. Las usa
+    /// el marco (`pata`) para acoplar sus barras sin que las ventanas las tapen;
+    /// cero en los cuatro libera la reserva. No toca el tamaño físico, así que
+    /// admite barras en varios bordes a la vez.
+    pub fn reserve_output(
+        &self,
+        id: OutputId,
+        top: i32,
+        bottom: i32,
+        left: i32,
+        right: i32,
+    ) -> BodyEvent {
+        BodyEvent::OutputReserved {
+            id,
+            top,
+            bottom,
+            left,
+            right,
+        }
+    }
+
     /// Registra una superficie recién creada por un cliente.
     pub fn open_surface(
         &mut self,

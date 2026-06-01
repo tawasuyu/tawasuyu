@@ -82,11 +82,23 @@ pub enum BodyEvent {
     OutputAdded { id: OutputId, width: i32, height: i32 },
     /// Desapareció un monitor.
     OutputRemoved { id: OutputId },
-    /// Cambió el área útil de un monitor — porque se redimensionó la
-    /// ventana anfitriona, o porque el shell reservó o liberó su franja.
-    /// El escritorio que muestra **no** cambia (a diferencia de quitar y
-    /// volver a añadir la salida).
+    /// Cambió el tamaño físico de un monitor — se redimensionó la ventana
+    /// anfitriona o el backend reportó otra resolución. El escritorio que
+    /// muestra **no** cambia (a diferencia de quitar y volver a añadir).
     OutputResized { id: OutputId, width: i32, height: i32 },
+    /// El marco (`pata`/shell) reservó —o liberó— franjas en los bordes de un
+    /// monitor: las **zonas exclusivas** que el teselado debe esquivar, en
+    /// píxeles desde cada borde. Cero en los cuatro = nada reservado (el área
+    /// útil vuelve a ser el monitor entero). A diferencia de `OutputResized`,
+    /// no cambia el tamaño físico: sólo el área teselada dentro de él, así que
+    /// soporta barras en cualquier borde (top/bottom/left/right) a la vez.
+    OutputReserved {
+        id: OutputId,
+        top: i32,
+        bottom: i32,
+        left: i32,
+        right: i32,
+    },
     /// Un cliente creó una ventana de nivel superior.
     WindowOpened { id: WindowId, app_id: String, title: String },
     /// Una ventana se cerró (por el cliente o tras un [`BrainCommand::Close`]).

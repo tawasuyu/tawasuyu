@@ -22,8 +22,26 @@ pub struct Output {
     pub id: OutputId,
     /// Rectángulo en el espacio global — las salidas van en fila horizontal.
     pub rect: Rect,
+    /// Zonas exclusivas reservadas por el marco (`pata`/shell), en px desde
+    /// cada borde: `(top, bottom, left, right)`. El teselado las esquiva.
+    pub reserved: (i32, i32, i32, i32),
     /// Índice del escritorio que esta salida muestra.
     pub workspace: usize,
+}
+
+impl Output {
+    /// El área teselable: el rect global menos las zonas reservadas. Es lo que
+    /// se le pasa al motor de layout, así que las barras de cualquier borde
+    /// quedan libres de ventanas.
+    pub fn work_rect(&self) -> Rect {
+        let (top, bottom, left, right) = self.reserved;
+        Rect::new(
+            self.rect.x + left,
+            self.rect.y + top,
+            (self.rect.w - left - right).max(1),
+            (self.rect.h - top - bottom).max(1),
+        )
+    }
 }
 
 /// El estado completo del escritorio.
@@ -128,6 +146,7 @@ impl Desktop {
                 self.outputs.push(Output {
                     id,
                     rect: Rect::new(0, 0, width, height),
+                    reserved: (0, 0, 0, 0),
                     workspace,
                 });
                 self.reflow_outputs();
@@ -148,6 +167,22 @@ impl Desktop {
                     o.rect.w = width;
                     o.rect.h = height;
                     self.reflow_outputs();
+                    self.relayout()
+                } else {
+                    Vec::new()
+                }
+            }
+            BodyEvent::OutputReserved {
+                id,
+                top,
+                bottom,
+                left,
+                right,
+            } => {
+                // El marco reservó/liberó franjas: cambia el área teselable
+                // sin tocar el tamaño físico ni el escritorio que muestra.
+                if let Some(o) = self.outputs.iter_mut().find(|o| o.id == id) {
+                    o.reserved = (top.max(0), bottom.max(0), left.max(0), right.max(0));
                     self.relayout()
                 } else {
                     Vec::new()
@@ -468,7 +503,9 @@ impl Desktop {
         }
         let mut all = Vec::new();
         for o in &self.outputs {
-            all.extend(placements(&self.workspaces[o.workspace], o.rect));
+            // El teselado usa el área útil (rect menos zonas reservadas), así las
+            // barras del marco en cualquier borde quedan libres de ventanas.
+            all.extend(placements(&self.workspaces[o.workspace], o.work_rect()));
         }
         // El foco del teclado es único: sólo la ventana enfocada de la
         // salida enfocada. `placements` marca el foco por escritorio (lo
@@ -904,6 +941,44 @@ mod tests {
         // escritorio activo se conserva.
         assert_eq!(d.active_index(), 1);
         assert!(matches!(cmds.as_slice(), [BrainCommand::Place(_)]));
+    }
+
+    #[test]
+    fn reservar_franja_desplaza_y_encoge_el_teselado() {
+        let mut d = desktop_with_screen(); // 1920×1080
+        let cmds = open(&mut d, 1);
+        // Una sola ventana ocupa toda el área útil (smart gaps).
+        assert_eq!(places(&cmds)[0].rect, Rect::new(0, 0, 1920, 1080));
+
+        // Reserva 40px arriba: la ventana arranca en y=40 y pierde 40 de alto.
+        let cmds = d.on_event(BodyEvent::OutputReserved {
+            id: 0,
+            top: 40,
+            bottom: 0,
+            left: 0,
+            right: 0,
+        });
+        assert_eq!(places(&cmds)[0].rect, Rect::new(0, 40, 1920, 1040));
+
+        // Reserva izquierda en vez de arriba: desplaza en x y encoge el ancho.
+        let cmds = d.on_event(BodyEvent::OutputReserved {
+            id: 0,
+            top: 0,
+            bottom: 0,
+            left: 48,
+            right: 0,
+        });
+        assert_eq!(places(&cmds)[0].rect, Rect::new(48, 0, 1872, 1080));
+
+        // Liberar (cero en los cuatro) restaura el monitor entero.
+        let cmds = d.on_event(BodyEvent::OutputReserved {
+            id: 0,
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
+        });
+        assert_eq!(places(&cmds)[0].rect, Rect::new(0, 0, 1920, 1080));
     }
 
     #[test]

@@ -132,14 +132,6 @@ impl ShellAnchor {
     fn es_horizontal(&self) -> bool {
         matches!(self, Self::Top | Self::Bottom)
     }
-
-    /// `true` si reservar su franja sólo encoge ancho/alto sin mover el origen
-    /// del teselado (bottom/right). `top`/`left` necesitarían propagar un offset
-    /// de origen que el Cuerpo todavía no expresa (Fase 8b): por ahora su barra
-    /// se coloca pero **flota**, sin reservar — como una superficie `autohide`.
-    fn reserva_inline(&self) -> bool {
-        matches!(self, Self::Bottom | Self::Right)
-    }
 }
 
 /// Config del acople del shell, resuelta una vez desde el entorno:
@@ -166,13 +158,6 @@ fn shell_dock() -> &'static ShellDock {
             .and_then(|s| s.trim().parse::<i32>().ok())
             .filter(|t| *t > 0)
             .unwrap_or(SHELL_DOCK_DEFAULT);
-        if !anchor.reserva_inline() {
-            eprintln!(
-                "mirada-compositor · aviso: el anclaje {anchor:?} del shell aún no \
-                 descuenta el offset de origen del teselado (Fase 8b); la barra se \
-                 coloca pero flota sobre las ventanas, sin reservar su franja."
-            );
-        }
         ShellDock {
             app_id,
             anchor,
@@ -198,13 +183,14 @@ fn shell_strip(anchor: ShellAnchor, ow: i32, oh: i32, t: i32) -> (i32, i32, i32,
     }
 }
 
-/// El tamaño `(w, h)` del área útil tras reservar la franja. Para los bordes que
-/// no reservan inline (top/left) devuelve la salida entera. Pura — testeable.
-fn shell_work_size(anchor: ShellAnchor, ow: i32, oh: i32, t: i32) -> (i32, i32) {
+/// Las zonas exclusivas `(top, bottom, left, right)` que reserva una franja de
+/// grosor `t` en el borde `anchor` — lo que el teselado debe esquivar. Pura.
+fn shell_insets(anchor: ShellAnchor, t: i32) -> (i32, i32, i32, i32) {
     match anchor {
-        ShellAnchor::Bottom => (ow, (oh - t).max(1)),
-        ShellAnchor::Right => ((ow - t).max(1), oh),
-        ShellAnchor::Top | ShellAnchor::Left => (ow, oh),
+        ShellAnchor::Top => (t, 0, 0, 0),
+        ShellAnchor::Bottom => (0, t, 0, 0),
+        ShellAnchor::Left => (0, 0, t, 0),
+        ShellAnchor::Right => (0, 0, 0, t),
     }
 }
 
@@ -468,11 +454,11 @@ impl App {
         }
     }
 
-    /// Acopla la ventana del shell (el marco `pata`): le reserva una franja en
-    /// el borde configurado —el Cerebro tesela el área que queda— y la
-    /// dimensiona y coloca ahí. Se llama al registrarla y al cambiar el tamaño
-    /// de la salida. Para bottom/right la reserva encoge el área útil; para
-    /// top/left la barra se coloca pero flota (ver [`ShellAnchor::reserva_inline`]).
+    /// Acopla la ventana del shell (el marco `pata`): reserva la zona exclusiva
+    /// de su borde —el Cerebro tesela el resto, esquivándola— y dimensiona y
+    /// coloca la franja ahí. Se llama al registrarla y al cambiar el tamaño de
+    /// la salida. Funciona en cualquiera de los cuatro bordes: la reserva por
+    /// insets desplaza y encoge el área útil sin tocar el tamaño físico.
     fn dock_shell(&mut self) {
         let (ow, oh) = self.output_size;
         if ow == 0 || oh == 0 {
@@ -483,9 +469,9 @@ impl App {
         let limite = if dock.anchor.es_horizontal() { oh } else { ow };
         let t = dock.thickness.clamp(1, limite.max(1));
 
-        // Reserva el área útil (sólo encoge para bottom/right; top/left no reservan).
-        let (sw, sh) = shell_work_size(dock.anchor, ow, oh, t);
-        let ev = self.body.resize_output(0, sw, sh);
+        // Reserva la zona exclusiva del borde — el teselado la esquiva.
+        let (top, bottom, left, right) = shell_insets(dock.anchor, t);
+        let ev = self.body.reserve_output(0, top, bottom, left, right);
         self.brain_feed(ev);
 
         // Dimensiona la ventana del shell y la fija en la franja del borde.
@@ -502,15 +488,14 @@ impl App {
     }
 
     /// El backend informa de un tamaño de salida nuevo (arranque o
-    /// redimensión). Si hay shell acoplado, recoloca su franja; si no,
-    /// le pasa el área entera al Cerebro.
+    /// redimensión): fija el tamaño físico y, si hay shell acoplado, recalcula
+    /// su franja (la reserva por insets se mantiene relativa al borde).
     fn output_changed(&mut self, width: i32, height: i32) {
         self.output_size = (width, height);
+        let ev = self.body.resize_output(0, width, height);
+        self.brain_feed(ev);
         if self.windows.iter().any(|w| w.is_shell) {
             self.dock_shell();
-        } else {
-            let ev = self.body.resize_output(0, width, height);
-            self.brain_feed(ev);
         }
     }
 
@@ -621,13 +606,10 @@ impl XdgShellHandler for App {
         if let Some(pos) = pos {
             let w = self.windows.remove(pos);
             if w.is_shell {
-                // El shell se cerró: libera su franja, el Cerebro vuelve
-                // a teselar en la salida entera.
-                let (ow, oh) = self.output_size;
-                if ow != 0 && oh != 0 {
-                    let ev = self.body.resize_output(0, ow, oh);
-                    self.brain_feed(ev);
-                }
+                // El shell se cerró: libera su reserva (insets en cero), el
+                // Cerebro vuelve a teselar en la salida entera.
+                let ev = self.body.reserve_output(0, 0, 0, 0, 0);
+                self.brain_feed(ev);
             } else if let Some(ev) = self.body.close_surface(w.id) {
                 self.brain_feed(ev);
             }
@@ -1523,11 +1505,11 @@ mod tests {
     }
 
     #[test]
-    fn solo_bottom_y_right_reservan_inline() {
-        assert!(ShellAnchor::Bottom.reserva_inline());
-        assert!(ShellAnchor::Right.reserva_inline());
-        assert!(!ShellAnchor::Top.reserva_inline());
-        assert!(!ShellAnchor::Left.reserva_inline());
+    fn anchor_horizontalidad() {
+        assert!(ShellAnchor::Top.es_horizontal());
+        assert!(ShellAnchor::Bottom.es_horizontal());
+        assert!(!ShellAnchor::Left.es_horizontal());
+        assert!(!ShellAnchor::Right.es_horizontal());
     }
 
     #[test]
@@ -1546,11 +1528,11 @@ mod tests {
     }
 
     #[test]
-    fn area_util_reserva_en_bottom_y_right_y_no_en_top_left() {
-        assert_eq!(shell_work_size(ShellAnchor::Bottom, 1920, 1080, 40), (1920, 1040));
-        assert_eq!(shell_work_size(ShellAnchor::Right, 1920, 1080, 40), (1880, 1080));
-        // top/left no reservan inline: el área útil es la salida entera.
-        assert_eq!(shell_work_size(ShellAnchor::Top, 1920, 1080, 40), (1920, 1080));
-        assert_eq!(shell_work_size(ShellAnchor::Left, 1920, 1080, 40), (1920, 1080));
+    fn insets_reservan_la_zona_del_borde_correcto() {
+        // (top, bottom, left, right) — sólo el borde anclado lleva el grosor.
+        assert_eq!(shell_insets(ShellAnchor::Top, 40), (40, 0, 0, 0));
+        assert_eq!(shell_insets(ShellAnchor::Bottom, 40), (0, 40, 0, 0));
+        assert_eq!(shell_insets(ShellAnchor::Left, 48), (0, 0, 48, 0));
+        assert_eq!(shell_insets(ShellAnchor::Right, 48), (0, 0, 0, 48));
     }
 }
