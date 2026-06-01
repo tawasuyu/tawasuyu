@@ -130,6 +130,12 @@ enum Msg {
     SysTree(bool),
     /// Colapsar/expandir el subárbol de un PID.
     SysToggleNode(i32),
+    /// Entrar/salir del modo filtro (sin borrar el texto).
+    FilterMode(bool),
+    /// Texto del filtro (edición en vivo).
+    FilterSet(String),
+    /// Salir del modo filtro y limpiar el texto.
+    FilterClose,
     Signal(i32, Sig),
     Switch(Tab),
     Select(Option<Ulid>),
@@ -179,6 +185,10 @@ struct Model {
     sys_tree: bool,
     /// PIDs con su subárbol colapsado.
     collapsed: HashSet<i32>,
+    /// Filtro por nombre/comando/PID (vacío = sin filtro).
+    sys_filter: String,
+    /// Capturando teclas para el filtro (modo búsqueda activo).
+    filter_mode: bool,
     mem_total_kb: u64,
     /// Jiffies previos por PID + total, para derivar %CPU por delta.
     prev_proc: HashMap<i32, u64>,
@@ -366,6 +376,22 @@ struct RenderRow {
 /// árbol padre/hijo (modo árbol), respetando los subárboles colapsados. Es la
 /// única fuente de orden — render, scroll, navegación ↑↓ comparten esto.
 fn render_list(model: &Model) -> Vec<RenderRow> {
+    let q = model.sys_filter.trim().to_lowercase();
+    // Con filtro activo se aplana a lista plana de coincidencias (filtrar un
+    // árbol rompería la jerarquía — comportamiento htop).
+    if !q.is_empty() {
+        return model
+            .system
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| proc_matches(p, &q))
+            .map(|(idx, _)| RenderRow {
+                idx,
+                depth: 0,
+                has_kids: false,
+            })
+            .collect();
+    }
     if !model.sys_tree {
         return (0..model.system.len())
             .map(|idx| RenderRow {
@@ -376,6 +402,14 @@ fn render_list(model: &Model) -> Vec<RenderRow> {
             .collect();
     }
     flatten_tree(&model.system, &model.collapsed)
+}
+
+/// Un proceso coincide con `q` (ya en minúsculas) si lo contiene su nombre, su
+/// línea de comando o su PID.
+fn proc_matches(p: &SysProc, q: &str) -> bool {
+    p.name.to_lowercase().contains(q)
+        || p.cmd.to_lowercase().contains(q)
+        || p.pid.to_string().contains(q)
 }
 
 /// Aplana el bosque padre/hijo de `system` (ya ordenado) en orden DFS,
@@ -482,6 +516,8 @@ impl App for Monitor {
             sys_scroll: 0,
             sys_tree: true,
             collapsed: HashSet::new(),
+            sys_filter: String::new(),
+            filter_mode: false,
             mem_total_kb: 0,
             prev_proc: HashMap::new(),
             prev_total: 0,
@@ -543,6 +579,17 @@ impl App for Monitor {
                 if model.sys_scroll > max {
                     model.sys_scroll = max;
                 }
+            }
+            Msg::FilterMode(on) => model.filter_mode = on,
+            Msg::FilterSet(s) => {
+                model.sys_filter = s;
+                model.sys_scroll = 0;
+                ensure_visible(&mut model);
+            }
+            Msg::FilterClose => {
+                model.filter_mode = false;
+                model.sys_filter.clear();
+                model.sys_scroll = 0;
             }
             Msg::Signal(pid, sig) => {
                 if let Err(e) = procfs::signal(pid, sig) {
@@ -636,6 +683,30 @@ impl App for Monitor {
         if ev.state != KeyState::Pressed {
             return None;
         }
+
+        // Modo filtro: el tipeo edita el texto de búsqueda. Las flechas y los
+        // atajos con Ctrl caen al manejo normal (filtrar y navegar a la vez).
+        if model.tab == Tab::System && model.filter_mode {
+            match &ev.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::FilterClose),
+                Key::Named(NamedKey::Enter) => return Some(Msg::FilterMode(false)),
+                Key::Named(NamedKey::Backspace) => {
+                    let mut s = model.sys_filter.clone();
+                    s.pop();
+                    return Some(Msg::FilterSet(s));
+                }
+                _ => {
+                    if !ev.modifiers.ctrl && !ev.modifiers.meta {
+                        if let Some(txt) = &ev.text {
+                            if !txt.is_empty() && txt.chars().all(|c| !c.is_control()) {
+                                return Some(Msg::FilterSet(format!("{}{txt}", model.sys_filter)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         match &ev.key {
             Key::Named(NamedKey::Escape) => {
                 return Some(if model.menu_open.is_some() {
@@ -679,8 +750,15 @@ impl App for Monitor {
                     }
                 }
             }
+            // `/` abre el filtro en Sistema (estilo htop/less).
+            Key::Character(c)
+                if model.tab == Tab::System && !ev.modifiers.ctrl && c.as_str() == "/" =>
+            {
+                return Some(Msg::FilterMode(true));
+            }
             Key::Character(c) if ev.modifiers.ctrl => {
                 match c.as_str().to_ascii_lowercase().as_str() {
+                    "f" if model.tab == Tab::System => return Some(Msg::FilterMode(true)),
                     "r" => return Some(Msg::MenuCmd("monitor.refresh".into())),
                     "q" => return Some(Msg::MenuCmd("app.quit".into())),
                     "1" => return Some(Msg::MenuCmd("view.system".into())),
@@ -1063,6 +1141,7 @@ fn system_body(model: &Model) -> View<Msg> {
     .fill(t.bg_app)
     .children(vec![
         sys_action_bar(model, sel),
+        sys_filter_bar(model, total),
         View::new(Style {
             flex_direction: FlexDirection::Column,
             flex_grow: 1.0,
@@ -1127,6 +1206,69 @@ fn sys_action_bar(model: &Model, sel: Option<&SysProc>) -> View<Msg> {
         ..Default::default()
     })
     .fill(t.bg_panel_alt)
+    .children(row)
+}
+
+/// Barra de filtro (búsqueda por nombre/comando/PID). Click la enfoca; `/`
+/// también. Muestra el texto en vivo con caret, el conteo de coincidencias y
+/// una ✕ para limpiar.
+fn sys_filter_bar(model: &Model, matches: usize) -> View<Msg> {
+    let t = &model.theme;
+    let has = !model.sys_filter.is_empty();
+    let active = model.filter_mode;
+
+    let (shown, color) = if !has && !active {
+        (
+            "Filtrar por nombre o PID  ·  «/» o Ctrl+F".to_string(),
+            t.fg_placeholder,
+        )
+    } else {
+        let caret = if active { "▏" } else { "" };
+        (format!("{}{caret}", model.sys_filter), t.fg_text)
+    };
+
+    let mut row: Vec<View<Msg>> = vec![
+        View::new(Style {
+            size: Size {
+                width: length(20.0),
+                height: percent(1.0),
+            },
+            flex_shrink: 0.0,
+            justify_content: Some(JustifyContent::Center),
+            flex_direction: FlexDirection::Column,
+            ..Default::default()
+        })
+        .text("🔎", 12.0, t.fg_muted),
+        View::new(Style {
+            flex_grow: 1.0,
+            justify_content: Some(JustifyContent::Center),
+            flex_direction: FlexDirection::Column,
+            ..Default::default()
+        })
+        .clip(true)
+        .text(shown, 12.0, color)
+        .on_click(Msg::FilterMode(true)),
+    ];
+    if has {
+        row.push(
+            View::new(Style::default())
+                .text(format!("{matches} coinciden"), 11.0, t.fg_muted),
+        );
+        row.push(action_btn(t, "✕", t.bg_button, t.fg_text, Msg::FilterClose));
+    }
+
+    let bg = if active { t.bg_input_focus } else { t.bg_input };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(8.0),
+            height: length(6.0),
+        },
+        padding: pad(16.0, 6.0),
+        ..Default::default()
+    })
+    .fill(bg)
     .children(row)
 }
 
@@ -1644,6 +1786,17 @@ mod tests {
         // 1 y 2 tienen hijos; 4, 3, 9 no.
         assert!(rows[0].has_kids && rows[1].has_kids);
         assert!(!rows[2].has_kids && !rows[3].has_kids && !rows[4].has_kids);
+    }
+
+    #[test]
+    fn filtro_matchea_nombre_comando_y_pid() {
+        let mut p = proc(1234, 1);
+        p.name = "firefox".into();
+        p.cmd = "/usr/lib/firefox/firefox -contentproc".into();
+        assert!(proc_matches(&p, "fire")); // por nombre
+        assert!(proc_matches(&p, "contentproc")); // por comando
+        assert!(proc_matches(&p, "234")); // por PID (substring)
+        assert!(!proc_matches(&p, "chrome"));
     }
 
     #[test]
