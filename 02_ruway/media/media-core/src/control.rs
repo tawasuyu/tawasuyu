@@ -72,6 +72,14 @@ pub enum MediaCommand {
     EqBandBy { idx: usize, delta_db: f32 },
     /// Aplana el ecualizador (todas las bandas a 0 dB).
     EqReset,
+    /// Ajusta el desfase A/V (lipsync) sumando `ms` milisegundos al offset
+    /// actual (la app clampea a ±5 s). Positivo retrasa el video respecto
+    /// del audio; negativo lo adelanta. Es el `--audio-delay` de mpv/VLC,
+    /// reversible y sin tocar el stream de audio (corre la ventana de
+    /// presentación de `crate::sync`).
+    AvSyncBy { ms: i64 },
+    /// Vuelve el desfase A/V a cero.
+    AvSyncReset,
 }
 
 impl MediaCommand {
@@ -113,6 +121,11 @@ impl MediaCommand {
                 let signo = if *delta_db >= 0.0 { "+" } else { "" };
                 format!("EQ {banda} {signo}{delta_db:.0} dB")
             }
+            AvSyncBy { ms } if *ms < 0 => {
+                format!("Sync A/V −{}ms (adelantar video)", ms.abs())
+            }
+            AvSyncBy { ms } => format!("Sync A/V +{ms}ms (retrasar video)"),
+            AvSyncReset => "Sync A/V a cero".to_string(),
         }
     }
 }
@@ -310,6 +323,11 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             b(KeyChord::key("c"), ToggleRecord),
             b(KeyChord::shift("s"), Snapshot),
             b(KeyChord::key("e"), EqToggle),
+            // Lipsync: j adelanta el video (audio tarde), k lo retrasa,
+            // Shift+J vuelve a cero. Pasos de 50 ms como mpv (Ctrl±).
+            b(KeyChord::key("j"), AvSyncBy { ms: -50 }),
+            b(KeyChord::key("k"), AvSyncBy { ms: 50 }),
+            b(KeyChord::shift("j"), AvSyncReset),
             b(
                 KeyChord::key("b"),
                 Script {

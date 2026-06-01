@@ -79,6 +79,8 @@ ControlSettings(
 | `]` / `[`    | SpeedStep +1 / −1   | cicla `speed_steps`            |
 | `=`          | SetSpeed 1.0×       | reset (más flexible que VLC)   |
 | `c`          | ToggleRecord        | capture                        |
+| `j` / `k`    | AvSyncBy ∓50 ms     | lipsync: adelanta / retrasa el video (`--audio-delay`) |
+| `Shift+J`    | AvSyncReset         | desfase A/V a cero             |
 | `Shift+s`    | Snapshot            | como VLC (Shift+S)             |
 | `b`          | Script «potenciar»  | ejemplo Rhai (vol 100% + 1.25×) |
 | (click)      | SeekTo fracción     | timeline scrubbeable bajo el video |

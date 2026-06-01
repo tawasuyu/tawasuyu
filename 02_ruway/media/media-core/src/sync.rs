@@ -68,6 +68,24 @@ impl Default for SyncConfig {
 /// no representa valores negativos: un frame puede estar antes o después
 /// del reloj.
 pub fn plan_frame(audio: Duration, frame_pts: Duration, cfg: &SyncConfig) -> FramePlan {
+    plan_frame_offset(audio, frame_pts, 0, cfg)
+}
+
+/// Como [`plan_frame`] pero con un **desfase A/V firmado** en nanosegundos
+/// (`offset_ns`) — el ajuste de lipsync (A4 de `PARIDAD.md`, el
+/// `--audio-delay` de mpv/VLC). `offset_ns` **positivo retrasa el video**
+/// respecto del audio (equivale a adelantar el audio); negativo lo
+/// adelanta. No toca el stream de audio: sólo corre la ventana de
+/// presentación, así que vale para ambas direcciones y es reversible.
+///
+/// El audio efectivo es `audio - offset`: con offset positivo el frame
+/// queda "más adelantado" → se retiene más → el video se atrasa.
+pub fn plan_frame_offset(
+    audio: Duration,
+    frame_pts: Duration,
+    offset_ns: i64,
+    cfg: &SyncConfig,
+) -> FramePlan {
     let audio_ns = audio.as_nanos() as i128;
     let pts_ns = frame_pts.as_nanos() as i128;
     let ahead_ns = cfg.present_ahead.as_nanos() as i128;
@@ -75,7 +93,8 @@ pub fn plan_frame(audio: Duration, frame_pts: Duration, cfg: &SyncConfig) -> Fra
 
     // diff > 0: el frame va por DELANTE del audio (es futuro).
     // diff < 0: el frame va por DETRÁS del audio (es pasado, tarde).
-    let diff = pts_ns - audio_ns;
+    // El offset corre la referencia: diff = pts - (audio - offset).
+    let diff = pts_ns - audio_ns + offset_ns as i128;
 
     if diff > ahead_ns {
         // Demasiado adelantado: esperar hasta que entre a la ventana
@@ -100,10 +119,17 @@ pub fn plan_frame(audio: Duration, frame_pts: Duration, cfg: &SyncConfig) -> Fra
 #[derive(Debug, Clone)]
 pub struct AvSync {
     cfg: SyncConfig,
+    /// Desfase A/V firmado en nanos (A4). Positivo retrasa el video.
+    offset_ns: i64,
     presented: u64,
     dropped: u64,
     held: u64,
 }
+
+/// Tope del desfase A/V manual (±5 s). Más allá no es lipsync sino otra
+/// cosa; clampeamos para que un atajo repetido no mande el video a otro
+/// planeta.
+pub const MAX_OFFSET_MS: i64 = 5_000;
 
 impl Default for AvSync {
     fn default() -> Self {
@@ -115,6 +141,7 @@ impl AvSync {
     pub fn new(cfg: SyncConfig) -> Self {
         AvSync {
             cfg,
+            offset_ns: 0,
             presented: 0,
             dropped: 0,
             held: 0,
@@ -131,11 +158,28 @@ impl AvSync {
         self.cfg = cfg;
     }
 
+    /// Desfase A/V manual actual en milisegundos (positivo = video atrasado).
+    pub fn offset_ms(&self) -> i64 {
+        self.offset_ns / 1_000_000
+    }
+
+    /// Fija el desfase A/V manual en ms, clampeado a ±[`MAX_OFFSET_MS`].
+    pub fn set_offset_ms(&mut self, ms: i64) {
+        let ms = ms.clamp(-MAX_OFFSET_MS, MAX_OFFSET_MS);
+        self.offset_ns = ms * 1_000_000;
+    }
+
+    /// Suma `delta_ms` al desfase A/V (negativo adelanta el video). Atajo
+    /// para los comandos `AvSyncBy` que ciclan el lipsync con una tecla.
+    pub fn add_offset_ms(&mut self, delta_ms: i64) {
+        self.set_offset_ms(self.offset_ms() + delta_ms);
+    }
+
     /// Planea un frame y actualiza los contadores. `Hold` NO cuenta como
     /// presentado ni descartado (el frame sigue pendiente); se cuenta
-    /// aparte para diagnóstico.
+    /// aparte para diagnóstico. Aplica el desfase A/V manual ([`offset_ms`]).
     pub fn plan(&mut self, audio: Duration, frame_pts: Duration) -> FramePlan {
-        let plan = plan_frame(audio, frame_pts, &self.cfg);
+        let plan = plan_frame_offset(audio, frame_pts, self.offset_ns, &self.cfg);
         match plan {
             FramePlan::Present => self.presented += 1,
             FramePlan::Drop => self.dropped += 1,
@@ -244,6 +288,55 @@ mod tests {
         assert!(sync.presented() > 0 || sync.dropped() > 0);
         sync.reset();
         assert_eq!((sync.presented(), sync.dropped(), sync.held()), (0, 0, 0));
+    }
+
+    #[test]
+    fn offset_positivo_retrasa_el_video() {
+        let cfg = SyncConfig::default();
+        // Un frame en hora con el audio se presenta sin offset.
+        assert_eq!(
+            plan_frame_offset(ms(1000), ms(1000), 0, &cfg),
+            FramePlan::Present
+        );
+        // Offset +100 ms (retrasar video): ese mismo frame queda "por
+        // delante" del audio efectivo → se retiene, así el video se atrasa.
+        let off = 100 * 1_000_000;
+        assert!(matches!(
+            plan_frame_offset(ms(1000), ms(1000), off, &cfg),
+            FramePlan::Hold { .. }
+        ));
+    }
+
+    #[test]
+    fn offset_negativo_adelanta_el_video() {
+        let cfg = SyncConfig::default();
+        // Un frame en hora con el audio. Offset −100 ms (adelantar video):
+        // el frame pasa a quedar 100 ms atrasado respecto del audio
+        // efectivo → se descarta para que el video corra adelante.
+        let off = -100 * 1_000_000;
+        assert_eq!(
+            plan_frame_offset(ms(1000), ms(1000), off, &cfg),
+            FramePlan::Drop
+        );
+    }
+
+    #[test]
+    fn avsync_aplica_y_clampea_el_offset() {
+        let mut sync = AvSync::default();
+        assert_eq!(sync.offset_ms(), 0);
+        sync.add_offset_ms(100);
+        assert_eq!(sync.offset_ms(), 100);
+        // Con +100 ms (retrasar video), un frame en hora pasa a retenerse.
+        assert!(matches!(sync.plan(ms(1000), ms(1000)), FramePlan::Hold { .. }));
+        // Clamp al tope ±MAX_OFFSET_MS.
+        sync.set_offset_ms(999_999);
+        assert_eq!(sync.offset_ms(), MAX_OFFSET_MS);
+        sync.set_offset_ms(-999_999);
+        assert_eq!(sync.offset_ms(), -MAX_OFFSET_MS);
+        // reset() NO toca el offset (es preferencia, no contador).
+        sync.set_offset_ms(40);
+        sync.reset();
+        assert_eq!(sync.offset_ms(), 40);
     }
 
     #[test]

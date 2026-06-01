@@ -39,7 +39,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 
 ### Pendiente
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
-- Track AUDIO A2–A6 (selección de pista, dispositivo de salida, delay, normalización/ReplayGain, gapless/crossfade).
+- Track AUDIO A2/A3/A5/A6 (selección de pista, dispositivo de salida, normalización/ReplayGain, gapless/crossfade). **A4 (delay/sync) ✅.**
 - Track VIDEO V1–V8 (fullscreen, aspect/crop/zoom, rotación, ajustes de color, deinterlacing, filtros/shaders, capítulos, HDR) — todo pendiente.
 - Track SUBTÍTULOS S1–S5 (ASS/SSA, pistas embebidas, estilo configurable, delay/sync, auto-carga).
 - Track RED R1–R4 (URL/HLS/RTSP, yt-dlp/plataformas, streaming server, DLNA/Chromecast) — totalmente ausente; prerequisito de FREETUBE.md.
@@ -81,7 +81,14 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 - **A2 — Selección de pista de audio** (archivos multi-stream / multi-idioma).
 - **A3 — Selección de dispositivo de salida** (hoy `media-audio-cpal` usa
   sólo el default output device).
-- **A4 — Delay/sync de audio** (`--audio-delay`).
+- **A4 — Delay/sync de audio** (`--audio-delay`). ✅ *Cerrado (2026-06-01).*
+  Desfase A/V firmado en la política de sync (`plan_frame_offset` +
+  `AvSync::{offset_ms,set_offset_ms,add_offset_ms}`, clamp ±5 s): corre la
+  ventana de presentación sin tocar el stream de audio, así vale para ambas
+  direcciones (positivo retrasa el video, negativo lo adelanta) y es
+  reversible. Comandos `MediaCommand::{AvSyncBy{ms},AvSyncReset}` atados a
+  `j`/`k`/`Shift+J` por defecto y en el palette/ayuda (grupo "Sync A/V").
+  Coherente con M1: el ajuste vive donde se compara PTS vs reloj de audio.
 - **A5 — Normalización / ReplayGain / limitador**, downmix/upmix.
 - **A6 — Gapless garantizado / crossfade** entre pistas.
 

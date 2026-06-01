@@ -939,6 +939,9 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (SetSpeed { mult: 1.0 }, "Velocidad"),
         (EqToggle, "Ecualizador"),
         (EqReset, "Ecualizador"),
+        (AvSyncBy { ms: -50 }, "Sync A/V"),
+        (AvSyncBy { ms: 50 }, "Sync A/V"),
+        (AvSyncReset, "Sync A/V"),
         (Snapshot, "Captura"),
         (ToggleRecord, "Captura"),
     ];
@@ -1085,6 +1088,19 @@ fn apply_command(cmd: MediaCommand) {
         EqReset => {
             eq().set_all_gains(&[0.0; ISO_10_BANDS_HZ.len()]);
             eprintln!("media-app: eq plano");
+        }
+        AvSyncBy { ms } => {
+            if let Some(pipe) = pipeline_slot().get() {
+                let mut s = pipe.sync.lock();
+                s.add_offset_ms(ms);
+                eprintln!("media-app: sync A/V {:+}ms", s.offset_ms());
+            }
+        }
+        AvSyncReset => {
+            if let Some(pipe) = pipeline_slot().get() {
+                pipe.sync.lock().set_offset_ms(0);
+                eprintln!("media-app: sync A/V a cero");
+            }
         }
     }
 }
