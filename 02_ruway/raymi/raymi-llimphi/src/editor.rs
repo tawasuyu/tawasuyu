@@ -7,6 +7,7 @@
 
 use llimphi_widget_text_input::TextInputState;
 
+use raymi_core::recur::{self, Freq, Recurrence};
 use raymi_core::time::{self, CivilDate};
 use raymi_core::{Contact, Event};
 
@@ -25,29 +26,124 @@ impl Editor {
 
 // ── Evento ──────────────────────────────────────────────────────────────────
 
-/// Campo enfocado del editor de evento (orden del ciclo Tab).
+/// Campo de texto enfocado del editor de evento (orden del ciclo Tab).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventField {
     Summary,
     Date,
     Start,
     End,
+    Interval,
+    Count,
+    Until,
     Location,
     Description,
 }
 
 impl EventField {
-    /// Siguiente campo en el ciclo. Salta hora cuando es de día completo lo
-    /// resuelve el llamador; aquí el ciclo es plano.
+    /// Siguiente campo en el ciclo (plano; el formulario oculta los irrelevantes).
     pub fn next(self) -> Self {
         use EventField::*;
         match self {
             Summary => Date,
             Date => Start,
             Start => End,
-            End => Location,
+            End => Interval,
+            Interval => Count,
+            Count => Until,
+            Until => Location,
             Location => Description,
             Description => Summary,
+        }
+    }
+}
+
+/// Cadencia de repetición elegida en la UI (`Freq` + “no se repite”).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repeat {
+    None,
+    Daily,
+    Weekly,
+    Monthly,
+    Yearly,
+}
+
+impl Repeat {
+    pub fn next(self) -> Self {
+        use Repeat::*;
+        match self {
+            None => Daily,
+            Daily => Weekly,
+            Weekly => Monthly,
+            Monthly => Yearly,
+            Yearly => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Repeat::None => "No se repite",
+            Repeat::Daily => "Diariamente",
+            Repeat::Weekly => "Semanalmente",
+            Repeat::Monthly => "Mensualmente",
+            Repeat::Yearly => "Anualmente",
+        }
+    }
+
+    /// Etiqueta de la unidad del intervalo (“cada N …”).
+    pub fn unit(self) -> &'static str {
+        match self {
+            Repeat::None => "",
+            Repeat::Daily => "día(s)",
+            Repeat::Weekly => "semana(s)",
+            Repeat::Monthly => "mes(es)",
+            Repeat::Yearly => "año(s)",
+        }
+    }
+
+    fn to_freq(self) -> Option<Freq> {
+        match self {
+            Repeat::None => None,
+            Repeat::Daily => Some(Freq::Daily),
+            Repeat::Weekly => Some(Freq::Weekly),
+            Repeat::Monthly => Some(Freq::Monthly),
+            Repeat::Yearly => Some(Freq::Yearly),
+        }
+    }
+
+    fn from_freq(f: Freq) -> Self {
+        match f {
+            Freq::Daily => Repeat::Daily,
+            Freq::Weekly => Repeat::Weekly,
+            Freq::Monthly => Repeat::Monthly,
+            Freq::Yearly => Repeat::Yearly,
+        }
+    }
+}
+
+/// Condición de término de la repetición.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepeatEnd {
+    Never,
+    Count,
+    Until,
+}
+
+impl RepeatEnd {
+    pub fn next(self) -> Self {
+        use RepeatEnd::*;
+        match self {
+            Never => Count,
+            Count => Until,
+            Until => Never,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RepeatEnd::Never => "Sin fin",
+            RepeatEnd::Count => "Tras N veces",
+            RepeatEnd::Until => "Hasta fecha",
         }
     }
 }
@@ -65,8 +161,18 @@ pub struct EventDraft {
     pub location: TextInputState,
     pub description: TextInputState,
     pub all_day: bool,
+    // Recurrencia (editable).
+    pub repeat: Repeat,
+    pub interval: TextInputState,
+    /// Días marcados para `WEEKLY;BYDAY` (índice 0 = lunes … 6 = domingo). Si
+    /// ninguno está marcado, la regla repite en el mismo día de la semana del inicio.
+    pub byday: [bool; 7],
+    pub repeat_end: RepeatEnd,
+    pub count: TextInputState,
+    pub until: TextInputState,
     pub focus: EventField,
     // Campos preservados de un evento existente (no editables en el formulario).
+    /// `RRULE` cruda preservada sólo si no la sabemos representar (no parsea).
     keep_rrule: Option<String>,
     keep_organizer: Option<raymi_core::Address>,
     keep_attendees: Vec<raymi_core::Address>,
@@ -87,6 +193,12 @@ impl EventDraft {
             location: TextInputState::new(),
             description: TextInputState::new(),
             all_day: false,
+            repeat: Repeat::None,
+            interval: input("1"),
+            byday: [false; 7],
+            repeat_end: RepeatEnd::Never,
+            count: input("10"),
+            until: TextInputState::new(),
             focus: EventField::Summary,
             keep_rrule: None,
             keep_organizer: None,
@@ -94,10 +206,44 @@ impl EventDraft {
         }
     }
 
-    /// Edita un evento existente: vuelca sus campos al borrador.
+    /// Edita un evento existente: vuelca sus campos al borrador. La `RRULE` se
+    /// descompone en los controles si la sabemos parsear; si no, se preserva
+    /// cruda y el formulario muestra “No se repite”.
     pub fn from_event(e: &Event) -> Self {
         let (date, h, mi, _) = time::to_civil(e.start);
         let (_, eh, emi, _) = time::to_civil(e.end);
+
+        let parsed = e.rrule.as_deref().filter(|s| !s.trim().is_empty()).map(|s| (s, recur::parse(s)));
+        let mut repeat = Repeat::None;
+        let mut interval = input("1");
+        let mut byday = [false; 7];
+        let mut repeat_end = RepeatEnd::Never;
+        let mut count = input("10");
+        let mut until = TextInputState::new();
+        let mut keep_rrule = None;
+        match parsed {
+            Some((_, Some(r))) => {
+                repeat = Repeat::from_freq(r.freq);
+                interval = input(&r.interval.to_string());
+                for &d in &r.byday {
+                    if (d as usize) < 7 {
+                        byday[d as usize] = true;
+                    }
+                }
+                if let Some(c) = r.count {
+                    repeat_end = RepeatEnd::Count;
+                    count = input(&c.to_string());
+                } else if let Some(u) = r.until {
+                    repeat_end = RepeatEnd::Until;
+                    let (ud, _, _, _) = time::to_civil(u);
+                    until = input(&fmt_date(ud));
+                }
+            }
+            // RRULE presente pero no representable → preservarla cruda.
+            Some((raw, None)) => keep_rrule = Some(raw.to_string()),
+            None => {}
+        }
+
         Self {
             uid: Some(e.uid.clone()),
             calendar: e.calendar.clone(),
@@ -108,8 +254,14 @@ impl EventDraft {
             location: input(&e.location),
             description: input(&e.description),
             all_day: e.all_day,
+            repeat,
+            interval,
+            byday,
+            repeat_end,
+            count,
+            until,
             focus: EventField::Summary,
-            keep_rrule: e.rrule.clone(),
+            keep_rrule,
             keep_organizer: e.organizer.clone(),
             keep_attendees: e.attendees.clone(),
         }
@@ -121,9 +273,30 @@ impl EventDraft {
             EventField::Date => &mut self.date,
             EventField::Start => &mut self.start_hm,
             EventField::End => &mut self.end_hm,
+            EventField::Interval => &mut self.interval,
+            EventField::Count => &mut self.count,
+            EventField::Until => &mut self.until,
             EventField::Location => &mut self.location,
             EventField::Description => &mut self.description,
         }
+    }
+
+    /// Compone la `RRULE` desde los controles, o `None` si “No se repite”.
+    /// Devuelve `None` también si la cadencia no parsea a una `Freq`.
+    fn build_rrule(&self) -> Option<String> {
+        let freq = self.repeat.to_freq()?;
+        let interval = self.interval.text().trim().parse::<u32>().ok().filter(|&n| n >= 1).unwrap_or(1);
+        let byday: Vec<u32> = if matches!(self.repeat, Repeat::Weekly) {
+            (0..7).filter(|&i| self.byday[i as usize]).collect()
+        } else {
+            Vec::new()
+        };
+        let (count, until) = match self.repeat_end {
+            RepeatEnd::Never => (None, None),
+            RepeatEnd::Count => (self.count.text().trim().parse::<u32>().ok().filter(|&n| n >= 1), None),
+            RepeatEnd::Until => (None, parse_date(&self.until.text()).map(|d| time::to_unix(d, 23, 59, 59))),
+        };
+        Some(Recurrence { freq, interval, count, until, byday }.to_rrule())
     }
 
     /// Construye el `Event` final con el `uid` dado. `None` si la fecha o las
@@ -144,6 +317,9 @@ impl EventDraft {
             (s, e)
         };
         let summary = self.summary.text();
+        // La regla compuesta gana; si “No se repite” pero había una cruda no
+        // representable, se preserva.
+        let rrule = self.build_rrule().or_else(|| self.keep_rrule.clone());
         Some(Event {
             uid,
             summary: if summary.trim().is_empty() { "(sin título)".to_string() } else { summary },
@@ -152,7 +328,7 @@ impl EventDraft {
             start,
             end,
             all_day: self.all_day,
-            rrule: self.keep_rrule.clone(),
+            rrule,
             organizer: self.keep_organizer.clone(),
             attendees: self.keep_attendees.clone(),
             calendar: self.calendar.clone(),
@@ -321,6 +497,48 @@ mod tests {
         assert_eq!(e.summary, "Reunión");
         assert_eq!(e.calendar, "personal");
         assert_eq!(e.end - e.start, 3600);
+    }
+
+    #[test]
+    fn draft_evento_compone_rrule_semanal() {
+        let mut d = EventDraft::new("personal".into(), 0);
+        d.repeat = Repeat::Weekly;
+        d.interval.set_text("2");
+        d.byday[0] = true; // lunes
+        d.byday[2] = true; // miércoles
+        d.repeat_end = RepeatEnd::Count;
+        d.count.set_text("8");
+        let e = d.build("u1".into()).unwrap();
+        assert_eq!(e.rrule.as_deref(), Some("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;COUNT=8"));
+    }
+
+    #[test]
+    fn draft_evento_sin_repeticion_no_pone_rrule() {
+        let d = EventDraft::new("personal".into(), 0);
+        assert!(d.build("u1".into()).unwrap().rrule.is_none());
+    }
+
+    #[test]
+    fn from_event_descompone_rrule_y_roundtrip() {
+        let base = Event {
+            uid: "u1".into(),
+            summary: "Standup".into(),
+            description: String::new(),
+            location: String::new(),
+            start: time::to_unix(CivilDate { year: 2026, month: 6, day: 1 }, 9, 0, 0),
+            end: time::to_unix(CivilDate { year: 2026, month: 6, day: 1 }, 9, 30, 0),
+            all_day: false,
+            rrule: Some("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE".into()),
+            organizer: None,
+            attendees: vec![],
+            calendar: "personal".into(),
+        };
+        let d = EventDraft::from_event(&base);
+        assert_eq!(d.repeat, Repeat::Weekly);
+        assert_eq!(d.interval.text(), "2");
+        assert!(d.byday[0] && d.byday[2]);
+        // y reconstruye la misma regla
+        assert_eq!(d.build("u1".into()).unwrap().rrule.as_deref(), Some("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE"));
     }
 
     #[test]

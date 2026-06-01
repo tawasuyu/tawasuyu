@@ -122,7 +122,7 @@ intercambiables, como el resto de la suite.
   ya en el trait) y a la caché.
   - `raymi-core::CalStore` gana `upsert_event`/`remove_event` y
     `upsert_contact`/`remove_contact`: mantienen la caché en memoria consistente
-    sin re-sincronizar la colección entera (+2 tests, 29 en core).
+    sin re-sincronizar la colección entera (+2 tests).
   - `raymi-llimphi::editor` — borradores (`EventDraft`/`ContactDraft`) con campos
     de texto, ciclo de foco con **Tab**, parseo `AAAA-MM-DD` / `HH:MM` y
     conversión borrador → modelo nativo. Día completo ancla a medianoche y dura
@@ -143,10 +143,26 @@ intercambiables, como el resto de la suite.
     barra de estado. `raymi-app` cablea `view_overlay`. En modo demo todo funciona
     (el `MockBackend` ya guarda). `cargo check --workspace` verde.
 
+- **Fase 8 (2026-06-01):** **recurrencia editable** en el modal de evento.
+  - `raymi-core::Recurrence::to_rrule` — serializador canónico (inverso práctico
+    de `parse`): omite `INTERVAL=1`, lista `BYDAY` en orden, `COUNT` sobre `UNTIL`
+    (excluyentes), `UNTIL` en forma de fecha `AAAAMMDD`. +1 test de roundtrip.
+  - `EventDraft` gana controles de repetición: `Repeat` (No se repite / Diaria /
+    Semanal / Mensual / Anual), intervalo, días `BYDAY` (semanal), y término
+    `RepeatEnd` (Sin fin / Tras N veces / Hasta fecha). `from_event` **descompone**
+    la `RRULE` en los controles si parsea; si no la sabemos representar, se
+    preserva cruda y el formulario muestra “No se repite”. `build` recompone la
+    regla (la compuesta gana sobre la preservada). +3 tests.
+  - **UI**: selector de cadencia (chip que cicla ⟳), “cada N <unidad>”, 7 toggles
+    de día (L M X J V S D) sólo en semanal, y la condición de término con su campo
+    contextual (N veces / fecha). Las nuevas ocurrencias se expanden de inmediato
+    en la grilla y la agenda (vía `CalStore::occurrences_in`). `cargo check
+    --workspace` verde.
+
 ## Pendiente (orden sugerido)
 
 1. **Verificar `raymi-net` contra servidor real** (Nextcloud/Radicale) en la
    laptop: discover + sync + put/delete end-to-end.
 2. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.
-3. **Recurrencia editable** en la UI (hoy se preserva la `RRULE` cruda pero no se
-   edita) y elegir entre editar la serie o una instancia.
+3. **Editar serie vs. instancia** de un evento recurrente (hoy se edita siempre la
+   serie base; falta `RECURRENCE-ID` / `EXDATE` para excepciones puntuales).

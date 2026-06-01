@@ -16,7 +16,7 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use raymi_core::time::{self, CivilDate, DAY};
 use raymi_core::{CalStore, Contact, Occurrence};
 
-use crate::{ContactDraft, ContactField, EventDraft, EventField, Mode, Model, Msg};
+use crate::{ContactDraft, ContactField, EventDraft, EventField, Mode, Model, Msg, Repeat, RepeatEnd};
 use llimphi_widget_text_input::TextInputState;
 
 const AGENDA_W: f32 = 340.0;
@@ -716,6 +716,10 @@ pub fn event_editor(model: &Model, d: &EventDraft) -> View<Msg> {
         .children(vec![labeled(theme, "Inicio", start), labeled(theme, "Fin", end)]);
         col.push(hours);
     }
+    // Sección de repetición (cadencia + intervalo + días + término).
+    for v in repeat_section(theme, &pal, d) {
+        col.push(v);
+    }
     col.push(labeled(
         theme,
         "Lugar",
@@ -749,6 +753,127 @@ pub fn contact_editor(model: &Model, d: &ContactDraft) -> View<Msg> {
     ];
 
     editor_card(theme, title, col)
+}
+
+const WD_INITIALS: [&str; 7] = ["L", "M", "X", "J", "V", "S", "D"];
+
+/// Controles de repetición del editor de evento. Devuelve las filas a apilar:
+/// siempre el selector de cadencia; si repite, intervalo, (días si es semanal) y
+/// la condición de término con su campo contextual.
+fn repeat_section(theme: &Theme, pal: &TextInputPalette, d: &EventDraft) -> Vec<View<Msg>> {
+    let mut out = vec![labeled(
+        theme,
+        "Repetir",
+        cycle_chip(theme, d.repeat.label(), Msg::EventCycleRepeat),
+    )];
+    if d.repeat == Repeat::None {
+        return out;
+    }
+
+    // "cada [N] unidad"
+    let interval = ev_field(&d.interval, "1", d.focus == EventField::Interval, pal, EventField::Interval);
+    let unit = View::new(Style {
+        size: Size { width: length(90.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(d.repeat.unit().to_string(), 12.0, theme.fg_muted, Alignment::Start);
+    let every = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style { size: Size { width: length(70.0_f32), height: Dimension::auto() }, ..Default::default() })
+            .children(vec![interval]),
+        unit,
+    ]);
+    out.push(labeled(theme, "Cada", every));
+
+    // Días de la semana (sólo semanal).
+    if d.repeat == Repeat::Weekly {
+        let mut days: Vec<View<Msg>> = Vec::with_capacity(7);
+        for i in 0..7u32 {
+            days.push(day_toggle(theme, WD_INITIALS[i as usize], d.byday[i as usize], i));
+        }
+        let row = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
+            gap: Size { width: length(5.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .children(days);
+        out.push(labeled(theme, "Días", row));
+    }
+
+    // Condición de término + campo contextual.
+    let end_chip = cycle_chip(theme, d.repeat_end.label(), Msg::EventCycleRepeatEnd);
+    let end_extra: Option<View<Msg>> = match d.repeat_end {
+        RepeatEnd::Never => None,
+        RepeatEnd::Count => {
+            Some(ev_field(&d.count, "10", d.focus == EventField::Count, pal, EventField::Count))
+        }
+        RepeatEnd::Until => {
+            Some(ev_field(&d.until, "AAAA-MM-DD", d.focus == EventField::Until, pal, EventField::Until))
+        }
+    };
+    let mut end_children = vec![
+        View::new(Style { size: Size { width: length(150.0_f32), height: Dimension::auto() }, ..Default::default() })
+            .children(vec![end_chip]),
+    ];
+    if let Some(extra) = end_extra {
+        end_children.push(View::new(Style { size: Size { width: Dimension::auto(), height: Dimension::auto() }, flex_grow: 1.0, ..Default::default() }).children(vec![extra]));
+    }
+    let end_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(end_children);
+    out.push(labeled(theme, "Termina", end_row));
+
+    out
+}
+
+/// Botón cuadrado de día de la semana, resaltado si está activo.
+fn day_toggle(theme: &Theme, label: &str, on: bool, idx: u32) -> View<Msg> {
+    let (bg, fg) = if on { (theme.accent, theme.bg_app) } else { (theme.bg_input, theme.fg_muted) };
+    View::new(Style {
+        size: Size { width: length(30.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::EventToggleByday(idx))
+    .text(label, 12.0, fg)
+}
+
+/// Chip que cicla un valor al hacer clic (muestra el valor + “⟳”).
+fn cycle_chip(theme: &Theme, value: &str, msg: Msg) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: pad_xy(10.0, 0.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_input)
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(msg)
+    .children(vec![
+        View::new(Style { size: Size { width: Dimension::auto(), height: percent(1.0_f32) }, flex_grow: 1.0, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text_aligned(value.to_string(), 13.0, theme.fg_text, Alignment::Start),
+        View::new(Style { size: Size { width: length(20.0_f32), height: percent(1.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text_aligned("⟳".to_string(), 13.0, theme.fg_muted, Alignment::End),
+    ])
 }
 
 /// Envoltorio común: backdrop oscuro + tarjeta centrada. Click en el backdrop

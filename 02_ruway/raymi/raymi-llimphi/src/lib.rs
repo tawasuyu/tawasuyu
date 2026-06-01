@@ -26,7 +26,7 @@ mod editor;
 pub mod demo;
 mod view;
 
-pub use editor::{ContactDraft, ContactField, Editor, EventDraft, EventField};
+pub use editor::{ContactDraft, ContactField, Editor, EventDraft, EventField, Repeat, RepeatEnd};
 
 /// Modo activo de la app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,6 +343,12 @@ pub enum Msg {
     EventToggleAllDay,
     /// Pasar el evento al siguiente calendario.
     EventCycleCalendar,
+    /// Ciclar la cadencia de repetición (No se repite → Diaria → …).
+    EventCycleRepeat,
+    /// Marcar/desmarcar un día de la semana para `WEEKLY;BYDAY` (0 = lunes).
+    EventToggleByday(u32),
+    /// Ciclar la condición de término (Sin fin → Tras N veces → Hasta fecha).
+    EventCycleRepeatEnd,
     /// Guardar / borrar el evento en edición.
     SaveEvent,
     DeleteEvent,
@@ -405,6 +411,23 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
             }
         }
         Msg::EventCycleCalendar => model.cycle_event_calendar(),
+        Msg::EventCycleRepeat => {
+            if let Editor::Event(d) = &mut model.editor {
+                d.repeat = d.repeat.next();
+            }
+        }
+        Msg::EventToggleByday(i) => {
+            if let Editor::Event(d) = &mut model.editor {
+                if let Some(slot) = d.byday.get_mut(i as usize) {
+                    *slot = !*slot;
+                }
+            }
+        }
+        Msg::EventCycleRepeatEnd => {
+            if let Editor::Event(d) = &mut model.editor {
+                d.repeat_end = d.repeat_end.next();
+            }
+        }
         Msg::EventKey(event) => apply_editor_key(&mut model, event, true),
         Msg::SaveEvent => model.save_event(),
         Msg::DeleteEvent => model.delete_event(),

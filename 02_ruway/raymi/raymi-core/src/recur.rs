@@ -35,6 +35,43 @@ pub struct Recurrence {
     pub byday: Vec<u32>,
 }
 
+impl Recurrence {
+    /// Serializa a una cadena `RRULE` canónica (sin el prefijo `RRULE:`),
+    /// inversa práctica de [`parse`]: omite `INTERVAL=1`, lista `BYDAY` en orden,
+    /// y emite `COUNT` con preferencia sobre `UNTIL` (son mutuamente excluyentes
+    /// en el RFC). `UNTIL` sale en forma de fecha `AAAAMMDD`.
+    pub fn to_rrule(&self) -> String {
+        let mut parts = vec![format!(
+            "FREQ={}",
+            match self.freq {
+                Freq::Daily => "DAILY",
+                Freq::Weekly => "WEEKLY",
+                Freq::Monthly => "MONTHLY",
+                Freq::Yearly => "YEARLY",
+            }
+        )];
+        if self.interval > 1 {
+            parts.push(format!("INTERVAL={}", self.interval));
+        }
+        if !self.byday.is_empty() {
+            let codes: Vec<&str> = self.byday.iter().map(|&d| code_weekday(d)).collect();
+            parts.push(format!("BYDAY={}", codes.join(",")));
+        }
+        if let Some(c) = self.count {
+            parts.push(format!("COUNT={c}"));
+        } else if let Some(u) = self.until {
+            let (d, _, _, _) = time::to_civil(u);
+            parts.push(format!("UNTIL={:04}{:02}{:02}", d.year, d.month, d.day));
+        }
+        parts.join(";")
+    }
+}
+
+/// `0..6` (lunes = 0) → `MO`/`TU`/… (inversa de [`weekday_code`]).
+fn code_weekday(d: u32) -> &'static str {
+    ["MO", "TU", "WE", "TH", "FR", "SA", "SU"].get(d as usize).copied().unwrap_or("MO")
+}
+
 /// Parsea una cadena `RRULE`. Devuelve `None` si falta `FREQ` o es desconocida.
 pub fn parse(rrule: &str) -> Option<Recurrence> {
     let mut freq = None;
@@ -225,6 +262,25 @@ mod tests {
         assert_eq!(r.count, Some(10));
         assert_eq!(r.byday, vec![0, 2]);
         assert!(parse("INTERVAL=2").is_none(), "sin FREQ no parsea");
+    }
+
+    #[test]
+    fn to_rrule_roundtrip() {
+        for raw in [
+            "FREQ=DAILY",
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE",
+            "FREQ=MONTHLY;COUNT=5",
+            "FREQ=YEARLY",
+        ] {
+            let r = parse(raw).unwrap();
+            assert_eq!(r.to_rrule(), raw, "roundtrip de {raw}");
+        }
+        // INTERVAL=1 se omite; UNTIL sale en forma de fecha.
+        assert_eq!(parse("FREQ=DAILY;INTERVAL=1").unwrap().to_rrule(), "FREQ=DAILY");
+        assert_eq!(
+            parse("FREQ=MONTHLY;UNTIL=20260401").unwrap().to_rrule(),
+            "FREQ=MONTHLY;UNTIL=20260401"
+        );
     }
 
     #[test]
