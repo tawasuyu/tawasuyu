@@ -195,11 +195,17 @@ hechas de lo que el plan asumía.
    `AudioEngine::play_takiy_score(score, vol, sep)` renderiza una partitura takiy
    (OscRenderer), la colapsa a mono y la encola como voz del `DoomMixer`. +2
    tests device-free; supay-audio 20/20.
-4. **AppBus out-of-process** (nahual open-with) → ⬜ pendiente, arquitectural.
-   `shared/app-bus` tiene `AppRegistry` + `Bus` pub/sub **in-process**; nahual
-   despacha visores in-process (`viewer_registry::pick` → enum). Enganche futuro:
-   `pick()` consulta `AppRegistry::handlers_for(mime)` → `Bus::LaunchRequested`
-   → `ProcessLauncher` spawnea + IPC de archivo (a diseñar).
+4. **AppBus out-of-process** (nahual open-with) → 🟡 **mecanismo + seam hechos**
+   (esta sesión); falta la última capa de GUI. Hecho y testeado:
+   - `shared/app-bus`: `expand_target` (placeholders `%f`/`%u` estilo freedesktop),
+     `AppEntry::open(target)` (spawnea Exec con el archivo), `AppRegistry::open_with
+     (mime, target)` (elige handler + abre out-of-process). +4 tests, 12/12.
+   - `nahual viewer_registry::external_handler_for(registry, discernment)` — el
+     seam que mapea mime→app externa, independiente de `pick()` (sin tocar la
+     GUI). +1 test.
+   - **Resta (UX-driven, en la GUI):** que el mount del shell llame
+     `external_handler_for` y, si hay handler, `open_with` + spawn en vez de
+     montar un widget — incluye la política "¿externo gana a builtin?" (tu call).
 5. **§14.1.3 wawa** (capacidades derivadas de firma) → ⬜ pendiente. Primitivos
    ya existen (`agora-core` + `claves.rs`).
 
@@ -265,7 +271,7 @@ cruza a "lista para mostrar".
 ```
 Nivel 0  (días)      → licencias, untracked, CI, decisión de alcance   [DESBLOQUEA TODO]
 Nivel 1  (días)      → workspace 100% limpio: clippy, tests, warnings
-Nivel 3 (1·2·3)      → ✅ NAT, discovery DHT, audio supay↔takiy. Resta 4 (AppBus) y 5 (§14.1.3)
+Nivel 3 (1·2·3·4)    → ✅ NAT, discovery DHT, audio, open-with out-of-proc (mec.+seam). Resta 4-GUI y 5 (§14.1.3)
 Nivel 2A             → empujón corto a las ≥80% que ya casi cierran
 Nivel 2B             → el grueso del core (agora/§14.1.3, media M1, iniy e2e…)
 Nivel 4  (en paralelo, tuyo) → pulido app por app a medida que cierran
