@@ -192,8 +192,12 @@ enum Msg {
     Scroll(i32),
     /// Arrastre sobre el mapa: panea la cámara `(dx, dy)` en px físicos.
     MapPan(f32, f32),
-    /// Rueda sobre el mapa: zoom de la cámara (delta normalizado a líneas).
-    MapZoom(f32),
+    /// Rueda sobre el mapa: zoom anclado al cursor `(delta, cx, cy)`.
+    MapZoom(f32, f32, f32),
+    /// Reencuadra el mapa (zoom 1, sin pan).
+    MapReset,
+    /// Alterna el mapa-base mundial de fondo.
+    MapToggleBase,
     /// Drag del divisor — positivo = lista crece.
     ResizeList(f32),
     /// El bus `wawa-config` publicó una versión nueva.
@@ -302,6 +306,13 @@ impl App for Shell {
             // Sólo desde POSIX — dentro de una fuente montada no aplican.
             Key::Character(c) if c == "m" => Some(Msg::MountNouser),
             Key::Character(c) if c == "g" => Some(Msg::MountMinga),
+            // Sobre un mapa: `f` reencuadra, `b` alterna el mapa-base.
+            Key::Character(c) if c == "f" && matches!(_model.preview, PreviewPane::Map(_)) => {
+                Some(Msg::MapReset)
+            }
+            Key::Character(c) if c == "b" && matches!(_model.preview, PreviewPane::Map(_)) => {
+                Some(Msg::MapToggleBase)
+            }
             _ => None,
         }
     }
@@ -316,7 +327,7 @@ impl App for Shell {
         // vez de scrollear la lista (gateo por el rect que el canvas registra).
         if matches!(model.preview, PreviewPane::Map(_)) && model.map_view.contains(cursor.0, cursor.1)
         {
-            return Some(Msg::MapZoom(delta.y));
+            return Some(Msg::MapZoom(delta.y, cursor.0, cursor.1));
         }
         // El delta del touchpad se acumula en `FileExplorerState`; acá
         // sólo aproximamos los pasos para evitar un round-trip por
@@ -421,10 +432,12 @@ impl App for Shell {
             Msg::MapPan(dx, dy) => {
                 m.map_view.pan_by(dx as f64, dy as f64);
             }
-            Msg::MapZoom(dy) => {
-                // Cada "línea" de rueda → ±12% de zoom; arriba acerca.
-                m.map_view.zoom_by(1.12_f64.powf(dy as f64));
+            Msg::MapZoom(dy, cx, cy) => {
+                // Cada "línea" de rueda → ±12% de zoom, anclado al cursor.
+                m.map_view.zoom_at(1.12_f64.powf(dy as f64), cx, cy);
             }
+            Msg::MapReset => m.map_view.reset(),
+            Msg::MapToggleBase => m.map_view.toggle_base(),
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);
                 // nahual-shell no usa rimay_localize hoy; si en el

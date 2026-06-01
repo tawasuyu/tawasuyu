@@ -453,6 +453,8 @@ fn coord_rings(v: Option<&serde_json::Value>) -> Vec<Ring> {
 pub struct MapView {
     pub zoom: f64,
     pub pan: (f64, f64),
+    /// Dibujar el mapa-base mundial de fondo.
+    pub show_base: bool,
     rect: Arc<Mutex<Option<(f32, f32, f32, f32)>>>,
 }
 
@@ -461,6 +463,7 @@ impl Default for MapView {
         Self {
             zoom: 1.0,
             pan: (0.0, 0.0),
+            show_base: true,
             rect: Arc::new(Mutex::new(None)),
         }
     }
@@ -491,6 +494,37 @@ impl MapView {
         if factor.is_finite() && factor > 0.0 {
             self.zoom = (self.zoom * factor).clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
         }
+    }
+
+    /// Zoom anclado a un punto de pantalla `(cx, cy)` (físicos): el lugar bajo
+    /// el cursor queda fijo. Si todavía no se pintó (sin rect), cae a
+    /// [`zoom_by`] (zoom al centro).
+    pub fn zoom_at(&mut self, factor: f64, cx: f32, cy: f32) {
+        if !(factor.is_finite() && factor > 0.0) {
+            return;
+        }
+        let Some((rx, ry, rw, rh)) = self.rect.lock().ok().and_then(|g| *g) else {
+            self.zoom_by(factor);
+            return;
+        };
+        let pivot_x = rx as f64 + rw as f64 * 0.5;
+        let pivot_y = ry as f64 + rh as f64 * 0.5;
+        let z0 = self.zoom;
+        let z1 = (z0 * factor).clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
+        if (z1 - z0).abs() < f64::EPSILON {
+            return;
+        }
+        // Mantener fijo el punto bajo el cursor:
+        //   pan1 = pan0 - (c - pivot - pan0) * (z1 - z0) / z0
+        let k = (z1 - z0) / z0;
+        self.pan.0 -= (cx as f64 - pivot_x - self.pan.0) * k;
+        self.pan.1 -= (cy as f64 - pivot_y - self.pan.1) * k;
+        self.zoom = z1;
+    }
+
+    /// Alterna el mapa-base de fondo.
+    pub fn toggle_base(&mut self) {
+        self.show_base = !self.show_base;
     }
 
     /// `true` si `(x, y)` (físicos) cae dentro del último rect pintado por el
@@ -651,6 +685,7 @@ where
 {
     let zoom = view.zoom;
     let pan = view.pan;
+    let show_base = view.show_base;
     View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -730,27 +765,29 @@ where
         // --- Mapa-base mundial (detrás de todo) ----------------------
         // Países Natural Earth, proyectados con la misma cámara que el dato:
         // al hacer zoom a una región, sólo se ve su parte (el resto, clipeado).
-        let world = world_base();
-        let land_fill = with_alpha(palette.land, 0.10);
-        let land_stroke = with_alpha(palette.land, 0.32);
-        let land_label = with_alpha(palette.land, 0.5);
-        let stroke_coast = Stroke::new(0.6);
-        for poly in &world.polygons {
-            for (i, ring) in poly.iter().enumerate() {
-                let path = ring_path(ring, &to_screen, true);
-                if i == 0 {
-                    scene.fill(Fill::NonZero, Affine::IDENTITY, land_fill, None, &path);
+        if show_base {
+            let world = world_base();
+            let land_fill = with_alpha(palette.land, 0.10);
+            let land_stroke = with_alpha(palette.land, 0.32);
+            let land_label = with_alpha(palette.land, 0.5);
+            let stroke_coast = Stroke::new(0.6);
+            for poly in &world.polygons {
+                for (i, ring) in poly.iter().enumerate() {
+                    let path = ring_path(ring, &to_screen, true);
+                    if i == 0 {
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, land_fill, None, &path);
+                    }
+                    scene.stroke(&stroke_coast, Affine::IDENTITY, land_stroke, None, &path);
                 }
-                scene.stroke(&stroke_coast, Affine::IDENTITY, land_stroke, None, &path);
             }
-        }
-        // Nombres de país, sólo los que caen dentro del panel (el clip
-        // recorta el resto, así que en una vista regional son pocos).
-        for label in &world.labels {
-            let (x, y) = to_screen(label.at);
-            if in_panel(x, y) {
-                let block = TextBlock::simple(&label.text, 9.0, land_label, (x + 2.0, y - 6.0));
-                draw_block(scene, ts, &block);
+            // Nombres de país, sólo los que caen dentro del panel (el clip
+            // recorta el resto, así que en una vista regional son pocos).
+            for label in &world.labels {
+                let (x, y) = to_screen(label.at);
+                if in_panel(x, y) {
+                    let block = TextBlock::simple(&label.text, 9.0, land_label, (x + 2.0, y - 6.0));
+                    draw_block(scene, ts, &block);
+                }
             }
         }
 
@@ -1252,6 +1289,47 @@ mod tests {
         v.reset();
         assert_eq!(v.pan, (0.0, 0.0));
         assert_eq!(v.zoom, 1.0);
+    }
+
+    #[test]
+    fn zoom_at_ancla_el_punto_bajo_el_cursor() {
+        let mut v = MapView::default();
+        v.record_rect((0.0, 0.0, 200.0, 100.0)); // pivot (100, 50)
+        let (pvx, pvy) = (100.0, 50.0);
+        // Posición de pantalla de un punto base, con la cámara actual.
+        let screen = |v: &MapView, bx: f64, by: f64| {
+            (
+                pvx + (bx - pvx) * v.zoom + v.pan.0,
+                pvy + (by - pvy) * v.zoom + v.pan.1,
+            )
+        };
+        // El punto base bajo el cursor (150, 50) a zoom 1 es (150, 50).
+        let (bx, by) = (150.0, 50.0);
+        assert_eq!(screen(&v, bx, by), (150.0, 50.0));
+        v.zoom_at(2.0, 150.0, 50.0);
+        assert_eq!(v.zoom, 2.0);
+        // Tras el zoom, ese mismo punto base sigue bajo el cursor.
+        let (sx, sy) = screen(&v, bx, by);
+        assert!((sx - 150.0).abs() < 1e-9 && (sy - 50.0).abs() < 1e-9, "({sx}, {sy})");
+    }
+
+    #[test]
+    fn zoom_at_sin_rect_cae_a_zoom_al_centro() {
+        let mut v = MapView::default();
+        v.zoom_at(2.0, 10.0, 10.0); // sin record_rect previo
+        assert_eq!(v.zoom, 2.0);
+        assert_eq!(v.pan, (0.0, 0.0)); // sin anclaje: pan intacto
+    }
+
+    #[test]
+    fn toggle_base_alterna() {
+        let mut v = MapView::default();
+        assert!(v.show_base);
+        v.toggle_base();
+        assert!(!v.show_base);
+        // reset no toca la preferencia de base.
+        v.reset();
+        assert!(!v.show_base);
     }
 
     #[test]
