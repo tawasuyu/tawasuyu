@@ -64,7 +64,8 @@ use smithay::wayland::shell::xdg::{
 };
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::shell::wlr_layer::{
-    Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+    Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData, WlrLayerShellHandler,
+    WlrLayerShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::desktop::{layer_map_for_output, LayerSurface as DesktopLayerSurface, WindowSurfaceType};
@@ -634,26 +635,36 @@ impl CompositorHandler for App {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
-        // Layer surface: cada commit re-arregla el mapa (manda el configure
-        // inicial con el tamaño anclado y recalcula la zona exclusiva).
+        // Layer surface: cada commit re-arregla el mapa (zona exclusiva) y,
+        // en el PRIMER commit, le mandamos el configure inicial.
         if let Some(output) = self.output.clone() {
             let mut map = layer_map_for_output(&output);
-            let is_layer = map
+            let layer = map
                 .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL | WindowSurfaceType::POPUP)
-                .is_some();
-            if is_layer {
+                .cloned();
+            if let Some(layer) = layer {
+                // ¿Ya salió el configure inicial? `arrange()` calcula y guarda
+                // el tamaño anclado, pero —por el spec— NO manda el configure
+                // inicial: ese hay que mandarlo en respuesta al primer commit.
+                // Sin él el cliente nunca conoce su tamaño y no pinta.
+                let initial_sent = with_states(surface, |states| {
+                    states
+                        .data_map
+                        .get::<LayerSurfaceData>()
+                        .map(|d| d.lock().unwrap().initial_configure_sent)
+                        .unwrap_or(false)
+                });
                 map.arrange();
-                // Geometría que el configure le comunica al cliente.
-                let geo = map
-                    .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL | WindowSurfaceType::POPUP)
-                    .cloned()
-                    .and_then(|l| map.layer_geometry(&l));
+                if !initial_sent {
+                    layer.layer_surface().send_configure();
+                }
+                let geo = map.layer_geometry(&layer);
                 drop(map);
                 self.recompute_reservations();
-                // ¿El layer surface ya trae buffer? `surface_size().is_some()`.
-                let buf = with_renderer_surface_state(surface, |s| s.surface_size())
-                    .flatten();
-                println!("mirada-compositor · layer commit: geom={geo:?} buffer={buf:?}");
+                let buf = with_renderer_surface_state(surface, |s| s.surface_size()).flatten();
+                println!(
+                    "mirada-compositor · layer commit: inicial_ya={initial_sent} geom={geo:?} buffer={buf:?}"
+                );
             }
         }
     }
