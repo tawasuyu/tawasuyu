@@ -79,13 +79,15 @@ fn toolbar(model: &Model) -> View<Msg> {
 
     let mut children = vec![brand, tabs, spacer()];
     if model.mode == Mode::Calendar {
-        // Conmutador Mes / Semana.
+        // Conmutador Mes / Semana / Día.
         children.push(view_tab(theme, "Mes", model.cal_view() == CalView::Month, Msg::SetCalView(CalView::Month)));
         children.push(view_tab(theme, "Semana", model.cal_view() == CalView::Week, Msg::SetCalView(CalView::Week)));
+        children.push(view_tab(theme, "Día", model.cal_view() == CalView::Day, Msg::SetCalView(CalView::Day)));
         children.push(button("＋ Evento", theme.accent, theme.bg_app, Msg::NewEvent));
         let label = match model.cal_view() {
             CalView::Month => format!("{}  {}", MONTHS[(model.view_month - 1) as usize], model.view_year),
             CalView::Week => week_label(model),
+            CalView::Day => day_label(model),
         };
         children.push(button("‹", theme.bg_button, theme.fg_text, Msg::PrevMonth));
         children.push(
@@ -138,6 +140,7 @@ fn calendar_body(model: &Model) -> View<Msg> {
     let inner = match model.cal_view() {
         CalView::Month => vec![month_grid(model), day_agenda(model)],
         CalView::Week => vec![week_grid(model)],
+        CalView::Day => vec![day_grid(model)],
     };
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -177,6 +180,14 @@ fn week_label(model: &Model) -> String {
     } else {
         format!("{} {} – {} {}", a.day, &MONTHS[(a.month - 1) as usize][..3], b.day, &MONTHS[(b.month - 1) as usize][..3])
     }
+}
+
+/// Etiqueta del día mostrado (“Lun 1 Junio 2026”).
+fn day_label(model: &Model) -> String {
+    let days = model.selected_day.div_euclid(DAY);
+    let d = time::civil_from_days(days);
+    let wd = WEEKDAYS[time::weekday(days) as usize];
+    format!("{wd} {} {} {}", d.day, MONTHS[(d.month - 1) as usize], d.year)
 }
 
 /// Grilla del mes: cabecera de días + 6 semanas × 7 días con chips de eventos.
@@ -758,6 +769,57 @@ fn wk_event_block(theme: &Theme, o: &Occurrence, color: Color, top: f32, h: f32)
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::EditEvent { calendar: o.event.calendar.clone(), uid: o.event.uid.clone(), occ_start: Some(o.start) })
     .children(vec![bar, col])
+}
+
+/// Vista de un solo día: misma rejilla horaria que la semana, una columna ancha.
+fn day_grid(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let day_ts = model.selected_day;
+    let date = time::civil_from_days(day_ts.div_euclid(DAY));
+    let colors = calendar_colors(model);
+    let occ = model.store_ref().occurrences_in(day_ts, day_ts + DAY);
+
+    let header = row_full(
+        WK_HEADER_H,
+        vec![gutter_box(WK_HEADER_H), wk_day_header(theme, date, day_ts, day_ts == model.today, true)],
+    );
+
+    let allday_chips: Vec<View<Msg>> = occ
+        .iter()
+        .filter(|o| o.event.all_day)
+        .map(|o| {
+            let color = colors.get(&o.event.calendar).copied().unwrap_or(theme.accent);
+            wk_allday_chip(theme, o, color)
+        })
+        .collect();
+    let strip_cell = View::new(Style {
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(3.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(3.0, 0.0),
+        ..Default::default()
+    })
+    .clip(true)
+    .children(allday_chips);
+    let allday = row_full(ALLDAY_H, vec![gutter_label(theme, "todo el día", ALLDAY_H), strip_cell]);
+
+    let occ_refs: Vec<&Occurrence> = occ.iter().collect();
+    let body = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(WK_GRID_H) },
+        ..Default::default()
+    })
+    .children(vec![time_gutter(theme), wk_day_column(theme, occ_refs, day_ts, &colors)]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![header, allday, body])
 }
 
 // ── Contactos ───────────────────────────────────────────────────────────────

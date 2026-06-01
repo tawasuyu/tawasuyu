@@ -191,10 +191,11 @@ intercambiables, como el resto de la suite.
     `RECURRENCE-ID` en el mismo recurso; internamente consistente, pero un servidor
     CalDAV real preferiría el override en el mismo `.ics` (lo afinará el puente).
 
-- **Fase 11 (2026-06-01):** **vista semana** (rejilla horaria) junto a la del mes.
-  - Conmutador **Mes / Semana** en la barra (teclas `m`/`w`); la navegación ‹ ›,
-    la rueda y ←/→ se vuelven **período-aware** (mes o semana). “Hoy” y la etiqueta
-    de rango (“1–7 Junio 2026”) siguen la vista.
+- **Fase 11 (2026-06-01):** **vista semana** (rejilla horaria) y **vista día**.
+  - Conmutador **Mes / Semana / Día** en la barra (teclas `m`/`w`/`d`); la
+    navegación ‹ ›, la rueda y ←/→ se vuelven **período-aware** (mes/semana/día).
+    “Hoy” y la etiqueta (mes, rango “1–7 Junio 2026”, o “Lun 1 Junio 2026”) siguen
+    la vista. La vista día reusa la rejilla de la semana con una columna ancha.
   - `week_grid`: cabecera de 7 días (hoy con disco de acento, clic selecciona el
     día), franja de **día completo** arriba, y **rejilla horaria** 07:00–22:00 con
     medidor a la izquierda. Los eventos con hora se **posicionan por hora**

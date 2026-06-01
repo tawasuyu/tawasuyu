@@ -38,11 +38,12 @@ pub enum Mode {
     Contacts,
 }
 
-/// Vista del calendario: grilla del mes o rejilla horaria de la semana.
+/// Vista del calendario: grilla del mes, semana u horario de un solo día.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CalView {
     Month,
     Week,
+    Day,
 }
 
 /// El modelo del cliente: el backend (calendario + contactos), la caché y la
@@ -414,11 +415,20 @@ impl Model {
         self.view_month = date.month;
     }
 
-    /// Avanza/retrocede un período según la vista activa (mes o semana).
+    /// Corre el día seleccionado por `delta` días (sincroniza el mes).
+    fn shift_day(&mut self, delta: i64) {
+        self.selected_day += delta * time::DAY;
+        let (date, _, _, _) = time::to_civil(self.selected_day);
+        self.view_year = date.year;
+        self.view_month = date.month;
+    }
+
+    /// Avanza/retrocede un período según la vista activa (mes / semana / día).
     fn shift_period(&mut self, delta: i64) {
         match self.cal_view {
             CalView::Month => self.shift_month(delta),
             CalView::Week => self.shift_week(delta),
+            CalView::Day => self.shift_day(delta),
         }
     }
 
@@ -704,6 +714,9 @@ pub fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         }
         Key::Character(ch) if ch.eq_ignore_ascii_case("m") && model.mode == Mode::Calendar => {
             Some(Msg::SetCalView(CalView::Month))
+        }
+        Key::Character(ch) if ch.eq_ignore_ascii_case("d") && model.mode == Mode::Calendar => {
+            Some(Msg::SetCalView(CalView::Day))
         }
         _ => None,
     }
