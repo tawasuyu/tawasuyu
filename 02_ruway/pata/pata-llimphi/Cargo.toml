@@ -25,5 +25,8 @@ chrono = { workspace = true }
 # eww/waybar — layer surface anclada con exclusive zone, no una ventana cliente.
 smithay-client-toolkit = "0.19"
 wayland-client = "0.31"
+# Lista de ventanas (widget `window_list`): wlr-foreign-toplevel-management, el
+# protocolo que usan waybar/eww para enumerar y activar toplevels en wlroots.
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 raw-window-handle = { workspace = true }
 pollster = { workspace = true }

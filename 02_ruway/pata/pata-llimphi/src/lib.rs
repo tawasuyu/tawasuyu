@@ -24,6 +24,7 @@ pub mod layer;
 pub mod render;
 pub mod sampler;
 pub mod shuma;
+pub mod toplevel;
 
 use std::time::Duration;
 
@@ -56,6 +57,9 @@ pub enum Msg {
     ShumaAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
     Spawn(String),
+    /// Activar una ventana del `window_list` (traerla al frente). El `u32` es el
+    /// [`toplevel::Toplevel::id`]; sólo el backend layer-shell sabe resolverlo.
+    ActivateWindow(u32),
     /// Cerrar la app.
     Quit,
 }
@@ -71,6 +75,10 @@ pub enum SlotWidget {
     },
     /// El cabezal del shell; su estado vive en [`Model::shuma`].
     Shuma,
+    /// La lista de ventanas abiertas. Es interacción + IPC (igual que `Shuma`):
+    /// los datos los provee el backend (vía wlr-foreign-toplevel en layer-shell)
+    /// y se pasan al render aparte, no por el view-model de core.
+    WindowList,
 }
 
 /// Lanza `cmd` por `sh -c` como proceso hijo, sin esperarlo (no bloquea). Lo
@@ -98,7 +106,7 @@ impl SurfaceWidgets {
             .chain(self.end.iter_mut())
             .filter_map(|sw| match sw {
                 SlotWidget::Core { widget, .. } => Some(widget),
-                SlotWidget::Shuma => None,
+                SlotWidget::Shuma | SlotWidget::WindowList => None,
             })
     }
 }
@@ -135,6 +143,8 @@ impl Model {
                             shuma = ShumaState::from_spec(spec);
                         }
                         SlotWidget::Shuma
+                    } else if spec.kind == "window_list" {
+                        SlotWidget::WindowList
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -260,6 +270,9 @@ impl App for PataApp {
             }
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
+            // El window_list sólo es funcional bajo layer-shell (foreign-toplevel);
+            // bajo el compositor mirada llegará por su IPC. Aquí es no-op.
+            Msg::ActivateWindow(_) => {}
         }
         model
     }

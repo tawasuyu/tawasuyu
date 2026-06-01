@@ -43,9 +43,14 @@ use smithay_client_toolkit::{
     },
 };
 use wayland_client::{
+    event_created_child,
     globals::registry_queue_init,
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
-    Connection, Proxy, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
+};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
+    zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1, EVT_TOPLEVEL_OPCODE},
 };
 
 use llimphi_theme::Theme;
@@ -59,6 +64,7 @@ use pata_core::widget::WidgetCtx;
 use pata_core::{Anchor, Config, SurfaceKind};
 
 use crate::sampler::Sampler;
+use crate::toplevel::{Toplevel, WindowEntry};
 use crate::{render, Model, Msg};
 
 /// El estado wgpu de **una** layer surface (una barra). El `Hal` (instancia +
@@ -106,6 +112,18 @@ struct LayerApp {
     hal: Option<Hal>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
+    /// El seat (para activar ventanas: `activate(seat)` lo exige).
+    seat: Option<wl_seat::WlSeat>,
+    /// El manager de wlr-foreign-toplevel, si el compositor lo expone. `None` en
+    /// compositores sin el protocolo: el `window_list` queda vacío, sin romper.
+    /// Se guarda para mantener vivo el binding (de él cuelgan los eventos de cada
+    /// toplevel), aunque no se vuelva a leer.
+    #[allow(dead_code)]
+    toplevel_mgr: Option<ZwlrForeignToplevelManagerV1>,
+    /// Las ventanas abiertas que reporta el compositor.
+    toplevels: Vec<Toplevel>,
+    /// Contador para asignar [`Toplevel::id`] estables.
+    next_toplevel_id: u32,
     theme: Theme,
     cfg: Config,
     surfaces: Vec<crate::SurfaceWidgets>,
@@ -172,6 +190,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let compositor = CompositorState::bind(&globals, &qh)?;
     let layer_shell = LayerShell::bind(&globals, &qh)?;
 
+    // El manager de ventanas (window_list): opcional. Si el compositor no lo
+    // expone, el widget queda vacío en vez de fallar el arranque.
+    let toplevel_mgr = globals
+        .bind::<ZwlrForeignToplevelManagerV1, _, _>(&qh, 1..=3, ())
+        .ok();
+    if toplevel_mgr.is_none() {
+        eprintln!("pata layer · el compositor no expone wlr-foreign-toplevel; window_list vacío");
+    }
+
     // Una layer surface por barra: anclada a su borde, con su exclusive zone.
     let mut panels = Vec::new();
     for &idx in &bars {
@@ -230,6 +257,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         hal: None,
         keyboard: None,
         pointer: None,
+        seat: None,
+        toplevel_mgr,
+        toplevels: Vec::new(),
+        next_toplevel_id: 0,
         theme: Theme::dark(),
         cfg,
         surfaces,
@@ -263,6 +294,31 @@ impl LayerApp {
         if let Some(pi) = self.shuma_panel {
             self.panels[pi].dirty = true;
         }
+    }
+
+    /// Marca todas las barras para re-pintar (p. ej. cambió la lista de ventanas).
+    fn marcar_todo_dirty(&mut self) {
+        for p in &mut self.panels {
+            p.dirty = true;
+        }
+    }
+
+    /// La lista de ventanas para el render del `window_list`, desde los toplevels
+    /// que reporta el compositor.
+    fn window_entries(&self) -> Vec<WindowEntry> {
+        self.toplevels
+            .iter()
+            .map(|t| WindowEntry {
+                id: t.id,
+                label: t.etiqueta(),
+                active: t.activated,
+            })
+            .collect()
+    }
+
+    /// El toplevel con ese `id`, si sigue abierto.
+    fn toplevel_por_id(&self, id: u32) -> Option<&Toplevel> {
+        self.toplevels.iter().find(|t| t.id == id)
     }
 
     /// Despliega o repliega el drawer Quake: agranda/encoge la layer surface de
@@ -403,6 +459,7 @@ impl LayerApp {
 
         let idx = self.panels[pi].idx;
         let (w, h) = (self.panels[pi].width, self.panels[pi].height);
+        let windows = self.window_entries();
         // La barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el
         // resto pinta su barra normal.
         let view = if self.shuma_panel == Some(pi) && self.shuma.open {
@@ -410,6 +467,7 @@ impl LayerApp {
                 &self.cfg.surfaces[idx],
                 &self.surfaces[idx],
                 &self.shuma,
+                &windows,
                 &self.theme,
                 self.shuma_bar_px as f32,
             )
@@ -418,6 +476,7 @@ impl LayerApp {
                 &self.cfg.surfaces[idx],
                 &self.surfaces[idx],
                 &self.shuma,
+                &windows,
                 &self.theme,
             )
         };
@@ -471,8 +530,19 @@ impl LayerApp {
         match msg {
             Msg::ShumaToggle => self.set_shuma_open(!self.shuma.open),
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
+            Msg::ActivateWindow(id) => self.activar_ventana(id),
             Msg::Quit => self.exit = true,
             _ => {}
+        }
+    }
+
+    /// Trae al frente la ventana `id` vía `activate(seat)`. Sin seat (raro) no
+    /// hace nada. El compositor manda luego un `state`/`done` que actualiza el
+    /// resaltado de la activa.
+    fn activar_ventana(&mut self, id: u32) {
+        let Some(seat) = self.seat.clone() else { return };
+        if let Some(t) = self.toplevel_por_id(id) {
+            t.handle.activate(&seat);
         }
     }
 }
@@ -570,7 +640,12 @@ impl SeatHandler for LayerApp {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        // Guardamos el seat para poder activar ventanas (`activate(seat)`).
+        if self.seat.is_none() {
+            self.seat = Some(seat);
+        }
+    }
 
     fn new_capability(
         &mut self,
@@ -732,6 +807,72 @@ impl ProvidesRegistryState for LayerApp {
         &mut self.registry_state
     }
     registry_handlers![OutputState, SeatState];
+}
+
+/// El manager de ventanas: anuncia un toplevel nuevo (creando su handle hijo) y
+/// el fin del servicio. `event_created_child!` declara cómo enrutar el handle que
+/// nace en el evento `toplevel` (sin esto, wayland-client paniquea al recibirlo).
+impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for LayerApp {
+    fn event(
+        state: &mut Self,
+        _mgr: &ZwlrForeignToplevelManagerV1,
+        event: zwlr_foreign_toplevel_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwlr_foreign_toplevel_manager_v1::Event;
+        match event {
+            Event::Toplevel { toplevel } => {
+                let id = state.next_toplevel_id;
+                state.next_toplevel_id = state.next_toplevel_id.wrapping_add(1);
+                state.toplevels.push(Toplevel::new(id, toplevel));
+            }
+            Event::Finished => {
+                state.toplevels.clear();
+                state.marcar_todo_dirty();
+            }
+            _ => {}
+        }
+    }
+
+    event_created_child!(LayerApp, ZwlrForeignToplevelManagerV1, [
+        EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
+    ]);
+}
+
+/// Un handle de toplevel: el compositor le manda título / app_id / estado en
+/// eventos sueltos y los confirma con `done`; `closed` lo retira. Acumulamos en
+/// el [`Toplevel`] y aplicamos en `done` para no pintar estados a medias.
+impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for LayerApp {
+    fn event(
+        state: &mut Self,
+        handle: &ZwlrForeignToplevelHandleV1,
+        event: zwlr_foreign_toplevel_handle_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwlr_foreign_toplevel_handle_v1::Event;
+        let pos = state.toplevels.iter().position(|t| &t.handle == handle);
+        let Some(i) = pos else { return };
+        match event {
+            Event::Title { title } => state.toplevels[i].set_title(title),
+            Event::AppId { app_id } => state.toplevels[i].set_app_id(app_id),
+            Event::State { state: estados } => state.toplevels[i].set_state(&estados),
+            Event::Done => {
+                if state.toplevels[i].confirmar() {
+                    state.marcar_todo_dirty();
+                }
+            }
+            Event::Closed => {
+                let t = state.toplevels.remove(i);
+                t.handle.destroy();
+                state.marcar_todo_dirty();
+            }
+            _ => {}
+        }
+    }
 }
 
 delegate_compositor!(LayerApp);

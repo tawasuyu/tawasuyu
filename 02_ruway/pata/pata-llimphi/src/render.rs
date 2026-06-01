@@ -23,7 +23,12 @@ use pata_core::layout::Rect;
 use pata_core::widget::WidgetView;
 
 use crate::shuma::{self, ShumaState};
+use crate::toplevel::WindowEntry;
 use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
+
+/// Largo máximo de la etiqueta de una ventana en el `window_list` antes de
+/// recortar con `…`. Evita que un título largo empuje el resto de la barra.
+const WINDOW_LABEL_MAX: usize = 22;
 
 /// Ancho de la barrita de un medidor, en píxeles.
 const BARRA_W: f32 = 48.0;
@@ -178,6 +183,9 @@ pub fn root(model: &Model) -> View<Msg> {
             placed.rect,
             widgets,
             &model.shuma,
+            // Bajo el compositor mirada (este path winit) el window_list aún no
+            // recibe ventanas; llegará por el IPC de mirada.
+            &[],
             &model.theme,
         ));
     }
@@ -199,6 +207,7 @@ fn surface_view(
     rect: Rect,
     widgets: &SurfaceWidgets,
     shuma_state: &ShumaState,
+    windows: &[WindowEntry],
     theme: &Theme,
 ) -> View<Msg> {
     let dir = if surface.anchor.es_horizontal() {
@@ -231,7 +240,7 @@ fn surface_view(
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(slots_de(surface, widgets, shuma_state, theme, dir))
+    .children(slots_de(surface, widgets, shuma_state, windows, theme, dir))
 }
 
 /// La barra de shuma **desplegada**: la propia layer surface creció hacia
@@ -242,6 +251,7 @@ pub fn shuma_open_view(
     surface: &Surface,
     widgets: &SurfaceWidgets,
     shuma_state: &ShumaState,
+    windows: &[WindowEntry],
     theme: &Theme,
     bar_px: f32,
 ) -> View<Msg> {
@@ -263,7 +273,7 @@ pub fn shuma_open_view(
         },
         ..Default::default()
     })
-    .children(vec![bar_view(surface, widgets, shuma_state, theme)]);
+    .children(vec![bar_view(surface, widgets, shuma_state, windows, theme)]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -284,6 +294,7 @@ fn slots_de(
     surface: &Surface,
     widgets: &SurfaceWidgets,
     shuma_state: &ShumaState,
+    windows: &[WindowEntry],
     theme: &Theme,
     dir: FlexDirection,
 ) -> Vec<View<Msg>> {
@@ -303,6 +314,7 @@ fn slots_de(
                     }
                 }
                 SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
+                SlotWidget::WindowList => window_list_view(windows, surface.gap, dir, theme),
             })
             .collect();
         let mut style = Style {
@@ -325,6 +337,58 @@ fn slots_de(
     ]
 }
 
+/// El `window_list`: un chip clickeable por ventana abierta, resaltando la
+/// activa. Clickear envía [`Msg::ActivateWindow`] con su `id`; el backend
+/// layer-shell la trae al frente. Los chips siguen el eje de la barra (fila u
+/// columna) con el mismo `gap` que el resto de los slots.
+fn window_list_view(
+    windows: &[WindowEntry],
+    gap: f32,
+    dir: FlexDirection,
+    theme: &Theme,
+) -> View<Msg> {
+    let chips: Vec<View<Msg>> = windows
+        .iter()
+        .map(|w| {
+            let texto = recortar(&w.label, WINDOW_LABEL_MAX);
+            // La activa va con texto pleno + fondo de panel; el resto, tenue.
+            let (fg, fill) = if w.active {
+                (theme.fg_text, theme.bg_panel)
+            } else {
+                (theme.fg_muted, theme.bg_panel_alt)
+            };
+            chip(theme)
+                .fill(fill)
+                .radius(6.0)
+                .hover_fill(theme.bg_button_hover)
+                .on_click(Msg::ActivateWindow(w.id))
+                .text(texto, 12.0, fg)
+        })
+        .collect();
+
+    View::new(Style {
+        flex_direction: dir,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(gap),
+            height: length(gap),
+        },
+        ..Default::default()
+    })
+    .children(chips)
+}
+
+/// Recorta una cadena a `max` caracteres, agregando `…` si sobró.
+fn recortar(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
 /// La barra de **una** superficie llenando su contenedor (100%×100%): la raíz
 /// que pinta el backend `wlr-layer-shell`, donde el compositor ya dimensionó y
 /// ancló la layer surface al borde — no hace falta posicionarla en absoluto.
@@ -332,6 +396,7 @@ pub fn bar_view(
     surface: &Surface,
     widgets: &SurfaceWidgets,
     shuma_state: &ShumaState,
+    windows: &[WindowEntry],
     theme: &Theme,
 ) -> View<Msg> {
     let dir = if surface.anchor.es_horizontal() {
@@ -356,5 +421,5 @@ pub fn bar_view(
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(slots_de(surface, widgets, shuma_state, theme, dir))
+    .children(slots_de(surface, widgets, shuma_state, windows, theme, dir))
 }

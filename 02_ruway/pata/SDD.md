@@ -1,7 +1,8 @@
 # SDD — `pata`, el marco del escritorio
 
-> Estado: **Fase 8** (acople en mirada — zonas exclusivas). Este documento es la
-> fuente autoritativa de qué es `pata` y dónde termina, por encima de README.
+> Estado: **Fase 8b** (layer-shell sobre wlroots: barras, Quake, clicks,
+> `window_list`). Este documento es la fuente autoritativa de qué es `pata` y
+> dónde termina, por encima de README.
 
 ## 0. El problema que resuelve
 
@@ -115,8 +116,10 @@ borde; shuma provee el contenido.
     es el upgrade drop-in cuando se quiera alta precisión.
   - `start_button` ✅ — muestra su `label` (default `⊞`). Cablear su acción
     (abrir el lanzador) espera al ruteo de clicks (Fase 7).
-  - `window_list` ⏳ — necesita que mirada exponga los toplevels por IPC
-    (`mirada-ctl`/`-link` aún no lo hacen); queda como placeholder.
+  - `window_list` ✅ (en layer-shell) — lista de ventanas abiertas vía el
+    protocolo `wlr-foreign-toplevel-management` (el que usan waybar/eww), no por
+    IPC de mirada. Ver el detalle en la Fase 8b. Bajo el compositor `mirada` (el
+    path winit) sigue vacío hasta que mirada exponga sus toplevels.
   - `tray` ⏳ — StatusNotifierItem; diferido. Placeholder por ahora.
 - **Fase 7 ✅** — despliegue Quake de shuma desde `shuma_input`. El frontend
   intercepta el kind `shuma_input` (es interacción, no pasa por el `build`
@@ -187,6 +190,17 @@ borde; shuma provee el contenido.
     `WidgetCtx::{volume, muted}` (el brillo ya lo lee de `/sys`). El medidor deja
     de marcar 0%. Parseo en funciones puras testeadas (`parse_wpctl`/
     `parse_pactl_pct`). Bonus en el asset: `volume` con `exec = "pavucontrol"`.
-  - Falta: los widgets placeholder (`window_list`/`tray`/`clipboard`, Fase 6).
+  - **`window_list`** ✅ — la lista de ventanas abiertas, vía
+    `wlr-foreign-toplevel-management` (`wayland-protocols-wlr`), el protocolo de
+    waybar/eww. El manager se bindea opcional (si el compositor no lo expone, el
+    widget queda vacío sin romper); cada toplevel acumula título/app_id/estado en
+    `pata-llimphi::toplevel::Toplevel` y se confirma en `done`. El render pinta un
+    chip clickeable por ventana (la activa resaltada); el click manda
+    `Msg::ActivateWindow(id)` → `activate(seat)`, que la trae al frente. Como el
+    `shuma_input`, es interacción + IPC: no pasa por el `build` agnóstico de core
+    sino que lo intercepta el frontend (`SlotWidget::WindowList`); los datos se
+    pasan al render aparte del view-model. El asset `launcher.toml` ya lo tiene en
+    el centro de la barra superior.
+  - Falta: los widgets placeholder restantes (`tray`/`clipboard`, Fase 6).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
