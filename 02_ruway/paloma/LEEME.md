@@ -15,8 +15,7 @@ paloma-core        — modelo agnóstico: direcciones, mensajes, buzones, hilos,
                      cuentas, el trait de transporte. Sin red ni UI.   [HECHO]
 paloma-net         — puente MIME + IMAP (fetch) + SMTP (envío);
                      implementa MailBackend contra servidores reales.  [HECHO]
-paloma-store       — persistencia nativa (BLAKE3 + postcard) + sync
-                     incremental + búsqueda (rimay).                    [pendiente]
+paloma-store       — persistencia nativa (postcard + BLAKE3), offline-first. [HECHO]
 paloma-llimphi     — frontend: lista de hilos + lectura + redacción.   [HECHO]
 paloma-app         — binario lanzable (`paloma`): NetBackend + fallback demo. [HECHO]
 ```
@@ -72,10 +71,42 @@ intercambiables, como el resto de la suite.
     compartida con `examples/buzon_demo`).
   - Lanzar: `cargo run -p paloma-app --release` (o `-p paloma-app --bin paloma`).
 
+- **Fase 5 (2026-06-01):** `paloma-store` — caché en disco **offline-first**.
+  - Persiste buzones y mensajes por cuenta con **postcard**; el archivo por
+    buzón se nombra por **BLAKE3** del nombre (tolera `/`, espacios, mayúsculas);
+    escritura atómica (`.tmp` + rename). 5 tests.
+  - `MailStore::ingest_mailboxes` precarga desde caché. El `Model` gana
+    `with_persistence`: pinta lo cacheado, refresca de red y persiste; sin red,
+    abre desde disco. `paloma-app` cablea un `MailDb` en `~/.cache/paloma`.
+
+- **Fase 6 (2026-06-01):** búsqueda de texto local.
+  - `paloma-core::search` (AND de términos; peso asunto>remitente>cuerpo) +
+    `MailStore::search` cruza buzones y ordena. 7 tests.
+  - Frontend: caja en la toolbar (tecla `/`); con consulta, el panel central
+    muestra resultados planos; click o Enter abren el mensaje en su hilo; Esc
+    limpia. (Semántica con `rimay` queda como extensión: su daemon es async y
+    opt-in; no encaja en el modelo síncrono sin un runtime — ver Pendiente.)
+
+- **Fase 7 (2026-06-01):** IMAP STARTTLS/plano + fetch de los últimos N.
+  - `imap_client` soporta los tres transportes (TLS implícito, STARTTLS 143→TLS,
+    plano) vía enum de sesión; métodos genéricos sobre el stream. Fetch acotado
+    a los últimos N (rango desde el `EXISTS` del `SELECT`), N configurable
+    (default 200) — `NetBackend::set_fetch_limit`, env `PALOMA_FETCH_LIMIT`.
+
+- **Fase 8 (2026-06-01):** lectura — scroll + cuerpo HTML.
+  - `Message::display_body` cae a `strip_html` cuando el mensaje vino sólo en
+    HTML (despoja etiquetas, salta `<style>`/`<script>`, decodifica entidades,
+    respeta saltos de bloque). 2 tests. Panel de lectura con scroll en píxeles
+    (margen negativo + viewport clip); la rueda elige panel por la X del cursor.
+
 ## Pendiente (orden sugerido)
 
-1. **Verificar `paloma-net` contra un servidor real** (laptop, con credenciales).
-2. **STARTTLS/plain en IMAP** + límite de fetch a los últimos N (sync incremental).
-3. **`paloma-store`** — persistencia nativa (BLAKE3 + postcard) + búsqueda (`rimay`).
+1. **Verificar contra un servidor real** (laptop, con credenciales) los caminos
+   IMAP (TLS/STARTTLS/plano) y SMTP — sólo testeados por tipos hasta ahora.
+2. **Búsqueda semántica con `rimay`** — exige un puente sync↔async al
+   `rimay-verbo-daemon` (embeddings) + índice persistido; hoy la búsqueda es
+   exacta. Es el gancho que falta para "buscar por significado".
+3. **Firma/verificación con `agora`** (Ed25519) — firmar salientes y verificar
+   entrantes; necesita keystore de `agora` + un header propio.
 4. **Calendario/Contactos** (CalDAV/CardDAV) compartiendo la capa de cuentas.
-5. **Scroll del panel de lectura** + cuerpo HTML vía puriy cuando haga falta.
+5. **HTML rico vía puriy** cuando el usuario lo pida (hoy: texto despojado).
