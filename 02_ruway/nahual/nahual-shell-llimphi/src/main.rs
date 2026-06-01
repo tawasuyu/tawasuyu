@@ -105,6 +105,9 @@ use nahual_archive_viewer_llimphi::{
 use nahual_font_viewer_llimphi::{
     font_viewer_view, load_font, FontPreview, FontViewerPalette, DEFAULT_FONT_BYTES_MAX,
 };
+use nahual_map_viewer_llimphi::{
+    load_map, map_viewer_view, MapPreview, MapViewerPalette, DEFAULT_MAP_BYTES_MAX,
+};
 use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
@@ -129,6 +132,7 @@ enum PreviewPane {
     Markdown(MarkdownPreview),
     Archive(ArchivePreview),
     Font(FontPreview),
+    Map(MapPreview),
     /// Página HTML. El panel muestra el fuente (mismo visor de texto); el
     /// render real es asunto de **puriy**, que se lanza al abrir el archivo
     /// (Enter) sobre `file://<path>`. Costura nahual↔puriy.
@@ -517,6 +521,7 @@ impl App for Shell {
         let markdown_palette = MarkdownViewerPalette::from_theme(&theme);
         let archive_palette = ArchiveViewerPalette::from_theme(&theme);
         let font_palette = FontViewerPalette::from_theme(&theme);
+        let map_palette = MapViewerPalette::from_theme(&theme);
         let menu = app_menu(model);
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_bar(model, &theme);
@@ -566,6 +571,9 @@ impl App for Shell {
             }
             PreviewPane::Font(state) => {
                 font_viewer_view::<Msg>(state, model.preview_of.as_deref(), &font_palette)
+            }
+            PreviewPane::Map(state) => {
+                map_viewer_view::<Msg>(state, model.preview_of.as_deref(), &map_palette)
             }
             // El visor de texto muestra el fuente HTML; abrir (Enter) lanza puriy.
             PreviewPane::Web(state) => text_viewer_view::<Msg>(
@@ -985,6 +993,7 @@ fn load_for(path: &Path) -> PreviewPane {
         }
         ViewerKind::Archive => PreviewPane::Archive(load_archive(path)),
         ViewerKind::Font => PreviewPane::Font(load_font(path, DEFAULT_FONT_BYTES_MAX)),
+        ViewerKind::Map => PreviewPane::Map(load_map(path, DEFAULT_MAP_BYTES_MAX)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
         // El panel muestra el fuente; el render lo hace puriy al abrir.
         ViewerKind::Web => PreviewPane::Web(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),

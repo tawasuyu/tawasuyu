@@ -33,6 +33,7 @@ nahual-table-viewer-llimphi = { workspace = true }
 nahual-markdown-viewer-llimphi = { workspace = true }
 nahual-archive-viewer-llimphi = { workspace = true }
 nahual-font-viewer-llimphi = { workspace = true }
+nahual-map-viewer-llimphi = { workspace = true }
 nahual-text-viewer-llimphi = { workspace = true }
 shuma-discern = { path = "../../shuma/sandbox/shuma-discern" }
 card-core = { path = "../../../shared/card/card-core" }

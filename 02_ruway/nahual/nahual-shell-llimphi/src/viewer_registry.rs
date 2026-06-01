@@ -69,6 +69,9 @@ pub enum ViewerKind {
     /// Markdown renderizado (`nahual-markdown-viewer-llimphi`); encabezados,
     /// listas, código y citas con estilo en vez de la sintaxis cruda.
     Markdown,
+    /// Mapa GeoJSON (`nahual-map-viewer-llimphi`); proyecta y dibuja
+    /// puntos/líneas/polígonos en vez del árbol crudo de coordenadas.
+    Map,
     /// Listado de un archivo comprimido (`nahual-archive-viewer-llimphi`);
     /// muestra las entradas (nombre/tamaño/ratio) en vez del volcado hex.
     /// Cubre ZIP (y .jar/.apk/.epub/OOXML), tar y tar.gz.
@@ -100,6 +103,7 @@ impl ViewerKind {
             ViewerKind::Hex => "hex",
             ViewerKind::Table => "table",
             ViewerKind::Markdown => "markdown",
+            ViewerKind::Map => "map",
             ViewerKind::Archive => "archive",
             ViewerKind::Font => "font",
             ViewerKind::Text => "text",
@@ -119,6 +123,7 @@ impl ViewerKind {
             "hex" => ViewerKind::Hex,
             "table" => ViewerKind::Table,
             "markdown" => ViewerKind::Markdown,
+            "map" => ViewerKind::Map,
             "archive" => ViewerKind::Archive,
             "font" => ViewerKind::Font,
             "text" => ViewerKind::Text,
@@ -183,6 +188,15 @@ pub fn builtin_registry() -> Vec<ViewerCard> {
         ViewerCard::builtin(ViewerKind::Tree, &["tree"], &[], &[], Normal),
         ViewerCard::builtin(ViewerKind::Table, &["table"], &[], &[], Normal),
         ViewerCard::builtin(ViewerKind::Markdown, &["markdown"], &[], &[], Normal),
+        // GeoJSON → mapa. Lo rutea el lens `map` de shuma-discern y, por si
+        // acaso, los mime canónicos de GeoJSON.
+        ViewerCard::builtin(
+            ViewerKind::Map,
+            &["map", "geo"],
+            &[],
+            &["application/geo+json", "application/vnd.geo+json"],
+            Normal,
+        ),
         ViewerCard::builtin(ViewerKind::Font, &["font"], &[], &[], Normal),
         // HTML → puriy (el navegador de la suite). Cubre el lens `web`/`html`
         // que pueda emitir shuma-discern y los mime canónicos del HTML/XHTML.
@@ -474,6 +488,12 @@ mod tests {
     #[test]
     fn markdown_va_a_markdown() {
         assert_eq!(pick_builtin(Some("markdown"), Some("text/plain")), ViewerKind::Markdown);
+    }
+
+    #[test]
+    fn map_lens_y_mime_van_a_mapa() {
+        assert_eq!(pick_builtin(Some("map"), Some("application/json")), ViewerKind::Map);
+        assert_eq!(pick_builtin(None, Some("application/geo+json")), ViewerKind::Map);
     }
 
     #[test]

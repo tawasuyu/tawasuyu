@@ -41,9 +41,10 @@ impl DiscernPipeline {
     pub fn default_pipeline() -> Self {
         let mut p = Self::new();
         p.push(Box::new(MagicBytes));
-        // CardProbe antes que JsonProbe: una Card es JSON, pero queremos el
-        // TypeRef más específico cuando aplique.
+        // CardProbe y GeoJsonProbe antes que JsonProbe: ambos son JSON, pero
+        // queremos el TypeRef/lens más específico cuando el contenido lo delata.
         p.push(Box::new(CardProbe));
+        p.push(Box::new(GeoJsonProbe));
         p.push(Box::new(JsonProbe));
         p.push(Box::new(TomlProbe));
         p.push(Box::new(TabularProbe));
@@ -252,6 +253,59 @@ impl Discerner for CardProbe {
     }
 }
 
+/// GeoJSON: un JSON cuyo `type` raíz es una de las clases GeoJSON
+/// (`FeatureCollection`/`Feature`/geometrías). Emite lens `map` y mime
+/// `application/geo+json` para que el shell lo rutee al visor de mapas en
+/// vez del árbol genérico.
+pub struct GeoJsonProbe;
+
+impl Discerner for GeoJsonProbe {
+    fn name(&self) -> &str { "geojson" }
+
+    fn discern(&self, s: &[u8], _h: &Hint<'_>) -> Option<Discernment> {
+        let trimmed = trim_left(s);
+        if trimmed.first()? != &b'{' {
+            return None;
+        }
+        let txt = std::str::from_utf8(trimmed).ok()?;
+        let v: serde_json::Value = serde_json::from_str(txt).ok()?;
+        let ty = v.get("type")?.as_str()?;
+        let is_geo = matches!(
+            ty,
+            "FeatureCollection"
+                | "Feature"
+                | "GeometryCollection"
+                | "Point"
+                | "MultiPoint"
+                | "LineString"
+                | "MultiLineString"
+                | "Polygon"
+                | "MultiPolygon"
+        );
+        if !is_geo {
+            return None;
+        }
+        // Confirmar mínimamente la forma: una colección/feature debe traer su
+        // arreglo característico; una geometría, `coordinates`. Esto evita
+        // confundir un JSON cualquiera con `"type":"Point"` sin coordenadas.
+        let confirmed = match ty {
+            "FeatureCollection" => v.get("features").map(|f| f.is_array()).unwrap_or(false),
+            "Feature" => v.get("geometry").is_some(),
+            "GeometryCollection" => v.get("geometries").map(|g| g.is_array()).unwrap_or(false),
+            _ => v.get("coordinates").map(|c| c.is_array()).unwrap_or(false),
+        };
+        if !confirmed {
+            return None;
+        }
+        Some(Discernment {
+            ty: TypeRef::Primitive { name: "geojson".into() },
+            confidence: 0.96,
+            mime: Some("application/geo+json".into()),
+            lens: Some("map".into()),
+        })
+    }
+}
+
 /// Texto UTF-8 plano. Fallback de baja confidence.
 pub struct Utf8Probe;
 
@@ -399,6 +453,34 @@ mod tests {
             discern(b"OggS\x00\x02\x00\x00").unwrap().mime.as_deref(),
             Some("audio/ogg")
         );
+    }
+
+    #[test]
+    fn geojson_detectado_como_mapa() {
+        let fc = br#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","geometry":{"type":"Point","coordinates":[1,2]},"properties":{}}
+        ]}"#;
+        let r = discern(fc).unwrap();
+        assert_eq!(r.lens.as_deref(), Some("map"));
+        assert_eq!(r.mime.as_deref(), Some("application/geo+json"));
+        // Una geometría suelta también.
+        let pt = discern(br#"{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}"#).unwrap();
+        assert_eq!(pt.lens.as_deref(), Some("map"));
+    }
+
+    #[test]
+    fn json_con_type_no_geo_cae_a_tree() {
+        // Un JSON con `"type"` arbitrario (no GeoJSON) no debe robarlo el
+        // GeoJsonProbe: cae al árbol.
+        let r = discern(br#"{"type":"banana","valor":3}"#).unwrap();
+        assert_eq!(r.lens.as_deref(), Some("tree"));
+    }
+
+    #[test]
+    fn point_sin_coordinates_no_es_geo() {
+        // `"type":"Point"` sin `coordinates` no se confunde con GeoJSON.
+        let r = discern(br#"{"type":"Point","name":"un punto cualquiera"}"#).unwrap();
+        assert_eq!(r.lens.as_deref(), Some("tree"));
     }
 
     #[test]
