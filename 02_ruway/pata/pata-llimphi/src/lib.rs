@@ -20,6 +20,7 @@
 //! (Fase 8), cada una será su propia ventana acoplada.
 
 pub mod keys;
+pub mod layer;
 pub mod render;
 pub mod sampler;
 pub mod shuma;

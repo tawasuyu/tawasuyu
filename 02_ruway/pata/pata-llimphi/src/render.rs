@@ -11,7 +11,9 @@
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{auto, length, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
+    prelude::{
+        auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style,
+    },
     Rect as TaffyRect,
 };
 use llimphi_ui::View;
@@ -182,28 +184,6 @@ fn surface_view(
         FlexDirection::Column
     };
 
-    let slot = |ws: &[SlotWidget], justify: JustifyContent| -> View<Msg> {
-        let items: Vec<View<Msg>> = ws
-            .iter()
-            .map(|sw| match sw {
-                SlotWidget::Core(w) => widget_view(&w.view(), theme),
-                SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
-            })
-            .collect();
-        let mut style = Style {
-            flex_direction: dir,
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(justify),
-            gap: Size {
-                width: length(surface.gap),
-                height: length(surface.gap),
-            },
-            ..Default::default()
-        };
-        style.flex_grow = 1.0;
-        View::new(style).children(items)
-    };
-
     View::new(Style {
         position: Position::Absolute,
         inset: TaffyRect {
@@ -228,9 +208,78 @@ fn surface_view(
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(vec![
+    .children(slots_de(surface, widgets, shuma_state, theme, dir))
+}
+
+/// Construye los tres slots (start/center/end) de una superficie a lo largo de
+/// su eje. Compartido por [`surface_view`] (una superficie colocada en su rect
+/// dentro de una ventana grande) y [`bar_view`] (la barra llenando su propia
+/// layer surface de Wayland).
+fn slots_de(
+    surface: &Surface,
+    widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    theme: &Theme,
+    dir: FlexDirection,
+) -> Vec<View<Msg>> {
+    let slot = |ws: &[SlotWidget], justify: JustifyContent| -> View<Msg> {
+        let items: Vec<View<Msg>> = ws
+            .iter()
+            .map(|sw| match sw {
+                SlotWidget::Core(w) => widget_view(&w.view(), theme),
+                SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
+            })
+            .collect();
+        let mut style = Style {
+            flex_direction: dir,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(justify),
+            gap: Size {
+                width: length(surface.gap),
+                height: length(surface.gap),
+            },
+            ..Default::default()
+        };
+        style.flex_grow = 1.0;
+        View::new(style).children(items)
+    };
+    vec![
         slot(&widgets.start, JustifyContent::FlexStart),
         slot(&widgets.center, JustifyContent::Center),
         slot(&widgets.end, JustifyContent::FlexEnd),
-    ])
+    ]
+}
+
+/// La barra de **una** superficie llenando su contenedor (100%×100%): la raíz
+/// que pinta el backend `wlr-layer-shell`, donde el compositor ya dimensionó y
+/// ancló la layer surface al borde — no hace falta posicionarla en absoluto.
+pub fn bar_view(
+    surface: &Surface,
+    widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    theme: &Theme,
+) -> View<Msg> {
+    let dir = if surface.anchor.es_horizontal() {
+        FlexDirection::Row
+    } else {
+        FlexDirection::Column
+    };
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_direction: dir,
+        padding: TaffyRect {
+            left: length(surface.padding),
+            right: length(surface.padding),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::SpaceBetween),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(slots_de(surface, widgets, shuma_state, theme, dir))
 }

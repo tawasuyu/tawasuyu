@@ -141,10 +141,24 @@ borde; shuma provee el contenido.
     El motor de layout ya respetaba `screen.x/y`, así que top/left desplazan el
     origen del teselado correctamente. Soporta barras en varios bordes a la vez.
     Cerrar el shell libera la reserva (insets en cero).
-  - Pendiente del lado `pata` (Fase 8b): hoy `pata-llimphi` es una ventana a
-    pantalla completa; para que el acople a franja no la recorte, debe volverse
-    una layer-surface (overlay que pinta sólo sus barras) o N ventanas por
-    superficie. El compositor ya reserva las zonas; falta que pata se dibuje
-    como overlay y anuncie sus superficies (varios anchors simultáneos).
+- **Fase 8b (en curso)** — `pata` como **layer surface** (nivel eww/waybar) en
+  compositores wlroots (Hyprland, Sway, river), no como ventana cliente. Sin
+  esto, en Hyprland pata abría como ventana flotante; el acople de la Fase 8 era
+  sólo para el compositor `mirada`, no para terceros.
+  - `llimphi-hal::RawSurface` — `Surface` sobre una `wgpu::Surface` creada desde
+    handles raw, **sin `winit::Window`** (misma intermedia + blit que
+    `WinitSurface`). Es la costura: el render de Llimphi ya era winit-free salvo
+    la creación de la surface.
+  - `pata-llimphi::layer` — backend `wlr-layer-shell` con
+    `smithay-client-toolkit`: crea una layer surface anclada según la config
+    (anchor + `set_exclusive_zone(thickness)`), saca la `wgpu::Surface` de los
+    punteros `wl_display`/`wl_surface`, y pinta la barra reusando
+    `mount → compute → paint → render` vía [`render::bar_view`]. `main` elige
+    layer-shell si hay `WAYLAND_DISPLAY` (salvo `PATA_BACKEND=winit`), con
+    fallback a la ventana winit.
+  - **Compila; runtime sin verificar** (se itera en un compositor real).
+    Pinta la **primera** barra `Bar` de la config. Falta (próximo incremento):
+    input (teclado→Quake, clicks→toggle/start_button), las demás superficies
+    (N layer surfaces) y el drawer Quake como layer `Overlay`.
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).

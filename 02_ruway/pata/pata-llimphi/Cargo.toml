@@ -21,3 +21,9 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-motion = { workspace = true }
 chrono = { workspace = true }
+# Backend wlr-layer-shell (Linux/Wayland): hace que pata se siente al nivel de
+# eww/waybar — layer surface anclada con exclusive zone, no una ventana cliente.
+smithay-client-toolkit = "0.19"
+wayland-client = "0.31"
+raw-window-handle = { workspace = true }
+pollster = { workspace = true }

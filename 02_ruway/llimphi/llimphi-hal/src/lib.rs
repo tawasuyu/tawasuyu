@@ -256,6 +256,115 @@ impl WinitSurface {
     }
 }
 
+/// Surface sobre una `wgpu::Surface` creada desde **handles raw** (sin
+/// `winit::Window`): la usa el backend `wlr-layer-shell` de `pata` para pintar
+/// en una *layer surface* de Wayland (barras/paneles al nivel de eww/waybar).
+/// Misma mecánica que [`WinitSurface`] —intermedia `Rgba8Unorm` + blit al
+/// swapchain— pero el tamaño se pasa explícito porque no hay ventana que
+/// consultar. La `wgpu::Surface` la crea el caller (típicamente con
+/// `instance.create_surface_unsafe` desde los punteros `wl_display`/`wl_surface`).
+pub struct RawSurface {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    device: wgpu::Device,
+    intermediate: wgpu::Texture,
+    intermediate_view: wgpu::TextureView,
+    blitter: wgpu::util::TextureBlitter,
+}
+
+impl RawSurface {
+    /// Envuelve una `wgpu::Surface` ya creada, con el tamaño físico inicial.
+    pub fn from_surface(
+        hal: &Hal,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, HalError> {
+        let caps = surface.get_capabilities(&hal.adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| matches!(f, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm))
+            .unwrap_or(caps.formats[0]);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: width.max(1),
+            height: height.max(1),
+            present_mode: choose_present_mode(&caps),
+            desired_maximum_frame_latency: 2,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+        };
+        surface.configure(&hal.device, &config);
+        let (intermediate, intermediate_view) =
+            create_intermediate(&hal.device, config.width, config.height);
+        let blitter = wgpu::util::TextureBlitter::new(&hal.device, format);
+        Ok(Self {
+            surface,
+            config,
+            device: hal.device.clone(),
+            intermediate,
+            intermediate_view,
+            blitter,
+        })
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+}
+
+impl Surface for RawSurface {
+    fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        self.config.width = width.max(1);
+        self.config.height = height.max(1);
+        self.surface.configure(&self.device, &self.config);
+        let (tex, view) = create_intermediate(&self.device, self.config.width, self.config.height);
+        self.intermediate = tex;
+        self.intermediate_view = view;
+    }
+
+    fn acquire(&mut self) -> Result<Frame, SurfaceError> {
+        let texture = self.surface.get_current_texture().map_err(|e| match e {
+            wgpu::SurfaceError::Lost => SurfaceError::Lost,
+            wgpu::SurfaceError::Outdated => SurfaceError::Outdated,
+            wgpu::SurfaceError::OutOfMemory => SurfaceError::OutOfMemory,
+            wgpu::SurfaceError::Timeout => SurfaceError::Timeout,
+            other => SurfaceError::Other(format!("{other:?}")),
+        })?;
+        let surface_view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        Ok(Frame {
+            surface_texture: texture,
+            surface_view,
+            intermediate_view: self.intermediate_view.clone(),
+            width: self.config.width,
+            height: self.config.height,
+        })
+    }
+
+    fn present(&mut self, frame: Frame, hal: &Hal) {
+        let mut encoder = hal.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("llimphi-blit-raw"),
+        });
+        self.blitter.copy(
+            &hal.device,
+            &mut encoder,
+            &frame.intermediate_view,
+            &frame.surface_view,
+        );
+        hal.queue.submit(std::iter::once(encoder.finish()));
+        frame.surface_texture.present();
+    }
+}
+
 /// Elige el modo de presentación del swapchain.
 ///
 /// Default: **Mailbox** si el driver lo expone, sino **Fifo**. La razón es
