@@ -106,8 +106,18 @@ borde; shuma provee el contenido.
   que el layout resolvió (posición absoluta). `PataApp` (app-id `gioser.pata`)
   carga config vía `pata-config`, `tick`ea a 1 Hz y pinta. Por ahora una sola
   ventana; mirada acopla por superficie en la Fase 8.
-- **Fase 6** — widgets nuevos: `start_button`, `window_list` (IPC con mirada),
-  `tray`, `astro` (cosmos).
+- **Fase 6 (parcial)** — widgets nuevos:
+  - `astro` ✅ — posición zodiacal del Sol (signo + grado) + fase lunar. La
+    efeméride la computa el sampler (host) y la entrega en `WidgetCtx`
+    (`sun_longitude_deg` + `moon_phase`); el widget de core sólo mapea grados→
+    signo y fracción→fase, con aritmética entera (no_std). El sampler usa la
+    fórmula de baja precisión del *Astronomical Almanac*; `cosmos-ephemeris`
+    es el upgrade drop-in cuando se quiera alta precisión.
+  - `start_button` ✅ — muestra su `label` (default `⊞`). Cablear su acción
+    (abrir el lanzador) espera al ruteo de clicks (Fase 7).
+  - `window_list` ⏳ — necesita que mirada exponga los toplevels por IPC
+    (`mirada-ctl`/`-link` aún no lo hacen); queda como placeholder.
+  - `tray` ⏳ — StatusNotifierItem; diferido. Placeholder por ahora.
 - **Fase 7** — despliegue Quake de shuma desde `shuma_input`.
 - **Fase 8** — mirada-compositor reconoce superficies pata (varios anchors, no
   una sola franja de 40px al pie); `SHELL_APP_ID` → identidad pata + override

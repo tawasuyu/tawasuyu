@@ -7,9 +7,14 @@
 //! meminfo` para la RAM y `/sys/class/backlight` para el brillo. El volumen
 //! (PulseAudio/PipeWire) queda diferido —el medidor sale en 0% hasta entonces—.
 
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Local, Timelike, Utc};
 
 use pata_core::widget::{ClockReading, WidgetCtx};
+
+/// Duración del mes sinódico (de luna nueva a luna nueva), en días.
+const MES_SINODICO: f64 = 29.530588853;
+/// Época de referencia de luna nueva: 2000-01-06 18:14 UTC, en días julianos.
+const LUNA_NUEVA_REF_JD: f64 = 2451550.1;
 
 /// Muestreador con estado: guarda la última lectura de `/proc/stat` para poder
 /// calcular el uso de CPU como delta entre ticks.
@@ -28,6 +33,7 @@ impl Sampler {
     /// Toma un snapshot completo del sistema.
     pub fn sample(&mut self) -> WidgetCtx {
         let (ram, ram_used_mb, ram_total_mb) = sample_ram();
+        let (sun_longitude_deg, moon_phase) = astro_from_jd(jd_from_unix(Utc::now().timestamp()));
         WidgetCtx {
             clock: sample_clock(),
             cpu: self.sample_cpu(),
@@ -37,6 +43,8 @@ impl Sampler {
             volume: 0.0,
             muted: false,
             brightness: sample_brightness().unwrap_or(0.0),
+            sun_longitude_deg,
+            moon_phase,
         }
     }
 
@@ -141,9 +149,59 @@ fn parse_proc_stat(text: &str) -> Option<(u64, u64)> {
     Some((total, idle))
 }
 
+/// Día juliano a partir de un timestamp Unix (segundos UTC). El día juliano
+/// 2440587.5 corresponde a la época Unix (1970-01-01 00:00 UTC).
+fn jd_from_unix(secs: i64) -> f64 {
+    secs as f64 / 86_400.0 + 2_440_587.5
+}
+
+/// `(longitud_eclíptica_sol_deg, fase_lunar)` para un día juliano dado.
+///
+/// La longitud del Sol usa la fórmula de baja precisión del *Astronomical
+/// Almanac* (exacta a ~0.01°, de sobra para el signo zodiacal). La fase lunar
+/// es la edad sinódica media desde una luna nueva de referencia, como fracción
+/// `0..1` (0 = nueva, 0.5 = llena). No es astronomía de alta precisión —para eso
+/// está `cosmos-ephemeris`, que puede sustituir a este sampler— pero alcanza
+/// para un widget de barra.
+fn astro_from_jd(jd: f64) -> (f32, f32) {
+    let n = jd - 2_451_545.0; // días desde J2000.0
+    // Anomalía media del Sol (grados → radianes para los senos).
+    let g = (357.528 + 0.985_600_3 * n).to_radians();
+    // Longitud media + ecuación del centro.
+    let mut lambda = 280.460 + 0.985_647_4 * n + 1.915 * g.sin() + 0.020 * (2.0 * g).sin();
+    lambda = lambda.rem_euclid(360.0);
+
+    // Edad lunar como fracción del ciclo sinódico.
+    let edad = (jd - LUNA_NUEVA_REF_JD).rem_euclid(MES_SINODICO);
+    let fase = (edad / MES_SINODICO) as f32;
+
+    (lambda as f32, fase)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jd_de_epoca_unix_es_la_referencia() {
+        assert!((jd_from_unix(0) - 2_440_587.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sol_en_equinoccio_de_marzo_esta_cerca_de_aries_0() {
+        // 2025-03-20 ~09:01 UTC fue el equinoccio: el Sol cruza 0° (Aries).
+        // timestamp del 2025-03-20 09:01:00 UTC = 1742461260.
+        let (lon, _) = astro_from_jd(jd_from_unix(1_742_461_260));
+        // Cerca de 0°/360°: aceptamos un margen de 1°.
+        let dist = lon.min(360.0 - lon);
+        assert!(dist < 1.0, "longitud {lon} no está cerca de 0°");
+    }
+
+    #[test]
+    fn fase_lunar_esta_en_rango() {
+        let (_, fase) = astro_from_jd(jd_from_unix(1_742_461_260));
+        assert!((0.0..=1.0).contains(&fase));
+    }
 
     #[test]
     fn parse_meminfo_extrae_total_y_disponible() {
@@ -172,17 +230,15 @@ mod tests {
     }
 
     #[test]
-    fn cpu_primer_tick_es_cero_y_luego_calcula_delta() {
-        // No tocamos /proc: validamos la lógica de delta a mano.
-        let mut s = Sampler::new();
-        // Sin lectura previa, el primer cálculo es 0 (y guarda la base).
-        assert_eq!(s.cpu_prev, None);
-        // Simulamos dos lecturas: base (total=1000, idle=900) y luego
-        // (total=1100, idle=950): dt=100, di=50 → uso = 1 - 0.5 = 0.5.
-        s.cpu_prev = Some((1000, 900));
-        let (total, idle) = (1100, 950);
-        let dt = total - 1000;
-        let di = idle - 900;
+    fn sampler_nuevo_no_tiene_lectura_previa_de_cpu() {
+        // El primer tick no puede calcular delta (sin base): arranca en None.
+        assert_eq!(Sampler::new().cpu_prev, None);
+    }
+
+    #[test]
+    fn delta_de_cpu_da_el_uso_esperado() {
+        // Base (total=1000, idle=900) → (1100, 950): dt=100, di=50 → 1-0.5 = 0.5.
+        let (dt, di) = (1100u64 - 1000, 950u64 - 900);
         let uso = 1.0 - di as f32 / dt as f32;
         assert!((uso - 0.5).abs() < 1e-6);
     }

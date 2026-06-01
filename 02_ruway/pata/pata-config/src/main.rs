@@ -148,6 +148,8 @@ fn ctx_muestra() -> WidgetCtx {
         volume: 0.75,
         muted: false,
         brightness: 0.55,
+        sun_longitude_deg: 132.0, // Leo 12°
+        moon_phase: 0.5,          // llena
     }
 }
 

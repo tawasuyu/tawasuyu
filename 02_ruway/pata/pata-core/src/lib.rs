@@ -36,6 +36,6 @@ pub mod widget;
 pub use config::{Anchor, Config, FloatingCard, General, Prop, Surface, SurfaceKind, WidgetSpec};
 pub use layout::{resolve, Frame, Placed, Rect};
 pub use widget::{
-    build, build_all, Clock, ClockReading, Meter, MeterSource, Placeholder, Widget, WidgetCtx,
-    WidgetView,
+    build, build_all, Astro, Clock, ClockReading, Meter, MeterSource, Placeholder, StartButton,
+    Widget, WidgetCtx, WidgetView,
 };

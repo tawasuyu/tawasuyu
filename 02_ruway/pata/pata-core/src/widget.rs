@@ -63,6 +63,13 @@ pub struct WidgetCtx {
     pub muted: bool,
     /// Brillo de pantalla, fracción `0.0..=1.0`.
     pub brightness: f32,
+    /// Longitud eclíptica del Sol en grados `0..360` — la posición zodiacal. El
+    /// host la computa (en Linux, vía una efeméride; ver `pata-llimphi::sampler`);
+    /// el widget [`Astro`] la mapea a signo + grado.
+    pub sun_longitude_deg: f32,
+    /// Fase lunar como fracción del ciclo sinódico `0.0..=1.0`: `0` = luna nueva,
+    /// `0.5` = llena, de vuelta a `1` = nueva.
+    pub moon_phase: f32,
 }
 
 /// El view-model que un widget emite: describe qué pintar sin atarse a ningún
@@ -228,6 +235,128 @@ impl Widget for Meter {
     }
 }
 
+/// Los doce signos del zodíaco con su glifo, en orden desde Aries (0°). Los
+/// nombres van en español (regla del repo); el glifo es el símbolo astrológico.
+const SIGNOS: [(&str, &str); 12] = [
+    ("Aries", "♈"),
+    ("Tauro", "♉"),
+    ("Géminis", "♊"),
+    ("Cáncer", "♋"),
+    ("Leo", "♌"),
+    ("Virgo", "♍"),
+    ("Libra", "♎"),
+    ("Escorpio", "♏"),
+    ("Sagitario", "♐"),
+    ("Capricornio", "♑"),
+    ("Acuario", "♒"),
+    ("Piscis", "♓"),
+];
+
+/// Las ocho fases lunares con su glifo, en orden desde la nueva. El índice se
+/// saca de la fracción del ciclo (`moon_phase * 8`, redondeado).
+const FASES_LUNA: [(&str, &str); 8] = [
+    ("Nueva", "🌑"),
+    ("Creciente", "🌒"),
+    ("Cuarto creciente", "🌓"),
+    ("Gibosa creciente", "🌔"),
+    ("Llena", "🌕"),
+    ("Gibosa menguante", "🌖"),
+    ("Cuarto menguante", "🌗"),
+    ("Menguante", "🌘"),
+];
+
+/// Widget astral: la posición zodiacal del Sol (signo + grado) y, opcionalmente,
+/// la fase lunar — el aporte que distingue al marco de gioser. La efeméride la
+/// resuelve el host y la entrega en el [`WidgetCtx`]; este widget sólo mapea
+/// grados a signo y fracción a fase, con aritmética entera (`core` no tiene
+/// `floor`/`round` de punto flotante).
+///
+/// Props:
+/// - `degree` (bool, default `true`): muestra el grado dentro del signo.
+/// - `moon` (bool, default `true`): añade el glifo de la fase lunar.
+/// - `name` (bool, default `true`): muestra el nombre del signo (si no, sólo el
+///   glifo).
+#[derive(Debug, Clone)]
+pub struct Astro {
+    show_degree: bool,
+    show_moon: bool,
+    show_name: bool,
+    text: String,
+}
+
+impl Astro {
+    /// Construye desde el spec leyendo `degree` / `moon` / `name`.
+    pub fn from_spec(spec: &WidgetSpec) -> Self {
+        Self {
+            show_degree: spec.bool_prop("degree", true),
+            show_moon: spec.bool_prop("moon", true),
+            show_name: spec.bool_prop("name", true),
+            text: String::new(),
+        }
+    }
+}
+
+impl Widget for Astro {
+    fn tick(&mut self, ctx: &WidgetCtx) {
+        // Grados enteros normalizados a 0..360 sin usar floor (no_std).
+        let lon = ((ctx.sun_longitude_deg as i32) % 360 + 360) % 360;
+        let (nombre, glifo) = SIGNOS[(lon / 30) as usize % 12];
+        let grado = lon % 30;
+
+        let mut s = String::new();
+        s.push_str(glifo);
+        if self.show_name {
+            s.push(' ');
+            s.push_str(nombre);
+        }
+        if self.show_degree {
+            s.push_str(&format!(" {grado}°"));
+        }
+        if self.show_moon {
+            // Índice 0..7: redondeo entero de moon_phase*8 (la fracción es ≥0).
+            let frac = ctx.moon_phase.clamp(0.0, 1.0);
+            let idx = ((frac * 8.0 + 0.5) as usize) % 8;
+            let (_, luna) = FASES_LUNA[idx];
+            s.push_str(" · ");
+            s.push_str(luna);
+        }
+        self.text = s;
+    }
+
+    fn view(&self) -> WidgetView {
+        if self.text.is_empty() {
+            WidgetView::Empty
+        } else {
+            WidgetView::Text(self.text.clone())
+        }
+    }
+}
+
+/// Botón de inicio: el ancla del menú de aplicaciones. Por ahora sólo muestra su
+/// etiqueta (`label`, default `"⊞"`); cablear su acción —abrir el lanzador—
+/// llega cuando el marco rutee clicks (Fase 7, junto al Quake de shuma).
+#[derive(Debug, Clone)]
+pub struct StartButton {
+    label: String,
+}
+
+impl StartButton {
+    /// Construye desde el spec leyendo la prop `label`.
+    pub fn from_spec(spec: &WidgetSpec) -> Self {
+        Self {
+            label: spec.str_prop("label", "⊞").to_string(),
+        }
+    }
+}
+
+impl Widget for StartButton {
+    fn tick(&mut self, _ctx: &WidgetCtx) {}
+
+    fn view(&self) -> WidgetView {
+        WidgetView::Text(self.label.clone())
+    }
+}
+
 /// Widget de relleno para un `kind` que el core no implementa todavía. Su `view`
 /// es siempre un [`WidgetView::Placeholder`] con el nombre del kind.
 #[derive(Debug, Clone)]
@@ -262,6 +391,8 @@ pub fn build(spec: &WidgetSpec) -> Box<dyn Widget> {
         "ram_meter" => Box::new(Meter::from_spec(MeterSource::Ram, spec)),
         "volume" => Box::new(Meter::from_spec(MeterSource::Volume, spec)),
         "brightness" => Box::new(Meter::from_spec(MeterSource::Brightness, spec)),
+        "astro" => Box::new(Astro::from_spec(spec)),
+        "start_button" => Box::new(StartButton::from_spec(spec)),
         _ => Box::new(Placeholder::new(&spec.kind)),
     }
 }
@@ -455,13 +586,59 @@ mod tests {
 
     #[test]
     fn kind_desconocido_cae_a_placeholder() {
-        let w = build(&WidgetSpec::new("start_button"));
-        assert_eq!(w.view(), WidgetView::Placeholder("start_button".to_string()));
-        // astro/window_list/tray/shuma_input todavía no son builtin.
+        // window_list/tray/shuma_input todavía no son builtin (IPC/shell pendiente).
+        let w = build(&WidgetSpec::new("window_list"));
+        assert_eq!(w.view(), WidgetView::Placeholder("window_list".to_string()));
         assert_eq!(
-            build(&WidgetSpec::new("astro")).view(),
-            WidgetView::Placeholder("astro".to_string())
+            build(&WidgetSpec::new("tray")).view(),
+            WidgetView::Placeholder("tray".to_string())
         );
+    }
+
+    #[test]
+    fn astro_mapea_longitud_a_signo_y_grado() {
+        let mut ctx = ctx();
+        // 132° → 132/30 = 4 → Leo; 132 % 30 = 12°.
+        ctx.sun_longitude_deg = 132.0;
+        ctx.moon_phase = 0.0; // nueva
+        let mut a = Astro::from_spec(&WidgetSpec::new("astro"));
+        a.tick(&ctx);
+        assert_eq!(a.view(), WidgetView::Text("♌ Leo 12° · 🌑".to_string()));
+    }
+
+    #[test]
+    fn astro_normaliza_longitud_negativa_y_redondea_luna() {
+        let mut ctx = ctx();
+        // -30° normaliza a 330° → Piscis (330/30 = 11), grado 0.
+        ctx.sun_longitude_deg = -30.0;
+        ctx.moon_phase = 0.5; // llena → idx 4
+        let mut a = Astro::from_spec(&WidgetSpec::new("astro"));
+        a.tick(&ctx);
+        assert_eq!(a.view(), WidgetView::Text("♓ Piscis 0° · 🌕".to_string()));
+    }
+
+    #[test]
+    fn astro_respeta_props_degree_moon_name() {
+        let mut ctx = ctx();
+        ctx.sun_longitude_deg = 5.0; // Aries 5°
+        let spec = WidgetSpec::new("astro")
+            .with("degree", Prop::Bool(false))
+            .with("moon", Prop::Bool(false))
+            .with("name", Prop::Bool(false));
+        let mut a = Astro::from_spec(&spec);
+        a.tick(&ctx);
+        // Sólo el glifo del signo.
+        assert_eq!(a.view(), WidgetView::Text("♈".to_string()));
+    }
+
+    #[test]
+    fn start_button_muestra_label_default_y_override() {
+        let def = build(&WidgetSpec::new("start_button"));
+        assert_eq!(def.view(), WidgetView::Text("⊞".to_string()));
+        let custom = StartButton::from_spec(
+            &WidgetSpec::new("start_button").with("label", Prop::Str("Inicio".to_string())),
+        );
+        assert_eq!(custom.view(), WidgetView::Text("Inicio".to_string()));
     }
 
     #[test]
