@@ -373,6 +373,24 @@ pub fn pick(discernment: Option<&Discernment>) -> ViewerKind {
     pick_in(registry(), discernment)
 }
 
+/// Seam del **open-with out-of-process**: dado el discernimiento y un
+/// `AppRegistry` (apps externas registradas en `shared/app-bus`), devuelve la
+/// app externa que declara abrir el `mime` discernido, si la hay.
+///
+/// Es independiente de [`pick`] (que sólo resuelve visores in-process): el
+/// shell la consulta cuando quiere ofrecer/usar un handler externo —p.ej. un
+/// "Abrir con…" o una política donde una app del SO gana a un visor builtin—
+/// y, de obtener `Some`, abre el archivo con
+/// [`app_bus::AppRegistry::open_with`] en vez de montar un widget. `None`
+/// significa "no hay app externa para esto": seguí con [`pick`] in-process.
+pub fn external_handler_for<'a>(
+    registry: &'a app_bus::AppRegistry,
+    discernment: Option<&Discernment>,
+) -> Option<&'a app_bus::AppEntry> {
+    let mime = discernment?.mime.as_deref()?;
+    registry.handlers_for(mime).into_iter().next()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,5 +656,32 @@ mod tests {
         assert_eq!(pick_in(&rows, Some(&disc(Some("gallery"), None))), ViewerKind::Image);
         rows.push(vc);
         assert_eq!(pick_in(&rows, Some(&disc(Some("gallery"), None))), ViewerKind::Hex);
+    }
+
+    #[test]
+    fn external_handler_for_matchea_por_mime() {
+        use app_bus::{AppEntry, AppRegistry, Launch};
+        let reg = AppRegistry::new(vec![AppEntry {
+            id: "puriy".into(),
+            label: "Puriy".into(),
+            icon: None,
+            category: None,
+            launch: Launch::Exec {
+                program: "puriy".into(),
+                args: vec![],
+            },
+            handles: vec!["text/html".into()],
+        }]);
+        // Hay app externa para text/html → la devuelve.
+        let d = disc(None, Some("text/html"));
+        assert_eq!(
+            external_handler_for(&reg, Some(&d)).map(|e| e.id.as_str()),
+            Some("puriy")
+        );
+        // No hay para image/png → None (el caller cae a pick() in-process).
+        assert!(external_handler_for(&reg, Some(&disc(None, Some("image/png")))).is_none());
+        // Sin mime / sin discernment → None.
+        assert!(external_handler_for(&reg, Some(&disc(None, None))).is_none());
+        assert!(external_handler_for(&reg, None).is_none());
     }
 }
