@@ -4,6 +4,39 @@
 > **reproductor** frente a VLC/mpv y en qué orden cerrarlo. Complementa a
 > `CONTROLES.md` (que cubre el mapeo de entrada → acción, ya ✅).
 
+## Handoff — retomar el hilo (2026-06-01)
+
+Se está avanzando este plan **en orden**. Cerrado en esta tanda (todo en
+`origin/main`, `cargo test -p media-core` = 82 verde, `cargo check
+--workspace` verde):
+
+- **M1** sync A/V (video esclavo del reloj de audio + drop) ·
+  **A4** desfase A/V manual (lipsync) ·
+  **S1** subtítulos ASS/SSA (texto+timing) ·
+  **R1** URL de red (http/hls/rtsp vía ffmpeg) ·
+  **R2** plataformas con yt-dlp (puente nuevo `shared/foreign-ytdlp`) ·
+  **V4** ajustes de color de video (brillo/contraste/gamma/saturación).
+
+Con M1+R1+R2 `media` ya **reproduce desde una plataforma**; lo que falta para
+FreeTube es navegación (`shared/foreign-youtube`), no el reproductor (ver
+`FREETUBE.md`).
+
+**Próximo paso sugerido (en orden, aislado y testeable en CI):** **V3 —
+rotación/flip** como transformación pura del buffer RGBA, mismo molde que V4
+(`media-core::color` → nuevo `media-core` transform o ampliar ese módulo) +
+comandos + wiring en `media-app`. Ojo: rotar 90°/270° intercambia `(w, h)`
+que devuelve `tick` — el surface ya sube dimensiones arbitrarias, pero
+verificar el blit.
+
+**Lo que necesita correr la app/GPU para verificar** (no hacer a ciegas):
+V1 fullscreen (API de ventana de llimphi-ui), V2 aspect/crop/zoom (blit),
+V5 deinterlacing, V6 shaders, V8 HDR.
+
+**Otros frentes aislados disponibles:** S5 (auto-carga de `.srt`/`.ass` por
+nombre del video), S4 (delay/sync de subtítulo — calca A4), A5 (normalización/
+limitador puro-DSP, molde EQ). El resto del estado vive en las secciones de
+abajo (✅/pendiente por track).
+
 ## Punto de partida (lo que YA anda)
 
 `media` está fuerte en **decode/encode/captura nativos** (ver `README.md`):
