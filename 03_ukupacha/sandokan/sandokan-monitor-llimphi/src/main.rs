@@ -1643,7 +1643,7 @@ fn tri_node(t: &Theme, has_kids: bool, collapsed: bool, pid: i32) -> View<Msg> {
     let mut v = View::new(Style {
         size: Size {
             width: length(15.0),
-            height: percent(1.0),
+            height: length(ROW_H),
         },
         flex_shrink: 0.0,
         ..Default::default()
@@ -1688,7 +1688,7 @@ fn command_node(cmd: &str, color: Color) -> View<Msg> {
         },
         size: Size {
             width: auto(),
-            height: percent(1.0),
+            height: length(ROW_H),
         },
         ..Default::default()
     })
