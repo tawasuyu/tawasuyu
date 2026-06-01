@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=mirada · pata
+Comment=Compositor Wayland teselante (mirada) con el marco pata
+Exec=mirada-session-pata
+Type=Application
+DesktopNames=mirada

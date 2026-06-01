@@ -120,6 +120,8 @@ const BTN_RIGHT: u32 = 0x111;
 /// El estado del bucle DRM — lo comparten todos los callbacks de `calloop`.
 struct DrmState {
     app: App,
+    /// La sesión libseat — se conserva para conmutar de VT (`Ctrl+Alt+Fn`).
+    session: LibSeatSession,
     display: Display<App>,
     /// El dispositivo DRM — se conserva para pausarlo y reactivarlo al
     /// conmutar de VT.
@@ -383,6 +385,12 @@ impl DrmState {
                                 st.running = false;
                                 return FilterResult::Intercept(());
                             }
+                            // Ctrl+Alt+Fn: conmutar de VT. Lo aplica el
+                            // backend tras el evento (sólo él tiene la sesión).
+                            if let Some(vt) = crate::vt_from_combo(&combo) {
+                                st.pending_vt = Some(vt);
+                                return FilterResult::Intercept(());
+                            }
                             if st.grabs.contains(&combo) {
                                 st.pending_keybind = Some(combo);
                                 return FilterResult::Intercept(());
@@ -394,6 +402,11 @@ impl DrmState {
                 if let Some(combo) = self.app.pending_keybind.take() {
                     let ev = self.app.body.keybind(combo);
                     self.app.brain_feed(ev);
+                }
+                if let Some(vt) = self.app.pending_vt.take() {
+                    if let Err(e) = self.session.change_vt(vt) {
+                        eprintln!("mirada-compositor · no pude conmutar a VT{vt}: {e}");
+                    }
                 }
             }
 
@@ -908,6 +921,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
 
     let mut state = DrmState {
         app,
+        session: session.clone(),
         display,
         drm,
         compositor,
@@ -938,6 +952,17 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             }
         })
         .map_err(|e| format!("el bucle de eventos falló: {e}"))?;
+
+    // Sesión ajena pendiente: soltamos TODO —`drop(state)` cierra el
+    // dispositivo DRM y `drop(event_loop)` libera el último clon de la
+    // sesión libseat (cede el seat)— y recién entonces ejecutamos el otro
+    // compositor, que ya puede tomar la GPU.
+    let pending = state.app.pending_session.take();
+    drop(state);
+    drop(event_loop);
+    if let Some((cmd, user)) = pending {
+        crate::exec_session(&cmd, user.as_ref());
+    }
 
     println!("mirada-compositor · adiós.");
     Ok(())

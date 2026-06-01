@@ -1,0 +1,31 @@
+#!/bin/sh
+# mirada-dm — arranca mirada en modo display manager sobre DRM, como lo
+# haría un init. Corre como root desde una TTY física; muestra el greeter,
+# autentica por PAM (servicio «carmen») y traspasa a la sesión elegida.
+#
+# Salir del greeter:      Ctrl+Alt+Backspace
+# Cambiar de consola:     Ctrl+Alt+F1 … F12
+#
+# Variables que respeta (con defaults sanos):
+#   LIBSEAT_BACKEND   backend de libseat (default «builtin»: toma el seat
+#                     sin seatd/logind, válido corriendo como root).
+#   XDG_RUNTIME_DIR   dónde publica el socket Wayland (default /run/mirada).
+#   MIRADA_GREETER_MOCK="usuario:clave"  salta PAM (para probar sin /etc/pam.d/carmen).
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "mirada-dm: corré como root —  sudo mirada-dm" >&2
+    exit 1
+fi
+
+export LIBSEAT_BACKEND="${LIBSEAT_BACKEND:-builtin}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/mirada}"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 0711 "$XDG_RUNTIME_DIR"
+
+# El DM corre como root, pero el traspaso baja la sesión al usuario real
+# (setuid). Con umask 0 el socket Wayland que crea root queda accesible a
+# ese usuario, para que sus clientes (pata, foot…) se conecten.
+umask 0
+
+exec mirada-compositor --greeter --drm "$@"

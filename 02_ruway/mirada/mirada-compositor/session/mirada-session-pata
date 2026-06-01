@@ -1,0 +1,26 @@
+#!/bin/sh
+# mirada-session-pata — sesión «mirada · pata» para gestores de login
+# EXTERNOS (sddm, greetd, ly…): arranca el compositor mirada y deja a pata
+# como marco del escritorio. Instálalo en /usr/local/bin junto a
+# `mirada-compositor` y `pata-llimphi`.
+#
+# (Cuando el DM es el propio mirada —`mirada-dm`—, no hace falta este
+# script: elegís «mirada · pata» en el greeter y el marco arranca como
+# cliente sin reiniciar el servidor.)
+set -eu
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=mirada
+export XDG_SESSION_DESKTOP=mirada
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="wayland;xcb"
+export SDL_VIDEODRIVER=wayland
+
+# Asegura pata en el autoarranque del usuario (idempotente). pata se fuerza
+# a su backend de ventana, que es como mirada lo acopla por app-id.
+mkdir -p "${HOME}/.config/mirada"
+AUTO="${HOME}/.config/mirada/autostart"
+LINE='PATA_BACKEND=winit pata-llimphi'
+grep -qxF "$LINE" "$AUTO" 2>/dev/null || echo "$LINE" >> "$AUTO"
+
+exec mirada-compositor --drm

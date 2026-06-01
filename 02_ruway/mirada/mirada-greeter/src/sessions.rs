@@ -42,6 +42,10 @@ pub struct Session {
     /// en vez de ejecutar un comando ajeno.
     pub exec: String,
     pub kind: Kind,
+    /// `true` si es un compositor **ajeno** (descubierto en `wayland-sessions`):
+    /// el handoff lo lanza por `exec` soltando el DRM. `false` para las
+    /// nativas de mirada (pata, autostart), que corren como clientes.
+    pub foreign: bool,
 }
 
 /// Raíces XDG donde buscar sesiones, según `XDG_DATA_HOME` y
@@ -75,20 +79,45 @@ fn xdg_data_roots() -> Vec<String> {
 /// haya siempre un camino al autostart del compositor. Deduplica por
 /// `(name, exec)` —la misma sesión puede aparecer en varias raíces XDG.
 pub fn discover() -> Vec<Session> {
-    let mut out = vec![Session {
-        name: "mirada".to_string(),
-        exec: String::new(),
-        kind: Kind::Wayland,
-    }];
+    // Built-ins nativos: corren como clientes del propio compositor (no
+    // son `foreign`). «mirada» a secas ⇒ Exec vacío ⇒ autostart del
+    // usuario; «mirada · pata» ⇒ arranca el marco pata (forzado a su
+    // backend de ventana, que es como mirada lo acopla por app-id).
+    let mut out = vec![
+        Session {
+            name: "mirada".to_string(),
+            exec: String::new(),
+            kind: Kind::Wayland,
+            foreign: false,
+        },
+        Session {
+            name: "mirada · pata".to_string(),
+            exec: "PATA_BACKEND=winit pata-llimphi".to_string(),
+            kind: Kind::Wayland,
+            foreign: false,
+        },
+    ];
     for root in xdg_data_roots() {
         collect_dir(&Path::new(&root).join("wayland-sessions"), Kind::Wayland, &mut out);
         collect_dir(&Path::new(&root).join("xsessions"), Kind::X11, &mut out);
     }
+    // Las sesiones del propio mirada (carmen.desktop, mirada-pata.desktop)
+    // existen para DMs externos; aquí ya están cubiertas por los built-ins,
+    // así que las filtramos para no duplicar.
+    out.retain(|s| !is_mirada_session(&s.exec));
     // Dedup global por (name, exec): la misma sesión puede repetirse en
     // varias raíces XDG y no quedar contigua. `dedup_by` no basta.
     let mut seen = std::collections::HashSet::new();
     out.retain(|s| seen.insert((s.name.clone(), s.exec.clone())));
     out
+}
+
+/// ¿El `Exec` arranca el propio mirada? (`mirada-session*`,
+/// `mirada-compositor`). Esas sesiones las cubren los built-ins.
+fn is_mirada_session(exec: &str) -> bool {
+    let first = exec.split_whitespace().next().unwrap_or("");
+    let base = first.rsplit('/').next().unwrap_or(first);
+    base.starts_with("mirada-session") || base == "mirada-compositor"
 }
 
 /// Lee un directorio de sesiones, parsea cada `.desktop` y agrega los
@@ -160,6 +189,9 @@ fn parse_entry(text: &str, kind: Kind) -> Option<Session> {
         name: name.unwrap_or_else(|| exec.clone()),
         exec,
         kind,
+        // Toda sesión declarada en el sistema es un compositor ajeno: el
+        // handoff la lanza por `exec`, no como cliente.
+        foreign: true,
     })
 }
 

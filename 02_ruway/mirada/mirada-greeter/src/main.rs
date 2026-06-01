@@ -279,16 +279,14 @@ impl App for Greeter {
             Msg::AuthDone(Ok(user)) => {
                 // El comando de la sesión elegida viaja en el tiquet. Vacío
                 // (sesión nativa mirada) ⇒ el compositor usa su autostart.
-                let exec = m
-                    .sessions
-                    .get(m.session_idx)
-                    .map(|s| s.exec.clone())
-                    .unwrap_or_default();
+                let chosen = m.sessions.get(m.session_idx);
+                let exec = chosen.map(|s| s.exec.clone()).unwrap_or_default();
+                let foreign = chosen.map(|s| s.foreign).unwrap_or(false);
                 let ticket = SessionTicket::new(user);
                 let ticket = if exec.is_empty() {
                     ticket
                 } else {
-                    ticket.with_session(exec)
+                    ticket.with_session(exec).foreign(foreign)
                 };
                 emit_ticket(&ticket);
                 handle.quit();
@@ -372,7 +370,18 @@ impl App for Greeter {
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let input_palette = TextInputPalette::from_theme(&theme);
 
-        let title = row(28.0, "carmen", 22.0, theme.fg_text);
+        // Barrita de acento sobre el título — el toque de color del DM.
+        let accent_bar = View::new(Style {
+            size: Size {
+                width: length(46.0_f32),
+                height: length(4.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.accent)
+        .radius(2.0);
+
+        let title = row(30.0, "carmen", 23.0, theme.fg_text);
         let subtitle = row(
             16.0,
             &rimay_localize::t("greeter-subtitle"),
@@ -418,61 +427,99 @@ impl App for Greeter {
         };
         let status_line = row(16.0, &status_msg, 11.0, status_color);
 
-        // Selector de sesión: muestra la elegida y, si hay más de una,
-        // permite ciclar con un clic. Estilo DM clásico (abajo del login).
-        let sess = model
-            .sessions
-            .get(model.session_idx)
-            .map(|s| (s.name.as_str(), s.kind.tag()))
-            .unwrap_or(("mirada", "wayland"));
-        let multi = model.sessions.len() > 1;
-        let sess_label = if multi {
-            format!("Sesión: {} · {}   ⟳ cambiar", sess.0, sess.1)
-        } else {
-            format!("Sesión: {} · {}", sess.0, sess.1)
+        // Selector de sesión: una pastilla «‹ nombre · tipo ›». Siempre hay
+        // al menos «mirada» y «mirada · pata», así que las flechas sirven.
+        let sess = model.sessions.get(model.session_idx);
+        let sess_name = sess.map(|s| s.name.clone()).unwrap_or_else(|| "mirada".into());
+        let sess_kind = sess.map(|s| s.kind.tag()).unwrap_or("wayland");
+        let sess_cap = row(14.0, "Escritorio", 10.0, theme.fg_muted);
+        let arrow = |glyph: &str, msg: Msg| {
+            View::new(Style {
+                size: Size {
+                    width: length(30.0_f32),
+                    height: length(28.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .fill(theme.bg_button)
+            .radius(7.0)
+            .text_aligned(glyph.to_string(), 14.0, theme.fg_text, Alignment::Center)
+            .on_click(msg)
         };
-        let mut session_line = View::new(Style {
+        let sess_center = View::new(Style {
+            flex_grow: 1.0,
             size: Size {
-                width: percent(1.0_f32),
-                height: length(16.0_f32),
+                width: Dimension::auto(),
+                height: length(28.0_f32),
             },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .text_aligned(sess_label, 10.0, theme.fg_muted, Alignment::Start);
-        if multi {
-            session_line = session_line.on_click(Msg::CycleSession(1));
-        }
+        .fill(theme.bg_input)
+        .radius(7.0)
+        .text_aligned(
+            format!("{sess_name} · {sess_kind}"),
+            11.0,
+            theme.fg_text,
+            Alignment::Center,
+        );
+        let session_selector = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(28.0_f32),
+            },
+            gap: Size {
+                width: length(6.0_f32),
+                height: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![
+            arrow("‹", Msg::CycleSession(-1)),
+            sess_center,
+            arrow("›", Msg::CycleSession(1)),
+        ]);
 
         let card = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
-                width: length(320.0_f32),
+                width: length(360.0_f32),
                 height: Dimension::auto(),
             },
             gap: Size {
                 width: length(0.0_f32),
-                height: length(10.0_f32),
+                height: length(11.0_f32),
             },
             padding: Rect {
-                left: length(28.0_f32),
-                right: length(28.0_f32),
-                top: length(28.0_f32),
-                bottom: length(28.0_f32),
+                left: length(32.0_f32),
+                right: length(32.0_f32),
+                top: length(30.0_f32),
+                bottom: length(26.0_f32),
             },
             ..Default::default()
         })
         .fill(theme.bg_panel)
-        .radius(12.0)
+        .radius(14.0)
         .children(vec![
+            accent_bar,
             title,
             subtitle,
+            spacer(6.0),
             user_cap,
             user_box,
             pass_cap,
             pass_box,
             status_line,
-            session_line,
-            row(14.0, "Ctrl+Alt+Backspace: salir", 9.0, theme.fg_muted),
+            spacer(2.0),
+            sess_cap,
+            session_selector,
+            spacer(4.0),
+            row(14.0, "Ctrl+Alt+Backspace: salir  ·  Ctrl+Alt+F1…F12: cambiar de consola", 9.0, theme.fg_muted),
         ]);
 
         // Zona central que aloja la tarjeta de login. Ocupa todo el
@@ -680,6 +727,17 @@ fn toggle(f: Field) -> Field {
 // ---------------------------------------------------------------------
 // Helpers de vista
 // ---------------------------------------------------------------------
+
+/// Un hueco vertical de `h` px — separa grupos dentro de la tarjeta.
+fn spacer(h: f32) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(h),
+        },
+        ..Default::default()
+    })
+}
 
 /// Fila de ancho completo con un texto a la izquierda.
 fn row(height: f32, text: &str, size: f32, color: Color) -> View<Msg> {

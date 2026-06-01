@@ -277,6 +277,13 @@ struct App {
     grabs: Vec<String>,
     /// Atajo capturado en el último evento de teclado, pendiente de enviar.
     pending_keybind: Option<String>,
+    /// VT a la que conmutar, capturada por `Ctrl+Alt+Fn`. El backend DRM
+    /// la consume tras el evento de teclado (sólo él puede `change_vt`).
+    pending_vt: Option<i32>,
+    /// Sesión ajena a ejecutar tras cerrar el compositor: el handoff a un
+    /// compositor foráneo suelta el DRM (saliendo del bucle) y recién
+    /// entonces hace `exec`. `(comando, usuario)`.
+    pending_session: Option<(String, Option<UserInfo>)>,
     next_id: u64,
     running: bool,
 }
@@ -528,13 +535,24 @@ impl App {
             self.apply_commands(vec![grab]);
         }
 
-        // Arranca la sesión: el comando del tiquet, o el autoarranque
-        // del usuario si el tiquet no trae ninguno.
+        // Arranca la sesión. Tres caminos:
+        //  · vacío         → autostart del usuario (cliente de este compositor).
+        //  · nativo (pata) → comando como cliente, sin reiniciar el servidor.
+        //  · ajeno         → soltar el DRM y `exec` (otro compositor toma la
+        //                    GPU). Se difiere al cierre del bucle: marcamos la
+        //                    sesión pendiente y pedimos salir.
         let user = self.session_user.clone();
-        if ticket.session.trim().is_empty() {
+        let cmd = ticket.session.trim();
+        if cmd.is_empty() {
             spawn_autostart(user.as_ref());
+        } else if ticket.foreign {
+            println!(
+                "mirada-compositor · sesión ajena «{cmd}» — cierro y cedo el DRM."
+            );
+            self.pending_session = Some((cmd.to_string(), user));
+            self.running = false;
         } else {
-            spawn_command(&ticket.session, user.as_ref());
+            spawn_command(cmd, user.as_ref());
         }
     }
 }
@@ -801,6 +819,37 @@ fn combo_string(mods: &ModifiersState, sym: Keysym) -> Option<String> {
 /// varado: el clásico «zap» de X. Funciona igual en winit y en DRM.
 pub(crate) fn is_escape_hatch(combo: &str) -> bool {
     matches!(combo, "Ctrl+Alt+BackSpace" | "Ctrl+Alt+Delete")
+}
+
+/// La VT destino de un `Ctrl+Alt+Fn` (`F1`→1 … `F12`→12), o `None` si el
+/// combo no es de conmutación. Sólo lo honra el backend DRM —en winit no
+/// hay VTs—. Es el comportamiento clásico para saltar entre consolas
+/// gráficas sin matar el compositor.
+pub(crate) fn vt_from_combo(combo: &str) -> Option<i32> {
+    let f = combo.strip_prefix("Ctrl+Alt+F")?;
+    match f.parse::<i32>() {
+        Ok(n) if (1..=12).contains(&n) => Some(n),
+        _ => None,
+    }
+}
+
+/// Cierra el compositor y `exec`-uta una sesión ajena en su lugar, como el
+/// usuario autenticado. Se llama **después** de salir del bucle y soltar el
+/// DRM, así el compositor entrante (sway, Plasma…) puede tomar la GPU.
+/// Reemplaza la imagen del proceso: si `exec` falla, registra y aborta.
+pub(crate) fn exec_session(cmd: &str, as_user: Option<&UserInfo>) -> ! {
+    use std::os::unix::process::CommandExt;
+    println!("mirada-compositor · cediendo a la sesión: {cmd}");
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg(cmd).envs(THEME_ENV.iter().copied());
+    if let Some(user) = as_user {
+        if nix::unistd::geteuid().is_root() {
+            apply_user(&mut command, user);
+        }
+    }
+    let err = command.exec(); // sólo retorna si falla
+    eprintln!("mirada-compositor · no pude ceder a «{cmd}»: {err}");
+    std::process::exit(1);
 }
 
 /// El nombre canónico de una tecla especial — `Return`, `Tab`, `Up`,
@@ -1187,6 +1236,8 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         session_user: None,
         grabs: Vec::new(),
         pending_keybind: None,
+        pending_vt: None,
+        pending_session: None,
         next_id: 1,
         running: true,
     };
@@ -1459,6 +1510,13 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
         display.flush_clients()?;
 
         backend.submit(Some(&[damage])).unwrap();
+    }
+
+    // Sesión ajena pendiente (handoff por `exec`): en anidado no hay DRM
+    // que ceder, pero soltamos la ventana del host y cedemos igual.
+    if let Some((cmd, user)) = state.pending_session.take() {
+        drop(backend);
+        exec_session(&cmd, user.as_ref());
     }
 
     println!("mirada-compositor · adiós.");
