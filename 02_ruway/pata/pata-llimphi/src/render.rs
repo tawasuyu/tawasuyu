@@ -28,6 +28,10 @@ use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 /// Ancho de la barrita de un medidor, en píxeles.
 const BARRA_W: f32 = 48.0;
 
+/// Ancho fijo de la leyenda de un medidor (px). Cabe `"10.5/15.5G"` (RAM), la
+/// más ancha; evita que el cambio de dígitos reacomode la barra.
+const CAPTION_W: f32 = 72.0;
+
 /// Traduce el view-model de un widget al `View<Msg>` que lo pinta.
 pub fn widget_view(v: &WidgetView, theme: &Theme) -> View<Msg> {
     match v {
@@ -99,7 +103,10 @@ fn meter_view(label: Option<&str>, fraction: f32, caption: &str, theme: &Theme) 
     }
     hijos.push(barra);
     if !caption.is_empty() {
-        hijos.push(etiqueta(caption, theme));
+        // Ancho FIJO: la leyenda cambia de dígitos cada tick ("7%"→"42%"→
+        // "100%") y, con ancho automático, eso reflota toda la barra. Una caja
+        // fija mantiene el layout quieto.
+        hijos.push(caption_fija(caption, theme));
     }
 
     View::new(Style {
@@ -123,6 +130,22 @@ fn meter_view(label: Option<&str>, fraction: f32, caption: &str, theme: &Theme) 
         ..Default::default()
     })
     .children(hijos)
+}
+
+/// La leyenda de un medidor en una caja de **ancho fijo**: como el texto cambia
+/// de dígitos a cada tick, una caja fija evita que el medidor (y con él toda la
+/// barra) se reacomode. Cabe la más ancha (`"10.5/15.5G"` de la RAM).
+fn caption_fija(t: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(CAPTION_W),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexStart),
+        ..Default::default()
+    })
+    .text(t.to_string(), 12.0, theme.fg_muted)
 }
 
 /// Un texto corto en color tenue (etiqueta o leyenda de un medidor).

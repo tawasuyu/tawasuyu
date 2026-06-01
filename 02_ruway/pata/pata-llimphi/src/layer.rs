@@ -17,6 +17,7 @@
 
 use std::error::Error;
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
@@ -48,6 +49,7 @@ use llimphi_ui::llimphi_layout::{taffy, LayoutTree};
 use llimphi_ui::llimphi_raster::{peniko::color::palette, vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 
+use pata_core::widget::WidgetCtx;
 use pata_core::{Anchor, Config, SurfaceKind};
 
 use crate::sampler::Sampler;
@@ -75,6 +77,16 @@ struct LayerApp {
     surfaces: Vec<crate::SurfaceWidgets>,
     shuma: crate::shuma::ShumaState,
     sampler: Sampler,
+    /// Último snapshot del sistema y cuándo se tomó: el frame-callback corre a
+    /// ~60fps, pero re-muestrear (y cambiar el CPU%) sólo tiene sentido ~1Hz —
+    /// si no, el porcentaje baila varias veces por segundo.
+    ctx: WidgetCtx,
+    ultimo_sample: Option<Instant>,
+    /// `true` cuando hay algo nuevo que pintar (cambió el muestreo o el tamaño).
+    /// Entre cambios sólo mantenemos vivo el latido del frame-callback sin
+    /// re-rasterizar — pintar 60 veces por segundo un contenido idéntico es puro
+    /// gasto de GPU/CPU.
+    dirty: bool,
     /// Índice (en `cfg.surfaces`) de la barra que esta layer surface pinta.
     bar_index: usize,
     gpu: Option<Gpu>,
@@ -142,6 +154,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         surfaces,
         shuma,
         sampler: Sampler::new(),
+        ctx: WidgetCtx::default(),
+        ultimo_sample: None,
+        dirty: true,
         bar_index,
         gpu: None,
         width: size.0.max(1),
@@ -200,17 +215,44 @@ impl LayerApp {
         });
     }
 
-    /// Pinta un frame de la barra y solicita el siguiente frame-callback (loop
-    /// continuo, el compositor lo pacea). Re-muestrea el sistema cada frame.
+    /// Mantiene vivo el latido: pide el siguiente frame-callback. Un `commit`
+    /// sin buffer nuevo sólo re-agenda la llamada; el contenido actual se queda.
+    fn latido(&self, qh: &QueueHandle<Self>) {
+        let surface = self.layer.wl_surface();
+        surface.frame(qh, surface.clone());
+        surface.commit();
+    }
+
+    /// Avanza el frame: re-muestrea ~1Hz, y pinta sólo si hay algo nuevo. El
+    /// frame-callback late a ~60fps, pero re-rasterizar contenido idéntico sería
+    /// puro gasto, así que entre cambios sólo mantenemos el latido.
     fn draw(&mut self, qh: &QueueHandle<Self>) {
         self.ensure_gpu();
-        // Refresca los widgets con un snapshot del sistema.
-        let ctx = self.sampler.sample();
-        for sw in &mut self.surfaces {
-            for w in sw.core_mut() {
-                w.tick(&ctx);
+
+        // Re-muestrear sólo ~1Hz: muestrear a 60fps hace bailar el CPU% (delta
+        // sobre ~16ms, ruidoso) y, antes del ancho fijo, reacomodaba la barra.
+        let toca_muestrear = self
+            .ultimo_sample
+            .map(|t| t.elapsed() >= Duration::from_secs(1))
+            .unwrap_or(true);
+        if toca_muestrear {
+            self.ctx = self.sampler.sample();
+            self.ultimo_sample = Some(Instant::now());
+            let ctx = self.ctx;
+            for sw in &mut self.surfaces {
+                for w in sw.core_mut() {
+                    w.tick(&ctx);
+                }
             }
+            self.dirty = true;
         }
+
+        // Sin cambios: sólo latir y salir, sin re-rasterizar.
+        if !self.dirty {
+            self.latido(qh);
+            return;
+        }
+        self.dirty = false;
 
         let (w, h) = (self.width, self.height);
         let view = render::bar_view(
@@ -220,11 +262,17 @@ impl LayerApp {
             &self.theme,
         );
 
-        let Some(gpu) = self.gpu.as_mut() else { return };
+        let Some(gpu) = self.gpu.as_mut() else {
+            self.latido(qh);
+            return;
+        };
         gpu.surface.resize(w, h);
         let frame = match gpu.surface.acquire() {
             Ok(f) => f,
-            Err(_) => return,
+            Err(_) => {
+                self.latido(qh);
+                return;
+            }
         };
         gpu.layout.clear();
         let mounted: Mounted<Msg> = mount(&mut gpu.layout, view);
@@ -250,10 +298,7 @@ impl LayerApp {
         }
         gpu.surface.present(frame, &gpu.hal);
 
-        // Pide el siguiente frame-callback para mantener el reloj vivo.
-        let surface = self.layer.wl_surface();
-        surface.frame(qh, surface.clone());
-        surface.commit();
+        self.latido(qh);
     }
 }
 
@@ -326,6 +371,7 @@ impl LayerShellHandler for LayerApp {
         if ch > 0 {
             self.height = ch;
         }
+        self.dirty = true; // tamaño nuevo → hay que re-pintar
         self.draw(qh);
     }
 }
