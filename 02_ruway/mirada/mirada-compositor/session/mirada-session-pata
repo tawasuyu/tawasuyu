@@ -16,11 +16,11 @@ export MOZ_ENABLE_WAYLAND=1
 export QT_QPA_PLATFORM="wayland;xcb"
 export SDL_VIDEODRIVER=wayland
 
-# Asegura pata en el autoarranque del usuario (idempotente). pata se fuerza
-# a su backend de ventana, que es como mirada lo acopla por app-id.
+# Asegura pata en el autoarranque del usuario (idempotente). pata ancla por
+# wlr-layer-shell (su backend nativo), que mirada ahora soporta.
 mkdir -p "${HOME}/.config/mirada"
 AUTO="${HOME}/.config/mirada/autostart"
-LINE='PATA_BACKEND=winit pata-llimphi'
+LINE='pata-llimphi'
 grep -qxF "$LINE" "$AUTO" 2>/dev/null || echo "$LINE" >> "$AUTO"
 
 exec mirada-compositor --drm

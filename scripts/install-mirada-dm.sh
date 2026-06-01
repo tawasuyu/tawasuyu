@@ -49,6 +49,15 @@ sudo install -Dm644 "$REPO/shared/auth/auth-core/data/carmen" /etc/pam.d/carmen
 sudo install -Dm644 "$MC/session/carmen.desktop"      /usr/share/wayland-sessions/carmen.desktop
 sudo install -Dm644 "$MC/session/mirada-pata.desktop" /usr/share/wayland-sessions/mirada-pata.desktop
 
+# Las sesiones AJENAS (KDE, sway…) corren como tu usuario y necesitan tomar
+# el asiento por su cuenta: te metemos en seat/video/input. Las nativas
+# (mirada, mirada·pata) no lo necesitan. Requiere re-login para tomar.
+for g in seat video input; do
+    if getent group "$g" >/dev/null 2>&1; then
+        sudo usermod -aG "$g" "$USER" 2>/dev/null || true
+    fi
+done
+
 cat <<'FIN'
 
 ==> listo.
@@ -61,6 +70,9 @@ cat <<'FIN'
 
   Para probar sin configurar PAM:
       sudo MIRADA_GREETER_MOCK=demo:demo mirada-dm
+
+  Si te agregué a grupos nuevos (seat/video/input), cerrá sesión y volvé a
+  entrar antes de elegir una sesión AJENA (KDE/sway); las nativas no lo piden.
 
   Un segundo DM en otra consola: cambiá de VT (Ctrl+Alt+F4) y corré `sudo mirada-dm` de nuevo.
 FIN

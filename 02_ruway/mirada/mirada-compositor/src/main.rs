@@ -955,6 +955,22 @@ pub(crate) fn exec_session(cmd: &str, as_user: Option<&UserInfo>) -> ! {
     command.arg("-c").arg(cmd).envs(THEME_ENV.iter().copied());
     if let Some(user) = as_user {
         if nix::unistd::geteuid().is_root() {
+            // El compositor entrante crea su PROPIO socket Wayland, así que
+            // necesita un XDG_RUNTIME_DIR suyo (no el de root, donde no
+            // puede escribir) y no debe heredar nuestro WAYLAND_DISPLAY (el
+            // DM ya cerró). Sin esto, Plasma/sway fallan con «could not
+            // create wayland socket».
+            use std::os::unix::fs::PermissionsExt;
+            let xrd = format!("/run/user/{}", user.uid);
+            let _ = std::fs::create_dir_all(&xrd);
+            let _ = std::fs::set_permissions(&xrd, std::fs::Permissions::from_mode(0o700));
+            let _ = nix::unistd::chown(
+                xrd.as_str(),
+                Some(nix::unistd::Uid::from_raw(user.uid)),
+                Some(nix::unistd::Gid::from_raw(user.gid)),
+            );
+            command.env("XDG_RUNTIME_DIR", &xrd);
+            command.env_remove("WAYLAND_DISPLAY");
             apply_user(&mut command, user);
         }
     }
@@ -1184,12 +1200,9 @@ fn autostart_path(user: Option<&UserInfo>) -> Option<std::path::PathBuf> {
 /// hace nada. Se llama una vez al arrancar (o tras el traspaso del DM),
 /// con el socket ya abierto. `as_user` se propaga a [`spawn_command`].
 fn spawn_autostart(as_user: Option<&UserInfo>) {
-    let Some(path) = autostart_path(as_user) else {
-        return;
-    };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return; // no hay archivo de autoarranque
-    };
+    let text = autostart_path(as_user)
+        .and_then(|path| std::fs::read_to_string(&path).ok())
+        .unwrap_or_default();
     let mut n = 0;
     for line in text.lines() {
         let line = line.trim();
@@ -1200,7 +1213,12 @@ fn spawn_autostart(as_user: Option<&UserInfo>) {
         n += 1;
     }
     if n > 0 {
-        println!("mirada-compositor · autoarranque: {n} programa(s) desde {}", path.display());
+        println!("mirada-compositor · autoarranque: {n} programa(s).");
+    } else {
+        // Sin autostart: en vez de un escritorio negro y vacío, levanta el
+        // marco pata para que haya algo usable de entrada.
+        println!("mirada-compositor · sin autoarranque — levanto el marco pata.");
+        spawn_command("pata-llimphi", as_user);
     }
 }
 

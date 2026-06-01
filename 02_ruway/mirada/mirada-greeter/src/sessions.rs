@@ -91,8 +91,10 @@ pub fn discover() -> Vec<Session> {
             foreign: false,
         },
         Session {
+            // pata ancla por wlr-layer-shell (su backend nativo, que mirada
+            // ahora soporta): barra con zona exclusiva, sin winit ni app-id.
             name: "mirada · pata".to_string(),
-            exec: "PATA_BACKEND=winit pata-llimphi".to_string(),
+            exec: "pata-llimphi".to_string(),
             kind: Kind::Wayland,
             foreign: false,
         },
