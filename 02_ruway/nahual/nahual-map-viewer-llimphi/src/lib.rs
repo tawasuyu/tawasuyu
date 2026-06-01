@@ -757,6 +757,55 @@ where
             let block = TextBlock::simple(&label.text, 11.0, palette.label, (x + 5.0, y - 14.0));
             draw_block(scene, ts, &block);
         }
+
+        // --- Mobiliario cartográfico (fijo a pantalla) ---------------
+        let furn = with_alpha(palette.label, 0.7);
+        let furn_line = Stroke::new(1.4);
+        let rx = rect.x as f64;
+        let ry = rect.y as f64;
+        let rw = rect.w as f64;
+        let rh = rect.h as f64;
+
+        // Lectura del centro de la vista + zoom (arriba-izquierda).
+        // Invierte la cámara y la proyección en el centro del panel.
+        let cbx = pivot_x - pan.0 / zoom;
+        let cby = pivot_y - pan.1 / zoom;
+        let lon_c = ((cbx - ox) / scale + pmin_x) / kx;
+        let lat_c = bb.max_lat - (cby - oy) / scale;
+        let read = format!("{}  {}   {:.1}×", fmt_lat(lat_c), fmt_lon(lon_c), zoom);
+        draw_block(scene, ts, &TextBlock::simple(&read, 9.5, furn, (rx + 12.0, ry + 6.0)));
+
+        // Flecha de norte (arriba-derecha): el norte siempre es arriba.
+        let nx = rx + rw - 18.0;
+        let ny = ry + 12.0;
+        let mut arrow = BezPath::new();
+        arrow.move_to((nx, ny + 15.0));
+        arrow.line_to((nx, ny));
+        arrow.move_to((nx - 4.0, ny + 5.0));
+        arrow.line_to((nx, ny));
+        arrow.line_to((nx + 4.0, ny + 5.0));
+        scene.stroke(&furn_line, Affine::IDENTITY, furn, None, &arrow);
+        draw_block(scene, ts, &TextBlock::simple("N", 9.0, furn, (nx - 3.5, ny + 15.0)));
+
+        // Barra de escala (abajo-izquierda): un segmento de distancia
+        // redonda, calculado de la proyección a la latitud de la vista.
+        // En equirectangular el grado de latitud mide ~constante.
+        let km_per_px = 110.574 / (scale * zoom).max(1e-9);
+        let nice_km = nice_125(km_per_px * 110.0);
+        let bar_px = (nice_km / km_per_px).clamp(20.0, rw * 0.45);
+        let bx = rx + 14.0;
+        let by = ry + rh - 22.0;
+        let mut bar = BezPath::new();
+        bar.move_to((bx, by - 5.0));
+        bar.line_to((bx, by));
+        bar.line_to((bx + bar_px, by));
+        bar.line_to((bx + bar_px, by - 5.0));
+        scene.stroke(&furn_line, Affine::IDENTITY, furn, None, &bar);
+        draw_block(
+            scene,
+            ts,
+            &TextBlock::simple(&fmt_distance(nice_km), 9.0, furn, (bx, by - 17.0)),
+        );
     })
 }
 
@@ -780,6 +829,51 @@ fn nice_step(span: f64) -> f64 {
         10.0
     };
     step * mag
+}
+
+/// Redondea a un valor "lindo" (1·2·5·10 × 10ⁿ) cercano a `x`, para la barra
+/// de escala. Siempre positivo.
+fn nice_125(x: f64) -> f64 {
+    if !(x > 0.0) {
+        return 1.0;
+    }
+    let mag = 10f64.powf(x.log10().floor());
+    let n = x / mag;
+    let pick = if n < 1.5 {
+        1.0
+    } else if n < 3.0 {
+        2.0
+    } else if n < 7.0 {
+        5.0
+    } else {
+        10.0
+    };
+    pick * mag
+}
+
+/// Formatea una distancia: km (entero o un decimal) o metros si < 1 km.
+fn fmt_distance(km: f64) -> String {
+    if km >= 1.0 {
+        if (km - km.round()).abs() < 1e-9 {
+            format!("{} km", km as i64)
+        } else {
+            format!("{km:.1} km")
+        }
+    } else {
+        format!("{} m", (km * 1000.0).round() as i64)
+    }
+}
+
+/// Latitud con hemisferio (`N`/`S`).
+fn fmt_lat(lat: f64) -> String {
+    let h = if lat >= 0.0 { 'N' } else { 'S' };
+    format!("{:.2}°{h}", lat.abs())
+}
+
+/// Longitud con hemisferio (`E`/`O`).
+fn fmt_lon(lon: f64) -> String {
+    let h = if lon >= 0.0 { 'E' } else { 'O' };
+    format!("{:.2}°{h}", lon.abs())
 }
 
 /// Múltiplos de `step` dentro de `[lo, hi]` (incluidos), redondeando el
@@ -1022,6 +1116,30 @@ mod tests {
         assert_eq!(fmt_deg(10.0, 5.0), "10°");
         assert_eq!(fmt_deg(-16.5, 0.5), "-16.5°");
         assert_eq!(fmt_deg(0.25, 0.1), "0.2°");
+    }
+
+    #[test]
+    fn nice_125_redondea() {
+        assert_eq!(nice_125(1.0), 1.0);
+        assert_eq!(nice_125(1.7), 2.0);
+        assert_eq!(nice_125(4.0), 5.0);
+        assert_eq!(nice_125(800.0), 1000.0);
+        assert_eq!(nice_125(0.0), 1.0); // degenerado
+    }
+
+    #[test]
+    fn fmt_distancia_km_y_m() {
+        assert_eq!(fmt_distance(5.0), "5 km");
+        assert_eq!(fmt_distance(2.5), "2.5 km");
+        assert_eq!(fmt_distance(0.5), "500 m");
+    }
+
+    #[test]
+    fn fmt_coordenadas_con_hemisferio() {
+        assert_eq!(fmt_lat(-16.5), "16.50°S");
+        assert_eq!(fmt_lat(40.0), "40.00°N");
+        assert_eq!(fmt_lon(-70.65), "70.65°O");
+        assert_eq!(fmt_lon(2.35), "2.35°E");
     }
 
     #[test]
