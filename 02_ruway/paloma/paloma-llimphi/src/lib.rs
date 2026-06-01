@@ -100,6 +100,8 @@ pub struct Model {
     selected_thread: Option<usize>,
     /// Offset de scroll de la lista de hilos (en filas).
     list_scroll: usize,
+    /// Offset de scroll del panel de lectura (en píxeles).
+    read_scroll: f32,
     /// Redacción en curso; `None` si el modal está cerrado.
     compose: Option<Compose>,
     /// Caja de búsqueda de texto. Con contenido, el panel central muestra
@@ -176,6 +178,7 @@ impl Model {
             threads: Vec::new(),
             selected_thread: None,
             list_scroll: 0,
+            read_scroll: 0.0,
             compose: None,
             search: TextInputState::new(),
             search_focused: false,
@@ -253,6 +256,7 @@ impl Model {
         // estable, así que el índice sigue apuntando al mismo hilo.
         self.threads = self.store.threads(&mailbox);
         self.selected_thread = Some(idx);
+        self.read_scroll = 0.0;
         // Reflejar el estado de leído en la caché en disco.
         if let Some(d) = self.db.clone() {
             let _ = d.save_messages(&self.account_id, &mailbox, self.store.messages(&mailbox));
@@ -275,6 +279,8 @@ pub enum Msg {
     SelectThread(usize),
     /// Scroll de la lista de hilos (líneas; +abajo).
     ScrollList(i32),
+    /// Scroll del panel de lectura (líneas; +abajo).
+    ScrollRead(i32),
     /// Abrir el compositor en blanco.
     ComposeOpen,
     /// Abrir el compositor como respuesta al último mensaje del hilo abierto.
@@ -309,6 +315,12 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
             } else {
                 model.list_scroll = model.list_scroll.saturating_sub((-lines) as usize);
             }
+        }
+        Msg::ScrollRead(lines) => {
+            const STEP: f32 = 40.0;
+            let max = view::reading_content_height(&model) - READ_VIEWPORT_H;
+            let max = max.max(0.0);
+            model.read_scroll = (model.read_scroll + lines as f32 * STEP).clamp(0.0, max);
         }
         Msg::Refresh => {
             if let Some(name) = model.selected_mailbox.clone() {
@@ -459,12 +471,27 @@ pub fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
 pub fn on_wheel(
     _model: &Model,
     delta: WheelDelta,
-    _cursor: (f32, f32),
+    cursor: (f32, f32),
     _mods: llimphi_ui::Modifiers,
 ) -> Option<Msg> {
     let lines = (delta.y * 3.0).round() as i32;
-    (lines != 0).then_some(Msg::ScrollList(-lines))
+    if lines == 0 {
+        return None;
+    }
+    // El panel de lectura es la franja derecha; el resto scrollea la lista.
+    if cursor.0 > READING_PANEL_X {
+        Some(Msg::ScrollRead(-lines))
+    } else {
+        Some(Msg::ScrollList(-lines))
+    }
 }
+
+/// X (px) a partir de la cual empieza el panel de lectura (ancho buzones +
+/// ancho hilos). Decide a qué panel va la rueda del mouse.
+const READING_PANEL_X: f32 = 200.0 + 340.0;
+/// Alto aproximado del viewport de lectura (ventana − toolbar − header −
+/// status). Sólo se usa para acotar el scroll; el sobre-scroll se autocorrige.
+const READ_VIEWPORT_H: f32 = 600.0;
 
 // Reexport para que el binario del demo arme su `impl App` con tipos estables.
 pub use llimphi_ui::Handle;

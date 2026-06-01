@@ -99,7 +99,39 @@ pub fn backend() -> MockBackend {
             None,
             &[],
         ),
+        // Boletín que vino sólo en HTML: ejercita display_body → strip_html.
+        html_only(
+            "<b1@boletin.com>",
+            Address::named("Boletín Acme", "news@acme.com"),
+            "Resumen mensual",
+            "<style>.x{color:red}</style><h1>Resumen de Mayo</h1>\
+             <p>Hola Sergio,</p><p>Estas fueron las novedades del mes:</p>\
+             <ul><li>Nuevo panel de control</li><li>Mejoras de rendimiento</li>\
+             <li>Soporte para &mdash; ya sabés &mdash; lo de siempre</li></ul>\
+             <p>Saludos,<br>El equipo de Acme &amp; Co.</p>",
+            -6,
+        ),
     ];
 
     MockBackend::new(inbox)
+}
+
+/// Un mensaje que vino **sólo en HTML** (sin `text/plain`): la UI cae a
+/// `display_body` → `strip_html`.
+fn html_only(id: &str, from: Address, subject: &str, html: &str, hours: i64) -> Message {
+    Message {
+        id: MessageId(id.into()),
+        from,
+        to: vec![Address::named("Sergio", "sergio@jlsoltech.com")],
+        cc: vec![],
+        bcc: vec![],
+        subject: subject.into(),
+        date: ts(hours),
+        in_reply_to: None,
+        references: vec![],
+        body_text: String::new(),
+        body_html: Some(html.into()),
+        flags: Flags { seen: false, ..Default::default() },
+        mailbox: "INBOX".into(),
+    }
 }

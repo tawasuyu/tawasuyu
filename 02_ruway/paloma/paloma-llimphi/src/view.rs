@@ -429,20 +429,61 @@ fn reading_panel(model: &Model) -> View<Msg> {
         }
     }
 
-    let scroll = View::new(Style {
+    // Contenido desplazado hacia arriba por `read_scroll` (margen negativo);
+    // el viewport lo recorta. Da scroll suave en píxeles sin scroller nativo.
+    let content = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: Dimension::auto() },
-        flex_grow: 1.0,
         gap: Size { width: length(0.0_f32), height: length(12.0_f32) },
         padding: pad(16.0),
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(-model.read_scroll),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(cards);
+
+    let viewport = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        flex_grow: 1.0,
         ..Default::default()
     })
     .clip(true)
-    .children(cards);
+    .children(vec![content]);
 
     View::new(col(Dimension::auto()).grow())
         .fill(theme.bg_app)
-        .children(vec![header, scroll])
+        .children(vec![header, viewport])
+}
+
+/// Alto aproximado de la tarjeta-cuerpo según sus líneas (sin tope chico: en
+/// lectura queremos el alto real para que el scroll revele todo).
+fn card_body_height(text: &str) -> f32 {
+    let lines = text.lines().count().max(1);
+    (lines as f32 * 18.0).clamp(18.0, 6000.0)
+}
+
+/// Alto total estimado del contenido del panel de lectura para el hilo abierto.
+/// Lo usa `update` para acotar el scroll. Espeja la geometría de `message_card`:
+/// padding 14·2 + cabecera 20 + gap 6 + "para" 16 + gap 6 = 76 px fijos + cuerpo.
+pub(crate) fn reading_content_height(model: &Model) -> f32 {
+    let Some(thread) = model.threads.get(model.selected_thread.unwrap_or(usize::MAX)) else {
+        return 0.0;
+    };
+    let mut total = 32.0; // padding del contenedor (16·2)
+    let n = thread.message_ids.len();
+    for (i, id) in thread.message_ids.iter().enumerate() {
+        if let Some(m) = model.store_ref().message(id) {
+            total += 76.0 + card_body_height(&m.display_body());
+            if i + 1 < n {
+                total += 12.0; // gap entre tarjetas
+            }
+        }
+    }
+    total
 }
 
 /// Tarjeta de un mensaje: cabecera (de · para · fecha) + cuerpo de texto.
@@ -479,14 +520,14 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
         Alignment::Start,
     );
 
-    // Cuerpo: alto aproximado por cantidad de líneas (el panel recorta).
-    let lines = m.body_text.lines().count().max(1);
-    let body_h = (lines as f32 * 18.0).min(420.0).max(18.0);
+    // Cuerpo: texto plano, o HTML despojado si el mensaje vino sólo en HTML.
+    let body_text = m.display_body();
+    let body_h = card_body_height(&body_text);
     let body = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(body_h) },
         ..Default::default()
     })
-    .text_aligned(m.body_text.clone(), 13.0, theme.fg_text, Alignment::Start);
+    .text_aligned(body_text, 13.0, theme.fg_text, Alignment::Start);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
