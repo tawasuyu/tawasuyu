@@ -40,6 +40,10 @@ impl App for Demo {
         raymi_llimphi::view(model)
     }
 
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        raymi_llimphi::view_overlay(model)
+    }
+
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         raymi_llimphi::on_key(model, event)
     }
