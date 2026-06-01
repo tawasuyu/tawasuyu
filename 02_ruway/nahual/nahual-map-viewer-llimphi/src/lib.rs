@@ -12,19 +12,23 @@
 //! líneas trazadas, puntos como discos.
 //!
 //! Sin red ni tiles: el dato vectorial se dibuja tal cual, offline puro —
-//! la ética soberana de la suite. No es un mapa-base navegable todavía
-//! (sin pan/zoom interactivo): encuadra el contenido completo y lo muestra.
+//! la ética soberana de la suite. Arranca encuadrando todo el contenido y
+//! se navega con **arrastre (pan) y rueda (zoom)** vía [`MapView`], la
+//! cámara que el host guarda y muta (zoom anclado al centro del panel).
 //!
 //! Patrón fino de los otros viewers: carga sync en [`load_map`], render en
-//! [`map_viewer_view`]. No conoce el AppBus: el caller pasa el path.
+//! [`map_viewer_view`]. No conoce el AppBus: el caller pasa el path. La
+//! interacción la cablea el host (el shell mapea arrastre→pan y rueda→zoom
+//! a su `Msg`); el visor sólo aplica la [`MapView`] al proyectar.
 //!
 //! MVP feo-primero: proyección plana (buena a escala ciudad/país, deforma
-//! cerca de los polos), sin leyenda de propiedades ni interacción. Capamos
+//! cerca de los polos), sin leyenda de propiedades, sin mapa-base. Capamos
 //! por bytes y por vértices para que vello no se atragante.
 
 #![forbid(unsafe_code)]
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
@@ -408,6 +412,75 @@ fn coord_rings(v: Option<&serde_json::Value>) -> Vec<Ring> {
     arr.iter().map(|r| coord_list(Some(r))).collect()
 }
 
+/// Transformación de cámara del mapa: zoom (factor) + pan (desplazamiento en
+/// píxeles físicos de pantalla). El host la guarda y la muta con la rueda y
+/// el arrastre; el canvas la aplica al proyectar, anclando el zoom al centro
+/// del panel.
+///
+/// La celda `rect` la **escribe el canvas** en cada paint con su rectángulo
+/// físico, y la **lee el host** ([`MapView::contains`]) para acotar el
+/// zoom-por-rueda al área del mapa (sin robarle el scroll a la lista).
+#[derive(Clone)]
+pub struct MapView {
+    pub zoom: f64,
+    pub pan: (f64, f64),
+    rect: Arc<Mutex<Option<(f32, f32, f32, f32)>>>,
+}
+
+impl Default for MapView {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            pan: (0.0, 0.0),
+            rect: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl MapView {
+    /// Límites de zoom: ni tan lejos que desaparezca, ni tan cerca que se
+    /// pierda en aritmética.
+    pub const ZOOM_MIN: f64 = 0.2;
+    pub const ZOOM_MAX: f64 = 64.0;
+
+    /// Vuelve al encuadre inicial (zoom 1, sin pan). Conserva la celda del
+    /// rect para no perder el gateo entre selecciones.
+    pub fn reset(&mut self) {
+        self.zoom = 1.0;
+        self.pan = (0.0, 0.0);
+    }
+
+    /// Acumula un desplazamiento (de un arrastre), en píxeles físicos.
+    pub fn pan_by(&mut self, dx: f64, dy: f64) {
+        self.pan.0 += dx;
+        self.pan.1 += dy;
+    }
+
+    /// Multiplica el zoom (acotado). El pan no se toca: el zoom queda
+    /// anclado al centro del panel.
+    pub fn zoom_by(&mut self, factor: f64) {
+        if factor.is_finite() && factor > 0.0 {
+            self.zoom = (self.zoom * factor).clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
+        }
+    }
+
+    /// `true` si `(x, y)` (físicos) cae dentro del último rect pintado por el
+    /// canvas. `false` si todavía no se pintó.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        match self.rect.lock().ok().and_then(|g| *g) {
+            Some((rx, ry, rw, rh)) => x >= rx && x <= rx + rw && y >= ry && y <= ry + rh,
+            None => false,
+        }
+    }
+
+    /// Registra el rect físico del canvas (lo llama el propio canvas).
+    fn record_rect(&self, r: (f32, f32, f32, f32)) {
+        if let Ok(mut g) = self.rect.lock() {
+            *g = Some(r);
+        }
+    }
+}
+
 /// Paleta del viewer.
 #[derive(Debug, Clone, Copy)]
 pub struct MapViewerPalette {
@@ -462,6 +535,7 @@ pub fn map_viewer_view<Msg>(
     state: &MapPreview,
     path: Option<&Path>,
     palette: &MapViewerPalette,
+    view: &MapView,
 ) -> View<Msg>
 where
     Msg: Clone + 'static,
@@ -514,7 +588,7 @@ where
             simple_body(&format!("(archivo muy grande: {n} bytes — sin preview)"), palette.fg_muted)
         }
         MapPreview::Error(e) => simple_body(&format!("(no se pudo leer: {e})"), palette.fg_error),
-        MapPreview::Map { data, .. } => map_canvas(data.clone(), *palette),
+        MapPreview::Map { data, .. } => map_canvas(data.clone(), *palette, view.clone()),
     };
 
     View::new(Style {
@@ -537,11 +611,14 @@ where
     .children(vec![header, body])
 }
 
-/// Lienzo que proyecta y dibuja las geometrías encajadas en el panel.
-fn map_canvas<Msg>(data: MapData, palette: MapViewerPalette) -> View<Msg>
+/// Lienzo que proyecta y dibuja las geometrías encajadas en el panel,
+/// aplicando la cámara (`zoom`/`pan`) y registrando su rect para el host.
+fn map_canvas<Msg>(data: MapData, palette: MapViewerPalette, view: MapView) -> View<Msg>
 where
     Msg: Clone + 'static,
 {
+    let zoom = view.zoom;
+    let pan = view.pan;
     View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -552,10 +629,22 @@ where
         ..Default::default()
     })
     .paint_with(move |scene, ts, rect| {
+        // Registrar el rect físico para que el host acote el zoom-por-rueda.
+        view.record_rect((rect.x, rect.y, rect.w, rect.h));
         let Some(bb) = data.bbox() else { return };
         if rect.w <= 8.0 || rect.h <= 8.0 {
             return;
         }
+
+        // Cámara: zoom anclado al centro del panel + pan en px físicos.
+        let pivot_x = rect.x as f64 + rect.w as f64 * 0.5;
+        let pivot_y = rect.y as f64 + rect.h as f64 * 0.5;
+        let camera = |x: f64, y: f64| -> (f64, f64) {
+            (
+                pivot_x + (x - pivot_x) * zoom + pan.0,
+                pivot_y + (y - pivot_y) * zoom + pan.1,
+            )
+        };
 
         // Proyección equirectangular con corrección por coseno de la
         // latitud media: comprime el eje X para que un grado de longitud y
@@ -584,11 +673,12 @@ where
         let ox = rect.x as f64 + inset + (aw - pw * scale) * 0.5;
         let oy = rect.y as f64 + inset + (ah - ph * scale) * 0.5;
 
-        // lon/lat → pantalla (Y invertida: lat arriba, pantalla abajo).
+        // lon/lat → pantalla (Y invertida: lat arriba, pantalla abajo),
+        // pasando por la cámara (zoom/pan).
         let to_screen = |[lon, lat]: Coord| -> (f64, f64) {
             let x = ox + (lon * kx - pmin_x) * scale;
             let y = oy + (bb.max_lat - lat) * scale;
-            (x, y)
+            camera(x, y)
         };
 
         let stroke_thin = Stroke::new(1.2);
@@ -940,5 +1030,42 @@ mod tests {
             load_map(Path::new("/no/existe.geojson"), DEFAULT_MAP_BYTES_MAX),
             MapPreview::Error(_)
         ));
+    }
+
+    // --- Cámara (MapView) ---
+
+    #[test]
+    fn zoom_se_acota() {
+        let mut v = MapView::default();
+        v.zoom_by(1000.0);
+        assert!((v.zoom - MapView::ZOOM_MAX).abs() < 1e-9);
+        v.zoom_by(1e-6);
+        assert!((v.zoom - MapView::ZOOM_MIN).abs() < 1e-9);
+        // factor inválido no rompe.
+        v.zoom_by(f64::NAN);
+        assert!(v.zoom.is_finite());
+    }
+
+    #[test]
+    fn pan_acumula_y_reset_vuelve_al_origen() {
+        let mut v = MapView::default();
+        v.pan_by(10.0, -5.0);
+        v.pan_by(2.0, 3.0);
+        assert_eq!(v.pan, (12.0, -2.0));
+        v.zoom_by(2.0);
+        v.reset();
+        assert_eq!(v.pan, (0.0, 0.0));
+        assert_eq!(v.zoom, 1.0);
+    }
+
+    #[test]
+    fn contains_usa_el_rect_registrado() {
+        let v = MapView::default();
+        // Sin paint todavía: nada contiene.
+        assert!(!v.contains(10.0, 10.0));
+        v.record_rect((100.0, 50.0, 200.0, 100.0));
+        assert!(v.contains(150.0, 90.0));
+        assert!(!v.contains(50.0, 90.0)); // a la izquierda del rect
+        assert!(!v.contains(150.0, 200.0)); // debajo del rect
     }
 }

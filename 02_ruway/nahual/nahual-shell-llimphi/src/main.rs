@@ -106,7 +106,7 @@ use nahual_font_viewer_llimphi::{
     font_viewer_view, load_font, FontPreview, FontViewerPalette, DEFAULT_FONT_BYTES_MAX,
 };
 use nahual_map_viewer_llimphi::{
-    load_map, map_viewer_view, MapPreview, MapViewerPalette, DEFAULT_MAP_BYTES_MAX,
+    load_map, map_viewer_view, MapPreview, MapView, MapViewerPalette, DEFAULT_MAP_BYTES_MAX,
 };
 use wawa_config_llimphi::theme_from_wawa;
 
@@ -174,6 +174,9 @@ struct Model {
     /// en coords de ventana. `None` cerrado. No hay edición de texto en el
     /// shell, así que el contextual lista acciones de navegación/montaje.
     context_menu: Option<(f32, f32)>,
+    /// Cámara del visor de mapas (zoom/pan). Se resetea al cambiar de
+    /// preview; la mutan el arrastre y la rueda sobre el panel del mapa.
+    map_view: MapView,
     /// Suscripción al bus de configuración del SO.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
@@ -187,6 +190,10 @@ enum Msg {
     Select(usize),
     /// Scroll en filas — positivo abajo, negativo arriba.
     Scroll(i32),
+    /// Arrastre sobre el mapa: panea la cámara `(dx, dy)` en px físicos.
+    MapPan(f32, f32),
+    /// Rueda sobre el mapa: zoom de la cámara (delta normalizado a líneas).
+    MapZoom(f32),
     /// Drag del divisor — positivo = lista crece.
     ResizeList(f32),
     /// El bus `wawa-config` publicó una versión nueva.
@@ -261,6 +268,7 @@ impl App for Shell {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             context_menu: None,
+            map_view: MapView::default(),
             _wawa_watcher: watcher,
         }
     }
@@ -299,11 +307,17 @@ impl App for Shell {
     }
 
     fn on_wheel(
-        _model: &Self::Model,
+        model: &Self::Model,
         delta: WheelDelta,
-        _cursor: (f32, f32),
+        cursor: (f32, f32),
         _mods: Modifiers,
     ) -> Option<Self::Msg> {
+        // Si la rueda cae sobre el panel del mapa, hace zoom de la cámara en
+        // vez de scrollear la lista (gateo por el rect que el canvas registra).
+        if matches!(model.preview, PreviewPane::Map(_)) && model.map_view.contains(cursor.0, cursor.1)
+        {
+            return Some(Msg::MapZoom(delta.y));
+        }
         // El delta del touchpad se acumula en `FileExplorerState`; acá
         // sólo aproximamos los pasos para evitar un round-trip por
         // sub-fila. El update llamará a `apply_wheel(delta.y)` para que
@@ -368,6 +382,7 @@ impl App for Shell {
                                     }
                                     m.preview_of = Some(path);
                                     m.preview_temp = None;
+                                    m.map_view.reset();
                                 }
                             }
                         }
@@ -402,6 +417,13 @@ impl App for Shell {
                 } else {
                     m.explorer.apply_wheel(steps as f32);
                 }
+            }
+            Msg::MapPan(dx, dy) => {
+                m.map_view.pan_by(dx as f64, dy as f64);
+            }
+            Msg::MapZoom(dy) => {
+                // Cada "línea" de rueda → ±12% de zoom; arriba acerca.
+                m.map_view.zoom_by(1.12_f64.powf(dy as f64));
             }
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);
@@ -573,7 +595,17 @@ impl App for Shell {
                 font_viewer_view::<Msg>(state, model.preview_of.as_deref(), &font_palette)
             }
             PreviewPane::Map(state) => {
-                map_viewer_view::<Msg>(state, model.preview_of.as_deref(), &map_palette)
+                map_viewer_view::<Msg>(
+                    state,
+                    model.preview_of.as_deref(),
+                    &map_palette,
+                    &model.map_view,
+                )
+                // Arrastrar el panel panea la cámara del mapa.
+                .draggable(|phase, dx, dy| match phase {
+                    DragPhase::Move => Some(Msg::MapPan(dx, dy)),
+                    DragPhase::End => None,
+                })
             }
             // El visor de texto muestra el fuente HTML; abrir (Enter) lanza puriy.
             PreviewPane::Web(state) => text_viewer_view::<Msg>(
@@ -962,6 +994,8 @@ fn refresh_preview(m: &mut Model) {
     };
     m.preview = load_for(&path);
     m.preview_of = Some(path);
+    // Encuadre fresco para el nuevo archivo (si fuera un mapa).
+    m.map_view.reset();
 }
 
 /// Decide qué viewer usar discerniendo el **contenido** del archivo (no
