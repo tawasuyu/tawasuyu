@@ -16,18 +16,19 @@ Se está avanzando este plan **en orden**. Cerrado en esta tanda (todo en
   **R1** URL de red (http/hls/rtsp vía ffmpeg) ·
   **R2** plataformas con yt-dlp (puente nuevo `shared/foreign-ytdlp`) ·
   **V4** ajustes de color de video (brillo/contraste/gamma/saturación) ·
-  **V3** rotación/flip del video (`media-core::transform`).
+  **V3** rotación/flip del video (`media-core::transform`) ·
+  **S5** auto-carga de subtítulos sidecar.
 
 Con M1+R1+R2 `media` ya **reproduce desde una plataforma**; lo que falta para
 FreeTube es navegación (`shared/foreign-youtube`), no el reproductor (ver
 `FREETUBE.md`). `cargo test -p media-core` = 91 verde, `--workspace` verde.
 
-**Próximo paso sugerido (en orden, aislado y testeable en CI):** **S5 —
-auto-carga de subtítulos**: al abrir un video, buscar junto a él un
-`.srt`/`.vtt`/`.ass` con el mismo nombre base y cargarlo sin pedir env. Es
-chico y puro (lógica de paths + reusa `parse_subtitles`, ya listo). Después
-**S4** (delay/sync de subtítulo, calca A4) y **A5** (normalización/limitador
-puro-DSP, molde EQ).
+**Próximo paso sugerido (en orden, aislado y testeable en CI):** **S4 —
+delay/sync de subtítulo**: un offset firmado aplicado al consultar el cue
+activo (desplaza `SubtitleTrack::at(t)` por un delta), calca A4 (lipsync) —
+comandos `SubDelayBy{ms}`/`SubDelayReset` + un slot compartido. Después
+**A5** (normalización/limitador puro-DSP, molde EQ) y **S3** (estilo visual
+de subtítulos).
 
 **Lo que necesita correr la app/GPU para verificar** (no hacer a ciegas):
 V1 fullscreen (API de ventana de llimphi-ui), V2 aspect/crop/zoom (blit),
@@ -72,7 +73,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
 - Track AUDIO A2/A3/A5/A6 (selección de pista, dispositivo de salida, normalización/ReplayGain, gapless/crossfade). **A4 (delay/sync) ✅.**
 - Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, sin hue) ✅.**
-- Track SUBTÍTULOS S2–S5 (pistas embebidas, estilo configurable, delay/sync, auto-carga). **S1 (ASS/SSA texto+timing) ✅.**
+- Track SUBTÍTULOS S2–S4 (pistas embebidas, estilo configurable, delay/sync). **S1 (ASS/SSA texto+timing) ✅ · S5 (auto-carga sidecar) ✅.**
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
 - Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
 
@@ -164,7 +165,12 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 - **S2 — Pistas embebidas** (muxeadas) + su selección.
 - **S3 — Estilo configurable** (fuente/tamaño/color/posición/fondo).
 - **S4 — Delay/sync de subtítulo** + subtítulo secundario.
-- **S5 — Auto-carga** del `.srt`/`.vtt` por nombre de archivo.
+- **S5 — Auto-carga** del `.srt`/`.vtt` por nombre de archivo. ✅ *Cerrado
+  (2026-06-01).* `media-app`: si ninguna env de subtítulo apunta a un archivo,
+  busca un "sidecar" junto al video con su mismo nombre base
+  (`peli.mp4` → `peli.{srt,vtt,ass,ssa}`, en ese orden) y lo carga vía
+  `parse_subtitles`. Sólo para archivos locales (un stream de red no tiene
+  hermano en disco). Helper puro `subtitle_sidecar_candidates` + test.
 
 ### Track RED (totalmente ausente; vía `shared/foreign-*`)
 

@@ -55,9 +55,11 @@
 //! manualmente y `speed` cicla velocidades 0.5×..2×. `MEDIA_SRT=
 //! subs.srt` (o `MEDIA_VTT` / `MEDIA_ASS`) carga subtítulos —
 //! SRT/WebVTT/ASS-SSA, autodetectados— sincronizados a la posición
-//! actual del track.
+//! actual del track. Sin esa env, si junto al video hay un archivo con
+//! su mismo nombre base (`peli.mp4` → `peli.srt`/`.vtt`/`.ass`/`.ssa`)
+//! se carga solo (S5, auto-carga sidecar).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -469,11 +471,58 @@ fn playlist_slot() -> &'static OnceLock<Option<Arc<Mutex<Playlist>>>> {
     &SLOT
 }
 
-/// Pista de subtítulos cargada, si MEDIA_SRT/MEDIA_VTT apuntó a un
-/// archivo válido. Se consulta por timestamp del seekable_handle activo.
+/// Pista de subtítulos cargada (por env o auto-carga sidecar S5). Se
+/// consulta por timestamp del seekable_handle activo.
 fn subtitles_slot() -> &'static OnceLock<Option<SubtitleTrack>> {
     static SLOT: OnceLock<Option<SubtitleTrack>> = OnceLock::new();
     &SLOT
+}
+
+/// Lee y parsea un archivo de subtítulos (autodetect SRT/WebVTT/ASS por
+/// cabecera). Log a stderr; `None` si no se puede leer o no hay cues.
+fn load_subtitle_file(path: &Path) -> Option<SubtitleTrack> {
+    match std::fs::read_to_string(path) {
+        Ok(body) => match SubtitleTrack::parse_subtitles(&body) {
+            Ok(t) => {
+                eprintln!("media-app: subtitles {} · {} cues", path.display(), t.len());
+                Some(t)
+            }
+            Err(e) => {
+                eprintln!("media-app: subtítulos inválidos en {} ({e})", path.display());
+                None
+            }
+        },
+        Err(e) => {
+            eprintln!("media-app: no pude leer subtítulos {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Candidatos de subtítulo "sidecar" de un video: mismo nombre base con
+/// extensión de subtítulo, en orden de preferencia. Puro y testeable.
+fn subtitle_sidecar_candidates(video: &Path) -> Vec<PathBuf> {
+    ["srt", "vtt", "ass", "ssa"]
+        .iter()
+        .map(|e| video.with_extension(e))
+        .collect()
+}
+
+/// S5: busca junto al video un subtítulo con su mismo nombre base y lo
+/// carga, sin necesidad de env. Sólo para archivos locales (un stream de
+/// red no tiene hermano en disco). Silencioso si no hay ninguno.
+fn auto_load_sidecar_subtitles() -> Option<SubtitleTrack> {
+    let video = video_path_slot().get()?;
+    if is_network_url(&video.to_string_lossy()) {
+        return None;
+    }
+    for cand in subtitle_sidecar_candidates(video) {
+        if cand.is_file() {
+            eprintln!("media-app: subtítulo sidecar {}", cand.display());
+            return load_subtitle_file(&cand);
+        }
+    }
+    None
 }
 
 /// `MediaSession` compartida entre el FfmpegVideoSource del pipeline y
@@ -3007,34 +3056,17 @@ fn main() {
         }
     }
 
-    // Subtítulos: MEDIA_SRT / MEDIA_VTT / MEDIA_ASS apuntan al archivo; el
-    // parser autodetecta SRT vs WebVTT vs ASS/SSA por la cabecera, así que
-    // las tres envs son intercambiables (gana la primera presente en ese
-    // orden). Falla silenciosa con log en stderr — la app sigue sin subs.
-    let subs = match std::env::var("MEDIA_SRT")
+    // Subtítulos: primero las envs explícitas (MEDIA_SRT/VTT/ASS, autodetect
+    // por cabecera). Si ninguna apunta a un archivo, S5: auto-carga el
+    // "sidecar" del video (mismo nombre base, .srt/.vtt/.ass/.ssa). Falla
+    // silenciosa con log — la app sigue sin subs.
+    let env_path = std::env::var("MEDIA_SRT")
         .or_else(|_| std::env::var("MEDIA_VTT"))
         .or_else(|_| std::env::var("MEDIA_ASS"))
-    {
-        Ok(path) => match std::fs::read_to_string(&path) {
-            Ok(body) => match SubtitleTrack::parse_subtitles(&body) {
-                Ok(t) => {
-                    eprintln!(
-                        "media-app: subtitles {path} · {} cues",
-                        t.len()
-                    );
-                    Some(t)
-                }
-                Err(e) => {
-                    eprintln!("media-app: subtítulos inválidos ({e})");
-                    None
-                }
-            },
-            Err(e) => {
-                eprintln!("media-app: no pude leer subtítulos {path}: {e}");
-                None
-            }
-        },
-        Err(_) => None,
+        .ok();
+    let subs = match env_path {
+        Some(path) => load_subtitle_file(Path::new(&path)),
+        None => auto_load_sidecar_subtitles(),
     };
     subtitles_slot().set(subs).ok();
 
@@ -3193,7 +3225,27 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
 
 #[cfg(test)]
 mod tests {
-    use super::is_network_url;
+    use super::{is_network_url, subtitle_sidecar_candidates};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn sidecar_usa_el_nombre_base_del_video() {
+        let cands = subtitle_sidecar_candidates(Path::new("/cine/peli.mp4"));
+        assert_eq!(
+            cands,
+            vec![
+                PathBuf::from("/cine/peli.srt"),
+                PathBuf::from("/cine/peli.vtt"),
+                PathBuf::from("/cine/peli.ass"),
+                PathBuf::from("/cine/peli.ssa"),
+            ]
+        );
+        // Sin extensión previa, la agrega.
+        assert_eq!(
+            subtitle_sidecar_candidates(Path::new("clip"))[0],
+            PathBuf::from("clip.srt")
+        );
+    }
 
     #[test]
     fn reconoce_urls_de_red() {
