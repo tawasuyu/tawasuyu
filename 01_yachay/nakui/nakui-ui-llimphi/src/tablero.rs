@@ -6,6 +6,8 @@
 
 use super::*;
 
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
+
 /// Resuelve las claves de un desglose (UUIDs) al label legible del
 /// record referido en `ref_entity`. Las claves que no son UUID se
 /// dejan tal cual; los records borrados se marcan como tales. Mismo
@@ -607,8 +609,12 @@ pub(crate) fn dashboard_card(
         },
         ..Default::default()
     })
-    .fill(theme.bg_panel_alt)
-    .radius(8.0)
+    // Firma visual transversal del kit (gradiente vertical + hairline
+    // accent) en vez de un fill plano — para que las stat cards de nakui
+    // lean "talladas" igual que el resto del sistema. Reemplaza el fill.
+    .paint_with(panel_signature_painter(PanelStyle::from_theme(theme)))
+    .radius(PanelStyle::from_theme(theme).radius)
+    .clip(true)
     .children(children)
 }
 
