@@ -38,6 +38,8 @@ pub struct Scan {
     pub mem_total_kb: u64,
     /// Memoria disponible (`MemAvailable`), para derivar la usada.
     pub mem_avail_kb: u64,
+    /// Por core: `(jiffies_totales, jiffies_idle)` para derivar %uso por delta.
+    pub cores: Vec<(u64, u64)>,
 }
 
 impl Default for Scan {
@@ -48,6 +50,7 @@ impl Default for Scan {
             ncpu: 1,
             mem_total_kb: 0,
             mem_avail_kb: 0,
+            cores: Vec::new(),
         }
     }
 }
@@ -62,18 +65,39 @@ fn page_kb() -> u64 {
     }
 }
 
-/// Suma de todos los campos de la primera línea `cpu ` de `/proc/stat`.
-fn total_cpu_jiffies() -> u64 {
-    let Ok(stat) = fs::read_to_string("/proc/stat") else {
-        return 0;
-    };
-    let Some(line) = stat.lines().next() else {
-        return 0;
-    };
-    line.split_whitespace()
+/// `(total, idle)` de una línea `cpu...` de `/proc/stat`. `idle = idle +
+/// iowait` (campos 4 y 5), como htop.
+fn parse_cpu_line(line: &str) -> (u64, u64) {
+    let nums: Vec<u64> = line
+        .split_whitespace()
         .skip(1)
         .filter_map(|n| n.parse::<u64>().ok())
-        .sum()
+        .collect();
+    let total: u64 = nums.iter().sum();
+    let idle = nums.get(3).copied().unwrap_or(0) + nums.get(4).copied().unwrap_or(0);
+    (total, idle)
+}
+
+/// Línea agregada `cpu ` (total de jiffies) + una entrada `(total, idle)` por
+/// core (`cpu0`, `cpu1`, …).
+fn cpu_stat() -> (u64, Vec<(u64, u64)>) {
+    let Ok(stat) = fs::read_to_string("/proc/stat") else {
+        return (0, Vec::new());
+    };
+    let mut total = 0;
+    let mut cores = Vec::new();
+    for line in stat.lines() {
+        if let Some(rest) = line.strip_prefix("cpu") {
+            if rest.starts_with(char::is_whitespace) {
+                total = parse_cpu_line(line).0; // línea agregada `cpu `
+            } else if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                cores.push(parse_cpu_line(line)); // `cpuN`
+            }
+        } else {
+            break; // las líneas cpu van primero
+        }
+    }
+    (total, cores)
 }
 
 /// `(MemTotal, MemAvailable)` en kB desde `/proc/meminfo`.
@@ -166,14 +190,21 @@ pub fn scan() -> Scan {
         }
     }
     let (mem_total_kb, mem_avail_kb) = meminfo_kb();
+    let (total_jiffies, cores) = cpu_stat();
+    let ncpu = if cores.is_empty() {
+        std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1)
+    } else {
+        cores.len() as u32
+    };
     Scan {
         procs,
-        total_jiffies: total_cpu_jiffies(),
-        ncpu: std::thread::available_parallelism()
-            .map(|n| n.get() as u32)
-            .unwrap_or(1),
+        total_jiffies,
+        ncpu,
         mem_total_kb,
         mem_avail_kb,
+        cores,
     }
 }
 
@@ -202,6 +233,22 @@ pub fn signal(pid: i32, sig: Sig) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_line_total_e_idle() {
+        // user nice system idle iowait irq softirq steal ...
+        let (total, idle) = parse_cpu_line("cpu0 100 0 50 800 20 0 0 0 0 0");
+        assert_eq!(total, 100 + 0 + 50 + 800 + 20);
+        assert_eq!(idle, 800 + 20); // idle + iowait
+    }
+
+    #[test]
+    fn scan_lee_cores() {
+        let s = scan();
+        assert!(!s.cores.is_empty(), "debería leer al menos un core");
+        assert_eq!(s.ncpu as usize, s.cores.len());
+        assert!(s.cores.iter().all(|&(t, i)| t >= i));
+    }
 
     #[test]
     fn scan_ve_procesos_y_se_encuentra_a_si_mismo() {

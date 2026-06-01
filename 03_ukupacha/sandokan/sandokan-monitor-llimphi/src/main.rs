@@ -193,10 +193,12 @@ struct Model {
     filter_mode: bool,
     mem_total_kb: u64,
     mem_avail_kb: u64,
-    /// Historial global de %CPU y %MEM (un punto por barrido) → gráficos.
-    cpu_hist: VecDeque<f32>,
+    /// Historial de %uso por core + historial de %MEM (un punto por barrido).
+    core_hist: Vec<VecDeque<f32>>,
     mem_hist: VecDeque<f32>,
-    /// Jiffies previos por PID + total, para derivar %CPU por delta.
+    /// Lectura previa `(total, idle)` por core, para derivar %uso por delta.
+    prev_core: Vec<(u64, u64)>,
+    /// Jiffies previos por PID + total, para derivar %CPU por proceso.
     prev_proc: HashMap<i32, u64>,
     prev_total: u64,
     // --- menú ---
@@ -332,14 +334,30 @@ fn ingest_system(model: &mut Model, scan: Scan) {
         });
     }
 
-    // Muestras globales para los gráficos del tope.
-    let overall_cpu = (out.iter().map(|p| p.cpu_pct).sum::<f32>() / ncpu).clamp(0.0, 100.0);
+    // %uso por core: delta(busy)/delta(total) contra la lectura previa.
+    if model.core_hist.len() != scan.cores.len() {
+        model.core_hist = vec![VecDeque::new(); scan.cores.len()];
+        model.prev_core = vec![(0, 0); scan.cores.len()];
+    }
+    for (i, &(total, idle)) in scan.cores.iter().enumerate() {
+        let (ptotal, pidle) = model.prev_core[i];
+        let dtot = total.saturating_sub(ptotal) as f32;
+        let didle = idle.saturating_sub(pidle) as f32;
+        let usage = if dtot > 0.0 {
+            ((dtot - didle) / dtot).clamp(0.0, 1.0) * 100.0
+        } else {
+            0.0
+        };
+        push_capped(&mut model.core_hist[i], usage);
+    }
+    model.prev_core = scan.cores.clone();
+
+    // % de memoria usada para el gráfico de memoria.
     let mem_used_pct = if scan.mem_total_kb > 0 {
         (1.0 - scan.mem_avail_kb as f32 / scan.mem_total_kb as f32).clamp(0.0, 1.0) * 100.0
     } else {
         0.0
     };
-    push_capped(&mut model.cpu_hist, overall_cpu);
     push_capped(&mut model.mem_hist, mem_used_pct);
 
     model.prev_proc = next_prev;
@@ -545,8 +563,9 @@ impl App for Monitor {
             filter_mode: false,
             mem_total_kb: 0,
             mem_avail_kb: 0,
-            cpu_hist: VecDeque::new(),
+            core_hist: Vec::new(),
             mem_hist: VecDeque::new(),
+            prev_core: Vec::new(),
             prev_proc: HashMap::new(),
             prev_total: 0,
             menu: build_menu(),
@@ -1191,41 +1210,46 @@ fn system_body(model: &Model) -> View<Msg> {
     ])
 }
 
-/// Fila de gráficos del tope: historial de %CPU y % de memoria usada.
+/// Fila de gráficos del tope: un gráfico de %uso por **core** + uno de memoria,
+/// en FlexWrap (en ventanas angostas los cores bajan de fila).
 fn sys_graphs(model: &Model) -> View<Msg> {
     let t = &model.theme;
-    let cpu_now = model.cpu_hist.back().copied().unwrap_or(0.0);
-    let mem_now = model.mem_hist.back().copied().unwrap_or(0.0);
-    let used_kb = model.mem_total_kb.saturating_sub(model.mem_avail_kb);
-
     let cpu_col = Color::from_rgba8(0x3f, 0xcf, 0x6a, 0xff);
     let mem_col = t.accent;
 
+    let mut items: Vec<View<Msg>> = Vec::with_capacity(model.core_hist.len() + 1);
+    for (i, hist) in model.core_hist.iter().enumerate() {
+        let now = hist.back().copied().unwrap_or(0.0);
+        items.push(meter(t, &format!("CPU{i}"), &format!("{now:.0}%"), hist, cpu_col, 126.0));
+    }
+    let mem_now = model.mem_hist.back().copied().unwrap_or(0.0);
+    let used_kb = model.mem_total_kb.saturating_sub(model.mem_avail_kb);
+    items.push(meter(
+        t,
+        "Memoria",
+        &format!("{} / {} · {mem_now:.0}%", fmt_mem(used_kb * 1024), fmt_mem(model.mem_total_kb * 1024)),
+        &model.mem_hist,
+        mem_col,
+        236.0,
+    ));
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
+        flex_wrap: FlexWrap::Wrap,
         gap: Size {
-            width: length(12.0),
-            height: length(0.0),
+            width: length(10.0),
+            height: length(8.0),
         },
         padding: pad(16.0, 10.0),
         ..Default::default()
     })
     .fill(t.bg_panel)
-    .children(vec![
-        meter(t, "CPU", &format!("{cpu_now:.0}%"), &model.cpu_hist, cpu_col),
-        meter(
-            t,
-            "Memoria",
-            &format!("{} / {} · {mem_now:.0}%", fmt_mem(used_kb * 1024), fmt_mem(model.mem_total_kb * 1024)),
-            &model.mem_hist,
-            mem_col,
-        ),
-    ])
+    .children(items)
 }
 
-/// Un medidor: cabecera (label + valor) sobre un gráfico de área del historial
-/// (escala fija 0..100 %). Pintado con `paint_with` (área + línea).
-fn meter(t: &Theme, label: &str, value: &str, hist: &VecDeque<f32>, color: Color) -> View<Msg> {
+/// Un medidor de ancho fijo: cabecera (label + valor) sobre un gráfico de área
+/// del historial (escala fija 0..100 %). Pintado con `paint_with`.
+fn meter(t: &Theme, label: &str, value: &str, hist: &VecDeque<f32>, color: Color, width: f32) -> View<Msg> {
     let samples: Vec<f32> = hist.iter().copied().collect();
     let area_col = color.with_alpha(0.20);
     let track = t.bg_input;
@@ -1237,14 +1261,14 @@ fn meter(t: &Theme, label: &str, value: &str, hist: &VecDeque<f32>, color: Color
         ..Default::default()
     })
     .children(vec![
-        View::new(Style::default()).text(label, 11.0, t.fg_muted),
-        View::new(Style::default()).text(value, 11.5, color),
+        View::new(Style::default()).text(label, 10.5, t.fg_muted),
+        View::new(Style::default()).text(value, 11.0, color),
     ]);
 
     let graph = View::new(Style {
         size: Size {
             width: percent(1.0),
-            height: length(40.0),
+            height: length(32.0),
         },
         ..Default::default()
     })
@@ -1290,7 +1314,11 @@ fn meter(t: &Theme, label: &str, value: &str, hist: &VecDeque<f32>, color: Color
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
+        flex_shrink: 0.0,
+        size: Size {
+            width: length(width),
+            height: auto(),
+        },
         gap: Size {
             width: length(0.0),
             height: length(5.0),
@@ -1368,7 +1396,7 @@ fn sys_filter_bar(model: &Model, matches: usize) -> View<Msg> {
     let mut row: Vec<View<Msg>> = vec![
         View::new(Style {
             size: Size {
-                width: length(20.0),
+                width: length(24.0),
                 height: percent(1.0),
             },
             flex_shrink: 0.0,
@@ -1376,7 +1404,7 @@ fn sys_filter_bar(model: &Model, matches: usize) -> View<Msg> {
             flex_direction: FlexDirection::Column,
             ..Default::default()
         })
-        .text("🔎", 12.0, t.fg_muted),
+        .text("/", 13.0, t.fg_muted),
         View::new(Style {
             flex_grow: 1.0,
             justify_content: Some(JustifyContent::Center),
@@ -1504,9 +1532,9 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
             let glyph = if !has_kids {
                 " "
             } else if collapsed {
-                "▸"
+                "▶"
             } else {
-                "▾"
+                "▼"
             };
             let mut g = View::new(Style {
                 size: Size {
@@ -1524,15 +1552,22 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
             }
             parts.push(g);
         }
+        // El comando va en un nodo de ancho fijo grande → parley NO lo wrappea
+        // (queda en una sola línea); el contenedor recorta el sobrante. Sin
+        // esto, el texto largo se rompe en varias líneas apretadas en ROW_H.
+        let cmd_show: String = p.cmd.chars().take(256).collect();
         parts.push(
             View::new(Style {
-                flex_grow: 1.0,
+                size: Size {
+                    width: length(2400.0),
+                    height: percent(1.0),
+                },
+                flex_shrink: 0.0,
                 justify_content: Some(JustifyContent::Center),
                 flex_direction: FlexDirection::Column,
                 ..Default::default()
             })
-            .clip(true)
-            .text(&p.cmd, 11.5, t.fg_text),
+            .text(cmd_show, 11.5, t.fg_text),
         );
         View::new(Style {
             flex_grow: 1.0,
