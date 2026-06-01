@@ -63,10 +63,15 @@ use smithay::wayland::shell::xdg::{
     XdgToplevelSurfaceData,
 };
 use smithay::wayland::output::OutputHandler;
+use smithay::wayland::shell::wlr_layer::{
+    Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+};
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::desktop::{layer_map_for_output, LayerSurface as DesktopLayerSurface, WindowSurfaceType};
+use smithay::output::Output;
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat,
-    delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_layer_shell,
+    delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 use auth_core::{SessionTicket, UserInfo};
@@ -248,6 +253,12 @@ struct App {
     seat_state: SeatState<Self>,
     data_device_state: DataDeviceState,
     seat: Seat<Self>,
+    /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
+    /// waybar, swaybg, wofi, mako).
+    layer_shell_state: WlrLayerShellState,
+    /// La salida persistente — la necesita `layer_map_for_output` para
+    /// arreglar anclajes y zonas exclusivas de los layer surfaces.
+    output: Option<Output>,
     keyboard: Option<KeyboardHandle<Self>>,
     pointer: Option<PointerHandle<Self>>,
     /// Posición del puntero en coordenadas globales.
@@ -476,11 +487,6 @@ impl App {
         let limite = if dock.anchor.es_horizontal() { oh } else { ow };
         let t = dock.thickness.clamp(1, limite.max(1));
 
-        // Reserva la zona exclusiva del borde — el teselado la esquiva.
-        let (top, bottom, left, right) = shell_insets(dock.anchor, t);
-        let ev = self.body.reserve_output(0, top, bottom, left, right);
-        self.brain_feed(ev);
-
         // Dimensiona la ventana del shell y la fija en la franja del borde.
         if let Some(w) = self.windows.iter_mut().find(|w| w.is_shell) {
             let (x, y, sw, sh) = shell_strip(dock.anchor, ow, oh, t);
@@ -492,6 +498,42 @@ impl App {
             });
             w.toplevel.send_pending_configure();
         }
+
+        // La reserva del borde (franja pata + zonas exclusivas de
+        // layer-shell) se computa en un solo lugar.
+        self.recompute_reservations();
+    }
+
+    /// Recalcula y publica al Cerebro el área reservada del borde: suma la
+    /// franja del shell (pata) y las zonas exclusivas de los layer surfaces
+    /// (waybar y compañía). Fuente única de los insets del teselado.
+    fn recompute_reservations(&mut self) {
+        let (ow, oh) = self.output_size;
+        if ow == 0 || oh == 0 {
+            return;
+        }
+        let (mut top, mut bottom, mut left, mut right) = (0, 0, 0, 0);
+        // Lo que los layer surfaces dejan libre (zona no exclusiva).
+        if let Some(output) = self.output.clone() {
+            let z = layer_map_for_output(&output).non_exclusive_zone();
+            top += z.loc.y.max(0);
+            left += z.loc.x.max(0);
+            right += (ow - (z.loc.x + z.size.w)).max(0);
+            bottom += (oh - (z.loc.y + z.size.h)).max(0);
+        }
+        // Franja del shell (pata), si está acoplado.
+        if self.windows.iter().any(|w| w.is_shell) {
+            let dock = shell_dock();
+            let limite = if dock.anchor.es_horizontal() { oh } else { ow };
+            let t = dock.thickness.clamp(1, limite.max(1));
+            let (st, sb, sl, sr) = shell_insets(dock.anchor, t);
+            top += st;
+            bottom += sb;
+            left += sl;
+            right += sr;
+        }
+        let ev = self.body.reserve_output(0, top, bottom, left, right);
+        self.brain_feed(ev);
     }
 
     /// El backend informa de un tamaño de salida nuevo (arranque o
@@ -499,10 +541,25 @@ impl App {
     /// su franja (la reserva por insets se mantiene relativa al borde).
     fn output_changed(&mut self, width: i32, height: i32) {
         self.output_size = (width, height);
+        // Mantené el Output (y su LayerMap) al día con el tamaño nuevo.
+        if let Some(output) = self.output.clone() {
+            output.change_current_state(
+                Some(smithay::output::Mode {
+                    size: (width, height).into(),
+                    refresh: 60_000,
+                }),
+                None,
+                None,
+                None,
+            );
+            layer_map_for_output(&output).arrange();
+        }
         let ev = self.body.resize_output(0, width, height);
         self.brain_feed(ev);
         if self.windows.iter().any(|w| w.is_shell) {
             self.dock_shell();
+        } else {
+            self.recompute_reservations();
         }
     }
 
@@ -572,11 +629,64 @@ impl CompositorHandler for App {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        // Layer surface: cada commit re-arregla el mapa (manda el configure
+        // inicial con el tamaño anclado y recalcula la zona exclusiva).
+        if let Some(output) = self.output.clone() {
+            let mut map = layer_map_for_output(&output);
+            let is_layer = map
+                .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL | WindowSurfaceType::POPUP)
+                .is_some();
+            if is_layer {
+                map.arrange();
+                drop(map);
+                self.recompute_reservations();
+            }
+        }
     }
 }
 
 impl BufferHandler for App {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
+}
+
+impl WlrLayerShellHandler for App {
+    fn shell_state(&mut self) -> &mut WlrLayerShellState {
+        &mut self.layer_shell_state
+    }
+
+    fn new_layer_surface(
+        &mut self,
+        surface: WlrLayerSurface,
+        _output: Option<wl_output::WlOutput>,
+        _layer: Layer,
+        namespace: String,
+    ) {
+        // Sin salida todavía no podemos colocarlo; el cliente reintentará
+        // al haber output. Mapeamos al único Output de mirada.
+        let Some(output) = self.output.clone() else {
+            return;
+        };
+        let desktop = DesktopLayerSurface::new(surface, namespace);
+        let mut map = layer_map_for_output(&output);
+        let _ = map.map_layer(&desktop);
+        drop(map);
+        self.recompute_reservations();
+    }
+
+    fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        let Some(output) = self.output.clone() else {
+            return;
+        };
+        let mut map = layer_map_for_output(&output);
+        if let Some(layer) = map
+            .layer_for_surface(surface.wl_surface(), WindowSurfaceType::ALL)
+            .cloned()
+        {
+            map.unmap_layer(&layer);
+        }
+        drop(map);
+        self.recompute_reservations();
+    }
 }
 
 impl DmabufHandler for App {
@@ -754,6 +864,7 @@ impl SeatHandler for App {
 impl OutputHandler for App {}
 
 delegate_compositor!(App);
+delegate_layer_shell!(App);
 delegate_xdg_shell!(App);
 delegate_xdg_decoration!(App);
 delegate_dmabuf!(App);
@@ -894,6 +1005,44 @@ fn send_frames_surface_tree(surface: &WlSurface, time: u32) {
 /// ventanas). Una ventana normal va en su celda; si el cliente presenta
 /// una superficie más pequeña que la celda (p. ej. un terminal que
 /// redondea su tamaño a celdas de texto), se centra en el hueco.
+/// Elementos de render de los layer surfaces de la salida, separados en
+/// `(encima, debajo)` de las ventanas: `encima` = capas Overlay+Top,
+/// `debajo` = Bottom+Background. Cada layer se pinta en la geometría que
+/// el `LayerMap` le calculó (anclaje + márgenes). Coordenadas top-left,
+/// igual que las ventanas. Lo comparten los backends winit y DRM.
+fn layer_render_elements(
+    output: Option<&Output>,
+    renderer: &mut GlesRenderer,
+) -> (
+    Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+    Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+) {
+    let mut over = Vec::new();
+    let mut under = Vec::new();
+    let Some(output) = output else {
+        return (over, under);
+    };
+    let map = layer_map_for_output(output);
+    for layer in map.layers() {
+        let Some(geo) = map.layer_geometry(layer) else {
+            continue;
+        };
+        let els = render_elements_from_surface_tree(
+            renderer,
+            layer.wl_surface(),
+            (geo.loc.x, geo.loc.y),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        );
+        match layer.layer() {
+            Layer::Overlay | Layer::Top => over.extend(els),
+            Layer::Background | Layer::Bottom => under.extend(els),
+        }
+    }
+    (over, under)
+}
+
 fn render_loc(w: &ManagedWindow, output_h: i32) -> (i32, i32) {
     if w.is_shell {
         // Sólo el anclaje inferior crece hacia arriba cuando el cliente
@@ -1218,6 +1367,8 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
     let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
         xdg_shell_state: XdgShellState::new::<App>(&dh),
+        layer_shell_state: WlrLayerShellState::new::<App>(&dh),
+        output: None,
         shm_state: ShmState::new::<App>(&dh, Vec::new()),
         dmabuf_state: DmabufState::new(),
         seat_state,
@@ -1348,7 +1499,13 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     // Salida inicial = el tamaño de la ventana winit.
     let win_size = backend.window_size();
-    let _wl_output = announce_output(&display.handle(), "winit", win_size.w, win_size.h, 60_000);
+    state.output = Some(announce_output(
+        &display.handle(),
+        "winit",
+        win_size.w,
+        win_size.h,
+        60_000,
+    ));
     {
         let ev = state.body.add_output(0, win_size.w, win_size.h);
         state.brain_feed(ev);
@@ -1468,21 +1625,27 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
             // las flotantes, luego las teseladas. `sort_by_key` es estable:
             // dentro de cada grupo se respeta el orden de apertura.
             let output_h = state.output_size.1;
+            // Layer surfaces (waybar, swaybg…): overlay/top van ENCIMA de
+            // las ventanas, bottom/background DEBAJO. La lista es front-to-back.
+            let (over_layers, under_layers) =
+                layer_render_elements(state.output.as_ref(), renderer);
             let mut shown: Vec<&ManagedWindow> =
                 state.windows.iter().filter(|w| w.visible).collect();
             shown.sort_by_key(|w| (!w.is_shell, !w.floating));
-            let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = shown
-                .iter()
-                .flat_map(|w| {
-                    render_elements_from_surface_tree(
-                        renderer,
-                        &w.surface,
-                        render_loc(w, output_h),
-                        1.0,
-                        1.0,
-                        Kind::Unspecified,
-                    )
-                })
+            let window_elems = shown.iter().flat_map(|w| {
+                render_elements_from_surface_tree(
+                    renderer,
+                    &w.surface,
+                    render_loc(w, output_h),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )
+            });
+            let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = over_layers
+                .into_iter()
+                .chain(window_elems)
+                .chain(under_layers)
                 .collect();
             let mut frame = renderer
                 .render(&mut framebuffer, size, Transform::Flipped180)
@@ -1498,6 +1661,11 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
         let time = start.elapsed().as_millis() as u32;
         for w in &state.windows {
             send_frames_surface_tree(&w.surface, time);
+        }
+        if let Some(output) = state.output.clone() {
+            for layer in layer_map_for_output(&output).layers() {
+                send_frames_surface_tree(layer.wl_surface(), time);
+            }
         }
         if let Some(stream) = listener.accept()? {
             let client = display

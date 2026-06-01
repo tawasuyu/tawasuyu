@@ -218,6 +218,14 @@ impl DrmState {
                 }
             }
 
+            // Layer surfaces (waybar, swaybg…): los Overlay/Top van encima
+            // de las ventanas; los Bottom/Background, debajo. Front-to-back.
+            let (over_layers, under_layers) =
+                crate::layer_render_elements(self.app.output.as_ref(), &mut self.renderer);
+            for el in over_layers {
+                out.push(Frame::Window(el));
+            }
+
             // El shell va sobre todo; luego las flotantes; luego las
             // teseladas. `sort_by_key` es estable: respeta el orden de
             // apertura dentro de cada grupo.
@@ -251,6 +259,11 @@ impl DrmState {
                     out.push(Frame::Window(el));
                 }
             }
+
+            // Layer surfaces de fondo (Bottom/Background) — debajo de todo.
+            for el in under_layers {
+                out.push(Frame::Window(el));
+            }
             out
         };
         match self.compositor.render_frame::<_, _>(
@@ -273,6 +286,11 @@ impl DrmState {
         let time = self.start.elapsed().as_millis() as u32;
         for w in &self.app.windows {
             send_frames_surface_tree(&w.surface, time);
+        }
+        if let Some(output) = self.app.output.clone() {
+            for layer in smithay::desktop::layer_map_for_output(&output).layers() {
+                send_frames_surface_tree(layer.wl_surface(), time);
+            }
         }
         // También a la superficie del cursor, por si es un cursor animado.
         if let CursorImageStatus::Surface(surface) = &self.app.cursor_status {
@@ -771,13 +789,13 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // El puntero arranca en el centro de la pantalla.
     app.pointer_loc = (mode_w as f64 / 2.0, mode_h as f64 / 2.0);
     // Anuncia el monitor en el protocolo Wayland — los clientes lo exigen.
-    let _wl_output = crate::announce_output(
+    app.output = Some(crate::announce_output(
         &display.handle(),
         &out_name,
         mode_w as i32,
         mode_h as i32,
         mode.vrefresh() as i32 * 1000,
-    );
+    ));
 
     // El socket Wayland por el que se conectan los clientes.
     let listener = ListeningSocket::bind_auto("wayland", 1..32)?;

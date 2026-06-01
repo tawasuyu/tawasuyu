@@ -1,16 +1,18 @@
 #!/bin/sh
 # mirada-dm — arranca mirada en modo display manager sobre DRM, como lo
-# haría un init. Corre como root desde una TTY física; muestra el greeter,
-# autentica por PAM (servicio «carmen») y traspasa a la sesión elegida.
+# haría un init. Corre como root desde una TTY FÍSICA (Ctrl+Alt+F3, no un
+# terminal gráfico ni SSH): el backend DRM toma la consola entera.
 #
 # Salir del greeter:      Ctrl+Alt+Backspace
 # Cambiar de consola:     Ctrl+Alt+F1 … F12
 #
-# Variables que respeta (con defaults sanos):
-#   LIBSEAT_BACKEND   backend de libseat (default «builtin»: toma el seat
-#                     sin seatd/logind, válido corriendo como root).
+# Asiento (seat): por defecto usa seatd —robusto—; lo levanta si hace falta.
+# Variables que respeta:
+#   LIBSEAT_BACKEND   forzá un backend de libseat (p. ej. «builtin» sin
+#                     daemon, o «logind»). Sin esto, libseat autodetecta
+#                     (seatd si está, luego logind).
 #   XDG_RUNTIME_DIR   dónde publica el socket Wayland (default /run/mirada).
-#   MIRADA_GREETER_MOCK="usuario:clave"  salta PAM (para probar sin /etc/pam.d/carmen).
+#   MIRADA_GREETER_MOCK="usuario:clave"  salta PAM (probar sin /etc/pam.d/carmen).
 set -eu
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -18,7 +20,25 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-export LIBSEAT_BACKEND="${LIBSEAT_BACKEND:-builtin}"
+# Seat: si no se forzó un backend y seatd no está corriendo, lo arrancamos.
+# libseat lo detecta solo por /run/seatd.sock (más fiable que el builtin,
+# que exige colgar de una VT real).
+if [ -z "${LIBSEAT_BACKEND:-}" ] && [ ! -S /run/seatd.sock ]; then
+    if command -v seatd >/dev/null 2>&1; then
+        echo "mirada-dm: levantando seatd…"
+        seatd >/tmp/mirada-seatd.log 2>&1 &
+        i=0
+        while [ ! -S /run/seatd.sock ] && [ "$i" -lt 25 ]; do
+            i=$((i + 1))
+            sleep 0.2
+        done
+        [ -S /run/seatd.sock ] || echo "mirada-dm: seatd no abrió su socket; sigo igual." >&2
+    else
+        echo "mirada-dm: seatd no está instalado; pruebo el backend que detecte libseat." >&2
+        echo "           (instalalo con: pacman -S seatd)" >&2
+    fi
+fi
+
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/mirada}"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0711 "$XDG_RUNTIME_DIR"
