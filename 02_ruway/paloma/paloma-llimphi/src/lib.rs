@@ -102,20 +102,65 @@ pub struct Model {
     list_scroll: usize,
     /// Redacción en curso; `None` si el modal está cerrado.
     compose: Option<Compose>,
+    /// Caché en disco (offline-first). `None` = sin persistencia (demos).
+    db: Option<paloma_store::MailDb>,
+    /// Identificador de la cuenta — clave en la caché en disco.
+    account_id: String,
     /// Última línea de estado (resultado de un sync/envío).
     pub status: String,
     pub theme: Theme,
 }
 
 impl Model {
-    /// Construye el modelo sobre `backend`, sincroniza los buzones y abre el
-    /// primero (típicamente `INBOX`). Best-effort: si un sync falla, el panel
-    /// queda vacío y el estado lo dice.
+    /// Construye el modelo sobre `backend` **sin persistencia** (demos): no toca
+    /// disco, sincroniza buzones de red y abre el primero.
     pub fn new(backend: Box<dyn MailBackend>, me: Address, theme: Theme) -> Self {
+        Self::build(backend, me, theme, None, "demo".to_string())
+    }
+
+    /// Como [`Self::new`] pero con **caché en disco**: precarga lo último
+    /// conocido (offline-first), refresca contra el backend y persiste el
+    /// resultado bajo `account_id`.
+    pub fn with_persistence(
+        backend: Box<dyn MailBackend>,
+        me: Address,
+        theme: Theme,
+        db: paloma_store::MailDb,
+        account_id: impl Into<String>,
+    ) -> Self {
+        Self::build(backend, me, theme, Some(db), account_id.into())
+    }
+
+    fn build(
+        backend: Box<dyn MailBackend>,
+        me: Address,
+        theme: Theme,
+        db: Option<paloma_store::MailDb>,
+        account_id: String,
+    ) -> Self {
         let mut store = MailStore::new();
+        // Offline-first: pintar lo cacheado antes de tocar la red.
+        if let Some(d) = &db {
+            let cached = d.load_mailboxes(&account_id);
+            if !cached.is_empty() {
+                store.ingest_mailboxes(cached);
+            }
+        }
+        // Refrescar la lista de buzones de red; si funciona, persistirla.
         let mut status = String::from("paloma · sin sincronizar");
-        if let Err(e) = store.sync_mailboxes(&*backend) {
-            status = format!("error al listar buzones: {e}");
+        match store.sync_mailboxes(&*backend) {
+            Ok(()) => {
+                if let Some(d) = &db {
+                    let _ = d.save_mailboxes(&account_id, store.mailboxes());
+                }
+            }
+            Err(e) => {
+                if store.mailboxes().is_empty() {
+                    status = format!("sin conexión y sin caché: {e}");
+                } else {
+                    status = format!("offline · buzones desde caché ({e})");
+                }
+            }
         }
         let first = store.mailboxes().first().map(|m| m.name.clone());
         let mut model = Self {
@@ -127,6 +172,8 @@ impl Model {
             selected_thread: None,
             list_scroll: 0,
             compose: None,
+            db,
+            account_id,
             status,
             theme,
         };
@@ -136,15 +183,21 @@ impl Model {
         model
     }
 
-    /// Trae y abre `mailbox`: sincroniza sus mensajes, reconstruye hilos y
-    /// limpia la selección de hilo.
+    /// Trae y abre `mailbox`: sincroniza sus mensajes (o los lee de la caché si
+    /// no hay red), reconstruye hilos y limpia la selección de hilo. Persiste el
+    /// snapshot fresco en disco cuando la red responde.
     fn open_mailbox(&mut self, mailbox: &str) {
+        let db = self.db.clone();
+        let account = self.account_id.clone();
         match self.store.sync_messages(&*self.backend, mailbox) {
             Ok(()) => {
                 self.threads = self.store.threads(mailbox);
                 self.selected_mailbox = Some(mailbox.to_string());
                 self.selected_thread = None;
                 self.list_scroll = 0;
+                if let Some(d) = &db {
+                    let _ = d.save_messages(&account, mailbox, self.store.messages(mailbox));
+                }
                 self.status = format!(
                     "{mailbox} · {} hilos · {} sin leer",
                     self.threads.len(),
@@ -152,7 +205,21 @@ impl Model {
                 );
             }
             Err(e) => {
-                self.status = format!("error al traer {mailbox}: {e}");
+                // Offline: caer a la caché en disco si la hay.
+                let cached = db.as_ref().map(|d| d.load_messages(&account, mailbox)).unwrap_or_default();
+                if cached.is_empty() {
+                    self.status = format!("error al traer {mailbox}: {e}");
+                } else {
+                    self.store.ingest(mailbox, cached);
+                    self.threads = self.store.threads(mailbox);
+                    self.selected_mailbox = Some(mailbox.to_string());
+                    self.selected_thread = None;
+                    self.list_scroll = 0;
+                    self.status = format!(
+                        "{mailbox} · offline · {} hilos desde caché",
+                        self.threads.len(),
+                    );
+                }
             }
         }
     }
@@ -169,6 +236,10 @@ impl Model {
         // estable, así que el índice sigue apuntando al mismo hilo.
         self.threads = self.store.threads(&mailbox);
         self.selected_thread = Some(idx);
+        // Reflejar el estado de leído en la caché en disco.
+        if let Some(d) = self.db.clone() {
+            let _ = d.save_messages(&self.account_id, &mailbox, self.store.messages(&mailbox));
+        }
         self.status = format!("{mailbox} · {} sin leer", self.store.unread_count(&mailbox));
     }
 

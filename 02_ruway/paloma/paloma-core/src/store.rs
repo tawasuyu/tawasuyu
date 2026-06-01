@@ -41,9 +41,18 @@ impl MailStore {
         Ok(())
     }
 
-    /// Inserta mensajes directamente (para tests/demos sin backend).
+    /// Inserta mensajes directamente (para tests/demos o para precargar desde
+    /// una caché en disco antes de tener red).
     pub fn ingest(&mut self, mailbox: &str, messages: Vec<Message>) {
         self.by_mailbox.insert(mailbox.to_string(), messages);
+    }
+
+    /// Fija la lista de buzones directamente, ordenándola por rol (igual que
+    /// `sync_mailboxes`). Para precargar desde la caché en disco cuando todavía
+    /// no hubo —o falló— el sync de red.
+    pub fn ingest_mailboxes(&mut self, mut mailboxes: Vec<Mailbox>) {
+        mailboxes.sort_by(|a, b| a.role.sort_key().cmp(&b.role.sort_key()).then(a.name.cmp(&b.name)));
+        self.mailboxes = mailboxes;
     }
 
     /// Los buzones conocidos, ya ordenados por rol.

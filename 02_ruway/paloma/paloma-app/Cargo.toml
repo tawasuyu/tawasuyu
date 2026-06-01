@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 paloma-core = { path = "../paloma-core" }
 paloma-net = { path = "../paloma-net" }
+paloma-store = { path = "../paloma-store" }
 paloma-llimphi = { path = "../paloma-llimphi" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }

@@ -104,9 +104,24 @@ fn passwords() -> Option<(String, String)> {
     }
 }
 
+/// Lo que `try_net` entrega cuando hay una conexión real.
+struct NetSession {
+    backend: Box<dyn MailBackend>,
+    me: Address,
+    /// Identificador de la cuenta (su correo) — clave en la caché en disco.
+    account_id: String,
+    label: String,
+}
+
+/// Directorio de caché en disco (`~/.cache/paloma` en Linux). `None` si la
+/// plataforma no expone ProjectDirs.
+fn cache_dir() -> Option<PathBuf> {
+    ProjectDirs::from("org", "gioser", "paloma").map(|d| d.cache_dir().to_path_buf())
+}
+
 /// Intenta armar el `NetBackend` real. Devuelve `Err(motivo)` legible si falta
 /// config/credenciales o falla la conexión — el caller cae a demo y lo informa.
-fn try_net() -> Result<(Box<dyn MailBackend>, Address, String), String> {
+fn try_net() -> Result<NetSession, String> {
     let path = config_path().ok_or_else(|| "no se pudo resolver el dir de config".to_string())?;
     let raw = std::fs::read_to_string(&path)
         .map_err(|e| format!("sin cuenta en {}: {e}", path.display()))?;
@@ -118,10 +133,11 @@ fn try_net() -> Result<(Box<dyn MailBackend>, Address, String), String> {
     let account = cuenta.into_account();
     // `account.address` ya lleva el display-name (lo puso `into_account`).
     let me = account.address.clone();
-    let label = format!("conectado · {}", account.address.email);
+    let account_id = account.address.email.clone();
+    let label = format!("conectado · {account_id}");
     let backend = paloma_net::NetBackend::connect(account, &imap_pw, &smtp_pw)
         .map_err(|e| format!("no se pudo conectar IMAP: {e}"))?;
-    Ok((Box::new(backend), me, label))
+    Ok(NetSession { backend: Box::new(backend), me, account_id, label })
 }
 
 struct Paloma;
@@ -140,10 +156,26 @@ impl App for Paloma {
 
     fn init(_handle: &Handle<Msg>) -> Model {
         match try_net() {
-            Ok((backend, me, label)) => {
-                let mut model = Model::new(backend, me, Theme::dark());
-                model.status = label;
-                model
+            Ok(s) => {
+                // Caché en disco si la plataforma la permite; si no, sin persistencia.
+                match cache_dir().and_then(|d| paloma_store::MailDb::open(d).ok()) {
+                    Some(db) => {
+                        let mut model = Model::with_persistence(
+                            s.backend,
+                            s.me,
+                            Theme::dark(),
+                            db,
+                            s.account_id,
+                        );
+                        model.status = s.label;
+                        model
+                    }
+                    None => {
+                        let mut model = Model::new(s.backend, s.me, Theme::dark());
+                        model.status = s.label;
+                        model
+                    }
+                }
             }
             Err(why) => {
                 eprintln!("paloma · modo demo: {why}");
