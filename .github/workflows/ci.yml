@@ -1,0 +1,45 @@
+# Guardián de `main` — hace cumplir las reglas duras del repo (CLAUDE.md):
+#   #5  `cargo check --workspace` debe pasar siempre (smoke test mínimo).
+#   no_std  los 5+1 núcleos compartidos compilan sin std (wasm32).
+#
+# `03_ukupacha/wawa` está excluido del workspace (target bare-metal nightly),
+# por eso `--workspace` no lo toca y este CI no necesita la toolchain nightly.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    name: cargo check --workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain estable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Dependencias de sistema (wgpu / vello / audio)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libudev-dev pkg-config \
+            libwayland-dev libxkbcommon-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
+
+  no_std:
+    name: núcleos no_std (wasm32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain estable + target wasm32
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/check-shared-cores.sh

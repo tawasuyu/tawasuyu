@@ -8,3 +8,8 @@ Cargo.lock
 node_modules/
 dist/
 *.log
+
+# Artefactos wasm-bindgen de la landing (se regeneran con build-gioser-web.sh)
+pkg/
+# Salida accidental de build fuera de árbol (no es un dominio del workspace)
+/crates/
