@@ -82,6 +82,12 @@ pub struct Frame {
     surface_texture: wgpu::SurfaceTexture,
     surface_view: wgpu::TextureView,
     intermediate_view: wgpu::TextureView,
+    /// Textura secundaria para la capa de overlay (menús/paleta/modal)
+    /// cuando hay contenido `gpu_paint` que la taparía. El overlay se
+    /// rasteriza acá con fondo transparente y luego se compone con
+    /// alpha SOBRE la intermedia (que ya tiene UI + video). Ver
+    /// [`OverlayCompositor`] y el eventloop de `llimphi-ui`.
+    overlay_view: wgpu::TextureView,
     width: u32,
     height: u32,
 }
@@ -89,6 +95,12 @@ pub struct Frame {
 impl Frame {
     pub fn view(&self) -> &wgpu::TextureView {
         &self.intermediate_view
+    }
+
+    /// Vista de la textura de overlay (mismo tamaño y formato que la
+    /// intermedia). Sólo se usa en el camino de compositing del overlay.
+    pub fn overlay_view(&self) -> &wgpu::TextureView {
+        &self.overlay_view
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -176,6 +188,9 @@ pub struct WinitSurface {
     device: wgpu::Device,
     intermediate: wgpu::Texture,
     intermediate_view: wgpu::TextureView,
+    /// Textura de la capa de overlay (ver [`Frame::overlay_view`]).
+    overlay: wgpu::Texture,
+    overlay_view: wgpu::TextureView,
     blitter: wgpu::util::TextureBlitter,
 }
 
@@ -239,6 +254,8 @@ impl WinitSurface {
         surface.configure(&hal.device, &config);
         let (intermediate, intermediate_view) =
             create_intermediate(&hal.device, config.width, config.height);
+        let (overlay, overlay_view) =
+            create_intermediate(&hal.device, config.width, config.height);
         let blitter = wgpu::util::TextureBlitter::new(&hal.device, format);
         Ok(Self {
             _window: window,
@@ -247,6 +264,8 @@ impl WinitSurface {
             device: hal.device.clone(),
             intermediate,
             intermediate_view,
+            overlay,
+            overlay_view,
             blitter,
         })
     }
@@ -269,6 +288,8 @@ pub struct RawSurface {
     device: wgpu::Device,
     intermediate: wgpu::Texture,
     intermediate_view: wgpu::TextureView,
+    overlay: wgpu::Texture,
+    overlay_view: wgpu::TextureView,
     blitter: wgpu::util::TextureBlitter,
 }
 
@@ -326,6 +347,8 @@ impl RawSurface {
         surface.configure(&hal.device, &config);
         let (intermediate, intermediate_view) =
             create_intermediate(&hal.device, config.width, config.height);
+        let (overlay, overlay_view) =
+            create_intermediate(&hal.device, config.width, config.height);
         let blitter = wgpu::util::TextureBlitter::new(&hal.device, format);
         Ok(Self {
             surface,
@@ -333,6 +356,8 @@ impl RawSurface {
             device: hal.device.clone(),
             intermediate,
             intermediate_view,
+            overlay,
+            overlay_view,
             blitter,
         })
     }
@@ -354,6 +379,10 @@ impl Surface for RawSurface {
         let (tex, view) = create_intermediate(&self.device, self.config.width, self.config.height);
         self.intermediate = tex;
         self.intermediate_view = view;
+        let (otex, oview) =
+            create_intermediate(&self.device, self.config.width, self.config.height);
+        self.overlay = otex;
+        self.overlay_view = oview;
     }
 
     fn acquire(&mut self) -> Result<Frame, SurfaceError> {
@@ -371,6 +400,7 @@ impl Surface for RawSurface {
             surface_texture: texture,
             surface_view,
             intermediate_view: self.intermediate_view.clone(),
+            overlay_view: self.overlay_view.clone(),
             width: self.config.width,
             height: self.config.height,
         })
@@ -459,6 +489,189 @@ fn create_intermediate(
     (texture, view)
 }
 
+/// Compositor de la capa de overlay: alpha-blittea una textura source (el
+/// overlay rasterizado por vello sobre fondo transparente) SOBRE una textura
+/// target (la intermedia, que ya tiene la UI principal + el video pintado por
+/// `gpu_paint`). Resuelve el z-order: sin esto, el blit de `gpu_paint` (video)
+/// queda encima de la capa vello del overlay y los menús se ven por debajo del
+/// video.
+///
+/// Es un pase de pantalla completa (triángulo) que samplea el source y lo
+/// emite con alpha-over. El factor de blend asume alpha **premultiplicado**
+/// (lo que produce vello); si en pantalla los menús se ven con halos oscuros o
+/// transparencia rara, exportar `LLIMPHI_OVERLAY_BLEND=straight` para usar
+/// alpha recto sin recompilar.
+pub struct OverlayCompositor {
+    pipeline: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+    bind_layout: wgpu::BindGroupLayout,
+}
+
+impl OverlayCompositor {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("llimphi-overlay-composite"),
+            source: wgpu::ShaderSource::Wgsl(OVERLAY_COMPOSITE_WGSL.into()),
+        });
+        let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("llimphi-overlay-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("llimphi-overlay-pl"),
+            bind_group_layouts: &[&bind_layout],
+            push_constant_ranges: &[],
+        });
+        // Alpha-over. `src_factor` distingue premultiplicado (One) de recto
+        // (SrcAlpha); el resto es siempre OneMinusSrcAlpha.
+        let straight = std::env::var("LLIMPHI_OVERLAY_BLEND")
+            .map(|v| v.trim().eq_ignore_ascii_case("straight"))
+            .unwrap_or(false);
+        let color_src = if straight {
+            wgpu::BlendFactor::SrcAlpha
+        } else {
+            wgpu::BlendFactor::One
+        };
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("llimphi-overlay-pipe"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: INTERMEDIATE_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: color_src,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("llimphi-overlay-sampler"),
+            ..Default::default()
+        });
+        OverlayCompositor {
+            pipeline,
+            sampler,
+            bind_layout,
+        }
+    }
+
+    /// Compone `source` (overlay con fondo transparente) sobre `target` (la
+    /// intermedia), preservando el contenido previo del target (LoadOp::Load)
+    /// y mezclando con alpha. Graba un render pass en `encoder`.
+    pub fn composite(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        source: &wgpu::TextureView,
+    ) {
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("llimphi-overlay-bg"),
+            layout: &self.bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("llimphi-overlay-composite-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+}
+
+/// Pase de pantalla completa que samplea la textura de overlay y la emite
+/// para alpha-over. Triángulo grande que cubre el viewport; UV mapea clip
+/// → texel 1:1 (Y invertida, igual que un blit estándar).
+const OVERLAY_COMPOSITE_WGSL: &str = r#"
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
+    var corners = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    let xy = corners[vi];
+    var out: VsOut;
+    out.pos = vec4<f32>(xy, 0.0, 1.0);
+    out.uv = vec2<f32>((xy.x + 1.0) * 0.5, (1.0 - xy.y) * 0.5);
+    return out;
+}
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_samp: sampler;
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    return textureSample(src_tex, src_samp, in.uv);
+}
+"#;
+
 impl Surface for WinitSurface {
     fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
@@ -471,6 +684,10 @@ impl Surface for WinitSurface {
         let (tex, view) = create_intermediate(&self.device, self.config.width, self.config.height);
         self.intermediate = tex;
         self.intermediate_view = view;
+        let (otex, oview) =
+            create_intermediate(&self.device, self.config.width, self.config.height);
+        self.overlay = otex;
+        self.overlay_view = oview;
     }
 
     fn acquire(&mut self) -> Result<Frame, SurfaceError> {
@@ -490,6 +707,7 @@ impl Surface for WinitSurface {
             surface_texture: texture,
             surface_view,
             intermediate_view: self.intermediate_view.clone(),
+            overlay_view: self.overlay_view.clone(),
             width: self.config.width,
             height: self.config.height,
         })

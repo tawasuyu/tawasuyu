@@ -84,12 +84,30 @@ impl Renderer {
         base_color: peniko::Color,
     ) -> Result<(), RasterError> {
         let (width, height) = frame.size();
+        self.render_to_view(hal, scene, frame.view(), width, height, base_color)
+    }
+
+    /// Como [`render`](Self::render) pero contra una vista de textura
+    /// explícita (mismo formato/tamaño que la intermedia). Lo usa el
+    /// compositor de overlay de `llimphi-ui` para rasterizar la capa de
+    /// overlay sobre fondo transparente en su propia textura. Ojo:
+    /// `render_to_texture` **limpia** el target con `base_color` y escribe
+    /// todos los píxeles — no compone sobre contenido previo.
+    pub fn render_to_view(
+        &mut self,
+        hal: &Hal,
+        scene: &vello::Scene,
+        view: &llimphi_hal::wgpu::TextureView,
+        width: u32,
+        height: u32,
+        base_color: peniko::Color,
+    ) -> Result<(), RasterError> {
         self.inner
             .render_to_texture(
                 &hal.device,
                 &hal.queue,
                 scene,
-                frame.view(),
+                view,
                 &vello::RenderParams {
                     base_color,
                     width,

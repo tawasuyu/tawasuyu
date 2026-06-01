@@ -343,6 +343,14 @@ pub fn paint<Msg>(
 /// callbacks corren, así que su `LoadOp` debe ser `Load`. Devuelve si
 /// se invocó al menos un painter (para que el caller decida si vale la
 /// pena finalizar y submitir el encoder).
+/// `true` si algún nodo del árbol registró un `gpu_painter` (p. ej. el video
+/// de media vía `gpu_paint_with`). El eventloop lo usa para decidir si la
+/// capa de overlay necesita componerse aparte (sobre el contenido gpu) en vez
+/// de pintarse en la escena principal.
+pub fn has_gpu_painter<Msg>(mounted: &Mounted<Msg>) -> bool {
+    mounted.nodes.iter().any(|n| n.gpu_painter.is_some())
+}
+
 pub fn paint_gpu<Msg>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,

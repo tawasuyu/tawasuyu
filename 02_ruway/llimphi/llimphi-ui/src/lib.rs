@@ -336,6 +336,10 @@ struct RuntimeState<A: App> {
     surface: WinitSurface,
     renderer: Renderer,
     scene: vello::Scene,
+    /// Compositor de la capa de overlay sobre contenido `gpu_paint` (video).
+    /// Sólo entra en juego cuando el árbol principal tiene painters gpu y hay
+    /// un overlay activo; resuelve el z-order (menús por encima del video).
+    overlay_compositor: llimphi_hal::OverlayCompositor,
     model: Option<A::Model>,
     cursor: PhysicalPosition<f64>,
     modifiers: Modifiers,

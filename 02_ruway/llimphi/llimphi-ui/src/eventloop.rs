@@ -30,6 +30,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
         let hal = pollster::block_on(Hal::new(None)).expect("hal");
         let surface = WinitSurface::new(&hal, window.clone()).expect("surface");
         let renderer = Renderer::new(&hal).expect("renderer");
+        let overlay_compositor = llimphi_hal::OverlayCompositor::new(&hal.device);
         let typesetter = llimphi_text::Typesetter::new();
         window.request_redraw();
         self.state = Some(RuntimeState {
@@ -38,6 +39,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             surface,
             renderer,
             scene: vello::Scene::new(),
+            overlay_compositor,
             model: Some(A::init(&self.handle)),
             cursor: PhysicalPosition::new(0.0, 0.0),
             modifiers: Modifiers::default(),
@@ -633,6 +635,16 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             state.cursor.y as f32,
                         )
                     });
+                // Z-order del overlay sobre contenido `gpu_paint`: si el
+                // árbol principal tiene painters gpu (p. ej. el video de
+                // media) Y hay un overlay activo, el overlay NO va en la
+                // escena principal (quedaría debajo del blit gpu). Se
+                // rasteriza aparte sobre fondo transparente y se compone con
+                // alpha DESPUÉS del pase gpu. Sin gpu o sin overlay, el camino
+                // de siempre (overlay en la escena principal) — coste cero.
+                let composite_overlay =
+                    overlay_built.is_some() && has_gpu_painter(&mounted);
+
                 state.scene.reset();
                 paint(
                     &mut state.scene,
@@ -642,15 +654,17 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     hover_idx,
                     drop_hover_idx,
                 );
-                if let Some(ov) = overlay_built.as_ref() {
-                    paint(
-                        &mut state.scene,
-                        &ov.mounted,
-                        &ov.computed,
-                        &mut state.typesetter,
-                        ov.hover_idx,
-                        None,
-                    );
+                if !composite_overlay {
+                    if let Some(ov) = overlay_built.as_ref() {
+                        paint(
+                            &mut state.scene,
+                            &ov.mounted,
+                            &ov.computed,
+                            &mut state.typesetter,
+                            ov.hover_idx,
+                            None,
+                        );
+                    }
                 }
                 if let Err(e) = state.renderer.render(
                     &state.hal,
@@ -659,6 +673,34 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     palette::css::BLACK,
                 ) {
                     eprintln!("render error: {e}");
+                }
+                let (vw, vh) = frame.size();
+                // Capa de overlay aparte (camino composite): vello la
+                // rasteriza con fondo transparente en `frame.overlay_view()`.
+                // Se renderiza ANTES del pase gpu para que el blit del
+                // compositor (en `gpu_encoder`) la lea ya escrita.
+                if composite_overlay {
+                    if let Some(ov) = overlay_built.as_ref() {
+                        state.scene.reset();
+                        paint(
+                            &mut state.scene,
+                            &ov.mounted,
+                            &ov.computed,
+                            &mut state.typesetter,
+                            ov.hover_idx,
+                            None,
+                        );
+                        if let Err(e) = state.renderer.render_to_view(
+                            &state.hal,
+                            &state.scene,
+                            frame.overlay_view(),
+                            vw,
+                            vh,
+                            palette::css::TRANSPARENT,
+                        ) {
+                            eprintln!("render overlay error: {e}");
+                        }
+                    }
                 }
                 // Pasada GPU directo (Fase 1 del SDD §"GPU directo wgpu"):
                 // si algún View del main o del overlay registró un
@@ -684,15 +726,34 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     viewport,
                 );
                 if let Some(ov) = overlay_built.as_ref() {
+                    // En el camino composite, los painters gpu del overlay van
+                    // sobre SU textura; si no, sobre la intermedia.
+                    let target = if composite_overlay {
+                        frame.overlay_view()
+                    } else {
+                        frame.view()
+                    };
                     any_gpu |= paint_gpu(
                         &ov.mounted,
                         &ov.computed,
                         &state.hal.device,
                         &state.hal.queue,
                         &mut gpu_encoder,
-                        frame.view(),
+                        target,
                         viewport,
                     );
+                }
+                // Composición alpha del overlay SOBRE la intermedia (que ya
+                // tiene UI + video). Último pase del encoder → corre después
+                // del blit del video. Garantiza menús por encima del video.
+                if composite_overlay {
+                    state.overlay_compositor.composite(
+                        &state.hal.device,
+                        &mut gpu_encoder,
+                        frame.view(),
+                        frame.overlay_view(),
+                    );
+                    any_gpu = true;
                 }
                 if any_gpu {
                     state
