@@ -532,6 +532,11 @@ impl App {
             left += sl;
             right += sr;
         }
+        if top != 0 || bottom != 0 || left != 0 || right != 0 {
+            println!(
+                "mirada-compositor · insets reservados t{top} b{bottom} l{left} r{right} (salida {ow}x{oh})."
+            );
+        }
         let ev = self.body.reserve_output(0, top, bottom, left, right);
         self.brain_feed(ev);
     }
@@ -666,9 +671,16 @@ impl WlrLayerShellHandler for App {
         let Some(output) = self.output.clone() else {
             return;
         };
-        let desktop = DesktopLayerSurface::new(surface, namespace);
+        let desktop = DesktopLayerSurface::new(surface, namespace.clone());
         let mut map = layer_map_for_output(&output);
-        let _ = map.map_layer(&desktop);
+        match map.map_layer(&desktop) {
+            Ok(()) => println!(
+                "mirada-compositor · layer surface «{namespace}» mapeado (capa {_layer:?})."
+            ),
+            Err(e) => eprintln!(
+                "mirada-compositor · no pude mapear el layer surface «{namespace}»: {e:?}"
+            ),
+        }
         drop(map);
         self.recompute_reservations();
     }

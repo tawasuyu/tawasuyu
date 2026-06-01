@@ -48,4 +48,8 @@ chmod 0711 "$XDG_RUNTIME_DIR"
 # ese usuario, para que sus clientes (pata, foot…) se conecten.
 umask 0
 
-exec mirada-compositor --greeter --drm "$@"
+# En DRM la consola queda tapada por el compositor, así que su salida (y la
+# de lo que lanza, que hereda estos descriptores) va a un log diagnosticable.
+LOG="${MIRADA_LOG:-/tmp/mirada.log}"
+echo "mirada-dm: log de la sesión en $LOG"
+exec mirada-compositor --greeter --drm "$@" >"$LOG" 2>&1
