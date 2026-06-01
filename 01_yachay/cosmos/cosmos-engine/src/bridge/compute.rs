@@ -237,7 +237,7 @@ pub fn compose(
                 );
             }
             crate::PipelineRequest::Topocentric => {
-                build_topocentric_overlay(&natal, &mut render)?;
+                build_topocentric_overlay(&natal, natal_options.show_minors, &mut render)?;
                 push_overlay_meta(
                     &mut render,
                     "topocentric",

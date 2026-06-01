@@ -86,6 +86,7 @@ pub(crate) fn build_transit_overlay(
 /// ven simultáneamente.
 pub(crate) fn build_topocentric_overlay(
     natal: &NatalChart,
+    show_minors: bool,
     render: &mut RenderModel,
 ) -> Result<(), EngineError> {
     const KM_PER_AU: f64 = 149_597_870.7;
@@ -126,7 +127,7 @@ pub(crate) fn build_topocentric_overlay(
     // `module_id = "topocentric"` para que la tabla de aspectos
     // topocéntricos (panel «Aspectos · topocéntrico») los muestre junto
     // a los geocéntricos. Sólo mayores por ahora.
-    populate_topocentric_aspect_summary(&body_glyphs, render);
+    populate_topocentric_aspect_summary(&body_glyphs, show_minors, render);
 
     render.layers.push(Layer {
         module_id: "topocentric".into(),
@@ -1071,7 +1072,11 @@ pub(crate) fn populate_natal_aspect_summary(aspects: &[Aspect], render: &mut Ren
 /// planetas y los publica con `module_id = "topocentric"`. Es un detector
 /// directo (separación angular vs. ángulo del aspecto ± orbe), no pasa por
 /// el motor de aspectos natal — suficiente para la tabla topocéntrica.
-pub(crate) fn populate_topocentric_aspect_summary(glyphs: &[Glyph], render: &mut RenderModel) {
+pub(crate) fn populate_topocentric_aspect_summary(
+    glyphs: &[Glyph],
+    show_minors: bool,
+    render: &mut RenderModel,
+) {
     // (ángulo exacto, orbe, id del aspecto).
     const MAJORS: &[(f64, f64, &str)] = &[
         (0.0, 8.0, "conjunction"),
@@ -1079,6 +1084,13 @@ pub(crate) fn populate_topocentric_aspect_summary(glyphs: &[Glyph], render: &mut
         (90.0, 6.0, "square"),
         (120.0, 6.0, "trine"),
         (180.0, 8.0, "opposition"),
+    ];
+    // Menores: orbes más ajustados, sólo cuando el usuario los pide.
+    const MINORS: &[(f64, f64, &str)] = &[
+        (30.0, 2.0, "semi_sextile"),
+        (45.0, 2.0, "semi_square"),
+        (135.0, 2.0, "sesquiquadrate"),
+        (150.0, 3.0, "quincunx"),
     ];
     for i in 0..glyphs.len() {
         for j in (i + 1)..glyphs.len() {
@@ -1088,7 +1100,8 @@ pub(crate) fn populate_topocentric_aspect_summary(glyphs: &[Glyph], render: &mut
             if sep > 180.0 {
                 sep = 360.0 - sep;
             }
-            for (angle, orb, kind) in MAJORS {
+            let kinds = MAJORS.iter().chain(if show_minors { MINORS } else { &[] });
+            for (angle, orb, kind) in kinds {
                 let delta = (sep - angle).abs();
                 if delta <= *orb {
                     render.aspect_summary.push(AspectSummary {
