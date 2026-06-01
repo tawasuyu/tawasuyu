@@ -352,13 +352,29 @@ async fn tarea_sonido() {
 /// FRESH en cada carga: ni cache ni TOCTOU. La concesion vive en el grafo
 /// direccionado por contenido; un swap en disco entre arranque y `Alt+N` se
 /// nota en la proxima instanciacion.
+/// Flip del rollout escalonado → estricto (WAWA.md §14.1.3 / SDD-capacidades §3.6).
+///
+/// `false` (HOY, escalonado): una `EntradaApp` SIN concesión rige por sus
+///   permisos declarados — la firma del manifiesto sigue gobernando. El génesis
+///   bootea aunque el operador no haya sembrado concesiones todavía.
+/// `true` (END-STATE estricto): sin concesión ⇒ CERO capacidades gateadas. Cierra
+///   la escalada por re-firma de manifiesto incluso para apps que nunca
+///   declararon concesión.
+///
+/// **No flipear a `true` hasta completar la ceremonia de génesis** (SDD §3.3:
+/// firmar offline una `ConcesionCapacidad` por cada app génesis con permisos y
+/// sembrarlas en `wawa-kernel/assets/concesiones/`). Flipear antes deja a
+/// `mudanza`/`cronista`/`asistente`/etc. sin permisos en el próximo arranque.
+const MODO_CAPACIDAD_ESTRICTO_GLOBAL: bool = false;
+
 fn permisos_efectivos_de(
     declarados: format::Permisos,
     concesion: Option<&format::Hash>,
     bytecode: &format::Hash,
 ) -> format::Permisos {
     let Some(h) = concesion else {
-        return declarados;
+        // Sin concesión: escalonado ⇒ rigen los declarados; estricto ⇒ cero.
+        return if MODO_CAPACIDAD_ESTRICTO_GLOBAL { 0 } else { declarados };
     };
     let concedidos = match almacen::recuperar(h) {
         Ok(Some(objeto)) => match format::ConcesionCapacidad::deserializar(&objeto.datos) {

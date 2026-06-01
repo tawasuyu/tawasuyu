@@ -632,8 +632,12 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
    `permisos_efectivos_de`) intersecta FRESH en cada parto; el camino host
    (`construir_release`) ya emite y referencia una concesión firmada por app con
    permisos gateados. Rollout escalonado: `None ⇒ declarados`, `Some ⇒ estricto`
-   (SDD §3.6). Falta: ceremonia offline de concesiones del génesis (`boot` no
-   firma — no tiene seed) + el flip a `None ⇒ 0` global — ver SDD §3.3/§3.6.
+   (SDD §3.6), gobernado por el booleano `MODO_CAPACIDAD_ESTRICTO_GLOBAL` en
+   `wawa-kernel/src/main.rs` (`false` hoy). Falta (operador, no código):
+   ceremonia offline de concesiones del génesis (`boot` no firma — no tiene seed)
+   + poner ese booleano en `true` una vez sembradas — ver SDD §3.3/§3.6.
+   Verificado 2026-06-01: cadena host 9/9 (format/agora-channel, incl. los 4
+   casos del modelo de amenaza) + el kernel compila a `x86_64-unknown-none`.
 
 ---
 

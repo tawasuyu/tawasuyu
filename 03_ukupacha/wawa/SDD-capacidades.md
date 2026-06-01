@@ -198,10 +198,12 @@ en el próximo QEMU.
 Por eso el kernel arranca en modo **escalonado**: `None ⇒ declarados` (la firma
 del manifiesto sigue gobernando), `Some ⇒ intersección estricta`. Toda app que
 OPTE por una concesión (todo release host, ya) obtiene su techo per-bytecode
-duro; el génesis sigue booteando. El flip a `None ⇒ 0` (estricto global) es una
-hardening de UNA línea en `permisos_efectivos_de`, gated a que el operador
-complete la ceremonia §3.3 y siembre las concesiones del génesis. Documentado el
-corte de formato (v4→v5) en `PLAN.md`.
+duro; el génesis sigue booteando. El flip a `None ⇒ 0` (estricto global) es un
+**único booleano** en el kernel: `const MODO_CAPACIDAD_ESTRICTO_GLOBAL` (encima de
+`permisos_efectivos_de` en `wawa-kernel/src/main.rs`), `false` hoy. Ponerlo en
+`true` activa el end-state — gated a que el operador complete la ceremonia §3.3 y
+siembre las concesiones del génesis (flipear antes deja al génesis sin permisos).
+Documentado el corte de formato (v4→v5) en `PLAN.md`.
 
 ## 4. Modelo de amenaza
 
