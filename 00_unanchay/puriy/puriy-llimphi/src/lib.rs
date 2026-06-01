@@ -84,6 +84,11 @@ thread_local! {
     /// lo lee para que `window.innerWidth`/`innerHeight` reflejen el tamaño
     /// real ya en la primera ejecución de scripts. Default = `initial_size`.
     static PURIY_VIEWPORT: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((1100.0, 760.0)) };
+    /// Factor de escala (DPI) actual de la ventana, el `scale_factor` de
+    /// winit. Lo actualiza `Msg::ScaleFactor` (desde `on_scale_factor`) y
+    /// `run_scripts_on_tab` lo lee para que `window.devicePixelRatio` sea
+    /// correcto ya en la primera ejecución de scripts. Default = 1.0.
+    static PURIY_DPR: std::cell::Cell<f64> = const { std::cell::Cell::new(1.0) };
     static PURIY_PROFILE: std::cell::RefCell<Option<std::sync::Arc<std::sync::Mutex<puriy_core::Profile>>>> = const { std::cell::RefCell::new(None) };
     static PURIY_PROFILE_PATH: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
 }
@@ -498,6 +503,9 @@ pub enum Msg {
     /// La ventana cambió de tamaño (px físicos). Actualiza el viewport y
     /// dispatcha el evento `resize` al window de la pestaña activa.
     Resize(u32, u32),
+    /// El factor de escala (DPI) de la ventana cambió (`scale_factor` de
+    /// winit). Actualiza `window.devicePixelRatio` y dispatcha `resize`.
+    ScaleFactor(f64),
     FocusAddr,
     AddrKey(KeyEvent),
     Back,
@@ -864,6 +872,10 @@ impl App for Puriy {
         Some(Msg::Resize(width, height))
     }
 
+    fn on_scale_factor(_model: &Self::Model, scale: f64) -> Option<Self::Msg> {
+        Some(Msg::ScaleFactor(scale))
+    }
+
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         let mut m = model;
         match msg {
@@ -1171,6 +1183,23 @@ impl App for Puriy {
                 // 'resize' lea `window.innerWidth`/`innerHeight` actuales.
                 if let Some(rt) = t.js.as_mut() {
                     let _ = rt.set_viewport(vp_w, vp_h);
+                    let (_, pending) = dispatch_window_js_event_on_tab(t, "resize", now_ms);
+                    for req in pending {
+                        handle.dispatch(req);
+                    }
+                }
+            }
+            Msg::ScaleFactor(scale) => {
+                // Guardamos el DPR para que los próximos loads lo sincronicen
+                // ya en la primera ejecución de scripts.
+                PURIY_DPR.with(|c| c.set(scale));
+                let now_ms = m.start.elapsed().as_millis() as u64;
+                let t = m.active_mut();
+                // set_device_pixel_ratio ANTES del dispatch para que el
+                // handler de 'resize' lea `window.devicePixelRatio` actual
+                // (los browsers disparan 'resize' al cambiar el DPI).
+                if let Some(rt) = t.js.as_mut() {
+                    let _ = rt.set_device_pixel_ratio(scale);
                     let (_, pending) = dispatch_window_js_event_on_tab(t, "resize", now_ms);
                     for req in pending {
                         handle.dispatch(req);
@@ -2760,6 +2789,10 @@ fn run_scripts_on_tab(
     let (vp_w, vp_h) = PURIY_VIEWPORT.with(|c| c.get());
     let _ = rt.set_scroll(0.0, t.scroll_y);
     let _ = rt.set_viewport(vp_w, vp_h);
+    // DPR real de la ventana (Fase 7.173): que `devicePixelRatio` sea
+    // correcto ya en el primer script. `Msg::ScaleFactor` mantiene el
+    // thread-local al día con el `scale_factor` de winit (default = 1.0).
+    let _ = rt.set_device_pixel_ratio(PURIY_DPR.with(|c| c.get()));
     let mut prev_stdout_len = rt.stdout().len();
     let mut prev_stderr_len = rt.stderr().len();
     for s in scripts {
@@ -6791,6 +6824,52 @@ mod tests {
             Puriy::on_resize(&m, 640, 480),
             Some(Msg::Resize(640, 480))
         ));
+    }
+
+    #[test]
+    fn on_scale_factor_devuelve_msg_scale_factor() {
+        let m = model_con_script("/* boot */");
+        assert!(matches!(
+            Puriy::on_scale_factor(&m, 2.0),
+            Some(Msg::ScaleFactor(s)) if s == 2.0
+        ));
+    }
+
+    #[test]
+    fn scale_factor_actualiza_devicePixelRatio_y_corre_listener() {
+        // El listener de 'resize' lee window.devicePixelRatio y lo escribe al
+        // DOM (los browsers disparan 'resize' al cambiar el DPI).
+        let mut m = model_con_script(
+            "window.addEventListener('resize', function() { \
+                document.getElementById('out').textContent = String(window.devicePixelRatio); \
+             });",
+        );
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "out".into(),
+            tag_name: "div".into(),
+            text_content: "1".into(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        m.tabs[0].box_tree = Some(parse(r#"<body><div id="out">1</div></body>"#));
+        // Msg::ScaleFactor(2.0) debe: (1) set_device_pixel_ratio(2) ANTES del
+        // dispatch, (2) disparar 'resize' → el handler ve devicePixelRatio=2.
+        let h: Handle<Msg> = Handle::for_test();
+        let m = Puriy::update(m, Msg::ScaleFactor(2.0), &h);
+        let bt = m.tabs[0].box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.text.as_deref() == Some("2") {
+                found = true;
+            }
+        });
+        assert!(found, "el handler de resize debió ver devicePixelRatio=2 y mutar a '2'");
     }
 
     #[test]

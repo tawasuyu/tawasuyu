@@ -844,6 +844,24 @@ impl JsRuntime {
         self.eval_raw(&script).map(|_| ())
     }
 
+    /// Sincroniza `window.devicePixelRatio` con el factor de escala real de
+    /// la ventana (el `scale_factor` de winit). El chrome lo llama al cargar
+    /// cada página y cuando el compositor cambia el DPI (HiDPI, mover entre
+    /// monitores). Sin esto el getter (Fase 7.99, `screen.rs`) reporta 1
+    /// fijo. No dispara eventos — el chrome decide si despacha `resize`.
+    pub fn set_device_pixel_ratio(&mut self, dpr: f64) -> Result<(), JsError> {
+        // Guarda contra NaN/inf y valores no positivos: el spec garantiza
+        // `devicePixelRatio > 0`. Si llega basura, no tocamos el estado.
+        if !dpr.is_finite() || dpr <= 0.0 {
+            return Ok(());
+        }
+        let script = format!(
+            "if (typeof globalThis.__puriy_set_device_pixel_ratio === 'function') {{ \
+                globalThis.__puriy_set_device_pixel_ratio({dpr}); }}"
+        );
+        self.eval_raw(&script).map(|_| ())
+    }
+
     /// Avanza el reloj a `now_ms` y dispara cada `setTimeout`/
     /// `setInterval` con `fire_at <= now_ms`. Devuelve cuántos
     /// callbacks corrieron + cuántos timers quedan vivos (para que el
@@ -8731,6 +8749,20 @@ mod tests {
         // height intacto (no venía en el patch).
         assert_eq!(rt.eval("screen.height").expect("e"), JsValue::Number(844.0));
         assert_eq!(rt.eval("devicePixelRatio").expect("e"), JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn set_device_pixel_ratio_metodo_host_actualiza_el_getter() {
+        // Fase 7.173 — el chrome alimenta el scale_factor de winit por aquí.
+        let mut rt = JsRuntime::new().expect("rt");
+        assert_eq!(rt.eval("devicePixelRatio").expect("e"), JsValue::Number(1.0));
+        rt.set_device_pixel_ratio(2.0).expect("set dpr");
+        assert_eq!(rt.eval("devicePixelRatio").expect("e"), JsValue::Number(2.0));
+        // Valores no-finitos o <= 0 son ignorados (spec: dpr > 0 siempre).
+        rt.set_device_pixel_ratio(f64::NAN).expect("nan no-op");
+        rt.set_device_pixel_ratio(0.0).expect("cero no-op");
+        rt.set_device_pixel_ratio(-1.0).expect("neg no-op");
+        assert_eq!(rt.eval("devicePixelRatio").expect("e"), JsValue::Number(2.0));
     }
 
     #[test]

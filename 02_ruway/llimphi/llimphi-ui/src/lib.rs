@@ -109,6 +109,18 @@ pub trait App: 'static {
         None
     }
 
+    /// Maneja un cambio del factor de escala de la ventana (`scale_factor`
+    /// de winit: 1.0 en pantallas normales, 2.0 en HiDPI/Retina, fraccional
+    /// con escalado del compositor). El runtime lo invoca una vez al arrancar
+    /// (con el factor inicial de la ventana, tras `init`) y luego en cada
+    /// `WindowEvent::ScaleFactorChanged` (mover la ventana entre monitores,
+    /// cambiar el escalado del sistema). Es lo que permite, p. ej., que
+    /// `window.devicePixelRatio` refleje el DPI real. Devolver `Some(Msg)`
+    /// dispara un update; `None` (default) lo ignora.
+    fn on_scale_factor(_model: &Self::Model, _scale: f64) -> Option<Self::Msg> {
+        None
+    }
+
     /// Título de la ventana (sólo se lee al arrancar).
     fn title() -> &'static str {
         "llimphi"

@@ -47,6 +47,18 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             last_render: None,
             drag: None,
         });
+        // Sincroniza el factor de escala inicial (el de la ventana recién
+        // creada) ANTES del primer render: así una app que dependa del DPI
+        // (p. ej. `devicePixelRatio` en puriy) ya lo tiene correcto en su
+        // primera pasada, sin esperar a un ScaleFactorChanged.
+        if let Some(state) = self.state.as_mut() {
+            let scale = state.window.scale_factor();
+            if let Some(msg) = A::on_scale_factor(state.model.as_ref().expect("model"), scale) {
+                let model = state.model.take().expect("model");
+                state.model = Some(A::update(model, msg, &self.handle));
+                state.last_render = None;
+            }
+        }
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent<A::Msg>) {
@@ -83,6 +95,19 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // para repintar con el tamaño nuevo.
                 if let Some(msg) =
                     A::on_resize(state.model.as_ref().expect("model"), size.width, size.height)
+                {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
+                }
+                state.window.request_redraw();
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                // El DPI de la ventana cambió (movida a otro monitor, escalado
+                // del sistema). winit envía un Resized aparte para el nuevo
+                // tamaño físico; aquí sólo propagamos el factor.
+                if let Some(msg) =
+                    A::on_scale_factor(state.model.as_ref().expect("model"), scale_factor)
                 {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
