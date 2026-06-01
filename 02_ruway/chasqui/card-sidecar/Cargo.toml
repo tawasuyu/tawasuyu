@@ -11,6 +11,9 @@ description = "Brahman — sidecar reusable: thread + tokio runtime que mantiene
 [dependencies]
 card-core = { path = "../../../shared/card/card-core" }
 card-handshake = { path = "../card-handshake" }
+# Discovery remoto por DHT: el resolver local-first/remote-fallback expone
+# `&BrahmanNet` y `PeerId` en su API pública.
+card-net = { path = "../../../shared/card/card-net" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -18,6 +21,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
 card-wit = { path = "../../../shared/card/card-wit" }
+chasqui-broker = { path = "../chasqui-broker" }
+tempfile = { workspace = true }
 
 [[example]]
 name = "presence"

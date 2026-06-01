@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use card_core::{
     Card, CardKind, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef,
 };
+use card_net::{BrahmanNet, PeerId};
 use card_handshake::client::{Client, ClientError};
 use card_handshake::messages::MatchEventKind;
 use card_handshake::transport;
@@ -49,6 +50,8 @@ pub enum ConsumerError {
     },
     #[error("no se pudo crear runtime tokio: {0}")]
     Runtime(String),
+    #[error("la Card consumer no declara ningún input flow para resolver")]
+    NoInputFlow,
 }
 
 /// Construye una Card mínima de consumer que declara un input flow
@@ -144,6 +147,67 @@ pub fn await_provider_blocking(
         .map_err(|e| ConsumerError::Runtime(e.to_string()))?;
 
     rt.block_on(await_provider(consumer_card, timeout))
+}
+
+// =====================================================================
+// Discovery local-first / remoto (DHT) — capa de consumidor
+// =====================================================================
+
+/// Discovery DHT crudo, reexportado desde `card-handshake` para que un
+/// consumidor que ya usa `card-sidecar` pueda buscar proveedores remotos
+/// por `(flow_name, TypeRef)` sin alcanzar las internas del handshake.
+pub use card_handshake::network::find_remote_providers;
+
+/// Dónde vive el proveedor elegido para un flow.
+///
+/// El broker local (vía `await_provider`) entrega un socket Unix listo
+/// para consumir; el DHT remoto entrega `PeerId`s que el caller debe
+/// dial-ar y sub-handshakear con `card_handshake::network::connect_libp2p`.
+#[derive(Debug, Clone)]
+pub enum ProviderLocation {
+    /// Proveedor local: socket de servicio resuelto por el broker del init.
+    Local(PathBuf),
+    /// Proveedores remotos anunciados en el DHT (peers a dial-ar).
+    Remote(Vec<PeerId>),
+}
+
+/// Resuelve un proveedor para el **primer input flow** de `consumer_card`,
+/// **local primero, DHT remoto como fallback**.
+///
+/// 1. Pregunta al broker del init local (`await_provider`) hasta
+///    `local_timeout`. Si hay match → [`ProviderLocation::Local`].
+/// 2. Si no hay proveedor local (timeout) ni init local alcanzable
+///    (socket ausente), consulta el DHT vía `net` y devuelve
+///    [`ProviderLocation::Remote`] con los `PeerId`s que anuncian el flow
+///    (lista posiblemente vacía si nadie lo provee en la malla).
+///
+/// Esto es el cableado que faltaba entre el discovery local (broker) y el
+/// discovery remoto (DHT de `card-net`, ya cableado en el handshake): un
+/// consumidor pide "un proveedor para el tipo X" y obtiene el más cercano
+/// disponible sin saber a priori si vive en esta máquina o en la red.
+pub async fn resolve_provider(
+    consumer_card: Card,
+    net: &BrahmanNet,
+    local_timeout: Duration,
+) -> Result<ProviderLocation, ConsumerError> {
+    // Necesitamos el flow a resolver antes de mover la card al broker.
+    let (flow_name, ty) = match consumer_card.flow.input.first() {
+        Some(f) => (f.name.clone(), f.ty.clone()),
+        None => return Err(ConsumerError::NoInputFlow),
+    };
+
+    // 1) Local primero.
+    match await_provider(consumer_card, local_timeout).await {
+        Ok(socket) => return Ok(ProviderLocation::Local(socket)),
+        // Sin proveedor local (timeout) o sin init local alcanzable:
+        // caemos al DHT. Cualquier otro error sí se propaga.
+        Err(ConsumerError::NoProvider { .. }) | Err(ConsumerError::Connect { .. }) => {}
+        Err(other) => return Err(other),
+    }
+
+    // 2) Fallback remoto por DHT.
+    let peers = find_remote_providers(net, &flow_name, &ty).await;
+    Ok(ProviderLocation::Remote(peers))
 }
 
 /// Conecta al brahman-init con una Card observer (sin inputs ni
