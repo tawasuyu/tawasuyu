@@ -795,6 +795,14 @@ fn combo_string(mods: &ModifiersState, sym: Keysym) -> Option<String> {
     Some(combo)
 }
 
+/// Combos cableados que **siempre** cortan el compositor, estén o no en el
+/// keymap y en cualquier modo —greeter incluido, donde los atajos del
+/// escritorio no están registrados—. La red de seguridad para no quedar
+/// varado: el clásico «zap» de X. Funciona igual en winit y en DRM.
+pub(crate) fn is_escape_hatch(combo: &str) -> bool {
+    matches!(combo, "Ctrl+Alt+BackSpace" | "Ctrl+Alt+Delete")
+}
+
 /// El nombre canónico de una tecla especial — `Return`, `Tab`, `Up`,
 /// `F5`… `None` si xkb no le da un nombre razonable.
 fn named_key(sym: Keysym) -> Option<String> {
@@ -1331,6 +1339,11 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
                             return FilterResult::Forward;
                         }
                         if let Some(combo) = combo_string(mods, handle.modified_sym()) {
+                            if is_escape_hatch(&combo) {
+                                eprintln!("mirada-compositor · salida de emergencia ({combo}).");
+                                st.running = false;
+                                return FilterResult::Intercept(());
+                            }
                             if st.grabs.contains(&combo) {
                                 st.pending_keybind = Some(combo);
                                 return FilterResult::Intercept(());

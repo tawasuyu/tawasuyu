@@ -472,6 +472,7 @@ impl App for Greeter {
             pass_box,
             status_line,
             session_line,
+            row(14.0, "Ctrl+Alt+Backspace: salir", 9.0, theme.fg_muted),
         ]);
 
         // Zona central que aloja la tarjeta de login. Ocupa todo el

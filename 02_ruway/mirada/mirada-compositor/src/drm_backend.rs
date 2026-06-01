@@ -376,6 +376,13 @@ impl DrmState {
                             return FilterResult::Forward;
                         }
                         if let Some(combo) = combo_string(mods, handle.modified_sym()) {
+                            if crate::is_escape_hatch(&combo) {
+                                eprintln!(
+                                    "mirada-compositor · salida de emergencia ({combo})."
+                                );
+                                st.running = false;
+                                return FilterResult::Intercept(());
+                            }
                             if st.grabs.contains(&combo) {
                                 st.pending_keybind = Some(combo);
                                 return FilterResult::Intercept(());

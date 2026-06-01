@@ -44,26 +44,50 @@ pub struct Session {
     pub kind: Kind,
 }
 
-/// Directorios estándar donde los DM buscan sesiones, en orden.
-const DIRS: &[(&str, Kind)] = &[
-    ("/usr/share/wayland-sessions", Kind::Wayland),
-    ("/usr/local/share/wayland-sessions", Kind::Wayland),
-    ("/usr/share/xsessions", Kind::X11),
-    ("/usr/local/share/xsessions", Kind::X11),
-];
+/// Raíces XDG donde buscar sesiones, según `XDG_DATA_HOME` y
+/// `XDG_DATA_DIRS` (con los defaults del spec si faltan). De cada raíz
+/// `R` se miran `R/wayland-sessions` y `R/xsessions`. Honrar XDG es lo que
+/// hace un DM de verdad —y permite dropear un `.desktop` en
+/// `~/.local/share/wayland-sessions` para probar sin tocar `/usr`.
+fn xdg_data_roots() -> Vec<String> {
+    let mut roots = Vec::new();
+    // XDG_DATA_HOME (default ~/.local/share) primero: gana sobre el sistema.
+    match std::env::var("XDG_DATA_HOME") {
+        Ok(h) if !h.is_empty() => roots.push(h),
+        _ => {
+            if let Ok(home) = std::env::var("HOME") {
+                roots.push(format!("{home}/.local/share"));
+            }
+        }
+    }
+    let dirs = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
+    for d in dirs.split(':').filter(|s| !s.is_empty()) {
+        roots.push(d.to_string());
+    }
+    roots
+}
 
 /// Descubre todas las sesiones del sistema. La primera entrada es siempre
 /// la nativa de mirada (`Exec` vacío) para que la lista nunca esté vacía y
-/// haya siempre un camino al autostart del compositor.
+/// haya siempre un camino al autostart del compositor. Deduplica por
+/// `(name, exec)` —la misma sesión puede aparecer en varias raíces XDG.
 pub fn discover() -> Vec<Session> {
     let mut out = vec![Session {
         name: "mirada".to_string(),
         exec: String::new(),
         kind: Kind::Wayland,
     }];
-    for (dir, kind) in DIRS {
-        collect_dir(Path::new(dir), *kind, &mut out);
+    for root in xdg_data_roots() {
+        collect_dir(&Path::new(&root).join("wayland-sessions"), Kind::Wayland, &mut out);
+        collect_dir(&Path::new(&root).join("xsessions"), Kind::X11, &mut out);
     }
+    // Dedup global por (name, exec): la misma sesión puede repetirse en
+    // varias raíces XDG y no quedar contigua. `dedup_by` no basta.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|s| seen.insert((s.name.clone(), s.exec.clone())));
     out
 }
 
