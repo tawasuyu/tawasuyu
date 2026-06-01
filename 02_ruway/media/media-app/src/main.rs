@@ -366,13 +366,8 @@ struct Pipeline {
     last_tick: Mutex<Instant>,
     /// Política de sincronización A/V (M1 de `PARIDAD.md`). Decide por
     /// frame, contra el reloj de audio, si presentarlo o descartarlo;
-    /// además lleva contadores de diagnóstico.
+    /// además lleva contadores de diagnóstico y el desfase manual (A4).
     sync: Mutex<AvSync>,
-    /// Última posición del reloj de audio observada en un paint. El delta
-    /// contra la actual es cuánto avanzó el audio entre paints — el `dt`
-    /// con el que avanzamos el video (esclavo del audio, no del reloj de
-    /// pared). `None` hasta el primer paint con audio o tras un seek.
-    last_audio_pos: Mutex<Option<Duration>>,
 }
 
 fn config_slot() -> &'static OnceLock<Config> {
@@ -945,20 +940,21 @@ impl Seekable for Playlist {
 /// playlist (tono A4 / testcard). Es el reloj **maestro** de M1: el video
 /// se acomoda a él; sin él, el video cae al reloj de pared.
 fn current_audio_position() -> Option<Duration> {
-    playlist_slot()
-        .get()
-        .and_then(|o| o.as_ref())
-        .map(|h| h.lock().position())
+    // `try_lock`: NUNCA bloquear el hilo de UI acá. El hilo de audio (cpal)
+    // puede estar dentro de `fill()` con este mismo lock tomado mientras lee
+    // del pipe de ffmpeg (lectura bloqueante). Si bloqueáramos, el hilo de UI
+    // dejaría de drenar el pipe de video → ffmpeg quedaría trabado → el audio
+    // nunca avanzaría → cpal nunca soltaría el lock: deadlock. Si está ocupado,
+    // devolvemos None y este frame se rige por el reloj de pared.
+    let handle = playlist_slot().get()?.as_ref()?;
+    handle.try_lock().map(|g| g.position())
 }
 
-/// Re-ancla el reloj de sync A/V tras un seek o cambio de pista: el
-/// próximo paint no avanza el video por un delta espurio (un salto de
-/// posición no es "tiempo transcurrido") y los contadores de drop se
-/// reinician. No-op si el pipeline todavía no se inicializó (el primer
-/// paint lo crea).
+/// Reinicia los contadores de sync A/V tras un seek o cambio de pista (los
+/// frames viejos no deben contar contra el nuevo punto). No-op si el
+/// pipeline todavía no se inicializó (el primer paint lo crea).
 fn reset_av_sync_anchor() {
     if let Some(pipe) = pipeline_slot().get() {
-        *pipe.last_audio_pos.lock() = None;
         pipe.sync.lock().reset();
     }
 }
@@ -1567,7 +1563,6 @@ fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'static Pipeline
         last_dim: Mutex::new((0, 0)),
         last_tick: Mutex::new(Instant::now()),
         sync: Mutex::new(AvSync::default()),
-        last_audio_pos: Mutex::new(None),
     })
 }
 
@@ -1837,38 +1832,25 @@ impl App for MediaApp {
                 d
             };
 
-            // M1 — reloj maestro = audio. El video avanza **lo que avanzó
-            // el audio** desde el último paint (sample-accurate), no el
-            // reloj de pared; así no deriva en fuentes que no son 30 fps
-            // exactos. Sin playlist (tono A4 / testcard) cae al reloj de
-            // pared para que el testcard siga animando.
+            // M1 — sync A/V con el audio como reloj maestro, SIN acoplar el
+            // ritmo de decode al audio. El video avanza por el reloj de pared
+            // (`wall_dt`): el propio source respeta el fps del archivo vía su
+            // acumulador, así que esto NO es el timer fijo de 30 fps de antes.
+            // Crucial: tickear por wall_dt mantiene drenado el pipe de ffmpeg
+            // (el video alimenta al audio); regular el decode con el reloj de
+            // audio deadlockeaba el pipe al arranque. El reloj de audio se usa
+            // sólo para DESCARTAR frames atrasados (drop), abajo.
+            let dt = wall_dt;
             let audio_pos = current_audio_position();
-            let dt = match audio_pos {
-                Some(pos) => {
-                    let mut last_pos = pipe.last_audio_pos.lock();
-                    let d = match *last_pos {
-                        // Avance normal del audio: ese es el dt del video.
-                        Some(prev) if pos >= prev => pos - prev,
-                        // Primer frame, seek o loop (la posición retrocede o
-                        // arranca): no avances el video por un delta espurio.
-                        _ => Duration::ZERO,
-                    };
-                    *last_pos = Some(pos);
-                    d
-                }
-                None => wall_dt,
-            };
 
             let mut buf = pipe.buf.lock();
             let mut src = pipe.source.lock();
             if let Some((w, h)) = src.tick(dt, &mut buf) {
                 let frame_pts = src.pts();
                 drop(src);
-                // Si hay reloj de audio y la fuente conoce su PTS, la
-                // política decide presentar/descartar. `Hold` no puede
-                // ocurrir acá (avanzamos el video con el delta del audio, no
-                // más allá), así que sólo distinguimos Drop del resto. Sin
-                // PTS o sin audio se presenta siempre (comportamiento previo).
+                // Si hay reloj de audio (no ocupado) y la fuente conoce su
+                // PTS, la política descarta el frame si llegó tarde respecto
+                // del audio. Sin PTS o sin audio se presenta siempre.
                 let present = match (audio_pos, frame_pts) {
                     (Some(audio), Some(pts)) => {
                         !matches!(pipe.sync.lock().plan(audio, pts), FramePlan::Drop)
