@@ -37,12 +37,17 @@ público sin romperte legal o reproduciblemente. Es barato y desbloquea todo.
 | 0.1 | **Archivos de licencia.** El default del workspace es `MIT OR Apache-2.0`; 6 crates de base (`format`, `forth-emisor`, `foreign-fs`, `wawa`/`wawa-kernel`/`wawa-fs`) overridean a `MPL-2.0`. | 🤖 | ✅ `LICENSE-{APACHE,MIT,MPL}` verbatim (SPDX) + `LICENSE.md` (commit `80224d36`) |
 | 0.2 | **Untracked sin commitear.** `crates/apps/` + `web/gioser-web/pkg/` eran artefactos; `nahual-svg-viewer-llimphi` lo está creando **otro agente** (stub). | 🤝 | ✅ `pkg/` y `/crates/` a `.gitignore`; svg-viewer se deja al otro agente |
 | 0.3 | **CI mínimo.** Workflow que corre `cargo check --workspace` + `check-shared-cores.sh`. Guardián de la regla dura #5 y de la simetría no_std. | 🤖 | ✅ `.github/workflows/ci.yml` |
-| 0.4 | **Política `publish`.** Confirmar que TODO lo que no es producto-final (demos, sandboxes, `*-explorer`) tenga `publish = false`, para no subir basura a crates.io. Hoy sólo 6 lo marcan. | 🤖 | ⬜ pendiente — auditar tras decidir 0.5 |
-| 0.5 | **Decisión de alcance público.** ¿Se publica *todo* el workspace, o sólo un subconjunto (p.ej. Llimphi + format + apps maduras)? wawa-kernel (no_std, excluido) y las apps a medio core no deberían ir en la v1. | 🧑 | ⬜ **decisión tuya** — condiciona 0.4 y Niveles 2–5 |
+| 0.4 | **Política `publish`.** Sólo relevante para crates.io (eje opcional). Para el repo público en GitHub no hace falta. Si algún día se sube a crates.io: marcar bins/demos/sandboxes con `publish = false`. | 🤖 | ⏸️ diferido — no bloquea v1 |
+| 0.5 | **Decisión de alcance público.** | 🧑 | ✅ **TODO el workspace público** (2026-06-01). Sin recortes, nada oculto/experimental — ni mirada. |
 
-> **Salida del Nivel 0:** árbol limpio, licencias presentes, CI verde (✅ hechos),
-> y una lista explícita de "qué se publica en v1" (⬜ pendiente, 0.5). Sin esto
-> último, 0.4 y el recorte de los demás niveles quedan en el aire.
+> **Salida del Nivel 0:** ✅ árbol limpio, licencias presentes, CI verde, alcance
+> decidido (todo público). Nivel 0 **cerrado**.
+>
+> **Aclaración de alcance (0.5).** "Publicable" = **repo entero público en
+> GitHub** bajo las licencias, clonable y compilable por cualquiera. Publicar los
+> 454 crates a **crates.io** es un eje *separado y opcional* (nombres, orden de
+> deps, y la mayoría son binarios de app/demos que no tiene sentido subir) — no
+> es requisito de la v1.
 
 ---
 
