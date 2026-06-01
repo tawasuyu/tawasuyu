@@ -82,6 +82,7 @@ use media_core::{
 };
 use media_core::color::{ColorControl, ColorVideo};
 use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
+use media_core::dynamics::{DynamicsAudio, DynamicsControl};
 use media_core::transform::{TransformControl, TransformVideo};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
@@ -462,6 +463,14 @@ fn color() -> &'static ColorControl {
 fn transform() -> &'static TransformControl {
     static SLOT: OnceLock<TransformControl> = OnceLock::new();
     SLOT.get_or_init(TransformControl::default)
+}
+
+/// Control de normalización + limitador de audio (A5). Compartido entre el
+/// wrapper `DynamicsAudio` de la cadena de audio y los comandos Norm*.
+/// Arranca en 0 dB con el limitador activo (techo por defecto).
+fn dynamics() -> &'static DynamicsControl {
+    static SLOT: OnceLock<DynamicsControl> = OnceLock::new();
+    SLOT.get_or_init(DynamicsControl::default)
 }
 
 /// Handle al [`Playlist`] activo cuando hay tracks WAV/MP3. `None`
@@ -1039,6 +1048,10 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (SubDelayBy { ms: -100 }, "Subtítulos"),
         (SubDelayBy { ms: 100 }, "Subtítulos"),
         (SubDelayReset, "Subtítulos"),
+        (NormToggle, "Normalización"),
+        (NormGainBy { db: 3.0 }, "Normalización"),
+        (NormGainBy { db: -3.0 }, "Normalización"),
+        (NormReset, "Normalización"),
         (Snapshot, "Captura"),
         (ToggleRecord, "Captura"),
     ];
@@ -1237,6 +1250,21 @@ fn apply_command(cmd: MediaCommand) {
         SubDelayReset => {
             SUB_DELAY_MS.store(0, Ordering::Relaxed);
             eprintln!("media-app: subtítulo sin delay");
+        }
+        NormToggle => {
+            let d = dynamics();
+            let on = !d.is_enabled();
+            d.set_enabled(on);
+            eprintln!("media-app: normalización {}", if on { "on" } else { "off" });
+        }
+        NormGainBy { db } => {
+            let d = dynamics();
+            d.add_gain_db(db);
+            eprintln!("media-app: normalización {:+.0} dB", d.gain_db());
+        }
+        NormReset => {
+            dynamics().reset();
+            eprintln!("media-app: normalización a 0 dB");
         }
     }
 }
@@ -3152,7 +3180,10 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
                 );
                 let voled = VolumeAudio::new(pausable, volume().clone());
                 let equalized = EqualizerAudio::new(voled, eq().clone());
-                let recorded = RecordedAudioSource::new(equalized, recorder().clone());
+                // A5: normalización + limitador tras el EQ (último estadio
+                // de ganancia antes del tap del visor).
+                let normalized = DynamicsAudio::new(equalized, dynamics().clone());
+                let recorded = RecordedAudioSource::new(normalized, recorder().clone());
                 let probed = ProbedAudioSource::new(recorded, probe.clone());
                 return (Arc::new(Mutex::new(probed)), probe);
             }
@@ -3241,7 +3272,9 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     // ya ecualizado — el visor refleja lo que realmente suena y la
     // grabación queda con el mismo tono que se escuchó.
     let equalized = EqualizerAudio::new(voled, eq().clone());
-    let recorded = RecordedAudioSource::new(equalized, recorder().clone());
+    // A5: normalización + limitador tras el EQ.
+    let normalized = DynamicsAudio::new(equalized, dynamics().clone());
+    let recorded = RecordedAudioSource::new(normalized, recorder().clone());
     let probed = ProbedAudioSource::new(recorded, probe.clone());
     (Arc::new(Mutex::new(probed)), probe)
 }

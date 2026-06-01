@@ -18,18 +18,31 @@ Se está avanzando este plan **en orden**. Cerrado en esta tanda (todo en
   **V4** ajustes de color de video (brillo/contraste/gamma/saturación) ·
   **V3** rotación/flip del video (`media-core::transform`) ·
   **S5** auto-carga de subtítulos sidecar ·
-  **S4** delay/sync de subtítulo.
+  **S4** delay/sync de subtítulo ·
+  **A5** normalización manual + limitador (`media-core::dynamics`).
 
 Con M1+R1+R2 `media` ya **reproduce desde una plataforma**; lo que falta para
 FreeTube es navegación (`shared/foreign-youtube`), no el reproductor (ver
-`FREETUBE.md`). `cargo test -p media-core` = 91 verde, `--workspace` verde.
+`FREETUBE.md`). `cargo test -p media-core` = 97 verde, `--workspace` verde.
 
-**Próximo paso sugerido (en orden, aislado y testeable en CI):** **A5 —
-normalización / limitador**: un wrapper `AudioSource` puro-DSP (molde EQ en
-`media-core::eq`) — un limitador de picos (soft-clip / brick-wall) y/o
-ganancia de normalización, en la cadena entre Volume y Probe. Después **A4
-ya está**; quedan A2/A3/A6 (selección de pista, dispositivo, gapless) y los
-de video que necesitan pantalla.
+**Estado:** los ítems aislados y testeables en CI del plan ya están casi todos
+cerrados (A1,A4,A5 · M1 · R1,R2 · S1,S4,S5 · V3,V4 · todo CONTROLES.md). Lo
+que **queda necesita correr la app/GPU o hardware** para verificarse, así que
+conviene retomarlo con pantalla:
+
+- **Video con pantalla**: V1 fullscreen (API de ventana de llimphi-ui), V2
+  aspect/crop/zoom (blit), V5 deinterlacing, V6 shaders, V8 HDR.
+- **Audio con hardware**: A3 dispositivo de salida (cpal), A2 selección de
+  pista (multi-stream), A6 gapless/crossfade.
+- **Motor**: M2 hw decode, M3 seek frame-accurate, M4 frame stepping, M5
+  pitch-correct speed.
+- **Subtítulos**: S2 pistas embebidas, S3 estilo visual ASS (libass-like).
+- **Mejoras a lo ya hecho**: R2 DASH A/V separados (calidad > 720p),
+  A5 ReplayGain/EBU R128 (medición automática), V4 hue.
+
+Sugerencia al retomar: `cargo run -p media-app -- <archivo>` y ejercitar las
+features nuevas desde el command palette (Ctrl+Shift+P): grupos Orientación,
+Color, Subtítulos, Normalización, Sync A/V.
 
 **Lo que necesita correr la app/GPU para verificar** (no hacer a ciegas):
 V1 fullscreen (API de ventana de llimphi-ui), V2 aspect/crop/zoom (blit),
@@ -72,7 +85,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 
 ### Pendiente
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
-- Track AUDIO A2/A3/A5/A6 (selección de pista, dispositivo de salida, normalización/ReplayGain, gapless/crossfade). **A4 (delay/sync) ✅.**
+- Track AUDIO A2/A3/A6 (selección de pista, dispositivo de salida, gapless/crossfade). **A4 (delay/sync) ✅ · A5 (normalización manual + limitador) ✅.**
 - Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, sin hue) ✅.**
 - Track SUBTÍTULOS S2, S3 (pistas embebidas, estilo configurable). **S1 (ASS/SSA texto+timing) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.**
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
@@ -122,7 +135,14 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   reversible. Comandos `MediaCommand::{AvSyncBy{ms},AvSyncReset}` atados a
   `j`/`k`/`Shift+J` por defecto y en el palette/ayuda (grupo "Sync A/V").
   Coherente con M1: el ajuste vive donde se compara PTS vs reloj de audio.
-- **A5 — Normalización / ReplayGain / limitador**, downmix/upmix.
+- **A5 — Normalización / ReplayGain / limitador**, downmix/upmix. ✅
+  *Cerrado (2026-06-01, normalización manual + limitador).* `media-core::
+  dynamics`: procesador puro `Dynamics` (ganancia makeup en dB → limitador
+  brick-wall a un techo, default 0.98) + `DynamicsControl` versionado +
+  wrapper `DynamicsAudio` — molde EQ. Insertado tras el EQ en ambas cadenas
+  de audio (último estadio de ganancia). Comandos `MediaCommand::{NormToggle,
+  NormGainBy{db},NormReset}` en el palette (grupo "Normalización"). +6 tests.
+  Falta la medición automática (ReplayGain / EBU R128) y downmix/upmix.
 - **A6 — Gapless garantizado / crossfade** entre pistas.
 
 ### Track VIDEO

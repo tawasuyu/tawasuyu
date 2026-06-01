@@ -102,6 +102,12 @@ pub enum MediaCommand {
     SubDelayBy { ms: i64 },
     /// Vuelve el delay de subtítulos a cero.
     SubDelayReset,
+    /// Enciende/apaga la etapa de normalización + limitador (A5).
+    NormToggle,
+    /// Ajusta la ganancia de normalización sumando `db` (la app clampea).
+    NormGainBy { db: f32 },
+    /// Vuelve la ganancia de normalización a 0 dB (mantiene el limitador).
+    NormReset,
 }
 
 /// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
@@ -185,6 +191,10 @@ impl MediaCommand {
             }
             SubDelayBy { ms } => format!("Subtítulo +{ms}ms (retrasar)"),
             SubDelayReset => "Subtítulo sin delay".to_string(),
+            NormToggle => "Normalización on/off".to_string(),
+            NormReset => "Normalización a 0 dB".to_string(),
+            NormGainBy { db } if *db < 0.0 => format!("Normalización {db:.0} dB"),
+            NormGainBy { db } => format!("Normalización +{db:.0} dB"),
         }
     }
 }
