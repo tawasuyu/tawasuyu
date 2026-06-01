@@ -231,7 +231,7 @@ impl WinitSurface {
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: choose_present_mode(&caps),
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -253,6 +253,44 @@ impl WinitSurface {
 
     pub fn format(&self) -> wgpu::TextureFormat {
         self.config.format
+    }
+}
+
+/// Elige el modo de presentación del swapchain.
+///
+/// Default: **Mailbox** si el driver lo expone, sino **Fifo**. La razón es
+/// el cuelgue observado en las apps Llimphi (investigación 2026-05-30): con
+/// `Fifo`/`AutoVsync`, `surface.get_current_texture()` **bloquea** esperando
+/// el frame-callback del compositor Wayland — si el compositor no suelta un
+/// buffer, el hilo del UI queda dormido (CPU baja, deadlock aparente).
+/// `Mailbox` no bloquea (triple-buffer, descarta frames viejos), así que el
+/// loop nunca se queda esperando al compositor. `Fifo` está garantizado por
+/// spec como fallback.
+///
+/// Override por entorno para A/B sin recompilar (útil en la laptop con
+/// display real): `LLIMPHI_PRESENT_MODE = fifo | mailbox | immediate |
+/// fifo_relaxed`. Si el modo pedido no está soportado, se ignora y se aplica
+/// el default.
+fn choose_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
+    use wgpu::PresentMode::{Fifo, FifoRelaxed, Immediate, Mailbox};
+    if let Ok(v) = std::env::var("LLIMPHI_PRESENT_MODE") {
+        let want = match v.trim().to_ascii_lowercase().as_str() {
+            "fifo" | "vsync" => Some(Fifo),
+            "fifo_relaxed" | "fiforelaxed" => Some(FifoRelaxed),
+            "mailbox" => Some(Mailbox),
+            "immediate" | "novsync" => Some(Immediate),
+            _ => None,
+        };
+        if let Some(m) = want {
+            if caps.present_modes.contains(&m) {
+                return m;
+            }
+        }
+    }
+    if caps.present_modes.contains(&Mailbox) {
+        Mailbox
+    } else {
+        Fifo
     }
 }
 
