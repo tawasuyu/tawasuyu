@@ -2920,9 +2920,10 @@ fn dispatch_js_event_with_init(
     // `document.addEventListener(type, ...)`, con el elemento original como
     // `event.target`. Un `preventDefault()` del handler de document también
     // cuenta para el fallback (p. ej. cancelar la navegación de un `<a>`).
-    // Limitación: `stopPropagation()` a nivel elemento todavía NO corta este
-    // bubble — el dispatch de elemento no propaga su flag `_stopped`.
-    if event_bubbles_to_document(event_type) {
+    // Si un handler del elemento llamó `stopPropagation()`, el evento NO
+    // burbujea hasta `document` (el dispatch ahora propaga el flag
+    // `_stopped` vía `DispatchResult::propagation_stopped`).
+    if event_bubbles_to_document(event_type) && !result.propagation_stopped {
         let (doc_result, doc_pending) = dispatch_document_js_event_on_tab(
             t,
             event_type,

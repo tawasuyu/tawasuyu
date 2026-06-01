@@ -681,13 +681,7 @@ impl JsRuntime {
             _ => return Ok(DispatchResult::default()),
         };
         // Formato "count,prevented" donde prevented es 0 o 1.
-        let mut parts = s.splitn(2, ',');
-        let count: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-        let default_prevented = parts.next() == Some("1");
-        Ok(DispatchResult {
-            count,
-            default_prevented,
-        })
+        Ok(parse_dispatch_result(&s))
     }
 
     /// Fase 7.42 — setea `document.hidden`/`document.visibilityState` y,
@@ -727,13 +721,7 @@ impl JsRuntime {
             JsValue::String(s) => s,
             _ => return Ok(DispatchResult::default()),
         };
-        let mut parts = s.splitn(2, ',');
-        let count: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-        let default_prevented = parts.next() == Some("1");
-        Ok(DispatchResult {
-            count,
-            default_prevented,
-        })
+        Ok(parse_dispatch_result(&s))
     }
 
     /// Dispatcha un evento a nivel `document` (`document.addEventListener`).
@@ -774,13 +762,7 @@ impl JsRuntime {
             JsValue::String(s) => s,
             _ => return Ok(DispatchResult::default()),
         };
-        let mut parts = s.splitn(2, ',');
-        let count: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-        let default_prevented = parts.next() == Some("1");
-        Ok(DispatchResult {
-            count,
-            default_prevented,
-        })
+        Ok(parse_dispatch_result(&s))
     }
 
     /// Actualiza `globalThis.__puriy_now_ms` para que `setTimeout` y
@@ -1257,11 +1239,30 @@ impl EventInit {
 /// handlers corrieron (suma de `on<type>` + listeners). `default_prevented`
 /// es `true` si algún handler llamó `event.preventDefault()` — el chrome
 /// lo usa para decidir si correr la default action (ej. navegar el link
-/// asociado a `<a>` que tiene un handler de click).
+/// asociado a `<a>` que tiene un handler de click). `propagation_stopped`
+/// es `true` si algún handler llamó `event.stopPropagation()` — el chrome
+/// lo usa para NO burbujear el evento hasta `document` (event delegation).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DispatchResult {
     pub count: u32,
     pub default_prevented: bool,
+    pub propagation_stopped: bool,
+}
+
+/// Parsea el string `"count,prevented[,stopped]"` que devuelven las rutas
+/// de dispatch JS. El tercer campo es opcional (las rutas window/document
+/// emiten sólo dos por ahora) y default a `false`. Ningún campo contiene
+/// comas (números + flags `0`/`1`), así que un `split(',')` simple basta.
+fn parse_dispatch_result(s: &str) -> DispatchResult {
+    let mut parts = s.split(',');
+    let count: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let default_prevented = parts.next() == Some("1");
+    let propagation_stopped = parts.next() == Some("1");
+    DispatchResult {
+        count,
+        default_prevented,
+        propagation_stopped,
+    }
 }
 
 /// Mutación del DOM publicada por un setter JS (`textContent`,
@@ -2503,6 +2504,49 @@ mod tests {
         let r = rt.dispatch_event("a", "click", None).expect("dispatch");
         assert_eq!(r.count, 1);
         assert!(r.default_prevented, "esperaba default_prevented=true");
+    }
+
+    #[test]
+    fn stop_propagation_lo_reporta_dispatch_result() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("a", "a", "link")]).expect("e");
+        rt.eval(
+            "document.getElementById('a').onclick = function(e){ e.stopPropagation(); }",
+        )
+        .expect("e");
+        let r = rt.dispatch_event("a", "click", None).expect("dispatch");
+        assert_eq!(r.count, 1);
+        assert!(
+            r.propagation_stopped,
+            "esperaba propagation_stopped=true tras stopPropagation()"
+        );
+    }
+
+    #[test]
+    fn sin_stop_propagation_dispatch_result_lo_marca_falso() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("a", "a", "link")]).expect("e");
+        rt.eval("document.getElementById('a').onclick = function(){ /* nada */ }")
+            .expect("e");
+        let r = rt.dispatch_event("a", "click", None).expect("dispatch");
+        assert_eq!(r.count, 1);
+        assert!(!r.propagation_stopped);
+    }
+
+    #[test]
+    fn parse_dispatch_result_acepta_dos_o_tres_campos() {
+        // Ruta de elemento: tres campos.
+        assert_eq!(
+            parse_dispatch_result("2,1,1"),
+            DispatchResult { count: 2, default_prevented: true, propagation_stopped: true }
+        );
+        // Rutas window/document: dos campos → stopped default false.
+        assert_eq!(
+            parse_dispatch_result("3,0"),
+            DispatchResult { count: 3, default_prevented: false, propagation_stopped: false }
+        );
     }
 
     #[test]

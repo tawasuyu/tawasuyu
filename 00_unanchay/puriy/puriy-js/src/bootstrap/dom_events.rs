@@ -1214,7 +1214,10 @@ globalThis.__puriy_dispatch = function(id, type, init) {
         }
         invoke(chain[j], chain[j]._listeners);
     }
-    return count + ',' + (event.defaultPrevented ? '1' : '0');
+    // Formato "count,prevented,stopped": el tercer campo informa al host
+    // si algún handler llamó stopPropagation(), para que el chrome NO
+    // burbujee el evento hasta document (event delegation).
+    return count + ',' + (event.defaultPrevented ? '1' : '0') + ',' + (event._stopped ? '1' : '0');
 };
 globalThis.__puriy_drain_dirty = function() {
     var arr = globalThis.__puriy_dirty;
