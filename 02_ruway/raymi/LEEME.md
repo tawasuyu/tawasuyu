@@ -15,7 +15,7 @@ y contactos. Habla CalDAV (eventos) y CardDAV (contactos) y renderiza nativo.
 raymi-core         — modelo agnóstico: eventos, recurrencia (RRULE),
                      calendarios, contactos, el trait de transporte.    [HECHO]
 raymi-net          — puente CalDAV/CardDAV: iCalendar (VEVENT) + vCard
-                     (VCARD) + REPORT/PUT; implementa los traits.        [pendiente]
+                     (VCARD) + REPORT/PUT; implementa los traits.        [HECHO]
 raymi-store        — persistencia nativa (postcard) + sync incremental.  [pendiente]
 raymi-llimphi      — frontend: vista mes + agenda del día + contactos.   [HECHO]
 raymi-app          — binario lanzable.                                    [pendiente]
@@ -61,11 +61,23 @@ intercambiables, como el resto de la suite.
   - Demo: `cargo run -p raymi-llimphi --example agenda_demo --release`
     (2 calendarios, eventos recurrentes anclados a hoy, 3 contactos).
 
+- **Fase 3 (2026-06-01):** `raymi-net` — puente CalDAV/CardDAV.
+  - `ical` — iCalendar (RFC 5545) ↔ `Event`: parsea `VEVENT` (UID/SUMMARY/
+    DTSTART/DTEND con `VALUE=DATE` para día completo/DATE-TIME UTC, DESCRIPTION/
+    LOCATION/RRULE/ORGANIZER/ATTENDEE), desdobla líneas plegadas, escapa/desescapa;
+    `write_event` para `PUT`. `vcard` — vCard ↔ `Contact` (FN/N/EMAIL/TEL/ORG/
+    NOTE/UID). `text` — helpers compartidos (unfold/split/escape).
+  - `dav` — cliente HTTP sobre `ureq`: `REPORT` (calendar-query/addressbook-query),
+    `PUT`, `DELETE`, Basic auth; parseo de `multistatus` con `roxmltree` por nombre
+    local de etiqueta. `NetBackend` implementa ambos traits (colecciones por URL;
+    autodescubrimiento pendiente). **17 tests offline**; los caminos HTTP se
+    verifican contra un servidor real (Nextcloud/Radicale) en la laptop.
+
 ## Pendiente (orden sugerido)
 
-1. **`raymi-net`** — puente CalDAV/CardDAV (REPORT time-range, PUT, ETag) +
-   parser iCalendar/vCard. Reusa `ServerConfig`/`Security`.
-2. **`raymi-store`** — persistencia nativa (postcard) + sync incremental.
+1. **`raymi-store`** — persistencia nativa (postcard) + sync incremental.
+2. **Autodescubrimiento DAV** (PROPFIND `calendar-home-set`/`addressbook-home-set`)
+   + verificar `raymi-net` contra servidor real.
 3. **`raymi-app`** — binario lanzable, comparte `cuenta.json` con paloma.
 4. **Crear/editar eventos y contactos** desde la UI (put/delete ya en el trait).
 5. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.
