@@ -23,7 +23,7 @@ use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::TextInputState;
 
 use paloma_core::{
-    parse_address_list, Address, MailBackend, MailStore, MessageId, OutgoingMessage, Thread,
+    parse_address_list, Address, Flags, MailBackend, MailStore, MessageId, OutgoingMessage, Thread,
 };
 
 pub mod demo;
@@ -33,15 +33,17 @@ mod view;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComposeField {
     To,
+    Cc,
     Subject,
     Body,
 }
 
 impl ComposeField {
-    /// El siguiente campo en el ciclo Tab (To → Subject → Body → To).
+    /// El siguiente campo en el ciclo Tab (To → Cc → Subject → Body → To).
     fn next(self) -> Self {
         match self {
-            ComposeField::To => ComposeField::Subject,
+            ComposeField::To => ComposeField::Cc,
+            ComposeField::Cc => ComposeField::Subject,
             ComposeField::Subject => ComposeField::Body,
             ComposeField::Body => ComposeField::To,
         }
@@ -52,6 +54,7 @@ impl ComposeField {
 /// `None` en el modelo significa "no hay redacción abierta".
 pub struct Compose {
     pub to: TextInputState,
+    pub cc: TextInputState,
     pub subject: TextInputState,
     pub body: TextInputState,
     pub focus: ComposeField,
@@ -59,17 +62,22 @@ pub struct Compose {
     /// `References`). El asunto/destinatario ya vienen prellenados.
     pub in_reply_to: Option<MessageId>,
     pub references: Vec<MessageId>,
+    /// Firmar el saliente con la identidad Ed25519 de la cuenta (gancho de
+    /// `agora`; hoy es una preferencia de UI hasta integrar el keystore).
+    pub sign: bool,
 }
 
 impl Compose {
     fn empty() -> Self {
         Self {
             to: TextInputState::new(),
+            cc: TextInputState::new(),
             subject: TextInputState::new(),
             body: TextInputState::new(),
             focus: ComposeField::To,
             in_reply_to: None,
             references: Vec::new(),
+            sign: false,
         }
     }
 
@@ -77,6 +85,7 @@ impl Compose {
     fn focused_mut(&mut self) -> &mut TextInputState {
         match self.focus {
             ComposeField::To => &mut self.to,
+            ComposeField::Cc => &mut self.cc,
             ComposeField::Subject => &mut self.subject,
             ComposeField::Body => &mut self.body,
         }
@@ -268,6 +277,46 @@ impl Model {
     fn current_thread(&self) -> Option<&Thread> {
         self.selected_thread.and_then(|i| self.threads.get(i))
     }
+
+    /// El `Message-ID` del mensaje más reciente del hilo abierto.
+    fn current_newest(&self) -> Option<MessageId> {
+        self.current_thread().and_then(|t| t.message_ids.last().cloned())
+    }
+
+    /// Persiste el snapshot de un buzón en la caché en disco (si la hay).
+    fn persist_mailbox(&self, mailbox: &str) {
+        if let Some(d) = self.db.clone() {
+            let _ = d.save_messages(&self.account_id, mailbox, self.store.messages(mailbox));
+        }
+    }
+
+    /// Alterna un flag de un mensaje (estrella o leído), local + backend, y
+    /// reconstruye los hilos. `flip` recibe los flags actuales y devuelve los
+    /// nuevos.
+    fn toggle_flag(&mut self, id: &MessageId, flip: impl Fn(Flags) -> Flags) {
+        let Some(mailbox) = self.selected_mailbox.clone() else { return };
+        let Some(new_flags) = self.store.message(id).map(|m| flip(m.flags)) else { return };
+        let _ = self.store.set_flags(&*self.backend, &mailbox, id, new_flags);
+        self.threads = self.store.threads(&mailbox);
+        self.persist_mailbox(&mailbox);
+    }
+
+    /// Marca el hilo abierto como borrado (`\Deleted`) y lo saca de la bandeja.
+    fn delete_current_thread(&mut self) {
+        let Some(mailbox) = self.selected_mailbox.clone() else { return };
+        let Some(thread) = self.current_thread() else { return };
+        let ids: Vec<MessageId> = thread.message_ids.clone();
+        for id in &ids {
+            if let Some(flags) = self.store.message(id).map(|m| Flags { deleted: true, ..m.flags }) {
+                let _ = self.store.set_flags(&*self.backend, &mailbox, id, flags);
+            }
+        }
+        self.threads = self.store.threads(&mailbox);
+        self.selected_thread = None;
+        self.read_scroll = 0.0;
+        self.persist_mailbox(&mailbox);
+        self.status = format!("{mailbox} · hilo enviado a la papelera");
+    }
 }
 
 /// Las transiciones de la UI.
@@ -285,8 +334,18 @@ pub enum Msg {
     ComposeOpen,
     /// Abrir el compositor como respuesta al último mensaje del hilo abierto.
     ComposeReply,
+    /// Abrir el compositor reenviando el último mensaje del hilo abierto.
+    ComposeForward,
+    /// Alternar la firma Ed25519 del saliente (gancho de agora).
+    ComposeToggleSign,
     /// Cerrar el compositor sin enviar.
     ComposeClose,
+    /// Alternar la estrella (`\Flagged`) de un mensaje.
+    ToggleStar(MessageId),
+    /// Alternar leído/no-leído (`\Seen`) de un mensaje.
+    ToggleSeen(MessageId),
+    /// Enviar el hilo abierto a la papelera (`\Deleted`).
+    DeleteThread,
     /// Cambiar el campo enfocado del compositor.
     ComposeFocus(ComposeField),
     /// Tecla mientras el compositor está abierto (va al campo enfocado).
@@ -347,6 +406,24 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
                 model.compose = Some(c);
             }
         }
+        Msg::ComposeForward => {
+            if let Some(original) = model.current_newest().and_then(|id| model.store.message(&id)) {
+                let out = OutgoingMessage::forward(original, model.me.clone());
+                let mut c = Compose::empty();
+                c.subject.set_text(out.subject);
+                c.body.set_text(out.body_text);
+                c.focus = ComposeField::To;
+                model.compose = Some(c);
+            }
+        }
+        Msg::ComposeToggleSign => {
+            if let Some(c) = model.compose.as_mut() {
+                c.sign = !c.sign;
+            }
+        }
+        Msg::ToggleStar(id) => model.toggle_flag(&id, |f| Flags { flagged: !f.flagged, ..f }),
+        Msg::ToggleSeen(id) => model.toggle_flag(&id, |f| Flags { seen: !f.seen, ..f }),
+        Msg::DeleteThread => model.delete_current_thread(),
         Msg::ComposeFocus(field) => {
             if let Some(c) = model.compose.as_mut() {
                 c.focus = field;
@@ -408,10 +485,11 @@ fn send_compose(mut model: Model) -> Model {
         model.status = "no se puede enviar: falta un destinatario válido".into();
         return model;
     }
+    let signed = c.sign;
     let out = OutgoingMessage {
         from: model.me.clone(),
         to,
-        cc: Vec::new(),
+        cc: parse_address_list(&c.cc.text()),
         bcc: Vec::new(),
         subject: c.subject.text(),
         body_text: c.body.text(),
@@ -422,7 +500,7 @@ fn send_compose(mut model: Model) -> Model {
     match model.backend.send(&out) {
         Ok(_id) => {
             model.compose = None;
-            model.status = "enviado".into();
+            model.status = if signed { "enviado · firmado (Ed25519)" } else { "enviado" }.into();
             // Si estamos viendo Sent, reflejar el envío recién aterrizado.
             if model.selected_mailbox.as_deref() == Some("Sent") {
                 model.open_mailbox("Sent");
@@ -458,10 +536,14 @@ pub fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
     }
     match &event.key {
         Key::Named(NamedKey::F5) => Some(Msg::Refresh),
+        Key::Named(NamedKey::Delete) => model.current_thread().map(|_| Msg::DeleteThread),
         Key::Character(ch) if ch.as_str() == "/" => Some(Msg::SearchFocus(true)),
         Key::Character(ch) if ch.eq_ignore_ascii_case("c") => Some(Msg::ComposeOpen),
         Key::Character(ch) if ch.eq_ignore_ascii_case("r") => {
             model.current_thread().map(|_| Msg::ComposeReply)
+        }
+        Key::Character(ch) if ch.eq_ignore_ascii_case("f") => {
+            model.current_thread().map(|_| Msg::ComposeForward)
         }
         _ => None,
     }

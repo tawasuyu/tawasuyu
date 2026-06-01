@@ -65,9 +65,13 @@ impl MailStore {
         self.by_mailbox.get(mailbox).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    /// Los hilos de un buzón, recientes primero.
+    /// Los hilos de un buzón, recientes primero. Oculta los mensajes marcados
+    /// como borrados (`\Deleted`): siguen en la caché hasta el expunge, pero no
+    /// aparecen en la bandeja.
     pub fn threads(&self, mailbox: &str) -> Vec<Thread> {
-        build_threads(self.messages(mailbox))
+        let visible: Vec<Message> =
+            self.messages(mailbox).iter().filter(|m| !m.flags.deleted).cloned().collect();
+        build_threads(&visible)
     }
 
     /// Busca un mensaje por id en cualquier buzón.

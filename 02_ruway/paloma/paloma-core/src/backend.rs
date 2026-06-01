@@ -42,6 +42,40 @@ impl OutgoingMessage {
             references,
         }
     }
+
+    /// Arma un **reenvío** de `original` desde `from`: asunto `Fwd:` y el cuerpo
+    /// prellenado con el mensaje citado (cabecera + texto). El destinatario lo
+    /// completa el redactor. No hilea (un forward abre una conversación nueva).
+    pub fn forward(original: &Message, from: Address) -> Self {
+        let quoted = format!(
+            "\n\n----- Mensaje reenviado -----\nDe: {}\nAsunto: {}\n\n{}",
+            original.from,
+            original.subject,
+            original.display_body(),
+        );
+        OutgoingMessage {
+            from,
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: forward_subject(&original.subject),
+            body_text: quoted,
+            body_html: None,
+            in_reply_to: None,
+            references: vec![],
+        }
+    }
+}
+
+/// El asunto de un reenvío: `Fwd: <asunto>` sin duplicar el prefijo.
+fn forward_subject(subject: &str) -> String {
+    let base = subject.trim();
+    let lower = base.to_ascii_lowercase();
+    if lower.starts_with("fwd:") || lower.starts_with("fw:") {
+        base.to_string()
+    } else {
+        format!("Fwd: {base}")
+    }
 }
 
 /// El transporte de correo, agnóstico al protocolo. El puente real (IMAP para
@@ -199,6 +233,21 @@ mod tests {
         assert_eq!(r.to, vec![Address::new("a@x.com")]);
         assert_eq!(r.in_reply_to, Some(MessageId("<1@x>".into())));
         assert_eq!(r.references, vec![MessageId("<1@x>".into())]);
+    }
+
+    #[test]
+    fn forward_prefija_fwd_y_cita_el_cuerpo() {
+        let original = msg("<1@x>");
+        let f = OutgoingMessage::forward(&original, Address::new("yo@x.com"));
+        assert_eq!(f.subject, "Fwd: Hola");
+        assert!(f.to.is_empty(), "el reenvío no asume destinatario");
+        assert!(f.in_reply_to.is_none(), "un reenvío no hilea");
+        assert!(f.body_text.contains("Mensaje reenviado"));
+        assert!(f.body_text.contains("cuerpo"));
+        // No duplica el prefijo.
+        let mut twice = original.clone();
+        twice.subject = "Fwd: Hola".into();
+        assert_eq!(OutgoingMessage::forward(&twice, Address::new("yo@x.com")).subject, "Fwd: Hola");
     }
 
     #[test]

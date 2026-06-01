@@ -1,5 +1,9 @@
 //! El árbol de vistas de paloma: tres paneles + barra de estado + el modal de
 //! redacción. Todo se reconstruye en cada frame desde `&Model` (Elm puro).
+//!
+//! El look apunta a una bandeja sobria y legible: avatares con iniciales por
+//! remitente, estrella por hilo, barra de acciones en lectura (responder ·
+//! reenviar · destacar · leído · papelera) y estados de selección/hover claros.
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -11,15 +15,16 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-use paloma_core::{MailboxRole, Message};
+use paloma_core::{MailStore, MailboxRole, Message};
 
 use crate::{Compose, ComposeField, Model, Msg};
 
 const MAILBOX_W: f32 = 200.0;
-const THREADS_W: f32 = 340.0;
-const TOOLBAR_H: f32 = 44.0;
+const THREADS_W: f32 = 360.0;
+const TOOLBAR_H: f32 = 48.0;
 const STATUS_H: f32 = 26.0;
-const ROW_H: f32 = 60.0;
+const ROW_H: f32 = 64.0;
+const AVATAR: f32 = 38.0;
 
 /// Estilo de columna que ocupa todo el alto disponible.
 fn col(width: Dimension) -> Style {
@@ -31,12 +36,11 @@ fn col(width: Dimension) -> Style {
 }
 
 fn pad(all: f32) -> Rect<LengthPercentage> {
-    Rect {
-        left: length(all),
-        right: length(all),
-        top: length(all),
-        bottom: length(all),
-    }
+    Rect { left: length(all), right: length(all), top: length(all), bottom: length(all) }
+}
+
+fn pad_xy(x: f32, y: f32) -> Rect<LengthPercentage> {
+    Rect { left: length(x), right: length(x), top: length(y), bottom: length(y) }
 }
 
 /// La raíz: barra superior, cuerpo de tres columnas, barra de estado.
@@ -67,22 +71,21 @@ pub fn root(model: &Model) -> View<Msg> {
     .children(vec![toolbar(model), body, status_bar(model)])
 }
 
-/// Barra superior: marca + botón Redactar + Refrescar.
+/// Barra superior: marca + buscador + Redactar + Refrescar.
 fn toolbar(model: &Model) -> View<Msg> {
     let theme = &model.theme;
     let brand = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
-        padding: Rect { left: length(16.0_f32), right: length(0.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        padding: pad_xy(16.0, 0.0),
         ..Default::default()
     })
     .text_aligned("🕊  paloma", 18.0, theme.fg_text, Alignment::Start);
 
-    // Caja de búsqueda (ancho fijo). El `text_input_view` ya pinta foco/borde.
     let pal = TextInputPalette::from_theme(theme);
     let search = View::new(Style {
-        size: Size { width: length(280.0_f32), height: Dimension::auto() },
+        size: Size { width: length(300.0_f32), height: Dimension::auto() },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
@@ -99,7 +102,7 @@ fn toolbar(model: &Model) -> View<Msg> {
         size: Size { width: percent(1.0_f32), height: length(TOOLBAR_H) },
         align_items: Some(AlignItems::Center),
         gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
-        padding: Rect { left: length(0.0_f32), right: length(12.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        padding: pad_xy(12.0, 0.0),
         ..Default::default()
     })
     .fill(theme.bg_panel)
@@ -109,108 +112,6 @@ fn toolbar(model: &Model) -> View<Msg> {
         button("✎  Redactar", theme.accent, theme.bg_app, Msg::ComposeOpen),
         button("⟳", theme.bg_button, theme.fg_text, Msg::Refresh),
     ])
-}
-
-/// Panel central en **modo búsqueda**: lista plana de mensajes que matchean la
-/// consulta, en todos los buzones. Click abre el mensaje en su hilo.
-fn search_results_panel(model: &Model) -> View<Msg> {
-    let theme = &model.theme;
-    let query = model.search.text();
-    let hits = model.store_ref().search(&query);
-
-    let header = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
-        align_items: Some(AlignItems::Center),
-        padding: Rect { left: length(14.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .text_aligned(
-        format!("🔍  {} resultado(s) · «{}»", hits.len(), query.trim()),
-        13.0,
-        theme.fg_muted,
-        Alignment::Start,
-    );
-
-    let mut rows: Vec<View<Msg>> = Vec::new();
-    for m in hits.into_iter().skip(model.list_scroll) {
-        rows.push(result_row(theme, m));
-    }
-    if rows.is_empty() {
-        rows.push(
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(ROW_H) },
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::Center),
-                ..Default::default()
-            })
-            .text_aligned("sin coincidencias", 13.0, theme.fg_placeholder, Alignment::Center),
-        );
-    }
-
-    let list = View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
-        flex_grow: 1.0,
-        ..Default::default()
-    })
-    .clip(true)
-    .children(rows);
-
-    View::new(col(length(THREADS_W)))
-        .fill(theme.bg_panel)
-        .children(vec![header, list])
-}
-
-/// Fila de un resultado de búsqueda: remitente · buzón · fecha + asunto + extracto.
-fn result_row(theme: &Theme, m: &Message) -> View<Msg> {
-    let top = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
-        align_items: Some(AlignItems::Center),
-        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
-        ..Default::default()
-    })
-    .children(vec![
-        View::new(Style {
-            size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
-            flex_grow: 1.0,
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text_aligned(m.from.display_name().to_string(), 13.0, theme.fg_text, Alignment::Start),
-        View::new(Style {
-            size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text_aligned(crate::view::fmt_date(m.date), 11.0, theme.fg_muted, Alignment::End),
-    ]);
-
-    let subject = if m.subject.trim().is_empty() { "(sin asunto)".to_string() } else { m.subject.clone() };
-    let subj = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
-        ..Default::default()
-    })
-    .text_aligned(format!("{}  ·  {}", m.mailbox, subject), 13.0, theme.fg_text, Alignment::Start);
-
-    let snip = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
-        ..Default::default()
-    })
-    .text_aligned(m.snippet(64), 11.0, theme.fg_muted, Alignment::Start);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
-        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
-        padding: Rect { left: length(14.0_f32), right: length(12.0_f32), top: length(8.0_f32), bottom: length(8.0_f32) },
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .hover_fill(theme.bg_row_hover)
-    .on_click(Msg::OpenMessage(m.id.clone()))
-    .children(vec![top, subj, snip])
 }
 
 /// Panel izquierdo: los buzones, con rol e indicador de no-leídos.
@@ -223,8 +124,12 @@ fn mailboxes_panel(model: &Model) -> View<Msg> {
         rows.push(mailbox_row(theme, role_glyph(mb.role), mb.leaf_name(), unread, selected, mb.name.clone()));
     }
 
+    // Nota de roadmap: Calendario/Contactos compartirán esta capa de cuentas.
+    rows.push(nav_hint(theme, "🗓  Calendario", "pronto"));
+    rows.push(nav_hint(theme, "👤  Contactos", "pronto"));
+
     View::new(Style {
-        padding: Rect { left: length(8.0_f32), right: length(8.0_f32), top: length(8.0_f32), bottom: length(8.0_f32) },
+        padding: pad(8.0),
         gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
         ..col(length(MAILBOX_W))
     })
@@ -241,7 +146,7 @@ fn mailbox_row(
     key: String,
 ) -> View<Msg> {
     let bg = if selected { theme.bg_selected } else { theme.bg_panel_alt };
-    let fg = if unread > 0 { theme.fg_text } else { theme.fg_muted };
+    let fg = if unread > 0 || selected { theme.fg_text } else { theme.fg_muted };
 
     let label = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
@@ -251,23 +156,55 @@ fn mailbox_row(
     })
     .text_aligned(format!("{glyph}  {name}"), 14.0, fg, Alignment::Start);
 
-    let mut children = vec![label];
+    let mut children = vec![accent_bar(if selected { theme.accent } else { bg }), label];
     if unread > 0 {
         children.push(badge(theme, unread));
     }
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
         align_items: Some(AlignItems::Center),
-        padding: Rect { left: length(10.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(8.0, 0.0),
         ..Default::default()
     })
     .fill(bg)
-    .radius(4.0)
+    .radius(6.0)
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::SelectMailbox(key))
     .children(children)
+}
+
+/// Entrada de navegación deshabilitada (Calendario/Contactos — del roadmap).
+fn nav_hint(theme: &Theme, label: &str, tag: &str) -> View<Msg> {
+    let name = View::new(Style {
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(label, 14.0, theme.fg_placeholder, Alignment::Start);
+    let chip = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: pad_xy(6.0, 0.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(8.0)
+    .text(tag, 10.0, theme.fg_muted);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(16.0, 0.0),
+        ..Default::default()
+    })
+    .children(vec![name, chip])
 }
 
 /// Panel central: cabecera del buzón + lista de hilos (scrolleable, clip).
@@ -278,20 +215,16 @@ fn threads_panel(model: &Model) -> View<Msg> {
         .as_deref()
         .map(|m| format!("{m}  ·  {} hilos", model.threads.len()))
         .unwrap_or_else(|| "—".to_string());
-    let header = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
-        align_items: Some(AlignItems::Center),
-        padding: Rect { left: length(14.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .text_aligned(header_text, 13.0, theme.fg_muted, Alignment::Start);
+    let header = panel_header(theme, &header_text);
 
     let mut rows: Vec<View<Msg>> = Vec::new();
     for (idx, thread) in model.threads.iter().enumerate().skip(model.list_scroll) {
         let newest: Option<&Message> = thread.message_ids.last().and_then(|id| model.store_ref().message(id));
         let selected = model.selected_thread == Some(idx);
         rows.push(thread_row(theme, thread, newest, selected, idx));
+    }
+    if rows.is_empty() {
+        rows.push(empty_note(theme, "Bandeja vacía"));
     }
 
     let list = View::new(Style {
@@ -317,18 +250,18 @@ fn thread_row(
 ) -> View<Msg> {
     let unread = thread.unread > 0;
     let bg = if selected { theme.bg_selected } else { theme.bg_panel };
-    let title_color = if unread { theme.fg_text } else { theme.fg_muted };
+    let title_color = if unread || selected { theme.fg_text } else { theme.fg_muted };
+    let flagged = newest.map(|m| m.flags.flagged).unwrap_or(false);
 
     let sender = newest.map(|m| m.from.display_name().to_string()).unwrap_or_default();
-    let snippet = newest.map(|m| m.snippet(64)).unwrap_or_default();
-    let date = newest.map(|m| crate::view::fmt_date(m.date)).unwrap_or_default();
+    let sender_email = newest.map(|m| m.from.email.clone()).unwrap_or_default();
+    let snippet = newest.map(|m| m.snippet(60)).unwrap_or_default();
+    let date = newest.map(|m| fmt_date_short(m.date)).unwrap_or_default();
     let subject = if thread.subject.is_empty() { "(sin asunto)".to_string() } else { thread.subject.clone() };
+    let newest_id = newest.map(|m| m.id.clone());
 
-    // Línea 1: remitente · fecha (+ punto de no-leído).
+    // Línea 1: remitente (negrita si no leído) · estrella · fecha.
     let mut top: Vec<View<Msg>> = Vec::new();
-    if unread {
-        top.push(dot(theme.accent));
-    }
     top.push(
         View::new(Style {
             size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
@@ -336,11 +269,12 @@ fn thread_row(
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .text_aligned(sender, 13.0, title_color, Alignment::Start),
+        .text_aligned(sender, 13.5, title_color, Alignment::Start),
     );
+    top.push(star_toggle(theme, flagged, newest_id));
     top.push(
         View::new(Style {
-            size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+            size: Size { width: length(54.0_f32), height: percent(1.0_f32) },
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
@@ -372,55 +306,227 @@ fn thread_row(
     })
     .text_aligned(snippet, 11.0, theme.fg_muted, Alignment::Start);
 
-    View::new(Style {
+    let texts = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
         gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
-        padding: Rect { left: length(14.0_f32), right: length(12.0_f32), top: length(8.0_f32), bottom: length(8.0_f32) },
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![line_top, line_subject, line_snippet]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: pad_xy(12.0, 8.0),
         ..Default::default()
     })
     .fill(bg)
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::SelectThread(idx))
-    .children(vec![line_top, line_subject, line_snippet])
+    .children(vec![
+        accent_bar(if selected { theme.accent } else { bg }),
+        avatar(newest.map(|m| m.from.display_name()).unwrap_or("?"), &sender_email),
+        texts,
+    ])
 }
 
-/// Panel derecho: el hilo abierto, mensaje por mensaje.
+/// Estrella clicable: ★ si destacado, ☆ si no. Click alterna el flag sin
+/// abrir el hilo (el handler del icono gana sobre el de la fila).
+fn star_toggle(theme: &Theme, flagged: bool, id: Option<paloma_core::MessageId>) -> View<Msg> {
+    let (glyph, color) = if flagged { ("★", theme.accent) } else { ("☆", theme.fg_muted) };
+    let mut v = View::new(Style {
+        size: Size { width: length(20.0_f32), height: length(18.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(glyph, 14.0, color);
+    if let Some(id) = id {
+        v = v.on_click(Msg::ToggleStar(id));
+    }
+    v
+}
+
+/// Panel central en **modo búsqueda**: lista plana de mensajes que matchean la
+/// consulta, en todos los buzones. Click abre el mensaje en su hilo.
+fn search_results_panel(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let query = model.search.text();
+    let hits = model.store_ref().search(&query);
+
+    let header = panel_header(theme, &format!("🔍  {} resultado(s) · «{}»", hits.len(), query.trim()));
+
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    for m in hits.into_iter().skip(model.list_scroll) {
+        rows.push(result_row(theme, m));
+    }
+    if rows.is_empty() {
+        rows.push(empty_note(theme, "sin coincidencias"));
+    }
+
+    let list = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .clip(true)
+    .children(rows);
+
+    View::new(col(length(THREADS_W)))
+        .fill(theme.bg_panel)
+        .children(vec![header, list])
+}
+
+/// Fila de un resultado de búsqueda: avatar + remitente · fecha · buzón + asunto.
+fn result_row(theme: &Theme, m: &Message) -> View<Msg> {
+    let top = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(m.from.display_name().to_string(), 13.0, theme.fg_text, Alignment::Start),
+        View::new(Style {
+            size: Size { width: length(54.0_f32), height: percent(1.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(fmt_date_short(m.date), 11.0, theme.fg_muted, Alignment::End),
+    ]);
+
+    let subject = if m.subject.trim().is_empty() { "(sin asunto)".to_string() } else { m.subject.clone() };
+    let subj = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(format!("{}  ·  {}", m.mailbox, subject), 13.0, theme.fg_text, Alignment::Start);
+
+    let snip = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(m.snippet(60), 11.0, theme.fg_muted, Alignment::Start);
+
+    let texts = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![top, subj, snip]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: pad_xy(12.0, 8.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::OpenMessage(m.id.clone()))
+    .children(vec![avatar(m.from.display_name(), &m.from.email), texts])
+}
+
+/// Panel derecho: el hilo abierto, mensaje por mensaje, con barra de acciones.
 fn reading_panel(model: &Model) -> View<Msg> {
     let theme = &model.theme;
     let Some(thread) = model.threads.get(model.selected_thread.unwrap_or(usize::MAX)) else {
         let placeholder = View::new(Style {
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            flex_direction: FlexDirection::Column,
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
+            gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
             flex_grow: 1.0,
             ..Default::default()
         })
-        .text_aligned("Elegí un hilo para leerlo", 14.0, theme.fg_placeholder, Alignment::Center);
+        .children(vec![
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(40.0_f32) }, ..Default::default() })
+                .text_aligned("🕊", 34.0, theme.fg_placeholder, Alignment::Center),
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(20.0_f32) }, ..Default::default() })
+                .text_aligned("Elegí un hilo para leerlo", 14.0, theme.fg_placeholder, Alignment::Center),
+        ]);
         return View::new(col(Dimension::auto()).grow()).fill(theme.bg_app).children(vec![placeholder]);
     };
 
+    let newest = thread.message_ids.last().and_then(|id| model.store_ref().message(id));
+    let newest_id = thread.message_ids.last().cloned();
+    let flagged = newest.map(|m| m.flags.flagged).unwrap_or(false);
+    let seen = newest.map(|m| m.flags.seen).unwrap_or(true);
+
     let subject = if thread.subject.is_empty() { "(sin asunto)".to_string() } else { thread.subject.clone() };
     let subject_view = View::new(Style {
-        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
-        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(subject, 17.0, theme.fg_text, Alignment::Start);
+    .text_aligned(subject, 18.0, theme.fg_text, Alignment::Start);
+    let meta = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{} mensaje(s) en el hilo", thread.message_ids.len()),
+        11.0,
+        theme.fg_muted,
+        Alignment::Start,
+    );
     let header = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(44.0_f32) },
-        align_items: Some(AlignItems::Center),
-        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
-        padding: Rect { left: length(20.0_f32), right: length(12.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(58.0_f32) },
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        padding: pad_xy(20.0, 0.0),
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![
-        subject_view,
-        button("↩  Responder", theme.bg_button, theme.fg_text, Msg::ComposeReply),
-    ]);
+    .children(vec![subject_view, meta]);
+
+    // Barra de acciones.
+    let star_lbl = if flagged { "★ Destacado" } else { "☆ Destacar" };
+    let seen_lbl = if seen { "✉ Marcar no leído" } else { "✓ Marcar leído" };
+    let mut actions: Vec<View<Msg>> = vec![
+        button("↩  Responder", theme.accent, theme.bg_app, Msg::ComposeReply),
+        button("↪  Reenviar", theme.bg_button, theme.fg_text, Msg::ComposeForward),
+    ];
+    if let Some(id) = &newest_id {
+        actions.push(button(
+            star_lbl,
+            theme.bg_button,
+            if flagged { theme.accent } else { theme.fg_text },
+            Msg::ToggleStar(id.clone()),
+        ));
+        actions.push(button(seen_lbl, theme.bg_button, theme.fg_text, Msg::ToggleSeen(id.clone())));
+    }
+    actions.push(spacer());
+    actions.push(button("🗑  Borrar", theme.bg_button, theme.fg_destructive, Msg::DeleteThread));
+    let action_bar = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(42.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(16.0, 0.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(actions);
 
     let mut cards: Vec<View<Msg>> = Vec::new();
     for id in &thread.message_ids {
@@ -428,9 +534,6 @@ fn reading_panel(model: &Model) -> View<Msg> {
             cards.push(message_card(theme, m));
         }
     }
-
-    // Contenido desplazado hacia arriba por `read_scroll` (margen negativo);
-    // el viewport lo recorta. Da scroll suave en píxeles sin scroller nativo.
     let content = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: Dimension::auto() },
@@ -456,7 +559,7 @@ fn reading_panel(model: &Model) -> View<Msg> {
 
     View::new(col(Dimension::auto()).grow())
         .fill(theme.bg_app)
-        .children(vec![header, viewport])
+        .children(vec![header, action_bar, viewport])
 }
 
 /// Alto aproximado de la tarjeta-cuerpo según sus líneas (sin tope chico: en
@@ -468,7 +571,7 @@ fn card_body_height(text: &str) -> f32 {
 
 /// Alto total estimado del contenido del panel de lectura para el hilo abierto.
 /// Lo usa `update` para acotar el scroll. Espeja la geometría de `message_card`:
-/// padding 14·2 + cabecera 20 + gap 6 + "para" 16 + gap 6 = 76 px fijos + cuerpo.
+/// padding 14·2 + cabecera 40 + gap 8 + cuerpo.
 pub(crate) fn reading_content_height(model: &Model) -> f32 {
     let Some(thread) = model.threads.get(model.selected_thread.unwrap_or(usize::MAX)) else {
         return 0.0;
@@ -486,7 +589,7 @@ pub(crate) fn reading_content_height(model: &Model) -> f32 {
     total
 }
 
-/// Tarjeta de un mensaje: cabecera (de · para · fecha) + cuerpo de texto.
+/// Tarjeta de un mensaje: avatar + (de · fecha) + para + cuerpo.
 fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
     let from = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
@@ -494,23 +597,25 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(m.from.to_string(), 13.0, theme.fg_text, Alignment::Start);
+    .text_aligned(m.from.to_string(), 13.5, theme.fg_text, Alignment::Start);
     let date = View::new(Style {
-        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        size: Size { width: length(120.0_f32), height: percent(1.0_f32) },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(crate::view::fmt_date(m.date), 11.0, theme.fg_muted, Alignment::End);
+    .text_aligned(fmt_date(m.date), 11.0, theme.fg_muted, Alignment::End);
     let head = View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        size: Size { width: Dimension::auto(), height: length(20.0_f32) },
+        flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
     .children(vec![from, date]);
 
     let to = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+        flex_grow: 1.0,
         ..Default::default()
     })
     .text_aligned(
@@ -519,8 +624,25 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
         theme.fg_muted,
         Alignment::Start,
     );
+    let head_col = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: Dimension::auto(), height: length(40.0_f32) },
+        flex_grow: 1.0,
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![head, to]);
 
-    // Cuerpo: texto plano, o HTML despojado si el mensaje vino sólo en HTML.
+    let header_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+        gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![avatar(m.from.display_name(), &m.from.email), head_col]);
+
     let body_text = m.display_body();
     let body_h = card_body_height(&body_text);
     let body = View::new(Style {
@@ -532,13 +654,13 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: Dimension::auto() },
-        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
         padding: pad(14.0),
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .radius(6.0)
-    .children(vec![head, to, body])
+    .radius(8.0)
+    .children(vec![header_row, body])
 }
 
 /// Barra inferior de estado.
@@ -547,14 +669,14 @@ fn status_bar(model: &Model) -> View<Msg> {
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(STATUS_H) },
         align_items: Some(AlignItems::Center),
-        padding: Rect { left: length(14.0_f32), right: length(0.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        padding: pad_xy(14.0, 0.0),
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
     .text_aligned(model.status.clone(), 12.0, theme.fg_muted, Alignment::Start)
 }
 
-/// El modal de redacción: scrim + tarjeta con To/Asunto/Cuerpo + acciones.
+/// El modal de redacción: scrim + tarjeta con To/Cc/Asunto/Cuerpo + acciones.
 pub fn compose_modal(model: &Model, c: &Compose) -> View<Msg> {
     let theme = &model.theme;
     let pal = TextInputPalette::from_theme(theme);
@@ -567,37 +689,37 @@ pub fn compose_modal(model: &Model, c: &Compose) -> View<Msg> {
     .text_aligned(title, 16.0, theme.fg_text, Alignment::Start);
 
     let to = field(&c.to, "Para: nombre <correo@dominio>", c.focus == ComposeField::To, &pal, ComposeField::To);
+    let cc = field(&c.cc, "Cc: (opcional)", c.focus == ComposeField::Cc, &pal, ComposeField::Cc);
     let subject = field(&c.subject, "Asunto", c.focus == ComposeField::Subject, &pal, ComposeField::Subject);
     let body = body_field(&c.body, c.focus == ComposeField::Body, theme);
 
+    // Fila inferior: firmar (gancho agora) a la izquierda, acciones a la derecha.
     let actions = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
         align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::End),
         gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
     .children(vec![
+        sign_checkbox(theme, c.sign),
+        spacer(),
         button("Cancelar", theme.bg_button, theme.fg_text, Msg::ComposeClose),
         button("Enviar  ⏎", theme.accent, theme.bg_app, Msg::ComposeSend),
     ]);
 
     let card = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(560.0_f32), height: length(440.0_f32) },
+        size: Size { width: length(580.0_f32), height: length(480.0_f32) },
         gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
         padding: pad(20.0),
         ..Default::default()
     })
     .fill(theme.bg_panel)
     .radius(10.0)
-    // Click sobre el fondo de la tarjeta no la cierra (reenfoca el campo
-    // actual); sólo el scrim de afuera cierra.
     .on_click(Msg::ComposeFocus(c.focus))
-    .children(vec![title_view, to, subject, body, actions]);
+    .children(vec![title_view, to, cc, subject, body, actions]);
 
-    // Scrim a pantalla completa: oscurece y captura clicks-afuera.
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -607,6 +729,34 @@ pub fn compose_modal(model: &Model, c: &Compose) -> View<Msg> {
     .fill(Color::from_rgba8(0, 0, 0, 150))
     .on_click(Msg::ComposeClose)
     .children(vec![card])
+}
+
+/// Checkbox "Firmar (Ed25519)" — preferencia de UI; la firma real con la
+/// identidad de agora llega al integrar el keystore (ver LEEME · Pendiente).
+fn sign_checkbox(theme: &Theme, on: bool) -> View<Msg> {
+    let (box_glyph, color) = if on { ("☑", theme.accent) } else { ("☐", theme.fg_muted) };
+    let mark = View::new(Style {
+        size: Size { width: length(20.0_f32), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(box_glyph, 16.0, color);
+    let label = View::new(Style {
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned("Firmar (Ed25519)", 12.0, theme.fg_muted, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: length(170.0_f32), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .on_click(Msg::ComposeToggleSign)
+    .children(vec![mark, label])
 }
 
 fn field(
@@ -661,13 +811,56 @@ fn button(label: &str, bg: Color, fg: Color, msg: Msg) -> View<Msg> {
         size: Size { width: Dimension::auto(), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
-        padding: Rect { left: length(14.0_f32), right: length(14.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        padding: pad_xy(12.0, 0.0),
         ..Default::default()
     })
     .fill(bg)
     .radius(6.0)
-    .text(label, 13.0, fg)
+    .hover_fill(bg)
+    .text(label, 12.5, fg)
     .on_click(msg)
+}
+
+/// Un hueco flexible que empuja lo que sigue al extremo opuesto.
+fn spacer() -> View<Msg> {
+    View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(1.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+}
+
+/// Cabecera estándar de un panel central.
+fn panel_header(theme: &Theme, text: &str) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: pad_xy(14.0, 0.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .text_aligned(text.to_string(), 13.0, theme.fg_muted, Alignment::Start)
+}
+
+/// Nota centrada para estados vacíos.
+fn empty_note(theme: &Theme, text: &str) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(text, 13.0, theme.fg_placeholder, Alignment::Center)
+}
+
+/// Barra de acento vertical de 3 px (marca selección a la izquierda de una fila).
+fn accent_bar(color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: length(3.0_f32), height: percent(0.7_f32) },
+        ..Default::default()
+    })
+    .fill(color)
+    .radius(2.0)
 }
 
 /// Burbuja con un contador (no-leídos).
@@ -683,14 +876,50 @@ fn badge(theme: &Theme, n: usize) -> View<Msg> {
     .text(n.to_string(), 11.0, theme.bg_app)
 }
 
-/// Punto de acento (hilo con no-leídos).
-fn dot(color: Color) -> View<Msg> {
+/// Avatar circular con iniciales, coloreado de forma estable por el correo.
+fn avatar(name: &str, email: &str) -> View<Msg> {
     View::new(Style {
-        size: Size { width: length(8.0_f32), height: length(8.0_f32) },
+        size: Size { width: length(AVATAR), height: length(AVATAR) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .fill(color)
-    .radius(4.0)
+    .fill(avatar_color(email))
+    .radius((AVATAR / 2.0) as f64)
+    .text(initials(name), 15.0, Color::from_rgba8(255, 255, 255, 235))
+}
+
+/// Iniciales (1–2) de un nombre para mostrar en el avatar.
+fn initials(name: &str) -> String {
+    let mut words = name.split_whitespace().filter(|w| !w.is_empty());
+    let first = words.next().and_then(|w| w.chars().next());
+    let second = words.next().and_then(|w| w.chars().next());
+    match (first, second) {
+        (Some(a), Some(b)) => format!("{}{}", a.to_uppercase(), b.to_uppercase()),
+        (Some(a), None) => a.to_uppercase().to_string(),
+        _ => "?".to_string(),
+    }
+}
+
+/// Color estable de avatar derivado del correo (hash FNV-1a → paleta).
+fn avatar_color(seed: &str) -> Color {
+    const PALETTE: [(u8, u8, u8); 8] = [
+        (94, 129, 172),   // azul acero
+        (163, 109, 156),  // malva
+        (122, 162, 110),  // verde salvia
+        (191, 138, 92),   // terракота
+        (108, 153, 168),  // celeste apagado
+        (170, 120, 120),  // rosa viejo
+        (130, 140, 175),  // lavanda
+        (150, 150, 110),  // oliva
+    ];
+    let mut h: u32 = 2_166_136_261;
+    for b in seed.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(16_777_619);
+    }
+    let (r, g, b) = PALETTE[(h as usize) % PALETTE.len()];
+    Color::from_rgba8(r, g, b, 255)
 }
 
 /// Glifo por rol de buzón.
@@ -712,23 +941,35 @@ pub(crate) fn fmt_date(ts: i64) -> String {
     if ts <= 0 {
         return "—".to_string();
     }
+    let (y, m, d, h, min) = civil(ts);
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}")
+}
+
+/// Fecha corta para listas: `MM-DD HH:MM`.
+fn fmt_date_short(ts: i64) -> String {
+    if ts <= 0 {
+        return String::new();
+    }
+    let (_, m, d, h, min) = civil(ts);
+    format!("{m:02}-{d:02} {h:02}:{min:02}")
+}
+
+/// Descompone un timestamp Unix (s UTC) en `(año, mes, día, hora, minuto)`.
+fn civil(ts: i64) -> (i64, i64, i64, i64, i64) {
     let days = ts.div_euclid(86_400);
     let secs = ts.rem_euclid(86_400);
     let (h, min) = (secs / 3600, (secs % 3600) / 60);
-
-    // days since 1970-01-01 → (year, month, day) — civil_from_days.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
     let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
-
-    format!("{year:04}-{m:02}-{d:02} {h:02}:{min:02}")
+    (year, m, d, h, min)
 }
 
 // ── helpers de estilo ─────────────────────────────────────────────────────
@@ -749,5 +990,3 @@ impl Model {
         &self.store
     }
 }
-
-use paloma_core::MailStore;
