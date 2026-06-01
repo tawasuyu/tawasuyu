@@ -32,7 +32,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
-use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::llimphi_text::{draw_block, Alignment, TextBlock};
 use llimphi_ui::View;
 
 /// Tope de bytes a leer (16 MiB). Un GeoJSON más grande que eso es un
@@ -83,6 +83,17 @@ impl BBox {
     }
 }
 
+/// Una etiqueta: el nombre de una feature anclado a un punto representativo
+/// (el punto mismo, el medio de una línea, el centroide de un polígono).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Label {
+    pub at: Coord,
+    pub text: String,
+}
+
+/// Tope de etiquetas a retener — más que esto satura el panel de texto.
+const MAX_LABELS: usize = 200;
+
 /// Geometrías aplanadas listas para proyectar y pintar. Las geometrías
 /// GeoJSON anidadas (multi-, colecciones) se desarman a estas tres listas.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -94,6 +105,9 @@ pub struct MapData {
     /// Polígonos: cada uno es una lista de anillos; el primero es el
     /// contorno exterior y los siguientes, huecos. (`Polygon`/`MultiPolygon`.)
     pub polygons: Vec<Vec<Ring>>,
+    /// Nombres de features (de `properties.nombre`/`name`/…) anclados a un
+    /// punto representativo, para rotular el mapa.
+    pub labels: Vec<Label>,
 }
 
 impl MapData {
@@ -180,7 +194,7 @@ pub fn parse_geojson(src: &str) -> MapPreview {
     };
     let mut data = MapData::default();
     let mut budget = MAX_VERTICES;
-    collect(&value, &mut data, &mut budget);
+    collect(&value, &mut data, &mut budget, None);
     let truncated = budget == 0;
     if data.total_features() == 0 {
         MapPreview::NoGeometry
@@ -192,7 +206,9 @@ pub fn parse_geojson(src: &str) -> MapPreview {
 /// Recorre recursivamente un valor GeoJSON (FeatureCollection / Feature /
 /// geometría / GeometryCollection) acumulando geometrías en `data`. `budget`
 /// es el presupuesto de vértices restante: al agotarse, deja de agregar.
-fn collect(v: &serde_json::Value, data: &mut MapData, budget: &mut usize) {
+/// `name` es el rótulo heredado de la `Feature` contenedora (si la hay), que
+/// se ancla a un punto representativo de cada geometría hoja.
+fn collect(v: &serde_json::Value, data: &mut MapData, budget: &mut usize, name: Option<&str>) {
     if *budget == 0 {
         return;
     }
@@ -203,55 +219,124 @@ fn collect(v: &serde_json::Value, data: &mut MapData, budget: &mut usize) {
         "FeatureCollection" => {
             if let Some(arr) = v.get("features").and_then(|f| f.as_array()) {
                 for f in arr {
-                    collect(f, data, budget);
+                    collect(f, data, budget, None);
                 }
             }
         }
         "Feature" => {
+            // El nombre de la feature manda sobre uno heredado.
+            let fname = feature_name(v.get("properties"));
             if let Some(g) = v.get("geometry") {
-                collect(g, data, budget);
+                collect(g, data, budget, fname.as_deref().or(name));
             }
         }
         "GeometryCollection" => {
             if let Some(arr) = v.get("geometries").and_then(|g| g.as_array()) {
                 for g in arr {
-                    collect(g, data, budget);
+                    collect(g, data, budget, name);
                 }
             }
         }
         "Point" => {
             if let Some(c) = coord(v.get("coordinates")) {
                 push_points(data, std::slice::from_ref(&c), budget);
+                label_at(data, name, Some(c));
             }
         }
         "MultiPoint" => {
             let cs = coord_list(v.get("coordinates"));
+            let rep = cs.first().copied();
             push_points(data, &cs, budget);
+            label_at(data, name, rep);
         }
         "LineString" => {
             let line = coord_list(v.get("coordinates"));
+            let rep = midpoint(&line);
             push_line(data, line, budget);
+            label_at(data, name, rep);
         }
         "MultiLineString" => {
-            for line in coord_rings(v.get("coordinates")) {
+            let lines = coord_rings(v.get("coordinates"));
+            let rep = lines.first().and_then(|l| midpoint(l));
+            for line in lines {
                 push_line(data, line, budget);
             }
+            label_at(data, name, rep);
         }
         "Polygon" => {
             let rings = coord_rings(v.get("coordinates"));
+            let rep = rings.first().and_then(|r| centroid(r));
             push_polygon(data, rings, budget);
+            label_at(data, name, rep);
         }
         "MultiPolygon" => {
             // coordinates: [ [ ring, ring... ], ... ]
             if let Some(arr) = v.get("coordinates").and_then(|c| c.as_array()) {
+                let mut rep = None;
                 for poly in arr {
                     let rings = coord_rings(Some(poly));
+                    if rep.is_none() {
+                        rep = rings.first().and_then(|r| centroid(r));
+                    }
                     push_polygon(data, rings, budget);
                 }
+                label_at(data, name, rep);
             }
         }
         _ => {}
     }
+}
+
+/// Extrae un nombre legible de `properties`, probando claves usuales en
+/// español/inglés. `None` si no hay propiedades o ninguna clave aplica.
+fn feature_name(props: Option<&serde_json::Value>) -> Option<String> {
+    let obj = props?.as_object()?;
+    for key in ["nombre", "name", "título", "titulo", "title", "label", "Name", "NAME"] {
+        if let Some(s) = obj.get(key).and_then(|v| v.as_str()) {
+            let s = s.trim();
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Ancla una etiqueta a `at` si hay nombre y punto, respetando [`MAX_LABELS`].
+fn label_at(data: &mut MapData, name: Option<&str>, at: Option<Coord>) {
+    if let (Some(text), Some(at)) = (name, at) {
+        if data.labels.len() < MAX_LABELS {
+            data.labels.push(Label { at, text: text.to_string() });
+        }
+    }
+}
+
+/// Vértice central de una polilínea (rótulo de líneas).
+fn midpoint(line: &[Coord]) -> Option<Coord> {
+    if line.is_empty() {
+        None
+    } else {
+        Some(line[line.len() / 2])
+    }
+}
+
+/// Centroide simple (promedio de vértices) de un anillo, ignorando el último
+/// si repite el primero (anillos GeoJSON cerrados).
+fn centroid(ring: &[Coord]) -> Option<Coord> {
+    let pts: &[Coord] = match ring.split_last() {
+        Some((last, head)) if !head.is_empty() && last == &head[0] => head,
+        _ => ring,
+    };
+    if pts.is_empty() {
+        return None;
+    }
+    let (mut sx, mut sy) = (0.0, 0.0);
+    for [lon, lat] in pts {
+        sx += lon;
+        sy += lat;
+    }
+    let n = pts.len() as f64;
+    Some([sx / n, sy / n])
 }
 
 fn push_points(data: &mut MapData, pts: &[Coord], budget: &mut usize) {
@@ -336,6 +421,10 @@ pub struct MapViewerPalette {
     pub fill: Color,
     /// Disco de los puntos.
     pub point: Color,
+    /// Rejilla de coordenadas (se aplica muy tenue).
+    pub grid: Color,
+    /// Texto de etiquetas y rótulos de la rejilla.
+    pub label: Color,
 }
 
 impl Default for MapViewerPalette {
@@ -354,6 +443,8 @@ impl MapViewerPalette {
             stroke: t.accent,
             fill: t.accent,
             point: t.fg_text,
+            grid: t.fg_muted,
+            label: t.fg_text,
         }
     }
 }
@@ -460,7 +551,7 @@ where
         padding: pad(8.0, 6.0),
         ..Default::default()
     })
-    .paint_with(move |scene, _ts, rect| {
+    .paint_with(move |scene, ts, rect| {
         let Some(bb) = data.bbox() else { return };
         if rect.w <= 8.0 || rect.h <= 8.0 {
             return;
@@ -502,7 +593,40 @@ where
 
         let stroke_thin = Stroke::new(1.2);
         let stroke_edge = Stroke::new(1.0);
+        let stroke_grid = Stroke::new(0.75);
         let fill_col = with_alpha(palette.fill, 0.18);
+        let grid_col = with_alpha(palette.grid, 0.22);
+        let grid_label_col = with_alpha(palette.label, 0.55);
+
+        // --- Rejilla de coordenadas (detrás de todo) -----------------
+        // Líneas de lon/lat a un paso "redondo" con rótulo en grados, para
+        // dar contexto geográfico aunque no haya mapa-base.
+        let x0 = rect.x as f64;
+        let y0 = rect.y as f64;
+        let x1 = x0 + rect.w as f64;
+        let y1 = y0 + rect.h as f64;
+        let lon_step = nice_step(bb.max_lon - bb.min_lon);
+        let lat_step = nice_step(bb.max_lat - bb.min_lat);
+        for lon in ticks(bb.min_lon, bb.max_lon, lon_step) {
+            let (gx, _) = to_screen([lon, bb.max_lat]);
+            let mut path = BezPath::new();
+            path.move_to((gx, y0));
+            path.line_to((gx, y1));
+            scene.stroke(&stroke_grid, Affine::IDENTITY, grid_col, None, &path);
+            let txt = fmt_deg(lon, lon_step);
+            let block = TextBlock::simple(&txt, 9.0, grid_label_col, (gx + 2.0, y1 - 12.0));
+            draw_block(scene, ts, &block);
+        }
+        for lat in ticks(bb.min_lat, bb.max_lat, lat_step) {
+            let (_, gy) = to_screen([bb.min_lon, lat]);
+            let mut path = BezPath::new();
+            path.move_to((x0, gy));
+            path.line_to((x1, gy));
+            scene.stroke(&stroke_grid, Affine::IDENTITY, grid_col, None, &path);
+            let txt = fmt_deg(lat, lat_step);
+            let block = TextBlock::simple(&txt, 9.0, grid_label_col, (x0 + 2.0, gy + 1.0));
+            draw_block(scene, ts, &block);
+        }
 
         // Polígonos: relleno translúcido del contorno exterior + borde de
         // cada anillo.
@@ -535,7 +659,65 @@ where
                 &Circle::new((x, y), r),
             );
         }
+
+        // --- Etiquetas (encima de todo) ------------------------------
+        for label in &data.labels {
+            let (x, y) = to_screen(label.at);
+            // Desplazada arriba-derecha del ancla para no taparla.
+            let block = TextBlock::simple(&label.text, 11.0, palette.label, (x + 5.0, y - 14.0));
+            draw_block(scene, ts, &block);
+        }
     })
+}
+
+/// Paso "redondo" (1·2·5 × 10ⁿ) para una rejilla que cubra `span` con unas
+/// ~4–8 divisiones. Devuelve un paso positivo aun para spans degenerados.
+fn nice_step(span: f64) -> f64 {
+    let span = span.abs();
+    if span <= 1e-9 {
+        return 1.0;
+    }
+    let target = span / 6.0;
+    let mag = 10f64.powf(target.log10().floor());
+    let norm = target / mag; // 1..10
+    let step = if norm < 1.5 {
+        1.0
+    } else if norm < 3.5 {
+        2.0
+    } else if norm < 7.5 {
+        5.0
+    } else {
+        10.0
+    };
+    step * mag
+}
+
+/// Múltiplos de `step` dentro de `[lo, hi]` (incluidos), redondeando el
+/// primero hacia arriba. Capada por seguridad para no iterar de más.
+fn ticks(lo: f64, hi: f64, step: f64) -> Vec<f64> {
+    let mut out = Vec::new();
+    if step <= 0.0 || !lo.is_finite() || !hi.is_finite() {
+        return out;
+    }
+    let first = (lo / step).ceil() * step;
+    let mut v = first;
+    while v <= hi + step * 1e-6 && out.len() < 64 {
+        out.push(v);
+        v += step;
+    }
+    out
+}
+
+/// Formatea un grado con la cantidad de decimales que el paso amerita
+/// (pasos chicos → más decimales), con sufijo `°`.
+fn fmt_deg(value: f64, step: f64) -> String {
+    let decimals = if step >= 1.0 {
+        0
+    } else {
+        // -log10(step), acotado a [1, 4].
+        (-step.log10().floor() as i32).clamp(1, 4) as usize
+    };
+    format!("{value:.decimals$}°")
 }
 
 /// Construye un `BezPath` en coordenadas de pantalla a partir de un anillo.
@@ -695,6 +877,61 @@ mod tests {
     fn vertice_count_y_truncado() {
         let d = data_of(r#"{"type":"LineString","coordinates":[[0,0],[1,1],[2,2]]}"#);
         assert_eq!(d.vertex_count(), 3);
+    }
+
+    #[test]
+    fn etiquetas_desde_properties() {
+        let src = r#"{
+            "type":"FeatureCollection",
+            "features":[
+                {"type":"Feature","properties":{"nombre":"La Paz"},
+                 "geometry":{"type":"Point","coordinates":[-68.15,-16.5]}},
+                {"type":"Feature","properties":{"name":"Ruta"},
+                 "geometry":{"type":"LineString","coordinates":[[0,0],[2,2],[4,4]]}},
+                {"type":"Feature","properties":{},
+                 "geometry":{"type":"Point","coordinates":[1,1]}}
+            ]
+        }"#;
+        let d = data_of(src);
+        // Dos features con nombre → dos etiquetas; la de properties vacías no.
+        assert_eq!(d.labels.len(), 2);
+        assert_eq!(d.labels[0].text, "La Paz");
+        assert_eq!(d.labels[0].at, [-68.15, -16.5]);
+        // La etiqueta de la línea se ancla a su vértice medio.
+        assert_eq!(d.labels[1].text, "Ruta");
+        assert_eq!(d.labels[1].at, [2.0, 2.0]);
+    }
+
+    #[test]
+    fn etiqueta_de_poligono_en_el_centroide() {
+        let src = r#"{"type":"Feature","properties":{"nombre":"cuadra"},
+            "geometry":{"type":"Polygon","coordinates":[[[0,0],[2,0],[2,2],[0,2],[0,0]]]}}"#;
+        let d = data_of(src);
+        assert_eq!(d.labels.len(), 1);
+        // Centroide del cuadrado (ignorando el vértice de cierre repetido).
+        assert_eq!(d.labels[0].at, [1.0, 1.0]);
+    }
+
+    #[test]
+    fn nice_step_es_redondo() {
+        assert_eq!(nice_step(60.0), 10.0);
+        assert_eq!(nice_step(12.0), 2.0);
+        assert_eq!(nice_step(3.0), 0.5);
+        assert!(nice_step(0.0) > 0.0); // degenerado no rompe
+    }
+
+    #[test]
+    fn ticks_dentro_del_rango() {
+        let t = ticks(-3.0, 7.0, 2.0);
+        assert_eq!(t, vec![-2.0, 0.0, 2.0, 4.0, 6.0]);
+        assert!(ticks(0.0, 1.0, 0.0).is_empty()); // paso 0 no itera
+    }
+
+    #[test]
+    fn fmt_deg_decimales_segun_paso() {
+        assert_eq!(fmt_deg(10.0, 5.0), "10°");
+        assert_eq!(fmt_deg(-16.5, 0.5), "-16.5°");
+        assert_eq!(fmt_deg(0.25, 0.1), "0.2°");
     }
 
     #[test]

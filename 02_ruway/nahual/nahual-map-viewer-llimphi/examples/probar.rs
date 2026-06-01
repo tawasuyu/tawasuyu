@@ -31,8 +31,12 @@ fn main() {
                     b.min_lon, b.min_lat, b.max_lon, b.max_lat
                 );
             }
+            println!("  etiquetas : {}", data.labels.len());
             for (i, p) in data.points.iter().enumerate() {
                 println!("  punto[{i}] = lon {:.3}, lat {:.3}", p[0], p[1]);
+            }
+            for l in &data.labels {
+                println!("  rótulo    : {:?} @ lon {:.3}, lat {:.3}", l.text, l.at[0], l.at[1]);
             }
         }
         MapPreview::NoGeometry => println!("✗ JSON sin geometrías GeoJSON"),
