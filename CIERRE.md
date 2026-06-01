@@ -64,13 +64,32 @@ Barrido transversal, mecánico, alto valor por esfuerzo. **Estado al 2026-06-01:
   "no embellecer sin pedido" + tocaría decenas de dominios en un commit
   arriesgado). Queda como pase opt-in cuando lo pidas.
 - **1.3 — Inventario de `todo!()`/`unimplemented!()`.** ⬜ ~67 marcas sin triar.
-- **1.4 — Compilación de tests/examples.** ✅ **`cargo test --workspace --no-run`
-  compila todo** tras dos arreglos: (a) `cosmos-notebook-kernel` tenía un example
-  roto por un rename viejo — `cargo check` no lo veía, `--all-targets` sí
-  (`1fa3d60f`); (b) **el disco estaba 100% lleno** (`target/` = 127 GB) y los
-  demás "errores" eran secuela — se liberaron 25 GB borrando
-  `target/debug/incremental` (caché regenerable). Ejecutar la *suite* (no sólo
-  compilarla) sigue pendiente, sobre todo `iniy` ⚠️.
+- **1.4 — Tests ejecutados (no sólo compilados).** ✅ Corridos con **nextest**
+  (timeout por test, mata cuelgues). Cobertura: **cores de lógica de dominio** de
+  todos los cuadrantes (no GUI/`-llimphi`, no daemons, no wawa-excluido). Total
+  ~**1.900 tests**:
+  - `iniy-*` (el ⚠️ del inventario): **64/64 ✅** — la lógica está sólida; el ⚠️
+    era el e2e con NLI real, no los unit tests.
+  - Batch shared+raíz (format, forth-emisor, foreign-fs, mirada-layout,
+    pluma-notebook-core, agora, minga, khipu): **516/516 ✅**.
+  - cosmos compute (13 crates): **1267/1271 ✅**, 3 skipped, **4 lentos en debug**
+    (búsquedas de eclipses/tránsitos de ventana larga — uno verificado: pasa en
+    149 s; no son bugs). → marcarlos release-only o subir su timeout.
+  - **`nakui-core`: 60/133 — 73 FALLAN** 🔴. Causa única: los tests de integración
+    cargan módulos desde `01_yachay/nakui/modules/` (crm, inventory, sales…) que
+    **nunca se commitearon** (no están en git ni en disco). Falla desde 2026-05-25.
+    Es deuda de core de nakui (ver Nivel 2B), no un fix mecánico.
+  - dominium/tinkuy/supay/tullpu/media/takiy/chasqui/sandokan cores: verdes en lo
+    corrido (sin fallos), corrida no exhaustiva.
+- **1.4.bis — 2 bugs reales arreglados** (`1fa3d60f`, `0c556c62`): los examples de
+  `cosmos-notebook-kernel` y `dominium-notebook-kernel` importaban el nombre viejo
+  del crate (`pluma_notebook_kernel_{cosmos,dominium}`) tras un rename. `cargo
+  check` no los veía; `--all-targets` sí. Los kernels `pluma-notebook-kernel-{llm,
+  python,wasm,media,tinkuy}` conservan ese nombre → sus imports son correctos.
+- **1.4.ter — disco.** El build de tests llenó el disco dos veces (`target/` ~127 GB
+  / 147 GB). Se liberaron 45 GB borrando `target/debug/{incremental,examples}`
+  (regenerables). La suite completa (con GUI + 454 crates) **no entra en este
+  disco**; su lugar natural es CI (disco limpio). Ver nota ambiental.
 - **1.5 — Metadata de paquete** (`repository`, `keywords`, `categories`). ⬜
   Sólo relevante si se sube a crates.io (eje opcional) — diferible.
 
@@ -116,7 +135,7 @@ de lo automatizable.
 | **wawa-explorer** (78) | Sacar process-monitor a su crate | 🤖 |
 | **wawa host** (72) | Toggles de módulos con efecto real, accent→theme global | 🧑+🤖 |
 | **takiy** (72) | Pulir `takiy-midi` (núcleo ya cerrado) | 🤖 |
-| **nakui** (70) | **Editor de fórmulas en UI + WAL desde UI + vista formulario** | 🧑 — UX pesada, tuya |
+| **nakui** (70) | **Editor de fórmulas en UI + WAL desde UI + vista formulario.** ⚠️ Además: faltan los módulos `nakui/modules/{crm,inventory,sales,…}` sin commitear → **73 tests de integración en rojo** (ver 1.4). Autorar/commitear esos fixtures es prerequisito. | 🧑 — UX + contenido de dominio, tuya |
 | **nahual** (68) | Visor PDF (falta rasterizador) + SVG + seek/scrub | 🤝 (svg-viewer untracked ya empezado: ver 0.2) |
 | **media** (68) | **M1: sync A/V por PTS completa** | 🤖 — es el cuello de media |
 | **iniy** (65 ⚠️) | **Pipeline e2e *probado* + NLI local** (hoy piezas sueltas/mock) | 🤖 — primero *verlo correr*, recién después subir % |
