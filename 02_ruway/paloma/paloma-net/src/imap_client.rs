@@ -1,10 +1,17 @@
 //! Cliente IMAP síncrono (sobre `imap` + `native-tls`).
 //!
 //! Trae buzones y mensajes y actualiza flags. Síncrono a propósito: encaja
-//! con el patrón del resto de la suite (igual que `ureq` en puriy). Por ahora
-//! sólo TLS implícito (puerto 993); STARTTLS/plain se rechazan con un error
-//! claro y quedan para una sub-fase.
+//! con el patrón del resto de la suite (igual que `ureq` en puriy). Soporta los
+//! tres modos de transporte: **TLS implícito** (993), **STARTTLS** (143→TLS) y
+//! **plano** (143, sólo redes de confianza/pruebas). STARTTLS y TLS terminan en
+//! el mismo tipo de stream cifrado; el plano vive en una variante aparte del
+//! enum [`ImapSession`].
+//!
+//! El fetch trae **los últimos N** mensajes del buzón (no todo el histórico):
+//! se calcula el rango a partir del `EXISTS` que devuelve el `SELECT`. `N` es
+//! configurable (default [`DEFAULT_FETCH_LIMIT`]); `None` trae todo.
 
+use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use imap::types::Flag as ImapFlag;
@@ -14,83 +21,163 @@ use paloma_core::{Flags, Mailbox, MailError, Message, MessageId, Security, Serve
 
 use crate::mime;
 
-/// Sesión IMAP autenticada contra un servidor.
+/// Cuántos mensajes recientes traer por buzón si no se configura otra cosa.
+pub const DEFAULT_FETCH_LIMIT: usize = 200;
+
+/// Sesión IMAP autenticada, cifrada (TLS/STARTTLS) o en claro (plano).
+enum ImapSession {
+    Tls(Session<TlsStream<TcpStream>>),
+    Plain(Session<TcpStream>),
+}
+
+/// Cliente IMAP: una sesión + el límite de fetch.
 pub struct ImapClient {
-    session: Session<TlsStream<TcpStream>>,
+    session: ImapSession,
+    /// Cuántos mensajes recientes traer por buzón; `None` = todos.
+    fetch_limit: Option<usize>,
 }
 
 impl ImapClient {
-    /// Conecta y hace login. La contraseña la provee el caller (a futuro,
-    /// desde el proveedor de credenciales de la suite).
+    /// Conecta y hace login según `cfg.security`. La contraseña la provee el
+    /// caller (a futuro, desde el proveedor de credenciales de la suite).
     pub fn connect(cfg: &ServerConfig, password: &str) -> Result<Self, MailError> {
-        if !matches!(cfg.security, Security::Tls) {
-            return Err(MailError::Transport(
-                "paloma-net: por ahora sólo IMAP sobre TLS implícito (993)".into(),
-            ));
-        }
-        let tls = native_tls::TlsConnector::builder()
-            .build()
-            .map_err(|e| MailError::Transport(e.to_string()))?;
-        let client = imap::connect((cfg.host.as_str(), cfg.port), cfg.host.as_str(), &tls)
-            .map_err(|e| MailError::Transport(e.to_string()))?;
-        let session = client
-            .login(&cfg.username, password)
-            .map_err(|(_e, _client)| MailError::Auth)?;
-        Ok(Self { session })
+        let session = match cfg.security {
+            Security::Tls => {
+                let tls = build_tls()?;
+                let client = imap::connect((cfg.host.as_str(), cfg.port), cfg.host.as_str(), &tls)
+                    .map_err(|e| MailError::Transport(e.to_string()))?;
+                ImapSession::Tls(login(client, cfg, password)?)
+            }
+            Security::StartTls => {
+                let tls = build_tls()?;
+                let client =
+                    imap::connect_starttls((cfg.host.as_str(), cfg.port), cfg.host.as_str(), &tls)
+                        .map_err(|e| MailError::Transport(e.to_string()))?;
+                ImapSession::Tls(login(client, cfg, password)?)
+            }
+            Security::Plain => {
+                let tcp = TcpStream::connect((cfg.host.as_str(), cfg.port))
+                    .map_err(|e| MailError::Transport(e.to_string()))?;
+                let mut client = imap::Client::new(tcp);
+                client.read_greeting().map_err(|e| MailError::Transport(e.to_string()))?;
+                ImapSession::Plain(login(client, cfg, password)?)
+            }
+        };
+        Ok(Self { session, fetch_limit: Some(DEFAULT_FETCH_LIMIT) })
+    }
+
+    /// Ajusta cuántos mensajes recientes traer por buzón (`None` = todos).
+    pub fn set_fetch_limit(&mut self, limit: Option<usize>) {
+        self.fetch_limit = limit;
     }
 
     /// Lista los buzones (`LIST "" "*"`).
     pub fn list_mailboxes(&mut self) -> Result<Vec<Mailbox>, MailError> {
-        let names = self.session.list(Some(""), Some("*")).map_err(map_err)?;
-        Ok(names.iter().map(|n| Mailbox::new(n.name())).collect())
-    }
-
-    /// Trae todos los mensajes de un buzón (`FETCH 1:* (UID FLAGS RFC822)`) y
-    /// los parsea al modelo nativo. (Limitar a los últimos N queda para la
-    /// fase de sync incremental.)
-    pub fn fetch_messages(&mut self, mailbox: &str) -> Result<Vec<Message>, MailError> {
-        self.session.select(mailbox).map_err(map_err)?;
-        let fetches = self.session.fetch("1:*", "(UID FLAGS RFC822)").map_err(map_err)?;
-        let mut out = Vec::new();
-        for f in fetches.iter() {
-            let Some(body) = f.body().or_else(|| f.text()) else {
-                continue;
-            };
-            let flags = flags_from(f.flags());
-            if let Ok(m) = mime::parse_message(body, mailbox, flags) {
-                out.push(m);
-            }
+        match &mut self.session {
+            ImapSession::Tls(s) => list_on(s),
+            ImapSession::Plain(s) => list_on(s),
         }
-        Ok(out)
     }
 
-    /// Reemplaza los flags de un mensaje, ubicándolo por su `Message-ID`
-    /// (`UID SEARCH HEADER MESSAGE-ID …` → `UID STORE`).
+    /// Trae los últimos N mensajes de un buzón y los parsea al modelo nativo.
+    pub fn fetch_messages(&mut self, mailbox: &str) -> Result<Vec<Message>, MailError> {
+        let limit = self.fetch_limit;
+        match &mut self.session {
+            ImapSession::Tls(s) => fetch_on(s, mailbox, limit),
+            ImapSession::Plain(s) => fetch_on(s, mailbox, limit),
+        }
+    }
+
+    /// Reemplaza los flags de un mensaje, ubicándolo por su `Message-ID`.
     pub fn set_flags_by_message_id(
         &mut self,
         mailbox: &str,
         id: &MessageId,
         flags: Flags,
     ) -> Result<(), MailError> {
-        self.session.select(mailbox).map_err(map_err)?;
-        let inner = id.0.trim_matches(|c| c == '<' || c == '>');
-        let uids = self
-            .session
-            .uid_search(format!("HEADER MESSAGE-ID <{inner}>"))
-            .map_err(map_err)?;
-        let Some(&uid) = uids.iter().next() else {
-            return Err(MailError::UnknownMessage(id.0.clone()));
-        };
-        self.session
-            .uid_store(uid.to_string(), format!("FLAGS ({})", imap_flag_string(flags)))
-            .map_err(map_err)?;
-        Ok(())
+        match &mut self.session {
+            ImapSession::Tls(s) => set_flags_on(s, mailbox, id, flags),
+            ImapSession::Plain(s) => set_flags_on(s, mailbox, id, flags),
+        }
     }
 
     /// Cierra la sesión limpiamente.
     pub fn logout(&mut self) -> Result<(), MailError> {
-        self.session.logout().map_err(map_err)
+        match &mut self.session {
+            ImapSession::Tls(s) => s.logout().map_err(map_err),
+            ImapSession::Plain(s) => s.logout().map_err(map_err),
+        }
     }
+}
+
+fn build_tls() -> Result<native_tls::TlsConnector, MailError> {
+    native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| MailError::Transport(e.to_string()))
+}
+
+/// Login genérico sobre cualquier `Client<T>`, mapeando el rechazo a `Auth`.
+fn login<T: Read + Write>(
+    client: imap::Client<T>,
+    cfg: &ServerConfig,
+    password: &str,
+) -> Result<Session<T>, MailError> {
+    client.login(&cfg.username, password).map_err(|(_e, _client)| MailError::Auth)
+}
+
+/// `LIST "" "*"` → buzones nativos. Genérico sobre el tipo de stream.
+fn list_on<T: Read + Write>(s: &mut Session<T>) -> Result<Vec<Mailbox>, MailError> {
+    let names = s.list(Some(""), Some("*")).map_err(map_err)?;
+    Ok(names.iter().map(|n| Mailbox::new(n.name())).collect())
+}
+
+/// `SELECT` + `FETCH` de los últimos `limit` mensajes (o todos si `None`).
+fn fetch_on<T: Read + Write>(
+    s: &mut Session<T>,
+    mailbox: &str,
+    limit: Option<usize>,
+) -> Result<Vec<Message>, MailError> {
+    let meta = s.select(mailbox).map_err(map_err)?;
+    let total = meta.exists;
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+    // Rango de números de secuencia: los últimos `limit`, hasta el final.
+    let start = match limit {
+        Some(n) if (n as u32) < total => total - n as u32 + 1,
+        _ => 1,
+    };
+    let range = format!("{start}:*");
+    let fetches = s.fetch(range, "(UID FLAGS RFC822)").map_err(map_err)?;
+    let mut out = Vec::new();
+    for f in fetches.iter() {
+        let Some(body) = f.body().or_else(|| f.text()) else {
+            continue;
+        };
+        let flags = flags_from(f.flags());
+        if let Ok(m) = mime::parse_message(body, mailbox, flags) {
+            out.push(m);
+        }
+    }
+    Ok(out)
+}
+
+/// `UID SEARCH HEADER MESSAGE-ID …` → `UID STORE FLAGS`.
+fn set_flags_on<T: Read + Write>(
+    s: &mut Session<T>,
+    mailbox: &str,
+    id: &MessageId,
+    flags: Flags,
+) -> Result<(), MailError> {
+    s.select(mailbox).map_err(map_err)?;
+    let inner = id.0.trim_matches(|c| c == '<' || c == '>');
+    let uids = s.uid_search(format!("HEADER MESSAGE-ID <{inner}>")).map_err(map_err)?;
+    let Some(&uid) = uids.iter().next() else {
+        return Err(MailError::UnknownMessage(id.0.clone()));
+    };
+    s.uid_store(uid.to_string(), format!("FLAGS ({})", imap_flag_string(flags)))
+        .map_err(map_err)?;
+    Ok(())
 }
 
 fn map_err(e: imap::Error) -> MailError {

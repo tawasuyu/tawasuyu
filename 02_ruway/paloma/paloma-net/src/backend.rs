@@ -30,6 +30,12 @@ impl NetBackend {
     pub fn account(&self) -> &Account {
         &self.account
     }
+
+    /// Ajusta cuántos mensajes recientes traer por buzón (`None` = todos).
+    /// Por defecto, [`crate::imap_client::DEFAULT_FETCH_LIMIT`].
+    pub fn set_fetch_limit(&self, limit: Option<usize>) {
+        self.imap.lock().unwrap().set_fetch_limit(limit);
+    }
 }
 
 impl MailBackend for NetBackend {

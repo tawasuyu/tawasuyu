@@ -137,6 +137,14 @@ fn try_net() -> Result<NetSession, String> {
     let label = format!("conectado · {account_id}");
     let backend = paloma_net::NetBackend::connect(account, &imap_pw, &smtp_pw)
         .map_err(|e| format!("no se pudo conectar IMAP: {e}"))?;
+    // Límite de fetch opcional: `PALOMA_FETCH_LIMIT=0` (o "all") trae todo.
+    if let Ok(raw) = std::env::var("PALOMA_FETCH_LIMIT") {
+        let limit = match raw.trim() {
+            "0" | "all" | "todos" => None,
+            n => n.parse::<usize>().ok().or(Some(200)),
+        };
+        backend.set_fetch_limit(limit);
+    }
     Ok(NetSession { backend: Box::new(backend), me, account_id, label })
 }
 

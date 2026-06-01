@@ -2,7 +2,8 @@
 //!
 //! Implementa el `MailBackend` de [`paloma_core`] contra servidores reales:
 //! - [`mime`] — parsea bytes RFC 822 (lo que IMAP entrega) al `Message` nativo.
-//! - [`imap_client`] — fetch IMAP (TLS implícito): buzones, mensajes, flags.
+//! - [`imap_client`] — fetch IMAP (TLS/STARTTLS/plano): buzones, últimos N
+//!   mensajes, flags.
 //! - [`smtp`] — envío SMTP por `lettre`.
 //! - [`NetBackend`] — junta IMAP (entrada) + SMTP (salida) en un `MailBackend`.
 //!
