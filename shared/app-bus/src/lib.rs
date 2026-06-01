@@ -281,6 +281,7 @@ pub fn seed_default_apps() -> std::io::Result<usize> {
         ("media", "Media", "▶", "media-app", "ruway"),
         ("tullpu", "Tullpu", "✦", "tullpu-app-llimphi", "ruway"),
         ("supay", "Supay", "✷", "supay-app-llimphi", "ruway"),
+        ("sandokan-monitor", "Monitor", "❤", "sandokan-monitor", "ukupacha"),
     ];
 
     let mut escritos = 0;

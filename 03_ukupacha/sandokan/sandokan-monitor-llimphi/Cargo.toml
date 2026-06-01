@@ -20,3 +20,5 @@ ulid = { workspace = true }
 tokio = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+app-bus = { path = "../../../shared/app-bus" }

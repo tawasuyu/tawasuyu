@@ -33,6 +33,7 @@ use sandokan::{auto_default, Engine, Intent, IsolationLevel};
 use sandokan_monitor_core::{observe, MonitorSnapshot, UnitObservation};
 use ulid::Ulid;
 
+use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Rect, Size, Style},
@@ -41,6 +42,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{App, Handle, View};
+use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
 
 /// Muestras de CPU guardadas por unidad para dibujar el sparkline.
 const SPARK_LEN: usize = 48;
@@ -92,6 +94,28 @@ enum Msg {
     Stop(Ulid),
     Kill(Ulid),
     WawaCensus(Vec<WawaApp>),
+    /// Abrir/cerrar un menú raíz de la barra (`None` = cerrar).
+    MenuOpen(Option<usize>),
+    /// Command id elegido en un dropdown de la barra.
+    MenuCmd(String),
+}
+
+/// Menú de la app (Monitor / Ver / Ayuda). Los `command` los mapea
+/// `update` en `Msg::MenuCmd`.
+fn build_menu() -> AppMenu {
+    AppMenu::new()
+        .menu(
+            Menu::new("Monitor")
+                .item(MenuItem::new("Refrescar", "monitor.refresh").shortcut("Ctrl+R").icon("⟳"))
+                .item(MenuItem::new("Sembrar demo", "monitor.seed").icon("✚").separated())
+                .item(MenuItem::new("Salir", "app.quit").shortcut("Ctrl+Q").separated()),
+        )
+        .menu(
+            Menu::new("Ver")
+                .item(MenuItem::new("Linux", "view.linux"))
+                .item(MenuItem::new("Wawa", "view.wawa")),
+        )
+        .menu(Menu::new("Ayuda").item(MenuItem::new("Observa por el contrato Engine", "help.about")))
 }
 
 struct Model {
@@ -103,6 +127,8 @@ struct Model {
     selected: Option<Ulid>,
     error: Option<String>,
     wawa: Vec<WawaApp>,
+    menu: AppMenu,
+    menu_open: Option<usize>,
     ctx: Arc<EngineCtx>,
 }
 
@@ -232,6 +258,8 @@ impl App for Monitor {
             selected: None,
             error: None,
             wawa: Vec::new(),
+            menu: build_menu(),
+            menu_open: None,
             ctx,
         }
     }
@@ -283,6 +311,32 @@ impl App for Monitor {
                 model.selected = None;
             }
             Msg::WawaCensus(apps) => model.wawa = apps,
+            Msg::MenuOpen(o) => model.menu_open = o,
+            Msg::MenuCmd(cmd) => {
+                model.menu_open = None;
+                match cmd.as_str() {
+                    "view.linux" => model.world = World::Linux,
+                    "view.wawa" => {
+                        model.world = World::Wawa;
+                        if model.wawa.is_empty() {
+                            handle.spawn(|| Msg::WawaCensus(wawa_census()));
+                        }
+                    }
+                    "monitor.refresh" => {
+                        let ctx = model.ctx.clone();
+                        handle.spawn(move || Msg::Snapshot(ctx.poll()));
+                    }
+                    "monitor.seed" => {
+                        let ctx = model.ctx.clone();
+                        handle.spawn(move || {
+                            seed_demo(&ctx);
+                            Msg::Snapshot(ctx.poll())
+                        });
+                    }
+                    "app.quit" => handle.quit(),
+                    _ => {}
+                }
+            }
         }
         model
     }
@@ -303,7 +357,29 @@ impl App for Monitor {
             ..Default::default()
         })
         .fill(t.bg_app)
-        .children(vec![header(model), tabs(model), body])
+        .children(vec![
+            menubar_view(&menu_spec(model)),
+            header(model),
+            tabs(model),
+            body,
+        ])
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        menubar_overlay(&menu_spec(model))
+    }
+}
+
+/// Spec de la barra de menú — armado en cada `view()`/`view_overlay()`.
+fn menu_spec(model: &Model) -> MenuBarSpec<'_, Msg> {
+    MenuBarSpec {
+        menu: &model.menu,
+        open: model.menu_open,
+        theme: &model.theme,
+        viewport: (900.0, 600.0),
+        height: DEFAULT_HEIGHT,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|s: &str| Msg::MenuCmd(s.to_string())),
     }
 }
 
