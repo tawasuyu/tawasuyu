@@ -26,6 +26,7 @@ mod backend;
 mod error;
 mod mailbox;
 mod message;
+pub mod search;
 mod store;
 pub mod thread;
 

@@ -75,6 +75,24 @@ impl MailStore {
         self.by_mailbox.values().flatten().find(|m| &m.id == id)
     }
 
+    /// Búsqueda de texto sobre **todos** los buzones cacheados. Devuelve los
+    /// mensajes que matchean todos los términos de `query`, mejor puntuados y
+    /// más recientes primero. Consulta vacía → sin resultados.
+    pub fn search(&self, query: &str) -> Vec<&Message> {
+        let terms = crate::search::terms(query);
+        if terms.is_empty() {
+            return Vec::new();
+        }
+        let mut hits: Vec<(i32, &Message)> = self
+            .by_mailbox
+            .values()
+            .flatten()
+            .filter_map(|m| crate::search::score(m, &terms).map(|s| (s, m)))
+            .collect();
+        hits.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.date.cmp(&a.1.date)));
+        hits.into_iter().map(|(_, m)| m).collect()
+    }
+
     /// Cantidad de mensajes sin leer en un buzón.
     pub fn unread_count(&self, mailbox: &str) -> usize {
         self.messages(mailbox).iter().filter(|m| m.is_unread()).count()
@@ -166,6 +184,25 @@ mod tests {
         assert_eq!(store.unread_count("INBOX"), 0);
         // Persistió en el backend también.
         assert!(backend.fetch_messages("INBOX").unwrap()[0].flags.seen);
+    }
+
+    #[test]
+    fn search_cruza_buzones_y_ordena() {
+        let mut store = MailStore::new();
+        let mut a = msg("<1@x>", true, 10, None);
+        a.subject = "Factura de mayo".into();
+        let mut b = msg("<2@x>", true, 30, None);
+        b.subject = "Otra cosa".into();
+        b.body_text = "te paso la factura adjunta".into();
+        b.mailbox = "Sent".into();
+        store.ingest("INBOX", vec![a]);
+        store.ingest("Sent", vec![b]);
+        let hits = store.search("factura");
+        assert_eq!(hits.len(), 2);
+        // El match en asunto (peso mayor) va primero pese a ser más viejo.
+        assert_eq!(hits[0].id.0, "<1@x>");
+        assert!(store.search("inexistente").is_empty());
+        assert!(store.search("").is_empty());
     }
 
     #[test]

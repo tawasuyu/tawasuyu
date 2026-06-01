@@ -102,6 +102,11 @@ pub struct Model {
     list_scroll: usize,
     /// Redacción en curso; `None` si el modal está cerrado.
     compose: Option<Compose>,
+    /// Caja de búsqueda de texto. Con contenido, el panel central muestra
+    /// resultados (mensajes que matchean) en vez de los hilos del buzón.
+    search: TextInputState,
+    /// `true` si la caja de búsqueda tiene el foco del teclado.
+    search_focused: bool,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -172,6 +177,8 @@ impl Model {
             selected_thread: None,
             list_scroll: 0,
             compose: None,
+            search: TextInputState::new(),
+            search_focused: false,
             db,
             account_id,
             status,
@@ -181,6 +188,16 @@ impl Model {
             model.open_mailbox(&name);
         }
         model
+    }
+
+    /// Abre el mensaje `id`: salta a su buzón y selecciona el hilo que lo
+    /// contiene. Usado al elegir un resultado de búsqueda.
+    fn open_message(&mut self, id: &MessageId) {
+        let Some(mailbox) = self.store.message(id).map(|m| m.mailbox.clone()) else { return };
+        self.open_mailbox(&mailbox);
+        if let Some(idx) = self.threads.iter().position(|t| t.message_ids.contains(id)) {
+            self.open_thread(idx);
+        }
     }
 
     /// Trae y abre `mailbox`: sincroniza sus mensajes (o los lee de la caché si
@@ -272,6 +289,12 @@ pub enum Msg {
     ComposeSend,
     /// Re-traer el buzón activo desde el backend.
     Refresh,
+    /// Enfocar/desenfocar la caja de búsqueda.
+    SearchFocus(bool),
+    /// Tecla mientras la búsqueda tiene el foco.
+    SearchKey(KeyEvent),
+    /// Abrir un mensaje (típicamente, un resultado de búsqueda).
+    OpenMessage(MessageId),
 }
 
 /// La transición Elm. Toma el modelo por valor y lo devuelve mutado.
@@ -331,6 +354,34 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
             }
         }
         Msg::ComposeSend => model = send_compose(model),
+        Msg::SearchFocus(on) => model.search_focused = on,
+        Msg::OpenMessage(id) => {
+            model.open_message(&id);
+            model.search_focused = false;
+        }
+        Msg::SearchKey(event) => {
+            if event.state == KeyState::Pressed {
+                match &event.key {
+                    Key::Named(NamedKey::Escape) => {
+                        model.search.clear();
+                        model.search_focused = false;
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        // Enter abre el primer resultado.
+                        let q = model.search.text();
+                        let first = model.store.search(&q).first().map(|m| m.id.clone());
+                        if let Some(id) = first {
+                            model.open_message(&id);
+                            model.search_focused = false;
+                        }
+                    }
+                    _ => {
+                        model.search.apply_key(&event);
+                        model.list_scroll = 0;
+                    }
+                }
+            }
+        }
     }
     model
 }
@@ -387,11 +438,15 @@ pub fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
     if model.compose.is_some() {
         return Some(Msg::ComposeKey(event.clone()));
     }
+    if model.search_focused {
+        return Some(Msg::SearchKey(event.clone()));
+    }
     if event.state != KeyState::Pressed || event.modifiers.ctrl || event.modifiers.alt {
         return None;
     }
     match &event.key {
         Key::Named(NamedKey::F5) => Some(Msg::Refresh),
+        Key::Character(ch) if ch.as_str() == "/" => Some(Msg::SearchFocus(true)),
         Key::Character(ch) if ch.eq_ignore_ascii_case("c") => Some(Msg::ComposeOpen),
         Key::Character(ch) if ch.eq_ignore_ascii_case("r") => {
             model.current_thread().map(|_| Msg::ComposeReply)

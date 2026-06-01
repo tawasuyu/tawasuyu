@@ -50,7 +50,11 @@ pub fn root(model: &Model) -> View<Msg> {
     })
     .children(vec![
         mailboxes_panel(model),
-        threads_panel(model),
+        if model.search.text().trim().is_empty() {
+            threads_panel(model)
+        } else {
+            search_results_panel(model)
+        },
         reading_panel(model),
     ]);
 
@@ -75,6 +79,21 @@ fn toolbar(model: &Model) -> View<Msg> {
     })
     .text_aligned("🕊  paloma", 18.0, theme.fg_text, Alignment::Start);
 
+    // Caja de búsqueda (ancho fijo). El `text_input_view` ya pinta foco/borde.
+    let pal = TextInputPalette::from_theme(theme);
+    let search = View::new(Style {
+        size: Size { width: length(280.0_f32), height: Dimension::auto() },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        &model.search,
+        "🔍  Buscar…  ( / )",
+        model.search_focused,
+        &pal,
+        Msg::SearchFocus(true),
+    )]);
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(TOOLBAR_H) },
@@ -86,9 +105,112 @@ fn toolbar(model: &Model) -> View<Msg> {
     .fill(theme.bg_panel)
     .children(vec![
         brand,
+        search,
         button("✎  Redactar", theme.accent, theme.bg_app, Msg::ComposeOpen),
         button("⟳", theme.bg_button, theme.fg_text, Msg::Refresh),
     ])
+}
+
+/// Panel central en **modo búsqueda**: lista plana de mensajes que matchean la
+/// consulta, en todos los buzones. Click abre el mensaje en su hilo.
+fn search_results_panel(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let query = model.search.text();
+    let hits = model.store_ref().search(&query);
+
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: Rect { left: length(14.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .text_aligned(
+        format!("🔍  {} resultado(s) · «{}»", hits.len(), query.trim()),
+        13.0,
+        theme.fg_muted,
+        Alignment::Start,
+    );
+
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    for m in hits.into_iter().skip(model.list_scroll) {
+        rows.push(result_row(theme, m));
+    }
+    if rows.is_empty() {
+        rows.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .text_aligned("sin coincidencias", 13.0, theme.fg_placeholder, Alignment::Center),
+        );
+    }
+
+    let list = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .clip(true)
+    .children(rows);
+
+    View::new(col(length(THREADS_W)))
+        .fill(theme.bg_panel)
+        .children(vec![header, list])
+}
+
+/// Fila de un resultado de búsqueda: remitente · buzón · fecha + asunto + extracto.
+fn result_row(theme: &Theme, m: &Message) -> View<Msg> {
+    let top = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(m.from.display_name().to_string(), 13.0, theme.fg_text, Alignment::Start),
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(crate::view::fmt_date(m.date), 11.0, theme.fg_muted, Alignment::End),
+    ]);
+
+    let subject = if m.subject.trim().is_empty() { "(sin asunto)".to_string() } else { m.subject.clone() };
+    let subj = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(format!("{}  ·  {}", m.mailbox, subject), 13.0, theme.fg_text, Alignment::Start);
+
+    let snip = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(m.snippet(64), 11.0, theme.fg_muted, Alignment::Start);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        padding: Rect { left: length(14.0_f32), right: length(12.0_f32), top: length(8.0_f32), bottom: length(8.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::OpenMessage(m.id.clone()))
+    .children(vec![top, subj, snip])
 }
 
 /// Panel izquierdo: los buzones, con rol e indicador de no-leídos.
