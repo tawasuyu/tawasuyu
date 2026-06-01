@@ -40,6 +40,7 @@ kind = "clipboard"
 
 [[surfaces.end]]
 kind = "volume"
+exec = "pavucontrol"   # click en el medidor → mezclador de audio
 
 [[surfaces.end]]
 kind = "brightness"

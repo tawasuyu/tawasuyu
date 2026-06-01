@@ -182,7 +182,11 @@ borde; shuma provee el contenido.
   - **Exec asíncrono del Quake** ✅ — el `Enter` corre el comando en un hilo y el
     resultado llega por un `mpsc::Receiver` que el latido sondea (`try_recv`) cada
     frame; ya no bloquea el loop. Mientras corre, el drawer muestra `…`.
-  - Falta: los widgets placeholder (`window_list`/`tray`/`clipboard`, Fase 6) y
-    leer el volumen real en el sampler (hoy 0%).
+  - **Volumen real** ✅ — el sampler lee el volumen del sink por defecto vía
+    PipeWire (`wpctl get-volume`) con fallback a PulseAudio (`pactl`), y rellena
+    `WidgetCtx::{volume, muted}` (el brillo ya lo lee de `/sys`). El medidor deja
+    de marcar 0%. Parseo en funciones puras testeadas (`parse_wpctl`/
+    `parse_pactl_pct`). Bonus en el asset: `volume` con `exec = "pavucontrol"`.
+  - Falta: los widgets placeholder (`window_list`/`tray`/`clipboard`, Fase 6).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).

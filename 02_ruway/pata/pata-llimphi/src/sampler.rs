@@ -34,14 +34,15 @@ impl Sampler {
     pub fn sample(&mut self) -> WidgetCtx {
         let (ram, ram_used_mb, ram_total_mb) = sample_ram();
         let (sun_longitude_deg, moon_phase) = astro_from_jd(jd_from_unix(Utc::now().timestamp()));
+        let (volume, muted) = sample_volume().unwrap_or((0.0, false));
         WidgetCtx {
             clock: sample_clock(),
             cpu: self.sample_cpu(),
             ram,
             ram_used_mb,
             ram_total_mb,
-            volume: 0.0,
-            muted: false,
+            volume,
+            muted,
             brightness: sample_brightness().unwrap_or(0.0),
             sun_longitude_deg,
             moon_phase,
@@ -188,6 +189,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_wpctl_lee_fraccion_y_mute() {
+        assert_eq!(parse_wpctl("Volume: 0.65"), Some((0.65, false)));
+        assert_eq!(parse_wpctl("Volume: 0.30 [MUTED]"), Some((0.30, true)));
+        assert_eq!(parse_wpctl("nada"), None);
+    }
+
+    #[test]
+    fn parse_pactl_pct_toma_el_primer_porcentaje() {
+        let s = "Volume: front-left: 42598 / 65% / -9.58 dB,   front-right: 42598 / 65% / -9.58 dB";
+        assert_eq!(parse_pactl_pct(s), Some(0.65));
+        assert_eq!(parse_pactl_pct("Volume: 0 / 0% / -inf dB"), Some(0.0));
+        assert_eq!(parse_pactl_pct("sin porcentaje"), None);
+    }
+
+    #[test]
     fn sol_en_equinoccio_de_marzo_esta_cerca_de_aries_0() {
         // 2025-03-20 ~09:01 UTC fue el equinoccio: el Sol cruza 0° (Aries).
         // timestamp del 2025-03-20 09:01:00 UTC = 1742461260.
@@ -259,6 +275,51 @@ fn sample_brightness() -> Option<f32> {
         if let (Some(c), Some(m)) = (cur, max) {
             if m > 0.0 {
                 return Some((c / m).clamp(0.0, 1.0));
+            }
+        }
+    }
+    None
+}
+
+/// `(fracción_volumen, muteado)` del sink por defecto. Prueba PipeWire (`wpctl`)
+/// y cae a PulseAudio (`pactl`). `None` si ninguno está. Corre un subproceso por
+/// muestreo (~1Hz) — barato a esa frecuencia.
+fn sample_volume() -> Option<(f32, bool)> {
+    if let Some(out) = run("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"]) {
+        if let Some(r) = parse_wpctl(&out) {
+            return Some(r);
+        }
+    }
+    let vol = run("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]).and_then(|o| parse_pactl_pct(&o))?;
+    let muted = run("pactl", &["get-sink-mute", "@DEFAULT_SINK@"])
+        .map(|o| o.contains("yes"))
+        .unwrap_or(false);
+    Some((vol, muted))
+}
+
+/// Corre `cmd args` y devuelve su stdout si salió bien.
+fn run(cmd: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(cmd).args(args).output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Parsea `wpctl get-volume`: `"Volume: 0.65"` o `"Volume: 0.65 [MUTED]"`.
+fn parse_wpctl(s: &str) -> Option<(f32, bool)> {
+    let rest = s.trim().strip_prefix("Volume:")?;
+    let muted = rest.contains("MUTED");
+    let frac = rest.split_whitespace().next()?.parse::<f32>().ok()?;
+    Some((frac.clamp(0.0, 1.0), muted))
+}
+
+/// Parsea el primer porcentaje de `pactl get-sink-volume`
+/// (`"Volume: front-left: 42598 / 65% / -9.58 dB ..."`) como fracción `0..1`.
+fn parse_pactl_pct(s: &str) -> Option<f32> {
+    for tok in s.split_whitespace() {
+        if let Some(num) = tok.strip_suffix('%') {
+            if let Ok(p) = num.parse::<f32>() {
+                return Some((p / 100.0).clamp(0.0, 1.0));
             }
         }
     }
