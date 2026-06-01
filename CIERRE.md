@@ -32,16 +32,17 @@ Y tres cajones que el inventario ya separa y aquí se respetan:
 Esto no es código de producto: es lo que hace que el repo *pueda* hacerse
 público sin romperte legal o reproduciblemente. Es barato y desbloquea todo.
 
-| # | Tarea | Quién | Nota |
+| # | Tarea | Quién | Estado |
 |---|---|---|---|
-| 0.1 | **Archivos de licencia.** Los `Cargo.toml` declaran `MPL-2.0` (391×) y `MIT OR Apache-2.0` (2×) pero **no hay `LICENSE`/`COPYING` en la raíz**. crates.io y GitHub lo exigen. Agregar `LICENSE-MPL`, y `LICENSE-MIT`+`LICENSE-APACHE` para los crates duales. | 🤖 | Bloqueante duro de publicación |
-| 0.2 | **Untracked sin commitear.** `crates/apps/`, `02_ruway/nahual/nahual-svg-viewer-llimphi/`, `web/gioser-web/pkg/`. Decidir: ¿entran al workspace, se ignoran, o se borran? `pkg/` es artefacto → `.gitignore`. El svg-viewer ya tiene `Cargo.toml` con `publish.workspace` → cablear o quitar. | 🤝 | Define si el árbol está "limpio" |
-| 0.3 | **CI mínimo.** No hay `.github/workflows/`. Un workflow que corra `cargo check --workspace` + `./scripts/check-shared-cores.sh` en push. Es el guardián de la regla dura #5. | 🤖 | Sin esto, "main siempre verde" es voluntarista |
-| 0.4 | **Política `publish`.** 6 crates marcan `publish = false`. Confirmar que TODO lo que no es producto-final (demos, sandboxes, `*-explorer`) lo tenga, para no publicar basura a crates.io por error. | 🤖 | |
-| 0.5 | **Decisión de alcance público.** ¿Se publica *todo* el workspace, o sólo un subconjunto (p.ej. Llimphi + format + algunas apps)? wawa-kernel (no_std, excluido) y las apps a medio core no deberían ir en la v1 pública. | 🧑 | Decisión tuya; condiciona Niveles 2–5 |
+| 0.1 | **Archivos de licencia.** El default del workspace es `MIT OR Apache-2.0`; 6 crates de base (`format`, `forth-emisor`, `foreign-fs`, `wawa`/`wawa-kernel`/`wawa-fs`) overridean a `MPL-2.0`. | 🤖 | ✅ `LICENSE-{APACHE,MIT,MPL}` verbatim (SPDX) + `LICENSE.md` (commit `80224d36`) |
+| 0.2 | **Untracked sin commitear.** `crates/apps/` + `web/gioser-web/pkg/` eran artefactos; `nahual-svg-viewer-llimphi` lo está creando **otro agente** (stub). | 🤝 | ✅ `pkg/` y `/crates/` a `.gitignore`; svg-viewer se deja al otro agente |
+| 0.3 | **CI mínimo.** Workflow que corre `cargo check --workspace` + `check-shared-cores.sh`. Guardián de la regla dura #5 y de la simetría no_std. | 🤖 | ✅ `.github/workflows/ci.yml` |
+| 0.4 | **Política `publish`.** Confirmar que TODO lo que no es producto-final (demos, sandboxes, `*-explorer`) tenga `publish = false`, para no subir basura a crates.io. Hoy sólo 6 lo marcan. | 🤖 | ⬜ pendiente — auditar tras decidir 0.5 |
+| 0.5 | **Decisión de alcance público.** ¿Se publica *todo* el workspace, o sólo un subconjunto (p.ej. Llimphi + format + apps maduras)? wawa-kernel (no_std, excluido) y las apps a medio core no deberían ir en la v1. | 🧑 | ⬜ **decisión tuya** — condiciona 0.4 y Niveles 2–5 |
 
-> **Salida del Nivel 0:** árbol limpio, licencias presentes, CI verde, y una
-> lista explícita de "qué se publica en v1". Sin esto, lo demás es prematuro.
+> **Salida del Nivel 0:** árbol limpio, licencias presentes, CI verde (✅ hechos),
+> y una lista explícita de "qué se publica en v1" (⬜ pendiente, 0.5). Sin esto
+> último, 0.4 y el recorte de los demás niveles quedan en el aire.
 
 ---
 
