@@ -2,7 +2,9 @@
 
 > Framework de UI nativa: HAL · raster · layout · text · theme · ui — más widgets y módulos.
 
-`llimphi` es el motor gráfico que comparten todas las apps del monorepo. Pipeline retained-mode declarativa sobre `vello` + `wgpu` + `taffy`, con shaping `fontdue`/`harfbuzz`, theme `Dark/Light/Aurora/Sunset`, HAL multiplataforma (Wayland · X11 · Win32 · Android · Wawa). Detalle del diseño en [SDD.md](SDD.md).
+`llimphi` es el motor gráfico que comparten todas las apps del monorepo. Pipeline retained-mode declarativa sobre `vello` + `wgpu` + `taffy`, con shaping `fontdue`/`harfbuzz`, theme `Dark/Light/Aurora/Sunset`, HAL multiplataforma (Wayland · X11 · Win32 · Android · Wawa).
+
+**Manual de uso:** [MANUAL.md](MANUAL.md) — referencia completa (bucle Elm, DSL `View<Msg>`, los ~44 widgets y 10 módulos, GPU directo, gotchas) para humanos e IA. Diseño y roadmap: [SDD.md](SDD.md).
 
 Filosofía: **un widget no se diseña pensando en mockups; se diseña con lo que `vello` y `taffy` pueden hacer.**
 

@@ -4,6 +4,8 @@
 
 > **Regla dura para apps:** nada de cómputo pesado síncrono en `App::update`/`init`/handlers — congela la UI ("Not Responding"). Ver [COMPUTO-FUERA-DEL-HILO-UI.md](COMPUTO-FUERA-DEL-HILO-UI.md) (patrón worker + checklist por app, prioridad urgente).
 
+> **¿Buscás cómo *usar* Llimphi?** Este SDD es el *porqué* (diseño, fases, roadmap). La referencia de *uso* — bucle Elm, DSL `View<Msg>`, catálogo de widgets/módulos, GPU directo — está en [MANUAL.md](MANUAL.md), verificada contra el código.
+
 ## Tesis
 
 Soberanía total sobre el píxel. Renderizar las geometrías exactas del simulador cósmico (`cosmos`), el compositor (`mirada`), las apps de escritorio (`nahual`) y el visor (`pluma`) sin cajas negras de Apple/Google/navegadores. Reemplazo total de **GPUI** en la pila gioser.
