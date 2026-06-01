@@ -41,6 +41,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
+use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
 
@@ -96,6 +97,7 @@ enum Sort {
     Mem,
     Pid,
     Name,
+    Uptime,
 }
 
 /// Un proceso del SO ya con %CPU/%MEM derivados, listo para pintar.
@@ -414,6 +416,10 @@ fn sort_system(model: &mut Model) {
         Sort::Name => model
             .system
             .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+        // Más viejo primero (mayor uptime arriba).
+        Sort::Uptime => model
+            .system
+            .sort_by(|a, b| b.uptime_secs.cmp(&a.uptime_secs)),
     }
 }
 
@@ -1512,7 +1518,7 @@ fn sys_header_row(model: &Model) -> View<Msg> {
         hcell("S", W_ST, None),
         hcell("HILOS", W_THR, None),
         hcell("UID", W_UID, None),
-        hcell("TIEMPO", W_TIME, None),
+        hcell("TIEMPO", W_TIME, Some(Sort::Uptime)),
         cmd,
     ])
 }
@@ -1567,22 +1573,20 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
             }
             parts.push(g);
         }
-        // El comando va en un nodo de ancho fijo grande → parley NO lo wrappea
-        // (queda en una sola línea); el contenedor recorta el sobrante. Sin
-        // esto, el texto largo se rompe en varias líneas apretadas en ROW_H.
+        // El comando se pinta con `text_runs` (un solo run): ese path usa
+        // `break_all_lines(None)` → una sola línea SIN wrap, y el contenedor
+        // recorta el sobrante. Con `.text()` normal se medía contra el ancho
+        // de la celda y se rompía en varias líneas apretadas en ROW_H.
         let cmd_show: String = p.cmd.chars().take(256).collect();
         parts.push(
             View::new(Style {
-                size: Size {
-                    width: length(2400.0),
-                    height: percent(1.0),
-                },
-                flex_shrink: 0.0,
+                flex_grow: 1.0,
                 justify_content: Some(JustifyContent::Center),
                 flex_direction: FlexDirection::Column,
                 ..Default::default()
             })
-            .text(cmd_show, 11.5, t.fg_text),
+            .clip(true)
+            .text_runs(cmd_show, 11.5, t.fg_text, vec![], Alignment::Start),
         );
         View::new(Style {
             flex_grow: 1.0,
