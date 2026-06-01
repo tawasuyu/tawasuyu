@@ -293,6 +293,7 @@ members = [
     "02_ruway/raymi/raymi-net",
     "02_ruway/raymi/raymi-store",
     "02_ruway/raymi/raymi-llimphi",
+    "02_ruway/raymi/raymi-app",
     "02_ruway/mirada/asistente-puente",
     "02_ruway/mirada/mirada-app-llimphi",
     "02_ruway/mirada/mirada-asistente-llimphi",

@@ -10,6 +10,7 @@ description = "raymi-llimphi — frontend de calendario y contactos sobre Llimph
 
 [dependencies]
 raymi-core = { path = "../raymi-core" }
+raymi-store = { path = "../raymi-store" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }

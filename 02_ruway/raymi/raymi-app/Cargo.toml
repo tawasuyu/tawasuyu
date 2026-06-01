@@ -1,0 +1,24 @@
+[package]
+name = "raymi-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "raymi-app — el binario lanzable de calendario y contactos: arma el frontend Llimphi sobre NetBackend (CalDAV/CardDAV autodescubierto) desde la cuenta compartida con paloma, offline-first vía raymi-store, con fallback a datos de demo sin red."
+
+[[bin]]
+name = "raymi"
+path = "src/main.rs"
+
+[dependencies]
+raymi-core = { path = "../raymi-core" }
+raymi-net = { path = "../raymi-net" }
+raymi-store = { path = "../raymi-store" }
+raymi-llimphi = { path = "../raymi-llimphi" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+directories = { workspace = true }

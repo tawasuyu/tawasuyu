@@ -18,7 +18,7 @@ raymi-net          — puente CalDAV/CardDAV: iCalendar (VEVENT) + vCard
                      (VCARD) + REPORT/PUT; implementa los traits.        [HECHO]
 raymi-store        — persistencia nativa (postcard) + sync incremental.  [HECHO]
 raymi-llimphi      — frontend: vista mes + agenda del día + contactos.   [HECHO]
-raymi-app          — binario lanzable.                                    [pendiente]
+raymi-app          — binario lanzable.                                    [HECHO]
 ```
 
 Un dominio = un crate raíz `*-core` agnóstico + frontends Llimphi
@@ -101,11 +101,25 @@ intercambiables, como el resto de la suite.
   - 7 tests verde (roundtrips, id con URL, miss vacío, upsert/delete idempotente,
     snapshot↔hydrate, cuentas aisladas).
 
+- **Fase 6 (2026-06-01):** `raymi-app` — el binario lanzable (`cargo run -p
+  raymi-app`, binario `raymi`), offline-first.
+  - Comparte la cuenta con paloma: lee el mismo `~/.config/paloma/cuenta.json`
+    (campo extra `dav_url`, que paloma ignora) y acepta `PALOMA_PASSWORD`.
+    Envs propios: `RAYMI_PASSWORD`, `RAYMI_DAV_URL`, `RAYMI_CONFIG`.
+  - `try_net`: parsea la cuenta → `NetBackend::discover(user, pass, dav_url)`
+    (autodescubrimiento de Fase 5) → `Box<dyn DavBackend>`.
+  - **Offline-first** vía `raymi-store`: `Model::with_persistence` hidrata el
+    `CalStore` desde `~/.cache/raymi` antes del primer viaje de red (pinta lo
+    cacheado al instante), sincroniza y vuelca el snapshot fresco a disco. Si la
+    red falla, conserva lo hidratado y el status lo dice (“sin red · N en caché”).
+  - Sin `dav_url`/contraseña → modo demo (`raymi-llimphi::demo::backend`), así
+    siempre arranca. `cargo check --workspace` verde.
+  - Añadidos en `raymi-llimphi`: `Model::with_persistence(backend, theme, CalDb,
+    account_id)` + constructor común `build`; `resync` persiste tras éxito.
+
 ## Pendiente (orden sugerido)
 
-1. **`raymi-app`** — binario lanzable, comparte `cuenta.json` con paloma; hidrata
-   desde `raymi-store` al arrancar, autodescubre/refresca contra la red.
-2. **Verificar `raymi-net` contra servidor real** (Nextcloud/Radicale) en la
+1. **Verificar `raymi-net` contra servidor real** (Nextcloud/Radicale) en la
    laptop: discover + sync + put/delete end-to-end.
-3. **Crear/editar eventos y contactos** desde la UI (put/delete ya en el trait).
-4. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.
+2. **Crear/editar eventos y contactos** desde la UI (put/delete ya en el trait).
+3. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.

@@ -20,6 +20,7 @@ use llimphi_widget_text_input::TextInputState;
 
 use raymi_core::time::{self, CivilDate};
 use raymi_core::{CalStore, DavBackend};
+use raymi_store::CalDb;
 
 pub mod demo;
 mod view;
@@ -49,22 +50,51 @@ pub struct Model {
     search_focused: bool,
     /// `UID` del contacto seleccionado.
     selected_contact: Option<String>,
+    /// Caché en disco (offline-first). `None` → sin persistencia (demo).
+    db: Option<CalDb>,
+    /// Id de cuenta — clave de la caché en disco.
+    account_id: String,
     pub status: String,
     pub theme: Theme,
 }
 
 impl Model {
-    /// Construye el modelo sobre `backend`, sincroniza todo (calendarios +
-    /// eventos + libretas + contactos) y abre el mes actual con el día de hoy
-    /// seleccionado. Best-effort: si un sync falla, ese panel queda vacío.
+    /// Construye el modelo sobre `backend` sin persistencia (demo): sincroniza
+    /// todo y abre el mes actual con el día de hoy seleccionado. Best-effort: si
+    /// un sync falla, ese panel queda vacío.
     pub fn new(backend: Box<dyn DavBackend>, theme: Theme) -> Self {
+        Self::build(backend, theme, None, "default".to_string())
+    }
+
+    /// Igual que [`Model::new`] pero **offline-first** con caché en disco:
+    /// hidrata el `store` desde `db` antes de tocar la red (pinta al instante lo
+    /// último conocido), luego sincroniza y vuelca el resultado al disco. Si la
+    /// red falla, queda lo hidratado.
+    pub fn with_persistence(
+        backend: Box<dyn DavBackend>,
+        theme: Theme,
+        db: CalDb,
+        account_id: String,
+    ) -> Self {
+        Self::build(backend, theme, Some(db), account_id)
+    }
+
+    /// Constructor común: arma el modelo, hidrata desde disco si hay `db`, abre
+    /// el mes de hoy y sincroniza.
+    fn build(backend: Box<dyn DavBackend>, theme: Theme, db: Option<CalDb>, account_id: String) -> Self {
         let now = now_unix();
         let today = time::start_of_day(now);
         let (date, _, _, _) = time::to_civil(now);
 
+        // Offline-first: lo que haya en disco se ve antes del primer viaje de red.
+        let store = match &db {
+            Some(db) => db.hydrate(&account_id),
+            None => CalStore::new(),
+        };
+
         let mut model = Self {
             backend,
-            store: CalStore::new(),
+            store,
             mode: Mode::Calendar,
             view_year: date.year,
             view_month: date.month,
@@ -73,6 +103,8 @@ impl Model {
             search: TextInputState::new(),
             search_focused: false,
             selected_contact: None,
+            db,
+            account_id,
             status: String::from("raymi"),
             theme,
         };
@@ -81,10 +113,12 @@ impl Model {
     }
 
     /// (Re)sincroniza todo desde el backend: calendarios + eventos + libretas +
-    /// contactos. Best-effort; deja el estado contado.
+    /// contactos. Best-effort; deja el estado contado. Si la red falla, conserva
+    /// lo que ya tenía (lo hidratado del disco). Tras un sync exitoso vuelca la
+    /// caché a disco si hay persistencia.
     fn resync(&mut self) {
         if let Err(e) = self.store.sync_calendars(&*self.backend) {
-            self.status = format!("error al listar calendarios: {e}");
+            self.status = format!("sin red · {} en caché ({e})", self.store.calendars().len());
             return;
         }
         let cal_ids: Vec<String> = self.store.calendars().iter().map(|c| c.id.clone()).collect();
@@ -96,6 +130,10 @@ impl Model {
             for b in &books {
                 let _ = self.store.sync_contacts(&*self.backend, b);
             }
+        }
+        // Persistir el snapshot fresco (best-effort: un fallo de disco no rompe la UI).
+        if let Some(db) = &self.db {
+            let _ = db.snapshot(&self.account_id, &self.store);
         }
         self.status = format!(
             "{} calendario(s) · {} contacto(s)",
