@@ -152,9 +152,12 @@ Cobertura por crate:
   Sugiyama chain/fan/cycle).
 - `pineal-export` — 9 (SVG + PNG, validación de bytes magic + roundtrip
   decode/check pixel).
+- `pineal-bars` — 10 (simple/agrupado/apilado en ambas orientaciones,
+  baseline con negativos, histograma: suma de conteos, último bin, rango
+  degenerado).
 - Cada painter trae 4–13 tests propios usando `PlanRecorder`.
 
-Total al 2026-05-28: **130+ tests verdes**.
+Total al 2026-06-01: **140+ tests verdes**.
 
 ## 8. Decisiones explícitas
 
