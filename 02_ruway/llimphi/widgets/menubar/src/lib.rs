@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use app_bus::AppMenu;
+use app_bus::{AppMenu, Menu};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
@@ -33,7 +33,8 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_context_menu::{
-    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+    context_menu_view_ex, step_active, ContextMenuExtras, ContextMenuItem, ContextMenuPalette,
+    ContextMenuSpec,
 };
 
 type MsgFromMenu<Msg> = Arc<dyn Fn(Option<usize>) -> Msg + Send + Sync>;
@@ -130,24 +131,11 @@ pub fn menubar_view<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> View<Msg> 
     titles_row(spec, false)
 }
 
-/// El dropdown del menú abierto, para `App::view_overlay`. `None` si no
-/// hay menú abierto. Hospeda además una copia de la fila de títulos por
-/// encima del scrim: así, con el menú abierto, mover el mouse a otro
-/// título cambia de menú (hover-switch).
-pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<View<Msg>> {
-    let idx = spec.open?;
-    let root = spec.menu.menus.get(idx)?;
-
-    // Ancla: bajo el título, desplazada por el ancho aproximado de los
-    // títulos previos (+ el padding izquierdo de la barra). El
-    // context-menu clampea al viewport igual.
-    let mut x = 6.0_f32;
-    for prev in spec.menu.menus.iter().take(idx) {
-        x += approx_title_width(&prev.label);
-    }
-
-    // Una sola pasada: `items` (lo que pinta el context-menu) y `commands`
-    // (índice → command, `None` en separadores) quedan alineados.
+/// Aplana un menú raíz al par alineado `(items, commands)` que consume el
+/// context-menu (los separadores `separator_before` se insertan como
+/// filas y llevan `command = None`). Es la única fuente de verdad del
+/// orden de filas — la navegación por teclado y el render comparten esto.
+fn dropdown_items(root: &Menu) -> (Vec<ContextMenuItem>, Vec<Option<String>>) {
     let mut items: Vec<ContextMenuItem> = Vec::new();
     let mut commands: Vec<Option<String>> = Vec::new();
     for (k, src) in root.items.iter().enumerate() {
@@ -168,6 +156,43 @@ pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<
         items.push(cm);
         commands.push(Some(src.command.clone()));
     }
+    (items, commands)
+}
+
+/// El dropdown del menú abierto, para `App::view_overlay`. `None` si no
+/// hay menú abierto. Hospeda además una copia de la fila de títulos por
+/// encima del scrim: así, con el menú abierto, mover el mouse a otro
+/// título cambia de menú (hover-switch).
+pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<View<Msg>> {
+    menubar_overlay_core(spec, usize::MAX, 1.0)
+}
+
+/// Como [`menubar_overlay`] pero con `active` (fila resaltada por teclado;
+/// `usize::MAX` = ninguna) y `appear` (0..1, animación de aparición — útil
+/// para que el dropdown se deslice/funda al cambiar de menú por hover o
+/// flechas). La app guarda el `active` y un `Tween` para el `appear`.
+pub fn menubar_overlay_animated<Msg: Clone + 'static>(
+    spec: &MenuBarSpec<Msg>,
+    active: usize,
+    appear: f32,
+) -> Option<View<Msg>> {
+    menubar_overlay_core(spec, active, appear)
+}
+
+fn menubar_overlay_core<Msg: Clone + 'static>(
+    spec: &MenuBarSpec<Msg>,
+    active: usize,
+    appear: f32,
+) -> Option<View<Msg>> {
+    let idx = spec.open?;
+    let root = spec.menu.menus.get(idx)?;
+
+    let mut x = 6.0_f32;
+    for prev in spec.menu.menus.iter().take(idx) {
+        x += approx_title_width(&prev.label);
+    }
+
+    let (items, commands) = dropdown_items(root);
 
     let on_command = spec.on_command.clone();
     let on_open = spec.on_open.clone();
@@ -179,16 +204,22 @@ pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<
         }
     });
 
-    let dropdown = context_menu_view(ContextMenuSpec {
-        anchor: (x, spec.height),
-        viewport: spec.viewport,
-        header: Some(root.label.clone()),
-        items,
-        active: usize::MAX,
-        on_pick,
-        on_dismiss: (spec.on_open)(None),
-        palette: ContextMenuPalette::from_theme(spec.theme),
-    });
+    let dropdown = context_menu_view_ex(
+        ContextMenuSpec {
+            anchor: (x, spec.height),
+            viewport: spec.viewport,
+            header: Some(root.label.clone()),
+            items,
+            active,
+            on_pick,
+            on_dismiss: (spec.on_open)(None),
+            palette: ContextMenuPalette::from_theme(spec.theme),
+        },
+        ContextMenuExtras {
+            appear,
+            ..ContextMenuExtras::default()
+        },
+    );
 
     // Fila de títulos por encima del scrim del dropdown: queda hovereable
     // para cambiar de menú con el mouse. Absoluta al tope para no consumir
@@ -220,6 +251,26 @@ pub fn menubar_overlay<Msg: Clone + 'static>(spec: &MenuBarSpec<Msg>) -> Option<
         })
         .children(vec![dropdown, titles]),
     )
+}
+
+/// Navegación por teclado dentro del dropdown del menú `menu_idx`: dado el
+/// `active` actual y la dirección (`+1` baja, `-1` sube), devuelve el
+/// próximo índice de fila válido (saltea separadores y deshabilitados).
+/// `usize::MAX` si no hay menú abierto o sin filas elegibles.
+pub fn menubar_nav(menu: &AppMenu, menu_idx: usize, active: usize, dir: i32) -> usize {
+    let Some(root) = menu.menus.get(menu_idx) else {
+        return usize::MAX;
+    };
+    let (items, _) = dropdown_items(root);
+    step_active(&items, active, dir)
+}
+
+/// El `command` de la fila `active` del menú `menu_idx` (para ejecutar con
+/// Enter). `None` si el índice no es una fila-acción.
+pub fn menubar_command_at(menu: &AppMenu, menu_idx: usize, active: usize) -> Option<String> {
+    let root = menu.menus.get(menu_idx)?;
+    let (_, commands) = dropdown_items(root);
+    commands.get(active).cloned().flatten()
 }
 
 fn title_style() -> Style {

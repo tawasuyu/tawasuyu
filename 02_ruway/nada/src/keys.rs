@@ -4,6 +4,41 @@ pub(crate) fn handle_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
         }
+
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra. Tiene prioridad sobre todo lo demás.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            match &event.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => {
+                    return Some(Msg::MenuOpen(Some((mi + n - 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    return Some(Msg::MenuOpen(Some((mi + 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::MenuActivate),
+                _ => return None,
+            }
+        }
+
+        // Menú de edición (right-click) abierto: ↑/↓ navegan, → abre el
+        // submenú de la fila activa, ← lo cierra, Enter ejecuta, Esc cierra.
+        if model.edit_menu.is_some() {
+            match &event.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::EditNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::EditNav(-1)),
+                Key::Named(NamedKey::ArrowRight) => return Some(Msg::EditActivate),
+                Key::Named(NamedKey::ArrowLeft) => return Some(Msg::EditSubHover(None)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::EditActivate),
+                _ => return None,
+            }
+        }
+
         // Si el popup de completions está abierto, intercepta nav.
         if model.completions.is_some() {
             match &event.key {

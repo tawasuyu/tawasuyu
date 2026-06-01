@@ -8,7 +8,49 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 let mut m = model;
                 m.menu_open = idx;
                 m.edit_menu = None;
+                m.menu_active = usize::MAX;
+                // Animación de aparición/swap: cada vez que se abre (o se
+                // cambia de) menú, el dropdown se funde+desliza de nuevo.
+                if idx.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
                 m
+            }
+            Msg::MenuNav(dir) => {
+                let mut m = model;
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    m.menu_active = menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+                m
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        return handle_menu_command(model, cmd, handle);
+                    }
+                }
+                model
+            }
+            Msg::EditNav(dir) => {
+                let mut m = model;
+                let (items, _) = build_edit_menu(&m);
+                m.edit_active = step_active(&items, m.edit_active, dir);
+                m
+            }
+            Msg::EditActivate => {
+                let (_, picks) = build_edit_menu(&model);
+                match picks.get(model.edit_active).copied() {
+                    Some(CtxPick::Edit(a)) => apply_edit_menu_action(model, a),
+                    Some(CtxPick::OpenSub(p)) => {
+                        let mut m = model;
+                        m.edit_sub = Some(p);
+                        m
+                    }
+                    _ => model,
+                }
             }
             Msg::MenuCommand(cmd) => handle_menu_command(model, cmd, handle),
             Msg::EditMenuOpen(x, y) => {
@@ -16,6 +58,7 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 m.edit_menu = Some((x, y));
                 m.menu_open = None;
                 m.edit_sub = None;
+                m.edit_active = usize::MAX;
                 // Animación de aparición: 0→1 con ease-out, autodirigida
                 // por ticks de llimphi-motion hasta terminar.
                 m.edit_menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
@@ -48,6 +91,8 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 m.menu_open = None;
                 m.edit_menu = None;
                 m.edit_sub = None;
+                m.menu_active = usize::MAX;
+                m.edit_active = usize::MAX;
                 m
             }
             Msg::EditKey(ev) => apply_editor_key(model, ev),

@@ -72,10 +72,14 @@ use llimphi_widget_text_editor_lsp::{
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_context_menu::{
-    context_menu_view_ex, ContextMenuExtras, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+    context_menu_view_ex, step_active, ContextMenuExtras, ContextMenuItem, ContextMenuPalette,
+    ContextMenuSpec,
 };
 use llimphi_motion::{animate, motion, Tween};
 
@@ -212,6 +216,14 @@ enum Msg {
     /// Tick de la animación de aparición del menú de edición (no-op salvo
     /// forzar el re-render mientras el tween avanza).
     MenuTick,
+    /// Navegación con flechas en el dropdown del menú principal (+1 baja).
+    MenuNav(i32),
+    /// Ejecuta la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Navegación con flechas en el menú de edición.
+    EditNav(i32),
+    /// Ejecuta la fila activa del menú de edición (Enter).
+    EditActivate,
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +348,13 @@ struct Model {
     /// Índice del item raíz cuyo submenú está desplegado (flyout). `None`
     /// = ninguno. Hoy sólo lo usa el item "Buscar" del menú de edición.
     edit_sub: Option<usize>,
+    /// Fila resaltada por teclado en el dropdown del menú principal
+    /// (`usize::MAX` = ninguna).
+    menu_active: usize,
+    /// Fila resaltada por teclado en el menú de edición.
+    edit_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal.
+    menu_anim: Tween<f32>,
 }
 
 const RECENT_FILES_CAP: usize = 20;
@@ -547,6 +566,9 @@ impl App for EditorApp {
             edit_menu: None,
             edit_menu_anim: Tween::idle(1.0),
             edit_sub: None,
+            menu_active: usize::MAX,
+            edit_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
@@ -637,7 +659,11 @@ impl App for EditorApp {
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &model.theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 
@@ -663,7 +689,7 @@ fn menubar_spec<'a>(
 /// `on_pick` la capture en un `Arc<Vec<_>>` sin tomar un `Msg` crudo (así
 /// el closure es `Send + Sync` sin exigirle esos bounds al `Msg`).
 #[derive(Clone, Copy)]
-enum CtxPick {
+pub(crate) enum CtxPick {
     Edit(EditAction),
     /// Abrir el submenú del item raíz `idx`.
     OpenSub(usize),
@@ -673,12 +699,12 @@ enum CtxPick {
 
 /// Índice del item raíz "Buscar" (el que tiene submenú) dentro del menú
 /// de edición. Lo necesitan el builder y el `update` para abrirlo.
-const EDIT_BUSCAR_IDX: usize = 9;
+pub(crate) const EDIT_BUSCAR_IDX: usize = 9;
 
-/// Construye el menú de edición contextual de nada: el bloque estándar
-/// (Deshacer…Seleccionar todo) + un submenú "Buscar ▸" en flyout. Es la
-/// vitrina viva de íconos + submenús + animación.
-fn edit_menu_view(model: &Model, x: f32, y: f32) -> View<Msg> {
+/// Construye las filas del menú de edición + su `CtxPick` por índice.
+/// Única fuente de verdad — la comparten el render y la navegación por
+/// teclado.
+pub(crate) fn build_edit_menu(model: &Model) -> (Vec<ContextMenuItem>, Vec<CtxPick>) {
     let (ed, masked) = match model.active_tab() {
         Some(tab) => (Some(&tab.editor), false),
         None => (None, false),
@@ -741,6 +767,15 @@ fn edit_menu_view(model: &Model, x: f32, y: f32) -> View<Msg> {
         CtxPick::OpenSub(EDIT_BUSCAR_IDX),
     );
 
+    (items, picks)
+}
+
+/// Render del menú de edición contextual: filas de [`build_edit_menu`] +
+/// la animación/submenú/teclado. `model.edit_active` resalta la fila por
+/// teclado.
+fn edit_menu_view(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let (items, picks) = build_edit_menu(model);
+
     let picks = std::sync::Arc::new(picks);
     let on_pick: std::sync::Arc<dyn Fn(usize) -> Msg + Send + Sync> = {
         let picks = picks.clone();
@@ -757,7 +792,7 @@ fn edit_menu_view(model: &Model, x: f32, y: f32) -> View<Msg> {
         viewport: (w as f32, h as f32),
         header: Some("Edición".to_string()),
         items,
-        active: usize::MAX,
+        active: model.edit_active,
         on_pick,
         on_dismiss: Msg::CloseMenus,
         palette: ContextMenuPalette::from_theme(&model.theme),
