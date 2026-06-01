@@ -28,7 +28,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
@@ -192,19 +192,48 @@ pub fn load_map(path: &Path, max_bytes: u64) -> MapPreview {
 /// Parsea una cadena GeoJSON a [`MapPreview`]. Tolerante: ignora geometrías
 /// malformadas en vez de abortar, y recorta al llegar a [`MAX_VERTICES`].
 pub fn parse_geojson(src: &str) -> MapPreview {
-    let value: serde_json::Value = match serde_json::from_str(src) {
-        Ok(v) => v,
-        Err(e) => return MapPreview::Error(e.to_string()),
-    };
-    let mut data = MapData::default();
-    let mut budget = MAX_VERTICES;
-    collect(&value, &mut data, &mut budget, None);
-    let truncated = budget == 0;
-    if data.total_features() == 0 {
-        MapPreview::NoGeometry
-    } else {
-        MapPreview::Map { data, truncated }
+    match parse_into(src, MAX_VERTICES) {
+        Err(e) => MapPreview::Error(e),
+        Ok((data, truncated)) => {
+            if data.total_features() == 0 {
+                MapPreview::NoGeometry
+            } else {
+                MapPreview::Map { data, truncated }
+            }
+        }
     }
+}
+
+/// Núcleo del parseo con presupuesto de vértices explícito. Devuelve la
+/// geometría aplanada y si se truncó. Separado para reusarlo con el
+/// mapa-base (que necesita un tope mucho mayor que un documento a ojo).
+fn parse_into(src: &str, cap: usize) -> Result<(MapData, bool), String> {
+    let value: serde_json::Value = serde_json::from_str(src).map_err(|e| e.to_string())?;
+    let mut data = MapData::default();
+    let mut budget = cap;
+    collect(&value, &mut data, &mut budget, None);
+    Ok((data, budget == 0))
+}
+
+/// El mapa-base mundial (Natural Earth admin-0, 177 países) embebido en el
+/// binario y parseado una sola vez. Da contexto geográfico a cualquier dato
+/// — offline, sin red ni tiles. Si por algo no parseara, queda vacío y el
+/// visor simplemente no pinta fondo.
+fn world_base() -> &'static MapData {
+    static WORLD: OnceLock<MapData> = OnceLock::new();
+    WORLD.get_or_init(|| {
+        const SRC: &str = include_str!("../assets/world-countries.geojson");
+        // Tope amplio: el dataset tiene decenas de miles de vértices y no
+        // queremos recortarlo como a un documento de usuario.
+        parse_into(SRC, 4_000_000).map(|(d, _)| d).unwrap_or_default()
+    })
+}
+
+/// `(polígonos, vértices, países)` del mapa-base embebido. Diagnóstico para
+/// herramientas/ejemplos (verificar que el asset cargó sin abrir ventana).
+pub fn world_base_stats() -> (usize, usize, usize) {
+    let w = world_base();
+    (w.polygons.len(), w.vertex_count(), w.labels.len())
 }
 
 /// Recorre recursivamente un valor GeoJSON (FeatureCollection / Feature /
@@ -498,6 +527,8 @@ pub struct MapViewerPalette {
     pub grid: Color,
     /// Texto de etiquetas y rótulos de la rejilla.
     pub label: Color,
+    /// Mapa-base mundial (tierra): se aplica muy tenue de fondo.
+    pub land: Color,
 }
 
 impl Default for MapViewerPalette {
@@ -518,6 +549,7 @@ impl MapViewerPalette {
             point: t.fg_text,
             grid: t.fg_muted,
             label: t.fg_text,
+            land: t.fg_muted,
         }
     }
 }
@@ -688,7 +720,41 @@ where
         let grid_col = with_alpha(palette.grid, 0.22);
         let grid_label_col = with_alpha(palette.label, 0.55);
 
-        // --- Rejilla de coordenadas (detrás de todo) -----------------
+        let in_panel = |x: f64, y: f64| {
+            x >= rect.x as f64
+                && x <= (rect.x + rect.w) as f64
+                && y >= rect.y as f64
+                && y <= (rect.y + rect.h) as f64
+        };
+
+        // --- Mapa-base mundial (detrás de todo) ----------------------
+        // Países Natural Earth, proyectados con la misma cámara que el dato:
+        // al hacer zoom a una región, sólo se ve su parte (el resto, clipeado).
+        let world = world_base();
+        let land_fill = with_alpha(palette.land, 0.10);
+        let land_stroke = with_alpha(palette.land, 0.32);
+        let land_label = with_alpha(palette.land, 0.5);
+        let stroke_coast = Stroke::new(0.6);
+        for poly in &world.polygons {
+            for (i, ring) in poly.iter().enumerate() {
+                let path = ring_path(ring, &to_screen, true);
+                if i == 0 {
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, land_fill, None, &path);
+                }
+                scene.stroke(&stroke_coast, Affine::IDENTITY, land_stroke, None, &path);
+            }
+        }
+        // Nombres de país, sólo los que caen dentro del panel (el clip
+        // recorta el resto, así que en una vista regional son pocos).
+        for label in &world.labels {
+            let (x, y) = to_screen(label.at);
+            if in_panel(x, y) {
+                let block = TextBlock::simple(&label.text, 9.0, land_label, (x + 2.0, y - 6.0));
+                draw_block(scene, ts, &block);
+            }
+        }
+
+        // --- Rejilla de coordenadas (detrás del dato) ----------------
         // Líneas de lon/lat a un paso "redondo" con rótulo en grados, para
         // dar contexto geográfico aunque no haya mapa-base.
         let x0 = rect.x as f64;
@@ -1148,6 +1214,18 @@ mod tests {
             load_map(Path::new("/no/existe.geojson"), DEFAULT_MAP_BYTES_MAX),
             MapPreview::Error(_)
         ));
+    }
+
+    #[test]
+    fn mapa_base_mundial_carga_completo() {
+        let w = world_base();
+        // 177 features (148 Polygon + 29 MultiPolygon) → al aplanar, al menos
+        // tantos polígonos como features.
+        assert!(w.polygons.len() >= 177, "polígonos: {}", w.polygons.len());
+        // Decenas de miles de vértices, sin truncar.
+        assert!(w.vertex_count() > 5_000, "vértices: {}", w.vertex_count());
+        // Trae nombres de país para rotular.
+        assert!(w.labels.iter().any(|l| l.text == "Costa Rica"));
     }
 
     // --- Cámara (MapView) ---

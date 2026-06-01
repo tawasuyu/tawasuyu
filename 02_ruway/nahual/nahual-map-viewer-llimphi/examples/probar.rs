@@ -9,9 +9,11 @@
 
 use std::path::PathBuf;
 
-use nahual_map_viewer_llimphi::{load_map, MapPreview, DEFAULT_MAP_BYTES_MAX};
+use nahual_map_viewer_llimphi::{load_map, world_base_stats, MapPreview, DEFAULT_MAP_BYTES_MAX};
 
 fn main() {
+    let (polys, verts, labels) = world_base_stats();
+    println!("Mapa-base embebido: {polys} polígonos · {verts} vértices · {labels} países\n");
     // Path del argumento, o el sample que viene con el crate.
     let path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/andes.geojson")
