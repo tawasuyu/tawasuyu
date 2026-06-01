@@ -561,6 +561,7 @@ fn emitir_subtree(
         selected: selected == Some(hash),
         on_toggle: Msg::Toggle(hash),
         on_select: Msg::Select(hash),
+        editor: None,
     });
 
     if expanded_aqui {

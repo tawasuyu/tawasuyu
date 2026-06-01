@@ -70,6 +70,14 @@ pub struct TreeRow<Msg> {
     pub on_toggle: Msg,
     /// Msg al hacer click en la fila (label o área alrededor).
     pub on_select: Msg,
+    /// Edición in-situ: si es `Some`, la fila se renderea con este
+    /// `View` (típicamente un `text_input_view`) en el lugar del label,
+    /// en vez del texto sólo-lectura. El chevron y la indentación se
+    /// mantienen; el editor ocupa el slot elástico del label y no se le
+    /// cablea `on_select` (las teclas las rutea el App). `None` = fila
+    /// normal de sólo-lectura (el caso de todos los árboles salvo el que
+    /// está renombrando un nodo).
+    pub editor: Option<View<Msg>>,
 }
 
 /// Especificación completa del árbol a renderear.
@@ -166,23 +174,44 @@ fn tree_row_view<Msg: Clone + 'static>(
         chevron = chevron.hover_fill(palette.bg_hover).on_click(msg);
     }
 
-    let label = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(height),
-        },
-        flex_grow: 1.0,
-        padding: Rect {
-            left: length(4.0_f32),
-            right: length(8.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .text_aligned(row.label, 12.0, palette.fg_text, Alignment::Start)
-    .on_click(row.on_select);
+    // Slot elástico del label: editor in-situ si la fila lo trae, o el
+    // texto sólo-lectura clickeable en su defecto.
+    let label = if let Some(editor) = row.editor {
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(height),
+            },
+            flex_grow: 1.0,
+            padding: Rect {
+                left: length(4.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![editor])
+    } else {
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(height),
+            },
+            flex_grow: 1.0,
+            padding: Rect {
+                left: length(4.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(row.label, 12.0, palette.fg_text, Alignment::Start)
+        .on_click(row.on_select)
+    };
 
     View::new(Style {
         flex_direction: FlexDirection::Row,

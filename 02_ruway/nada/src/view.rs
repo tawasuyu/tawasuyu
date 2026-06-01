@@ -268,6 +268,7 @@ pub(crate) fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
             selected: model.selected == Some(i),
             on_toggle: Msg::ToggleNode(i),
             on_select: Msg::SelectNode(i),
+            editor: None,
         })
         .collect();
 

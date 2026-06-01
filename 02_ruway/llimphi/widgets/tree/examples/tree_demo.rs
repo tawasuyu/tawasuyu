@@ -191,6 +191,7 @@ fn visit(
             selected: selected == Some(*id),
             on_toggle: Msg::Toggle(*id),
             on_select: Msg::Select(*id),
+            editor: None,
         });
         if has_children && is_expanded {
             visit(*id, depth + 1, expanded, selected, out);

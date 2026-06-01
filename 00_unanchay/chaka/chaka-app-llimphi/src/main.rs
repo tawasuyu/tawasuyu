@@ -694,6 +694,7 @@ fn corpus_tree(model: &Model, theme: &Theme) -> View<Msg> {
             selected: model.open == Some(i),
             on_toggle: Msg::OpenFile(i),
             on_select: Msg::OpenFile(i),
+            editor: None,
         })
         .collect();
 

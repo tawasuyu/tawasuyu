@@ -388,6 +388,20 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         } else {
             click.clone()
         };
+        // Renombrado in-situ: el nodo en edición muestra el text input en
+        // el lugar de su label (sin barra aparte). El ruteo de teclas
+        // (Enter/Escape) lo hace `App::on_key`.
+        let editor = if model.nav_rename.as_deref() == Some(n.key.as_str()) {
+            Some(text_input_view(
+                &model.rename_input,
+                "nombre…",
+                true,
+                &TextInputPalette::from_theme(theme),
+                Msg::RenameStart,
+            ))
+        } else {
+            None
+        };
         rows.push(TreeRow {
             label: n.label.clone(),
             depth: n.depth,
@@ -396,6 +410,7 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
             selected,
             on_toggle: toggle,
             on_select: click,
+            editor,
         });
     }
 
@@ -408,6 +423,7 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
             selected: false,
             on_toggle: Msg::CloseCtx,
             on_select: Msg::CloseCtx,
+            editor: None,
         });
     }
 
@@ -418,11 +434,7 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         palette: TreePalette::from_theme(theme),
     });
 
-    let mut kids: Vec<View<Msg>> = vec![nav_toolbar(model, theme)];
-    if model.nav_rename.is_some() {
-        kids.push(rename_bar(model, theme));
-    }
-    kids.push(tree);
+    let kids: Vec<View<Msg>> = vec![nav_toolbar(model, theme), tree];
 
     View::new(Style {
         size: Size {
@@ -504,34 +516,6 @@ fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         btn("📋", Msg::PasteNode, has_cut),
         btn("🗑", Msg::DeleteSelected, has_sel),
     ])
-}
-
-/// Caja de texto para renombrar el nodo seleccionado (Enter confirma,
-/// Escape cancela — el ruteo de teclas lo hace `App::on_key`).
-fn rename_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let input = text_input_view(
-        &model.rename_input,
-        "nombre…",
-        true,
-        &TextInputPalette::from_theme(theme),
-        Msg::RenameStart,
-    );
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(30.0_f32),
-        },
-        flex_shrink: 0.0,
-        padding: Rect {
-            left: length(6.0_f32),
-            right: length(6.0_f32),
-            top: length(3.0_f32),
-            bottom: length(3.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .children(vec![input])
 }
 
 // =====================================================================
