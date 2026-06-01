@@ -38,6 +38,7 @@ pub enum EventField {
     Until,
     Location,
     Description,
+    Invitee,
 }
 
 impl EventField {
@@ -53,7 +54,8 @@ impl EventField {
             Count => Until,
             Until => Location,
             Location => Description,
-            Description => Summary,
+            Description => Invitee,
+            Invitee => Summary,
         }
     }
 }
@@ -170,12 +172,16 @@ pub struct EventDraft {
     pub repeat_end: RepeatEnd,
     pub count: TextInputState,
     pub until: TextInputState,
+    /// Invitados (`ATTENDEE`) — editables: chips removibles + alta por correo o
+    /// desde la libreta.
+    pub attendees: Vec<raymi_core::Address>,
+    /// Caja de texto para sumar un invitado a mano.
+    pub invitee: TextInputState,
     pub focus: EventField,
     // Campos preservados de un evento existente (no editables en el formulario).
     /// `RRULE` cruda preservada sólo si no la sabemos representar (no parsea).
     keep_rrule: Option<String>,
     keep_organizer: Option<raymi_core::Address>,
-    keep_attendees: Vec<raymi_core::Address>,
 }
 
 impl EventDraft {
@@ -199,11 +205,29 @@ impl EventDraft {
             repeat_end: RepeatEnd::Never,
             count: input("10"),
             until: TextInputState::new(),
+            attendees: Vec::new(),
+            invitee: TextInputState::new(),
             focus: EventField::Summary,
             keep_rrule: None,
             keep_organizer: None,
-            keep_attendees: Vec::new(),
         }
+    }
+
+    /// Agrega un invitado si `addr` no está ya (compara por correo, sin
+    /// distinguir mayúsculas). Devuelve `true` si lo sumó.
+    pub fn add_attendee(&mut self, addr: raymi_core::Address) -> bool {
+        let mail = addr.email.to_lowercase();
+        if self.attendees.iter().any(|a| a.email.to_lowercase() == mail) {
+            return false;
+        }
+        self.attendees.push(addr);
+        true
+    }
+
+    /// Quita el invitado con ese correo (sin distinguir mayúsculas).
+    pub fn remove_attendee(&mut self, email: &str) {
+        let mail = email.to_lowercase();
+        self.attendees.retain(|a| a.email.to_lowercase() != mail);
     }
 
     /// Edita un evento existente: vuelca sus campos al borrador. La `RRULE` se
@@ -260,10 +284,11 @@ impl EventDraft {
             repeat_end,
             count,
             until,
+            attendees: e.attendees.clone(),
+            invitee: TextInputState::new(),
             focus: EventField::Summary,
             keep_rrule,
             keep_organizer: e.organizer.clone(),
-            keep_attendees: e.attendees.clone(),
         }
     }
 
@@ -278,6 +303,7 @@ impl EventDraft {
             EventField::Until => &mut self.until,
             EventField::Location => &mut self.location,
             EventField::Description => &mut self.description,
+            EventField::Invitee => &mut self.invitee,
         }
     }
 
@@ -330,7 +356,7 @@ impl EventDraft {
             all_day: self.all_day,
             rrule,
             organizer: self.keep_organizer.clone(),
-            attendees: self.keep_attendees.clone(),
+            attendees: self.attendees.clone(),
             calendar: self.calendar.clone(),
         })
     }
@@ -539,6 +565,20 @@ mod tests {
         assert!(d.byday[0] && d.byday[2]);
         // y reconstruye la misma regla
         assert_eq!(d.build("u1".into()).unwrap().rrule.as_deref(), Some("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE"));
+    }
+
+    #[test]
+    fn draft_evento_invitados_sin_duplicar() {
+        let mut d = EventDraft::new("personal".into(), 0);
+        assert!(d.add_attendee(raymi_core::Address::named("Ana", "ana@x.com")));
+        assert!(!d.add_attendee(raymi_core::Address::new("ANA@X.COM")), "duplicado por correo");
+        assert!(d.add_attendee(raymi_core::Address::new("beto@x.com")));
+        assert_eq!(d.attendees.len(), 2);
+        let e = d.build("u1".into()).unwrap();
+        assert_eq!(e.attendees.len(), 2);
+        d.remove_attendee("ANA@X.COM");
+        assert_eq!(d.attendees.len(), 1);
+        assert_eq!(d.attendees[0].email, "beto@x.com");
     }
 
     #[test]

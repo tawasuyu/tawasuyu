@@ -349,6 +349,12 @@ pub enum Msg {
     EventToggleByday(u32),
     /// Ciclar la condición de término (Sin fin → Tras N veces → Hasta fecha).
     EventCycleRepeatEnd,
+    /// Sumar el invitado escrito a mano (parsea la caja `Nombre <correo>`).
+    EventAddInvitee,
+    /// Sumar un invitado desde la libreta (`nombre`, `correo`).
+    EventAddContact { name: String, email: String },
+    /// Quitar el invitado con ese correo.
+    EventRemoveInvitee(String),
     /// Guardar / borrar el evento en edición.
     SaveEvent,
     DeleteEvent,
@@ -428,6 +434,30 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
                 d.repeat_end = d.repeat_end.next();
             }
         }
+        Msg::EventAddInvitee => {
+            if let Editor::Event(d) = &mut model.editor {
+                if let Some(addr) = raymi_core::Address::parse(&d.invitee.text()) {
+                    d.add_attendee(addr);
+                    d.invitee.clear();
+                }
+            }
+        }
+        Msg::EventAddContact { name, email } => {
+            if let Editor::Event(d) = &mut model.editor {
+                let addr = if name.trim().is_empty() {
+                    raymi_core::Address::new(email)
+                } else {
+                    raymi_core::Address::named(name, email)
+                };
+                d.add_attendee(addr);
+                d.invitee.clear();
+            }
+        }
+        Msg::EventRemoveInvitee(email) => {
+            if let Editor::Event(d) = &mut model.editor {
+                d.remove_attendee(&email);
+            }
+        }
         Msg::EventKey(event) => apply_editor_key(&mut model, event, true),
         Msg::SaveEvent => model.save_event(),
         Msg::DeleteEvent => model.delete_event(),
@@ -461,6 +491,17 @@ fn apply_editor_key(model: &mut Model, event: KeyEvent, is_event: bool) {
             Editor::Contact(d) if !is_event => d.focus = d.focus.next(),
             _ => {}
         },
+        // Enter en la caja de invitado lo agrega; en otros campos no hace nada.
+        Key::Named(NamedKey::Enter) => {
+            if let Editor::Event(d) = &mut model.editor {
+                if is_event && d.focus == EventField::Invitee {
+                    if let Some(addr) = raymi_core::Address::parse(&d.invitee.text()) {
+                        d.add_attendee(addr);
+                        d.invitee.clear();
+                    }
+                }
+            }
+        }
         _ => match &mut model.editor {
             Editor::Event(d) if is_event => {
                 d.focused_mut().apply_key(&event);

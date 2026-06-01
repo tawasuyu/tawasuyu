@@ -14,7 +14,7 @@ use llimphi_ui::View;
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 
 use raymi_core::time::{self, CivilDate, DAY};
-use raymi_core::{CalStore, Contact, Occurrence};
+use raymi_core::{Address, CalStore, Contact, Occurrence};
 
 use crate::{ContactDraft, ContactField, EventDraft, EventField, Mode, Model, Msg, Repeat, RepeatEnd};
 use llimphi_widget_text_input::TextInputState;
@@ -395,11 +395,14 @@ fn day_agenda(model: &Model) -> View<Msg> {
 }
 
 fn agenda_row(theme: &Theme, o: &Occurrence, color: Color) -> View<Msg> {
-    let when = if o.event.all_day {
+    let mut when = if o.event.all_day {
         "todo el día".to_string()
     } else {
         format!("{} – {}", hhmm(o.start), hhmm(o.end))
     };
+    if !o.event.attendees.is_empty() {
+        when.push_str(&format!("  ·  👤 {}", o.event.attendees.len()));
+    }
     let bar = View::new(Style {
         size: Size { width: length(4.0_f32), height: percent(1.0_f32) },
         ..Default::default()
@@ -730,6 +733,7 @@ pub fn event_editor(model: &Model, d: &EventDraft) -> View<Msg> {
         "Descripción",
         ev_field(&d.description, "Notas (opcional)", d.focus == EventField::Description, &pal, EventField::Description),
     ));
+    col.push(attendees_section(model, &pal, d));
 
     let actions = editor_actions(theme, d.uid.is_some(), Msg::SaveEvent, Msg::DeleteEvent);
     col.push(actions);
@@ -853,6 +857,125 @@ fn day_toggle(theme: &Theme, label: &str, on: bool, idx: u32) -> View<Msg> {
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::EventToggleByday(idx))
     .text(label, 12.0, fg)
+}
+
+/// Sección **Invitados**: pills removibles de los actuales + caja de alta +
+/// sugerencias desde la libreta según lo tecleado.
+fn attendees_section(model: &Model, pal: &TextInputPalette, d: &EventDraft) -> View<Msg> {
+    let theme = &model.theme;
+    let mut block: Vec<View<Msg>> = Vec::new();
+
+    // Invitados actuales (uno por fila, con ✕ para quitar).
+    for a in &d.attendees {
+        block.push(attendee_pill(theme, a));
+    }
+
+    // Caja para sumar a mano (Enter agrega).
+    block.push(ev_field(
+        &d.invitee,
+        "Nombre <correo>  · Enter",
+        d.focus == EventField::Invitee,
+        pal,
+        EventField::Invitee,
+    ));
+
+    // Sugerencias: contactos con correo que matchean lo tecleado y no están ya.
+    let query = d.invitee.text();
+    if !query.trim().is_empty() {
+        let invited: std::collections::HashSet<String> =
+            d.attendees.iter().map(|a| a.email.to_lowercase()).collect();
+        let mut shown = 0;
+        for c in model.store_ref().search_contacts(&query) {
+            if shown >= 4 {
+                break;
+            }
+            let Some(email) = c.primary_email() else { continue };
+            if invited.contains(&email.to_lowercase()) {
+                continue;
+            }
+            block.push(suggestion_row(theme, &c.full_name, email));
+            shown += 1;
+        }
+    }
+
+    let inner = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
+        ..Default::default()
+    })
+    .children(block);
+    labeled(theme, "Invitados", inner)
+}
+
+fn attendee_pill(theme: &Theme, a: &Address) -> View<Msg> {
+    let label = match &a.name {
+        Some(n) => format!("{n}  ·  {}", a.email),
+        None => a.email.clone(),
+    };
+    let text = View::new(Style {
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(label, 12.5, theme.fg_text, Alignment::Start);
+    let close = View::new(Style {
+        size: Size { width: length(24.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text("✕", 12.0, theme.fg_muted);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(10.0, 0.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::EventRemoveInvitee(a.email.clone()))
+    .children(vec![text, close])
+}
+
+fn suggestion_row(theme: &Theme, name: &str, email: &str) -> View<Msg> {
+    let texts = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style { size: Size { width: Dimension::auto(), height: percent(1.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text(name.to_string(), 12.5, theme.fg_text),
+        View::new(Style { size: Size { width: Dimension::auto(), height: percent(1.0_f32) }, flex_grow: 1.0, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text_aligned(email.to_string(), 11.0, theme.fg_muted, Alignment::Start),
+    ]);
+    let plus = View::new(Style {
+        size: Size { width: length(20.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text("＋", 13.0, theme.accent);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: pad_xy(10.0, 0.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_input)
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::EventAddContact { name: name.to_string(), email: email.to_string() })
+    .children(vec![texts, plus])
 }
 
 /// Chip que cicla un valor al hacer clic (muestra el valor + “⟳”).

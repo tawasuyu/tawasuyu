@@ -159,10 +159,23 @@ intercambiables, como el resto de la suite.
     en la grilla y la agenda (vía `CalStore::occurrences_in`). `cargo check
     --workspace` verde.
 
+- **Fase 9 (2026-06-01):** **invitar contactos a eventos** (cruce con la libreta).
+  - `EventDraft` expone `attendees: Vec<Address>` editable (+ `add_attendee`/
+    `remove_attendee`, dedup por correo sin distinguir mayúsculas) y una caja
+    `invitee`; los `ATTENDEE` ya no sólo se preservan, se editan. +1 test.
+  - **UI** en el modal de evento, sección **Invitados**: pills removibles (✕) de
+    los actuales, caja “Nombre &lt;correo&gt; · Enter” (parsea con
+    `Address::parse`) y **sugerencias** en vivo desde `CalStore::search_contacts`
+    (hasta 4, con correo, que no estén ya invitados) → clic los suma con nombre.
+  - La agenda del día muestra “👤 N” cuando el evento tiene invitados; el demo
+    siembra “Reunión con clientes” con Ana y Bruno para verlo de una.
+  - `cargo check --workspace` verde.
+
 ## Pendiente (orden sugerido)
 
 1. **Verificar `raymi-net` contra servidor real** (Nextcloud/Radicale) en la
    laptop: discover + sync + put/delete end-to-end.
-2. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.
+2. **“Crear evento desde correo”** en paloma (la otra mitad del cruce): un mensaje
+   con fecha/hora detectada o un `.ics` adjunto → evento en raymi.
 3. **Editar serie vs. instancia** de un evento recurrente (hoy se edita siempre la
    serie base; falta `RECURRENCE-ID` / `EXDATE` para excepciones puntuales).

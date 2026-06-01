@@ -53,6 +53,13 @@ pub fn backend(now: i64) -> MockBackend {
 
     let today0 = time::start_of_day(now);
 
+    // Reunión con clientes: con invitados (cruce con la libreta).
+    let mut clientes = ev("clientes", "trabajo", "Reunión con clientes", today0, 2, 11, 2, None);
+    clientes.location = "Sala 2".into();
+    clientes.attendees = vec![
+        raymi_core::Address::named("Ana Pérez", "ana@ejemplo.com"),
+        raymi_core::Address::named("Bruno Díaz", "bruno@empresa.com"),
+    ];
     mock.seed_events(
         "trabajo",
         vec![
@@ -60,8 +67,7 @@ pub fn backend(now: i64) -> MockBackend {
             ev("standup", "trabajo", "Daily standup", today0, 0, 9, 0, Some("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR")),
             // Revisión hoy a la tarde.
             ev("review", "trabajo", "Revisión de sprint", today0, 0, 15, 1, None),
-            // Reunión de clientes pasado mañana.
-            ev("clientes", "trabajo", "Reunión con clientes", today0, 2, 11, 2, None),
+            clientes,
         ],
     );
     mock.seed_events(
