@@ -40,12 +40,19 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
-/// Paleta del menú. Defaults dark; override por la app.
+/// Paleta del menú — estilo "webpage" elegante derivado del theme:
+/// panel redondeado con borde hairline, filas como píldoras con hover
+/// suave (`bg_hover`) y resaltado de teclado (`bg_active`, más un
+/// indicador accent a la izquierda). Defaults dark; override por la app.
 #[derive(Debug, Clone, Copy)]
 pub struct ContextMenuPalette {
     pub bg_panel: Color,
+    /// Fila bajo el cursor (hover) — tinte suave.
+    pub bg_hover: Color,
+    /// Fila activa por teclado (flechas) — algo más marcado que el hover.
     pub bg_active: Color,
     pub fg_text: Color,
+    /// Texto de la fila activa/hover (legible sobre el tinte suave).
     pub fg_active: Color,
     pub fg_shortcut: Color,
     pub fg_disabled: Color,
@@ -57,19 +64,24 @@ pub struct ContextMenuPalette {
     pub border: Color,
     pub separator: Color,
     pub scrim: Color,
+    /// Radio de las esquinas del panel.
+    pub radius: f64,
     pub panel: PanelStyle,
 }
 
 impl ContextMenuPalette {
     pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
+        // El panel se eleva sobre el fondo: usa `bg_panel` (no `bg_app`)
+        // con su gradiente sutil + esquinas redondeadas.
         let mut panel = PanelStyle::neutral(t);
-        panel.bg_base = t.bg_app;
-        panel.radius = 0.0;
+        panel.bg_base = t.bg_panel;
+        panel.radius = PANEL_RADIUS as f64;
         Self {
-            bg_panel: t.bg_app,
-            bg_active: t.accent,
+            bg_panel: t.bg_panel,
+            bg_hover: t.bg_row_hover,
+            bg_active: t.bg_selected,
             fg_text: t.fg_text,
-            fg_active: t.bg_app,
+            fg_active: t.fg_text,
             fg_shortcut: t.fg_muted,
             fg_disabled: t.fg_muted,
             fg_destructive: t.fg_destructive,
@@ -79,6 +91,7 @@ impl ContextMenuPalette {
             border: t.border,
             separator: t.border,
             scrim: Color::from_rgba8(0, 0, 0, 64),
+            radius: PANEL_RADIUS as f64,
             panel,
         }
     }
@@ -203,17 +216,23 @@ impl<Msg: Clone + 'static> Default for ContextMenuExtras<Msg> {
     }
 }
 
-const PANEL_W: f32 = 248.0;
-/// Altura de cada item (no-separator). Subida a 30 para respirar y
-/// centrar mejor el texto verticalmente.
-const ITEM_H: f32 = 30.0;
+const PANEL_W: f32 = 252.0;
+/// Altura de cada item (no-separator).
+const ITEM_H: f32 = 32.0;
 const SEP_H: f32 = 11.0;
-const HEADER_H: f32 = 24.0;
-const ACCENT_BAR_W: f32 = 3.0;
+const HEADER_H: f32 = 26.0;
 /// Gutter del ícono a la izquierda del label.
-const ICON_W: f32 = 26.0;
+const ICON_W: f32 = 24.0;
 const ITEM_PAD_LEFT: f32 = 10.0;
-const ITEM_PAD_RIGHT: f32 = 14.0;
+const ITEM_PAD_RIGHT: f32 = 12.0;
+/// Radio de las esquinas del panel (estilo webpage).
+const PANEL_RADIUS: f32 = 10.0;
+/// Radio de la píldora de hover/activo de cada fila.
+const ITEM_RADIUS: f32 = 6.0;
+/// Padding interno del panel (entre el borde y la columna de píldoras).
+const PANEL_PAD: f32 = 6.0;
+/// Ancho del indicador accent vertical de la fila activa.
+const INDICATOR_W: f32 = 3.0;
 /// Desplazamiento vertical de entrada (px) cuando `appear` = 0.
 const APPEAR_SLIDE: f32 = 8.0;
 
@@ -313,7 +332,8 @@ fn panel_view<Msg: Clone + 'static>(
         .iter()
         .map(|it| if it.separator { SEP_H } else { ITEM_H })
         .sum();
-    let panel_h = header_h + items_h + 2.0;
+    // borde (1+1) + padding interno (PANEL_PAD ×2) + header + items.
+    let panel_h = 2.0 + 2.0 * PANEL_PAD + header_h + items_h;
 
     let margin = 4.0;
     let x = anchor
@@ -360,7 +380,8 @@ fn submenu_view<Msg: Clone + 'static>(
         .iter()
         .map(|it| if it.separator { SEP_H } else { ITEM_H })
         .sum::<f32>()
-        + 2.0;
+        + 2.0
+        + 2.0 * PANEL_PAD;
     let margin = 4.0;
     let x = anchor
         .0
@@ -387,7 +408,10 @@ fn submenu_view<Msg: Clone + 'static>(
     panel_container(x, y + slide, panel_h, children, palette)
 }
 
-/// El contenedor visual común (barra accent + columna de items con borde).
+/// El contenedor visual: panel redondeado con borde hairline (un nodo
+/// exterior del color del borde + uno interior con el gradiente del
+/// PanelStyle) y padding interno para que las píldoras de cada fila
+/// queden inset — el look de menú de webpage.
 fn panel_container<Msg: Clone + 'static>(
     x: f32,
     y: f32,
@@ -407,33 +431,34 @@ fn panel_container<Msg: Clone + 'static>(
             width: length(PANEL_W),
             height: length(panel_h),
         },
-        flex_direction: FlexDirection::Row,
+        padding: Rect {
+            left: length(1.0_f32),
+            right: length(1.0_f32),
+            top: length(1.0_f32),
+            bottom: length(1.0_f32),
+        },
         ..Default::default()
     })
     .fill(palette.border)
-    .children(vec![
-        View::new(Style {
-            size: Size {
-                width: length(ACCENT_BAR_W),
-                height: percent(1.0_f32),
-            },
-            ..Default::default()
-        })
-        .fill(palette.accent),
-        View::new(Style {
-            flex_direction: FlexDirection::Column,
-            flex_grow: 1.0,
-            padding: Rect {
-                left: length(0.0_f32),
-                right: length(1.0_f32),
-                top: length(1.0_f32),
-                bottom: length(1.0_f32),
-            },
-            ..Default::default()
-        })
-        .paint_with(panel_signature_painter(palette.panel))
-        .children(children),
-    ])
+    .radius(palette.radius as f64)
+    .children(vec![View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: Rect {
+            left: length(PANEL_PAD),
+            right: length(PANEL_PAD),
+            top: length(PANEL_PAD),
+            bottom: length(PANEL_PAD),
+        },
+        ..Default::default()
+    })
+    .radius((palette.radius - 1.0) as f64)
+    .paint_with(panel_signature_painter(palette.panel))
+    .children(children)])
 }
 
 /// Ancla del flyout: a la derecha del panel padre, alineado al item.
@@ -445,12 +470,12 @@ fn submenu_anchor(
     parent_idx: usize,
 ) -> (f32, f32) {
     let mut off = if header.is_some() { HEADER_H } else { 0.0 };
-    off += 1.0; // padding top del contenedor
+    off += 1.0 + PANEL_PAD; // borde + padding interno del contenedor
     for it in items.iter().take(parent_idx) {
         off += if it.separator { SEP_H } else { ITEM_H };
     }
-    // 2px de solape para que se lea continuo con el panel padre.
-    (panel_x + PANEL_W - 2.0, panel_y + off)
+    // pequeño solape para que el flyout se lea continuo con el padre.
+    (panel_x + PANEL_W - PANEL_PAD, panel_y + off)
 }
 
 fn header_view<Msg: Clone + 'static>(text: String, palette: &ContextMenuPalette) -> View<Msg> {
@@ -460,9 +485,9 @@ fn header_view<Msg: Clone + 'static>(text: String, palette: &ContextMenuPalette)
             height: length(HEADER_H),
         },
         padding: Rect {
-            left: length(ITEM_PAD_LEFT + ICON_W),
+            left: length(ITEM_PAD_LEFT + INDICATOR_W + ICON_W + 4.0),
             right: length(ITEM_PAD_RIGHT),
-            top: length(0.0_f32),
+            top: length(2.0_f32),
             bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
@@ -488,16 +513,41 @@ fn item_view<Msg: Clone + 'static>(
         return separator_view(palette);
     }
 
-    let (bg, fg, fg_dim): (Option<Color>, Color, Color) = if !item.enabled {
-        (None, palette.fg_disabled, palette.fg_disabled)
-    } else if is_active {
-        (Some(palette.bg_active), palette.fg_active, palette.fg_active)
+    // Color del texto y del atajo según estado.
+    let (fg, fg_dim): (Color, Color) = if !item.enabled {
+        (palette.fg_disabled, palette.fg_disabled)
     } else if item.destructive {
-        (None, palette.fg_destructive, palette.fg_shortcut)
+        (palette.fg_destructive, palette.fg_shortcut)
+    } else if is_active {
+        (palette.fg_active, palette.fg_active)
     } else {
-        (None, palette.fg_text, palette.fg_shortcut)
+        (palette.fg_text, palette.fg_shortcut)
     };
-    let icon_fg = if is_active { fg } else { palette.fg_icon };
+    // Ícono: accent cuando la fila está activa (cue del menú), si no
+    // apagado.
+    let icon_fg = if !item.enabled {
+        palette.fg_disabled
+    } else if is_active {
+        palette.accent
+    } else {
+        palette.fg_icon
+    };
+
+    // Indicador accent vertical a la izquierda — visible sólo en la fila
+    // activa; reserva su ancho siempre para que el texto no salte.
+    let indicator = View::new(Style {
+        size: Size {
+            width: length(INDICATOR_W),
+            height: percent(0.55_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    });
+    let indicator = if is_active && item.enabled {
+        indicator.fill(palette.accent).radius(2.0)
+    } else {
+        indicator
+    };
 
     // Gutter de ícono — auto height para que el row lo centre vertical.
     let icon_cell = View::new(Style {
@@ -510,12 +560,7 @@ fn item_view<Msg: Clone + 'static>(
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(
-        item.icon.clone().unwrap_or_default(),
-        13.0,
-        if item.enabled { icon_fg } else { palette.fg_disabled },
-        Alignment::Center,
-    );
+    .text_aligned(item.icon.clone().unwrap_or_default(), 13.0, icon_fg, Alignment::Center);
 
     // Label — auto height (lo centra el align_items Center del row).
     let label = View::new(Style {
@@ -534,18 +579,18 @@ fn item_view<Msg: Clone + 'static>(
     } else {
         item.shortcut.clone().map(|s| (s, fg_dim))
     };
-    let mut row_children: Vec<View<Msg>> = vec![icon_cell, label];
+    let mut row_children: Vec<View<Msg>> = vec![indicator, icon_cell, label];
     if let Some((txt, color)) = trailing_text {
         row_children.push(
             View::new(Style {
                 size: Size {
-                    width: length(70.0_f32),
+                    width: length(64.0_f32),
                     height: auto(),
                 },
                 flex_shrink: 0.0,
                 ..Default::default()
             })
-            .text_aligned(txt, 11.5, color, Alignment::End),
+            .text_aligned(txt, 11.0, color, Alignment::End),
         );
     }
 
@@ -561,16 +606,24 @@ fn item_view<Msg: Clone + 'static>(
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
+        gap: Size {
+            width: length(2.0_f32),
+            height: length(0.0_f32),
+        },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
+    .radius(ITEM_RADIUS as f64)
     .children(row_children);
-    if let Some(bg) = bg {
-        row = row.fill(bg);
+
+    // Fondo: píldora suave en activo (teclado). El hover lo aporta
+    // `hover_fill` (tinte aún más suave) para no competir con el activo.
+    if is_active && item.enabled {
+        row = row.fill(palette.bg_active);
     }
 
     if item.enabled {
-        row = row.hover_fill(palette.bg_active);
+        row = row.hover_fill(palette.bg_hover);
         match &parent {
             Some((pidx, cb)) => {
                 let cb = cb.clone();
