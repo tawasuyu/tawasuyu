@@ -154,7 +154,7 @@ de lo automatizable.
 | **nahual** (68) | Visor PDF (falta rasterizador) + SVG + seek/scrub | 🤝 (svg-viewer untracked ya empezado: ver 0.2) |
 | **media** (68) | **M1: sync A/V por PTS completa** | 🤖 — es el cuello de media |
 | **iniy** (65 ⚠️) | **Pipeline e2e *probado* + NLI local** (hoy piezas sueltas/mock) | 🤖 — primero *verlo correr*, recién después subir % |
-| **chasqui** (62) | Persistencia del broker + transporte/discovery P2P | 🤖 |
+| **chasqui** (62) | ~~transporte/discovery P2P~~ ✅ discovery DHT cableado (`resolve_provider`). Falta connect-and-consume remoto. *(La "persistencia del broker" es un no-feature: efímero por diseño.)* | 🤖 |
 | **sandokan** (60) | Cleanup socket + `RunCard` arbitraria | 🤖 |
 
 ### 2C. Cuello real (<60%) — NO DETALLABLE como tarea simple
@@ -179,10 +179,16 @@ hechas de lo que el plan asumía.
    `EnlaceMinga`, `card-handshake::network`, `KhipuNode`). El único pendiente es
    un refactor `MemStore→NodeStore` en minga, *trigger-driven* (>100k nodos), no
    bloqueante. Corregidos los comentarios/docs obsoletos que decían lo contrario.
-2. **Discovery de chasqui** → 🟡 parcial. El transporte (card-net) está; falta
-   **cablear el discovery por DHT**: el daemon Nouser no llama `announce_outputs()`
-   y no hay `find_remote_providers(flow_type)` en `card-sidecar`. *(La
-   "persistencia del broker" del inventario está **mal planteada**: el broker
+2. **Discovery de chasqui** → ✅ **cableado** (esta sesión). Resultó estar más
+   hecho de lo que el map decía: el discovery por DHT ya vivía completo y
+   testeado en `card-handshake::network` (`flow_dht_key` blake3 + `announce_outputs`
+   que el **Server llama solo** al registrar + `find_remote_providers`, 3/3 en
+   `network_discovery.rs`). Lo que faltaba era la **capa de consumidor**:
+   `card-sidecar::discovery::resolve_provider(card, net, timeout)` → `ProviderLocation
+   ::{Local(socket) | Remote(Vec<PeerId>)}` (local-first, fallback al DHT), con
+   test de integración verde. *Follow-up fino:* el connect-and-consume remoto
+   (dial + `connect_libp2p` sobre el `PeerId`) — primitivos ya en card-handshake.
+   *(La "persistencia del broker" del inventario está **mal planteada**: el broker
    indexa por `SessionId` = conexiones vivas → es efímero por diseño; lo durable
    ya es el sled de Nouser + el keypair libp2p.)*
 3. **Audio supay ↔ takiy** → ✅ **HECHO** esta sesión.
@@ -259,7 +265,7 @@ cruza a "lista para mostrar".
 ```
 Nivel 0  (días)      → licencias, untracked, CI, decisión de alcance   [DESBLOQUEA TODO]
 Nivel 1  (días)      → workspace 100% limpio: clippy, tests, warnings
-Nivel 3.2            → discovery por DHT en chasqui (3.1 NAT ya hecho) [APALANCA]
+Nivel 3 (1·2·3)      → ✅ NAT, discovery DHT, audio supay↔takiy. Resta 4 (AppBus) y 5 (§14.1.3)
 Nivel 2A             → empujón corto a las ≥80% que ya casi cierran
 Nivel 2B             → el grueso del core (agora/§14.1.3, media M1, iniy e2e…)
 Nivel 4  (en paralelo, tuyo) → pulido app por app a medida que cierran
