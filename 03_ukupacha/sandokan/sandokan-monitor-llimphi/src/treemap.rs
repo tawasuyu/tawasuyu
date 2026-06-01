@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 /// Entrada cruda: un proceso con su peso (RSS o CPU) y su color (cpu).
+#[derive(Clone)]
 pub struct Item {
     pub pid: i32,
     pub ppid: i32,
@@ -21,6 +22,7 @@ pub struct Item {
 /// Un rectángulo ya colocado, listo para pintar.
 #[derive(Clone, Debug)]
 pub struct Cell {
+    pub pid: i32,
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -140,6 +142,7 @@ fn place(
         let has_kids = kids.map(|k| !k.is_empty()).unwrap_or(false);
 
         out.push(Cell {
+            pid: items[i].pid,
             x: cx,
             y: cy,
             w: cw,

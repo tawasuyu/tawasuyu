@@ -810,7 +810,9 @@ impl App for Monitor {
             Key::Named(NamedKey::ArrowUp) if model.tab == Tab::System => {
                 return sys_move(model, -1);
             }
-            Key::Named(NamedKey::Delete) if model.tab == Tab::System => {
+            Key::Named(NamedKey::Delete)
+                if model.tab == Tab::System || model.tab == Tab::Map =>
+            {
                 return model.sys_sel.map(|p| Msg::Signal(p, Sig::Term));
             }
             // En árbol: ← colapsa, → expande el nodo seleccionado.
@@ -1035,6 +1037,9 @@ fn map_body(model: &Model) -> View<Msg> {
 
     let border = t.bg_app;
     let label_col = Color::from_rgba8(0x0d, 0x10, 0x14, 0xff);
+    let accent = t.accent;
+    let sel = model.sys_sel;
+    let hit_items = items.clone();
 
     let canvas = View::new(Style {
         flex_grow: 1.0,
@@ -1055,17 +1060,21 @@ fn map_body(model: &Model) -> View<Msg> {
                 (c.x + c.w) as f64,
                 (c.y + c.h) as f64,
             );
-            // Hoja: color por uso (más opaco). Contenedor: tinte tenue (los
-            // hijos lo tapan, queda visible la cabecera + borde).
-            let base = usage_color(c.cpu);
+            // Color categórico por proceso; la opacidad sube con el uso de CPU
+            // y baja con la profundidad (sensación fractal). Contenedor: tenue.
+            let base = name_color(&c.label);
             let fill = if c.leaf {
-                // Sombreado sutil por profundidad para dar sensación fractal.
-                base.with_alpha((0.92 - c.depth as f32 * 0.05).clamp(0.55, 0.92))
+                let a = (0.60 + c.cpu / 100.0 * 0.34 - c.depth as f32 * 0.05).clamp(0.5, 0.95);
+                base.with_alpha(a)
             } else {
-                base.with_alpha(0.16)
+                base.with_alpha(0.14)
             };
             scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
-            scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, border, None, &r);
+            if sel == Some(c.pid) {
+                scene.stroke(&Stroke::new(2.5), Affine::IDENTITY, accent, None, &r);
+            } else {
+                scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, border, None, &r);
+            }
 
             // Etiqueta si hay lugar.
             if c.w > 46.0 && c.h > 15.0 {
@@ -1078,6 +1087,17 @@ fn map_body(model: &Model) -> View<Msg> {
                 }
             }
         }
+    })
+    .on_click_at(move |x, y, w, h| {
+        // Recomputa el layout en coords LOCALES (0,0,w,h) —las mismas que
+        // entrega `on_click_at`— y resuelve el rect más profundo (último
+        // dibujado) que contiene el punto.
+        let cells = treemap::layout(&hit_items, (0.0, 0.0, w, h), 15.0, 3.0);
+        cells
+            .iter()
+            .rev()
+            .find(|c| x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h)
+            .map(|c| Msg::SysSelect(c.pid))
     });
 
     View::new(Style {
@@ -1095,6 +1115,35 @@ fn map_body(model: &Model) -> View<Msg> {
 
 fn map_toolbar(model: &Model) -> View<Msg> {
     let t = &model.theme;
+    let mut row = vec![
+        View::new(Style::default()).text("Área por:", 12.0, t.fg_muted),
+        seg_btn(t, "Memoria", !model.map_cpu, Msg::MapMetric(false)),
+        seg_btn(t, "CPU", model.map_cpu, Msg::MapMetric(true)),
+    ];
+    match model.sys_sel.and_then(|pid| model.system.iter().find(|p| p.pid == pid)) {
+        Some(p) => {
+            row.push(
+                View::new(Style {
+                    flex_grow: 1.0,
+                    ..Default::default()
+                })
+                .text(format!("▸ PID {} · {}", p.pid, p.name), 12.0, name_color(&p.name)),
+            );
+            row.push(action_btn(t, "Terminar", t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Term)));
+            row.push(action_btn(t, "Matar", t.fg_destructive, t.bg_app, Msg::Signal(p.pid, Sig::Kill)));
+        }
+        None => row.push(
+            View::new(Style {
+                flex_grow: 1.0,
+                ..Default::default()
+            })
+            .text(
+                "Click en un rectángulo para seleccionar y matar · color por proceso",
+                11.0,
+                t.fg_muted,
+            ),
+        ),
+    }
     View::new(Style {
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
@@ -1106,20 +1155,7 @@ fn map_toolbar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .fill(t.bg_panel_alt)
-    .children(vec![
-        View::new(Style::default()).text("Área por:", 12.0, t.fg_muted),
-        seg_btn(t, "Memoria", !model.map_cpu, Msg::MapMetric(false)),
-        seg_btn(t, "CPU", model.map_cpu, Msg::MapMetric(true)),
-        View::new(Style {
-            flex_grow: 1.0,
-            ..Default::default()
-        })
-        .text(
-            "Anidado por padre/hijo · color por uso de CPU",
-            11.0,
-            t.fg_muted,
-        ),
-    ])
+    .children(row)
 }
 
 // ---------------------------------------------------------------------------
@@ -1394,6 +1430,37 @@ fn sys_graphs(model: &Model) -> View<Msg> {
     })
     .fill(t.bg_panel)
     .children(items)
+}
+
+/// Color categórico estable por nombre de proceso (mismo nombre → mismo color),
+/// para que el treemap y la lista sean coloridos y coherentes entre sí.
+fn name_color(name: &str) -> Color {
+    const P: [(u8, u8, u8); 16] = [
+        (0x5a, 0x9b, 0xd4),
+        (0x6a, 0xc4, 0x6a),
+        (0xe0, 0xb0, 0x3a),
+        (0xd9, 0x65, 0x5a),
+        (0xb0, 0x7a, 0xd9),
+        (0x40, 0xc4, 0xc4),
+        (0xe0, 0x8a, 0x4a),
+        (0xd8, 0x6a, 0xa8),
+        (0x8a, 0xc2, 0x4a),
+        (0x4a, 0x8a, 0xd9),
+        (0xc4, 0xa0, 0x40),
+        (0x6a, 0xd9, 0xa0),
+        (0xd9, 0x6a, 0x6a),
+        (0x9a, 0x8a, 0xd9),
+        (0x50, 0xb0, 0xd9),
+        (0xc4, 0x6a, 0x9a),
+    ];
+    // FNV-1a sobre el nombre.
+    let mut h: u32 = 2166136261;
+    for b in name.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    let (r, g, b) = P[(h as usize) % P.len()];
+    Color::from_rgba8(r, g, b, 0xff)
 }
 
 /// Color por nivel de uso: verde (bajo) → ámbar (medio) → rojo (alto).
@@ -1700,7 +1767,14 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
         .text(s, 11.5, color)
     };
     let bg = if selected { t.bg_selected } else { t.bg_app };
-    let cpu_col = if p.cpu_pct >= 1.0 { t.fg_text } else { t.fg_muted };
+    // %CPU coloreado por nivel cuando hay actividad; el comando toma el color
+    // categórico del proceso (coherente con el treemap).
+    let cpu_col = if p.cpu_pct >= 0.5 {
+        usage_color(p.cpu_pct)
+    } else {
+        t.fg_muted
+    };
+    let cmd_col = name_color(&p.name);
 
     // Celda de comando: en árbol lleva sangría por profundidad + triángulo de
     // colapso (dibujado, no glifo de fuente) antes del texto.
@@ -1713,7 +1787,7 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
             }
             parts.push(tri_node(t, has_kids, collapsed, p.pid));
         }
-        parts.push(command_node(&p.cmd, t.fg_text));
+        parts.push(command_node(&p.cmd, cmd_col));
         View::new(Style {
             flex_grow: 1.0,
             flex_basis: length(0.0),
