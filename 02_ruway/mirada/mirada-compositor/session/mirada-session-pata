@@ -20,7 +20,7 @@ export SDL_VIDEODRIVER=wayland
 # wlr-layer-shell (su backend nativo), que mirada ahora soporta.
 mkdir -p "${HOME}/.config/mirada"
 AUTO="${HOME}/.config/mirada/autostart"
-LINE='WGPU_BACKEND=gl pata-llimphi'
+LINE='pata-llimphi'
 grep -qxF "$LINE" "$AUTO" 2>/dev/null || echo "$LINE" >> "$AUTO"
 
 exec mirada-compositor --drm
