@@ -92,6 +92,45 @@ impl AppEntry {
             Launch::Action(_) | Launch::Wasm { .. } => Ok(None),
         }
     }
+
+    /// **Open-with out-of-process**: abre `target` con esta app. Para `Exec`,
+    /// spawnea el binario sustituyendo el placeholder `%f`/`%u` en los args
+    /// por `target`; si ningún arg lo trae, agrega `target` como último
+    /// argumento (semántica estilo freedesktop `Exec=app %f`). `Action`/`Wasm`
+    /// devuelven `Ok(None)`: el target lo despacha el host (chasis a una vista
+    /// in-process, o kernel de wawa a una app WASM), no un proceso del SO.
+    pub fn open(&self, target: &str) -> std::io::Result<Option<std::process::Child>> {
+        match &self.launch {
+            Launch::Exec { program, args } => std::process::Command::new(program)
+                .args(expand_target(args, target))
+                .spawn()
+                .map(Some),
+            Launch::Action(_) | Launch::Wasm { .. } => Ok(None),
+        }
+    }
+}
+
+/// Sustituye los placeholders `%f`/`%u` por `target` en `args`. Si ninguno
+/// aparece, agrega `target` como argumento final — la convención de
+/// freedesktop (`Exec=app %f`) que entiende cualquier "abrir con".
+#[cfg(feature = "std")]
+pub fn expand_target(args: &[String], target: &str) -> Vec<String> {
+    let mut sustituido = false;
+    let mut out: Vec<String> = args
+        .iter()
+        .map(|a| {
+            if a.contains("%f") || a.contains("%u") {
+                sustituido = true;
+                a.replace("%f", target).replace("%u", target)
+            } else {
+                a.clone()
+            }
+        })
+        .collect();
+    if !sustituido {
+        out.push(target.to_string());
+    }
+    out
 }
 
 // ----- forma en disco (TOML) -----
@@ -222,6 +261,23 @@ impl AppRegistry {
     /// existe — la app sigue, sólo sin entradas.
     pub fn discover() -> Self {
         apps_dir().map(Self::from_dir).unwrap_or_default()
+    }
+
+    /// **Open-with universal**: elige el primer handler de `mime` (orden de
+    /// label) y le abre `target` out-of-process vía [`AppEntry::open`].
+    /// Devuelve el `AppEntry` elegido y su `Child` (o `None` en el child si
+    /// la app es `Action`/`Wasm`, que despacha el host). `Ok(None)` si ninguna
+    /// app registrada declara abrir ese mime — el caller cae a su visor
+    /// in-process por defecto (p.ej. el `viewer_registry` de nahual-shell).
+    pub fn open_with(
+        &self,
+        mime: &str,
+        target: &str,
+    ) -> std::io::Result<Option<(&AppEntry, Option<std::process::Child>)>> {
+        match self.handlers_for(mime).into_iter().next() {
+            Some(entry) => Ok(Some((entry, entry.open(target)?))),
+            None => Ok(None),
+        }
     }
 
     /// Escanea `<dir>/*.toml`. Ignora en silencio los que no parsean
@@ -641,5 +697,77 @@ mod tests {
             app_id: "nada".into(),
         });
         assert_eq!(n, 1);
+    }
+
+    // ===== open-with out-of-process =====
+
+    #[test]
+    fn expand_target_sustituye_placeholder() {
+        let args = vec!["--open".to_string(), "%f".to_string()];
+        assert_eq!(
+            expand_target(&args, "/tmp/x.png"),
+            vec!["--open".to_string(), "/tmp/x.png".to_string()]
+        );
+        // `%u` también; y substitución embebida en un arg compuesto.
+        let args = vec!["url=%u".to_string()];
+        assert_eq!(expand_target(&args, "http://a"), vec!["url=http://a".to_string()]);
+    }
+
+    #[test]
+    fn expand_target_agrega_si_no_hay_placeholder() {
+        let args = vec!["--flag".to_string()];
+        assert_eq!(
+            expand_target(&args, "/tmp/x.png"),
+            vec!["--flag".to_string(), "/tmp/x.png".to_string()]
+        );
+    }
+
+    #[test]
+    fn open_with_sin_handler_devuelve_none() {
+        let reg = AppRegistry::new(vec![]);
+        assert!(reg.open_with("image/png", "/tmp/x.png").unwrap().is_none());
+    }
+
+    #[test]
+    fn open_with_spawnea_handler_y_le_pasa_el_target() {
+        use std::io::Read;
+        // Archivo donde el "handler" escribirá el target que recibió.
+        let out =
+            std::env::temp_dir().join(format!("app-bus-openwith-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&out);
+
+        // Handler = sh que escribe $1 (el target expandido en %f) al archivo.
+        let entry = AppEntry {
+            id: "writer".into(),
+            label: "Writer".into(),
+            icon: None,
+            category: None,
+            launch: Launch::Exec {
+                program: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    format!("printf '%s' \"$1\" > {}", out.display()),
+                    "_".into(),
+                    "%f".into(),
+                ],
+            },
+            handles: vec!["image/png".into()],
+        };
+        let reg = AppRegistry::new(vec![entry]);
+
+        let (chosen, child) = reg
+            .open_with("image/png", "TARGET-123")
+            .unwrap()
+            .expect("debe haber handler para image/png");
+        assert_eq!(chosen.id, "writer");
+        child.expect("Exec debe spawnear un Child").wait().unwrap();
+
+        let mut s = String::new();
+        std::fs::File::open(&out)
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
+        assert_eq!(s, "TARGET-123", "el handler recibió el target en %f");
+        let _ = std::fs::remove_file(&out);
     }
 }
