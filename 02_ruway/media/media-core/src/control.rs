@@ -80,6 +80,35 @@ pub enum MediaCommand {
     AvSyncBy { ms: i64 },
     /// Vuelve el desfase A/V a cero.
     AvSyncReset,
+    /// Enciende/apaga los ajustes de color del video (bypass real).
+    ColorToggle,
+    /// Ajusta un parámetro de color del video (V4) sumando `delta` (la app
+    /// clampea a su rango). Parametrizado igual que `EqBandBy`: el mismo
+    /// comando sube o baja brillo/contraste/gamma/saturación según el binding.
+    ColorBy { param: ColorParam, delta: f32 },
+    /// Vuelve todos los ajustes de color a la identidad (imagen original).
+    ColorReset,
+}
+
+/// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorParam {
+    Brightness,
+    Contrast,
+    Gamma,
+    Saturation,
+}
+
+impl ColorParam {
+    /// Etiqueta humana para la ayuda / el palette.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ColorParam::Brightness => "brillo",
+            ColorParam::Contrast => "contraste",
+            ColorParam::Gamma => "gamma",
+            ColorParam::Saturation => "saturación",
+        }
+    }
 }
 
 impl MediaCommand {
@@ -126,6 +155,12 @@ impl MediaCommand {
             }
             AvSyncBy { ms } => format!("Sync A/V +{ms}ms (retrasar video)"),
             AvSyncReset => "Sync A/V a cero".to_string(),
+            ColorToggle => "Ajustes de color on/off".to_string(),
+            ColorReset => "Color original".to_string(),
+            ColorBy { param, delta } => {
+                let signo = if *delta >= 0.0 { "+" } else { "" };
+                format!("Color {} {signo}{delta:.2}", param.label())
+            }
         }
     }
 }

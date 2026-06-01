@@ -40,7 +40,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 ### Pendiente
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
 - Track AUDIO A2/A3/A5/A6 (selección de pista, dispositivo de salida, normalización/ReplayGain, gapless/crossfade). **A4 (delay/sync) ✅.**
-- Track VIDEO V1–V8 (fullscreen, aspect/crop/zoom, rotación, ajustes de color, deinterlacing, filtros/shaders, capítulos, HDR) — todo pendiente.
+- Track VIDEO V1–V3, V5–V8 (fullscreen, aspect/crop/zoom, rotación, deinterlacing, filtros/shaders, capítulos, HDR). **V4 (ajustes de color, sin hue) ✅.**
 - Track SUBTÍTULOS S2–S5 (pistas embebidas, estilo configurable, delay/sync, auto-carga). **S1 (ASS/SSA texto+timing) ✅.**
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
 - Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
@@ -97,7 +97,15 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 - **V1 — Fullscreen real** del reproductor.
 - **V2 — Aspect ratio / crop / zoom / pan.**
 - **V3 — Rotación / flip.**
-- **V4 — Ajustes de color** (brillo/contraste/gamma/saturación/hue).
+- **V4 — Ajustes de color** (brillo/contraste/gamma/saturación). ✅
+  *Cerrado (2026-06-01, hue pendiente).* `media-core::color`: procesador
+  puro por-pixel `ColorAdjust` (contraste→brillo→saturación Rec.709→gamma,
+  clamp) + `ColorControl` compartido versionado + wrapper `ColorVideo`
+  sobre `FrameSource` — calca el molde del EQ (A1). Bypass real en identidad
+  o deshabilitado. Wireado en `media-app` (envuelve toda fuente de video,
+  testcard incluido) con comandos `MediaCommand::{ColorToggle,ColorReset,
+  ColorBy{param,delta}}` (`ColorParam` Brightness/Contrast/Gamma/Saturation)
+  en el palette (grupo "Color"). +8 tests. Falta **hue** (rotación de matiz).
 - **V5 — Deinterlacing.**
 - **V6 — Filtros/shaders de video** (los glsl de mpv, los filtros de VLC).
 - **V7 — Capítulos** y navegación; menús DVD/Blu-ray (baja prioridad).

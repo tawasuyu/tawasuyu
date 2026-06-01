@@ -77,7 +77,8 @@ use media_core::{
     PausableVideo, ProbedAudioSource, Seekable, SubtitleTrack, TestCard, ToneSource, Volume,
     VolumeAudio, Waterfall,
 };
-use media_core::control::{ControlSettings, KeyChord, MediaCommand};
+use media_core::color::{ColorControl, ColorVideo};
+use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
 use media_core::sync::{AvSync, FramePlan};
@@ -441,6 +442,14 @@ fn volume() -> &'static Volume {
 fn eq() -> &'static EqControl {
     static SLOT: OnceLock<EqControl> = OnceLock::new();
     SLOT.get_or_init(EqControl::graphic_10band)
+}
+
+/// Control de ajustes de color del video (brillo/contraste/gamma/
+/// saturación, V4). Compartido entre el wrapper `ColorVideo` de la cadena
+/// de video y los comandos `Color*`. Arranca en identidad (bypass).
+fn color() -> &'static ColorControl {
+    static SLOT: OnceLock<ColorControl> = OnceLock::new();
+    SLOT.get_or_init(ColorControl::default)
 }
 
 /// Handle al [`Playlist`] activo cuando hay tracks WAV/MP3. `None`
@@ -948,6 +957,16 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (AvSyncBy { ms: -50 }, "Sync A/V"),
         (AvSyncBy { ms: 50 }, "Sync A/V"),
         (AvSyncReset, "Sync A/V"),
+        (ColorToggle, "Color"),
+        (ColorReset, "Color"),
+        (ColorBy { param: ColorParam::Brightness, delta: 0.05 }, "Color"),
+        (ColorBy { param: ColorParam::Brightness, delta: -0.05 }, "Color"),
+        (ColorBy { param: ColorParam::Contrast, delta: 0.1 }, "Color"),
+        (ColorBy { param: ColorParam::Contrast, delta: -0.1 }, "Color"),
+        (ColorBy { param: ColorParam::Gamma, delta: 0.1 }, "Color"),
+        (ColorBy { param: ColorParam::Gamma, delta: -0.1 }, "Color"),
+        (ColorBy { param: ColorParam::Saturation, delta: 0.1 }, "Color"),
+        (ColorBy { param: ColorParam::Saturation, delta: -0.1 }, "Color"),
         (Snapshot, "Captura"),
         (ToggleRecord, "Captura"),
     ];
@@ -1107,6 +1126,25 @@ fn apply_command(cmd: MediaCommand) {
                 pipe.sync.lock().set_offset_ms(0);
                 eprintln!("media-app: sync A/V a cero");
             }
+        }
+        ColorToggle => {
+            let c = color();
+            let on = !c.is_enabled();
+            c.set_enabled(on);
+            eprintln!("media-app: color {}", if on { "on" } else { "off" });
+        }
+        ColorBy { param, delta } => {
+            let c = color();
+            match param {
+                ColorParam::Brightness => c.add_brightness(delta),
+                ColorParam::Contrast => c.add_contrast(delta),
+                ColorParam::Gamma => c.add_gamma(delta),
+                ColorParam::Saturation => c.add_saturation(delta),
+            }
+        }
+        ColorReset => {
+            color().reset();
+            eprintln!("media-app: color original");
         }
     }
 }
@@ -1398,7 +1436,10 @@ fn build_video_source() -> Box<dyn FrameSource + Send> {
 fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'static Pipeline {
     pipeline_slot().get_or_init(|| Pipeline {
         surface: ExternalSurface::new(device, queue),
-        source: Mutex::new(build_video_source()),
+        // V4: el ajuste de color envuelve a TODA fuente de video (incluido
+        // el testcard). En identidad hace bypass, así que no cuesta nada
+        // hasta que el usuario toca brillo/contraste/gamma/saturación.
+        source: Mutex::new(Box::new(ColorVideo::new(build_video_source(), color().clone()))),
         buf: Mutex::new(Vec::new()),
         last_dim: Mutex::new((0, 0)),
         last_tick: Mutex::new(Instant::now()),
