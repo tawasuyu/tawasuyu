@@ -41,7 +41,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
 - Track AUDIO A2/A3/A5/A6 (selección de pista, dispositivo de salida, normalización/ReplayGain, gapless/crossfade). **A4 (delay/sync) ✅.**
 - Track VIDEO V1–V8 (fullscreen, aspect/crop/zoom, rotación, ajustes de color, deinterlacing, filtros/shaders, capítulos, HDR) — todo pendiente.
-- Track SUBTÍTULOS S1–S5 (ASS/SSA, pistas embebidas, estilo configurable, delay/sync, auto-carga).
+- Track SUBTÍTULOS S2–S5 (pistas embebidas, estilo configurable, delay/sync, auto-carga). **S1 (ASS/SSA texto+timing) ✅.**
 - Track RED R1–R4 (URL/HLS/RTSP, yt-dlp/plataformas, streaming server, DLNA/Chromecast) — totalmente ausente; prerequisito de FREETUBE.md.
 - Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
 
@@ -105,7 +105,16 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 
 ### Track SUBTÍTULOS
 
-- **S1 — ASS/SSA** con estilo (el libass de mpv — esencial para karaoke/anime).
+- **S1 — ASS/SSA** ✅ *Cerrado (2026-06-01, sólo texto+timing).*
+  `SubtitleTrack::parse_ass` lee `[Events]`, ubica las columnas
+  `Start`/`End`/`Text` por su línea `Format:` (cae al orden v4+ si falta),
+  parsea cada `Dialogue:` con timestamps en **centésimas** (`parse_ass_timestamp`,
+  distinto de SRT que usa milésimas) y descarta los override tags
+  (`strip_ass_markup`: `{\\i1}`, `{\\an8}`, `\\N`→salto, `\\h`→espacio).
+  `parse_subtitles` lo autodetecta por la cabecera de secciones; `media-app`
+  suma la env `MEDIA_ASS`. ASS entra al mismo pipeline de texto que SRT/VTT.
+  El **estilo visual** (fuente/color/posición/karaoke) queda para S3 — hoy se
+  pinta como texto plano. +6 tests.
 - **S2 — Pistas embebidas** (muxeadas) + su selección.
 - **S3 — Estilo configurable** (fuente/tamaño/color/posición/fondo).
 - **S4 — Delay/sync de subtítulo** + subtítulo secundario.

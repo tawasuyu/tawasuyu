@@ -48,8 +48,9 @@
 //! simple: una línea por archivo `.wav`/`.mp3`, `#` = comentario,
 //! paths relativos al .m3u). Los botones `⟨trk` / `trk⟩` ciclan
 //! manualmente y `speed` cicla velocidades 0.5×..2×. `MEDIA_SRT=
-//! subs.srt` carga subtítulos que se muestran sincronizados a la
-//! posición actual del track.
+//! subs.srt` (o `MEDIA_VTT` / `MEDIA_ASS`) carga subtítulos —
+//! SRT/WebVTT/ASS-SSA, autodetectados— sincronizados a la posición
+//! actual del track.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -2883,11 +2884,14 @@ fn main() {
         }
     }
 
-    // Subtítulos: MEDIA_SRT o MEDIA_VTT apuntan al archivo; el parser
-    // autodetecta SRT vs WebVTT por la cabecera, así que ambas envs son
-    // intercambiables (gana MEDIA_SRT si las dos están). Falla
-    // silenciosa con log en stderr — la app sigue sin subs.
-    let subs = match std::env::var("MEDIA_SRT").or_else(|_| std::env::var("MEDIA_VTT")) {
+    // Subtítulos: MEDIA_SRT / MEDIA_VTT / MEDIA_ASS apuntan al archivo; el
+    // parser autodetecta SRT vs WebVTT vs ASS/SSA por la cabecera, así que
+    // las tres envs son intercambiables (gana la primera presente en ese
+    // orden). Falla silenciosa con log en stderr — la app sigue sin subs.
+    let subs = match std::env::var("MEDIA_SRT")
+        .or_else(|_| std::env::var("MEDIA_VTT"))
+        .or_else(|_| std::env::var("MEDIA_ASS"))
+    {
         Ok(path) => match std::fs::read_to_string(&path) {
             Ok(body) => match SubtitleTrack::parse_subtitles(&body) {
                 Ok(t) => {

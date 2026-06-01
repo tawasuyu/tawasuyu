@@ -1586,13 +1586,122 @@ impl SubtitleTrack {
         Ok(Self::new(cues))
     }
 
-    /// Autodetecta SRT vs WebVTT por la cabecera `WEBVTT` (tras un BOM
-    /// opcional) y delega al parser correspondiente. Lo que usa el
-    /// consumidor cuando no sabe el formato de antemano.
+    /// Parsea un cuerpo ASS/SSA (Advanced SubStation Alpha — el formato de
+    /// subtítulos de anime/karaoke, el `libass` de mpv). Sólo extrae el
+    /// **texto plano y su timing**: lee la sección `[Events]`, su línea
+    /// `Format:` para ubicar las columnas `Start`/`End`/`Text` (cae al orden
+    /// estándar v4+ si falta), parsea cada `Dialogue:` y descarta los
+    /// override tags (`{\i1}`, `{\an8}`, `{\pos(..)}`…), convirtiendo los
+    /// saltos `\N`/`\n` en líneas y `\h` en espacio. El estilo visual
+    /// (fuentes, colores, posición, karaoke) **no** se renderiza todavía —
+    /// eso sería S3 de `PARIDAD.md`; acá ASS entra al mismo pipeline de
+    /// texto que SRT/WebVTT.
+    ///
+    /// Tolerante: saltea `Dialogue` malformados (acumula avisos) y los
+    /// `Comment:`. Si no hay ningún cue válido devuelve `Err`. Asume — como
+    /// todo ASS real — que `Text` es la última columna, así las comas del
+    /// diálogo no lo parten.
+    pub fn parse_ass(text: &str) -> Result<Self, String> {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut cues: Vec<SubtitleCue> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+
+        let mut in_events = false;
+        // Orden de columnas por defecto de ASS v4+ (Layer, Start, End,
+        // Style, Name, MarginL, MarginR, MarginV, Effect, Text). La línea
+        // `Format:` de `[Events]` lo sobreescribe si difiere (p. ej. SSA v4
+        // arranca con `Marked` en vez de `Layer`).
+        let mut idx_start = 1usize;
+        let mut idx_end = 2usize;
+        let mut idx_text = 9usize;
+        let mut num_cols = 10usize;
+
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with('[') {
+                in_events = trimmed.eq_ignore_ascii_case("[Events]");
+                continue;
+            }
+            if !in_events {
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("Format:") {
+                let cols: Vec<String> = rest
+                    .split(',')
+                    .map(|c| c.trim().to_ascii_lowercase())
+                    .collect();
+                if !cols.is_empty() {
+                    num_cols = cols.len();
+                    if let Some(i) = cols.iter().position(|c| c == "start") {
+                        idx_start = i;
+                    }
+                    if let Some(i) = cols.iter().position(|c| c == "end") {
+                        idx_end = i;
+                    }
+                    if let Some(i) = cols.iter().position(|c| c == "text") {
+                        idx_text = i;
+                    }
+                }
+                continue;
+            }
+            let Some(rest) = trimmed.strip_prefix("Dialogue:") else {
+                // Comment:, Picture:, etc. — se ignoran.
+                continue;
+            };
+            // `Text` es la última columna: partimos en `num_cols` campos para
+            // que el último capture las comas del diálogo.
+            let fields: Vec<&str> = rest.splitn(num_cols, ',').collect();
+            if fields.len() < num_cols || idx_text >= fields.len() {
+                warnings.push(format!("Dialogue con pocos campos: '{trimmed}'"));
+                continue;
+            }
+            let start = match parse_ass_timestamp(fields[idx_start]) {
+                Ok(d) => d,
+                Err(e) => {
+                    warnings.push(e);
+                    continue;
+                }
+            };
+            let end = match parse_ass_timestamp(fields[idx_end]) {
+                Ok(d) => d,
+                Err(e) => {
+                    warnings.push(e);
+                    continue;
+                }
+            };
+            let body = strip_ass_markup(fields[idx_text]);
+            let body = body.trim().to_string();
+            if body.is_empty() {
+                continue;
+            }
+            cues.push(SubtitleCue { start, end, text: body });
+        }
+
+        if cues.is_empty() {
+            return Err(format!(
+                "ningún Dialogue válido en el ASS/SSA (avisos: {})",
+                warnings.join(" · ")
+            ));
+        }
+        Ok(Self::new(cues))
+    }
+
+    /// Autodetecta SRT vs WebVTT vs ASS/SSA y delega al parser
+    /// correspondiente. Lo que usa el consumidor cuando no sabe el formato
+    /// de antemano. WebVTT por la cabecera `WEBVTT`; ASS/SSA por su cabecera
+    /// de secciones (`[Script Info]`/`[V4...]`/`[Events]`); el resto, SRT.
     pub fn parse_subtitles(text: &str) -> Result<Self, String> {
         let head = text.trim_start_matches('\u{FEFF}').trim_start();
         if head.starts_with("WEBVTT") {
             Self::parse_webvtt(text)
+        } else if head.starts_with("[Script Info]")
+            || head.starts_with("[V4")
+            || head.starts_with("[Events]")
+        {
+            Self::parse_ass(text)
         } else {
             Self::parse_srt(text)
         }
@@ -1637,6 +1746,72 @@ fn strip_vtt_markup(s: &str) -> String {
         .replace("&nbsp;", " ")
         .replace("&lrm;", "")
         .replace("&rlm;", "")
+}
+
+/// Borra los override tags de ASS (`{...}`) y convierte los escapes de
+/// salto/espacio (`\N`, `\n`, `\h`) — deja texto plano para pintar. No
+/// interpreta los tags (color/posición/karaoke); sólo los descarta. El
+/// resto de los `\x` (escapes desconocidos) se preservan literales.
+fn strip_ass_markup(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    let mut in_brace = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '{' => in_brace = true,
+            '}' => in_brace = false,
+            _ if in_brace => {}
+            '\\' => match chars.peek() {
+                // \N salto duro, \n salto blando, \h espacio duro.
+                Some('N') | Some('n') => {
+                    out.push('\n');
+                    chars.next();
+                }
+                Some('h') => {
+                    out.push(' ');
+                    chars.next();
+                }
+                _ => out.push('\\'),
+            },
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Timestamp ASS/SSA: `H:MM:SS.cc`, donde la fracción son **centésimas**
+/// (no milésimas como SRT) — por eso no reusa [`parse_timestamp`]. La
+/// fracción se escala genéricamente por su cantidad de dígitos, así
+/// `.5`/`.50`/`.500` valen todos 500 ms. La hora puede ser un solo dígito.
+fn parse_ass_timestamp(s: &str) -> Result<Duration, String> {
+    let s = s.trim();
+    let (hms, frac) = s.rsplit_once('.').unwrap_or((s, ""));
+    let parts: Vec<&str> = hms.split(':').collect();
+    let (h, m, sec) = match parts.as_slice() {
+        [hh, mm, ss] => (
+            hh.parse::<u64>().map_err(|_| format!("hora inválida en '{s}'"))?,
+            mm.parse::<u64>().map_err(|_| format!("minuto inválido en '{s}'"))?,
+            ss.parse::<u64>().map_err(|_| format!("segundo inválido en '{s}'"))?,
+        ),
+        [mm, ss] => (
+            0,
+            mm.parse::<u64>().map_err(|_| format!("minuto inválido en '{s}'"))?,
+            ss.parse::<u64>().map_err(|_| format!("segundo inválido en '{s}'"))?,
+        ),
+        _ => return Err(format!("timestamp ASS inválido '{s}'")),
+    };
+    // Fracción → ms escalando por la cantidad de dígitos (centésimas = 2).
+    let frac_ms = if frac.is_empty() {
+        0
+    } else {
+        let frac_int: u64 = frac
+            .parse()
+            .map_err(|_| format!("fracción inválida en '{s}'"))?;
+        let denom = 10u64.pow(frac.len().min(9) as u32);
+        frac_int * 1000 / denom
+    };
+    let total_ms = ((h * 3600) + (m * 60) + sec) * 1000 + frac_ms;
+    Ok(Duration::from_millis(total_ms))
 }
 
 fn parse_timing_line(s: &str) -> Result<(Duration, Duration), String> {
@@ -1838,13 +2013,93 @@ mod tests_subtitles {
     fn parse_subtitles_autodetects() {
         let vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nvtt\n";
         let srt = "1\n00:00:01,000 --> 00:00:02,000\nsrt\n";
+        let ass = "[Script Info]\n[Events]\n\
+            Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+            Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,ass\n";
         assert_eq!(SubtitleTrack::parse_subtitles(vtt).unwrap().cues()[0].text, "vtt");
         assert_eq!(SubtitleTrack::parse_subtitles(srt).unwrap().cues()[0].text, "srt");
+        assert_eq!(SubtitleTrack::parse_subtitles(ass).unwrap().cues()[0].text, "ass");
     }
 
     #[test]
     fn empty_webvtt_fails() {
         let err = SubtitleTrack::parse_webvtt("WEBVTT\n").unwrap_err();
         assert!(err.contains("cue"));
+    }
+
+    #[test]
+    fn parse_simple_ass() {
+        // Centésimas, no milésimas: .50 = 500 ms.
+        let src = "[Script Info]\n\
+            Title: prueba\n\
+            \n\
+            [V4+ Styles]\n\
+            Format: Name, Fontname\n\
+            Style: Default,Arial\n\
+            \n\
+            [Events]\n\
+            Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+            Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,Hola mundo\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        assert_eq!(track.len(), 1);
+        assert_eq!(track.cues()[0].text, "Hola mundo");
+        assert_eq!(track.cues()[0].start, Duration::from_millis(1000));
+        assert_eq!(track.cues()[0].end, Duration::from_millis(3500));
+    }
+
+    #[test]
+    fn ass_strips_override_tags_and_breaks() {
+        let src = "[Events]\n\
+            Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+            Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,{\\an8}{\\i1}Hola{\\i0}\\NMundo cruel\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        // Override tags fuera, \\N → salto de línea.
+        assert_eq!(track.cues()[0].text, "Hola\nMundo cruel");
+    }
+
+    #[test]
+    fn ass_text_conserva_las_comas() {
+        // El texto es la última columna: sus comas no deben partir el campo.
+        let src = "[Events]\n\
+            Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+            Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Uno, dos, tres\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        assert_eq!(track.cues()[0].text, "Uno, dos, tres");
+    }
+
+    #[test]
+    fn ass_ignora_comments_y_lineas_fuera_de_events() {
+        let src = "[Script Info]\n\
+            ; un comentario de cabecera\n\
+            Dialogue: esto NO está en [Events] y se ignora\n\
+            \n\
+            [Events]\n\
+            Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+            Comment: 0,0:00:00.00,0:00:09.00,Default,,0,0,0,,no soy diálogo\n\
+            Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,el único de verdad\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        assert_eq!(track.len(), 1);
+        assert_eq!(track.cues()[0].text, "el único de verdad");
+        assert_eq!(track.cues()[0].start, Duration::from_millis(2000));
+    }
+
+    #[test]
+    fn ass_respeta_orden_de_columnas_no_estandar() {
+        // Format con Text antes del final igual se ubica por nombre. Acá Text
+        // es la última columna pero el orden de Start/End viene invertido en
+        // la lista — se resuelven por nombre, no por posición fija.
+        let src = "[Events]\n\
+            Format: Start, End, Text\n\
+            Dialogue: 0:00:05.00,0:00:06.00,corto\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        assert_eq!(track.cues()[0].text, "corto");
+        assert_eq!(track.cues()[0].start, Duration::from_millis(5000));
+        assert_eq!(track.cues()[0].end, Duration::from_millis(6000));
+    }
+
+    #[test]
+    fn empty_ass_fails() {
+        let err = SubtitleTrack::parse_ass("[Events]\n").unwrap_err();
+        assert!(err.contains("Dialogue"));
     }
 }
