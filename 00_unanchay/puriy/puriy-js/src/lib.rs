@@ -13596,4 +13596,103 @@ mod tests {
             JsValue::Bool(true)
         );
     }
+
+    // --- Fase 7.172 — polyfills ES2024 (lang_modern.rs) ------------------
+
+    #[test]
+    fn lang_promise_with_resolvers_forma() {
+        // Devuelve el trío { promise, resolve, reject }.
+        assert_eq!(
+            eval(
+                "var d = Promise.withResolvers(); \
+                 typeof d.promise === 'object' && d.promise instanceof Promise && \
+                 typeof d.resolve === 'function' && typeof d.reject === 'function'"
+            ),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn lang_promise_with_resolvers_resuelve_externamente() {
+        // El resolve externo settlea la promise; el .then corre en el drain.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "globalThis.__wr = null; \
+             var d = Promise.withResolvers(); \
+             d.promise.then(function(v){ globalThis.__wr = v; }); \
+             d.resolve(42);",
+        )
+        .expect("eval");
+        assert_eq!(rt.eval("globalThis.__wr === 42").expect("read"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lang_array_from_async_iterable_con_map() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "globalThis.__fa = null; \
+             Array.fromAsync([1,2,3], function(x){ return x * 2; }) \
+                 .then(function(a){ globalThis.__fa = a.join(','); });",
+        )
+        .expect("eval");
+        assert_eq!(rt.eval("globalThis.__fa === '2,4,6'").expect("read"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lang_array_from_async_awaitea_promesas() {
+        // sync-iterable de promesas: fromAsync debe resolver cada valor.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "globalThis.__fp = null; \
+             Array.fromAsync([Promise.resolve(7), Promise.resolve(8)]) \
+                 .then(function(a){ globalThis.__fp = a.join(','); });",
+        )
+        .expect("eval");
+        assert_eq!(rt.eval("globalThis.__fp === '7,8'").expect("read"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lang_array_from_async_array_like() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "globalThis.__al = null; \
+             Array.fromAsync({ length: 3, 0: 'a', 1: 'b', 2: 'c' }) \
+                 .then(function(a){ globalThis.__al = a.join('-'); });",
+        )
+        .expect("eval");
+        assert_eq!(rt.eval("globalThis.__al === 'a-b-c'").expect("read"), JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lang_object_group_by_particiona_con_proto_nulo() {
+        assert_eq!(
+            eval(
+                "var g = Object.groupBy([1,2,3,4,5], function(n){ return n % 2 === 0 ? 'par' : 'impar'; }); \
+                 g.par.join(',') === '2,4' && g.impar.join(',') === '1,3,5' && \
+                 Object.getPrototypeOf(g) === null"
+            ),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn lang_object_group_by_callback_invalido_tira_typeerror() {
+        assert_eq!(
+            eval("try { Object.groupBy([1], 42); false; } catch (e) { e instanceof TypeError; }"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn lang_map_group_by_agrupa_por_identidad_de_objeto() {
+        assert_eq!(
+            eval(
+                "var a = {}, b = {}; \
+                 var items = [{k:a,v:1},{k:b,v:2},{k:a,v:3}]; \
+                 var m = Map.groupBy(items, function(it){ return it.k; }); \
+                 m instanceof Map && m.get(a).length === 2 && m.get(b).length === 1 && m.get(a)[1].v === 3"
+            ),
+            JsValue::Bool(true)
+        );
+    }
 }

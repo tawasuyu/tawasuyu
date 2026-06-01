@@ -6,6 +6,7 @@ mod window_alias;
 mod console;
 mod timers;
 mod microtask;
+mod lang_modern;
 mod performance;
 mod dom_events;
 mod event_class;
@@ -150,6 +151,7 @@ pub(crate) use window_alias::WINDOW_ALIAS_BOOTSTRAP;
 pub(crate) use console::CONSOLE_BOOTSTRAP;
 pub(crate) use timers::TIMERS_BOOTSTRAP;
 pub(crate) use microtask::MICROTASK_BOOTSTRAP;
+pub(crate) use lang_modern::LANG_MODERN_BOOTSTRAP;
 pub(crate) use performance::PERFORMANCE_BOOTSTRAP;
 pub(crate) use dom_events::DOM_EVENTS_BOOTSTRAP;
 pub(crate) use event_class::EVENT_CLASS_BOOTSTRAP;
@@ -294,6 +296,7 @@ pub(crate) const ALL: &[&str] = &[
     CONSOLE_BOOTSTRAP,
     TIMERS_BOOTSTRAP,
     MICROTASK_BOOTSTRAP,
+    LANG_MODERN_BOOTSTRAP,
     PERFORMANCE_BOOTSTRAP,
     DOM_EVENTS_BOOTSTRAP,
     EVENT_CLASS_BOOTSTRAP,
