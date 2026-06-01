@@ -79,6 +79,11 @@ pub enum ViewerKind {
     /// Visor de texto (`nahual-text-viewer-llimphi`); degrada a "binario"
     /// si el contenido no es UTF-8. Es el fallback universal.
     Text,
+    /// Página web (HTML): el "open-with" la entrega a **puriy**, el
+    /// navegador de la suite. El panel muestra el fuente; abrir el archivo
+    /// (Enter) lanza puriy sobre `file://<path>`. Es la costura nahual↔puriy
+    /// — el escritorio sabe que el HTML es asunto del navegador.
+    Web,
 }
 
 impl ViewerKind {
@@ -98,6 +103,7 @@ impl ViewerKind {
             ViewerKind::Archive => "archive",
             ViewerKind::Font => "font",
             ViewerKind::Text => "text",
+            ViewerKind::Web => "web",
         }
     }
 
@@ -116,6 +122,7 @@ impl ViewerKind {
             "archive" => ViewerKind::Archive,
             "font" => ViewerKind::Font,
             "text" => ViewerKind::Text,
+            "web" => ViewerKind::Web,
             _ => return None,
         })
     }
@@ -177,6 +184,15 @@ pub fn builtin_registry() -> Vec<ViewerCard> {
         ViewerCard::builtin(ViewerKind::Table, &["table"], &[], &[], Normal),
         ViewerCard::builtin(ViewerKind::Markdown, &["markdown"], &[], &[], Normal),
         ViewerCard::builtin(ViewerKind::Font, &["font"], &[], &[], Normal),
+        // HTML → puriy (el navegador de la suite). Cubre el lens `web`/`html`
+        // que pueda emitir shuma-discern y los mime canónicos del HTML/XHTML.
+        ViewerCard::builtin(
+            ViewerKind::Web,
+            &["web", "html"],
+            &[],
+            &["text/html", "application/xhtml+xml"],
+            Normal,
+        ),
         // Contenedores: un comprimido se lista (entradas) en vez de volcarse.
         // ZIP cubre .jar/.apk/.epub/OOXML; gzip se asume envolviendo un tar.
         ViewerCard::builtin(
@@ -450,6 +466,15 @@ mod tests {
     #[test]
     fn code_va_a_texto() {
         assert_eq!(pick_builtin(Some("code"), Some("text/plain")), ViewerKind::Text);
+    }
+
+    #[test]
+    fn html_va_a_web() {
+        // Por mime (sin lens) y por lens — ambos rutean a puriy.
+        assert_eq!(pick_builtin(None, Some("text/html")), ViewerKind::Web);
+        assert_eq!(pick_builtin(None, Some("application/xhtml+xml")), ViewerKind::Web);
+        assert_eq!(pick_builtin(Some("web"), Some("text/plain")), ViewerKind::Web);
+        assert_eq!(pick_builtin(Some("html"), None), ViewerKind::Web);
     }
 
     #[test]

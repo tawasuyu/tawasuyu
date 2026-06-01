@@ -127,6 +127,10 @@ enum PreviewPane {
     Markdown(MarkdownPreview),
     Archive(ArchivePreview),
     Font(FontPreview),
+    /// Página HTML. El panel muestra el fuente (mismo visor de texto); el
+    /// render real es asunto de **puriy**, que se lanza al abrir el archivo
+    /// (Enter) sobre `file://<path>`. Costura nahual↔puriy.
+    Web(PreviewState),
 }
 
 /// Cadencia del avance de los visores con reloj (video, audio) ~30 Hz.
@@ -324,6 +328,12 @@ impl App for Shell {
                                 }
                                 None => {
                                     m.preview = load_for(&path);
+                                    // HTML: además de previsualizar el fuente,
+                                    // abrir el archivo lo entrega a puriy (como
+                                    // un file manager abre el visor default).
+                                    if matches!(m.preview, PreviewPane::Web(_)) {
+                                        launch_puriy(&path);
+                                    }
                                     m.preview_of = Some(path);
                                     m.preview_temp = None;
                                 }
@@ -506,6 +516,12 @@ impl App for Shell {
             PreviewPane::Font(state) => {
                 font_viewer_view::<Msg>(state, model.preview_of.as_deref(), &font_palette)
             }
+            // El visor de texto muestra el fuente HTML; abrir (Enter) lanza puriy.
+            PreviewPane::Web(state) => text_viewer_view::<Msg>(
+                state,
+                model.preview_of.as_deref(),
+                &text_palette,
+            ),
         };
 
         let body = splitter_two(
@@ -915,6 +931,24 @@ fn load_for(path: &Path) -> PreviewPane {
         ViewerKind::Archive => PreviewPane::Archive(load_archive(path)),
         ViewerKind::Font => PreviewPane::Font(load_font(path, DEFAULT_FONT_BYTES_MAX)),
         ViewerKind::Text => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
+        // El panel muestra el fuente; el render lo hace puriy al abrir.
+        ViewerKind::Web => PreviewPane::Web(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
+    }
+}
+
+/// Lanza puriy (el navegador de la suite) sobre un archivo HTML local,
+/// fuera de proceso, como un file manager abre el visor por defecto. La
+/// ruta se entrega como `file://<abs>` (puriy resuelve `file://`). El
+/// binario es `puriy`; `$PURIY_BIN` lo override (útil en dev:
+/// `PURIY_BIN=target/debug/puriy`). Un fallo al spawnear se reporta a
+/// stderr y no interrumpe el shell.
+fn launch_puriy(path: &Path) {
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let url = format!("file://{}", abs.display());
+    let bin = std::env::var("PURIY_BIN").unwrap_or_else(|_| "puriy".to_string());
+    match std::process::Command::new(&bin).arg(&url).spawn() {
+        Ok(_) => {}
+        Err(e) => eprintln!("[nahual] no pude lanzar puriy ({bin}) sobre {url}: {e}"),
     }
 }
 
