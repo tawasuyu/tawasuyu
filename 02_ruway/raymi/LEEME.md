@@ -17,7 +17,8 @@ raymi-core         — modelo agnóstico: eventos, recurrencia (RRULE),
 raymi-net          — puente CalDAV/CardDAV: iCalendar (VEVENT) + vCard
                      (VCARD) + REPORT/PUT; implementa los traits.        [HECHO]
 raymi-store        — persistencia nativa (postcard) + sync incremental.  [HECHO]
-raymi-llimphi      — frontend: vista mes + agenda del día + contactos.   [HECHO]
+raymi-llimphi      — frontend: vista mes/semana + agenda + contactos +
+                     editor (crear/editar/borrar, recurrencia, invitados). [HECHO]
 raymi-app          — binario lanzable.                                    [HECHO]
 ```
 
@@ -189,6 +190,19 @@ intercambiables, como el resto de la suite.
   - **Límite conocido:** “Esta instancia” usa un evento de uid propio en vez de un
     `RECURRENCE-ID` en el mismo recurso; internamente consistente, pero un servidor
     CalDAV real preferiría el override en el mismo `.ics` (lo afinará el puente).
+
+- **Fase 11 (2026-06-01):** **vista semana** (rejilla horaria) junto a la del mes.
+  - Conmutador **Mes / Semana** en la barra (teclas `m`/`w`); la navegación ‹ ›,
+    la rueda y ←/→ se vuelven **período-aware** (mes o semana). “Hoy” y la etiqueta
+    de rango (“1–7 Junio 2026”) siguen la vista.
+  - `week_grid`: cabecera de 7 días (hoy con disco de acento, clic selecciona el
+    día), franja de **día completo** arriba, y **rejilla horaria** 07:00–22:00 con
+    medidor a la izquierda. Los eventos con hora se **posicionan por hora**
+    (bloques `Position::Absolute`, `top`/`height` derivados de `start`/`end`,
+    recortados al rango); líneas horarias de fondo. Clic en un bloque lo edita
+    (pasa `occ_start`, así enchufa con el alcance serie/instancia de la Fase 10).
+  - Sin núcleo nuevo: todo sale de `CalStore::occurrences_in`. `cargo check
+    --workspace` verde.
 
 ## Pendiente (orden sugerido)
 

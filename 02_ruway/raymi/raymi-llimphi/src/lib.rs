@@ -38,12 +38,21 @@ pub enum Mode {
     Contacts,
 }
 
+/// Vista del calendario: grilla del mes o rejilla horaria de la semana.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalView {
+    Month,
+    Week,
+}
+
 /// El modelo del cliente: el backend (calendario + contactos), la caché y la
 /// selección de la UI. `'static` para `App::Model`; vive en el hilo del compositor.
 pub struct Model {
     backend: Box<dyn DavBackend>,
     store: CalStore,
     mode: Mode,
+    /// Vista del calendario (mes / semana).
+    cal_view: CalView,
     /// Mes mostrado en la grilla.
     view_year: i64,
     view_month: u32,
@@ -107,6 +116,7 @@ impl Model {
             backend,
             store,
             mode: Mode::Calendar,
+            cal_view: CalView::Month,
             view_year: date.year,
             view_month: date.month,
             selected_day: today,
@@ -395,7 +405,24 @@ impl Model {
         self.view_month = d.month;
     }
 
-    /// Vuelve al mes de hoy y selecciona el día de hoy.
+    /// Corre la semana mostrada por `delta` semanas (mueve el día seleccionado y
+    /// sincroniza el mes en la cabecera).
+    fn shift_week(&mut self, delta: i64) {
+        self.selected_day += delta * 7 * time::DAY;
+        let (date, _, _, _) = time::to_civil(self.selected_day);
+        self.view_year = date.year;
+        self.view_month = date.month;
+    }
+
+    /// Avanza/retrocede un período según la vista activa (mes o semana).
+    fn shift_period(&mut self, delta: i64) {
+        match self.cal_view {
+            CalView::Month => self.shift_month(delta),
+            CalView::Week => self.shift_week(delta),
+        }
+    }
+
+    /// Vuelve al mes/semana de hoy y selecciona el día de hoy.
     fn go_today(&mut self) {
         let (date, _, _, _) = time::to_civil(self.today);
         self.view_year = date.year;
@@ -411,6 +438,11 @@ impl Model {
     pub(crate) fn edit_scope(&self) -> EditScope {
         self.edit_scope
     }
+
+    /// Vista del calendario activa (para la vista).
+    pub(crate) fn cal_view(&self) -> CalView {
+        self.cal_view
+    }
 }
 
 /// Las transiciones de la UI.
@@ -418,7 +450,9 @@ impl Model {
 pub enum Msg {
     /// Cambiar de modo (Calendario / Contactos).
     SetMode(Mode),
-    /// Mes anterior / siguiente en la grilla.
+    /// Cambiar la vista del calendario (mes / semana).
+    SetCalView(CalView),
+    /// Período anterior / siguiente (mes o semana según la vista).
     PrevMonth,
     NextMonth,
     /// Volver al mes de hoy.
@@ -489,8 +523,9 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
             model.mode = m;
             model.search_focused = false;
         }
-        Msg::PrevMonth => model.shift_month(-1),
-        Msg::NextMonth => model.shift_month(1),
+        Msg::SetCalView(v) => model.cal_view = v,
+        Msg::PrevMonth => model.shift_period(-1),
+        Msg::NextMonth => model.shift_period(1),
         Msg::Today => model.go_today(),
         Msg::Refresh => model.resync(),
         Msg::SelectDay(day) => model.selected_day = day,
@@ -664,6 +699,12 @@ pub fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
             Mode::Calendar => Msg::NewEvent,
             Mode::Contacts => Msg::NewContact,
         }),
+        Key::Character(ch) if ch.eq_ignore_ascii_case("w") && model.mode == Mode::Calendar => {
+            Some(Msg::SetCalView(CalView::Week))
+        }
+        Key::Character(ch) if ch.eq_ignore_ascii_case("m") && model.mode == Mode::Calendar => {
+            Some(Msg::SetCalView(CalView::Month))
+        }
         _ => None,
     }
 }

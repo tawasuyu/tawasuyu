@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Dimension, FlexDirection, LengthPercentage, Rect, Size, Style},
+    prelude::{length, percent, Dimension, FlexDirection, LengthPercentage, Position, Rect, Size, Style},
+    style::LengthPercentageAuto,
     AlignItems, JustifyContent,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -16,7 +17,9 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use raymi_core::time::{self, CivilDate, DAY};
 use raymi_core::{Address, CalStore, Contact, Occurrence};
 
-use crate::{ContactDraft, ContactField, EventDraft, EventField, Mode, Model, Msg, Repeat, RepeatEnd};
+use crate::{
+    CalView, ContactDraft, ContactField, EventDraft, EventField, Mode, Model, Msg, Repeat, RepeatEnd,
+};
 use llimphi_widget_text_input::TextInputState;
 
 const AGENDA_W: f32 = 340.0;
@@ -76,17 +79,23 @@ fn toolbar(model: &Model) -> View<Msg> {
 
     let mut children = vec![brand, tabs, spacer()];
     if model.mode == Mode::Calendar {
+        // Conmutador Mes / Semana.
+        children.push(view_tab(theme, "Mes", model.cal_view() == CalView::Month, Msg::SetCalView(CalView::Month)));
+        children.push(view_tab(theme, "Semana", model.cal_view() == CalView::Week, Msg::SetCalView(CalView::Week)));
         children.push(button("＋ Evento", theme.accent, theme.bg_app, Msg::NewEvent));
-        let label = format!("{}  {}", MONTHS[(model.view_month - 1) as usize], model.view_year);
+        let label = match model.cal_view() {
+            CalView::Month => format!("{}  {}", MONTHS[(model.view_month - 1) as usize], model.view_year),
+            CalView::Week => week_label(model),
+        };
         children.push(button("‹", theme.bg_button, theme.fg_text, Msg::PrevMonth));
         children.push(
             View::new(Style {
-                size: Size { width: length(160.0_f32), height: percent(1.0_f32) },
+                size: Size { width: length(176.0_f32), height: percent(1.0_f32) },
                 align_items: Some(AlignItems::Center),
                 justify_content: Some(JustifyContent::Center),
                 ..Default::default()
             })
-            .text(label, 15.0, theme.fg_text),
+            .text(label, 14.0, theme.fg_text),
         );
         children.push(button("›", theme.bg_button, theme.fg_text, Msg::NextMonth));
         children.push(button("Hoy", theme.accent, theme.bg_app, Msg::Today));
@@ -126,14 +135,48 @@ fn tab(theme: &Theme, label: &str, active: bool, msg: Msg) -> View<Msg> {
 
 fn calendar_body(model: &Model) -> View<Msg> {
     let theme = &model.theme;
+    let inner = match model.cal_view() {
+        CalView::Month => vec![month_grid(model), day_agenda(model)],
+        CalView::Week => vec![week_grid(model)],
+    };
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: Dimension::auto() },
         flex_grow: 1.0,
         ..Default::default()
     })
-    .children(vec![month_grid(model), day_agenda(model)])
+    .children(inner)
     .fill(theme.bg_app)
+}
+
+/// Tab chico para el conmutador de vista (Mes / Semana).
+fn view_tab(theme: &Theme, label: &str, active: bool, msg: Msg) -> View<Msg> {
+    let (bg, fg) = if active { (theme.bg_selected, theme.fg_text) } else { (theme.bg_button, theme.fg_muted) };
+    View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: pad_xy(12.0, 0.0),
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(6.0)
+    .hover_fill(theme.bg_row_hover)
+    .text(label, 12.5, fg)
+    .on_click(msg)
+}
+
+/// Etiqueta del rango de la semana mostrada (lunes–domingo).
+fn week_label(model: &Model) -> String {
+    let days = model.selected_day.div_euclid(DAY);
+    let monday = days - time::weekday(days) as i64;
+    let a = time::civil_from_days(monday);
+    let b = time::civil_from_days(monday + 6);
+    if a.month == b.month {
+        format!("{}–{} {} {}", a.day, b.day, MONTHS[(a.month - 1) as usize], a.year)
+    } else {
+        format!("{} {} – {} {}", a.day, &MONTHS[(a.month - 1) as usize][..3], b.day, &MONTHS[(b.month - 1) as usize][..3])
+    }
 }
 
 /// Grilla del mes: cabecera de días + 6 semanas × 7 días con chips de eventos.
@@ -447,6 +490,274 @@ fn agenda_row(theme: &Theme, o: &Occurrence, color: Color) -> View<Msg> {
         occ_start: Some(o.start),
     })
     .children(vec![bar, texts])
+}
+
+// ── Vista semana (rejilla horaria) ───────────────────────────────────────────
+
+const WEEK_START_H: i64 = 7;
+const WEEK_END_H: i64 = 22;
+const WK_HOURS: i64 = WEEK_END_H - WEEK_START_H;
+const HOUR_PX: f32 = 36.0;
+const WK_GRID_H: f32 = WK_HOURS as f32 * HOUR_PX;
+const GUTTER_W: f32 = 52.0;
+const WK_HEADER_H: f32 = 46.0;
+const ALLDAY_H: f32 = 28.0;
+
+/// La semana (lunes–domingo) del día seleccionado: cabecera + franja de día
+/// completo + rejilla horaria con bloques posicionados por hora.
+fn week_grid(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let days0 = model.selected_day.div_euclid(DAY);
+    let monday = days0 - time::weekday(days0) as i64;
+    let monday_ts = monday * DAY;
+    let colors = calendar_colors(model);
+
+    // Ocurrencias de la semana, repartidas por día de su inicio.
+    let occ = model.store_ref().occurrences_in(monday_ts, monday_ts + 7 * DAY);
+    let mut by_day: Vec<Vec<&Occurrence>> = vec![Vec::new(); 7];
+    for o in &occ {
+        let idx = (time::start_of_day(o.start) - monday_ts).div_euclid(DAY);
+        if (0..7).contains(&idx) {
+            by_day[idx as usize].push(o);
+        }
+    }
+
+    // Cabecera: hueco del medidor + 7 días.
+    let mut head = vec![gutter_box(WK_HEADER_H)];
+    for i in 0..7 {
+        let day_ts = (monday + i) * DAY;
+        let date = time::civil_from_days(monday + i);
+        head.push(wk_day_header(theme, date, day_ts, day_ts == model.today, day_ts == model.selected_day));
+    }
+    let header = row_full(WK_HEADER_H, head);
+
+    // Franja de eventos de día completo.
+    let mut strip = vec![gutter_label(theme, "todo el día", ALLDAY_H)];
+    for day in by_day.iter() {
+        let chips: Vec<View<Msg>> = day
+            .iter()
+            .filter(|o| o.event.all_day)
+            .map(|o| {
+                let color = colors.get(&o.event.calendar).copied().unwrap_or(theme.accent);
+                wk_allday_chip(theme, o, color)
+            })
+            .collect();
+        strip.push(
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+                flex_grow: 1.0,
+                align_items: Some(AlignItems::Center),
+                gap: Size { width: length(3.0_f32), height: length(0.0_f32) },
+                padding: pad_xy(3.0, 0.0),
+                ..Default::default()
+            })
+            .clip(true)
+            .children(chips),
+        );
+    }
+    let allday = row_full(ALLDAY_H, strip);
+
+    // Rejilla horaria: medidor + 7 columnas.
+    let mut grid = vec![time_gutter(theme)];
+    for (i, day) in by_day.into_iter().enumerate() {
+        let day_ts = (monday + i as i64) * DAY;
+        grid.push(wk_day_column(theme, day, day_ts, &colors));
+    }
+    let body = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(WK_GRID_H) },
+        ..Default::default()
+    })
+    .children(grid);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![header, allday, body])
+}
+
+/// Fila a lo ancho con altura fija (cabecera / franja).
+fn row_full(h: f32, children: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(h) },
+        gap: Size { width: length(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(children)
+}
+
+fn gutter_box(h: f32) -> View<Msg> {
+    View::new(Style { size: Size { width: length(GUTTER_W), height: length(h) }, ..Default::default() })
+}
+
+fn gutter_label(theme: &Theme, text: &str, h: f32) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: length(GUTTER_W), height: length(h) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(text.to_string(), 9.5, theme.fg_placeholder, Alignment::Center)
+}
+
+fn wk_day_header(theme: &Theme, date: CivilDate, day_ts: i64, is_today: bool, is_selected: bool) -> View<Msg> {
+    let wd = WEEKDAYS[time::weekday(day_ts.div_euclid(DAY)) as usize];
+    let bg = if is_selected { theme.bg_selected } else { theme.bg_panel };
+    let num_bg = if is_today { theme.accent } else { bg };
+    let num_fg = if is_today { theme.bg_app } else { theme.fg_text };
+    let num = View::new(Style {
+        size: Size { width: length(26.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(num_bg)
+    .radius(11.0)
+    .text(date.day.to_string(), 14.0, num_fg);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::SelectDay(day_ts))
+    .children(vec![
+        View::new(Style { size: Size { width: percent(1.0_f32), height: length(12.0_f32) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+            .text(wd.to_string(), 10.0, theme.fg_muted),
+        num,
+    ])
+}
+
+fn wk_allday_chip(theme: &Theme, o: &Occurrence, color: Color) -> View<Msg> {
+    let bar = View::new(Style { size: Size { width: length(3.0_f32), height: percent(1.0_f32) }, ..Default::default() })
+        .fill(color)
+        .radius(2.0);
+    let label = View::new(Style { size: Size { width: Dimension::auto(), height: percent(1.0_f32) }, flex_grow: 1.0, align_items: Some(AlignItems::Center), ..Default::default() })
+        .text_aligned(o.event.summary.clone(), 10.0, theme.fg_text, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(3.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(3.0, 0.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(3.0)
+    .clip(true)
+    .on_click(Msg::EditEvent { calendar: o.event.calendar.clone(), uid: o.event.uid.clone(), occ_start: Some(o.start) })
+    .children(vec![bar, label])
+}
+
+/// Medidor de horas a la izquierda: etiquetas absolutas en cada línea horaria.
+fn time_gutter(theme: &Theme) -> View<Msg> {
+    let mut labels: Vec<View<Msg>> = Vec::new();
+    for h in 0..WK_HOURS {
+        labels.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    right: length(4.0_f32),
+                    top: length(h as f32 * HOUR_PX - 6.0),
+                    bottom: LengthPercentageAuto::auto(),
+                },
+                size: Size { width: Dimension::auto(), height: length(12.0_f32) },
+                ..Default::default()
+            })
+            .text_aligned(format!("{:02}:00", WEEK_START_H + h), 9.5, theme.fg_placeholder, Alignment::End),
+        );
+    }
+    View::new(Style {
+        size: Size { width: length(GUTTER_W), height: length(WK_GRID_H) },
+        ..Default::default()
+    })
+    .children(labels)
+}
+
+/// Una columna-día: líneas horarias de fondo + bloques de eventos posicionados.
+fn wk_day_column(theme: &Theme, day: Vec<&Occurrence>, day_ts: i64, colors: &HashMap<String, Color>) -> View<Msg> {
+    let col_start = day_ts + WEEK_START_H * 3600;
+    let mut children: Vec<View<Msg>> = Vec::new();
+
+    // Líneas horarias.
+    for h in 0..=WK_HOURS {
+        children.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(h as f32 * HOUR_PX), bottom: LengthPercentageAuto::auto() },
+                size: Size { width: Dimension::auto(), height: length(1.0_f32) },
+                ..Default::default()
+            })
+            .fill(theme.border),
+        );
+    }
+
+    // Bloques de eventos (sólo con hora; los de día completo van a la franja).
+    for o in day.iter().filter(|o| !o.event.all_day) {
+        let color = colors.get(&o.event.calendar).copied().unwrap_or(theme.accent);
+        let top = (((o.start - col_start) as f32) / 3600.0 * HOUR_PX).clamp(0.0, WK_GRID_H - 14.0);
+        let bottom = (((o.end - col_start) as f32) / 3600.0 * HOUR_PX).clamp(0.0, WK_GRID_H);
+        let h = (bottom - top).max(15.0);
+        children.push(wk_event_block(theme, o, color, top, h));
+    }
+
+    View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(WK_GRID_H) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(children)
+}
+
+fn wk_event_block(theme: &Theme, o: &Occurrence, color: Color, top: f32, h: f32) -> View<Msg> {
+    let bar = View::new(Style { size: Size { width: length(3.0_f32), height: percent(1.0_f32) }, ..Default::default() })
+        .fill(color)
+        .radius(2.0);
+    let summary = View::new(Style { size: Size { width: percent(1.0_f32), height: length(13.0_f32) }, ..Default::default() })
+        .text_aligned(o.event.summary.clone(), 10.5, theme.fg_text, Alignment::Start);
+    let mut texts = vec![summary];
+    if h >= 30.0 {
+        texts.push(
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(11.0_f32) }, ..Default::default() })
+                .text_aligned(format!("{} – {}", hhmm(o.start), hhmm(o.end)), 9.0, theme.fg_muted, Alignment::Start),
+        );
+    }
+    let col = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        gap: Size { width: length(0.0_f32), height: length(1.0_f32) },
+        ..Default::default()
+    })
+    .clip(true)
+    .children(texts);
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect { left: length(2.0_f32), right: length(2.0_f32), top: length(top), bottom: LengthPercentageAuto::auto() },
+        size: Size { width: Dimension::auto(), height: length(h) },
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Stretch),
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(4.0, 2.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::EditEvent { calendar: o.event.calendar.clone(), uid: o.event.uid.clone(), occ_start: Some(o.start) })
+    .children(vec![bar, col])
 }
 
 // ── Contactos ───────────────────────────────────────────────────────────────
