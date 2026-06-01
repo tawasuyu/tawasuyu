@@ -1,0 +1,181 @@
+//! `paloma` — el binario lanzable del correo.
+//!
+//! Arma el frontend Llimphi (`paloma-llimphi`) sobre un backend real
+//! (`NetBackend`: IMAP+SMTP) construido desde la configuración de la cuenta.
+//! Si no hay config —o falla la conexión— cae a los datos de demostración
+//! (`MockBackend`), así la app siempre arranca y muestra algo.
+//!
+//! ## Configuración
+//!
+//! Cuenta en JSON, en `~/.config/paloma/cuenta.json` (o el dir de config del
+//! SO). Las contraseñas **no** van en el archivo: se leen de entorno.
+//!
+//! ```json
+//! {
+//!   "display_name": "Sergio",
+//!   "email": "sergio@jlsoltech.com",
+//!   "username": "sergio@jlsoltech.com",
+//!   "imap_host": "imap.jlsoltech.com", "imap_port": 993, "imap_security": "tls",
+//!   "smtp_host": "smtp.jlsoltech.com", "smtp_port": 465, "smtp_security": "tls"
+//! }
+//! ```
+//!
+//! Entorno:
+//! - `PALOMA_PASSWORD` — contraseña única (IMAP y SMTP), o bien
+//! - `PALOMA_IMAP_PASSWORD` / `PALOMA_SMTP_PASSWORD` por separado.
+//! - `PALOMA_CONFIG` — ruta alternativa al JSON de la cuenta.
+//!
+//! Sin `cuenta.json` o sin contraseña, arranca en modo demo (sin red).
+
+use std::path::PathBuf;
+
+use directories::ProjectDirs;
+use llimphi_theme::Theme;
+use llimphi_ui::{App, Handle, KeyEvent, Modifiers, View, WheelDelta};
+use serde::Deserialize;
+
+use paloma_core::{Account, Address, MailBackend, Security, ServerConfig};
+use paloma_llimphi::{Model, Msg};
+
+/// La cuenta tal como se escribe en el JSON: plana y cómoda de editar a mano.
+/// Se traduce a [`Account`] al arrancar.
+#[derive(Debug, Deserialize)]
+struct CuentaFile {
+    display_name: String,
+    email: String,
+    /// Usuario de login; si falta, se usa `email`.
+    #[serde(default)]
+    username: Option<String>,
+    imap_host: String,
+    imap_port: u16,
+    #[serde(default = "sec_tls")]
+    imap_security: String,
+    smtp_host: String,
+    smtp_port: u16,
+    #[serde(default = "sec_tls")]
+    smtp_security: String,
+}
+
+fn sec_tls() -> String {
+    "tls".to_string()
+}
+
+fn parse_security(s: &str) -> Security {
+    match s.to_ascii_lowercase().as_str() {
+        "plain" | "none" => Security::Plain,
+        "starttls" => Security::StartTls,
+        _ => Security::Tls,
+    }
+}
+
+impl CuentaFile {
+    fn into_account(self) -> Account {
+        let user = self.username.unwrap_or_else(|| self.email.clone());
+        let imap = ServerConfig::new(self.imap_host, self.imap_port, parse_security(&self.imap_security), user.clone());
+        let smtp = ServerConfig::new(self.smtp_host, self.smtp_port, parse_security(&self.smtp_security), user);
+        Account::new(
+            "default",
+            self.display_name.clone(),
+            Address::named(self.display_name, self.email),
+            imap,
+            smtp,
+        )
+    }
+}
+
+/// Ruta del JSON de la cuenta: `PALOMA_CONFIG` si está, si no el dir de config
+/// del SO (`~/.config/paloma/cuenta.json` en Linux).
+fn config_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("PALOMA_CONFIG") {
+        return Some(PathBuf::from(p));
+    }
+    ProjectDirs::from("org", "gioser", "paloma").map(|d| d.config_dir().join("cuenta.json"))
+}
+
+/// Contraseñas IMAP/SMTP desde entorno. `PALOMA_PASSWORD` cubre ambas; las
+/// específicas la pisan. `None` si no hay ninguna (→ modo demo).
+fn passwords() -> Option<(String, String)> {
+    let both = std::env::var("PALOMA_PASSWORD").ok();
+    let imap = std::env::var("PALOMA_IMAP_PASSWORD").ok().or_else(|| both.clone());
+    let smtp = std::env::var("PALOMA_SMTP_PASSWORD").ok().or(both);
+    match (imap, smtp) {
+        (Some(i), Some(s)) => Some((i, s)),
+        _ => None,
+    }
+}
+
+/// Intenta armar el `NetBackend` real. Devuelve `Err(motivo)` legible si falta
+/// config/credenciales o falla la conexión — el caller cae a demo y lo informa.
+fn try_net() -> Result<(Box<dyn MailBackend>, Address, String), String> {
+    let path = config_path().ok_or_else(|| "no se pudo resolver el dir de config".to_string())?;
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("sin cuenta en {}: {e}", path.display()))?;
+    let cuenta: CuentaFile =
+        serde_json::from_str(&raw).map_err(|e| format!("cuenta.json inválido: {e}"))?;
+    let (imap_pw, smtp_pw) = passwords().ok_or_else(|| {
+        "falta contraseña (PALOMA_PASSWORD o PALOMA_IMAP_PASSWORD/PALOMA_SMTP_PASSWORD)".to_string()
+    })?;
+    let account = cuenta.into_account();
+    // `account.address` ya lleva el display-name (lo puso `into_account`).
+    let me = account.address.clone();
+    let label = format!("conectado · {}", account.address.email);
+    let backend = paloma_net::NetBackend::connect(account, &imap_pw, &smtp_pw)
+        .map_err(|e| format!("no se pudo conectar IMAP: {e}"))?;
+    Ok((Box::new(backend), me, label))
+}
+
+struct Paloma;
+
+impl App for Paloma {
+    type Model = Model;
+    type Msg = Msg;
+
+    fn title() -> &'static str {
+        "paloma"
+    }
+
+    fn initial_size() -> (u32, u32) {
+        (1180, 720)
+    }
+
+    fn init(_handle: &Handle<Msg>) -> Model {
+        match try_net() {
+            Ok((backend, me, label)) => {
+                let mut model = Model::new(backend, me, Theme::dark());
+                model.status = label;
+                model
+            }
+            Err(why) => {
+                eprintln!("paloma · modo demo: {why}");
+                let me = Address::named("Sergio", "sergio@jlsoltech.com");
+                let mut model = Model::new(Box::new(paloma_llimphi::demo::backend()), me, Theme::dark());
+                model.status = format!("modo demo (sin red) · {why}");
+                model
+            }
+        }
+    }
+
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
+        paloma_llimphi::update(model, msg, handle)
+    }
+
+    fn view(model: &Model) -> View<Msg> {
+        paloma_llimphi::view(model)
+    }
+
+    fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        paloma_llimphi::view_overlay(model)
+    }
+
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        paloma_llimphi::on_key(model, event)
+    }
+
+    fn on_wheel(model: &Model, delta: WheelDelta, cursor: (f32, f32), mods: Modifiers) -> Option<Msg> {
+        paloma_llimphi::on_wheel(model, delta, cursor, mods)
+    }
+}
+
+fn main() {
+    llimphi_ui::run::<Paloma>();
+}

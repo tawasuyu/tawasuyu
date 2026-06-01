@@ -1,0 +1,23 @@
+[package]
+name = "paloma-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-app — el binario lanzable del correo: arma el frontend Llimphi sobre NetBackend (IMAP+SMTP) desde la config de la cuenta, con fallback a datos de demo sin red."
+
+[[bin]]
+name = "paloma"
+path = "src/main.rs"
+
+[dependencies]
+paloma-core = { path = "../paloma-core" }
+paloma-net = { path = "../paloma-net" }
+paloma-llimphi = { path = "../paloma-llimphi" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+directories = { workspace = true }

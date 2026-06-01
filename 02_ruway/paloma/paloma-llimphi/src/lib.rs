@@ -26,6 +26,7 @@ use paloma_core::{
     parse_address_list, Address, MailBackend, MailStore, MessageId, OutgoingMessage, Thread,
 };
 
+pub mod demo;
 mod view;
 
 /// Campo enfocado del formulario de redacción.
