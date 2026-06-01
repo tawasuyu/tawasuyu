@@ -49,9 +49,9 @@ use wayland_client::{
 };
 
 use llimphi_theme::Theme;
-use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint, Mounted};
+use llimphi_ui::llimphi_compositor::{hit_test_click, measure_text_node, mount, paint, Mounted};
 use llimphi_ui::llimphi_hal::{wgpu, Hal, RawSurface, Surface as _};
-use llimphi_ui::llimphi_layout::{taffy, LayoutTree};
+use llimphi_ui::llimphi_layout::{taffy, ComputedLayout, LayoutTree};
 use llimphi_ui::llimphi_raster::{peniko::color::palette, vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 
@@ -71,11 +71,20 @@ struct PanelGpu {
     layout: LayoutTree,
 }
 
+/// El árbol pintado en el último frame de un panel, para hacer hit-test de los
+/// clicks (qué nodo está bajo el puntero y qué `on_click` dispara).
+struct RenderCache {
+    mounted: Mounted<Msg>,
+    computed: ComputedLayout,
+}
+
 /// Una barra = una layer surface anclada a un borde, con su propio estado wgpu.
 struct Panel {
     /// Índice de su superficie en `cfg.surfaces`.
     idx: usize,
     layer: LayerSurface,
+    /// El árbol del último frame (para hit-test de clicks).
+    cache: Option<RenderCache>,
     width: u32,
     height: u32,
     /// `true` cuando hay algo nuevo que pintar (cambió el muestreo o el tamaño).
@@ -181,6 +190,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         panels.push(Panel {
             idx,
             layer,
+            cache: None,
             width: size.0.max(1),
             height: thickness,
             dirty: true,
@@ -423,7 +433,20 @@ impl LayerApp {
         }
         gpu.surface.present(frame, hal);
 
+        // Guarda el árbol pintado para el hit-test de los clicks.
+        self.panels[pi].cache = Some(RenderCache { mounted, computed });
         self.latido(pi, qh);
+    }
+
+    /// Aplica el `Msg` que produjo un click. Hoy el único que emiten los nodos
+    /// es `ShumaToggle` (el cabezal de shuma); el resto se ignora.
+    fn handle_msg(&mut self, msg: Msg) {
+        match msg {
+            Msg::ShumaToggle => self.set_shuma_open(!self.shuma.open),
+            Msg::Quit => self.exit = true,
+            // Char/Backspace/Submit/Result/Tick no salen de un click.
+            _ => {}
+        }
     }
 }
 
@@ -657,11 +680,20 @@ impl PointerHandler for LayerApp {
                 if button != BTN_LEFT {
                     continue;
                 }
-                // Un click izquierdo sobre la barra de shuma (cerrada) despliega
-                // el Quake. El click le dio foco de teclado (OnDemand), así que
-                // ya se puede escribir. Cerrar es con Esc.
-                if self.panel_de(&e.surface) == self.shuma_panel && !self.shuma.open {
-                    self.set_shuma_open(true);
+                // Hit-test: qué nodo está bajo el puntero y qué `on_click` dispara.
+                // Así el cabezal `› shuma` togglea con precisión (clickear el reloj
+                // o un medidor no hace nada). El click ya dio foco de teclado.
+                let Some(pi) = self.panel_de(&e.surface) else {
+                    continue;
+                };
+                let (px, py) = (e.position.0 as f32, e.position.1 as f32);
+                let msg = self.panels[pi].cache.as_ref().and_then(|c| {
+                    hit_test_click(&c.mounted, &c.computed, px, py)
+                        .and_then(|i| c.mounted.nodes.get(i))
+                        .and_then(|n| n.on_click.clone())
+                });
+                if let Some(msg) = msg {
+                    self.handle_msg(msg);
                 }
             }
         }

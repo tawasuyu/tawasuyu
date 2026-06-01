@@ -160,7 +160,7 @@ borde; shuma provee el contenido.
     (salvo `PATA_BACKEND=winit`), con fallback a la ventana winit.
     Verificado en runtime (Hyprland): salen todas las barras ancladas, sin
     error, y el muestreo/leyenda quietos.
-  - **Input + Quake** (compila, runtime por verificar): seat/keyboard/pointer
+  - **Input + Quake** ✅ (verificado en Hyprland): seat/keyboard/pointer
     vía sctk. Un cliente layer-shell **no recibe hotkeys globales**, así que el
     Quake se abre con **click** en la barra de shuma (foco de teclado vía
     `OnDemand` → al abrir pasa a `Exclusive`). En vez de una segunda surface, la
@@ -169,8 +169,14 @@ borde; shuma provee el contenido.
     `render::shuma_open_view` pinta el cuerpo del drawer (input + salida) arriba
     y el cabezal abajo. Teclado con foco: Esc cierra, Backspace, Enter ejecuta
     (`shuma::ejecutar_stand_in`, `sh -c` bloqueante), texto → buffer.
-  - Falta: clicks por hit-test (hoy cualquier click en la barra de shuma abre;
-    `start_button` y demás aún sin acción), exec asíncrono (hoy bloquea el loop),
-    y los widgets placeholder (`window_list`/`tray`/`clipboard`, Fase 6).
+  - **Clicks por hit-test** ✅ — cada panel guarda su árbol pintado
+    (`RenderCache`: `Mounted` + `ComputedLayout`); al click, `hit_test_click`
+    ubica el nodo bajo el puntero y dispara su `on_click` (vía `handle_msg`). El
+    cabezal `› shuma` togglea con precisión (abre y cierra); clickear el reloj o
+    un medidor no hace nada. Reemplaza al "cualquier click en la barra abre".
+  - Falta: acciones por widget (que `start_button` lance algo — cablear un
+    `exec`/Msg en el render desde la prop del spec), exec asíncrono (hoy `sh -c`
+    bloquea el loop), y los widgets placeholder
+    (`window_list`/`tray`/`clipboard`, Fase 6).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
