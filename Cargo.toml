@@ -281,6 +281,7 @@ members = [
     "02_ruway/nahual/nahual-archive-viewer-llimphi",
     "02_ruway/nahual/nahual-font-viewer-llimphi",
     "02_ruway/paloma/paloma-core",
+    "02_ruway/paloma/paloma-net",
     "02_ruway/mirada/asistente-puente",
     "02_ruway/mirada/mirada-app-llimphi",
     "02_ruway/mirada/mirada-asistente-llimphi",

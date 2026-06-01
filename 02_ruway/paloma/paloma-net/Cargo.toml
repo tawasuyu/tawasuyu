@@ -1,0 +1,17 @@
+[package]
+name = "paloma-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-net — puente de red del correo: parser MIME (RFC 822 → Message), fetch IMAP y envío SMTP. Implementa el trait MailBackend de paloma-core contra servidores reales."
+
+[dependencies]
+paloma-core = { path = "../paloma-core" }
+mail-parser = "0.9"
+imap = "2"
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "native-tls", "builder"] }
+native-tls = "0.2"
+thiserror = { workspace = true }
