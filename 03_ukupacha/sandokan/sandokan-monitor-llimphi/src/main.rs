@@ -44,10 +44,15 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
 
+mod procfs;
+use procfs::{Scan, Sig};
+
 /// Muestras de CPU guardadas por unidad para dibujar el sparkline.
 const SPARK_LEN: usize = 48;
 /// Cadencia del polling al Engine.
 const POLL: Duration = Duration::from_millis(1000);
+/// Filas de proceso visibles a la vez en el modo Sistema (ventana virtual).
+const SYS_ROWS: usize = 26;
 
 // ---------------------------------------------------------------------------
 // Contexto de ejecución compartido (runtime tokio + Engine elegido).
@@ -74,9 +79,35 @@ impl EngineCtx {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum World {
-    Linux,
+enum Tab {
+    /// Todos los procesos del SO (lectura de `/proc`) — el process monitor.
+    System,
+    /// Unidades del plano de control sandokan (por el contrato Engine).
+    Units,
+    /// Censo de apps WASM instaladas de Wawa.
     Wawa,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sort {
+    Cpu,
+    Mem,
+    Pid,
+    Name,
+}
+
+/// Un proceso del SO ya con %CPU/%MEM derivados, listo para pintar.
+#[derive(Clone)]
+struct SysProc {
+    pid: i32,
+    name: String,
+    state: char,
+    cpu_pct: f32,
+    mem_pct: f32,
+    rss_kb: u64,
+    threads: u32,
+    uid: u32,
+    cmd: String,
 }
 
 #[derive(Clone)]
@@ -89,7 +120,13 @@ struct WawaApp {
 enum Msg {
     /// Resultado de un poll al Engine (snapshot o error de transporte).
     Snapshot(Result<MonitorSnapshot, String>),
-    Switch(World),
+    /// Barrido de `/proc` (modo Sistema). El %CPU se deriva en `update`.
+    System(Scan),
+    SysSelect(i32),
+    SysSort(Sort),
+    SysScroll(i32),
+    Signal(i32, Sig),
+    Switch(Tab),
     Select(Option<Ulid>),
     Stop(Ulid),
     Kill(Ulid),
@@ -112,21 +149,32 @@ fn build_menu() -> AppMenu {
         )
         .menu(
             Menu::new("Ver")
-                .item(MenuItem::new("Linux", "view.linux"))
-                .item(MenuItem::new("Wawa", "view.wawa")),
+                .item(MenuItem::new("Sistema", "view.system").shortcut("Ctrl+1"))
+                .item(MenuItem::new("Unidades", "view.units").shortcut("Ctrl+2"))
+                .item(MenuItem::new("Wawa", "view.wawa").shortcut("Ctrl+3")),
         )
         .menu(Menu::new("Ayuda").item(MenuItem::new("Observa por el contrato Engine", "help.about")))
 }
 
 struct Model {
     theme: Theme,
-    world: World,
+    tab: Tab,
     snapshot: MonitorSnapshot,
     /// Historial de CPU por unidad → sparkline.
     history: HashMap<Ulid, VecDeque<f32>>,
     selected: Option<Ulid>,
     error: Option<String>,
     wawa: Vec<WawaApp>,
+    // --- modo Sistema (/proc) ---
+    system: Vec<SysProc>,
+    sys_sel: Option<i32>,
+    sys_sort: Sort,
+    sys_scroll: usize,
+    mem_total_kb: u64,
+    /// Jiffies previos por PID + total, para derivar %CPU por delta.
+    prev_proc: HashMap<i32, u64>,
+    prev_total: u64,
+    // --- menú ---
     menu: AppMenu,
     menu_open: Option<usize>,
     ctx: Arc<EngineCtx>,
@@ -217,6 +265,82 @@ fn wawa_census() -> Vec<WawaApp> {
 }
 
 // ---------------------------------------------------------------------------
+// Modo Sistema: deltas de CPU, orden, cambio de pestaña.
+// ---------------------------------------------------------------------------
+
+/// Toma un barrido crudo de `/proc` y deriva %CPU/%MEM contra la lectura
+/// previa (guardada en el Model). Deja `model.system` ordenado.
+fn ingest_system(model: &mut Model, scan: Scan) {
+    let dtotal = scan.total_jiffies.saturating_sub(model.prev_total).max(1) as f32;
+    let ncpu = scan.ncpu.max(1) as f32;
+    let mem_total = scan.mem_total_kb.max(1) as f32;
+
+    let mut next_prev = HashMap::with_capacity(scan.procs.len());
+    let mut out = Vec::with_capacity(scan.procs.len());
+    for p in &scan.procs {
+        let dproc = p
+            .cpu_jiffies
+            .saturating_sub(model.prev_proc.get(&p.pid).copied().unwrap_or(p.cpu_jiffies))
+            as f32;
+        // delta_proc / delta_total_de_una_cpu = delta_proc / (dtotal/ncpu).
+        let cpu_pct = (dproc / (dtotal / ncpu)).clamp(0.0, 100.0 * ncpu);
+        next_prev.insert(p.pid, p.cpu_jiffies);
+        out.push(SysProc {
+            pid: p.pid,
+            name: p.name.clone(),
+            state: p.state,
+            cpu_pct,
+            mem_pct: (p.rss_kb as f32 / mem_total) * 100.0,
+            rss_kb: p.rss_kb,
+            threads: p.threads,
+            uid: p.uid,
+            cmd: p.cmd.clone(),
+        });
+    }
+
+    model.prev_proc = next_prev;
+    model.prev_total = scan.total_jiffies;
+    model.mem_total_kb = scan.mem_total_kb;
+    model.system = out;
+    sort_system(model);
+
+    // El proceso seleccionado pudo morir entre barridos.
+    if let Some(sel) = model.sys_sel {
+        if !model.system.iter().any(|p| p.pid == sel) {
+            model.sys_sel = None;
+        }
+    }
+    let max = model.system.len().saturating_sub(SYS_ROWS);
+    if model.sys_scroll > max {
+        model.sys_scroll = max;
+    }
+}
+
+fn sort_system(model: &mut Model) {
+    match model.sys_sort {
+        Sort::Cpu => model
+            .system
+            .sort_by(|a, b| b.cpu_pct.total_cmp(&a.cpu_pct)),
+        Sort::Mem => model.system.sort_by(|a, b| b.rss_kb.cmp(&a.rss_kb)),
+        Sort::Pid => model.system.sort_by(|a, b| a.pid.cmp(&b.pid)),
+        Sort::Name => model
+            .system
+            .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+    }
+}
+
+fn switch_tab(model: &mut Model, tab: Tab, handle: &Handle<Msg>) {
+    model.tab = tab;
+    match tab {
+        Tab::Wawa if model.wawa.is_empty() => {
+            handle.spawn(|| Msg::WawaCensus(wawa_census()));
+        }
+        Tab::System => handle.spawn(|| Msg::System(procfs::scan())),
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
 // App.
 // ---------------------------------------------------------------------------
 
@@ -247,17 +371,28 @@ impl App for Monitor {
         let cp = ctx.clone();
         handle.spawn_periodic(POLL, move || Msg::Snapshot(cp.poll()));
 
+        // Barrido de /proc para el modo Sistema (fuente del SO, no del Engine).
+        handle.spawn(|| Msg::System(procfs::scan()));
+        handle.spawn_periodic(POLL, || Msg::System(procfs::scan()));
+
         // Censo de Wawa en background (no bloquea el arranque).
         handle.spawn(|| Msg::WawaCensus(wawa_census()));
 
         Model {
             theme: Theme::dark(),
-            world: World::Linux,
+            tab: Tab::System,
             snapshot: MonitorSnapshot::default(),
             history: HashMap::new(),
             selected: None,
             error: None,
             wawa: Vec::new(),
+            system: Vec::new(),
+            sys_sel: None,
+            sys_sort: Sort::Cpu,
+            sys_scroll: 0,
+            mem_total_kb: 0,
+            prev_proc: HashMap::new(),
+            prev_total: 0,
             menu: build_menu(),
             menu_open: None,
             ctx,
@@ -287,12 +422,41 @@ impl App for Monitor {
                 model.error = None;
             }
             Msg::Snapshot(Err(e)) => model.error = Some(e),
-            Msg::Switch(w) => {
-                model.world = w;
-                if matches!(w, World::Wawa) && model.wawa.is_empty() {
-                    handle.spawn(|| Msg::WawaCensus(wawa_census()));
+            Msg::System(scan) => {
+                ingest_system(&mut model, scan);
+            }
+            Msg::SysSelect(pid) => {
+                model.sys_sel = (pid >= 0).then_some(pid);
+                // Mantener la fila seleccionada dentro de la ventana visible.
+                if let Some(i) = model
+                    .sys_sel
+                    .and_then(|p| model.system.iter().position(|x| x.pid == p))
+                {
+                    if i < model.sys_scroll {
+                        model.sys_scroll = i;
+                    } else if i >= model.sys_scroll + SYS_ROWS {
+                        model.sys_scroll = i - SYS_ROWS + 1;
+                    }
                 }
             }
+            Msg::SysSort(s) => {
+                model.sys_sort = s;
+                sort_system(&mut model);
+            }
+            Msg::SysScroll(steps) => {
+                let max = model.system.len().saturating_sub(SYS_ROWS);
+                let cur = model.sys_scroll as i64 + steps as i64;
+                model.sys_scroll = cur.clamp(0, max as i64) as usize;
+            }
+            Msg::Signal(pid, sig) => {
+                if let Err(e) = procfs::signal(pid, sig) {
+                    model.error = Some(format!("señal a {pid}: {e}"));
+                } else {
+                    model.error = None;
+                    handle.spawn(|| Msg::System(procfs::scan()));
+                }
+            }
+            Msg::Switch(tab) => switch_tab(&mut model, tab, handle),
             Msg::Select(s) => model.selected = s,
             Msg::Stop(id) => {
                 let ctx = model.ctx.clone();
@@ -315,16 +479,13 @@ impl App for Monitor {
             Msg::MenuCmd(cmd) => {
                 model.menu_open = None;
                 match cmd.as_str() {
-                    "view.linux" => model.world = World::Linux,
-                    "view.wawa" => {
-                        model.world = World::Wawa;
-                        if model.wawa.is_empty() {
-                            handle.spawn(|| Msg::WawaCensus(wawa_census()));
-                        }
-                    }
+                    "view.system" => switch_tab(&mut model, Tab::System, handle),
+                    "view.units" => switch_tab(&mut model, Tab::Units, handle),
+                    "view.wawa" => switch_tab(&mut model, Tab::Wawa, handle),
                     "monitor.refresh" => {
                         let ctx = model.ctx.clone();
                         handle.spawn(move || Msg::Snapshot(ctx.poll()));
+                        handle.spawn(|| Msg::System(procfs::scan()));
                     }
                     "monitor.seed" => {
                         let ctx = model.ctx.clone();
@@ -343,9 +504,10 @@ impl App for Monitor {
 
     fn view(model: &Model) -> View<Msg> {
         let t = &model.theme;
-        let body = match model.world {
-            World::Linux => linux_body(model),
-            World::Wawa => wawa_body(model),
+        let body = match model.tab {
+            Tab::System => system_body(model),
+            Tab::Units => units_body(model),
+            Tab::Wawa => wawa_body(model),
         };
 
         View::new(Style {
@@ -370,9 +532,10 @@ impl App for Monitor {
     }
 
     /// Bindings reales (los shortcuts del menú son sólo etiquetas; el binding
-    /// vive acá). `Esc` cierra el menú o deselecciona · `Tab` alterna mundo ·
-    /// `Ctrl+R`/`F5` refresca · `Ctrl+Q` sale · `Ctrl+L`/`Ctrl+K` van a
-    /// Linux/Wawa.
+    /// vive acá). `Esc` cierra el menú o deselecciona · `Tab` cicla pestañas ·
+    /// `↑/↓` mueven la selección en Sistema · `Supr`/`k` terminan/matan el
+    /// proceso seleccionado · `Ctrl+R`/`F5` refresca · `Ctrl+Q` sale ·
+    /// `Ctrl+1/2/3` van a Sistema/Unidades/Wawa.
     fn on_key(model: &Model, ev: &KeyEvent) -> Option<Msg> {
         if ev.state != KeyState::Pressed {
             return None;
@@ -381,27 +544,37 @@ impl App for Monitor {
             Key::Named(NamedKey::Escape) => {
                 return Some(if model.menu_open.is_some() {
                     Msg::MenuOpen(None)
+                } else if model.sys_sel.is_some() {
+                    Msg::SysSelect(-1)
                 } else {
                     Msg::Select(None)
                 });
             }
             Key::Named(NamedKey::F5) => return Some(Msg::MenuCmd("monitor.refresh".into())),
             Key::Named(NamedKey::Tab) => {
-                let next = match model.world {
-                    World::Linux => World::Wawa,
-                    World::Wawa => World::Linux,
+                let next = match model.tab {
+                    Tab::System => "view.units",
+                    Tab::Units => "view.wawa",
+                    Tab::Wawa => "view.system",
                 };
-                return Some(Msg::MenuCmd(match next {
-                    World::Linux => "view.linux".into(),
-                    World::Wawa => "view.wawa".into(),
-                }));
+                return Some(Msg::MenuCmd(next.into()));
+            }
+            Key::Named(NamedKey::ArrowDown) if model.tab == Tab::System => {
+                return sys_move(model, 1);
+            }
+            Key::Named(NamedKey::ArrowUp) if model.tab == Tab::System => {
+                return sys_move(model, -1);
+            }
+            Key::Named(NamedKey::Delete) if model.tab == Tab::System => {
+                return model.sys_sel.map(|p| Msg::Signal(p, Sig::Term));
             }
             Key::Character(c) if ev.modifiers.ctrl => {
                 match c.as_str().to_ascii_lowercase().as_str() {
                     "r" => return Some(Msg::MenuCmd("monitor.refresh".into())),
                     "q" => return Some(Msg::MenuCmd("app.quit".into())),
-                    "l" => return Some(Msg::MenuCmd("view.linux".into())),
-                    "k" => return Some(Msg::MenuCmd("view.wawa".into())),
+                    "1" => return Some(Msg::MenuCmd("view.system".into())),
+                    "2" => return Some(Msg::MenuCmd("view.units".into())),
+                    "3" => return Some(Msg::MenuCmd("view.wawa".into())),
                     _ => {}
                 }
             }
@@ -409,6 +582,38 @@ impl App for Monitor {
         }
         None
     }
+
+    fn on_wheel(
+        model: &Model,
+        delta: llimphi_ui::WheelDelta,
+        _cursor: (f32, f32),
+        _mods: llimphi_ui::Modifiers,
+    ) -> Option<Msg> {
+        if model.tab == Tab::System {
+            // Convención CSS: delta.y positivo = hacia abajo.
+            let steps = delta.y.trunc() as i32;
+            if steps != 0 {
+                return Some(Msg::SysScroll(steps));
+            }
+        }
+        None
+    }
+}
+
+/// Mueve la selección en la tabla de Sistema y reajusta el scroll para
+/// mantenerla visible.
+fn sys_move(model: &Model, dir: i32) -> Option<Msg> {
+    if model.system.is_empty() {
+        return None;
+    }
+    let cur = model
+        .sys_sel
+        .and_then(|p| model.system.iter().position(|x| x.pid == p));
+    let next = match cur {
+        Some(i) => (i as i32 + dir).clamp(0, model.system.len() as i32 - 1) as usize,
+        None => 0,
+    };
+    Some(Msg::SysSelect(model.system[next].pid))
 }
 
 /// Spec de la barra de menú — armado en cada `view()`/`view_overlay()`.
@@ -430,28 +635,40 @@ fn menu_spec(model: &Model) -> MenuBarSpec<'_, Msg> {
 
 fn header(model: &Model) -> View<Msg> {
     let t = &model.theme;
-    let snap = &model.snapshot;
-    let total = snap.len();
-    let running = snap.running();
-    let mem: u64 = snap
-        .units
-        .iter()
-        .filter_map(|u| u.telemetry.as_ref().map(|x| x.mem_bytes))
-        .sum();
-    let cpu: f64 = snap
-        .units
-        .iter()
-        .filter_map(|u| u.telemetry.as_ref().map(|x| x.cpu_pct))
-        .sum();
-
-    let mut chips = vec![
-        chip(t, "unidades", &total.to_string()),
-        chip(t, "vivas", &running.to_string()),
-        chip(t, "memoria", &fmt_mem(mem)),
-        chip(t, "cpu", &format!("{cpu:.0}%")),
-    ];
+    let mut chips = match model.tab {
+        Tab::System => {
+            let cpu: f32 = model.system.iter().map(|p| p.cpu_pct).sum();
+            let rss: u64 = model.system.iter().map(|p| p.rss_kb).sum::<u64>() * 1024;
+            vec![
+                chip(t, "procesos", &model.system.len().to_string()),
+                chip(t, "cpu", &format!("{cpu:.0}%")),
+                chip(t, "rss", &fmt_mem(rss)),
+                chip(t, "ram", &fmt_mem(model.mem_total_kb * 1024)),
+            ]
+        }
+        Tab::Units => {
+            let snap = &model.snapshot;
+            let mem: u64 = snap
+                .units
+                .iter()
+                .filter_map(|u| u.telemetry.as_ref().map(|x| x.mem_bytes))
+                .sum();
+            let cpu: f64 = snap
+                .units
+                .iter()
+                .filter_map(|u| u.telemetry.as_ref().map(|x| x.cpu_pct))
+                .sum();
+            vec![
+                chip(t, "unidades", &snap.len().to_string()),
+                chip(t, "vivas", &snap.running().to_string()),
+                chip(t, "memoria", &fmt_mem(mem)),
+                chip(t, "cpu", &format!("{cpu:.0}%")),
+            ]
+        }
+        Tab::Wawa => vec![chip(t, "apps wasm", &model.wawa.len().to_string())],
+    };
     if let Some(e) = &model.error {
-        chips.push(chip_warn(t, "engine", e));
+        chips.push(chip_warn(t, "aviso", e));
     }
 
     View::new(Style {
@@ -499,8 +716,9 @@ fn tabs(model: &Model) -> View<Msg> {
     })
     .fill(t.bg_panel)
     .children(vec![
-        tab(t, "Linux", model.world == World::Linux, Msg::Switch(World::Linux)),
-        tab(t, "Wawa", model.world == World::Wawa, Msg::Switch(World::Wawa)),
+        tab(t, "Sistema", model.tab == Tab::System, Msg::Switch(Tab::System)),
+        tab(t, "Unidades", model.tab == Tab::Units, Msg::Switch(Tab::Units)),
+        tab(t, "Wawa", model.tab == Tab::Wawa, Msg::Switch(Tab::Wawa)),
     ])
 }
 
@@ -522,10 +740,10 @@ fn tab(t: &Theme, label: &str, active: bool, on: Msg) -> View<Msg> {
 }
 
 // ---------------------------------------------------------------------------
-// Mundo Linux: grilla de tarjetas vivas.
+// Modo Unidades (sandokan): grilla de tarjetas vivas.
 // ---------------------------------------------------------------------------
 
-fn linux_body(model: &Model) -> View<Msg> {
+fn units_body(model: &Model) -> View<Msg> {
     let t = &model.theme;
     if model.snapshot.is_empty() {
         return empty_state(
@@ -669,6 +887,259 @@ fn action_btn(t: &Theme, label: &str, bg: Color, fg: Color, on: Msg) -> View<Msg
     .hover_fill(t.bg_button_hover)
     .text(label, 12.0, fg)
     .on_click(on)
+}
+
+// ---------------------------------------------------------------------------
+// Modo Sistema: tabla de procesos del SO (/proc) — el process monitor.
+// ---------------------------------------------------------------------------
+
+// Anchos de columna (px); la última (comando) crece.
+const W_PID: f32 = 62.0;
+const W_CPU: f32 = 58.0;
+const W_MEM: f32 = 58.0;
+const W_RSS: f32 = 78.0;
+const W_ST: f32 = 28.0;
+const W_THR: f32 = 46.0;
+const W_UID: f32 = 54.0;
+const ROW_H: f32 = 21.0;
+
+fn system_body(model: &Model) -> View<Msg> {
+    let t = &model.theme;
+    if model.system.is_empty() {
+        return empty_state(t, "Leyendo /proc…", "Barriendo los procesos del sistema.");
+    }
+
+    let total = model.system.len();
+    let start = model.sys_scroll.min(total.saturating_sub(1));
+    let end = (start + SYS_ROWS).min(total);
+
+    let mut table: Vec<View<Msg>> = Vec::with_capacity(end - start + 2);
+    table.push(sys_header_row(model));
+    for p in &model.system[start..end] {
+        table.push(sys_row(t, p, model.sys_sel == Some(p.pid)));
+    }
+    if end < total {
+        table.push(
+            View::new(Style {
+                padding: pad(10.0, 4.0),
+                ..Default::default()
+            })
+            .text(
+                &format!("… {} procesos más abajo (rueda / ↑↓)", total - end),
+                10.5,
+                t.fg_muted,
+            ),
+        );
+    }
+
+    let sel = model
+        .sys_sel
+        .and_then(|pid| model.system.iter().find(|p| p.pid == pid));
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .fill(t.bg_app)
+    .children(vec![
+        sys_action_bar(t, sel),
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(1.0),
+                height: auto(),
+            },
+            padding: Rect {
+                left: length(12.0),
+                right: length(12.0),
+                top: length(0.0),
+                bottom: length(8.0),
+            },
+            ..Default::default()
+        })
+        .clip(true)
+        .children(table),
+    ])
+}
+
+/// Barra de acciones sobre el proceso seleccionado. Sin selección, una pista.
+fn sys_action_bar(t: &Theme, sel: Option<&SysProc>) -> View<Msg> {
+    let mut row: Vec<View<Msg>> = Vec::new();
+    match sel {
+        Some(p) => {
+            row.push(
+                View::new(Style {
+                    flex_grow: 1.0,
+                    ..Default::default()
+                })
+                .text(&format!("PID {} · {}", p.pid, p.name), 12.5, t.fg_text),
+            );
+            row.push(action_btn(t, "Terminar", t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Term)));
+            row.push(action_btn(t, "Matar", t.fg_destructive, t.bg_app, Msg::Signal(p.pid, Sig::Kill)));
+            row.push(action_btn(t, "Pausar", t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Stop)));
+            row.push(action_btn(t, "Seguir", t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Cont)));
+        }
+        None => row.push(
+            View::new(Style {
+                flex_grow: 1.0,
+                ..Default::default()
+            })
+            .text(
+                "Elegí un proceso (click / ↑↓) para terminar, matar, pausar o seguir.",
+                12.0,
+                t.fg_muted,
+            ),
+        ),
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(8.0),
+            height: length(6.0),
+        },
+        padding: pad(16.0, 8.0),
+        ..Default::default()
+    })
+    .fill(t.bg_panel_alt)
+    .children(row)
+}
+
+fn sys_header_row(model: &Model) -> View<Msg> {
+    let t = &model.theme;
+    let hcell = |label: &str, w: f32, sort: Option<Sort>| {
+        let active = sort.map(|s| s == model.sys_sort).unwrap_or(false);
+        let fg = if active { t.accent } else { t.fg_muted };
+        let mut v = View::new(Style {
+            size: Size {
+                width: length(w),
+                height: percent(1.0),
+            },
+            flex_shrink: 0.0,
+            justify_content: Some(JustifyContent::Center),
+            flex_direction: FlexDirection::Column,
+            ..Default::default()
+        })
+        .text(label, 10.5, fg);
+        if let Some(s) = sort {
+            v = v.on_click(Msg::SysSort(s));
+        }
+        v
+    };
+    let cmd = {
+        let active = model.sys_sort == Sort::Name;
+        let fg = if active { t.accent } else { t.fg_muted };
+        View::new(Style {
+            flex_grow: 1.0,
+            justify_content: Some(JustifyContent::Center),
+            flex_direction: FlexDirection::Column,
+            ..Default::default()
+        })
+        .text("COMANDO (nombre↕)", 10.5, fg)
+        .on_click(Msg::SysSort(Sort::Name))
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        size: Size {
+            width: percent(1.0),
+            height: length(ROW_H + 4.0),
+        },
+        gap: Size {
+            width: length(6.0),
+            height: length(0.0),
+        },
+        padding: Rect {
+            left: length(8.0),
+            right: length(8.0),
+            top: length(0.0),
+            bottom: length(0.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        hcell("PID", W_PID, Some(Sort::Pid)),
+        hcell("%CPU", W_CPU, Some(Sort::Cpu)),
+        hcell("%MEM", W_MEM, Some(Sort::Mem)),
+        hcell("RSS", W_RSS, Some(Sort::Mem)),
+        hcell("S", W_ST, None),
+        hcell("HILOS", W_THR, None),
+        hcell("UID", W_UID, None),
+        cmd,
+    ])
+}
+
+fn sys_row(t: &Theme, p: &SysProc, selected: bool) -> View<Msg> {
+    let cell = |s: String, w: f32, color: Color| {
+        View::new(Style {
+            size: Size {
+                width: length(w),
+                height: percent(1.0),
+            },
+            flex_shrink: 0.0,
+            justify_content: Some(JustifyContent::Center),
+            flex_direction: FlexDirection::Column,
+            ..Default::default()
+        })
+        .text(s, 11.5, color)
+    };
+    let bg = if selected { t.bg_selected } else { t.bg_app };
+    let cpu_col = if p.cpu_pct >= 1.0 { t.fg_text } else { t.fg_muted };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        size: Size {
+            width: percent(1.0),
+            height: length(ROW_H),
+        },
+        gap: Size {
+            width: length(6.0),
+            height: length(0.0),
+        },
+        padding: Rect {
+            left: length(8.0),
+            right: length(8.0),
+            top: length(0.0),
+            bottom: length(0.0),
+        },
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(t.bg_row_hover)
+    .on_click(Msg::SysSelect(p.pid))
+    .children(vec![
+        cell(p.pid.to_string(), W_PID, t.fg_muted),
+        cell(format!("{:.1}", p.cpu_pct), W_CPU, cpu_col),
+        cell(format!("{:.1}", p.mem_pct), W_MEM, t.fg_muted),
+        cell(fmt_mem(p.rss_kb * 1024), W_RSS, t.fg_muted),
+        cell(p.state.to_string(), W_ST, state_color(t, p.state)),
+        cell(p.threads.to_string(), W_THR, t.fg_muted),
+        cell(p.uid.to_string(), W_UID, t.fg_muted),
+        View::new(Style {
+            flex_grow: 1.0,
+            justify_content: Some(JustifyContent::Center),
+            flex_direction: FlexDirection::Column,
+            ..Default::default()
+        })
+        .clip(true)
+        .text(&p.cmd, 11.5, t.fg_text),
+    ])
+}
+
+fn state_color(t: &Theme, s: char) -> Color {
+    match s {
+        'R' => Color::from_rgba8(0x3f, 0xcf, 0x6a, 0xff),
+        'D' => Color::from_rgba8(0xe0, 0xb0, 0x3a, 0xff),
+        'Z' => t.fg_destructive,
+        'T' | 't' => t.accent,
+        _ => t.fg_muted,
+    }
 }
 
 // ---------------------------------------------------------------------------

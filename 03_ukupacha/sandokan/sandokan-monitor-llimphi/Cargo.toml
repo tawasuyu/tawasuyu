@@ -18,6 +18,8 @@ sandokan-monitor-core = { path = "../../../shared/sandokan/sandokan-monitor-core
 card-core = { path = "../../../shared/card/card-core" }
 ulid = { workspace = true }
 tokio = { workspace = true }
+nix = { workspace = true }
+libc = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
