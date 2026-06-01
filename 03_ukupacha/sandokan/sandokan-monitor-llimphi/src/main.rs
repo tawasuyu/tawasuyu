@@ -40,7 +40,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, FlexWrap, JustifyContent,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
 
@@ -53,6 +53,8 @@ const SPARK_LEN: usize = 48;
 const POLL: Duration = Duration::from_millis(1000);
 /// Filas de proceso visibles a la vez en el modo Sistema (ventana virtual).
 const SYS_ROWS: usize = 26;
+/// Puntos de historial en los gráficos de CPU/memoria (~2 min a 1 Hz).
+const GRAPH_LEN: usize = 120;
 
 // ---------------------------------------------------------------------------
 // Contexto de ejecución compartido (runtime tokio + Engine elegido).
@@ -190,6 +192,10 @@ struct Model {
     /// Capturando teclas para el filtro (modo búsqueda activo).
     filter_mode: bool,
     mem_total_kb: u64,
+    mem_avail_kb: u64,
+    /// Historial global de %CPU y %MEM (un punto por barrido) → gráficos.
+    cpu_hist: VecDeque<f32>,
+    mem_hist: VecDeque<f32>,
     /// Jiffies previos por PID + total, para derivar %CPU por delta.
     prev_proc: HashMap<i32, u64>,
     prev_total: u64,
@@ -289,6 +295,14 @@ fn wawa_census() -> Vec<WawaApp> {
 
 /// Toma un barrido crudo de `/proc` y deriva %CPU/%MEM contra la lectura
 /// previa (guardada en el Model). Deja `model.system` ordenado.
+/// Empuja una muestra al historial, recortando a `GRAPH_LEN`.
+fn push_capped(buf: &mut VecDeque<f32>, v: f32) {
+    if buf.len() == GRAPH_LEN {
+        buf.pop_front();
+    }
+    buf.push_back(v);
+}
+
 fn ingest_system(model: &mut Model, scan: Scan) {
     let dtotal = scan.total_jiffies.saturating_sub(model.prev_total).max(1) as f32;
     let ncpu = scan.ncpu.max(1) as f32;
@@ -318,9 +332,20 @@ fn ingest_system(model: &mut Model, scan: Scan) {
         });
     }
 
+    // Muestras globales para los gráficos del tope.
+    let overall_cpu = (out.iter().map(|p| p.cpu_pct).sum::<f32>() / ncpu).clamp(0.0, 100.0);
+    let mem_used_pct = if scan.mem_total_kb > 0 {
+        (1.0 - scan.mem_avail_kb as f32 / scan.mem_total_kb as f32).clamp(0.0, 1.0) * 100.0
+    } else {
+        0.0
+    };
+    push_capped(&mut model.cpu_hist, overall_cpu);
+    push_capped(&mut model.mem_hist, mem_used_pct);
+
     model.prev_proc = next_prev;
     model.prev_total = scan.total_jiffies;
     model.mem_total_kb = scan.mem_total_kb;
+    model.mem_avail_kb = scan.mem_avail_kb;
     model.system = out;
     sort_system(model);
 
@@ -519,6 +544,9 @@ impl App for Monitor {
             sys_filter: String::new(),
             filter_mode: false,
             mem_total_kb: 0,
+            mem_avail_kb: 0,
+            cpu_hist: VecDeque::new(),
+            mem_hist: VecDeque::new(),
             prev_proc: HashMap::new(),
             prev_total: 0,
             menu: build_menu(),
@@ -1140,6 +1168,7 @@ fn system_body(model: &Model) -> View<Msg> {
     })
     .fill(t.bg_app)
     .children(vec![
+        sys_graphs(model),
         sys_action_bar(model, sel),
         sys_filter_bar(model, total),
         View::new(Style {
@@ -1160,6 +1189,115 @@ fn system_body(model: &Model) -> View<Msg> {
         .clip(true)
         .children(table),
     ])
+}
+
+/// Fila de gráficos del tope: historial de %CPU y % de memoria usada.
+fn sys_graphs(model: &Model) -> View<Msg> {
+    let t = &model.theme;
+    let cpu_now = model.cpu_hist.back().copied().unwrap_or(0.0);
+    let mem_now = model.mem_hist.back().copied().unwrap_or(0.0);
+    let used_kb = model.mem_total_kb.saturating_sub(model.mem_avail_kb);
+
+    let cpu_col = Color::from_rgba8(0x3f, 0xcf, 0x6a, 0xff);
+    let mem_col = t.accent;
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        gap: Size {
+            width: length(12.0),
+            height: length(0.0),
+        },
+        padding: pad(16.0, 10.0),
+        ..Default::default()
+    })
+    .fill(t.bg_panel)
+    .children(vec![
+        meter(t, "CPU", &format!("{cpu_now:.0}%"), &model.cpu_hist, cpu_col),
+        meter(
+            t,
+            "Memoria",
+            &format!("{} / {} · {mem_now:.0}%", fmt_mem(used_kb * 1024), fmt_mem(model.mem_total_kb * 1024)),
+            &model.mem_hist,
+            mem_col,
+        ),
+    ])
+}
+
+/// Un medidor: cabecera (label + valor) sobre un gráfico de área del historial
+/// (escala fija 0..100 %). Pintado con `paint_with` (área + línea).
+fn meter(t: &Theme, label: &str, value: &str, hist: &VecDeque<f32>, color: Color) -> View<Msg> {
+    let samples: Vec<f32> = hist.iter().copied().collect();
+    let area_col = color.with_alpha(0.20);
+    let track = t.bg_input;
+
+    let head = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        justify_content: Some(JustifyContent::SpaceBetween),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style::default()).text(label, 11.0, t.fg_muted),
+        View::new(Style::default()).text(value, 11.5, color),
+    ]);
+
+    let graph = View::new(Style {
+        size: Size {
+            width: percent(1.0),
+            height: length(40.0),
+        },
+        ..Default::default()
+    })
+    .fill(track)
+    .radius(6.0)
+    .clip(true)
+    .paint_with(move |scene, _ts, rect| {
+        let n = samples.len();
+        if n < 2 {
+            return;
+        }
+        let pad = 2.0_f32;
+        let w = (rect.w - pad * 2.0).max(1.0);
+        let h = (rect.h - pad * 2.0).max(1.0);
+        let x0 = rect.x + pad;
+        let ybase = (rect.y + pad + h) as f64;
+        let step = w / (n as f32 - 1.0);
+        let xat = |i: usize| (x0 + step * i as f32) as f64;
+        let yat = |v: f32| (rect.y + pad + h * (1.0 - (v / 100.0).clamp(0.0, 1.0))) as f64;
+
+        // Área bajo la curva.
+        let mut area = BezPath::new();
+        area.move_to((xat(0), ybase));
+        for (i, v) in samples.iter().enumerate() {
+            area.line_to((xat(i), yat(*v)));
+        }
+        area.line_to((xat(n - 1), ybase));
+        area.close_path();
+        scene.fill(Fill::NonZero, Affine::IDENTITY, area_col, None, &area);
+
+        // Línea superior.
+        let mut line = BezPath::new();
+        for (i, v) in samples.iter().enumerate() {
+            let p = (xat(i), yat(*v));
+            if i == 0 {
+                line.move_to(p);
+            } else {
+                line.line_to(p);
+            }
+        }
+        scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, color, None, &line);
+    });
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        gap: Size {
+            width: length(0.0),
+            height: length(5.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![head, graph])
 }
 
 /// Barra de acciones: toggle Lista/Árbol + acciones sobre el seleccionado.

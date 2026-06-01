@@ -36,6 +36,8 @@ pub struct Scan {
     pub total_jiffies: u64,
     pub ncpu: u32,
     pub mem_total_kb: u64,
+    /// Memoria disponible (`MemAvailable`), para derivar la usada.
+    pub mem_avail_kb: u64,
 }
 
 impl Default for Scan {
@@ -45,6 +47,7 @@ impl Default for Scan {
             total_jiffies: 0,
             ncpu: 1,
             mem_total_kb: 0,
+            mem_avail_kb: 0,
         }
     }
 }
@@ -73,20 +76,19 @@ fn total_cpu_jiffies() -> u64 {
         .sum()
 }
 
-fn mem_total_kb() -> u64 {
+/// `(MemTotal, MemAvailable)` en kB desde `/proc/meminfo`.
+fn meminfo_kb() -> (u64, u64) {
     let Ok(mi) = fs::read_to_string("/proc/meminfo") else {
-        return 0;
+        return (0, 0);
     };
-    for line in mi.lines() {
-        if let Some(rest) = line.strip_prefix("MemTotal:") {
-            return rest
-                .split_whitespace()
-                .next()
-                .and_then(|n| n.parse::<u64>().ok())
-                .unwrap_or(0);
-        }
-    }
-    0
+    let field = |prefix: &str| -> u64 {
+        mi.lines()
+            .find_map(|l| l.strip_prefix(prefix))
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    (field("MemTotal:"), field("MemAvailable:"))
 }
 
 /// Parsea `/proc/<pid>/stat`. El `comm` puede traer espacios y paréntesis, así
@@ -163,13 +165,15 @@ pub fn scan() -> Scan {
             }
         }
     }
+    let (mem_total_kb, mem_avail_kb) = meminfo_kb();
     Scan {
         procs,
         total_jiffies: total_cpu_jiffies(),
         ncpu: std::thread::available_parallelism()
             .map(|n| n.get() as u32)
             .unwrap_or(1),
-        mem_total_kb: mem_total_kb(),
+        mem_total_kb,
+        mem_avail_kb,
     }
 }
 
