@@ -31,9 +31,13 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 
 /// `app_id` con el que el compositor reconoce y compone el greeter.
@@ -98,6 +102,14 @@ struct Model {
     menu_open: Option<usize>,
     /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
     edit_menu: Option<(f32, f32)>,
+    /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown principal.
+    menu_anim: Tween<f32>,
+    /// Fila resaltada por teclado en el menú de edición (`usize::MAX` = ninguna).
+    edit_active: usize,
+    /// Animación de aparición del menú de edición.
+    edit_anim: Tween<f32>,
 }
 
 #[derive(Clone)]
@@ -116,6 +128,16 @@ enum Msg {
     EditMenuOpen(f32, f32),
     /// Acción elegida en el menú de edición.
     EditMenuAction(EditAction),
+    /// Navegación ↑/↓ por la fila activa del menú principal.
+    MenuNav(i32),
+    /// Enter sobre la fila activa del menú principal.
+    MenuActivate,
+    /// Tick de animación de aparición/swap (re-render).
+    MenuTick,
+    /// Navegación ↑/↓ por la fila activa del menú de edición.
+    EditNav(i32),
+    /// Enter sobre la fila activa del menú de edición.
+    EditActivate,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
 }
@@ -148,6 +170,10 @@ impl App for Greeter {
             clipboard: SystemClipboard::new(),
             menu_open: None,
             edit_menu: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
         }
     }
 
@@ -159,13 +185,34 @@ impl App for Greeter {
         if matches!(model.status, Status::Authenticating) {
             return None;
         }
-        // Con un menú abierto, Esc lo cierra y el resto se ignora para no
-        // teclear «detrás» del menú.
-        if model.menu_open.is_some() || model.edit_menu.is_some() {
-            if matches!(&e.key, Key::Named(NamedKey::Escape)) {
-                return Some(Msg::CloseMenus);
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            match &e.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => {
+                    return Some(Msg::MenuOpen(Some((mi + n - 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    return Some(Msg::MenuOpen(Some((mi + 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::MenuActivate),
+                _ => return None,
             }
-            return None;
+        }
+        // Menú de edición abierto: ↑/↓ navegan, Enter ejecuta, Esc cierra.
+        if model.edit_menu.is_some() {
+            match &e.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::EditNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::EditNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::EditActivate),
+                _ => return None,
+            }
         }
         match &e.key {
             Key::Named(NamedKey::Tab) => Some(Msg::Focus(toggle(model.focus))),
@@ -225,16 +272,56 @@ impl App for Greeter {
                 m.pass.clear();
                 m.focus = Field::Pass;
             }
-            Msg::MenuOpen(idx) => m.menu_open = idx,
+            Msg::MenuOpen(idx) => {
+                m.menu_open = idx;
+                m.edit_menu = None;
+                m.menu_active = usize::MAX;
+                if idx.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
+            }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    m.menu_active = menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, m.menu_active) {
+                        return handle_menu_command(m, cmd, handle);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
+            Msg::EditNav(dir) => {
+                let (input, masked) = focused_input(&m);
+                let flags = EditFlags::from_editor(input.editor(), masked);
+                m.edit_active = editmenu::edit_menu_step(flags, m.edit_active, dir);
+            }
+            Msg::EditActivate => {
+                let (input, masked) = focused_input(&m);
+                let flags = EditFlags::from_editor(input.editor(), masked);
+                if let Some(a) = editmenu::edit_menu_action_at(flags, m.edit_active) {
+                    return apply_edit_menu_action(m, a);
+                }
+            }
             Msg::CloseMenus => {
                 m.menu_open = None;
                 m.edit_menu = None;
+                m.menu_active = usize::MAX;
+                m.edit_active = usize::MAX;
             }
             Msg::MenuCommand(cmd) => return handle_menu_command(m, cmd, handle),
             Msg::EditMenuOpen(x, y) => {
                 // Mientras autenticamos no abrimos el menú de edición.
                 if !matches!(m.status, Status::Authenticating) {
                     m.edit_menu = Some((x, y));
+                    m.edit_active = usize::MAX;
+                    m.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
                 }
             }
             Msg::EditMenuAction(action) => return apply_edit_menu_action(m, action),
@@ -364,18 +451,27 @@ impl App for Greeter {
         if let Some((x, y)) = model.edit_menu {
             let (input, masked) = focused_input(model);
             let flags = EditFlags::from_editor(input.editor(), masked);
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 viewport,
                 &theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras { appear: model.edit_anim.value(), ..Default::default() },
+            ));
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 

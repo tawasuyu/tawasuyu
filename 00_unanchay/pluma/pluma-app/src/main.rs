@@ -77,6 +77,28 @@ impl App for Pluma {
         if event.state != KeyState::Pressed {
             return None;
         }
+        // Menús abiertos: las flechas navegan y tienen prioridad sobre todo.
+        if let Some(mi) = model.menu_open {
+            let n = crate::update::menu_principal(model).menus.len().max(1);
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
+        }
+        if model.edit_menu.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::EditNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::EditNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::EditActivate),
+                _ => None,
+            };
+        }
         // Si el input de ruta tiene foco, las teclas van ahí — incluso
         // Ctrl/Shift combos. Esc lo apaga; cualquier otra cosa edita.
         if model.path_focused {

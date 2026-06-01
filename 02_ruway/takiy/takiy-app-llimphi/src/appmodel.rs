@@ -42,6 +42,11 @@ pub(crate) struct Model {
     /// Barra de menú principal: índice del menú raíz abierto (`None`
     /// cerrado). Lo abre/cierra `menubar_view` vía `Msg::MenuOpen`.
     pub(crate) menu_open: Option<usize>,
+    /// Fila resaltada por teclado dentro del dropdown del menú principal
+    /// (`usize::MAX` = ninguna). La mueven las flechas ↑/↓.
+    pub(crate) menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    pub(crate) menu_anim: llimphi_motion::Tween<f32>,
     /// Menú contextual sobre la nota seleccionada: ancla `(x, y)` en
     /// coords de ventana. `None` cerrado. Sólo se abre con right-click
     /// cuando hay una nota seleccionada y el click no cayó sobre un

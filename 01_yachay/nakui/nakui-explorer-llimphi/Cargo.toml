@@ -15,6 +15,7 @@ llimphi-widget-banner = { workspace = true }
 llimphi-widget-card = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }

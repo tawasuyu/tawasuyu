@@ -37,7 +37,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, View, WheelDelta};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_styled, ButtonPalette};
@@ -48,9 +48,13 @@ use llimphi_widget_text_editor::{
 };
 use llimphi_widget_theme_switcher::theme_switcher_view;
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 
 const TREE_WIDTH: f32 = 240.0;
@@ -95,6 +99,16 @@ enum Msg {
     MenuOpen(Option<usize>),
     /// Comando elegido en el menú principal — se traduce al `Msg` real.
     MenuCommand(String),
+    /// Navegación ↑/↓ por la fila activa del menú principal.
+    MenuNav(i32),
+    /// Enter sobre la fila activa del menú principal.
+    MenuActivate,
+    /// Tick de animación de aparición/swap (re-render).
+    MenuTick,
+    /// Navegación ↑/↓ por la fila activa del menú de edición.
+    EditNav(i32),
+    /// Enter sobre la fila activa del menú de edición.
+    EditActivate,
     /// Right-click en el área de trabajo → abre el menú de edición en
     /// `(x, y)` de ventana, operando sobre el editor del .cob.
     EditMenuOpen(f32, f32),
@@ -195,6 +209,14 @@ struct Model {
     menu_open: Option<usize>,
     /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
     edit_menu: Option<(f32, f32)>,
+    /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown principal.
+    menu_anim: Tween<f32>,
+    /// Fila resaltada por teclado en el menú de edición (`usize::MAX` = ninguna).
+    edit_active: usize,
+    /// Animación de aparición del menú de edición.
+    edit_anim: Tween<f32>,
 }
 
 struct ChakaApp;
@@ -238,6 +260,10 @@ impl App for ChakaApp {
             clipboard: SystemClipboard::new(),
             menu_open: None,
             edit_menu: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
         };
         // Si hay corpus, abrimos el primero — pantalla inicial poblada
         // en vez de placeholders vacíos.
@@ -273,13 +299,52 @@ impl App for ChakaApp {
                 let mut m = model;
                 m.menu_open = i;
                 m.edit_menu = None;
+                m.menu_active = usize::MAX;
+                if i.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
                 m
             }
             Msg::MenuCommand(cmd) => handle_menu_command(model, cmd, handle),
+            Msg::MenuNav(dir) => {
+                let mut m = model;
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    m.menu_active = menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+                m
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        return handle_menu_command(model, cmd, handle);
+                    }
+                }
+                model
+            }
+            Msg::MenuTick => model,
+            Msg::EditNav(dir) => {
+                let mut m = model;
+                let flags = EditFlags::from_editor(&m.cobol, false);
+                m.edit_active = editmenu::edit_menu_step(flags, m.edit_active, dir);
+                m
+            }
+            Msg::EditActivate => {
+                let flags = EditFlags::from_editor(&model.cobol, false);
+                if let Some(a) = editmenu::edit_menu_action_at(flags, model.edit_active) {
+                    return apply_edit_menu_action(model, a);
+                }
+                model
+            }
             Msg::EditMenuOpen(x, y) => {
                 let mut m = model;
                 m.edit_menu = Some((x, y));
                 m.menu_open = None;
+                m.edit_active = usize::MAX;
+                m.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(handle, motion::FAST, || Msg::MenuTick);
                 m
             }
             Msg::EditMenuAction(action) => apply_edit_menu_action(model, action),
@@ -287,6 +352,8 @@ impl App for ChakaApp {
                 let mut m = model;
                 m.menu_open = None;
                 m.edit_menu = None;
+                m.menu_active = usize::MAX;
+                m.edit_active = usize::MAX;
                 m
             }
         }
@@ -306,9 +373,38 @@ impl App for ChakaApp {
         }
     }
 
-    fn on_key(_model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+    fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra. Tiene prioridad sobre todo lo demás.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            match &event.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => {
+                    return Some(Msg::MenuOpen(Some((mi + n - 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    return Some(Msg::MenuOpen(Some((mi + 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::MenuActivate),
+                _ => return None,
+            }
+        }
+        // Menú de edición abierto: ↑/↓ navegan, Enter ejecuta, Esc cierra.
+        if model.edit_menu.is_some() {
+            match &event.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::EditNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::EditNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::EditActivate),
+                _ => return None,
+            }
         }
         // Atajos globales con Ctrl.
         if event.modifiers.ctrl {
@@ -361,18 +457,27 @@ impl App for ChakaApp {
         if let Some((x, y)) = model.edit_menu {
             let flags = EditFlags::from_editor(&model.cobol, false);
             let (w, h) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 &model.theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras { appear: model.edit_anim.value(), ..Default::default() },
+            ));
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &model.theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 

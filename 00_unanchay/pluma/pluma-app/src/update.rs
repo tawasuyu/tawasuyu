@@ -4,8 +4,9 @@
 
 use std::collections::HashMap;
 
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_ui::Handle;
-use llimphi_widget_edit_menu::EditAction;
+use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_text_editor::PointerEvent;
 use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
@@ -172,21 +173,59 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         // --- Menú principal + menú de edición contextual ---
         Msg::MenuOpen(idx) => {
             model.menu_open = idx;
+            model.menu_active = usize::MAX;
             model.edit_menu = None;
+            if idx.is_some() {
+                model.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(handle, motion::FAST, || Msg::MenuTick);
+            }
         }
         Msg::CloseMenus => {
             model.menu_open = None;
+            model.menu_active = usize::MAX;
             model.edit_menu = None;
+            model.edit_active = usize::MAX;
         }
         Msg::EditMenuOpen(x, y) => {
             model.edit_menu = Some((x, y));
+            model.edit_active = usize::MAX;
             model.menu_open = None;
+            model.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+            animate(handle, motion::FAST, || Msg::MenuTick);
         }
         Msg::EditMenuAction(action) => {
             return aplicar_edit_menu(model, action);
         }
         Msg::MenuCommand(cmd) => {
             return ejecutar_menu_command(model, cmd, handle);
+        }
+        Msg::MenuNav(dir) => {
+            if let Some(mi) = model.menu_open {
+                let menu = menu_principal(&model);
+                model.menu_active =
+                    llimphi_widget_menubar::menubar_nav(&menu, mi, model.menu_active, dir);
+            }
+        }
+        Msg::MenuActivate => {
+            if let Some(mi) = model.menu_open {
+                let menu = menu_principal(&model);
+                if let Some(cmd) =
+                    llimphi_widget_menubar::menubar_command_at(&menu, mi, model.menu_active)
+                {
+                    return ejecutar_menu_command(model, cmd, handle);
+                }
+            }
+        }
+        Msg::MenuTick => {}
+        Msg::EditNav(dir) => {
+            let flags = EditFlags::from_editor(&model.ide.state, false);
+            model.edit_active = editmenu::edit_menu_step(flags, model.edit_active, dir);
+        }
+        Msg::EditActivate => {
+            let flags = EditFlags::from_editor(&model.ide.state, false);
+            if let Some(action) = editmenu::edit_menu_action_at(flags, model.edit_active) {
+                return aplicar_edit_menu(model, action);
+            }
         }
     }
     model

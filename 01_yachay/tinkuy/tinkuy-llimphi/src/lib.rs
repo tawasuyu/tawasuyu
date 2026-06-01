@@ -47,7 +47,11 @@ use llimphi_ui::{App, DragPhase, Handle, View};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_nodegraph::{nodegraph_view, NodegraphMetrics, NodegraphPalette};
 use llimphi_widget_tiled::{tiled_view_reorderable_cols, TileSpec, TiledPalette};
 
@@ -140,6 +144,12 @@ pub enum Msg {
     MenuOpen(Option<usize>),
     /// Comando elegido en el menú principal — se traduce al `Msg` real.
     MenuCommand(String),
+    /// Navegación por teclado en el dropdown del menú principal (↑/↓).
+    MenuNav(i32),
+    /// Ejecuta el comando de la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Tick de la animación de aparición/swap del menú principal (re-render).
+    MenuTick,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
     /// Cicla el tema claro/oscuro.
@@ -183,6 +193,11 @@ pub struct Model {
     theme: Theme,
     /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
     menu_open: Option<usize>,
+    /// Fila resaltada por teclado dentro del dropdown del menú principal
+    /// (`usize::MAX` = ninguna). La mueven las flechas ↑/↓.
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    menu_anim: Tween<f32>,
     /// Tile seleccionado por click en su cuerpo. Habilita el menú contextual
     /// y resalta el estado. `None` si ninguno.
     selected_tile: Option<TileId>,
@@ -365,6 +380,8 @@ impl App for TinkuyApp {
             force_status,
             theme: Theme::dark(),
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             selected_tile: None,
             context_menu: None,
         }
@@ -475,11 +492,34 @@ impl App for TinkuyApp {
             }
             Msg::MenuOpen(which) => {
                 model.menu_open = which;
+                model.menu_active = usize::MAX;
                 // Abrir un menú raíz cierra cualquier contextual.
                 model.context_menu = None;
+                if which.is_some() {
+                    model.menu_anim =
+                        Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        model.menu_open = None;
+                        return handle_menu_command(model, &cmd, handle);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.context_menu = None;
             }
             Msg::MenuCommand(cmd) => {
@@ -504,10 +544,24 @@ impl App for TinkuyApp {
         model
     }
 
-    fn on_key(_model: &Model, event: &llimphi_ui::KeyEvent) -> Option<Msg> {
+    fn on_key(model: &Model, event: &llimphi_ui::KeyEvent) -> Option<Msg> {
         use llimphi_ui::{Key, KeyState, NamedKey};
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc cierra.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
         }
         match &event.key {
             Key::Named(NamedKey::Space) => Some(Msg::TogglePause),
@@ -591,7 +645,11 @@ impl App for TinkuyApp {
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &model.theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 

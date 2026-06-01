@@ -32,8 +32,10 @@ use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
 use llimphi_widget_menubar::{
-    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
 };
+use llimphi_motion::{animate, motion, Tween};
 
 use media_core::{AudioSource, FrameSource};
 use media_recorder_webm::{
@@ -111,6 +113,12 @@ enum Msg {
     MenuCommand(String),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Navegación por teclado en el dropdown del menú principal (↑/↓).
+    MenuNav(i32),
+    /// Ejecuta el comando de la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Tick de la animación de aparición/swap del menú principal (re-render).
+    MenuTick,
     /// Right-click en la raíz → abre el menú contextual anclado en
     /// `(x, y)` de ventana. Origen de la raíz es 0,0 ⇒ local == ventana.
     ContextMenuOpen(f32, f32),
@@ -135,6 +143,11 @@ struct Model {
     /// Barra de menú principal: índice del menú raíz abierto (`None`
     /// cerrado).
     menu_open: Option<usize>,
+    /// Fila resaltada por teclado dentro del dropdown del menú principal
+    /// (`usize::MAX` = ninguna). La mueven las flechas ↑/↓.
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    menu_anim: Tween<f32>,
     /// Menú contextual: ancla `(x, y)` en ventana. `None` cerrado. La app
     /// no tiene campos de texto editables, así que el contextual mapea a
     /// comandos de grabación reales — no a edición.
@@ -173,6 +186,8 @@ impl App for RecorderApp {
             stop: Arc::new(AtomicBool::new(false)),
             elapsed_secs: 0,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             context_menu: None,
             dark: true,
             viewport: (560.0, 380.0),
@@ -219,11 +234,35 @@ impl App for RecorderApp {
             }
             Msg::MenuOpen(which) => {
                 model.menu_open = which;
+                model.menu_active = usize::MAX;
                 // Abrir un menú raíz cierra cualquier contextual.
                 model.context_menu = None;
+                if which.is_some() {
+                    model.menu_anim =
+                        Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        model.menu_open = None;
+                        model.context_menu = None;
+                        return handle_menu_command(model, &cmd, handle);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.context_menu = None;
             }
             Msg::MenuCommand(cmd) => {
@@ -247,6 +286,20 @@ impl App for RecorderApp {
         if event.state != KeyState::Pressed {
             return None;
         }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc cierra.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
+        }
         if matches!(event.key, Key::Named(NamedKey::Escape))
             && (model.menu_open.is_some() || model.context_menu.is_some())
         {
@@ -261,7 +314,11 @@ impl App for RecorderApp {
             return Some(context_menu(model, x, y));
         }
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {

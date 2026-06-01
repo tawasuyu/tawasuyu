@@ -37,9 +37,13 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{
     length, percent, Dimension, FlexDirection, Size, Style,
 };
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, View};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_motion::{animate, motion, Tween};
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_text_input::TextInputState;
 use wawa_config_llimphi::theme_from_wawa;
 
@@ -171,7 +175,11 @@ impl App for Dominium {
             panel_tab: PanelTab::Mundo,
             onboarding_done: false,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             edit_menu: None,
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
             clipboard: llimphi_clipboard::SystemClipboard::new(),
         }
     }
@@ -508,12 +516,48 @@ impl App for Dominium {
             }
             Msg::MenuOpen(idx) => {
                 m.menu_open = idx;
+                m.menu_active = usize::MAX;
                 // Abrir un menú principal cierra el contextual de edición.
                 m.edit_menu = None;
+                // Animación de aparición/swap: cada vez que se abre (o se
+                // cambia de) menú, el dropdown se funde+desliza de nuevo.
+                if idx.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(h, motion::FAST, || Msg::MenuTick);
+                }
             }
             Msg::MenuCommand(cmd) => {
                 m.menu_open = None;
                 return handle_menu_command(m, cmd, h);
+            }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    m.menu_active = menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, m.menu_active) {
+                        m.menu_open = None;
+                        return handle_menu_command(m, cmd, h);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
+            Msg::EditNav(dir) => {
+                let flags =
+                    EditFlags::from_editor(m.id_input.editor(), m.id_input.is_masked());
+                m.edit_active = editmenu::edit_menu_step(flags, m.edit_active, dir);
+            }
+            Msg::EditActivate => {
+                let flags =
+                    EditFlags::from_editor(m.id_input.editor(), m.id_input.is_masked());
+                if let Some(action) = editmenu::edit_menu_action_at(flags, m.edit_active) {
+                    m.edit_menu = None;
+                    apply_edit_menu_action(&mut m, action);
+                }
             }
             Msg::EditMenuOpen(x, y) => {
                 // Sólo tiene sentido si hay un campo de texto focuseado;
@@ -521,7 +565,10 @@ impl App for Dominium {
                 // (todo aparece en gris), pero preferimos no molestar.
                 if m.id_input_focused {
                     m.edit_menu = Some((x, y));
+                    m.edit_active = usize::MAX;
                     m.menu_open = None;
+                    m.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(h, motion::FAST, || Msg::MenuTick);
                 }
             }
             Msg::EditMenuAction(action) => {
@@ -530,13 +577,42 @@ impl App for Dominium {
             }
             Msg::CloseMenus => {
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
                 m.edit_menu = None;
+                m.edit_active = usize::MAX;
             }
         }
         m
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        if event.state == KeyState::Pressed {
+            // Menú principal abierto: flechas navegan, ←/→ cambian de menú
+            // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+            // cierra. Tiene prioridad sobre todo lo demás.
+            if let Some(mi) = model.menu_open {
+                let n = app_menu(model).menus.len().max(1);
+                return match &event.key {
+                    Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                    Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                    Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                    Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                    Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                    Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                    _ => None,
+                };
+            }
+            // Menú de edición abierto: ↑/↓ navegan, Enter ejecuta, Esc cierra.
+            if model.edit_menu.is_some() {
+                return match &event.key {
+                    Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                    Key::Named(NamedKey::ArrowDown) => Some(Msg::EditNav(1)),
+                    Key::Named(NamedKey::ArrowUp) => Some(Msg::EditNav(-1)),
+                    Key::Named(NamedKey::Enter) => Some(Msg::EditActivate),
+                    _ => None,
+                };
+            }
+        }
         if !model.id_input_focused {
             return None;
         }
@@ -650,18 +726,30 @@ impl App for Dominium {
         if let Some((x, y)) = model.edit_menu {
             let flags = EditFlags::from_editor(model.id_input.editor(), model.id_input.is_masked());
             let (w, hgt) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, hgt as f32),
                 &theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras {
+                    appear: model.edit_anim.value(),
+                    ..Default::default()
+                },
+            ));
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 

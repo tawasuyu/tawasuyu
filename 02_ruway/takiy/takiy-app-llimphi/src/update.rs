@@ -2,8 +2,9 @@
 //! `EditorState`), hit-testing del press/right-press, drag-to-move/resize/
 //! automación, export y el blip de audition.
 
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_ui::{DragPhase, Handle};
-use llimphi_widget_menubar::DEFAULT_HEIGHT as MENU_H;
+use llimphi_widget_menubar::{menubar_command_at, menubar_nav, DEFAULT_HEIGHT as MENU_H};
 use takiy_app::{
     cell_at, default_save_path_for_save, gm_program_name, grid_geometry, header_beat_at,
     hit_test_note, pitch_range_with_offset, write_score, EditMsg, EditorState, HEADER_H, KEYBOARD_W,
@@ -617,11 +618,37 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         }
         Msg::MenuOpen(which) => {
             model.menu_open = which;
+            model.menu_active = usize::MAX;
             // Abrir un menú raíz cierra cualquier contextual.
             model.context_menu = None;
+            // Animación de aparición/swap: el dropdown se funde+desliza
+            // cada vez que se abre o se cambia de menú raíz.
+            if which.is_some() {
+                model.menu_anim =
+                    Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(handle, motion::FAST, || Msg::MenuTick);
+            }
         }
+        Msg::MenuNav(dir) => {
+            if let Some(mi) = model.menu_open {
+                let menu = crate::app_menu();
+                model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+            }
+        }
+        Msg::MenuActivate => {
+            if let Some(mi) = model.menu_open {
+                let menu = crate::app_menu();
+                if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                    model.menu_open = None;
+                    model.context_menu = None;
+                    crate::handle_menu_command(&cmd, handle);
+                }
+            }
+        }
+        Msg::MenuTick => {}
         Msg::CloseMenus => {
             model.menu_open = None;
+            model.menu_active = usize::MAX;
             model.context_menu = None;
         }
         Msg::MenuCommand(cmd) => {

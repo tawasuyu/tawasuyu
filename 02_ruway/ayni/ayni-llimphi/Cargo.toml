@@ -39,5 +39,6 @@ llimphi-widget-text-input = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-motion = { workspace = true }
 llimphi-clipboard = { workspace = true }
 app-bus = { workspace = true }

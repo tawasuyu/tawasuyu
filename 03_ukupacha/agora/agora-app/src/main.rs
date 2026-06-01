@@ -33,10 +33,12 @@ use format::{ConcesionCapacidad, ManifiestoFirmado};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_motion::{animate, motion, Tween};
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_menubar::{
-    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_text_input::TextInputState;
 use llimphi_widget_tiled::{tiled_view_reorderable, TileSpec, TiledPalette};
@@ -127,6 +129,10 @@ impl App for AgoraApp {
             menu_open: None,
             edit_menu: None,
             clipboard: llimphi_clipboard::SystemClipboard::new(),
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
         };
 
         if !necesita_unlock {
@@ -468,10 +474,21 @@ impl App for AgoraApp {
             }
 
             // ---- Menús ---------------------------------------------------
-            Msg::MenuOpen(idx) => model.menu_open = idx,
+            Msg::MenuOpen(idx) => {
+                model.menu_open = idx;
+                model.edit_menu = None;
+                model.menu_active = usize::MAX;
+                if idx.is_some() {
+                    model.menu_anim =
+                        Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
+            }
             Msg::CloseMenus => {
                 model.menu_open = None;
                 model.edit_menu = None;
+                model.menu_active = usize::MAX;
+                model.edit_active = usize::MAX;
             }
             Msg::MenuCommand(cmd) => {
                 model.menu_open = None;
@@ -479,7 +496,46 @@ impl App for AgoraApp {
                     return AgoraApp::update(model, real, handle);
                 }
             }
-            Msg::EditMenuOpen(x, y) => model.edit_menu = Some((x, y)),
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        model.menu_open = None;
+                        if let Some(real) = menu_command_to_msg(&model, &cmd) {
+                            return AgoraApp::update(model, real, handle);
+                        }
+                    }
+                }
+            }
+            Msg::MenuTick => {}
+            Msg::EditNav(dir) => {
+                let editor = model.focused_input_ref().editor();
+                let masked = model.focused_input_ref().is_masked();
+                let flags = EditFlags::from_editor(editor, masked);
+                model.edit_active = editmenu::edit_menu_step(flags, model.edit_active, dir);
+            }
+            Msg::EditActivate => {
+                let editor = model.focused_input_ref().editor();
+                let masked = model.focused_input_ref().is_masked();
+                let flags = EditFlags::from_editor(editor, masked);
+                if let Some(a) = editmenu::edit_menu_action_at(flags, model.edit_active) {
+                    model.edit_menu = None;
+                    model.apply_edit_menu_action(a);
+                }
+            }
+            Msg::EditMenuOpen(x, y) => {
+                model.edit_menu = Some((x, y));
+                model.menu_open = None;
+                model.edit_active = usize::MAX;
+                model.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(handle, motion::FAST, || Msg::MenuTick);
+            }
             Msg::EditMenuAction(action) => {
                 model.edit_menu = None;
                 model.apply_edit_menu_action(action);
@@ -491,6 +547,35 @@ impl App for AgoraApp {
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra. Tiene prioridad sobre todo lo demás.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            match &event.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => {
+                    return Some(Msg::MenuOpen(Some((mi + n - 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    return Some(Msg::MenuOpen(Some((mi + 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::MenuActivate),
+                _ => return None,
+            }
+        }
+        // Menú de edición abierto: ↑/↓ navegan, Enter ejecuta, Esc cierra.
+        if model.edit_menu.is_some() {
+            match &event.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::EditNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::EditNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::EditActivate),
+                _ => return None,
+            }
         }
         // Unlock: todas las teclas al input; Enter desbloquea.
         if matches!(model.screen, Screen::Unlock { .. }) {
@@ -588,17 +673,26 @@ impl App for AgoraApp {
             let masked = model.focused_input_ref().is_masked();
             let flags = EditFlags::from_editor(editor, masked);
             let (w, h) = AgoraApp::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 &theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras { appear: model.edit_anim.value(), ..Default::default() },
+            ));
         }
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 

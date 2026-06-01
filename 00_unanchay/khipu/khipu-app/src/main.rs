@@ -51,9 +51,13 @@ use llimphi_widget_text_editor::{
     text_editor_view, EditorMetrics, EditorPalette, EditorState, PointerEvent,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 use serde::{Deserialize, Serialize};
 
@@ -221,6 +225,16 @@ enum Msg {
     MenuOpen(Option<usize>),
     /// Comando elegido en la barra de menú (`command` de cada `MenuItem`).
     MenuCommand(String),
+    /// Navegación por teclado en el menú principal (`+1` baja, `-1` sube).
+    MenuNav(i32),
+    /// Enter en el menú principal: ejecuta la fila activa.
+    MenuActivate,
+    /// Tick de animación de menús (sólo re-render).
+    MenuTick,
+    /// Navegación por teclado en el menú de edición.
+    EditNav(i32),
+    /// Enter en el menú de edición: ejecuta la fila activa.
+    EditActivate,
     /// Abre el menú de edición contextual (right-click) en coords de ventana.
     EditMenuOpen(f32, f32),
     /// Acción de edición (undo/redo/cut/copy/paste/delete/selectall) sobre
@@ -286,8 +300,16 @@ struct Model {
     p2p: Option<P2p>,
     /// Dropdown abierto de la barra de menú (índice), o `None` si cerrada.
     menu_open: Option<usize>,
+    /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    menu_anim: Tween<f32>,
     /// Posición (coords de ventana) del menú de edición contextual, si abierto.
     edit_menu: Option<(f32, f32)>,
+    /// Fila resaltada por teclado en el menú de edición (`usize::MAX` = ninguna).
+    edit_active: usize,
+    /// Animación de aparición del menú de edición (0→1).
+    edit_anim: Tween<f32>,
     /// Portapapeles del sistema, compartido por todas las acciones de edición.
     clipboard: SystemClipboard,
 }
@@ -640,21 +662,56 @@ impl App for KhipuApp {
             }
             Msg::MenuOpen(idx) => {
                 model.menu_open = idx;
+                model.menu_active = usize::MAX;
                 model.edit_menu = None;
+                if idx.is_some() {
+                    model.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(h, motion::FAST, || Msg::MenuTick);
+                }
             }
             Msg::MenuCommand(cmd) => {
                 return handle_menu_command(model, cmd, h);
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        return handle_menu_command(model, cmd, h);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
+            Msg::EditNav(dir) => {
+                let flags = focused_edit_flags(&model);
+                model.edit_active = editmenu::edit_menu_step(flags, model.edit_active, dir);
+            }
+            Msg::EditActivate => {
+                let flags = focused_edit_flags(&model);
+                if let Some(action) = editmenu::edit_menu_action_at(flags, model.edit_active) {
+                    return apply_edit_menu_action(model, action, h);
+                }
+            }
             Msg::EditMenuOpen(x, y) => {
                 model.edit_menu = Some((x, y));
+                model.edit_active = usize::MAX;
                 model.menu_open = None;
+                model.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(h, motion::FAST, || Msg::MenuTick);
             }
             Msg::EditMenuAction(action) => {
                 return apply_edit_menu_action(model, action, h);
             }
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.edit_menu = None;
+                model.edit_active = usize::MAX;
             }
         }
         model
@@ -741,27 +798,59 @@ impl App for KhipuApp {
         }
         // Prioridad: menú de edición contextual sobre el menú principal.
         if let Some((x, y)) = model.edit_menu {
-            let (editor, masked) = focused_editor(model);
-            let flags = match editor {
-                Some(ed) => EditFlags::from_editor(ed, masked),
-                None => EditFlags::default(),
-            };
+            let flags = focused_edit_flags(model);
             let (w, h) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 &model.theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras {
+                    appear: model.edit_anim.value(),
+                    ..Default::default()
+                },
+            ));
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &model.theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        // Menús abiertos: las flechas navegan y tienen prioridad sobre todo.
+        if event.state == KeyState::Pressed {
+            if let Some(mi) = model.menu_open {
+                let n = app_menu(model).menus.len().max(1);
+                return match &event.key {
+                    Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                    Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                    Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                    Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                    Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                    Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                    _ => None,
+                };
+            }
+            if model.edit_menu.is_some() {
+                return match &event.key {
+                    Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                    Key::Named(NamedKey::ArrowDown) => Some(Msg::EditNav(1)),
+                    Key::Named(NamedKey::ArrowUp) => Some(Msg::EditNav(-1)),
+                    Key::Named(NamedKey::Enter) => Some(Msg::EditActivate),
+                    _ => None,
+                };
+            }
+        }
         // Con el prompt de passphrase abierto, las teclas son sólo suyas:
         // Enter desbloquea, Esc cancela, el resto va al input.
         if model.unlocking {
@@ -1768,6 +1857,16 @@ fn focused_editor(model: &Model) -> (Option<&EditorState>, bool) {
     }
 }
 
+/// `EditFlags` del campo focuseado, para nav/ejecución por teclado del
+/// menú de edición. Sin campo focuseado, flags vacíos (todo gris).
+fn focused_edit_flags(model: &Model) -> EditFlags {
+    let (editor, masked) = focused_editor(model);
+    match editor {
+        Some(ed) => EditFlags::from_editor(ed, masked),
+        None => EditFlags::default(),
+    }
+}
+
 /// Construye el menú principal de khipu reflejando el estado del campo
 /// focuseado (ítems de Editar grises sin selección / historial).
 fn app_menu(model: &Model) -> app_bus::AppMenu {
@@ -2481,7 +2580,11 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         pending: None,
         p2p: None,
         menu_open: None,
+        menu_active: usize::MAX,
+        menu_anim: Tween::idle(1.0),
         edit_menu: None,
+        edit_active: usize::MAX,
+        edit_anim: Tween::idle(1.0),
         clipboard: SystemClipboard::new(),
     };
     if same_space {
@@ -2541,7 +2644,11 @@ fn seeded_model(embedder: Embedder) -> Model {
         pending: None,
         p2p: None,
         menu_open: None,
+        menu_active: usize::MAX,
+        menu_anim: Tween::idle(1.0),
         edit_menu: None,
+        edit_active: usize::MAX,
+        edit_anim: Tween::idle(1.0),
         clipboard: SystemClipboard::new(),
     };
     let now = now_secs();

@@ -100,6 +100,12 @@ pub(crate) enum Msg {
     /// Comando elegido en el menú principal o contextual — el string
     /// se traduce al `Msg`/`EditMsg` real existente en `handle_menu_command`.
     MenuCommand(String),
+    /// Navegación por teclado en el dropdown del menú principal (↑/↓).
+    MenuNav(i32),
+    /// Ejecuta el comando de la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Tick de la animación de aparición/swap del menú principal (re-render).
+    MenuTick,
     /// Cierra cualquier menú abierto (click-fuera / Esc / tras comando).
     CloseMenus,
     /// Abre el menú contextual sobre la nota seleccionada, anclado en

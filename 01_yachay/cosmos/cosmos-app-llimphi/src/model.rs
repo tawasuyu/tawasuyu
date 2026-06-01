@@ -14,6 +14,7 @@ use cosmos_engine::{Corpus, PipelineRequest};
 use cosmos_model::Chart;
 use cosmos_render::RenderModel;
 use cosmos_store::Store;
+use llimphi_motion::Tween;
 use llimphi_theme::Theme;
 use llimphi_widget_text_input::TextInputState;
 use serde::{Deserialize, Serialize};
@@ -449,6 +450,13 @@ pub(crate) enum Msg {
     // menú principal
     OpenMenu(MenuKind),
     MenuPick(MenuKind, usize),
+    /// Navegación de teclado en el dropdown del menú principal (±1 fila,
+    /// salta separadores y deshabilitados).
+    MenuNav(i32),
+    /// Enter sobre la fila activa del menú principal.
+    MenuActivate,
+    /// Tick de re-render para la animación de aparición del dropdown.
+    MenuTick,
     CloseMenu,
     // menú contextual sobre la rueda
     OpenCanvasCtx(f32, f32),
@@ -528,6 +536,10 @@ pub(crate) struct Model {
     pub(crate) expanded_panels: Vec<ToolPanel>,
     // chrome
     pub(crate) menu_open: Option<MenuKind>,
+    /// Fila activa (resaltada por teclado) del dropdown del menú principal.
+    pub(crate) menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    pub(crate) menu_anim: Tween<f32>,
     pub(crate) ctx_open: Option<(f32, f32)>,
     // watchers
     pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,

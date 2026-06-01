@@ -37,14 +37,16 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
 use llimphi_widget_menubar::{
-    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use minga_store::PersistentRepo;
@@ -80,6 +82,10 @@ struct Model {
     /// Barra de menú principal: índice del menú raíz abierto (`None`
     /// cerrado).
     menu_open: Option<usize>,
+    /// Fila activa dentro del dropdown abierto (`usize::MAX` = ninguna).
+    menu_active: usize,
+    /// Animación de aparición del dropdown.
+    menu_anim: Tween<f32>,
     /// Menú contextual sobre el dashboard: `(x, y)` ancla en ventana.
     /// `None` cerrado. El explorer es de sólo lectura — el contextual
     /// sólo ofrece acciones de observación (refrescar / tema).
@@ -103,6 +109,12 @@ enum Msg {
     MenuOpen(Option<usize>),
     /// Comando elegido en el menú principal — se traduce al `Msg` real.
     MenuCommand(String),
+    /// Navega la fila activa del dropdown (+1/-1).
+    MenuNav(i32),
+    /// Ejecuta el comando de la fila activa (Enter).
+    MenuActivate,
+    /// No-op: sólo fuerza re-render durante la animación del dropdown.
+    MenuTick,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
     /// Right-click en la raíz → abre el menú contextual anclado en
@@ -158,8 +170,29 @@ impl App for Explorer {
             last_load_ms: 0,
             _wawa_watcher: watcher,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             context_menu: None,
         }
+    }
+
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        if let Some(mi) = model.menu_open {
+            let n = app_menu().menus.len().max(1);
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
+        }
+        None
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -200,13 +233,36 @@ impl App for Explorer {
                 m.menu_open = which;
                 // Abrir un menú raíz cierra cualquier contextual.
                 m.context_menu = None;
+                m.menu_active = usize::MAX;
+                if which.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu();
+                    m.menu_active = menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu();
+                    if let Some(cmd) = menubar_command_at(&menu, mi, m.menu_active) {
+                        m.menu_open = None;
+                        return handle_menu_command(m, &cmd, handle);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::CloseMenus => {
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
                 m.context_menu = None;
             }
             Msg::MenuCommand(cmd) => {
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
                 return handle_menu_command(m, &cmd, handle);
             }
             Msg::ContextMenuOpen(x, y) => {
@@ -365,7 +421,11 @@ impl App for Explorer {
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu();
-        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &model.theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 

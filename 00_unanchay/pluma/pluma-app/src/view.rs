@@ -12,10 +12,10 @@ use llimphi_ui::{DragPhase, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
 use llimphi_widget_edit_menu::{self as editmenu, EditFlags};
 use llimphi_widget_menubar::{
-    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+    menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_text_editor::{EditorPalette as TEPalette, Language};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
@@ -117,17 +117,29 @@ pub(crate) fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     let theme = Theme::dark();
     if let Some((x, y)) = model.edit_menu {
         let flags = EditFlags::from_editor(&model.ide.state, false);
-        return Some(context_menu_view(editmenu::edit_context_menu(
+        let mut spec = editmenu::edit_context_menu(
             (x, y),
             VIEWPORT,
             &theme,
             flags,
             Msg::EditMenuAction,
             Msg::CloseMenus,
-        )));
+        );
+        spec.active = model.edit_active;
+        return Some(context_menu_view_ex(
+            spec,
+            ContextMenuExtras {
+                appear: model.edit_anim.value(),
+                ..Default::default()
+            },
+        ));
     }
     let menu = menu_principal(model);
-    menubar_overlay(&menubar_spec(&menu, model, &theme))
+    menubar_overlay_animated(
+        &menubar_spec(&menu, model, &theme),
+        model.menu_active,
+        model.menu_anim.value(),
+    )
 }
 
 fn barra_status(model: &Model, theme: &Theme) -> View<Msg> {

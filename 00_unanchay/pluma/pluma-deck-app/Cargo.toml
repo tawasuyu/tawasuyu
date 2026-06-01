@@ -24,4 +24,5 @@ llimphi-ui = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-motion = { workspace = true }
 app-bus = { workspace = true }

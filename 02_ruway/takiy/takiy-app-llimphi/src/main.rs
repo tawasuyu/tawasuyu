@@ -49,7 +49,10 @@ use llimphi_ui::{
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
+use llimphi_motion::Tween;
 use takiy_app::{describe_key, load_score_or_demo, pitch_range_with_offset, EditMsg};
 use takiy_playback::Player;
 
@@ -124,6 +127,8 @@ impl App for Takiy {
             midi_offset: 0,
             last_audition_at: None,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             context_menu: None,
         }
     }
@@ -169,6 +174,21 @@ impl App for Takiy {
         );
         if event.repeat && !allow_repeat {
             return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra. Tiene prioridad sobre todo lo demás.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu().menus.len().max(1);
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
         }
         match &event.key {
             Key::Named(NamedKey::Space) if event.modifiers.ctrl => Some(Msg::PlayWithCountIn),
@@ -374,7 +394,11 @@ impl App for Takiy {
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu();
-        menubar_overlay(&menubar_spec(&menu, model))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 

@@ -29,7 +29,11 @@ use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, Nam
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
+use llimphi_motion::{animate, motion, Tween};
 use pluma_deck_core::adaptador::recorrido_desde_atomos;
 use pluma_deck_core::{Autoplay, ContenidoMarco, Marco, Recorrido, RecorridoState, Rect, RejillaOpts};
 use pluma_deck_recorrido_llimphi::{dentro, panel_actual, recorrido_view, recorrido_view_editor, ZOOM_BASE};
@@ -71,6 +75,12 @@ enum Msg {
     MenuOpen(Option<usize>),
     /// Comando elegido en el menú principal — se traduce al `Msg` real.
     MenuCommand(String),
+    /// Navegación de teclado en el dropdown del menú principal (±1 fila).
+    MenuNav(i32),
+    /// Enter sobre la fila activa del menú principal.
+    MenuActivate,
+    /// Tick de re-render para la animación de aparición del dropdown.
+    MenuTick,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
     /// Right-click en el lienzo → menú contextual anclado en `(x, y)` de
@@ -94,6 +104,10 @@ struct Model {
     theme: Theme,
     /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
     menu_open: Option<usize>,
+    /// Fila activa (resaltada por teclado) del dropdown del menú principal.
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    menu_anim: Tween<f32>,
     /// Menú contextual del lienzo: `(x, y)` ancla en ventana. `None` cerrado.
     context_menu: Option<(f32, f32)>,
 }
@@ -168,6 +182,8 @@ impl App for Deck {
             historial: Historial::new(64),
             theme: Theme::dark(),
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             context_menu: None,
         }
     }
@@ -296,15 +312,39 @@ impl App for Deck {
             }
             Msg::MenuOpen(which) => {
                 model.menu_open = which;
+                model.menu_active = usize::MAX;
                 // Abrir un menú raíz cierra cualquier contextual.
                 model.context_menu = None;
+                // Animación de aparición/swap: cada vez que se abre (o se
+                // cambia de) menú, el dropdown se funde+desliza de nuevo.
+                if which.is_some() {
+                    model.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        return Deck::update(model, Msg::MenuCommand(cmd), handle);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.context_menu = None;
             }
             Msg::MenuCommand(cmd) => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 if let Some(next) = comando_a_msg(&cmd) {
                     return Deck::update(model, next, handle);
                 }
@@ -415,9 +455,13 @@ impl App for Deck {
                 palette: ContextMenuPalette::from_theme(&model.theme),
             }));
         }
-        // Si no, el dropdown del menú principal.
+        // Si no, el dropdown del menú principal (con nav por teclado + animación).
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 
     fn on_wheel(_m: &Self::Model, delta: WheelDelta, cursor: (f32, f32), _mods: Modifiers) -> Option<Self::Msg> {
@@ -431,6 +475,21 @@ impl App for Deck {
     fn on_key(model: &Self::Model, ev: &KeyEvent) -> Option<Self::Msg> {
         if ev.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra. Tiene prioridad sobre todo lo demás.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return match &ev.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
         }
         // Guardar/cargar en cualquier modo.
         if ev.modifiers.ctrl {

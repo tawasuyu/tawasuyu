@@ -19,6 +19,7 @@ llimphi-widget-list = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 nahual-file-explorer-llimphi = { workspace = true }
 nahual-source-core = { path = "../nahual-source-core", features = ["nouser", "minga"] }

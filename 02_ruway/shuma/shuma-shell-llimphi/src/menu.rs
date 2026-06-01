@@ -18,7 +18,9 @@ use llimphi_ui::{Key, KeyEvent, KeyState, Modifiers, NamedKey, View};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+};
 
 use super::{Model, Msg, ModuleMsg, ModuleState, Slot};
 
@@ -155,7 +157,11 @@ pub(crate) fn overlay(model: &Model) -> Option<View<Msg>> {
         return Some(terminal_context_menu(model, x, y));
     }
     let menu = app_menu(model);
-    menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+    menubar_overlay_animated(
+        &menubar_spec(&menu, model, &model.theme),
+        model.menu_active,
+        model.menu_anim.value(),
+    )
 }
 
 fn terminal_context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
@@ -220,6 +226,7 @@ fn terminal_context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
 /// modelo. Devuelve el modelo modificado (cerrando antes los menús).
 pub(crate) fn handle_command(mut model: Model, cmd: &str) -> Model {
     model.menu_open = None;
+    model.menu_active = usize::MAX;
     model.ctx_menu = None;
 
     // Selector de tab: "view.tab.<i>".
@@ -300,8 +307,22 @@ fn shell_paste_key() -> ModuleMsg {
 /// Si hay algún menú abierto, intercepta Esc para cerrarlo. Devuelve
 /// `Some(Msg::CloseMenus)` para que `on_key` corte el reenvío al shell.
 pub(crate) fn intercept_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
-    let menu_open = model.menu_open.is_some() || model.ctx_menu.is_some();
-    if menu_open && matches!(e.key, Key::Named(NamedKey::Escape)) {
+    // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+    // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+    // cierra. El context-menu de terminal queda mouse-only (sólo Esc).
+    if let Some(mi) = model.menu_open {
+        let n = app_menu(model).menus.len().max(1);
+        return match &e.key {
+            Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+            Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+            Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+            Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+            Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+            Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+            _ => None,
+        };
+    }
+    if model.ctx_menu.is_some() && matches!(e.key, Key::Named(NamedKey::Escape)) {
         return Some(Msg::CloseMenus);
     }
     None

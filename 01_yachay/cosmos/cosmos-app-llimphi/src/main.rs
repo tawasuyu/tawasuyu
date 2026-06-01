@@ -644,6 +644,8 @@ impl App for Cosmos {
             tool_cat: ui.tool_cat,
             expanded_panels: ui.expanded_panels,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: llimphi_motion::Tween::idle(1.0),
             ctx_open: None,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
@@ -657,7 +659,7 @@ impl App for Cosmos {
         // efímera de estado. El resultado del worker (AstroComputed) tampoco
         // la toca: es un evento de fondo, no una acción del usuario.
         match &msg {
-            Msg::OpenMenu(_) | Msg::WawaConfigChanged(_) | Msg::AstroComputed(..) => {}
+            Msg::OpenMenu(_) | Msg::MenuTick | Msg::WawaConfigChanged(_) | Msg::AstroComputed(..) => {}
             _ => m.status_note = None,
         }
         match msg {
@@ -756,17 +758,54 @@ impl App for Cosmos {
             // menú principal
             Msg::OpenMenu(k) => {
                 m.menu_open = if m.menu_open == Some(k) { None } else { Some(k) };
+                m.menu_active = usize::MAX;
                 m.ctx_open = None;
+                // Animación de aparición/swap: cada vez que se abre (o se
+                // cambia de) menú, el dropdown se funde+desliza de nuevo.
+                if m.menu_open.is_some() {
+                    m.menu_anim = llimphi_motion::Tween::new(
+                        0.0,
+                        1.0,
+                        llimphi_motion::motion::FAST,
+                        llimphi_motion::motion::ease_out_cubic,
+                    );
+                    llimphi_motion::animate(handle, llimphi_motion::motion::FAST, || Msg::MenuTick);
+                }
             }
             Msg::MenuPick(kind, idx) => {
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
                 let cmd = chrome::menu_entries(kind, &m).get(idx).map(|e| e.cmd);
                 if let Some(cmd) = cmd {
                     apply_cmd(&mut m, cmd);
                     persist = true;
                 }
             }
-            Msg::CloseMenu => m.menu_open = None,
+            Msg::MenuNav(dir) => {
+                if let Some(kind) = m.menu_open {
+                    let entries = chrome::menu_entries(kind, &m);
+                    let items: Vec<_> = entries.iter().map(chrome::MenuEntry::to_item).collect();
+                    m.menu_active =
+                        llimphi_widget_context_menu::step_active(&items, m.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(kind) = m.menu_open {
+                    let idx = m.menu_active;
+                    let cmd = chrome::menu_entries(kind, &m).get(idx).map(|e| e.cmd);
+                    m.menu_open = None;
+                    m.menu_active = usize::MAX;
+                    if let Some(cmd) = cmd {
+                        apply_cmd(&mut m, cmd);
+                        persist = true;
+                    }
+                }
+            }
+            Msg::MenuTick => {}
+            Msg::CloseMenu => {
+                m.menu_open = None;
+                m.menu_active = usize::MAX;
+            }
             // menú contextual
             Msg::OpenCanvasCtx(x, y) => {
                 m.ctx_open = Some((x, y));
@@ -918,6 +957,25 @@ impl App for Cosmos {
         }
         if ev.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra. El context-menu de la rueda queda mouse-only (sólo Esc).
+        if let Some(kind) = model.menu_open {
+            let order = MenuKind::order();
+            let n = order.len().max(1);
+            let cur = order.iter().position(|k| *k == kind).unwrap_or(0);
+            return match &ev.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenu),
+                Key::Named(NamedKey::ArrowLeft) => {
+                    Some(Msg::OpenMenu(order[(cur + n - 1) % n]))
+                }
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::OpenMenu(order[(cur + 1) % n])),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
         }
         match &ev.key {
             Key::Named(NamedKey::Escape) => {

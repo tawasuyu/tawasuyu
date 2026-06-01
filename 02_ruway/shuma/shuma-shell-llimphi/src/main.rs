@@ -41,6 +41,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, PathEl, Point, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{App, DragPhase, Handle, KeyEvent, KeyState, PaintRect, View};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_theme::Theme;
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
@@ -244,6 +245,10 @@ struct Model {
 
     /// Menú principal: índice del menú raíz abierto (`None` = cerrado).
     menu_open: Option<usize>,
+    /// Fila activa (resaltada por teclado) del dropdown del menú principal.
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    menu_anim: Tween<f32>,
     /// Menú contextual de terminal: ancla `(x, y)` en ventana (`None` =
     /// cerrado). Se abre con right-click sobre el área de trabajo.
     ctx_menu: Option<(f32, f32)>,
@@ -271,6 +276,12 @@ enum Msg {
 
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
     MenuOpen(Option<usize>),
+    /// Navegación de teclado en el dropdown del menú principal (±1 fila).
+    MenuNav(i32),
+    /// Enter sobre la fila activa del menú principal.
+    MenuActivate,
+    /// Tick de re-render para la animación de aparición del dropdown.
+    MenuTick,
     /// Comando elegido en el menú principal o contextual — se traduce al
     /// `Msg`/acción real del chasis o del módulo shell focado.
     MenuCommand(String),
@@ -357,6 +368,8 @@ impl App for Shell {
             extra_display: HashMap::new(),
             _wawa_watcher: wawa_watcher,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             ctx_menu: None,
         }
     }
@@ -437,15 +450,41 @@ impl App for Shell {
             }
             Msg::MenuOpen(idx) => {
                 m.menu_open = idx;
+                m.menu_active = usize::MAX;
                 // Abrir el menú principal cierra el contextual (y viceversa).
                 m.ctx_menu = None;
+                // Animación de aparición/swap: cada vez que se abre (o se
+                // cambia de) menú, el dropdown se funde+desliza de nuevo.
+                if idx.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = m.menu_open {
+                    let menu = menu::app_menu(&m);
+                    m.menu_active = llimphi_widget_menubar::menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = m.menu_open {
+                    let menu = menu::app_menu(&m);
+                    if let Some(cmd) =
+                        llimphi_widget_menubar::menubar_command_at(&menu, mi, m.menu_active)
+                    {
+                        m = menu::handle_command(m, &cmd);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::ContextMenuOpen(x, y) => {
                 m.ctx_menu = Some((x, y));
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
             }
             Msg::CloseMenus => {
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
                 m.ctx_menu = None;
             }
             Msg::MenuCommand(cmd) => {

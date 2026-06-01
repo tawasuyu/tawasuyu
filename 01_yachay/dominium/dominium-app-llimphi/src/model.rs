@@ -81,9 +81,17 @@ pub(crate) struct Model {
     pub(crate) onboarding_done: bool,
     /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
     pub(crate) menu_open: Option<usize>,
+    /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
+    pub(crate) menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    pub(crate) menu_anim: llimphi_motion::Tween<f32>,
     /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
     /// Opera sobre el editor del campo de texto focuseado (`id_input`).
     pub(crate) edit_menu: Option<(f32, f32)>,
+    /// Fila resaltada por teclado en el menú de edición (`usize::MAX` = ninguna).
+    pub(crate) edit_active: usize,
+    /// Animación de aparición del menú de edición (0→1).
+    pub(crate) edit_anim: llimphi_motion::Tween<f32>,
     /// Clipboard del sistema, compartido por el menú de edición y el
     /// text-input de renombre.
     pub(crate) clipboard: SystemClipboard,
@@ -256,6 +264,16 @@ pub(crate) enum Msg {
     MenuOpen(Option<usize>),
     /// Comando elegido en el menú principal — se traduce al `Msg` real.
     MenuCommand(String),
+    /// Navegación por teclado en el menú principal (`+1` baja, `-1` sube).
+    MenuNav(i32),
+    /// Enter en el menú principal: ejecuta la fila activa.
+    MenuActivate,
+    /// Tick de animación de menús (sólo re-render).
+    MenuTick,
+    /// Navegación por teclado en el menú de edición.
+    EditNav(i32),
+    /// Enter en el menú de edición: ejecuta la fila activa.
+    EditActivate,
     /// Right-click en la ventana → abre el menú de edición en `(x, y)`,
     /// operando sobre el campo de texto focuseado (`id_input`).
     EditMenuOpen(f32, f32),

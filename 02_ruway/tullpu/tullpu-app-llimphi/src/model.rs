@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use llimphi_clipboard::SystemClipboard;
 use llimphi_module_file_picker::{PickerMsg, PickerState};
+use llimphi_motion::Tween;
 use llimphi_ui::llimphi_raster::peniko::Image;
 use llimphi_ui::{KeyEvent, PaintRect};
 use llimphi_widget_edit_menu::EditAction;
@@ -150,6 +151,10 @@ pub(crate) struct Model {
     /// Barra de menú principal: índice del menú raíz abierto (`None`
     /// cerrado). Lo enciende el click sobre la barra (vía `menubar_view`).
     pub(crate) menu_open: Option<usize>,
+    /// Fila activa (teclado) del dropdown principal. `usize::MAX` = ninguna.
+    pub(crate) menu_active: usize,
+    /// Animación de aparición/swap del dropdown principal.
+    pub(crate) menu_anim: Tween<f32>,
     /// Menú contextual sobre el lienzo/capa: ancla `(x, y)` en ventana
     /// (`None` cerrado). Lo abre el right-click sobre el panel del lienzo.
     pub(crate) context_menu: Option<(f32, f32)>,
@@ -157,6 +162,10 @@ pub(crate) struct Model {
     /// cerrado). Sólo se usa mientras se renombra una capa (hay un
     /// `TextInputState` focuseado) — right-click sobre el input lo abre.
     pub(crate) edit_menu: Option<(f32, f32)>,
+    /// Fila activa (teclado) del menú de edición. `usize::MAX` = ninguna.
+    pub(crate) edit_active: usize,
+    /// Animación de aparición del menú de edición.
+    pub(crate) edit_anim: Tween<f32>,
     /// Portapapeles del sistema para el menú de edición de texto del
     /// renombrado de capas. Independiente del `portapapeles` de píxeles.
     pub(crate) clipboard: SystemClipboard,
@@ -626,6 +635,16 @@ pub(crate) enum Msg {
     RightPressAt { x: f32, y: f32 },
     /// Acción elegida en el menú de edición de texto.
     EditMenuAction(EditAction),
+    /// Navegación por teclado en el dropdown del menú principal.
+    MenuNav(i32),
+    /// Ejecuta la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Tick de animación de los dropdowns (sólo re-render).
+    MenuTick,
+    /// Navegación por teclado en el menú de edición de texto.
+    EditNav(i32),
+    /// Ejecuta la fila activa del menú de edición (Enter).
+    EditActivate,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

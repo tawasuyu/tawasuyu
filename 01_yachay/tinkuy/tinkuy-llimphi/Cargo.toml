@@ -14,6 +14,7 @@ llimphi-widget-tiled     = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
 llimphi-widget-menubar      = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-motion              = { workspace = true }
 app-bus                     = { workspace = true }
 tinkuy-core   = { path = "../tinkuy-core" }
 tinkuy-dsl    = { path = "../tinkuy-dsl" }

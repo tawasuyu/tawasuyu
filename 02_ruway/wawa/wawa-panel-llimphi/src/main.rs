@@ -31,7 +31,11 @@ use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
+use llimphi_motion::{animate, motion, Tween};
 use app_bus::{AppMenu, Menu, MenuItem};
 use std::sync::Arc;
 use wawa_config::{ConfigWatcher, WawaConfig};
@@ -329,6 +333,11 @@ struct Model {
     /// Barra de menú principal: índice del menú raíz abierto (`None`
     /// cerrado).
     menu_open: Option<usize>,
+    /// Fila resaltada por teclado dentro del dropdown del menú principal
+    /// (`usize::MAX` = ninguna). La mueven las flechas ↑/↓.
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    menu_anim: Tween<f32>,
     /// Menú contextual sobre la categoría activa: ancla `(x, y)` en
     /// ventana. `None` cerrado.
     context_menu: Option<(f32, f32)>,
@@ -353,6 +362,12 @@ enum Msg {
     MenuOpen(Option<usize>),
     /// Comando elegido en el menú principal — se traduce al `Msg` real.
     MenuCommand(String),
+    /// Navegación por teclado en el dropdown del menú principal (↑/↓).
+    MenuNav(i32),
+    /// Ejecuta el comando de la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Tick de la animación de aparición/swap del menú principal (re-render).
+    MenuTick,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
     /// Right-click en la raíz → abre el menú contextual anclado en
@@ -410,11 +425,13 @@ impl App for Panel {
             status: String::new(),
             _config_watcher: watcher,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             context_menu: None,
         }
     }
 
-    fn update(model: Model, msg: Msg, _handle: &Handle<Msg>) -> Model {
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let mut m = model;
         match msg {
             Msg::Tick => {
@@ -486,11 +503,33 @@ impl App for Panel {
             }
             Msg::MenuOpen(which) => {
                 m.menu_open = which;
+                m.menu_active = usize::MAX;
                 // Abrir un menú raíz cierra cualquier contextual.
                 m.context_menu = None;
+                if which.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    m.menu_active = menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, m.menu_active) {
+                        m.menu_open = None;
+                        return handle_menu_command(m, &cmd);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::CloseMenus => {
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
                 m.context_menu = None;
             }
             Msg::MenuCommand(cmd) => {
@@ -508,6 +547,20 @@ impl App for Panel {
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc cierra.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
         }
         // Esc cierra cualquier menú abierto antes que nada.
         if let Key::Named(NamedKey::Escape) = event.key {
@@ -617,7 +670,11 @@ impl App for Panel {
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 

@@ -7,8 +7,10 @@ use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{
-    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
 };
+use llimphi_motion::{animate, motion, Tween};
 
 use mirada_launcher_llimphi::config::{Config, FloatingCard};
 use mirada_launcher_llimphi::panel;
@@ -30,6 +32,10 @@ struct Model {
     bottom: Vec<Box<dyn Widget>>,
     /// Índice del menú raíz abierto en la barra de menú (`None` = ninguno).
     menu_open: Option<usize>,
+    /// Fila resaltada dentro del dropdown abierto (`usize::MAX` = ninguna).
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal.
+    menu_anim: Tween<f32>,
 }
 
 impl Model {
@@ -196,6 +202,8 @@ impl App for LauncherApp {
             floating,
             bottom,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
         }
     }
 
@@ -289,9 +297,35 @@ impl App for LauncherApp {
             }
             Msg::MenuOpen(idx) => {
                 model.menu_open = *idx;
+                model.menu_active = usize::MAX;
+                // Animación de aparición/swap del dropdown.
+                if idx.is_some() {
+                    model.menu_anim =
+                        Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, *dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        model.menu_open = None;
+                        if let Some(real) = handle_menu_command(&cmd) {
+                            return Self::update(model, real, handle);
+                        }
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
             }
             Msg::MenuCommand(cmd) => {
                 model.menu_open = None;
@@ -329,7 +363,11 @@ impl App for LauncherApp {
         // Prioridad: dropdown del menú principal > overlays de los widgets
         // (quake / shuma).
         let menu = app_menu(model);
-        if let Some(v) = menubar_overlay(&menubar_spec(model, &menu)) {
+        if let Some(v) = menubar_overlay_animated(
+            &menubar_spec(model, &menu),
+            model.menu_active,
+            model.menu_anim.value(),
+        ) {
             return Some(v);
         }
         panel::overlay_view(&model.theme, model.each_widget())
@@ -338,6 +376,21 @@ impl App for LauncherApp {
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // 0) Con el menú principal abierto las flechas navegan: ←/→ cambian
+        //    de menú raíz (con wrap), ↑/↓ mueven la fila activa, Enter
+        //    ejecuta y Esc cierra. Tiene prioridad sobre todo lo demás.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
         }
         // 1) hotkeys declarados por los widgets (quake_input.hotkey, etc.)
         for w in model.each_widget() {
@@ -355,7 +408,6 @@ impl App for LauncherApp {
         let quake_open = !shuma_open && model.quake_open();
 
         match &event.key {
-            Key::Named(NamedKey::Escape) if model.menu_open.is_some() => Some(Msg::CloseMenus),
             Key::Named(NamedKey::Escape) if shuma_open => Some(Msg::ShumaToggle),
             Key::Named(NamedKey::Escape) if quake_open => Some(Msg::QuakeToggle),
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),

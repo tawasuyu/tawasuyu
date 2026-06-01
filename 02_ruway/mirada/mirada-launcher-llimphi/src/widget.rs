@@ -39,6 +39,12 @@ pub enum Msg {
     /// Comando elegido en la barra de menú (id `menu.<verbo>` mapeado a
     /// una acción real de la app).
     MenuCommand(String),
+    /// Navegación por teclado dentro del dropdown abierto: +1 baja, -1 sube.
+    MenuNav(i32),
+    /// Enter sobre la fila resaltada del dropdown.
+    MenuActivate,
+    /// Tick de la animación del menú (sólo re-render).
+    MenuTick,
     /// Cerrar cualquier menú/dropdown abierto.
     CloseMenus,
     /// Cerrar la app.

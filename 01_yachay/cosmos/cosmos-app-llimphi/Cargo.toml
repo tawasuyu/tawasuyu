@@ -36,6 +36,7 @@ llimphi-widget-segmented = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-switch = { workspace = true }
 llimphi-widget-slider = { workspace = true }
+llimphi-motion = { workspace = true }
 notify = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

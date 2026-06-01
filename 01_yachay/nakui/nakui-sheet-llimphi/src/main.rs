@@ -33,10 +33,15 @@ use llimphi_ui::{
     App, Handle, Key, KeyEvent, KeyState, NamedKey, View, WheelDelta,
 };
 use llimphi_widget_context_menu::{
-    context_menu_view, step_active, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+    context_menu_view, context_menu_view_ex, step_active, ContextMenuExtras, ContextMenuItem,
+    ContextMenuPalette, ContextMenuSpec,
 };
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use nakui_sheet::{csv_io, CellFormat, CellRange, CellRef, ExportMode, SheetValue, Workbook};
@@ -173,6 +178,16 @@ enum Msg {
     EditMenuAction(EditAction),
     /// Cierra cualquier menú/overlay abierto (menú principal + edición).
     CloseMenus,
+    /// Navegación por teclado en el dropdown del menú principal.
+    MenuNav(i32),
+    /// Ejecuta la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Tick de animación de los dropdowns (sólo re-render).
+    MenuTick,
+    /// Navegación por teclado en el menú de edición de la barra de fórmula.
+    EditNav(i32),
+    /// Ejecuta la fila activa del menú de edición (Enter).
+    EditActivate,
 }
 
 #[derive(Clone, Copy)]
@@ -280,9 +295,17 @@ struct Model {
     /// Menú principal (barra superior): índice del menú raíz abierto.
     /// `None` = cerrado.
     menu_open: Option<usize>,
+    /// Fila activa (teclado) del dropdown principal. `usize::MAX` = ninguna.
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown principal.
+    menu_anim: Tween<f32>,
     /// Menú de edición contextual sobre la barra de fórmula: ancla
     /// `(x, y)` en coordenadas de ventana. `None` = cerrado.
     edit_menu: Option<(f32, f32)>,
+    /// Fila activa (teclado) del menú de edición. `usize::MAX` = ninguna.
+    edit_active: usize,
+    /// Animación de aparición del menú de edición.
+    edit_anim: Tween<f32>,
     /// Clipboard del sistema para las acciones del menú de edición de la
     /// barra de fórmula (cut/copy/paste de texto dentro del input). El
     /// copy/cut/paste de CELDAS sigue usando `arboard` aparte porque
@@ -349,7 +372,11 @@ impl App for NakuiSheetApp {
             menu: None,
             anchor: selected,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             edit_menu: None,
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
             clipboard: SystemClipboard::new(),
         }
     }
@@ -729,12 +756,37 @@ impl App for NakuiSheetApp {
             }
             Msg::MenuBarOpen(idx) => {
                 model.menu_open = idx;
+                model.menu_active = usize::MAX;
                 // Abrir el menú principal cierra cualquier otro overlay
                 // local (menú de edición, menú de celda).
                 model.edit_menu = None;
+                if idx.is_some() {
+                    model.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(h, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        model.menu_open = None;
+                        model.menu_active = usize::MAX;
+                        if let Some(inner) = menubar_command_msg(&model, &cmd) {
+                            h.dispatch(inner);
+                        }
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::MenuCommand(cmd) => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 if let Some(inner) = menubar_command_msg(&model, &cmd) {
                     h.dispatch(inner);
                 }
@@ -745,9 +797,23 @@ impl App for NakuiSheetApp {
                 model.menu_open = None;
                 model.menu = None;
                 model.edit_menu = Some((x, y));
+                model.edit_active = usize::MAX;
+                model.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(h, motion::FAST, || Msg::MenuTick);
+            }
+            Msg::EditNav(dir) => {
+                let flags = EditFlags::from_editor(model.bar.editor(), model.bar.is_masked());
+                model.edit_active = editmenu::edit_menu_step(flags, model.edit_active, dir);
+            }
+            Msg::EditActivate => {
+                let flags = EditFlags::from_editor(model.bar.editor(), model.bar.is_masked());
+                if let Some(action) = editmenu::edit_menu_action_at(flags, model.edit_active) {
+                    return NakuiSheetApp::update(model, Msg::EditMenuAction(action), h);
+                }
             }
             Msg::EditMenuAction(action) => {
                 model.edit_menu = None;
+                model.edit_active = usize::MAX;
                 let _ = editmenu::apply(model.bar.editor_mut(), action, &mut model.clipboard);
                 // Si el menú de edición tocó el texto de la barra estando
                 // en modo edición, lo dejamos vivo — el commit pasa con
@@ -755,7 +821,9 @@ impl App for NakuiSheetApp {
             }
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.edit_menu = None;
+                model.edit_active = usize::MAX;
             }
         }
         model
@@ -767,19 +835,31 @@ impl App for NakuiSheetApp {
         if let Some((x, y)) = model.edit_menu {
             let flags = EditFlags::from_editor(model.bar.editor(), model.bar.is_masked());
             let (w, h) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 &model.theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras {
+                    appear: model.edit_anim.value(),
+                    ..Default::default()
+                },
+            ));
         }
         // 2) Dropdown del menú principal (barra superior).
         if model.menu_open.is_some() {
             let menu = app_menu(model);
-            return menubar_overlay(&menubar_spec(&menu, model, &model.theme));
+            return menubar_overlay_animated(
+                &menubar_spec(&menu, model, &model.theme),
+                model.menu_active,
+                model.menu_anim.value(),
+            );
         }
         // 3) El pivot: modal de pantalla completa.
         if let Some(pivot) = model.pivot.as_ref() {
@@ -879,11 +959,31 @@ impl App for NakuiSheetApp {
         if ev.state != KeyState::Pressed {
             return None;
         }
-        // Menú principal o menú de edición abiertos: Esc cierra; cualquier
-        // otra tecla los cierra también (feel estándar de menús). No
-        // dejamos que la tecla caiga a navegación de grilla.
-        if model.menu_open.is_some() || model.edit_menu.is_some() {
-            return Some(Msg::CloseMenus);
+        // Menú principal abierto: ←/→ cambian de menú raíz (con wrap),
+        // ↑/↓ navegan la fila, Enter ejecuta, Esc cierra. Cualquier otra
+        // tecla cierra (feel estándar). No cae a navegación de grilla.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return Some(match &ev.key {
+                Key::Named(NamedKey::Escape) => Msg::CloseMenus,
+                Key::Named(NamedKey::ArrowLeft) => Msg::MenuBarOpen(Some((mi + n - 1) % n)),
+                Key::Named(NamedKey::ArrowRight) => Msg::MenuBarOpen(Some((mi + 1) % n)),
+                Key::Named(NamedKey::ArrowDown) => Msg::MenuNav(1),
+                Key::Named(NamedKey::ArrowUp) => Msg::MenuNav(-1),
+                Key::Named(NamedKey::Enter) => Msg::MenuActivate,
+                _ => Msg::CloseMenus,
+            });
+        }
+        // Menú de edición de la barra de fórmula abierto: ↑/↓ navegan,
+        // Enter ejecuta, Esc cierra.
+        if model.edit_menu.is_some() {
+            return Some(match &ev.key {
+                Key::Named(NamedKey::Escape) => Msg::CloseMenus,
+                Key::Named(NamedKey::ArrowDown) => Msg::EditNav(1),
+                Key::Named(NamedKey::ArrowUp) => Msg::EditNav(-1),
+                Key::Named(NamedKey::Enter) => Msg::EditActivate,
+                _ => Msg::CloseMenus,
+            });
         }
         // Si el pivot está abierto, las teclas controlan el modal:
         // Esc cierra, ←/→ rotan la función, A/G/V ciclan

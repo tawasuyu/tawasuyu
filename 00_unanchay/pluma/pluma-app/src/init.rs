@@ -100,7 +100,11 @@ pub(crate) fn init_modelo() -> Model {
         side_izq_w: 280.0,
         side_der_w: 340.0,
         menu_open: None,
+        menu_active: usize::MAX,
+        menu_anim: llimphi_motion::Tween::idle(1.0),
         edit_menu: None,
+        edit_active: usize::MAX,
+        edit_anim: llimphi_motion::Tween::idle(1.0),
     }
 }
 

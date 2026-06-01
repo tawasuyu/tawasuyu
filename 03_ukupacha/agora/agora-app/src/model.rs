@@ -17,6 +17,7 @@ use agora_core::{IdentityId, IdentityKind, Keypair, MultiSignature};
 use agora_graph::{TrustGraph, TrustPolicy};
 use agora_keystore::Keystore;
 use format::{ConcesionCapacidad, ManifiestoFirmado, Permisos};
+use llimphi_motion::Tween;
 use llimphi_ui::KeyEvent;
 use llimphi_widget_text_input::TextInputState;
 
@@ -176,6 +177,14 @@ pub(crate) struct Model {
     pub edit_menu: Option<(f32, f32)>,
     /// Portapapeles del sistema, compartido por copiar/cortar/pegar.
     pub clipboard: llimphi_clipboard::SystemClipboard,
+    /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
+    pub menu_active: usize,
+    /// Animación de aparición/swap del dropdown principal.
+    pub menu_anim: Tween<f32>,
+    /// Fila resaltada por teclado en el menú de edición (`usize::MAX` = ninguna).
+    pub edit_active: usize,
+    /// Animación de aparición del menú de edición.
+    pub edit_anim: Tween<f32>,
 }
 
 impl Model {
@@ -407,6 +416,16 @@ pub(crate) enum Msg {
     EditMenuOpen(f32, f32),
     /// Acción elegida en el menú de edición contextual.
     EditMenuAction(llimphi_widget_edit_menu::EditAction),
+    /// Navegación ↑/↓ por la fila activa del menú principal.
+    MenuNav(i32),
+    /// Enter sobre la fila activa del menú principal.
+    MenuActivate,
+    /// Tick de animación de aparición/swap (re-render).
+    MenuTick,
+    /// Navegación ↑/↓ por la fila activa del menú de edición.
+    EditNav(i32),
+    /// Enter sobre la fila activa del menú de edición.
+    EditActivate,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
 }

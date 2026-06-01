@@ -39,9 +39,13 @@ use llimphi_widget_text_editor::{
     text_editor_view_highlighted, EditorMetrics, EditorPalette, EditorState, Language,
     PointerEvent,
 };
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 use std::sync::Arc;
 use pluma_notebook_core::{
@@ -86,6 +90,16 @@ enum Msg {
     MenuOpen(Option<usize>),
     /// Comando del menú principal — se traduce al `Msg` real.
     MenuCommand(String),
+    /// Navegación por teclado en el menú principal (`+1` baja, `-1` sube).
+    MenuNav(i32),
+    /// Enter en el menú principal: ejecuta la fila activa.
+    MenuActivate,
+    /// Tick de animación de menús (sólo re-render).
+    MenuTick,
+    /// Navegación por teclado en el menú de edición.
+    EditNav(i32),
+    /// Enter en el menú de edición: ejecuta la fila activa.
+    EditActivate,
     /// Right-click → menú de edición en `(x,y)` de ventana sobre la celda
     /// en edición (si la hay).
     EditMenuOpen(f32, f32),
@@ -134,8 +148,16 @@ struct Model {
     load_error: Option<String>,
     /// Menú principal: índice del menú raíz abierto (`None` cerrado).
     menu_open: Option<usize>,
+    /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    menu_anim: Tween<f32>,
     /// Menú de edición contextual: ancla `(x,y)` en ventana (`None` cerrado).
     edit_menu: Option<(f32, f32)>,
+    /// Fila resaltada por teclado en el menú de edición (`usize::MAX` = ninguna).
+    edit_active: usize,
+    /// Animación de aparición del menú de edición (0→1).
+    edit_anim: Tween<f32>,
     /// Portapapeles del sistema para cortar/copiar/pegar en las celdas.
     clipboard: SystemClipboard,
 }
@@ -178,7 +200,11 @@ impl App for Viewer {
             source,
             load_error,
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             edit_menu: None,
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
             clipboard: SystemClipboard::new(),
         }
     }
@@ -248,9 +274,67 @@ impl App for Viewer {
                 }
                 model
             }
-            Msg::MenuOpen(idx) => Model { menu_open: idx, edit_menu: None, ..model },
+            Msg::MenuOpen(idx) => {
+                let mut model = Model {
+                    menu_open: idx,
+                    menu_active: usize::MAX,
+                    edit_menu: None,
+                    ..model
+                };
+                if idx.is_some() {
+                    model.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
+                model
+            }
             Msg::MenuCommand(cmd) => handle_menu_command(model, cmd),
-            Msg::EditMenuOpen(x, y) => Model { edit_menu: Some((x, y)), menu_open: None, ..model },
+            Msg::MenuNav(dir) => {
+                let mut model = model;
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+                model
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        return handle_menu_command(model, cmd);
+                    }
+                }
+                model
+            }
+            Msg::MenuTick => model,
+            Msg::EditNav(dir) => {
+                let mut model = model;
+                let flags = notebook_edit_flags(&model);
+                model.edit_active = editmenu::edit_menu_step(flags, model.edit_active, dir);
+                model
+            }
+            Msg::EditActivate => {
+                let mut model = model;
+                let flags = notebook_edit_flags(&model);
+                if let Some(action) = editmenu::edit_menu_action_at(flags, model.edit_active) {
+                    model.edit_menu = None;
+                    let Model { editing, clipboard, .. } = &mut model;
+                    if let Some(edit) = editing.as_mut() {
+                        let _ = editmenu::apply(&mut edit.editor, action, clipboard);
+                    }
+                }
+                model
+            }
+            Msg::EditMenuOpen(x, y) => {
+                let mut model = Model {
+                    edit_menu: Some((x, y)),
+                    edit_active: usize::MAX,
+                    menu_open: None,
+                    ..model
+                };
+                model.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(handle, motion::FAST, || Msg::MenuTick);
+                model
+            }
             Msg::EditMenuAction(action) => {
                 let mut model = model;
                 model.edit_menu = None;
@@ -260,7 +344,13 @@ impl App for Viewer {
                 }
                 model
             }
-            Msg::CloseMenus => Model { menu_open: None, edit_menu: None, ..model },
+            Msg::CloseMenus => Model {
+                menu_open: None,
+                menu_active: usize::MAX,
+                edit_menu: None,
+                edit_active: usize::MAX,
+                ..model
+            },
             Msg::EditorPointer(ev) => {
                 let mut model = model;
                 if let Some(edit) = model.editing.as_mut() {
@@ -298,6 +388,28 @@ impl App for Viewer {
     fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Menús abiertos: las flechas navegan y tienen prioridad sobre todo.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
+        }
+        if model.edit_menu.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::EditNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::EditNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::EditActivate),
+                _ => None,
+            };
         }
         // Sin edición activa: atajos del canvas.
         if model.editing.is_none() {
@@ -382,22 +494,31 @@ impl App for Viewer {
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
         let theme = Theme::dark();
         if let Some((x, y)) = model.edit_menu {
-            let flags = match model.editing.as_ref() {
-                Some(e) => EditFlags::from_editor(&e.editor, false),
-                None => EditFlags::default(),
-            };
+            let flags = notebook_edit_flags(model);
             let (w, h) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 &theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras {
+                    appear: model.edit_anim.value(),
+                    ..Default::default()
+                },
+            ));
         }
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 
@@ -417,6 +538,15 @@ fn menubar_spec<'a>(menu: &'a app_bus::AppMenu, model: &Model, theme: &'a Theme)
 
 /// Menú principal del notebook. Editar refleja en gris el estado real de
 /// la celda en edición (si no hay celda en edición, todo gris).
+/// `EditFlags` de la celda en edición, para nav/ejecución por teclado del
+/// menú de edición. Sin celda en edición, flags vacíos (todo gris).
+fn notebook_edit_flags(model: &Model) -> EditFlags {
+    match model.editing.as_ref() {
+        Some(e) => EditFlags::from_editor(&e.editor, false),
+        None => EditFlags::default(),
+    }
+}
+
 fn app_menu(model: &Model) -> app_bus::AppMenu {
     use app_bus::{AppMenu, Menu, MenuItem};
     let ed = model.editing.as_ref().map(|e| &e.editor);

@@ -31,9 +31,13 @@ use llimphi_raster::peniko::{
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 use llimphi_theme::Theme;
 
@@ -324,6 +328,14 @@ pub struct Model {
     /// Clipboard del sistema — lo consumen las acciones Cut/Copy/Paste
     /// del menú de edición sobre el `EditorState` del campo focuseado.
     pub clipboard: SystemClipboard,
+    /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
+    pub menu_active: usize,
+    /// Animación de aparición/swap del dropdown principal.
+    pub menu_anim: Tween<f32>,
+    /// Fila resaltada por teclado en el menú de edición (`usize::MAX` = ninguna).
+    pub edit_active: usize,
+    /// Animación de aparición del menú de edición.
+    pub edit_anim: Tween<f32>,
 }
 
 /// Periodo del poll del reactor JS — disparo de `Msg::JsTick`. ~30 fps
@@ -618,6 +630,16 @@ pub enum Msg {
     /// Acción del menú de edición a aplicar sobre el `EditorState` del
     /// campo de texto focuseado.
     EditMenuAction(EditAction),
+    /// Navegación ↑/↓ por la fila activa del menú principal.
+    MenuNav(i32),
+    /// Enter sobre la fila activa del menú principal.
+    MenuActivate,
+    /// Tick de animación de aparición/swap (re-render).
+    MenuTick,
+    /// Navegación ↑/↓ por la fila activa del menú de edición.
+    EditNav(i32),
+    /// Enter sobre la fila activa del menú de edición.
+    EditActivate,
 }
 
 impl App for Puriy {
@@ -666,12 +688,45 @@ impl App for Puriy {
             menu_open: None,
             edit_menu: None,
             clipboard: SystemClipboard::new(),
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
         }
     }
 
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra. Tiene prioridad sobre todo lo demás.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            match &e.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => {
+                    return Some(Msg::MenuOpen(Some((mi + n - 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    return Some(Msg::MenuOpen(Some((mi + 1) % n)));
+                }
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::MenuActivate),
+                _ => return None,
+            }
+        }
+        // Menú de edición abierto: ↑/↓ navegan, Enter ejecuta, Esc cierra.
+        if model.edit_menu.is_some() {
+            match &e.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::EditNav(1)),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::EditNav(-1)),
+                Key::Named(NamedKey::Enter) => return Some(Msg::EditActivate),
+                _ => return None,
+            }
         }
         let mods = e.modifiers;
         // Atajos con Ctrl — toman precedencia incluso sobre el address bar.
@@ -1578,17 +1633,58 @@ impl App for Puriy {
             Msg::MenuOpen(idx) => {
                 m.menu_open = idx;
                 m.edit_menu = None;
+                m.menu_active = usize::MAX;
+                if idx.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
             Msg::MenuCommand(cmd) => {
                 return handle_menu_command(m, cmd, handle);
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    m.menu_active = menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, m.menu_active) {
+                        return handle_menu_command(m, cmd, handle);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
+            Msg::EditNav(dir) => {
+                let flags = match m.focused_text_input() {
+                    Some((input, masked)) => EditFlags::from_editor(input.editor(), masked),
+                    None => EditFlags::default(),
+                };
+                m.edit_active = editmenu::edit_menu_step(flags, m.edit_active, dir);
+            }
+            Msg::EditActivate => {
+                let flags = match m.focused_text_input() {
+                    Some((input, masked)) => EditFlags::from_editor(input.editor(), masked),
+                    None => EditFlags::default(),
+                };
+                if let Some(a) = editmenu::edit_menu_action_at(flags, m.edit_active) {
+                    apply_edit_menu_action(&mut m, a);
+                }
+            }
             Msg::CloseMenus => {
                 m.menu_open = None;
                 m.edit_menu = None;
+                m.menu_active = usize::MAX;
+                m.edit_active = usize::MAX;
             }
             Msg::EditMenuOpen(x, y) => {
                 m.edit_menu = Some((x, y));
                 m.menu_open = None;
+                m.edit_active = usize::MAX;
+                m.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(handle, motion::FAST, || Msg::MenuTick);
             }
             Msg::EditMenuAction(action) => {
                 apply_edit_menu_action(&mut m, action);
@@ -1606,17 +1702,26 @@ impl App for Puriy {
                 None => EditFlags::default(),
             };
             let (w, h) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 menu_theme(),
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras { appear: model.edit_anim.value(), ..Default::default() },
+            ));
         }
         let menu = app_menu(model);
-        if let Some(ov) = menubar_overlay(&menubar_spec(&menu, model)) {
+        if let Some(ov) = menubar_overlay_animated(
+            &menubar_spec(&menu, model),
+            model.menu_active,
+            model.menu_anim.value(),
+        ) {
             return Some(ov);
         }
 
@@ -5908,6 +6013,10 @@ mod tests {
             menu_open: None,
             edit_menu: None,
             clipboard: SystemClipboard::new(),
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
         }
     }
 
@@ -6194,6 +6303,10 @@ mod tests {
             menu_open: None,
             edit_menu: None,
             clipboard: SystemClipboard::new(),
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
         }
     }
 
@@ -6228,6 +6341,10 @@ mod tests {
             menu_open: None,
             edit_menu: None,
             clipboard: SystemClipboard::new(),
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
         };
         tick_js_runtimes(&mut m, 1234);
         assert!(m.tabs[0].js.is_none());

@@ -116,9 +116,13 @@ use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_field::{field_view, FieldPalette, FieldSpec as FieldWidgetSpec};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 use llimphi_widget_nodegraph::{
     nodegraph_view_styled, NodeId, NodeSpec, NodeTint, NodegraphMetrics, NodegraphPalette, Wire,
@@ -278,6 +282,16 @@ enum Msg {
     EditMenuAction(EditAction),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Navegación por teclado en el dropdown del menú principal.
+    MenuNav(i32),
+    /// Ejecuta la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Tick de animación de los dropdowns (sólo re-render).
+    MenuTick,
+    /// Navegación por teclado en el menú de edición contextual.
+    EditNav(i32),
+    /// Ejecuta la fila activa del menú de edición (Enter).
+    EditActivate,
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -370,8 +384,16 @@ struct Model {
     graph_pan: (f32, f32),
     /// Menú principal: índice del menú raíz abierto (`None` cerrado).
     menu_open: Option<usize>,
+    /// Fila activa (teclado) del dropdown principal. `usize::MAX` = ninguna.
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown principal.
+    menu_anim: Tween<f32>,
     /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
     edit_menu: Option<(f32, f32)>,
+    /// Fila activa (teclado) del menú de edición. `usize::MAX` = ninguna.
+    edit_active: usize,
+    /// Animación de aparición del menú de edición.
+    edit_anim: Tween<f32>,
     /// Clipboard del sistema para el menú de edición (cut/copy/paste).
     clipboard: SystemClipboard,
 }
@@ -559,7 +581,11 @@ impl App for NakuiApp {
             graph_zoom: 1.0,
             graph_pan: (0.0, 0.0),
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             edit_menu: None,
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
             clipboard: SystemClipboard::new(),
         }
     }
@@ -875,10 +901,35 @@ impl App for NakuiApp {
             }
             Msg::MenuOpen(idx) => {
                 m.menu_open = idx;
+                m.menu_active = usize::MAX;
                 m.edit_menu = None;
+                if idx.is_some() {
+                    m.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    m.menu_active = menubar_nav(&menu, mi, m.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = m.menu_open {
+                    let menu = app_menu(&m);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, m.menu_active) {
+                        m.menu_open = None;
+                        m.menu_active = usize::MAX;
+                        if let Some(msg) = menu_command_to_msg(&m, &cmd) {
+                            return NakuiApp::update(m, msg, handle);
+                        }
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::MenuCommand(cmd) => {
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
                 if let Some(msg) = menu_command_to_msg(&m, &cmd) {
                     return NakuiApp::update(m, msg, handle);
                 }
@@ -888,10 +939,24 @@ impl App for NakuiApp {
                 if m.focused_input().is_some() {
                     m.menu_open = None;
                     m.edit_menu = Some((x, y));
+                    m.edit_active = usize::MAX;
+                    m.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
+            }
+            Msg::EditNav(dir) => {
+                let flags = edit_flags(&m);
+                m.edit_active = editmenu::edit_menu_step(flags, m.edit_active, dir);
+            }
+            Msg::EditActivate => {
+                let flags = edit_flags(&m);
+                if let Some(action) = editmenu::edit_menu_action_at(flags, m.edit_active) {
+                    return NakuiApp::update(m, Msg::EditMenuAction(action), handle);
                 }
             }
             Msg::EditMenuAction(action) => {
                 m.edit_menu = None;
+                m.edit_active = usize::MAX;
                 let mut clip = std::mem::replace(&mut m.clipboard, SystemClipboard::new());
                 if let Some(input) = m.focused_input_mut() {
                     let _ = editmenu::apply(input.editor_mut(), action, &mut clip);
@@ -900,19 +965,51 @@ impl App for NakuiApp {
             }
             Msg::CloseMenus => {
                 m.menu_open = None;
+                m.menu_active = usize::MAX;
                 m.edit_menu = None;
+                m.edit_active = usize::MAX;
             }
         }
         m
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
-        // Un menú abierto captura el teclado: Esc (o cualquier tecla) lo
-        // cierra, sin caer al form/lista debajo.
-        if (model.menu_open.is_some() || model.edit_menu.is_some())
-            && event.state == KeyState::Pressed
-        {
-            return Some(Msg::CloseMenus);
+        if event.state != KeyState::Pressed {
+            // Aun así, un menú abierto sigue tragando teclas (no caer abajo).
+            if model.menu_open.is_some() || model.edit_menu.is_some() {
+                return None;
+            }
+            // Continúa al manejo normal del form/lista para key-release.
+        }
+        // Menú principal abierto: ←/→ cambian de menú raíz, ↑/↓ navegan la
+        // fila, Enter ejecuta, Esc cierra. Consume la tecla.
+        if let Some(mi) = model.menu_open {
+            if event.state == KeyState::Pressed {
+                let n = app_menu(model).menus.len().max(1);
+                return Some(match &event.key {
+                    Key::Named(NamedKey::Escape) => Msg::CloseMenus,
+                    Key::Named(NamedKey::ArrowLeft) => Msg::MenuOpen(Some((mi + n - 1) % n)),
+                    Key::Named(NamedKey::ArrowRight) => Msg::MenuOpen(Some((mi + 1) % n)),
+                    Key::Named(NamedKey::ArrowDown) => Msg::MenuNav(1),
+                    Key::Named(NamedKey::ArrowUp) => Msg::MenuNav(-1),
+                    Key::Named(NamedKey::Enter) => Msg::MenuActivate,
+                    _ => Msg::CloseMenus,
+                });
+            }
+            return None;
+        }
+        // Menú de edición abierto: ↑/↓ navegan, Enter ejecuta, Esc cierra.
+        if model.edit_menu.is_some() {
+            if event.state == KeyState::Pressed {
+                return Some(match &event.key {
+                    Key::Named(NamedKey::Escape) => Msg::CloseMenus,
+                    Key::Named(NamedKey::ArrowDown) => Msg::EditNav(1),
+                    Key::Named(NamedKey::ArrowUp) => Msg::EditNav(-1),
+                    Key::Named(NamedKey::Enter) => Msg::EditActivate,
+                    _ => Msg::CloseMenus,
+                });
+            }
+            return None;
         }
         // El form gana el teclado cuando tiene un field de texto activo.
         if let Some(form) = &model.form {
@@ -991,22 +1088,40 @@ impl App for NakuiApp {
         let theme = Theme::dark();
         // 1) Menú de edición sobre el campo con foco: máxima prioridad.
         if let Some((x, y)) = model.edit_menu {
-            let flags = match model.focused_input() {
-                Some(input) => EditFlags::from_editor(input.editor(), input.is_masked()),
-                None => EditFlags::default(),
-            };
+            let flags = edit_flags(model);
             let (w, h) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 &theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras {
+                    appear: model.edit_anim.value(),
+                    ..Default::default()
+                },
+            ));
         }
         // 2) Dropdown del menú principal (barra superior).
-        menubar_overlay(&menubar_spec(&app_menu(model), model, &theme))
+        menubar_overlay_animated(
+            &menubar_spec(&app_menu(model), model, &theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
+    }
+}
+
+/// Banderas del menú de edición derivadas del campo con foco. Sin foco,
+/// banderas por defecto (todo deshabilitado salvo Pegar).
+fn edit_flags(model: &Model) -> EditFlags {
+    match model.focused_input() {
+        Some(input) => EditFlags::from_editor(input.editor(), input.is_masked()),
+        None => EditFlags::default(),
     }
 }
 

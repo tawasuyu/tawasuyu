@@ -96,12 +96,15 @@ use llimphi_ui::{
     App, Handle, Key, KeyEvent, Modifiers, NamedKey, View, WheelDelta,
 };
 use llimphi_widget_context_menu::{
-    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+    context_menu_view, context_menu_view_ex, ContextMenuExtras, ContextMenuItem,
+    ContextMenuPalette, ContextMenuSpec,
 };
 use llimphi_widget_edit_menu::{self as editmenu, EditFlags};
 use llimphi_widget_menubar::{
-    menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
 };
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_text_input::TextInputState;
 
 use tullpu_core::{Capa, TransformacionPixel};
@@ -920,14 +923,41 @@ impl App for Tullpu {
             }
             Msg::MenuOpen(idx) => {
                 model.menu_open = idx;
+                model.menu_active = usize::MAX;
+                if idx.is_some() {
+                    model.menu_anim =
+                        Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        model.menu_open = None;
+                        model.menu_active = usize::MAX;
+                        model.context_menu = None;
+                        model = handle_menu_command(model, &cmd, handle);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.context_menu = None;
                 model.edit_menu = None;
+                model.edit_active = usize::MAX;
             }
             Msg::MenuCommand(cmd) => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.context_menu = None;
                 model = handle_menu_command(model, &cmd, handle);
             }
@@ -940,13 +970,33 @@ impl App for Tullpu {
                 if model.renombrando.is_some() {
                     model.context_menu = None;
                     model.edit_menu = Some((x, y));
+                    model.edit_active = usize::MAX;
+                    model.edit_anim =
+                        Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
                 } else {
                     model.edit_menu = None;
                     model.context_menu = Some((x, y));
                 }
             }
+            Msg::EditNav(dir) => {
+                if let Some((_, input)) = model.renombrando.as_ref() {
+                    let flags = EditFlags::from_editor(input.editor(), input.is_masked());
+                    model.edit_active = editmenu::edit_menu_step(flags, model.edit_active, dir);
+                }
+            }
+            Msg::EditActivate => {
+                let action = model.renombrando.as_ref().and_then(|(_, input)| {
+                    let flags = EditFlags::from_editor(input.editor(), input.is_masked());
+                    editmenu::edit_menu_action_at(flags, model.edit_active)
+                });
+                if let Some(action) = action {
+                    return Tullpu::update(model, Msg::EditMenuAction(action), handle);
+                }
+            }
             Msg::EditMenuAction(action) => {
                 model.edit_menu = None;
+                model.edit_active = usize::MAX;
                 if let Some((_, input)) = model.renombrando.as_mut() {
                     let _ = editmenu::apply(
                         input.editor_mut(),
@@ -1042,6 +1092,38 @@ impl App for Tullpu {
             }
             return None;
         }
+        // Menú principal abierto: ←/→ cambian de menú raíz (con wrap),
+        // ↑/↓ navegan la fila, Enter ejecuta, Esc cierra. Consume la tecla.
+        if let Some(mi) = model.menu_open {
+            if event.state == KeyState::Pressed {
+                let n = app_menu(model).menus.len().max(1);
+                return Some(match &event.key {
+                    Key::Named(NamedKey::Escape) => Msg::CloseMenus,
+                    Key::Named(NamedKey::ArrowLeft) => Msg::MenuOpen(Some((mi + n - 1) % n)),
+                    Key::Named(NamedKey::ArrowRight) => Msg::MenuOpen(Some((mi + 1) % n)),
+                    Key::Named(NamedKey::ArrowDown) => Msg::MenuNav(1),
+                    Key::Named(NamedKey::ArrowUp) => Msg::MenuNav(-1),
+                    Key::Named(NamedKey::Enter) => Msg::MenuActivate,
+                    _ => return None,
+                });
+            }
+            return None;
+        }
+        // Menú de edición de texto abierto (sólo durante renombrado):
+        // ↑/↓ navegan, Enter ejecuta, Esc cierra. Tiene prioridad sobre el
+        // ruteo de teclas al text-input del renombrado.
+        if model.edit_menu.is_some() {
+            if event.state == KeyState::Pressed {
+                return Some(match &event.key {
+                    Key::Named(NamedKey::Escape) => Msg::CloseMenus,
+                    Key::Named(NamedKey::ArrowDown) => Msg::EditNav(1),
+                    Key::Named(NamedKey::ArrowUp) => Msg::EditNav(-1),
+                    Key::Named(NamedKey::Enter) => Msg::EditActivate,
+                    _ => return None,
+                });
+            }
+            return None;
+        }
         // Renombrando una capa: las teclas van al text-input, salvo Enter
         // (confirma) y Escape (cancela). Mismo patrón que el picker: el
         // modo modal absorbe los atajos globales.
@@ -1075,14 +1157,22 @@ impl App for Tullpu {
         if let Some((x, y)) = model.edit_menu {
             if let Some((_, input)) = model.renombrando.as_ref() {
                 let flags = EditFlags::from_editor(input.editor(), input.is_masked());
-                return Some(context_menu_view(editmenu::edit_context_menu(
+                let mut spec = editmenu::edit_context_menu(
                     (x, y),
                     viewport_of(),
                     &theme,
                     flags,
                     Msg::EditMenuAction,
                     Msg::CloseMenus,
-                )));
+                );
+                spec.active = model.edit_active;
+                return Some(context_menu_view_ex(
+                    spec,
+                    ContextMenuExtras {
+                        appear: model.edit_anim.value(),
+                        ..Default::default()
+                    },
+                ));
             }
         }
         // Prioridad 2: menú contextual de capa/selección.
@@ -1092,7 +1182,11 @@ impl App for Tullpu {
         // Prioridad 3: dropdown del menú principal.
         if model.menu_open.is_some() {
             let menu = app_menu(model);
-            if let Some(v) = menubar_overlay(&menubar_spec(&menu, model, &theme)) {
+            if let Some(v) = menubar_overlay_animated(
+                &menubar_spec(&menu, model, &theme),
+                model.menu_active,
+                model.menu_anim.value(),
+            ) {
                 return Some(v);
             }
         }

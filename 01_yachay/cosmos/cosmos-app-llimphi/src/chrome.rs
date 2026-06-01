@@ -24,7 +24,8 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, View};
 use llimphi_widget_context_menu::{
-    context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+    context_menu_view, context_menu_view_ex, ContextMenuExtras, ContextMenuItem,
+    ContextMenuPalette, ContextMenuSpec,
 };
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
@@ -122,7 +123,7 @@ impl MenuEntry {
         self.shortcut = Some(s);
         self
     }
-    fn to_item(&self) -> ContextMenuItem {
+    pub(crate) fn to_item(&self) -> ContextMenuItem {
         if self.separator {
             return ContextMenuItem::separator();
         }
@@ -1258,16 +1259,22 @@ pub(crate) fn overlay_view(model: &Model, theme: &Theme) -> Option<View<Msg>> {
     if let Some(kind) = model.menu_open {
         let entries = menu_entries(kind, model);
         let items: Vec<ContextMenuItem> = entries.iter().map(MenuEntry::to_item).collect();
-        return Some(context_menu_view(ContextMenuSpec {
-            anchor: (kind.anchor_x(), MENU_BAR_H),
-            viewport: VIEWPORT,
-            header: Some(kind.label().to_uppercase()),
-            items,
-            active: usize::MAX,
-            on_pick: Arc::new(move |i| Msg::MenuPick(kind, i)),
-            on_dismiss: Msg::CloseMenu,
-            palette: pal,
-        }));
+        return Some(context_menu_view_ex(
+            ContextMenuSpec {
+                anchor: (kind.anchor_x(), MENU_BAR_H),
+                viewport: VIEWPORT,
+                header: Some(kind.label().to_uppercase()),
+                items,
+                active: model.menu_active,
+                on_pick: Arc::new(move |i| Msg::MenuPick(kind, i)),
+                on_dismiss: Msg::CloseMenu,
+                palette: pal,
+            },
+            ContextMenuExtras {
+                appear: model.menu_anim.value(),
+                ..Default::default()
+            },
+        ));
     }
     if let Some(anchor) = model.ctx_open {
         let entries = ctx_entries(model);

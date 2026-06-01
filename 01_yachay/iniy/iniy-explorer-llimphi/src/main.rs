@@ -29,7 +29,12 @@ use llimphi_widget_card::{card_view, CardOptions, CardPalette};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
+use llimphi_motion::{animate, motion, Tween};
+use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey};
 
 use app_bus::{AppMenu, Menu, MenuItem};
 use std::sync::Arc;
@@ -54,6 +59,13 @@ enum Msg {
     MenuCommand(String),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Navegación por teclado dentro del dropdown del menú principal
+    /// (`+1` baja, `-1` sube).
+    MenuNav(i32),
+    /// Ejecuta la fila activa del menú principal (Enter).
+    MenuActivate,
+    /// Tick de animación del dropdown (sólo re-render).
+    MenuTick,
     /// Cicla el tema claro/oscuro.
     CambiarTema,
     /// Recarga el corpus desde la DB (re-lee SQLite y re-calcula layout).
@@ -81,6 +93,11 @@ struct Model {
     theme: Theme,
     /// Barra de menú principal: índice del menú raíz abierto (`None` cerrado).
     menu_open: Option<usize>,
+    /// Fila activa (resaltada por teclado) dentro del dropdown abierto.
+    /// `usize::MAX` = ninguna.
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal.
+    menu_anim: Tween<f32>,
     /// Menú contextual sobre la aserción seleccionada: `(x, y)` ancla en
     /// ventana. `None` cerrado.
     menu_contextual: Option<(f32, f32)>,
@@ -131,6 +148,8 @@ impl App for Explorer {
                     seleccionada: None,
                     theme,
                     menu_open: None,
+                    menu_active: usize::MAX,
+                    menu_anim: Tween::idle(1.0),
                     menu_contextual: None,
                 }
             }
@@ -146,6 +165,8 @@ impl App for Explorer {
                 seleccionada: None,
                 theme,
                 menu_open: None,
+                menu_active: usize::MAX,
+                menu_anim: Tween::idle(1.0),
                 menu_contextual: None,
             },
         }
@@ -160,15 +181,41 @@ impl App for Explorer {
             }
             Msg::MenuOpen(which) => {
                 model.menu_open = which;
+                model.menu_active = usize::MAX;
                 // Abrir un menú raíz cierra cualquier contextual.
                 model.menu_contextual = None;
+                // Animación de aparición/swap: cada vez que se abre (o se
+                // cambia de) menú, el dropdown se funde+desliza de nuevo.
+                if which.is_some() {
+                    model.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        model.menu_open = None;
+                        model.menu_active = usize::MAX;
+                        return handle_menu_command(model, &cmd, handle);
+                    }
+                }
+            }
+            Msg::MenuTick => {}
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.menu_contextual = None;
             }
             Msg::MenuCommand(cmd) => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 return handle_menu_command(model, &cmd, handle);
             }
             Msg::CambiarTema => {
@@ -302,7 +349,33 @@ impl App for Explorer {
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model, &model.theme))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model, &model.theme),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
+    }
+
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
+        // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
+        // cierra. Consume la tecla.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return Some(match &event.key {
+                Key::Named(NamedKey::Escape) => Msg::CloseMenus,
+                Key::Named(NamedKey::ArrowLeft) => Msg::MenuOpen(Some((mi + n - 1) % n)),
+                Key::Named(NamedKey::ArrowRight) => Msg::MenuOpen(Some((mi + 1) % n)),
+                Key::Named(NamedKey::ArrowDown) => Msg::MenuNav(1),
+                Key::Named(NamedKey::ArrowUp) => Msg::MenuNav(-1),
+                Key::Named(NamedKey::Enter) => Msg::MenuActivate,
+                _ => return None,
+            });
+        }
+        None
     }
 }
 

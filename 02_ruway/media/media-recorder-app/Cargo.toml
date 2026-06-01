@@ -13,6 +13,7 @@ llimphi-ui = { path = "../../llimphi/llimphi-ui" }
 # texto, así que no usa edit-menu / clipboard).
 llimphi-widget-menubar = { path = "../../llimphi/widgets/menubar" }
 llimphi-widget-context-menu = { path = "../../llimphi/widgets/context-menu" }
+llimphi-motion = { path = "../../llimphi/llimphi-motion" }
 llimphi-theme = { path = "../../llimphi/llimphi-theme" }
 app-bus = { path = "../../../shared/app-bus" }
 media-core = { path = "../media-core" }

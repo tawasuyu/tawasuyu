@@ -230,8 +230,12 @@ pub(crate) fn inicializar() -> Model {
         thumbs_mascara: HashMap::new(),
         curva_arrastrando: None,
         menu_open: None,
+        menu_active: usize::MAX,
+        menu_anim: llimphi_motion::Tween::idle(1.0),
         context_menu: None,
         edit_menu: None,
+        edit_active: usize::MAX,
+        edit_anim: llimphi_motion::Tween::idle(1.0),
         clipboard: SystemClipboard::new(),
     };
     sincronizar_thumbs(&mut model);

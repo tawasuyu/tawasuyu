@@ -35,9 +35,13 @@ use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View
 
 use llimphi_theme::Theme;
 use llimphi_widget_text_input::TextInputState;
-use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_menubar::{
+    menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
+    DEFAULT_HEIGHT as MENU_H,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_context_menu::context_menu_view;
+use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 
 /// Cuántos mensajes pinta la ventana visible del hilo (con scroll por rueda).
@@ -63,6 +67,16 @@ enum Msg {
     MenuOpen(Option<usize>),
     /// Comando elegido en el menú principal — se traduce al `Msg` real.
     MenuCommand(String),
+    /// Navegación por teclado en el menú principal (`+1` baja, `-1` sube).
+    MenuNav(i32),
+    /// Enter en el menú principal: ejecuta la fila activa.
+    MenuActivate,
+    /// Tick de animación de menús (sólo re-render).
+    MenuTick,
+    /// Navegación por teclado en el menú de edición.
+    EditNav(i32),
+    /// Enter en el menú de edición: ejecuta la fila activa.
+    EditActivate,
     /// Right-click en el área de trabajo → abre el menú de edición en
     /// `(x, y)` de ventana, operando sobre el input de mensaje.
     EditMenuOpen(f32, f32),
@@ -89,8 +103,16 @@ struct Modelo {
     theme: Theme,
     /// Menú principal: índice del menú raíz abierto (`None` cerrado).
     menu_open: Option<usize>,
+    /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
+    menu_active: usize,
+    /// Animación de aparición/swap del dropdown del menú principal (0→1).
+    menu_anim: Tween<f32>,
     /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
     edit_menu: Option<(f32, f32)>,
+    /// Fila resaltada por teclado en el menú de edición (`usize::MAX` = ninguna).
+    edit_active: usize,
+    /// Animación de aparición del menú de edición (0→1).
+    edit_anim: Tween<f32>,
     /// Clipboard del sistema para Cortar/Copiar/Pegar del menú de edición.
     clipboard: SystemClipboard,
 }
@@ -154,14 +176,42 @@ impl App for Ayni {
             aviso: format!("escuchando en {dir} · {transporte}"),
             theme: Theme::dark(),
             menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
             edit_menu: None,
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
             clipboard: SystemClipboard::new(),
         }
     }
 
-    fn on_key(_model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
+    fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
+        }
+        // Menú principal abierto: flechas navegan, ←/→ cambian de menú raíz
+        // (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc cierra.
+        if let Some(mi) = model.menu_open {
+            let n = app_menu(model).menus.len().max(1);
+            return match &e.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowLeft) => Some(Msg::MenuOpen(Some((mi + n - 1) % n))),
+                Key::Named(NamedKey::ArrowRight) => Some(Msg::MenuOpen(Some((mi + 1) % n))),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
+                _ => None,
+            };
+        }
+        // Menú de edición abierto: ↑/↓ navegan, Enter ejecuta, Esc cierra.
+        if model.edit_menu.is_some() {
+            return match &e.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenus),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::EditNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::EditNav(-1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::EditActivate),
+                _ => None,
+            };
         }
         match &e.key {
             Key::Named(NamedKey::Enter) => Some(Msg::Enviar),
@@ -182,7 +232,7 @@ impl App for Ayni {
         Some(Msg::Scroll(if delta.y > 0.0 { 3 } else { -3 }))
     }
 
-    fn update(mut model: Self::Model, msg: Self::Msg, _handle: &Handle<Self::Msg>) -> Self::Model {
+    fn update(mut model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         let enlace = model.enlace.clone();
         match msg {
             Msg::Tecla(e) => {
@@ -246,14 +296,50 @@ impl App for Ayni {
             }
             Msg::MenuOpen(idx) => {
                 model.menu_open = idx;
+                model.menu_active = usize::MAX;
                 model.edit_menu = None;
+                if idx.is_some() {
+                    model.menu_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                    animate(handle, motion::FAST, || Msg::MenuTick);
+                }
             }
             Msg::MenuCommand(cmd) => {
                 model = handle_menu_command(model, cmd, enlace.as_ref());
             }
+            Msg::MenuNav(dir) => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    model.menu_active = menubar_nav(&menu, mi, model.menu_active, dir);
+                }
+            }
+            Msg::MenuActivate => {
+                if let Some(mi) = model.menu_open {
+                    let menu = app_menu(&model);
+                    if let Some(cmd) = menubar_command_at(&menu, mi, model.menu_active) {
+                        model = handle_menu_command(model, cmd, enlace.as_ref());
+                    }
+                }
+            }
+            Msg::MenuTick => {}
+            Msg::EditNav(dir) => {
+                let flags =
+                    EditFlags::from_editor(model.entrada.editor(), model.entrada.is_masked());
+                model.edit_active = editmenu::edit_menu_step(flags, model.edit_active, dir);
+            }
+            Msg::EditActivate => {
+                let flags =
+                    EditFlags::from_editor(model.entrada.editor(), model.entrada.is_masked());
+                if let Some(action) = editmenu::edit_menu_action_at(flags, model.edit_active) {
+                    model.edit_menu = None;
+                    editmenu::apply(model.entrada.editor_mut(), action, &mut model.clipboard);
+                }
+            }
             Msg::EditMenuOpen(x, y) => {
                 model.edit_menu = Some((x, y));
+                model.edit_active = usize::MAX;
                 model.menu_open = None;
+                model.edit_anim = Tween::new(0.0, 1.0, motion::FAST, motion::ease_out_cubic);
+                animate(handle, motion::FAST, || Msg::MenuTick);
             }
             Msg::EditMenuAction(action) => {
                 model.edit_menu = None;
@@ -261,7 +347,9 @@ impl App for Ayni {
             }
             Msg::CloseMenus => {
                 model.menu_open = None;
+                model.menu_active = usize::MAX;
                 model.edit_menu = None;
+                model.edit_active = usize::MAX;
             }
         }
         model
@@ -305,18 +393,30 @@ impl App for Ayni {
         if let Some((x, y)) = model.edit_menu {
             let flags = EditFlags::from_editor(model.entrada.editor(), model.entrada.is_masked());
             let (w, h) = Self::initial_size();
-            return Some(context_menu_view(editmenu::edit_context_menu(
+            let mut spec = editmenu::edit_context_menu(
                 (x, y),
                 (w as f32, h as f32),
                 &model.theme,
                 flags,
                 Msg::EditMenuAction,
                 Msg::CloseMenus,
-            )));
+            );
+            spec.active = model.edit_active;
+            return Some(context_menu_view_ex(
+                spec,
+                ContextMenuExtras {
+                    appear: model.edit_anim.value(),
+                    ..Default::default()
+                },
+            ));
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay(&menubar_spec(&menu, model))
+        menubar_overlay_animated(
+            &menubar_spec(&menu, model),
+            model.menu_active,
+            model.menu_anim.value(),
+        )
     }
 }
 
