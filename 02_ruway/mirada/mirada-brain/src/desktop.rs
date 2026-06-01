@@ -946,9 +946,11 @@ mod tests {
     #[test]
     fn reservar_franja_desplaza_y_encoge_el_teselado() {
         let mut d = desktop_with_screen(); // 1920×1080
-        let cmds = open(&mut d, 1);
+        open(&mut d, 1);
         // Una sola ventana ocupa toda el área útil (smart gaps).
-        assert_eq!(places(&cmds)[0].rect, Rect::new(0, 0, 1920, 1080));
+        let cmds = open(&mut d, 1); // re-relayout
+        let p0 = places(&cmds)[0].rect;
+        assert_eq!(p0, Rect::new(0, 0, 1920, 1080));
 
         // Reserva 40px arriba: la ventana arranca en y=40 y pierde 40 de alto.
         let cmds = d.on_event(BodyEvent::OutputReserved {
@@ -958,7 +960,8 @@ mod tests {
             left: 0,
             right: 0,
         });
-        assert_eq!(places(&cmds)[0].rect, Rect::new(0, 40, 1920, 1040));
+        let p = places(&cmds)[0].rect;
+        assert_eq!(p, Rect::new(0, 40, 1920, 1040));
 
         // Reserva izquierda en vez de arriba: desplaza en x y encoge el ancho.
         let cmds = d.on_event(BodyEvent::OutputReserved {
@@ -968,7 +971,8 @@ mod tests {
             left: 48,
             right: 0,
         });
-        assert_eq!(places(&cmds)[0].rect, Rect::new(48, 0, 1872, 1080));
+        let p = places(&cmds)[0].rect;
+        assert_eq!(p, Rect::new(48, 0, 1872, 1080));
 
         // Liberar (cero en los cuatro) restaura el monitor entero.
         let cmds = d.on_event(BodyEvent::OutputReserved {
