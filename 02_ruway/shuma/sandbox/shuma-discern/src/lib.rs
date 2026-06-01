@@ -46,6 +46,7 @@ impl DiscernPipeline {
         p.push(Box::new(CardProbe));
         p.push(Box::new(GeoJsonProbe));
         p.push(Box::new(GpxProbe));
+        p.push(Box::new(KmlProbe));
         p.push(Box::new(JsonProbe));
         p.push(Box::new(TomlProbe));
         p.push(Box::new(TabularProbe));
@@ -335,6 +336,31 @@ impl Discerner for GpxProbe {
     }
 }
 
+/// KML: XML de Google Earth. Arranca con `<` y trae `<kml` cerca del inicio.
+/// Emite lens `map` (mismo que GeoJSON/GPX); el visor desambigua por contenido.
+pub struct KmlProbe;
+
+impl Discerner for KmlProbe {
+    fn name(&self) -> &str { "kml" }
+
+    fn discern(&self, s: &[u8], _h: &Hint<'_>) -> Option<Discernment> {
+        let trimmed = trim_left(s);
+        if trimmed.first()? != &b'<' {
+            return None;
+        }
+        let head = &trimmed[..trimmed.len().min(2048)];
+        if !head.windows(4).any(|w| w == b"<kml") {
+            return None;
+        }
+        Some(Discernment {
+            ty: TypeRef::Primitive { name: "kml".into() },
+            confidence: 0.96,
+            mime: Some("application/vnd.google-earth.kml+xml".into()),
+            lens: Some("map".into()),
+        })
+    }
+}
+
 /// Texto UTF-8 plano. Fallback de baja confidence.
 pub struct Utf8Probe;
 
@@ -506,6 +532,17 @@ mod tests {
         let r = discern(gpx).unwrap();
         assert_eq!(r.lens.as_deref(), Some("map"));
         assert_eq!(r.mime.as_deref(), Some("application/gpx+xml"));
+    }
+
+    #[test]
+    fn kml_detectado_como_mapa() {
+        let kml = br#"<?xml version="1.0"?>
+            <kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+              <Placemark><Point><coordinates>-77,-12,0</coordinates></Point></Placemark>
+            </Document></kml>"#;
+        let r = discern(kml).unwrap();
+        assert_eq!(r.lens.as_deref(), Some("map"));
+        assert_eq!(r.mime.as_deref(), Some("application/vnd.google-earth.kml+xml"));
     }
 
     #[test]

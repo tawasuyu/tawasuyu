@@ -186,10 +186,15 @@ pub fn load_map(path: &Path, max_bytes: u64) -> MapPreview {
         Ok(s) => s,
         Err(e) => return MapPreview::Error(e.to_string()),
     };
-    // GPX es XML (arranca con `<`); GeoJSON es JSON (`{`/`[`). El shell rutea
-    // ambos al lens `map`, así que el visor desambigua por contenido.
+    // GPX/KML son XML (arrancan con `<`); GeoJSON es JSON (`{`/`[`). El shell
+    // rutea los tres al lens `map`, así que el visor desambigua por contenido.
     if src.trim_start().starts_with('<') {
-        parse_gpx(&src)
+        let head = &src[..src.len().min(2048)];
+        if head.contains("<kml") {
+            parse_kml(&src)
+        } else {
+            parse_gpx(&src)
+        }
     } else {
         parse_geojson(&src)
     }
@@ -340,6 +345,137 @@ pub fn parse_gpx(src: &str) -> MapPreview {
     } else {
         MapPreview::Map { data, truncated: budget == 0 }
     }
+}
+
+/// Parsea KML (XML de Google Earth): cada `<Placemark>` con su `<name>` y su
+/// geometría (`<Point>`/`<LineString>`/`<Polygon>` con `<coordinates>`). Las
+/// coordenadas KML son `lon,lat[,alt]` separadas por espacios. Tolerante.
+pub fn parse_kml(src: &str) -> MapPreview {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Geom {
+        None,
+        Point,
+        Line,
+        Ring,
+    }
+
+    let mut reader = Reader::from_str(src);
+    reader.trim_text(true);
+    let mut buf = Vec::new();
+
+    let mut data = MapData::default();
+    let mut budget = MAX_VERTICES;
+
+    let mut placemark_name: Option<String> = None;
+    let mut in_name = false; // dentro de <name> de un Placemark
+    let mut geom = Geom::None;
+    let mut in_polygon = false;
+    let mut poly_rings: Vec<Ring> = Vec::new();
+    let mut reading_coords = false;
+    let mut coord_buf = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"Placemark" => {
+                    placemark_name = None;
+                    geom = Geom::None;
+                }
+                b"name" => in_name = true,
+                b"Point" => geom = Geom::Point,
+                b"LineString" => geom = Geom::Line,
+                b"Polygon" => {
+                    in_polygon = true;
+                    poly_rings.clear();
+                }
+                b"LinearRing" => geom = Geom::Ring,
+                b"coordinates" => {
+                    reading_coords = true;
+                    coord_buf.clear();
+                }
+                _ => {}
+            },
+            Ok(Event::Text(t)) => {
+                if let Ok(txt) = t.unescape() {
+                    if reading_coords {
+                        coord_buf.push_str(&txt);
+                    } else if in_name {
+                        let txt = txt.trim();
+                        if !txt.is_empty() {
+                            placemark_name.get_or_insert_with(|| txt.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(e)) => match e.local_name().as_ref() {
+                b"name" => in_name = false,
+                b"coordinates" => {
+                    reading_coords = false;
+                    let coords = kml_coords(&coord_buf);
+                    match geom {
+                        Geom::Point => {
+                            if let Some(c) = coords.first().copied() {
+                                push_points(&mut data, std::slice::from_ref(&c), &mut budget);
+                                label_at(&mut data, placemark_name.as_deref(), Some(c));
+                            }
+                        }
+                        Geom::Line => {
+                            let rep = midpoint(&coords);
+                            push_line(&mut data, coords, &mut budget);
+                            label_at(&mut data, placemark_name.as_deref(), rep);
+                        }
+                        Geom::Ring => {
+                            if in_polygon {
+                                poly_rings.push(coords);
+                            } else {
+                                // LinearRing suelto → polígono de un anillo.
+                                let rep = centroid(&coords);
+                                push_polygon(&mut data, vec![coords], &mut budget);
+                                label_at(&mut data, placemark_name.as_deref(), rep);
+                            }
+                        }
+                        Geom::None => {}
+                    }
+                }
+                b"Polygon" => {
+                    let rep = poly_rings.first().and_then(|r| centroid(r));
+                    push_polygon(&mut data, std::mem::take(&mut poly_rings), &mut budget);
+                    label_at(&mut data, placemark_name.as_deref(), rep);
+                    in_polygon = false;
+                }
+                b"LinearRing" => geom = Geom::None,
+                b"Point" | b"LineString" => geom = Geom::None,
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+        if budget == 0 {
+            break;
+        }
+    }
+
+    if data.total_features() == 0 {
+        MapPreview::NoGeometry
+    } else {
+        MapPreview::Map { data, truncated: budget == 0 }
+    }
+}
+
+/// Parsea un bloque de coordenadas KML (`lon,lat[,alt] lon,lat[,alt] …`).
+fn kml_coords(s: &str) -> Vec<Coord> {
+    s.split_whitespace()
+        .filter_map(|tok| {
+            let mut it = tok.split(',');
+            let lon = it.next()?.trim().parse::<f64>().ok()?;
+            let lat = it.next()?.trim().parse::<f64>().ok()?;
+            (lon.is_finite() && lat.is_finite()).then_some([lon, lat])
+        })
+        .collect()
 }
 
 /// Lee los atributos `lat`/`lon` de un elemento GPX a una [`Coord`]
@@ -1458,6 +1594,56 @@ mod tests {
         match r {
             MapPreview::Map { data, .. } => assert_eq!(data.points, vec![[2.0, 1.0]]),
             other => panic!("GPX debió parsear como mapa, fue {other:?}"),
+        }
+    }
+
+    // --- KML ---
+
+    fn kml_data(src: &str) -> MapData {
+        match parse_kml(src) {
+            MapPreview::Map { data, .. } => data,
+            other => panic!("esperaba Map, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kml_point_line_polygon() {
+        let src = r#"<kml><Document>
+            <Placemark><name>P</name><Point><coordinates>-77.03,-12.05,0</coordinates></Point></Placemark>
+            <Placemark><name>L</name><LineString><coordinates>0,0,0 1,1,0 2,0,0</coordinates></LineString></Placemark>
+            <Placemark><name>Poly</name><Polygon><outerBoundaryIs><LinearRing>
+              <coordinates>0,0 2,0 2,2 0,2 0,0</coordinates>
+            </LinearRing></outerBoundaryIs></Polygon></Placemark>
+            </Document></kml>"#;
+        let d = kml_data(src);
+        assert_eq!(d.points, vec![[-77.03, -12.05]]);
+        assert_eq!(d.lines, vec![vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]]]);
+        assert_eq!(d.polygons.len(), 1);
+        assert_eq!(d.polygons[0][0].len(), 5);
+        assert!(d.labels.iter().any(|l| l.text == "P"));
+        assert!(d.labels.iter().any(|l| l.text == "Poly"));
+    }
+
+    #[test]
+    fn kml_coords_ignora_altitud_y_espacios() {
+        let cs = kml_coords("  -71.9,-13.5,2400   -71.8,-13.4  ");
+        assert_eq!(cs, vec![[-71.9, -13.5], [-71.8, -13.4]]);
+    }
+
+    #[test]
+    fn load_map_desambigua_kml() {
+        let dir = std::env::temp_dir();
+        let p = dir.join("nahual-map-test.kml");
+        std::fs::write(
+            &p,
+            r#"<kml><Placemark><Point><coordinates>2,1,0</coordinates></Point></Placemark></kml>"#,
+        )
+        .unwrap();
+        let r = load_map(&p, DEFAULT_MAP_BYTES_MAX);
+        let _ = std::fs::remove_file(&p);
+        match r {
+            MapPreview::Map { data, .. } => assert_eq!(data.points, vec![[2.0, 1.0]]),
+            other => panic!("KML debió parsear como mapa, fue {other:?}"),
         }
     }
 

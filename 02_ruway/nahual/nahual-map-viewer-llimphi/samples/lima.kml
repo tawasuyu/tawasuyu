@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Lima — puntos de interés</name>
+    <Placemark>
+      <name>Plaza Mayor</name>
+      <Point>
+        <coordinates>-77.0300,-12.0464,0</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Miraflores</name>
+      <Point>
+        <coordinates>-77.0300,-12.1200,0</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Malecón</name>
+      <LineString>
+        <coordinates>
+          -77.0500,-12.1100,0
+          -77.0520,-12.1250,0
+          -77.0480,-12.1400,0
+        </coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Centro Histórico</name>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              -77.040,-12.040,0
+              -77.020,-12.040,0
+              -77.020,-12.055,0
+              -77.040,-12.055,0
+              -77.040,-12.040,0
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+  </Document>
+</kml>
