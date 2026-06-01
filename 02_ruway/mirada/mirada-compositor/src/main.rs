@@ -105,12 +105,108 @@ enum BodyMode {
     Session,
 }
 
-/// `app_id` que distingue a la ventana del shell del escritorio. carmen
-/// no la tesela: la acopla a una franja al pie de la pantalla.
-const SHELL_APP_ID: &str = "carmen.shell";
+/// Grosor por defecto de la franja del shell (px), si el entorno no lo fija.
+const SHELL_DOCK_DEFAULT: i32 = 40;
 
-/// Alto en píxeles de la franja del shell, al pie de la salida.
-const SHELL_DOCK_HEIGHT: i32 = 40;
+/// El borde de la salida al que se acopla la franja del shell (el marco `pata`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ShellAnchor {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl ShellAnchor {
+    /// Parsea el valor de `MIRADA_SHELL_ANCHOR`; cae a `Bottom` si no calza.
+    fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "top" => Self::Top,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            _ => Self::Bottom,
+        }
+    }
+
+    /// `true` para los bordes horizontales (top/bottom): su grosor es alto.
+    fn es_horizontal(&self) -> bool {
+        matches!(self, Self::Top | Self::Bottom)
+    }
+
+    /// `true` si reservar su franja sólo encoge ancho/alto sin mover el origen
+    /// del teselado (bottom/right). `top`/`left` necesitarían propagar un offset
+    /// de origen que el Cuerpo todavía no expresa (Fase 8b): por ahora su barra
+    /// se coloca pero **flota**, sin reservar — como una superficie `autohide`.
+    fn reserva_inline(&self) -> bool {
+        matches!(self, Self::Bottom | Self::Right)
+    }
+}
+
+/// Config del acople del shell, resuelta una vez desde el entorno:
+/// - `MIRADA_SHELL_APP_ID` — identidad de la ventana-marco (default `gioser.pata`).
+/// - `MIRADA_SHELL_ANCHOR` — borde (`top`/`bottom`/`left`/`right`, default `bottom`).
+/// - `MIRADA_SHELL_THICKNESS` — grosor en px (default `40`).
+struct ShellDock {
+    app_id: String,
+    anchor: ShellAnchor,
+    thickness: i32,
+}
+
+/// La config del shell, leída del entorno la primera vez que se consulta.
+fn shell_dock() -> &'static ShellDock {
+    static DOCK: std::sync::OnceLock<ShellDock> = std::sync::OnceLock::new();
+    DOCK.get_or_init(|| {
+        let app_id =
+            std::env::var("MIRADA_SHELL_APP_ID").unwrap_or_else(|_| "gioser.pata".to_string());
+        let anchor = std::env::var("MIRADA_SHELL_ANCHOR")
+            .map(|s| ShellAnchor::parse(&s))
+            .unwrap_or(ShellAnchor::Bottom);
+        let thickness = std::env::var("MIRADA_SHELL_THICKNESS")
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .filter(|t| *t > 0)
+            .unwrap_or(SHELL_DOCK_DEFAULT);
+        if !anchor.reserva_inline() {
+            eprintln!(
+                "mirada-compositor · aviso: el anclaje {anchor:?} del shell aún no \
+                 descuenta el offset de origen del teselado (Fase 8b); la barra se \
+                 coloca pero flota sobre las ventanas, sin reservar su franja."
+            );
+        }
+        ShellDock {
+            app_id,
+            anchor,
+            thickness,
+        }
+    })
+}
+
+/// `true` si el `app_id` corresponde al shell: la identidad de `pata` (o el
+/// override de `MIRADA_SHELL_APP_ID`), o el alias legacy `carmen.shell`.
+fn is_shell_app_id(app_id: &str) -> bool {
+    app_id == shell_dock().app_id || app_id == "carmen.shell"
+}
+
+/// El rect `(x, y, w, h)` de la franja del shell sobre una salida `ow×oh` con
+/// grosor `t`, según el borde. Pura — fácil de testear.
+fn shell_strip(anchor: ShellAnchor, ow: i32, oh: i32, t: i32) -> (i32, i32, i32, i32) {
+    match anchor {
+        ShellAnchor::Top => (0, 0, ow, t),
+        ShellAnchor::Bottom => (0, oh - t, ow, t),
+        ShellAnchor::Left => (0, 0, t, oh),
+        ShellAnchor::Right => (ow - t, 0, t, oh),
+    }
+}
+
+/// El tamaño `(w, h)` del área útil tras reservar la franja. Para los bordes que
+/// no reservan inline (top/left) devuelve la salida entera. Pura — testeable.
+fn shell_work_size(anchor: ShellAnchor, ow: i32, oh: i32, t: i32) -> (i32, i32) {
+    match anchor {
+        ShellAnchor::Bottom => (ow, (oh - t).max(1)),
+        ShellAnchor::Right => ((ow - t).max(1), oh),
+        ShellAnchor::Top | ShellAnchor::Left => (ow, oh),
+    }
+}
 
 /// Una ventana de cliente que el compositor gestiona.
 struct ManagedWindow {
@@ -346,8 +442,8 @@ impl App {
                 })
                 .unwrap_or_default()
         });
-        // La ventana del shell no se tesela: carmen la acopla al pie.
-        let is_shell = app_id == SHELL_APP_ID;
+        // La ventana del shell (el marco pata) no se tesela: se acopla a un borde.
+        let is_shell = is_shell_app_id(&app_id);
 
         self.windows.push(ManagedWindow {
             id,
@@ -372,25 +468,34 @@ impl App {
         }
     }
 
-    /// Acopla la ventana del shell: le reserva una franja al pie de la
-    /// salida —el Cerebro tesela el área que queda— y la dimensiona y
-    /// coloca ahí. Se llama al registrarla y al cambiar el tamaño de la
-    /// salida.
+    /// Acopla la ventana del shell (el marco `pata`): le reserva una franja en
+    /// el borde configurado —el Cerebro tesela el área que queda— y la
+    /// dimensiona y coloca ahí. Se llama al registrarla y al cambiar el tamaño
+    /// de la salida. Para bottom/right la reserva encoge el área útil; para
+    /// top/left la barra se coloca pero flota (ver [`ShellAnchor::reserva_inline`]).
     fn dock_shell(&mut self) {
         let (ow, oh) = self.output_size;
         if ow == 0 || oh == 0 {
             return; // la salida todavía no está lista
         }
-        // Reserva la franja: el Cerebro tesela en el alto que queda.
-        let ev = self.body.resize_output(0, ow, oh - SHELL_DOCK_HEIGHT);
+        let dock = shell_dock();
+        // El grosor no puede exceder el lado de la salida sobre el que recorta.
+        let limite = if dock.anchor.es_horizontal() { oh } else { ow };
+        let t = dock.thickness.clamp(1, limite.max(1));
+
+        // Reserva el área útil (sólo encoge para bottom/right; top/left no reservan).
+        let (sw, sh) = shell_work_size(dock.anchor, ow, oh, t);
+        let ev = self.body.resize_output(0, sw, sh);
         self.brain_feed(ev);
-        // Dimensiona la ventana del shell y la fija en la franja.
+
+        // Dimensiona la ventana del shell y la fija en la franja del borde.
         if let Some(w) = self.windows.iter_mut().find(|w| w.is_shell) {
-            w.loc = (0, oh - SHELL_DOCK_HEIGHT);
-            w.size = (ow, SHELL_DOCK_HEIGHT);
+            let (x, y, sw, sh) = shell_strip(dock.anchor, ow, oh, t);
+            w.loc = (x, y);
+            w.size = (sw, sh);
             w.visible = true;
             w.toplevel.with_pending_state(|s| {
-                s.size = Some((ow.max(1), SHELL_DOCK_HEIGHT.max(1)).into());
+                s.size = Some((sw.max(1), sh.max(1)).into());
             });
             w.toplevel.send_pending_configure();
         }
@@ -752,8 +857,14 @@ fn send_frames_surface_tree(surface: &WlSurface, time: u32) {
 /// redondea su tamaño a celdas de texto), se centra en el hueco.
 fn render_loc(w: &ManagedWindow, output_h: i32) -> (i32, i32) {
     if w.is_shell {
-        let h = surface_px_size(w).map(|(_, h)| h).unwrap_or(SHELL_DOCK_HEIGHT);
-        return (0, output_h - h);
+        // Sólo el anclaje inferior crece hacia arriba cuando el cliente
+        // presenta una superficie más alta que la franja (cajón desplegado);
+        // los demás bordes usan la posición acoplada tal cual.
+        if shell_dock().anchor == ShellAnchor::Bottom {
+            let h = surface_px_size(w).map(|(_, h)| h).unwrap_or(shell_dock().thickness);
+            return (0, output_h - h);
+        }
+        return w.loc;
     }
     match with_renderer_surface_state(&w.surface, |s| s.surface_size()) {
         Some(Some(size)) => {
@@ -1394,5 +1505,52 @@ fn main() {
     if let Err(e) = result {
         eprintln!("mirada-compositor · error: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anchor_parse_y_default() {
+        assert_eq!(ShellAnchor::parse("top"), ShellAnchor::Top);
+        assert_eq!(ShellAnchor::parse("LEFT"), ShellAnchor::Left);
+        assert_eq!(ShellAnchor::parse("right"), ShellAnchor::Right);
+        // desconocido o vacío → bottom.
+        assert_eq!(ShellAnchor::parse("xyz"), ShellAnchor::Bottom);
+        assert_eq!(ShellAnchor::parse(""), ShellAnchor::Bottom);
+    }
+
+    #[test]
+    fn solo_bottom_y_right_reservan_inline() {
+        assert!(ShellAnchor::Bottom.reserva_inline());
+        assert!(ShellAnchor::Right.reserva_inline());
+        assert!(!ShellAnchor::Top.reserva_inline());
+        assert!(!ShellAnchor::Left.reserva_inline());
+    }
+
+    #[test]
+    fn franja_del_shell_por_borde() {
+        // Salida 1920×1080, grosor 40.
+        assert_eq!(shell_strip(ShellAnchor::Top, 1920, 1080, 40), (0, 0, 1920, 40));
+        assert_eq!(
+            shell_strip(ShellAnchor::Bottom, 1920, 1080, 40),
+            (0, 1040, 1920, 40)
+        );
+        assert_eq!(shell_strip(ShellAnchor::Left, 1920, 1080, 40), (0, 0, 40, 1080));
+        assert_eq!(
+            shell_strip(ShellAnchor::Right, 1920, 1080, 40),
+            (1880, 0, 40, 1080)
+        );
+    }
+
+    #[test]
+    fn area_util_reserva_en_bottom_y_right_y_no_en_top_left() {
+        assert_eq!(shell_work_size(ShellAnchor::Bottom, 1920, 1080, 40), (1920, 1040));
+        assert_eq!(shell_work_size(ShellAnchor::Right, 1920, 1080, 40), (1880, 1080));
+        // top/left no reservan inline: el área útil es la salida entera.
+        assert_eq!(shell_work_size(ShellAnchor::Top, 1920, 1080, 40), (1920, 1080));
+        assert_eq!(shell_work_size(ShellAnchor::Left, 1920, 1080, 40), (1920, 1080));
     }
 }

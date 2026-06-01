@@ -1,6 +1,6 @@
 # SDD — `pata`, el marco del escritorio
 
-> Estado: **Fase 7** (Quake de shuma). Este documento es la fuente autoritativa
+> Estado: **Fase 8** (acople en mirada). Este documento es la fuente autoritativa
 > de qué es `pata` y dónde termina, por encima de cualquier README.
 
 ## 0. El problema que resuelve
@@ -127,8 +127,21 @@ borde; shuma provee el contenido.
   comando es, estrictamente, de `shuma`: mientras no haya puente, `shuma::
   ejecutar_stand_in` corre por `sh -c` como **sustituto temporal** (patrón de
   mirada) — se reemplaza sin tocar el mecanismo del drawer.
-- **Fase 8** — mirada-compositor reconoce superficies pata (varios anchors, no
-  una sola franja de 40px al pie); `SHELL_APP_ID` → identidad pata + override
-  por env.
+- **Fase 8 (parcial)** — `mirada-compositor` reconoce el marco `pata`:
+  - Identidad: el viejo `SHELL_APP_ID = "carmen.shell"` → `is_shell_app_id`, que
+    matchea `gioser.pata` (la identidad que anuncia `pata-llimphi`) o el alias
+    legacy `carmen.shell`, override por `MIRADA_SHELL_APP_ID`.
+  - Anclaje/grosor configurables (`MIRADA_SHELL_ANCHOR` / `MIRADA_SHELL_THICKNESS`,
+    defaults bottom/40), ya no una franja fija de 40px al pie. Geometría en
+    helpers puros testeados (`shell_strip` / `shell_work_size`).
+  - bottom/right reservan el área útil encogiendo ancho/alto. top/left ⏳
+    colocan la barra pero **flotan** sin reservar (como un `autohide`): reservar
+    su franja exige propagar un **offset de origen** del teselado por
+    `mirada-body::resize_output` → `BodyEvent::OutputResized` → el Cerebro
+    (Fase 8b). Aviso por stderr cuando se pide un anclaje que aún no reserva.
+  - Pendiente del lado `pata`: hoy `pata-llimphi` es una ventana a pantalla
+    completa; para que el acople a franja no la recorte, debe volverse una
+    layer-surface (overlay que pinta sólo sus barras) o N ventanas por
+    superficie (Fase 8b).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
