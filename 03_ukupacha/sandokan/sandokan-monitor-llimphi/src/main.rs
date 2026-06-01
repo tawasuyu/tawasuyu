@@ -40,7 +40,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, FlexWrap, JustifyContent,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
-use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Gradient};
 use llimphi_ui::llimphi_text::{draw_layout, measurement, Alignment};
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
@@ -1105,6 +1105,7 @@ fn map_body(model: &Model) -> View<Msg> {
             ppid: p.ppid,
             weight: if cpu { p.cpu_pct as f64 } else { p.rss_kb as f64 },
             cpu: p.cpu_pct,
+            mem_kb: p.rss_kb,
             label: p.name.clone(),
         })
         .collect();
@@ -1137,27 +1138,37 @@ fn map_body(model: &Model) -> View<Msg> {
             // Color categórico por proceso; la opacidad sube con el uso de CPU
             // y baja con la profundidad (sensación fractal). Contenedor: tenue.
             let base = name_color(&c.label);
-            let fill = if c.leaf {
-                let a = (0.60 + c.cpu / 100.0 * 0.34 - c.depth as f32 * 0.05).clamp(0.5, 0.95);
-                base.with_alpha(a)
+            let a = if c.leaf {
+                (0.60 + c.cpu / 100.0 * 0.34 - c.depth as f32 * 0.05).clamp(0.5, 0.95)
             } else {
-                base.with_alpha(0.14)
+                0.14
             };
-            scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
+            // Gradiente vertical leve: arriba un toque más claro, abajo el base
+            // — da volumen sin estridencia.
+            let top = base.map_lightness(|l| (l + 0.07).min(1.0)).with_alpha(a);
+            let bot = base.map_lightness(|l| (l - 0.05).max(0.0)).with_alpha(a);
+            let grad = Gradient::new_linear((c.x as f64, c.y as f64), (c.x as f64, (c.y + c.h) as f64))
+                .with_stops([top, bot]);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, &grad, None, &r);
             if sel == Some(c.pid) {
                 scene.stroke(&Stroke::new(2.5), Affine::IDENTITY, accent, None, &r);
             } else {
                 scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, border, None, &r);
             }
 
-            // Etiqueta si hay lugar.
+            // Etiqueta: nombre arriba y, si hay alto, %CPU · RAM debajo.
             if c.w > 46.0 && c.h > 15.0 {
-                let layout = ts.layout(&c.label, 11.0, None, Alignment::Start, 1.2, false, None);
-                let m = measurement(&layout);
-                if m.width <= c.w - 6.0 {
-                    let x = (c.x + 3.0) as f64;
-                    let y = (c.y + 2.0) as f64;
-                    draw_layout(scene, &layout, label_col, (x, y));
+                let name = ts.layout(&c.label, 11.0, None, Alignment::Start, 1.2, false, None);
+                if measurement(&name).width <= c.w - 6.0 {
+                    draw_layout(scene, &name, label_col, ((c.x + 3.0) as f64, (c.y + 2.0) as f64));
+                }
+                if c.h > 30.0 {
+                    let stats = format!("{:.0}% · {}", c.cpu, fmt_mem(c.mem_kb * 1024));
+                    let sl = ts.layout(&stats, 9.5, None, Alignment::Start, 1.2, false, None);
+                    if measurement(&sl).width <= c.w - 6.0 {
+                        let sc = label_col.with_alpha(0.72);
+                        draw_layout(scene, &sl, sc, ((c.x + 3.0) as f64, (c.y + 15.0) as f64));
+                    }
                 }
             }
         }

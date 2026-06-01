@@ -16,6 +16,7 @@ pub struct Item {
     pub ppid: i32,
     pub weight: f64,
     pub cpu: f32,
+    pub mem_kb: u64,
     pub label: String,
 }
 
@@ -29,6 +30,7 @@ pub struct Cell {
     pub h: f32,
     pub depth: u16,
     pub cpu: f32,
+    pub mem_kb: u64,
     pub label: String,
     /// `true` si es el rectángulo propio de un proceso (hoja visual), `false`
     /// si es el contenedor de un padre (sólo se ve su cabecera + borde).
@@ -56,13 +58,13 @@ pub fn layout(items: &[Item], area: (f32, f32, f32, f32), header: f32, min_side:
     // Peso total memoizado (propio + subárbol), con guarda anti-ciclo.
     let mut totals: HashMap<usize, f64> = HashMap::new();
     for i in 0..items.len() {
-        total_of(i, items, &children, &pos, &mut totals, &mut Vec::new());
+        total_of(i, items, &children, &mut totals, &mut Vec::new());
     }
 
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     place(
-        &roots, items, &children, &pos, &totals, area, 0, true, header, min_side, &mut out, &mut seen,
+        &roots, items, &children, &totals, area, 0, true, header, min_side, &mut out, &mut seen,
     );
     out
 }
@@ -71,7 +73,6 @@ fn total_of(
     i: usize,
     items: &[Item],
     children: &HashMap<i32, Vec<usize>>,
-    pos: &HashMap<i32, usize>,
     memo: &mut HashMap<usize, f64>,
     stack: &mut Vec<usize>,
 ) -> f64 {
@@ -85,7 +86,7 @@ fn total_of(
     let mut sum = items[i].weight.max(0.0);
     if let Some(kids) = children.get(&items[i].pid) {
         for &k in kids {
-            sum += total_of(k, items, children, pos, memo, stack);
+            sum += total_of(k, items, children, memo, stack);
         }
     }
     stack.pop();
@@ -98,7 +99,6 @@ fn place(
     idxs: &[usize],
     items: &[Item],
     children: &HashMap<i32, Vec<usize>>,
-    pos: &HashMap<i32, usize>,
     totals: &HashMap<usize, f64>,
     area: (f32, f32, f32, f32),
     depth: u16,
@@ -149,23 +149,19 @@ fn place(
             h: ch,
             depth,
             cpu: items[i].cpu,
+            mem_kb: items[i].mem_kb,
             label: items[i].label.clone(),
             leaf: !has_kids,
         });
 
-        // Recursión: hijos reales + un "self" sintético con el peso propio.
+        // Recursión: hijos reales (el peso propio queda representado por la
+        // cabecera que el padre reserva arriba).
         if has_kids && ch > header + min_side && cw > min_side {
             let inner = (cx + 1.0, cy + header, cw - 2.0, ch - header - 1.0);
-            let mut group: Vec<usize> = kids.cloned().unwrap_or_default();
-            // El peso propio se representa recursando con el mismo nodo como
-            // hoja: lo hacemos marcando que en el grupo va también `i`, pero
-            // para evitar re-emitirlo (ya está en `seen`) sólo cuenta su peso
-            // a través de un reparto que deja hueco. Simplificación: repartimos
-            // sólo entre hijos; el propio queda representado por la cabecera.
-            group.retain(|&k| k != i);
+            let group: Vec<usize> = kids.cloned().unwrap_or_default();
             place(
-                &group, items, children, pos, totals, inner, depth + 1, !horizontal, header,
-                min_side, out, seen,
+                &group, items, children, totals, inner, depth + 1, !horizontal, header, min_side,
+                out, seen,
             );
         }
     }
@@ -181,6 +177,7 @@ mod tests {
             ppid,
             weight: w,
             cpu: 0.0,
+            mem_kb: 0,
             label: format!("p{pid}"),
         }
     }
