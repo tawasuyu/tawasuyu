@@ -2915,6 +2915,43 @@ mod tests {
     }
 
     #[test]
+    fn link_stylesheet_externo_data_url_aplica() {
+        // `<link rel="stylesheet" href="data:text/css,...">` — la hoja externa
+        // se baja (acá vía data:, sin red) y sus reglas entran a la cascada.
+        let html = r##"<html><head>
+            <link rel="stylesheet" href="data:text/css,p%7Bcolor%3A%23008000%7D">
+        </head><body><p>verde</p></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found = false;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("p") && b.color == super::Color::rgb(0, 128, 0) {
+                found = true;
+            }
+        });
+        assert!(found, "la regla de la hoja externa data: no se aplicó al <p>");
+    }
+
+    #[test]
+    fn link_stylesheet_cascada_respeta_orden_de_documento() {
+        // Hoja externa (data:) declara color rojo; un `<style>` posterior lo
+        // pisa a azul — el orden de documento debe ganar (azul), no el externo.
+        let html = r##"<html><head>
+            <link rel="stylesheet" href="data:text/css,p%7Bcolor%3Ared%7D">
+            <style>p { color: #0000ff }</style>
+        </head><body><p>azul</p></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut p_color = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("p") {
+                p_color = Some(b.color);
+            }
+        });
+        assert_eq!(p_color, Some(super::Color::rgb(0, 0, 255)), "el <style> posterior debe ganar");
+    }
+
+    #[test]
     fn details_sin_open_attr_arranca_cerrado() {
         let html = r#"<html><body>
             <details><summary>Tit</summary><p>Contenido</p></details>

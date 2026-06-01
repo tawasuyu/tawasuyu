@@ -111,6 +111,32 @@ impl DomTree {
         out
     }
 
+    /// Recolecta TODAS las fuentes de estilo del documento en orden de
+    /// aparición: `<style>` inline (su texto) y `<link rel="stylesheet">`
+    /// externo (su `href` crudo, a resolver+bajar por el caller). El orden
+    /// importa para la cascada — una hoja externa declarada antes de un
+    /// `<style>` debe ceder ante éste, igual que en un browser real.
+    pub fn collect_style_sources(&self) -> Vec<StyleSource> {
+        let mut out = Vec::new();
+        walk(&self.document(), &mut |node| {
+            if let NodeData::Element { name, .. } = &node.data {
+                match name.local.as_ref() {
+                    "style" => out.push(StyleSource::Inline(collect_text(node))),
+                    "link" if link_is_stylesheet(node) => {
+                        if let Some(href) = attr(node, "href") {
+                            let href = href.trim();
+                            if !href.is_empty() {
+                                out.push(StyleSource::External(href.to_string()));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        out
+    }
+
     /// Itera in-order todos los `<script>` del documento y devuelve sus
     /// metadatos. Cada script lleva, o bien un `src` externo (a bajar),
     /// o bien el body inline; nunca ambos a la vez (HTML spec: si hay
@@ -242,6 +268,29 @@ fn collect_text_inner(node: &Handle, out: &mut String) {
     }
 }
 
+/// Una fuente de estilos del documento, en orden de aparición. La produce
+/// [`DomTree::collect_style_sources`].
+pub enum StyleSource {
+    /// Texto de un `<style>` inline.
+    Inline(String),
+    /// `href` crudo de un `<link rel="stylesheet">` — el caller lo resuelve
+    /// contra la base y lo baja.
+    External(String),
+}
+
+/// ¿Es este `<link>` una hoja de estilo aplicable? Exige `rel` con el token
+/// `stylesheet` (case-insensitive) y descarta las `alternate` (las hojas
+/// alternativas están desactivadas por defecto en los browsers).
+fn link_is_stylesheet(node: &Handle) -> bool {
+    let Some(rel) = attr(node, "rel") else {
+        return false;
+    };
+    let rel = rel.to_ascii_lowercase();
+    let mut tokens = rel.split_whitespace();
+    let has_stylesheet = rel.split_whitespace().any(|t| t == "stylesheet");
+    has_stylesheet && !tokens.any(|t| t == "alternate")
+}
+
 /// Lee el atributo `name` de un nodo Element (case-insensitive sobre el
 /// nombre local). Devuelve `None` si no es un Element o el atributo no
 /// existe.
@@ -358,6 +407,26 @@ mod tests {
         let sheets = dom.collect_inline_stylesheets();
         assert_eq!(sheets.len(), 1);
         assert!(sheets[0].contains("color: red"));
+    }
+
+    #[test]
+    fn collect_style_sources_ordena_e_ignora_alternate() {
+        let html = r##"<html><head>
+            <link rel="stylesheet" href="a.css">
+            <style>p{color:red}</style>
+            <link rel="alternate stylesheet" href="dark.css">
+            <link rel="icon" href="favicon.ico">
+            <link rel="STYLESHEET" href="b.css">
+            <link rel="stylesheet">
+        </head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let sources = dom.collect_style_sources();
+        // Esperado en orden: External(a.css), Inline(...), External(b.css).
+        // Descartados: alternate stylesheet, rel=icon, link sin href.
+        assert_eq!(sources.len(), 3, "se esperaban 3 fuentes, hubo {}", sources.len());
+        assert!(matches!(&sources[0], StyleSource::External(h) if h == "a.css"));
+        assert!(matches!(&sources[1], StyleSource::Inline(t) if t.contains("color:red")));
+        assert!(matches!(&sources[2], StyleSource::External(h) if h == "b.css"));
     }
 
     #[test]

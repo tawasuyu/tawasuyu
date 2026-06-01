@@ -118,7 +118,25 @@ impl Engine {
     /// Variante para tests / data URLs: parsea HTML ya en memoria.
     pub fn load_html(&self, url: &str, html: &str) -> Document {
         let dom = DomTree::parse(html);
-        let styles = StyleEngine::from_dom_with_viewport(&dom, self.viewport);
+        // Resuelve las hojas de estilo en orden de documento: `<style>` inline
+        // se usa tal cual; `<link rel="stylesheet">` se baja (http/file/data:)
+        // contra la base. Una hoja externa que falle se saltea (queda sin sus
+        // reglas, como un browser tras un 404 de CSS). Hojas relativas con base
+        // no-http (`about:test` en tests) no resuelven → sin red.
+        let base = url::Url::parse(url).ok();
+        let sheets: Vec<String> = dom
+            .collect_style_sources()
+            .into_iter()
+            .filter_map(|src| match src {
+                dom::StyleSource::Inline(text) => Some(text),
+                dom::StyleSource::External(href) => {
+                    let abs = resolve_resource_url(base.as_ref(), &href)?;
+                    let bytes = fetch::fetch_bytes(&abs).ok()?;
+                    Some(String::from_utf8_lossy(&bytes).into_owned())
+                }
+            })
+            .collect();
+        let styles = StyleEngine::from_sheets_with_viewport(&sheets, self.viewport);
         let box_tree = boxes::build(&dom, &styles, url);
         let title = dom.title().unwrap_or_default();
         let meta_refresh = dom.meta_refresh();
@@ -139,6 +157,28 @@ impl Default for Engine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Resuelve el `href` de un recurso (hoja de estilo externa) a una URL
+/// bajable. A diferencia de la navegación (`<a href>`, que bloquea `data:`),
+/// un recurso SÍ puede venir como `data:`/`file:`. Las relativas se unen a la
+/// base; las absolutas se aceptan sólo para http/https/file/data:. `None` si
+/// no resuelve (base no-hierárquica, scheme no soportado, href vacío).
+fn resolve_resource_url(base: Option<&url::Url>, href: &str) -> Option<String> {
+    let href = href.trim();
+    if href.is_empty() {
+        return None;
+    }
+    if fetch::is_data_url(href) {
+        return Some(href.to_string());
+    }
+    if let Ok(abs) = url::Url::parse(href) {
+        return match abs.scheme() {
+            "http" | "https" | "file" => Some(abs.into()),
+            _ => None,
+        };
+    }
+    base.and_then(|b| b.join(href).ok()).map(|u| u.to_string())
 }
 
 /// Documento web parseado y layouted (en forma de box tree).

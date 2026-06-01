@@ -750,26 +750,37 @@ impl StyleEngine {
     /// Como [`Self::from_dom`] pero evalúa los `@media` del documento contra
     /// `vp` (el tamaño/DPR real de la ventana). Las queries que no matchean se
     /// descartan en el parse, así que la cascada sólo ve las reglas activas.
+    /// Sólo ve los `<style>` inline — las hojas externas (`<link>`) las baja el
+    /// `Engine` y entran por [`Self::from_sheets_with_viewport`].
     pub fn from_dom_with_viewport(dom: &DomTree, vp: Viewport) -> Self {
+        Self::from_sheets_with_viewport(&dom.collect_inline_stylesheets(), vp)
+    }
+
+    /// Construye el motor desde una lista de hojas de estilo YA resueltas (su
+    /// texto), en orden de cascada. Es el punto por el que el `Engine` mete
+    /// tanto los `<style>` inline como los `<link rel="stylesheet">` externos
+    /// (ya bajados), preservando el orden de documento. El UA stylesheet va
+    /// siempre primero (menor prioridad).
+    pub fn from_sheets_with_viewport(sheets: &[String], vp: Viewport) -> Self {
         let mut rules = ua_stylesheet();
-        // Primera pasada: recoger `--name: value` de `:root` de todos
-        // los stylesheets para que cualquier `var(--x)` se resuelva sin
-        // importar en qué archivo se declaró.
+        // Primera pasada: recoger `--name: value` de `:root` de todas las
+        // hojas para que cualquier `var(--x)` se resuelva sin importar en qué
+        // archivo se declaró.
         let mut vars: HashMap<String, String> = HashMap::new();
-        for sheet in dom.collect_inline_stylesheets() {
-            let cleaned = strip_comments(&sheet);
+        for sheet in sheets {
+            let cleaned = strip_comments(sheet);
             extract_root_vars(&cleaned, &mut vars);
         }
-        // Segunda pasada: recoger `@keyframes` de todos los stylesheets.
-        // Son globales (no caen en la cascada por selector), así que un
-        // mapa name→def plano alcanza; conflictos los gana el último.
+        // Segunda pasada: recoger `@keyframes` de todas las hojas. Son
+        // globales (no caen en la cascada por selector), así que un mapa
+        // name→def plano alcanza; conflictos los gana el último.
         let mut keyframes: HashMap<String, Keyframes> = HashMap::new();
-        for sheet in dom.collect_inline_stylesheets() {
-            let cleaned = strip_comments(&sheet);
+        for sheet in sheets {
+            let cleaned = strip_comments(sheet);
             extract_keyframes(&cleaned, &mut keyframes);
         }
-        for sheet in dom.collect_inline_stylesheets() {
-            rules.extend(parse_stylesheet(&sheet, &vars, vp));
+        for sheet in sheets {
+            rules.extend(parse_stylesheet(sheet, &vars, vp));
         }
         Self { rules, vars, keyframes }
     }
