@@ -46,6 +46,7 @@ use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
 
 mod procfs;
+mod treemap;
 use procfs::{Scan, Sig};
 
 /// Muestras de CPU guardadas por unidad para dibujar el sparkline.
@@ -85,6 +86,8 @@ impl EngineCtx {
 enum Tab {
     /// Todos los procesos del SO (lectura de `/proc`) — el process monitor.
     System,
+    /// Treemap jerárquico (fractal) de procesos por memoria o CPU.
+    Map,
     /// Unidades del plano de control sandokan (por el contrato Engine).
     Units,
     /// Censo de apps WASM instaladas de Wawa.
@@ -136,6 +139,8 @@ enum Msg {
     SysTree(bool),
     /// Colapsar/expandir el subárbol de un PID.
     SysToggleNode(i32),
+    /// Métrica del treemap: `true` = CPU, `false` = memoria.
+    MapMetric(bool),
     /// Entrar/salir del modo filtro (sin borrar el texto).
     FilterMode(bool),
     /// Texto del filtro (edición en vivo).
@@ -167,8 +172,9 @@ fn build_menu() -> AppMenu {
         .menu(
             Menu::new("Ver")
                 .item(MenuItem::new("Sistema", "view.system").shortcut("Ctrl+1"))
-                .item(MenuItem::new("Unidades", "view.units").shortcut("Ctrl+2"))
-                .item(MenuItem::new("Wawa", "view.wawa").shortcut("Ctrl+3")),
+                .item(MenuItem::new("Mapa", "view.map").shortcut("Ctrl+2"))
+                .item(MenuItem::new("Unidades", "view.units").shortcut("Ctrl+3"))
+                .item(MenuItem::new("Wawa", "view.wawa").shortcut("Ctrl+4")),
         )
         .menu(Menu::new("Ayuda").item(MenuItem::new("Observa por el contrato Engine", "help.about")))
 }
@@ -195,6 +201,8 @@ struct Model {
     sys_filter: String,
     /// Capturando teclas para el filtro (modo búsqueda activo).
     filter_mode: bool,
+    /// Treemap: `true` colorea/dimensiona por CPU, `false` por memoria.
+    map_cpu: bool,
     mem_total_kb: u64,
     mem_avail_kb: u64,
     /// Historial de %uso por core + historial de %MEM (un punto por barrido).
@@ -519,7 +527,7 @@ fn switch_tab(model: &mut Model, tab: Tab, handle: &Handle<Msg>) {
         Tab::Wawa if model.wawa.is_empty() => {
             handle.spawn(|| Msg::WawaCensus(wawa_census()));
         }
-        Tab::System => handle.spawn(|| Msg::System(procfs::scan())),
+        Tab::System | Tab::Map => handle.spawn(|| Msg::System(procfs::scan())),
         _ => {}
     }
 }
@@ -578,6 +586,7 @@ impl App for Monitor {
             collapsed: HashSet::new(),
             sys_filter: String::new(),
             filter_mode: false,
+            map_cpu: false,
             mem_total_kb: 0,
             mem_avail_kb: 0,
             core_hist: Vec::new(),
@@ -645,6 +654,7 @@ impl App for Monitor {
                     model.sys_scroll = max;
                 }
             }
+            Msg::MapMetric(cpu) => model.map_cpu = cpu,
             Msg::FilterMode(on) => model.filter_mode = on,
             Msg::FilterSet(s) => {
                 model.sys_filter = s;
@@ -688,6 +698,7 @@ impl App for Monitor {
                 model.menu_open = None;
                 match cmd.as_str() {
                     "view.system" => switch_tab(&mut model, Tab::System, handle),
+                    "view.map" => switch_tab(&mut model, Tab::Map, handle),
                     "view.units" => switch_tab(&mut model, Tab::Units, handle),
                     "view.wawa" => switch_tab(&mut model, Tab::Wawa, handle),
                     "monitor.refresh" => {
@@ -714,6 +725,7 @@ impl App for Monitor {
         let t = &model.theme;
         let body = match model.tab {
             Tab::System => system_body(model),
+            Tab::Map => map_body(model),
             Tab::Units => units_body(model),
             Tab::Wawa => wawa_body(model),
         };
@@ -785,7 +797,8 @@ impl App for Monitor {
             Key::Named(NamedKey::F5) => return Some(Msg::MenuCmd("monitor.refresh".into())),
             Key::Named(NamedKey::Tab) => {
                 let next = match model.tab {
-                    Tab::System => "view.units",
+                    Tab::System => "view.map",
+                    Tab::Map => "view.units",
                     Tab::Units => "view.wawa",
                     Tab::Wawa => "view.system",
                 };
@@ -827,8 +840,9 @@ impl App for Monitor {
                     "r" => return Some(Msg::MenuCmd("monitor.refresh".into())),
                     "q" => return Some(Msg::MenuCmd("app.quit".into())),
                     "1" => return Some(Msg::MenuCmd("view.system".into())),
-                    "2" => return Some(Msg::MenuCmd("view.units".into())),
-                    "3" => return Some(Msg::MenuCmd("view.wawa".into())),
+                    "2" => return Some(Msg::MenuCmd("view.map".into())),
+                    "3" => return Some(Msg::MenuCmd("view.units".into())),
+                    "4" => return Some(Msg::MenuCmd("view.wawa".into())),
                     _ => {}
                 }
             }
@@ -891,7 +905,7 @@ fn menu_spec(model: &Model) -> MenuBarSpec<'_, Msg> {
 fn header(model: &Model) -> View<Msg> {
     let t = &model.theme;
     let mut chips = match model.tab {
-        Tab::System => {
+        Tab::System | Tab::Map => {
             let cpu: f32 = model.system.iter().map(|p| p.cpu_pct).sum();
             let rss: u64 = model.system.iter().map(|p| p.rss_kb).sum::<u64>() * 1024;
             vec![
@@ -972,6 +986,7 @@ fn tabs(model: &Model) -> View<Msg> {
     .fill(t.bg_panel)
     .children(vec![
         tab(t, "Sistema", model.tab == Tab::System, Msg::Switch(Tab::System)),
+        tab(t, "Mapa", model.tab == Tab::Map, Msg::Switch(Tab::Map)),
         tab(t, "Unidades", model.tab == Tab::Units, Msg::Switch(Tab::Units)),
         tab(t, "Wawa", model.tab == Tab::Wawa, Msg::Switch(Tab::Wawa)),
     ])
@@ -992,6 +1007,119 @@ fn tab(t: &Theme, label: &str, active: bool, on: Msg) -> View<Msg> {
     .hover_fill(t.bg_button_hover)
     .text(label, 13.0, fg)
     .on_click(on)
+}
+
+// ---------------------------------------------------------------------------
+// Modo Mapa: treemap jerárquico (fractal) de procesos.
+// ---------------------------------------------------------------------------
+
+fn map_body(model: &Model) -> View<Msg> {
+    let t = &model.theme;
+    if model.system.is_empty() {
+        return empty_state(t, "Leyendo /proc…", "Armando el mapa de procesos.");
+    }
+    let cpu = model.map_cpu;
+
+    // Datos para el painter (owned → Send + Sync + 'static).
+    let items: Vec<treemap::Item> = model
+        .system
+        .iter()
+        .map(|p| treemap::Item {
+            pid: p.pid,
+            ppid: p.ppid,
+            weight: if cpu { p.cpu_pct as f64 } else { p.rss_kb as f64 },
+            cpu: p.cpu_pct,
+            label: p.name.clone(),
+        })
+        .collect();
+
+    let border = t.bg_app;
+    let label_col = Color::from_rgba8(0x0d, 0x10, 0x14, 0xff);
+
+    let canvas = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .fill(t.bg_app)
+    .clip(true)
+    .paint_with(move |scene, ts, rect| {
+        let cells = treemap::layout(&items, (rect.x, rect.y, rect.w, rect.h), 15.0, 3.0);
+        for c in &cells {
+            let r = llimphi_ui::llimphi_raster::kurbo::Rect::new(
+                c.x as f64,
+                c.y as f64,
+                (c.x + c.w) as f64,
+                (c.y + c.h) as f64,
+            );
+            // Hoja: color por uso (más opaco). Contenedor: tinte tenue (los
+            // hijos lo tapan, queda visible la cabecera + borde).
+            let base = usage_color(c.cpu);
+            let fill = if c.leaf {
+                // Sombreado sutil por profundidad para dar sensación fractal.
+                base.with_alpha((0.92 - c.depth as f32 * 0.05).clamp(0.55, 0.92))
+            } else {
+                base.with_alpha(0.16)
+            };
+            scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
+            scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, border, None, &r);
+
+            // Etiqueta si hay lugar.
+            if c.w > 46.0 && c.h > 15.0 {
+                let layout = ts.layout(&c.label, 11.0, None, Alignment::Start, 1.2, false, None);
+                let m = measurement(&layout);
+                if m.width <= c.w - 6.0 {
+                    let x = (c.x + 3.0) as f64;
+                    let y = (c.y + 2.0) as f64;
+                    draw_layout(scene, &layout, label_col, (x, y));
+                }
+            }
+        }
+    });
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .fill(t.bg_app)
+    .children(vec![map_toolbar(model), canvas])
+}
+
+fn map_toolbar(model: &Model) -> View<Msg> {
+    let t = &model.theme;
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(8.0),
+            height: length(6.0),
+        },
+        padding: pad(16.0, 8.0),
+        ..Default::default()
+    })
+    .fill(t.bg_panel_alt)
+    .children(vec![
+        View::new(Style::default()).text("Área por:", 12.0, t.fg_muted),
+        seg_btn(t, "Memoria", !model.map_cpu, Msg::MapMetric(false)),
+        seg_btn(t, "CPU", model.map_cpu, Msg::MapMetric(true)),
+        View::new(Style {
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .text(
+            "Anidado por padre/hijo · color por uso de CPU",
+            11.0,
+            t.fg_muted,
+        ),
+    ])
 }
 
 // ---------------------------------------------------------------------------
