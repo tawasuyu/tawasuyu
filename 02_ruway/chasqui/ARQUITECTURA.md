@@ -167,7 +167,7 @@ ayni    : HEREDA la aspiración pub/sub de chasqui. Ayni-sync usa trait Transpor
 
 ### Pendiente
 - Persistencia del broker: hoy vive en memoria del Init, sin snapshot/recover al reboot.
-- Transporte remoto: Brahman es Unix-socket local; matching de módulos remotos (card-net/libp2p) sigue experimental, bloqueado por NAT traversal en minga.
+- Transporte remoto: Brahman es Unix-socket local; el matching de módulos remotos (card-net/libp2p) ya NO está bloqueado por NAT — `card-net` cablea relay+dcutr+autonat (verificado por el test `jalar_a_traves_de_un_relay` de khipu). Lo que falta es CABLEAR el discovery: el daemon Nouser no llama `announce_outputs()` al DHT ni hay `find_remote_providers(flow_type)` en `card-sidecar`.
 - real-nous en producción: la feature `embeddings` arrastra ~200 MB de ONNX runtime (trade-off tamaño↔capacidad).
 - Integración a fondo cross-dominio (rimay/shuma/arje) con nouser, aún superficial.
 - La aspiración pub/sub original migró a Ayni (chat P2P); chasqui hoy NO transporta mensajes app↔app en tiempo real.
@@ -177,8 +177,10 @@ ayni    : HEREDA la aspiración pub/sub de chasqui. Ayni-sync usa trait Transpor
 ```
 DEUDA / ASPIRA_A:
   #1 PERSISTENCIA del broker: hoy vive en memoria del Init, sin snapshot/recover al reboot.
-  #2 TRANSPORTE remoto: Brahman es Unix-socket local; matching de módulos remotos (card-net/libp2p) experimental.
-  #3 NAT traversal en minga (hole-punching/relays) — bloquea cualquier uso remoto P2P.
+  #2 TRANSPORTE remoto: Brahman es Unix-socket local; falta CABLEAR discovery por DHT
+     (announce_outputs en el daemon Nouser + find_remote_providers en card-sidecar).
+  #3 NAT traversal: HECHO en card-net (relay+dcutr+autonat), heredado por minga/agora/
+     chasqui/khipu; ya no bloquea el uso remoto P2P.
   #4 real-nous en producción: feature `embeddings` arrastra ~200MB de ONNX runtime — trade-off size↔capacidad.
   #5 COHERENCIA cross-dominio: rimay/shuma/arje aún no integrados a fondo con nouser.
 

@@ -824,6 +824,21 @@ impl AudioSource for DoomAudio {
     }
 }
 
+/// Colapsa un `AudioBuffer` de takiy (posiblemente estéreo/multicanal,
+/// interleaved) a un stream mono promediando los canales de cada cuadro. El
+/// [`DoomMixer`] trabaja con voces mono (panea él mismo a L/R), así que el
+/// puente con takiy reduce primero a mono.
+fn mono_samples(buf: &takiy_synth::AudioBuffer) -> Vec<f32> {
+    let ch = buf.channels.max(1) as usize;
+    if ch == 1 {
+        return buf.samples.clone();
+    }
+    buf.samples
+        .chunks(ch)
+        .map(|frame| frame.iter().copied().sum::<f32>() / ch as f32)
+        .collect()
+}
+
 /// Motor de audio: abre el sink cpal, cachea los sfx decodificados del
 /// WAD y reproduce eventos del motor. Mantené una instancia viva
 /// mientras corra el juego — al dropearla, el stream cpal se cierra.
@@ -882,6 +897,32 @@ impl AudioEngine {
                 .sfx
                 .add(samples, rate, g * pl, g * pr, occlusion);
         }
+    }
+
+    /// Reproduce una partitura de **takiy** como una voz más del mixer de
+    /// SFX (puente supay↔takiy). Renderiza el `Score` con el `OscRenderer`
+    /// de takiy al sample-rate del dispositivo, lo colapsa a mono y lo encola
+    /// con volumen `vol` (0..127) y paneo `sep` (0..255, 128 = centro) —
+    /// mismo contrato que [`play`](Self::play). Permite que el motor dispare
+    /// jingles o sonidos sintéticos sin que vivan en el WAD.
+    pub fn play_takiy_score(&mut self, score: &takiy_core::Score, vol: u8, sep: u8) {
+        use takiy_synth::renderer::{OscRenderer, Renderer};
+        let dev_rate = self._sink.sample_rate().max(1);
+        let buf = OscRenderer {
+            sample_rate: dev_rate,
+            ..Default::default()
+        }
+        .render(score);
+        let mono = mono_samples(&buf);
+        if mono.is_empty() {
+            return;
+        }
+        let g = vol as f32 / 127.0;
+        let (pl, pr) = equal_power_pan(sep);
+        self.audio
+            .lock()
+            .sfx
+            .add(mono.into(), dev_rate as f32, g * pl, g * pr, 0.0);
     }
 
     /// Empieza a reproducir un lump de música MUS (bytes crudos). Si no
@@ -1234,5 +1275,48 @@ mod tests {
         let mut buf = vec![0.0f32; 200];
         s.render_add(&mut buf, 8000, 1);
         assert_eq!(s.active_voices(), 1);
+    }
+
+    // === Puente supay↔takiy (device-free) ===
+
+    #[test]
+    fn mono_samples_promedia_canales_estereo() {
+        let buf = takiy_synth::AudioBuffer {
+            sample_rate: 44_100,
+            channels: 2,
+            // 2 cuadros estéreo: (1.0,0.0) → 0.5 ; (-1.0,1.0) → 0.0
+            samples: vec![1.0, 0.0, -1.0, 1.0],
+        };
+        assert_eq!(mono_samples(&buf), vec![0.5, 0.0]);
+    }
+
+    #[test]
+    fn takiy_score_se_encola_como_voz_mono() {
+        use takiy_core::{Pitch, Score, ScoreNote, Track};
+        use takiy_synth::renderer::{OscRenderer, Renderer};
+
+        // Una nota La4 de 1 beat a 60 bpm → ~1 s de señal audible.
+        let mut score = Score::new(60.0);
+        let mut track = Track::new("a");
+        track.add(ScoreNote::new(Pitch::A4, 0.0, 1.0, 127));
+        score.add_track(track);
+
+        let buf = OscRenderer {
+            sample_rate: 44_100,
+            ..Default::default()
+        }
+        .render(&score);
+        let mono = mono_samples(&buf);
+
+        assert!(!mono.is_empty(), "el render debe producir muestras");
+        assert!(
+            mono.iter().copied().map(f32::abs).fold(0.0, f32::max) > 0.1,
+            "la voz mono debe ser audible (no silencio)"
+        );
+
+        // Esa voz mono se encola en el mixer como cualquier SFX.
+        let mut m = DoomMixer::new();
+        m.add(mono.into(), 44_100.0, 0.7, 0.7, 0.0);
+        assert_eq!(m.active_voices(), 1);
     }
 }

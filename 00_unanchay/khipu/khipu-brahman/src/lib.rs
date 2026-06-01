@@ -12,9 +12,10 @@
 //! bajo una clave fija y [`KhipuNode::descubrir`] lista a quién la provee —
 //! rendezvous sin saber la `Multiaddr` de antemano (hace falta al menos un
 //! peer bootstrap en la tabla, vía [`KhipuNode::add_peer`]). La travesía de
-//! NAT (relay/dcutr) no está configurada en `BrahmanNet` todavía, así que
-//! entre pares directamente alcanzables esto cruza WAN; detrás de NAT hace
-//! falta port-forward o un relay futuro.
+//! NAT (relay + dcutr + autonat) **sí** está cableada en `BrahmanNet`
+//! (`shared/card/card-net`); ver el test `jalar_a_traves_de_un_relay` en
+//! `tests/p2p_roundtrip.rs`, que jala un sobre a través de un circuito relay.
+//! Detrás de NAT simétrico todavía conviene un relay público alcanzable.
 //!
 //! Marco de cable: `u32` big-endian con el largo del sobre + el sobre
 //! (postcard). Un sobre por stream — espejo del marco de `khipu-share::net`.

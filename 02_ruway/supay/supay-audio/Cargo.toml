@@ -8,4 +8,7 @@ description = "Mixer de SFX de Doom (supay) sobre cpal — Fase 4.0"
 supay-wad = { path = "../supay-wad" }
 media-core = { path = "../../media/media-core" }
 media-audio-cpal = { path = "../../media/media-audio-cpal" }
+# Puente supay↔takiy: renderizar partituras takiy como voces del mixer.
+takiy-core = { path = "../../takiy/takiy-core" }
+takiy-synth = { path = "../../takiy/takiy-synth" }
 parking_lot = { workspace = true }
