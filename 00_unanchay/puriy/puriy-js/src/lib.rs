@@ -13597,7 +13597,11 @@ mod tests {
         );
     }
 
-    // --- Fase 7.172 — polyfills ES2024 (lang_modern.rs) ------------------
+    // --- Fase 7.172 — conformance ES2024 del blob QuickJS embebido -------
+    // El blob es quickjs-ng con stdlib ES2024 COMPLETA: estos cuatro builtins
+    // ya son nativos (se verificó `.toString()` → "[native code]"), así que no
+    // hay polyfill — son tests de conformance/regresión que fallarían si un
+    // futuro cambio de blob degradara el engine.
 
     #[test]
     fn lang_promise_with_resolvers_forma() {
