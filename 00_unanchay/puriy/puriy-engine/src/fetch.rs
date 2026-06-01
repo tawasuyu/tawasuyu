@@ -70,6 +70,20 @@ pub fn fetch_bytes_with_referer(
     url: &str,
     referer: Option<&str>,
 ) -> Result<(Vec<u8>, String), FetchError> {
+    // file:// — páginas (y assets) locales del disco. Un navegador debe
+    // poder abrir un `.html` local y resolver sus `src`/`href` relativos
+    // (que el engine ya transforma en `file://…`). No pasa por la cache:
+    // un archivo en disco se relee siempre fresco. El resto del pipeline
+    // (parse/style/layout) es agnóstico al origen de los bytes.
+    if url.starts_with("file://") {
+        let path = url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.to_file_path().ok())
+            .unwrap_or_else(|| std::path::PathBuf::from(url.trim_start_matches("file://")));
+        let bytes = std::fs::read(&path)
+            .map_err(|e| FetchError::Transport(format!("file {}: {e}", path.display())))?;
+        return Ok((bytes, url.to_string()));
+    }
     if let Some(hit) = cache::get(url) {
         return Ok((hit, url.to_string()));
     }
@@ -296,6 +310,29 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_url_lee_archivo_local() {
+        // Un .html en disco se abre por file:// y devuelve sus bytes tal cual.
+        let mut path = std::env::temp_dir();
+        path.push(format!("puriy_file_test_{}.html", std::process::id()));
+        let html = b"<!doctype html><h1>hola local</h1>";
+        std::fs::write(&path, html).expect("escribir temp");
+        let url = format!("file://{}", path.display());
+        let (bytes, final_url) = fetch_bytes_with_referer(&url, None).expect("leer file://");
+        assert_eq!(bytes, html);
+        assert_eq!(final_url, url);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_url_inexistente_da_error_transport() {
+        let url = "file:///no/existe/jamas_de_los_jamases_puriy.html";
+        assert!(matches!(
+            fetch_bytes_with_referer(url, None),
+            Err(FetchError::Transport(_))
+        ));
+    }
 
     #[test]
     fn parse_max_age_extrae_segundos() {
