@@ -41,7 +41,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
-use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::llimphi_text::{draw_layout, measurement, Alignment};
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
 
@@ -1233,14 +1233,14 @@ fn system_body(model: &Model) -> View<Msg> {
 /// en FlexWrap (en ventanas angostas los cores bajan de fila).
 fn sys_graphs(model: &Model) -> View<Msg> {
     let t = &model.theme;
-    let cpu_col = Color::from_rgba8(0x3f, 0xcf, 0x6a, 0xff);
-    let mem_col = t.accent;
 
     let mut items: Vec<View<Msg>> = Vec::with_capacity(model.core_hist.len() + 1);
     for (i, hist) in model.core_hist.iter().enumerate() {
         let id = model.core_ids.get(i).copied().unwrap_or(i as u32);
         let now = hist.back().copied().unwrap_or(0.0);
-        items.push(meter(t, &format!("CPU{id}"), &format!("{now:.0}%"), hist, cpu_col, 126.0));
+        // El valor de la cabecera toma el color del nivel actual; la línea se
+        // colorea por tramo según el uso (verde→ámbar→rojo).
+        items.push(meter(t, &format!("CPU{id}"), &format!("{now:.0}%"), hist, usage_color(now), 126.0, true));
     }
     let mem_now = model.mem_hist.back().copied().unwrap_or(0.0);
     let used_kb = model.mem_total_kb.saturating_sub(model.mem_avail_kb);
@@ -1249,8 +1249,9 @@ fn sys_graphs(model: &Model) -> View<Msg> {
         "Memoria",
         &format!("{} / {} · {mem_now:.0}%", fmt_mem(used_kb * 1024), fmt_mem(model.mem_total_kb * 1024)),
         &model.mem_hist,
-        mem_col,
+        t.accent,
         236.0,
+        false,
     ));
 
     View::new(Style {
@@ -1267,11 +1268,32 @@ fn sys_graphs(model: &Model) -> View<Msg> {
     .children(items)
 }
 
+/// Color por nivel de uso: verde (bajo) → ámbar (medio) → rojo (alto).
+fn usage_color(pct: f32) -> Color {
+    if pct >= 85.0 {
+        Color::from_rgba8(0xd9, 0x53, 0x4f, 0xff)
+    } else if pct >= 60.0 {
+        Color::from_rgba8(0xe0, 0xb0, 0x3a, 0xff)
+    } else {
+        Color::from_rgba8(0x3f, 0xcf, 0x6a, 0xff)
+    }
+}
+
 /// Un medidor de ancho fijo: cabecera (label + valor) sobre un gráfico de área
-/// del historial (escala fija 0..100 %). Pintado con `paint_with`.
-fn meter(t: &Theme, label: &str, value: &str, hist: &VecDeque<f32>, color: Color, width: f32) -> View<Msg> {
+/// del historial (escala fija 0..100 %). Pintado con `paint_with`. Si
+/// `by_usage`, cada tramo de la línea se colorea por su nivel (CPU); si no, usa
+/// `color` plano (memoria).
+fn meter(
+    t: &Theme,
+    label: &str,
+    value: &str,
+    hist: &VecDeque<f32>,
+    color: Color,
+    width: f32,
+    by_usage: bool,
+) -> View<Msg> {
     let samples: Vec<f32> = hist.iter().copied().collect();
-    let area_col = color.with_alpha(0.20);
+    let area_col = color.with_alpha(0.18);
     let track = t.bg_input;
 
     let head = View::new(Style {
@@ -1319,17 +1341,28 @@ fn meter(t: &Theme, label: &str, value: &str, hist: &VecDeque<f32>, color: Color
         area.close_path();
         scene.fill(Fill::NonZero, Affine::IDENTITY, area_col, None, &area);
 
-        // Línea superior.
-        let mut line = BezPath::new();
-        for (i, v) in samples.iter().enumerate() {
-            let p = (xat(i), yat(*v));
-            if i == 0 {
-                line.move_to(p);
-            } else {
-                line.line_to(p);
+        // Línea superior. Con `by_usage`, cada tramo se tiñe por su nivel.
+        let stroke = Stroke::new(1.5);
+        if by_usage {
+            for i in 1..n {
+                let mut seg = BezPath::new();
+                seg.move_to((xat(i - 1), yat(samples[i - 1])));
+                seg.line_to((xat(i), yat(samples[i])));
+                let c = usage_color(samples[i].max(samples[i - 1]));
+                scene.stroke(&stroke, Affine::IDENTITY, c, None, &seg);
             }
+        } else {
+            let mut line = BezPath::new();
+            for (i, v) in samples.iter().enumerate() {
+                let p = (xat(i), yat(*v));
+                if i == 0 {
+                    line.move_to(p);
+                } else {
+                    line.line_to(p);
+                }
+            }
+            scene.stroke(&stroke, Affine::IDENTITY, color, None, &line);
         }
-        scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, color, None, &line);
     });
 
     View::new(Style {
@@ -1542,7 +1575,7 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
     let cpu_col = if p.cpu_pct >= 1.0 { t.fg_text } else { t.fg_muted };
 
     // Celda de comando: en árbol lleva sangría por profundidad + triángulo de
-    // colapso (clickeable) antes del texto.
+    // colapso (dibujado, no glifo de fuente) antes del texto.
     let cmd_cell = {
         let mut parts: Vec<View<Msg>> = Vec::new();
         if let Some((depth, has_kids, collapsed)) = node {
@@ -1550,46 +1583,16 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
             if indent > 0.0 {
                 parts.push(spacer(indent));
             }
-            let glyph = if !has_kids {
-                " "
-            } else if collapsed {
-                "▶"
-            } else {
-                "▼"
-            };
-            let mut g = View::new(Style {
-                size: Size {
-                    width: length(15.0),
-                    height: percent(1.0),
-                },
-                flex_shrink: 0.0,
-                justify_content: Some(JustifyContent::Center),
-                flex_direction: FlexDirection::Column,
-                ..Default::default()
-            })
-            .text(glyph, 11.0, t.fg_muted);
-            if has_kids {
-                g = g.on_click(Msg::SysToggleNode(p.pid));
-            }
-            parts.push(g);
+            parts.push(tri_node(t, has_kids, collapsed, p.pid));
         }
-        // El comando se pinta con `text_runs` (un solo run): ese path usa
-        // `break_all_lines(None)` → una sola línea SIN wrap, y el contenedor
-        // recorta el sobrante. Con `.text()` normal se medía contra el ancho
-        // de la celda y se rompía en varias líneas apretadas en ROW_H.
-        let cmd_show: String = p.cmd.chars().take(256).collect();
-        parts.push(
-            View::new(Style {
-                flex_grow: 1.0,
-                justify_content: Some(JustifyContent::Center),
-                flex_direction: FlexDirection::Column,
-                ..Default::default()
-            })
-            .clip(true)
-            .text_runs(cmd_show, 11.5, t.fg_text, vec![], Alignment::Start),
-        );
+        parts.push(command_node(&p.cmd, t.fg_text));
         View::new(Style {
             flex_grow: 1.0,
+            flex_basis: length(0.0),
+            min_size: Size {
+                width: length(0.0),
+                height: auto(),
+            },
             flex_direction: FlexDirection::Row,
             align_items: Some(AlignItems::Center),
             ..Default::default()
@@ -1631,6 +1634,87 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool
         cell(fmt_dur(p.uptime_secs), W_TIME, t.fg_muted),
         cmd_cell,
     ])
+}
+
+/// Triángulo de colapso del árbol, **dibujado** (no glifo de fuente, que salía
+/// tofu): ▶ colapsado / ▼ expandido. Las hojas quedan en blanco. Clickeable.
+fn tri_node(t: &Theme, has_kids: bool, collapsed: bool, pid: i32) -> View<Msg> {
+    let col = t.fg_muted;
+    let mut v = View::new(Style {
+        size: Size {
+            width: length(15.0),
+            height: percent(1.0),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    });
+    if has_kids {
+        v = v.paint_with(move |scene, _ts, rect| {
+            let cx = rect.x + rect.w / 2.0;
+            let cy = rect.y + rect.h / 2.0;
+            let s = 3.6_f32;
+            let mut tri = BezPath::new();
+            if collapsed {
+                // apunta a la derecha ▶
+                tri.move_to(((cx - s) as f64, (cy - s) as f64));
+                tri.line_to(((cx - s) as f64, (cy + s) as f64));
+                tri.line_to(((cx + s) as f64, cy as f64));
+            } else {
+                // apunta abajo ▼
+                tri.move_to(((cx - s) as f64, (cy - s) as f64));
+                tri.line_to(((cx + s) as f64, (cy - s) as f64));
+                tri.line_to((cx as f64, (cy + s) as f64));
+            }
+            tri.close_path();
+            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &tri);
+        });
+        v = v.on_click(Msg::SysToggleNode(pid));
+    }
+    v
+}
+
+/// Celda de comando: **rellena el espacio disponible** (flex), texto a la
+/// izquierda, una sola línea, y se pica con `...` si no entra. Pintado con
+/// `paint_with` para medir contra el ancho REAL de la columna (responsive) y
+/// elipsar pixel-exacto. Esto evita reservar una columna gigante.
+fn command_node(cmd: &str, color: Color) -> View<Msg> {
+    let cmd = cmd.chars().take(512).collect::<String>();
+    View::new(Style {
+        flex_grow: 1.0,
+        flex_basis: length(0.0),
+        min_size: Size {
+            width: length(0.0),
+            height: auto(),
+        },
+        size: Size {
+            width: auto(),
+            height: percent(1.0),
+        },
+        ..Default::default()
+    })
+    .clip(true)
+    .paint_with(move |scene, ts, rect| {
+        if cmd.is_empty() {
+            return;
+        }
+        let avail = (rect.w - 4.0).max(1.0);
+        let layout = ts.layout(&cmd, 11.5, None, Alignment::Start, 1.2, false, None);
+        let m = measurement(&layout);
+        let x = (rect.x + 2.0) as f64;
+        let y = (rect.y + ((rect.h - m.height) / 2.0).max(0.0)) as f64;
+        if m.width <= avail {
+            draw_layout(scene, &layout, color, (x, y));
+        } else {
+            // Picar por estimación (ancho promedio de glifo) + "...".
+            let n = cmd.chars().count().max(1);
+            let avg = m.width / n as f32;
+            let fit = ((avail / avg).floor() as usize).saturating_sub(2).min(n);
+            let mut s: String = cmd.chars().take(fit).collect();
+            s.push_str("...");
+            let lay = ts.layout(&s, 11.5, None, Alignment::Start, 1.2, false, None);
+            draw_layout(scene, &lay, color, (x, y));
+        }
+    })
 }
 
 /// Espaciador horizontal de ancho fijo (sangría del árbol).
