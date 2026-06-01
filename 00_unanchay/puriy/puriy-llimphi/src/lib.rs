@@ -700,7 +700,7 @@ impl App for Puriy {
             .unwrap_or_else(|| NEW_TAB_URL.to_string());
         let mut tab = TabState::new(url.clone());
         tab.gen = 1;
-        spawn_load(tab.id, tab.gen, url, /* referer */ None, handle.clone());
+        spawn_load(tab.id, tab.gen, url, /* referer */ None, current_viewport(), handle.clone());
         // Poll del reactor JS — un solo thread global que dispatcha
         // `Msg::JsTick` cada ~33ms. El handler walka las pestañas y
         // saltea las que no tienen runtime (cost ~ns por tab inactiva).
@@ -1150,7 +1150,7 @@ impl App for Puriy {
                 };
                 let mut tab = TabState::new(target.clone());
                 tab.gen = 1;
-                spawn_load(tab.id, tab.gen, target, referer, handle.clone());
+                spawn_load(tab.id, tab.gen, target, referer, current_viewport(), handle.clone());
                 m.tabs.push(tab);
                 let new_idx = m.tabs.len() - 1;
                 switch_active_tab(&mut m, new_idx);
@@ -3613,16 +3613,31 @@ fn start_load(m: &mut Model, url: String, push_history: bool, handle: &Handle<Ms
     }
     t.gen = t.gen.wrapping_add(1);
     let (id, gen) = (t.id, t.gen);
-    spawn_load(id, gen, url, referer, handle.clone());
+    spawn_load(id, gen, url, referer, current_viewport(), handle.clone());
 }
 
-fn spawn_load(tab: TabId, gen: u64, url: String, referer: Option<String>, handle: Handle<Msg>) {
+/// Viewport real actual (px físicos + DPR), leído de los thread-locals en el
+/// hilo main. Se captura ANTES de spawnear el worker (que no ve los TLS) para
+/// que el engine resuelva los `@media` del documento contra la ventana real.
+fn current_viewport() -> puriy_engine::Viewport {
+    let (w, h) = PURIY_VIEWPORT.with(|c| c.get());
+    puriy_engine::Viewport { width: w, height: h, dpr: PURIY_DPR.with(|c| c.get()) as f32 }
+}
+
+fn spawn_load(
+    tab: TabId,
+    gen: u64,
+    url: String,
+    referer: Option<String>,
+    viewport: puriy_engine::Viewport,
+    handle: Handle<Msg>,
+) {
     if url == NEW_TAB_URL {
         // No fetch para about:blank.
         return;
     }
     std::thread::spawn(move || {
-        let engine = Engine::new();
+        let engine = Engine::new().with_viewport(viewport);
         match engine.load_with_referer(&url, referer.as_deref()) {
             Ok(doc) => {
                 let title = if doc.title.is_empty() { doc.url.clone() } else { doc.title.clone() };
@@ -6900,6 +6915,19 @@ mod tests {
             }
         });
         assert!(found, "el handler de resize debió ver devicePixelRatio=2 y mutar a '2'");
+    }
+
+    #[test]
+    fn current_viewport_refleja_resize_y_scale() {
+        // Fase 7.175 — el engine resuelve @media contra este viewport.
+        let m = model_con_script("/* x */");
+        let h: Handle<Msg> = Handle::for_test();
+        let m = Puriy::update(m, Msg::Resize(900, 500), &h);
+        let _m = Puriy::update(m, Msg::ScaleFactor(2.0), &h);
+        let vp = current_viewport();
+        assert_eq!(vp.width, 900.0);
+        assert_eq!(vp.height, 500.0);
+        assert_eq!(vp.dpr, 2.0);
     }
 
     #[test]

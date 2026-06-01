@@ -741,7 +741,16 @@ impl StyleEngine {
     /// Construye el engine desde el DOM: parsea cada `<style>` inline +
     /// inyecta el UA stylesheet (los defaults HTML que cssparser no
     /// conoce).
+    /// Construye el motor de estilos resolviendo `@media` contra `DEFAULT_VIEWPORT`.
+    /// El chrome usa [`Self::from_dom_with_viewport`] para el viewport real.
     pub fn from_dom(dom: &DomTree) -> Self {
+        Self::from_dom_with_viewport(dom, DEFAULT_VIEWPORT)
+    }
+
+    /// Como [`Self::from_dom`] pero evalúa los `@media` del documento contra
+    /// `vp` (el tamaño/DPR real de la ventana). Las queries que no matchean se
+    /// descartan en el parse, así que la cascada sólo ve las reglas activas.
+    pub fn from_dom_with_viewport(dom: &DomTree, vp: Viewport) -> Self {
         let mut rules = ua_stylesheet();
         // Primera pasada: recoger `--name: value` de `:root` de todos
         // los stylesheets para que cualquier `var(--x)` se resuelva sin
@@ -760,7 +769,7 @@ impl StyleEngine {
             extract_keyframes(&cleaned, &mut keyframes);
         }
         for sheet in dom.collect_inline_stylesheets() {
-            rules.extend(parse_stylesheet(&sheet, &vars));
+            rules.extend(parse_stylesheet(&sheet, &vars, vp));
         }
         Self { rules, vars, keyframes }
     }
@@ -1969,9 +1978,9 @@ fn ua_stylesheet() -> Vec<Rule> {
 // nesting / `@media` / `!important`, migrar a `cssparser::StyleSheetParser`
 // con un visitor.
 
-fn parse_stylesheet(css: &str, vars: &HashMap<String, String>) -> Vec<Rule> {
+fn parse_stylesheet(css: &str, vars: &HashMap<String, String>, vp: Viewport) -> Vec<Rule> {
     let css = strip_comments(css);
-    parse_rules_block(&css, vars, DEFAULT_VIEWPORT)
+    parse_rules_block(&css, vars, vp)
 }
 
 /// Parsea un bloque de reglas — el cuerpo de un stylesheet completo o
@@ -4836,7 +4845,7 @@ mod tests {
 
     #[test]
     fn parsea_regla_simple() {
-        let rules = parse_stylesheet("p { color: red; font-size: 14px; }", &HashMap::new());
+        let rules = parse_stylesheet("p { color: red; font-size: 14px; }", &HashMap::new(), DEFAULT_VIEWPORT);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].selector.compounds.len(), 1);
         assert!(matches!(
@@ -5152,6 +5161,7 @@ mod tests {
         let s = parse_stylesheet(
             "p { width: 80%; max-width: 800px } div { width: auto }",
             &HashMap::new(),
+            DEFAULT_VIEWPORT,
         );
         assert_eq!(s.len(), 2);
         assert!(matches!(s[0].decls[0].kind, DeclKind::Width(LengthVal::Pct(80.0))));
@@ -5164,6 +5174,7 @@ mod tests {
         let s = parse_stylesheet(
             "h1 { text-align: center } p { text-align: right }",
             &HashMap::new(),
+            DEFAULT_VIEWPORT,
         );
         assert!(matches!(s[0].decls[0].kind, DeclKind::TextAlign(TextAlign::Center)));
         assert!(matches!(s[1].decls[0].kind, DeclKind::TextAlign(TextAlign::Right)));
@@ -5174,6 +5185,7 @@ mod tests {
         let s = parse_stylesheet(
             "p { line-height: 1.5 } h1 { line-height: 32px }",
             &HashMap::new(),
+            DEFAULT_VIEWPORT,
         );
         // 1.5 → 1.5
         assert!(matches!(s[0].decls[0].kind, DeclKind::LineHeight(v) if (v - 1.5).abs() < 1e-6));
@@ -6458,6 +6470,29 @@ line2</pre></body></html>"#;
 
         // Feature desconocida no descalifica (lenient, igual que antes).
         assert!(evaluate_media_query("(quantum-foam: 3)", landscape));
+    }
+
+    #[test]
+    fn from_dom_with_viewport_selecciona_media_por_ancho_real() {
+        let html = r#"<html><head><style>
+            p { color: green }
+            @media (max-width: 600px) { p { color: red } }
+            @media (min-width: 601px) { p { color: blue } }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+
+        // Viewport angosto → gana la regla red.
+        let eng = StyleEngine::from_dom_with_viewport(&dom, Viewport { width: 500.0, height: 800.0, dpr: 1.0 });
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(255, 0, 0), "ancho 500 → red");
+
+        // Viewport ancho → gana la regla blue.
+        let eng = StyleEngine::from_dom_with_viewport(&dom, Viewport { width: 1200.0, height: 800.0, dpr: 1.0 });
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255), "ancho 1200 → blue");
+
+        // `from_dom` sin viewport cae en DEFAULT_VIEWPORT (1280) → blue.
+        let eng = StyleEngine::from_dom(&dom);
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255), "default 1280 → blue");
     }
 
     #[test]

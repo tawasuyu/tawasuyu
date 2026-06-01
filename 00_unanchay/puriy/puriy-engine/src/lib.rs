@@ -49,11 +49,24 @@ pub use style::{
 
 /// Pipeline completo del navegador. Sin estado mutable — cada `load`
 /// devuelve un [`Document`] independiente.
-pub struct Engine;
+pub struct Engine {
+    /// Viewport contra el que se evalúan los `@media` del documento. El chrome
+    /// lo setea con el tamaño/DPR real de la ventana (`with_viewport`); por
+    /// defecto es `DEFAULT_VIEWPORT` (1280×800 @1.0) para tests y carga headless.
+    viewport: Viewport,
+}
 
 impl Engine {
     pub fn new() -> Self {
-        Self
+        Self { viewport: DEFAULT_VIEWPORT }
+    }
+
+    /// Fija el viewport real (ancho/alto en px + DPR) para que los `@media`
+    /// del documento se resuelvan contra la ventana de verdad. El chrome lo
+    /// llama antes de cargar con el tamaño actual. Builder: `Engine::new().with_viewport(vp)`.
+    pub fn with_viewport(mut self, viewport: Viewport) -> Self {
+        self.viewport = viewport;
+        self
     }
 
     /// Carga una URL y produce un documento listo para render.
@@ -105,7 +118,7 @@ impl Engine {
     /// Variante para tests / data URLs: parsea HTML ya en memoria.
     pub fn load_html(&self, url: &str, html: &str) -> Document {
         let dom = DomTree::parse(html);
-        let styles = StyleEngine::from_dom(&dom);
+        let styles = StyleEngine::from_dom_with_viewport(&dom, self.viewport);
         let box_tree = boxes::build(&dom, &styles, url);
         let title = dom.title().unwrap_or_default();
         let meta_refresh = dom.meta_refresh();
