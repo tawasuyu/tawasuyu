@@ -27,7 +27,7 @@ pinta/dispara. Los procesadores de audio componen como wrappers de
 `AudioSource` (igual que `PausableAudio`/`VolumeAudio`/`MixerAudio`). Los
 formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 
-## Estado (2026-05-31)
+## Estado (2026-06-01)
 
 ### Hecho
 - Decode/encode/captura nativos puro-Rust: AV1 (rav1d/rav1e) + Opus + FLAC + Vorbis + demux/mux WebM propio (sin ffmpeg); MP4/MKV/etc. vía puente `shared/foreign-av`.
@@ -35,10 +35,10 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 - Reproductor: playlist m3u (prev/next, repeat Off/One/All, shuffle), mixer + volumen + pausa unificada, visores (waveform/spectrum/waterfall/levels), subtítulos SRT+WebVTT sincronizados, velocidad (varispeed nativo).
 - Controles configurables estilo VLC (CONTROLES.md, Fases A–E todas ✅): keymap RON en caliente + watch, scripts Rhai, command palette ejecutable, overlay de ayuda, layout de paneles persistente, timeline scrubbeable (`SeekTo` absoluto + widget `llimphi-widget-timeline`).
 - Fase A1 (ecualizador paramétrico, banco de biquads) ✅ + EQ gráfico wireado en `media-app`.
-- M1 (sync A/V) arrancado: política `AvSync` (kernel) + `FrameSource` ya lleva PTS.
+- **M1 (sync A/V) ✅**: política `AvSync` (kernel) + `FrameSource` lleva PTS + **wiring en `media-app`**: el video se esclaviza al reloj de audio (la fuente avanza el delta sample-accurate que avanzó el audio entre paints, no el reloj de pared), `AvSync::plan` descarta frames atrasados, el dup es implícito (sin frame nuevo se retiene la textura previa), y seek/loop re-anclan el reloj (`reset_av_sync_anchor`). Sin playlist (tono/testcard) cae al reloj de pared, sin regresión.
 
 ### Pendiente
-- M1 completo (reloj de presentación + drop/dup por PTS en `media-app`/`foreign-av`), M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
+- M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
 - Track AUDIO A2–A6 (selección de pista, dispositivo de salida, delay, normalización/ReplayGain, gapless/crossfade).
 - Track VIDEO V1–V8 (fullscreen, aspect/crop/zoom, rotación, ajustes de color, deinterlacing, filtros/shaders, capítulos, HDR) — todo pendiente.
 - Track SUBTÍTULOS S1–S5 (ASS/SSA, pistas embebidas, estilo configurable, delay/sync, auto-carga).
@@ -51,14 +51,18 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 
 ### Track MOTOR — el corazón del reproductor
 
-- **M1 — Sincronización A/V por PTS.** *El hueco más importante.* Hoy el
-  video avanza con un timer fijo (`TICK_MS ≈ 30 fps` en `media-app`)
-  independiente del framerate del archivo y del reloj de audio → deriva en
-  todo lo que no sea 30 fps exacto. VLC/mpv usan el clock de audio como
-  master y hacen drop/dup de frames por PTS. Necesita: `FrameSource` que
-  exponga PTS del frame, un reloj de presentación, y el loop que compare
-  contra `Seekable::position()` del audio. Es multi-paso (core + `foreign-av`
-  + `media-app`).
+- **M1 — Sincronización A/V por PTS.** ✅ *Cerrado (2026-06-01).* Era el
+  hueco más importante: el video avanzaba con un timer fijo (`TICK_MS ≈ 30
+  fps` en `media-app`) independiente del framerate del archivo y del reloj
+  de audio → derivaba en todo lo que no fuera 30 fps exacto. VLC/mpv usan el
+  clock de audio como master y hacen drop/dup de frames por PTS. **Hecho**:
+  `FrameSource::pts()` expone el PTS del frame, la política pura `AvSync`
+  (`media-core::sync`) decide present/hold/drop contra el reloj de audio, y
+  el paint de `media-app` esclaviza el video al audio — avanza la fuente con
+  el delta sample-accurate que avanzó `Seekable::position()` del audio entre
+  paints (no el reloj de pared), descarta frames atrasados vía `AvSync::plan`
+  y re-ancla el reloj en cada seek/loop. El dup es implícito (sin frame nuevo
+  se retiene la textura). Sin audio (tono/testcard) cae al reloj de pared.
 - **M2 — Decode por hardware** (VAAPI/NVDEC/VideoToolbox/D3D11VA). La
   bandera de mpv; reproducir 4K/HEVC sin freír CPU. Probablemente vía
   ffmpeg `-hwaccel` en el puente primero.

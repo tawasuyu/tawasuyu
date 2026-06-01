@@ -74,6 +74,7 @@ use media_core::{
 use media_core::control::{ControlSettings, KeyChord, MediaCommand};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
+use media_core::sync::{AvSync, FramePlan};
 use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
 };
@@ -351,6 +352,15 @@ struct Pipeline {
     /// armar el `ImageBuffer`.
     last_dim: Mutex<(u32, u32)>,
     last_tick: Mutex<Instant>,
+    /// Política de sincronización A/V (M1 de `PARIDAD.md`). Decide por
+    /// frame, contra el reloj de audio, si presentarlo o descartarlo;
+    /// además lleva contadores de diagnóstico.
+    sync: Mutex<AvSync>,
+    /// Última posición del reloj de audio observada en un paint. El delta
+    /// contra la actual es cuánto avanzó el audio entre paints — el `dt`
+    /// con el que avanzamos el video (esclavo del audio, no del reloj de
+    /// pared). `None` hasta el primer paint con audio o tras un seek.
+    last_audio_pos: Mutex<Option<Duration>>,
 }
 
 fn config_slot() -> &'static OnceLock<Config> {
@@ -842,6 +852,29 @@ impl Seekable for Playlist {
     }
 }
 
+/// Posición del reloj de audio (sample-accurate, avanza al ritmo en que
+/// el sink consume samples) del track en curso, o `None` cuando no hay
+/// playlist (tono A4 / testcard). Es el reloj **maestro** de M1: el video
+/// se acomoda a él; sin él, el video cae al reloj de pared.
+fn current_audio_position() -> Option<Duration> {
+    playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .map(|h| h.lock().position())
+}
+
+/// Re-ancla el reloj de sync A/V tras un seek o cambio de pista: el
+/// próximo paint no avanza el video por un delta espurio (un salto de
+/// posición no es "tiempo transcurrido") y los contadores de drop se
+/// reinician. No-op si el pipeline todavía no se inicializó (el primer
+/// paint lo crea).
+fn reset_av_sync_anchor() {
+    if let Some(pipe) = pipeline_slot().get() {
+        *pipe.last_audio_pos.lock() = None;
+        pipe.sync.lock().reset();
+    }
+}
+
 /// Mueve la posición del Playlist (= track actual) en `delta_secs`
 /// (negativo = atrás) con wrap módulo duration. No-op si no hay
 /// playlist (tono A4).
@@ -855,6 +888,9 @@ fn seek_audio_by(delta_secs: i64) {
     let cur_s = src.position().as_secs_f64();
     let new_s = (cur_s + delta_secs as f64).rem_euclid(dur_s);
     src.seek_to(Duration::from_secs_f64(new_s));
+    drop(src);
+    // El video no debe interpretar el salto como tiempo transcurrido.
+    reset_av_sync_anchor();
 }
 
 /// Salta a la posición **absoluta** `fraction` (0..1) de la duración del
@@ -868,6 +904,9 @@ fn seek_audio_to(fraction: f32) {
     let dur_s = src.duration().unwrap_or(Duration::ZERO).as_secs_f64();
     let f = fraction.clamp(0.0, 1.0) as f64;
     src.seek_to(Duration::from_secs_f64(dur_s * f));
+    drop(src);
+    // El video no debe interpretar el salto como tiempo transcurrido.
+    reset_av_sync_anchor();
 }
 
 /// Construye el catálogo de acciones para el command palette a partir de
@@ -1341,6 +1380,8 @@ fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'static Pipeline
         buf: Mutex::new(Vec::new()),
         last_dim: Mutex::new((0, 0)),
         last_tick: Mutex::new(Instant::now()),
+        sync: Mutex::new(AvSync::default()),
+        last_audio_pos: Mutex::new(None),
     })
 }
 
@@ -1602,14 +1643,58 @@ impl App for MediaApp {
         .radius(10.0)
         .gpu_paint_with(move |device, queue, encoder, view, rect, viewport| {
             let pipe = pipeline_for(device, queue);
-            let mut last = pipe.last_tick.lock();
             let now = Instant::now();
-            let dt = now - *last;
-            *last = now;
+            let wall_dt = {
+                let mut last = pipe.last_tick.lock();
+                let d = now - *last;
+                *last = now;
+                d
+            };
+
+            // M1 — reloj maestro = audio. El video avanza **lo que avanzó
+            // el audio** desde el último paint (sample-accurate), no el
+            // reloj de pared; así no deriva en fuentes que no son 30 fps
+            // exactos. Sin playlist (tono A4 / testcard) cae al reloj de
+            // pared para que el testcard siga animando.
+            let audio_pos = current_audio_position();
+            let dt = match audio_pos {
+                Some(pos) => {
+                    let mut last_pos = pipe.last_audio_pos.lock();
+                    let d = match *last_pos {
+                        // Avance normal del audio: ese es el dt del video.
+                        Some(prev) if pos >= prev => pos - prev,
+                        // Primer frame, seek o loop (la posición retrocede o
+                        // arranca): no avances el video por un delta espurio.
+                        _ => Duration::ZERO,
+                    };
+                    *last_pos = Some(pos);
+                    d
+                }
+                None => wall_dt,
+            };
+
             let mut buf = pipe.buf.lock();
-            if let Some((w, h)) = pipe.source.lock().tick(dt, &mut buf) {
-                pipe.surface.upload(&buf, w, h);
-                *pipe.last_dim.lock() = (w, h);
+            let mut src = pipe.source.lock();
+            if let Some((w, h)) = src.tick(dt, &mut buf) {
+                let frame_pts = src.pts();
+                drop(src);
+                // Si hay reloj de audio y la fuente conoce su PTS, la
+                // política decide presentar/descartar. `Hold` no puede
+                // ocurrir acá (avanzamos el video con el delta del audio, no
+                // más allá), así que sólo distinguimos Drop del resto. Sin
+                // PTS o sin audio se presenta siempre (comportamiento previo).
+                let present = match (audio_pos, frame_pts) {
+                    (Some(audio), Some(pts)) => {
+                        !matches!(pipe.sync.lock().plan(audio, pts), FramePlan::Drop)
+                    }
+                    _ => true,
+                };
+                if present {
+                    pipe.surface.upload(&buf, w, h);
+                    *pipe.last_dim.lock() = (w, h);
+                }
+            } else {
+                drop(src);
             }
             drop(buf);
             pipe.surface.blit(queue, encoder, view, rect, viewport);
