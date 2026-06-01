@@ -1,4 +1,4 @@
-//! `pluma-notebook-kernel-dominium` — kernel de notebook que ejecuta
+//! `dominium-notebook-kernel` — kernel de notebook que ejecuta
 //! celdas sobre el simulador determinista de [`dominium_core`] +
 //! [`dominium_physics`].
 //!

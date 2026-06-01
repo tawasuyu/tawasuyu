@@ -18,7 +18,7 @@
 //!   en dos celdas para mostrar reactividad parcial.
 //! - `stats`: lectura final sin avanzar el reloj.
 //!
-//! Corré con: `cargo run -p pluma-notebook-kernel-dominium --example
+//! Corré con: `cargo run -p dominium-notebook-kernel --example
 //! notebook_dominium_demo --release`.
 //!
 //! El demo no abre ventana; imprime el stdout de cada celda. Para
@@ -27,7 +27,7 @@
 
 use pluma_notebook_core::{CellId, CellKind, Notebook, OutputPayload};
 use pluma_notebook_exec::run_all;
-use pluma_notebook_kernel_dominium::DominiumKernel;
+use dominium_notebook_kernel::DominiumKernel;
 
 #[tokio::main]
 async fn main() {
