@@ -17,12 +17,12 @@
 //! Editar la celda TDB o LOCATION y re-correr `run_all` muta toda la
 //! cadena. Mismo patrón reactivo que kernel-dominium.
 //!
-//! Corré con: `cargo run -p pluma-notebook-kernel-cosmos --example
+//! Corré con: `cargo run -p cosmos-notebook-kernel --example
 //! notebook_cosmos_demo --release`.
 
 use pluma_notebook_core::{CellId, CellKind, Notebook, OutputPayload};
 use pluma_notebook_exec::run_all;
-use pluma_notebook_kernel_cosmos::CosmosKernel;
+use cosmos_notebook_kernel::CosmosKernel;
 
 #[tokio::main]
 async fn main() {

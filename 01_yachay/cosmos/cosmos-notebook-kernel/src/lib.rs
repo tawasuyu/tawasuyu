@@ -1,4 +1,4 @@
-//! `pluma-notebook-kernel-cosmos` — kernel de notebook que envuelve
+//! `cosmos-notebook-kernel` — kernel de notebook que envuelve
 //! [`cosmos_time`] + [`cosmos_ephemeris`] para servir efemérides puras
 //! desde el DAG.
 //!
