@@ -20,6 +20,9 @@ url = { workspace = true }
 # Net síncrono
 ureq = { workspace = true }
 
+# Decode de `data:` URLs (RFC 2397) en su forma base64
+base64 = { workspace = true }
+
 # Decoding de imágenes (<img>) — sólo PNG + JPEG por default-features
 image = { workspace = true }
 

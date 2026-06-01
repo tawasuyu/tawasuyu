@@ -1642,9 +1642,7 @@ fn build_node(
             let image = if tag.as_deref() == Some("img") {
                 let src_candidate = pick_srcset(&dom::attr(node, "srcset").unwrap_or_default())
                     .or_else(|| dom::attr(node, "src"));
-                src_candidate
-                    .and_then(|s| resolve_href(base, &s))
-                    .and_then(|abs| fetch_and_decode(&abs))
+                src_candidate.and_then(|s| fetch_image_src(base, &s))
             } else if tag.as_deref() == Some("picture") {
                 // `<picture>`: el primer `<source srcset>` que sirva
                 // gana; sino caemos al `<img>` interno (que ya entra
@@ -1660,9 +1658,7 @@ fn build_node(
                         }
                     }
                 }
-                chosen
-                    .and_then(|s| resolve_href(base, &s))
-                    .and_then(|abs| fetch_and_decode(&abs))
+                chosen.and_then(|s| fetch_image_src(base, &s))
             } else {
                 None
             };
@@ -1672,8 +1668,7 @@ fn build_node(
             let background_image = style
                 .background_image_url
                 .as_deref()
-                .and_then(|u| resolve_href(base, u))
-                .and_then(|abs| fetch_and_decode(&abs));
+                .and_then(|u| fetch_image_src(base, u));
             let mut children = Vec::new();
             // `::before` pseudo-element. Se inyecta ANTES que el marker
             // de `<li>` y que los children reales — matchea spec ("the
@@ -2459,6 +2454,12 @@ fn prefetch_background_image_urls(
 
 fn fetch_and_decode(url: &str) -> Option<ImageData> {
     let bytes = crate::fetch::fetch_bytes(url).ok()?;
+    decode_image_bytes(&bytes)
+}
+
+/// Decodifica bytes de imagen (PNG/JPEG por las features de `image`) a RGBA8.
+/// `None` si el formato no está habilitado o el decode falla.
+fn decode_image_bytes(bytes: &[u8]) -> Option<ImageData> {
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
@@ -2467,6 +2468,19 @@ fn fetch_and_decode(url: &str) -> Option<ImageData> {
     let rgba = img.to_rgba8();
     let (width, height) = (rgba.width(), rgba.height());
     Some(ImageData { rgba: rgba.into_raw(), width, height })
+}
+
+/// Resuelve+decodifica la imagen de un `src`/`srcset`/`background-image`.
+/// Los `data:` URLs se decodifican inline (RFC 2397) — `resolve_href` los
+/// bloquea a propósito (no son navegables como `<a href>`), pero como fuente
+/// de un recurso son legítimos. El resto resuelve contra `base` y baja por
+/// HTTP/file. `None` si falta src o falla la decodificación.
+fn fetch_image_src(base: Option<&url::Url>, src: &str) -> Option<ImageData> {
+    if crate::fetch::is_data_url(src.trim()) {
+        return decode_image_bytes(&crate::fetch::decode_data_url(src.trim())?);
+    }
+    let abs = resolve_href(base, src)?;
+    fetch_and_decode(&abs)
 }
 
 /// Colapso de whitespace según `white-space`:
@@ -3567,6 +3581,26 @@ mod tests {
             elapsed.as_millis() < 500,
             "load_html con base about: y un <img> debería ser instantáneo, fue {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn img_data_url_se_decodifica_inline() {
+        // `<img src="data:image/png;base64,...">` con un PNG 1×1 (un pixel rojo).
+        // `resolve_href` bloquea data: (no navegable), pero como fuente de
+        // imagen `fetch_image_src` lo decodifica sin tocar la red.
+        let png_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+        let html = format!(r##"<html><body><img src="{png_1x1}"></body></html>"##);
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", &html);
+        let mut img_dims: Option<(u32, u32)> = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("img") {
+                if let Some(img) = &b.image {
+                    img_dims = Some((img.width, img.height));
+                }
+            }
+        });
+        assert_eq!(img_dims, Some((1, 1)), "el PNG data: debería decodificar a 1×1");
     }
 
     #[test]

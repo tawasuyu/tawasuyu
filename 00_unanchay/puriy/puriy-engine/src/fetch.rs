@@ -70,6 +70,14 @@ pub fn fetch_bytes_with_referer(
     url: &str,
     referer: Option<&str>,
 ) -> Result<(Vec<u8>, String), FetchError> {
+    // data: — bytes embebidos en el propio URL (RFC 2397). Inline icons,
+    // PNGs/SVGs chicos, fuentes base64. No tocan la red ni la cache: se
+    // decodifican acá y se devuelven crudos (el caller adivina el formato).
+    if is_data_url(url) {
+        let bytes =
+            decode_data_url(url).ok_or_else(|| FetchError::Transport("data: URL inválida".into()))?;
+        return Ok((bytes, url.to_string()));
+    }
     // file:// — páginas (y assets) locales del disco. Un navegador debe
     // poder abrir un `.html` local y resolver sus `src`/`href` relativos
     // (que el engine ya transforma en `file://…`). No pasa por la cache:
@@ -127,6 +135,78 @@ pub fn fetch_bytes_with_referer(
     Ok((bytes, final_url))
 }
 
+/// `true` si la URL es un `data:` URL (scheme case-insensitive).
+pub fn is_data_url(url: &str) -> bool {
+    url.len() >= 5 && url[..5].eq_ignore_ascii_case("data:")
+}
+
+/// El MIME declarado por un `data:` URL (`data:<mime>[;params],<datos>`).
+/// Default `text/plain;charset=US-ASCII` cuando se omite (lo dicta RFC 2397).
+fn data_url_mime(url: &str) -> String {
+    let rest = &url[5.min(url.len())..];
+    let meta = rest.split(',').next().unwrap_or("");
+    let mime = meta.strip_suffix(";base64").unwrap_or(meta);
+    if mime.is_empty() {
+        "text/plain;charset=US-ASCII".to_string()
+    } else {
+        mime.to_string()
+    }
+}
+
+/// Decodifica un `data:` URL (RFC 2397) a sus bytes crudos. Soporta la forma
+/// base64 (`data:<mime>;base64,<b64>`) y la percent-encoded
+/// (`data:<mime>,<texto>`). El MIME se descarta — el caller adivina el formato
+/// (las imágenes por sniffing). `None` si el prefijo no es `data:`, falta la
+/// coma separadora, o el payload base64 está corrupto.
+pub fn decode_data_url(url: &str) -> Option<Vec<u8>> {
+    if !is_data_url(url) {
+        return None;
+    }
+    let rest = &url[5..];
+    let comma = rest.find(',')?;
+    let meta = &rest[..comma];
+    let payload = &rest[comma + 1..];
+    // El último parámetro `;base64` (case-insensitive) marca la codificación.
+    let is_base64 = meta
+        .rsplit(';')
+        .next()
+        .is_some_and(|s| s.eq_ignore_ascii_case("base64"));
+    if is_base64 {
+        use base64::Engine as _;
+        // Los data: URLs a menudo traen saltos de línea/espacios — el decoder
+        // estándar los rechaza, así que los quitamos primero.
+        let cleaned: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+        base64::engine::general_purpose::STANDARD
+            .decode(cleaned.as_bytes())
+            .ok()
+    } else {
+        Some(percent_decode_bytes(payload))
+    }
+}
+
+/// Percent-decode minimal: `%XX` → byte; el resto pasa crudo. En `data:` el
+/// `+` es un literal (no espacio, a diferencia de los query strings). Un `%`
+/// mal formado se conserva tal cual.
+fn percent_decode_bytes(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Parser minimal de `Cache-Control: max-age=N`. Ignora `s-maxage`,
 /// `no-store`, etc. — esos directivos requerirían lógica adicional que
 /// queda fuera del scope inicial. Devuelve `None` si:
@@ -173,6 +253,21 @@ pub fn fetch_full(
     body: Option<&[u8]>,
     headers: &[(String, String)],
 ) -> Result<FetchResponse, FetchError> {
+    // data: — `fetch('data:...')` resuelve con los bytes embebidos, status 200.
+    // El MIME (parte antes de `,`) viaja como Content-Type para que
+    // `response.blob()`/`.text()` se comporten bien.
+    if is_data_url(url) {
+        let bytes =
+            decode_data_url(url).ok_or_else(|| FetchError::Transport("data: URL inválida".into()))?;
+        let mime = data_url_mime(url);
+        return Ok(FetchResponse {
+            status: 200,
+            status_text: "OK".to_string(),
+            body: bytes,
+            headers: vec![("content-type".to_string(), mime)],
+            final_url: url.to_string(),
+        });
+    }
     let parsed = url::Url::parse(url).ok();
     let host = parsed.as_ref().and_then(|u| u.host_str()).map(|s| s.to_string());
     let method_upper = method.to_ascii_uppercase();
@@ -332,6 +427,47 @@ mod tests {
             fetch_bytes_with_referer(url, None),
             Err(FetchError::Transport(_))
         ));
+    }
+
+    #[test]
+    fn data_url_base64_decodifica() {
+        // data:text/plain;base64,SGk= → "Hi"
+        let (bytes, final_url) =
+            fetch_bytes_with_referer("data:text/plain;base64,SGk=", None).expect("data:");
+        assert_eq!(bytes, b"Hi");
+        assert_eq!(final_url, "data:text/plain;base64,SGk=");
+    }
+
+    #[test]
+    fn data_url_base64_ignora_whitespace() {
+        // Saltos de línea dentro del payload (común en data: largos) no rompen.
+        // base64("Hi!") = "SGkh".
+        assert_eq!(
+            decode_data_url("data:application/octet-stream;base64,SG\nkh"),
+            Some(b"Hi!".to_vec())
+        );
+    }
+
+    #[test]
+    fn data_url_percent_encoded_decodifica() {
+        // Forma sin base64: el payload va percent-encoded; `+` es literal.
+        assert_eq!(
+            decode_data_url("data:text/plain,Hola%20mundo+ya"),
+            Some(b"Hola mundo+ya".to_vec())
+        );
+    }
+
+    #[test]
+    fn data_url_sin_mime_default_y_corrupto_none() {
+        // MIME omitido → default text/plain;charset=US-ASCII.
+        assert_eq!(data_url_mime("data:,abc"), "text/plain;charset=US-ASCII");
+        assert_eq!(data_url_mime("data:image/png;base64,AAAA"), "image/png");
+        // base64 corrupto (carácter inválido) → None.
+        assert_eq!(decode_data_url("data:;base64,@@@@"), None);
+        // No es data: URL.
+        assert_eq!(decode_data_url("http://x/y"), None);
+        assert!(!is_data_url("https://data.example.com"));
+        assert!(is_data_url("DATA:text/plain,x"));
     }
 
     #[test]
