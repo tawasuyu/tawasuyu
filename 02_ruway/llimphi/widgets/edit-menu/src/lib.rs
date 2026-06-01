@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use llimphi_theme::Theme;
 use llimphi_ui::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
-use llimphi_widget_context_menu::{ContextMenuItem, ContextMenuPalette, ContextMenuSpec};
+use llimphi_widget_context_menu::{step_active, ContextMenuItem, ContextMenuPalette, ContextMenuSpec};
 use llimphi_widget_text_editor::{ApplyResult, Clipboard, EditorState};
 
 /// Una acción de edición del menú estándar. Es `Copy` para que el
@@ -181,6 +181,27 @@ pub fn edit_menu_items(flags: EditFlags) -> Vec<ContextMenuItem> {
     entries(flags).0
 }
 
+/// Mueve el resaltado de teclado por las filas del menú de edición, saltando
+/// separadores y filas deshabilitadas. `active == usize::MAX` significa "ninguna
+/// fila"; `direction` +1 baja, −1 sube. Pensado para enganchar flechas
+/// arriba/abajo sobre el menú de edición abierto (paralelo a [`step_active`]).
+pub fn edit_menu_step(flags: EditFlags, active: usize, direction: i32) -> usize {
+    let items = entries(flags).0;
+    step_active(&items, active, direction)
+}
+
+/// La [`EditAction`] de la fila `active`, o `None` si esa fila es un separador,
+/// está deshabilitada o fuera de rango. Pensado para resolver la tecla Enter
+/// sobre la fila resaltada por [`edit_menu_step`].
+pub fn edit_menu_action_at(flags: EditFlags, active: usize) -> Option<EditAction> {
+    let (items, actions) = entries(flags);
+    let item = items.get(active)?;
+    if item.separator || !item.enabled {
+        return None;
+    }
+    actions.get(active).copied()
+}
+
 /// Arma el [`ContextMenuSpec`] del menú de edición listo para
 /// `context_menu_view`. `on_action` rebota cada pick en un `Msg` de la
 /// app; `on_dismiss` cierra al click-fuera o Esc.
@@ -311,6 +332,22 @@ mod tests {
         let items = edit_menu_items(flags);
         // "Cortar" es el primer ítem tras el separador (índice 3).
         assert!(!items[3].enabled, "Cortar debería estar deshabilitado sin selección");
+    }
+
+    #[test]
+    fn step_y_action_at_saltan_separadores_y_deshabilitados() {
+        let mut s = lleno();
+        s.select_all();
+        let flags = EditFlags::from_editor(&s, false);
+        // Desde "ninguna fila", bajar cae en la primera seleccionable (Deshacer
+        // está gris sin historial; Cortar=3 es el primer habilitado real).
+        let first = edit_menu_step(flags, usize::MAX, 1);
+        assert!(edit_menu_action_at(flags, first).is_some());
+        // El separador (índice 2) nunca da acción.
+        assert_eq!(edit_menu_action_at(flags, 2), None);
+        // Avanzar y retroceder vuelve a una fila con acción válida.
+        let next = edit_menu_step(flags, first, 1);
+        assert!(edit_menu_action_at(flags, next).is_some());
     }
 
     #[test]
