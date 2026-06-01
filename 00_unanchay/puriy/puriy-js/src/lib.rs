@@ -862,6 +862,34 @@ impl JsRuntime {
         self.eval_raw(&script).map(|_| ())
     }
 
+    /// Empuja el resultado de evaluar una media query al estado JS. Si el valor
+    /// flipeó respecto al previo, dispara `change` en los `MediaQueryList` vivos
+    /// de esa query (Fase 7.98). El chrome lo llama tras evaluar cada query
+    /// registrada contra su viewport real. Usa `eval` (no `eval_raw`) para drenar
+    /// microtasks que los listeners de `change` pudieran encolar.
+    pub fn set_media_match(&mut self, query: &str, matches: bool) -> Result<(), JsError> {
+        let q = js_string_literal(query);
+        let script = format!(
+            "if (typeof globalThis.__puriy_set_media_match === 'function') {{ \
+                globalThis.__puriy_set_media_match({q}, {matches}); }}"
+        );
+        self.eval(&script).map(|_| ())
+    }
+
+    /// Lista las media queries que el script consultó vía `matchMedia(...)`. El
+    /// chrome las evalúa contra su viewport real y empuja cada resultado con
+    /// [`set_media_match`](Self::set_media_match). Vacío si nunca se llamó a
+    /// `matchMedia`. Las queries no contienen `\n`, así que el join es seguro.
+    pub fn registered_media_queries(&mut self) -> Vec<String> {
+        let script = "(globalThis.__puriy_media_queries || []).join('\\n')";
+        match self.eval(script) {
+            Ok(JsValue::String(s)) if !s.is_empty() => {
+                s.split('\n').map(|q| q.to_string()).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Avanza el reloj a `now_ms` y dispara cada `setTimeout`/
     /// `setInterval` con `fire_at <= now_ms`. Devuelve cuántos
     /// callbacks corrieron + cuántos timers quedan vivos (para que el
@@ -8721,6 +8749,45 @@ mod tests {
         .expect("e");
         // El listener corrió una sola vez (se quitó antes del segundo cambio).
         assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn registered_media_queries_enumera_lo_consultado() {
+        // Fase 7.174 — el chrome enumera las queries para evaluarlas él mismo.
+        let mut rt = JsRuntime::new().expect("rt");
+        assert!(rt.registered_media_queries().is_empty());
+        rt.eval(
+            "matchMedia('(min-width: 600px)'); \
+             matchMedia('(orientation: landscape)'); \
+             matchMedia('(min-width: 600px)');", // duplicada → dedup
+        )
+        .expect("e");
+        let qs = rt.registered_media_queries();
+        assert_eq!(qs.len(), 2, "dedup: {qs:?}");
+        assert!(qs.contains(&"(min-width: 600px)".to_string()));
+        assert!(qs.contains(&"(orientation: landscape)".to_string()));
+    }
+
+    #[test]
+    fn set_media_match_host_flippea_y_solo_dispara_si_cambia() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var n = 0; \
+             var mql = matchMedia('(min-width: 600px)'); \
+             mql.addEventListener('change', function() { n++; });",
+        )
+        .expect("e");
+        // Primer push true → flipea de undefined → dispara.
+        rt.set_media_match("(min-width: 600px)", true).expect("set");
+        assert_eq!(rt.eval("mql.matches").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+        // Re-empujar el MISMO valor no debe re-disparar change.
+        rt.set_media_match("(min-width: 600px)", true).expect("set");
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(1.0));
+        // Cambiar a false sí dispara.
+        rt.set_media_match("(min-width: 600px)", false).expect("set");
+        assert_eq!(rt.eval("mql.matches").expect("e"), JsValue::Bool(false));
+        assert_eq!(rt.eval("n").expect("e"), JsValue::Number(2.0));
     }
 
     // ---- Fase 7.99 — screen / orientation / devicePixelRatio ----

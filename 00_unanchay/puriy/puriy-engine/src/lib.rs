@@ -44,6 +44,7 @@ pub use style::{
     Keyframes, LengthVal, LinearGradient, Outline, Overflow, PointerEvents, Position,
     PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine, TextShadow, TextTransform,
     Transform, TransitionBinding, VerticalAlign, Viewport, Visibility, WhiteSpace, DEFAULT_VIEWPORT,
+    evaluate_media_query,
 };
 
 /// Pipeline completo del navegador. Sin estado mutable — cada `load`

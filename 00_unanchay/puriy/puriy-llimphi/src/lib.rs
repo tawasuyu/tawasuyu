@@ -1183,6 +1183,9 @@ impl App for Puriy {
                 // 'resize' lea `window.innerWidth`/`innerHeight` actuales.
                 if let Some(rt) = t.js.as_mut() {
                     let _ = rt.set_viewport(vp_w, vp_h);
+                    // Re-evalúa las media queries de ancho/alto/orientation con
+                    // el viewport nuevo (dispara `change` donde flipeó).
+                    sync_media_queries(rt, vp_w, vp_h, PURIY_DPR.with(|c| c.get()) as f32);
                     let (_, pending) = dispatch_window_js_event_on_tab(t, "resize", now_ms);
                     for req in pending {
                         handle.dispatch(req);
@@ -1200,6 +1203,9 @@ impl App for Puriy {
                 // (los browsers disparan 'resize' al cambiar el DPI).
                 if let Some(rt) = t.js.as_mut() {
                     let _ = rt.set_device_pixel_ratio(scale);
+                    // Re-evalúa las media queries de resolution con el DPR nuevo.
+                    let (vp_w, vp_h) = PURIY_VIEWPORT.with(|c| c.get());
+                    sync_media_queries(rt, vp_w, vp_h, scale as f32);
                     let (_, pending) = dispatch_window_js_event_on_tab(t, "resize", now_ms);
                     for req in pending {
                         handle.dispatch(req);
@@ -2825,11 +2831,35 @@ fn run_scripts_on_tab(
         prev_stdout_len = new_stdout.len();
         prev_stderr_len = new_stderr.len();
     }
+    // Resuelve las media queries que los scripts consultaron (`matchMedia`)
+    // contra el viewport real, ahora que ya se registraron. Así un listener
+    // de DOMContentLoaded/load o un `if (mql.matches)` posterior ve el valor
+    // correcto. (Limitación: una lectura síncrona de `.matches` en el MISMO
+    // tick del `matchMedia(...)` ve aún `false` — no hay hostcall síncrono
+    // desde el sandbox para evaluar al vuelo.)
+    let (vp_w, vp_h) = PURIY_VIEWPORT.with(|c| c.get());
+    sync_media_queries(rt, vp_w, vp_h, PURIY_DPR.with(|c| c.get()) as f32);
     // Aplica al box_tree cualquier mutación que los scripts iniciales
     // hayan hecho via `el.textContent = ...` (typeahead, contadores
     // inicializados, sustituciones de placeholders, etc). Las
     // mutaciones de fetch suben al caller para que dispatch.
     apply_dom_mutations(t)
+}
+
+/// Evalúa cada media query registrada por `matchMedia` contra el viewport
+/// real (ancho/alto en px + DPR) reusando el evaluador del engine, y empuja
+/// el resultado al estado JS — disparando `change` en los `MediaQueryList`
+/// vivos cuyo `matches` flipeó. No-op si el script nunca llamó `matchMedia`.
+fn sync_media_queries(rt: &mut puriy_js::JsRuntime, vp_w: f32, vp_h: f32, dpr: f32) {
+    let queries = rt.registered_media_queries();
+    if queries.is_empty() {
+        return;
+    }
+    let vp = puriy_engine::Viewport { width: vp_w, height: vp_h, dpr };
+    for q in queries {
+        let matches = puriy_engine::evaluate_media_query(&q, vp);
+        let _ = rt.set_media_match(&q, matches);
+    }
 }
 
 /// Walka el `BoxTree` y arma un `Vec<ElementSnapshot>` para cada nodo
@@ -6870,6 +6900,34 @@ mod tests {
             }
         });
         assert!(found, "el handler de resize debió ver devicePixelRatio=2 y mutar a '2'");
+    }
+
+    #[test]
+    fn media_queries_se_resuelven_contra_viewport_y_dpr() {
+        // Fase 7.174 — el chrome evalúa matchMedia contra su viewport REAL.
+        // Conducimos viewport y DPR por Msg para no depender del thread-local
+        // (que otros tests del mismo hilo podrían haber mutado).
+        let m = model_con_script(
+            "globalThis.__wide = matchMedia('(min-width: 600px)'); \
+             globalThis.__huge = matchMedia('(min-width: 1200px)'); \
+             globalThis.__hidpi = matchMedia('(min-resolution: 2dppx)');",
+        );
+        let h: Handle<Msg> = Handle::for_test();
+        // Viewport 1000×700 @ dpr 1 → wide sí, huge no, hidpi no.
+        let mut m = Puriy::update(m, Msg::Resize(1000, 700), &h);
+        {
+            let rt = m.tabs[0].js.as_mut().expect("rt");
+            assert_eq!(rt.eval("__wide.matches").expect("e"), puriy_js::JsValue::Bool(true));
+            assert_eq!(rt.eval("__huge.matches").expect("e"), puriy_js::JsValue::Bool(false));
+            assert_eq!(rt.eval("__hidpi.matches").expect("e"), puriy_js::JsValue::Bool(false));
+        }
+        // Subimos el DPR a 2 → la query de resolution flipea a true.
+        let mut m = Puriy::update(m, Msg::ScaleFactor(2.0), &h);
+        {
+            let rt = m.tabs[0].js.as_mut().expect("rt");
+            assert_eq!(rt.eval("__hidpi.matches").expect("e"), puriy_js::JsValue::Bool(true));
+        }
+        let _ = m;
     }
 
     #[test]

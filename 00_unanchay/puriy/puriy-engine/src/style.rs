@@ -562,9 +562,13 @@ pub struct Keyframes {
 pub struct Viewport {
     pub width: f32,
     pub height: f32,
+    /// Factor de escala (DPI lógico) — `window.devicePixelRatio`. 1.0 normal,
+    /// 2.0 HiDPI/Retina. Lo consume `evaluate_media_query` para las features
+    /// `min/max-resolution` (`Ndppx` / `Ndpi`). Default 1.0.
+    pub dpr: f32,
 }
 
-pub const DEFAULT_VIEWPORT: Viewport = Viewport { width: 1280.0, height: 800.0 };
+pub const DEFAULT_VIEWPORT: Viewport = Viewport { width: 1280.0, height: 800.0, dpr: 1.0 };
 
 impl<T: Copy> Sides<T> {
     pub const fn all(v: T) -> Self {
@@ -4525,62 +4529,105 @@ fn parse_one_grid_track(s: &str) -> Option<GridTrackSize> {
 /// Evalúa una condición de `@media` contra el viewport por defecto. Subset:
 /// `(max-width: Npx)`, `(min-width: Npx)`, encadenados por ` and `.
 /// `screen`/`all` se ignoran (siempre true).
-fn evaluate_media_query(condition: &str, vp: Viewport) -> bool {
+/// Evalúa una media query (`@media` en CSS y `window.matchMedia()` en JS) contra
+/// el viewport actual. Soporta listas separadas por `,` (OR), `not`/`only`,
+/// el combinador ` and `, tipos de media (`screen`/`all`/`print`/`speech`) y
+/// las features: `min/max/exact-width`, `min/max/exact-height`, `orientation`
+/// (portrait/landscape), `min/max/exact-resolution` (`Ndppx`/`Ndpi`/`Nx` vs
+/// `vp.dpr`) y `prefers-color-scheme`/`prefers-reduced-motion` (reportamos
+/// light / no-reduce). Features desconocidas se ignoran (no descalifican), igual
+/// que el comportamiento previo, para no romper CSS que las use de forma
+/// progresiva. Pública porque el chrome (`puriy-llimphi`) la reusa para resolver
+/// `matchMedia` contra el viewport real de la ventana.
+pub fn evaluate_media_query(condition: &str, vp: Viewport) -> bool {
     let cond = condition.trim().to_ascii_lowercase();
     if cond.is_empty() {
         return true;
     }
-    let parts: Vec<&str> = cond.split(" and ").map(|s| s.trim()).collect();
-    for part in parts {
-        if part == "all" || part == "screen" || part == "print" {
-            // Tipos de media: aceptamos screen y all; print → false.
-            if part == "print" {
-                return false;
-            }
+    // Media query LIST: separada por comas, matchea si CUALQUIER componente lo hace.
+    if cond.contains(',') {
+        return cond.split(',').any(|q| evaluate_media_query(q, vp));
+    }
+    // `not` a nivel de query invierte el resultado completo.
+    if let Some(rest) = cond.strip_prefix("not ") {
+        return !evaluate_media_query_terms(rest.trim(), vp);
+    }
+    evaluate_media_query_terms(&cond, vp)
+}
+
+/// Evalúa los términos unidos por ` and ` de una query ya sin `,`/`not` de tope.
+fn evaluate_media_query_terms(cond: &str, vp: Viewport) -> bool {
+    for part in cond.split(" and ").map(|s| s.trim()) {
+        if part.is_empty() {
             continue;
         }
-        // Eliminar prefijo `only ` o `not ` (no soportamos not — falla).
-        let part = part.strip_prefix("only ").unwrap_or(part).trim();
-        if part.starts_with("not ") {
+        // Tipos de media.
+        if part == "all" || part == "screen" {
+            continue;
+        }
+        if part == "print" || part == "speech" || part == "tty" {
             return false;
         }
-        // Esperamos `(feature: value)`.
-        let inner = part.strip_prefix('(').and_then(|s| s.strip_suffix(')'));
-        let Some(inner) = inner else {
+        let part = part.strip_prefix("only ").unwrap_or(part).trim();
+        // Esperamos `(feature)` o `(feature: value)`.
+        let Some(inner) = part.strip_prefix('(').and_then(|s| s.strip_suffix(')')) else {
+            // Token no reconocido (tipo de media raro): no matchea.
             return false;
         };
-        let Some((feature, val)) = inner.split_once(':').map(|(a, b)| (a.trim(), b.trim()))
-        else {
+        if !evaluate_media_feature(inner.trim(), vp) {
             return false;
-        };
-        let Some(len) = parse_length_px(val) else {
-            return false;
-        };
-        match feature {
-            "max-width" => {
-                if vp.width > len {
-                    return false;
-                }
-            }
-            "min-width" => {
-                if vp.width < len {
-                    return false;
-                }
-            }
-            "max-height" => {
-                if vp.height > len {
-                    return false;
-                }
-            }
-            "min-height" => {
-                if vp.height < len {
-                    return false;
-                }
-            }
-            _ => {} // feature no soportada → ignorar (= true).
         }
     }
     true
+}
+
+/// Evalúa UNA feature `(feature)` o `(feature: value)` contra el viewport.
+fn evaluate_media_feature(inner: &str, vp: Viewport) -> bool {
+    let Some((feature, val)) = inner.split_once(':').map(|(a, b)| (a.trim(), b.trim())) else {
+        // Feature booleana (sin valor): matchea si la capacidad "existe".
+        return matches!(inner, "color" | "grid" | "hover" | "pointer");
+    };
+    match feature {
+        "max-width" => parse_length_px(val).is_some_and(|l| vp.width <= l),
+        "min-width" => parse_length_px(val).is_some_and(|l| vp.width >= l),
+        "width" => parse_length_px(val).is_some_and(|l| (vp.width - l).abs() < 0.5),
+        "max-height" => parse_length_px(val).is_some_and(|l| vp.height <= l),
+        "min-height" => parse_length_px(val).is_some_and(|l| vp.height >= l),
+        "height" => parse_length_px(val).is_some_and(|l| (vp.height - l).abs() < 0.5),
+        "orientation" => match val {
+            "portrait" => vp.height >= vp.width,
+            "landscape" => vp.width > vp.height,
+            _ => false,
+        },
+        "min-resolution" => parse_resolution_dppx(val).is_some_and(|r| vp.dpr >= r),
+        "max-resolution" => parse_resolution_dppx(val).is_some_and(|r| vp.dpr <= r),
+        "resolution" => parse_resolution_dppx(val).is_some_and(|r| (vp.dpr - r).abs() < 0.01),
+        // Preferencias del usuario: reportamos tema claro y sin reducción.
+        "prefers-color-scheme" => val == "light" || val == "no-preference",
+        "prefers-reduced-motion" => val == "no-preference",
+        "prefers-contrast" => val == "no-preference",
+        "hover" => val == "hover",
+        "any-hover" => val == "hover",
+        "pointer" => val == "fine",
+        "any-pointer" => val == "fine",
+        // Feature desconocida: no descalifica (comportamiento previo lenient).
+        _ => true,
+    }
+}
+
+/// Parsea una resolución de media query a `dppx` (dots per px). Acepta
+/// `Ndppx`, `Nx` (alias de dppx) y `Ndpi` (96dpi = 1dppx). `None` si no parsea.
+fn parse_resolution_dppx(val: &str) -> Option<f32> {
+    let v = val.trim();
+    if let Some(n) = v.strip_suffix("dppx").or_else(|| v.strip_suffix('x')) {
+        n.trim().parse::<f32>().ok()
+    } else if let Some(n) = v.strip_suffix("dpi") {
+        n.trim().parse::<f32>().ok().map(|d| d / 96.0)
+    } else if let Some(n) = v.strip_suffix("dpcm") {
+        n.trim().parse::<f32>().ok().map(|d| d / 96.0 * 2.54)
+    } else {
+        None
+    }
 }
 
 /// Evalúa una condición `@supports (prop: value)` ⇒ true si nuestro
@@ -6366,6 +6413,51 @@ line2</pre></body></html>"#;
         let eng = StyleEngine::from_dom(&dom);
         let p = dom.find("p").unwrap();
         assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn media_query_orientation_resolution_y_combinadores() {
+        let portrait = Viewport { width: 400.0, height: 900.0, dpr: 1.0 };
+        let landscape = Viewport { width: 900.0, height: 400.0, dpr: 1.0 };
+        let retina = Viewport { width: 900.0, height: 400.0, dpr: 2.0 };
+
+        // orientation.
+        assert!(evaluate_media_query("(orientation: portrait)", portrait));
+        assert!(!evaluate_media_query("(orientation: portrait)", landscape));
+        assert!(evaluate_media_query("(orientation: landscape)", landscape));
+
+        // resolution (dppx / x / dpi).
+        assert!(evaluate_media_query("(min-resolution: 2dppx)", retina));
+        assert!(!evaluate_media_query("(min-resolution: 2dppx)", landscape));
+        assert!(evaluate_media_query("(min-resolution: 2x)", retina));
+        assert!(evaluate_media_query("(min-resolution: 192dpi)", retina));
+        assert!(evaluate_media_query("(max-resolution: 1dppx)", landscape));
+
+        // Lista OR (`,`): matchea si cualquiera lo hace.
+        assert!(evaluate_media_query("(max-width: 100px), (orientation: landscape)", landscape));
+        assert!(!evaluate_media_query("(max-width: 100px), (max-height: 100px)", landscape));
+
+        // `not` invierte la query completa.
+        assert!(evaluate_media_query("not (max-width: 100px)", landscape));
+        assert!(!evaluate_media_query("not (orientation: landscape)", landscape));
+
+        // Preferencias: reportamos tema claro y sin reducción de movimiento.
+        assert!(evaluate_media_query("(prefers-color-scheme: light)", landscape));
+        assert!(!evaluate_media_query("(prefers-color-scheme: dark)", landscape));
+        assert!(evaluate_media_query("(prefers-reduced-motion: no-preference)", landscape));
+
+        // `and` mezclando dimensión + orientación + resolución.
+        assert!(evaluate_media_query(
+            "screen and (min-width: 800px) and (orientation: landscape) and (min-resolution: 2dppx)",
+            retina,
+        ));
+        assert!(!evaluate_media_query(
+            "screen and (min-width: 800px) and (min-resolution: 2dppx)",
+            landscape, // dpr 1.0 → falla la última
+        ));
+
+        // Feature desconocida no descalifica (lenient, igual que antes).
+        assert!(evaluate_media_query("(quantum-foam: 3)", landscape));
     }
 
     #[test]

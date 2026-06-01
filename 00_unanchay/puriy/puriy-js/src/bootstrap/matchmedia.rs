@@ -12,6 +12,10 @@ pub(crate) const MATCHMEDIA_BOOTSTRAP: &str = r#"
 // pegados, no un `MediaQueryListEvent` real.
 (function() {
     globalThis.__puriy_media_state = globalThis.__puriy_media_state || {};   // query -> bool
+    // Lista de TODAS las queries consultadas (dedup). El chrome la enumera con
+    // `registered_media_queries()` para evaluarlas contra el viewport real y
+    // empujar el resultado por `__puriy_set_media_match`. Persiste entre loads.
+    globalThis.__puriy_media_queries = globalThis.__puriy_media_queries || [];
     var live = {};   // query -> [MediaQueryList vivos]
 
     function MediaQueryList(query) {
@@ -38,12 +42,20 @@ pub(crate) const MATCHMEDIA_BOOTSTRAP: &str = r#"
         var mql = new MediaQueryList(query);
         if (!live[query]) live[query] = [];
         live[query].push(mql);
+        if (globalThis.__puriy_media_queries.indexOf(query) < 0) {
+            globalThis.__puriy_media_queries.push(query);
+        }
         return mql;
     };
 
     globalThis.__puriy_set_media_match = function(query, matches) {
         query = String(query);
-        globalThis.__puriy_media_state[query] = !!matches;
+        matches = !!matches;
+        // Sólo dispara `change` si el valor REALMENTE cambió (la spec lo exige;
+        // evita un alud de eventos en cada resize cuando nada flipeó).
+        var prev = globalThis.__puriy_media_state[query];
+        globalThis.__puriy_media_state[query] = matches;
+        if (prev === matches) return true;
         var arr = live[query];
         if (!arr) return true;
         for (var i = 0; i < arr.length; i++) {
