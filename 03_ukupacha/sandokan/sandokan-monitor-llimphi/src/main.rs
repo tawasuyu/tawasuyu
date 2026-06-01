@@ -23,7 +23,7 @@
 //! El monitor **no inventa** un canal de observación paralelo: es la cara de
 //! sólo-lectura del plano de control (SDD §6).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -100,6 +100,7 @@ enum Sort {
 #[derive(Clone)]
 struct SysProc {
     pid: i32,
+    ppid: i32,
     name: String,
     state: char,
     cpu_pct: f32,
@@ -125,6 +126,10 @@ enum Msg {
     SysSelect(i32),
     SysSort(Sort),
     SysScroll(i32),
+    /// Cambiar entre lista plana y árbol padre/hijo.
+    SysTree(bool),
+    /// Colapsar/expandir el subárbol de un PID.
+    SysToggleNode(i32),
     Signal(i32, Sig),
     Switch(Tab),
     Select(Option<Ulid>),
@@ -170,6 +175,10 @@ struct Model {
     sys_sel: Option<i32>,
     sys_sort: Sort,
     sys_scroll: usize,
+    /// Modo árbol (padre/hijo) vs lista plana ordenable.
+    sys_tree: bool,
+    /// PIDs con su subárbol colapsado.
+    collapsed: HashSet<i32>,
     mem_total_kb: u64,
     /// Jiffies previos por PID + total, para derivar %CPU por delta.
     prev_proc: HashMap<i32, u64>,
@@ -287,6 +296,7 @@ fn ingest_system(model: &mut Model, scan: Scan) {
         next_prev.insert(p.pid, p.cpu_jiffies);
         out.push(SysProc {
             pid: p.pid,
+            ppid: p.ppid,
             name: p.name.clone(),
             state: p.state,
             cpu_pct,
@@ -310,9 +320,23 @@ fn ingest_system(model: &mut Model, scan: Scan) {
             model.sys_sel = None;
         }
     }
-    let max = model.system.len().saturating_sub(SYS_ROWS);
+    let max = render_list(model).len().saturating_sub(SYS_ROWS);
     if model.sys_scroll > max {
         model.sys_scroll = max;
+    }
+}
+
+/// Reajusta el scroll para que la fila seleccionada quede en la ventana visible
+/// (según el orden de render actual: lista o árbol).
+fn ensure_visible(model: &mut Model) {
+    let Some(pid) = model.sys_sel else { return };
+    let rows = render_list(model);
+    if let Some(i) = rows.iter().position(|r| model.system[r.idx].pid == pid) {
+        if i < model.sys_scroll {
+            model.sys_scroll = i;
+        } else if i >= model.sys_scroll + SYS_ROWS {
+            model.sys_scroll = i + 1 - SYS_ROWS;
+        }
     }
 }
 
@@ -327,6 +351,72 @@ fn sort_system(model: &mut Model) {
             .system
             .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
     }
+}
+
+/// Una fila tal como se va a pintar: índice en `model.system`, profundidad en
+/// el árbol y si tiene hijos (para el triángulo de colapso).
+#[derive(Clone, Copy)]
+struct RenderRow {
+    idx: usize,
+    depth: u16,
+    has_kids: bool,
+}
+
+/// La lista de filas a pintar/recorrer: plana (modo lista) o aplanada DFS del
+/// árbol padre/hijo (modo árbol), respetando los subárboles colapsados. Es la
+/// única fuente de orden — render, scroll, navegación ↑↓ comparten esto.
+fn render_list(model: &Model) -> Vec<RenderRow> {
+    if !model.sys_tree {
+        return (0..model.system.len())
+            .map(|idx| RenderRow {
+                idx,
+                depth: 0,
+                has_kids: false,
+            })
+            .collect();
+    }
+    flatten_tree(&model.system, &model.collapsed)
+}
+
+/// Aplana el bosque padre/hijo de `system` (ya ordenado) en orden DFS,
+/// saltando los subárboles colapsados. Pura para poder testearla.
+fn flatten_tree(system: &[SysProc], collapsed: &HashSet<i32>) -> Vec<RenderRow> {
+    // pid → índice (en el orden ya ordenado por sys_sort).
+    let pos: HashMap<i32, usize> = system.iter().enumerate().map(|(i, p)| (p.pid, i)).collect();
+    // ppid → hijos (índices), preservando el orden global ordenado.
+    let mut children: HashMap<i32, Vec<usize>> = HashMap::new();
+    let mut roots: Vec<usize> = Vec::new();
+    for (i, p) in system.iter().enumerate() {
+        if p.ppid != p.pid && p.ppid != 0 && pos.contains_key(&p.ppid) {
+            children.entry(p.ppid).or_default().push(i);
+        } else {
+            roots.push(i);
+        }
+    }
+
+    let mut out = Vec::with_capacity(system.len());
+    let mut seen: HashSet<i32> = HashSet::new();
+    // Pila DFS (índice, profundidad); se empuja en reversa para emitir en orden.
+    let mut stack: Vec<(usize, u16)> = roots.iter().rev().map(|&i| (i, 0)).collect();
+    while let Some((i, depth)) = stack.pop() {
+        let pid = system[i].pid;
+        if !seen.insert(pid) {
+            continue; // guarda anti-ciclo (ppid patológico)
+        }
+        let kids = children.get(&pid);
+        let has_kids = kids.map(|k| !k.is_empty()).unwrap_or(false);
+        out.push(RenderRow {
+            idx: i,
+            depth,
+            has_kids,
+        });
+        if has_kids && !collapsed.contains(&pid) {
+            for &c in kids.unwrap().iter().rev() {
+                stack.push((c, depth + 1));
+            }
+        }
+    }
+    out
 }
 
 fn switch_tab(model: &mut Model, tab: Tab, handle: &Handle<Msg>) {
@@ -390,6 +480,8 @@ impl App for Monitor {
             sys_sel: None,
             sys_sort: Sort::Cpu,
             sys_scroll: 0,
+            sys_tree: true,
+            collapsed: HashSet::new(),
             mem_total_kb: 0,
             prev_proc: HashMap::new(),
             prev_total: 0,
@@ -427,26 +519,30 @@ impl App for Monitor {
             }
             Msg::SysSelect(pid) => {
                 model.sys_sel = (pid >= 0).then_some(pid);
-                // Mantener la fila seleccionada dentro de la ventana visible.
-                if let Some(i) = model
-                    .sys_sel
-                    .and_then(|p| model.system.iter().position(|x| x.pid == p))
-                {
-                    if i < model.sys_scroll {
-                        model.sys_scroll = i;
-                    } else if i >= model.sys_scroll + SYS_ROWS {
-                        model.sys_scroll = i - SYS_ROWS + 1;
-                    }
-                }
+                ensure_visible(&mut model);
             }
             Msg::SysSort(s) => {
                 model.sys_sort = s;
                 sort_system(&mut model);
             }
             Msg::SysScroll(steps) => {
-                let max = model.system.len().saturating_sub(SYS_ROWS);
+                let max = render_list(&model).len().saturating_sub(SYS_ROWS);
                 let cur = model.sys_scroll as i64 + steps as i64;
                 model.sys_scroll = cur.clamp(0, max as i64) as usize;
+            }
+            Msg::SysTree(on) => {
+                model.sys_tree = on;
+                model.sys_scroll = 0;
+                ensure_visible(&mut model);
+            }
+            Msg::SysToggleNode(pid) => {
+                if !model.collapsed.remove(&pid) {
+                    model.collapsed.insert(pid);
+                }
+                let max = render_list(&model).len().saturating_sub(SYS_ROWS);
+                if model.sys_scroll > max {
+                    model.sys_scroll = max;
+                }
             }
             Msg::Signal(pid, sig) => {
                 if let Err(e) = procfs::signal(pid, sig) {
@@ -568,6 +664,21 @@ impl App for Monitor {
             Key::Named(NamedKey::Delete) if model.tab == Tab::System => {
                 return model.sys_sel.map(|p| Msg::Signal(p, Sig::Term));
             }
+            // En árbol: ← colapsa, → expande el nodo seleccionado.
+            Key::Named(NamedKey::ArrowLeft) if model.tab == Tab::System && model.sys_tree => {
+                if let Some(p) = model.sys_sel {
+                    if !model.collapsed.contains(&p) {
+                        return Some(Msg::SysToggleNode(p));
+                    }
+                }
+            }
+            Key::Named(NamedKey::ArrowRight) if model.tab == Tab::System && model.sys_tree => {
+                if let Some(p) = model.sys_sel {
+                    if model.collapsed.contains(&p) {
+                        return Some(Msg::SysToggleNode(p));
+                    }
+                }
+            }
             Key::Character(c) if ev.modifiers.ctrl => {
                 match c.as_str().to_ascii_lowercase().as_str() {
                     "r" => return Some(Msg::MenuCmd("monitor.refresh".into())),
@@ -600,20 +711,21 @@ impl App for Monitor {
     }
 }
 
-/// Mueve la selección en la tabla de Sistema y reajusta el scroll para
-/// mantenerla visible.
+/// Mueve la selección en la tabla de Sistema siguiendo el **orden de render**
+/// (en árbol, recorre la jerarquía aplanada visible).
 fn sys_move(model: &Model, dir: i32) -> Option<Msg> {
-    if model.system.is_empty() {
+    let rows = render_list(model);
+    if rows.is_empty() {
         return None;
     }
     let cur = model
         .sys_sel
-        .and_then(|p| model.system.iter().position(|x| x.pid == p));
+        .and_then(|p| rows.iter().position(|r| model.system[r.idx].pid == p));
     let next = match cur {
-        Some(i) => (i as i32 + dir).clamp(0, model.system.len() as i32 - 1) as usize,
+        Some(i) => (i as i32 + dir).clamp(0, rows.len() as i32 - 1) as usize,
         None => 0,
     };
-    Some(Msg::SysSelect(model.system[next].pid))
+    Some(Msg::SysSelect(model.system[rows[next].idx].pid))
 }
 
 /// Spec de la barra de menú — armado en cada `view()`/`view_overlay()`.
@@ -909,14 +1021,17 @@ fn system_body(model: &Model) -> View<Msg> {
         return empty_state(t, "Leyendo /proc…", "Barriendo los procesos del sistema.");
     }
 
-    let total = model.system.len();
+    let rows = render_list(model);
+    let total = rows.len();
     let start = model.sys_scroll.min(total.saturating_sub(1));
     let end = (start + SYS_ROWS).min(total);
 
     let mut table: Vec<View<Msg>> = Vec::with_capacity(end - start + 2);
     table.push(sys_header_row(model));
-    for p in &model.system[start..end] {
-        table.push(sys_row(t, p, model.sys_sel == Some(p.pid)));
+    for r in &rows[start..end] {
+        let p = &model.system[r.idx];
+        let node = model.sys_tree.then_some((r.depth, r.has_kids, model.collapsed.contains(&p.pid)));
+        table.push(sys_row(t, p, model.sys_sel == Some(p.pid), node));
     }
     if end < total {
         table.push(
@@ -925,7 +1040,7 @@ fn system_body(model: &Model) -> View<Msg> {
                 ..Default::default()
             })
             .text(
-                &format!("… {} procesos más abajo (rueda / ↑↓)", total - end),
+                &format!("… {} filas más abajo (rueda / ↑↓)", total - end),
                 10.5,
                 t.fg_muted,
             ),
@@ -947,7 +1062,7 @@ fn system_body(model: &Model) -> View<Msg> {
     })
     .fill(t.bg_app)
     .children(vec![
-        sys_action_bar(t, sel),
+        sys_action_bar(model, sel),
         View::new(Style {
             flex_direction: FlexDirection::Column,
             flex_grow: 1.0,
@@ -968,9 +1083,13 @@ fn system_body(model: &Model) -> View<Msg> {
     ])
 }
 
-/// Barra de acciones sobre el proceso seleccionado. Sin selección, una pista.
-fn sys_action_bar(t: &Theme, sel: Option<&SysProc>) -> View<Msg> {
-    let mut row: Vec<View<Msg>> = Vec::new();
+/// Barra de acciones: toggle Lista/Árbol + acciones sobre el seleccionado.
+fn sys_action_bar(model: &Model, sel: Option<&SysProc>) -> View<Msg> {
+    let t = &model.theme;
+    let mut row: Vec<View<Msg>> = vec![
+        seg_btn(t, "Árbol", model.sys_tree, Msg::SysTree(true)),
+        seg_btn(t, "Lista", !model.sys_tree, Msg::SysTree(false)),
+    ];
     match sel {
         Some(p) => {
             row.push(
@@ -1075,7 +1194,8 @@ fn sys_header_row(model: &Model) -> View<Msg> {
     ])
 }
 
-fn sys_row(t: &Theme, p: &SysProc, selected: bool) -> View<Msg> {
+/// `node = Some((depth, has_kids, collapsed))` en modo árbol; `None` en lista.
+fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16, bool, bool)>) -> View<Msg> {
     let cell = |s: String, w: f32, color: Color| {
         View::new(Style {
             size: Size {
@@ -1091,6 +1211,59 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool) -> View<Msg> {
     };
     let bg = if selected { t.bg_selected } else { t.bg_app };
     let cpu_col = if p.cpu_pct >= 1.0 { t.fg_text } else { t.fg_muted };
+
+    // Celda de comando: en árbol lleva sangría por profundidad + triángulo de
+    // colapso (clickeable) antes del texto.
+    let cmd_cell = {
+        let mut parts: Vec<View<Msg>> = Vec::new();
+        if let Some((depth, has_kids, collapsed)) = node {
+            let indent = depth as f32 * 14.0;
+            if indent > 0.0 {
+                parts.push(spacer(indent));
+            }
+            let glyph = if !has_kids {
+                " "
+            } else if collapsed {
+                "▸"
+            } else {
+                "▾"
+            };
+            let mut g = View::new(Style {
+                size: Size {
+                    width: length(15.0),
+                    height: percent(1.0),
+                },
+                flex_shrink: 0.0,
+                justify_content: Some(JustifyContent::Center),
+                flex_direction: FlexDirection::Column,
+                ..Default::default()
+            })
+            .text(glyph, 11.0, t.fg_muted);
+            if has_kids {
+                g = g.on_click(Msg::SysToggleNode(p.pid));
+            }
+            parts.push(g);
+        }
+        parts.push(
+            View::new(Style {
+                flex_grow: 1.0,
+                justify_content: Some(JustifyContent::Center),
+                flex_direction: FlexDirection::Column,
+                ..Default::default()
+            })
+            .clip(true)
+            .text(&p.cmd, 11.5, t.fg_text),
+        );
+        View::new(Style {
+            flex_grow: 1.0,
+            flex_direction: FlexDirection::Row,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .clip(true)
+        .children(parts)
+    };
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
@@ -1121,15 +1294,38 @@ fn sys_row(t: &Theme, p: &SysProc, selected: bool) -> View<Msg> {
         cell(p.state.to_string(), W_ST, state_color(t, p.state)),
         cell(p.threads.to_string(), W_THR, t.fg_muted),
         cell(p.uid.to_string(), W_UID, t.fg_muted),
-        View::new(Style {
-            flex_grow: 1.0,
-            justify_content: Some(JustifyContent::Center),
-            flex_direction: FlexDirection::Column,
-            ..Default::default()
-        })
-        .clip(true)
-        .text(&p.cmd, 11.5, t.fg_text),
+        cmd_cell,
     ])
+}
+
+/// Espaciador horizontal de ancho fijo (sangría del árbol).
+fn spacer(w: f32) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(w),
+            height: percent(1.0),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+}
+
+/// Botón segmentado chico (toggle Lista/Árbol).
+fn seg_btn(t: &Theme, label: &str, active: bool, on: Msg) -> View<Msg> {
+    let (bg, fg) = if active {
+        (t.accent, t.bg_app)
+    } else {
+        (t.bg_button, t.fg_muted)
+    };
+    View::new(Style {
+        padding: pad(11.0, 5.0),
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(6.0)
+    .hover_fill(t.bg_button_hover)
+    .text(label, 11.5, fg)
+    .on_click(on)
 }
 
 fn state_color(t: &Theme, s: char) -> Color {
@@ -1411,4 +1607,53 @@ fn pad(h: f32, v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPercenta
 
 fn main() {
     llimphi_ui::run::<Monitor>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proc(pid: i32, ppid: i32) -> SysProc {
+        SysProc {
+            pid,
+            ppid,
+            name: format!("p{pid}"),
+            state: 'S',
+            cpu_pct: 0.0,
+            mem_pct: 0.0,
+            rss_kb: 0,
+            threads: 1,
+            uid: 0,
+            cmd: format!("p{pid}"),
+        }
+    }
+
+    #[test]
+    fn arbol_anida_por_ppid_con_profundidad() {
+        // 1 → {2 → {4}, 3};  9 huérfano (ppid fuera de la vista) = raíz.
+        let sys = vec![
+            proc(1, 0),
+            proc(2, 1),
+            proc(3, 1),
+            proc(4, 2),
+            proc(9, 999),
+        ];
+        let rows = flatten_tree(&sys, &HashSet::new());
+        let seq: Vec<(i32, u16)> = rows.iter().map(|r| (sys[r.idx].pid, r.depth)).collect();
+        assert_eq!(seq, vec![(1, 0), (2, 1), (4, 2), (3, 1), (9, 0)]);
+        // 1 y 2 tienen hijos; 4, 3, 9 no.
+        assert!(rows[0].has_kids && rows[1].has_kids);
+        assert!(!rows[2].has_kids && !rows[3].has_kids && !rows[4].has_kids);
+    }
+
+    #[test]
+    fn colapsar_oculta_el_subarbol() {
+        let sys = vec![proc(1, 0), proc(2, 1), proc(4, 2)];
+        let mut collapsed = HashSet::new();
+        collapsed.insert(2); // colapsa 2 → su hijo 4 desaparece
+        let rows = flatten_tree(&sys, &collapsed);
+        let pids: Vec<i32> = rows.iter().map(|r| sys[r.idx].pid).collect();
+        assert_eq!(pids, vec![1, 2]);
+        assert!(rows[1].has_kids, "2 sigue marcando que tiene hijos (colapsado)");
+    }
 }

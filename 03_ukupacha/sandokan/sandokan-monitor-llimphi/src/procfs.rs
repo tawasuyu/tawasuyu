@@ -16,6 +16,7 @@ use std::os::unix::fs::MetadataExt;
 #[derive(Clone)]
 pub struct ProcRaw {
     pub pid: i32,
+    pub ppid: i32,
     pub name: String,
     pub state: char,
     pub rss_kb: u64,
@@ -100,6 +101,7 @@ fn parse_one(pid: i32, page: u64) -> Option<ProcRaw> {
     let rest = stat.get(close + 2..)?;
     let f: Vec<&str> = rest.split_whitespace().collect();
     let state = f.first().and_then(|s| s.chars().next()).unwrap_or('?');
+    let ppid: i32 = f.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     let utime: u64 = f.get(11).and_then(|s| s.parse().ok()).unwrap_or(0);
     let stime: u64 = f.get(12).and_then(|s| s.parse().ok()).unwrap_or(0);
     let threads: u32 = f.get(17).and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -135,6 +137,7 @@ fn parse_one(pid: i32, page: u64) -> Option<ProcRaw> {
 
     Some(ProcRaw {
         pid,
+        ppid,
         name,
         state,
         rss_kb,
