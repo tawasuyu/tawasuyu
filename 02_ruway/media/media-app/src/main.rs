@@ -79,6 +79,7 @@ use media_core::{
 };
 use media_core::color::{ColorControl, ColorVideo};
 use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
+use media_core::transform::{TransformControl, TransformVideo};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
 use media_core::sync::{AvSync, FramePlan};
@@ -450,6 +451,14 @@ fn eq() -> &'static EqControl {
 fn color() -> &'static ColorControl {
     static SLOT: OnceLock<ColorControl> = OnceLock::new();
     SLOT.get_or_init(ColorControl::default)
+}
+
+/// Control de orientación del video (rotación/flip, V3). Compartido entre
+/// el wrapper `TransformVideo` de la cadena de video y los comandos de
+/// orientación. Arranca en identidad (bypass).
+fn transform() -> &'static TransformControl {
+    static SLOT: OnceLock<TransformControl> = OnceLock::new();
+    SLOT.get_or_init(TransformControl::default)
 }
 
 /// Handle al [`Playlist`] activo cuando hay tracks WAV/MP3. `None`
@@ -967,6 +976,11 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (ColorBy { param: ColorParam::Gamma, delta: -0.1 }, "Color"),
         (ColorBy { param: ColorParam::Saturation, delta: 0.1 }, "Color"),
         (ColorBy { param: ColorParam::Saturation, delta: -0.1 }, "Color"),
+        (RotateBy { dir: 1 }, "Orientación"),
+        (RotateBy { dir: -1 }, "Orientación"),
+        (FlipH, "Orientación"),
+        (FlipV, "Orientación"),
+        (OrientReset, "Orientación"),
         (Snapshot, "Captura"),
         (ToggleRecord, "Captura"),
     ];
@@ -1145,6 +1159,16 @@ fn apply_command(cmd: MediaCommand) {
         ColorReset => {
             color().reset();
             eprintln!("media-app: color original");
+        }
+        RotateBy { dir } => {
+            transform().rotate(dir);
+            eprintln!("media-app: rotación {}", transform().transform().rotation.label());
+        }
+        FlipH => transform().toggle_flip_h(),
+        FlipV => transform().toggle_flip_v(),
+        OrientReset => {
+            transform().reset();
+            eprintln!("media-app: orientación original");
         }
     }
 }
@@ -1436,10 +1460,13 @@ fn build_video_source() -> Box<dyn FrameSource + Send> {
 fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'static Pipeline {
     pipeline_slot().get_or_init(|| Pipeline {
         surface: ExternalSurface::new(device, queue),
-        // V4: el ajuste de color envuelve a TODA fuente de video (incluido
-        // el testcard). En identidad hace bypass, así que no cuesta nada
-        // hasta que el usuario toca brillo/contraste/gamma/saturación.
-        source: Mutex::new(Box::new(ColorVideo::new(build_video_source(), color().clone()))),
+        // Cadena de video: <decoder> → ColorVideo (V4) → TransformVideo
+        // (V3). Ambos hacen bypass en identidad, así que no cuestan nada
+        // hasta que el usuario toca color u orientación.
+        source: Mutex::new(Box::new(TransformVideo::new(
+            ColorVideo::new(build_video_source(), color().clone()),
+            transform().clone(),
+        ))),
         buf: Mutex::new(Vec::new()),
         last_dim: Mutex::new((0, 0)),
         last_tick: Mutex::new(Instant::now()),

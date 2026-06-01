@@ -26,6 +26,7 @@ use std::time::Duration;
 pub mod color;
 pub mod control;
 pub mod eq;
+pub mod transform;
 pub mod layout;
 pub mod sync;
 

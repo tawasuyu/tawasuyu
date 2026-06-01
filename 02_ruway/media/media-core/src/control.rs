@@ -88,6 +88,14 @@ pub enum MediaCommand {
     ColorBy { param: ColorParam, delta: f32 },
     /// Vuelve todos los ajustes de color a la identidad (imagen original).
     ColorReset,
+    /// Rota el video 90° (`dir > 0` horario, `dir < 0` antihorario). V3.
+    RotateBy { dir: i32 },
+    /// Espeja el video horizontalmente (toggle).
+    FlipH,
+    /// Espeja el video verticalmente (toggle).
+    FlipV,
+    /// Vuelve a la orientación original (sin rotar ni espejar).
+    OrientReset,
 }
 
 /// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
@@ -161,6 +169,11 @@ impl MediaCommand {
                 let signo = if *delta >= 0.0 { "+" } else { "" };
                 format!("Color {} {signo}{delta:.2}", param.label())
             }
+            RotateBy { dir } if *dir < 0 => "Rotar 90° antihorario".to_string(),
+            RotateBy { .. } => "Rotar 90° horario".to_string(),
+            FlipH => "Espejar horizontal".to_string(),
+            FlipV => "Espejar vertical".to_string(),
+            OrientReset => "Orientación original".to_string(),
         }
     }
 }

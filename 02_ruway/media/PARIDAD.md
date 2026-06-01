@@ -15,27 +15,25 @@ Se está avanzando este plan **en orden**. Cerrado en esta tanda (todo en
   **S1** subtítulos ASS/SSA (texto+timing) ·
   **R1** URL de red (http/hls/rtsp vía ffmpeg) ·
   **R2** plataformas con yt-dlp (puente nuevo `shared/foreign-ytdlp`) ·
-  **V4** ajustes de color de video (brillo/contraste/gamma/saturación).
+  **V4** ajustes de color de video (brillo/contraste/gamma/saturación) ·
+  **V3** rotación/flip del video (`media-core::transform`).
 
 Con M1+R1+R2 `media` ya **reproduce desde una plataforma**; lo que falta para
 FreeTube es navegación (`shared/foreign-youtube`), no el reproductor (ver
-`FREETUBE.md`).
+`FREETUBE.md`). `cargo test -p media-core` = 91 verde, `--workspace` verde.
 
-**Próximo paso sugerido (en orden, aislado y testeable en CI):** **V3 —
-rotación/flip** como transformación pura del buffer RGBA, mismo molde que V4
-(`media-core::color` → nuevo `media-core` transform o ampliar ese módulo) +
-comandos + wiring en `media-app`. Ojo: rotar 90°/270° intercambia `(w, h)`
-que devuelve `tick` — el surface ya sube dimensiones arbitrarias, pero
-verificar el blit.
+**Próximo paso sugerido (en orden, aislado y testeable en CI):** **S5 —
+auto-carga de subtítulos**: al abrir un video, buscar junto a él un
+`.srt`/`.vtt`/`.ass` con el mismo nombre base y cargarlo sin pedir env. Es
+chico y puro (lógica de paths + reusa `parse_subtitles`, ya listo). Después
+**S4** (delay/sync de subtítulo, calca A4) y **A5** (normalización/limitador
+puro-DSP, molde EQ).
 
 **Lo que necesita correr la app/GPU para verificar** (no hacer a ciegas):
 V1 fullscreen (API de ventana de llimphi-ui), V2 aspect/crop/zoom (blit),
-V5 deinterlacing, V6 shaders, V8 HDR.
-
-**Otros frentes aislados disponibles:** S5 (auto-carga de `.srt`/`.ass` por
-nombre del video), S4 (delay/sync de subtítulo — calca A4), A5 (normalización/
-limitador puro-DSP, molde EQ). El resto del estado vive en las secciones de
-abajo (✅/pendiente por track).
+V5 deinterlacing, V6 shaders, V8 HDR. Cuando se retome con pantalla, conviene
+correr `cargo run -p media-app -- <archivo>` y probar V3/V4 desde el palette
+(grupos "Orientación"/"Color").
 
 ## Punto de partida (lo que YA anda)
 
@@ -73,7 +71,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 ### Pendiente
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
 - Track AUDIO A2/A3/A5/A6 (selección de pista, dispositivo de salida, normalización/ReplayGain, gapless/crossfade). **A4 (delay/sync) ✅.**
-- Track VIDEO V1–V3, V5–V8 (fullscreen, aspect/crop/zoom, rotación, deinterlacing, filtros/shaders, capítulos, HDR). **V4 (ajustes de color, sin hue) ✅.**
+- Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, sin hue) ✅.**
 - Track SUBTÍTULOS S2–S5 (pistas embebidas, estilo configurable, delay/sync, auto-carga). **S1 (ASS/SSA texto+timing) ✅.**
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
 - Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
@@ -129,7 +127,14 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 
 - **V1 — Fullscreen real** del reproductor.
 - **V2 — Aspect ratio / crop / zoom / pan.**
-- **V3 — Rotación / flip.**
+- **V3 — Rotación / flip.** ✅ *Cerrado (2026-06-01).* `media-core::transform`:
+  transform puro `transform_rgba` (flip H/V en espacio de origen + rotación
+  horaria 0/90/180/270°, mapeo forward, 90/270° intercambian `w↔h`) +
+  `TransformControl` compartido versionado + wrapper `TransformVideo` con
+  scratch (bypass en identidad, swap del buffer si transforma). Wireado en
+  `media-app` tras `ColorVideo` en la cadena, con comandos
+  `MediaCommand::{RotateBy{dir},FlipH,FlipV,OrientReset}` en el palette
+  (grupo "Orientación"). +9 tests.
 - **V4 — Ajustes de color** (brillo/contraste/gamma/saturación). ✅
   *Cerrado (2026-06-01, hue pendiente).* `media-core::color`: procesador
   puro por-pixel `ColorAdjust` (contraste→brillo→saturación Rec.709→gamma,
