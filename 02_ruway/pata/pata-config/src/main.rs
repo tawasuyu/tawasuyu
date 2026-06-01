@@ -6,23 +6,31 @@
 //! que le queda al compositor. Sirve para autorear configs y ver la geometría
 //! sin levantar la UI.
 //!
+//! Con `--widgets` además materializa cada widget y lo `tick`ea con un contexto
+//! de muestra, mostrando el view-model que el frontend recibiría —los `kind`s
+//! que el core aún no implementa salen como `placeholder`—.
+//!
 //! ```sh
 //! cargo run -p pata-config --bin pata -- --screen 1920x1080
 //! cargo run -p pata-config --bin pata -- --config ./mi.toml --screen 2560x1440
+//! cargo run -p pata-config --bin pata -- --widgets
 //! ```
 
 use std::process::ExitCode;
 
-use pata_core::{Config, Rect, Surface, SurfaceKind};
+use pata_core::widget::{self, ClockReading, WidgetCtx, WidgetView};
+use pata_core::{Config, Rect, Surface, SurfaceKind, WidgetSpec};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut screen = (1920_i32, 1080_i32);
     let mut config_path: Option<String> = None;
+    let mut mostrar_widgets = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--widgets" => mostrar_widgets = true,
             "--screen" => {
                 i += 1;
                 match args.get(i).and_then(|s| parse_wxh(s)) {
@@ -42,7 +50,7 @@ fn main() -> ExitCode {
                 }
             }
             "-h" | "--help" => {
-                println!("uso: pata [--config <ruta>] [--screen WxH]");
+                println!("uso: pata [--config <ruta>] [--screen WxH] [--widgets]");
                 return ExitCode::SUCCESS;
             }
             other => {
@@ -89,9 +97,9 @@ fn main() -> ExitCode {
             r.y,
             if placed.reserva { "reserva" } else { "flota" },
         );
-        print_slot("start ", &s.start);
-        print_slot("center", &s.center);
-        print_slot("end   ", &s.end);
+        print_slot("start ", &s.start, mostrar_widgets);
+        print_slot("center", &s.center, mostrar_widgets);
+        print_slot("end   ", &s.end, mostrar_widgets);
     }
     let w = frame.work_area;
     println!(
@@ -102,12 +110,62 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn print_slot(nombre: &str, widgets: &[pata_core::WidgetSpec]) {
+fn print_slot(nombre: &str, widgets: &[WidgetSpec], con_view: bool) {
     if widgets.is_empty() {
         return;
     }
     let kinds: Vec<&str> = widgets.iter().map(|w| w.kind.as_str()).collect();
     println!("        {nombre}: {}", kinds.join(" · "));
+    if !con_view {
+        return;
+    }
+    // Materializa cada widget y muéstralo ya `tick`eado con el contexto muestra.
+    let ctx = ctx_muestra();
+    for spec in widgets {
+        let mut w = widget::build(spec);
+        w.tick(&ctx);
+        println!("          {:<14} → {}", spec.kind, render_view(&w.view()));
+    }
+}
+
+/// Un [`WidgetCtx`] de muestra para que `--widgets` enseñe el view-model sin
+/// muestrear el sistema real (eso es trabajo del frontend, no del inspector).
+fn ctx_muestra() -> WidgetCtx {
+    WidgetCtx {
+        clock: ClockReading {
+            year: 2026,
+            month: 6,
+            day: 1,
+            weekday: 1,
+            hour: 14,
+            minute: 7,
+            second: 9,
+        },
+        cpu: 0.42,
+        ram: 0.61,
+        ram_used_mb: 9687,
+        ram_total_mb: 15872,
+        volume: 0.75,
+        muted: false,
+        brightness: 0.55,
+    }
+}
+
+/// Renderiza un [`WidgetView`] como una línea legible para el inspector.
+fn render_view(v: &WidgetView) -> String {
+    match v {
+        WidgetView::Empty => "·".to_string(),
+        WidgetView::Text(t) => format!("text  «{t}»"),
+        WidgetView::Meter {
+            label,
+            fraction,
+            caption,
+        } => {
+            let etiqueta = label.as_deref().unwrap_or("—");
+            format!("meter [{etiqueta}] {:.0}% «{caption}»", fraction * 100.0)
+        }
+        WidgetView::Placeholder(k) => format!("placeholder ⟨{k}⟩"),
+    }
 }
 
 fn kind_str(k: SurfaceKind) -> &'static str {

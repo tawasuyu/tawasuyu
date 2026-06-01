@@ -1,6 +1,6 @@
 # SDD — `pata`, el marco del escritorio
 
-> Estado: **Fase 1** (núcleo del modelo). Este documento es la fuente autoritativa
+> Estado: **Fase 4** (modelo de widget). Este documento es la fuente autoritativa
 > de qué es `pata` y dónde termina, por encima de cualquier README.
 
 ## 0. El problema que resuelve
@@ -91,8 +91,14 @@ borde; shuma provee el contenido.
   colocadas + `work_area` (lo que mirada tesela). Geometría pura testeada.
 - **Fase 3 ✅** — `pata-config`: loader TOML/XDG → modelo + binario `pata`
   inspector. Pipeline config→layout verificado sobre archivos reales.
-- **Fase 4** — modelo de widget agnóstico (trait `tick`/`view` → view-model, no
-  Llimphi) + lógica de datos de los widgets portada al core.
+- **Fase 4 ✅** — modelo de widget agnóstico (`pata-core::widget`): trait
+  [`Widget`] (`tick(&WidgetCtx)` / `view() → WidgetView`), un `WidgetCtx` que el
+  host muestrea (reloj, cpu, ram, volumen, brillo) y un view-model
+  `Text | Meter | Placeholder | Empty` sin pincel. Builtins con lógica portada:
+  `clock` (strftime reducido), `cpu_meter` / `ram_meter` / `volume` /
+  `brightness` (medidor genérico). `build(spec)` despacha por string y cae a
+  `Placeholder` para kinds no implementados. `no_std` verificado (wasm32); el
+  inspector `pata --widgets` lo muestra de punta a punta.
 - **Fase 5** — `pata-llimphi`: render de superficies sobre Llimphi; reusa los
   widgets de `mirada-launcher-llimphi`. App-id que mirada acopla por superficie.
 - **Fase 6** — widgets nuevos: `start_button`, `window_list` (IPC con mirada),

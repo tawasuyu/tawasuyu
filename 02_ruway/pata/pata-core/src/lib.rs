@@ -14,6 +14,9 @@
 //!   akasha en wawa) materializa.
 //! - [`layout`] — la geometría: resuelve un `Config` + pantalla en superficies
 //!   colocadas en píxeles + el área de trabajo que queda para las ventanas.
+//! - [`widget`] — la lógica de datos de cada widget: un [`config::WidgetSpec`]
+//!   se materializa en un [`widget::Widget`] vivo que, alimentado por un
+//!   snapshot del sistema, emite un view-model agnóstico del pincel.
 //!
 //! No pinta, no toca el SO, no sabe quién lo renderiza. Por eso es `no_std` +
 //! `alloc`: el mismo modelo sirve al frontend Llimphi sobre Linux y al kernel
@@ -28,6 +31,11 @@ extern crate alloc;
 
 pub mod config;
 pub mod layout;
+pub mod widget;
 
 pub use config::{Anchor, Config, FloatingCard, General, Prop, Surface, SurfaceKind, WidgetSpec};
 pub use layout::{resolve, Frame, Placed, Rect};
+pub use widget::{
+    build, build_all, Clock, ClockReading, Meter, MeterSource, Placeholder, Widget, WidgetCtx,
+    WidgetView,
+};
