@@ -206,8 +206,18 @@ hechas de lo que el plan asumía.
    - **Resta (UX-driven, en la GUI):** que el mount del shell llame
      `external_handler_for` y, si hay handler, `open_with` + spawn en vez de
      montar un widget — incluye la política "¿externo gana a builtin?" (tu call).
-5. **§14.1.3 wawa** (capacidades derivadas de firma) → ⬜ pendiente. Primitivos
-   ya existen (`agora-core` + `claves.rs`).
+5. **§14.1.3 wawa** (capacidades derivadas de firma) → ✅ **código hecho +
+   verificado** (esta sesión). El binding firmado `(bytecode_hash, permisos)`
+   está cableado end-to-end: `format::{ConcesionCapacidad, mensaje_capacidad,
+   permisos_efectivos}` + `agora-channel::{firmar,verificar}_capacidad` +
+   `claves::verificar_concesion_capacidad` (kernel) + `permisos_efectivos_de`
+   (intersección fresh, fail-closed). **Verificado:** cadena host 9/9 (incl. los
+   4 casos del modelo de amenaza: bytecode/permisos manipulados, autor ajeno) y el
+   kernel compila a `x86_64-unknown-none`. El flip escalonado→estricto se
+   convirtió en un toggle nombrado (`MODO_CAPACIDAD_ESTRICTO_GLOBAL`, `false`).
+   **Resta sólo trabajo de operador (no código):** la ceremonia de génesis (firma
+   offline de concesiones con las seeds del `AGORA_AUTH_RING`) + poner el toggle
+   en `true`. 🧑 soberano.
 
 > Realidad tras el mapeo: el "transporte abajo" (1) **ya estaba**; lo que de
 > verdad apalanca varias apps ahora es **2 (discovery por DHT)**. ayni/khipu ya
@@ -271,7 +281,7 @@ cruza a "lista para mostrar".
 ```
 Nivel 0  (días)      → licencias, untracked, CI, decisión de alcance   [DESBLOQUEA TODO]
 Nivel 1  (días)      → workspace 100% limpio: clippy, tests, warnings
-Nivel 3 (1·2·3·4)    → ✅ NAT, discovery DHT, audio, open-with out-of-proc (mec.+seam). Resta 4-GUI y 5 (§14.1.3)
+Nivel 3 (1·2·3·5)    → ✅ NAT, discovery DHT, audio, §14.1.3 (código+verif). 4 hasta el borde GUI. Resta: 4-GUI (UX) + ceremonias de operador
 Nivel 2A             → empujón corto a las ≥80% que ya casi cierran
 Nivel 2B             → el grueso del core (agora/§14.1.3, media M1, iniy e2e…)
 Nivel 4  (en paralelo, tuyo) → pulido app por app a medida que cierran
