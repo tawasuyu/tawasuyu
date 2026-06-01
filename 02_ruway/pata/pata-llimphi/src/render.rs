@@ -1,0 +1,222 @@
+//! El pincel: traduce el modelo resuelto de `pata-core` a `View<Msg>` de
+//! Llimphi.
+//!
+//! Dos niveles:
+//! - [`widget_view`] traduce un [`WidgetView`] —el view-model agnóstico que un
+//!   widget emite— a un `View<Msg>` concreto (texto, medidor con barra,
+//!   placeholder tenue).
+//! - [`root`] coloca cada superficie en el rect que [`pata_core::layout`]
+//!   resolvió (posición absoluta, en píxeles de pantalla) y reparte sus widgets
+//!   en los slots start/center/end según el eje del anclaje.
+
+use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::{
+    prelude::{auto, length, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
+    Rect as TaffyRect,
+};
+use llimphi_ui::View;
+
+use pata_core::config::Surface;
+use pata_core::layout::Rect;
+use pata_core::widget::{Widget, WidgetView};
+
+use crate::{Model, Msg, SurfaceWidgets};
+
+/// Ancho de la barrita de un medidor, en píxeles.
+const BARRA_W: f32 = 48.0;
+
+/// Traduce el view-model de un widget al `View<Msg>` que lo pinta.
+pub fn widget_view(v: &WidgetView, theme: &Theme) -> View<Msg> {
+    match v {
+        WidgetView::Empty => View::new(Style {
+            size: Size {
+                width: length(0.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        }),
+        WidgetView::Text(t) => chip(theme).text(t.clone(), 13.0, theme.fg_text),
+        WidgetView::Meter {
+            label,
+            fraction,
+            caption,
+        } => meter_view(label.as_deref(), *fraction, caption, theme),
+        WidgetView::Placeholder(kind) => chip(theme)
+            .fill(theme.bg_panel)
+            .radius(6.0)
+            .text(kind.clone(), 12.0, theme.fg_muted),
+    }
+}
+
+/// Un contenedor compacto, centrado, con padding horizontal — la base de
+/// cualquier widget de barra.
+fn chip(_theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: auto(),
+            height: length(22.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+}
+
+/// Un medidor: etiqueta opcional + barrita proporcional + leyenda.
+fn meter_view(label: Option<&str>, fraction: f32, caption: &str, theme: &Theme) -> View<Msg> {
+    let frac = fraction.clamp(0.0, 1.0);
+    let barra = View::new(Style {
+        size: Size {
+            width: length(BARRA_W),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(2.0)
+    .children(vec![View::new(Style {
+        size: Size {
+            width: length(BARRA_W * frac),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.accent)
+    .radius(2.0)]);
+
+    let mut hijos: Vec<View<Msg>> = Vec::new();
+    if let Some(l) = label {
+        hijos.push(etiqueta(l, theme));
+    }
+    hijos.push(barra);
+    if !caption.is_empty() {
+        hijos.push(etiqueta(caption, theme));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: auto(),
+            height: length(22.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// Un texto corto en color tenue (etiqueta o leyenda de un medidor).
+fn etiqueta(t: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: auto(),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(t.to_string(), 12.0, theme.fg_muted)
+}
+
+/// El `View` raíz: cubre la pantalla y coloca cada superficie en su rect.
+pub fn root(model: &Model) -> View<Msg> {
+    let (sw, sh) = model.screen;
+    let mut superficies: Vec<View<Msg>> = Vec::new();
+
+    for placed in &model.frame.surfaces {
+        let surface = &model.cfg.surfaces[placed.index];
+        let widgets = &model.surfaces[placed.index];
+        if !placed.rect.es_visible() {
+            continue;
+        }
+        superficies.push(surface_view(surface, placed.rect, widgets, &model.theme));
+    }
+
+    View::new(Style {
+        size: Size {
+            width: length(sw as f32),
+            height: length(sh as f32),
+        },
+        ..Default::default()
+    })
+    .children(superficies)
+}
+
+/// Una superficie colocada: rectángulo absoluto con los tres slots repartidos
+/// a lo largo de su eje (fila si el anclaje es horizontal, columna si vertical).
+fn surface_view(
+    surface: &Surface,
+    rect: Rect,
+    widgets: &SurfaceWidgets,
+    theme: &Theme,
+) -> View<Msg> {
+    let dir = if surface.anchor.es_horizontal() {
+        FlexDirection::Row
+    } else {
+        FlexDirection::Column
+    };
+
+    let slot = |ws: &[Box<dyn Widget>], justify: JustifyContent| -> View<Msg> {
+        let items: Vec<View<Msg>> = ws.iter().map(|w| widget_view(&w.view(), theme)).collect();
+        let mut style = Style {
+            flex_direction: dir,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(justify),
+            gap: Size {
+                width: length(surface.gap),
+                height: length(surface.gap),
+            },
+            ..Default::default()
+        };
+        style.flex_grow = 1.0;
+        View::new(style).children(items)
+    };
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(rect.x as f32),
+            top: length(rect.y as f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(rect.w as f32),
+            height: length(rect.h as f32),
+        },
+        flex_direction: dir,
+        padding: TaffyRect {
+            left: length(surface.padding),
+            right: length(surface.padding),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::SpaceBetween),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![
+        slot(&widgets.start, JustifyContent::FlexStart),
+        slot(&widgets.center, JustifyContent::Center),
+        slot(&widgets.end, JustifyContent::FlexEnd),
+    ])
+}

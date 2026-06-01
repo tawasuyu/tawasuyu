@@ -1,0 +1,22 @@
+[package]
+name = "pata-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pata — el frontend Linux: monta el modelo de pata-core sobre Llimphi. Resuelve la geometría de las superficies (barras/paneles/dock) y pinta cada widget traduciendo su view-model agnóstico al backend gráfico. Muestrea el sistema (reloj, CPU, RAM, volumen, brillo) en un WidgetCtx que alimenta a los widgets. Corre sobre el compositor mirada."
+
+[[bin]]
+name = "pata-llimphi"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pata-core = { path = "../pata-core" }
+pata-config = { path = "../pata-config" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+chrono = { workspace = true }

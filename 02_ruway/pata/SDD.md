@@ -1,6 +1,6 @@
 # SDD — `pata`, el marco del escritorio
 
-> Estado: **Fase 4** (modelo de widget). Este documento es la fuente autoritativa
+> Estado: **Fase 5** (frontend Llimphi). Este documento es la fuente autoritativa
 > de qué es `pata` y dónde termina, por encima de cualquier README.
 
 ## 0. El problema que resuelve
@@ -99,8 +99,13 @@ borde; shuma provee el contenido.
   `brightness` (medidor genérico). `build(spec)` despacha por string y cae a
   `Placeholder` para kinds no implementados. `no_std` verificado (wasm32); el
   inspector `pata --widgets` lo muestra de punta a punta.
-- **Fase 5** — `pata-llimphi`: render de superficies sobre Llimphi; reusa los
-  widgets de `mirada-launcher-llimphi`. App-id que mirada acopla por superficie.
+- **Fase 5 ✅** — `pata-llimphi`: el frontend Linux. `sampler` muestrea el
+  sistema (chrono + `/proc/stat` + `/proc/meminfo` + `/sys/class/backlight`) en
+  un `WidgetCtx`; `render` traduce cada `WidgetView` a `View<Msg>` (texto,
+  medidor con barra, placeholder tenue) y coloca las superficies en los rects
+  que el layout resolvió (posición absoluta). `PataApp` (app-id `gioser.pata`)
+  carga config vía `pata-config`, `tick`ea a 1 Hz y pinta. Por ahora una sola
+  ventana; mirada acopla por superficie en la Fase 8.
 - **Fase 6** — widgets nuevos: `start_button`, `window_list` (IPC con mirada),
   `tray`, `astro` (cosmos).
 - **Fase 7** — despliegue Quake de shuma desde `shuma_input`.
