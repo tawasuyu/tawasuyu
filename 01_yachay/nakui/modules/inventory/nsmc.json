@@ -1,0 +1,26 @@
+{
+  "module": "inventory",
+  "schemas": ["schema.ncl"],
+  "morphisms": [
+    {
+      "name": "transferir_stock",
+      "inputs": [
+        { "role": "source", "entity": "Stock" },
+        { "role": "dest", "entity": "Stock" }
+      ],
+      "reads": ["source.cantidad", "source.sku_id", "dest.cantidad", "dest.sku_id"],
+      "writes": ["source.cantidad", "dest.cantidad", "MovimientoStock"],
+      "invariants": {
+        "conserve": [{ "entity": "Stock", "field": "cantidad", "group_by": "sku_id" }]
+      },
+      "script": "scripts/transferir_stock.rhai"
+    },
+    {
+      "name": "recibir_stock",
+      "inputs": [{ "role": "stock", "entity": "Stock" }],
+      "reads": ["stock.cantidad"],
+      "writes": ["stock.cantidad", "MovimientoStock"],
+      "script": "scripts/recibir_stock.rhai"
+    }
+  ]
+}

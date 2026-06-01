@@ -1,0 +1,16 @@
+{
+  "module": "sales",
+  "schemas": ["../treasury/schema.ncl", "../inventory/schema.ncl", "schema.ncl"],
+  "morphisms": [
+    {
+      "name": "vender",
+      "inputs": [
+        { "role": "stock", "entity": "Stock" },
+        { "role": "caja", "entity": "Caja" }
+      ],
+      "reads": ["stock.cantidad", "caja.saldo", "caja.currency"],
+      "writes": ["stock.cantidad", "caja.saldo", "Venta"],
+      "script": "scripts/vender.rhai"
+    }
+  ]
+}

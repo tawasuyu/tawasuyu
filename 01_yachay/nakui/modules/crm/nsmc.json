@@ -1,0 +1,27 @@
+{
+  "module": "crm",
+  "schemas": ["schema.ncl"],
+  "morphisms": [
+    {
+      "name": "abrir_oportunidad",
+      "inputs": [{ "role": "cliente", "entity": "Cliente" }],
+      "reads": [],
+      "writes": ["Oportunidad"],
+      "script": "scripts/abrir_oportunidad.rhai"
+    },
+    {
+      "name": "mover_oportunidad",
+      "inputs": [{ "role": "oportunidad", "entity": "Oportunidad" }],
+      "reads": ["oportunidad.etapa"],
+      "writes": ["oportunidad.etapa"],
+      "script": "scripts/mover_oportunidad.rhai"
+    },
+    {
+      "name": "registrar_interaccion",
+      "inputs": [{ "role": "cliente", "entity": "Cliente" }],
+      "reads": [],
+      "writes": ["Interaccion"],
+      "script": "scripts/registrar_interaccion.rhai"
+    }
+  ]
+}
