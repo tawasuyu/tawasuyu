@@ -25,7 +25,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use card_core::{Card, Payload, Supervision};
 use sandokan::lifecycle::LifecycleState;
@@ -141,6 +141,12 @@ enum Msg {
     SysToggleNode(i32),
     /// Métrica del treemap: `true` = CPU, `false` = memoria.
     MapMetric(bool),
+    /// Click en un rectángulo del mapa: selecciona; doble-click hace zoom.
+    MapClick(i32),
+    /// Fija la raíz de zoom del mapa (`None` = todo).
+    MapRoot(Option<i32>),
+    /// Sube un nivel de zoom (al padre de la raíz actual).
+    MapZoomOut,
     /// Entrar/salir del modo filtro (sin borrar el texto).
     FilterMode(bool),
     /// Texto del filtro (edición en vivo).
@@ -203,6 +209,10 @@ struct Model {
     filter_mode: bool,
     /// Treemap: `true` colorea/dimensiona por CPU, `false` por memoria.
     map_cpu: bool,
+    /// Zoom del treemap: si `Some(pid)`, sólo se muestra ese subárbol.
+    map_root: Option<i32>,
+    /// Último click en el mapa (pid, instante) para detectar doble-click.
+    last_map_click: Option<(i32, Instant)>,
     mem_total_kb: u64,
     mem_avail_kb: u64,
     /// Historial de %uso por core + historial de %MEM (un punto por barrido).
@@ -394,6 +404,12 @@ fn ingest_system(model: &mut Model, scan: Scan) {
             model.sys_sel = None;
         }
     }
+    // Si la raíz de zoom del mapa murió, salir del zoom.
+    if let Some(r) = model.map_root {
+        if !model.system.iter().any(|p| p.pid == r) {
+            model.map_root = None;
+        }
+    }
     let max = render_list(model).len().saturating_sub(SYS_ROWS);
     if model.sys_scroll > max {
         model.sys_scroll = max;
@@ -521,6 +537,24 @@ fn flatten_tree(system: &[SysProc], collapsed: &HashSet<i32>) -> Vec<RenderRow> 
     out
 }
 
+/// PIDs del subárbol con raíz `root` (incluida), siguiendo `ppid`.
+fn subtree_pids(system: &[SysProc], root: i32) -> HashSet<i32> {
+    let mut kids: HashMap<i32, Vec<i32>> = HashMap::new();
+    for p in system {
+        kids.entry(p.ppid).or_default().push(p.pid);
+    }
+    let mut set = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        if set.insert(pid) {
+            if let Some(cs) = kids.get(&pid) {
+                stack.extend(cs.iter().copied());
+            }
+        }
+    }
+    set
+}
+
 fn switch_tab(model: &mut Model, tab: Tab, handle: &Handle<Msg>) {
     model.tab = tab;
     match tab {
@@ -587,6 +621,8 @@ impl App for Monitor {
             sys_filter: String::new(),
             filter_mode: false,
             map_cpu: false,
+            map_root: None,
+            last_map_click: None,
             mem_total_kb: 0,
             mem_avail_kb: 0,
             core_hist: Vec::new(),
@@ -655,6 +691,32 @@ impl App for Monitor {
                 }
             }
             Msg::MapMetric(cpu) => model.map_cpu = cpu,
+            Msg::MapClick(pid) => {
+                model.sys_sel = Some(pid);
+                let now = Instant::now();
+                let dbl = matches!(model.last_map_click,
+                    Some((p, t)) if p == pid && now.duration_since(t) < Duration::from_millis(450));
+                if dbl {
+                    model.map_root = Some(pid); // zoom al subárbol
+                    model.last_map_click = None;
+                } else {
+                    model.last_map_click = Some((pid, now));
+                }
+            }
+            Msg::MapRoot(r) => {
+                model.map_root = r;
+                model.last_map_click = None;
+            }
+            Msg::MapZoomOut => {
+                // Sube al subárbol del padre; si el padre no está a la vista,
+                // vuelve a "todo".
+                if let Some(r) = model.map_root {
+                    let parent = model.system.iter().find(|p| p.pid == r).map(|p| p.ppid);
+                    model.map_root =
+                        parent.filter(|pp| model.system.iter().any(|p| p.pid == *pp));
+                }
+                model.last_map_click = None;
+            }
             Msg::FilterMode(on) => model.filter_mode = on,
             Msg::FilterSet(s) => {
                 model.sys_filter = s;
@@ -814,6 +876,12 @@ impl App for Monitor {
                 if model.tab == Tab::System || model.tab == Tab::Map =>
             {
                 return model.sys_sel.map(|p| Msg::Signal(p, Sig::Term));
+            }
+            // En el mapa, Backspace sube un nivel de zoom.
+            Key::Named(NamedKey::Backspace)
+                if model.tab == Tab::Map && model.map_root.is_some() =>
+            {
+                return Some(Msg::MapZoomOut);
             }
             // En árbol: ← colapsa, → expande el nodo seleccionado.
             Key::Named(NamedKey::ArrowLeft) if model.tab == Tab::System && model.sys_tree => {
@@ -1021,11 +1089,17 @@ fn map_body(model: &Model) -> View<Msg> {
         return empty_state(t, "Leyendo /proc…", "Armando el mapa de procesos.");
     }
     let cpu = model.map_cpu;
+    // Con zoom, restringe al subárbol de la raíz (incluida).
+    let subtree = model
+        .map_root
+        .filter(|r| model.system.iter().any(|p| p.pid == *r))
+        .map(|r| subtree_pids(&model.system, r));
 
     // Datos para el painter (owned → Send + Sync + 'static).
     let items: Vec<treemap::Item> = model
         .system
         .iter()
+        .filter(|p| subtree.as_ref().map(|s| s.contains(&p.pid)).unwrap_or(true))
         .map(|p| treemap::Item {
             pid: p.pid,
             ppid: p.ppid,
@@ -1097,7 +1171,7 @@ fn map_body(model: &Model) -> View<Msg> {
             .iter()
             .rev()
             .find(|c| x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h)
-            .map(|c| Msg::SysSelect(c.pid))
+            .map(|c| Msg::MapClick(c.pid))
     });
 
     View::new(Style {
@@ -1120,6 +1194,21 @@ fn map_toolbar(model: &Model) -> View<Msg> {
         seg_btn(t, "Memoria", !model.map_cpu, Msg::MapMetric(false)),
         seg_btn(t, "CPU", model.map_cpu, Msg::MapMetric(true)),
     ];
+    // Breadcrumb de zoom (si estamos dentro de un subárbol).
+    if let Some(r) = model.map_root {
+        let name = model
+            .system
+            .iter()
+            .find(|p| p.pid == r)
+            .map(|p| p.name.as_str())
+            .unwrap_or("?");
+        row.push(seg_btn(t, "◂ Subir", false, Msg::MapZoomOut));
+        row.push(seg_btn(t, "Todo", false, Msg::MapRoot(None)));
+        row.push(
+            View::new(Style::default())
+                .text(format!("zoom: {name}"), 11.5, name_color(name)),
+        );
+    }
     match model.sys_sel.and_then(|pid| model.system.iter().find(|p| p.pid == pid)) {
         Some(p) => {
             row.push(
@@ -1138,7 +1227,7 @@ fn map_toolbar(model: &Model) -> View<Msg> {
                 ..Default::default()
             })
             .text(
-                "Click en un rectángulo para seleccionar y matar · color por proceso",
+                "Click: seleccionar · doble-click: zoom al subárbol · color por proceso",
                 11.0,
                 t.fg_muted,
             ),
