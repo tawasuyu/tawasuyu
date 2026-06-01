@@ -13,8 +13,8 @@ los mensajes lo puede pintar puriy cuando haga falta.
 ```
 paloma-core        — modelo agnóstico: direcciones, mensajes, buzones, hilos,
                      cuentas, el trait de transporte. Sin red ni UI.   [HECHO]
-paloma-net         — puente IMAP/SMTP: implementa MailBackend contra
-                     servidores reales (TLS/STARTTLS).                  [pendiente]
+paloma-net         — puente MIME + IMAP (fetch) + SMTP (envío);
+                     implementa MailBackend contra servidores reales.  [HECHO]
 paloma-store       — persistencia nativa (BLAKE3 + postcard) + sync
                      incremental + búsqueda (rimay).                    [pendiente]
 paloma-llimphi     — frontend: lista de hilos + lectura + redacción.   [pendiente]
@@ -37,13 +37,20 @@ intercambiables, como el resto de la suite.
   - `MailStore` — caché local: buzones → mensajes → hilos, flags, no-leídos.
   - 27 tests verde.
 
+- **Fase 2 (2026-06-01):** `paloma-net` — puente de red.
+  - `mime::parse_message` — RFC 822 → `Message` (mail-parser): headers, hilado,
+    cuerpos text+html, encoded-words. 4 tests offline.
+  - `imap_client` — fetch síncrono (`imap`+native-tls, TLS implícito): buzones,
+    mensajes, set de flags por Message-ID (UID SEARCH+STORE).
+  - `smtp` — envío (`lettre`): RFC 822 desde `OutgoingMessage`, multipart alt.
+  - `NetBackend` — IMAP+SMTP tras el trait `MailBackend`. MIME testeado; los
+    caminos IMAP/SMTP compilan, se verifican contra servidor real en la laptop.
+
 ## Pendiente (orden sugerido)
 
-1. **`paloma-net`** — IMAP fetch (LIST/SELECT/FETCH/STORE) + SMTP send sobre
-   TLS/STARTTLS; mapea fallos a `MailError`. Credenciales vía un proveedor
-   aparte (a futuro `agora`/`shared/auth`).
-2. **Parser MIME** — `Date`/`From`/`To` + cuerpos `multipart/alternative` y
-   nombres codificados `=?utf-8?…?=` (entran por un puente, no al núcleo).
-3. **`paloma-llimphi`** — tres-paneles (buzones · hilos · lectura) + redacción.
-4. **`paloma-store`** — persistencia nativa + búsqueda semántica (`rimay`).
+1. **`paloma-llimphi`** — tres-paneles (buzones · hilos · lectura) + redacción,
+   sobre `MockBackend` primero, luego `NetBackend`.
+2. **Verificar `paloma-net` contra un servidor real** (laptop, con credenciales).
+3. **STARTTLS/plain en IMAP** + límite de fetch a los últimos N (sync incremental).
+4. **`paloma-store`** — persistencia nativa (BLAKE3 + postcard) + búsqueda (`rimay`).
 5. **Calendario/Contactos** (CalDAV/CardDAV) compartiendo la capa de cuentas.
