@@ -79,10 +79,19 @@ Barrido transversal, mecánico, alto valor por esfuerzo. **Estado al 2026-06-01:
   - cosmos compute (13 crates): **1267/1271 ✅**, 3 skipped, **4 lentos en debug**
     (búsquedas de eclipses/tránsitos de ventana larga — uno verificado: pasa en
     149 s; no son bugs). → marcarlos release-only o subir su timeout.
-  - **`nakui-core`: 60/133 — 73 FALLAN** 🔴. Causa única: los tests de integración
-    cargan módulos desde `01_yachay/nakui/modules/` (crm, inventory, sales…) que
-    **nunca se commitearon** (no están en git ni en disco). Falla desde 2026-05-25.
-    Es deuda de core de nakui (ver Nivel 2B), no un fix mecánico.
+  - **`nakui-core`: 79/133 — 53 FALLAN** 🔴 (era 60/133 → 73 fallos). Los tests
+    cargan módulos de `01_yachay/nakui/modules/{treasury,inventory,sales,crm}`, dir
+    que **nunca se commiteó**. Avance: **`treasury` recuperado** (`42c1b605`) — su
+    contenido existía como el ejemplo `tesoro/nakui` de nakui-ui-llimphi; copiado al
+    path de producción → **+20 tests**. Lo que **resta** (deuda de core de nakui,
+    ver 2B):
+    - *treasury, ~12 tests:* el `schema.ncl` (`Caja = {saldo, estado}`) divergió de
+      lo que siembran los tests (`{name, saldo, currency}`, sin `estado`).
+      Reconciliar schema ↔ scripts ↔ tests = **decisión de dominio** (¿qué campos
+      tiene `Caja`?). No se toca a ciegas: rompería los scripts y los tests verdes.
+    - *crm (16) + inventory (8) + sales (6):* módulos **inexistentes** (`sales`/
+      `ventas` está a medias: tiene `module.json`+`seed.json`, falta `nakui/nsmc.json`
+      + schema + scripts). Autorar la lógica ERP en Rhai/Nickel es **tu terreno**.
   - dominium/tinkuy/supay/tullpu/media/takiy/chasqui/sandokan cores: verdes en lo
     corrido (sin fallos), corrida no exhaustiva.
 - **1.4.bis — 2 bugs reales arreglados** (`1fa3d60f`, `0c556c62`): los examples de
