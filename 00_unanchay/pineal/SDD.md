@@ -164,13 +164,13 @@ Total al 2026-05-28: **130+ tests verdes**.
 | `RingBuffer` con `revision` u64 | Permite a los backends invalidar texturas cacheadas sin diff por valor. Mismo patrón en `HeatmapMatrix`. |
 | Painters dibujan ABSOLUTO en pixels del scene | Composición vía `View::paint_with`: el caller pasa `PaintRect` y el painter no necesita conocer transformations. |
 
-## Estado (2026-05-31)
+## Estado (2026-06-01)
 
 ### Hecho
 
 - Catálogo cerrado: 14 crates viz/render/export (core, render, cartesian,
   polar, mesh, treemap, phosphor, flow, heatmap, stream, financial,
-  hexbin, contour, umbrella) + export SVG/PNG/PDF + 11 demos ejecutables.
+  hexbin, contour, umbrella) + export SVG/PNG/PDF + 12 demos ejecutables.
 - Algoritmos de grafo: Fruchterman-Reingold + Barnes-Hut O(n log n),
   Sugiyama-lite layered, FDEB-lite para bundling.
 - Backends en producción: vello/llimphi (`SceneCanvas`), SVG vectorial,
@@ -178,21 +178,29 @@ Total al 2026-05-28: **130+ tests verdes**.
 - **GPU directo wgpu** (`GpuSceneCanvas`, Fase 4): mismo trait `Canvas`
   sobre `llimphi-raster::GpuBatch`; pinta en `View::gpu_paint_with`.
   Validado en Iris Xe (11.76×@1M, 141 fps).
-- Menú principal + contextual cableados en las 11 demos.
+- **Primer consumidor real del camino GPU** (`pineal-gpu-demo`,
+  2026-06-01): starfield warp 3D que proyecta perspectiva en CPU y emite
+  hasta **1 M `fill_rect`** por frame contra el trait `Canvas` — detrás,
+  `GpuSceneCanvas` los colapsa en **una sola draw call instanciada**.
+  Densidad cicable 50K→200K→500K→1M (tecla `D` / menú), pausa con
+  `espacio`. Cierra el pendiente que el SDD arrastraba: el camino GPU ya
+  no es sólo teoría + tests, hay una app que lo ejercita end-to-end.
+- Menú principal + contextual cableados en las 12 demos.
 - 130+ tests verdes.
 
 ### Pendiente
 
-- Primera visualización densa real que ejercite `GpuSceneCanvas`
-  (candidata: cosmos starfield) — el camino GPU ya existe, falta el caso.
-- Texto y AA fino en el camino GPU (limitación documentada del backend).
+- Texto y AA fino en el camino GPU (limitación documentada del backend;
+  los labels del starfield van por la pasada vello hermana, como prescribe
+  el módulo `gpu_canvas`).
 - El techo de >1M primitivos por frame en vello es horizontal de
-  `llimphi-raster`, no de pineal.
+  `llimphi-raster`, no de pineal. El camino GPU directo (ya ejercitado)
+  es justamente la vía para superarlo.
 
 ## 9. Roadmap
 
 El catálogo de pineal está cerrado: 14 crates de viz/render/export
-+ 11 demos ejecutables + SDD propio. **Pineal no tiene roadmap propio
++ 12 demos ejecutables + SDD propio. **Pineal no tiene roadmap propio
 pendiente.**
 
 El único techo es el del motor (vello no aguanta >1M primitivos por
@@ -205,8 +213,14 @@ existe — implementa el mismo trait `Canvas` apoyándose en
 `llimphi_raster::GpuBatch`. Los painters no cambian. Lo enchufa la app
 desde un `View::gpu_paint_with` (en lugar de `paint_with`). Trade-offs
 (sin texto, una sola `line_width` por flush, sin AA fino) documentados
-en el módulo. Falta la primera visualización densa que lo ejercite —
-candidata natural: cosmos starfield.
+en el módulo.
+
+**Hecho 2026-06-01**: `pineal-gpu-demo` es la primera visualización densa
+que lo ejercita — un starfield warp 3D que empuja hasta 1 M `fill_rect`
+por frame por el camino GPU directo. El SDD daba "cosmos starfield" como
+candidata; se hizo un starfield autónomo dentro de pineal para no acoplar
+el demo a la maquinaria de cosmos (que computa, y pineal no computa).
+cosmos puede ahora copiar el patrón cuando quiera su propio cielo GPU.
 
 ## 10. Lo que NO va a pineal
 

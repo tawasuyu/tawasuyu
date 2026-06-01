@@ -1,0 +1,17 @@
+[package]
+name = "pineal-gpu-demo"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Starfield warp 3D denso (hasta 1M estrellas) — primer consumidor real de GpuSceneCanvas: pinta el trait Canvas sobre GpuBatch desde View::gpu_paint_with. Ejercita el camino GPU directo (Fase 4) que el resto del catálogo pineal sólo tenía documentado."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-menubar = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+app-bus = { workspace = true }
+wgpu = { workspace = true }
+pineal-render = { path = "../../pineal-render" }

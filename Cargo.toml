@@ -28,6 +28,7 @@ members = [
     "00_unanchay/pineal/demos/pineal-demo",
     "00_unanchay/pineal/demos/pineal-financial-demo",
     "00_unanchay/pineal/demos/pineal-flow-demo",
+    "00_unanchay/pineal/demos/pineal-gpu-demo",
     "00_unanchay/pineal/demos/pineal-heatmap-demo",
     "00_unanchay/pineal/demos/pineal-hexbin-demo",
     "00_unanchay/pineal/demos/pineal-mesh-demo",
