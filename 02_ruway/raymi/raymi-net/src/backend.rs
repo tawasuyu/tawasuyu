@@ -1,14 +1,17 @@
 //! `NetBackend` — implementación real de los transportes de `raymi-core` sobre
-//! CalDAV/CardDAV. Las colecciones (calendarios y libretas) se configuran por su
-//! URL; cada `fetch` hace un `REPORT` y parsea los objetos con [`crate::ical`] /
-//! [`crate::vcard`]. El autodescubrimiento (PROPFIND de home-sets) queda para una
-//! sub-fase.
+//! CalDAV/CardDAV. Las colecciones (calendarios y libretas) se conocen por su
+//! URL: se configuran a mano ([`NetBackend::new`]) o se **autodescubren** desde
+//! una URL base ([`NetBackend::discover`], PROPFIND principal → home-sets →
+//! enumeración). Cada `fetch` hace un `REPORT` y parsea los objetos con
+//! [`crate::ical`] / [`crate::vcard`].
 
 use raymi_core::{
     AddressBook, Calendar, CalendarBackend, CalError, Contact, ContactsBackend, Event,
 };
 
-use crate::dav::{DavClient, ADDRESSBOOK_QUERY, CALENDAR_CT, CALENDAR_QUERY, ICAL_CT, VCARD_CT};
+use crate::dav::{
+    CollectionKind, DavClient, ADDRESSBOOK_QUERY, CALENDAR_CT, CALENDAR_QUERY, ICAL_CT, VCARD_CT,
+};
 use crate::{ical, vcard};
 
 /// Backend CalDAV/CardDAV. Una sesión = un usuario; las colecciones se conocen
@@ -25,6 +28,41 @@ impl NetBackend {
     pub fn new(username: &str, password: &str, calendars: Vec<Calendar>, books: Vec<AddressBook>) -> Self {
         Self { client: DavClient::new(username, password), calendars, books }
     }
+
+    /// Crea el backend **autodescubriendo** las colecciones desde `base_url`
+    /// (PROPFIND principal → home-sets → enumeración). Hace red de inmediato. Las
+    /// colecciones quedan cacheadas como si se hubieran pasado a [`Self::new`]; el
+    /// rol del calendario se infiere de su nombre visible (vía [`Calendar::new`]).
+    pub fn discover(username: &str, password: &str, base_url: &str) -> Result<Self, CalError> {
+        let client = DavClient::new(username, password);
+        let (calendars, books) = collections_to_domain(client.discover(base_url)?);
+        Ok(Self { client, calendars, books })
+    }
+}
+
+/// Reparte las colecciones descubiertas en calendarios y libretas nativos,
+/// conservando URL (el `id`), nombre visible y color. Descarta las `Other`
+/// (home-sets planos u otros recursos).
+fn collections_to_domain(
+    collections: Vec<crate::dav::DavCollection>,
+) -> (Vec<Calendar>, Vec<AddressBook>) {
+    let mut calendars = Vec::new();
+    let mut books = Vec::new();
+    for c in collections {
+        let name = c.display_name.unwrap_or_else(|| c.href.clone());
+        match c.kind {
+            CollectionKind::Calendar => {
+                let mut cal = Calendar::new(c.href, name);
+                if let Some(color) = c.color {
+                    cal = cal.with_color(color);
+                }
+                calendars.push(cal);
+            }
+            CollectionKind::AddressBook => books.push(AddressBook::new(c.href, name)),
+            CollectionKind::Other => {}
+        }
+    }
+    (calendars, books)
 }
 
 impl CalendarBackend for NetBackend {
@@ -97,6 +135,37 @@ mod tests {
     fn object_url_sanea_el_uid() {
         assert_eq!(object_url("https://x/cal/", "abc@x", "ics"), "https://x/cal/abc-x.ics");
         assert_eq!(object_url("https://x/cal", "u-1.2", "vcf"), "https://x/cal/u-1.2.vcf");
+    }
+
+    #[test]
+    fn descubrimiento_reparte_por_tipo() {
+        use crate::dav::{CollectionKind, DavCollection};
+        let cols = vec![
+            DavCollection {
+                href: "https://x/cal/personal/".into(),
+                display_name: Some("Personal".into()),
+                color: Some("#3b82f6".into()),
+                kind: CollectionKind::Calendar,
+            },
+            DavCollection {
+                href: "https://x/card/contacts/".into(),
+                display_name: Some("Contactos".into()),
+                color: None,
+                kind: CollectionKind::AddressBook,
+            },
+            DavCollection {
+                href: "https://x/cal/".into(),
+                display_name: None,
+                color: None,
+                kind: CollectionKind::Other,
+            },
+        ];
+        let (cals, books) = collections_to_domain(cols);
+        assert_eq!(cals.len(), 1);
+        assert_eq!(cals[0].id, "https://x/cal/personal/");
+        assert_eq!(cals[0].color.as_deref(), Some("#3b82f6"));
+        assert_eq!(books.len(), 1);
+        assert_eq!(books[0].name, "Contactos");
     }
 
     #[test]

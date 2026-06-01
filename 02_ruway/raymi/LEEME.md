@@ -69,9 +69,21 @@ intercambiables, como el resto de la suite.
     NOTE/UID). `text` — helpers compartidos (unfold/split/escape).
   - `dav` — cliente HTTP sobre `ureq`: `REPORT` (calendar-query/addressbook-query),
     `PUT`, `DELETE`, Basic auth; parseo de `multistatus` con `roxmltree` por nombre
-    local de etiqueta. `NetBackend` implementa ambos traits (colecciones por URL;
-    autodescubrimiento pendiente). **17 tests offline**; los caminos HTTP se
-    verifican contra un servidor real (Nextcloud/Radicale) en la laptop.
+    local de etiqueta. `NetBackend` implementa ambos traits (colecciones por URL).
+    **17 tests offline**; los caminos HTTP se verifican contra un servidor real
+    (Nextcloud/Radicale) en la laptop.
+
+- **Fase 5 (2026-06-01):** autodescubrimiento DAV en `raymi-net`.
+  - `dav` gana `PROPFIND` + `DavClient::discover(base_url)`: principal del usuario
+    (`current-user-principal`) → home-sets (`calendar-home-set`/
+    `addressbook-home-set`, ambos en un viaje) → enumeración `Depth: 1` de
+    colecciones (`resourcetype` + `displayname` + `calendar-color` de Apple).
+    Tolerante: si falta principal o home-set, cae a la base/principal. `resolve`
+    arma URLs absolutas a partir de los `href` del servidor; el color `#rrggbbaa`
+    se recorta a `#rrggbb`.
+  - `NetBackend::discover(user, pass, base_url)` mapea las colecciones a
+    `Calendar`/`AddressBook` nativos (rol inferido del nombre) y queda listo para
+    `sync_*`. **+5 tests offline (22)**; los viajes HTTP se verifican en la laptop.
 
 - **Fase 4 (2026-06-01):** `raymi-store` — caché en disco (postcard + BLAKE3).
   - `CalDb` — raíz de disco con un directorio por cuenta (id saneado). Persiste
@@ -91,9 +103,9 @@ intercambiables, como el resto de la suite.
 
 ## Pendiente (orden sugerido)
 
-1. **Autodescubrimiento DAV** (PROPFIND `calendar-home-set`/`addressbook-home-set`)
-   + verificar `raymi-net` contra servidor real.
-2. **`raymi-app`** — binario lanzable, comparte `cuenta.json` con paloma; hidrata
-   desde `raymi-store` al arrancar y refresca contra la red.
+1. **`raymi-app`** — binario lanzable, comparte `cuenta.json` con paloma; hidrata
+   desde `raymi-store` al arrancar, autodescubre/refresca contra la red.
+2. **Verificar `raymi-net` contra servidor real** (Nextcloud/Radicale) en la
+   laptop: discover + sync + put/delete end-to-end.
 3. **Crear/editar eventos y contactos** desde la UI (put/delete ya en el trait).
 4. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.

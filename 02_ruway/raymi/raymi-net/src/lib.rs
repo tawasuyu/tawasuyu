@@ -3,10 +3,12 @@
 //! Implementa los traits de [`raymi_core`] contra servidores reales:
 //! - [`ical`] — parsea/serializa iCalendar (`VEVENT` ↔ `Event`).
 //! - [`vcard`] — parsea/serializa vCard (`VCARD` ↔ `Contact`).
-//! - [`dav`] — cliente HTTP CalDAV/CardDAV (`REPORT`/`PUT`/`DELETE`, Basic auth)
-//!   + parseo de `multistatus`.
+//! - [`dav`] — cliente HTTP CalDAV/CardDAV (`PROPFIND`/`REPORT`/`PUT`/`DELETE`,
+//!   Basic auth) + parseo de `multistatus` + **autodescubrimiento** (principal →
+//!   home-sets → enumeración de colecciones).
 //! - [`NetBackend`] — junta ambos en un `CalendarBackend` + `ContactsBackend`
-//!   (y por ende `DavBackend`).
+//!   (y por ende `DavBackend`); colecciones a mano ([`NetBackend::new`]) o
+//!   autodescubiertas ([`NetBackend::discover`]).
 //!
 //! Los formatos ajenos (iCalendar/vCard, XML DAV) entran por acá, nunca al
 //! núcleo: el resto de la suite trabaja con `Event`/`Contact` nativos. Los
