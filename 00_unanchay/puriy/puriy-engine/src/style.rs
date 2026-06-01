@@ -4611,6 +4611,15 @@ fn evaluate_media_feature(inner: &str, vp: Viewport) -> bool {
         "min-resolution" => parse_resolution_dppx(val).is_some_and(|r| vp.dpr >= r),
         "max-resolution" => parse_resolution_dppx(val).is_some_and(|r| vp.dpr <= r),
         "resolution" => parse_resolution_dppx(val).is_some_and(|r| (vp.dpr - r).abs() < 0.01),
+        "min-aspect-ratio" => {
+            parse_aspect_ratio(val).is_some_and(|r| vp.width / vp.height >= r)
+        }
+        "max-aspect-ratio" => {
+            parse_aspect_ratio(val).is_some_and(|r| vp.width / vp.height <= r)
+        }
+        "aspect-ratio" => {
+            parse_aspect_ratio(val).is_some_and(|r| (vp.width / vp.height - r).abs() < 0.01)
+        }
         // Preferencias del usuario: reportamos tema claro y sin reducción.
         "prefers-color-scheme" => val == "light" || val == "no-preference",
         "prefers-reduced-motion" => val == "no-preference",
@@ -4621,6 +4630,23 @@ fn evaluate_media_feature(inner: &str, vp: Viewport) -> bool {
         "any-pointer" => val == "fine",
         // Feature desconocida: no descalifica (comportamiento previo lenient).
         _ => true,
+    }
+}
+
+/// Parsea un aspect-ratio de media query a un float `ancho/alto`. Acepta la
+/// forma `W/H` (`16/9`) y el número suelto (`1.5`). `None` si no parsea o el
+/// alto es cero.
+fn parse_aspect_ratio(val: &str) -> Option<f32> {
+    let v = val.trim();
+    if let Some((w, h)) = v.split_once('/') {
+        let w: f32 = w.trim().parse().ok()?;
+        let h: f32 = h.trim().parse().ok()?;
+        if h == 0.0 {
+            return None;
+        }
+        Some(w / h)
+    } else {
+        v.parse::<f32>().ok()
     }
 }
 
@@ -6467,6 +6493,13 @@ line2</pre></body></html>"#;
             "screen and (min-width: 800px) and (min-resolution: 2dppx)",
             landscape, // dpr 1.0 → falla la última
         ));
+
+        // aspect-ratio (W/H y número). landscape = 900/400 = 2.25.
+        assert!(evaluate_media_query("(min-aspect-ratio: 16/9)", landscape)); // 2.25 >= 1.77
+        assert!(!evaluate_media_query("(min-aspect-ratio: 16/9)", portrait)); // 0.44 < 1.77
+        assert!(evaluate_media_query("(max-aspect-ratio: 1/1)", portrait)); // 0.44 <= 1.0
+        assert!(!evaluate_media_query("(max-aspect-ratio: 1/1)", landscape)); // 2.25 > 1.0
+        assert!(evaluate_media_query("(min-aspect-ratio: 2)", landscape)); // 2.25 >= 2
 
         // Feature desconocida no descalifica (lenient, igual que antes).
         assert!(evaluate_media_query("(quantum-foam: 3)", landscape));
