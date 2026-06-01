@@ -16,6 +16,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     },
     Rect as TaffyRect,
 };
+use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::View;
 
 use pata_core::config::Surface;
@@ -24,7 +25,7 @@ use pata_core::widget::WidgetView;
 
 use crate::shuma::{self, ShumaState};
 use crate::toplevel::WindowEntry;
-use crate::tray::TrayItem;
+use crate::tray::{TrayIcon, TrayItem};
 use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 
 /// Largo máximo de la etiqueta de una ventana en el `window_list` antes de
@@ -422,27 +423,34 @@ fn clipboard_view(text: Option<&str>, exec: Option<&str>, theme: &Theme) -> View
     }
 }
 
+/// Tamaño del ícono del tray en la barra (px).
+const TRAY_ICON_PX: f32 = 18.0;
+
 /// El `tray`: un chip clickeable por item de la bandeja, resaltando los que
 /// piden atención (`NeedsAttention`). Click → [`Msg::TrayActivate`] con su `key`;
-/// el backend activa el item por D-Bus. Los chips siguen el eje de la barra. (MVP
-/// textual: el ícono real —pixmap/tema— queda para más adelante.)
+/// el backend activa el item por D-Bus. Pinta el ícono si la app lo proveyó (pixmap
+/// o PNG por nombre); si no, cae a la etiqueta de texto. Los chips siguen el eje.
 fn tray_view(items: &[TrayItem], gap: f32, dir: FlexDirection, theme: &Theme) -> View<Msg> {
     let chips: Vec<View<Msg>> = items
         .iter()
         .map(|it| {
-            let texto = recortar(&it.label, TRAY_LABEL_MAX);
-            // NeedsAttention: resaltado con el color de acento; el resto, normal.
-            let fg = if it.status == "NeedsAttention" {
-                theme.accent
-            } else {
-                theme.fg_text
-            };
-            chip(theme)
+            let base = chip(theme)
                 .fill(theme.bg_panel_alt)
                 .radius(6.0)
                 .hover_fill(theme.bg_button_hover)
-                .on_click(Msg::TrayActivate(it.key.clone()))
-                .text(texto, 12.0, fg)
+                .on_click(Msg::TrayActivate(it.key.clone()));
+            match &it.icon {
+                Some(icon) => base.children(vec![tray_icon_node(icon)]),
+                None => {
+                    // NeedsAttention: acento; el resto, normal.
+                    let fg = if it.status == "NeedsAttention" {
+                        theme.accent
+                    } else {
+                        theme.fg_text
+                    };
+                    base.text(recortar(&it.label, TRAY_LABEL_MAX), 12.0, fg)
+                }
+            }
         })
         .collect();
 
@@ -456,6 +464,21 @@ fn tray_view(items: &[TrayItem], gap: f32, dir: FlexDirection, theme: &Theme) ->
         ..Default::default()
     })
     .children(chips)
+}
+
+/// Un nodo cuadrado de [`TRAY_ICON_PX`] con el ícono del item (aspect-fit). Arma la
+/// `peniko::Image` desde los bytes RGBA que el hilo del tray ya decodificó.
+fn tray_icon_node(icon: &TrayIcon) -> View<Msg> {
+    let blob = Blob::from(icon.rgba.clone());
+    let img = Image::new(blob, ImageFormat::Rgba8, icon.width, icon.height);
+    View::new(Style {
+        size: Size {
+            width: length(TRAY_ICON_PX),
+            height: length(TRAY_ICON_PX),
+        },
+        ..Default::default()
+    })
+    .image(img)
 }
 
 /// Recorta una cadena a `max` caracteres, agregando `…` si sobró.

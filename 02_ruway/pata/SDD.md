@@ -219,9 +219,13 @@ borde; shuma provee el contenido.
     clicks por un canal tokio (como el exec del Quake). El render pinta un chip por
     item (resaltando `NeedsAttention`); el click manda `Msg::TrayActivate(key)` →
     `Activate(0,0)` por D-Bus. Interceptado por el frontend (`SlotWidget::Tray`),
-    los items viajan en `render::BarData`. MVP textual: **no** decodifica íconos
-    (pixmap/tema) ni emite señales del watcher ni hace fallback si ya hay un
-    watcher (si el nombre está tomado, queda vacío y loguea). `split_service`
+    los items viajan en `render::BarData`. **Íconos** ✅: resuelve el `IconPixmap`
+    (ARGB32 por D-Bus → RGBA, sin tema) y, si no, el `IconName` como PNG en los
+    dirs estándar (hicolor + pixmaps, sólo PNG, sin `index.theme` ni SVG); cae a
+    texto si nada resuelve. El hilo del tray decodifica a `TrayIcon{rgba}` y el
+    render lo envuelve en `peniko::Image` (`View::image`, 18px). **No** emite
+    señales del watcher ni hace fallback si ya hay un watcher (si el nombre está
+    tomado, queda vacío y loguea). `split_service`
     normaliza el registro (ruta+remitente / nombre de bus / combinado), testeada.
     El tray sólo arranca si la config declara un widget `tray`. Ver `02_ruway/pata/
     pata-llimphi/src/tray.rs`.

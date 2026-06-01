@@ -33,5 +33,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # current-thread (el workspace fija zbus con la feature `tokio`, no la blocking).
 zbus = { workspace = true }
 tokio = { workspace = true }
+# Decodificar PNG de íconos del tray resueltos por nombre (IconName).
+image = { workspace = true }
 raw-window-handle = { workspace = true }
 pollster = { workspace = true }

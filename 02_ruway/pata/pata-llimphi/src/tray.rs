@@ -12,18 +12,33 @@
 //!
 //! Alcance del MVP (todo runtime, no verificable sin un Hyprland real):
 //! - **Enumera** los items y los **activa** al click (`Activate(0,0)`).
-//! - **No** decodifica íconos (pixmaps ARGB / temas): pinta una etiqueta de texto
-//!   (título o id), que es lo que una barra textual puede mostrar hoy.
+//! - **Íconos**: resuelve el `IconPixmap` (ARGB32 que manda la app por D-Bus) y,
+//!   si no hay, busca el `IconName` como PNG en los directorios estándar de íconos
+//!   (búsqueda acotada: hicolor + pixmaps, sólo PNG, sin parsear `index.theme` ni
+//!   SVG). Si nada resuelve, cae a una etiqueta de texto (título o id).
 //! - **No** emite las señales del watcher (sólo le importan a *otros* hosts) ni
 //!   provee fallback si ya hay un watcher corriendo: si el nombre está tomado, el
 //!   tray queda vacío y se loguea (el caso de pata como barra única no lo tiene).
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 use zbus::message::Header;
 use zbus::{interface, proxy};
+
+/// Un ícono ya decodificado a RGBA8, listo para que el render lo envuelva en una
+/// `peniko::Image`. El render no toca D-Bus ni decodifica; sólo pinta.
+#[derive(Clone, Debug)]
+pub struct TrayIcon {
+    /// Ancho en píxeles.
+    pub width: u32,
+    /// Alto en píxeles.
+    pub height: u32,
+    /// Píxeles RGBA8 (`width*height*4` bytes).
+    pub rgba: Vec<u8>,
+}
 
 /// Lo que el render necesita de cada item del tray. `key` (`"bus|path"`) rutea la
 /// activación de vuelta al hilo del tray.
@@ -35,6 +50,8 @@ pub struct TrayItem {
     pub label: String,
     /// Estado SNI (`Active` / `Passive` / `NeedsAttention`).
     pub status: String,
+    /// Ícono ya decodificado, o `None` si no se pudo resolver (cae a texto).
+    pub icon: Option<TrayIcon>,
 }
 
 /// Estado compartido con la interfaz del watcher: los items registrados como
@@ -145,6 +162,10 @@ trait StatusNotifierItem {
     fn title(&self) -> zbus::Result<String>;
     #[zbus(property)]
     fn icon_name(&self) -> zbus::Result<String>;
+    /// Íconos embebidos: lista de `(ancho, alto, ARGB32)`. La app los manda por el
+    /// bus; no requieren buscar en el tema.
+    #[zbus(property)]
+    fn icon_pixmap(&self) -> zbus::Result<Vec<(i32, i32, Vec<u8>)>>;
     #[zbus(property)]
     fn status(&self) -> zbus::Result<String>;
     /// Click primario sobre el item.
@@ -214,11 +235,12 @@ async fn refrescar(
     let mut snapshot = Vec::new();
     let mut vivos = Vec::new();
     for (key, bus, path) in registrados {
-        if let Some((label, status)) = leer_item(conn, &bus, &path).await {
+        if let Some((label, status, icon)) = leer_item(conn, &bus, &path).await {
             snapshot.push(TrayItem {
                 key: key.clone(),
                 label,
                 status,
+                icon,
             });
             vivos.push((key, bus, path));
         }
@@ -227,20 +249,35 @@ async fn refrescar(
     *items_out.lock().unwrap() = snapshot;
 }
 
-/// Lee `(label, status)` de un item. La etiqueta es el título, o el id, o el
-/// nombre del ícono —lo primero no vacío—. `None` si los tres fallan: la app se
-/// fue y hay que podar el item.
-async fn leer_item(conn: &zbus::Connection, bus: &str, path: &str) -> Option<(String, String)> {
+/// Lee `(label, status, icon)` de un item. La etiqueta es el título, o el id, o el
+/// nombre del ícono —lo primero no vacío—. El ícono sale del `IconPixmap` o, si no,
+/// del `IconName` resuelto a PNG. `None` si no se puede leer ni el label ni el id:
+/// la app se fue y hay que podar el item.
+async fn leer_item(
+    conn: &zbus::Connection,
+    bus: &str,
+    path: &str,
+) -> Option<(String, String, Option<TrayIcon>)> {
     let proxy = item_proxy(conn, bus, path).await?;
-    let label = proxy
-        .title()
+    let title = proxy.title().await.ok().filter(|s| !s.is_empty());
+    let id = proxy.id().await.ok().filter(|s| !s.is_empty());
+    let icon_name = proxy.icon_name().await.ok().filter(|s| !s.is_empty());
+    let label = title.or(id).or_else(|| icon_name.clone())?;
+    let status = proxy
+        .status()
         .await
         .ok()
-        .filter(|s| !s.is_empty())
-        .or(proxy.id().await.ok().filter(|s| !s.is_empty()))
-        .or(proxy.icon_name().await.ok().filter(|s| !s.is_empty()))?;
-    let status = proxy.status().await.ok().unwrap_or_else(|| "Active".to_string());
-    Some((label, status))
+        .unwrap_or_else(|| "Active".to_string());
+
+    // Ícono: primero el pixmap embebido (no necesita tema); si no, el nombre.
+    let icon = proxy
+        .icon_pixmap()
+        .await
+        .ok()
+        .and_then(pixmap_a_icono)
+        .or_else(|| icon_name.as_deref().and_then(buscar_icono_png));
+
+    Some((label, status, icon))
 }
 
 /// Activa (click primario) el item con esa `key`, si sigue registrado.
@@ -273,6 +310,92 @@ async fn item_proxy<'a>(
         .build()
         .await
         .ok()
+}
+
+/// Tamaño de ícono que preferimos para la barra (px). Elegimos el pixmap más
+/// cercano a esto para no clonar mapas de 256px en cada frame.
+const ICONO_OBJETIVO: i64 = 24;
+
+/// Convierte la lista de `IconPixmap` (ARGB32) en un [`TrayIcon`] RGBA8. Elige el
+/// pixmap de tamaño más cercano a [`ICONO_OBJETIVO`] entre los válidos. `None` si
+/// la lista viene vacía o ningún entry tiene datos consistentes.
+fn pixmap_a_icono(pixmaps: Vec<(i32, i32, Vec<u8>)>) -> Option<TrayIcon> {
+    let (w, h, data) = pixmaps
+        .into_iter()
+        .filter(|(w, h, d)| {
+            *w > 0 && *h > 0 && d.len() >= (*w as usize) * (*h as usize) * 4
+        })
+        .min_by_key(|(w, _, _)| (*w as i64 - ICONO_OBJETIVO).abs())?;
+    let (w, h) = (w as u32, h as u32);
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    // ARGB32 en orden de red (big-endian) → en memoria los bytes son [A,R,G,B];
+    // peniko espera RGBA8, así que reordenamos a [R,G,B,A].
+    for px in data.chunks_exact(4) {
+        rgba.extend_from_slice(&[px[1], px[2], px[3], px[0]]);
+    }
+    Some(TrayIcon {
+        width: w,
+        height: h,
+        rgba,
+    })
+}
+
+/// Busca el `IconName` como PNG en los directorios estándar y lo decodifica. Si el
+/// nombre ya es una ruta absoluta, la usa directo. Búsqueda acotada: hicolor (por
+/// tamaños) + `/usr/share/pixmaps`, sólo PNG, sin `index.theme` ni SVG.
+fn buscar_icono_png(name: &str) -> Option<TrayIcon> {
+    if name.is_empty() {
+        return None;
+    }
+    if name.starts_with('/') {
+        return decodificar_png(&PathBuf::from(name));
+    }
+    for ruta in rutas_candidatas(name) {
+        if let Some(ic) = decodificar_png(&ruta) {
+            return Some(ic);
+        }
+    }
+    None
+}
+
+/// Las rutas PNG donde puede vivir un ícono temático `name`, en orden de
+/// preferencia (tamaños chicos primero, para una barra).
+fn rutas_candidatas(name: &str) -> Vec<PathBuf> {
+    let mut bases: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        bases.push(PathBuf::from(&home).join(".local/share"));
+        bases.push(PathBuf::from(&home).join(".icons"));
+    }
+    let datadirs =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    bases.extend(datadirs.split(':').filter(|s| !s.is_empty()).map(PathBuf::from));
+
+    let sizes = ["32x32", "24x24", "22x22", "16x16", "48x48"];
+    let mut rutas = Vec::new();
+    for base in &bases {
+        for size in sizes {
+            rutas.push(
+                base.join("icons/hicolor")
+                    .join(size)
+                    .join("apps")
+                    .join(format!("{name}.png")),
+            );
+        }
+    }
+    // Último recurso: el cajón plano de pixmaps.
+    rutas.push(PathBuf::from(format!("/usr/share/pixmaps/{name}.png")));
+    rutas
+}
+
+/// Decodifica un PNG a [`TrayIcon`] RGBA8, o `None` si no existe / no es válido.
+fn decodificar_png(ruta: &std::path::Path) -> Option<TrayIcon> {
+    let img = image::open(ruta).ok()?.to_rgba8();
+    let (width, height) = (img.width(), img.height());
+    Some(TrayIcon {
+        width,
+        height,
+        rgba: img.into_raw(),
+    })
 }
 
 /// Normaliza el argumento de `RegisterStatusNotifierItem` a `(bus, path)`:
