@@ -179,7 +179,10 @@ borde; shuma provee el contenido.
     comando; el render le pone `on_click(Msg::Spawn(cmd))` + `hover_fill`; ambos
     backends lo lanzan con `spawn_cmd` (`sh -c`, sin esperar). Ej. en el asset:
     `start_button` con `exec = "wofi --show drun"`.
-  - Falta: exec asíncrono del Quake (el `Enter` aún bloquea con `sh -c`) y los
-    widgets placeholder (`window_list`/`tray`/`clipboard`, Fase 6).
+  - **Exec asíncrono del Quake** ✅ — el `Enter` corre el comando en un hilo y el
+    resultado llega por un `mpsc::Receiver` que el latido sondea (`try_recv`) cada
+    frame; ya no bloquea el loop. Mientras corre, el drawer muestra `…`.
+  - Falta: los widgets placeholder (`window_list`/`tray`/`clipboard`, Fase 6) y
+    leer el volumen real en el sampler (hoy 0%).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).

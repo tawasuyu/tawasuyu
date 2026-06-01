@@ -119,6 +119,9 @@ struct LayerApp {
     /// ~60fps, pero re-muestrear (y cambiar el CPU%) sólo tiene sentido ~1Hz.
     ctx: WidgetCtx,
     ultimo_sample: Option<Instant>,
+    /// Comando del Quake corriendo en un hilo: su resultado llega por aquí. El
+    /// latido del frame-callback lo sondea (`try_recv`) sin bloquear el loop.
+    exec_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Una layer surface por cada barra de la config.
     panels: Vec<Panel>,
     exit: bool,
@@ -236,6 +239,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         sampler: Sampler::new(),
         ctx: WidgetCtx::default(),
         ultimo_sample: None,
+        exec_rx: None,
         panels,
         exit: false,
     };
@@ -282,14 +286,36 @@ impl LayerApp {
         self.panels[pi].dirty = true;
     }
 
-    /// Enter en el drawer: corre el comando (sustituto `sh -c`, bloqueante) y
-    /// guarda su salida. El puente real a `shuma` reemplaza a esto.
+    /// Enter en el drawer: corre el comando en un **hilo** (no bloquea el loop) y
+    /// deja el resultado en `exec_rx`; el latido lo recoge con [`Self::poll_exec`].
+    /// El puente real a `shuma` reemplaza a esto.
     fn shuma_submit(&mut self) {
         let cmd = std::mem::take(&mut self.shuma.buffer);
-        if !cmd.is_empty() {
-            self.shuma.output = Some(crate::shuma::ejecutar_stand_in(&cmd));
+        if cmd.is_empty() {
+            self.marcar_shuma_dirty();
+            return;
         }
+        self.shuma.pending = true;
+        self.shuma.output = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::shuma::ejecutar_stand_in(&cmd));
+        });
+        self.exec_rx = Some(rx);
         self.marcar_shuma_dirty();
+    }
+
+    /// Sondea (sin bloquear) si el comando del Quake terminó; si sí, guarda su
+    /// salida y re-pinta. Se llama en cada frame (el latido del shuma corre a
+    /// ~60fps, así que el resultado aparece a los ~16ms de terminar).
+    fn poll_exec(&mut self) {
+        let got = self.exec_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some(res) = got {
+            self.shuma.output = Some(res);
+            self.shuma.pending = false;
+            self.exec_rx = None;
+            self.marcar_shuma_dirty();
+        }
     }
 
     /// Re-muestrea el sistema si pasó ~1s; si lo hace, marca todas las barras
@@ -366,6 +392,7 @@ impl LayerApp {
     /// hay algo nuevo; entre cambios sólo mantiene el latido.
     fn draw(&mut self, pi: usize, qh: &QueueHandle<Self>) {
         self.maybe_sample();
+        self.poll_exec();
         self.ensure_gpu(pi);
 
         if !self.panels[pi].dirty {
