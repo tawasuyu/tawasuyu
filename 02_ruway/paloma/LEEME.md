@@ -99,6 +99,21 @@ intercambiables, como el resto de la suite.
     respeta saltos de bloque). 2 tests. Panel de lectura con scroll en píxeles
     (margen negativo + viewport clip); la rueda elige panel por la X del cursor.
 
+- **Fase 9 (2026-06-01):** interfaz pulida + acciones + ganchos del roadmap.
+  - **Pulido**: avatares con iniciales (color estable por correo) en lista,
+    lectura y resultados; estrella clicable por hilo; barra de acento en
+    selección; fechas cortas en listas; estados vacíos; placeholder de lectura.
+  - **Acciones reales** (al backend + caché): ★ destacar / ✓ leído-no-leído
+    (`set_flags`), 🗑 papelera (`\Deleted`, oculto vía `store.threads`), ↪
+    reenviar (`OutgoingMessage::forward`), Cc en redacción. Barra de acciones en
+    lectura; atajos `f`=reenviar, `Supr`=borrar.
+  - **Ganchos del roadmap** (UI lista, backend pendiente y rotulado como tal):
+    nav lateral Calendario/Contactos (chip "pronto"); checkbox **Firmar
+    (Ed25519)** en redacción (estado "enviado · firmado"); toggle de búsqueda
+    **Exacta | Semántica** (semántica avisa que cae a exacta hasta integrar
+    `rimay`); botón **Ver HTML enriquecido** en mensajes con `body_html` (avisa
+    que el render rico vía puriy está pendiente).
+
 ## Pendiente (orden sugerido)
 
 1. **Verificar contra un servidor real** (laptop, con credenciales) los caminos

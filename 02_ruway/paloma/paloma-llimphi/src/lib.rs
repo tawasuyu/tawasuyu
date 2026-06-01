@@ -118,6 +118,10 @@ pub struct Model {
     search: TextInputState,
     /// `true` si la caja de búsqueda tiene el foco del teclado.
     search_focused: bool,
+    /// Modo de búsqueda: `false` = exacta (texto), `true` = semántica. La
+    /// semántica (embeddings vía `rimay`) está pendiente de integrar; el toggle
+    /// existe y, por ahora, cae a la exacta avisándolo.
+    search_semantic: bool,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -191,6 +195,7 @@ impl Model {
             compose: None,
             search: TextInputState::new(),
             search_focused: false,
+            search_semantic: false,
             db,
             account_id,
             status,
@@ -360,6 +365,10 @@ pub enum Msg {
     SearchKey(KeyEvent),
     /// Abrir un mensaje (típicamente, un resultado de búsqueda).
     OpenMessage(MessageId),
+    /// Cambiar el modo de búsqueda (false = exacta, true = semántica).
+    SearchMode(bool),
+    /// Pedir el render HTML enriquecido de un mensaje (gancho de puriy).
+    ViewRich(MessageId),
 }
 
 /// La transición Elm. Toma el modelo por valor y lo devuelve mutado.
@@ -444,6 +453,15 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
         }
         Msg::ComposeSend => model = send_compose(model),
         Msg::SearchFocus(on) => model.search_focused = on,
+        Msg::SearchMode(semantic) => {
+            model.search_semantic = semantic;
+            if semantic {
+                model.status = "búsqueda semántica (rimay): pendiente — usando exacta".into();
+            }
+        }
+        Msg::ViewRich(_id) => {
+            model.status = "HTML enriquecido vía puriy: pendiente (texto despojado por ahora)".into();
+        }
         Msg::OpenMessage(id) => {
             model.open_message(&id);
             model.search_focused = false;

@@ -379,7 +379,38 @@ fn search_results_panel(model: &Model) -> View<Msg> {
 
     View::new(col(length(THREADS_W)))
         .fill(theme.bg_panel)
-        .children(vec![header, list])
+        .children(vec![header, mode_toggle(theme, model.search_semantic), list])
+}
+
+/// Control segmentado Exacta | Semántica para el modo de búsqueda.
+fn mode_toggle(theme: &Theme, semantic: bool) -> View<Msg> {
+    let seg = |label: &str, active: bool, msg: Msg| {
+        let (bg, fg) = if active { (theme.accent, theme.bg_app) } else { (theme.bg_button, theme.fg_muted) };
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(24.0_f32) },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(bg)
+        .radius(5.0)
+        .text(label, 12.0, fg)
+        .on_click(msg)
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(14.0, 5.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![
+        seg("🔤  Exacta", !semantic, Msg::SearchMode(false)),
+        seg("🧠  Semántica", semantic, Msg::SearchMode(true)),
+    ])
 }
 
 /// Fila de un resultado de búsqueda: avatar + remitente · fecha · buzón + asunto.
@@ -651,6 +682,24 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
     })
     .text_aligned(body_text, 13.0, theme.fg_text, Alignment::Start);
 
+    let mut children = vec![header_row, body];
+    // Si el mensaje trae HTML, ofrecer el render enriquecido (gancho de puriy).
+    if m.body_html.is_some() {
+        let rich = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![button(
+            "⌹  Ver HTML enriquecido",
+            theme.bg_button,
+            theme.fg_muted,
+            Msg::ViewRich(m.id.clone()),
+        )]);
+        children.push(rich);
+    }
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: Dimension::auto() },
@@ -660,7 +709,7 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .radius(8.0)
-    .children(vec![header_row, body])
+    .children(children)
 }
 
 /// Barra inferior de estado.
