@@ -53,10 +53,22 @@ pub(crate) struct UiState {
     pub(crate) expanded_panels: Vec<ToolPanel>,
     #[serde(default)]
     pub(crate) tile_mode: bool,
+    #[serde(default = "default_yaw")]
+    pub(crate) sphere_yaw: f32,
+    #[serde(default = "default_pitch")]
+    pub(crate) sphere_pitch: f32,
 }
 
 fn default_harmonic() -> u32 {
     1
+}
+
+fn default_yaw() -> f32 {
+    26.0
+}
+
+fn default_pitch() -> f32 {
+    -64.0
 }
 
 /// Topocéntrico activo por default — habilita la tabla de aspectos
@@ -91,6 +103,8 @@ impl Default for UiState {
             tool_cat: ToolCat::default(),
             expanded_panels: ToolPanel::defaults_expanded(),
             tile_mode: false,
+            sphere_yaw: default_yaw(),
+            sphere_pitch: default_pitch(),
         }
     }
 }

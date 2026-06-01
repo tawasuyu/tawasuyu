@@ -415,6 +415,10 @@ pub(crate) enum Msg {
     CloseChartTab(usize),
     /// Alterna entre vista de pestañas y mosaico (cartas lado a lado).
     ToggleTileMode,
+    /// Rota la esfera 3D por pasos (Δyaw, Δpitch) desde los botones.
+    SphereRotate(f32, f32),
+    /// Resetea la orientación de la esfera 3D.
+    SphereReset,
     /// Expande/colapsa un nodo (grupo o contacto) del árbol de datos.
     ToggleNavNode(String),
     /// Selecciona un nodo del árbol; carta→carga, contenedor→toggle.
@@ -510,6 +514,9 @@ pub(crate) struct Model {
     pub(crate) rename_input: TextInputState,
     /// Clave del nodo cortado, pendiente de pegar (mover).
     pub(crate) nav_cut: Option<String>,
+    // esfera 3D (orientación)
+    pub(crate) sphere_yaw: f32,
+    pub(crate) sphere_pitch: f32,
     // layout guardable (3 zonas resizables)
     pub(crate) nav_w: f32,
     pub(crate) tools_w: f32,

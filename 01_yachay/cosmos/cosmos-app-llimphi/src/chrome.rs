@@ -10,7 +10,10 @@
 use std::sync::Arc;
 
 use cosmos_canvas_llimphi::{canvas_view, canvas_view_clickable};
-use cosmos_render::{compose_sphere, compose_wheel_with_hits, CompositionOpts, Palette, SphereOpts, SphereView};
+use cosmos_render::{
+    compose_sphere, compose_wheel_with_hits, CompositionOpts, DrawCommand, Palette, Rgba,
+    SphereOpts, SphereView, TextAnchor,
+};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Size, Style},
@@ -662,12 +665,122 @@ fn graphic_for(
     match model.chart_view {
         ChartView::Estandar => wheel_canvas(model, render, size),
         ChartView::Carto => crate::astrocarto::tile_astrocarto(chart, render, theme),
-        ChartView::Esfera3d => sphere_canvas(render, size),
-        ChartView::Cielo => pending_view(
-            "Cielo del observador (gráfico) — pendiente; la tabla alt/az está en Herramientas › Astronomía.",
-            theme,
-        ),
+        ChartView::Esfera3d => sphere_canvas(model, render, size, theme),
+        ChartView::Cielo => sky_canvas(model, size, theme),
     }
+}
+
+/// Cielo del observador: proyección azimutal (cénit al centro, horizonte
+/// al borde) de los cuerpos en alt/az. Compone `DrawCommand`s y los pinta
+/// en el mismo canvas que la rueda. Usa `model.astro` (la lectura
+/// astronómica cacheada); si todavía no está, muestra "calculando…".
+fn sky_canvas(model: &Model, size: f32, theme: &Theme) -> View<Msg> {
+    let Some(astro) = &model.astro else {
+        return pending_view("Cielo del observador — calculando…", theme);
+    };
+    let cx = size / 2.0;
+    let cy = size / 2.0;
+    let r = size * 0.42;
+    let grid = Rgba { r: 0.35, g: 0.40, b: 0.50, a: 1.0 };
+    let card = Rgba { r: 0.65, g: 0.70, b: 0.80, a: 1.0 };
+    let body_col = Rgba { r: 0.95, g: 0.85, b: 0.45, a: 1.0 };
+    let label_col = Rgba { r: 0.85, g: 0.88, b: 0.95, a: 1.0 };
+
+    let mut cmds: Vec<DrawCommand> = Vec::new();
+    // Horizonte + anillos de altitud (30°, 60°).
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r,
+        stroke: Some(grid),
+        fill: None,
+        stroke_w: 1.5,
+    });
+    for alt in [30.0_f32, 60.0_f32] {
+        cmds.push(DrawCommand::Circle {
+            cx,
+            cy,
+            r: r * (90.0 - alt) / 90.0,
+            stroke: Some(grid),
+            fill: None,
+            stroke_w: 0.7,
+        });
+    }
+    // Cruz de cardinales.
+    cmds.push(DrawCommand::Line {
+        x1: cx - r,
+        y1: cy,
+        x2: cx + r,
+        y2: cy,
+        color: grid,
+        width: 0.7,
+        dash: None,
+    });
+    cmds.push(DrawCommand::Line {
+        x1: cx,
+        y1: cy - r,
+        x2: cx,
+        y2: cy + r,
+        color: grid,
+        width: 0.7,
+        dash: None,
+    });
+    for (txt, dx, dy) in [
+        ("N", 0.0, -1.0),
+        ("S", 0.0, 1.0),
+        ("E", 1.0, 0.0),
+        ("O", -1.0, 0.0),
+    ] {
+        cmds.push(DrawCommand::Text {
+            x: cx + dx * (r + 12.0),
+            y: cy + dy * (r + 12.0),
+            content: txt.to_string(),
+            color: card,
+            size: 13.0,
+            anchor: TextAnchor::Middle,
+        });
+    }
+    // Cuerpos sobre el horizonte: azimut → ángulo (N arriba, E derecha),
+    // altitud → radio (cénit al centro).
+    for (body, pos) in &astro.sky {
+        if !pos.above_horizon {
+            continue;
+        }
+        let alt = pos.altitude_deg as f32;
+        let az = (pos.azimuth_deg as f32).to_radians();
+        let rr = r * (90.0 - alt.clamp(0.0, 90.0)) / 90.0;
+        let x = cx + rr * az.sin();
+        let y = cy - rr * az.cos();
+        cmds.push(DrawCommand::Circle {
+            cx: x,
+            cy: y,
+            r: 4.0,
+            stroke: None,
+            fill: Some(body_col),
+            stroke_w: 1.0,
+        });
+        let abbr: String = format!("{body:?}").chars().take(2).collect();
+        cmds.push(DrawCommand::Text {
+            x,
+            y: y - 9.0,
+            content: abbr,
+            color: label_col,
+            size: 10.0,
+            anchor: TextAnchor::Middle,
+        });
+    }
+
+    let bg = Color::from_rgba8(8, 10, 16, 255);
+    let canvas = canvas_view::<Msg>(cmds, size, Some(bg));
+    View::new(Style {
+        size: Size {
+            width: length(size),
+            height: length(size),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![canvas])
 }
 
 /// Tira de pestañas de cartas abiertas (multi-carta). Cada pestaña: label
@@ -830,18 +943,22 @@ fn chart_switcher(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 /// Esfera celeste 3D (wireframe) — compone con `cosmos-render::sphere3d`
-/// y pinta los `DrawCommand` en el mismo canvas que la rueda. Vista fija
-/// por ahora (rotación con drag pendiente de que el canvas exponga drag).
-fn sphere_canvas(render: &cosmos_render::RenderModel, size: f32) -> View<Msg> {
+/// y pinta los `DrawCommand` en el mismo canvas que la rueda. La botonera
+/// ◀▶▲▼⟳ rota yaw/pitch (el canvas committeado no expone drag todavía).
+fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme) -> View<Msg> {
     let opts = SphereOpts {
         size,
         palette: Palette::dark(),
         ..Default::default()
     };
-    let commands = compose_sphere(render, &SphereView::default(), &opts);
+    let view = SphereView {
+        yaw_deg: model.sphere_yaw,
+        pitch_deg: model.sphere_pitch,
+    };
+    let commands = compose_sphere(render, &view, &opts);
     let canvas_bg = Color::from_rgba8(8, 10, 16, 255);
     let canvas = canvas_view::<Msg>(commands, size, Some(canvas_bg));
-    View::new(Style {
+    let canvas_box = View::new(Style {
         size: Size {
             width: length(size),
             height: length(size),
@@ -849,7 +966,66 @@ fn sphere_canvas(render: &cosmos_render::RenderModel, size: f32) -> View<Msg> {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![canvas])
+    .children(vec![canvas]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(size),
+            height: auto(),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![sphere_controls(theme), canvas_box])
+}
+
+/// Botonera de rotación de la esfera 3D.
+fn sphere_controls(theme: &Theme) -> View<Msg> {
+    let step = 15.0_f32;
+    let btn = |label: &str, msg: Msg| -> View<Msg> {
+        View::new(Style {
+            size: Size {
+                width: length(30.0_f32),
+                height: length(24.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .radius(4.0)
+        .fill(theme.bg_panel)
+        .hover_fill(theme.bg_row_hover)
+        .text_aligned(label.to_string(), 13.0, theme.fg_text, Alignment::Center)
+        .on_click(msg)
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: auto(),
+            height: length(26.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(4.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        btn("◀", Msg::SphereRotate(-step, 0.0)),
+        btn("▶", Msg::SphereRotate(step, 0.0)),
+        btn("▲", Msg::SphereRotate(0.0, -step)),
+        btn("▼", Msg::SphereRotate(0.0, step)),
+        btn("⟳", Msg::SphereReset),
+    ])
 }
 
 fn pending_view(msg: &str, theme: &Theme) -> View<Msg> {

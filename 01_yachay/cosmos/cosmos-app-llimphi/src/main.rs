@@ -539,6 +539,8 @@ fn save_ui(m: &Model) {
         tool_cat: m.tool_cat,
         expanded_panels: m.expanded_panels.clone(),
         tile_mode: m.tile_mode,
+        sphere_yaw: m.sphere_yaw,
+        sphere_pitch: m.sphere_pitch,
     });
 }
 
@@ -632,6 +634,8 @@ impl App for Cosmos {
             nav_rename: None,
             rename_input: llimphi_widget_text_input::TextInputState::new(),
             nav_cut: None,
+            sphere_yaw: ui.sphere_yaw,
+            sphere_pitch: ui.sphere_pitch,
             nav_w: ui.nav_w,
             tools_w: ui.tools_w,
             nav_open: ui.nav_open,
@@ -668,6 +672,16 @@ impl App for Cosmos {
             Msg::CloseChartTab(i) => close_chart_tab(&mut m, i),
             Msg::ToggleTileMode => {
                 m.tile_mode = !m.tile_mode;
+                persist = true;
+            }
+            Msg::SphereRotate(dyaw, dpitch) => {
+                m.sphere_yaw = (m.sphere_yaw + dyaw).rem_euclid(360.0);
+                m.sphere_pitch = (m.sphere_pitch + dpitch).clamp(-89.0, 89.0);
+                persist = true;
+            }
+            Msg::SphereReset => {
+                m.sphere_yaw = 26.0;
+                m.sphere_pitch = -64.0;
                 persist = true;
             }
             // navegación
