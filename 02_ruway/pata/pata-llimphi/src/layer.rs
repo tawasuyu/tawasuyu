@@ -256,14 +256,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     }
 
     // El tray sólo arranca (y toma el nombre del watcher) si la config lo pide.
-    let tiene_tray = cfg.surfaces.iter().any(|s| {
-        s.start
-            .iter()
-            .chain(&s.center)
-            .chain(&s.end)
-            .any(|w| w.kind == "tray")
-    });
-    let tray = if tiene_tray { TrayHandle::spawn() } else { None };
+    let tray = crate::config_tiene_widget(&cfg, "tray")
+        .then(TrayHandle::spawn)
+        .flatten();
 
     let (surfaces, shuma) = Model::construir(&cfg);
     let mut app = LayerApp {

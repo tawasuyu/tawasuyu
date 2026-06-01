@@ -194,6 +194,16 @@ pub fn root(model: &Model) -> View<Msg> {
     let (sw, sh) = model.screen;
     let mut superficies: Vec<View<Msg>> = Vec::new();
 
+    // Datos del host muestreados por el Model: portapapeles y tray ya funcionan en
+    // este path winit. El `window_list` queda vacío hasta que el compositor mirada
+    // exponga sus toplevels por IPC (en layer-shell sí se llena).
+    let tray_items = model.tray.as_ref().map(|t| t.items()).unwrap_or_default();
+    let data = BarData {
+        windows: &[],
+        clipboard: model.clipboard.as_deref(),
+        tray: &tray_items,
+    };
+
     for placed in &model.frame.surfaces {
         let surface = &model.cfg.surfaces[placed.index];
         let widgets = &model.surfaces[placed.index];
@@ -205,9 +215,7 @@ pub fn root(model: &Model) -> View<Msg> {
             placed.rect,
             widgets,
             &model.shuma,
-            // Bajo el compositor mirada (este path winit) los datos del host
-            // (ventanas, portapapeles) aún no se muestrean; llegarán por su IPC.
-            &BarData::default(),
+            &data,
             &model.theme,
         ));
     }

@@ -229,8 +229,13 @@ borde; shuma provee el contenido.
     normaliza el registro (ruta+remitente / nombre de bus / combinado), testeada.
     El tray sólo arranca si la config declara un widget `tray`. Ver `02_ruway/pata/
     pata-llimphi/src/tray.rs`.
-  - **Fase 6 cerrada**: todos los widgets previstos (§4) existen. Pendiente de
-    pulido futuro: íconos reales en el tray, `window_list`/`clipboard`/`tray` bajo
-    el path winit (compositor mirada) cuando mirada exponga su IPC.
+  - **Fase 6 cerrada**: todos los widgets previstos (§4) existen, con íconos
+    reales en el tray. **`clipboard` y `tray` cableados también en el path winit**
+    (el `Model` muestrea el portapapeles cada tick y arranca el `TrayHandle` si la
+    config lo pide; `render::root` arma el `BarData` desde el `Model`). El único
+    pendiente es **`window_list` bajo el path winit/mirada**: necesita el cliente
+    foreign-toplevel (que vive en el backend layer-shell) o el IPC de toplevels de
+    mirada; hasta entonces queda vacío en ese path. Helper `config_tiene_widget`
+    compartido por ambos backends para arrancar el tray sólo si hace falta.
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).

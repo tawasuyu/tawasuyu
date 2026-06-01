@@ -38,6 +38,7 @@ use pata_core::{Config, Frame, Rect};
 
 use sampler::Sampler;
 use shuma::ShumaState;
+use tray::TrayHandle;
 
 /// Los mensajes de la app.
 #[derive(Clone, Debug)]
@@ -101,6 +102,19 @@ pub fn spawn_cmd(cmd: &str) {
     let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
 }
 
+/// `true` si la config declara al menos un widget de ese `kind` en cualquier slot
+/// de cualquier superficie. Lo usan ambos backends para arrancar servicios caros
+/// (el tray, que toma el nombre del watcher) sólo si hacen falta.
+pub fn config_tiene_widget(cfg: &Config, kind: &str) -> bool {
+    cfg.surfaces.iter().any(|s| {
+        s.start
+            .iter()
+            .chain(&s.center)
+            .chain(&s.end)
+            .any(|w| w.kind == kind)
+    })
+}
+
 /// Los widgets vivos de una superficie, repartidos por slot.
 pub struct SurfaceWidgets {
     /// Slot inicial (izquierda / arriba).
@@ -142,6 +156,12 @@ pub struct Model {
     pub shuma: ShumaState,
     /// Muestreador del sistema (con estado para el delta de CPU).
     pub sampler: Sampler,
+    /// Texto del portapapeles (una línea), para el widget `clipboard`. Se
+    /// re-muestrea cada tick vía `wl-paste`.
+    pub clipboard: Option<String>,
+    /// La bandeja del sistema, corriendo en su propio hilo. `None` si la config no
+    /// declara ningún widget `tray`.
+    pub tray: Option<TrayHandle>,
     /// Tamaño de la pantalla en píxeles.
     pub screen: (i32, i32),
 }
@@ -239,6 +259,10 @@ impl App for PataApp {
         let (surfaces, shuma) = Model::construir(&cfg);
         let mut sampler = Sampler::new();
         let ctx = sampler.sample();
+        let clipboard = crate::sampler::leer_clipboard();
+        let tray = config_tiene_widget(&cfg, "tray")
+            .then(TrayHandle::spawn)
+            .flatten();
 
         let mut model = Model {
             theme: Theme::dark(),
@@ -247,6 +271,8 @@ impl App for PataApp {
             surfaces,
             shuma,
             sampler,
+            clipboard,
+            tray,
             screen,
         };
         // Primer tick para que los widgets arranquen con datos.
@@ -261,6 +287,7 @@ impl App for PataApp {
             Msg::Tick => {
                 let ctx = model.sampler.sample();
                 model.tick_widgets(&ctx);
+                model.clipboard = crate::sampler::leer_clipboard();
             }
             Msg::Quit => handle.quit(),
             Msg::ShumaToggle => {
@@ -294,10 +321,14 @@ impl App for PataApp {
             }
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
-            // window_list y tray sólo son funcionales bajo layer-shell (donde el
-            // backend tiene el cliente foreign-toplevel / D-Bus); bajo el
-            // compositor mirada llegarán por su IPC. Aquí son no-op.
-            Msg::ActivateWindow(_) | Msg::TrayActivate(_) => {}
+            Msg::TrayActivate(key) => {
+                if let Some(t) = &model.tray {
+                    t.activate(key);
+                }
+            }
+            // El window_list necesita el cliente foreign-toplevel del backend
+            // layer-shell; bajo el compositor mirada llegará por su IPC. No-op acá.
+            Msg::ActivateWindow(_) => {}
         }
         model
     }
