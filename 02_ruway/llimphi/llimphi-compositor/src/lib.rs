@@ -39,6 +39,12 @@ pub struct TextSpec {
     /// CSS-style font-family string (acepta lista con fallbacks). `None`
     /// = la fuente default de parley.
     pub font_family: Option<String>,
+    /// Múltiplo de interlínea (`line-height` / `font-size`). 1.2 es el
+    /// default que usaban todos los callers; puriy lo sobreescribe con el
+    /// valor computado de CSS. Se usa tanto al **medir** (para que taffy
+    /// reserve el alto correcto) como al **pintar**, así medida y dibujo
+    /// coinciden.
+    pub line_height: f32,
     /// Colores por rango de **bytes** sobre `content`, para texto multicolor
     /// (syntax highlighting) en una sola pasada de shaping. `None` = color
     /// uniforme (`color`). Cuando es `Some`, el runtime usa
@@ -272,6 +278,7 @@ pub struct TextMeasure {
     pub alignment: llimphi_text::Alignment,
     pub italic: bool,
     pub font_family: Option<String>,
+    pub line_height: f32,
 }
 
 pub struct MountedNode<Msg> {

@@ -94,6 +94,7 @@ pub fn mount_recursive<Msg: Clone>(
                         alignment: text.alignment,
                         italic: text.italic,
                         font_family: text.font_family.clone(),
+                        line_height: text.line_height,
                     },
                 );
             }
@@ -106,8 +107,8 @@ pub fn mount_recursive<Msg: Clone>(
 /// el ancho disponible, devolviendo el bounding box. Si el ancho ya está
 /// resuelto (`known.width`) se usa ese; si no, se deriva del `available`
 /// (Definite → ese ancho; MaxContent → sin límite = una línea; MinContent →
-/// 0 = envuelve a la palabra más ancha). El `line_height` 1.2 espeja el que
-/// usa `paint`, así medida y pintado coinciden.
+/// 0 = envuelve a la palabra más ancha). El `line_height` sale del propio
+/// `TextMeasure`, el mismo que usa `paint`, así medida y pintado coinciden.
 pub fn measure_text_node(
     ts: &mut llimphi_text::Typesetter,
     tm: &TextMeasure,
@@ -127,7 +128,7 @@ pub fn measure_text_node(
         origin: (0.0, 0.0),
         max_width,
         alignment: tm.alignment,
-        line_height: 1.2,
+        line_height: tm.line_height,
         italic: tm.italic,
         font_family: tm.font_family.clone(),
     };
@@ -279,7 +280,7 @@ pub fn paint<Msg>(
                     text.color,
                     runs,
                     text.alignment,
-                    1.2,
+                    text.line_height,
                 );
                 llimphi_text::draw_layout_runs(scene, &layout, (r.x as f64, r.y as f64));
             } else {
@@ -293,7 +294,7 @@ pub fn paint<Msg>(
                     origin: (r.x as f64, r.y as f64),
                     max_width: Some(r.w),
                     alignment: text.alignment,
-                    line_height: 1.2,
+                    line_height: text.line_height,
                     italic: text.italic,
                     font_family: text.font_family.clone(),
                 };

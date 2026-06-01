@@ -133,6 +133,7 @@ impl<Msg> View<Msg> {
             alignment: llimphi_text::Alignment::Center,
             italic: false,
             font_family: None,
+            line_height: 1.2,
             runs: None,
         });
         self
@@ -152,6 +153,7 @@ impl<Msg> View<Msg> {
             alignment,
             italic: false,
             font_family: None,
+            line_height: 1.2,
             runs: None,
         });
         self
@@ -174,6 +176,7 @@ impl<Msg> View<Msg> {
             alignment,
             italic,
             font_family: None,
+            line_height: 1.2,
             runs: None,
         });
         self
@@ -198,6 +201,7 @@ impl<Msg> View<Msg> {
             alignment,
             italic,
             font_family,
+            line_height: 1.2,
             runs: None,
         });
         self
@@ -223,8 +227,20 @@ impl<Msg> View<Msg> {
             alignment,
             italic: false,
             font_family: None,
+            line_height: 1.2,
             runs: Some(runs),
         });
+        self
+    }
+
+    /// Sobreescribe el múltiplo de interlínea del texto ya seteado (default
+    /// 1.2). No-op si el nodo no tiene texto. Pensado para puriy, que pasa
+    /// el `line-height` computado de CSS para que medición y pintado usen
+    /// el mismo valor.
+    pub fn line_height(mut self, mult: f32) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.line_height = mult;
+        }
         self
     }
 

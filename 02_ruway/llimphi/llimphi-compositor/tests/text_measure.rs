@@ -56,3 +56,32 @@ fn parrafo_largo_reserva_varias_lineas() {
     );
     assert!(rect.w <= 200.0 + 1.0, "no debería exceder el ancho del bloque");
 }
+
+#[test]
+fn line_height_mayor_reserva_mas_alto() {
+    let texto = "una línea de texto que envuelve en dos o tres renglones según \
+                 el ancho disponible para el bloque contenedor angosto";
+    let medir = |lh: f32| -> f32 {
+        let mut ts = llimphi_text::Typesetter::new();
+        let tm = llimphi_compositor::TextMeasure {
+            content: texto.to_string(),
+            size_px: 16.0,
+            alignment: llimphi_text::Alignment::Start,
+            italic: false,
+            font_family: None,
+            line_height: lh,
+        };
+        let known = TSize { width: Some(180.0_f32), height: None };
+        let avail = TSize {
+            width: AvailableSpace::Definite(180.0),
+            height: AvailableSpace::MaxContent,
+        };
+        measure_text_node(&mut ts, &tm, known, avail).height
+    };
+    let compacto = medir(1.0);
+    let comodo = medir(2.0);
+    assert!(
+        comodo > compacto * 1.5,
+        "line-height: 2 debería reservar bastante más alto que 1.0 (got {compacto} vs {comodo})"
+    );
+}
