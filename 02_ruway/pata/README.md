@@ -21,6 +21,17 @@ See [`SDD.md`](SDD.md) for the canonical definition and the phase plan.
 
 | Crate | Role |
 |---|---|
-| [`pata-core`](pata-core/) | Agnostic model: `Config → [Surface] → slots → [WidgetSpec]`. `no_std + alloc`. |
+| [`pata-core`](pata-core/) | Agnostic model + layout: `Config → [Surface] → slots → [WidgetSpec]` and `resolve(config, screen) → Frame`. `no_std + alloc`. |
+| [`pata-config`](pata-config/) | Linux loader (std): reads the user's TOML from XDG paths into the model. Ships the `pata` inspector binary. |
 
-(`pata-llimphi` and the Wawa launcher land in later phases.)
+(`pata-llimphi` rendering and the Wawa launcher land in later phases.)
+
+## Try it
+
+```sh
+cargo run -p pata-config --bin pata -- \
+  --config 02_ruway/pata/pata-config/assets/launcher.toml --screen 1920x1080
+```
+
+Prints how the frame resolves: each surface's rect, whether it reserves a strip,
+its widgets per slot, and the work area left for windows.

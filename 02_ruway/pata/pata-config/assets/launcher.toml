@@ -1,0 +1,64 @@
+# Ejemplo de marco de pata. Copialo a ~/.config/pata/launcher.toml y editá.
+#
+# Un marco es una lista de superficies (bar | panel | dock). Cada una se ancla
+# a un borde (top/bottom/left/right) y reparte widgets en sus slots
+# start/center/end. Las barras sólidas reservan su franja; autohide/dock/panel
+# flotan. Inspeccioná el resultado con:
+#   cargo run -p pata-config --bin pata -- --config este.toml --screen 1920x1080
+
+[general]
+timezone = "auto"   # "auto" lo detecta del sistema; o un IANA como "America/Lima"
+
+# --- Barra superior: el menú clásico tipo waybar/eww ---
+[[surfaces]]
+kind = "bar"
+anchor = "top"
+thickness = 32
+gap = 16
+padding = 12
+
+[[surfaces.start]]
+kind = "start_button"
+
+[[surfaces.start]]
+kind = "clock"
+format = "%H:%M"
+
+[[surfaces.center]]
+kind = "window_list"
+
+# El racimo de indicadores a la derecha — orden libre.
+[[surfaces.end]]
+kind = "astro"          # posición zodiacal del sol + ciclo lunar (aporte)
+moon = true
+
+[[surfaces.end]]
+kind = "clipboard"
+
+[[surfaces.end]]
+kind = "volume"
+
+[[surfaces.end]]
+kind = "brightness"
+
+[[surfaces.end]]
+kind = "tray"
+
+[[surfaces.end]]
+kind = "ram_meter"
+
+[[surfaces.end]]
+kind = "cpu_meter"
+
+# --- Shell: barra inferior autoescondible con el input de shuma ---
+# Al escribir, el frontend despliega el resto de shuma estilo Quake.
+[[surfaces]]
+kind = "bar"
+anchor = "bottom"
+thickness = 40
+autohide = true
+
+[[surfaces.center]]
+kind = "shuma_input"
+hotkey = "F12"
+placeholder = "› preguntá, lanzá, navegá"

@@ -29,10 +29,14 @@ alrededor, **shuma** es la boca por la que le hablás al sistema.
 ## 2. Forma del dominio
 
 ```
-pata-core      Modelo agnóstico (no_std + alloc). El esquema declarativo:
-               Config → [Surface] → slots → [WidgetSpec]. No pinta, no toca
-               el SO, no sabe quién lo renderiza. Cruza la frontera a wawa
-               por `path`, como mirada-layout.
+pata-core      Modelo agnóstico (no_std + alloc): el esquema declarativo
+               (Config → [Surface] → slots → [WidgetSpec]) + el layout
+               (resolve: config+pantalla → superficies colocadas + work_area).
+               No pinta, no toca el SO. Cruza a wawa por `path`, como mirada-layout.
+pata-config    Loader Linux (std): lee el TOML del usuario desde las rutas XDG y
+               lo materializa en el modelo. El límite std→no_std del marco. Trae
+               el binario `pata` para inspeccionar la geometría resuelta. En wawa
+               este rol lo cumple akasha, no este crate.
 pata-llimphi   Frontend Linux: monta pata-core sobre Llimphi. Cada Surface es
                una ventana Wayland que el compositor mirada acopla; despacha
                los widgets builtin; el shuma_input despliega shuma. (Fase 3,
@@ -81,17 +85,21 @@ borde; shuma provee el contenido.
 
 ## 6. Estado y plan por fases
 
-- **Fase 1 ✅** — `pata-core`: esquema declarativo, `Prop` agnóstico, contrato
-  TOML, `no_std` verificado (wasm32). En el workspace.
-- **Fase 2** — modelo de widget agnóstico (trait `tick`/`view` que devuelve un
-  view-model, no Llimphi) + lógica de datos de los widgets portada al core.
-- **Fase 3** — `pata-llimphi`: render de superficies sobre Llimphi; hereda
-  `mirada-launcher-llimphi`. App-id que mirada acopla por superficie.
-- **Fase 4** — widgets nuevos: `start_button`, `window_list` (IPC con mirada),
+- **Fase 1 ✅** — `pata-core` config: esquema declarativo, `Prop` agnóstico,
+  contrato TOML, `no_std` verificado (wasm32). En el workspace.
+- **Fase 2 ✅** — `pata-core::layout`: resuelve config+pantalla en superficies
+  colocadas + `work_area` (lo que mirada tesela). Geometría pura testeada.
+- **Fase 3 ✅** — `pata-config`: loader TOML/XDG → modelo + binario `pata`
+  inspector. Pipeline config→layout verificado sobre archivos reales.
+- **Fase 4** — modelo de widget agnóstico (trait `tick`/`view` → view-model, no
+  Llimphi) + lógica de datos de los widgets portada al core.
+- **Fase 5** — `pata-llimphi`: render de superficies sobre Llimphi; reusa los
+  widgets de `mirada-launcher-llimphi`. App-id que mirada acopla por superficie.
+- **Fase 6** — widgets nuevos: `start_button`, `window_list` (IPC con mirada),
   `tray`, `astro` (cosmos).
-- **Fase 5** — despliegue Quake de shuma desde `shuma_input`.
-- **Fase 6** — mirada-compositor reconoce superficies pata (varios anchors, no
+- **Fase 7** — despliegue Quake de shuma desde `shuma_input`.
+- **Fase 8** — mirada-compositor reconoce superficies pata (varios anchors, no
   una sola franja de 40px al pie); `SHELL_APP_ID` → identidad pata + override
   por env.
-- **Fase 7** — kernel launcher de wawa sobre `pata-core`.
-- **Fase 8** — retirar `mirada-launcher-llimphi` (migrado a pata).
+- **Fase 9** — kernel launcher de wawa sobre `pata-core`.
+- **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
