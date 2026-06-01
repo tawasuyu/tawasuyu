@@ -19,4 +19,5 @@ pata-core = { path = "../pata-core" }
 pata-config = { path = "../pata-config" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-motion = { workspace = true }
 chrono = { workspace = true }

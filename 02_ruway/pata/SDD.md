@@ -1,6 +1,6 @@
 # SDD — `pata`, el marco del escritorio
 
-> Estado: **Fase 5** (frontend Llimphi). Este documento es la fuente autoritativa
+> Estado: **Fase 7** (Quake de shuma). Este documento es la fuente autoritativa
 > de qué es `pata` y dónde termina, por encima de cualquier README.
 
 ## 0. El problema que resuelve
@@ -118,7 +118,15 @@ borde; shuma provee el contenido.
   - `window_list` ⏳ — necesita que mirada exponga los toplevels por IPC
     (`mirada-ctl`/`-link` aún no lo hacen); queda como placeholder.
   - `tray` ⏳ — StatusNotifierItem; diferido. Placeholder por ahora.
-- **Fase 7** — despliegue Quake de shuma desde `shuma_input`.
+- **Fase 7 ✅** — despliegue Quake de shuma desde `shuma_input`. El frontend
+  intercepta el kind `shuma_input` (es interacción, no pasa por el `build`
+  agnóstico de core, igual que mirada con su shuma_bar): un cabezal clicable en
+  la barra + hotkey (`keys`) despliegan un **drawer** animado (`llimphi-motion`,
+  scrim que cierra al click + panel inferior que crece con el tween) que captura
+  el teclado. El estado vive en `Model::shuma`, no en core. La ejecución del
+  comando es, estrictamente, de `shuma`: mientras no haya puente, `shuma::
+  ejecutar_stand_in` corre por `sh -c` como **sustituto temporal** (patrón de
+  mirada) — se reemplaza sin tocar el mecanismo del drawer.
 - **Fase 8** — mirada-compositor reconoce superficies pata (varios anchors, no
   una sola franja de 40px al pie); `SHELL_APP_ID` → identidad pata + override
   por env.

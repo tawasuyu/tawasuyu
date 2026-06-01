@@ -18,9 +18,10 @@ use llimphi_ui::View;
 
 use pata_core::config::Surface;
 use pata_core::layout::Rect;
-use pata_core::widget::{Widget, WidgetView};
+use pata_core::widget::WidgetView;
 
-use crate::{Model, Msg, SurfaceWidgets};
+use crate::shuma::{self, ShumaState};
+use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 
 /// Ancho de la barrita de un medidor, en píxeles.
 const BARRA_W: f32 = 48.0;
@@ -147,7 +148,13 @@ pub fn root(model: &Model) -> View<Msg> {
         if !placed.rect.es_visible() {
             continue;
         }
-        superficies.push(surface_view(surface, placed.rect, widgets, &model.theme));
+        superficies.push(surface_view(
+            surface,
+            placed.rect,
+            widgets,
+            &model.shuma,
+            &model.theme,
+        ));
     }
 
     View::new(Style {
@@ -166,6 +173,7 @@ fn surface_view(
     surface: &Surface,
     rect: Rect,
     widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
     theme: &Theme,
 ) -> View<Msg> {
     let dir = if surface.anchor.es_horizontal() {
@@ -174,8 +182,14 @@ fn surface_view(
         FlexDirection::Column
     };
 
-    let slot = |ws: &[Box<dyn Widget>], justify: JustifyContent| -> View<Msg> {
-        let items: Vec<View<Msg>> = ws.iter().map(|w| widget_view(&w.view(), theme)).collect();
+    let slot = |ws: &[SlotWidget], justify: JustifyContent| -> View<Msg> {
+        let items: Vec<View<Msg>> = ws
+            .iter()
+            .map(|sw| match sw {
+                SlotWidget::Core(w) => widget_view(&w.view(), theme),
+                SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
+            })
+            .collect();
         let mut style = Style {
             flex_direction: dir,
             align_items: Some(AlignItems::Center),
