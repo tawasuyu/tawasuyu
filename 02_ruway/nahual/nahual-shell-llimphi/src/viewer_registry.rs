@@ -194,7 +194,7 @@ pub fn builtin_registry() -> Vec<ViewerCard> {
             ViewerKind::Map,
             &["map", "geo"],
             &[],
-            &["application/geo+json", "application/vnd.geo+json"],
+            &["application/geo+json", "application/vnd.geo+json", "application/gpx+xml"],
             Normal,
         ),
         ViewerCard::builtin(ViewerKind::Font, &["font"], &[], &[], Normal),

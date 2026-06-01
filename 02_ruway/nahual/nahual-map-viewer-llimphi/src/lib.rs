@@ -1,4 +1,4 @@
-//! `nahual-map-viewer-llimphi` — visor de mapas GeoJSON.
+//! `nahual-map-viewer-llimphi` — visor de mapas GeoJSON y GPX.
 //!
 //! Duodécimo visor del shell meta-app. Un `.geojson` es JSON, así que sin
 //! visor propio caía al árbol (`tree`) — que muestra la estructura cruda
@@ -186,7 +186,13 @@ pub fn load_map(path: &Path, max_bytes: u64) -> MapPreview {
         Ok(s) => s,
         Err(e) => return MapPreview::Error(e.to_string()),
     };
-    parse_geojson(&src)
+    // GPX es XML (arranca con `<`); GeoJSON es JSON (`{`/`[`). El shell rutea
+    // ambos al lens `map`, así que el visor desambigua por contenido.
+    if src.trim_start().starts_with('<') {
+        parse_gpx(&src)
+    } else {
+        parse_geojson(&src)
+    }
 }
 
 /// Parsea una cadena GeoJSON a [`MapPreview`]. Tolerante: ignora geometrías
@@ -213,6 +219,145 @@ fn parse_into(src: &str, cap: usize) -> Result<(MapData, bool), String> {
     let mut budget = cap;
     collect(&value, &mut data, &mut budget, None);
     Ok((data, budget == 0))
+}
+
+/// Parsea GPX (XML de GPS): waypoints (`<wpt>`) → puntos, rutas (`<rte>`) y
+/// segmentos de track (`<trkseg>`) → polilíneas. Los `<name>` de waypoints,
+/// rutas y tracks se vuelven etiquetas. Tolerante: ignora lo que no entiende.
+pub fn parse_gpx(src: &str) -> MapPreview {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    /// A quién se asigna el próximo `<name>` de texto.
+    #[derive(Clone, Copy, PartialEq)]
+    enum NameTarget {
+        None,
+        Seg,
+        Wpt,
+    }
+
+    let mut reader = Reader::from_str(src);
+    reader.trim_text(true);
+    let mut buf = Vec::new();
+
+    let mut data = MapData::default();
+    let mut budget = MAX_VERTICES;
+
+    // Línea (track-seg o ruta) en curso + su nombre heredado del trk/rte.
+    let mut seg: Vec<Coord> = Vec::new();
+    let mut seg_name: Option<String> = None;
+    // Waypoint en curso (con hijos, p. ej. `<name>`).
+    let mut wpt: Option<Coord> = None;
+    let mut wpt_name: Option<String> = None;
+    let mut target = NameTarget::None;
+
+    // Cierra la línea en curso como polilínea con su etiqueta.
+    let flush_seg =
+        |data: &mut MapData, budget: &mut usize, seg: &mut Vec<Coord>, name: &mut Option<String>| {
+            let rep = midpoint(seg);
+            push_line(data, std::mem::take(seg), budget);
+            label_at(data, name.as_deref(), rep);
+            *name = None;
+        };
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"trk" | b"rte" => {
+                    seg.clear();
+                    seg_name = None;
+                    target = NameTarget::Seg;
+                }
+                b"trkseg" => seg.clear(),
+                b"trkpt" | b"rtept" => {
+                    if let Some(c) = gpx_latlon(&e) {
+                        seg.push(c);
+                    }
+                }
+                b"wpt" => {
+                    wpt = gpx_latlon(&e);
+                    wpt_name = None;
+                    target = NameTarget::Wpt;
+                }
+                b"name" => {} // el texto siguiente va al `target` vigente
+                _ => {}
+            },
+            Ok(Event::Empty(e)) => match e.local_name().as_ref() {
+                b"trkpt" | b"rtept" => {
+                    if let Some(c) = gpx_latlon(&e) {
+                        seg.push(c);
+                    }
+                }
+                b"wpt" => {
+                    if let Some(c) = gpx_latlon(&e) {
+                        push_points(&mut data, std::slice::from_ref(&c), &mut budget);
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Text(t)) => {
+                if target != NameTarget::None {
+                    if let Ok(txt) = t.unescape() {
+                        let txt = txt.trim().to_string();
+                        if !txt.is_empty() {
+                            match target {
+                                NameTarget::Seg => seg_name.get_or_insert(txt),
+                                NameTarget::Wpt => wpt_name.get_or_insert(txt),
+                                NameTarget::None => unreachable!(),
+                            };
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(e)) => match e.local_name().as_ref() {
+                b"trkseg" => flush_seg(&mut data, &mut budget, &mut seg, &mut seg_name),
+                b"rte" => {
+                    flush_seg(&mut data, &mut budget, &mut seg, &mut seg_name);
+                    target = NameTarget::None;
+                }
+                b"trk" => target = NameTarget::None,
+                b"wpt" => {
+                    if let Some(c) = wpt.take() {
+                        push_points(&mut data, std::slice::from_ref(&c), &mut budget);
+                        label_at(&mut data, wpt_name.as_deref(), Some(c));
+                    }
+                    wpt_name = None;
+                    target = NameTarget::None;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+        if budget == 0 {
+            break;
+        }
+    }
+
+    if data.total_features() == 0 {
+        MapPreview::NoGeometry
+    } else {
+        MapPreview::Map { data, truncated: budget == 0 }
+    }
+}
+
+/// Lee los atributos `lat`/`lon` de un elemento GPX a una [`Coord`]
+/// `[lon, lat]`. `None` si falta alguno o no son números finitos.
+fn gpx_latlon(e: &quick_xml::events::BytesStart) -> Option<Coord> {
+    let mut lat = None;
+    let mut lon = None;
+    for a in e.attributes().flatten() {
+        match a.key.local_name().as_ref() {
+            b"lat" => lat = std::str::from_utf8(&a.value).ok().and_then(|s| s.parse::<f64>().ok()),
+            b"lon" => lon = std::str::from_utf8(&a.value).ok().and_then(|s| s.parse::<f64>().ok()),
+            _ => {}
+        }
+    }
+    match (lon, lat) {
+        (Some(lon), Some(lat)) if lon.is_finite() && lat.is_finite() => Some([lon, lat]),
+        _ => None,
+    }
 }
 
 /// El mapa-base mundial (Natural Earth admin-0, 177 países) embebido en el
@@ -1251,6 +1396,69 @@ mod tests {
             load_map(Path::new("/no/existe.geojson"), DEFAULT_MAP_BYTES_MAX),
             MapPreview::Error(_)
         ));
+    }
+
+    // --- GPX ---
+
+    fn gpx_data(src: &str) -> MapData {
+        match parse_gpx(src) {
+            MapPreview::Map { data, .. } => data,
+            other => panic!("esperaba Map, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gpx_waypoints_y_track() {
+        let src = r#"<?xml version="1.0"?>
+            <gpx version="1.1">
+              <wpt lat="-13.51" lon="-71.97"><name>Cusco</name></wpt>
+              <trk><name>Sendero</name><trkseg>
+                <trkpt lat="-13.51" lon="-71.97"/>
+                <trkpt lat="-13.50" lon="-71.98"/>
+                <trkpt lat="-13.49" lon="-71.98"/>
+              </trkseg></trk>
+            </gpx>"#;
+        let d = gpx_data(src);
+        assert_eq!(d.points, vec![[-71.97, -13.51]]);
+        assert_eq!(d.lines.len(), 1);
+        assert_eq!(d.lines[0].len(), 3);
+        // Etiquetas: el waypoint y el track.
+        assert!(d.labels.iter().any(|l| l.text == "Cusco"));
+        assert!(d.labels.iter().any(|l| l.text == "Sendero"));
+    }
+
+    #[test]
+    fn gpx_ruta_es_linea() {
+        let src = r#"<gpx><rte><name>R</name>
+            <rtept lat="0" lon="0"/><rtept lat="1" lon="1"/><rtept lat="2" lon="0"/>
+            </rte></gpx>"#;
+        let d = gpx_data(src);
+        assert_eq!(d.lines, vec![vec![[0.0, 0.0], [1.0, 1.0], [0.0, 2.0]]]);
+    }
+
+    #[test]
+    fn gpx_waypoint_self_closing_sin_nombre() {
+        let d = gpx_data(r#"<gpx><wpt lat="5" lon="-3"/></gpx>"#);
+        assert_eq!(d.points, vec![[-3.0, 5.0]]);
+        assert!(d.labels.is_empty());
+    }
+
+    #[test]
+    fn gpx_vacio_es_no_geometry() {
+        assert_eq!(parse_gpx("<gpx></gpx>"), MapPreview::NoGeometry);
+    }
+
+    #[test]
+    fn load_map_desambigua_gpx_de_geojson() {
+        let dir = std::env::temp_dir();
+        let gpx_path = dir.join("nahual-map-test.gpx");
+        std::fs::write(&gpx_path, r#"<gpx><wpt lat="1" lon="2"/></gpx>"#).unwrap();
+        let r = load_map(&gpx_path, DEFAULT_MAP_BYTES_MAX);
+        let _ = std::fs::remove_file(&gpx_path);
+        match r {
+            MapPreview::Map { data, .. } => assert_eq!(data.points, vec![[2.0, 1.0]]),
+            other => panic!("GPX debió parsear como mapa, fue {other:?}"),
+        }
     }
 
     #[test]

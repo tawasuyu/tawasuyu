@@ -22,7 +22,7 @@ fn main() {
     println!("Cargando: {}", path.display());
     match load_map(&path, DEFAULT_MAP_BYTES_MAX) {
         MapPreview::Map { data, truncated } => {
-            println!("✓ GeoJSON parseado{}", if truncated { " (truncado)" } else { "" });
+            println!("✓ mapa parseado{}", if truncated { " (truncado)" } else { "" });
             println!("  puntos    : {}", data.points.len());
             println!("  líneas    : {}", data.lines.len());
             println!("  polígonos : {}", data.polygons.len());

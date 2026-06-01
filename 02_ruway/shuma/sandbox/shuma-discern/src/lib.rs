@@ -45,6 +45,7 @@ impl DiscernPipeline {
         // queremos el TypeRef/lens más específico cuando el contenido lo delata.
         p.push(Box::new(CardProbe));
         p.push(Box::new(GeoJsonProbe));
+        p.push(Box::new(GpxProbe));
         p.push(Box::new(JsonProbe));
         p.push(Box::new(TomlProbe));
         p.push(Box::new(TabularProbe));
@@ -306,6 +307,34 @@ impl Discerner for GeoJsonProbe {
     }
 }
 
+/// GPX: XML de GPS. Arranca con `<` y trae el elemento `<gpx` cerca del
+/// inicio. Emite lens `map` (mismo que GeoJSON) para que el visor de mapas
+/// lo abra; el visor desambigua JSON vs XML por contenido.
+pub struct GpxProbe;
+
+impl Discerner for GpxProbe {
+    fn name(&self) -> &str { "gpx" }
+
+    fn discern(&self, s: &[u8], _h: &Hint<'_>) -> Option<Discernment> {
+        let trimmed = trim_left(s);
+        if trimmed.first()? != &b'<' {
+            return None;
+        }
+        // Buscar `<gpx` en el preámbulo (tras el posible `<?xml ...?>`).
+        let head = &trimmed[..trimmed.len().min(2048)];
+        let found = head.windows(4).any(|w| w == b"<gpx");
+        if !found {
+            return None;
+        }
+        Some(Discernment {
+            ty: TypeRef::Primitive { name: "gpx".into() },
+            confidence: 0.96,
+            mime: Some("application/gpx+xml".into()),
+            lens: Some("map".into()),
+        })
+    }
+}
+
 /// Texto UTF-8 plano. Fallback de baja confidence.
 pub struct Utf8Probe;
 
@@ -466,6 +495,24 @@ mod tests {
         // Una geometría suelta también.
         let pt = discern(br#"{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}"#).unwrap();
         assert_eq!(pt.lens.as_deref(), Some("map"));
+    }
+
+    #[test]
+    fn gpx_detectado_como_mapa() {
+        let gpx = br#"<?xml version="1.0"?>
+            <gpx version="1.1" creator="test">
+              <wpt lat="-13.5" lon="-71.9"><name>Cusco</name></wpt>
+            </gpx>"#;
+        let r = discern(gpx).unwrap();
+        assert_eq!(r.lens.as_deref(), Some("map"));
+        assert_eq!(r.mime.as_deref(), Some("application/gpx+xml"));
+    }
+
+    #[test]
+    fn xml_no_gpx_no_es_mapa() {
+        // Un XML cualquiera (sin `<gpx`) no lo agarra el GpxProbe.
+        let r = discern(b"<?xml version=\"1.0\"?><rss><channel/></rss>");
+        assert_ne!(r.and_then(|d| d.lens).as_deref(), Some("map"));
     }
 
     #[test]

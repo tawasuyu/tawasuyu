@@ -6,9 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "nahual-map-viewer-llimphi — visor de mapas GeoJSON sobre Llimphi. Parsea FeatureCollection/Feature/geometrías (puntos, líneas, polígonos) con serde_json, proyecta lon/lat con corrección por coseno de latitud y los pinta fit-to-bounds en la escena vello vía `paint_with`. Duodécimo visor del shell nahual."
+description = "nahual-map-viewer-llimphi — visor de mapas GeoJSON y GPX sobre Llimphi. Parsea geometrías (puntos, líneas, polígonos) con serde_json y tracks/waypoints GPS con quick-xml, las proyecta con corrección por coseno de latitud, las pinta sobre un mapa-base mundial embebido (Natural Earth) con pan/zoom, rejilla, escala y etiquetas. Duodécimo visor del shell nahual."
 
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 serde_json = { workspace = true }
+quick-xml = { workspace = true }

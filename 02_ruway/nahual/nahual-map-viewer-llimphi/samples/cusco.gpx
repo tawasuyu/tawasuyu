@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="gioser nahual-map-viewer" xmlns="http://www.topografix.com/GPX/1/1">
+  <wpt lat="-13.5163" lon="-71.9785">
+    <name>Plaza de Armas, Cusco</name>
+  </wpt>
+  <wpt lat="-13.5151" lon="-71.9817">
+    <name>Mercado San Pedro</name>
+  </wpt>
+  <wpt lat="-13.5081" lon="-71.9819">
+    <name>Sacsayhuamán</name>
+  </wpt>
+  <trk>
+    <name>Subida a Sacsayhuamán</name>
+    <trkseg>
+      <trkpt lat="-13.5163" lon="-71.9785"/>
+      <trkpt lat="-13.5150" lon="-71.9790"/>
+      <trkpt lat="-13.5128" lon="-71.9802"/>
+      <trkpt lat="-13.5104" lon="-71.9811"/>
+      <trkpt lat="-13.5081" lon="-71.9819"/>
+    </trkseg>
+  </trk>
+  <rte>
+    <name>Ruta al Valle Sagrado</name>
+    <rtept lat="-13.5081" lon="-71.9819"/>
+    <rtept lat="-13.4200" lon="-72.0800"/>
+    <rtept lat="-13.3400" lon="-72.0900"/>
+    <rtept lat="-13.2600" lon="-72.1100"/>
+  </rte>
+</gpx>
