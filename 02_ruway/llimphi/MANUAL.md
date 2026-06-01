@@ -679,9 +679,11 @@ on_seek: Fn(f32 [0..1])->Option<Msg>)`.
 EditorState::new(); .text(); .set_text(s); .has_selection(); .can_undo()/.can_redo();
 .add_cursor_at(line,col);  .apply_key_with_clipboard(&KeyEvent, &mut dyn Clipboard) -> ApplyResult;
 .ensure_caret_visible(visible_lines)
-text_editor_view(&state, &EditorPalette, &EditorMetrics, on_change: Fn()->Msg)
-text_editor_view_highlighted(&state, &palette, &metrics, Language, &SyntaxPalette, on_change, on_click_at)
-syntax_palette_dark(&theme) -> SyntaxPalette
+// nota: `metrics` se pasa POR VALOR; el callback es on_pointer: Fn(PointerEvent)->Option<Msg>
+text_editor_view(&state, &EditorPalette, metrics: EditorMetrics, visible_lines: usize, on_pointer)
+text_editor_view_highlighted(&state, &palette, metrics, visible_lines, language: Language, on_pointer)
+text_editor_view_full(&state, &palette, metrics, visible_lines, language, match_ranges: &[(usize,usize)], on_pointer)
+syntax_palette_dark(&theme) -> SyntaxPalette   // en lib.rs del widget
 ```
 
 **text-editor-core** — núcleo **agnóstico** (sin GPU, sin Llimphi; sólo
@@ -696,10 +698,17 @@ syntax_palette_dark(&theme) -> SyntaxPalette
   cursor_before, cursor_after }` con `.apply()/.undo()`.
 - `UndoStack`: `push(delta)`, `undo/redo(&mut buf, &mut cursor) -> bool`, `can_undo/redo`.
 - `FindState { query, case_sensitive }`: `all_matches`, `find_next`, `find_prev`.
+- Matching de brackets: `find_bracket_pair(&buf, &cursor) -> Option<(Pos, Pos)>`, `Direction`.
 - `Clipboard` (trait `get/set`), `MemClipboard`, `NullClipboard`.
-- `Diagnostic { range, severity: Severity, message }`.
-- Highlight tree-sitter: `Language::{Rust, Python, WAT, PlainText}`,
-  `Highlighter::new(lang).highlight(&buf) -> Vec<Span>`, `TokenKind`, `SyntaxPalette`.
+- `Diagnostic { range: DiagnosticRange { start: Pos, end: Pos }, severity: Severity,
+  message: String, source: Option<String> }` (+ ctors `error(..)`, `warning(..)`);
+  `Severity::{Error, Warning, Information, Hint}`.
+- Highlight tree-sitter: `Language::{Plain, Rust, Python, Wat}`
+  (+ `Language::from_cell_language(s)`); `Highlighter::new(lang)` con
+  `.highlight(&mut self, source: &str) -> Vec<Vec<Span>>` (un `Vec<Span>` **por
+  línea**), `.set_language(lang)`, `.language()`; helpers de módulo
+  `invalidate_tree_cache(lang)` y `apply_pending_edits(lang, &edits)` para el
+  caché incremental. `TokenKind`, `Span`, `SyntaxPalette::color(kind)`.
 
 **text-editor-lsp** — cliente LSP por stdin/stdout. `trait LspClient` (fire-and-forget
 `request_*` + lecturas de caché `latest_*`/`clear_*`): completions, hover,
