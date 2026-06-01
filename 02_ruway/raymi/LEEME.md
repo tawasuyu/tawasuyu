@@ -17,7 +17,7 @@ raymi-core         — modelo agnóstico: eventos, recurrencia (RRULE),
 raymi-net          — puente CalDAV/CardDAV: iCalendar (VEVENT) + vCard
                      (VCARD) + REPORT/PUT; implementa los traits.        [pendiente]
 raymi-store        — persistencia nativa (postcard) + sync incremental.  [pendiente]
-raymi-llimphi      — frontend: vista mes/semana/día + lista de contactos. [pendiente]
+raymi-llimphi      — frontend: vista mes + agenda del día + contactos.   [HECHO]
 raymi-app          — binario lanzable.                                    [pendiente]
 ```
 
@@ -45,13 +45,27 @@ intercambiables, como el resto de la suite.
     curso), busca contactos y cruza por correo con paloma.
   - 25 tests verde.
 
+- **Fase 2 (2026-06-01):** `raymi-llimphi` — frontend sobre Llimphi.
+  - Dos modos en la barra superior: **Calendario** y **Contactos**.
+  - Calendario: grilla del mes (6×7) con chips de eventos coloreados por
+    calendario, día de hoy con disco de acento, navegación ‹ Mes Año › + "Hoy"
+    (←/→ y rueda cambian de mes); a la derecha, **agenda del día** seleccionado
+    (instancias con hora/“todo el día”, color y lugar). Recurrencias expandidas
+    por `CalStore::occurrences_in`.
+  - Contactos: lista buscable (avatar con iniciales + correo) + ficha (avatar
+    grande, organización, correos/teléfonos/nota).
+  - `DavBackend` (supertrait Calendar+Contacts, blanket impl) para llevar un solo
+    backend. `resync` (F5) re-sincroniza. Crate **agnóstico**: `Model`/`Msg` +
+    funciones libres; el anfitrión arma su `impl App`. El frontend sí lee el reloj
+    (`SystemTime`) para “hoy”, a diferencia del núcleo.
+  - Demo: `cargo run -p raymi-llimphi --example agenda_demo --release`
+    (2 calendarios, eventos recurrentes anclados a hoy, 3 contactos).
+
 ## Pendiente (orden sugerido)
 
-1. **`raymi-llimphi`** — frontend sobre `MockBackend`: vista mes (grilla) +
-   agenda del día + lista/detalle de contactos, reusando avatares y estética de
-   paloma.
-2. **`raymi-net`** — puente CalDAV/CardDAV (REPORT time-range, PUT, ETag) +
+1. **`raymi-net`** — puente CalDAV/CardDAV (REPORT time-range, PUT, ETag) +
    parser iCalendar/vCard. Reusa `ServerConfig`/`Security`.
-3. **`raymi-store`** — persistencia nativa (postcard) + sync incremental.
-4. **`raymi-app`** — binario lanzable, comparte `cuenta.json` con paloma.
+2. **`raymi-store`** — persistencia nativa (postcard) + sync incremental.
+3. **`raymi-app`** — binario lanzable, comparte `cuenta.json` con paloma.
+4. **Crear/editar eventos y contactos** desde la UI (put/delete ya en el trait).
 5. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.

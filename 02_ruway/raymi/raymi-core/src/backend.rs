@@ -27,6 +27,13 @@ pub trait ContactsBackend {
     fn delete_contact(&self, address_book: &str, uid: &str) -> Result<(), CalError>;
 }
 
+/// Conveniencia: un transporte que habla **calendario y contactos** a la vez
+/// (el caso de una cuenta cuyo servidor expone CalDAV y CardDAV juntos, como
+/// Nextcloud/Google). Un blanket impl lo da gratis a cualquier tipo que
+/// implemente ambos traits; el frontend lleva un solo `Box<dyn DavBackend>`.
+pub trait DavBackend: CalendarBackend + ContactsBackend {}
+impl<T: CalendarBackend + ContactsBackend> DavBackend for T {}
+
 /// Backend en memoria para tests y demos: implementa **ambos** transportes con
 /// colecciones precargadas. Permite ejercitar toda la UI sin red.
 pub struct MockBackend {

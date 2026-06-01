@@ -1,0 +1,19 @@
+[package]
+name = "raymi-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "raymi-llimphi — frontend de calendario y contactos sobre Llimphi: vista de mes + agenda del día + lista/detalle de contactos. Agnóstico al backend (Mock o CalDAV/CardDAV)."
+
+[dependencies]
+raymi-core = { path = "../raymi-core" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
+
+[[example]]
+name = "agenda_demo"
+path = "examples/agenda_demo.rs"

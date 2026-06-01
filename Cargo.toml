@@ -290,6 +290,7 @@ members = [
     "02_ruway/paloma/paloma-llimphi",
     "02_ruway/paloma/paloma-app",
     "02_ruway/raymi/raymi-core",
+    "02_ruway/raymi/raymi-llimphi",
     "02_ruway/mirada/asistente-puente",
     "02_ruway/mirada/mirada-app-llimphi",
     "02_ruway/mirada/mirada-asistente-llimphi",

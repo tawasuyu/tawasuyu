@@ -29,7 +29,7 @@ pub mod recur;
 mod store;
 pub mod time;
 
-pub use backend::{CalendarBackend, ContactsBackend, MockBackend};
+pub use backend::{CalendarBackend, ContactsBackend, DavBackend, MockBackend};
 pub use calendar::{Calendar, CalendarRole};
 pub use contact::{AddressBook, Contact};
 pub use error::CalError;
