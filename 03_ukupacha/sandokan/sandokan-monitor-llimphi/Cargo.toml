@@ -1,0 +1,22 @@
+[package]
+name = "sandokan-monitor-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Monitor de procesos de gioser sobre Llimphi: observa las unidades vivas por el contrato sandokan-core::Engine (Linux) y el censo de apps WASM instaladas (Wawa). Tarjetas vivas con sparkline de CPU; detener/matar por el mismo Engine. Frontend de shared/sandokan/SDD.md §6."
+
+[[bin]]
+name = "sandokan-monitor"
+path = "src/main.rs"
+
+[dependencies]
+sandokan = { path = "../sandokan" }
+sandokan-monitor-core = { path = "../../../shared/sandokan/sandokan-monitor-core" }
+card-core = { path = "../../../shared/card/card-core" }
+ulid = { workspace = true }
+tokio = { workspace = true }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
