@@ -643,13 +643,17 @@ impl CompositorHandler for App {
                 .is_some();
             if is_layer {
                 map.arrange();
+                // Geometría que el configure le comunica al cliente.
+                let geo = map
+                    .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL | WindowSurfaceType::POPUP)
+                    .cloned()
+                    .and_then(|l| map.layer_geometry(&l));
                 drop(map);
                 self.recompute_reservations();
-                // Diagnóstico: ¿el layer surface ya trae un buffer pintado?
-                // `surface_size().is_some()` ⇒ hay buffer importado.
+                // ¿El layer surface ya trae buffer? `surface_size().is_some()`.
                 let buf = with_renderer_surface_state(surface, |s| s.surface_size())
                     .flatten();
-                println!("mirada-compositor · layer commit: buffer={buf:?}");
+                println!("mirada-compositor · layer commit: geom={geo:?} buffer={buf:?}");
             }
         }
     }

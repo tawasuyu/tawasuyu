@@ -465,6 +465,13 @@ impl LayerApp {
         self.maybe_sample();
         self.poll_exec();
         self.ensure_gpu(pi);
+        eprintln!(
+            "pata · draw pi={pi} {}x{} dirty={} gpu={}",
+            self.panels[pi].width,
+            self.panels[pi].height,
+            self.panels[pi].dirty,
+            self.panels[pi].gpu.is_some()
+        );
 
         if !self.panels[pi].dirty {
             self.latido(pi, qh);
@@ -540,6 +547,7 @@ impl LayerApp {
             eprintln!("pata layer · render: {e}");
         }
         gpu.surface.present(frame, hal);
+        eprintln!("pata · present pi={pi} ({w}x{h}) hecho");
 
         // Guarda el árbol pintado para el hit-test de los clicks.
         self.panels[pi].cache = Some(RenderCache { mounted, computed });
@@ -638,11 +646,13 @@ impl LayerShellHandler for LayerApp {
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
-        let Some(pi) = self.panel_de(layer.wl_surface()) else {
+        let (cw, ch) = configure.new_size;
+        let pi_dbg = self.panel_de(layer.wl_surface());
+        eprintln!("pata · configure recibido: panel={pi_dbg:?} new_size={cw}x{ch}");
+        let Some(pi) = pi_dbg else {
             return;
         };
         // El compositor nos da el tamaño definitivo (el eje libre ya resuelto).
-        let (cw, ch) = configure.new_size;
         if cw > 0 {
             self.panels[pi].width = cw;
         }
