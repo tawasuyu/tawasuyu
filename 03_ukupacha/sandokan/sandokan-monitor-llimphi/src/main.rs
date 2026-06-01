@@ -41,7 +41,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
 
 /// Muestras de CPU guardadas por unidad para dibujar el sparkline.
@@ -367,6 +367,47 @@ impl App for Monitor {
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
         menubar_overlay(&menu_spec(model))
+    }
+
+    /// Bindings reales (los shortcuts del menú son sólo etiquetas; el binding
+    /// vive acá). `Esc` cierra el menú o deselecciona · `Tab` alterna mundo ·
+    /// `Ctrl+R`/`F5` refresca · `Ctrl+Q` sale · `Ctrl+L`/`Ctrl+K` van a
+    /// Linux/Wawa.
+    fn on_key(model: &Model, ev: &KeyEvent) -> Option<Msg> {
+        if ev.state != KeyState::Pressed {
+            return None;
+        }
+        match &ev.key {
+            Key::Named(NamedKey::Escape) => {
+                return Some(if model.menu_open.is_some() {
+                    Msg::MenuOpen(None)
+                } else {
+                    Msg::Select(None)
+                });
+            }
+            Key::Named(NamedKey::F5) => return Some(Msg::MenuCmd("monitor.refresh".into())),
+            Key::Named(NamedKey::Tab) => {
+                let next = match model.world {
+                    World::Linux => World::Wawa,
+                    World::Wawa => World::Linux,
+                };
+                return Some(Msg::MenuCmd(match next {
+                    World::Linux => "view.linux".into(),
+                    World::Wawa => "view.wawa".into(),
+                }));
+            }
+            Key::Character(c) if ev.modifiers.ctrl => {
+                match c.as_str().to_ascii_lowercase().as_str() {
+                    "r" => return Some(Msg::MenuCmd("monitor.refresh".into())),
+                    "q" => return Some(Msg::MenuCmd("app.quit".into())),
+                    "l" => return Some(Msg::MenuCmd("view.linux".into())),
+                    "k" => return Some(Msg::MenuCmd("view.wawa".into())),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        None
     }
 }
 
