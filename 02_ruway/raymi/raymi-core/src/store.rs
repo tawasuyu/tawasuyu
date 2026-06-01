@@ -118,6 +118,11 @@ impl CalStore {
         &self.books
     }
 
+    /// Contactos crudos de una libreta (sin filtrar ni ordenar). Vacío si no hay.
+    pub fn contacts(&self, book: &str) -> &[Contact] {
+        self.contacts.get(book).map(Vec::as_slice).unwrap_or(&[])
+    }
+
     /// Todos los contactos (de todas las libretas) que matchean `query`,
     /// ordenados por nombre. Consulta vacía → todos.
     pub fn search_contacts(&self, query: &str) -> Vec<&Contact> {

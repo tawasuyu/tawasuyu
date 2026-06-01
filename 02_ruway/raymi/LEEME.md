@@ -16,7 +16,7 @@ raymi-core         — modelo agnóstico: eventos, recurrencia (RRULE),
                      calendarios, contactos, el trait de transporte.    [HECHO]
 raymi-net          — puente CalDAV/CardDAV: iCalendar (VEVENT) + vCard
                      (VCARD) + REPORT/PUT; implementa los traits.        [HECHO]
-raymi-store        — persistencia nativa (postcard) + sync incremental.  [pendiente]
+raymi-store        — persistencia nativa (postcard) + sync incremental.  [HECHO]
 raymi-llimphi      — frontend: vista mes + agenda del día + contactos.   [HECHO]
 raymi-app          — binario lanzable.                                    [pendiente]
 ```
@@ -73,11 +73,27 @@ intercambiables, como el resto de la suite.
     autodescubrimiento pendiente). **17 tests offline**; los caminos HTTP se
     verifican contra un servidor real (Nextcloud/Radicale) en la laptop.
 
+- **Fase 4 (2026-06-01):** `raymi-store` — caché en disco (postcard + BLAKE3).
+  - `CalDb` — raíz de disco con un directorio por cuenta (id saneado). Persiste
+    calendarios (`calendarios.pc`) y sus eventos (`eventos-<blake3>.pc`), libretas
+    (`libretas.pc`) y sus contactos (`contactos-<blake3>.pc`). El hash del id de
+    colección (una URL CalDAV/CardDAV con `/`, espacios y mayúsculas) evita rutas
+    rotas. Escritura **atómica** (`.tmp` + `rename`); lectura best-effort (blob
+    corrupto/viejo → vacío). Espeja a `paloma-store` (mismo patrón).
+  - **Sync incremental** sobre el mismo snapshot: `upsert_event`/`delete_event` y
+    `upsert_contact`/`delete_contact` aplican el delta por UID sin reescribir lo
+    que no cambió a nivel lógico.
+  - **Puente con `CalStore`**: `snapshot(account, &CalStore)` vuelca la caché en
+    memoria entera a disco; `hydrate(account) -> CalStore` la reconstruye
+    (offline-first). Añadido accesor `CalStore::contacts(book)` en el núcleo.
+  - 7 tests verde (roundtrips, id con URL, miss vacío, upsert/delete idempotente,
+    snapshot↔hydrate, cuentas aisladas).
+
 ## Pendiente (orden sugerido)
 
-1. **`raymi-store`** — persistencia nativa (postcard) + sync incremental.
-2. **Autodescubrimiento DAV** (PROPFIND `calendar-home-set`/`addressbook-home-set`)
+1. **Autodescubrimiento DAV** (PROPFIND `calendar-home-set`/`addressbook-home-set`)
    + verificar `raymi-net` contra servidor real.
-3. **`raymi-app`** — binario lanzable, comparte `cuenta.json` con paloma.
-4. **Crear/editar eventos y contactos** desde la UI (put/delete ya en el trait).
-5. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.
+2. **`raymi-app`** — binario lanzable, comparte `cuenta.json` con paloma; hidrata
+   desde `raymi-store` al arrancar y refresca contra la red.
+3. **Crear/editar eventos y contactos** desde la UI (put/delete ya en el trait).
+4. **Cruce con paloma**: invitar contactos a eventos; “crear evento desde correo”.

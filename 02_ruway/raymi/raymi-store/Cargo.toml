@@ -1,0 +1,19 @@
+[package]
+name = "raymi-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "raymi-store — persistencia nativa del calendario y los contactos: caché en disco de calendarios/eventos y libretas/contactos (postcard + BLAKE3), offline-first. Sync incremental por UID sobre el mismo snapshot. Agnóstica a la red y a la UI."
+
+[dependencies]
+raymi-core = { path = "../raymi-core" }
+serde = { workspace = true }
+postcard = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
