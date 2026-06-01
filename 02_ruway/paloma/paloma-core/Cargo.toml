@@ -1,0 +1,16 @@
+[package]
+name = "paloma-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-core — modelo agnóstico de correo: direcciones, mensajes, buzones, hilos, cuentas y el trait de transporte (IMAP/SMTP enchufables). Sin red ni UI."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
