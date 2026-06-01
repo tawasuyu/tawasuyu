@@ -77,6 +77,17 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 state.surface.resize(size.width, size.height);
+                // La app puede reaccionar al nuevo viewport (emitir un
+                // evento `resize`, recalcular layout, etc.). El update se
+                // corre tras reconfigurar la surface; el cache se invalida
+                // para repintar con el tamaño nuevo.
+                if let Some(msg) =
+                    A::on_resize(state.model.as_ref().expect("model"), size.width, size.height)
+                {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
+                }
                 state.window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {

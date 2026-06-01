@@ -79,6 +79,11 @@ pub fn run_with_profile(
 
 thread_local! {
     static PURIY_URL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// Viewport actual de la ventana en px físicos (lo actualiza
+    /// `Msg::Resize` desde el `on_resize` del runtime). `run_scripts_on_tab`
+    /// lo lee para que `window.innerWidth`/`innerHeight` reflejen el tamaño
+    /// real ya en la primera ejecución de scripts. Default = `initial_size`.
+    static PURIY_VIEWPORT: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((1100.0, 760.0)) };
     static PURIY_PROFILE: std::cell::RefCell<Option<std::sync::Arc<std::sync::Mutex<puriy_core::Profile>>>> = const { std::cell::RefCell::new(None) };
     static PURIY_PROFILE_PATH: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
 }
@@ -490,6 +495,9 @@ pub enum Msg {
         result: Result<usize, String>,
     },
     Scroll(f32),
+    /// La ventana cambió de tamaño (px físicos). Actualiza el viewport y
+    /// dispatcha el evento `resize` al window de la pestaña activa.
+    Resize(u32, u32),
     FocusAddr,
     AddrKey(KeyEvent),
     Back,
@@ -852,6 +860,10 @@ impl App for Puriy {
         wheel_to_msg(delta, mods)
     }
 
+    fn on_resize(_model: &Self::Model, width: u32, height: u32) -> Option<Self::Msg> {
+        Some(Msg::Resize(width, height))
+    }
+
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         let mut m = model;
         match msg {
@@ -1143,6 +1155,23 @@ impl App for Puriy {
                 // creado para esta pestaña.
                 if t.js.is_some() {
                     let (_, pending) = dispatch_window_js_event_on_tab(t, "scroll", now_ms);
+                    for req in pending {
+                        handle.dispatch(req);
+                    }
+                }
+            }
+            Msg::Resize(w, h) => {
+                // Guardamos el viewport para que los próximos loads lo
+                // sincronicen ya en la primera ejecución de scripts.
+                let (vp_w, vp_h) = (w as f32, h as f32);
+                PURIY_VIEWPORT.with(|c| c.set((vp_w, vp_h)));
+                let now_ms = m.start.elapsed().as_millis() as u64;
+                let t = m.active_mut();
+                // set_viewport ANTES del dispatch para que el handler de
+                // 'resize' lea `window.innerWidth`/`innerHeight` actuales.
+                if let Some(rt) = t.js.as_mut() {
+                    let _ = rt.set_viewport(vp_w, vp_h);
+                    let (_, pending) = dispatch_window_js_event_on_tab(t, "resize", now_ms);
                     for req in pending {
                         handle.dispatch(req);
                     }
@@ -2726,11 +2755,11 @@ fn run_scripts_on_tab(
     let _ = rt.set_now_ms(now_ms);
     // Fase 7.28 — sync scroll + viewport. Habilita que `window.scrollY`/
     // `innerWidth` desde JS reflejen state real del chrome. El viewport
-    // se asume 1024×768 acá porque el tab no tiene un width real hasta
-    // que el render layer mide; cuando llegue Msg::Resize, llamar
-    // set_viewport con valores actuales.
+    // sale del thread-local `PURIY_VIEWPORT`, que `Msg::Resize` mantiene
+    // al día con el tamaño real de la ventana (default = initial_size).
+    let (vp_w, vp_h) = PURIY_VIEWPORT.with(|c| c.get());
     let _ = rt.set_scroll(0.0, t.scroll_y);
-    let _ = rt.set_viewport(1024.0, 768.0);
+    let _ = rt.set_viewport(vp_w, vp_h);
     let mut prev_stdout_len = rt.stdout().len();
     let mut prev_stderr_len = rt.stderr().len();
     for s in scripts {
@@ -6717,6 +6746,51 @@ mod tests {
         assert_eq!(r.count, 1);
         let v = m.tabs[0].js.as_mut().expect("rt").eval("ran").expect("e");
         assert_eq!(v, puriy_js::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resize_actualiza_viewport_y_corre_listener() {
+        // El listener de 'resize' lee window.innerWidth y lo escribe al DOM.
+        let mut m = model_con_script(
+            "window.addEventListener('resize', function() { \
+                document.getElementById('out').textContent = String(window.innerWidth); \
+             });",
+        );
+        let rt = m.tabs[0].js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "out".into(),
+            tag_name: "div".into(),
+            text_content: "0".into(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        m.tabs[0].box_tree = Some(parse(r#"<body><div id="out">0</div></body>"#));
+        // Msg::Resize debe: (1) set_viewport(800,600) ANTES del dispatch,
+        // (2) disparar 'resize' → el handler ve innerWidth=800.
+        let h: Handle<Msg> = Handle::for_test();
+        let m = Puriy::update(m, Msg::Resize(800, 600), &h);
+        let bt = m.tabs[0].box_tree.as_ref().expect("bt");
+        let mut found = false;
+        bt.walk(|b| {
+            if b.text.as_deref() == Some("800") {
+                found = true;
+            }
+        });
+        assert!(found, "el handler de resize debió ver innerWidth=800 y mutar a '800'");
+    }
+
+    #[test]
+    fn on_resize_devuelve_msg_resize() {
+        let m = model_con_script("/* boot */");
+        assert!(matches!(
+            Puriy::on_resize(&m, 640, 480),
+            Some(Msg::Resize(640, 480))
+        ));
     }
 
     #[test]

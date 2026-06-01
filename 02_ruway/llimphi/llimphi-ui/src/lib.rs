@@ -98,6 +98,17 @@ pub trait App: 'static {
         None
     }
 
+    /// Maneja un redimensionado de la ventana. `width`/`height` son el
+    /// nuevo tamaño en **píxeles físicos** (lo que reporta
+    /// `winit::WindowEvent::Resized` y lo que recibe la surface). El
+    /// runtime ya reconfiguró la surface y pedirá redraw; este callback
+    /// es para que la app reaccione al nuevo viewport (recalcular layout
+    /// dependiente del tamaño, emitir un evento `resize`, etc.).
+    /// Devolver `Some(Msg)` dispara un update; `None` (default) lo ignora.
+    fn on_resize(_model: &Self::Model, _width: u32, _height: u32) -> Option<Self::Msg> {
+        None
+    }
+
     /// Título de la ventana (sólo se lee al arrancar).
     fn title() -> &'static str {
         "llimphi"
