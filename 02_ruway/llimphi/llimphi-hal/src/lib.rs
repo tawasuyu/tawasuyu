@@ -281,12 +281,38 @@ impl RawSurface {
         height: u32,
     ) -> Result<Self, HalError> {
         let caps = surface.get_capabilities(&hal.adapter);
-        let format = caps
+        let info = hal.adapter.get_info();
+        eprintln!(
+            "llimphi-hal · RawSurface: {} formato(s), {} alpha-mode(s) · adapter={:?}/{:?} «{}»",
+            caps.formats.len(),
+            caps.alpha_modes.len(),
+            info.backend,
+            info.device_type,
+            info.name,
+        );
+        // Si la superficie no expone formatos, el compositor no la soporta por
+        // este backend (Vulkan/GL WSI): error claro en vez de un panic por
+        // indexar `formats[0]` sobre una lista vacía.
+        let format = match caps
             .formats
             .iter()
             .copied()
             .find(|f| matches!(f, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm))
-            .unwrap_or(caps.formats[0]);
+            .or_else(|| caps.formats.first().copied())
+        {
+            Some(f) => f,
+            None => {
+                return Err(HalError::CreateSurface(format!(
+                    "la superficie no expone formatos (adapter {:?}/{:?}): el compositor no la soporta por {:?} WSI",
+                    info.backend, info.device_type, info.backend
+                )))
+            }
+        };
+        let alpha_mode = caps
+            .alpha_modes
+            .first()
+            .copied()
+            .unwrap_or(wgpu::CompositeAlphaMode::Auto);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -294,7 +320,7 @@ impl RawSurface {
             height: height.max(1),
             present_mode: choose_present_mode(&caps),
             desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
         };
         surface.configure(&hal.device, &config);

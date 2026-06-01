@@ -93,8 +93,10 @@ pub fn discover() -> Vec<Session> {
         Session {
             // pata ancla por wlr-layer-shell (su backend nativo, que mirada
             // ahora soporta): barra con zona exclusiva, sin winit ni app-id.
+            // Forzamos el backend GL de wgpu: la WSI Vulkan sobre superficies
+            // raw no expone formatos en mirada; GL/EGL sí.
             name: "mirada · pata".to_string(),
-            exec: "pata-llimphi".to_string(),
+            exec: "WGPU_BACKEND=gl pata-llimphi".to_string(),
             kind: Kind::Wayland,
             foreign: false,
         },

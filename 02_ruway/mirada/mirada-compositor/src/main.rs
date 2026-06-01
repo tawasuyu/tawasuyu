@@ -1250,7 +1250,7 @@ fn spawn_autostart(as_user: Option<&UserInfo>) {
         // Sin autostart: en vez de un escritorio negro y vacío, levanta el
         // marco pata para que haya algo usable de entrada.
         println!("mirada-compositor · sin autoarranque — levanto el marco pata.");
-        spawn_command("pata-llimphi", as_user);
+        spawn_command("WGPU_BACKEND=gl pata-llimphi", as_user);
     }
 }
 
