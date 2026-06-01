@@ -39,6 +39,9 @@ use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
+// El trait `Clipboard` aporta `get`/`set` sobre `SystemClipboard` — lo usamos
+// para puentear `navigator.clipboard` (Fase 7.176) con el portapapeles real.
+use llimphi_widget_text_editor::Clipboard as _;
 use llimphi_theme::Theme;
 
 use puriy_engine::{
@@ -611,6 +614,12 @@ pub enum Msg {
         fetch_id: u32,
         result: Result<puriy_engine::FetchResponse, String>,
     },
+    /// Empuja texto al portapapeles real del sistema. Lo emite
+    /// `apply_dom_mutations` cuando el JS llamó `navigator.clipboard.writeText`/
+    /// `write` (mutación `kind:'clipboard'`). Se procesa en el update loop
+    /// porque escribir el portapapeles necesita `&mut Model.clipboard`, que
+    /// `apply_dom_mutations` (sólo `&mut TabState`) no alcanza (Fase 7.176).
+    SetSystemClipboard(String),
     /// Tick periódico del reactor JS — disparado por `Handle::spawn_periodic`
     /// cada `JS_POLL_PERIOD_MS`. Para cada pestaña con `JsRuntime` y timers
     /// vivos, avanza el reloj a `Model.start.elapsed_ms()` y corre los
@@ -885,6 +894,9 @@ impl App for Puriy {
             }
             Msg::Loaded { tab, gen, final_url, title, box_tree, source, meta_refresh, scripts } => {
                 if let Some(idx) = m.tab_idx(tab) {
+                    // Lee el portapapeles del sistema ANTES de tomar `&mut t`
+                    // (borrow disjunto) para sembrarlo en el runtime nuevo.
+                    let sys_clipboard = m.clipboard.get();
                     let t = &mut m.tabs[idx];
                     if t.gen == gen {
                         // Si hubo redirect, propaga la URL final a la
@@ -962,7 +974,8 @@ impl App for Puriy {
                         t.js = None;
                         t.js_summary = JsSummary::default();
                         let now_ms = m.start.elapsed().as_millis() as u64;
-                        let pending = run_scripts_on_tab(t, &scripts, now_ms);
+                        let pending =
+                            run_scripts_on_tab(t, &scripts, now_ms, sys_clipboard.as_deref());
                         for req in pending {
                             handle.dispatch(req);
                         }
@@ -1419,6 +1432,11 @@ impl App for Puriy {
             req @ Msg::FetchRequest { .. } => {
                 spawn_fetch(req, handle.clone());
             }
+            Msg::SetSystemClipboard(text) => {
+                // `navigator.clipboard.writeText`/`write` → portapapeles real
+                // (Fase 7.176). Degrada a no-op si no hay backend (headless).
+                m.clipboard.set(&text);
+            }
             Msg::FetchComplete { tab, gen, fetch_id, result } => {
                 let tab_idx = m.tabs.iter().position(|t| t.id == tab && t.gen == gen);
                 if let Some(idx) = tab_idx {
@@ -1449,8 +1467,12 @@ impl App for Puriy {
                             new_stdout[prev_stdout..].matches('\n').count();
                         m.tabs[idx].js_summary.errors +=
                             new_stderr[prev_stderr..].matches('\n').count();
+                        // Las mutaciones resultantes (fetch encadenado, write
+                        // al portapapeles) se despachan al loop: `FetchRequest`
+                        // re-entra a su arm (que spawnea el worker) y
+                        // `SetSystemClipboard` al suyo.
                         for next in apply_dom_mutations(&mut m.tabs[idx]) {
-                            spawn_fetch(next, handle.clone());
+                            handle.dispatch(next);
                         }
                     }
                 }
@@ -2744,6 +2766,7 @@ fn run_scripts_on_tab(
     t: &mut TabState,
     scripts: &[puriy_engine::ScriptInfo],
     now_ms: u64,
+    system_clipboard: Option<&str>,
 ) -> Vec<Msg> {
     if scripts.is_empty() {
         return Vec::new();
@@ -2799,6 +2822,14 @@ fn run_scripts_on_tab(
     // correcto ya en el primer script. `Msg::ScaleFactor` mantiene el
     // thread-local al día con el `scale_factor` de winit (default = 1.0).
     let _ = rt.set_device_pixel_ratio(PURIY_DPR.with(|c| c.get()));
+    // Portapapeles del sistema → buffer JS (Fase 7.176): que un
+    // `navigator.clipboard.readText()` de un script inicial vea lo que el
+    // usuario tiene copiado afuera, no la cadena vacía. (Limitación: un copy
+    // externo POSTERIOR al load no se relee hasta la próxima carga — la lectura
+    // viva exigiría resolver readText como promesa pendiente del chrome.)
+    if let Some(clip) = system_clipboard {
+        let _ = rt.set_clipboard(clip);
+    }
     let mut prev_stdout_len = rt.stdout().len();
     let mut prev_stderr_len = rt.stderr().len();
     for s in scripts {
@@ -3284,6 +3315,17 @@ fn apply_dom_mutations(t: &mut TabState) -> Vec<Msg> {
         if m.kind == "fetch" {
             if let Some(req) = parse_fetch_payload(&m.value, t.id, t.gen) {
                 out.push(req);
+            }
+        } else if m.kind == "clipboard" {
+            // `writeText:<txt>` / `write:<txt>` — empuja el texto al
+            // portapapeles real. No necesita box_tree (opera sobre el SO);
+            // el write efectivo lo hace el update loop (tiene `&mut clipboard`).
+            let text = m
+                .value
+                .strip_prefix("writeText:")
+                .or_else(|| m.value.strip_prefix("write:"));
+            if let Some(text) = text {
+                out.push(Msg::SetSystemClipboard(text.to_string()));
             }
         } else {
             other_muts.push(m);
@@ -6313,7 +6355,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts, 0);
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
         assert_eq!(t.js_summary.logs, 2, "esperaba 2 logs");
         assert_eq!(t.js_summary.errors, 0);
         // El runtime debe haberse instanciado.
@@ -6332,7 +6374,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts, 0);
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
         // 1 log de console + 1 error del throw.
         assert_eq!(t.js_summary.logs, 1);
         assert_eq!(t.js_summary.errors, 1);
@@ -6360,7 +6402,7 @@ mod tests {
                 async_: false,
             },
         ];
-        run_scripts_on_tab(&mut t, &scripts, 0);
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
         // Ninguno de los dos ejecutable → no se instancia runtime.
         assert!(t.js.is_none());
         assert_eq!(t.js_summary.logs, 0);
@@ -6382,7 +6424,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts, 0);
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
         let rt = t.js.as_ref().expect("rt creado");
         let out = rt.stdout();
         assert!(out.contains("Hola mundo"), "stdout: {out:?}");
@@ -6411,7 +6453,7 @@ mod tests {
                 async_: false,
             },
         ];
-        run_scripts_on_tab(&mut t, &scripts, 0);
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
         assert_eq!(t.js_summary.logs, 1);
     }
 
@@ -6428,7 +6470,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts, 0);
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
         Model {
             tabs: vec![t],
             active: 0,
@@ -6644,7 +6686,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts, 0);
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
         let bt = t.box_tree.as_ref().expect("box_tree");
         let mut found_new = false;
         let mut found_old = false;
@@ -7013,7 +7055,7 @@ mod tests {
             defer: false,
             async_: false,
         }];
-        run_scripts_on_tab(&mut t, &scripts, 0);
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
         let bt = t.box_tree.as_ref().expect("bt");
         let mut red_leaf = false;
         bt.walk(|b| {
@@ -7251,6 +7293,52 @@ mod tests {
             .expect("e");
         apply_dom_mutations(t);
         assert_eq!(t.inputs[0].text(), "nuevo");
+    }
+
+    #[test]
+    fn clipboard_write_text_emite_set_system_clipboard() {
+        // navigator.clipboard.writeText publica una mutación kind:'clipboard';
+        // apply_dom_mutations debe traducirla a Msg::SetSystemClipboard para
+        // que el update loop la empuje al portapapeles real (Fase 7.176).
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        let rt = t.js.as_mut().expect("rt");
+        rt.eval("navigator.clipboard.writeText('copiado por JS')")
+            .expect("e");
+        let out = apply_dom_mutations(t);
+        let writes: Vec<&str> = out
+            .iter()
+            .filter_map(|msg| match msg {
+                Msg::SetSystemClipboard(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(writes, vec!["copiado por JS"]);
+    }
+
+    #[test]
+    fn run_scripts_siembra_el_portapapeles_del_sistema() {
+        // Con system_clipboard = Some(...), un readText() de un script inicial
+        // ve lo que el usuario tiene copiado afuera, no la cadena vacía.
+        let mut t = TabState::new("about:blank".into());
+        t.box_tree = Some(parse("<p>x</p>"));
+        let scripts = vec![puriy_engine::ScriptInfo {
+            src: None,
+            inline: Some(
+                "var leido = ''; navigator.clipboard.readText().then(function(x){ leido = x; });"
+                    .to_string(),
+            ),
+            type_attr: None,
+            is_module: false,
+            defer: false,
+            async_: false,
+        }];
+        run_scripts_on_tab(&mut t, &scripts, 0, Some("desde el sistema"));
+        let rt = t.js.as_mut().expect("rt");
+        assert_eq!(
+            rt.eval("leido").expect("e"),
+            puriy_js::JsValue::String("desde el sistema".into())
+        );
     }
 
     #[test]

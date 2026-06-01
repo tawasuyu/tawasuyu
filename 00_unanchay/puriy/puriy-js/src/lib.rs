@@ -862,6 +862,21 @@ impl JsRuntime {
         self.eval_raw(&script).map(|_| ())
     }
 
+    /// Sincroniza el buffer del portapapeles JS (`navigator.clipboard.readText`/
+    /// `read`) con el texto que el usuario tiene en el portapapeles del sistema.
+    /// El chrome lo llama al cargar la página (y cuando detecta un copy externo)
+    /// para que las lecturas devuelvan lo que de verdad hay afuera, no el último
+    /// `writeText` del propio script. Espejo inverso de la mutación
+    /// `kind:'clipboard'` que `writeText`/`write` publican (Fase 7.96).
+    pub fn set_clipboard(&mut self, text: &str) -> Result<(), JsError> {
+        let t = js_string_literal(text);
+        let script = format!(
+            "if (typeof globalThis.__puriy_set_clipboard === 'function') {{ \
+                globalThis.__puriy_set_clipboard({t}); }}"
+        );
+        self.eval_raw(&script).map(|_| ())
+    }
+
     /// Empuja el resultado de evaluar una media query al estado JS. Si el valor
     /// flipeó respecto al previo, dispara `change` en los `MediaQueryList` vivos
     /// de esa query (Fase 7.98). El chrome lo llama tras evaluar cada query
@@ -8638,6 +8653,21 @@ mod tests {
         rt.eval("var got = null; navigator.clipboard.readText().then(function(t) { got = t; });")
             .expect("e");
         assert_eq!(rt.eval("got").expect("e"), JsValue::String("copiado afuera".into()));
+    }
+
+    #[test]
+    fn clipboard_set_clipboard_metodo_host_sincroniza_el_buffer() {
+        // El chrome empuja el portapapeles del sistema vía el método host
+        // `set_clipboard` (no el `__puriy_set_clipboard` crudo). Escapa
+        // comillas/saltos sin romper el eval.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_clipboard("línea\ncon 'comillas'").expect("set");
+        rt.eval("var got = null; navigator.clipboard.readText().then(function(t) { got = t; });")
+            .expect("e");
+        assert_eq!(
+            rt.eval("got").expect("e"),
+            JsValue::String("línea\ncon 'comillas'".into())
+        );
     }
 
     #[test]
