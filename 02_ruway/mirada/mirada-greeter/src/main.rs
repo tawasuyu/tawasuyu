@@ -15,6 +15,8 @@
 //! - `MIRADA_GREETER_MOCK="usuario:secreto"` usa el mock, para iterar la UI
 //!   en cajas sin PAM o con el greeter anidado en otro escritorio.
 
+mod sessions;
+
 use std::io::Write;
 use std::sync::Arc;
 
@@ -96,6 +98,10 @@ struct Model {
     pass: TextInputState,
     focus: Field,
     status: Status,
+    /// Sesiones de escritorio descubiertas en el sistema (la 0 es mirada).
+    sessions: Vec<sessions::Session>,
+    /// Índice de la sesión elegida dentro de `sessions`.
+    session_idx: usize,
     /// Clipboard del sistema, compartido por el menú de edición.
     clipboard: SystemClipboard,
     /// Menú principal: índice del menú raíz abierto (`None` cerrado).
@@ -119,6 +125,11 @@ enum Msg {
     EditKey(KeyEvent),
     Submit,
     AuthDone(Result<UserInfo, AuthError>),
+    /// Avanza la sesión elegida (con wrap) — clic en el selector de la
+    /// tarjeta.
+    CycleSession(i32),
+    /// Fija la sesión elegida por índice — elección desde el menú.
+    PickSession(usize),
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
     MenuOpen(Option<usize>),
     /// Comando elegido en el menú principal — se traduce al `Msg` real.
@@ -167,6 +178,8 @@ impl App for Greeter {
             pass: TextInputState::masked(),
             focus: Field::User,
             status: Status::Idle,
+            sessions: sessions::discover(),
+            session_idx: 0,
             clipboard: SystemClipboard::new(),
             menu_open: None,
             edit_menu: None,
@@ -264,8 +277,32 @@ impl App for Greeter {
                 handle.spawn(move || Msg::AuthDone(auth.authenticate(&user, &secret)));
             }
             Msg::AuthDone(Ok(user)) => {
-                emit_ticket(&SessionTicket::new(user));
+                // El comando de la sesión elegida viaja en el tiquet. Vacío
+                // (sesión nativa mirada) ⇒ el compositor usa su autostart.
+                let exec = m
+                    .sessions
+                    .get(m.session_idx)
+                    .map(|s| s.exec.clone())
+                    .unwrap_or_default();
+                let ticket = SessionTicket::new(user);
+                let ticket = if exec.is_empty() {
+                    ticket
+                } else {
+                    ticket.with_session(exec)
+                };
+                emit_ticket(&ticket);
                 handle.quit();
+            }
+            Msg::CycleSession(dir) => {
+                let n = m.sessions.len().max(1) as i32;
+                let cur = m.session_idx as i32;
+                m.session_idx = (((cur + dir) % n + n) % n) as usize;
+            }
+            Msg::PickSession(i) => {
+                if i < m.sessions.len() {
+                    m.session_idx = i;
+                }
+                m.menu_open = None;
             }
             Msg::AuthDone(Err(e)) => {
                 m.status = Status::Failed(e.to_string());
@@ -381,6 +418,31 @@ impl App for Greeter {
         };
         let status_line = row(16.0, &status_msg, 11.0, status_color);
 
+        // Selector de sesión: muestra la elegida y, si hay más de una,
+        // permite ciclar con un clic. Estilo DM clásico (abajo del login).
+        let sess = model
+            .sessions
+            .get(model.session_idx)
+            .map(|s| (s.name.as_str(), s.kind.tag()))
+            .unwrap_or(("mirada", "wayland"));
+        let multi = model.sessions.len() > 1;
+        let sess_label = if multi {
+            format!("Sesión: {} · {}   ⟳ cambiar", sess.0, sess.1)
+        } else {
+            format!("Sesión: {} · {}", sess.0, sess.1)
+        };
+        let mut session_line = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(16.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(sess_label, 10.0, theme.fg_muted, Alignment::Start);
+        if multi {
+            session_line = session_line.on_click(Msg::CycleSession(1));
+        }
+
         let card = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -409,6 +471,7 @@ impl App for Greeter {
             pass_cap,
             pass_box,
             status_line,
+            session_line,
         ]);
 
         // Zona central que aloja la tarjeta de login. Ocupa todo el
@@ -528,13 +591,24 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
     let mut iniciar = MenuItem::new("Iniciar sesión", "session.submit").shortcut("Enter");
     if busy { iniciar = iniciar.disabled(); }
 
+    // Menú "Sesión": acciones de login + la lista de sesiones descubiertas.
+    // La elegida lleva «●»; el resto «  ».
+    let mut sesion = Menu::new("Sesión")
+        .item(iniciar)
+        .item(MenuItem::new("Ir a usuario", "session.user"))
+        .item(MenuItem::new("Ir a contraseña", "session.pass"));
+    for (i, s) in model.sessions.iter().enumerate() {
+        let mark = if i == model.session_idx { "● " } else { "   " };
+        let label = format!("{mark}{} · {}", s.name, s.kind.tag());
+        let mut item = MenuItem::new(label, format!("session.pick.{i}"));
+        if i == 0 {
+            item = item.separated();
+        }
+        sesion = sesion.item(item);
+    }
+
     AppMenu::new()
-        .menu(
-            Menu::new("Sesión")
-                .item(iniciar)
-                .item(MenuItem::new("Ir a usuario", "session.user").separated())
-                .item(MenuItem::new("Ir a contraseña", "session.pass")),
-        )
+        .menu(sesion)
         .menu(
             Menu::new("Editar")
                 .item(undo)
@@ -549,6 +623,13 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
 /// Traduce el `command` del menú principal al `Msg` real y lo despacha.
 fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
     model.menu_open = None;
+    // Elección de sesión: «session.pick.<idx>».
+    if let Some(rest) = command.strip_prefix("session.pick.") {
+        if let Ok(i) = rest.parse::<usize>() {
+            return Greeter::update(model, Msg::PickSession(i), handle);
+        }
+        return model;
+    }
     let target = match command.as_str() {
         "session.submit" => Some(Msg::Submit),
         "session.user" => Some(Msg::Focus(Field::User)),

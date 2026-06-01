@@ -1,0 +1,210 @@
+//! Enumeración de sesiones de escritorio instaladas.
+//!
+//! Un display manager no inventa qué sesiones ofrecer: las lee de los
+//! directorios estándar de XDG. Cada sesión es un archivo `.desktop` con
+//! un `Name` legible y un `Exec` que la arranca:
+//!
+//! - `…/wayland-sessions/*.desktop` → sesiones Wayland (sway, Hyprland,
+//!   Plasma Wayland, GNOME…).
+//! - `…/xsessions/*.desktop` → sesiones X11.
+//!
+//! El greeter lista lo que **ya existe** en el sistema (sin instalar
+//! nada), el usuario elige una, y su `Exec` viaja en el [`SessionTicket`]
+//! para que el compositor la ejecute como el usuario autenticado. Si la
+//! lista no trae nada de afuera, queda al menos la entrada nativa de
+//! mirada (su autostart), que es `Exec` vacío.
+
+use std::path::Path;
+
+/// Servidor gráfico de una sesión (sólo informativo, para etiquetar).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Wayland,
+    X11,
+}
+
+impl Kind {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Kind::Wayland => "wayland",
+            Kind::X11 => "x11",
+        }
+    }
+}
+
+/// Una sesión ofrecible en el login.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Session {
+    /// Nombre legible (campo `Name` del `.desktop`).
+    pub name: String,
+    /// Comando que la arranca (campo `Exec`, ya sin field-codes `%U`/`%i`).
+    /// Vacío ⇒ sesión nativa de mirada: el compositor cae a su autostart
+    /// en vez de ejecutar un comando ajeno.
+    pub exec: String,
+    pub kind: Kind,
+}
+
+/// Directorios estándar donde los DM buscan sesiones, en orden.
+const DIRS: &[(&str, Kind)] = &[
+    ("/usr/share/wayland-sessions", Kind::Wayland),
+    ("/usr/local/share/wayland-sessions", Kind::Wayland),
+    ("/usr/share/xsessions", Kind::X11),
+    ("/usr/local/share/xsessions", Kind::X11),
+];
+
+/// Descubre todas las sesiones del sistema. La primera entrada es siempre
+/// la nativa de mirada (`Exec` vacío) para que la lista nunca esté vacía y
+/// haya siempre un camino al autostart del compositor.
+pub fn discover() -> Vec<Session> {
+    let mut out = vec![Session {
+        name: "mirada".to_string(),
+        exec: String::new(),
+        kind: Kind::Wayland,
+    }];
+    for (dir, kind) in DIRS {
+        collect_dir(Path::new(dir), *kind, &mut out);
+    }
+    out
+}
+
+/// Lee un directorio de sesiones, parsea cada `.desktop` y agrega los
+/// válidos a `out` ordenados por nombre. Un directorio inexistente o
+/// ilegible se ignora en silencio (no todos los sistemas tienen ambos).
+fn collect_dir(dir: &Path, kind: Kind, out: &mut Vec<Session>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut found: Vec<Session> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(session) = parse_entry(&text, kind) {
+            found.push(session);
+        }
+    }
+    found.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.extend(found);
+}
+
+/// Parsea un `.desktop`: toma `Name` y `Exec` de la sección
+/// `[Desktop Entry]`. Devuelve `None` si está oculta (`Hidden`/`NoDisplay`)
+/// o no trae un `Exec` ejecutable.
+fn parse_entry(text: &str, kind: Kind) -> Option<Session> {
+    let mut in_main = false;
+    let mut name: Option<String> = None;
+    let mut exec: Option<String> = None;
+    let mut hidden = false;
+
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            // Sólo nos interesa la sección principal; las
+            // `[Desktop Action …]` se ignoran.
+            in_main = line == "[Desktop Entry]";
+            continue;
+        }
+        if !in_main || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        match key.trim() {
+            // Sólo la clave sin locale (`Name`, no `Name[es]`): el primero
+            // que aparezca gana.
+            "Name" if name.is_none() => name = Some(value.to_string()),
+            "Exec" if exec.is_none() => exec = Some(strip_field_codes(value)),
+            "Hidden" | "NoDisplay" if value == "true" => hidden = true,
+            _ => {}
+        }
+    }
+
+    if hidden {
+        return None;
+    }
+    let exec = exec?;
+    if exec.is_empty() {
+        return None;
+    }
+    Some(Session {
+        name: name.unwrap_or_else(|| exec.clone()),
+        exec,
+        kind,
+    })
+}
+
+/// Quita los field-codes de un `Exec` (`%U`, `%f`, `%i`, `%k`, …). El
+/// spec los reserva como tokens `%x` de dos chars; en sesiones casi nunca
+/// aparecen, pero los limpiamos por las dudas para no pasarle basura a
+/// `sh -c`.
+fn strip_field_codes(exec: &str) -> String {
+    exec.split_whitespace()
+        .filter(|tok| !(tok.len() == 2 && tok.starts_with('%')))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsea_entrada_minima() {
+        let s = parse_entry("[Desktop Entry]\nName=Sway\nExec=sway\n", Kind::Wayland).unwrap();
+        assert_eq!(s.name, "Sway");
+        assert_eq!(s.exec, "sway");
+        assert_eq!(s.kind, Kind::Wayland);
+    }
+
+    #[test]
+    fn limpia_field_codes() {
+        let s = parse_entry(
+            "[Desktop Entry]\nName=Plasma\nExec=startplasma-wayland %U\n",
+            Kind::Wayland,
+        )
+        .unwrap();
+        assert_eq!(s.exec, "startplasma-wayland");
+    }
+
+    #[test]
+    fn ignora_ocultas() {
+        assert!(parse_entry(
+            "[Desktop Entry]\nName=X\nExec=x\nNoDisplay=true\n",
+            Kind::Wayland
+        )
+        .is_none());
+        assert!(
+            parse_entry("[Desktop Entry]\nName=X\nExec=x\nHidden=true\n", Kind::X11).is_none()
+        );
+    }
+
+    #[test]
+    fn ignora_otras_secciones() {
+        // El `Exec` de una `[Desktop Action]` no debe colarse como el de
+        // la sesión.
+        let s = parse_entry(
+            "[Desktop Entry]\nName=Foo\nExec=foo\n[Desktop Action New]\nExec=foo --new\n",
+            Kind::Wayland,
+        )
+        .unwrap();
+        assert_eq!(s.exec, "foo");
+    }
+
+    #[test]
+    fn sin_exec_no_es_sesion() {
+        assert!(parse_entry("[Desktop Entry]\nName=Solo nombre\n", Kind::Wayland).is_none());
+    }
+
+    #[test]
+    fn discover_siempre_trae_mirada() {
+        let v = discover();
+        assert_eq!(v[0].name, "mirada");
+        assert!(v[0].exec.is_empty());
+    }
+}
