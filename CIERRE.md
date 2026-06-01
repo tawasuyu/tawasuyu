@@ -53,22 +53,30 @@ público sin romperte legal o reproduciblemente. Es barato y desbloquea todo.
 
 ## Nivel 1 — Higiene del workspace (🤖, casi todo automatizable)
 
-Barrido transversal, mecánico, alto valor por esfuerzo.
+Barrido transversal, mecánico, alto valor por esfuerzo. **Estado al 2026-06-01:**
 
-- **1.1 — Matar el warning `russh` future-incompat.** Bumpear o pinear; que
-  `cargo check` salga 100% limpio.
-- **1.2 — `cargo clippy --workspace` como segundo smoke test.** Hoy sólo corre
-  `check`. Clippy en `-D warnings` (al menos un pase de limpieza) sube la
-  percepción de calidad de un repo público enorme.
-- **1.3 — Inventario de `todo!()`/`unimplemented!()`.** Hay ~67 marcas
-  TODO/FIXME/unimplemented. Triar: cuáles son deuda real de core (descuentan) y
-  cuáles son notas. Las que estén en caminos que un usuario público puede
-  pisar → cerrar o documentar como "no soportado".
-- **1.4 — `cargo test --workspace` verde y medido.** Saber cuántos tests
-  existen y cuáles fallan/ignoran. `iniy` está marcado ⚠️ justamente por
-  pipeline e2e no verificado — esto lo destapa.
-- **1.5 — Metadata de paquete uniforme** (`description`, `repository`,
-  `keywords`, `categories`) en los crates que sí se publican. crates.io lo pide.
+- **1.1 — `russh` future-incompat.** ⏸️ **Deferido.** No es cosmético: bumpear
+  `0.54 → 0.61` (7 minors) es una **migración de `shared/ssh`** con riesgo de
+  API-break. El warning es no-fatal. Hacerlo como tarea propia, no a ciegas.
+- **1.2 — Clippy.** ✅ Medido: **173 warnings, 0 errores** — todo cosmético
+  (doc-indentation, float precision en tablas generadas de cosmos, dead code,
+  `needless_range_loop`). **No se aplicó `--fix` en bloque** a propósito (regla
+  "no embellecer sin pedido" + tocaría decenas de dominios en un commit
+  arriesgado). Queda como pase opt-in cuando lo pidas.
+- **1.3 — Inventario de `todo!()`/`unimplemented!()`.** ⬜ ~67 marcas sin triar.
+- **1.4 — Compilación de tests/examples.** ✅ **`cargo test --workspace --no-run`
+  compila todo** tras dos arreglos: (a) `cosmos-notebook-kernel` tenía un example
+  roto por un rename viejo — `cargo check` no lo veía, `--all-targets` sí
+  (`1fa3d60f`); (b) **el disco estaba 100% lleno** (`target/` = 127 GB) y los
+  demás "errores" eran secuela — se liberaron 25 GB borrando
+  `target/debug/incremental` (caché regenerable). Ejecutar la *suite* (no sólo
+  compilarla) sigue pendiente, sobre todo `iniy` ⚠️.
+- **1.5 — Metadata de paquete** (`repository`, `keywords`, `categories`). ⬜
+  Sólo relevante si se sube a crates.io (eje opcional) — diferible.
+
+> **Nota ambiental:** `target/` ocupaba 127 GB / 147 GB. Conviene `cargo clean`
+> periódico o mover `CARGO_TARGET_DIR` a un disco con más holgura; con builds
+> debug de 705k LOC se llena solo.
 
 ---
 
