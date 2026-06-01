@@ -24,6 +24,7 @@ use pata_core::widget::WidgetView;
 
 use crate::shuma::{self, ShumaState};
 use crate::toplevel::WindowEntry;
+use crate::tray::TrayItem;
 use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 
 /// Largo máximo de la etiqueta de una ventana en el `window_list` antes de
@@ -32,6 +33,9 @@ const WINDOW_LABEL_MAX: usize = 22;
 
 /// Largo máximo del preview del portapapeles antes de recortar con `…`.
 const CLIPBOARD_PREVIEW_MAX: usize = 28;
+
+/// Largo máximo de la etiqueta de un item del tray antes de recortar con `…`.
+const TRAY_LABEL_MAX: usize = 14;
 
 /// Los datos del host que el render necesita además del view-model de los
 /// widgets de core: lo dinámico que vive en el backend (ventanas abiertas,
@@ -43,6 +47,8 @@ pub struct BarData<'a> {
     pub windows: &'a [WindowEntry],
     /// El texto del portapapeles (ya en una línea), para el `clipboard`.
     pub clipboard: Option<&'a str>,
+    /// Los items de la bandeja del sistema, para el `tray`.
+    pub tray: &'a [TrayItem],
 }
 
 /// Ancho de la barrita de un medidor, en píxeles.
@@ -333,6 +339,7 @@ fn slots_de(
                 SlotWidget::Clipboard { exec } => {
                     clipboard_view(data.clipboard, exec.as_deref(), theme)
                 }
+                SlotWidget::Tray => tray_view(data.tray, surface.gap, dir, theme),
             })
             .collect();
         let mut style = Style {
@@ -413,6 +420,42 @@ fn clipboard_view(text: Option<&str>, exec: Option<&str>, theme: &Theme) -> View
             .on_click(Msg::Spawn(cmd.to_string())),
         None => v,
     }
+}
+
+/// El `tray`: un chip clickeable por item de la bandeja, resaltando los que
+/// piden atención (`NeedsAttention`). Click → [`Msg::TrayActivate`] con su `key`;
+/// el backend activa el item por D-Bus. Los chips siguen el eje de la barra. (MVP
+/// textual: el ícono real —pixmap/tema— queda para más adelante.)
+fn tray_view(items: &[TrayItem], gap: f32, dir: FlexDirection, theme: &Theme) -> View<Msg> {
+    let chips: Vec<View<Msg>> = items
+        .iter()
+        .map(|it| {
+            let texto = recortar(&it.label, TRAY_LABEL_MAX);
+            // NeedsAttention: resaltado con el color de acento; el resto, normal.
+            let fg = if it.status == "NeedsAttention" {
+                theme.accent
+            } else {
+                theme.fg_text
+            };
+            chip(theme)
+                .fill(theme.bg_panel_alt)
+                .radius(6.0)
+                .hover_fill(theme.bg_button_hover)
+                .on_click(Msg::TrayActivate(it.key.clone()))
+                .text(texto, 12.0, fg)
+        })
+        .collect();
+
+    View::new(Style {
+        flex_direction: dir,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(gap),
+            height: length(gap),
+        },
+        ..Default::default()
+    })
+    .children(chips)
 }
 
 /// Recorta una cadena a `max` caracteres, agregando `…` si sobró.

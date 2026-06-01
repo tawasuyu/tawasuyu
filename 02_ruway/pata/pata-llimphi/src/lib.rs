@@ -25,6 +25,7 @@ pub mod render;
 pub mod sampler;
 pub mod shuma;
 pub mod toplevel;
+pub mod tray;
 
 use std::time::Duration;
 
@@ -60,6 +61,9 @@ pub enum Msg {
     /// Activar una ventana del `window_list` (traerla al frente). El `u32` es el
     /// [`toplevel::Toplevel::id`]; sólo el backend layer-shell sabe resolverlo.
     ActivateWindow(u32),
+    /// Activar un item del `tray` (click). El `String` es la `key` del
+    /// [`tray::TrayItem`]; sólo el backend layer-shell sabe resolverlo.
+    TrayActivate(String),
     /// Cerrar la app.
     Quit,
 }
@@ -86,6 +90,9 @@ pub enum SlotWidget {
         /// Comando del selector de historial, o `None` si no es clickeable.
         exec: Option<String>,
     },
+    /// La bandeja del sistema (StatusNotifierItem). Dato del host (vía D-Bus, ver
+    /// [`tray`]), no del view-model de core. Cada item se activa al clickearlo.
+    Tray,
 }
 
 /// Lanza `cmd` por `sh -c` como proceso hijo, sin esperarlo (no bloquea). Lo
@@ -113,7 +120,10 @@ impl SurfaceWidgets {
             .chain(self.end.iter_mut())
             .filter_map(|sw| match sw {
                 SlotWidget::Core { widget, .. } => Some(widget),
-                SlotWidget::Shuma | SlotWidget::WindowList | SlotWidget::Clipboard { .. } => None,
+                SlotWidget::Shuma
+                | SlotWidget::WindowList
+                | SlotWidget::Clipboard { .. }
+                | SlotWidget::Tray => None,
             })
     }
 }
@@ -157,6 +167,8 @@ impl Model {
                         SlotWidget::Clipboard {
                             exec: (!exec.is_empty()).then(|| exec.to_string()),
                         }
+                    } else if spec.kind == "tray" {
+                        SlotWidget::Tray
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -282,9 +294,10 @@ impl App for PataApp {
             }
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
-            // El window_list sólo es funcional bajo layer-shell (foreign-toplevel);
-            // bajo el compositor mirada llegará por su IPC. Aquí es no-op.
-            Msg::ActivateWindow(_) => {}
+            // window_list y tray sólo son funcionales bajo layer-shell (donde el
+            // backend tiene el cliente foreign-toplevel / D-Bus); bajo el
+            // compositor mirada llegarán por su IPC. Aquí son no-op.
+            Msg::ActivateWindow(_) | Msg::TrayActivate(_) => {}
         }
         model
     }

@@ -65,6 +65,7 @@ use pata_core::{Anchor, Config, SurfaceKind};
 
 use crate::sampler::Sampler;
 use crate::toplevel::{Toplevel, WindowEntry};
+use crate::tray::TrayHandle;
 use crate::{render, Model, Msg};
 
 /// El estado wgpu de **una** layer surface (una barra). El `Hal` (instancia +
@@ -127,6 +128,9 @@ struct LayerApp {
     /// Texto del portapapeles (una línea), para el widget `clipboard`. Se
     /// re-muestrea con el resto del sistema (~1Hz) vía `wl-paste`.
     clipboard: Option<String>,
+    /// La bandeja del sistema (StatusNotifierItem), corriendo en su propio hilo.
+    /// `None` si la config no tiene ningún widget `tray`.
+    tray: Option<TrayHandle>,
     theme: Theme,
     cfg: Config,
     surfaces: Vec<crate::SurfaceWidgets>,
@@ -251,6 +255,16 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         panels[pi].layer.commit();
     }
 
+    // El tray sólo arranca (y toma el nombre del watcher) si la config lo pide.
+    let tiene_tray = cfg.surfaces.iter().any(|s| {
+        s.start
+            .iter()
+            .chain(&s.center)
+            .chain(&s.end)
+            .any(|w| w.kind == "tray")
+    });
+    let tray = if tiene_tray { TrayHandle::spawn() } else { None };
+
     let (surfaces, shuma) = Model::construir(&cfg);
     let mut app = LayerApp {
         registry_state: RegistryState::new(&globals),
@@ -265,6 +279,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         toplevels: Vec::new(),
         next_toplevel_id: 0,
         clipboard: None,
+        tray,
         theme: Theme::dark(),
         cfg,
         surfaces,
@@ -465,9 +480,11 @@ impl LayerApp {
         let idx = self.panels[pi].idx;
         let (w, h) = (self.panels[pi].width, self.panels[pi].height);
         let windows = self.window_entries();
+        let tray_items = self.tray.as_ref().map(|t| t.items()).unwrap_or_default();
         let data = render::BarData {
             windows: &windows,
             clipboard: self.clipboard.as_deref(),
+            tray: &tray_items,
         };
         // La barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el
         // resto pinta su barra normal.
@@ -541,6 +558,11 @@ impl LayerApp {
             Msg::ShumaToggle => self.set_shuma_open(!self.shuma.open),
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
             Msg::ActivateWindow(id) => self.activar_ventana(id),
+            Msg::TrayActivate(key) => {
+                if let Some(t) = &self.tray {
+                    t.activate(key);
+                }
+            }
             Msg::Quit => self.exit = true,
             _ => {}
         }

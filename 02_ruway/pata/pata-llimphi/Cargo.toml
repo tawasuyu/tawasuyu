@@ -28,5 +28,10 @@ wayland-client = "0.31"
 # Lista de ventanas (widget `window_list`): wlr-foreign-toplevel-management, el
 # protocolo que usan waybar/eww para enumerar y activar toplevels en wlroots.
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# Bandeja del sistema (widget `tray`): StatusNotifierItem sobre D-Bus. pata corre
+# como watcher+host en un hilo aparte con zbus async sobre un runtime tokio
+# current-thread (el workspace fija zbus con la feature `tokio`, no la blocking).
+zbus = { workspace = true }
+tokio = { workspace = true }
 raw-window-handle = { workspace = true }
 pollster = { workspace = true }

@@ -210,6 +210,23 @@ borde; shuma provee el contenido.
     Una prop `exec` lo vuelve clickeable → selector de historial (en el asset:
     `cliphist list | wofi --dmenu | cliphist decode | wl-copy`). Sólo en
     layer-shell (el path winit pasa `BarData::default()`).
-  - Falta: el último placeholder, `tray` (StatusNotifierItem sobre D-Bus, Fase 6).
+  - **`tray`** ✅ — la bandeja del sistema (StatusNotifierItem). pata corre como
+    **watcher + host**: posee `org.kde.StatusNotifierWatcher` y atiende a las apps
+    que registran su item. Como el bucle sctk es bloqueante y zbus es async, el
+    tray vive en su **propio hilo** con un runtime tokio current-thread (el
+    workspace fija zbus con la feature `tokio`, no la blocking — patrón de
+    `mirada-portal`); comparte el snapshot de items por `Arc<Mutex>` y recibe los
+    clicks por un canal tokio (como el exec del Quake). El render pinta un chip por
+    item (resaltando `NeedsAttention`); el click manda `Msg::TrayActivate(key)` →
+    `Activate(0,0)` por D-Bus. Interceptado por el frontend (`SlotWidget::Tray`),
+    los items viajan en `render::BarData`. MVP textual: **no** decodifica íconos
+    (pixmap/tema) ni emite señales del watcher ni hace fallback si ya hay un
+    watcher (si el nombre está tomado, queda vacío y loguea). `split_service`
+    normaliza el registro (ruta+remitente / nombre de bus / combinado), testeada.
+    El tray sólo arranca si la config declara un widget `tray`. Ver `02_ruway/pata/
+    pata-llimphi/src/tray.rs`.
+  - **Fase 6 cerrada**: todos los widgets previstos (§4) existen. Pendiente de
+    pulido futuro: íconos reales en el tray, `window_list`/`clipboard`/`tray` bajo
+    el path winit (compositor mirada) cuando mirada exponga su IPC.
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
