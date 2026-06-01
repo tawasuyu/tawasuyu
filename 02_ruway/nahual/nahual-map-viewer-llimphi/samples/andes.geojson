@@ -1,0 +1,60 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Lago Titicaca" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-69.60, -15.40],
+            [-69.00, -15.50],
+            [-68.70, -16.00],
+            [-69.00, -16.40],
+            [-69.50, -16.20],
+            [-69.80, -15.80],
+            [-69.60, -15.40]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Ruta La Paz–Cusco–Lima" },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-68.15, -16.50],
+          [-71.97, -13.53],
+          [-77.04, -12.05]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "La Paz" },
+      "geometry": { "type": "Point", "coordinates": [-68.15, -16.50] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Lima" },
+      "geometry": { "type": "Point", "coordinates": [-77.04, -12.05] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Cusco" },
+      "geometry": { "type": "Point", "coordinates": [-71.97, -13.53] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Santiago" },
+      "geometry": { "type": "Point", "coordinates": [-70.65, -33.45] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Buenos Aires" },
+      "geometry": { "type": "Point", "coordinates": [-58.38, -34.60] }
+    }
+  ]
+}
