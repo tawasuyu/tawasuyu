@@ -4121,6 +4121,13 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 .iter()
                 .map(|c| render_link_subtree(c, &target, link_color, new_tab, ctx))
                 .collect()
+        } else if is_mixed_inline_context(b) {
+            // Contexto inline con más de un hijo (texto + elementos inline
+            // como <b>/<a>/<code>): partimos cada run de texto en palabras
+            // para que TODO fluya palabra-a-palabra junto a los elementos.
+            // Sin esto, el run de texto se mide como un bloque multi-línea y
+            // el elemento inline queda colgado después, no en la misma línea.
+            render_inline_flow(&b.children, ctx)
         } else {
             render_children_z_ordered(&b.children, ctx)
         };
@@ -4158,6 +4165,68 @@ fn render_children_z_ordered(children: &[BoxNode], ctx: &mut RenderCtx<'_>) -> V
         .chain(out_of_flow_idx)
         .map(|i| render_box(&children[i], ctx))
         .collect()
+}
+
+/// ¿`b` es un contexto inline "mixto"? — todos sus hijos son inline y hay
+/// **más de uno** (p. ej. texto + `<b>` + texto). Ese es el caso donde el
+/// modelo "un run = un item flex" se rompe visualmente y conviene partir el
+/// texto en palabras. Un párrafo de un solo run de texto (`children.len()==1`)
+/// NO entra acá: se mide entero (envuelve a N líneas) y conserva el
+/// find-in-page por hoja.
+fn is_mixed_inline_context(b: &BoxNode) -> bool {
+    b.children.len() > 1 && has_inline_children(b)
+}
+
+/// Renderiza un contexto inline mixto partiendo cada hoja de texto en
+/// palabras: cada palabra es un item flex propio, así el `flex-wrap` del
+/// bloque rompe líneas en los límites de palabra y los elementos inline
+/// (`<b>`, `<code>`, `<a>`…) fluyen en la misma línea que el texto vecino.
+/// Las hojas no-texto (elementos inline) se renderizan como una unidad.
+fn render_inline_flow(children: &[BoxNode], ctx: &mut RenderCtx<'_>) -> Vec<View<Msg>> {
+    let mut out: Vec<View<Msg>> = Vec::new();
+    for c in children {
+        match &c.text {
+            // Hoja de texto: una vista por palabra (clon del nodo con el
+            // texto reemplazado), reusando el render normal — hereda
+            // color/peso/tamaño/familia/line-height sin duplicar lógica.
+            Some(text) if c.children.is_empty() => {
+                for word in split_words(text) {
+                    let mut wn = c.clone();
+                    wn.text = Some(word);
+                    out.push(render_box(&wn, ctx));
+                }
+            }
+            _ => out.push(render_box(c, ctx)),
+        }
+    }
+    out
+}
+
+/// Parte un run de texto (ya whitespace-colapsado a espacios simples) en
+/// tokens "palabra " con el espacio separador pegado, de modo que cada token
+/// mida su propio ancho (incluido el espacio) y los words se separen al
+/// fluir. Preserva un espacio inicial (separa del elemento inline anterior) y
+/// recorta el espacio final si el run no terminaba en espacio.
+fn split_words(s: &str) -> Vec<String> {
+    let leading = s.starts_with(' ');
+    let mut out: Vec<String> = Vec::new();
+    for (i, w) in s.split(' ').filter(|w| !w.is_empty()).enumerate() {
+        let mut tok = String::new();
+        if i == 0 && leading {
+            tok.push(' ');
+        }
+        tok.push_str(w);
+        tok.push(' ');
+        out.push(tok);
+    }
+    if !s.ends_with(' ') {
+        if let Some(last) = out.last_mut() {
+            if last.ends_with(' ') {
+                last.pop();
+            }
+        }
+    }
+    out
 }
 
 /// Recorre `b` y avanza `*counter` por cada `<details>` descendiente.
@@ -5554,6 +5623,50 @@ mod tests {
     fn parse(html: &str) -> BoxTree {
         let engine = Engine::new();
         engine.load_html("about:test", html).box_tree
+    }
+
+    #[test]
+    fn split_words_tokeniza_con_espacios() {
+        // Cada palabra lleva su espacio separador; el último sin espacio
+        // porque el run no termina en espacio.
+        assert_eq!(split_words("foo bar baz"), vec!["foo ", "bar ", "baz"]);
+        // Espacio inicial preservado (separa del elemento inline anterior).
+        assert_eq!(split_words(" baz"), vec![" baz"]);
+        // Espacio final preservado (separa del siguiente elemento inline).
+        assert_eq!(split_words("foo "), vec!["foo "]);
+        // Una sola palabra entre dos elementos: conserva ambos lados.
+        assert_eq!(split_words(" x "), vec![" x "]);
+        // Vacío → sin tokens.
+        assert!(split_words("").is_empty());
+    }
+
+    #[test]
+    fn contexto_inline_mixto_se_detecta() {
+        // <p>foo <b>bar</b> baz</p> → bloque con hijos inline múltiples.
+        let bt = parse("<p>foo <b>bar</b> baz</p>");
+        // Buscamos el <p> (block con inline children) en el árbol.
+        let mut hallado = false;
+        bt.walk(|b| {
+            if b.children.len() > 1 && has_inline_children(b) {
+                hallado = true;
+                assert!(is_mixed_inline_context(b));
+            }
+        });
+        assert!(hallado, "debería existir un contexto inline mixto en el <p>");
+    }
+
+    #[test]
+    fn parrafo_de_un_solo_run_no_es_mixto() {
+        // <p>solo texto</p> → un solo hijo de texto → NO mixto (se mide entero).
+        let bt = parse("<p>solo texto sin elementos inline</p>");
+        bt.walk(|b| {
+            if b.text.is_none() && has_inline_children(b) {
+                assert!(
+                    !is_mixed_inline_context(b),
+                    "un párrafo de un solo run no debe partirse en palabras"
+                );
+            }
+        });
     }
 
     #[test]
