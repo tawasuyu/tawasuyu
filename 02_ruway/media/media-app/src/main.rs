@@ -939,15 +939,75 @@ impl Seekable for Playlist {
 /// el sink consume samples) del track en curso, o `None` cuando no hay
 /// playlist (tono A4 / testcard). Es el reloj **maestro** de M1: el video
 /// se acomoda a él; sin él, el video cae al reloj de pared.
+/// Foto no-bloqueante del estado de reproducción para la vista.
+#[derive(Clone)]
+struct PlaybackSnapshot {
+    /// `false` cuando no hay playlist (tono A4 / testcard).
+    present: bool,
+    position: Duration,
+    duration: Option<Duration>,
+    idx: usize,
+    len: usize,
+    speed: f32,
+    repeat_label: &'static str,
+    shuffle_on: bool,
+}
+
+impl Default for PlaybackSnapshot {
+    fn default() -> Self {
+        PlaybackSnapshot {
+            present: false,
+            position: Duration::ZERO,
+            duration: None,
+            idx: 0,
+            len: 0,
+            speed: 1.0,
+            repeat_label: "rep-",
+            shuffle_on: false,
+        }
+    }
+}
+
+/// Snapshot del estado de reproducción SIN bloquear el hilo de UI. Usa
+/// `try_lock`: el hilo de audio (cpal) puede tener tomado el lock del
+/// `Playlist` mientras hace el `read_exact` bloqueante del pipe de ffmpeg —
+/// si el UI lo esperara, dejaría de drenar el pipe de video → ffmpeg se traba
+/// → el audio no avanza → cpal no suelta el lock: deadlock ("avanza un
+/// segundo y se detiene, ni se deja cerrar"). Por eso TODA la vista lee de
+/// acá. Si el lock está ocupado, devuelve el último snapshot conocido (la UI
+/// muestra valores de hace un frame, no se congela).
+fn playback_snapshot() -> PlaybackSnapshot {
+    static CACHE: OnceLock<Mutex<PlaybackSnapshot>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(PlaybackSnapshot::default()));
+    let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
+        return PlaybackSnapshot::default();
+    };
+    match handle.try_lock() {
+        Some(pl) => {
+            let snap = PlaybackSnapshot {
+                present: true,
+                position: pl.position(),
+                duration: pl.duration(),
+                idx: pl.idx(),
+                len: pl.len(),
+                speed: pl.current_speed(),
+                repeat_label: pl.repeat_mode().label(),
+                shuffle_on: pl.shuffle_on(),
+            };
+            drop(pl);
+            // CACHE sólo lo toca el hilo de UI → este lock nunca contiende.
+            *cache.lock() = snap.clone();
+            snap
+        }
+        None => cache.lock().clone(),
+    }
+}
+
+/// Posición del reloj de audio para el sync A/V del paint. Deriva del
+/// snapshot no-bloqueante (ver [`playback_snapshot`]).
 fn current_audio_position() -> Option<Duration> {
-    // `try_lock`: NUNCA bloquear el hilo de UI acá. El hilo de audio (cpal)
-    // puede estar dentro de `fill()` con este mismo lock tomado mientras lee
-    // del pipe de ffmpeg (lectura bloqueante). Si bloqueáramos, el hilo de UI
-    // dejaría de drenar el pipe de video → ffmpeg quedaría trabado → el audio
-    // nunca avanzaría → cpal nunca soltaría el lock: deadlock. Si está ocupado,
-    // devolvemos None y este frame se rige por el reloj de pared.
-    let handle = playlist_slot().get()?.as_ref()?;
-    handle.try_lock().map(|g| g.position())
+    let s = playback_snapshot();
+    s.present.then_some(s.position)
 }
 
 /// Reinicia los contadores de sync A/V tras un seek o cambio de pista (los
@@ -1901,21 +1961,20 @@ impl App for MediaApp {
             &palette,
         )]);
 
-        let time_label = playlist_slot()
-            .get()
-            .and_then(|o| o.as_ref())
-            .map(|h| {
-                let s = h.lock();
-                let pos = s.position();
-                let dur = s.duration().unwrap_or(Duration::ZERO);
-                let track = if s.len() > 1 {
-                    format!(" · trk {}/{}", s.idx() + 1, s.len())
+        let time_label = {
+            let s = playback_snapshot();
+            if s.present {
+                let dur = s.duration.unwrap_or(Duration::ZERO);
+                let track = if s.len > 1 {
+                    format!(" · trk {}/{}", s.idx + 1, s.len)
                 } else {
                     String::new()
                 };
-                format!(" · {} / {}{}", fmt_secs(pos), fmt_secs(dur), track)
-            })
-            .unwrap_or_default();
+                format!(" · {} / {}{}", fmt_secs(s.position), fmt_secs(dur), track)
+            } else {
+                String::new()
+            }
+        };
         let footer = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -2140,11 +2199,7 @@ fn transport_tile() -> View<Msg> {
         Msg::Command(MediaCommand::TogglePause),
     );
 
-    let playlist_active = playlist_slot()
-        .get()
-        .and_then(|o| o.as_ref())
-        .map(|h| h.lock().len() > 1)
-        .unwrap_or(false);
+    let playlist_active = playback_snapshot().len > 1;
     let pl_bg = if playlist_active {
         Color::from_rgba8(55, 65, 80, 255)
     } else {
@@ -2383,11 +2438,7 @@ fn playlist_tile() -> View<Msg> {
     let bg = if seekable { bg_on } else { bg_off };
     let fg = if seekable { fg_on } else { fg_off };
 
-    let current_speed = playlist_slot()
-        .get()
-        .and_then(|o| o.as_ref())
-        .map(|h| h.lock().current_speed())
-        .unwrap_or(1.0);
+    let current_speed = playback_snapshot().speed;
     let speed_label = format!("{:.2}×", current_speed);
     let speed_btn = chip_button(
         &speed_label,
@@ -2396,14 +2447,10 @@ fn playlist_tile() -> View<Msg> {
         Msg::Command(MediaCommand::SpeedStep { dir: 1 }),
     );
 
-    let (repeat_label, shuffle_on) = playlist_slot()
-        .get()
-        .and_then(|o| o.as_ref())
-        .map(|h| {
-            let pl = h.lock();
-            (pl.repeat_mode().label(), pl.shuffle_on())
-        })
-        .unwrap_or(("rep-", false));
+    let (repeat_label, shuffle_on) = {
+        let s = playback_snapshot();
+        (s.repeat_label, s.shuffle_on)
+    };
     let loop_btn = chip_button(repeat_label, bg, fg, Msg::Command(MediaCommand::CycleRepeat));
     let shuf_bg = if shuffle_on {
         Color::from_rgba8(60, 110, 150, 255)
@@ -2481,11 +2528,7 @@ fn subtitle_strip<Msg: 'static>() -> View<Msg> {
             ..Default::default()
         });
     };
-    let position = playlist_slot()
-        .get()
-        .and_then(|o| o.as_ref())
-        .map(|h| h.lock().position())
-        .unwrap_or(Duration::ZERO);
+    let position = playback_snapshot().position;
     // S4: delay de subtítulo. Positivo retrasa = al instante `t` mostramos
     // el cue que normalmente caería en `t - delay`. Clamp a >= 0.
     let q = position.as_millis() as i64 - SUB_DELAY_MS.load(Ordering::Relaxed);
@@ -2519,19 +2562,15 @@ fn subtitle_strip<Msg: 'static>() -> View<Msg> {
 /// no sabe la duración, sólo la fracción. Sin playlist (tono A4) queda en
 /// cero. Se redibuja cada Tick, así el playhead avanza solo.
 fn timeline_strip() -> View<Msg> {
-    let frac = playlist_slot()
-        .get()
-        .and_then(|o| o.as_ref())
-        .map(|h| {
-            let s = h.lock();
-            let dur = s.duration().unwrap_or(Duration::ZERO).as_secs_f64();
-            if dur <= 0.0 {
-                0.0
-            } else {
-                (s.position().as_secs_f64() / dur).clamp(0.0, 1.0) as f32
-            }
-        })
-        .unwrap_or(0.0);
+    let frac = {
+        let s = playback_snapshot();
+        let dur = s.duration.unwrap_or(Duration::ZERO).as_secs_f64();
+        if dur <= 0.0 {
+            0.0
+        } else {
+            (s.position.as_secs_f64() / dur).clamp(0.0, 1.0) as f32
+        }
+    };
     let palette = TimelinePalette::from_theme(&llimphi_theme::Theme::dark());
     timeline_view(frac, &palette, |fraction| {
         Some(Msg::Command(MediaCommand::SeekTo { fraction }))
