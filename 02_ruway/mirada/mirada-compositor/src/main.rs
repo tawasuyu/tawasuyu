@@ -645,6 +645,11 @@ impl CompositorHandler for App {
                 map.arrange();
                 drop(map);
                 self.recompute_reservations();
+                // Diagnóstico: ¿el layer surface ya trae un buffer pintado?
+                // `surface_size().is_some()` ⇒ hay buffer importado.
+                let buf = with_renderer_surface_state(surface, |s| s.surface_size())
+                    .flatten();
+                println!("mirada-compositor · layer commit: buffer={buf:?}");
             }
         }
     }
