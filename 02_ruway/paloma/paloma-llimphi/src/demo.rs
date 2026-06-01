@@ -3,7 +3,7 @@
 //! cuando no hay cuenta/credenciales configuradas — una sola fuente de verdad
 //! para los datos de demostración.
 
-use paloma_core::{Address, Flags, Message, MessageId, MockBackend};
+use paloma_core::{Address, Flags, Message, MessageId, MockBackend, SignatureStatus};
 
 /// Un timestamp base (2026-05-25 12:00 UTC) + offset en horas, para fechar los
 /// mensajes del demo sin arrastrar un crate de tiempo.
@@ -35,6 +35,7 @@ fn msg(
         body_text: body.into(),
         body_html: None,
         flags: Flags { seen, ..Default::default() },
+        signature: SignatureStatus::Unsigned,
         mailbox: "INBOX".into(),
     }
 }
@@ -46,7 +47,7 @@ pub fn backend() -> MockBackend {
     let bruno = Address::named("Bruno Díaz", "bruno@empresa.com");
     let lista = Address::named("Lista Rust", "anuncios@rust-es.org");
 
-    let inbox = vec![
+    let mut inbox = vec![
         msg(
             "<p1@ejemplo.com>",
             ana.clone(),
@@ -113,6 +114,16 @@ pub fn backend() -> MockBackend {
         ),
     ];
 
+    // Demostración del badge de firma (lo poblará `agora` en producción):
+    // la última respuesta de Ana viene firmada y verificada; la factura trae
+    // una firma que no valida.
+    if let Some(m) = inbox.iter_mut().find(|m| m.id.0 == "<p3@ejemplo.com>") {
+        m.signature = SignatureStatus::Verified;
+    }
+    if let Some(m) = inbox.iter_mut().find(|m| m.id.0 == "<f1@empresa.com>") {
+        m.signature = SignatureStatus::Invalid;
+    }
+
     MockBackend::new(inbox)
 }
 
@@ -132,6 +143,7 @@ fn html_only(id: &str, from: Address, subject: &str, html: &str, hours: i64) -> 
         body_text: String::new(),
         body_html: Some(html.into()),
         flags: Flags { seen: false, ..Default::default() },
+        signature: SignatureStatus::Unsigned,
         mailbox: "INBOX".into(),
     }
 }

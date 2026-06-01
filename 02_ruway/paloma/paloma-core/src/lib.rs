@@ -35,6 +35,6 @@ pub use address::{parse_address_list, Address};
 pub use backend::{MailBackend, MockBackend, OutgoingMessage};
 pub use error::MailError;
 pub use mailbox::{Mailbox, MailboxRole};
-pub use message::{Flags, Message, MessageId};
+pub use message::{Flags, Message, MessageId, SignatureStatus};
 pub use store::MailStore;
 pub use thread::{build_threads, Thread};

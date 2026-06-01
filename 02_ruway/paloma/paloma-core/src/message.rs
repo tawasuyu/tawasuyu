@@ -32,6 +32,21 @@ pub struct Flags {
     pub deleted: bool,
 }
 
+/// Estado de la firma criptográfica de un mensaje (Ed25519, vía la identidad de
+/// `agora`). `Unsigned` es lo normal hoy; la **verificación** del entrante la
+/// completa la integración con `agora` (ver LEEME · Pendiente) — este enum es el
+/// dato que esa capa va a poblar y que la UI ya sabe pintar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignatureStatus {
+    /// Sin firma (o sin verificar): el caso por defecto.
+    #[default]
+    Unsigned,
+    /// Firma presente y válida para el remitente declarado.
+    Verified,
+    /// Firma presente pero que no valida (manipulado o clave equivocada).
+    Invalid,
+}
+
 /// Un mensaje ya parseado: headers relevantes + cuerpo + flags + el buzón en
 /// el que vive. El cuerpo se guarda en texto plano (siempre) y, si el mensaje
 /// era `multipart/alternative`, también el HTML — el frontend elige cuál
@@ -54,6 +69,10 @@ pub struct Message {
     pub body_text: String,
     pub body_html: Option<String>,
     pub flags: Flags,
+    /// Estado de la firma Ed25519 del mensaje. `#[serde(default)]` para que las
+    /// cachés viejas (sin el campo) sigan decodificando como `Unsigned`.
+    #[serde(default)]
+    pub signature: SignatureStatus,
     /// Nombre del buzón donde reside (clave en [`crate::MailStore`]).
     pub mailbox: String,
 }
@@ -193,6 +212,7 @@ mod tests {
             body_text: body.into(),
             body_html: None,
             flags: Flags::default(),
+            signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
         }
     }

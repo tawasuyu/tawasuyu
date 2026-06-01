@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use crate::address::Address;
 use crate::error::MailError;
 use crate::mailbox::Mailbox;
-use crate::message::{Flags, Message, MessageId};
+use crate::message::{Flags, Message, MessageId, SignatureStatus};
 
 /// Un mensaje a **enviar**: lo que el frontend de redacción arma y el
 /// transporte SMTP serializa a RFC 5322. Separado de [`Message`] porque al
@@ -154,6 +154,7 @@ impl MailBackend for MockBackend {
             body_text: msg.body_text.clone(),
             body_html: msg.body_html.clone(),
             flags: Flags { seen: true, ..Default::default() },
+            signature: SignatureStatus::Unsigned,
             mailbox: "Sent".to_string(),
         };
         self.messages.lock().unwrap().entry("Sent".to_string()).or_default().push(stored);
@@ -192,6 +193,7 @@ mod tests {
             body_text: "cuerpo".into(),
             body_html: None,
             flags: Flags::default(),
+            signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
         }
     }

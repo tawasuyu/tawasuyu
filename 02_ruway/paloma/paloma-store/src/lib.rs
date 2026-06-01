@@ -131,7 +131,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paloma_core::{Address, Flags, MessageId};
+    use paloma_core::{Address, Flags, MessageId, SignatureStatus};
 
     fn msg(id: &str) -> Message {
         Message {
@@ -147,6 +147,7 @@ mod tests {
             body_text: "cuerpo".into(),
             body_html: None,
             flags: Flags { seen: true, ..Default::default() },
+            signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
         }
     }

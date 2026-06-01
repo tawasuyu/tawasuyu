@@ -137,7 +137,7 @@ mod tests {
     use super::*;
     use crate::address::Address;
     use crate::backend::MockBackend;
-    use crate::message::MessageId;
+    use crate::message::{MessageId, SignatureStatus};
 
     fn msg(id: &str, seen: bool, date: i64, irt: Option<&str>) -> Message {
         Message {
@@ -153,6 +153,7 @@ mod tests {
             body_text: String::new(),
             body_html: None,
             flags: Flags { seen, ..Default::default() },
+            signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
         }
     }

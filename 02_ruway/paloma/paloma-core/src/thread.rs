@@ -122,7 +122,7 @@ impl UnionFind {
 mod tests {
     use super::*;
     use crate::address::Address;
-    use crate::message::{Flags, Message, MessageId};
+    use crate::message::{Flags, Message, MessageId, SignatureStatus};
 
     fn m(id: &str, subject: &str, date: i64, irt: Option<&str>, refs: &[&str]) -> Message {
         Message {
@@ -138,6 +138,7 @@ mod tests {
             body_text: String::new(),
             body_html: None,
             flags: Flags::default(),
+            signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
         }
     }

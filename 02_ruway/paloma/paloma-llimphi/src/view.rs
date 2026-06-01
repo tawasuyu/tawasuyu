@@ -15,7 +15,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-use paloma_core::{MailStore, MailboxRole, Message};
+use paloma_core::{MailStore, MailboxRole, Message, SignatureStatus};
 
 use crate::{Compose, ComposeField, Model, Msg};
 
@@ -635,14 +635,20 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(fmt_date(m.date), 11.0, theme.fg_muted, Alignment::End);
+    let mut head_children = vec![from];
+    if let Some(badge) = signature_badge(theme, m.signature) {
+        head_children.push(badge);
+    }
+    head_children.push(date);
     let head = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: Dimension::auto(), height: length(20.0_f32) },
         flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
-    .children(vec![from, date]);
+    .children(head_children);
 
     let to = View::new(Style {
         size: Size { width: Dimension::auto(), height: length(16.0_f32) },
@@ -923,6 +929,29 @@ fn badge(theme: &Theme, n: usize) -> View<Msg> {
     .fill(theme.accent)
     .radius(9.0)
     .text(n.to_string(), 11.0, theme.bg_app)
+}
+
+/// Badge de estado de firma Ed25519: verde si verificada, rojo si inválida,
+/// nada si sin firma (para no meter ruido en el caso normal). El dato lo
+/// poblará la integración con `agora`; el render ya está listo.
+fn signature_badge(theme: &Theme, status: SignatureStatus) -> Option<View<Msg>> {
+    let (label, fg) = match status {
+        SignatureStatus::Unsigned => return None,
+        SignatureStatus::Verified => ("✓ firmado", Color::from_rgba8(90, 180, 120, 255)),
+        SignatureStatus::Invalid => ("⚠ firma inválida", theme.fg_destructive),
+    };
+    Some(
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(18.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            padding: pad_xy(8.0, 0.0),
+            ..Default::default()
+        })
+        .fill(theme.bg_panel_alt)
+        .radius(9.0)
+        .text(label, 10.5, fg),
+    )
 }
 
 /// Avatar circular con iniciales, coloreado de forma estable por el correo.

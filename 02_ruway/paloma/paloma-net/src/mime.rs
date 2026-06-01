@@ -8,7 +8,7 @@
 //! el único punto donde el formato ajeno toca la suite.
 
 use mail_parser::{Address as MpAddress, HeaderValue, MessageParser};
-use paloma_core::{Address, Flags, MailError, Message, MessageId};
+use paloma_core::{Address, Flags, MailError, Message, MessageId, SignatureStatus};
 
 /// Parsea un mensaje RFC 822 crudo al modelo nativo. `mailbox` y `flags`
 /// vienen del lado IMAP (no están en los bytes del mensaje).
@@ -54,6 +54,9 @@ pub fn parse_message(raw: &[u8], mailbox: &str, flags: Flags) -> Result<Message,
         body_text,
         body_html,
         flags,
+        // La verificación Ed25519 del entrante llega con la integración de
+        // `agora`; por ahora el puente no firma ni verifica.
+        signature: SignatureStatus::Unsigned,
         mailbox: mailbox.to_string(),
     })
 }

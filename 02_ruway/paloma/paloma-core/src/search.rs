@@ -55,7 +55,7 @@ pub fn score(message: &Message, terms: &[String]) -> Option<i32> {
 mod tests {
     use super::*;
     use crate::address::Address;
-    use crate::message::{Flags, MessageId};
+    use crate::message::{Flags, MessageId, SignatureStatus};
 
     fn m(subject: &str, from_name: &str, from_email: &str, body: &str) -> Message {
         Message {
@@ -71,6 +71,7 @@ mod tests {
             body_text: body.into(),
             body_html: None,
             flags: Flags::default(),
+            signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
         }
     }
