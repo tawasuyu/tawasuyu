@@ -45,6 +45,9 @@ use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use nakui_sheet::{csv_io, CellFormat, CellRange, CellRef, ExportMode, SheetValue, Workbook};
+// Motor de tabla dinámica (regla #2): `Agg`/`PivotState` y el cómputo viven
+// en el core; acá sólo se construyen, rotan y pintan.
+use nakui_sheet::pivot::{compute_pivot, pivot_col_label, Agg, PivotState};
 use std::sync::Arc;
 
 const VISIBLE_COLS: u32 = 12;
@@ -198,56 +201,9 @@ enum Dir {
     Right,
 }
 
-/// Función de agregación de una tabla dinámica.
-#[derive(Clone, Copy, PartialEq)]
-enum Agg {
-    Sum,
-    Count,
-    Avg,
-    Min,
-    Max,
-}
-
-impl Agg {
-    const ALL: [Agg; 5] = [Agg::Sum, Agg::Count, Agg::Avg, Agg::Min, Agg::Max];
-
-    fn label(self) -> &'static str {
-        match self {
-            Agg::Sum => "SUMA",
-            Agg::Count => "CONTAR",
-            Agg::Avg => "PROM",
-            Agg::Min => "MÍN",
-            Agg::Max => "MÁX",
-        }
-    }
-
-    /// Rota a la siguiente/anterior función (con wrap).
-    fn cycle(self, dir: i32) -> Agg {
-        let n = Self::ALL.len() as i32;
-        let idx = Self::ALL.iter().position(|a| *a == self).unwrap_or(0) as i32;
-        let next = ((idx + dir) % n + n) % n;
-        Self::ALL[next as usize]
-    }
-}
-
-/// Estado de la tabla dinámica (pivot) abierta sobre una selección.
-/// Agrupa las filas del rango por el valor de `group_col` y agrega
-/// `value_col` con `agg`. Vive como overlay encima de la grilla.
-#[derive(Clone)]
-struct PivotState {
-    /// Rango fuente sobre el que se computa (snapshot de la selección
-    /// al abrir el pivot — no sigue cambiando si después scrolleás).
-    source: CellRange,
-    /// Columna absoluta cuyos valores definen los grupos.
-    group_col: u32,
-    /// Columna absoluta que se agrega dentro de cada grupo.
-    value_col: u32,
-    /// Función de agregación activa.
-    agg: Agg,
-    /// Si la primera fila del rango son encabezados (se excluye de la
-    /// agregación y rotula las columnas group/value).
-    header_row: bool,
-}
+// `Agg` y `PivotState` (el motor de tabla dinámica) viven en
+// `nakui_sheet::pivot` (regla #2). Se importan vía `use nakui_sheet::pivot::*`
+// más abajo; el frontend sólo conserva el render del overlay (ver `pivot.rs`).
 
 struct Model {
     wb: Workbook,

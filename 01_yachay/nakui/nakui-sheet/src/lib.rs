@@ -15,6 +15,7 @@ pub mod cell;
 pub mod csv_io;
 pub mod formula;
 pub mod graph;
+pub mod pivot;
 pub mod sheet;
 pub mod sink;
 pub mod value;
