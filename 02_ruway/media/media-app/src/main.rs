@@ -86,7 +86,7 @@ use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
 use media_core::toolbar::BarItem;
-use media_core::transform::{TransformControl, TransformVideo};
+use media_core::transform::{Rotation, Transform, TransformControl, TransformVideo};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
 use media_core::sync::{AvSync, FramePlan};
@@ -229,6 +229,14 @@ enum ConfigEdit {
     // Video.
     ToggleColor,
     ColorReset,
+    BrightnessDelta(f32),
+    ContrastDelta(f32),
+    GammaDelta(f32),
+    SaturationDelta(f32),
+    HueDelta(f32),
+    RotateCw,
+    FlipH,
+    FlipV,
     // Playlist.
     ToggleResumeOnOpen,
     CycleRepeatDefault,
@@ -474,6 +482,12 @@ fn apply_media_config(cfg: &MediaConfig) {
         saturation: cfg.video.saturation,
         hue: cfg.video.hue,
     });
+    // Video (orientación) — V3.
+    transform().set_transform(Transform {
+        rotation: Rotation::from_degrees(cfg.video.rotation),
+        flip_h: cfg.video.flip_h,
+        flip_v: cfg.video.flip_v,
+    });
 }
 
 /// Aplica una [`ConfigEdit`] sobre la config (sin sanear — el caller lo
@@ -496,6 +510,14 @@ fn apply_config_edit(cfg: &mut MediaConfig, edit: ConfigEdit) {
             cfg.video.saturation = 1.0;
             cfg.video.hue = 0.0;
         }
+        ConfigEdit::BrightnessDelta(d) => cfg.video.brightness += d,
+        ConfigEdit::ContrastDelta(d) => cfg.video.contrast += d,
+        ConfigEdit::GammaDelta(d) => cfg.video.gamma += d,
+        ConfigEdit::SaturationDelta(d) => cfg.video.saturation += d,
+        ConfigEdit::HueDelta(d) => cfg.video.hue += d,
+        ConfigEdit::RotateCw => cfg.video.rotation = (cfg.video.rotation + 90) % 360,
+        ConfigEdit::FlipH => cfg.video.flip_h = !cfg.video.flip_h,
+        ConfigEdit::FlipV => cfg.video.flip_v = !cfg.video.flip_v,
         ConfigEdit::ToggleResumeOnOpen => {
             cfg.playlist.resume_on_open = !cfg.playlist.resume_on_open
         }
@@ -507,6 +529,17 @@ fn apply_config_edit(cfg: &mut MediaConfig, edit: ConfigEdit) {
         ConfigEdit::SubDelayDelta(d) => cfg.subtitles.delay_ms += d,
         ConfigEdit::SubFontDelta(d) => cfg.subtitles.font_scale += d,
         ConfigEdit::CrossfadeDelta(d) => cfg.behavior.crossfade_secs += d,
+    }
+}
+
+/// Mapea el modo de repetición de la config (`media-core`) al de la cola
+/// viva de `media-app`.
+fn repeat_mode_from(r: media_core::playlist::Repeat) -> RepeatMode {
+    use media_core::playlist::Repeat;
+    match r {
+        Repeat::Off => RepeatMode::Off,
+        Repeat::One => RepeatMode::One,
+        Repeat::All => RepeatMode::All,
     }
 }
 
@@ -1016,6 +1049,13 @@ impl Playlist {
         // así no hay glitch al reiniciar el sample 0.
         let want_loop = matches!(self.repeat, RepeatMode::One);
         self.current.set_loop(want_loop);
+    }
+
+    /// Fija el modo de repetición absoluto (para aplicar el default de la
+    /// config al arrancar), con el mismo efecto de loop que `cycle_repeat`.
+    fn set_repeat(&mut self, mode: RepeatMode) {
+        self.repeat = mode;
+        self.current.set_loop(matches!(self.repeat, RepeatMode::One));
     }
 
     fn toggle_shuffle(&mut self) {
@@ -1905,8 +1945,17 @@ impl App for MediaApp {
         let (palette_commands, palette_cmds) = build_command_catalog(&settings());
         let config = load_media_config();
         // Empuja las prefs persistidas a los handles vivos antes del primer
-        // frame (volumen/EQ/color/normalización arrancan como el usuario dejó).
+        // frame (volumen/EQ/color/normalización/orientación arrancan como el
+        // usuario dejó).
         apply_media_config(&config);
+        // Defaults de la cola (repeat/shuffle) sobre el Playlist vivo.
+        if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+            let mut pl = h.lock();
+            pl.set_repeat(repeat_mode_from(config.playlist.repeat));
+            if config.playlist.shuffle && !pl.shuffle_on() {
+                pl.toggle_shuffle();
+            }
+        }
         Model {
             frames: 0,
             started_at: Instant::now(),
@@ -2396,7 +2445,7 @@ fn settings_row(label: &str, value: &str, controls: Vec<View<Msg>>) -> View<Msg>
     let lab = View::new(Style {
         size: Size {
             width: length(148.0_f32),
-            height: length(40.0_f32),
+            height: length(38.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::FlexStart),
@@ -2406,7 +2455,7 @@ fn settings_row(label: &str, value: &str, controls: Vec<View<Msg>>) -> View<Msg>
     let val = View::new(Style {
         size: Size {
             width: length(60.0_f32),
-            height: length(40.0_f32),
+            height: length(38.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
@@ -2419,7 +2468,7 @@ fn settings_row(label: &str, value: &str, controls: Vec<View<Msg>>) -> View<Msg>
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(44.0_f32),
+            height: length(42.0_f32),
         },
         gap: Size {
             width: length(6.0_f32),
@@ -2436,7 +2485,7 @@ fn settings_header(title: &str) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(28.0_f32),
+            height: length(26.0_f32),
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
@@ -2527,13 +2576,80 @@ fn tab_audio(c: &MediaConfig) -> Vec<View<Msg>> {
     ]
 }
 
-/// Contenido de la pestaña Video.
+/// Una columna (mitad de ancho) que apila filas/cabeceras.
+fn half_column(children: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(0.5_f32),
+            height: length(380.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(children)
+}
+
+/// Pone dos columnas lado a lado.
+fn two_columns(left: Vec<View<Msg>>, right: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(384.0_f32),
+        },
+        gap: Size {
+            width: length(18.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![half_column(left), half_column(right)])
+}
+
+/// Contenido de la pestaña Video — dos columnas: color | orientación.
 fn tab_video(c: &MediaConfig) -> Vec<View<Msg>> {
-    vec![
-        settings_header("Video"),
-        settings_row("Ajuste de color", "", vec![cfg_toggle(c.video.color_enabled, ConfigEdit::ToggleColor)]),
-        settings_row("", "", vec![cfg_chip("reset color", ConfigEdit::ColorReset)]),
-    ]
+    let v = &c.video;
+    let color = vec![
+        settings_header("Color"),
+        settings_row("Activar", "", vec![cfg_toggle(v.color_enabled, ConfigEdit::ToggleColor)]),
+        settings_row(
+            "Brillo",
+            &format!("{:+.2}", v.brightness),
+            vec![cfg_chip("−", ConfigEdit::BrightnessDelta(-0.05)), cfg_chip("+", ConfigEdit::BrightnessDelta(0.05))],
+        ),
+        settings_row(
+            "Contraste",
+            &format!("{:.2}", v.contrast),
+            vec![cfg_chip("−", ConfigEdit::ContrastDelta(-0.05)), cfg_chip("+", ConfigEdit::ContrastDelta(0.05))],
+        ),
+        settings_row(
+            "Gamma",
+            &format!("{:.2}", v.gamma),
+            vec![cfg_chip("−", ConfigEdit::GammaDelta(-0.05)), cfg_chip("+", ConfigEdit::GammaDelta(0.05))],
+        ),
+        settings_row(
+            "Saturación",
+            &format!("{:.2}", v.saturation),
+            vec![cfg_chip("−", ConfigEdit::SaturationDelta(-0.05)), cfg_chip("+", ConfigEdit::SaturationDelta(0.05))],
+        ),
+        settings_row(
+            "Matiz",
+            &format!("{:.0}°", v.hue),
+            vec![cfg_chip("−", ConfigEdit::HueDelta(-10.0)), cfg_chip("+", ConfigEdit::HueDelta(10.0))],
+        ),
+        settings_row("", "", vec![cfg_chip("reset", ConfigEdit::ColorReset)]),
+    ];
+    let orient = vec![
+        settings_header("Orientación"),
+        settings_row(
+            "Rotación",
+            &format!("{}°", v.rotation),
+            vec![cfg_chip("rotar 90°", ConfigEdit::RotateCw)],
+        ),
+        settings_row("Espejo H", "", vec![cfg_toggle(v.flip_h, ConfigEdit::FlipH)]),
+        settings_row("Espejo V", "", vec![cfg_toggle(v.flip_v, ConfigEdit::FlipV)]),
+    ];
+    vec![two_columns(color, orient)]
 }
 
 /// Contenido de la pestaña Reproducción (playlist + subtítulos + comportamiento).

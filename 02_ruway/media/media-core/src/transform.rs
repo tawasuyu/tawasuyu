@@ -56,6 +56,27 @@ impl Rotation {
         }
     }
 
+    /// Grados horarios (0/90/180/270).
+    pub fn degrees(self) -> u16 {
+        match self {
+            Rotation::None => 0,
+            Rotation::Cw90 => 90,
+            Rotation::Half => 180,
+            Rotation::Cw270 => 270,
+        }
+    }
+
+    /// Construye desde grados, redondeando al múltiplo de 90 más cercano
+    /// (con wrap). Para reconstruir desde una config persistida.
+    pub fn from_degrees(deg: u16) -> Rotation {
+        match (((deg as u32) + 45) / 90) % 4 {
+            1 => Rotation::Cw90,
+            2 => Rotation::Half,
+            3 => Rotation::Cw270,
+            _ => Rotation::None,
+        }
+    }
+
     fn swaps_dims(self) -> bool {
         matches!(self, Rotation::Cw90 | Rotation::Cw270)
     }
@@ -201,6 +222,13 @@ impl TransformControl {
     /// Vuelve a la orientación original (sin rotar ni espejar).
     pub fn reset(&self) {
         self.lock().transform = Transform::default();
+        self.bump();
+    }
+
+    /// Fija la orientación absoluta (para aplicar una config persistida de
+    /// forma determinista, sin depender del estado previo).
+    pub fn set_transform(&self, t: Transform) {
+        self.lock().transform = t;
         self.bump();
     }
 }
@@ -390,5 +418,31 @@ mod tests {
         // Reset vuelve a la identidad.
         ctrl.reset();
         assert_eq!(vid.tick(Duration::ZERO, &mut buf), Some((2, 1)));
+    }
+
+    #[test]
+    fn rotation_degrees_roundtrip() {
+        for r in [Rotation::None, Rotation::Cw90, Rotation::Half, Rotation::Cw270] {
+            assert_eq!(Rotation::from_degrees(r.degrees()), r);
+        }
+        // Redondeo al múltiplo de 90 más cercano, con wrap.
+        assert_eq!(Rotation::from_degrees(44), Rotation::None);
+        assert_eq!(Rotation::from_degrees(46), Rotation::Cw90);
+        assert_eq!(Rotation::from_degrees(360), Rotation::None);
+    }
+
+    #[test]
+    fn set_transform_es_absoluto() {
+        let ctrl = TransformControl::default();
+        let t = Transform {
+            rotation: Rotation::Half,
+            flip_h: true,
+            flip_v: false,
+        };
+        ctrl.set_transform(t);
+        assert_eq!(ctrl.transform(), t);
+        // Sobrescribe sin depender del estado previo.
+        ctrl.set_transform(Transform::default());
+        assert!(ctrl.transform().is_identity());
     }
 }
