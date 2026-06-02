@@ -47,8 +47,11 @@ Crates listed in [README.md](README.md).
   acumulativo Dijkstra-lite), BRDF 3D direccional (rim) para paredes, pisos/techos,
   sprites y arma; tinte per-spritenum por canal; tabla de tintes Doom 2 + pickups + keys.
 - **HUD/armas**: weapon psprite, muzzle flash (`ps_flash`) + berserk tint, overlays de
-  paleta del jugador (daño/pickup/radsuit/invuln), mouse-look cosmético por y-shear,
-  shading del arma por luz del sector.
+  paleta del jugador (daño/pickup/radsuit), **invulnerabilidad con inversión real de
+  color** (blend `Difference`, negativo fotográfico del colormap de Doom, no la vieja
+  aproximación blanca), shading del arma por luz del sector.
+- **Mouse-look**: pitch cosmético (y-shear) por PageUp/PageDown/Home **y por arrastre del
+  mouse**. Doom no tiene aim vertical real; esto mueve el horizonte.
 - **Audio (supay-audio, Fases 4.0–4.6)**: SFX desde el WAD, música MUS→synth con
   GENMIDI (FM por instrumento), espacialización equal-power + reverb por sector,
   crossfade de ambiente, oclusión pasa-bajos por linedef y por vano (puertas cerradas
@@ -62,8 +65,16 @@ Crates listed in [README.md](README.md).
   (Fase 3.13b, ver arriba), pero la *visibilidad* sigue resolviéndose por overdraw del
   painter's: no hay clipping por columna de segmentos sólidos como el R_RenderBSPNode
   original, así que se dibuja geometría que quedaría oculta. Funciona, pero malgasta fill.
-- **Sound vía takiy**: el audio vive hoy en `supay-audio`; integrarlo al bus `takiy`
-  cuando esté listo (`FEATURE_SOUND` del motor C sigue en 0).
+- **`FEATURE_SOUND` del motor C en 0**: el audio no sale del `doomgeneric` (C) sino de
+  `supay-audio` (Rust), que ya sintetiza SFX + música y **ya puentea `takiy`**
+  (`AudioEngine::play_takiy_score` renderiza un `takiy_core::Score` y lo encola como una
+  voz más del mixer). No hay integración pendiente con takiy — su síntesis FM/OPL propia
+  no se solapa con los osciladores básicos de `takiy-synth`. Lo único abierto es subir
+  `FEATURE_SOUND` si algún día se quiere el audio del motor C en vez del nativo (no es el
+  plan).
 - **Wawa**: `supay-core/scene/wad` compilan a WASM, pero el renderer sobre el HAL Wawa
-  aún no está cerrado.
+  aún no está cerrado (depende de que `llimphi-ui` exponga un `custom_pass` wgpu usable
+  fuera de Linux). Es un port `no_std` a otro target, no pulido pendiente.
+- **OPL2 cycle-accurate**: el synth de música es una aproximación FM 2-operadores, no un
+  OPL2 exacto (sin KSL/vibrato/tremolo). Opción futura: Nuked-OPL o soundfont GM.
 - Detalle fase a fase y deuda fina en [SDD.md](SDD.md).

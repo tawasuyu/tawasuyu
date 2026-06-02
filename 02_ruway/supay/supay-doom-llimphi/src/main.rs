@@ -19,6 +19,9 @@
 //! - **Tab** — mapa.
 //! - **Esc** — menú del juego (Doom abre su menú; segundo Esc cierra ventana).
 //! - **Y/N** — confirmaciones del menú.
+//! - **PageUp/PageDown/Home** — mirar arriba / abajo / resetear horizonte.
+//! - **Arrastrar con el mouse** — mouse-look vertical (mueve el horizonte;
+//!   Doom no tiene aim vertical real, es y-shear cosmético).
 //!
 //! ## Requiere
 //!
@@ -39,7 +42,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 
 use llimphi_theme::Theme;
 use llimphi_widget_context_menu::{
@@ -302,6 +305,11 @@ const VIGNETTE_STEPS: [f32; 3] = [0.0, 0.55, 0.9];
 const PITCH_MAX: f32 = std::f32::consts::FRAC_PI_3;
 /// Paso del pitch por tap de PageUp/PageDown (en radianes). ~6° por tap.
 const PITCH_STEP: f32 = 0.105;
+/// Sensibilidad del mouse-look por drag (radianes de pitch por pixel de
+/// desplazamiento vertical). Un arrastre de ~300 px cubre el rango ±60°.
+/// El clamp final vive en `Msg::PitchDelta`. Doom no tiene aim vertical
+/// real: esto mueve el horizonte (y-shear cosmético del renderer).
+const MOUSE_LOOK_SENS: f32 = 0.0035;
 
 #[derive(Clone)]
 enum Msg {
@@ -869,7 +877,19 @@ impl App for Supay {
                         .collect(),
                     ..RenderConfig::default()
                 },
-            )),
+            )
+            // Mouse-look vertical: arrastrar con el botón izquierdo mueve el
+            // horizonte (pitch cosmético). Arrastrar hacia arriba (dy<0)
+            // mira hacia arriba. Complementa PageUp/PageDown. Doom no usa
+            // el click izquierdo para disparar (fire = Ctrl/Enter), así que
+            // hacerlo draggable no roba ningún binding.
+            .draggable(|phase, _dx, dy| match phase {
+                DragPhase::Move => Some(Msg::PitchDelta {
+                    delta: -dy * MOUSE_LOOK_SENS,
+                    reset: false,
+                }),
+                _ => None,
+            })),
         };
         let footer = footer_bar(model);
         // Right-click sobre el View RAÍZ (origen 0,0) ⇒ las coords locales
