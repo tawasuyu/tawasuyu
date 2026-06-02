@@ -30,18 +30,28 @@
 
 **Pendiente de esta tanda de feedback** (en orden sugerido):
 1. ✅ **Multiventana en Llimphi** + **config en ventana OS real con tabs de
-   Llimphi + layout delimitado** (2026-06-02). Implementado como path ADITIVO
-   (la ventana primaria intacta → cero regresión; opt-in con defaults en el
-   trait `App`). `Handle::open_window/close_window`, `App::secondary_view/
-   secondary_title/on_secondary_close`, `Runtime.secondaries` que comparten
-   Hal/Renderer/modelo. media-app: F2 abre la ventana `CONFIG_WIN`,
-   `settings_content` la llena con `llimphi-widget-tabs`. **⚠ NO EJECUTADO**
-   (sin display): hay que **correrlo** y validar — apertura/render de la 2ª
-   ventana, ruteo de eventos (clicks en tabs, scroll, sliders, botón cerrar
-   del SO), e interacción con el bug de freeze. Riesgos no verificados:
-   crear una 2ª `WinitSurface` desde el mismo instance en Wayland; present_mode
-   de la secundaria.
-2. **Barras arriba/abajo del video** — hoy las barras van todas debajo del
+   Llimphi** (2026-06-02, **VERIFICADO funcionando**). Path ADITIVO (primaria
+   intacta; opt-in con defaults). `Handle::open_window/close_window`,
+   `App::secondary_view/secondary_title/on_secondary_close`,
+   `Runtime.secondaries` (comparten Hal/Renderer/modelo). **Gotcha resuelto**:
+   `request_redraw()` sobre una ventana secundaria NO dispara `RedrawRequested`
+   en Wayland → las secundarias se repintan **directo** (`render_secondary`)
+   ante sus PROPIOS eventos (no por tick, que colgaba por doble `acquire()`
+   FIFO). media-app: F2 = ventana `CONFIG_WIN` con `llimphi-widget-tabs`.
+2. ✅ **Lista de reproducción / cola** como ventana secundaria (2026-06-02).
+   Menú Ver > "Lista de reproducción" (`PLAYLIST_WIN`): lista las pistas,
+   resalta la actual, clic salta (`Playlist::jump_to`). Nombres cacheados en
+   `playlist_labels_slot`. **Falta**: scroll para colas largas (v1 sin scroll)
+   + reordenar arrastrando (adoptar `media-core::playlist`).
+3. **Barras arriba/abajo del video** — ✅ hecho (cada barra elige lado; chip
+   ↑/↓ en config > Barras).
+4. **Tercera barra** — el editor (config > Barras) ya tiene `+ agregar barra`;
+   verificar end-to-end al correr.
+5. **Waveform de pista completa tipo Audacity** — ÚLTIMO pendiente grande.
+   Escaneo de picos del audio (decodificar toda la pista) + caché + dibujo con
+   eje de tiempo y playhead. Núcleo de picos = función pura testeable; obtener
+   las muestras = por fuente (nativas: decode; ffmpeg: scan). Es el más pesado.
+6. (libre) **Barras arriba/abajo del video** — ya cubierto en (3).
    canvas. Agregar posición por barra (sobre/bajo el video) en
    `media-core::toolbar`/`layout` + respetarla en `toolbar_view`.
 4. **Tercera barra** — el editor de barras (config → Barras) ya tiene
