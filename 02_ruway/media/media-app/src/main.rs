@@ -2189,6 +2189,19 @@ impl App for MediaApp {
         "media · player"
     }
 
+    /// Título dinámico de la ventana: el medio en reproducción aparece en la
+    /// barra del SO (antes era un cartelón pintado encima del video). Cae al
+    /// nombre genérico cuando no hay medio cargado.
+    fn window_title(_model: &Self::Model) -> Option<String> {
+        let t = media_title_string();
+        let t = t.trim();
+        Some(if t.is_empty() {
+            "media · player".to_string()
+        } else {
+            format!("media — {t}")
+        })
+    }
+
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
         spawn_controles_watcher(handle);
@@ -2470,7 +2483,6 @@ impl App for MediaApp {
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
-        let cfg = config_slot().get().expect("config set");
         let secs = model.started_at.elapsed().as_secs_f32().max(0.001);
         let fps = model.frames as f32 / secs;
 
@@ -2479,22 +2491,10 @@ impl App for MediaApp {
         let menu = app_menu();
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
 
-        // --- Hero: canvas de video con título overlay arriba ---
-        let title_text = View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(36.0_f32),
-            },
-            justify_content: Some(JustifyContent::Center),
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text(
-            format!("media — {}", cfg.label),
-            22.0,
-            Color::from_rgba8(220, 230, 245, 255),
-        );
-
+        // --- Hero: canvas de video. El título del medio ya NO se pinta encima
+        // (iba como un cartelón de 36px): ahora vive en la barra de título de
+        // la ventana del SO vía `MediaApp::window_title`. Queda más limpio y el
+        // item `Title` de la barra de controles sigue mostrándolo si se quiere.
         let canvas = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -2647,7 +2647,7 @@ impl App for MediaApp {
             },
             ..Default::default()
         })
-        .children(vec![title_text, canvas, subs_strip, bars, visualizers, footer]);
+        .children(vec![canvas, subs_strip, bars, visualizers, footer]);
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -3750,27 +3750,33 @@ fn bar_item_view(item: BarItem) -> View<Msg> {
             Color::from_rgba8(180, 195, 215, 255),
         ),
         BarItem::Title => {
-            let md = media_metadata_slot().get();
-            // Título del tag si lo hay; si no, la etiqueta del archivo.
-            let base = md
-                .and_then(|m| m.title.clone())
-                .or_else(|| config_slot().get().map(|c| c.label.clone()))
-                .unwrap_or_default();
-            let mut label = match md.and_then(|m| m.artist.as_deref()) {
-                Some(artist) if !artist.is_empty() => format!("{base} — {artist}"),
-                _ => base,
-            };
-            // Capítulo actual (V7), si lo hay.
-            if let Some(ch) = chapters_slot().get() {
-                if let Some((_, c)) = ch.at(playback_snapshot().position) {
-                    if !c.title.is_empty() {
-                        label = format!("{label}  ·  ▸ {}", c.title);
-                    }
-                }
-            }
-            bar_label(label, 300.0, Color::from_rgba8(200, 212, 230, 255))
+            bar_label(media_title_string(), 300.0, Color::from_rgba8(200, 212, 230, 255))
         }
     }
+}
+
+/// Título del medio para mostrar: tag `title` (— `artist`) si lo hay, si no la
+/// etiqueta del archivo, más el capítulo actual (V7). Una sola fuente para el
+/// item `Title` de la barra y para el título dinámico de la ventana del SO
+/// ([`MediaApp::window_title`]).
+fn media_title_string() -> String {
+    let md = media_metadata_slot().get();
+    let base = md
+        .and_then(|m| m.title.clone())
+        .or_else(|| config_slot().get().map(|c| c.label.clone()))
+        .unwrap_or_default();
+    let mut label = match md.and_then(|m| m.artist.as_deref()) {
+        Some(artist) if !artist.is_empty() => format!("{base} — {artist}"),
+        _ => base,
+    };
+    if let Some(ch) = chapters_slot().get() {
+        if let Some((_, c)) = ch.at(playback_snapshot().position) {
+            if !c.title.is_empty() {
+                label = format!("{label}  ·  ▸ {}", c.title);
+            }
+        }
+    }
+    label
 }
 
 fn waveform_panel<Msg: 'static>() -> View<Msg> {

@@ -164,9 +164,19 @@ pub trait App: 'static {
         None
     }
 
-    /// Título de la ventana (sólo se lee al arrancar).
+    /// Título de la ventana (sólo se lee al arrancar). Es el título inicial;
+    /// para uno que cambie en runtime, ver [`App::window_title`].
     fn title() -> &'static str {
         "llimphi"
+    }
+
+    /// Título **dinámico** de la ventana, derivado del modelo. El runtime lo
+    /// consulta tras cada render y, si cambió, lo aplica con `Window::set_title`
+    /// — así el título de la barra del SO puede reflejar el estado (p. ej. el
+    /// medio que se reproduce). `None` (default) deja el título fijo de
+    /// [`App::title`]; una app que no lo implemente no paga nada.
+    fn window_title(_model: &Self::Model) -> Option<String> {
+        None
     }
 
     /// Identificador de aplicación. En Wayland se mapea al `app_id` del
@@ -433,6 +443,9 @@ struct RuntimeState<A: App> {
     /// única fuente de verdad: lo mueve con Tab/Shift+Tab y click-to-focus
     /// y lo notifica vía `App::on_focus`. `None` = nada enfocado.
     focused: Option<u64>,
+    /// Último título dinámico aplicado a la ventana (ver [`App::window_title`]).
+    /// Evita llamar `set_title` en cada frame cuando no cambió.
+    last_title: Option<String>,
 }
 
 struct RenderCache<Msg> {

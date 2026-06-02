@@ -55,6 +55,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             hovered: None,
             drag: None,
             focused: None,
+            last_title: None,
         });
         // Sincroniza el factor de escala inicial (el de la ventana recién
         // creada) ANTES del primer render: así una app que dependa del DPI
@@ -645,6 +646,15 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Título dinámico (App::window_title): si cambió respecto del
+                // último aplicado, se lo pasamos a winit. Barato: una
+                // comparación de String por frame, set_title sólo en el cambio.
+                if let Some(t) = A::window_title(state.model.as_ref().expect("model")) {
+                    if state.last_title.as_deref() != Some(t.as_str()) {
+                        state.window.set_title(&t);
+                        state.last_title = Some(t);
+                    }
+                }
                 // Posicioná la ventana de candidatos del IME junto al caret
                 // (sólo con IME activo y si la app reporta el área).
                 if A::ime_allowed() {
