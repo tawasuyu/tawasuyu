@@ -34,4 +34,4 @@ pub use keymap::{Keymap, KeymapError, KeymapWatch};
 pub use rules::{Rule, RuleOutcome, Rules};
 
 pub use mirada_layout::{LayoutMode, LayoutParams, Rect, WindowId, Workspace};
-pub use mirada_protocol::{BodyEvent, BrainCommand, OutputId, WindowPlacement};
+pub use mirada_protocol::{BodyEvent, BrainCommand, Decorations, OutputId, WindowPlacement};

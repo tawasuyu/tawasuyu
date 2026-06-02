@@ -138,6 +138,13 @@ impl Desktop {
         BrainCommand::GrabKeys(self.keymap.grab_list())
     }
 
+    /// El comando que fija la decoración de ventana (marco, …) en el
+    /// Cuerpo, según la config. La app lo envía al arrancar (junto a
+    /// [`grab_keys`](Desktop::grab_keys)) y tras recargar la config.
+    pub fn decorations(&self) -> BrainCommand {
+        BrainCommand::SetDecorations(self.config.decorations())
+    }
+
     /// Reemplaza el keymap en caliente. Devuelve el [`BrainCommand`] que
     /// el dueño debe enviar al Cuerpo para reajustar qué teclas intercepta.
     pub fn set_keymap(&mut self, keymap: Keymap) -> BrainCommand {

@@ -52,6 +52,32 @@ pub struct WindowPlacement {
     pub fullscreen: bool,
 }
 
+/// Parámetros de decoración de ventana que el Cerebro fija en el Cuerpo.
+/// Hoy cubre el marco (grosor + colores). Los colores son RGBA en
+/// `0..=255` — enteros para conservar `Eq` en [`BrainCommand`] y por ser
+/// más naturales de escribir en la config que floats en `0..1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Decorations {
+    /// Grosor del marco en píxeles; `0` = ventanas sin marco.
+    pub border_width: i32,
+    /// Color RGBA del marco de la ventana enfocada.
+    pub border_focus: [u8; 4],
+    /// Color RGBA del marco de las ventanas sin foco.
+    pub border_normal: [u8; 4],
+}
+
+impl Default for Decorations {
+    /// Los valores históricos del Cuerpo: marco de 2 px, azul al foco,
+    /// gris discreto sin él. Fuente única — la config parte de aquí.
+    fn default() -> Self {
+        Self {
+            border_width: 2,
+            border_focus: [92, 143, 235, 255],
+            border_normal: [56, 56, 69, 255],
+        }
+    }
+}
+
 /// Una orden del Cerebro al Cuerpo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BrainCommand {
@@ -67,6 +93,9 @@ pub enum BrainCommand {
     GrabKeys(Vec<String>),
     /// Cambia el cursor del puntero al nombre dado (tema XCursor).
     SetCursor(String),
+    /// Fija los parámetros de decoración de las ventanas (marco, …). El
+    /// Cerebro lo envía al arrancar y tras recargar la config.
+    SetDecorations(Decorations),
     /// Lanza un programa como proceso hijo del Cuerpo — hereda su
     /// entorno, `WAYLAND_DISPLAY` incluido, así el cliente se conecta
     /// aquí. La cadena se pasa a `sh -c`.

@@ -89,21 +89,22 @@ const CURSOR_COLOR: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 /// Lado mínimo de una ventana al redimensionarla con el ratón.
 const MIN_WINDOW: i32 = 120;
 
-/// Grosor del marco de una ventana, en píxeles.
-const BORDER_WIDTH: i32 = 2;
+/// Convierte un color RGBA en `0..=255` (como viaja por el protocolo y la
+/// config) al `[f32; 4]` normalizado que consume el renderer.
+fn rgba_f32(c: [u8; 4]) -> [f32; 4] {
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+        c[3] as f32 / 255.0,
+    ]
+}
 
-/// Color del marco de la ventana enfocada — un azul que resalta.
-const BORDER_FOCUS: [f32; 4] = [0.36, 0.56, 0.92, 1.0];
-
-/// Color del marco de las ventanas sin foco — gris discreto.
-const BORDER_NORMAL: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
-
-/// Los 4 rectángulos `(x, y, w, h)` del marco de una ventana cuyo
-/// contenido ocupa `(sx, sy, sw, sh)`. El marco va *hacia adentro* (pisa
-/// el borde de la superficie), así nunca se solapa con el de la ventana
-/// vecina: arriba, abajo, izquierda, derecha.
-fn border_rects(sx: i32, sy: i32, sw: i32, sh: i32) -> [(i32, i32, i32, i32); 4] {
-    let bw = BORDER_WIDTH;
+/// Los 4 rectángulos `(x, y, w, h)` del marco de grosor `bw` de una ventana
+/// cuyo contenido ocupa `(sx, sy, sw, sh)`. El marco va *hacia adentro*
+/// (pisa el borde de la superficie), así nunca se solapa con el de la
+/// ventana vecina: arriba, abajo, izquierda, derecha.
+fn border_rects(sx: i32, sy: i32, sw: i32, sh: i32, bw: i32) -> [(i32, i32, i32, i32); 4] {
     let side_h = (sh - 2 * bw).max(0);
     [
         (sx, sy, sw, bw),
@@ -164,14 +165,19 @@ impl DrmState {
         // Paso 1 · refresca los búferes del marco de cada ventana — su
         // tamaño (sigue al contenido) y su color (según el foco). Cada
         // `SolidColorBuffer` sube su contador de daño sólo si algo cambió.
+        let dec = self.app.decorations;
         for w in &mut self.app.windows {
             if !w.visible || w.is_shell {
                 continue; // el shell no lleva marco
             }
             let (x, y) = crate::render_loc(w, output_h);
             let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
-            let color = if w.focused { BORDER_FOCUS } else { BORDER_NORMAL };
-            let rects = border_rects(x, y, sw, sh);
+            let color = rgba_f32(if w.focused {
+                dec.border_focus
+            } else {
+                dec.border_normal
+            });
+            let rects = border_rects(x, y, sw, sh, dec.border_width);
             for (buf, (_, _, bw, bh)) in w.borders.iter_mut().zip(rects) {
                 buf.update((bw, bh), color);
             }
@@ -236,9 +242,9 @@ impl DrmState {
                 let (x, y) = crate::render_loc(w, output_h);
                 let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
                 // El marco, encima de la propia superficie de la ventana
-                // — el shell no lleva.
-                if !w.is_shell {
-                    let rects = border_rects(x, y, sw, sh);
+                // — el shell no lleva, y se omite si el grosor es 0.
+                if !w.is_shell && self.app.decorations.border_width > 0 {
+                    let rects = border_rects(x, y, sw, sh, self.app.decorations.border_width);
                     for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
                         out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
                             buf,

@@ -311,6 +311,8 @@ struct App {
     session_user: Option<UserInfo>,
     /// Atajos globales a interceptar (los registra el Cerebro).
     grabs: Vec<String>,
+    /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
+    decorations: mirada_brain::Decorations,
     /// Atajo capturado en el último evento de teclado, pendiente de enviar.
     pending_keybind: Option<String>,
     /// VT a la que conmutar, capturada por `Ctrl+Alt+Fn`. El backend DRM
@@ -531,6 +533,7 @@ impl App {
             }
             BodyOp::SetGrabs(keys) => self.grabs = keys,
             BodyOp::SetCursor(_) => {}
+            BodyOp::SetDecorations(d) => self.decorations = d,
             BodyOp::Spawn(cmd) => {
                 // En modo greeter no se lanza nada: la pantalla de login
                 // no es un sitio desde donde abrir programas.
@@ -702,11 +705,11 @@ impl App {
         self.mode = BodyMode::Session;
         self.session_user = Some(ticket.user.clone());
 
-        // Ya en sesión: registra los atajos del escritorio (en modo
-        // greeter se omitieron a propósito — ver `build_app`).
+        // Ya en sesión: registra los atajos del escritorio y la decoración
+        // (en modo greeter se omitieron a propósito — ver `build_app`).
         if let Brain::Embedded(desktop) = &self.brain {
-            let grab = desktop.grab_keys();
-            self.apply_commands(vec![grab]);
+            let cmds = vec![desktop.grab_keys(), desktop.decorations()];
+            self.apply_commands(cmds);
         }
 
         // Arranca la sesión. Tres caminos:
@@ -1687,6 +1690,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         session_user: None,
         session_env: Vec::new(),
         grabs: Vec::new(),
+        decorations: mirada_brain::Decorations::default(),
         pending_keybind: None,
         pending_vt: None,
         pending_session: None,
@@ -1705,8 +1709,8 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
     // el traspaso a la sesión (`complete_greeter_handoff`).
     if !greeter {
         if let Brain::Embedded(desktop) = &app.brain {
-            let grab = desktop.grab_keys();
-            app.apply_commands(vec![grab]);
+            let cmds = vec![desktop.grab_keys(), desktop.decorations()];
+            app.apply_commands(cmds);
         }
     }
 

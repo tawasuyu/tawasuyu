@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use mirada_protocol::{BodyEvent, BrainCommand, OutputId, Rect, WindowId};
+use mirada_protocol::{BodyEvent, BrainCommand, Decorations, OutputId, Rect, WindowId};
 
 /// Una superficie Wayland desde la óptica del Cuerpo.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +74,8 @@ pub enum BodyOp {
     SetGrabs(Vec<String>),
     /// Cambia el cursor del puntero.
     SetCursor(String),
+    /// Fija los parámetros de decoración de las ventanas (marco, …).
+    SetDecorations(Decorations),
     /// Lanza un programa como proceso hijo del compositor.
     Spawn(String),
     /// Apaga el compositor y libera el hardware.
@@ -165,6 +167,7 @@ impl BodyState {
             BrainCommand::Kill(id) => vec![BodyOp::KillClient(id)],
             BrainCommand::GrabKeys(keys) => vec![BodyOp::SetGrabs(keys)],
             BrainCommand::SetCursor(name) => vec![BodyOp::SetCursor(name)],
+            BrainCommand::SetDecorations(d) => vec![BodyOp::SetDecorations(d)],
             BrainCommand::Spawn(cmd) => vec![BodyOp::Spawn(cmd)],
             BrainCommand::Shutdown => vec![BodyOp::Shutdown],
         }

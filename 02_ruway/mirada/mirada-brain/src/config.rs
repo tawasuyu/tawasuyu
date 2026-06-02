@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use mirada_layout::{LayoutMode, LayoutParams};
+use mirada_protocol::Decorations;
 
 /// `app_id` con el que se marca y reconoce la terminal dropdown (quake).
 /// El comando configurable [`Config::dropterm_cmd`] **debe** fijar este
@@ -70,11 +71,18 @@ pub struct Config {
     pub master_count: usize,
     /// El foco del teclado sigue al puntero, sin necesidad de click.
     pub focus_follows_mouse: bool,
+    /// Grosor del marco de ventana en píxeles; `0` = sin marco.
+    pub border_width: i32,
+    /// Color RGBA (`0..=255`) del marco de la ventana enfocada.
+    pub border_focus: [u8; 4],
+    /// Color RGBA (`0..=255`) del marco de las ventanas sin foco.
+    pub border_normal: [u8; 4],
 }
 
 impl Default for Config {
     fn default() -> Self {
         let lp = LayoutParams::default();
+        let dec = Decorations::default();
         Self {
             dropterm_cmd: DEFAULT_DROPTERM_CMD.to_string(),
             dropterm_height_pct: 45,
@@ -83,6 +91,9 @@ impl Default for Config {
             master_ratio: lp.master_ratio,
             master_count: lp.master_count,
             focus_follows_mouse: true,
+            border_width: dec.border_width,
+            border_focus: dec.border_focus,
+            border_normal: dec.border_normal,
         }
     }
 }
@@ -91,6 +102,16 @@ impl Config {
     /// El alto del dropdown acotado a `1..=100`, listo para multiplicar.
     pub fn dropterm_height_pct(&self) -> i32 {
         self.dropterm_height_pct.clamp(1, 100) as i32
+    }
+
+    /// Los parámetros de decoración que derivan de la config (marco, …),
+    /// con el grosor acotado a `>= 0`.
+    pub fn decorations(&self) -> Decorations {
+        Decorations {
+            border_width: self.border_width.max(0),
+            border_focus: self.border_focus,
+            border_normal: self.border_normal,
+        }
     }
 
     /// Los parámetros de teselado iniciales que derivan de la config, ya
@@ -171,6 +192,11 @@ const CONFIG_TEMPLATE: &str = "\
 
     // El foco del teclado sigue al puntero (sin click). false = foco al clickear.
     focus_follows_mouse: true,
+
+    // Marco de ventana. Colores RGBA en 0..=255; border_width: 0 = sin marco.
+    border_width: 2,
+    border_focus: (92, 143, 235, 255),    // azul al foco
+    border_normal: (56, 56, 69, 255),     // gris discreto sin foco
 )
 ";
 
@@ -207,6 +233,23 @@ mod tests {
         assert_eq!(c.dropterm_height_pct(), 100);
         let c = Config::from_ron("( dropterm_height_pct: 0 )").unwrap();
         assert_eq!(c.dropterm_height_pct(), 1);
+    }
+
+    #[test]
+    fn decorations_derive_from_the_config_and_clamp_width() {
+        let c = Config::from_ron(
+            "( border_width: -3, border_focus: (10, 20, 30, 255), border_normal: (1, 2, 3, 4) )",
+        )
+        .unwrap();
+        let d = c.decorations();
+        assert_eq!(d.border_width, 0); // acotado a >= 0
+        assert_eq!(d.border_focus, [10, 20, 30, 255]);
+        assert_eq!(d.border_normal, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn default_decorations_match_the_protocol_default() {
+        assert_eq!(Config::default().decorations(), Decorations::default());
     }
 
     #[test]
