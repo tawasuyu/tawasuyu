@@ -326,21 +326,11 @@ pub fn load_pmtiles_overview(bytes: Vec<u8>) -> MapPreview {
     if pm.header.tile_type != 1 {
         return MapPreview::Error("pmtiles: sólo se soportan tiles MVT".into());
     }
-    // Elegí el zoom más bajo cuyos tiles no superen un tope (vista general).
-    const MAX_TILES: u32 = 64;
-    let mut chosen = pm.header.min_zoom as u32;
-    for z in pm.header.min_zoom as u32..=pm.header.max_zoom as u32 {
-        let span = 1u32 << z;
-        if span.saturating_mul(span) <= MAX_TILES {
-            chosen = z;
-        } else {
-            break;
-        }
-    }
+    let chosen = overview_zoom(&pm.header);
     let span = 1u32 << chosen;
     let mut data = MapData::default();
     // Ancla la proyección a los bounds del archivo (marco estable al streamear).
-    data.bbox_override = pmtiles_bounds(&pm.header);
+    data.bbox_override = Some(pmtiles_extent(&pm));
     for x in 0..span {
         for y in 0..span {
             if let Some(tile) = pm.tile(chosen, x, y) {
@@ -355,19 +345,71 @@ pub fn load_pmtiles_overview(bytes: Vec<u8>) -> MapPreview {
     }
 }
 
-/// Bounds del header como [`BBox`], si son válidos (algunos archivos los dejan
-/// en cero → caemos a "mundo entero").
-fn pmtiles_bounds(h: &pmtiles::Header) -> Option<BBox> {
-    let bb = BBox {
-        min_lon: h.min_lon,
-        min_lat: h.min_lat,
-        max_lon: h.max_lon,
-        max_lat: h.max_lat,
-    };
-    if bb.max_lon > bb.min_lon && bb.max_lat > bb.min_lat {
-        Some(bb)
+/// Extensión geográfica del basemap, para anclar la proyección. Usa los bounds
+/// del header si son **sanos**; si están rotos (algunos generadores dejan
+/// `max_lon=0` u otros campos en cero — visto en exportes bbbike/tilemaker),
+/// los deriva de la geometría real del zoom mínimo; en último caso, mundo.
+/// Zoom de vista general: el más alto cuyos tiles no superen ~64 (pocos tiles
+/// que igual cubren el contenido). Lo comparten el overview y el cálculo de
+/// extensión, para que coincidan.
+fn overview_zoom(h: &pmtiles::Header) -> u32 {
+    let mut chosen = h.min_zoom as u32;
+    for z in h.min_zoom as u32..=h.max_zoom as u32 {
+        let span = 1u32 << z;
+        if span.saturating_mul(span) <= 64 {
+            chosen = z;
+        } else {
+            break;
+        }
+    }
+    chosen
+}
+
+fn pmtiles_extent(pm: &pmtiles::PmTiles) -> BBox {
+    const WORLD: BBox =
+        BBox { min_lon: -180.0, min_lat: -85.05, max_lon: 180.0, max_lat: 85.05 };
+    let h = &pm.header;
+    let header_ok = h.max_lon > h.min_lon
+        && h.max_lat > h.min_lat
+        && h.min_lon >= -180.5
+        && h.max_lon <= 180.5
+        && h.min_lat >= -85.5
+        && h.max_lat <= 85.5
+        // Campo de longitud/latitud faltante (queda en 0 mientras el otro no).
+        && !(h.min_lon != 0.0 && h.max_lon == 0.0)
+        && !(h.min_lat != 0.0 && h.max_lat == 0.0);
+    if header_ok {
+        return BBox {
+            min_lon: h.min_lon,
+            min_lat: h.min_lat,
+            max_lon: h.max_lon,
+            max_lat: h.max_lat,
+        };
+    }
+    // Header roto: derivar de la geometría a la vista general (mismo zoom que
+    // el overview, para que la bbox cubra todo lo que se muestra).
+    let z = overview_zoom(h);
+    let span = 1u32 << z;
+    let mut bb = BBox::empty();
+    let mut n = 0;
+    'outer: for x in 0..span {
+        for y in 0..span {
+            if n >= 64 {
+                break 'outer;
+            }
+            n += 1;
+            if let Some(bytes) = pm.tile(z, x, y) {
+                if let Some(b) = mvt_tile_to_mapdata(&bytes, z, x, y).bbox() {
+                    bb.expand([b.min_lon, b.min_lat]);
+                    bb.expand([b.max_lon, b.max_lat]);
+                }
+            }
+        }
+    }
+    if bb.is_empty() {
+        WORLD
     } else {
-        Some(BBox { min_lon: -180.0, min_lat: -85.05, max_lon: 180.0, max_lat: 85.05 })
+        bb
     }
 }
 
@@ -401,7 +443,7 @@ impl Basemap {
         if pm.header.tile_type != 1 {
             return Err("pmtiles: sólo se soportan tiles MVT".into());
         }
-        let bounds = pmtiles_bounds(&pm.header).unwrap();
+        let bounds = pmtiles_extent(&pm);
         Ok(Basemap { pm, bounds, cache: HashMap::new(), clock: 0 })
     }
 
@@ -1242,8 +1284,10 @@ impl MapView {
         self.rect.lock().ok().and_then(|g| *g)
     }
 
-    /// Registra el rect físico del canvas (lo llama el propio canvas).
-    fn record_rect(&self, r: (f32, f32, f32, f32)) {
+    /// Registra el rect físico del canvas. Lo llama el propio canvas en cada
+    /// paint; también lo usan herramientas/tests para dirigir el viewport
+    /// headless (sin un paint real).
+    pub fn record_rect(&self, r: (f32, f32, f32, f32)) {
         if let Ok(mut g) = self.rect.lock() {
             *g = Some(r);
         }
@@ -3091,6 +3135,18 @@ mod tests {
         assert!(cache.contains_key(&(0, 6, 0)));
         assert!(!cache.contains_key(&(0, 5, 0)));
         assert!(!cache.contains_key(&(0, 0, 0)));
+    }
+
+    #[test]
+    fn pmtiles_extent_deriva_de_geometria_con_header_roto() {
+        // tiny_pmtiles deja los bounds del header en cero (header roto, como el
+        // export real de bbbike/tilemaker con max_lon=0). pmtiles_extent debe
+        // ignorarlos y derivar la extensión de la geometría del tile.
+        let pm = pmtiles::PmTiles::from_bytes(tiny_pmtiles()).unwrap();
+        let bb = pmtiles_extent(&pm);
+        assert!(bb.max_lon >= bb.min_lon && bb.max_lat >= bb.min_lat);
+        // No es el mundo entero, y cae donde está la geometría (oeste lejano).
+        assert!(bb.min_lon > -180.0 && bb.max_lon < -100.0, "{bb:?}");
     }
 
     #[test]
