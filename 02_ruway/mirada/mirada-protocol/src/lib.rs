@@ -288,6 +288,40 @@ mod tests {
     }
 
     #[test]
+    fn frame_round_trips_the_new_body_events() {
+        for ev in [
+            BodyEvent::Clicked { id: 7 },
+            BodyEvent::WindowDragged { id: 3, x: 640, y: -12 },
+        ] {
+            let mut buf = Vec::new();
+            write_frame(&mut buf, &ev).unwrap();
+            let back: BodyEvent = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();
+            assert_eq!(back, ev);
+        }
+    }
+
+    #[test]
+    fn frame_round_trips_a_set_decorations_command() {
+        let cmd = BrainCommand::SetDecorations(Decorations {
+            border_width: 3,
+            border_focus: [10, 20, 30, 255],
+            border_normal: [1, 2, 3, 4],
+        });
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &cmd).unwrap();
+        let back: BrainCommand = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn default_decorations_are_the_historic_values() {
+        let d = Decorations::default();
+        assert_eq!(d.border_width, 2);
+        assert_eq!(d.border_focus, [92, 143, 235, 255]);
+        assert_eq!(d.border_normal, [56, 56, 69, 255]);
+    }
+
+    #[test]
     fn several_frames_stream_in_order() {
         let evs = vec![
             BodyEvent::OutputAdded { id: 0, width: 2560, height: 1440 },
