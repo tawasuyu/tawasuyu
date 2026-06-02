@@ -164,7 +164,7 @@ struct LayerApp {
     ctx: WidgetCtx,
     /// Comando del Quake corriendo en un hilo: su resultado llega por aquí. El
     /// latido del frame-callback lo sondea (`try_recv`) sin bloquear el loop.
-    exec_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    exec_rx: Option<std::sync::mpsc::Receiver<crate::shuma::RunResult>>,
     /// Una layer surface por cada barra de la config.
     panels: Vec<Panel>,
     exit: bool,
@@ -404,13 +404,12 @@ impl LayerApp {
             self.marcar_shuma_dirty();
             return;
         }
+        self.shuma.push_pending(cmd.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(crate::shuma::ejecutar(&cmd));
         });
         self.exec_rx = Some(rx);
-        self.shuma.pending = true;
-        self.shuma.output = None;
         self.marcar_shuma_dirty();
     }
 
@@ -420,8 +419,7 @@ impl LayerApp {
     fn poll_exec(&mut self) {
         let got = self.exec_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(res) = got {
-            self.shuma.output = Some(res);
-            self.shuma.pending = false;
+            self.shuma.finish_last(res);
             self.exec_rx = None;
             self.marcar_shuma_dirty();
         }
@@ -626,6 +624,24 @@ impl LayerApp {
     fn handle_msg(&mut self, msg: Msg) {
         match msg {
             Msg::ShumaToggle => self.set_shuma_open(!self.shuma.open),
+            // Clic en una etapa de pipe de una card: re-ejecuta la línea
+            // truncada en el drawer (lo abre si estaba cerrado).
+            Msg::ShumaRunLine(line) => {
+                if !line.trim().is_empty() {
+                    if !self.shuma.open {
+                        self.set_shuma_open(true);
+                    }
+                    self.shuma.buffer = line;
+                    self.shuma_submit();
+                }
+            }
+            // Clic en el `$` de una card: la pliega/despliega.
+            Msg::ShumaCollapse(idx) => {
+                if let Some(b) = self.shuma.blocks.get_mut(idx) {
+                    b.collapsed = !b.collapsed;
+                    self.marcar_shuma_dirty();
+                }
+            }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
             Msg::ActivateWindow(id) => self.activar_ventana(id),
             Msg::TrayActivate(key) => {

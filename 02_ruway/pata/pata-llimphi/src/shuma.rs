@@ -19,11 +19,87 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::View;
 
 use pata_core::WidgetSpec;
+use shuma_line::{split_pipeline, tokenize, Dialect};
 
 use crate::Msg;
 
 /// Alto máximo del drawer, como fracción de la pantalla.
 const DRAWER_FRAC: f32 = 0.45;
+
+/// Una línea de salida con su naturaleza, para colorearla en la card.
+#[derive(Clone, Debug)]
+pub struct OutLine {
+    /// `true` si vino por stderr (se pinta en color de error).
+    pub err: bool,
+    pub text: String,
+}
+
+/// Una *card* del drawer: un comando ejecutado con sus etapas de pipe, su
+/// salida y su código de salida. Es el modelo de paridad con el shell de
+/// shuma (cards + etapas clickeables), que el render del marco pinta.
+#[derive(Clone, Debug)]
+pub struct DrawerBlock {
+    /// La línea tal cual se tecleó.
+    pub cmd: String,
+    /// Etiquetas de cada etapa del pipe (de `shuma-line`) — chips clickeables
+    /// que re-ejecutan la línea truncada hasta esa etapa.
+    pub stages: Vec<String>,
+    /// Líneas de salida (stdout/stderr entremezcladas en orden de llegada).
+    pub lines: Vec<OutLine>,
+    /// Código de salida; `None` mientras el comando sigue corriendo.
+    pub exit: Option<i32>,
+    /// `true` si la card está plegada (sólo se ve el encabezado).
+    pub collapsed: bool,
+}
+
+/// El resultado estructurado de una corrida — lo que un hilo de fondo manda de
+/// vuelta para rellenar la card pendiente.
+#[derive(Clone, Debug)]
+pub struct RunResult {
+    pub lines: Vec<OutLine>,
+    pub exit: Option<i32>,
+}
+
+/// Las etiquetas de las etapas de pipe de una línea (vía `shuma-line`): el
+/// `comando` de cada etapa, o el texto crudo si no se reconoció. Vacío si la
+/// línea no tiene pipe (una sola etapa no amerita chips).
+pub fn stage_labels(cmd: &str) -> Vec<String> {
+    let pipeline = split_pipeline(&tokenize(cmd, Dialect::Bash));
+    if pipeline.stages.len() < 2 {
+        return Vec::new();
+    }
+    pipeline
+        .stages
+        .iter()
+        .map(|s| {
+            s.command.clone().unwrap_or_else(|| {
+                // Sin comando reconocido: el primer argumento, o «·».
+                s.args.first().cloned().unwrap_or_else(|| "·".into())
+            })
+        })
+        .collect()
+}
+
+/// La línea truncada hasta la etapa `upto` inclusive — lo que re-ejecuta el
+/// clic en una chip (`a | b | c`, clic en `b` → `a | b`). Reconstruye cada
+/// etapa desde su comando+args.
+pub fn truncated_line(cmd: &str, upto: usize) -> String {
+    let pipeline = split_pipeline(&tokenize(cmd, Dialect::Bash));
+    pipeline
+        .stages
+        .iter()
+        .take(upto + 1)
+        .map(|s| {
+            let mut parts = Vec::new();
+            if let Some(c) = &s.command {
+                parts.push(c.clone());
+            }
+            parts.extend(s.args.iter().cloned());
+            parts.join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
 
 /// El estado del cabezal del shell y su drawer. Vive en el `Model` del frontend
 /// —es interacción, no modelo de dominio—, no en `pata-core`.
@@ -32,8 +108,10 @@ pub struct ShumaState {
     pub open: bool,
     /// El comando que se está escribiendo.
     pub buffer: String,
-    /// Salida del último comando (stdout) o el error formateado.
-    pub output: Option<Result<String, String>>,
+    /// Historial de comandos del drawer, uno por *card* — paridad con el
+    /// shell de shuma (cada `$ cmd` con sus etapas de pipe, su salida y su
+    /// código). El más reciente va al final.
+    pub blocks: Vec<DrawerBlock>,
     /// `true` mientras el comando corre en segundo plano.
     pub pending: bool,
     /// Hotkey que abre/cierra el drawer (de la prop `hotkey`), o `None`.
@@ -49,12 +127,45 @@ pub struct ShumaState {
     pub present: bool,
 }
 
+impl ShumaState {
+    /// Tope de cards en el historial — más allá, las viejas se descartan.
+    const MAX_BLOCKS: usize = 12;
+
+    /// Empuja una card nueva en estado «corriendo» para `cmd` (con sus etapas
+    /// de pipe ya resueltas) y marca el drawer como pendiente. Acota el
+    /// historial a [`MAX_BLOCKS`]. Lo usan ambos backends al lanzar.
+    pub fn push_pending(&mut self, cmd: String) {
+        let stages = stage_labels(&cmd);
+        self.blocks.push(DrawerBlock {
+            cmd,
+            stages,
+            lines: Vec::new(),
+            exit: None,
+            collapsed: false,
+        });
+        if self.blocks.len() > Self::MAX_BLOCKS {
+            let drop = self.blocks.len() - Self::MAX_BLOCKS;
+            self.blocks.drain(0..drop);
+        }
+        self.pending = true;
+    }
+
+    /// Rellena la última card (la pendiente) con el resultado de la corrida.
+    pub fn finish_last(&mut self, res: RunResult) {
+        self.pending = false;
+        if let Some(b) = self.blocks.last_mut() {
+            b.lines = res.lines;
+            b.exit = res.exit;
+        }
+    }
+}
+
 impl Default for ShumaState {
     fn default() -> Self {
         Self {
             open: false,
             buffer: String::new(),
-            output: None,
+            blocks: Vec::new(),
             pending: false,
             hotkey: None,
             prompt: "›".into(),
@@ -166,37 +277,8 @@ pub fn drawer_overlay(state: &ShumaState, screen: (i32, i32), theme: &Theme) -> 
         ])
     };
 
-    // Cuerpo: salida del comando o pista de integración con shuma.
-    let cuerpo_texto;
-    let cuerpo_color;
-    if state.pending {
-        cuerpo_texto = "…".to_string();
-        cuerpo_color = theme.fg_muted;
-    } else {
-        match &state.output {
-            Some(Ok(out)) => {
-                cuerpo_texto = out.clone();
-                cuerpo_color = theme.fg_text;
-            }
-            Some(Err(err)) => {
-                cuerpo_texto = err.clone();
-                cuerpo_color = theme.fg_destructive;
-            }
-            None => {
-                cuerpo_texto =
-                    "shuma se despliega aquí — escribí un comando y Enter (Esc cierra)".to_string();
-                cuerpo_color = theme.fg_muted;
-            }
-        }
-    }
-    let cuerpo = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: auto(),
-        },
-        ..Default::default()
-    })
-    .text(cuerpo_texto, 13.0, cuerpo_color);
+    // Cuerpo: las cards del historial (paridad con el shell de shuma).
+    let cuerpo = blocks_view(state, theme);
 
     let panel = View::new(Style {
         position: Position::Absolute,
@@ -275,26 +357,7 @@ pub fn drawer_body_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
         chip_text(&buf, 16.0, theme.fg_text),
     ]);
 
-    let (texto, color) = if state.pending {
-        ("…".to_string(), theme.fg_muted)
-    } else {
-        match &state.output {
-            Some(Ok(out)) => (out.clone(), theme.fg_text),
-            Some(Err(err)) => (err.clone(), theme.fg_destructive),
-            None => (
-                "shuma se despliega aquí — escribí un comando y Enter (Esc cierra)".to_string(),
-                theme.fg_muted,
-            ),
-        }
-    };
-    let cuerpo = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: auto(),
-        },
-        ..Default::default()
-    })
-    .text(texto, 13.0, color);
+    let cuerpo = blocks_view(state, theme);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -318,6 +381,97 @@ pub fn drawer_body_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
     .children(vec![linea, cuerpo])
 }
 
+/// El cuerpo del drawer: las cards del historial (paridad con el shell de
+/// shuma), o la pista de uso si no hay ninguna. Lo comparten los dos backends
+/// (winit con scrim y layer-shell). Cada card es un `$ cmd` con sus etapas de
+/// pipe clickeables, su salida coloreada por stdout/stderr y su código.
+fn blocks_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
+    let col = Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        // Pegado abajo: lo más nuevo queda a la vista, lo viejo clipa arriba.
+        justify_content: Some(JustifyContent::FlexEnd),
+        gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
+        ..Default::default()
+    };
+    if state.blocks.is_empty() {
+        return View::new(col).text(
+            "shuma se despliega aquí — escribí un comando y Enter (Esc cierra)".to_string(),
+            13.0,
+            theme.fg_muted,
+        );
+    }
+    let cards = state
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| card_view(i, b, theme))
+        .collect();
+    View::new(col).children(cards)
+}
+
+/// Una card: encabezado (`$` plegable + etapas de pipe clickeables) y, si no
+/// está plegada, las líneas de salida y el código de salida.
+fn card_view(idx: usize, b: &DrawerBlock, theme: &Theme) -> View<Msg> {
+    // Encabezado: el `$` pliega/despliega; las etapas re-ejecutan la línea
+    // truncada hasta esa etapa (o, sin pipe, la línea entera).
+    let mut head: Vec<View<Msg>> = vec![chip_text("$", 14.0, theme.accent)
+        .on_click(Msg::ShumaCollapse(idx))];
+    if b.stages.is_empty() {
+        head.push(chip_text(&b.cmd, 14.0, theme.fg_text).on_click(Msg::ShumaRunLine(b.cmd.clone())));
+    } else {
+        for (si, label) in b.stages.iter().enumerate() {
+            if si > 0 {
+                head.push(chip_text("|", 14.0, theme.fg_muted));
+            }
+            head.push(
+                chip_text(label, 14.0, theme.accent)
+                    .on_click(Msg::ShumaRunLine(truncated_line(&b.cmd, si))),
+            );
+        }
+    }
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(head);
+
+    let mut col: Vec<View<Msg>> = vec![header];
+    if !b.collapsed {
+        if b.exit.is_none() {
+            col.push(out_line("…", theme.fg_muted));
+        }
+        for l in &b.lines {
+            let c = if l.err { theme.fg_destructive } else { theme.fg_text };
+            col.push(out_line(&l.text, c));
+        }
+        if let Some(code) = b.exit {
+            if code != 0 {
+                col.push(out_line(&format!("exit {code}"), theme.fg_destructive));
+            }
+        }
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .children(col)
+}
+
+/// Una línea de salida a ancho completo.
+fn out_line(t: &str, color: llimphi_theme::Color) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: auto() },
+        ..Default::default()
+    })
+    .text(t.to_string(), 13.0, color)
+}
+
 /// Un texto suelto, centrado verticalmente.
 fn chip_text(t: &str, size: f32, color: llimphi_theme::Color) -> View<Msg> {
     View::new(Style {
@@ -337,7 +491,7 @@ fn chip_text(t: &str, size: f32, color: llimphi_theme::Color) -> View<Msg> {
 /// Reúne los eventos en streaming hasta el final; la captura está acotada a
 /// [`CAPTURE_CAP`] (lo que excede se marca como truncado). Bloqueante: se
 /// llama desde un hilo de fondo (`Handle::spawn` o `std::thread`).
-pub fn ejecutar(cmd: &str) -> Result<String, String> {
+pub fn ejecutar(cmd: &str) -> RunResult {
     use shuma_exec::{run, CommandSpec, RunEvent};
 
     let cwd = std::env::current_dir()
@@ -345,51 +499,86 @@ pub fn ejecutar(cmd: &str) -> Result<String, String> {
         .unwrap_or_else(|_| "/".to_string());
     let spec = CommandSpec::shell(cmd, cwd).with_limit(CAPTURE_CAP);
 
-    let mut out = String::new();
-    let mut err = String::new();
-    let mut code = 0i32;
-    let mut failed: Option<String> = None;
-    let mut truncated = false;
+    let mut lines: Vec<OutLine> = Vec::new();
+    let mut exit: Option<i32> = None;
     for ev in run(&spec).wait_all() {
         match ev {
-            RunEvent::Stdout(l) => {
-                out.push_str(&l);
-                out.push('\n');
-            }
-            RunEvent::Stderr(l) => {
-                err.push_str(&l);
-                err.push('\n');
-            }
-            RunEvent::Exited(c) => code = c,
-            RunEvent::Failed(m) => failed = Some(m),
-            RunEvent::Truncated => truncated = true,
-            RunEvent::Spilled(p) => out.push_str(&format!("\n… (salida volcada a {p})")),
+            RunEvent::Stdout(t) => lines.push(OutLine { err: false, text: t }),
+            RunEvent::Stderr(t) => lines.push(OutLine { err: true, text: t }),
+            RunEvent::Exited(c) => exit = Some(c),
+            RunEvent::Failed(m) => lines.push(OutLine {
+                err: true,
+                text: format!("no pude lanzar: {m}"),
+            }),
+            RunEvent::Truncated => lines.push(OutLine {
+                err: true,
+                text: format!("… (salida truncada a {CAPTURE_CAP} bytes)"),
+            }),
+            RunEvent::Spilled(p) => lines.push(OutLine {
+                err: false,
+                text: format!("… (salida volcada a {p})"),
+            }),
             // Sólo aparece en modo PTY; el drawer no lo usa.
             RunEvent::Bytes(_) => {}
         }
     }
-
-    if let Some(m) = failed {
-        return Err(m);
-    }
-    if truncated {
-        out.push_str(&format!("\n… (salida truncada a {CAPTURE_CAP} bytes)"));
-    }
-    let out = out.trim_end().to_string();
-    if code != 0 {
-        let body = if !err.trim().is_empty() {
-            err.trim_end().to_string()
-        } else {
-            out
-        };
-        return Err(if body.is_empty() {
-            format!("salió con código {code}")
-        } else {
-            format!("{body}\n(código {code})")
-        });
-    }
-    Ok(out)
+    RunResult { lines, exit }
 }
 
 /// Tope de captura del drawer, en bytes — un comando charlatán no infla la RAM.
 const CAPTURE_CAP: usize = 256 * 1024;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn una_linea_sin_pipe_no_tiene_chips() {
+        assert!(stage_labels("ls -la").is_empty());
+        assert!(stage_labels("").is_empty());
+    }
+
+    #[test]
+    fn las_etapas_de_un_pipe_son_los_comandos() {
+        assert_eq!(
+            stage_labels("ls -la | grep foo | sort"),
+            vec!["ls".to_string(), "grep".to_string(), "sort".to_string()]
+        );
+    }
+
+    #[test]
+    fn la_linea_truncada_corta_en_la_etapa_clickeada() {
+        let cmd = "ls -la | grep foo | sort";
+        assert_eq!(truncated_line(cmd, 0), "ls -la");
+        assert_eq!(truncated_line(cmd, 1), "ls -la | grep foo");
+        assert_eq!(truncated_line(cmd, 2), "ls -la | grep foo | sort");
+    }
+
+    #[test]
+    fn push_pending_resuelve_etapas_y_acota_el_historial() {
+        let mut s = ShumaState::default();
+        s.push_pending("a | b".into());
+        let last = s.blocks.last().unwrap();
+        assert_eq!(last.stages, vec!["a".to_string(), "b".to_string()]);
+        assert!(last.exit.is_none() && s.pending);
+        // Más allá del tope, las viejas se descartan.
+        for _ in 0..ShumaState::MAX_BLOCKS + 5 {
+            s.push_pending("x".into());
+        }
+        assert_eq!(s.blocks.len(), ShumaState::MAX_BLOCKS);
+    }
+
+    #[test]
+    fn finish_last_rellena_la_card_pendiente() {
+        let mut s = ShumaState::default();
+        s.push_pending("echo hi".into());
+        s.finish_last(RunResult {
+            lines: vec![OutLine { err: false, text: "hi".into() }],
+            exit: Some(0),
+        });
+        let last = s.blocks.last().unwrap();
+        assert_eq!(last.exit, Some(0));
+        assert_eq!(last.lines.len(), 1);
+        assert!(!s.pending);
+    }
+}

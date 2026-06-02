@@ -53,8 +53,12 @@ pub enum Msg {
     ShumaBackspace,
     /// Enter en el input de shuma — ejecuta el comando.
     ShumaSubmit,
-    /// Resultado del comando (stdout o error formateado).
-    ShumaResult(Result<String, String>),
+    /// Resultado estructurado del comando (líneas + código) para la card.
+    ShumaResult(shuma::RunResult),
+    /// Re-ejecutar una línea (clic en una etapa de pipe de una card).
+    ShumaRunLine(String),
+    /// Plegar/desplegar la card `idx` del historial.
+    ShumaCollapse(usize),
     /// Tick de la animación de despliegue (sólo re-render).
     ShumaAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
@@ -308,16 +312,23 @@ impl App for PataApp {
                 }
             }
             Msg::ShumaSubmit => {
-                if model.shuma.open && !model.shuma.buffer.is_empty() {
+                if model.shuma.open && !model.shuma.buffer.trim().is_empty() {
                     let cmd = std::mem::take(&mut model.shuma.buffer);
-                    model.shuma.pending = true;
-                    model.shuma.output = None;
+                    model.shuma.push_pending(cmd.clone());
                     handle.spawn(move || Msg::ShumaResult(shuma::ejecutar(&cmd)));
                 }
             }
-            Msg::ShumaResult(res) => {
-                model.shuma.pending = false;
-                model.shuma.output = Some(res);
+            Msg::ShumaResult(res) => model.shuma.finish_last(res),
+            Msg::ShumaRunLine(line) => {
+                if model.shuma.open && !line.trim().is_empty() {
+                    model.shuma.push_pending(line.clone());
+                    handle.spawn(move || Msg::ShumaResult(shuma::ejecutar(&line)));
+                }
+            }
+            Msg::ShumaCollapse(idx) => {
+                if let Some(b) = model.shuma.blocks.get_mut(idx) {
+                    b.collapsed = !b.collapsed;
+                }
             }
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),

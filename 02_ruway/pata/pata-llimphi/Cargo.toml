@@ -21,6 +21,9 @@ pata-config = { path = "../pata-config" }
 # El drawer Quake corre los comandos por el ejecutor real de shuma (captura
 # acotada, streaming) en vez de un `sh -c` pelado.
 shuma-exec = { path = "../../shuma/sandbox/shuma-exec" }
+# El cerebro de la línea de shuma (agnóstico de GUI): descompone el comando en
+# etapas de pipe para las chips clickeables del drawer.
+shuma-line = { path = "../../shuma/sandbox/shuma-line" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-motion = { workspace = true }
