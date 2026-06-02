@@ -88,6 +88,7 @@ use mirada_brain::{
 use mirada_link::BodyLink;
 
 mod drm_backend;
+mod text;
 
 // ---------------------------------------------------------------------
 // Estado
@@ -222,6 +223,9 @@ struct ManagedWindow {
     focused: bool,
     /// `true` si es la ventana del shell — acoplada al pie, sin teselar.
     is_shell: bool,
+    /// Título del cliente — para pintar la etiqueta (barra de título).
+    /// Se actualiza en `title_changed`.
+    title: String,
     /// Búferes de los 4 lados del marco (arriba, abajo, izq., der.) —
     /// cada uno con su `Id` estable para el seguimiento de daño.
     borders: [SolidColorBuffer; 4],
@@ -528,6 +532,19 @@ impl App {
         }
     }
 
+    /// La ruta de fuente configurada (para las etiquetas del compositor), si
+    /// el Cerebro es embebido y la config la fija. Vacía/None → se prueban
+    /// las fuentes comunes del sistema.
+    fn config_font_path(&self) -> Option<String> {
+        match &self.brain {
+            Brain::Embedded(d) => {
+                let p = d.config().font_path.clone();
+                (!p.is_empty()).then_some(p)
+            }
+            Brain::Linked(_) => None,
+        }
+    }
+
     /// Traduce los comandos del Cerebro a operaciones y las ejecuta.
     fn apply_commands(&mut self, cmds: Vec<BrainCommand>) {
         for cmd in cmds {
@@ -640,6 +657,7 @@ impl App {
             floating: false,
             focused: false,
             is_shell,
+            title: title.clone(),
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
         });
 
@@ -1029,6 +1047,10 @@ impl XdgShellHandler for App {
                 .and_then(|d| d.title.clone())
                 .unwrap_or_default()
         });
+        // Espeja el título en la ventana gestionada (para pintar la etiqueta).
+        if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+            w.title = title.clone();
+        }
         if let Some(ev) = self.body.retitle_surface(id, title) {
             self.brain_feed(ev);
         }

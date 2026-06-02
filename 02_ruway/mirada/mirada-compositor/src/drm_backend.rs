@@ -30,6 +30,9 @@ use smithay::backend::input::{
     PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
+use smithay::backend::renderer::element::memory::{
+    MemoryRenderBuffer, MemoryRenderBufferRenderElement,
+};
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
@@ -37,7 +40,7 @@ use smithay::backend::renderer::element::surface::{
 use smithay::backend::renderer::element::{render_elements, Id, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::backend::renderer::{ImportAll, ImportDma};
+use smithay::backend::renderer::{ImportAll, ImportDma, ImportMem};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
@@ -70,11 +73,13 @@ type Compositor =
     DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
 
 render_elements! {
-    /// Lo que el backend DRM compone en un cuadro: superficies de cliente
-    /// y rectángulos de color sólido (el cursor y los marcos de ventana).
-    Frame<R> where R: ImportAll;
+    /// Lo que el backend DRM compone en un cuadro: superficies de cliente,
+    /// rectángulos de color sólido (cursor, marcos) y etiquetas de texto
+    /// (búferes RGBA rasterizados — títulos, menú).
+    Frame<R> where R: ImportAll + ImportMem;
     Window = WaylandSurfaceRenderElement<R>,
     Solid = SolidColorRenderElement,
+    Text = MemoryRenderBufferRenderElement<R>,
 }
 
 /// Color de fondo del escritorio cuando no hay nada que lo tape.
@@ -85,6 +90,12 @@ const CURSOR_SIZE: i32 = 12;
 
 /// Color del cursor — un cuadrado casi blanco, opaco.
 const CURSOR_COLOR: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
+
+/// Alto de las etiquetas de título, en píxeles.
+const TITLE_PX: f32 = 16.0;
+
+/// Color RGBA de las etiquetas de título — casi blanco.
+const TITLE_COLOR: [u8; 4] = [230, 230, 235, 255];
 
 /// Lado mínimo de una ventana al redimensionarla con el ratón.
 const MIN_WINDOW: i32 = 120;
@@ -149,6 +160,12 @@ struct DrmState {
     last_pointer_window: Option<u64>,
     /// Tamaño de la salida, en píxeles — los topes del puntero.
     output_size: (f64, f64),
+    /// Renderizador de texto (etiquetas de título/menú). `None` si no se
+    /// encontró ninguna fuente — entonces no se pintan etiquetas.
+    text: Option<crate::text::TextRenderer>,
+    /// Caché de etiquetas ya rasterizadas, por (texto, color) → búfer subido.
+    /// Evita re-rasterizar y re-subir la textura en cada cuadro.
+    text_cache: std::collections::HashMap<(String, [u8; 4]), MemoryRenderBuffer>,
 }
 
 impl DrmState {
@@ -241,6 +258,54 @@ impl DrmState {
             for w in &shown {
                 let (x, y) = crate::render_loc(w, output_h);
                 let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
+                // Etiqueta de título de la ventana ENFOCADA: rasterizada (con
+                // caché) y compuesta encima de su superficie. Es la primera
+                // prueba real del render de texto y la semilla de la barra de
+                // título. Se pinta primero en el bloque → queda arriba de todo
+                // lo de esta ventana.
+                if w.focused && !w.is_shell && !w.title.is_empty() {
+                    if let Some(tr) = &self.text {
+                        let color = TITLE_COLOR;
+                        // Tope simple: los títulos cambian seguido (cwd de una
+                        // terminal, etc.); sin esto la caché crecería sin fin.
+                        if self.text_cache.len() > 256 {
+                            self.text_cache.clear();
+                        }
+                        let buf = self
+                            .text_cache
+                            .entry((w.title.clone(), color))
+                            .or_insert_with(|| match tr.rasterize(&w.title, TITLE_PX, color) {
+                                Some(r) => MemoryRenderBuffer::from_slice(
+                                    &r.rgba,
+                                    Fourcc::Argb8888,
+                                    (r.width, r.height),
+                                    1,
+                                    Transform::Normal,
+                                    None,
+                                ),
+                                // Nada que pintar: un búfer 1×1 transparente.
+                                None => MemoryRenderBuffer::from_slice(
+                                    &[0u8; 4],
+                                    Fourcc::Argb8888,
+                                    (1, 1),
+                                    1,
+                                    Transform::Normal,
+                                    None,
+                                ),
+                            });
+                        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                            &mut self.renderer,
+                            ((x + 6) as f64, (y + 4) as f64),
+                            buf,
+                            None,
+                            None,
+                            None,
+                            Kind::Unspecified,
+                        ) {
+                            out.push(Frame::Text(el));
+                        }
+                    }
+                }
                 // El marco, encima de la propia superficie de la ventana
                 // — el shell no lleva, y se omite si el grosor es 0.
                 if !w.is_shell && self.app.decorations.border_width > 0 {
@@ -998,6 +1063,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         println!("   Se cerrará solo a los {timeout_secs}s (MIRADA_DRM_TIMEOUT=0 lo quita).");
     }
 
+    let font_path = app.config_font_path();
     let mut state = DrmState {
         app,
         session: session.clone(),
@@ -1015,6 +1081,16 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         cursor_id: Id::new(),
         last_pointer_window: None,
         output_size: (mode_w as f64, mode_h as f64),
+        text: {
+            let t = crate::text::TextRenderer::system(font_path.as_deref());
+            if t.is_some() {
+                println!("mirada-compositor · fuente de etiquetas cargada.");
+            } else {
+                eprintln!("mirada-compositor · sin fuente para etiquetas; no pinto títulos.");
+            }
+            t
+        },
+        text_cache: std::collections::HashMap::new(),
     };
 
     let signal = event_loop.get_signal();

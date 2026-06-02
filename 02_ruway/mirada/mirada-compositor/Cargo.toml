@@ -19,3 +19,6 @@ mirada-link = { path = "../mirada-link" }
 auth-core = { path = "../../../shared/auth/auth-core" }
 nix = { workspace = true }
 smithay = "0.7"
+# Rasterizado de texto sobre CPU (etiquetas: barra de título, menú). Es un
+# rasterizador puro-Rust ligero; smithay sube el búfer RGBA como textura.
+ab_glyph = "0.2"

@@ -82,6 +82,9 @@ pub struct Config {
     pub border_focus: [u8; 4],
     /// Color RGBA (`0..=255`) del marco de las ventanas sin foco.
     pub border_normal: [u8; 4],
+    /// Ruta a la fuente para las etiquetas del compositor (título, menú).
+    /// Vacía = se prueba una lista de fuentes comunes del sistema.
+    pub font_path: String,
 }
 
 impl Default for Config {
@@ -101,6 +104,7 @@ impl Default for Config {
             border_width: dec.border_width,
             border_focus: dec.border_focus,
             border_normal: dec.border_normal,
+            font_path: String::new(),
         }
     }
 }
@@ -221,6 +225,10 @@ const CONFIG_TEMPLATE: &str = "\
     border_width: 2,
     border_focus: (92, 143, 235, 255),    // azul al foco
     border_normal: (56, 56, 69, 255),     // gris discreto sin foco
+
+    // Fuente para las etiquetas (título, menú). Vacía = se prueba una lista
+    // de fuentes comunes del sistema (Liberation, DejaVu, Noto, Adwaita…).
+    font_path: \"\",
 )
 ";
 
