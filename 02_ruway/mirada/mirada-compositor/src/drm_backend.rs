@@ -58,10 +58,10 @@ use smithay::utils::{
 };
 
 use auth_core::SessionTicket;
-use mirada_brain::{BodyEvent, CtlReply, Keymap, Rect};
+use mirada_brain::{BodyEvent, CtlReply, Rect};
 
 use crate::{
-    combo_string, send_frames_surface_tree, App, BodyMode, Brain, ClientState, DragGrab, DragMode,
+    combo_string, send_frames_surface_tree, App, BodyMode, ClientState, DragGrab, DragMode,
     Setup,
 };
 
@@ -135,8 +135,8 @@ struct DrmState {
     active: bool,
     /// `true` entre que se encola un page-flip y llega su VBlank.
     pending_flip: bool,
-    keymap_path: Option<std::path::PathBuf>,
-    keymap_watch: Option<mirada_brain::KeymapWatch>,
+    /// Vigías de los archivos de config recargables en caliente.
+    watches: crate::ConfigWatches,
     ctl: Option<crate::CtlServer>,
     /// Inicio del compositor — base de tiempos para los frame-callbacks.
     start: Instant,
@@ -346,24 +346,8 @@ impl DrmState {
             self.last_windows = n;
         }
 
-        if self.keymap_watch.as_ref().is_some_and(|w| w.changed()) {
-            if let Some(path) = &self.keymap_path {
-                match Keymap::load(path) {
-                    Ok(km) => {
-                        let cmd = if let Brain::Embedded(d) = &mut self.app.brain {
-                            Some(d.set_keymap(km))
-                        } else {
-                            None
-                        };
-                        if let Some(cmd) = cmd {
-                            self.app.apply_commands(vec![cmd]);
-                        }
-                        println!("mirada-compositor · keymap recargado.");
-                    }
-                    Err(e) => eprintln!("mirada-compositor · keymap inválido: {e}"),
-                }
-            }
-        }
+        // Recarga en caliente de keymap/config/reglas si cambiaron en disco.
+        self.watches.poll(&mut self.app);
 
         if let Some(ctl) = &self.ctl {
             while let Some(mut conn) = ctl.poll() {
@@ -852,7 +836,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
 
     // 7 · El estado Wayland (Cerebro, teclado, keymap, control).
     println!("[7/8] armando el estado Wayland …");
-    let Setup { mut display, mut app, keymap_path, keymap_watch, ctl } =
+    let Setup { mut display, mut app, watches, ctl } =
         crate::build_app(greeter)?;
     // Con el renderer ya creado, anuncia dmabuf — sin esto las apps que
     // pintan por GPU (GPUI, navegadores acelerados) no pueden conectarse.
@@ -1024,8 +1008,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         libinput: libinput_handle,
         active: true,
         pending_flip: false,
-        keymap_path,
-        keymap_watch,
+        watches,
         ctl,
         start: Instant::now(),
         last_windows: 0,

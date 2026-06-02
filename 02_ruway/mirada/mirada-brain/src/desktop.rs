@@ -132,6 +132,15 @@ impl Desktop {
         &self.config
     }
 
+    /// Recarga la config en caliente: re-siembra los parámetros de teselado
+    /// (el archivo manda — un cambio de gap/modo/ratio se ve al guardar,
+    /// aunque pise un layout cambiado a mano) y devuelve el comando que
+    /// re-envía la decoración al Cuerpo. dropterm/foco se leen en vivo.
+    pub fn reload_config(&mut self, config: Config) -> Vec<BrainCommand> {
+        self.set_config(config);
+        vec![self.decorations()]
+    }
+
     /// El comando que registra los atajos globales en el Cuerpo. La app
     /// lo envía al conectar, y de nuevo tras cada recarga del keymap.
     pub fn grab_keys(&self) -> BrainCommand {
@@ -1446,6 +1455,22 @@ mod tests {
         assert!([1, 2, 3]
             .iter()
             .all(|&id| !d.active_workspace().is_floating(id)));
+    }
+
+    #[test]
+    fn reload_config_reseeds_params_and_re_sends_decorations() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        let cfg = Config::from_ron("( gap: 30, border_width: 5 )").unwrap();
+        let cmds = d.reload_config(cfg);
+        // El gap nuevo se sembró (el archivo manda).
+        assert_eq!(d.active_workspace().params().gap, 30);
+        // Y se devuelve un SetDecorations con el marco nuevo.
+        match cmds.as_slice() {
+            [BrainCommand::SetDecorations(dec)] => assert_eq!(dec.border_width, 5),
+            other => panic!("se esperaba un SetDecorations, no {other:?}"),
+        }
     }
 
     #[test]

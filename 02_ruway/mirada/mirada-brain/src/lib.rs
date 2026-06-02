@@ -25,6 +25,7 @@ pub mod ctl;
 pub mod desktop;
 pub mod keymap;
 pub mod rules;
+pub mod watch;
 
 pub use action::{default_keymap, DesktopAction, WORKSPACE_COUNT};
 pub use config::{Config, DROPTERM_APP_ID};
@@ -32,6 +33,7 @@ pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine};
 pub use desktop::{Desktop, Output, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
 pub use rules::{Rule, RuleOutcome, Rules};
+pub use watch::FileWatch;
 
 pub use mirada_layout::{LayoutMode, LayoutParams, Rect, WindowId, Workspace};
 pub use mirada_protocol::{BodyEvent, BrainCommand, Decorations, OutputId, WindowPlacement};

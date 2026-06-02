@@ -142,6 +142,11 @@ impl Config {
         Config::from_ron(&text)
     }
 
+    /// Vigila el archivo de config para recargarlo en caliente.
+    pub fn watch(path: &Path) -> notify::Result<crate::watch::FileWatch> {
+        crate::watch::FileWatch::new(path)
+    }
+
     /// Carga la config del usuario con un fallback amable: si el archivo no
     /// existe, escribe una plantilla documentada y devuelve los defaults; si
     /// está corrupto, avisa y devuelve los defaults.

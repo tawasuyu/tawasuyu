@@ -467,6 +467,67 @@ impl App {
         }
     }
 
+    /// Recarga el keymap del usuario en caliente. Conserva el anterior si
+    /// el archivo nuevo es inválido. No-op con el Cerebro enlazado (el
+    /// keymap es asunto suyo). Lo dispara [`ConfigWatches::poll`].
+    fn reload_keymap_from(&mut self, path: &std::path::Path) {
+        match Keymap::load(path) {
+            Ok(km) => {
+                let cmd = if let Brain::Embedded(d) = &mut self.brain {
+                    Some(d.set_keymap(km))
+                } else {
+                    None
+                };
+                if let Some(cmd) = cmd {
+                    self.apply_commands(vec![cmd]);
+                    println!("mirada-compositor · keymap recargado.");
+                }
+            }
+            Err(e) => {
+                eprintln!("mirada-compositor · keymap inválido, conservo el anterior: {e}")
+            }
+        }
+    }
+
+    /// Recarga la config general (dropterm, teselado, foco, marco) en
+    /// caliente y re-envía la decoración. Conserva la anterior si es
+    /// inválida. No-op con el Cerebro enlazado.
+    fn reload_config_from(&mut self, path: &std::path::Path) {
+        match mirada_brain::Config::load(path) {
+            Ok(cfg) => {
+                let cmds = if let Brain::Embedded(d) = &mut self.brain {
+                    d.reload_config(cfg)
+                } else {
+                    Vec::new()
+                };
+                if !cmds.is_empty() {
+                    self.apply_commands(cmds);
+                    println!("mirada-compositor · config recargada.");
+                }
+            }
+            Err(e) => {
+                eprintln!("mirada-compositor · config inválida, conservo la anterior: {e}")
+            }
+        }
+    }
+
+    /// Recarga las reglas de ventana en caliente. Aplican a las ventanas
+    /// que se abran a partir de ahora; las ya abiertas no se tocan.
+    /// Conserva las anteriores si son inválidas. No-op con Cerebro enlazado.
+    fn reload_rules_from(&mut self, path: &std::path::Path) {
+        match Rules::load(path) {
+            Ok(rules) => {
+                if let Brain::Embedded(d) = &mut self.brain {
+                    d.set_rules(rules);
+                    println!("mirada-compositor · reglas recargadas (aplican a ventanas nuevas).");
+                }
+            }
+            Err(e) => {
+                eprintln!("mirada-compositor · reglas inválidas, conservo las anteriores: {e}")
+            }
+        }
+    }
+
     /// Traduce los comandos del Cerebro a operaciones y las ejecuta.
     fn apply_commands(&mut self, cmds: Vec<BrainCommand>) {
         for cmd in cmds {
@@ -1616,13 +1677,46 @@ fn announce_dmabuf(app: &mut App, dh: &DisplayHandle, renderer: &GlesRenderer) {
     }
 }
 
+/// Vigías de los tres archivos de config recargables en caliente (keymap,
+/// config, reglas). Cada uno es `(ruta, vigía)` o `None` si no aplica
+/// (Cerebro enlazado, modo greeter o fallo al armar el watcher). Un solo
+/// [`poll`](ConfigWatches::poll) atiende los tres — sin duplicar la lógica
+/// entre el backend winit y el DRM.
+#[derive(Default)]
+struct ConfigWatches {
+    keymap: Option<(std::path::PathBuf, mirada_brain::FileWatch)>,
+    config: Option<(std::path::PathBuf, mirada_brain::FileWatch)>,
+    rules: Option<(std::path::PathBuf, mirada_brain::FileWatch)>,
+}
+
+impl ConfigWatches {
+    /// Recarga lo que haya cambiado en disco. Llamar una vez por iteración
+    /// del bucle de eventos de cada backend.
+    fn poll(&self, app: &mut App) {
+        if let Some((p, w)) = &self.keymap {
+            if w.changed() {
+                app.reload_keymap_from(p);
+            }
+        }
+        if let Some((p, w)) = &self.config {
+            if w.changed() {
+                app.reload_config_from(p);
+            }
+        }
+        if let Some((p, w)) = &self.rules {
+            if w.changed() {
+                app.reload_rules_from(p);
+            }
+        }
+    }
+}
+
 /// Lo que comparten los dos backends gráficos: el `Display` de Wayland,
-/// el `App` ya armado y la maquinaria de keymap y control.
+/// el `App` ya armado y la maquinaria de recarga en caliente y control.
 struct Setup {
     display: Display<App>,
     app: App,
-    keymap_path: Option<std::path::PathBuf>,
-    keymap_watch: Option<mirada_brain::KeymapWatch>,
+    watches: ConfigWatches,
     ctl: Option<CtlServer>,
 }
 
@@ -1714,16 +1808,28 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         }
     }
 
-    // Vigilancia del keymap para recargarlo en caliente — sólo tiene
-    // sentido con el Cerebro embebido y fuera del modo greeter (donde
-    // no hay atajos registrados que recargar).
-    let keymap_watch = match (&app.brain, &keymap_path) {
-        (Brain::Embedded(_), Some(p)) if !greeter => Keymap::watch(p).ok(),
-        _ => None,
+    // Vigilancia de los archivos de config (keymap, config, reglas) para
+    // recargarlos en caliente — sólo con el Cerebro embebido y fuera del
+    // modo greeter (donde no hay nada registrado que recargar). Cada vigía
+    // empareja la ruta con su `FileWatch`; un fallo al armarlo deja `None`.
+    let watches = if matches!(app.brain, Brain::Embedded(_)) && !greeter {
+        let watch_pair = |p: &Option<std::path::PathBuf>| {
+            p.as_ref()
+                .and_then(|p| mirada_brain::FileWatch::new(p).ok().map(|w| (p.clone(), w)))
+        };
+        let w = ConfigWatches {
+            keymap: watch_pair(&keymap_path),
+            config: watch_pair(&mirada_brain::Config::default_path()),
+            rules: watch_pair(&Rules::default_path()),
+        };
+        let n = [&w.keymap, &w.config, &w.rules].iter().filter(|x| x.is_some()).count();
+        if n > 0 {
+            println!("mirada-compositor · vigilando {n} archivo(s) de config (recarga en caliente).");
+        }
+        w
+    } else {
+        ConfigWatches::default()
     };
-    if keymap_watch.is_some() {
-        println!("mirada-compositor · vigilando el keymap (recarga en caliente).");
-    }
 
     // API de control (mirada-ctl) — sólo con el Cerebro embebido; si es
     // externo, el socket de control lo abre él.
@@ -1744,7 +1850,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         Brain::Linked(_) => None,
     };
 
-    Ok(Setup { display, app, keymap_path, keymap_watch, ctl })
+    Ok(Setup { display, app, watches, ctl })
 }
 
 /// El backend `winit`: corre anidado dentro de una sesión gráfica.
@@ -1752,8 +1858,7 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
     let Setup {
         mut display,
         app: mut state,
-        keymap_path,
-        keymap_watch,
+        watches,
         ctl,
     } = build_app(greeter)?;
     let keyboard = state.keyboard.clone().expect("teclado inicializado");
@@ -1886,27 +1991,8 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 2 ter · Recarga del keymap si el archivo cambió en disco.
-        if keymap_watch.as_ref().is_some_and(|w| w.changed()) {
-            if let Some(path) = &keymap_path {
-                match Keymap::load(path) {
-                    Ok(km) => {
-                        let cmd = if let Brain::Embedded(d) = &mut state.brain {
-                            Some(d.set_keymap(km))
-                        } else {
-                            None
-                        };
-                        if let Some(cmd) = cmd {
-                            state.apply_commands(vec![cmd]);
-                        }
-                        println!("mirada-compositor · keymap recargado.");
-                    }
-                    Err(e) => eprintln!(
-                        "mirada-compositor · keymap inválido, conservo el anterior: {e}"
-                    ),
-                }
-            }
-        }
+        // 2 ter · Recarga en caliente de keymap/config/reglas si cambiaron.
+        watches.poll(&mut state);
 
         // 2 quater · Peticiones del API de control (mirada-ctl).
         if let Some(ctl) = &ctl {

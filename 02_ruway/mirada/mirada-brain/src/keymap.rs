@@ -32,11 +32,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::action::{default_keymap, DesktopAction};
+use crate::watch::FileWatch;
 
 /// Atajos del escritorio: combinación canónica → acción.
 ///
@@ -179,43 +179,17 @@ impl Keymap {
         }
     }
 
-    /// Vigila el archivo del keymap para recargarlo en caliente.
+    /// Vigila el archivo del keymap para recargarlo en caliente — un
+    /// [`FileWatch`] genérico, igual que la config y las reglas.
     pub fn watch(path: &Path) -> notify::Result<KeymapWatch> {
-        use notify::{RecursiveMode, Watcher};
-
-        let target = path.to_path_buf();
-        let (tx, rx) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(event) = res {
-                // Vigilamos el directorio (los editores reescriben el
-                // archivo por *rename*); filtramos a nuestro archivo.
-                if event.paths.iter().any(|p| p == &target) {
-                    let _ = tx.send(());
-                }
-            }
-        })?;
-        let dir = path.parent().filter(|d| d.exists());
-        watcher.watch(dir.unwrap_or(path), RecursiveMode::NonRecursive)?;
-        Ok(KeymapWatch { _watcher: watcher, rx })
+        FileWatch::new(path)
     }
 }
 
-/// Vigía del archivo de keymap para la recarga en caliente.
-///
-/// Mantenlo vivo mientras quieras recargas; al soltarlo, la vigilancia
-/// cesa. Consulta [`changed`](KeymapWatch::changed) en tu bucle de eventos.
-pub struct KeymapWatch {
-    _watcher: notify::RecommendedWatcher,
-    rx: mpsc::Receiver<()>,
-}
-
-impl KeymapWatch {
-    /// `true` si el archivo cambió desde la última consulta. Coalesce una
-    /// ráfaga de eventos (un guardado dispara varios) en un solo `true`.
-    pub fn changed(&self) -> bool {
-        self.rx.try_iter().count() > 0
-    }
-}
+/// Vigía del archivo de keymap para la recarga en caliente. Hoy es un
+/// alias del [`FileWatch`] genérico — se conserva el nombre por
+/// compatibilidad con quien lo nombra (`mirada-compositor`).
+pub type KeymapWatch = FileWatch;
 
 /// La forma en disco del keymap — un mapa de cadenas. Las acciones van
 /// como texto (`"layout:grid"`) y no como enum, para que el RON sea
