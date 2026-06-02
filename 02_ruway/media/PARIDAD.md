@@ -38,8 +38,17 @@ conviene retomarlo con pantalla:
   pitch-correct speed.
 - **Subtítulos**: S2 pistas embebidas, S3 estilo visual ASS (libass-like).
 - **Mejoras a lo ya hecho**: *(A5 ReplayGain/EBU R128 ✅, V4 hue ✅ y R2 DASH
-  A/V separados ✅ cerrados 2026-06-02 — todo lo testeable-en-CI del plan está
-  hecho; lo que resta necesita pantalla/GPU o red/audio real para verificar.)*
+  A/V separados ✅ cerrados 2026-06-02.)*
+- **Track UX/BIBLIOTECA — core cerrado (2026-06-02)**: los 4 ítems sin
+  dependencia de hardware ya tienen su núcleo puro y testeado: **U1**
+  (`media-core::playlist`, modelo de orden + edición), **U2**
+  (`media-core::library::History`, resume/historial), **U5**
+  (`media-core::metadata`, ID3v2 + FLAC + carátula) y **U6**
+  (`media-core::library::Bookmarks`). Quedan **U3** (thumbnails en hover) y
+  **U4** (OSD), que necesitan decode/pantalla. Lo siguiente de estos 4 es el
+  **wiring en `media-app`** (persistir los `.ron`, ofrecer "continuar",
+  pintar carátula/marcas, editor de cola) — necesita correr la app.
+  `cargo test -p media-core` = **149 verde**, `--workspace` verde.
 
 Sugerencia al retomar: `cargo run -p media-app -- <archivo>` y ejercitar las
 features nuevas desde el command palette (Ctrl+Shift+P): grupos Orientación,
@@ -90,7 +99,10 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 - Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, hue incluido) ✅.**
 - Track SUBTÍTULOS S2, S3 (pistas embebidas, estilo configurable). **S1 (ASS/SSA texto+timing) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.**
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
-- Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
+- Track UX U3 (thumbnails en hover) y U4 (OSD) — necesitan decode/pantalla.
+  **U1 (modelo de orden de playlist) ✅ · U2 (resume/historial) ✅ · U5
+  (metadata/cover ID3+FLAC) ✅ · U6 (bookmarks) ✅** — core puro testeable en
+  CI (2026-06-02); falta el wiring en `media-app` (necesita pantalla).
 
 ## Tracks y fases
 
@@ -252,11 +264,43 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 ### Track UX / BIBLIOTECA
 
 - **U1 — Editor de playlist en UI** (reordenar arrastrando, guardar, ver cola).
-- **U2 — Resume from last position / historial.**
+  ✅ *Core cerrado (2026-06-02).* `media-core::playlist`: modelo de orden
+  agnóstico (regla #2) que hoy estaba enredado con los decoders en
+  `media-app`. Lista de entradas + cursor + edición que **sigue a la misma
+  entrada lógica** tras cada permutación — `push`/`insert`/`remove`/
+  `move_item` (drag-to-reorder)/`enqueue_next` ("reproducir a
+  continuación")/`clear`. `Repeat` (Off/All/One, ciclo estilo VLC) +
+  `shuffle` como estado serializable; `shuffle_order(seed)` determinista
+  (Fisher-Yates + LCG) con la actual primera; `next`/`prev` lineales
+  respetando repeat; round-trip RON, `sanitized()`. +13 tests. **Falta**: la
+  UI editora y que `media-app` adopte este modelo en vez de su `Playlist`
+  acoplada (necesita correr la app para validar nav/shuffle).
+- **U2 — Resume from last position / historial.** ✅ *Core cerrado
+  (2026-06-02).* `media-core::library`: `History` + `ResumePoint` por medio
+  (clave agnóstica: ruta/URL/hash), con posición de reanudación, política de
+  "ya terminó" (cola de créditos + 98 %), contador de reproducciones,
+  recencia y evicción LRU por capacidad. Tiempo inyectado (`now_secs` época
+  Unix) para ser determinista. Round-trip RON. +9 tests. **Falta**: que
+  `media-app` persista el `.ron` y ofrezca "continuar" al abrir un medio
+  conocido (necesita correr la app).
 - **U3 — Thumbnails en hover del timeline** (thumbfast).
 - **U4 — OSD** de reproducción (volumen/seek/velocidad on-screen).
-- **U5 — Metadata/tags** (ID3, carátula/cover art).
-- **U6 — Bookmarks.**
+- **U5 — Metadata/tags** (ID3, carátula/cover art). ✅ *Cerrado (2026-06-02).*
+  `media-core::metadata`: parser puro (sin deps, sin I/O) de ID3v2.2/2.3/2.4
+  (`.mp3`: TIT2/TPE1/TALB/TYER·TDRC/TRCK/TCON + APIC, con tamaños synchsafe
+  vs planos, IDs de 3 chars en v2.2, encodings Latin1/UTF-16(±BOM)/UTF-8, año
+  recortado de fechas) y bloques nativos FLAC (`VORBIS_COMMENT` LE + bloque
+  `PICTURE` BE → carátula). Autodetección por firma (`ID3`/`fLaC`),
+  best-effort ante bytes corruptos. Salida normalizada `Metadata` +
+  `CoverArt`, round-trip RON. +11 tests. **Falta**: que `media-app` muestre
+  título/artista/carátula (la UI decodifica el PNG/JPEG vía `peniko::Image`).
+- **U6 — Bookmarks.** ✅ *Cerrado (2026-06-02).* `media-core::library`:
+  `Bookmark` + `Bookmarks` — varias marcas con etiqueta por medio, puestas a
+  mano (vs. el `ResumePoint` único que mueve el reproductor). Orden canónico
+  `(key,position)`, `add` con renombrado por cercanía (epsilon 500 ms),
+  navegación `next_after`/`prev_before` para saltar de marca en marca,
+  `remove_near`/`clear_media`. Round-trip RON. +6 tests. **Falta**: comandos
+  + marcas pintadas sobre el `llimphi-widget-timeline`.
 
 ## Orden de ejecución sugerido
 
