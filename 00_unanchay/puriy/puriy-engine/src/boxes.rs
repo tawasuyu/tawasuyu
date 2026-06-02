@@ -2933,6 +2933,32 @@ mod tests {
     }
 
     #[test]
+    fn link_media_print_no_aplica_en_pantalla() {
+        // `<link media="print">` no debe aplicar al render de pantalla; la
+        // misma regla con `media="screen"` sí. DEFAULT_VIEWPORT es screen.
+        let print = r##"<html><head>
+            <link rel="stylesheet" href="data:text/css,p%7Bcolor%3Ared%7D" media="print">
+        </head><body><p>x</p></body></html>"##;
+        let screen = r##"<html><head>
+            <link rel="stylesheet" href="data:text/css,p%7Bcolor%3Ared%7D" media="screen">
+        </head><body><p>x</p></body></html>"##;
+        let eng = Engine::new();
+        let red = super::Color::rgb(255, 0, 0);
+        let color_of = |html: &str| {
+            let doc = eng.load_html("about:test", html);
+            let mut c = None;
+            doc.box_tree.walk(|b| {
+                if b.tag.as_deref() == Some("p") {
+                    c = Some(b.color);
+                }
+            });
+            c
+        };
+        assert_ne!(color_of(print), Some(red), "media=print no debía aplicar en pantalla");
+        assert_eq!(color_of(screen), Some(red), "media=screen sí debía aplicar");
+    }
+
+    #[test]
     fn link_stylesheet_cascada_respeta_orden_de_documento() {
         // Hoja externa (data:) declara color rojo; un `<style>` posterior lo
         // pisa a azul — el orden de documento debe ganar (azul), no el externo.

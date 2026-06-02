@@ -121,12 +121,18 @@ impl DomTree {
         walk(&self.document(), &mut |node| {
             if let NodeData::Element { name, .. } = &node.data {
                 match name.local.as_ref() {
-                    "style" => out.push(StyleSource::Inline(collect_text(node))),
+                    "style" => out.push(StyleSource::Inline {
+                        css: collect_text(node),
+                        media: media_attr(node),
+                    }),
                     "link" if link_is_stylesheet(node) => {
                         if let Some(href) = attr(node, "href") {
                             let href = href.trim();
                             if !href.is_empty() {
-                                out.push(StyleSource::External(href.to_string()));
+                                out.push(StyleSource::External {
+                                    href: href.to_string(),
+                                    media: media_attr(node),
+                                });
                             }
                         }
                     }
@@ -269,13 +275,28 @@ fn collect_text_inner(node: &Handle, out: &mut String) {
 }
 
 /// Una fuente de estilos del documento, en orden de aparición. La produce
-/// [`DomTree::collect_style_sources`].
+/// [`DomTree::collect_style_sources`]. `media` lleva el atributo `media=`
+/// crudo (la media query que gatea si la hoja aplica) — `None` = sin atributo
+/// (aplica siempre). El caller lo evalúa contra el viewport.
 pub enum StyleSource {
-    /// Texto de un `<style>` inline.
-    Inline(String),
-    /// `href` crudo de un `<link rel="stylesheet">` — el caller lo resuelve
-    /// contra la base y lo baja.
-    External(String),
+    /// Texto de un `<style>` inline + su `media` opcional.
+    Inline { css: String, media: Option<String> },
+    /// `href` crudo de un `<link rel="stylesheet">` + su `media` opcional — el
+    /// caller lo resuelve contra la base y lo baja.
+    External { href: String, media: Option<String> },
+}
+
+/// Lee el atributo `media` de un nodo (`<link>`/`<style>`), normalizado. `None`
+/// si falta o está vacío, o si es `all` (equivale a "siempre aplica" → evitar
+/// evaluarlo). Cualquier otro valor se conserva crudo para evaluar.
+fn media_attr(node: &Handle) -> Option<String> {
+    let m = attr(node, "media")?;
+    let m = m.trim();
+    if m.is_empty() || m.eq_ignore_ascii_case("all") {
+        None
+    } else {
+        Some(m.to_string())
+    }
 }
 
 /// ¿Es este `<link>` una hoja de estilo aplicable? Exige `rel` con el token
@@ -424,9 +445,25 @@ mod tests {
         // Esperado en orden: External(a.css), Inline(...), External(b.css).
         // Descartados: alternate stylesheet, rel=icon, link sin href.
         assert_eq!(sources.len(), 3, "se esperaban 3 fuentes, hubo {}", sources.len());
-        assert!(matches!(&sources[0], StyleSource::External(h) if h == "a.css"));
-        assert!(matches!(&sources[1], StyleSource::Inline(t) if t.contains("color:red")));
-        assert!(matches!(&sources[2], StyleSource::External(h) if h == "b.css"));
+        assert!(matches!(&sources[0], StyleSource::External { href, .. } if href == "a.css"));
+        assert!(matches!(&sources[1], StyleSource::Inline { css, .. } if css.contains("color:red")));
+        assert!(matches!(&sources[2], StyleSource::External { href, .. } if href == "b.css"));
+    }
+
+    #[test]
+    fn collect_style_sources_captura_media() {
+        let html = r##"<html><head>
+            <link rel="stylesheet" href="print.css" media="print">
+            <link rel="stylesheet" href="a.css" media="all">
+            <style media="(max-width: 600px)">p{}</style>
+        </head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let sources = dom.collect_style_sources();
+        assert_eq!(sources.len(), 3);
+        assert!(matches!(&sources[0], StyleSource::External { media: Some(m), .. } if m == "print"));
+        // media="all" se normaliza a None (aplica siempre).
+        assert!(matches!(&sources[1], StyleSource::External { media: None, .. }));
+        assert!(matches!(&sources[2], StyleSource::Inline { media: Some(m), .. } if m == "(max-width: 600px)"));
     }
 
     #[test]

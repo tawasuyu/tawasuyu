@@ -124,12 +124,24 @@ impl Engine {
         // reglas, como un browser tras un 404 de CSS). Hojas relativas con base
         // no-http (`about:test` en tests) no resuelven → sin red.
         let base = url::Url::parse(url).ok();
+        // El atributo `media` del `<link>`/`<style>` gatea la hoja: una que no
+        // matchea el viewport (`media="print"` en pantalla, `media="(max-width:
+        // 600px)"` en ventana ancha) se descarta entera, sin bajarla.
+        let media_ok = |media: &Option<String>| -> bool {
+            media
+                .as_deref()
+                .map(|q| evaluate_media_query(q, self.viewport))
+                .unwrap_or(true)
+        };
         let sheets: Vec<String> = dom
             .collect_style_sources()
             .into_iter()
             .filter_map(|src| match src {
-                dom::StyleSource::Inline(text) => Some(text),
-                dom::StyleSource::External(href) => {
+                dom::StyleSource::Inline { css, media } => media_ok(&media).then_some(css),
+                dom::StyleSource::External { href, media } => {
+                    if !media_ok(&media) {
+                        return None;
+                    }
                     let abs = resolve_resource_url(base.as_ref(), &href)?;
                     let bytes = fetch::fetch_bytes(&abs).ok()?;
                     Some(String::from_utf8_lossy(&bytes).into_owned())
