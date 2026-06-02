@@ -308,7 +308,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     };
 
     while !app.exit {
-        event_queue.blocking_dispatch(&mut app)?;
+        if let Err(e) = event_queue.blocking_dispatch(&mut app) {
+            // El compositor cerró la conexión (se apagó / Ctrl+Alt+Backspace):
+            // es una salida normal, no una falla del backend. Devolvemos Ok para
+            // que el caller NO caiga a la ventana winit (que paniquearía al no
+            // encontrar compositor). La caída a winit es sólo para cuando el
+            // layer-shell no arranca de entrada (X11, sin wlr-layer-shell).
+            eprintln!("pata layer · el compositor cerró la conexión: {e}");
+            break;
+        }
     }
     Ok(())
 }
