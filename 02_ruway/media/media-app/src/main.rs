@@ -812,6 +812,10 @@ struct Model {
     bar_target: usize,
     /// Desplazamiento vertical (px) del contenido de la pestaña activa.
     settings_scroll: f32,
+    /// Si el panel de visualizadores de audio (onda + waterfall + medidores)
+    /// está visible. Default **oculto**: por defecto se ve sólo video + barras;
+    /// se despliega desde el menú Ver. (Estado de sesión, no se persiste aún.)
+    visualizers_open: bool,
 }
 
 struct Pipeline {
@@ -2232,6 +2236,7 @@ impl App for MediaApp {
             settings_tab: SettingsTab::Audio,
             bar_target: 0,
             settings_scroll: 0.0,
+            visualizers_open: false,
         }
     }
 
@@ -2578,25 +2583,6 @@ impl App for MediaApp {
         // suelto de antes.
         let bars = toolbar_view(model);
 
-        // --- Visores ---
-        // Los controles ya viven en las barras de íconos (toolbar_view); acá
-        // sólo quedan los visores como "lienzo" del audio: forma de onda +
-        // waterfall (spectrogram). Reemplazan a las viejas tiles de control
-        // (transport/volume/playlist/recorder), que eran feas y redundantes.
-        let visualizers = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(200.0_f32),
-            },
-            gap: Size {
-                width: length(10.0_f32),
-                height: length(0.0_f32),
-            },
-            ..Default::default()
-        })
-        .children(vec![waveform_panel(), waterfall_panel(), meters_panel()]);
-
         let time_label = {
             let s = playback_snapshot();
             if s.present {
@@ -2650,7 +2636,30 @@ impl App for MediaApp {
             },
             ..Default::default()
         })
-        .children(vec![canvas, subs_strip, bars, visualizers, footer]);
+        .children({
+            // Visualizadores ocultos por default: sólo van si el usuario los
+            // desplegó desde el menú Ver. Así por defecto se ve video + barras.
+            // Son el "lienzo" del audio: forma de onda + waterfall + medidores.
+            let mut kids = vec![canvas, subs_strip, bars];
+            if model.visualizers_open {
+                let visualizers = View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(200.0_f32),
+                    },
+                    gap: Size {
+                        width: length(10.0_f32),
+                        height: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .children(vec![waveform_panel(), waterfall_panel(), meters_panel()]);
+                kids.push(visualizers);
+            }
+            kids.push(footer);
+            kids
+        });
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -3448,6 +3457,7 @@ fn app_menu() -> AppMenu {
         .menu(
             Menu::new("Ver")
                 .item(MenuItem::new("Configuración", "view.settings").shortcut("F2").separated())
+                .item(MenuItem::new("Visualizadores de audio", "view.visualizers"))
                 .item(MenuItem::new("Paleta de comandos", "view.palette").shortcut("Ctrl+Shift+P"))
                 .item(MenuItem::new("Ayuda de atajos", "view.help").shortcut("?")),
         )
@@ -3457,7 +3467,7 @@ fn app_menu() -> AppMenu {
 /// Traduce un command id del menú (principal o contextual) al `Msg`/efecto
 /// real. Los ids de transporte/captura despachan `Msg::Command` con un
 /// [`MediaCommand`] — exactamente lo que ya disparan botones y teclado.
-fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+fn handle_menu_command(mut model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
     use MediaCommand::*;
     let step = settings().seek_step_secs;
     let vstep = settings().volume_step;
@@ -3478,6 +3488,7 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "play.vol_up" => dispatch(VolumeBy { delta: vstep }),
         "play.vol_dn" => dispatch(VolumeBy { delta: -vstep }),
         "view.settings" => handle.dispatch(Msg::ToggleSettings),
+        "view.visualizers" => model.visualizers_open = !model.visualizers_open,
         "view.palette" => handle.dispatch(Msg::Palette(PaletteMsg::Open)),
         "view.help" => handle.dispatch(Msg::ToggleHelp),
         // "help.about" y desconocidos: no-op (sin diálogo todavía).
