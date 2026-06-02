@@ -27,6 +27,11 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             .create_window(build_window_attributes::<A>())
             .expect("create window");
         let window = Arc::new(window);
+        // IME opt-in: sólo se habilita si la app lo pide (ver `App::ime_allowed`).
+        // Con IME activo el texto compuesto llega por `WindowEvent::Ime`.
+        if A::ime_allowed() {
+            window.set_ime_allowed(true);
+        }
         let hal = pollster::block_on(Hal::new(None)).expect("hal");
         let surface = WinitSurface::new(&hal, window.clone()).expect("surface");
         let renderer = Renderer::new(&hal).expect("renderer");
@@ -207,6 +212,21 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             }
             WindowEvent::ModifiersChanged(mods) => {
                 state.modifiers = mods.state().into();
+            }
+            WindowEvent::Ime(ime) if A::ime_allowed() => {
+                use llimphi_hal::winit::event::Ime;
+                let ev = match ime {
+                    Ime::Enabled => ImeEvent::Enabled,
+                    Ime::Preedit(text, cursor) => ImeEvent::Preedit { text, cursor },
+                    Ime::Commit(text) => ImeEvent::Commit(text),
+                    Ime::Disabled => ImeEvent::Disabled,
+                };
+                if let Some(msg) = A::on_ime(state.model.as_ref().expect("model"), &ev) {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
+                    state.window.request_redraw();
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Tab / Shift+Tab mueven el foco entre nodos `focusable`,
@@ -616,6 +636,21 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Posicioná la ventana de candidatos del IME junto al caret
+                // (sólo con IME activo y si la app reporta el área).
+                if A::ime_allowed() {
+                    if let Some((x, y, w, h)) =
+                        A::ime_cursor_area(state.model.as_ref().expect("model"))
+                    {
+                        state.window.set_ime_cursor_area(
+                            PhysicalPosition::new(x as f64, y as f64),
+                            llimphi_hal::winit::dpi::PhysicalSize::new(
+                                w.max(1.0) as u32,
+                                h.max(1.0) as u32,
+                            ),
+                        );
+                    }
+                }
                 let frame = match state.surface.acquire() {
                     Ok(f) => f,
                     Err(_) => {

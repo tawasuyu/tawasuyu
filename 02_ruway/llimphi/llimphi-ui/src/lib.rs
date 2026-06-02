@@ -70,6 +70,35 @@ pub trait App: 'static {
         None
     }
 
+    /// ¿Habilitar IME (input method editor) en esta ventana? Default
+    /// `false`. Con IME activo, el texto compuesto (CJK, acentos muertos,
+    /// emoji picker) llega por [`App::on_ime`] como `Commit`, **no** por
+    /// `KeyEvent.text` — por eso es opt-in: las apps que sólo leen
+    /// `on_key` siguen funcionando igual. Las que editan texto
+    /// (`text-input`, `text-editor`) la activan e implementan `on_ime`.
+    fn ime_allowed() -> bool {
+        false
+    }
+
+    /// Maneja un evento de IME (sólo llega si [`App::ime_allowed`] es
+    /// `true`). El flujo típico: `Enabled` → uno o más `Preedit` (texto en
+    /// composición, a pintar subrayado en el caret) → `Commit(texto)` (el
+    /// texto final, a insertar como si se hubiera tecleado) o `Disabled`.
+    /// El `Preedit` no es definitivo: cada uno reemplaza al anterior, y un
+    /// `Commit` o `Preedit` vacío lo cierra. Devolver `Some(Msg)` dispara
+    /// una transición.
+    fn on_ime(_model: &Self::Model, _event: &ImeEvent) -> Option<Self::Msg> {
+        None
+    }
+
+    /// Área del caret en **píxeles físicos** `(x, y, w, h)` para posicionar
+    /// la ventana de candidatos del IME (CJK) junto al cursor de texto. El
+    /// runtime la consulta por frame cuando [`App::ime_allowed`] es `true`.
+    /// `None` (default) deja que el sistema la ubique por defecto.
+    fn ime_cursor_area(_model: &Self::Model) -> Option<(f32, f32, f32, f32)> {
+        None
+    }
+
     /// Maneja una rueda del mouse. `delta` está normalizado a "líneas"
     /// (positivo arriba/izquierda, negativo abajo/derecha). En backends
     /// que reportan píxeles, llimphi-ui divide por 20 para aproximar.
@@ -303,6 +332,26 @@ pub struct KeyEvent {
 pub enum KeyState {
     Pressed,
     Released,
+}
+
+/// Evento de IME normalizado (espeja `winit::event::Ime`). Ver
+/// [`App::on_ime`] para el flujo Enabled → Preedit* → Commit/Disabled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImeEvent {
+    /// El IME se activó para esta ventana.
+    Enabled,
+    /// Texto en composición (aún no confirmado). `cursor` es el rango
+    /// `(inicio, fin)` en bytes a resaltar dentro de `text`, si el IME lo
+    /// reporta. Cada `Preedit` reemplaza al anterior; uno con `text`
+    /// vacío cierra la preedición sin confirmar.
+    Preedit {
+        text: String,
+        cursor: Option<(usize, usize)>,
+    },
+    /// Texto confirmado: insertarlo como si se hubiera tecleado.
+    Commit(String),
+    /// El IME se desactivó (perder foco, cambiar de método).
+    Disabled,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
