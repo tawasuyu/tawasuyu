@@ -344,7 +344,11 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         var args = Array.prototype.slice.call(arguments);
         var src = '';
         if (image) src = image.src || image.currentSrc || image._src || '';
-        this._rec.apply(this, ['drawImage', String(src)].concat(args.slice(1)));
+        // Fase 7.201 — apendamos el snapshot de estilo al final (igual que
+        // fill/rect/text) para que el chrome aplique globalAlpha + sombra +
+        // globalCompositeOperation a la imagen. El painter parsea las
+        // coordenadas con filter_map (descarta el objeto snapshot del final).
+        this._rec.apply(this, ['drawImage', String(src)].concat(args.slice(1), [this._snapshot()]));
     };
 
     // Gradientes / patrones.

@@ -454,11 +454,13 @@ pub(crate) fn render_canvas(
 /// patrones `createPattern` (Fase 7.198), sombras `shadow*` (Fase 7.199:
 /// `fillRect` con blur gaussiano real, el resto silueta desplazada) y
 /// `globalCompositeOperation` (Fase 7.200: blend modes de vello vía
-/// `push_layer`, en fill/stroke/rect/text — ver `canvas_composite`).
-/// Limitaciones: putImageData/getImageData (sin buffer CPU), clearRect parcial,
-/// y `globalCompositeOperation`/`globalAlpha`/sombra sobre drawImage quedan
-/// fuera (su comando no lleva snapshot); el texto con gradiente degrada a color
-/// sólido (el typesetter sólo toma `Color`).
+/// `push_layer`, en fill/stroke/rect/text/drawImage — ver `canvas_composite`),
+/// y sobre `drawImage` también `globalAlpha` + sombra (Fase 7.201, vía el
+/// snapshot apendido al comando).
+/// Limitaciones: putImageData/getImageData (sin buffer CPU), clearRect parcial;
+/// la sombra de `drawImage` es rectangular (los límites dest, no la silueta
+/// alpha de la imagen); el texto con gradiente degrada a color sólido (el
+/// typesetter sólo toma `Color`).
 pub(crate) fn paint_canvas_cmds(
     scene: &mut llimphi_raster::vello::Scene,
     ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -714,8 +716,12 @@ pub(crate) fn paint_canvas_cmds(
                 let src = cmd.get(1).and_then(|v| v.as_str()).unwrap_or("");
                 let Some(img) = images.get(src) else { continue };
                 let (iw_i, ih_i) = (img.width as f64, img.height as f64);
+                // Fase 7.201 — snapshot opcional al final (objeto). Las
+                // coordenadas son los números (filter_map descarta el snapshot).
+                let st = cmd.last().filter(|v| v.is_object());
+                let ga = style_field(st, "ga").unwrap_or(1.0);
                 let nums: Vec<f64> =
-                    cmd[2.min(cmd.len())..].iter().map(|v| v.as_f64().unwrap_or(0.0)).collect();
+                    cmd[2.min(cmd.len())..].iter().filter_map(|v| v.as_f64()).collect();
                 let (sx, sy, sw, sh, dx, dy, dw, dh) = match nums.len() {
                     2 => (0.0, 0.0, iw_i, ih_i, nums[0], nums[1], iw_i, ih_i),
                     4 => (0.0, 0.0, iw_i, ih_i, nums[0], nums[1], nums[2], nums[3]),
@@ -725,20 +731,41 @@ pub(crate) fn paint_canvas_cmds(
                 if sw <= 0.0 || sh <= 0.0 || dw == 0.0 || dh == 0.0 {
                     continue;
                 }
+                let dest = KurboRect::new(dx, dy, dx + dw, dy + dh);
+                // globalCompositeOperation: capa de blend sobre el canvas entero.
+                let comp = canvas_composite(st);
+                if let Some(bm) = comp {
+                    scene.push_layer(bm, 1.0, base, &whole);
+                }
+                // Sombra (Fase 7.201): rect blureado de los límites dest en color
+                // de sombra, detrás de la imagen. MVP: ignora el alpha real de la
+                // imagen (sombra rectangular, no la silueta) — fiel para fotos/
+                // thumbnails opacos, boxy para PNGs con transparencia.
+                if let Some((col, blur, ox, oy)) = canvas_shadow(st, ga) {
+                    let sr = KurboRect::new(dx + ox, dy + oy, dx + dw + ox, dy + dh + oy);
+                    scene.draw_blurred_rounded_rect(base * cur, sr, col, 0.0, (blur * 0.5).max(0.0));
+                }
                 // Recorta al dest rect (necesario cuando el source es un
                 // sub-rect: draw_image pinta la imagen ENTERA, el clip la acota).
-                let dest = KurboRect::new(dx, dy, dx + dw, dy + dh);
                 scene.push_layer(Mix::Clip, 1.0, base * cur, &dest);
                 // Mapea espacio-pixel de la imagen → dest: el source (sx,sy)
                 // cae en (dx,dy) y (sx+sw,sy+sh) en (dx+dw,dy+dh).
                 let m = Affine::translate((dx, dy))
                     * Affine::scale_non_uniform(dw / sw, dh / sh)
                     * Affine::translate((-sx, -sy));
-                scene.draw_image(img, base * cur * m);
+                // globalAlpha: multiplica el alpha de la imagen (Fase 7.201).
+                if ga < 1.0 {
+                    scene.draw_image(&img.clone().with_alpha(ga.clamp(0.0, 1.0) as f32), base * cur * m);
+                } else {
+                    scene.draw_image(img, base * cur * m);
+                }
                 scene.pop_layer();
+                if comp.is_some() {
+                    scene.pop_layer();
+                }
             }
             // clearRect parcial / putImageData: no-op (el MVP no tiene buffer
-            // persistente; globalAlpha no se aplica a drawImage).
+            // persistente — putImageData/getImageData se cierran aparte).
             _ => {}
         }
     }

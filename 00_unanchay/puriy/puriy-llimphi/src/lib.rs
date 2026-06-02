@@ -4453,6 +4453,44 @@ mod tests {
     }
 
     #[test]
+    fn drawimage_con_snapshot_aplica_composite_y_alpha() {
+        // Fase 7.201 — un drawImage con snapshot de composite/alpha sigue
+        // dibujando (las coords se parsean con filter_map, descartando el
+        // snapshot del final) y la capa de blend agrega draw objects.
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let img = PenikoImage::new(Blob::from(vec![255u8; 16]), ImageFormat::Rgba8, 2, 2);
+        let mut images = std::collections::HashMap::new();
+        images.insert("u".to_string(), img);
+        // Sin snapshot (compat hacia atrás): dibuja.
+        let plano: Vec<Vec<serde_json::Value>> =
+            serde_json::from_str(r#"[["drawImage","u",10,10,40,40,{"ga":1.0}]]"#).unwrap();
+        let mut s_plano = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut s_plano, &mut ts, rect, &plano, 100.0, 100.0, &images);
+        assert!(!s_plano.encoding().is_empty(), "drawImage con snapshot debería pintar");
+        // Con composite 'lighter' → capa de blend extra.
+        let comp: Vec<Vec<serde_json::Value>> =
+            serde_json::from_str(r#"[["drawImage","u",10,10,40,40,{"ga":1.0,"gco":"lighter"}]]"#)
+                .unwrap();
+        let mut s_comp = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut s_comp, &mut ts, rect, &comp, 100.0, 100.0, &images);
+        assert!(
+            s_comp.encoding().draw_tags.len() > s_plano.encoding().draw_tags.len(),
+            "el composite debería agregar draw objects: {} vs {}",
+            s_comp.encoding().draw_tags.len(),
+            s_plano.encoding().draw_tags.len()
+        );
+        // Las coords (8 números, sub-rect) + snapshot siguen mapeando bien.
+        let sub: Vec<Vec<serde_json::Value>> = serde_json::from_str(
+            r#"[["drawImage","u",0,0,2,2,10,10,40,40,{"ga":0.5,"sc":"rgba(0,0,0,1)","sb":6,"sox":3,"soy":3}]]"#,
+        )
+        .unwrap();
+        let mut s_sub = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut s_sub, &mut ts, rect, &sub, 100.0, 100.0, &images);
+        assert!(!s_sub.encoding().is_empty(), "sub-rect con alpha+sombra debería pintar");
+    }
+
+    #[test]
     fn decode_canvas_images_resuelve_data_url() {
         // decode_canvas_images decodifica el src de un drawImage (data: PNG 1×1)
         // y lo deja en t.canvas_images.
