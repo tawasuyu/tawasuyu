@@ -189,6 +189,9 @@ impl Desktop {
                 }
             }
             BodyEvent::WindowOpened { id, app_id, title } => {
+                // La terminal dropdown se reconoce por su `app_id`: nace
+                // flotando anclada arriba y enfocada, lista para escribir.
+                let is_dropterm = app_id == DROPTERM_APP_ID;
                 // Las reglas pueden mandarla a otro escritorio o hacerla flotar.
                 let outcome = self.rules.resolve(&app_id, &title);
                 self.windows.insert(id, WindowInfo { app_id, title });
@@ -197,7 +200,13 @@ impl Desktop {
                     .filter(|&n| n < self.workspaces.len())
                     .unwrap_or(self.active_index());
                 self.workspaces[ws].add(id);
-                if outcome.floating {
+                if is_dropterm {
+                    let rect = self
+                        .screen()
+                        .map(dropdown_rect)
+                        .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
+                    self.workspaces[ws].set_floating(id, Some(rect));
+                } else if outcome.floating {
                     let rect = self
                         .screen()
                         .map(centered_float_rect)
@@ -386,6 +395,43 @@ impl Desktop {
                     self.relayout()
                 } else {
                     Vec::new()
+                }
+            }
+            DesktopAction::ToggleDropterm => {
+                // Buscamos la terminal dropdown por su marca de `app_id`.
+                let existing = self
+                    .windows
+                    .iter()
+                    .find(|(_, info)| info.app_id == DROPTERM_APP_ID)
+                    .map(|(&id, _)| id);
+                match existing {
+                    // Ya existe: si está a la vista, la guardamos; si está
+                    // guardada, la bajamos flotando y enfocada.
+                    Some(id) => {
+                        if self.workspaces[active].windows().contains(&id) {
+                            for ws in &mut self.workspaces {
+                                ws.remove(id);
+                            }
+                            if !self.scratchpad.contains(&id) {
+                                self.scratchpad.push(id);
+                            }
+                        } else {
+                            for ws in &mut self.workspaces {
+                                ws.remove(id);
+                            }
+                            self.scratchpad.retain(|&w| w != id);
+                            let rect = self
+                                .screen()
+                                .map(dropdown_rect)
+                                .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
+                            self.workspaces[active].add(id);
+                            self.workspaces[active].set_floating(id, Some(rect));
+                        }
+                        self.relayout()
+                    }
+                    // Aún no existe: la creamos perezosamente. Al abrirse,
+                    // `WindowOpened` la reconoce y la baja flotando+enfocada.
+                    None => vec![BrainCommand::Spawn(DROPTERM_CMD.into())],
                 }
             }
             DesktopAction::CycleLayout => {
@@ -585,6 +631,20 @@ impl Desktop {
         }
         lines
     }
+}
+
+/// `app_id` con el que se marca y reconoce la terminal dropdown (quake).
+/// La crea `ToggleDropterm` con [`DROPTERM_CMD`] y se la reconoce al abrir.
+pub const DROPTERM_APP_ID: &str = "mirada.dropterm";
+
+/// Comando que lanza la terminal dropdown. `kitty --class` fija el `app_id`
+/// en Wayland, que es como la reconocemos. Configurable en rondas futuras.
+const DROPTERM_CMD: &str = "kitty --class mirada.dropterm";
+
+/// El rectángulo de la terminal dropdown: anclada arriba, a todo el ancho,
+/// 45 % del alto — el gesto «quake» de bajar desde el borde superior.
+fn dropdown_rect(screen: Rect) -> Rect {
+    Rect::new(screen.x, screen.y, screen.w, (screen.h * 45 / 100).max(1))
 }
 
 /// El rectángulo flotante por defecto: 60 % de la pantalla, centrado.
@@ -1163,6 +1223,53 @@ mod tests {
         d.on_event(BodyEvent::WindowClosed { id: 1 });
         // Ya no hay nada que invocar.
         assert!(d.apply(DesktopAction::ToggleScratchpad).is_empty());
+    }
+
+    // --- Terminal dropdown (quake) ------------------------------------
+
+    #[test]
+    fn dropterm_lazy_spawns_when_absent() {
+        let mut d = desktop_with_screen();
+        // Sin terminal dropdown todavía: el toggle la crea.
+        let cmds = d.apply(DesktopAction::ToggleDropterm);
+        assert_eq!(cmds, vec![BrainCommand::Spawn(super::DROPTERM_CMD.into())]);
+    }
+
+    #[test]
+    fn dropterm_opens_floating_top_anchored_and_focused() {
+        let mut d = desktop_with_screen(); // 1920×1080
+        let cmds = d.on_event(BodyEvent::WindowOpened {
+            id: 5,
+            app_id: super::DROPTERM_APP_ID.into(),
+            title: "dropterm".into(),
+        });
+        let p = places(&cmds).iter().find(|x| x.id == 5).unwrap();
+        assert!(p.floating);
+        assert_eq!(p.rect.x, 0);
+        assert_eq!(p.rect.w, 1920); // a todo el ancho
+        assert!(p.rect.h < 1080); // anclada arriba, no a pantalla completa
+        assert_eq!(d.focused_window(), Some(5));
+    }
+
+    #[test]
+    fn dropterm_toggles_hide_then_show_keeping_focus() {
+        let mut d = desktop_with_screen();
+        // Ya abierta (spawn + WindowOpened).
+        d.on_event(BodyEvent::WindowOpened {
+            id: 5,
+            app_id: super::DROPTERM_APP_ID.into(),
+            title: "t".into(),
+        });
+        assert_eq!(d.workspace_loads()[0], 1);
+        // Toggle la guarda.
+        d.apply(DesktopAction::ToggleDropterm);
+        assert_eq!(d.workspace_loads()[0], 0);
+        assert!(d.window_info(5).is_some()); // sigue registrada
+        // Toggle la baja de nuevo, flotando y enfocada.
+        let cmds = d.apply(DesktopAction::ToggleDropterm);
+        assert_eq!(d.workspace_loads()[0], 1);
+        assert!(places(&cmds).iter().find(|x| x.id == 5).unwrap().floating);
+        assert_eq!(d.focused_window(), Some(5));
     }
 
     #[test]

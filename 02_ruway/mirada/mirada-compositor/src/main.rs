@@ -377,6 +377,43 @@ impl App {
         None
     }
 
+    /// Reconcilia el foco del teclado con las layers Exclusive. Una layer que
+    /// reclama `Exclusive` (el drawer Quake de `pata` abierto) debe **tener**
+    /// el foco — antes lo conseguía sólo si la barra era `OnDemand` y la
+    /// clickeabas; ahora se lo damos al volverse Exclusive, sin depender del
+    /// click. Al soltar Exclusive (drawer cerrado o destruido) se lo
+    /// devolvemos a la ventana que el Cerebro marcó enfocada, así una app
+    /// recién lanzada recibe el teclado. Idempotente: sólo toca `set_focus`
+    /// si el foco cambia, y nunca le roba el foco a una ventana (eso lo maneja
+    /// el Cerebro vía `BodyOp::Focus`).
+    fn reconcile_layer_keyboard(&mut self) {
+        let Some(kb) = self.keyboard.clone() else {
+            return;
+        };
+        let current = kb.current_focus();
+        match self.exclusive_layer_surface() {
+            Some(surf) => {
+                if current.as_ref() != Some(&surf) {
+                    kb.set_focus(self, Some(surf), SERIAL_COUNTER.next_serial());
+                }
+            }
+            None => {
+                // Si el foco ya está en una de nuestras ventanas, no lo tocamos
+                // (manda el Cerebro). Sólo actuamos si quedó colgado en una
+                // layer que ya no es Exclusive.
+                let on_window = current
+                    .as_ref()
+                    .is_some_and(|s| self.windows.iter().any(|w| &w.surface == s));
+                if !on_window {
+                    let target = self.windows.iter().find(|w| w.focused).map(|w| w.surface.clone());
+                    if current != target {
+                        kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
+                    }
+                }
+            }
+        }
+    }
+
     /// Inyecta un evento del Cuerpo en el Cerebro y aplica su respuesta.
     fn brain_feed(&mut self, event: BodyEvent) {
         let cmds = match &mut self.brain {
@@ -799,6 +836,9 @@ impl CompositorHandler for App {
                 }
                 drop(map);
                 self.recompute_reservations();
+                // Si el commit cambió la interactividad de teclado (el drawer
+                // Quake abrió/cerró), reasignamos el foco a quien corresponda.
+                self.reconcile_layer_keyboard();
             }
         }
     }
@@ -847,6 +887,8 @@ impl WlrLayerShellHandler for App {
         }
         drop(map);
         self.recompute_reservations();
+        // Una layer destruida pudo ser la Exclusive: devolver el teclado.
+        self.reconcile_layer_keyboard();
     }
 }
 

@@ -268,9 +268,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .map(|pi| cfg.surfaces[panels[pi].idx].thickness.max(1.0) as u32)
         .unwrap_or(40);
     if let Some(pi) = shuma_panel {
+        // Barra cerrada: NO pide teclado. Con `OnDemand` el compositor
+        // consumía el primer click para darle foco (de ahí «dos clicks para
+        // desplegar»); con `None` el click va directo a togglear.
         panels[pi]
             .layer
-            .set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
         panels[pi].layer.commit();
     }
 
@@ -373,32 +376,36 @@ impl LayerApp {
         let h = if open { DRAWER_H } else { self.shuma_bar_px };
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
+        // Abierto: foco Exclusive para escribir. Cerrado: `None` — no
+        // retiene el teclado, así una app lanzada (kitty) lo recibe.
         layer.set_keyboard_interactivity(if open {
             KeyboardInteractivity::Exclusive
         } else {
-            KeyboardInteractivity::OnDemand
+            KeyboardInteractivity::None
         });
         layer.commit();
+        // El cache de hit-test es del layout viejo; invalidarlo evita que el
+        // click siguiente pegue contra el árbol previo («no se guarda»). Se
+        // re-arma en el próximo frame con la geometría nueva.
+        self.panels[pi].cache = None;
         self.panels[pi].dirty = true;
     }
 
-    /// Enter en el drawer: corre el comando en un **hilo** (no bloquea el loop) y
-    /// deja el resultado en `exec_rx`; el latido lo recoge con [`Self::poll_exec`].
-    /// El puente real a `shuma` reemplaza a esto.
+    /// Enter en el drawer: lanza el comando **detached** (no bloquea, no espera
+    /// a que termine — clave para apps GUI como kitty) y **cierra el drawer**,
+    /// soltando el foco Exclusive para que la app lanzada reciba el teclado.
+    /// Es la UX de un lanzador (rofi/wofi-run): tecleás, Enter, abre y se va.
+    /// Para una terminal de verdad con shell, está la dropdown del WM (`Super+\``).
     fn shuma_submit(&mut self) {
         let cmd = std::mem::take(&mut self.shuma.buffer);
-        if cmd.is_empty() {
+        if cmd.trim().is_empty() {
             self.marcar_shuma_dirty();
             return;
         }
-        self.shuma.pending = true;
+        crate::spawn_cmd(&cmd);
+        self.shuma.pending = false;
         self.shuma.output = None;
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(crate::shuma::ejecutar_stand_in(&cmd));
-        });
-        self.exec_rx = Some(rx);
-        self.marcar_shuma_dirty();
+        self.set_shuma_open(false);
     }
 
     /// Sondea (sin bloquear) si el comando del Quake terminó; si sí, guarda su

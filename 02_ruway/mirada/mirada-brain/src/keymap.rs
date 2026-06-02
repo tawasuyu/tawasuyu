@@ -241,6 +241,7 @@ const KEYMAP_HEADER: &str = "\
 //   toggle-fullscreen                alterna pantalla completa
 //   send-to-scratchpad               guarda la enfocada en el scratchpad
 //   toggle-scratchpad                invoca / oculta la del scratchpad
+//   toggle-dropterm                  baja / sube la terminal dropdown (quake)
 //   cycle-layout                     siguiente modo de teselado
 //   layout:<modo>                    master-stack | centered-master | spiral
 //                                    grid | columns | rows | monocle

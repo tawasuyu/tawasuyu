@@ -48,6 +48,10 @@ pub enum DesktopAction {
     SendToScratchpad,
     /// Invoca u oculta la ventana del scratchpad — aparece flotando.
     ToggleScratchpad,
+    /// Despliega/oculta la terminal dropdown estilo *quake* — un toplevel
+    /// real anclado arriba a todo el ancho, con foco de teclado normal. La
+    /// crea perezosamente la primera vez (patrón pypr).
+    ToggleDropterm,
     /// Pasa al siguiente modo de teselado.
     CycleLayout,
     /// Fija un modo de teselado concreto.
@@ -117,6 +121,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::ToggleFullscreen => f.write_str("toggle-fullscreen"),
             DesktopAction::SendToScratchpad => f.write_str("send-to-scratchpad"),
             DesktopAction::ToggleScratchpad => f.write_str("toggle-scratchpad"),
+            DesktopAction::ToggleDropterm => f.write_str("toggle-dropterm"),
             DesktopAction::CycleLayout => f.write_str("cycle-layout"),
             DesktopAction::SetLayout(m) => write!(f, "layout:{}", layout_slug(*m)),
             DesktopAction::GrowMaster => f.write_str("grow-master"),
@@ -150,6 +155,7 @@ impl FromStr for DesktopAction {
             "toggle-fullscreen" => Self::ToggleFullscreen,
             "send-to-scratchpad" => Self::SendToScratchpad,
             "toggle-scratchpad" => Self::ToggleScratchpad,
+            "toggle-dropterm" => Self::ToggleDropterm,
             "cycle-layout" => Self::CycleLayout,
             "grow-master" => Self::GrowMaster,
             "shrink-master" => Self::ShrinkMaster,
@@ -217,7 +223,12 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+q".into(), DesktopAction::CloseFocused),
         ("Super+f".into(), DesktopAction::ToggleFloat),
         ("Super+Shift+f".into(), DesktopAction::ToggleFullscreen),
-        ("Super+`".into(), DesktopAction::ToggleScratchpad),
+        // La tecla «quake» clásica baja la terminal dropdown.
+        ("Super+`".into(), DesktopAction::ToggleDropterm),
+        // Scratchpad genérico: enviar la enfocada / invocar la guardada.
+        // (Shift+` produce «~» tras canonizar, así que ése es el combo.)
+        ("Super+Shift+s".into(), DesktopAction::SendToScratchpad),
+        ("Super+Shift+~".into(), DesktopAction::ToggleScratchpad),
         ("Super+space".into(), DesktopAction::CycleLayout),
         ("Super+t".into(), DesktopAction::SetLayout(LayoutMode::MasterStack)),
         ("Super+m".into(), DesktopAction::SetLayout(LayoutMode::Monocle)),
