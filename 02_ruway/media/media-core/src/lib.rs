@@ -34,6 +34,7 @@ pub mod fade;
 pub mod library;
 pub mod loudness;
 pub mod metadata;
+pub mod osd;
 pub mod playlist;
 pub mod toolbar;
 pub mod tracks;

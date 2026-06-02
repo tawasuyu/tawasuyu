@@ -340,6 +340,49 @@ pub fn probe_dash(
     })
 }
 
+/// Velocidad de reproducción → filtros de ffmpeg, **con corrección de tono**
+/// (M5). El filtro `atempo` sólo acepta factores en `[0.5, 2.0]`, así que para
+/// velocidades fuera de ese rango se **encadenan** varios cuyo producto da la
+/// velocidad pedida (`3.0` → `atempo=2.000,atempo=1.500`). Devuelve `None` para
+/// velocidad ≈ 1.0 (sin filtro). Función pura: la arma el spawner de la sesión.
+///
+/// A diferencia del varispeed de las fuentes nativas (que resamplea y corre el
+/// tono), `atempo` preserva el pitch — lo que esperás de un reproductor.
+pub fn atempo_chain(speed: f32) -> Option<String> {
+    if !speed.is_finite() || speed <= 0.0 || (speed - 1.0).abs() < 1e-3 {
+        return None;
+    }
+    let mut remaining = speed;
+    let mut factors: Vec<f32> = Vec::new();
+    // Acerca a 1.0 con pasos de 2.0 (rápido) o 0.5 (lento) hasta caer en rango.
+    while remaining > 2.0 + 1e-6 {
+        factors.push(2.0);
+        remaining /= 2.0;
+    }
+    while remaining < 0.5 - 1e-6 {
+        factors.push(0.5);
+        remaining /= 0.5;
+    }
+    factors.push(remaining);
+    Some(
+        factors
+            .iter()
+            .map(|f| format!("atempo={f:.3}"))
+            .collect::<Vec<_>>()
+            .join(","),
+    )
+}
+
+/// Velocidad de reproducción → filtro de video `setpts` que acompaña al
+/// [`atempo_chain`] del audio (mantiene A/V sincronizados al cambiar el ritmo).
+/// `setpts=PTS/speed`. `None` para velocidad ≈ 1.0.
+pub fn setpts_for_speed(speed: f32) -> Option<String> {
+    if !speed.is_finite() || speed <= 0.0 || (speed - 1.0).abs() < 1e-3 {
+        return None;
+    }
+    Some(format!("setpts={:.6}*PTS", 1.0 / speed))
+}
+
 fn parse_frame_rate(s: Option<&str>) -> Option<f32> {
     let s = s?;
     let (num, den) = s.split_once('/')?;
@@ -987,5 +1030,42 @@ mod tests {
         let set = media_core::tracks::TrackSet::from_tracks(tracks);
         assert_eq!(set.current_audio().unwrap().index, 1);
         assert_eq!(set.current_subtitle().unwrap().index, 4);
+    }
+
+    #[test]
+    fn atempo_chain_encadena_fuera_de_rango() {
+        // 1.0 → sin filtro.
+        assert_eq!(atempo_chain(1.0), None);
+        // En rango → un solo atempo.
+        assert_eq!(atempo_chain(1.5).as_deref(), Some("atempo=1.500"));
+        assert_eq!(atempo_chain(0.5).as_deref(), Some("atempo=0.500"));
+        // 3.0 = 2.0 × 1.5.
+        assert_eq!(atempo_chain(3.0).as_deref(), Some("atempo=2.000,atempo=1.500"));
+        // 4.0 = 2.0 × 2.0.
+        assert_eq!(atempo_chain(4.0).as_deref(), Some("atempo=2.000,atempo=2.000"));
+        // 0.25 = 0.5 × 0.5.
+        assert_eq!(atempo_chain(0.25).as_deref(), Some("atempo=0.500,atempo=0.500"));
+        // Basura → sin filtro.
+        assert_eq!(atempo_chain(0.0), None);
+        assert_eq!(atempo_chain(f32::NAN), None);
+    }
+
+    #[test]
+    fn atempo_producto_reconstruye_la_velocidad() {
+        for &sp in &[0.25_f32, 0.5, 0.75, 1.25, 2.0, 3.0, 4.0, 8.0] {
+            let chain = atempo_chain(sp).unwrap();
+            let prod: f32 = chain
+                .split(',')
+                .map(|t| t.trim_start_matches("atempo=").parse::<f32>().unwrap())
+                .product();
+            assert!((prod - sp).abs() < 0.01, "{chain} ≠ {sp}");
+        }
+    }
+
+    #[test]
+    fn setpts_acompana_al_audio() {
+        assert_eq!(setpts_for_speed(1.0), None);
+        assert_eq!(setpts_for_speed(2.0).as_deref(), Some("setpts=0.500000*PTS"));
+        assert_eq!(setpts_for_speed(0.5).as_deref(), Some("setpts=2.000000*PTS"));
     }
 }

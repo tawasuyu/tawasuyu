@@ -6,6 +6,13 @@
 
 ## Handoff — retomar el hilo (2026-06-01)
 
+> **2026-06-02 — el núcleo puro está agotado.** Todo lo testeable en CI sin
+> hardware/pantalla ya tiene su `*-core` cerrado (último: S3 estilo ASS, S2/A2
+> selección de pistas, V2 viewport, M5 atempo, U4 OSD). Lo que queda es
+> **wiring en `media-app`** y features que sólo se validan corriendo la app/HW.
+> El plan de la fase de interfaz está en **`PENDIENTE-UI.md`** (qué API de
+> núcleo usar, qué cablear y qué decidir/ver por ítem). Retomar con pantalla.
+
 Se está avanzando este plan **en orden**. Cerrado en esta tanda (todo en
 `origin/main`, `cargo test -p media-core` = 82 verde, `cargo check
 --workspace` verde):
@@ -101,12 +108,13 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 - **M1 (sync A/V) ✅**: política `AvSync` (kernel) + `FrameSource` lleva PTS + **wiring en `media-app`**: el video tickea por reloj de pared (el source ya respeta el fps del archivo vía su acumulador) y `AvSync::plan` **descarta** los frames que llegan tarde respecto del reloj de audio; el dup es implícito (sin frame nuevo se retiene la textura). El reloj de audio (y TODO el estado del Playlist que lee la vista) se obtiene con un `playback_snapshot()` no-bloqueante (`try_lock` + caché): el hilo de UI jamás espera el lock del Playlist. **NOTA (deadlock arreglado 2026-06-01)**: una primera versión (a) esclavizaba el `dt` del video al delta del reloj de audio y (b) lockeaba el Playlist en el paint y en varias funciones de vista. El pipe de ffmpeg se muerde la cola (el video alimenta al audio) y cpal retiene el lock del Playlist mientras hace el `read_exact` bloqueante del pipe de audio → el UI se congela (~1 s y se cuelga). Corregido: decode por wall-clock + audio sólo para drop + toda la vista vía snapshot no-bloqueante. Ver memoria `project_media_render_thread_deadlock`.
 
 ### Pendiente
-- M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
+- M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping). **M5 (pitch-correct speed: filtros `atempo`/`setpts` en `foreign-av`) ✅** — falta `set_speed` en la sesión + oído.
 - Track AUDIO A3 (dispositivo de salida — necesita hardware). **A2 (selección de pista: núcleo `tracks` + extracción `foreign-av`) ✅ · A4 (delay/sync) ✅ · A5 (normalización + limitador + downmix/upmix) ✅ · A6 (crossfade, kernel puro) ✅.** (A2 falta el menú + re-map en `media-app`.)
 - Track VIDEO V1, V5–V8 (fullscreen, deinterlacing, filtros/shaders, HDR). **V2 (aspect/crop/zoom/pan, núcleo geométrico) ✅ · V3 (rotación/flip) ✅ · V4 (ajustes de color, hue incluido) ✅ · V7 (capítulos) ✅.** (V2 falta el blit con `Layout` en `media-app`.)
 - Track SUBTÍTULOS — núcleo completo. **S1 (ASS/SSA texto+timing) ✅ · S2 (pistas embebidas: núcleo `tracks` + extracción `foreign-av`) ✅ · S3 (estilo/colores/alineación ASS, núcleo) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.** (S2/S3 faltan render/menú en `media-app`.)
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
-- Track UX U3 (thumbnails en hover) y U4 (OSD) — necesitan decode/pantalla.
+- Track UX U3 (thumbnails en hover) — necesita decode/pantalla. **U4 (OSD:
+  núcleo `osd` + formateadores) ✅** — falta pintar el overlay.
   **U1 (modelo de orden de playlist) ✅ · U2 (resume/historial) ✅ · U5
   (metadata/cover ID3+FLAC) ✅ · U6 (bookmarks) ✅** — core puro testeable en
   CI (2026-06-02); falta el wiring en `media-app` (necesita pantalla).
@@ -135,8 +143,14 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 - **M3 — Seek frame-accurate / por keyframe** en la ruta ffmpeg (hoy
   respawnea el proceso por seek).
 - **M4 — Frame stepping** (cuadro a cuadro, `.`/`,` de mpv).
-- **M5 — Pitch-correct speed** en ruta ffmpeg (`atempo`); las fuentes
-  nativas ya tienen varispeed pero sin corrección de tono.
+- **M5 — Pitch-correct speed** en ruta ffmpeg (`atempo`). ✅ *Núcleo cerrado
+  (2026-06-02).* `foreign-av::atempo_chain(speed)` arma la cadena de filtros
+  `atempo` (encadena factores en `[0.5,2]` cuando la velocidad se sale del
+  rango: `3.0`→`atempo=2.000,atempo=1.500`) y `setpts_for_speed(speed)` el
+  `setpts` de video que la acompaña. Puro, +3 tests (incluye que el producto
+  de la cadena reconstruye la velocidad). **Falta**: `MediaSession::set_speed`
+  que respawnee ffmpeg con esos filtros + atarlo al control de velocidad y
+  unificarlo con el varispeed nativo (necesita oído) — ver `PENDIENTE-UI.md`.
 
 ### Track AUDIO
 
@@ -352,7 +366,12 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   `media-app` persista el `.ron` y ofrezca "continuar" al abrir un medio
   conocido (necesita correr la app).
 - **U3 — Thumbnails en hover del timeline** (thumbfast).
-- **U4 — OSD** de reproducción (volumen/seek/velocidad on-screen).
+- **U4 — OSD** de reproducción (volumen/seek/velocidad on-screen). ✅ *Núcleo
+  cerrado (2026-06-02).* `media-core::osd`: `Osd` (mensaje transitorio con
+  expiración + `alpha` de fade lineal, tiempo inyectado para ser determinista)
+  + formateadores `format_volume`/`format_speed`/`format_seek`/`format_hms`.
+  +6 tests. **Falta**: cablear el overlay en `media-app` (flash en cada comando
+  + pintar con la opacidad) — ver `PENDIENTE-UI.md`.
 - **U5 — Metadata/tags** (ID3, carátula/cover art). ✅ *Cerrado (2026-06-02).*
   `media-core::metadata`: parser puro (sin deps, sin I/O) de ID3v2.2/2.3/2.4
   (`.mp3`: TIT2/TPE1/TALB/TYER·TDRC/TRCK/TCON + APIC, con tamaños synchsafe
