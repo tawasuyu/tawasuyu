@@ -470,7 +470,6 @@ impl LayerApp {
             self.latido(pi, qh);
             return;
         }
-        self.panels[pi].dirty = false;
 
         let idx = self.panels[pi].idx;
         let (w, h) = (self.panels[pi].width, self.panels[pi].height);
@@ -541,6 +540,10 @@ impl LayerApp {
         }
         gpu.surface.present(frame, hal);
 
+        // Recién con el cuadro presentado damos el panel por limpio: si la
+        // adquisición hubiera fallado, `dirty` sigue puesto y el próximo
+        // frame-callback reintenta (no esperamos al re-muestreo de 1 Hz).
+        self.panels[pi].dirty = false;
         // Guarda el árbol pintado para el hit-test de los clicks.
         self.panels[pi].cache = Some(RenderCache { mounted, computed });
         self.latido(pi, qh);

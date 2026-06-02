@@ -365,8 +365,18 @@ impl Surface for RawSurface {
     }
 
     fn resize(&mut self, width: u32, height: u32) {
-        self.config.width = width.max(1);
-        self.config.height = height.max(1);
+        let (w, h) = (width.max(1), height.max(1));
+        // Sin cambio de tamaño NO reconfiguramos. El backend layer-shell de `pata`
+        // llama a `resize` en cada cuadro (no tiene eventos de resize como winit);
+        // reconfigurar el swapchain por cuadro lo reconstruye una y otra vez, y en
+        // Vulkan WSI eso **destruye el `wl_buffer` recién presentado antes de que el
+        // compositor lo componga** — wlroots lo tolera, smithay (mirada) no, y la
+        // superficie queda en negro (el compositor ve `buffer=None`).
+        if self.config.width == w && self.config.height == h {
+            return;
+        }
+        self.config.width = w;
+        self.config.height = h;
         self.surface.configure(&self.device, &self.config);
         let (tex, view) = create_intermediate(&self.device, self.config.width, self.config.height);
         self.intermediate = tex;
@@ -378,13 +388,23 @@ impl Surface for RawSurface {
     }
 
     fn acquire(&mut self) -> Result<Frame, SurfaceError> {
-        let texture = self.surface.get_current_texture().map_err(|e| match e {
-            wgpu::SurfaceError::Lost => SurfaceError::Lost,
-            wgpu::SurfaceError::Outdated => SurfaceError::Outdated,
-            wgpu::SurfaceError::OutOfMemory => SurfaceError::OutOfMemory,
-            wgpu::SurfaceError::Timeout => SurfaceError::Timeout,
-            other => SurfaceError::Other(format!("{other:?}")),
-        })?;
+        let texture = match self.surface.get_current_texture() {
+            Ok(t) => t,
+            // El backend layer-shell no tiene un evento de resize que reconfigure
+            // el swapchain; si quedó obsoleto/perdido, lo reconstruimos aquí mismo
+            // y reintentamos una vez. Sin esto el panel quedaría en negro para
+            // siempre tras el primer `Outdated`.
+            Err(e @ (wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost)) => {
+                self.surface.configure(&self.device, &self.config);
+                self.surface.get_current_texture().map_err(|_| match e {
+                    wgpu::SurfaceError::Lost => SurfaceError::Lost,
+                    _ => SurfaceError::Outdated,
+                })?
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => return Err(SurfaceError::OutOfMemory),
+            Err(wgpu::SurfaceError::Timeout) => return Err(SurfaceError::Timeout),
+            Err(other) => return Err(SurfaceError::Other(format!("{other:?}"))),
+        };
         let surface_view = texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
