@@ -39,6 +39,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_enter,
         on_pointer_leave,
         on_scroll,
+        focusable,
         alpha,
         transform,
         children,
@@ -67,6 +68,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_enter,
         on_pointer_leave,
         on_scroll,
+        focusable,
         alpha,
         transform,
         subtree_end: 0,
@@ -559,6 +561,61 @@ pub fn hit_test_scroll<Msg>(
     hit_test_pred(mounted, computed, x, y, |n| n.on_scroll.is_some())
 }
 
+/// Hit-test para foco: el id `focusable` del nodo más al frente bajo el
+/// cursor (click-to-focus). `None` si no se clickeó nada enfocable.
+pub fn hit_test_focusable<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<u64> {
+    hit_test_pred(mounted, computed, x, y, |n| n.focusable.is_some())
+        .and_then(|i| mounted.nodes[i].focusable)
+}
+
+/// Ids enfocables en orden de Tab (pre-orden del árbol = orden de
+/// inserción de `Mounted::nodes`). Sólo nodos con rect computado
+/// (presentes en el layout). Es el orden DOM-like de tabulación.
+pub fn focus_order<Msg>(mounted: &Mounted<Msg>, computed: &ComputedLayout) -> Vec<u64> {
+    mounted
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            n.focusable
+                .filter(|_| computed.get(n.id).is_some())
+        })
+        .collect()
+}
+
+/// Próximo id de foco al pulsar Tab (o Shift+Tab si `reverse`), dado el
+/// `order` (de [`focus_order`]) y el `current`. Envuelve en los extremos.
+/// Si no hay enfocables devuelve `None`; si `current` ya no existe en el
+/// orden, arranca por el primero (Tab) o el último (Shift+Tab).
+pub fn next_focus(order: &[u64], current: Option<u64>, reverse: bool) -> Option<u64> {
+    if order.is_empty() {
+        return None;
+    }
+    let n = order.len();
+    let pos = current.and_then(|c| order.iter().position(|&id| id == c));
+    let next_idx = match pos {
+        Some(i) => {
+            if reverse {
+                (i + n - 1) % n
+            } else {
+                (i + 1) % n
+            }
+        }
+        None => {
+            if reverse {
+                n - 1
+            } else {
+                0
+            }
+        }
+    };
+    Some(order[next_idx])
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{hit_test_click, mount, View};
@@ -623,5 +680,24 @@ mod tests {
     fn escala_cero_es_inalcanzable() {
         let (m, c) = fixture(Some(Affine::scale(0.0)));
         assert_eq!(hit_test_click(&m, &c, 50.0, 50.0), None);
+    }
+
+    #[test]
+    fn tab_traversal_envuelve_en_los_extremos() {
+        use crate::next_focus;
+        let order = [10u64, 20, 30];
+        // Avanza.
+        assert_eq!(next_focus(&order, Some(10), false), Some(20));
+        assert_eq!(next_focus(&order, Some(30), false), Some(10)); // wrap
+        // Retrocede (Shift+Tab).
+        assert_eq!(next_focus(&order, Some(20), true), Some(10));
+        assert_eq!(next_focus(&order, Some(10), true), Some(30)); // wrap
+        // Sin foco previo: Tab → primero, Shift+Tab → último.
+        assert_eq!(next_focus(&order, None, false), Some(10));
+        assert_eq!(next_focus(&order, None, true), Some(30));
+        // Foco obsoleto (id que ya no está) → arranca por el extremo.
+        assert_eq!(next_focus(&order, Some(99), false), Some(10));
+        // Lista vacía.
+        assert_eq!(next_focus(&[], Some(10), false), None);
     }
 }

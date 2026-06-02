@@ -239,6 +239,12 @@ pub struct View<Msg> {
     /// `Some(Msg)` consume el evento. Base de las áreas de scroll
     /// autocontenidas. Ver [`ScrollFn`].
     pub on_scroll: Option<ScrollFn<Msg>>,
+    /// Marca este nodo como **enfocable** con el id opaco `u64`. El runtime
+    /// mantiene el foco (uno por ventana) y lo mueve con Tab/Shift+Tab en
+    /// orden de árbol (pre-orden) y al clickear un nodo enfocable; notifica
+    /// a la app vía `App::on_focus` para que pinte el ring y rutee el
+    /// teclado. El id lo elige el caller (índice de campo, hash, etc.).
+    pub focusable: Option<u64>,
     /// Opacidad multiplicada sobre TODO el subtree (este nodo + hijos),
     /// en `[0.0, 1.0]`. Se realiza con `scene.push_layer(Mix::Normal, a, …)`
     /// alrededor del rect del nodo: el subárbol se rasteriza en una capa
@@ -321,6 +327,7 @@ pub struct MountedNode<Msg> {
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub on_scroll: Option<ScrollFn<Msg>>,
+    pub focusable: Option<u64>,
     pub alpha: Option<f32>,
     /// Transformación afín 2D del nodo (alrededor del centro de su rect).
     /// Ver [`View::transform`]. `paint` la compone con la del padre.

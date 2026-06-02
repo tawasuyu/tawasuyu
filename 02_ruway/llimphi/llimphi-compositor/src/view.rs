@@ -25,6 +25,7 @@ impl<Msg> View<Msg> {
             drop_hover_fill: None,
             clip: false,
             on_scroll: None,
+            focusable: None,
             alpha: None,
             transform: None,
             children: Vec::new(),
@@ -41,6 +42,16 @@ impl<Msg> View<Msg> {
         F: Fn(f32, f32) -> Option<Msg> + Send + Sync + 'static,
     {
         self.on_scroll = Some(Arc::new(handler));
+        self
+    }
+
+    /// Marca este nodo como enfocable con el id opaco `id`. El runtime lo
+    /// incluye en el orden de Tab (pre-orden del árbol) y le da foco al
+    /// clickearlo; cada cambio de foco se notifica vía `App::on_focus`.
+    /// El caller pinta el focus-ring comparando el id contra el foco que
+    /// guardó en su `Model`.
+    pub fn focusable(mut self, id: u64) -> Self {
+        self.focusable = Some(id);
         self
     }
 

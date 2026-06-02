@@ -48,6 +48,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             overlay_layout: LayoutTree::new(),
             last_render: None,
             drag: None,
+            focused: None,
         });
         // Sincroniza el factor de escala inicial (el de la ventana recién
         // creada) ANTES del primer render: así una app que dependa del DPI
@@ -208,6 +209,32 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 state.modifiers = mods.state().into();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // Tab / Shift+Tab mueven el foco entre nodos `focusable`,
+                // que administra el runtime. Sólo intercepta si hay
+                // enfocables y en Pressed; si no, cae al `on_key` normal
+                // (apps que usan Tab para otra cosa lo siguen recibiendo).
+                let is_tab = event.state == ElementState::Pressed
+                    && matches!(event.logical_key, Key::Named(NamedKey::Tab));
+                if is_tab {
+                    let order = state
+                        .last_render
+                        .as_ref()
+                        .map(|c| focus_order(&c.mounted, &c.computed))
+                        .unwrap_or_default();
+                    if !order.is_empty() {
+                        let next = next_focus(&order, state.focused, state.modifiers.shift);
+                        state.focused = next;
+                        if let Some(msg) =
+                            A::on_focus(state.model.as_ref().expect("model"), next)
+                        {
+                            let model = state.model.take().expect("model");
+                            state.model = Some(A::update(model, msg, &self.handle));
+                        }
+                        state.last_render = None;
+                        state.window.request_redraw();
+                        return;
+                    }
+                }
                 let ev = KeyEvent {
                     key: event.logical_key.clone(),
                     state: match event.state {
@@ -291,6 +318,30 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // Hit-test contra el cache del último redraw (siempre
                 // representa lo visible). Fallback raro: cache vacío.
                 let cursor = state.cursor;
+                // Click-to-focus: si el click cae sobre un nodo enfocable,
+                // el runtime le da el foco ANTES de procesar la acción de
+                // click. Extraemos el id en un scope (suelta el borrow del
+                // cache) y recién después mutamos el foco/modelo.
+                let focus_hit = state
+                    .last_render
+                    .as_ref()
+                    .and_then(|cache| {
+                        let (m, c) = match cache.overlay.as_ref() {
+                            Some(ov) => (&ov.mounted, &ov.computed),
+                            None => (&cache.mounted, &cache.computed),
+                        };
+                        hit_test_focusable(m, c, cursor.x as f32, cursor.y as f32)
+                    });
+                if focus_hit.is_some() && focus_hit != state.focused {
+                    state.focused = focus_hit;
+                    if let Some(msg) =
+                        A::on_focus(state.model.as_ref().expect("model"), focus_hit)
+                    {
+                        let model = state.model.take().expect("model");
+                        state.model = Some(A::update(model, msg, &self.handle));
+                    }
+                    state.last_render = None;
+                }
                 // Tupla: (drag_fn, drag_at_fn, payload, on_click_msg,
                 //         on_click_at_handler, rect: (x, y, w, h))
                 type HitInfo<M> = (

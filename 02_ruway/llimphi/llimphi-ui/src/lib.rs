@@ -56,6 +56,20 @@ pub trait App: 'static {
         None
     }
 
+    /// El foco cambió: el runtime movió el foco a `id` (`None` = nada
+    /// enfocado). Pasa al pulsar Tab/Shift+Tab (recorre los nodos
+    /// `View::focusable` en orden de árbol, envolviendo) o al clickear un
+    /// nodo enfocable. La app guarda `id` en su `Model` para (a) pintar el
+    /// focus-ring (`if model.focus == Some(id) { … }` en `view`) y (b)
+    /// rutear el teclado al campo activo desde `on_key`. Devolver
+    /// `Some(Msg)` dispara una transición; `None` (default) ignora.
+    ///
+    /// El foco lo administra el runtime (única fuente de verdad), así que
+    /// Tab y click-to-focus quedan consistentes sin que la app los cablee.
+    fn on_focus(_model: &Self::Model, _id: Option<u64>) -> Option<Self::Msg> {
+        None
+    }
+
     /// Maneja una rueda del mouse. `delta` está normalizado a "líneas"
     /// (positivo arriba/izquierda, negativo abajo/derecha). En backends
     /// que reportan píxeles, llimphi-ui divide por 20 para aproximar.
@@ -359,6 +373,10 @@ struct RuntimeState<A: App> {
     /// — así el drag sobrevive aunque el cache se invalide entre
     /// eventos.
     drag: Option<DragState<A::Msg>>,
+    /// Foco actual (id de un nodo `View::focusable`). El runtime es la
+    /// única fuente de verdad: lo mueve con Tab/Shift+Tab y click-to-focus
+    /// y lo notifica vía `App::on_focus`. `None` = nada enfocado.
+    focused: Option<u64>,
 }
 
 struct RenderCache<Msg> {
