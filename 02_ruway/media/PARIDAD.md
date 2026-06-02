@@ -150,10 +150,15 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   (one-shot), `LoudnessProbe` (tap pasivo `AudioSource`) y `gain_to_target_db`
   que sale directo a `DynamicsControl::add_gain_db`. Objetivos
   `REPLAYGAIN_TARGET_LUFS` (−18) y `EBU_R128_TARGET_LUFS` (−23). +7 tests
-  (linealidad −6 dB→−6 LU, gates, otra sample rate, probe pasivo). **Queda
-  wirear** el comando live `NormAuto` en `media-app` (insertar el
-  `LoudnessProbe` en ambas cadenas + handle compartido) — necesita audio para
-  validar. Falta también downmix/upmix.
+  (linealidad −6 dB→−6 LU, gates, otra sample rate, probe pasivo,
+  reconfiguración por cambio de rate). **Wireado en `media-app` (2026-06-02)**:
+  `LoudnessTap` (handle clonable `Arc<Mutex<LoudnessMeter>>`, molde `AudioProbe`)
+  + `LoudnessProbe` insertado en ambas cadenas **antes** del makeup (mide post-EQ,
+  pre-ganancia, así la medida no se realimenta) + comando `MediaCommand::NormAuto`
+  en el palette (grupo "Normalización") que lee `gain_to_target_db(−18 LUFS)` y
+  fija `DynamicsControl::set_gain_db`. El medidor se autoconfigura con el rate del
+  `fill` (los biquads K-weighting dependen del sample rate). Falta validar a
+  oído con audio real y downmix/upmix.
 - **A6 — Gapless garantizado / crossfade** entre pistas.
 
 ### Track VIDEO

@@ -180,6 +180,17 @@ impl DynamicsControl {
         self.bump();
     }
 
+    /// Fija la ganancia de normalización en un valor absoluto (clampea a
+    /// ±24 dB). Lo usa la normalización automática (ReplayGain / EBU R128),
+    /// que calcula la ganancia a aplicar de una sola vez.
+    pub fn set_gain_db(&self, gain_db: f32) {
+        {
+            let mut g = self.lock();
+            g.params.gain_db = gain_db.clamp(-24.0, 24.0);
+        }
+        self.bump();
+    }
+
     /// Vuelve la ganancia a 0 dB (mantiene el techo).
     pub fn reset(&self) {
         {

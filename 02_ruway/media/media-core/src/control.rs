@@ -108,6 +108,10 @@ pub enum MediaCommand {
     NormGainBy { db: f32 },
     /// Vuelve la ganancia de normalización a 0 dB (mantiene el limitador).
     NormReset,
+    /// Normalización automática: mide la sonoridad integrada (EBU R128) de lo
+    /// reproducido hasta ahora y fija la ganancia para llevarla al objetivo
+    /// ReplayGain 2.0 (−18 LUFS). Necesita haber reproducido ≳ 1 s.
+    NormAuto,
 }
 
 /// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
@@ -198,6 +202,7 @@ impl MediaCommand {
             NormReset => "Normalización a 0 dB".to_string(),
             NormGainBy { db } if *db < 0.0 => format!("Normalización {db:.0} dB"),
             NormGainBy { db } => format!("Normalización +{db:.0} dB"),
+            NormAuto => "Normalizar automático (ReplayGain)".to_string(),
         }
     }
 }

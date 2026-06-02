@@ -83,6 +83,7 @@ use media_core::{
 use media_core::color::{ColorControl, ColorVideo};
 use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
+use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
 use media_core::transform::{TransformControl, TransformVideo};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
@@ -466,6 +467,14 @@ fn transform() -> &'static TransformControl {
 fn dynamics() -> &'static DynamicsControl {
     static SLOT: OnceLock<DynamicsControl> = OnceLock::new();
     SLOT.get_or_init(DynamicsControl::default)
+}
+
+/// Tap de medición de sonoridad (EBU R128) compartido entre el wrapper
+/// `LoudnessProbe` de la cadena de audio (que mide pre-ganancia) y el comando
+/// `NormAuto`, que lee la medida y fija la ganancia de `dynamics()`.
+fn loudness() -> &'static LoudnessTap {
+    static SLOT: OnceLock<LoudnessTap> = OnceLock::new();
+    SLOT.get_or_init(LoudnessTap::new)
 }
 
 /// Handle al [`Playlist`] activo cuando hay tracks WAV/MP3. `None`
@@ -1107,6 +1116,7 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (SubDelayBy { ms: 100 }, "Subtítulos"),
         (SubDelayReset, "Subtítulos"),
         (NormToggle, "Normalización"),
+        (NormAuto, "Normalización"),
         (NormGainBy { db: 3.0 }, "Normalización"),
         (NormGainBy { db: -3.0 }, "Normalización"),
         (NormReset, "Normalización"),
@@ -1324,6 +1334,27 @@ fn apply_command(cmd: MediaCommand) {
         NormReset => {
             dynamics().reset();
             eprintln!("media-app: normalización a 0 dB");
+        }
+        NormAuto => {
+            // Lee la sonoridad integrada medida hasta ahora y fija la ganancia
+            // para llevarla al objetivo ReplayGain. La medición la activa el
+            // limitador, así que aseguramos la etapa encendida.
+            match loudness().gain_to_target_db(REPLAYGAIN_TARGET_LUFS) {
+                Some(gain) => {
+                    let d = dynamics();
+                    d.set_enabled(true);
+                    d.set_gain_db(gain);
+                    eprintln!(
+                        "media-app: normalización automática → {:+.1} dB (objetivo {:.0} LUFS)",
+                        d.gain_db(),
+                        REPLAYGAIN_TARGET_LUFS
+                    );
+                }
+                None => eprintln!(
+                    "media-app: normalización automática — aún sin medición \
+                     (reproducí ≳ 1 s primero)"
+                ),
+            }
         }
     }
 }
@@ -3204,9 +3235,12 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
                 );
                 let voled = VolumeAudio::new(pausable, volume().clone());
                 let equalized = EqualizerAudio::new(voled, eq().clone());
+                // A5 auto: mide la sonoridad (EBU R128) *antes* de la ganancia
+                // de makeup, así `NormAuto` calcula cuánto subir para el target.
+                let measured = LoudnessProbe::new(equalized, loudness().clone());
                 // A5: normalización + limitador tras el EQ (último estadio
                 // de ganancia antes del tap del visor).
-                let normalized = DynamicsAudio::new(equalized, dynamics().clone());
+                let normalized = DynamicsAudio::new(measured, dynamics().clone());
                 let recorded = RecordedAudioSource::new(normalized, recorder().clone());
                 let probed = ProbedAudioSource::new(recorded, probe.clone());
                 return (Arc::new(Mutex::new(probed)), probe);
@@ -3296,8 +3330,10 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
     // ya ecualizado — el visor refleja lo que realmente suena y la
     // grabación queda con el mismo tono que se escuchó.
     let equalized = EqualizerAudio::new(voled, eq().clone());
+    // A5 auto: mide la sonoridad (EBU R128) antes de la ganancia de makeup.
+    let measured = LoudnessProbe::new(equalized, loudness().clone());
     // A5: normalización + limitador tras el EQ.
-    let normalized = DynamicsAudio::new(equalized, dynamics().clone());
+    let normalized = DynamicsAudio::new(measured, dynamics().clone());
     let recorded = RecordedAudioSource::new(normalized, recorder().clone());
     let probed = ProbedAudioSource::new(recorded, probe.clone());
     (Arc::new(Mutex::new(probed)), probe)
