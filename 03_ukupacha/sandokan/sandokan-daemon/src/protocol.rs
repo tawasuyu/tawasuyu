@@ -3,13 +3,15 @@
 //! Encoding: postcard. Framing: prefijo de longitud `u32` little-endian
 //! seguido de los bytes postcard. Mismo patrón que el wire de shuma.
 
-use sandokan_core::{EngineError, ExecHandle, Intent, TelemetryFrame};
+use sandokan_core::{EngineError, ExecHandle, Intent, PtySize, TelemetryFrame};
 use sandokan_lifecycle::LifecycleState;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use ulid::Ulid;
 
-/// Request del cliente al daemon. Espeja los métodos de `Engine`.
+/// Request del cliente al daemon. Espeja los métodos de `Engine` +
+/// `InteractiveEngine`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DaemonRequest {
     Run(Intent),
@@ -17,6 +19,9 @@ pub enum DaemonRequest {
     List,
     Status { card_id: Ulid },
     Telemetry { card_id: Ulid },
+    /// Encarna una sesión interactiva. El attach NO va por acá: la respuesta
+    /// trae el `socket_path` y el front se conecta ahí directamente.
+    RunInteractive { intent: Intent, size: PtySize },
 }
 
 /// Response del daemon al cliente. Una variante por resultado posible.
@@ -28,6 +33,12 @@ pub enum DaemonResponse {
     Status(LifecycleState),
     Telemetry(TelemetryFrame),
     Err(EngineError),
+    /// Sesión interactiva encarnada: handle + el socket canónico donde el
+    /// front attacha (`<run_dir>/<card_id>.sock`).
+    RanInteractive {
+        handle: ExecHandle,
+        socket_path: PathBuf,
+    },
 }
 
 /// Límite defensivo de tamaño de frame (16 MiB). Un Intent con una Card

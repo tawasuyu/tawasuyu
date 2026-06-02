@@ -18,9 +18,11 @@
 pub mod engine;
 pub mod error;
 pub mod event;
+pub mod interactive;
 pub mod intent;
 
 pub use engine::Engine;
 pub use error::EngineError;
 pub use event::{LifecycleEvent, TelemetryFrame};
+pub use interactive::{InteractiveEngine, PtySize};
 pub use intent::{ExecContext, ExecHandle, Intent, IsolationLevel};

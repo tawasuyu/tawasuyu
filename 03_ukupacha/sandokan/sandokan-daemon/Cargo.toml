@@ -20,3 +20,6 @@ tracing = { workspace = true }
 [dev-dependencies]
 sandokan-local = { path = "../sandokan-local" }
 tempfile = { workspace = true }
+# Para el test de round-trip interactivo: armar una Card de shell aislado.
+card-core = { path = "../../../shared/card/card-core" }
+arje-incarnate = { path = "../../arje/init/arje-incarnate" }

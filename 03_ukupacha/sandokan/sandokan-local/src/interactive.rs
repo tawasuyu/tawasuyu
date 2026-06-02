@@ -23,7 +23,7 @@ use std::time::SystemTime;
 
 use arje_incarnate::{ChildPreExec, ChildSetup, ChildStdio, Incarnator};
 use nix::pty::{openpty, OpenptyResult, Winsize};
-use sandokan_core::{EngineError, ExecHandle, Intent};
+use sandokan_core::{EngineError, ExecHandle, Intent, InteractiveEngine, PtySize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::broadcast;
@@ -32,19 +32,6 @@ use ulid::Ulid;
 
 use crate::{Entity, LocalEngine};
 use sandokan_lifecycle::LifecycleState;
-
-/// Tamaño del PTY en celdas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PtySize {
-    pub rows: u16,
-    pub cols: u16,
-}
-
-impl Default for PtySize {
-    fn default() -> Self {
-        Self { rows: 24, cols: 80 }
-    }
-}
 
 /// Bytes máximos de scrollback retenidos por sesión (replay al attach).
 const SCROLLBACK_CAP: usize = 64 * 1024;
@@ -310,11 +297,12 @@ fn spawn_socket_server(
     })
 }
 
-impl LocalEngine {
+#[async_trait::async_trait]
+impl InteractiveEngine for LocalEngine {
     /// Encarna una Card **interactiva**: aislada (como `run`) pero atada a un
     /// PTY que el engine retiene para `attach` posterior. Aparece en
     /// `list`/`status`/`stop` como cualquier entidad.
-    pub async fn run_interactive(
+    async fn run_interactive(
         &self,
         intent: Intent,
         size: PtySize,
@@ -349,9 +337,16 @@ impl LocalEngine {
             .lock()
             .expect("sessions lock")
             .insert(card_id, Arc::new(session));
+        self.autosave(); // persistir el set de sesiones (Model 1)
         Ok(handle)
     }
 
+    fn session_socket_path(&self, card_id: Ulid) -> PathBuf {
+        self.run_dir.join(format!("{card_id}.sock"))
+    }
+}
+
+impl LocalEngine {
     /// Engancha a una sesión interactiva viva por `card_id`: devuelve el
     /// scrollback + un stream de bytes vivos. Múltiples attaches conviven
     /// (espejo de pantalla). Soltar el `Attachment` = detach silencioso.
@@ -383,6 +378,16 @@ impl LocalEngine {
     /// trait `Engine` la llama tras matar el proceso.
     pub(crate) fn drop_session(&self, card_id: Ulid) {
         self.sessions.lock().expect("sessions lock").remove(&card_id);
+        self.autosave();
+    }
+
+    /// Persiste el snapshot interactivo si hay `snapshot_path` configurado
+    /// (best-effort). Llamado tras cada alta/baja de sesión para que el
+    /// archivo refleje el estado vivo (re-hidratación al reiniciar).
+    pub(crate) fn autosave(&self) {
+        if let Some(path) = self.snapshot_path.clone() {
+            let _ = self.save_snapshot(&path);
+        }
     }
 }
 
@@ -447,7 +452,7 @@ impl LocalEngine {
 mod tests {
     use super::*;
     use card_core::{Card, NamespaceSet, Payload};
-    use sandokan_core::Engine;
+    use sandokan_core::{Engine, InteractiveEngine};
     use std::time::Duration;
 
     fn isolated_sh() -> Card {

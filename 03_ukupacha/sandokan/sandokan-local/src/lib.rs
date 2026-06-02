@@ -11,7 +11,8 @@
 mod interactive;
 mod proc;
 
-pub use interactive::{Attachment, EngineSnapshot, PtySize, SessionSnapshot};
+pub use interactive::{Attachment, EngineSnapshot, SessionSnapshot};
+pub use sandokan_core::PtySize;
 
 use arje_incarnate::{Incarnator, IncarnatorConfig};
 use async_trait::async_trait;
@@ -45,6 +46,9 @@ pub struct LocalEngine {
     /// a ese path por card_id, sin asumir quién atiende detrás — hoy el
     /// engine in-process (Model 1), mañana un holder por sesión (Model 2).
     run_dir: PathBuf,
+    /// Si está, el engine auto-persiste su set de sesiones interactivas acá
+    /// tras cada alta/baja (re-hidratación al reiniciar el daemon).
+    snapshot_path: Option<PathBuf>,
 }
 
 /// Directorio por defecto de los sockets de sesión: `$SANDOKAN_RUN_DIR`, o
@@ -80,13 +84,16 @@ impl LocalEngine {
             registry: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             run_dir,
+            snapshot_path: None,
         }
     }
 
-    /// Path canónico del socket de una sesión interactiva. El front se conecta
-    /// **siempre** acá por `card_id`, sin conocer quién atiende detrás.
-    pub fn session_socket_path(&self, card_id: Ulid) -> PathBuf {
-        self.run_dir.join(format!("{card_id}.sock"))
+    /// Fija el archivo de snapshot: el engine auto-persiste el set de sesiones
+    /// interactivas tras cada alta/baja. El daemon lo combina con
+    /// `restore_snapshot` al arrancar para re-hidratar (Model 1).
+    pub fn with_snapshot_path(mut self, path: PathBuf) -> Self {
+        self.snapshot_path = Some(path);
+        self
     }
 
     /// Marca el estado de una entidad (best-effort; ignora lock envenenado).
