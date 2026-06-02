@@ -395,18 +395,21 @@ impl DrmState {
                         if !pressed {
                             return FilterResult::Forward;
                         }
-                        if let Some(combo) = combo_string(mods, handle.modified_sym()) {
+                        let sym = handle.modified_sym();
+                        // Conmutar de VT (Ctrl+Alt+Fn o XF86Switch_VT_n). Lo
+                        // aplica el backend tras el evento (sólo él tiene la
+                        // sesión). Se chequea a nivel de keysym, antes del
+                        // combo, porque según el keymap no llega como «Fn».
+                        if let Some(vt) = crate::vt_target(mods, sym) {
+                            st.pending_vt = Some(vt);
+                            return FilterResult::Intercept(());
+                        }
+                        if let Some(combo) = combo_string(mods, sym) {
                             if crate::is_escape_hatch(&combo) {
                                 eprintln!(
                                     "mirada-compositor · salida de emergencia ({combo})."
                                 );
                                 st.running = false;
-                                return FilterResult::Intercept(());
-                            }
-                            // Ctrl+Alt+Fn: conmutar de VT. Lo aplica el
-                            // backend tras el evento (sólo él tiene la sesión).
-                            if let Some(vt) = crate::vt_from_combo(&combo) {
-                                st.pending_vt = Some(vt);
                                 return FilterResult::Intercept(());
                             }
                             if st.grabs.contains(&combo) {

@@ -608,7 +608,8 @@ impl App for Greeter {
             spacer(6.0),
             enter_btn,
             spacer(2.0),
-            row(14.0, "↑/↓: escritorio  ·  Enter: entrar  ·  Ctrl+Alt+Backspace: salir", 9.0, theme.fg_muted),
+            row(13.0, "↑/↓: escritorio  ·  Enter: entrar", 9.0, theme.fg_muted),
+            row(13.0, "Ctrl+Alt+F1…F12: consola  ·  Ctrl+Alt+⌫: salir", 9.0, theme.fg_muted),
         ]);
 
         // Zona central que aloja la tarjeta de login. Ocupa todo el

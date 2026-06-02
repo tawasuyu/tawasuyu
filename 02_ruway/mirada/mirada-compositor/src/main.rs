@@ -1100,16 +1100,37 @@ pub(crate) fn is_escape_hatch(combo: &str) -> bool {
     matches!(combo, "Ctrl+Alt+BackSpace" | "Ctrl+Alt+Delete")
 }
 
-/// La VT destino de un `Ctrl+Alt+Fn` (`F1`→1 … `F12`→12), o `None` si el
-/// combo no es de conmutación. Sólo lo honra el backend DRM —en winit no
-/// hay VTs—. Es el comportamiento clásico para saltar entre consolas
-/// gráficas sin matar el compositor.
-pub(crate) fn vt_from_combo(combo: &str) -> Option<i32> {
-    let f = combo.strip_prefix("Ctrl+Alt+F")?;
-    match f.parse::<i32>() {
-        Ok(n) if (1..=12).contains(&n) => Some(n),
-        _ => None,
+/// La VT destino de una conmutación de consola (`1` … `12`), o `None` si la
+/// tecla no es de cambio de VT. Sólo lo honra el backend DRM —en winit no hay
+/// VTs—. Es el comportamiento clásico para saltar entre consolas sin matar el
+/// compositor.
+///
+/// Cubre los **dos** caminos, porque cuál llega depende del keymap activo:
+/// 1. el keysym dedicado `XF86Switch_VT_n` (lo emiten los keymaps con la
+///    sección `srvr_ctrl`, donde `Ctrl+Alt+Fn` ya no produce «Fn»); y
+/// 2. `Ctrl+Alt+Fn` literal (keymaps base sin ese binding).
+pub(crate) fn vt_target(mods: &ModifiersState, sym: Keysym) -> Option<i32> {
+    let name = xkb::keysym_get_name(sym);
+    // 1) Keysym dedicado: vale por sí mismo, sin exigir modificadores.
+    if let Some(n) = name.strip_prefix("XF86Switch_VT_") {
+        if let Ok(v) = n.parse::<i32>() {
+            if (1..=12).contains(&v) {
+                return Some(v);
+            }
+        }
     }
+    // 2) Ctrl+Alt+Fn directo. Exigimos ambos modificadores para no conmutar
+    //    con un F-key pelado.
+    if mods.ctrl && mods.alt {
+        if let Some(f) = name.strip_prefix('F') {
+            if let Ok(v) = f.parse::<i32>() {
+                if (1..=12).contains(&v) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Cierra el compositor y `exec`-uta una sesión ajena en su lugar, como el
@@ -1957,6 +1978,28 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vt_switch_cubre_fn_y_keysym_dedicado() {
+        let ctrl_alt = ModifiersState {
+            ctrl: true,
+            alt: true,
+            ..Default::default()
+        };
+        let none = ModifiersState::default();
+        // Ctrl+Alt+F3 → VT3.
+        assert_eq!(vt_target(&ctrl_alt, Keysym::new(xkb::keysyms::KEY_F3)), Some(3));
+        // F3 sin modificadores no conmuta.
+        assert_eq!(vt_target(&none, Keysym::new(xkb::keysyms::KEY_F3)), None);
+        // El keysym dedicado conmuta por sí mismo (keymaps con srvr_ctrl).
+        assert_eq!(
+            vt_target(&none, Keysym::new(xkb::keysyms::KEY_XF86Switch_VT_5)),
+            Some(5)
+        );
+        // Otras teclas y F-keys fuera de rango → None.
+        assert_eq!(vt_target(&ctrl_alt, Keysym::new(xkb::keysyms::KEY_a)), None);
+        assert_eq!(vt_target(&ctrl_alt, Keysym::new(xkb::keysyms::KEY_F13)), None);
+    }
 
     #[test]
     fn anchor_parse_y_default() {
