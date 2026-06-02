@@ -91,7 +91,7 @@ Auxiliares: `llimphi-theme` (paletas), `llimphi-motion` (tweens),
 `llimphi-icons` (iconos vectoriales), `llimphi-surface` (texturas externas),
 `llimphi-workspace` (chasis tmux), `llimphi-gallery` (showcase).
 
-Catálogo: **~44 widgets** (visuales) + **10 módulos** (features con estado).
+Catálogo: **~45 widgets** (visuales) + **10 módulos** (features con estado).
 
 ---
 
@@ -196,6 +196,19 @@ pub trait App: 'static {
     /// Drag&drop de archivos desde el file manager. Un evento por archivo.
     fn on_file_drop(_model: &Self::Model, _path: std::path::PathBuf) -> Option<Self::Msg> { None }
 
+    /// El foco cambió (Tab/Shift+Tab o click sobre un nodo `focusable`). El
+    /// runtime administra el foco; guardás `id` en tu Model para pintar el ring
+    /// y rutear el teclado. Ver §8 (Foco y teclado).
+    fn on_focus(_model: &Self::Model, _id: Option<u64>) -> Option<Self::Msg> { None }
+
+    /// IME (composición de texto: CJK, acentos muertos, emoji). Opt-in vía
+    /// `ime_allowed()` para no robarle el texto a las apps que sólo leen
+    /// `on_key`. Flujo: Enabled → Preedit* → Commit/Disabled. Ver §8 (IME).
+    fn ime_allowed() -> bool { false }
+    fn on_ime(_model: &Self::Model, _event: &ImeEvent) -> Option<Self::Msg> { None }
+    /// Área del caret en px físicos para ubicar la ventana de candidatos.
+    fn ime_cursor_area(_model: &Self::Model) -> Option<(f32, f32, f32, f32)> { None }
+
     fn title() -> &'static str { "llimphi" }
     fn app_id() -> Option<&'static str> { None }   // app_id del xdg-toplevel en Wayland
     fn initial_size() -> (u32, u32) { (960, 540) }
@@ -290,6 +303,8 @@ View::new(style: Style) -> View<Msg>
 .drag_payload(u64)                                        // payload que viaja con el drag
 .on_drop(|payload: u64| -> Option<Msg>)                   // este nodo es drop target
 .drop_hover_fill(Color)                                   // resaltado mientras un drag lo sobrevuela
+.on_scroll(|dx, dy| -> Option<Msg>)                       // rueda local (antes del on_wheel global)
+.focusable(u64)                                           // nodo enfocable por Tab/click (id opaco)
 ```
 
 ### Pintura custom (ver §10)
@@ -354,8 +369,11 @@ montar tu `View`. Sólo armás `Style`s.
 | Resize de panel | `.draggable(\|phase,dx,dy\| ...)` acumulando delta en el Model |
 | Arrastrar entidad de un canvas | `.draggable_at(\|phase,dx,dy,lx0,ly0\| ...)` |
 | Drag&drop entre zonas | origen: `.drag_payload(id)`; destino: `.on_drop(\|id\| ...)` + `.drop_hover_fill` |
-| Scroll | `App::on_wheel(model, delta, cursor, mods)` |
+| Scroll global | `App::on_wheel(model, delta, cursor, mods)` |
+| Área de scroll | widget `scroll_y(...)` (autocontenido) o `.on_scroll(\|dx,dy\| ...)` por nodo |
 | Teclado | `App::on_key(model, &KeyEvent) -> Option<Msg>` |
+| Foco / Tab | `.focusable(id)` en los nodos + `App::on_focus(model, id)` (ver abajo) |
+| IME (CJK, acentos) | `App::ime_allowed() -> true` + `App::on_ime(model, &ImeEvent)` (ver abajo) |
 | Drop de archivos del SO | `App::on_file_drop(model, path)` |
 
 **Patrón overlay** (menús/modales): el modelo guarda "menú abierto sí/no".
@@ -363,6 +381,30 @@ Mientras esté abierto, `view_overlay` devuelve `Some(view)`; clicks fuera se
 cierran envolviendo los items en un scrim a pantalla completa con
 `on_click = DismissOverlay`. Cuando el modelo dice cerrado, `view_overlay`
 devuelve `None`.
+
+**Scroll** (widget `llimphi-widget-scroll`). `scroll_y(offset, content_len,
+viewport_len, content, on_scroll, &palette)` arma un viewport clipeado +
+contenido desplazado `-offset` + barra arrastrable. Es **stateless**: el offset
+vive en tu Model. `on_scroll(delta_px)` (rueda y arrastre) emite un delta a
+sumar; clampealo con `scroll::clamp_offset` en tu `update`. Helpers:
+`ensure_visible(offset, vp, item_top, item_h)` para llevar la selección a la
+vista (teclado); `approach(cur, target, factor)` para scroll suave/inercia
+(driveado por `Handle::spawn_periodic`).
+
+**Foco y teclado.** Marcá los nodos navegables con `.focusable(id)` (id `u64`
+que vos elegís). El runtime es la **única fuente de verdad** del foco: lo mueve
+con Tab/Shift+Tab en orden de árbol (envolviendo) y al clickear un nodo
+enfocable, y te avisa con `App::on_focus(model, Option<u64>)`. Guardás el id en
+tu Model para (a) pintar el ring (`if model.focus == Some(id) { .fill(accent) }`
+en `view`) y (b) rutear el teclado al campo activo desde `on_key`. No setees el
+foco por tu cuenta vía Msg: quedaría desincronizado del runtime.
+
+**IME** (composición de texto). Opt-in: `ime_allowed() -> true`. Con IME activo
+el texto compuesto **no** llega por `KeyEvent.text` sino por `on_ime`:
+`ImeEvent::Enabled` → uno o más `Preedit{text, cursor}` (texto en composición, a
+pintar subrayado en el caret) → `Commit(text)` (insertá como tecleado) o
+`Disabled`. Reportá el área del caret con `ime_cursor_area(model)` para ubicar
+la ventana de candidatos (CJK) junto al cursor.
 
 ---
 
@@ -613,6 +655,11 @@ content: View<Msg>, tab_height, palette, tab_width })`. Selección la maneja la 
 **splitter** — divisor draggable de 2 panes. `splitter_two(Direction::{Row,Column},
 a, a_size, b, b_size, on_resize: Fn(DragPhase, delta)->Option<Msg>, &palette)`.
 `PaneSize::{Fixed(px), Flex}`. La app acumula el delta en su Model.
+
+**scroll** — área de scroll vertical con barra arrastrable. `scroll_y(offset,
+content_len, viewport_len, content, on_scroll: Fn(delta_px)->Msg, &palette)`.
+Stateless (offset en el Model); rueda autocontenida. Helpers: `clamp_offset`,
+`ensure_visible` (selección a la vista), `approach` (scroll suave). Ver §8.
 
 **tiled** — grilla auto cols×rows de tiles con title bar. `tiled_view(tiles, &palette)`,
 `tiled_view_cols(tiles, cols, &palette)`, y variantes `*_reorderable*` con
@@ -875,8 +922,10 @@ La **generación** es imprescindible si el recálculo se dispara seguido. Ver
   hace falta.
 - **`paint_with`** no debe dejar `push_layer` sin `pop_layer` ni resetear la
   Scene.
-- **Hit-test usa rects sin transformar**: `.transform()` no afecta dónde se
-  detectan los clicks (limitación conocida).
+- **Hit-test respeta `.transform()`**: un nodo rotado/escalado/trasladado recibe
+  los clicks donde se ve pintado (el runtime invierte el afín acumulado). Lo que
+  **no** se ajusta todavía: la posición local que reciben los handlers `*_at` se
+  reporta en coords de pantalla, no en el espacio local del nodo transformado.
 - **GPUI está extinto**: no agregar dependencias ni código GPUI (regla §3 de
   `CLAUDE.md`).
 - **Texto en regla pesada**: crear un `Typesetter` por frame es caro
