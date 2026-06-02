@@ -15,10 +15,13 @@
 //! - `MIRADA_GREETER_MOCK="usuario:secreto"` usa el mock, para iterar la UI
 //!   en cajas sin PAM o con el greeter anidado en otro escritorio.
 
+mod rain;
 mod sessions;
+mod state;
 
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Duration;
 
 use auth_core::{
     AuthError, Authenticator, MockAuthenticator, PamAuthenticator, SessionTicket, UserInfo,
@@ -116,6 +119,12 @@ struct Model {
     edit_active: usize,
     /// Animación de aparición del menú de edición.
     edit_anim: Tween<f32>,
+    /// ¿Pintar el fondo de lluvia de glifos (rusty rain)?
+    rain_enabled: bool,
+    /// Paleta del fondo de lluvia.
+    rain_color: state::RainColor,
+    /// Reloj del fondo (segundos), avanzado por `Msg::RainTick`.
+    rain_t: f32,
 }
 
 #[derive(Clone)]
@@ -151,6 +160,8 @@ enum Msg {
     EditActivate,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Tick del fondo de lluvia — avanza el reloj y repinta.
+    RainTick,
 }
 
 // ---------------------------------------------------------------------
@@ -171,15 +182,43 @@ impl App for Greeter {
         Some(GREETER_APP_ID)
     }
 
-    fn init(_: &Handle<Self::Msg>) -> Self::Model {
+    fn init(handle: &Handle<Self::Msg>) -> Self::Model {
+        let saved = state::GreeterState::load();
+        let sessions = sessions::discover();
+
+        // Prerellena el último usuario y arranca el foco directo en la
+        // contraseña si ya hay un nombre recordado.
+        let mut user = TextInputState::new();
+        if !saved.last_user.is_empty() {
+            user.set_text(saved.last_user.clone());
+        }
+        let focus = if saved.last_user.is_empty() {
+            Field::User
+        } else {
+            Field::Pass
+        };
+
+        // Restaura el último escritorio elegido buscándolo por nombre (los
+        // índices no son estables entre arranques: las sesiones del sistema
+        // pueden aparecer/desaparecer).
+        let session_idx = sessions
+            .iter()
+            .position(|s| s.name == saved.last_session)
+            .unwrap_or(0);
+
+        // Si el fondo está encendido, arranca el reloj de animación (~30 fps).
+        if saved.rain_enabled {
+            handle.spawn_periodic(Duration::from_millis(33), || Msg::RainTick);
+        }
+
         Model {
             auth: pick_authenticator(),
-            user: TextInputState::new(),
+            user,
             pass: TextInputState::masked(),
-            focus: Field::User,
+            focus,
             status: Status::Idle,
-            sessions: sessions::discover(),
-            session_idx: 0,
+            sessions,
+            session_idx,
             clipboard: SystemClipboard::new(),
             menu_open: None,
             edit_menu: None,
@@ -187,6 +226,9 @@ impl App for Greeter {
             menu_anim: Tween::idle(1.0),
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
+            rain_enabled: saved.rain_enabled,
+            rain_color: saved.rain_color,
+            rain_t: 0.0,
         }
     }
 
@@ -229,6 +271,10 @@ impl App for Greeter {
         }
         match &e.key {
             Key::Named(NamedKey::Tab) => Some(Msg::Focus(toggle(model.focus))),
+            // ↑/↓ cambian de escritorio sin tocar el ratón (los campos de una
+            // línea no usan las flechas verticales, así que quedan libres).
+            Key::Named(NamedKey::ArrowUp) => Some(Msg::CycleSession(-1)),
+            Key::Named(NamedKey::ArrowDown) => Some(Msg::CycleSession(1)),
             Key::Named(NamedKey::Enter) => {
                 if model.focus == Field::User {
                     Some(Msg::Focus(Field::Pass))
@@ -282,6 +328,15 @@ impl App for Greeter {
                 let chosen = m.sessions.get(m.session_idx);
                 let exec = chosen.map(|s| s.exec.clone()).unwrap_or_default();
                 let foreign = chosen.map(|s| s.foreign).unwrap_or(false);
+                // Recuerda usuario + escritorio (y la config del fondo) para
+                // el próximo login.
+                state::GreeterState {
+                    last_user: m.user.text().trim().to_string(),
+                    last_session: chosen.map(|s| s.name.clone()).unwrap_or_default(),
+                    rain_enabled: m.rain_enabled,
+                    rain_color: m.rain_color,
+                }
+                .save();
                 let ticket = SessionTicket::new(user);
                 let ticket = if exec.is_empty() {
                     ticket
@@ -360,6 +415,11 @@ impl App for Greeter {
                 }
             }
             Msg::EditMenuAction(action) => return apply_edit_menu_action(m, action),
+            Msg::RainTick => {
+                // Avanza el reloj del fondo. Se envuelve para no perder
+                // precisión `f32` en sesiones largas del greeter.
+                m.rain_t = (m.rain_t + 0.033) % 100_000.0;
+            }
         }
         m
     }
@@ -485,6 +545,33 @@ impl App for Greeter {
             arrow("›", Msg::CycleSession(1)),
         ]);
 
+        // Botón de entrar: la acción primaria, en color de acento. Mientras
+        // autentica se atenúa y cambia de rótulo.
+        let busy = matches!(model.status, Status::Authenticating);
+        let (btn_label, btn_fill) = if busy {
+            ("Entrando…", theme.bg_button)
+        } else {
+            ("Entrar", theme.accent)
+        };
+        let enter_btn = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(38.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(btn_fill)
+        .radius(9.0)
+        .text_aligned(
+            btn_label.to_string(),
+            13.0,
+            Color::from_rgba8(245, 246, 250, 255),
+            Alignment::Center,
+        )
+        .on_click(Msg::Submit);
+
         let card = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -518,13 +605,17 @@ impl App for Greeter {
             spacer(2.0),
             sess_cap,
             session_selector,
-            spacer(4.0),
-            row(14.0, "Ctrl+Alt+Backspace: salir  ·  Ctrl+Alt+F1…F12: cambiar de consola", 9.0, theme.fg_muted),
+            spacer(6.0),
+            enter_btn,
+            spacer(2.0),
+            row(14.0, "↑/↓: escritorio  ·  Enter: entrar  ·  Ctrl+Alt+Backspace: salir", 9.0, theme.fg_muted),
         ]);
 
         // Zona central que aloja la tarjeta de login. Ocupa todo el
-        // espacio sobrante bajo la barra de menú.
-        let body = View::new(Style {
+        // espacio sobrante bajo la barra de menú. Si el fondo de lluvia está
+        // activo, su `paint_with` pinta detrás de la tarjeta (el painter de un
+        // nodo corre antes que sus hijos).
+        let mut body = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
                 height: percent(1.0_f32),
@@ -534,8 +625,15 @@ impl App for Greeter {
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .fill(theme.bg_app)
-        .children(vec![card]);
+        .fill(theme.bg_app);
+        if model.rain_enabled {
+            let t = model.rain_t;
+            let bright = rain_bright(model.rain_color, &theme);
+            body = body.paint_with(move |scene, ts, rect| {
+                rain::paint(scene, ts, rect, t, bright);
+            });
+        }
+        let body = body.children(vec![card]);
 
         // Raíz en columna: barra de menú arriba + cuerpo centrado. El
         // right-click se engancha en la raíz (origen 0,0 ⇒ las coords
@@ -715,6 +813,21 @@ fn apply_edit_menu_action(mut model: Model, action: EditAction) -> Model {
         model.status = Status::Idle;
     }
     model
+}
+
+/// Resuelve el color base (RGB brillante) del fondo de lluvia. `Accent` toma
+/// el acento del tema; el resto son paletas fijas.
+fn rain_bright(color: state::RainColor, theme: &Theme) -> (u8, u8, u8) {
+    match color {
+        state::RainColor::Green => (120, 255, 140),
+        state::RainColor::Red => (255, 90, 80),
+        state::RainColor::Amber => (255, 200, 90),
+        state::RainColor::Cyan => (110, 235, 255),
+        state::RainColor::Accent => {
+            let c = theme.accent.to_rgba8();
+            (c.r, c.g, c.b)
+        }
+    }
 }
 
 fn toggle(f: Field) -> Field {

@@ -461,8 +461,9 @@ impl DrmState {
                 let button = event.button_code();
 
                 // ¿Empieza un arrastre? `Super`+botón sobre una ventana:
-                // izquierdo mueve, derecho redimensiona.
-                if pressed && self.app.drag.is_none() {
+                // izquierdo mueve, derecho redimensiona. En modo greeter no
+                // hay arrastre: el login está clavado a pantalla completa.
+                if pressed && self.app.drag.is_none() && self.app.mode != BodyMode::Greeter {
                     let super_held = self
                         .app
                         .keyboard
