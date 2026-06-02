@@ -15,10 +15,10 @@
 //! - **Geometría minimal, no marca**: glifos genéricos universales,
 //!   no "marca registrada". Cada uno debe ser reconocible al primer
 //!   vistazo aún en 12×12.
-//! - **20 iconos**: suficientes para cubrir el 90% de acciones que
-//!   aparecen en cualquier UI gioser. Si una app necesita uno más,
-//!   lo agrega aquí (no en su propio crate) — la consistencia visual
-//!   importa más que el aislamiento.
+//! - **Set acotado**: suficientes para cubrir el grueso de acciones y
+//!   tipos que aparecen en cualquier UI gioser. Si una app necesita uno
+//!   más, lo agrega aquí (no en su propio crate) — la consistencia
+//!   visual importa más que el aislamiento.
 //!
 //! ## Catálogo
 //!
@@ -29,6 +29,8 @@
 //! | Navegación   | `chevron_up`, `chevron_down`, `chevron_left`, `chevron_right`, `home`, `search` |
 //! | Estado       | `info`, `warning`, `error`, `bell`                  |
 //! | Sistema      | `settings`, `more`                                  |
+//! | Multimedia   | `play`, `pause`, `stop`, `skip_*`, `volume*`, `repeat`, `shuffle`, `record`, `equalizer`, `camera`, `gauge` |
+//! | Archivos     | `image`, `music`, `film`, `archive`, `code`, `file_text`, `link`, `font` |
 //!
 //! ## Uso
 //!
@@ -104,6 +106,15 @@ pub enum Icon {
     Equalizer,
     Camera,
     Gauge,
+    // --- Archivos (tipos por extensión, para listados de file manager) ---
+    Image,
+    Music,
+    Film,
+    Archive,
+    Code,
+    FileText,
+    Link,
+    Font,
 }
 
 impl Icon {
@@ -150,6 +161,14 @@ impl Icon {
             Icon::Equalizer => "equalizer",
             Icon::Camera => "camera",
             Icon::Gauge => "gauge",
+            Icon::Image => "image",
+            Icon::Music => "music",
+            Icon::Film => "film",
+            Icon::Archive => "archive",
+            Icon::Code => "code",
+            Icon::FileText => "file_text",
+            Icon::Link => "link",
+            Icon::Font => "font",
         }
     }
 
@@ -196,6 +215,14 @@ impl Icon {
             Icon::Equalizer => path_equalizer(),
             Icon::Camera => path_camera(),
             Icon::Gauge => path_gauge(),
+            Icon::Image => path_image(),
+            Icon::Music => path_music(),
+            Icon::Film => path_film(),
+            Icon::Archive => path_archive(),
+            Icon::Code => path_code(),
+            Icon::FileText => path_file_text(),
+            Icon::Link => path_link(),
+            Icon::Font => path_font(),
         }
     }
 }
@@ -779,6 +806,152 @@ fn path_gauge() -> BezPath {
     p
 }
 
+// ---------------------------------------------------------------------
+// Archivos — tipos por extensión (listados de file manager / shell)
+// ---------------------------------------------------------------------
+
+fn path_image() -> BezPath {
+    // Marco con una montaña y un sol (el clásico "imagen").
+    let mut p = BezPath::new();
+    p.move_to((4.0, 5.0));
+    p.line_to((20.0, 5.0));
+    p.line_to((20.0, 19.0));
+    p.line_to((4.0, 19.0));
+    p.close_path();
+    // Sol.
+    append(&mut p, &path_circle(8.5, 9.5, 1.6, 12));
+    // Montaña (línea quebrada hasta el borde derecho).
+    p.move_to((4.0, 17.0));
+    p.line_to((10.0, 12.0));
+    p.line_to((14.0, 15.0));
+    p.line_to((17.0, 12.0));
+    p.line_to((20.0, 15.0));
+    p
+}
+
+fn path_music() -> BezPath {
+    // Nota musical: dos cabezas redondas unidas por una plica con bandera.
+    let mut p = BezPath::new();
+    // Plicas.
+    p.move_to((9.0, 18.0));
+    p.line_to((9.0, 6.0));
+    p.line_to((19.0, 4.0));
+    p.line_to((19.0, 16.0));
+    // Cabeza izquierda.
+    append(&mut p, &path_circle(7.0, 18.0, 2.0, 14));
+    // Cabeza derecha.
+    append(&mut p, &path_circle(17.0, 16.0, 2.0, 14));
+    p
+}
+
+fn path_film() -> BezPath {
+    // Tira de película: rectángulo con perforaciones a los lados.
+    let mut p = BezPath::new();
+    p.move_to((4.0, 5.0));
+    p.line_to((20.0, 5.0));
+    p.line_to((20.0, 19.0));
+    p.line_to((4.0, 19.0));
+    p.close_path();
+    // Rieles internos (separan perforaciones del cuadro central).
+    p.move_to((8.0, 5.0));
+    p.line_to((8.0, 19.0));
+    p.move_to((16.0, 5.0));
+    p.line_to((16.0, 19.0));
+    // Perforaciones (cuatro tics por lado).
+    for y in [7.5, 11.0, 14.5] {
+        p.move_to((4.0, y));
+        p.line_to((8.0, y));
+        p.move_to((16.0, y));
+        p.line_to((20.0, y));
+    }
+    p
+}
+
+fn path_archive() -> BezPath {
+    // Caja/paquete: tapa arriba + cuerpo + tirador del cierre.
+    let mut p = BezPath::new();
+    // Tapa.
+    p.move_to((3.0, 5.0));
+    p.line_to((21.0, 5.0));
+    p.line_to((21.0, 9.0));
+    p.line_to((3.0, 9.0));
+    p.close_path();
+    // Cuerpo.
+    p.move_to((4.5, 9.0));
+    p.line_to((4.5, 20.0));
+    p.line_to((19.5, 20.0));
+    p.line_to((19.5, 9.0));
+    // Pestaña del cierre.
+    p.move_to((10.0, 12.0));
+    p.line_to((14.0, 12.0));
+    p
+}
+
+fn path_code() -> BezPath {
+    // Corchetes angulares </> — universal para "código".
+    let mut p = BezPath::new();
+    // Chevron izquierdo.
+    p.move_to((9.0, 7.0));
+    p.line_to((4.0, 12.0));
+    p.line_to((9.0, 17.0));
+    // Chevron derecho.
+    p.move_to((15.0, 7.0));
+    p.line_to((20.0, 12.0));
+    p.line_to((15.0, 17.0));
+    // Barra diagonal central.
+    p.move_to((13.0, 6.0));
+    p.line_to((11.0, 18.0));
+    p
+}
+
+fn path_file_text() -> BezPath {
+    // Documento (como `file`) con líneas de texto adentro.
+    let mut p = path_file();
+    p.move_to((8.5, 12.0));
+    p.line_to((16.5, 12.0));
+    p.move_to((8.5, 15.0));
+    p.line_to((16.5, 15.0));
+    p.move_to((8.5, 18.0));
+    p.line_to((13.5, 18.0));
+    p
+}
+
+fn path_link() -> BezPath {
+    // Symlink: dos eslabones de cadena en diagonal.
+    let mut p = BezPath::new();
+    // Eslabón superior-izquierdo (cápsula inclinada).
+    p.move_to((10.0, 14.0));
+    p.line_to((7.0, 11.0));
+    p.curve_to((5.0, 9.0), (5.0, 7.0), (7.0, 5.0));
+    p.curve_to((9.0, 3.0), (11.0, 3.0), (13.0, 5.0));
+    p.line_to((15.0, 7.0));
+    // Eslabón inferior-derecho.
+    p.move_to((14.0, 10.0));
+    p.line_to((17.0, 13.0));
+    p.curve_to((19.0, 15.0), (19.0, 17.0), (17.0, 19.0));
+    p.curve_to((15.0, 21.0), (13.0, 21.0), (11.0, 19.0));
+    p.line_to((9.0, 17.0));
+    p
+}
+
+fn path_font() -> BezPath {
+    // Letra "A" serif — glifo de fuente tipográfica.
+    let mut p = BezPath::new();
+    // Astas de la A.
+    p.move_to((6.0, 20.0));
+    p.line_to((12.0, 4.0));
+    p.line_to((18.0, 20.0));
+    // Travesaño.
+    p.move_to((8.5, 14.0));
+    p.line_to((15.5, 14.0));
+    // Serifas inferiores.
+    p.move_to((4.5, 20.0));
+    p.line_to((7.5, 20.0));
+    p.move_to((16.5, 20.0));
+    p.line_to((19.5, 20.0));
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,6 +968,8 @@ mod tests {
             Icon::Rewind, Icon::FastForward, Icon::Volume, Icon::VolumeMute,
             Icon::Repeat, Icon::Shuffle, Icon::Record, Icon::Equalizer,
             Icon::Camera, Icon::Gauge,
+            Icon::Image, Icon::Music, Icon::Film, Icon::Archive,
+            Icon::Code, Icon::FileText, Icon::Link, Icon::Font,
         ];
         for icon in all {
             let p = icon.path();
@@ -818,6 +993,8 @@ mod tests {
             Icon::Rewind, Icon::FastForward, Icon::Volume, Icon::VolumeMute,
             Icon::Repeat, Icon::Shuffle, Icon::Record, Icon::Equalizer,
             Icon::Camera, Icon::Gauge,
+            Icon::Image, Icon::Music, Icon::Film, Icon::Archive,
+            Icon::Code, Icon::FileText, Icon::Link, Icon::Font,
         ];
         let mut names: Vec<&str> = all.iter().map(|i| i.name()).collect();
         let n = names.len();

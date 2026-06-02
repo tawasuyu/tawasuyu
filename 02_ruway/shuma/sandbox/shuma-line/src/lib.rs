@@ -45,4 +45,4 @@ pub use pipeline::{split_pipeline, Pipeline, Stage};
 pub use token::{Token, TokenKind};
 
 pub mod icon;
-pub use icon::file_icon;
+pub use icon::{file_icon, file_kind, FileKind};

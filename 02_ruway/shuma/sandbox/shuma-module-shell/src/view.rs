@@ -1383,6 +1383,30 @@ pub(crate) fn render_output_line<HostMsg: Clone + 'static>(
 
 /// Convierte las piezas en una lista de `View`s. Las accionables
 /// (Path/Url/GrepRef/GitSha) llevan `on_click`.
+/// Mapea la categoría semántica de `shuma-line` al icono vectorial del
+/// set canónico `llimphi-icons`. Los iconos monocromos son más gruesos
+/// que los emoji (un solo `code` para todos los lenguajes, un `file_text`
+/// para todos los documentos) — la pérdida de granularidad es el precio
+/// de no depender de fuentes de emoji del sistema.
+fn kind_icon(kind: shuma_line::FileKind) -> llimphi_icons::Icon {
+    use llimphi_icons::Icon;
+    use shuma_line::FileKind as K;
+    match kind {
+        K::Folder => Icon::Folder,
+        K::Symlink => Icon::Link,
+        K::Image => Icon::Image,
+        K::Audio => Icon::Music,
+        K::Video => Icon::Film,
+        K::Archive => Icon::Archive,
+        K::Document => Icon::FileText,
+        K::Code => Icon::Code,
+        K::Data => Icon::Code,
+        K::Font => Icon::Font,
+        K::Executable => Icon::Settings,
+        K::Generic => Icon::File,
+    }
+}
+
 pub(crate) fn build_span_children<HostMsg: Clone + 'static>(
     text: &str,
     decorations: &[shuma_line::Decoration],
@@ -1401,25 +1425,48 @@ pub(crate) fn build_span_children<HostMsg: Clone + 'static>(
             p.deco,
             Some(Dk::Path { .. } | Dk::Url(_) | Dk::GrepRef { .. } | Dk::GitSha(_))
         );
-        // Para paths anteponemos un iconito por tipo: así un `ls` se lee
-        // como un explorador de archivos (carpeta/imagen/código/…) en
-        // vez de una lista de tokens sueltos.
-        let label = match &p.deco {
+        // Texto del span. Para paths le anteponemos un icono vectorial por
+        // tipo (no emoji): así un `ls` se lee como un explorador de
+        // archivos (carpeta/imagen/código/…) sin depender de fuentes de
+        // emoji del sistema.
+        let text_view: View<HostMsg> = View::new(Style {
+            ..Default::default()
+        })
+        .text_aligned(p.text.clone(), 12.0, p.color, Alignment::Start);
+        let mut span_view: View<HostMsg> = match &p.deco {
             Some(Dk::Path {
                 abs,
                 is_dir,
                 is_executable,
                 is_symlink,
             }) => {
-                let icon = shuma_line::file_icon(abs, *is_dir, *is_executable, *is_symlink);
-                format!("{icon} {}", p.text)
+                let kind = shuma_line::file_kind(abs, *is_dir, *is_executable, *is_symlink);
+                let icon_box: View<HostMsg> = View::new(Style {
+                    size: Size {
+                        width: length(13.0_f32),
+                        height: length(13.0_f32),
+                    },
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .children(vec![llimphi_icons::icon_view(
+                    kind_icon(kind),
+                    p.color,
+                    1.6,
+                )]);
+                View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    align_items: Some(AlignItems::Center),
+                    gap: Size {
+                        width: length(5.0_f32),
+                        height: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .children(vec![icon_box, text_view])
             }
-            _ => p.text.clone(),
+            _ => text_view,
         };
-        let mut span_view: View<HostMsg> = View::new(Style {
-            ..Default::default()
-        })
-        .text_aligned(label, 12.0, p.color, Alignment::Start);
         if let (true, Some(kind)) = (actionable, p.deco) {
             let l = lift.clone();
             // Feedback de hover: el span se resalta al pasar el cursor —
