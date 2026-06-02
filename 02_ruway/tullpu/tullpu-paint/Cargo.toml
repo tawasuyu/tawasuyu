@@ -1,0 +1,10 @@
+[package]
+name = "tullpu-paint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tullpu — kernel de pintura buffer-puro y agnóstico de GUI: recortes, rellenos, flood fill, pincel/disco, líneas, degradés, espejo, src-over y rotaciones 90° sobre Rgba8 y máscaras de un canal. Sin Model, sin render."
+
+[dependencies]

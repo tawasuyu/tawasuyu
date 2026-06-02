@@ -16,6 +16,7 @@ path = "src/main.rs"
 tullpu-core = { path = "../tullpu-core" }
 tullpu-render = { path = "../tullpu-render" }
 tullpu-ops = { path = "../tullpu-ops" }
+tullpu-paint = { path = "../tullpu-paint" }
 pixel-verbo-core = { path = "../pixel-verbo-core" }
 pixel-verbo-mock = { path = "../pixel-verbo-mock" }
 pixel-verbo-daemon = { path = "../pixel-verbo-daemon" }

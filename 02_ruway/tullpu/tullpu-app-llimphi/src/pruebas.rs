@@ -11,6 +11,9 @@
         Frescura, Lienzo, ModoFusion, OpLocal, OrigenCapa,
     };
     use tullpu_render::{AlmacenEnMemoria, FormatoExport, FuenteBuffers};
+    // Kernel puro usado sólo por tests (no re-exportado por `ops` porque el
+    // build normal no lo invoca directamente — sólo desde dentro del crate).
+    use tullpu_paint::{cobertura_pincel, mezclar_src_over};
     use uuid::Uuid;
 
     fn ev_char(s: &str, mods: Modifiers) -> KeyEvent {

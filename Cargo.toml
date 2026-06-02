@@ -172,6 +172,7 @@ members = [
     "02_ruway/tullpu/tullpu-core",
     "02_ruway/tullpu/tullpu-render",
     "02_ruway/tullpu/tullpu-ops",
+    "02_ruway/tullpu/tullpu-paint",
     "02_ruway/tullpu/tullpu-app-llimphi",
     "02_ruway/tullpu/pixel-verbo-core",
     "02_ruway/tullpu/pixel-verbo-mock",
