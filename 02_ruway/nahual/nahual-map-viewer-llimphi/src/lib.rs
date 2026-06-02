@@ -98,6 +98,26 @@ pub struct Label {
 /// Tope de etiquetas a retener — más que esto satura el panel de texto.
 const MAX_LABELS: usize = 200;
 
+/// Tope de propiedades retenidas por feature (para inspección/choropleth).
+const MAX_PROPS: usize = 80;
+
+/// Propiedades de una feature, retenidas para inspección (clic) y estilo por
+/// valor (choropleth). `props` son pares clave→valor ya stringificados (orden
+/// de aparición); `numbers` son sólo las numéricas, para escalas de color.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FeatureProps {
+    pub name: Option<String>,
+    pub props: Vec<(String, String)>,
+    pub numbers: Vec<(String, f64)>,
+}
+
+impl FeatureProps {
+    /// Valor numérico de una propiedad por nombre, si existe.
+    pub fn number(&self, key: &str) -> Option<f64> {
+        self.numbers.iter().find(|(k, _)| k == key).map(|(_, v)| *v)
+    }
+}
+
 /// Geometrías aplanadas listas para proyectar y pintar. Las geometrías
 /// GeoJSON anidadas (multi-, colecciones) se desarman a estas tres listas.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -112,6 +132,14 @@ pub struct MapData {
     /// Nombres de features (de `properties.nombre`/`name`/…) anclados a un
     /// punto representativo, para rotular el mapa.
     pub labels: Vec<Label>,
+    /// Propiedades por feature. Los índices `*_feat` apuntan acá.
+    pub features: Vec<FeatureProps>,
+    /// Índice de feature de cada punto (paralelo a `points`).
+    pub point_feat: Vec<usize>,
+    /// Índice de feature de cada línea (paralelo a `lines`).
+    pub line_feat: Vec<usize>,
+    /// Índice de feature de cada polígono (paralelo a `polygons`).
+    pub polygon_feat: Vec<usize>,
 }
 
 impl MapData {
@@ -222,7 +250,7 @@ fn parse_into(src: &str, cap: usize) -> Result<(MapData, bool), String> {
     let value: serde_json::Value = serde_json::from_str(src).map_err(|e| e.to_string())?;
     let mut data = MapData::default();
     let mut budget = cap;
-    collect(&value, &mut data, &mut budget, None);
+    collect(&value, &mut data, &mut budget, None, None);
     Ok((data, budget == 0))
 }
 
@@ -260,7 +288,8 @@ pub fn parse_gpx(src: &str) -> MapPreview {
     let flush_seg =
         |data: &mut MapData, budget: &mut usize, seg: &mut Vec<Coord>, name: &mut Option<String>| {
             let rep = midpoint(seg);
-            push_line(data, std::mem::take(seg), budget);
+            let fi = make_feature(data, name.as_deref());
+            push_line(data, std::mem::take(seg), budget, fi);
             label_at(data, name.as_deref(), rep);
             *name = None;
         };
@@ -296,7 +325,8 @@ pub fn parse_gpx(src: &str) -> MapPreview {
                 }
                 b"wpt" => {
                     if let Some(c) = gpx_latlon(&e) {
-                        push_points(&mut data, std::slice::from_ref(&c), &mut budget);
+                        let fi = make_feature(&mut data, None);
+                        push_points(&mut data, std::slice::from_ref(&c), &mut budget, fi);
                     }
                 }
                 _ => {}
@@ -324,7 +354,8 @@ pub fn parse_gpx(src: &str) -> MapPreview {
                 b"trk" => target = NameTarget::None,
                 b"wpt" => {
                     if let Some(c) = wpt.take() {
-                        push_points(&mut data, std::slice::from_ref(&c), &mut budget);
+                        let fi = make_feature(&mut data, wpt_name.as_deref());
+                        push_points(&mut data, std::slice::from_ref(&c), &mut budget, fi);
                         label_at(&mut data, wpt_name.as_deref(), Some(c));
                     }
                     wpt_name = None;
@@ -419,13 +450,15 @@ pub fn parse_kml(src: &str) -> MapPreview {
                     match geom {
                         Geom::Point => {
                             if let Some(c) = coords.first().copied() {
-                                push_points(&mut data, std::slice::from_ref(&c), &mut budget);
+                                let fi = make_feature(&mut data, placemark_name.as_deref());
+                                push_points(&mut data, std::slice::from_ref(&c), &mut budget, fi);
                                 label_at(&mut data, placemark_name.as_deref(), Some(c));
                             }
                         }
                         Geom::Line => {
                             let rep = midpoint(&coords);
-                            push_line(&mut data, coords, &mut budget);
+                            let fi = make_feature(&mut data, placemark_name.as_deref());
+                            push_line(&mut data, coords, &mut budget, fi);
                             label_at(&mut data, placemark_name.as_deref(), rep);
                         }
                         Geom::Ring => {
@@ -434,7 +467,8 @@ pub fn parse_kml(src: &str) -> MapPreview {
                             } else {
                                 // LinearRing suelto → polígono de un anillo.
                                 let rep = centroid(&coords);
-                                push_polygon(&mut data, vec![coords], &mut budget);
+                                let fi = make_feature(&mut data, placemark_name.as_deref());
+                                push_polygon(&mut data, vec![coords], &mut budget, fi);
                                 label_at(&mut data, placemark_name.as_deref(), rep);
                             }
                         }
@@ -443,7 +477,8 @@ pub fn parse_kml(src: &str) -> MapPreview {
                 }
                 b"Polygon" => {
                     let rep = poly_rings.first().and_then(|r| centroid(r));
-                    push_polygon(&mut data, std::mem::take(&mut poly_rings), &mut budget);
+                    let fi = make_feature(&mut data, placemark_name.as_deref());
+                    push_polygon(&mut data, std::mem::take(&mut poly_rings), &mut budget, fi);
                     label_at(&mut data, placemark_name.as_deref(), rep);
                     in_polygon = false;
                 }
@@ -522,77 +557,100 @@ pub fn world_base_stats() -> (usize, usize, usize) {
 /// es el presupuesto de vértices restante: al agotarse, deja de agregar.
 /// `name` es el rótulo heredado de la `Feature` contenedora (si la hay), que
 /// se ancla a un punto representativo de cada geometría hoja.
-fn collect(v: &serde_json::Value, data: &mut MapData, budget: &mut usize, name: Option<&str>) {
+fn collect(
+    v: &serde_json::Value,
+    data: &mut MapData,
+    budget: &mut usize,
+    name: Option<&str>,
+    feat: Option<usize>,
+) {
     if *budget == 0 {
         return;
     }
     let Some(ty) = v.get("type").and_then(|t| t.as_str()) else {
         return;
     };
+    // Índice de feature para las geometrías hoja: el heredado, o uno nuevo
+    // (vacío) para geometría suelta sin Feature contenedora.
+    let leaf_feat = |data: &mut MapData| match feat {
+        Some(f) => f,
+        None => make_feature(data, name),
+    };
     match ty {
         "FeatureCollection" => {
             if let Some(arr) = v.get("features").and_then(|f| f.as_array()) {
                 for f in arr {
-                    collect(f, data, budget, None);
+                    collect(f, data, budget, None, None);
                 }
             }
         }
         "Feature" => {
-            // El nombre de la feature manda sobre uno heredado.
+            // Una Feature crea su registro de propiedades una vez; toda su
+            // geometría (incluso multi-) comparte ese índice.
+            let mut fp = feature_props(v.get("properties"));
             let fname = feature_name(v.get("properties"));
+            fp.name = fname.clone();
+            data.features.push(fp);
+            let fi = data.features.len() - 1;
             if let Some(g) = v.get("geometry") {
-                collect(g, data, budget, fname.as_deref().or(name));
+                collect(g, data, budget, fname.as_deref().or(name), Some(fi));
             }
         }
         "GeometryCollection" => {
             if let Some(arr) = v.get("geometries").and_then(|g| g.as_array()) {
                 for g in arr {
-                    collect(g, data, budget, name);
+                    collect(g, data, budget, name, feat);
                 }
             }
         }
         "Point" => {
             if let Some(c) = coord(v.get("coordinates")) {
-                push_points(data, std::slice::from_ref(&c), budget);
+                let fi = leaf_feat(data);
+                push_points(data, std::slice::from_ref(&c), budget, fi);
                 label_at(data, name, Some(c));
             }
         }
         "MultiPoint" => {
             let cs = coord_list(v.get("coordinates"));
             let rep = cs.first().copied();
-            push_points(data, &cs, budget);
+            let fi = leaf_feat(data);
+            push_points(data, &cs, budget, fi);
             label_at(data, name, rep);
         }
         "LineString" => {
             let line = coord_list(v.get("coordinates"));
             let rep = midpoint(&line);
-            push_line(data, line, budget);
+            let fi = leaf_feat(data);
+            push_line(data, line, budget, fi);
             label_at(data, name, rep);
         }
         "MultiLineString" => {
             let lines = coord_rings(v.get("coordinates"));
             let rep = lines.first().and_then(|l| midpoint(l));
+            let fi = leaf_feat(data);
             for line in lines {
-                push_line(data, line, budget);
+                push_line(data, line, budget, fi);
             }
             label_at(data, name, rep);
         }
         "Polygon" => {
             let rings = coord_rings(v.get("coordinates"));
             let rep = rings.first().and_then(|r| centroid(r));
-            push_polygon(data, rings, budget);
+            let fi = leaf_feat(data);
+            push_polygon(data, rings, budget, fi);
             label_at(data, name, rep);
         }
         "MultiPolygon" => {
             // coordinates: [ [ ring, ring... ], ... ]
             if let Some(arr) = v.get("coordinates").and_then(|c| c.as_array()) {
+                let fi = leaf_feat(data);
                 let mut rep = None;
                 for poly in arr {
                     let rings = coord_rings(Some(poly));
                     if rep.is_none() {
                         rep = rings.first().and_then(|r| centroid(r));
                     }
-                    push_polygon(data, rings, budget);
+                    push_polygon(data, rings, budget, fi);
                 }
                 label_at(data, name, rep);
             }
@@ -653,17 +711,18 @@ fn centroid(ring: &[Coord]) -> Option<Coord> {
     Some([sx / n, sy / n])
 }
 
-fn push_points(data: &mut MapData, pts: &[Coord], budget: &mut usize) {
+fn push_points(data: &mut MapData, pts: &[Coord], budget: &mut usize, feat: usize) {
     for p in pts {
         if *budget == 0 {
             return;
         }
         data.points.push(*p);
+        data.point_feat.push(feat);
         *budget -= 1;
     }
 }
 
-fn push_line(data: &mut MapData, mut line: Ring, budget: &mut usize) {
+fn push_line(data: &mut MapData, mut line: Ring, budget: &mut usize, feat: usize) {
     if line.len() < 2 {
         return;
     }
@@ -673,9 +732,10 @@ fn push_line(data: &mut MapData, mut line: Ring, budget: &mut usize) {
     }
     *budget -= line.len();
     data.lines.push(line);
+    data.line_feat.push(feat);
 }
 
-fn push_polygon(data: &mut MapData, rings: Vec<Ring>, budget: &mut usize) {
+fn push_polygon(data: &mut MapData, rings: Vec<Ring>, budget: &mut usize, feat: usize) {
     let mut kept: Vec<Ring> = Vec::new();
     for mut ring in rings {
         if *budget == 0 {
@@ -690,7 +750,47 @@ fn push_polygon(data: &mut MapData, rings: Vec<Ring>, budget: &mut usize) {
     }
     if !kept.is_empty() {
         data.polygons.push(kept);
+        data.polygon_feat.push(feat);
     }
+}
+
+/// Crea una feature con un nombre opcional (para formatos sin propiedades
+/// ricas: GPX/KML, o geometrías sueltas) y devuelve su índice.
+fn make_feature(data: &mut MapData, name: Option<&str>) -> usize {
+    let mut fp = FeatureProps::default();
+    if let Some(n) = name {
+        fp.name = Some(n.to_string());
+        fp.props.push(("name".to_string(), n.to_string()));
+    }
+    data.features.push(fp);
+    data.features.len() - 1
+}
+
+/// Construye [`FeatureProps`] desde el objeto `properties` de una Feature
+/// GeoJSON: conserva escalares (número/string/bool) en orden, y los números
+/// también en `numbers` para choropleth. Omite null/array/objeto.
+fn feature_props(props: Option<&serde_json::Value>) -> FeatureProps {
+    let mut fp = FeatureProps::default();
+    let Some(obj) = props.and_then(|p| p.as_object()) else {
+        return fp;
+    };
+    for (k, v) in obj {
+        if fp.props.len() >= MAX_PROPS {
+            break;
+        }
+        match v {
+            serde_json::Value::Number(n) => {
+                if let Some(f) = n.as_f64() {
+                    fp.numbers.push((k.clone(), f));
+                    fp.props.push((k.clone(), n.to_string()));
+                }
+            }
+            serde_json::Value::String(s) => fp.props.push((k.clone(), s.clone())),
+            serde_json::Value::Bool(b) => fp.props.push((k.clone(), b.to_string())),
+            _ => {}
+        }
+    }
+    fp
 }
 
 /// Lee una coordenada `[lon, lat(, z)]` de un valor JSON. `None` si no es un
@@ -736,6 +836,8 @@ pub struct MapView {
     pub pan: (f64, f64),
     /// Dibujar el mapa-base mundial de fondo.
     pub show_base: bool,
+    /// Índice de la feature seleccionada (clic) en `MapData.features`, si la hay.
+    pub selected: Option<usize>,
     rect: Arc<Mutex<Option<(f32, f32, f32, f32)>>>,
 }
 
@@ -745,6 +847,7 @@ impl Default for MapView {
             zoom: 1.0,
             pan: (0.0, 0.0),
             show_base: true,
+            selected: None,
             rect: Arc::new(Mutex::new(None)),
         }
     }
@@ -756,11 +859,12 @@ impl MapView {
     pub const ZOOM_MIN: f64 = 0.2;
     pub const ZOOM_MAX: f64 = 64.0;
 
-    /// Vuelve al encuadre inicial (zoom 1, sin pan). Conserva la celda del
-    /// rect para no perder el gateo entre selecciones.
+    /// Vuelve al encuadre inicial (zoom 1, sin pan) y limpia la selección.
+    /// Conserva la celda del rect para no perder el gateo entre selecciones.
     pub fn reset(&mut self) {
         self.zoom = 1.0;
         self.pan = (0.0, 0.0);
+        self.selected = None;
     }
 
     /// Acumula un desplazamiento (de un arrastre), en píxeles físicos.
@@ -878,14 +982,16 @@ fn with_alpha(c: Color, alpha: f32) -> Color {
 }
 
 /// Pinta header (nombre + resumen) + body con el mapa proyectado.
-pub fn map_viewer_view<Msg>(
+pub fn map_viewer_view<Msg, F>(
     state: &MapPreview,
     path: Option<&Path>,
     palette: &MapViewerPalette,
     view: &MapView,
+    on_pick: F,
 ) -> View<Msg>
 where
     Msg: Clone + 'static,
+    F: Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
 {
     let name = path
         .and_then(|p| p.file_name())
@@ -935,7 +1041,11 @@ where
             simple_body(&format!("(archivo muy grande: {n} bytes — sin preview)"), palette.fg_muted)
         }
         MapPreview::Error(e) => simple_body(&format!("(no se pudo leer: {e})"), palette.fg_error),
-        MapPreview::Map { data, .. } => map_canvas(data.clone(), *palette, view.clone()),
+        // El clic sobre el lienzo se reporta como fracción del rect (el host
+        // la resuelve con `hit_test`); el resto de las variantes lo ignora.
+        MapPreview::Map { data, .. } => {
+            map_canvas(data.clone(), *palette, view.clone()).on_click_at(on_pick)
+        }
     };
 
     View::new(Style {
@@ -958,6 +1068,150 @@ where
     .children(vec![header, body])
 }
 
+/// Proyección equirectangular fit-to-bounds + cámara (zoom/pan). Encapsula la
+/// matemática para que el render (canvas) y el hit-test (clic) coincidan
+/// exactamente — si difirieran, el clic seleccionaría la feature equivocada.
+struct Projection {
+    kx: f64,
+    scale: f64,
+    ox: f64,
+    oy: f64,
+    pmin_x: f64,
+    max_lat: f64,
+    pivot_x: f64,
+    pivot_y: f64,
+    zoom: f64,
+    pan: (f64, f64),
+}
+
+impl Projection {
+    /// Encaja `bb` en `rect` (`x, y, w, h`, físicos) con escala uniforme y la
+    /// cámara dada.
+    fn fit(bb: BBox, rect: (f64, f64, f64, f64), zoom: f64, pan: (f64, f64)) -> Self {
+        let (rx, ry, rw, rh) = rect;
+        let lat0 = (bb.min_lat + bb.max_lat) * 0.5;
+        let kx = lat0.to_radians().cos().abs().max(0.05);
+        let pmin_x = bb.min_lon * kx;
+        let pw = (bb.max_lon * kx - pmin_x).max(0.0);
+        let ph = (bb.max_lat - bb.min_lat).max(0.0);
+        let inset = 6.0_f64;
+        let aw = (rw - 2.0 * inset).max(1.0);
+        let ah = (rh - 2.0 * inset).max(1.0);
+        let sx = if pw > 1e-12 { aw / pw } else { f64::INFINITY };
+        let sy = if ph > 1e-12 { ah / ph } else { f64::INFINITY };
+        let scale = sx.min(sy).min(1.0e6);
+        let scale = if scale.is_finite() { scale } else { 1.0 };
+        Projection {
+            kx,
+            scale,
+            ox: rx + inset + (aw - pw * scale) * 0.5,
+            oy: ry + inset + (ah - ph * scale) * 0.5,
+            pmin_x,
+            max_lat: bb.max_lat,
+            pivot_x: rx + rw * 0.5,
+            pivot_y: ry + rh * 0.5,
+            zoom,
+            pan,
+        }
+    }
+
+    /// lon/lat → pantalla (Y invertida), pasando por la cámara.
+    fn to_screen(&self, [lon, lat]: Coord) -> (f64, f64) {
+        let bx = self.ox + (lon * self.kx - self.pmin_x) * self.scale;
+        let by = self.oy + (self.max_lat - lat) * self.scale;
+        (
+            self.pivot_x + (bx - self.pivot_x) * self.zoom + self.pan.0,
+            self.pivot_y + (by - self.pivot_y) * self.zoom + self.pan.1,
+        )
+    }
+
+    /// pantalla → lon/lat (inverso exacto de [`to_screen`]).
+    fn inverse(&self, sx: f64, sy: f64) -> Coord {
+        let bx = self.pivot_x + (sx - self.pivot_x - self.pan.0) / self.zoom;
+        let by = self.pivot_y + (sy - self.pivot_y - self.pan.1) / self.zoom;
+        let lon = ((bx - self.ox) / self.scale + self.pmin_x) / self.kx;
+        let lat = self.max_lat - (by - self.oy) / self.scale;
+        [lon, lat]
+    }
+}
+
+/// Resuelve qué feature cae bajo un clic. `(fx, fy)` es la posición del clic
+/// como fracción `[0, 1]` del rect del canvas (DPI-independiente). Devuelve el
+/// índice en `data.features`, o `None` si el clic no toca ninguna geometría.
+///
+/// Prioridad: puntos > líneas > polígonos (lo más específico primero). Todo
+/// en espacio de pantalla con la misma [`Projection`] que el render, así el
+/// hit coincide con lo que se ve.
+pub fn hit_test(data: &MapData, view: &MapView, fx: f64, fy: f64) -> Option<usize> {
+    let (rx, ry, rw, rh) = view.rect.lock().ok().and_then(|g| *g)?;
+    if rw <= 0.0 || rh <= 0.0 {
+        return None;
+    }
+    let bb = data.bbox()?;
+    let proj = Projection::fit(bb, (rx as f64, ry as f64, rw as f64, rh as f64), view.zoom, view.pan);
+    let cx = rx as f64 + fx * rw as f64;
+    let cy = ry as f64 + fy * rh as f64;
+    let tol = 7.0_f64;
+
+    for (i, p) in data.points.iter().enumerate() {
+        let (sx, sy) = proj.to_screen(*p);
+        if (sx - cx).hypot(sy - cy) <= tol + 3.0 {
+            return data.point_feat.get(i).copied();
+        }
+    }
+    for (li, line) in data.lines.iter().enumerate() {
+        for w in line.windows(2) {
+            if dist_point_seg(cx, cy, proj.to_screen(w[0]), proj.to_screen(w[1])) <= tol {
+                return data.line_feat.get(li).copied();
+            }
+        }
+    }
+    for (pi, poly) in data.polygons.iter().enumerate() {
+        if let Some(outer) = poly.first() {
+            if point_in_ring_screen(cx, cy, outer, &proj) {
+                return data.polygon_feat.get(pi).copied();
+            }
+        }
+    }
+    None
+}
+
+/// Distancia de un punto `(px, py)` al segmento `a–b`, en pantalla.
+fn dist_point_seg(px: f64, py: f64, a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (ax, ay) = a;
+    let (bx, by) = b;
+    let (dx, dy) = (bx - ax, by - ay);
+    let len2 = dx * dx + dy * dy;
+    if len2 <= 1e-12 {
+        return (px - ax).hypot(py - ay);
+    }
+    let t = (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0);
+    let (qx, qy) = (ax + t * dx, ay + t * dy);
+    (px - qx).hypot(py - qy)
+}
+
+/// Test punto-en-anillo (even-odd / ray casting) en espacio de pantalla.
+fn point_in_ring_screen(px: f64, py: f64, ring: &[Coord], proj: &Projection) -> bool {
+    let n = ring.len();
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = proj.to_screen(ring[i]);
+        let (xj, yj) = proj.to_screen(ring[j]);
+        if (yi > py) != (yj > py) {
+            let x_cross = (xj - xi) * (py - yi) / (yj - yi) + xi;
+            if px < x_cross {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
 /// Lienzo que proyecta y dibuja las geometrías encajadas en el panel,
 /// aplicando la cámara (`zoom`/`pan`) y registrando su rect para el host.
 fn map_canvas<Msg>(data: MapData, palette: MapViewerPalette, view: MapView) -> View<Msg>
@@ -967,6 +1221,7 @@ where
     let zoom = view.zoom;
     let pan = view.pan;
     let show_base = view.show_base;
+    let selected = view.selected;
     View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -984,50 +1239,18 @@ where
             return;
         }
 
-        // Cámara: zoom anclado al centro del panel + pan en px físicos.
-        let pivot_x = rect.x as f64 + rect.w as f64 * 0.5;
-        let pivot_y = rect.y as f64 + rect.h as f64 * 0.5;
-        let camera = |x: f64, y: f64| -> (f64, f64) {
-            (
-                pivot_x + (x - pivot_x) * zoom + pan.0,
-                pivot_y + (y - pivot_y) * zoom + pan.1,
-            )
-        };
-
-        // Proyección equirectangular con corrección por coseno de la
-        // latitud media: comprime el eje X para que un grado de longitud y
-        // uno de latitud midan parecido en pantalla (sin esto, los mapas se
-        // estiran a lo ancho lejos del ecuador).
-        let lat0 = (bb.min_lat + bb.max_lat) * 0.5;
-        let kx = lat0.to_radians().cos().abs().max(0.05);
-
-        let pmin_x = bb.min_lon * kx;
-        let pmax_x = bb.max_lon * kx;
-        let pw = (pmax_x - pmin_x).max(0.0);
-        let ph = (bb.max_lat - bb.min_lat).max(0.0);
-
-        let inset = 6.0_f64;
-        let aw = (rect.w as f64 - 2.0 * inset).max(1.0);
-        let ah = (rect.h as f64 - 2.0 * inset).max(1.0);
-
-        // Escala uniforme que encaja la caja entera. Si una dimensión es
-        // degenerada (punto único, línea vertical/horizontal), se apoya en
-        // la otra; con tope para que un único punto no explote.
-        let sx = if pw > 1e-12 { aw / pw } else { f64::INFINITY };
-        let sy = if ph > 1e-12 { ah / ph } else { f64::INFINITY };
-        let scale = sx.min(sy).min(1.0e6);
-        let scale = if scale.is_finite() { scale } else { 1.0 };
-
-        let ox = rect.x as f64 + inset + (aw - pw * scale) * 0.5;
-        let oy = rect.y as f64 + inset + (ah - ph * scale) * 0.5;
-
-        // lon/lat → pantalla (Y invertida: lat arriba, pantalla abajo),
-        // pasando por la cámara (zoom/pan).
-        let to_screen = |[lon, lat]: Coord| -> (f64, f64) {
-            let x = ox + (lon * kx - pmin_x) * scale;
-            let y = oy + (bb.max_lat - lat) * scale;
-            camera(x, y)
-        };
+        // Proyección equirectangular (corrección por cos(lat)) + cámara
+        // (zoom/pan), encapsulada para compartir la matemática exacta con el
+        // hit-test del clic.
+        let proj = Projection::fit(
+            bb,
+            (rect.x as f64, rect.y as f64, rect.w as f64, rect.h as f64),
+            zoom,
+            pan,
+        );
+        let to_screen = |c: Coord| proj.to_screen(c);
+        let (pivot_x, pivot_y) = (proj.pivot_x, proj.pivot_y);
+        let scale = proj.scale;
 
         let stroke_thin = Stroke::new(1.2);
         let stroke_edge = Stroke::new(1.0);
@@ -1142,6 +1365,32 @@ where
             draw_block(scene, ts, &block);
         }
 
+        // --- Feature seleccionada (clic): resalte ---------------------
+        if let Some(fi) = selected {
+            let hl = Color::from_rgba8(255, 196, 64, 255); // ámbar, pop sobre cualquier tema
+            let hl_stroke = Stroke::new(2.6);
+            for (i, poly) in data.polygons.iter().enumerate() {
+                if data.polygon_feat.get(i) == Some(&fi) {
+                    for ring in poly {
+                        let path = ring_path(ring, &to_screen, true);
+                        scene.stroke(&hl_stroke, Affine::IDENTITY, hl, None, &path);
+                    }
+                }
+            }
+            for (i, line) in data.lines.iter().enumerate() {
+                if data.line_feat.get(i) == Some(&fi) {
+                    let path = ring_path(line, &to_screen, false);
+                    scene.stroke(&hl_stroke, Affine::IDENTITY, hl, None, &path);
+                }
+            }
+            for (i, p) in data.points.iter().enumerate() {
+                if data.point_feat.get(i) == Some(&fi) {
+                    let (x, y) = to_screen(*p);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, hl, None, &Circle::new((x, y), 5.0));
+                }
+            }
+        }
+
         // --- Mobiliario cartográfico (fijo a pantalla) ---------------
         let furn = with_alpha(palette.label, 0.7);
         let furn_line = Stroke::new(1.4);
@@ -1150,12 +1399,9 @@ where
         let rw = rect.w as f64;
         let rh = rect.h as f64;
 
-        // Lectura del centro de la vista + zoom (arriba-izquierda).
-        // Invierte la cámara y la proyección en el centro del panel.
-        let cbx = pivot_x - pan.0 / zoom;
-        let cby = pivot_y - pan.1 / zoom;
-        let lon_c = ((cbx - ox) / scale + pmin_x) / kx;
-        let lat_c = bb.max_lat - (cby - oy) / scale;
+        // Lectura del centro de la vista + zoom (arriba-izquierda):
+        // invierte la proyección en el centro del panel.
+        let [lon_c, lat_c] = proj.inverse(pivot_x, pivot_y);
         let read = format!("{}  {}   {:.1}×", fmt_lat(lat_c), fmt_lon(lon_c), zoom);
         draw_block(scene, ts, &TextBlock::simple(&read, 9.5, furn, (rx + 12.0, ry + 6.0)));
 
@@ -1190,7 +1436,72 @@ where
             ts,
             &TextBlock::simple(&fmt_distance(nice_km), 9.0, furn, (bx, by - 17.0)),
         );
+
+        // --- Panel de propiedades de la feature seleccionada ---------
+        if let Some(fp) = selected.and_then(|fi| data.features.get(fi)) {
+            draw_props_panel(scene, ts, (rx, ry, rw, rh), &palette, fp);
+        }
     })
+}
+
+/// Dibuja un panel con las propiedades de la feature seleccionada en el
+/// borde derecho del lienzo. Cabecera con el nombre + hasta [`PANEL_ROWS`]
+/// pares clave→valor.
+fn draw_props_panel(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    ts: &mut llimphi_ui::llimphi_text::Typesetter,
+    rect: (f64, f64, f64, f64),
+    palette: &MapViewerPalette,
+    fp: &FeatureProps,
+) {
+    use llimphi_ui::llimphi_raster::kurbo::RoundedRect;
+
+    const PANEL_ROWS: usize = 12;
+    let (rx, ry, rw, rh) = rect;
+    let pw = 220.0_f64.min(rw - 16.0);
+    if pw < 80.0 {
+        return;
+    }
+    let rows = fp.props.len().min(PANEL_ROWS);
+    let header = fp.name.clone().unwrap_or_else(|| "(feature)".to_string());
+    let ph = 14.0 + 16.0 + rows as f64 * 13.0 + 8.0;
+    let px = rx + rw - pw - 8.0;
+    let py = (ry + 30.0).min(ry + rh - ph - 8.0).max(ry + 8.0);
+
+    let bg = with_alpha(palette.bg, 0.92);
+    let border = with_alpha(palette.grid, 0.5);
+    let panel = RoundedRect::new(px, py, px + pw, py + ph, 5.0);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &panel);
+    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, border, None, &panel);
+
+    let pad = 8.0;
+    draw_block(
+        scene,
+        ts,
+        &TextBlock::simple(&clip_text(&header, 30), 11.5, palette.label, (px + pad, py + 6.0)),
+    );
+    let key_col = with_alpha(palette.fg_muted, 0.95);
+    for (i, (k, v)) in fp.props.iter().take(PANEL_ROWS).enumerate() {
+        let y = py + 24.0 + i as f64 * 13.0;
+        let line = format!("{}: {}", clip_text(k, 16), clip_text(v, 22));
+        draw_block(scene, ts, &TextBlock::simple(&line, 9.5, key_col, (px + pad, y)));
+    }
+    if fp.props.len() > PANEL_ROWS {
+        let y = py + 24.0 + PANEL_ROWS as f64 * 13.0;
+        let more = format!("… +{} más", fp.props.len() - PANEL_ROWS);
+        draw_block(scene, ts, &TextBlock::simple(&more, 9.0, key_col, (px + pad, y)));
+    }
+}
+
+/// Recorta un texto a `max` caracteres con elipsis.
+fn clip_text(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
 }
 
 /// Paso "redondo" (1·2·5 × 10ⁿ) para una rejilla que cubra `span` con unas
@@ -1713,6 +2024,41 @@ mod tests {
         v.zoom_at(2.0, 10.0, 10.0); // sin record_rect previo
         assert_eq!(v.zoom, 2.0);
         assert_eq!(v.pan, (0.0, 0.0)); // sin anclaje: pan intacto
+    }
+
+    #[test]
+    fn hit_test_selecciona_feature_bajo_el_clic() {
+        let d = data_of(
+            r#"{"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":{"name":"sq"},
+                 "geometry":{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,10],[0,0]]]}},
+                {"type":"Feature","properties":{"name":"pt"},
+                 "geometry":{"type":"Point","coordinates":[5,5]}}
+            ]}"#,
+        );
+        let view = MapView::default();
+        view.record_rect((0.0, 0.0, 100.0, 100.0));
+        // Centro del panel = (5,5) = el punto → gana el punto (feature 1).
+        assert_eq!(hit_test(&d, &view, 0.5, 0.5), Some(1));
+        // Dentro del polígono pero lejos del punto → polígono (feature 0).
+        assert_eq!(hit_test(&d, &view, 0.2, 0.2), Some(0));
+        // Esquina del panel, fuera del bbox proyectado → nada.
+        assert_eq!(hit_test(&d, &view, 0.99, 0.01), None);
+    }
+
+    #[test]
+    fn feature_props_retiene_propiedades() {
+        let d = data_of(
+            r#"{"type":"Feature","properties":{"name":"X","pop":1234,"activo":true},
+                "geometry":{"type":"Point","coordinates":[0,0]}}"#,
+        );
+        assert_eq!(d.features.len(), 1);
+        let fp = &d.features[0];
+        assert_eq!(fp.name.as_deref(), Some("X"));
+        assert_eq!(fp.number("pop"), Some(1234.0));
+        assert!(fp.props.iter().any(|(k, v)| k == "activo" && v == "true"));
+        // El punto apunta a esa feature.
+        assert_eq!(d.point_feat, vec![0]);
     }
 
     #[test]

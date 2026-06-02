@@ -198,6 +198,8 @@ enum Msg {
     MapReset,
     /// Alterna el mapa-base mundial de fondo.
     MapToggleBase,
+    /// Clic sobre el mapa: `(fx, fy)` fracción del rect → selecciona feature.
+    MapClick(f32, f32),
     /// Drag del divisor — positivo = lista crece.
     ResizeList(f32),
     /// El bus `wawa-config` publicó una versión nueva.
@@ -438,6 +440,16 @@ impl App for Shell {
             }
             Msg::MapReset => m.map_view.reset(),
             Msg::MapToggleBase => m.map_view.toggle_base(),
+            Msg::MapClick(fx, fy) => {
+                if let PreviewPane::Map(MapPreview::Map { data, .. }) = &m.preview {
+                    m.map_view.selected = nahual_map_viewer_llimphi::hit_test(
+                        data,
+                        &m.map_view,
+                        fx as f64,
+                        fy as f64,
+                    );
+                }
+            }
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);
                 // nahual-shell no usa rimay_localize hoy; si en el
@@ -608,11 +620,15 @@ impl App for Shell {
                 font_viewer_view::<Msg>(state, model.preview_of.as_deref(), &font_palette)
             }
             PreviewPane::Map(state) => {
-                map_viewer_view::<Msg>(
+                map_viewer_view::<Msg, _>(
                     state,
                     model.preview_of.as_deref(),
                     &map_palette,
                     &model.map_view,
+                    // Clic → fracción del rect (el update resuelve con hit_test).
+                    |lx, ly, w, h| {
+                        (w > 0.0 && h > 0.0).then(|| Msg::MapClick(lx / w, ly / h))
+                    },
                 )
                 // Arrastrar el panel panea la cámara del mapa.
                 .draggable(|phase, dx, dy| match phase {
