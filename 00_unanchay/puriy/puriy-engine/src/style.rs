@@ -166,6 +166,11 @@ pub struct ComputedStyle {
     pub text_indent: f32,
     /// Espacio extra entre palabras (en px). Heredable.
     pub word_spacing: f32,
+    /// Espacio extra entre letras (en px). Heredable. Espejo de
+    /// `word_spacing`: hoy se parsea/hereda/almacena en el `BoxNode` pero el
+    /// chrome todavía no lo pinta (la capa de texto compartida no expone
+    /// tracking aún) — mismo estado que `word-spacing`.
+    pub letter_spacing: f32,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -782,6 +787,7 @@ impl Default for ComputedStyle {
             pointer_events: PointerEvents::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
+            letter_spacing: 0.0,
             text_shadows: Vec::new(),
             transforms: Vec::new(),
             grid_template_columns: Vec::new(),
@@ -963,6 +969,7 @@ impl StyleEngine {
             // pointer-events: heredables (CSS spec).
             style.text_shadows = p.text_shadows.clone();
             style.word_spacing = p.word_spacing;
+            style.letter_spacing = p.letter_spacing;
             style.text_indent = p.text_indent;
             style.visibility = p.visibility;
             style.pointer_events = p.pointer_events;
@@ -1710,6 +1717,7 @@ enum DeclKind {
     PointerEvents(PointerEvents),
     TextIndent(f32),
     WordSpacing(f32),
+    LetterSpacing(f32),
     TextShadows(Vec<TextShadow>),
     /// Cadena vacía = `transform: none`.
     Transforms(Vec<Transform>),
@@ -1824,6 +1832,7 @@ impl Decl {
             DeclKind::PointerEvents(pe) => s.pointer_events = *pe,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
+            DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
             DeclKind::TextShadows(shadows) => s.text_shadows = shadows.clone(),
             DeclKind::Transforms(tr) => s.transforms = tr.clone(),
             DeclKind::GridTemplateColumns(t) => s.grid_template_columns = t.clone(),
@@ -3433,6 +3442,14 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "pointer-events" => parse_pointer_events(value).map(DeclKind::PointerEvents),
         "text-indent" => parse_length_px(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_length_px(value).map(DeclKind::WordSpacing),
+        "letter-spacing" => {
+            // `normal` = sin tracking extra (0px).
+            if value.trim().eq_ignore_ascii_case("normal") {
+                Some(DeclKind::LetterSpacing(0.0))
+            } else {
+                parse_length_px(value).map(DeclKind::LetterSpacing)
+            }
+        }
         "text-shadow" => parse_text_shadows(value).map(DeclKind::TextShadows),
         "transform" => parse_transforms(value).map(DeclKind::Transforms),
         "grid-template-columns" => {
@@ -7140,6 +7157,27 @@ line2</pre></body></html>"#;
         assert_eq!(p_style.word_spacing, 5.0);
         assert_eq!(span_style.word_spacing, 5.0);
         assert_eq!(span_style.text_indent, 30.0);
+    }
+
+    #[test]
+    fn parsea_letter_spacing_hereda_y_normal_es_cero() {
+        let html = r#"<html><head><style>
+            p { letter-spacing: 2px }
+            .tight { letter-spacing: normal }
+        </style></head><body>
+            <p>x <span>y</span></p>
+            <div class="tight">z</div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p_style = eng.compute(&dom.find("p").unwrap());
+        let span_style = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&p_style));
+        assert_eq!(p_style.letter_spacing, 2.0);
+        // Hereda al inline hijo.
+        assert_eq!(span_style.letter_spacing, 2.0);
+        // `normal` ⇒ 0px.
+        let tight = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(tight.letter_spacing, 0.0);
     }
 
     #[test]

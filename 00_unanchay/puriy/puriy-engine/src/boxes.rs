@@ -168,6 +168,9 @@ pub struct BoxNode {
     pub pointer_events: PointerEvents,
     pub text_indent: f32,
     pub word_spacing: f32,
+    /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no
+    /// pintado (mismo estado que `word_spacing`).
+    pub letter_spacing: f32,
     pub text_shadows: Vec<TextShadow>,
     pub transforms: Vec<Transform>,
     pub grid_template_columns: Vec<GridTrackSize>,
@@ -1128,6 +1131,7 @@ fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Option<Color>, f
     b.pointer_events = s.pointer_events;
     b.text_indent = s.text_indent;
     b.word_spacing = s.word_spacing;
+    b.letter_spacing = s.letter_spacing;
     b.text_shadows = s.text_shadows.clone();
     b.transforms = s.transforms.clone();
     b.grid_template_columns = s.grid_template_columns.clone();
@@ -1150,6 +1154,7 @@ fn set_leaf_inherited(leaf: &mut BoxNode, p: &ComputedStyle) {
     leaf.text_transform = p.text_transform;
     leaf.text_shadows = p.text_shadows.clone();
     leaf.word_spacing = p.word_spacing;
+    leaf.letter_spacing = p.letter_spacing;
     leaf.text_indent = p.text_indent;
     leaf.visibility = p.visibility;
     leaf.pointer_events = p.pointer_events;
@@ -1821,6 +1826,7 @@ fn empty_root() -> BoxNode {
         pointer_events: PointerEvents::Auto,
         text_indent: 0.0,
         word_spacing: 0.0,
+        letter_spacing: 0.0,
         text_shadows: Vec::new(),
         transforms: Vec::new(),
         grid_template_columns: Vec::new(),
@@ -2188,6 +2194,7 @@ fn build_node(
                 pointer_events: style.pointer_events,
                 text_indent: style.text_indent,
                 word_spacing: style.word_spacing,
+                letter_spacing: style.letter_spacing,
                 text_shadows: style.text_shadows.clone(),
                 transforms: style.transforms.clone(),
                 grid_template_columns: style.grid_template_columns.clone(),
@@ -2337,6 +2344,7 @@ fn build_node(
                 pointer_events: PointerEvents::Auto,
                 text_indent: 0.0,
                 word_spacing: 0.0,
+                letter_spacing: 0.0,
                 text_shadows: Vec::new(),
                 transforms: Vec::new(),
                 grid_template_columns: Vec::new(),
@@ -2431,6 +2439,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         pointer_events: PointerEvents::Auto,
         text_indent: 0.0,
         word_spacing: 0.0,
+        letter_spacing: 0.0,
         text_shadows: Vec::new(),
         transforms: Vec::new(),
         grid_template_columns: Vec::new(),
