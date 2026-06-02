@@ -1016,6 +1016,29 @@ mod tests {
     }
 
     #[test]
+    fn git_branch_reads_head_ref() {
+        // `.git/HEAD` con `ref: refs/heads/<rama>` → Some(rama). Usamos un
+        // tmpdir aislado para no depender del repo real.
+        let base = std::env::temp_dir().join(format!("shuma-gb-{}", std::process::id()));
+        let git = base.join(".git");
+        std::fs::create_dir_all(&git).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/feature/x\n").unwrap();
+        // Desde un subdirectorio: debe subir hasta encontrar `.git`.
+        let sub = base.join("sub/dir");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert_eq!(git_branch(&sub).as_deref(), Some("feature/x"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn git_branch_none_outside_repo() {
+        let base = std::env::temp_dir().join(format!("shuma-nogit-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        assert_eq!(git_branch(&base), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn toggle_stage_flips_expanded_set() {
         let mut s = State::new(Source::Local);
         s = update(s, Msg::ToggleStage { block: 2, stage: 0 });

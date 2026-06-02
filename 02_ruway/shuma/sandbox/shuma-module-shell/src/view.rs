@@ -843,10 +843,17 @@ pub(crate) fn shell_header<HostMsg: Clone + 'static>(
     } else {
         String::new()
     };
+    // Rama git del cwd, si estamos en un repo (`· (main)`). La fuente del
+    // shell no trae el glifo ⎇, así que usamos la convención de paréntesis.
+    let branch = match git_branch(&state.cwd) {
+        Some(b) => format!(" · ({b})"),
+        None => String::new(),
+    };
     let label = format!(
-        "Shell · {} · cwd: {}{}",
+        "Shell · {} · cwd: {}{}{}",
         state.source.label(),
         pretty_path(&state.cwd),
+        branch,
         status,
     );
     let color = if state.is_running() {

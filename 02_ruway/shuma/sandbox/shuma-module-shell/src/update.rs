@@ -622,6 +622,36 @@ pub(crate) fn forward_key_to_pty(s: &State, ev: &KeyEvent) {
     guard.handle.write_input(bytes);
 }
 
+/// Rama de git activa para `cwd` — `None` si no estamos en un repo (o si
+/// HEAD está detached). Implementación minimalista por archivo: sube por
+/// los padres buscando `.git`, lee `HEAD` y extrae `refs/heads/<rama>`. No
+/// usa libgit2 ni lanza procesos (barato de llamar por frame).
+pub(crate) fn git_branch(cwd: &std::path::Path) -> Option<String> {
+    let mut dir = cwd.to_path_buf();
+    let git_dir = loop {
+        let candidate = dir.join(".git");
+        if candidate.exists() {
+            break candidate;
+        }
+        if !dir.pop() {
+            return None;
+        }
+    };
+    // `.git` puede ser un archivo (worktrees/submódulos) con `gitdir: …`,
+    // o un directorio con `HEAD` dentro.
+    let head_path = if git_dir.is_file() {
+        let s = std::fs::read_to_string(&git_dir).ok()?;
+        let target = s.strip_prefix("gitdir:")?.trim();
+        std::path::PathBuf::from(target).join("HEAD")
+    } else {
+        git_dir.join("HEAD")
+    };
+    let head = std::fs::read_to_string(head_path).ok()?;
+    head.trim()
+        .strip_prefix("ref: refs/heads/")
+        .map(|b| b.to_string())
+}
+
 /// Sugerencia "ghost" para la línea actual — el prefijo histórico más
 /// reciente que extiende el texto que ya está tipeado.
 pub(crate) fn current_ghost(s: &State) -> Option<String> {
