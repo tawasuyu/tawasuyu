@@ -418,6 +418,13 @@ struct RuntimeState<A: App> {
     /// sin reconstruir `view` + layout, y CursorMoved para detectar si
     /// el hover cambió y disparar redraw.
     last_render: Option<RenderCache<A::Msg>>,
+    /// Nodo hovereado **persistente** entre frames, actualizado SÓLO en
+    /// `CursorMoved`. Es contra esto que se detecta el `on_pointer_enter`
+    /// (no contra `last_render.hover_idx`, que el render recomputa cada
+    /// cuadro): en una app que re-renderiza sin parar (visores `paint_with`)
+    /// el render "se comería" la transición de hover antes de que el handler
+    /// del mouse la detecte, y el hover-switch de menús no funcionaría.
+    hovered: Option<usize>,
     /// Drag activo. Mantiene su propio handler clonado del MountedNode
     /// — así el drag sobrevive aunque el cache se invalide entre
     /// eventos.

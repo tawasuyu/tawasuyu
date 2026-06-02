@@ -52,6 +52,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             layout: LayoutTree::new(),
             overlay_layout: LayoutTree::new(),
             last_render: None,
+            hovered: None,
             drag: None,
             focused: None,
         });
@@ -179,10 +180,11 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     // borrow del cache antes de mutar el modelo.
                     let mut enter_msg: Option<A::Msg> = None;
                     let mut hovered_changed = false;
+                    let mut new_hovered: Option<usize> = state.hovered;
                     if let Some(cache) = state.last_render.as_ref() {
-                        let (mounted, computed, prev_idx) = match cache.overlay.as_ref() {
-                            Some(ov) => (&ov.mounted, &ov.computed, ov.hover_idx),
-                            None => (&cache.mounted, &cache.computed, cache.hover_idx),
+                        let (mounted, computed) = match cache.overlay.as_ref() {
+                            Some(ov) => (&ov.mounted, &ov.computed),
+                            None => (&cache.mounted, &cache.computed),
                         };
                         let new_hover = hit_test_hover(
                             mounted,
@@ -190,13 +192,20 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             position.x as f32,
                             position.y as f32,
                         );
-                        if new_hover != prev_idx {
+                        // Comparamos contra el hover PERSISTENTE (state.hovered),
+                        // no contra el del cache: el render recomputa el del cache
+                        // al cursor actual cada cuadro, así que en una app que
+                        // re-renderiza sin parar la transición de hover se perdería
+                        // (y el hover-switch de menús no andaría). Ver `hovered`.
+                        if new_hover != state.hovered {
                             hovered_changed = true;
                             enter_msg = new_hover
                                 .and_then(|i| mounted.nodes.get(i))
                                 .and_then(|n| n.on_pointer_enter.clone());
                         }
+                        new_hovered = new_hover;
                     }
+                    state.hovered = new_hovered;
                     if hovered_changed {
                         state.window.request_redraw();
                     }
