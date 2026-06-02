@@ -281,6 +281,10 @@ struct App {
     brain: Brain,
     /// Fase del ciclo de vida — login o sesión (ver [`BodyMode`]).
     mode: BodyMode,
+    /// Entorno de sesión (XDG_RUNTIME_DIR del usuario, WAYLAND_DISPLAY
+    /// absoluto, bus D-Bus) inyectado a las apps nativas tras el traspaso.
+    /// Vacío en modo greeter.
+    session_env: Vec<(String, String)>,
     /// Identidad a la que rebajar privilegios al lanzar procesos de
     /// sesión. `None` salvo tras el traspaso del DM — entonces cada
     /// `spawn` hace `setuid`/`setgid` a este usuario (si somos root).
@@ -421,7 +425,7 @@ impl App {
                 if self.mode == BodyMode::Greeter {
                     eprintln!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
                 } else {
-                    spawn_command(&cmd, self.session_user.as_ref());
+                    spawn_command(&cmd, self.session_user.as_ref(), &self.session_env);
                 }
             }
             BodyOp::Shutdown => self.running = false,
@@ -605,9 +609,16 @@ impl App {
         //                    GPU). Se difiere al cierre del bucle: marcamos la
         //                    sesión pendiente y pedimos salir.
         let user = self.session_user.clone();
+        // Prepara el entorno de sesión del usuario (runtime dir propio,
+        // WAYLAND_DISPLAY absoluto, bus D-Bus) para que las apps nativas
+        // —waybar, GTK/Qt— funcionen como en una sesión de verdad.
+        if let Some(u) = &user {
+            self.setup_user_session_env(u);
+        }
+        let env = self.session_env.clone();
         let cmd = ticket.session.trim();
         if cmd.is_empty() {
-            spawn_autostart(user.as_ref());
+            spawn_autostart(user.as_ref(), &env);
         } else if ticket.foreign {
             println!(
                 "mirada-compositor · sesión ajena «{cmd}» — cierro y cedo el DRM."
@@ -615,7 +626,52 @@ impl App {
             self.pending_session = Some((cmd.to_string(), user));
             self.running = false;
         } else {
-            spawn_command(cmd, user.as_ref());
+            spawn_command(cmd, user.as_ref(), &env);
+        }
+    }
+
+    /// Arma el entorno de sesión del usuario para las apps NATIVAS (clientes
+    /// de este compositor): un `XDG_RUNTIME_DIR` propio y escribible
+    /// (`/run/user/<uid>`), el `WAYLAND_DISPLAY` en ruta absoluta (el socket
+    /// vive en el runtime dir del compositor, no en el del usuario) y un bus
+    /// de sesión D-Bus. Sin esto, dconf no puede escribir y waybar/GTK/Qt
+    /// fallan por «cannot autolaunch D-Bus».
+    fn setup_user_session_env(&mut self, user: &UserInfo) {
+        use std::os::unix::fs::PermissionsExt;
+        let xrd = format!("/run/user/{}", user.uid);
+        let _ = std::fs::create_dir_all(&xrd);
+        let _ = std::fs::set_permissions(&xrd, std::fs::Permissions::from_mode(0o700));
+        let _ = nix::unistd::chown(
+            xrd.as_str(),
+            Some(nix::unistd::Uid::from_raw(user.uid)),
+            Some(nix::unistd::Gid::from_raw(user.gid)),
+        );
+        // El socket Wayland está en el runtime dir del COMPOSITOR (p. ej.
+        // /run/mirada); WAYLAND_DISPLAY absoluto para que el cliente lo
+        // encuentre aunque su XDG_RUNTIME_DIR sea otro.
+        let wl = match (
+            std::env::var("XDG_RUNTIME_DIR"),
+            std::env::var("WAYLAND_DISPLAY"),
+        ) {
+            (Ok(rd), Ok(wd)) if !wd.starts_with('/') => format!("{rd}/{wd}"),
+            (_, Ok(wd)) => wd,
+            _ => String::new(),
+        };
+        let bus_path = format!("{xrd}/bus");
+        let dbus_addr = format!("unix:path={bus_path}");
+        self.session_env = vec![
+            ("XDG_RUNTIME_DIR".to_string(), xrd),
+            ("WAYLAND_DISPLAY".to_string(), wl),
+            ("DBUS_SESSION_BUS_ADDRESS".to_string(), dbus_addr.clone()),
+        ];
+        // Levanta el bus de sesión D-Bus como el usuario, si no hay uno.
+        if !std::path::Path::new(&bus_path).exists() {
+            let env = self.session_env.clone();
+            spawn_command(
+                &format!("dbus-daemon --session --address={dbus_addr} --nofork --nopidfile"),
+                Some(user),
+                &env,
+            );
         }
     }
 }
@@ -1159,13 +1215,18 @@ const THEME_ENV: &[(&str, &str)] = &[
 /// (modo DM, tras el traspaso), el hijo baja a ese usuario — ver
 /// [`apply_user`]. Con `None`, o sin ser root, lanza con la identidad
 /// actual del compositor.
-fn spawn_command(cmd: &str, as_user: Option<&UserInfo>) {
+fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: &[(String, String)]) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return;
     }
     let mut command = std::process::Command::new("sh");
     command.arg("-c").arg(cmd).envs(THEME_ENV.iter().copied());
+    // Entorno de sesión (runtime dir del usuario, WAYLAND_DISPLAY absoluto,
+    // bus D-Bus) — vacío para el greeter, poblado tras el traspaso.
+    for (k, v) in session_env {
+        command.env(k, v);
+    }
     if let Some(user) = as_user {
         if nix::unistd::geteuid().is_root() {
             apply_user(&mut command, user);
@@ -1231,7 +1292,7 @@ fn autostart_path(user: Option<&UserInfo>) -> Option<std::path::PathBuf> {
 /// línea, `#` comenta y las líneas en blanco se saltan. Sin archivo, no
 /// hace nada. Se llama una vez al arrancar (o tras el traspaso del DM),
 /// con el socket ya abierto. `as_user` se propaga a [`spawn_command`].
-fn spawn_autostart(as_user: Option<&UserInfo>) {
+fn spawn_autostart(as_user: Option<&UserInfo>, session_env: &[(String, String)]) {
     let text = autostart_path(as_user)
         .and_then(|path| std::fs::read_to_string(&path).ok())
         .unwrap_or_default();
@@ -1241,7 +1302,7 @@ fn spawn_autostart(as_user: Option<&UserInfo>) {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        spawn_command(line, as_user);
+        spawn_command(line, as_user, session_env);
         n += 1;
     }
     if n > 0 {
@@ -1250,7 +1311,7 @@ fn spawn_autostart(as_user: Option<&UserInfo>) {
         // Sin autostart: en vez de un escritorio negro y vacío, levanta el
         // marco pata para que haya algo usable de entrada.
         println!("mirada-compositor · sin autoarranque — levanto el marco pata.");
-        spawn_command("pata-llimphi", as_user);
+        spawn_command("pata-llimphi", as_user, session_env);
     }
 }
 
@@ -1435,6 +1496,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         brain,
         mode: if greeter { BodyMode::Greeter } else { BodyMode::Session },
         session_user: None,
+        session_env: Vec::new(),
         grabs: Vec::new(),
         pending_keybind: None,
         pending_vt: None,

@@ -817,12 +817,14 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         Some(rx)
     } else {
         // Autoarranque: los programas de `~/.config/mirada/autostart`.
-        crate::spawn_autostart(None);
+        // Modo no-greeter: ya corremos con la identidad del usuario, sin
+        // traspaso, así que no hay entorno de sesión que inyectar.
+        crate::spawn_autostart(None, &[]);
         // App de arranque: si `MIRADA_STARTUP` trae un comando, se lanza
         // como hijo (hereda `WAYLAND_DISPLAY`) — cómodo para probar sin
         // saltar de VT.
         if let Ok(cmd) = std::env::var("MIRADA_STARTUP") {
-            crate::spawn_command(&cmd, None);
+            crate::spawn_command(&cmd, None, &[]);
         }
         None
     };
