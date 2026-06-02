@@ -27,7 +27,7 @@ mod matching;
 pub use matching::*;
 /// Declaraciones CSS (`Decl`/`DeclKind` + aplicación sobre `ComputedStyle`).
 mod decl;
-pub use decl::*;
+pub(crate) use decl::*;
 /// Parsing CSS (hoja/at-rules/keyframes, selectores, declaraciones, color).
 mod parser;
 pub use parser::*;

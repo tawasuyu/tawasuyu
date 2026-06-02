@@ -1,0 +1,347 @@
+//! Parsing de selectores: `parse_selector`/`parse_compound`/`parse_attr_match`,
+//! normalización de combinadores, strip de pseudo-elementos y de comentarios.
+//! Sub-módulo de `parser` (regla #1). `use super::*`.
+use super::*;
+
+pub(crate) fn parse_selector(sel: &str) -> Option<Selector> {
+    let sel = sel.trim();
+    // Strip pseudo-element del final (`::before`/`::after`). CSS también
+    // acepta la sintaxis legacy `:before`/`:after` con un sólo `:` —
+    // las aceptamos por compatibilidad. Pueden venir adheridas al
+    // último compound (`p::before`) o solas (`::before` matchea
+    // implícitamente al universal).
+    let (sel, pseudo_element) = strip_pseudo_element(sel);
+    if sel.is_empty() {
+        let compound = Compound {
+            tag: TagPart::Universal,
+            ids: vec![],
+            classes: vec![],
+            attrs: vec![],
+            pseudos: vec![],
+        };
+        return Some(Selector {
+            compounds: vec![compound],
+            combinators: vec![],
+            pseudo_element,
+        });
+    }
+    // Tokenizamos: cada compound es una secuencia sin espacios ni
+    // combinadores; los combinadores ('>', '+', '~') están separados por
+    // whitespace en CSS canónico o pegados. Normalizamos respetando lo
+    // que viva dentro de `[...]` o `(...)`.
+    let normalized = normalize_combinators(sel);
+    let mut compounds: Vec<Compound> = Vec::new();
+    let mut combinators: Vec<Combinator> = Vec::new();
+    let mut pending_combinator: Option<Combinator> = None;
+    let mut first = true;
+    for tok in split_ws_top_level(&normalized) {
+        match tok {
+            ">" => pending_combinator = Some(Combinator::Child),
+            "+" => pending_combinator = Some(Combinator::AdjacentSibling),
+            "~" => pending_combinator = Some(Combinator::GeneralSibling),
+            _ => {
+                let compound = parse_compound(tok)?;
+                if first {
+                    first = false;
+                } else {
+                    combinators.push(pending_combinator.take().unwrap_or(Combinator::Descendant));
+                }
+                compounds.push(compound);
+            }
+        }
+    }
+    if compounds.is_empty() {
+        return None;
+    }
+    if pending_combinator.is_some() {
+        return None;
+    }
+    Some(Selector { compounds, combinators, pseudo_element })
+}
+
+/// Si `sel` termina con `::before`/`::after` (o legacy `:before`/`:after`),
+/// devuelve `(prefix, Some(PseudoElement))`. Sino devuelve `(sel, None)`.
+pub(crate) fn strip_pseudo_element(sel: &str) -> (&str, Option<PseudoElement>) {
+    let lower = sel.to_ascii_lowercase();
+    for (suffix, pe) in [
+        ("::before", PseudoElement::Before),
+        ("::after", PseudoElement::After),
+        (":before", PseudoElement::Before),
+        (":after", PseudoElement::After),
+    ] {
+        if let Some(prefix) = lower.strip_suffix(suffix) {
+            // Cuidado: `:before` no debe matchear cuando es parte de
+            // `:before-leaf` (no es un pseudo válido en CSS). Pero al
+            // ser sufijo exacto del string, esto no aplica acá. Sí
+            // garantizamos que el prefijo no termine en alfanumérico
+            // (caso `p:beforex` — el parseo falla al no encontrar
+            // pseudoclase válida y lo rechazamos abajo). Acá basta.
+            return (&sel[..prefix.len()], Some(pe));
+        }
+    }
+    (sel, None)
+}
+
+/// Inserta espacios alrededor de `>`/`+`/`~` para que `split_whitespace`
+/// los aísle como tokens propios. Si caen dentro de `[…]` o `(…)` los
+/// dejamos intactos — `[href*="a>b"]` o `:not(a+b)` deben pasar al
+/// compound parser sin romperse.
+pub(crate) fn normalize_combinators(sel: &str) -> String {
+    let mut out = String::with_capacity(sel.len() + 4);
+    let mut in_bracket = false;
+    let mut paren_depth: u32 = 0;
+    for c in sel.chars() {
+        match c {
+            '[' => {
+                in_bracket = true;
+                out.push(c);
+            }
+            ']' => {
+                in_bracket = false;
+                out.push(c);
+            }
+            '(' => {
+                paren_depth += 1;
+                out.push(c);
+            }
+            ')' => {
+                if paren_depth > 0 {
+                    paren_depth -= 1;
+                }
+                out.push(c);
+            }
+            '>' | '+' | '~' if !in_bracket && paren_depth == 0 => {
+                out.push(' ');
+                out.push(c);
+                out.push(' ');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Parsea un compound: opcional tag/`*` seguido de cualquier número de
+/// `.class`, `#id`, `[attr...]`, `:pseudo`. Devuelve `None` si encuentra
+/// caracteres no esperados, una pseudo no soportada, o `::pseudo-element`.
+pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
+    let bytes = sel.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut i = 0;
+    // Tag opcional (puede ser `*` o un nombre).
+    let tag = if bytes[0] == b'*' {
+        i = 1;
+        TagPart::Universal
+    } else if is_ident_byte(bytes[0]) {
+        let start = i;
+        while i < bytes.len() && is_ident_byte(bytes[i]) {
+            i += 1;
+        }
+        TagPart::Type(sel[start..i].to_string())
+    } else {
+        TagPart::Universal
+    };
+    let mut ids = Vec::new();
+    let mut classes = Vec::new();
+    let mut attrs = Vec::new();
+    let mut pseudos = Vec::new();
+    while i < bytes.len() {
+        match bytes[i] {
+            b'.' | b'#' => {
+                let marker = bytes[i];
+                i += 1;
+                let start = i;
+                while i < bytes.len() && is_ident_byte(bytes[i]) {
+                    i += 1;
+                }
+                if start == i {
+                    return None;
+                }
+                let ident = sel[start..i].to_string();
+                if marker == b'.' {
+                    classes.push(ident);
+                } else {
+                    ids.push(ident);
+                }
+            }
+            b'[' => {
+                let inner_start = i + 1;
+                let rel_close = sel[inner_start..].find(']')?;
+                let inner = &sel[inner_start..inner_start + rel_close];
+                attrs.push(parse_attr_match(inner)?);
+                i = inner_start + rel_close + 1;
+            }
+            b':' => {
+                i += 1;
+                // `::pseudo-element` (e.g. ::before) — rechazamos.
+                if i < bytes.len() && bytes[i] == b':' {
+                    return None;
+                }
+                let start = i;
+                while i < bytes.len() && is_ident_byte(bytes[i]) {
+                    i += 1;
+                }
+                if start == i {
+                    return None;
+                }
+                let name = sel[start..i].to_ascii_lowercase();
+                // Funcionales: `:nth-child(...)`, `:not(...)`. Detectamos
+                // y consumimos los argumentos.
+                if i < bytes.len() && bytes[i] == b'(' {
+                    let arg_start = i + 1;
+                    let rel_close = sel[arg_start..].find(')')?;
+                    let arg = &sel[arg_start..arg_start + rel_close];
+                    let p = match name.as_str() {
+                        "nth-child" => {
+                            let (a, b) = parse_nth_arg(arg)?;
+                            Pseudo::NthChild { a, b }
+                        }
+                        "nth-of-type" => {
+                            let (a, b) = parse_nth_arg(arg)?;
+                            Pseudo::NthOfType { a, b }
+                        }
+                        "nth-last-child" => {
+                            let (a, b) = parse_nth_arg(arg)?;
+                            Pseudo::NthLastChild { a, b }
+                        }
+                        "nth-last-of-type" => {
+                            let (a, b) = parse_nth_arg(arg)?;
+                            Pseudo::NthLastOfType { a, b }
+                        }
+                        "not" => {
+                            // CSS4: lista de compounds (`:not(.a, .b)`).
+                            let mut inner = Vec::new();
+                            for part in arg.split(',') {
+                                let c = parse_compound(part.trim())?;
+                                // Anti-recursión: `:not(:not(...))` rechazamos.
+                                if c.pseudos.iter().any(|p| matches!(p, Pseudo::Not(_))) {
+                                    return None;
+                                }
+                                inner.push(c);
+                            }
+                            if inner.is_empty() {
+                                return None;
+                            }
+                            Pseudo::Not(inner)
+                        }
+                        "is" | "where" => {
+                            // Lista de compounds separados por coma (sin
+                            // combinadores adentro — `parse_compound` parsea
+                            // uno solo). Split naive por `,` (no contempla
+                            // comas dentro de `[attr="a,b"]`, caso raro).
+                            let mut inner = Vec::new();
+                            for part in arg.split(',') {
+                                inner.push(parse_compound(part.trim())?);
+                            }
+                            if inner.is_empty() {
+                                return None;
+                            }
+                            if name == "is" {
+                                Pseudo::Is(inner)
+                            } else {
+                                Pseudo::Where(inner)
+                            }
+                        }
+                        _ => return None,
+                    };
+                    pseudos.push(p);
+                    i = arg_start + rel_close + 1;
+                    continue;
+                }
+                let p = match name.as_str() {
+                    "first-child" => Pseudo::FirstChild,
+                    "last-child" => Pseudo::LastChild,
+                    "only-child" => Pseudo::OnlyChild,
+                    "first-of-type" => Pseudo::FirstOfType,
+                    "last-of-type" => Pseudo::LastOfType,
+                    "only-of-type" => Pseudo::OnlyOfType,
+                    "hover" => Pseudo::Hover,
+                    "focus" | "focus-visible" | "focus-within" => Pseudo::Focus,
+                    "checked" => Pseudo::Checked,
+                    "disabled" => Pseudo::Disabled,
+                    "enabled" => Pseudo::Enabled,
+                    "required" => Pseudo::Required,
+                    "optional" => Pseudo::Optional,
+                    "read-only" => Pseudo::ReadOnly,
+                    "read-write" => Pseudo::ReadWrite,
+                    _ => return None,
+                };
+                pseudos.push(p);
+            }
+            _ => return None,
+        }
+    }
+    if matches!(tag, TagPart::Universal)
+        && ids.is_empty()
+        && classes.is_empty()
+        && attrs.is_empty()
+        && pseudos.is_empty()
+        && sel != "*"
+    {
+        return None;
+    }
+    Some(Compound { tag, ids, classes, attrs, pseudos })
+}
+
+/// Parsea el interior de `[...]`: `name`, `name=val`, `name="val"`,
+/// `name^=val`, `name$=val`, `name*=val`. Devuelve `None` si el formato
+/// no encaja.
+pub(crate) fn parse_attr_match(inner: &str) -> Option<AttrMatch> {
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return None;
+    }
+    let ops: &[(&str, AttrOp)] = &[
+        ("^=", AttrOp::Prefix),
+        ("$=", AttrOp::Suffix),
+        ("*=", AttrOp::Contains),
+        ("=", AttrOp::Equals),
+    ];
+    for (sym, op) in ops {
+        if let Some(pos) = inner.find(sym) {
+            let name = inner[..pos].trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let raw = inner[pos + sym.len()..].trim();
+            let value = raw.trim_matches(|c| c == '"' || c == '\'').to_string();
+            return Some(AttrMatch { name, op: *op, value });
+        }
+    }
+    Some(AttrMatch {
+        name: inner.to_string(),
+        op: AttrOp::Present,
+        value: String::new(),
+    })
+}
+
+pub(crate) fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
+}
+
+pub(crate) fn strip_comments(css: &str) -> String {
+    // Operamos a nivel byte para detectar `/*…*/`, pero copiamos slices
+    // de la `&str` original para preservar UTF-8 multi-byte (un push de
+    // bytes individuales `as char` rompe runs no-ASCII como "▸").
+    let mut out = String::with_capacity(css.len());
+    let bytes = css.as_bytes();
+    let mut i = 0;
+    let mut chunk_start = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            // Volcamos el chunk pendiente antes del comentario.
+            out.push_str(&css[chunk_start..i]);
+            if let Some(end) = css[i + 2..].find("*/") {
+                i += 2 + end + 2;
+                chunk_start = i;
+                continue;
+            }
+            return out;
+        }
+        i += 1;
+    }
+    out.push_str(&css[chunk_start..]);
+    out
+}
