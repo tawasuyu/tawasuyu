@@ -43,6 +43,11 @@ pub fn view<HostMsg: Clone + 'static>(
             ),
         );
     }
+    // Popup de completado: justo encima del input, candidatos con el
+    // resaltado actual. Tab/flechas navegan, Enter acepta, Esc cierra.
+    if let Some(popup) = completion_popup::<HostMsg>(state, theme) {
+        children.push(popup);
+    }
     children.push(input);
     if state.history_search.is_some() {
         children.push(history_search_panel::<HostMsg>(state, theme));
@@ -899,6 +904,100 @@ pub(crate) fn shell_header<HostMsg: Clone + 'static>(
         ..Default::default()
     })
     .text_aligned(label, 12.0, color, Alignment::Start)
+}
+
+/// Popup de completado: lista de candidatos con el actual resaltado. Se
+/// pinta sobre el input (en la columna, justo antes). Acota a `MAX_ROWS`
+/// filas visibles centradas en el índice. `None` si no hay popup abierto.
+pub(crate) fn completion_popup<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+) -> Option<View<HostMsg>> {
+    let comp = state.completion.as_ref()?;
+    if comp.candidates.is_empty() {
+        return None;
+    }
+    const MAX_ROWS: usize = 8;
+    const ROW: f32 = 18.0;
+    let n = comp.candidates.len();
+    let sel = state.completion_index.min(n - 1);
+    // Ventana deslizante centrada en la selección.
+    let start = sel.saturating_sub(MAX_ROWS / 2).min(n.saturating_sub(MAX_ROWS));
+    let end = (start + MAX_ROWS).min(n);
+
+    let mut rows: Vec<View<HostMsg>> = Vec::new();
+    for (i, cand) in comp.candidates[start..end].iter().enumerate() {
+        let idx = start + i;
+        let selected = idx == sel;
+        let (fill, fg) = if selected {
+            (theme.accent, theme.bg_panel)
+        } else {
+            (theme.bg_input, theme.fg_text)
+        };
+        rows.push(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(ROW),
+                },
+                padding: Rect {
+                    left: length(8.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(fill)
+            .text_aligned(cand.clone(), 12.0, fg, Alignment::Start),
+        );
+    }
+    // Pie con el conteo cuando hay más de lo que entra.
+    let mut total_rows = rows.len();
+    if n > MAX_ROWS {
+        rows.push(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(ROW),
+                },
+                padding: Rect {
+                    left: length(8.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(
+                format!("{}/{} · Tab/↑↓ navega · Enter acepta · Esc cierra", sel + 1, n),
+                10.0,
+                theme.fg_muted,
+                Alignment::Start,
+            ),
+        );
+        total_rows += 1;
+    }
+
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(total_rows as f32 * ROW + 4.0),
+            },
+            padding: Rect {
+                left: length(2.0_f32),
+                right: length(2.0_f32),
+                top: length(2.0_f32),
+                bottom: length(2.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .radius(4.0)
+        .children(rows),
+    )
 }
 
 // Geometría fija del panel de output. Debe coincidir EXACTAMENTE con los

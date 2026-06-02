@@ -375,6 +375,11 @@ pub struct State {
     /// Largo del historial en el último `:save` — los comandos desde acá
     /// son los que entran al próximo grupo.
     pub group_anchor: usize,
+    /// Completado activo (popup de candidatos). `Some` = popup abierto (Tab
+    /// con ≥2 opciones); se navega con Tab/flechas y se acepta con Enter.
+    pub completion: Option<shuma_line::Completion>,
+    /// Candidato resaltado dentro del popup de completado.
+    pub completion_index: usize,
     /// Scroll del panel de output, en px medidos desde el fondo. `0` =
     /// pegado al fondo (lo último siempre visible, como una terminal).
     /// Crece al rodar la rueda hacia arriba (ver historial). Lo clampa
@@ -442,6 +447,8 @@ impl State {
             reprocess_source: None,
             groups: Vec::new(),
             group_anchor,
+            completion: None,
+            completion_index: 0,
             scroll_px: 0.0,
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
@@ -1224,6 +1231,78 @@ mod tests {
         assert_eq!(s.reprocess_source, Some(3));
         s = update(s, Msg::SetReprocess(3));
         assert_eq!(s.reprocess_source, None, "re-armar el mismo bloque desarma");
+    }
+
+    fn fake_completion(cands: &[&str], start: usize, end: usize) -> shuma_line::Completion {
+        shuma_line::Completion {
+            kind: shuma_line::CompletionKind::Command,
+            candidates: cands.iter().map(|s| s.to_string()).collect(),
+            replace_start: start,
+            replace_end: end,
+        }
+    }
+
+    #[test]
+    fn completion_tab_cycles_then_wraps() {
+        let mut s = State::new(Source::Local);
+        s.completion = Some(fake_completion(&["cargo", "cat", "cal"], 0, 0));
+        s.completion_index = 0;
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Tab), None)));
+        assert_eq!(s.completion_index, 1);
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Tab), None)));
+        assert_eq!(s.completion_index, 2);
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Tab), None)));
+        assert_eq!(s.completion_index, 0, "Tab cicla con wrap");
+    }
+
+    #[test]
+    fn completion_arrows_cycle_both_ways() {
+        let mut s = State::new(Source::Local);
+        s.completion = Some(fake_completion(&["a", "b", "c"], 0, 0));
+        s.completion_index = 0;
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::ArrowUp), None)));
+        assert_eq!(s.completion_index, 2, "↑ desde 0 va al último");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::ArrowDown), None)));
+        assert_eq!(s.completion_index, 0);
+    }
+
+    #[test]
+    fn completion_enter_accepts_without_submitting() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("ca");
+        s.completion = Some(fake_completion(&["cargo", "cat"], 0, 2));
+        s.completion_index = 1; // "cat"
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.input.text(), "cat", "Enter aplica el resaltado");
+        assert!(s.completion.is_none(), "y cierra el popup");
+        assert!(!s.is_running(), "Enter con popup NO ejecuta el comando");
+    }
+
+    #[test]
+    fn completion_escape_closes_without_change() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("ca");
+        s.completion = Some(fake_completion(&["cargo", "cat"], 0, 2));
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Escape), None)));
+        assert!(s.completion.is_none());
+        assert_eq!(s.input.text(), "ca", "Esc no toca el texto");
+    }
+
+    #[test]
+    fn typing_closes_completion_popup() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("ca");
+        s.completion = Some(fake_completion(&["cargo", "cat"], 0, 2));
+        let key = KeyEvent {
+            key: Key::Character("r".into()),
+            state: KeyState::Pressed,
+            text: Some("r".into()),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        };
+        s = update(s, Msg::Key(key));
+        assert!(s.completion.is_none(), "tipear cierra el popup");
+        assert_eq!(s.input.text(), "car", "y la tecla se procesa normal");
     }
 
     #[test]

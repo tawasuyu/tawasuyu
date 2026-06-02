@@ -119,6 +119,27 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.history_search = Some(HistorySearch::default());
                 return s;
             }
+            // Popup de completado abierto: las teclas lo navegan.
+            if s.completion.is_some() {
+                match &ev.key {
+                    // Tab cicla adelante; Shift+Tab atrás.
+                    Key::Named(NamedKey::Tab) => {
+                        return cycle_completion(s, if ev.modifiers.shift { -1 } else { 1 });
+                    }
+                    Key::Named(NamedKey::ArrowDown) => return cycle_completion(s, 1),
+                    Key::Named(NamedKey::ArrowUp) => return cycle_completion(s, -1),
+                    // Enter o flecha derecha: acepta el resaltado (no ejecuta).
+                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::ArrowRight) => {
+                        return accept_completion(s);
+                    }
+                    Key::Named(NamedKey::Escape) => {
+                        close_completion(&mut s);
+                        return s;
+                    }
+                    // Cualquier otra tecla cierra el popup y se procesa normal.
+                    _ => close_completion(&mut s),
+                }
+            }
             // F1..F8: ejecuta el grupo guardado de esa posición (`:save`).
             // (F12 lo reserva el chasis para cerrar.)
             if let Some(idx) = fkey_index(&ev.key) {
@@ -338,24 +359,59 @@ pub(crate) fn spawn_detached(program: &str, args: &[&str]) {
         .spawn();
 }
 
-/// Aplica un Tab: completion en la posición del cursor.
-/// - 0 candidatos: no hace nada.
-/// - 1 candidato: lo inserta directo.
-/// - N candidatos: inserta el prefijo común y deja al usuario tipear más.
+/// Aplica un Tab:
+/// - popup abierto: cicla al siguiente candidato (no toca el texto, así el
+///   rango de reemplazo del `Completion` guardado sigue válido).
+/// - popup cerrado: 0 candidatos → nada; 1 → lo inserta directo; ≥2 → abre
+///   el popup con el primero resaltado (sin tocar el texto todavía).
 pub(crate) fn apply_completion_msg(mut s: State) -> State {
+    if let Some(comp) = &s.completion {
+        let n = comp.candidates.len();
+        if n > 0 {
+            s.completion_index = (s.completion_index + 1) % n;
+        }
+        return s;
+    }
     let comp = s.input.complete(s.completion_source.as_ref());
     if comp.is_empty() {
         return s;
     }
-    let candidate: String = if comp.candidates.len() == 1 {
-        comp.candidates[0].clone()
-    } else {
-        common_prefix(&comp.candidates)
-    };
-    if candidate.is_empty() {
+    if comp.candidates.len() == 1 {
+        let candidate = comp.candidates[0].clone();
+        s.input.apply_completion(&comp, &candidate);
         return s;
     }
-    s.input.apply_completion(&comp, &candidate);
+    s.completion = Some(comp);
+    s.completion_index = 0;
+    s
+}
+
+/// Cierra el popup de completado sin aplicar nada.
+pub(crate) fn close_completion(s: &mut State) {
+    s.completion = None;
+    s.completion_index = 0;
+}
+
+/// Cicla el candidato resaltado del popup (`delta` ±1, con wrap). No-op si
+/// el popup está cerrado.
+pub(crate) fn cycle_completion(mut s: State, delta: i32) -> State {
+    if let Some(comp) = &s.completion {
+        let n = comp.candidates.len() as i32;
+        if n > 0 {
+            s.completion_index = (s.completion_index as i32 + delta).rem_euclid(n) as usize;
+        }
+    }
+    s
+}
+
+/// Acepta el candidato resaltado del popup, lo inserta y cierra el popup.
+pub(crate) fn accept_completion(mut s: State) -> State {
+    if let Some(comp) = s.completion.take() {
+        if let Some(candidate) = comp.candidates.get(s.completion_index) {
+            s.input.apply_completion(&comp, candidate);
+        }
+    }
+    s.completion_index = 0;
     s
 }
 

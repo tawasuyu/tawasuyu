@@ -49,6 +49,21 @@ fn main() {
     state.expanded_stages.insert((block, 0));
     // Reprocess armado sobre este bloque → chip resaltado + banner.
     state.reprocess_source = Some(block);
+    // Popup de completado abierto sobre el input.
+    state.input.set_text("ca");
+    state.completion = Some(shuma_line::Completion {
+        kind: shuma_line::CompletionKind::Command,
+        candidates: vec![
+            "cargo".into(),
+            "cat".into(),
+            "cal".into(),
+            "case".into(),
+            "captoinfo".into(),
+        ],
+        replace_start: 0,
+        replace_end: 2,
+    });
+    state.completion_index = 1;
 
     let v = shuma_module_shell::view::<()>(&state, &theme, |_m| ());
 
