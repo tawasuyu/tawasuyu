@@ -397,6 +397,7 @@ async fn handle_exec_stream(
         capture_limit: capture_limit_bytes,
         spill_path: None, // el cliente no expone path local del daemon
         stdin_data,
+        capture_stages: false,
     };
     let mut handle = shuma_exec::run(&spec);
     // Capturamos el "Killer" antes de mover el RunHandle al hilo bridge —
@@ -463,6 +464,10 @@ async fn handle_exec_stream(
 fn exec_event_to_response(ev: shuma_exec::RunEvent) -> Response {
     match ev {
         shuma_exec::RunEvent::Stdout(l) => Response::ExecStdout(l),
+        // El daemon no activa `capture_stages`, así que no debería ver
+        // salida por etapa; si llegara, la reemitimos como stdout normal
+        // (el protocolo de wire no distingue etapas) para no perderla.
+        shuma_exec::RunEvent::StageStdout { line, .. } => Response::ExecStdout(line),
         shuma_exec::RunEvent::Stderr(l) => Response::ExecStderr(l),
         shuma_exec::RunEvent::Truncated => Response::ExecTruncated,
         shuma_exec::RunEvent::Spilled(p) => Response::ExecSpilled(p),
@@ -569,6 +574,7 @@ where
         capture_limit: capture_limit_bytes,
         spill_path: None,
         stdin_data,
+        capture_stages: false,
     };
     let mut handle = shuma_exec::run(&spec);
     let killer = handle.killer();

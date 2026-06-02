@@ -388,6 +388,7 @@ mod tests {
             capture_limit: capture_limit_bytes,
             spill_path: None,
             stdin_data,
+            capture_stages: false,
         };
         let mut h = shuma_exec::run(&spec);
         let killer = h.killer();
@@ -417,6 +418,7 @@ mod tests {
                         // usan Exec::Direct), pero el match debe ser
                         // exhaustivo.
                         RunEvent::Bytes(_) => continue,
+                        RunEvent::StageStdout { .. } => continue,
                     };
                     if write_frame(&mut stream, &resp).await.is_err() {
                         killer.kill();
@@ -574,6 +576,7 @@ mod tests {
             capture_limit: capture_limit_bytes,
             spill_path: None,
             stdin_data,
+            capture_stages: false,
         };
         let mut h = shuma_exec::run(&spec);
         let killer = h.killer();
@@ -595,6 +598,7 @@ mod tests {
                 RunEvent::Exited(c) => Response::ExecExited(c),
                 RunEvent::Failed(m) => Response::ExecFailed(m),
                 RunEvent::Bytes(_) => continue, // Test server no usa PTY
+                RunEvent::StageStdout { .. } => continue, // sin captura por etapa
             };
             if ch.send_postcard(&resp).await.is_err() {
                 killer.kill();

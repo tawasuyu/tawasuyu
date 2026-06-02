@@ -76,6 +76,12 @@ pub struct CommandSpec {
     pub spill_path: Option<PathBuf>,
     /// Texto a alimentar por stdin — para reprocesar una salida previa.
     pub stdin_data: Option<String>,
+    /// Si `true`, en un pipe `Direct` se intercepta el stdout de **cada
+    /// etapa intermedia** (tee): además de alimentar a la siguiente, cada
+    /// línea se emite como [`RunEvent::StageStdout`]. Permite ver el stream
+    /// de cada etapa **en vivo**, sin re-ejecutar. Default `false` (sólo se
+    /// captura la salida de la última etapa, como siempre).
+    pub capture_stages: bool,
 }
 
 impl CommandSpec {
@@ -87,6 +93,7 @@ impl CommandSpec {
             capture_limit: 0,
             spill_path: None,
             stdin_data: None,
+            capture_stages: false,
         }
     }
 
@@ -98,7 +105,14 @@ impl CommandSpec {
             capture_limit: 0,
             spill_path: None,
             stdin_data: None,
+            capture_stages: false,
         }
+    }
+
+    /// Activa la captura por etapa (tee) en pipes directos (encadenable).
+    pub fn with_stage_capture(mut self) -> Self {
+        self.capture_stages = true;
+        self
     }
 
     /// Fija el tope de captura en bytes (encadenable).
@@ -123,8 +137,13 @@ impl CommandSpec {
 /// Un evento de la ejecución de un comando.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunEvent {
-    /// Una línea de salida estándar.
+    /// Una línea de salida estándar (de la última etapa del pipe).
     Stdout(String),
+    /// Una línea de stdout de una etapa **intermedia** del pipe (tee). Sólo
+    /// se emite con `CommandSpec::capture_stages`. `stage` = índice 0-based
+    /// de la etapa que la produjo. El front la muestra en el desplegable de
+    /// esa etapa, sin re-ejecutar nada.
+    StageStdout { stage: usize, line: String },
     /// Una línea de salida de error.
     Stderr(String),
     /// Un chunk de bytes crudos del PTY (sólo bajo [`Exec::Pty`]). El
@@ -445,6 +464,18 @@ struct Spawned {
     stdin: Option<std::process::ChildStdin>,
     stdout: Option<std::process::ChildStdout>,
     stderrs: Vec<std::process::ChildStderr>,
+    /// Etapas intermedias a interceptar (solo con `capture_stages`). Vacío
+    /// en el caso normal.
+    stage_tees: Vec<StageTee>,
+}
+
+/// Una etapa intermedia cuyo stdout interceptamos: el coordinador lee
+/// `stdout`, reenvía los bytes a `sink` (el stdin de la etapa siguiente) y
+/// emite cada línea como [`RunEvent::StageStdout`].
+struct StageTee {
+    stage: usize,
+    stdout: std::process::ChildStdout,
+    sink: std::fs::File,
 }
 
 /// Lanza un único proceso shell (`program -c "<line>"`).
@@ -464,11 +495,16 @@ fn spawn_shell(line: &str, program: &str, cwd: &str, want_stdin: bool) -> std::i
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderrs = child.stderr.take().into_iter().collect();
-    Ok(Spawned { children: vec![child], stdin, stdout, stderrs })
+    Ok(Spawned { children: vec![child], stdin, stdout, stderrs, stage_tees: vec![] })
 }
 
 /// Lanza un pipe de etapas conectándolas con descriptores reales.
-fn spawn_direct(stages: &[StageSpec], cwd: &str, want_stdin: bool) -> std::io::Result<Spawned> {
+fn spawn_direct(
+    stages: &[StageSpec],
+    cwd: &str,
+    want_stdin: bool,
+    capture_stages: bool,
+) -> std::io::Result<Spawned> {
     if stages.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -477,7 +513,10 @@ fn spawn_direct(stages: &[StageSpec], cwd: &str, want_stdin: bool) -> std::io::R
     }
     let n = stages.len();
     let mut children: Vec<Child> = Vec::with_capacity(n);
-    let mut prev_stdout: Option<std::process::ChildStdout> = None;
+    let mut stage_tees: Vec<StageTee> = Vec::new();
+    // Qué alimenta el stdin de la etapa actual (i>0): el stdout de la
+    // anterior (directo) o el read-end de un pipe de tee (capturado).
+    let mut next_stdin: Option<Stdio> = None;
 
     for (i, st) in stages.iter().enumerate() {
         let mut cmd = Command::new(&st.program);
@@ -498,14 +537,35 @@ fn spawn_direct(stages: &[StageSpec], cwd: &str, want_stdin: bool) -> std::io::R
             // mantiene los PIDs/Childs por separado.
             cmd.process_group(0);
         } else {
-            // La etapa anterior alimenta a ésta por su stdout.
-            cmd.stdin(Stdio::from(prev_stdout.take().expect("stdout previo")));
+            // La etapa anterior alimenta a ésta (stdout directo o tee).
+            cmd.stdin(next_stdin.take().expect("stdin de etapa previa"));
             cmd.process_group(0);
         }
         match cmd.spawn() {
             Ok(mut child) => {
                 if i + 1 < n {
-                    prev_stdout = child.stdout.take();
+                    let stdout = child.stdout.take().expect("stdout de etapa intermedia");
+                    if capture_stages {
+                        // Tee: pipe propio. La etapa siguiente lee del read-end;
+                        // un hilo del coordinador reenvía stage[i].stdout al
+                        // write-end y captura cada línea como StageStdout.
+                        // `O_CLOEXEC`: estos fds NO deben heredarse a las etapas
+                        // que spawneamos después. Si una etapa heredara el
+                        // write-end del pipe de tee, su lado lector nunca vería
+                        // EOF y se colgaría esperando más entrada (deadlock). El
+                        // dup2 a fd 0 de la etapa siguiente lo hace std (limpia
+                        // CLOEXEC en el fd 0 resultante), así que su stdin queda bien.
+                        let (rd, wr) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC)
+                            .map_err(|e| std::io::Error::other(format!("pipe tee: {e}")))?;
+                        next_stdin = Some(Stdio::from(std::fs::File::from(rd)));
+                        stage_tees.push(StageTee {
+                            stage: i,
+                            stdout,
+                            sink: std::fs::File::from(wr),
+                        });
+                    } else {
+                        next_stdin = Some(Stdio::from(stdout));
+                    }
                 }
                 children.push(child);
             }
@@ -525,7 +585,44 @@ fn spawn_direct(stages: &[StageSpec], cwd: &str, want_stdin: bool) -> std::io::R
     let stdin = children.first_mut().and_then(|c| c.stdin.take());
     let stdout = children.last_mut().and_then(|c| c.stdout.take());
     let stderrs = children.iter_mut().filter_map(|c| c.stderr.take()).collect();
-    Ok(Spawned { children, stdin, stdout, stderrs })
+    Ok(Spawned { children, stdin, stdout, stderrs, stage_tees })
+}
+
+/// Hilo de tee de una etapa intermedia: lee su stdout, lo reenvía a `sink`
+/// (stdin de la etapa siguiente) y emite cada línea como `StageStdout`. Al
+/// EOF cierra `sink` (drop) para que la etapa siguiente vea fin de entrada.
+fn tee_pump(
+    stage: usize,
+    mut stdout: std::process::ChildStdout,
+    mut sink: std::fs::File,
+    tx: Sender<RunEvent>,
+) {
+    let mut buf = [0u8; 8192];
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        let n = match stdout.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        let chunk = &buf[..n];
+        // Reenviar a la etapa siguiente (si murió, igual seguimos drenando
+        // para no bloquear a la etapa actual).
+        let _ = sink.write_all(chunk);
+        // Capturar por línea para el desplegable de la etapa.
+        for &b in chunk {
+            if b == b'\n' {
+                let s = String::from_utf8_lossy(&line).into_owned();
+                let _ = tx.send(RunEvent::StageStdout { stage, line: s });
+                line.clear();
+            } else {
+                line.push(b);
+            }
+        }
+    }
+    if !line.is_empty() {
+        let s = String::from_utf8_lossy(&line).into_owned();
+        let _ = tx.send(RunEvent::StageStdout { stage, line: s });
+    }
 }
 
 /// Lanza `spec` y devuelve un [`RunHandle`] desde el que drenar la
@@ -582,10 +679,12 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
             Exec::Shell { line, program } => {
                 spawn_shell(line, program, &spec.cwd, want_stdin)
             }
-            Exec::Direct { stages } => spawn_direct(stages, &spec.cwd, want_stdin),
+            Exec::Direct { stages } => {
+                spawn_direct(stages, &spec.cwd, want_stdin, spec.capture_stages)
+            }
             Exec::Pty { .. } => unreachable!("Pty se maneja antes"),
         };
-        let Spawned { children, stdin, stdout, stderrs } = match spawned {
+        let Spawned { children, stdin, stdout, stderrs, stage_tees } = match spawned {
             Ok(s) => s,
             Err(e) => {
                 let _ = tx.send(RunEvent::Failed(e.to_string()));
@@ -603,6 +702,17 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
         // Comparte los procesos para que `kill` los alcance.
         if let Ok(mut g) = cell_thread.lock() {
             *g = children;
+        }
+
+        // Tee de etapas intermedias (solo con capture_stages): un hilo por
+        // etapa que reenvía su stdout a la siguiente y emite StageStdout.
+        // Guardamos los handles para joinearlos antes de `Exited` (si no, un
+        // StageStdout tardío se perdería tras cerrar el run).
+        let mut tee_handles: Vec<JoinHandle<()>> = Vec::new();
+        for tee in stage_tees {
+            let txc = tx.clone();
+            tee_handles
+                .push(std::thread::spawn(move || tee_pump(tee.stage, tee.stdout, tee.sink, txc)));
         }
 
         // Captura acotada: contador y aviso compartidos por todos los
@@ -636,6 +746,11 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
             ));
         }
         for h in readers {
+            let _ = h.join();
+        }
+        // Joinear los tees garantiza que todos los StageStdout salgan antes
+        // del Exited (drenaje completo de las etapas intermedias).
+        for h in tee_handles {
             let _ = h.join();
         }
 
@@ -849,6 +964,54 @@ mod tests {
         assert_eq!(stdout_of(h.wait_all()), vec!["1", "2", "3"]);
     }
 
+    fn stage_lines(events: &[RunEvent], stage: usize) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                RunEvent::StageStdout { stage: s, line } if *s == stage => Some(line.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // El supuesto "deadlock por write-end huérfano" era en realidad el error de
+    // build: se pidió la feature `fcntl` de nix (inexistente en 0.29 — `OFlag`
+    // vive bajo `fs`, ya habilitada), así que el crate ni compilaba y el fallo
+    // se confundió con un cuelgue. Con pipe2(O_CLOEXEC) ningún hijo hereda el
+    // write-end del tee y la etapa siguiente ve EOF en cuanto la anterior cierra
+    // su stdout; verificado estable (5/5).
+    #[test]
+    fn capture_stages_intercepts_each_stage_stdout() {
+        // printf "hello" | tr a-z A-Z | rev  →  etapa0="hello", etapa1="HELLO",
+        // salida final (rev) = "OLLEH". El tee captura las intermedias EN VIVO
+        // sin re-ejecutar, que es lo que el desplegable necesita por etapa.
+        let spec = pipe(&[
+            ("printf", &["hello\\n"]),
+            ("tr", &["a-z", "A-Z"]),
+            ("rev", &[]),
+        ])
+        .with_stage_capture();
+        let events = run(&spec).wait_all();
+
+        assert_eq!(stage_lines(&events, 0), vec!["hello"], "etapa 0 (printf)");
+        assert_eq!(stage_lines(&events, 1), vec!["HELLO"], "etapa 1 (tr)");
+        // La última etapa sigue saliendo por Stdout normal.
+        assert_eq!(stdout_of(events), vec!["OLLEH"]);
+    }
+
+    #[test]
+    fn without_capture_stages_there_are_no_stage_events() {
+        // El comportamiento por defecto no cambia: sólo la salida final.
+        let events = run(&pipe(&[("printf", &["x\\n"]), ("cat", &[])])).wait_all();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, RunEvent::StageStdout { .. })),
+            "sin with_stage_capture no debe haber StageStdout"
+        );
+        assert_eq!(stdout_of(events), vec!["x"]);
+    }
+
     #[test]
     fn direct_nonzero_exit_is_the_last_stage() {
         let mut h = run(&direct("false", &[]));
@@ -935,6 +1098,7 @@ mod tests {
             capture_limit: 0,
             spill_path: None,
             stdin_data: None,
+            capture_stages: false,
         };
         let mut h = run(&spec);
         let mut bytes_seen = Vec::<u8>::new();
@@ -974,6 +1138,7 @@ mod tests {
             capture_limit: 0,
             spill_path: None,
             stdin_data: None,
+            capture_stages: false,
         };
         let mut h = run(&spec);
         // Cat necesita un instante para que su slave arranque y abra stdin.
@@ -1012,6 +1177,7 @@ mod tests {
             capture_limit: 0,
             spill_path: None,
             stdin_data: None,
+            capture_stages: false,
         };
         let mut h = run(&spec);
         // Esperar a que el master se publique (race con el coordinador).

@@ -181,6 +181,12 @@ pub fn update(state: State, msg: Msg) -> State {
             s.input.set_text(line);
             s = run_submitted(s);
         }
+        Msg::ToggleStage { block, stage } => {
+            let key = (block, stage);
+            if !s.expanded_stages.remove(&key) {
+                s.expanded_stages.insert(key);
+            }
+        }
         Msg::Tick => {
             s = drain_run(s);
         }
@@ -990,9 +996,49 @@ pub(crate) fn parse_pub_hex(hex_str: &str) -> Result<shuma_link::PublicKey, Stri
     shuma_link::PublicKey::from_hex(hex_str).map_err(|e| e.to_string())
 }
 
+/// Si `line` es un pipe «simple» de ≥2 etapas —sólo `Command`/`Argument`/
+/// `Flag`/`Pipe`/espacio, sin comillas, variables, redirecciones,
+/// operadores, globs (`* ? [ ] { }`) ni `~`— devuelve sus etapas como
+/// [`StageSpec`] para correrlo por `Exec::Direct`. Si no, `None` (cae a
+/// `sh -c`, que sí absorbe esa sintaxis). Un único comando también cae a
+/// `sh -c`: el modo directo sólo aporta cuando hay tubería que interceptar.
+///
+/// Conservador a propósito: `shuma_line::Stage` no recoge los `StringLit`
+/// en `args`, así que un pipe con comillas debe ir al shell o perdería el
+/// argumento citado.
+pub(crate) fn simple_pipe_stages(line: &str) -> Option<Vec<StageSpec>> {
+    use shuma_line::TokenKind::*;
+    let tokens = shuma_line::tokenize(line, shuma_line::Dialect::Bash);
+    let simple = !tokens.is_empty()
+        && tokens.iter().all(|t| {
+            matches!(t.kind, Command | Argument | Flag | Pipe | Whitespace)
+                && !t.text.contains(['*', '?', '[', ']', '{', '}'])
+                && !t.text.starts_with('~')
+        });
+    if !simple {
+        return None;
+    }
+    let pipeline = shuma_line::split_pipeline(&tokens);
+    if pipeline.stages.len() < 2 {
+        return None;
+    }
+    let mut stages = Vec::with_capacity(pipeline.stages.len());
+    for st in &pipeline.stages {
+        // Una etapa sin comando (línea incompleta, p. ej. termina en `|`)
+        // → al shell, que reporta el error de sintaxis como toca.
+        let program = st.command.clone()?;
+        stages.push(StageSpec {
+            program,
+            args: st.args.clone(),
+        });
+    }
+    Some(stages)
+}
+
 /// Decide cómo lanzar `line`: si el primer token está en la allowlist
-/// TUI (o el usuario lo prefijó con `:tui`), abre un PTY; si no, va por
-/// el shell normal (streaming Stdout/Stderr).
+/// TUI (o el usuario lo prefijó con `:tui`), abre un PTY; si es un pipe
+/// simple, lo corre directo con captura por etapa; si no, va por el shell
+/// normal (streaming Stdout/Stderr).
 pub(crate) fn build_spec(line: &str, cwd: &str) -> (CommandSpec, Option<TuiSession>) {
     // Prefijo explícito `:tui <comando>`.
     let (cmd_line, force_tui) = match line.strip_prefix(":tui ") {
@@ -1002,6 +1048,24 @@ pub(crate) fn build_spec(line: &str, cwd: &str) -> (CommandSpec, Option<TuiSessi
     let first_word = cmd_line.split_whitespace().next().unwrap_or("");
     let is_tui = force_tui || TUI_ALLOWLIST.contains(&first_word);
     if !is_tui {
+        // Pipe «simple» (sólo comandos/args/flags y `|`, sin comillas,
+        // variables, redirecciones, globs ni `~`): lo corremos directo
+        // —conectando los procesos nosotros— y activamos la captura por
+        // etapa (tee) para inspeccionar los intermedios en vivo. Cualquier
+        // sintaxis que el modo directo no absorbe cae a `sh -c`.
+        if let Some(stages) = simple_pipe_stages(line) {
+            return (
+                CommandSpec {
+                    exec: Exec::Direct { stages },
+                    cwd: cwd.to_string(),
+                    capture_limit: 0,
+                    spill_path: None,
+                    stdin_data: None,
+                    capture_stages: true,
+                },
+                None,
+            );
+        }
         return (CommandSpec::shell(line, cwd), None);
     }
     // Bajo PTY: parseamos en stages básicos por whitespace. No soporta
@@ -1023,6 +1087,7 @@ pub(crate) fn build_spec(line: &str, cwd: &str) -> (CommandSpec, Option<TuiSessi
         capture_limit: 0,
         spill_path: None,
         stdin_data: None,
+        capture_stages: false,
     };
     // Stage marker — usamos `parts` para sintaxis, no para ejecutar; el
     // Exec::Pty arma el spawn directo. La conversión a `StageSpec`
@@ -1087,6 +1152,12 @@ pub(crate) fn drain_run(mut s: State) -> State {
                     // +1 por el `\n` implícito de cada línea drenada.
                     s.current_run_bytes = s.current_run_bytes.saturating_add(line.len() as u64 + 1);
                     s.push_in_block(run_block, OutputLine::stdout(line));
+                }
+                RunEvent::StageStdout { stage, line } => {
+                    // Salida de una etapa intermedia (tee). NO suma a
+                    // `current_run_bytes` (el grafo cuenta la salida final);
+                    // queda guardada para el desplegable de su etapa.
+                    s.push_in_block(run_block, OutputLine::stage_stdout(stage, line));
                 }
                 RunEvent::Stderr(line) => {
                     s.current_run_bytes = s.current_run_bytes.saturating_add(line.len() as u64 + 1);
@@ -1161,6 +1232,9 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
             for ev in guard.handle.try_events() {
                 match ev {
                     RunEvent::Stdout(line) => s.push_in_block(job_block, OutputLine::stdout(line)),
+                    RunEvent::StageStdout { stage, line } => {
+                        s.push_in_block(job_block, OutputLine::stage_stdout(stage, line))
+                    }
                     RunEvent::Stderr(line) => s.push_in_block(job_block, OutputLine::stderr(line)),
                     RunEvent::Truncated => {
                         s.push_in_block(job_block, OutputLine::notice("… (truncada)"))

@@ -1098,6 +1098,155 @@ pub(crate) fn pipe_stages_row<HostMsg: Clone + 'static>(
     )
 }
 
+/// Fila de etapas con **captura en vivo** (tee): cada chip despliega las
+/// líneas intermedias ya capturadas de su etapa, sin re-ejecutar. Devuelve
+/// `(views, alto)` — la fila de chips más, por cada etapa desplegada, sus
+/// líneas. `stage_lines` son las `OutputLine` con `stage = Some(_)` del
+/// bloque. La última etapa no se captura (su salida es el cuerpo).
+pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
+    header_text: &str,
+    stage_lines: &[&OutputLine],
+    block: u64,
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> (Vec<View<HostMsg>>, f32) {
+    let cmd = extract_command(header_text);
+    let toks = shuma_line::tokenize(&cmd, state_dialect_default());
+    let pipe = shuma_line::split_pipeline(&toks);
+    if pipe.stages.len() < 2 {
+        return (Vec::new(), 0.0);
+    }
+
+    // Chips de etapa.
+    let mut row_children: Vec<View<HostMsg>> = vec![View::new(Style {
+        size: Size {
+            width: length(16.0_f32),
+            height: length(16.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned("⇢".to_string(), 11.0, theme.fg_muted, Alignment::Start)];
+
+    for (i, st) in pipe.stages.iter().enumerate() {
+        let captured = stage_lines.iter().filter(|l| l.stage == Some(i)).count();
+        let expanded = state.expanded_stages.contains(&(block, i));
+        let base = st
+            .command
+            .clone()
+            .unwrap_or_else(|| format!("etapa {}", i + 1));
+        let label = if captured > 0 {
+            format!("{base} ·{captured}")
+        } else {
+            base
+        };
+        // La última etapa no tiene captura (su salida es el cuerpo): chip
+        // inerte, en color tenue, para que se vea la estructura del pipe.
+        let is_last = i + 1 == pipe.stages.len();
+        let fill = if expanded {
+            theme.bg_row_hover
+        } else {
+            theme.bg_input
+        };
+        let txt_color = if is_last { theme.fg_muted } else { theme.fg_text };
+        let mut chip = View::new(Style {
+            size: Size {
+                width: Dimension::auto(),
+                height: length(16.0_f32),
+            },
+            padding: Rect {
+                left: length(5.0_f32),
+                right: length(5.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(fill)
+        .radius(3.0)
+        .text_aligned(label, 11.0, txt_color, Alignment::Start);
+        if !is_last {
+            chip = chip
+                .hover_fill(theme.bg_row_hover)
+                .on_click(lift(Msg::ToggleStage { block, stage: i }));
+        }
+        row_children.push(chip);
+    }
+
+    let chips_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(STAGES_H),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(5.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(row_children);
+
+    let mut out: Vec<View<HostMsg>> = vec![chips_row];
+    let mut height = STAGES_H;
+
+    // Líneas capturadas de cada etapa desplegada, en orden de etapa.
+    for (i, _st) in pipe.stages.iter().enumerate() {
+        if !state.expanded_stages.contains(&(block, i)) {
+            continue;
+        }
+        let lines: Vec<&&OutputLine> =
+            stage_lines.iter().filter(|l| l.stage == Some(i)).collect();
+        if lines.is_empty() {
+            out.push(
+                View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(ROW_H),
+                    },
+                    padding: Rect {
+                        left: length(16.0_f32),
+                        right: length(0.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned(
+                    "(sin líneas capturadas)".to_string(),
+                    11.0,
+                    theme.fg_muted,
+                    Alignment::Start,
+                ),
+            );
+            height += ROW_H;
+            continue;
+        }
+        for l in lines {
+            out.push(
+                View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(ROW_H),
+                    },
+                    padding: Rect {
+                        left: length(16.0_f32),
+                        right: length(0.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned(l.text.clone(), 12.0, theme.fg_muted, Alignment::Start),
+            );
+            height += ROW_H;
+        }
+    }
+
+    (out, height)
+}
+
 /// Renderiza un bloque-comando como card desplegable: header (chevron +
 /// comando + badge de estado, clickable para plegar), opcional fila de
 /// etapas de pipe, y cuerpo (la salida, oculta si está colapsado).
@@ -1113,12 +1262,16 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
     let collapsed = state.collapsed.contains(&block);
     let header_text = group[0].text.clone();
 
-    // Separamos la notice de cierre (se promueve a badge) del resto del
-    // cuerpo. Si hay varias, gana la última.
+    // Separamos la notice de cierre (se promueve a badge), las líneas de
+    // etapas intermedias (tee — van a su desplegable) y el resto (cuerpo).
+    // Si hay varias notices de cierre, gana la última.
     let mut body: Vec<&OutputLine> = Vec::new();
+    let mut stage_lines: Vec<&OutputLine> = Vec::new();
     let mut badge: Option<(String, llimphi_ui::llimphi_raster::peniko::Color)> = None;
     for &l in &group[1..] {
-        if let Some(color) = status_color(&l.text, theme) {
+        if l.stage.is_some() {
+            stage_lines.push(l);
+        } else if let Some(color) = status_color(&l.text, theme) {
             badge = Some((l.text.clone(), color));
         } else {
             body.push(l);
@@ -1200,9 +1353,28 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
 
     // Fila de etapas de pipe (sólo si NO está colapsado y es un pipe).
     if !collapsed {
-        if let Some(row) = pipe_stages_row::<HostMsg>(&header_text, theme, lift) {
-            card_children.push(row);
-            child_h_sum += STAGES_H;
+        if stage_lines.is_empty() {
+            // Sin captura en vivo (pipe vía `sh -c` o comando suelto): los
+            // chips re-ejecutan la línea hasta esa etapa.
+            if let Some(row) = pipe_stages_row::<HostMsg>(&header_text, theme, lift) {
+                card_children.push(row);
+                child_h_sum += STAGES_H;
+            }
+        } else {
+            // Con captura (pipe directo + tee): los chips despliegan las
+            // líneas intermedias ya capturadas, sin re-ejecutar.
+            let (rows, h) = stage_capture_rows::<HostMsg>(
+                &header_text,
+                &stage_lines,
+                block,
+                state,
+                theme,
+                lift,
+            );
+            for r in rows {
+                card_children.push(r);
+            }
+            child_h_sum += h;
         }
     }
 

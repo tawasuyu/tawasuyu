@@ -127,6 +127,7 @@ pub fn spawn_with(
         capture_limit: 0,
         spill_path: None,
         stdin_data: None,
+        capture_stages: false,
     };
     let handle = shuma_exec::run(&spec);
     let killer = handle.killer();

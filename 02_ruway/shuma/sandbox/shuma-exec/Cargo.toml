@@ -8,7 +8,9 @@ publish.workspace = true
 description = "shuma — ejecutor de comandos del shell con salida en streaming: lanza un proceso y entrega stdout/stderr línea a línea por un canal. Agnóstico de UI."
 
 [dependencies]
-# `zerocopy` habilita `splice` — volcado pipe→archivo sin copia.
+# `zerocopy` → `splice` (volcado pipe→archivo sin copia). `OFlag` (para los
+# pipes de tee por etapa con `O_CLOEXEC` vía `pipe2`) vive bajo la feature
+# `fs`, que el workspace ya habilita — `unistd::pipe2` no necesita feature.
 nix = { workspace = true, features = ["zerocopy"] }
 # PTY allocation cross-platform — usado por `Exec::Pty` para los
 # comandos TUI (vim, htop, less, claude-code, etc.).

@@ -79,6 +79,11 @@ pub struct OutputLine {
     /// `Prompt` abre uno nuevo (id monotónico) y las siguientes líneas
     /// lo heredan. Por defecto `0` (las constructoras no lo conocen).
     pub block: u64,
+    /// Etapa intermedia del pipe que produjo la línea (tee de
+    /// `shuma-exec`), 0-based. `None` = salida normal (de la última etapa
+    /// o de un comando suelto). El render guarda estas líneas para el
+    /// desplegable de su etapa en vez de mezclarlas con el cuerpo.
+    pub stage: Option<usize>,
 }
 
 impl OutputLine {
@@ -87,6 +92,7 @@ impl OutputLine {
             kind: OutputKind::Prompt,
             text: text.into(),
             block: 0,
+            stage: None,
         }
     }
     pub fn stdout(text: impl Into<String>) -> Self {
@@ -94,6 +100,7 @@ impl OutputLine {
             kind: OutputKind::Stdout,
             text: text.into(),
             block: 0,
+            stage: None,
         }
     }
     pub fn stderr(text: impl Into<String>) -> Self {
@@ -101,6 +108,7 @@ impl OutputLine {
             kind: OutputKind::Stderr,
             text: text.into(),
             block: 0,
+            stage: None,
         }
     }
     pub fn notice(text: impl Into<String>) -> Self {
@@ -108,6 +116,17 @@ impl OutputLine {
             kind: OutputKind::Notice,
             text: text.into(),
             block: 0,
+            stage: None,
+        }
+    }
+    /// Línea capturada de una etapa intermedia del pipe (tee en vivo). Se
+    /// guarda con su `stage` para el desplegable correspondiente.
+    pub fn stage_stdout(stage: usize, text: impl Into<String>) -> Self {
+        Self {
+            kind: OutputKind::Stdout,
+            text: text.into(),
+            block: 0,
+            stage: Some(stage),
         }
     }
 }
@@ -331,6 +350,10 @@ pub struct State {
     /// Bloques colapsados por el usuario (click en el header de la card).
     /// Se renderizan plegados, mostrando sólo el header + un resumen.
     pub collapsed: HashSet<u64>,
+    /// Etapas de pipe desplegadas — `(block, stage)`. Click en un chip de
+    /// etapa alterna la pertenencia; al estar presente se muestran sus
+    /// líneas capturadas en vivo (tee) bajo la fila de etapas.
+    pub expanded_stages: HashSet<(u64, usize)>,
     /// Scroll del panel de output, en px medidos desde el fondo. `0` =
     /// pegado al fondo (lo último siempre visible, como una terminal).
     /// Crece al rodar la rueda hacia arriba (ver historial). Lo clampa
@@ -379,6 +402,7 @@ impl State {
             block_seq: 0,
             current_block: 0,
             collapsed: HashSet::new(),
+            expanded_stages: HashSet::new(),
             scroll_px: 0.0,
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
@@ -419,6 +443,7 @@ impl State {
     pub(crate) fn clear_output(&mut self) {
         self.output.clear();
         self.collapsed.clear();
+        self.expanded_stages.clear();
         self.scroll_px = 0.0;
     }
 
@@ -588,8 +613,12 @@ pub enum Msg {
     /// (positivo = rodar hacia arriba / ver historial). Ajusta `scroll_px`.
     Scroll(f32),
     /// Re-ejecuta `line` como un comando nuevo — la dispara el click en
-    /// una etapa de pipe de la card (inspeccionar resultados intermedios).
+    /// una etapa de pipe de una card SIN captura en vivo (fallback `sh -c`).
     RunLine(String),
+    /// Alterna el desplegable de una etapa de pipe con captura en vivo
+    /// (tee). La dispara el click en su chip; muestra/oculta las líneas
+    /// intermedias ya capturadas sin re-ejecutar nada.
+    ToggleStage { block: u64, stage: usize },
 }
 
 mod update;
@@ -911,6 +940,91 @@ mod tests {
         let (spec, tui) = build_spec("ls -la", "/");
         assert!(matches!(spec.exec, shuma_exec::Exec::Shell { .. }));
         assert!(tui.is_none());
+    }
+
+    #[test]
+    fn build_spec_routes_simple_pipe_to_direct_with_capture() {
+        // Un pipe simple corre directo (sin bash) y con captura por etapa.
+        let (spec, tui) = build_spec("ls -la | grep foo", "/");
+        match &spec.exec {
+            shuma_exec::Exec::Direct { stages } => {
+                assert_eq!(stages.len(), 2, "dos etapas");
+                assert_eq!(stages[0].program, "ls");
+                assert_eq!(stages[1].program, "grep");
+            }
+            other => panic!("esperaba Exec::Direct, fue {other:?}"),
+        }
+        assert!(spec.capture_stages, "el pipe directo activa el tee");
+        assert!(tui.is_none());
+    }
+
+    #[test]
+    fn build_spec_pipe_with_quotes_falls_back_to_shell() {
+        // `shuma_line::Stage` no recoge StringLit en args, así que un pipe
+        // con comillas debe ir a `sh -c` o perdería el argumento citado.
+        let (spec, _) = build_spec("echo 'a | b' | cat", "/");
+        assert!(matches!(spec.exec, shuma_exec::Exec::Shell { .. }));
+        assert!(!spec.capture_stages);
+    }
+
+    #[test]
+    fn build_spec_pipe_with_glob_falls_back_to_shell() {
+        let (spec, _) = build_spec("ls *.rs | cat", "/");
+        assert!(matches!(spec.exec, shuma_exec::Exec::Shell { .. }));
+    }
+
+    #[test]
+    fn simple_pipe_stages_rejects_single_command() {
+        // Un único comando no gana nada del modo directo (no hay tubería
+        // que interceptar) → `None`, cae a `sh -c`.
+        assert!(simple_pipe_stages("ls -la").is_none());
+    }
+
+    #[test]
+    fn simple_pipe_stages_rejects_trailing_pipe() {
+        // Etapa sin comando (línea incompleta) → None.
+        assert!(simple_pipe_stages("ls |").is_none());
+    }
+
+    #[test]
+    fn piped_command_captures_intermediate_stage_output() {
+        // `echo hola | cat`: stage0 (echo) se captura en vivo como una
+        // OutputLine con stage=Some(0); la salida final (cat) sale como
+        // stdout normal (stage None).
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text("echo hola | cat");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.is_running(), "el pipe debe arrancar un run");
+        s = drain_until_idle(s);
+        let stage0: Vec<&OutputLine> = s
+            .output
+            .iter()
+            .filter(|l| l.stage == Some(0))
+            .collect();
+        assert!(
+            stage0.iter().any(|l| l.text == "hola"),
+            "esperaba 'hola' capturado de la etapa 0, output: {:?}",
+            s.output.iter().map(|l| (l.stage, &l.text)).collect::<Vec<_>>()
+        );
+        // La salida final (cat) llega como stdout normal sin stage.
+        assert!(s
+            .output
+            .iter()
+            .any(|l| l.stage.is_none() && l.text == "hola"));
+        assert!(s.output.iter().any(|l| l.text == "✔ exit 0"));
+    }
+
+    #[test]
+    fn toggle_stage_flips_expanded_set() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::ToggleStage { block: 2, stage: 0 });
+        assert!(s.expanded_stages.contains(&(2, 0)), "primer toggle despliega");
+        s = update(s, Msg::ToggleStage { block: 2, stage: 0 });
+        assert!(
+            !s.expanded_stages.contains(&(2, 0)),
+            "segundo toggle repliega"
+        );
     }
 
     #[test]

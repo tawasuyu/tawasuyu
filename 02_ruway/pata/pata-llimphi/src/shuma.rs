@@ -574,6 +574,10 @@ pub fn ejecutar(cmd: &str) -> RunResult {
     for ev in run(&spec).wait_all() {
         match ev {
             RunEvent::Stdout(t) => lines.push(OutLine { err: false, text: t }),
+            // El drawer corre por `sh -c` (sin `capture_stages`), así que
+            // no debería ver salida por etapa; si llegara, la tratamos como
+            // stdout normal para no perderla.
+            RunEvent::StageStdout { line, .. } => lines.push(OutLine { err: false, text: line }),
             RunEvent::Stderr(t) => lines.push(OutLine { err: true, text: t }),
             RunEvent::Exited(c) => exit = Some(c),
             RunEvent::Failed(m) => lines.push(OutLine {

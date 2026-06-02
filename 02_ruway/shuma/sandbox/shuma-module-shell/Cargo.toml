@@ -22,3 +22,7 @@ llimphi-icons = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 vt100 = { workspace = true }
 arboard = { workspace = true }
+
+[dev-dependencies]
+png = { workspace = true }
+pollster = { workspace = true }
