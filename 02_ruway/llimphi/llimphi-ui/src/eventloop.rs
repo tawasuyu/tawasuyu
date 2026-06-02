@@ -1173,13 +1173,28 @@ impl<A: App> Runtime<A> {
                         )
                     })
                 };
-                eprintln!(
-                    "[llimphi sec] click cursor=({:.0},{:.0}) hit={} on_click={}",
-                    cursor.x,
-                    cursor.y,
-                    hit.is_some(),
-                    hit.as_ref().map(|h| h.3.is_some()).unwrap_or(false)
-                );
+                {
+                    let sec = &self.secondaries[idx];
+                    let (root, nodes, first_click) = sec
+                        .last_render
+                        .as_ref()
+                        .map(|c| {
+                            let root = c.computed.get(c.mounted.root).map(|r| (r.w, r.h));
+                            let fc = c
+                                .mounted
+                                .nodes
+                                .iter()
+                                .find(|n| n.on_click.is_some())
+                                .and_then(|n| c.computed.get(n.id))
+                                .map(|r| (r.x, r.y, r.w, r.h));
+                            (root, c.mounted.nodes.len(), fc)
+                        })
+                        .unwrap_or((None, 0, None));
+                    eprintln!(
+                        "[llimphi sec] click cursor=({:.0},{:.0}) hit={} root={:?} nodes={} 1er_onclick={:?}",
+                        cursor.x, cursor.y, hit.is_some(), root, nodes, first_click
+                    );
+                }
                 // Misma prioridad que la primaria: drag_at + on_click_at, luego
                 // drag simple, luego on_click_at, luego on_click.
                 match hit {
