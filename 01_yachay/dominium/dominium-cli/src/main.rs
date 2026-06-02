@@ -28,6 +28,37 @@ use dominium_core::{
 };
 use dominium_physics::tick;
 
+/// Forma rica del pack guardada por `dominium-app-llimphi`: sintonía del
+/// motor + relieve visual + Conceptos. La CLI sólo consume `params` y
+/// `conceptos` (el relieve visual es cosa del render). `weights` se acepta
+/// para no romper el parseo, pero se ignora.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EscenarioFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    params: Option<SimParams>,
+    #[serde(default)]
+    conceptos: Conceptos,
+}
+
+/// Lee un pack JSON tolerando los dos formatos del app: escenario rico
+/// `{ params?, weights?, conceptos }` o pack histórico `{ items: [...] }`.
+/// Devuelve los Conceptos y, si el archivo es rico, los `SimParams` que
+/// trae — así un escenario tuneado en la app se reproduce headless. El
+/// discriminante es la clave `conceptos`.
+fn load_pack(path: &std::path::Path) -> Result<(Conceptos, Option<SimParams>)> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("leyendo {}", path.display()))?;
+    if raw.contains("\"conceptos\"") {
+        let e: EscenarioFile = serde_json::from_str(&raw)
+            .with_context(|| format!("parseando escenario {}", path.display()))?;
+        Ok((e.conceptos, e.params))
+    } else {
+        let cs: Conceptos = serde_json::from_str(&raw)
+            .with_context(|| format!("parseando {}", path.display()))?;
+        Ok((cs, None))
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(version, about = "Headless runner for the dominium simulator")]
 struct Cli {
@@ -324,14 +355,17 @@ fn run_sim(
     } else {
         Vec::new()
     };
+    // Si el pack es un escenario rico, sus `params` son la base (economía,
+    // relieve físico, big_five…); los flags de CLI de abajo sólo pisan los
+    // campos estacionales/sociales que el subcomando expone. Un pack
+    // histórico (sólo Conceptos) deja la base en `default`.
+    let mut base_params = None;
     if let Some(path) = conceptos_path {
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("leyendo {}", path.display()))?;
-        let cs: Conceptos = serde_json::from_str(&raw)
-            .with_context(|| format!("parseando {}", path.display()))?;
+        let (cs, params) = load_pack(path)?;
         world.conceptos = cs;
+        base_params = params;
     }
-    let mut params = SimParams::default();
+    let mut params = base_params.unwrap_or_default();
     params.season_period = season_period;
     params.season_amplitude = season_amplitude;
     params.psi_effect_modulation = psi_modulation;
@@ -507,13 +541,14 @@ fn repl(
     conceptos_path: Option<&std::path::Path>,
 ) -> Result<()> {
     let mut world = build_world(seed, grid, lemmings);
+    let mut params = SimParams::default();
     if let Some(p) = conceptos_path {
-        let raw = std::fs::read_to_string(p)
-            .with_context(|| format!("leyendo {}", p.display()))?;
-        world.conceptos = serde_json::from_str(&raw)
-            .with_context(|| format!("parseando {}", p.display()))?;
+        let (cs, esc_params) = load_pack(p)?;
+        world.conceptos = cs;
+        if let Some(esc) = esc_params {
+            params = esc;
+        }
     }
-    let params = SimParams::default();
     let mut tick_count: u64 = 0;
     let mut csv_writer: Option<BufWriter<File>> = None;
     println!("dominium-cli repl · seed={seed} grid={grid}×{grid} lemmings={lemmings}");
@@ -626,15 +661,18 @@ fn repl(
                     println!("uso: load PATH");
                     continue;
                 };
-                match std::fs::read_to_string(path)
-                    .and_then(|raw| {
-                        serde_json::from_str::<Conceptos>(&raw)
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-                    })
-                {
-                    Ok(cs) => {
+                match load_pack(std::path::Path::new(path)) {
+                    Ok((cs, esc_params)) => {
                         world.conceptos = cs;
-                        println!("ok · {} conceptos cargados", world.conceptos.len());
+                        if let Some(esc) = esc_params {
+                            params = esc;
+                            println!(
+                                "ok · {} conceptos + sintonía del escenario aplicada",
+                                world.conceptos.len()
+                            );
+                        } else {
+                            println!("ok · {} conceptos cargados", world.conceptos.len());
+                        }
                     }
                     Err(e) => println!("error: {e}"),
                 }
@@ -644,9 +682,19 @@ fn repl(
                     println!("uso: save PATH");
                     continue;
                 };
-                match serde_json::to_string_pretty(&world.conceptos) {
+                // Guarda el escenario rico: sintonía vigente + Conceptos,
+                // mismo formato que el app. Recargable con `load` o por la
+                // app (que rellena el relieve visual con su default).
+                let esc = EscenarioFile {
+                    params: Some(params.clone()),
+                    conceptos: world.conceptos.clone(),
+                };
+                match serde_json::to_string_pretty(&esc) {
                     Ok(json) => match std::fs::write(path, json) {
-                        Ok(()) => println!("ok · {} conceptos guardados en {path}", world.conceptos.len()),
+                        Ok(()) => println!(
+                            "ok · escenario ({} conceptos + sintonía) guardado en {path}",
+                            world.conceptos.len()
+                        ),
                         Err(e) => println!("error: {e}"),
                     },
                     Err(e) => println!("error: {e}"),
@@ -945,10 +993,8 @@ fn run_sweep(a: SweepArgs) -> Result<()> {
     // Carga única del pack de Conceptos — todos los reps usan la misma
     // lista. La determinismo se mantiene porque la lista no se permuta.
     let conceptos = if let Some(path) = a.conceptos_path {
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("leyendo {}", path.display()))?;
-        Some(serde_json::from_str::<Conceptos>(&raw)
-            .with_context(|| format!("parseando {}", path.display()))?)
+        let (cs, _params) = load_pack(path)?;
+        Some(cs)
     } else {
         None
     };

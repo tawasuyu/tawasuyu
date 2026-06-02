@@ -3,7 +3,9 @@
 
 use std::path::PathBuf;
 
-use dominium_core::Conceptos;
+use dominium_core::{Conceptos, SimParams};
+use dominium_iso::ZWeights;
+use serde::{Deserialize, Serialize};
 
 /// Pack JSON por defecto — iglesia / banco / comuna / laboratorio + variantes.
 /// Embebido para que el binario corra sin archivos sueltos en cwd.
@@ -40,9 +42,59 @@ pub(crate) fn user_pack_path() -> Option<PathBuf> {
         .map(|d| d.config_dir().join("pack.json"))
 }
 
-/// Escribe la colección actual al pack del usuario. Crea el directorio
-/// padre si no existe. Errores van a stderr (la app no muere).
-pub(crate) fn save_user_pack(cs: &Conceptos) {
+/// Escenario completo serializable: la termodinámica del motor
+/// (`params`), el relieve visual (`weights`) y los Conceptos del mundo, en
+/// un solo archivo reproducible. Es el "pack" en su forma rica — guardar y
+/// cargar restituye el mundo *y su sintonía*, no sólo las fichas.
+///
+/// `params` y `weights` son `Option` para que un pack viejo (sólo
+/// `Conceptos`) cargue sin ellos y la app conserve su sintonía actual. La
+/// retrocompatibilidad la garantiza [`parse_escenario`], no el `#[serde]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct Escenario {
+    /// Sintonía del motor. `None` = no tocar los `SimParams` vigentes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<SimParams>,
+    /// Relieve visual (`ZWeights`). `None` = no tocar el relieve vigente.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weights: Option<ZWeights>,
+    /// Las fichas del mundo. Siempre presente (puede ir vacío).
+    #[serde(default)]
+    pub conceptos: Conceptos,
+}
+
+/// Parsea un JSON de pack tolerando los dos formatos:
+/// 1. **Escenario rico** `{ "params": …, "weights": …, "conceptos": {…} }`.
+/// 2. **Pack histórico** `{ "items": [ … ] }` — sólo `Conceptos`, sin
+///    sintonía; se envuelve en un `Escenario` con `params`/`weights` a
+///    `None`.
+///
+/// El discriminante es la clave `conceptos`: si está, es formato rico; si
+/// no, se intenta como `Conceptos` plano.
+fn parse_escenario(raw: &str) -> Option<Escenario> {
+    if raw.contains("\"conceptos\"") {
+        match serde_json::from_str::<Escenario>(raw) {
+            Ok(esc) => return Some(esc),
+            Err(e) => eprintln!("dominium · escenario malformado: {e}"),
+        }
+    }
+    match serde_json::from_str::<Conceptos>(raw) {
+        Ok(conceptos) => Some(Escenario {
+            params: None,
+            weights: None,
+            conceptos,
+        }),
+        Err(e) => {
+            eprintln!("dominium · pack corrupto: {e}");
+            None
+        }
+    }
+}
+
+/// Escribe el escenario completo (sintonía + relieve + Conceptos) al pack
+/// del usuario. Crea el directorio padre si no existe. Errores van a
+/// stderr (la app no muere).
+pub(crate) fn save_user_escenario(params: &SimParams, weights: &ZWeights, cs: &Conceptos) {
     let Some(path) = user_pack_path() else {
         eprintln!("dominium · no hay ProjectDirs en esta plataforma");
         return;
@@ -53,28 +105,32 @@ pub(crate) fn save_user_pack(cs: &Conceptos) {
             return;
         }
     }
-    match serde_json::to_string_pretty(cs) {
+    let esc = Escenario {
+        params: Some(params.clone()),
+        weights: Some(*weights),
+        conceptos: cs.clone(),
+    };
+    match serde_json::to_string_pretty(&esc) {
         Ok(json) => match std::fs::write(&path, json) {
-            Ok(()) => eprintln!("dominium · pack guardado en {}", path.display()),
+            Ok(()) => eprintln!("dominium · escenario guardado en {}", path.display()),
             Err(e) => eprintln!("dominium · error escribiendo {}: {e}", path.display()),
         },
-        Err(e) => eprintln!("dominium · error serializando pack: {e}"),
+        Err(e) => eprintln!("dominium · error serializando escenario: {e}"),
     }
 }
 
-/// Carga el pack del usuario si existe. Devuelve `None` si el archivo no
-/// está, o si el contenido no es un `Conceptos` válido. Errores van a stderr.
-pub(crate) fn load_user_pack() -> Option<Conceptos> {
+/// Carga el escenario del usuario si existe. Devuelve `None` si el archivo
+/// no está, o si el contenido no parsea por ninguno de los dos formatos.
+pub(crate) fn load_user_escenario() -> Option<Escenario> {
     let path = user_pack_path()?;
     let raw = std::fs::read_to_string(&path).ok()?;
-    match serde_json::from_str::<Conceptos>(&raw) {
-        Ok(cs) => {
-            eprintln!("dominium · pack cargado desde {}", path.display());
-            Some(cs)
-        }
-        Err(e) => {
-            eprintln!("dominium · {} corrupto: {e}", path.display());
-            None
-        }
-    }
+    let esc = parse_escenario(&raw)?;
+    eprintln!("dominium · escenario cargado desde {}", path.display());
+    Some(esc)
+}
+
+/// Carga sólo los Conceptos del pack del usuario — vista estrecha sobre
+/// [`load_user_escenario`] para el seeder del mundo (que no toca params).
+pub(crate) fn load_user_pack() -> Option<Conceptos> {
+    load_user_escenario().map(|e| e.conceptos)
 }

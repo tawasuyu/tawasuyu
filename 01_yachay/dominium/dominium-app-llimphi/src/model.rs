@@ -125,6 +125,24 @@ pub(crate) enum ParamSlot {
     ContagionRate,
     /// Umbral de homofilia (Fase B.2) — 0 = sin filtro.
     HomophilyThreshold,
+    // — Economía: los levers termodinámicos del flujo de energía. Deciden
+    //   si una población crece, se estabiliza o colapsa. Hasta ahora
+    //   hardcoded; expuestos para que el escenario guardado los capture.
+    /// Cantidad de materia que `Extraer` drena del suelo por acción.
+    ExtractRate,
+    /// Energía transferida por `Intercambiar`.
+    TradeAmount,
+    /// Fracción del espacio libre que la naturaleza repuebla por tick.
+    RegrowthRate,
+    /// Asíntota del regrowth: techo de materia por celda.
+    CarryingCapacity,
+    /// Drenaje basal de energía por tick a todo lemming vivo.
+    MetabolicCost,
+    /// Umbral de energía para que `Replicar` dispare.
+    ReplicateThreshold,
+    /// Umbral de abundancia por encima del cual el agente se fuerza a
+    /// `Replicar` (0 = desactiva la transición).
+    AbundanceThreshold,
 }
 
 impl ParamSlot {
@@ -147,6 +165,15 @@ impl ParamSlot {
             ParamSlot::ContagionRate => (0.0, 0.5),
             // Homofilia 0..2 — > sqrt(4) = 2 incluye todo el psi space.
             ParamSlot::HomophilyThreshold => (0.0, 2.0),
+            // Economía — rangos calibrados alrededor de los defaults del
+            // motor (ver `SimParams::default` / overrides de init).
+            ParamSlot::ExtractRate => (0.0, 6.0),
+            ParamSlot::TradeAmount => (0.0, 5.0),
+            ParamSlot::RegrowthRate => (0.0, 0.1),
+            ParamSlot::CarryingCapacity => (0.0, 100.0),
+            ParamSlot::MetabolicCost => (0.0, 0.5),
+            ParamSlot::ReplicateThreshold => (0.0, 100.0),
+            ParamSlot::AbundanceThreshold => (0.0, 150.0),
         }
     }
 }

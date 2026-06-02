@@ -378,6 +378,16 @@ fn append_mundo_tab(
     children.push(param_slider("season A", model.sim.params.season_amplitude, ParamSlot::SeasonAmplitude, slider_palette));
 
     children.push(separator(theme));
+    children.push(label_view("[ ECONOMÍA ]", 11.0, theme.fg_muted));
+    children.push(param_slider("extraer", model.sim.params.extract_rate, ParamSlot::ExtractRate, slider_palette));
+    children.push(param_slider("trueque", model.sim.params.trade_amount, ParamSlot::TradeAmount, slider_palette));
+    children.push(param_slider("regrowth", model.sim.params.regrowth_rate, ParamSlot::RegrowthRate, slider_palette));
+    children.push(param_slider("carga", model.sim.params.carrying_capacity, ParamSlot::CarryingCapacity, slider_palette));
+    children.push(param_slider("metabol", model.sim.params.metabolic_cost, ParamSlot::MetabolicCost, slider_palette));
+    children.push(param_slider("replica", model.sim.params.replicate_threshold, ParamSlot::ReplicateThreshold, slider_palette));
+    children.push(param_slider("abundan", model.sim.params.abundance_threshold, ParamSlot::AbundanceThreshold, slider_palette));
+
+    children.push(separator(theme));
     children.push(label_view("[ SCENARIO ]", 11.0, theme.fg_muted));
     let packs = scenario_packs();
     let (current_id, _) = packs[model.scenario_idx];

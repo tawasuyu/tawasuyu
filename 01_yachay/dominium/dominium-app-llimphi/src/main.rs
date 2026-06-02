@@ -49,7 +49,9 @@ use wawa_config_llimphi::theme_from_wawa;
 
 use crate::consts::{GRID, KMEANS_REFRESH_TICKS, SNAPSHOT_RING_CAP, TICK_MS, TRAIL_CAP};
 use crate::model::{Layer, Model, Msg, PanelTab, ParamSlot, ZSlot};
-use crate::packs::{default_conceptos, load_user_pack, save_user_pack, scenario_packs};
+use crate::packs::{
+    default_conceptos, load_user_escenario, save_user_escenario, scenario_packs,
+};
 use crate::sim::{
     lemming_color_for, mirror_zweights_to_relieve, overlay_trails, selected_mut, spawn_concepto_at,
 };
@@ -116,9 +118,35 @@ impl App for Dominium {
             abundance_threshold: 50.0,
             ..SimParams::default()
         };
+        // Relieve por bioma, recalibrado para los valores nuevos:
+        //   - mares  → z ≈ −15 (psique 200 × −0.075)
+        //   - llanura → z ≈ +1.6 (materia 80 × 0.02)
+        //   - colinas → z ≈ +6 (poder 15 × 0.4)
+        //   - picos  → z ≈ +21 (degradacion 16 × 1.3 + el resto)
+        let mut weights = ZWeights {
+            materia: 0.02,
+            psique: -0.075,
+            poder: 0.40,
+            oro: 0.0,
+            degradacion: 1.30,
+        };
+        // Si el usuario guardó un escenario rico, su sintonía gana sobre los
+        // defaults de arriba (los Conceptos ya entraron por `seed()` →
+        // `load_user_pack`). Packs históricos sólo traen Conceptos: dejan
+        // `params`/`weights` intactos. Ver `packs::Escenario`.
+        let mut params = params;
+        if let Some(esc) = load_user_escenario() {
+            if let Some(p) = esc.params {
+                params = p;
+            }
+            if let Some(w) = esc.weights {
+                weights = w;
+            }
+        }
         // Sesión de simulación: dominio + reloj + historia. El seeder
         // recarga el pack del usuario en cada reseed/colapso (igual que antes).
-        let sim = Sim::new(
+        let needs_psi5 = params.big_five;
+        let mut sim = Sim::new(
             seed(rng_seed),
             params,
             rng_seed,
@@ -128,6 +156,12 @@ impl App for Dominium {
             true,
             Box::new(|s| seed(s)),
         );
+        // El mundo recién sembrado nace Big Four (psi5 vacío); si el
+        // escenario guardado pide Big Five, rellenamos la quinta columna
+        // antes del primer tick.
+        if needs_psi5 {
+            sim.world.lemmings.ensure_psi5_len();
+        }
         Model {
             sim,
             // Scale 3.0 para que la grilla 240×240 entre en pantalla. z_factor
@@ -136,18 +170,7 @@ impl App for Dominium {
             // picos ~+30 px. La versión 0.35 anterior daba total ~9 px → el
             // mapa parecía plano por completo.
             iso: IsoProjector::new(3.0, 0.55),
-            // Relieve por bioma, recalibrado para valores nuevos:
-            //   - mares  → z ≈ −15 (psique 200 × −0.075)
-            //   - llanura → z ≈ +1.6 (materia 80 × 0.02)
-            //   - colinas → z ≈ +6 (poder 15 × 0.4)
-            //   - picos  → z ≈ +21 (degradacion 16 × 1.3 + el resto)
-            weights: ZWeights {
-                materia: 0.02,
-                psique: -0.075,
-                poder: 0.40,
-                oro: 0.0,
-                degradacion: 1.30,
-            },
+            weights,
             cfg: PlanConfig {
                 tile: 3.0,
                 lemming_size: 2.6,
@@ -291,6 +314,31 @@ impl App for Dominium {
                         m.sim.params.homophily_threshold =
                             (m.sim.params.homophily_threshold + dv).clamp(lo, hi)
                     }
+                    ParamSlot::ExtractRate => {
+                        m.sim.params.extract_rate = (m.sim.params.extract_rate + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::TradeAmount => {
+                        m.sim.params.trade_amount = (m.sim.params.trade_amount + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::RegrowthRate => {
+                        m.sim.params.regrowth_rate = (m.sim.params.regrowth_rate + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::CarryingCapacity => {
+                        m.sim.params.carrying_capacity =
+                            (m.sim.params.carrying_capacity + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::MetabolicCost => {
+                        m.sim.params.metabolic_cost =
+                            (m.sim.params.metabolic_cost + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::ReplicateThreshold => {
+                        m.sim.params.replicate_threshold =
+                            (m.sim.params.replicate_threshold + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::AbundanceThreshold => {
+                        m.sim.params.abundance_threshold =
+                            (m.sim.params.abundance_threshold + dv).clamp(lo, hi)
+                    }
                 }
             }
             Msg::EditZWeight(slot, dv) => {
@@ -306,10 +354,29 @@ impl App for Dominium {
                     mirror_zweights_to_relieve(&m.weights, &mut m.sim.params.relieve);
                 }
             }
-            Msg::GuardarPack => save_user_pack(&m.sim.world.conceptos),
+            Msg::GuardarPack => {
+                save_user_escenario(&m.sim.params, &m.weights, &m.sim.world.conceptos)
+            }
             Msg::CargarPack => {
-                if let Some(cs) = load_user_pack() {
-                    m.sim.world.conceptos = cs;
+                if let Some(esc) = load_user_escenario() {
+                    m.sim.world.conceptos = esc.conceptos;
+                    // Sintonía del motor: sólo se aplica si el pack la trae
+                    // (los packs históricos no, y entonces conservamos la
+                    // vigente). Si entra en Big Five, rellenamos psi5 antes
+                    // de que el tick consulte la quinta columna.
+                    if let Some(params) = esc.params {
+                        let needs_psi5 = params.big_five;
+                        m.sim.params = params;
+                        if needs_psi5 {
+                            m.sim.world.lemmings.ensure_psi5_len();
+                        }
+                    }
+                    if let Some(weights) = esc.weights {
+                        m.weights = weights;
+                        if m.sync_relieve {
+                            mirror_zweights_to_relieve(&m.weights, &mut m.sim.params.relieve);
+                        }
+                    }
                     for lock in m.sim.world.lemmings.hack_lock.iter_mut() {
                         *lock = 0;
                     }

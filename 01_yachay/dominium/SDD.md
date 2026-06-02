@@ -297,6 +297,25 @@ números son leyes.
   con 5 sliders (materia/psique/poder/oro/degradacion) en rango [-2, 2].
   Independiente del `relieve` físico de SimParams — el render puede
   mostrar una vista distinta de la altura que sienten los lemmings.
+- ~~Escenario serializable completo~~ — ✓ (2026-06-02). El pack del
+  usuario dejó de ser sólo `Conceptos`: ahora es un `Escenario`
+  `{ params: SimParams, weights: ZWeights, conceptos }` (en
+  `dominium-app-llimphi::packs`). "Guardar" persiste sintonía + relieve
+  visual + fichas; "Cargar" las restituye (con backfill de `psi5` si el
+  pack viene en Big Five). El parser tolera el formato histórico
+  (`{ "items": [...] }`) — discrimina por la clave `conceptos` — así los
+  packs viejos y los scenarios embebidos cargan sin cambios. La CLI lee el
+  mismo formato (`load_pack`): `run`/`repl` adoptan los `params` del
+  escenario como base (los flags estacionales/sociales del subcomando los
+  pisan), y `repl save` escribe el escenario rico. Reproducibilidad
+  headless verificada: tunear en la app → guardar → `dominium-cli run
+  --conceptos escenario.json` corre el mismo mundo, bit-exacto.
+- ~~Levers económicos editables~~ — ✓ (2026-06-02). Grupo `[ ECONOMÍA ]`
+  en el tab Mundo con 7 sliders nuevos: `extract_rate`, `trade_amount`,
+  `regrowth_rate`, `carrying_capacity`, `metabolic_cost`,
+  `replicate_threshold`, `abundance_threshold`. Son la termodinámica del
+  flujo de energía (lo que decide boom/equilibrio/colapso); estaban
+  hardcoded y ahora viajan en el `Escenario`.
 
 Ninguno de estos cambia la base del §1.
 
@@ -347,8 +366,10 @@ Esa es la spec. El §1 la materializa en código.
 
 ### Pendiente
 
-- Exponer `SimParams`/`ZWeights` restantes como datos editables/serializables
-  desde el panel (varios siguen hardcoded — §2).
+- Exponer los `SimParams` aún hardcoded restantes (cinéticos finos:
+  `move_speed`, `sync_rate`, `degr_per_extract`, `child_energy_frac`,
+  `fight_damage`, `absorb_frac`, `desperation_threshold`, `max_edad`) — los
+  levers económicos y de relieve ya son editables y serializables (2026-06-02).
 - Librería visual de sprites reales (hoy glifos opacos por índice).
 - Profundizar emergencia social documentada (packs de Conceptos "iglesia",
   "banco", etc.) como escenarios reproducibles.

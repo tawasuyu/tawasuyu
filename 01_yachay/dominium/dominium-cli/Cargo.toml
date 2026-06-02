@@ -15,5 +15,6 @@ path = "src/main.rs"
 dominium-core = { path = "../dominium-core" }
 dominium-physics = { path = "../dominium-physics" }
 clap = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
