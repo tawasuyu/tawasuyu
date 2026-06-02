@@ -46,6 +46,9 @@ pub enum BarItem {
     Clock,
     /// Etiqueta de volumen (porcentaje).
     VolumeLabel,
+    /// Slider de volumen con relleno graduable arrastrando el mouse (estilo
+    /// VLC): el `−`/`+` quedan a los lados como pasos discretos.
+    VolumeSlider,
     /// Título del medio en reproducción.
     Title,
     /// Separador elástico que empuja a los vecinos (alinear a izq/der).
@@ -77,6 +80,7 @@ impl BarItem {
         BarItem::Timeline,
         BarItem::Clock,
         BarItem::VolumeLabel,
+        BarItem::VolumeSlider,
         BarItem::Title,
         BarItem::Spacer,
     ];
@@ -105,6 +109,7 @@ impl BarItem {
             BarItem::Timeline => "timeline",
             BarItem::Clock => "clock",
             BarItem::VolumeLabel => "volume_label",
+            BarItem::VolumeSlider => "volume_slider",
             BarItem::Title => "title",
             BarItem::Spacer => "spacer",
         }
@@ -134,6 +139,7 @@ impl BarItem {
             BarItem::Timeline => "Línea de tiempo",
             BarItem::Clock => "Reloj",
             BarItem::VolumeLabel => "Etiqueta volumen",
+            BarItem::VolumeSlider => "Barra de volumen",
             BarItem::Title => "Título",
             BarItem::Spacer => "Separador",
         }
@@ -177,7 +183,7 @@ impl Default for Toolbar {
                 Bar::new(vec![
                     PlayPause, Prev, Next, SeekBack, SeekForward, Spacer, Clock, Spacer,
                     Repeat, Shuffle, SpeedDown, SpeedReset, SpeedUp, Spacer, VolumeDown,
-                    VolumeLabel, VolumeUp, Equalizer, Snapshot, Record, Settings,
+                    VolumeSlider, VolumeUp, VolumeLabel, Equalizer, Snapshot, Record, Settings,
                 ]),
             ],
         }

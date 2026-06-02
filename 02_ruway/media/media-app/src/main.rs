@@ -74,7 +74,9 @@ use llimphi_icons::{icon_view, Icon};
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{self, TextBlock};
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_ui::{
+    App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
+};
 use media_audio_cpal::AudioSink;
 use media_core::{
     AudioProbe, AudioSource, FrameSource, Levels, MixerAudio, Pause, PausableAudio,
@@ -98,6 +100,7 @@ use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
 };
 use llimphi_widget_timeline::{timeline_view, TimelinePalette};
+use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
@@ -3749,6 +3752,34 @@ fn bar_item_view(item: BarItem) -> View<Msg> {
             76.0,
             Color::from_rgba8(180, 195, 215, 255),
         ),
+        BarItem::VolumeSlider => {
+            // Barra de volumen graduable arrastrando el mouse (0–200%). El
+            // widget reporta el delta de valor; lo mandamos como VolumeBy, así
+            // el `−`/`+` de los lados y el arrastre comparten el mismo camino.
+            let mut pal = SliderPalette::from_theme(&llimphi_theme::Theme::dark());
+            pal.label_width = 0.0; // sin bloque de etiqueta
+            pal.value_width = 0.0; // sin bloque de valor (lo da VolumeLabel)
+            pal.track_width = 120.0;
+            pal.row_height = 34.0;
+            pal.track_thickness = 8.0;
+            View::new(Style {
+                size: Size { width: length(128.0_f32), height: length(34.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .children(vec![slider_view::<Msg, _>(
+                "",
+                volume().get(),
+                0.0,
+                2.0,
+                &pal,
+                |phase, delta| match phase {
+                    DragPhase::Move => Some(Msg::Command(VolumeBy { delta })),
+                    DragPhase::End => None,
+                },
+            )])
+        }
         BarItem::Title => {
             bar_label(media_title_string(), 300.0, Color::from_rgba8(200, 212, 230, 255))
         }
