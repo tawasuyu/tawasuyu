@@ -254,6 +254,35 @@ fn parse_into(src: &str, cap: usize) -> Result<(MapData, bool), String> {
     Ok((data, budget == 0))
 }
 
+/// Nombres de campos numéricos presentes en las features, en orden de primera
+/// aparición y sin repetir. Para que el host cicle el campo de choropleth.
+pub fn numeric_fields(data: &MapData) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in &data.features {
+        for (k, _) in &f.numbers {
+            if !out.iter().any(|o| o == k) {
+                out.push(k.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Color de una posición `t ∈ [0,1]` en una escala secuencial azul→ámbar→rojo
+/// (legible y con buen contraste sobre fondo oscuro o claro).
+fn scale_color(t: f64) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    // Tres paradas: azul (40,110,200) → ámbar (240,200,70) → rojo (210,60,50).
+    let stops = [(40.0, 110.0, 200.0), (240.0, 200.0, 70.0), (210.0, 60.0, 50.0)];
+    let (a, b, local) = if t < 0.5 {
+        (stops[0], stops[1], t / 0.5)
+    } else {
+        (stops[1], stops[2], (t - 0.5) / 0.5)
+    };
+    let lerp = |x: f64, y: f64| (x + (y - x) * local).round().clamp(0.0, 255.0) as u8;
+    Color::from_rgba8(lerp(a.0, b.0), lerp(a.1, b.1), lerp(a.2, b.2), 255)
+}
+
 /// Parsea GPX (XML de GPS): waypoints (`<wpt>`) → puntos, rutas (`<rte>`) y
 /// segmentos de track (`<trkseg>`) → polilíneas. Los `<name>` de waypoints,
 /// rutas y tracks se vuelven etiquetas. Tolerante: ignora lo que no entiende.
@@ -838,6 +867,9 @@ pub struct MapView {
     pub show_base: bool,
     /// Índice de la feature seleccionada (clic) en `MapData.features`, si la hay.
     pub selected: Option<usize>,
+    /// Campo numérico por el que colorear los polígonos (choropleth). `None`
+    /// = relleno uniforme.
+    pub color_field: Option<String>,
     rect: Arc<Mutex<Option<(f32, f32, f32, f32)>>>,
 }
 
@@ -848,6 +880,7 @@ impl Default for MapView {
             pan: (0.0, 0.0),
             show_base: true,
             selected: None,
+            color_field: None,
             rect: Arc::new(Mutex::new(None)),
         }
     }
@@ -1222,6 +1255,7 @@ where
     let pan = view.pan;
     let show_base = view.show_base;
     let selected = view.selected;
+    let color_field = view.color_field.clone();
     View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -1325,13 +1359,34 @@ where
             draw_block(scene, ts, &block);
         }
 
-        // Polígonos: relleno translúcido del contorno exterior + borde de
-        // cada anillo.
-        for poly in &data.polygons {
+        // Choropleth: si hay campo de color activo, rango [min,max] del valor
+        // a través de las features (para mapear cada polígono a un color).
+        let choro = color_field.as_deref().and_then(|field| {
+            let mut lo = f64::INFINITY;
+            let mut hi = f64::NEG_INFINITY;
+            for f in &data.features {
+                if let Some(v) = f.number(field) {
+                    lo = lo.min(v);
+                    hi = hi.max(v);
+                }
+            }
+            (hi > lo).then_some((field, lo, hi))
+        });
+
+        // Polígonos: relleno (choropleth o translúcido uniforme) + borde.
+        for (pi, poly) in data.polygons.iter().enumerate() {
+            // Color de relleno del polígono según el choropleth, si aplica.
+            let fill = choro
+                .and_then(|(field, lo, hi)| {
+                    let fi = *data.polygon_feat.get(pi)?;
+                    let v = data.features.get(fi)?.number(field)?;
+                    Some(with_alpha(scale_color((v - lo) / (hi - lo)), 0.62))
+                })
+                .unwrap_or(fill_col);
             for (i, ring) in poly.iter().enumerate() {
                 let path = ring_path(ring, &to_screen, true);
                 if i == 0 {
-                    scene.fill(Fill::NonZero, Affine::IDENTITY, fill_col, None, &path);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &path);
                 }
                 scene.stroke(&stroke_edge, Affine::IDENTITY, palette.stroke, None, &path);
             }
@@ -1437,11 +1492,64 @@ where
             &TextBlock::simple(&fmt_distance(nice_km), 9.0, furn, (bx, by - 17.0)),
         );
 
+        // --- Leyenda del choropleth (abajo-derecha) ------------------
+        if let Some((field, lo, hi)) = choro {
+            draw_legend(scene, ts, (rx, ry, rw, rh), furn, field, lo, hi);
+        }
+
         // --- Panel de propiedades de la feature seleccionada ---------
         if let Some(fp) = selected.and_then(|fi| data.features.get(fi)) {
             draw_props_panel(scene, ts, (rx, ry, rw, rh), &palette, fp);
         }
     })
+}
+
+/// Dibuja la leyenda del choropleth (abajo-derecha): nombre del campo, barra
+/// de gradiente azul→ámbar→rojo y el rango `lo – hi`.
+fn draw_legend(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    ts: &mut llimphi_ui::llimphi_text::Typesetter,
+    rect: (f64, f64, f64, f64),
+    color: Color,
+    field: &str,
+    lo: f64,
+    hi: f64,
+) {
+    use llimphi_ui::llimphi_raster::kurbo::Rect as KRect;
+    let (rx, ry, rw, rh) = rect;
+    let lw = 130.0_f64.min(rw - 24.0);
+    if lw < 60.0 {
+        return;
+    }
+    let lx = rx + rw - lw - 12.0;
+    let ly = ry + rh - 34.0;
+    let segs = 24;
+    let seg_w = lw / segs as f64;
+    for s in 0..segs {
+        let t = (s as f64 + 0.5) / segs as f64;
+        let x0 = lx + s as f64 * seg_w;
+        let bar = KRect::new(x0, ly, x0 + seg_w + 0.6, ly + 8.0);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, scale_color(t), None, &bar);
+    }
+    scene.stroke(
+        &Stroke::new(0.8),
+        Affine::IDENTITY,
+        color,
+        None,
+        &KRect::new(lx, ly, lx + lw, ly + 8.0),
+    );
+    draw_block(scene, ts, &TextBlock::simple(&clip_text(field, 26), 9.0, color, (lx, ly - 12.0)));
+    let range = format!("{} – {}", fmt_num(lo), fmt_num(hi));
+    draw_block(scene, ts, &TextBlock::simple(&range, 8.5, color, (lx, ly + 9.0)));
+}
+
+/// Formatea un número: entero si es exacto, dos decimales si no.
+fn fmt_num(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v:.2}")
+    }
 }
 
 /// Dibuja un panel con las propiedades de la feature seleccionada en el
@@ -2059,6 +2167,36 @@ mod tests {
         assert!(fp.props.iter().any(|(k, v)| k == "activo" && v == "true"));
         // El punto apunta a esa feature.
         assert_eq!(d.point_feat, vec![0]);
+    }
+
+    #[test]
+    fn numeric_fields_distintos_en_orden() {
+        let d = data_of(
+            r#"{"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":{"pop":10,"gdp":5,"name":"a"},"geometry":{"type":"Point","coordinates":[0,0]}},
+                {"type":"Feature","properties":{"pop":20,"area":3},"geometry":{"type":"Point","coordinates":[1,1]}}
+            ]}"#,
+        );
+        // `name` no es numérico; los demás aparecen una vez (el orden lo fija
+        // serde_json, que ordena claves).
+        let fields = numeric_fields(&d);
+        assert_eq!(fields.len(), 3);
+        for f in ["pop", "gdp", "area"] {
+            assert!(fields.iter().any(|x| x == f), "falta {f} en {fields:?}");
+        }
+        assert!(!fields.iter().any(|x| x == "name"));
+    }
+
+    #[test]
+    fn scale_color_extremos_y_medio() {
+        // Azul en 0, rojo en 1, ámbar al medio (sin pánico en bordes).
+        let lo = scale_color(0.0).to_rgba8();
+        let hi = scale_color(1.0).to_rgba8();
+        assert!(lo.b > lo.r); // azulado
+        assert!(hi.r > hi.b); // rojizo
+        let _ = scale_color(0.5);
+        // fuera de rango se acota.
+        assert_eq!(scale_color(-1.0).to_rgba8().b, scale_color(0.0).to_rgba8().b);
     }
 
     #[test]

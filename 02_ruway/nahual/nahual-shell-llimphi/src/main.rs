@@ -200,6 +200,8 @@ enum Msg {
     MapToggleBase,
     /// Clic sobre el mapa: `(fx, fy)` fracción del rect → selecciona feature.
     MapClick(f32, f32),
+    /// Cicla el campo numérico de coloreo (choropleth) del mapa.
+    MapCycleColor,
     /// Drag del divisor — positivo = lista crece.
     ResizeList(f32),
     /// El bus `wawa-config` publicó una versión nueva.
@@ -315,6 +317,9 @@ impl App for Shell {
             Key::Character(c) if c == "b" && matches!(_model.preview, PreviewPane::Map(_)) => {
                 Some(Msg::MapToggleBase)
             }
+            Key::Character(c) if c == "c" && matches!(_model.preview, PreviewPane::Map(_)) => {
+                Some(Msg::MapCycleColor)
+            }
             _ => None,
         }
     }
@@ -396,6 +401,7 @@ impl App for Shell {
                                     m.preview_of = Some(path);
                                     m.preview_temp = None;
                                     m.map_view.reset();
+                                    m.map_view.color_field = None;
                                 }
                             }
                         }
@@ -448,6 +454,12 @@ impl App for Shell {
                         fx as f64,
                         fy as f64,
                     );
+                }
+            }
+            Msg::MapCycleColor => {
+                if let PreviewPane::Map(MapPreview::Map { data, .. }) = &m.preview {
+                    let fields = nahual_map_viewer_llimphi::numeric_fields(data);
+                    m.map_view.color_field = next_in_cycle(&fields, &m.map_view.color_field);
                 }
             }
             Msg::WawaConfigChanged(cfg) => {
@@ -1003,6 +1015,20 @@ fn navigator_list_view(nav: &Navigator, palette: ListPalette) -> View<Msg> {
 }
 
 /// Releé el preview del entry seleccionado tras un cambio de selección.
+/// Avanza el campo de choropleth: `None → campo₀ → campo₁ → … → None`.
+fn next_in_cycle(fields: &[String], current: &Option<String>) -> Option<String> {
+    if fields.is_empty() {
+        return None;
+    }
+    match current {
+        None => fields.first().cloned(),
+        Some(c) => match fields.iter().position(|f| f == c) {
+            Some(i) if i + 1 < fields.len() => Some(fields[i + 1].clone()),
+            _ => None,
+        },
+    }
+}
+
 /// Si es directorio, limpia; si es archivo, lo carga sync con el
 /// viewer apropiado según extensión.
 fn refresh_preview(m: &mut Model) {
@@ -1023,8 +1049,10 @@ fn refresh_preview(m: &mut Model) {
     };
     m.preview = load_for(&path);
     m.preview_of = Some(path);
-    // Encuadre fresco para el nuevo archivo (si fuera un mapa).
+    // Encuadre fresco para el nuevo archivo (si fuera un mapa); los campos de
+    // color son del archivo anterior, así que se descartan.
     m.map_view.reset();
+    m.map_view.color_field = None;
 }
 
 /// Decide qué viewer usar discerniendo el **contenido** del archivo (no
