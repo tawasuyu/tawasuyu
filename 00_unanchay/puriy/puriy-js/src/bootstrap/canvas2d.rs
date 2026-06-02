@@ -214,11 +214,19 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     // (color CSS) o un objeto CanvasGradient (con _kind/_coords/_stops).
     C._snapshot = function() {
         var st = this._state;
-        return {
+        var snap = {
             f: serStyle(st.fillStyle), s: serStyle(st.strokeStyle), lw: st.lineWidth, ga: st.globalAlpha,
             fnt: st.font, lc: st.lineCap, lj: st.lineJoin, ta: st.textAlign, tb: st.textBaseline,
             ld: st.lineDash, ldo: st.lineDashOffset
         };
+        // Fase 7.199 — sombra: sólo se apende si está activa (blur o offset),
+        // para no engordar cada snapshot con el default transparente. El chrome
+        // valida además que el color de sombra no sea totalmente transparente.
+        var sb = st.shadowBlur || 0, sox = st.shadowOffsetX || 0, soy = st.shadowOffsetY || 0;
+        if (st.shadowColor && (sb > 0 || sox !== 0 || soy !== 0)) {
+            snap.sc = st.shadowColor; snap.sb = sb; snap.sox = sox; snap.soy = soy;
+        }
+        return snap;
     };
 
     C.save = function() {

@@ -5440,6 +5440,25 @@ fn canvas_color(v: Option<&serde_json::Value>, ga: f64) -> Color {
     Color::from_rgba8(base.r, base.g, base.b, a)
 }
 
+/// Lee el estado de sombra del snapshot (`sc`/`sb`/`sox`/`soy`) y lo resuelve a
+/// `(color, blur, offX, offY)`, multiplicando el alpha del color por `ga`
+/// (globalAlpha). Devuelve `None` si la sombra está inactiva: sin campo `sc`,
+/// color totalmente transparente, o blur 0 y ambos offsets en 0. Fase 7.199.
+fn canvas_shadow(st: Option<&serde_json::Value>, ga: f64) -> Option<(Color, f64, f64, f64)> {
+    let col = style_str(st, "sc").and_then(|s| puriy_engine::parse_color(&s))?;
+    if col.a == 0 {
+        return None;
+    }
+    let blur = style_field(st, "sb").unwrap_or(0.0).max(0.0);
+    let ox = style_field(st, "sox").unwrap_or(0.0);
+    let oy = style_field(st, "soy").unwrap_or(0.0);
+    if blur <= 0.0 && ox == 0.0 && oy == 0.0 {
+        return None;
+    }
+    let a = ((col.a as f64) * ga).clamp(0.0, 255.0) as u8;
+    Some((Color::from_rgba8(col.r, col.g, col.b, a), blur, ox, oy))
+}
+
 /// Recolecta (recursivamente, deduplicando contra `out`) los `src` de los
 /// descriptores de patrón `{_pattern:true, src, rep}` que `createPattern`
 /// inyecta en los snapshots de estilo. Se reusa el mismo mapa de imágenes
@@ -5702,11 +5721,13 @@ fn render_canvas(
 /// transforms (save/restore/translate/scale/rotate/transform/setTransform/
 /// resetTransform/beginPath), globalAlpha, gradientes REALES (linear/radial/
 /// conic→sweep) en fill/stroke/rect, `clip` (recorte por path, balanceado con
-/// save/restore), line dash/cap/join (Fase 7.197) y `drawImage` de imágenes
-/// decodificadas (Fase 7.197b, vía el mapa `images` keyeado por `src`).
-/// Limitaciones: putImageData, patrones, sombras, clearRect parcial y el
-/// `globalAlpha` sobre drawImage quedan fuera; el texto con gradiente degrada a
-/// color sólido (el typesetter sólo toma `Color`).
+/// save/restore), line dash/cap/join (Fase 7.197), `drawImage` de imágenes
+/// decodificadas (Fase 7.197b, vía el mapa `images` keyeado por `src`),
+/// patrones `createPattern` (Fase 7.198) y sombras `shadow*` (Fase 7.199:
+/// `fillRect` con blur gaussiano real, el resto silueta desplazada).
+/// Limitaciones: putImageData, clearRect parcial, `globalCompositeOperation` y
+/// el `globalAlpha`/sombra sobre drawImage quedan fuera; el texto con gradiente
+/// degrada a color sólido (el typesetter sólo toma `Color`).
 fn paint_canvas_cmds(
     scene: &mut llimphi_raster::vello::Scene,
     ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -5822,6 +5843,10 @@ fn paint_canvas_cmds(
             "fill" => {
                 let st = cmd.get(1);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
+                if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
+                    let sxf = base * cur * Affine::translate((ox, oy));
+                    scene.fill(Fill::NonZero, sxf, &Brush::Solid(col), None, &path);
+                }
                 let brush = canvas_brush(style_color(st, "f").as_ref(), ga, images);
                 scene.fill(Fill::NonZero, base * cur, &brush, None, &path);
             }
@@ -5829,8 +5854,13 @@ fn paint_canvas_cmds(
                 let st = cmd.get(1);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
+                let stroke = canvas_stroke(st, lw);
+                if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
+                    let sxf = base * cur * Affine::translate((ox, oy));
+                    scene.stroke(&stroke, sxf, &Brush::Solid(col), None, &path);
+                }
                 let brush = canvas_brush(style_color(st, "s").as_ref(), ga, images);
-                scene.stroke(&canvas_stroke(st, lw), base * cur, &brush, None, &path);
+                scene.stroke(&stroke, base * cur, &brush, None, &path);
             }
             "clip" => {
                 // Recorta el dibujo posterior al path actual. La capa se cierra
@@ -5845,17 +5875,28 @@ fn paint_canvas_cmds(
             "fillRect" => {
                 // ['fillRect', x, y, w, h, fillStyle, snapshot]
                 let ga = style_field(cmd.get(6), "ga").unwrap_or(1.0);
-                let brush = canvas_brush(cmd.get(5), ga, images);
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
+                // Sombra REAL blureada (gaussiana) — el caso estrella (cards,
+                // botones): rect desplazado por (ox,oy), std_dev = blur/2.
+                if let Some((col, blur, ox, oy)) = canvas_shadow(cmd.get(6), ga) {
+                    let sr = KurboRect::new(a(1) + ox, a(2) + oy, a(1) + a(3) + ox, a(2) + a(4) + oy);
+                    scene.draw_blurred_rounded_rect(base * cur, sr, col, 0.0, (blur * 0.5).max(0.0));
+                }
+                let brush = canvas_brush(cmd.get(5), ga, images);
                 scene.fill(Fill::NonZero, base * cur, &brush, None, &r);
             }
             "strokeRect" => {
                 let st = cmd.get(6);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
-                let brush = canvas_brush(cmd.get(5), ga, images);
+                let stroke = canvas_stroke(st, lw);
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
-                scene.stroke(&canvas_stroke(st, lw), base * cur, &brush, None, &r);
+                if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
+                    let sxf = base * cur * Affine::translate((ox, oy));
+                    scene.stroke(&stroke, sxf, &Brush::Solid(col), None, &r);
+                }
+                let brush = canvas_brush(cmd.get(5), ga, images);
+                scene.stroke(&stroke, base * cur, &brush, None, &r);
             }
             "fillText" | "strokeText" => {
                 // ['fillText', text, x, y, maxWidth, snapshot]
@@ -5887,6 +5928,12 @@ fn paint_canvas_cmds(
                     _ => 0.0,
                 };
                 let ascent = (px as f64) * 0.8;
+                // Sombra de texto: los glifos reales en color de sombra,
+                // desplazados (blur crisp — el typesetter sólo toma Color).
+                if let Some((scol, _b, ox, oy)) = canvas_shadow(st, ga) {
+                    let sxf = base * cur * Affine::translate((x + dx + ox, y - ascent + oy));
+                    llimphi_ui::llimphi_text::draw_layout_xf(scene, &layout, scol, sxf);
+                }
                 let xf = base * cur * Affine::translate((x + dx, y - ascent));
                 llimphi_ui::llimphi_text::draw_layout_xf(scene, &layout, color, xf);
             }
@@ -8948,6 +8995,97 @@ mod tests {
         let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
         paint_canvas_cmds(&mut scene, &mut ts, rect, &frame.cmds, 100.0, 100.0, &images);
         assert!(!scene.encoding().is_empty(), "el patrón debería pintar");
+    }
+
+    #[test]
+    fn canvas_shadow_lee_estado() {
+        // Sin campo `sc` → None.
+        let plain: serde_json::Value = serde_json::from_str(r#"{"ga":1.0}"#).unwrap();
+        assert!(canvas_shadow(Some(&plain), 1.0).is_none());
+        // Color totalmente transparente → None (aunque haya blur/offset).
+        let transp: serde_json::Value =
+            serde_json::from_str(r#"{"sc":"rgba(0,0,0,0)","sb":5,"sox":2,"soy":2}"#).unwrap();
+        assert!(canvas_shadow(Some(&transp), 1.0).is_none());
+        // Blur 0 + ambos offsets 0 → inactiva.
+        let inactive: serde_json::Value =
+            serde_json::from_str(r##"{"sc":"#000","sb":0,"sox":0,"soy":0}"##).unwrap();
+        assert!(canvas_shadow(Some(&inactive), 1.0).is_none());
+        // Activa: blur 4, offset (3,5); ga 0.5 reduce el alpha del color.
+        let active: serde_json::Value =
+            serde_json::from_str(r#"{"sc":"rgba(0,0,0,1)","sb":4,"sox":3,"soy":5}"#).unwrap();
+        let (col, blur, ox, oy) = canvas_shadow(Some(&active), 0.5).expect("sombra activa");
+        assert_eq!((blur, ox, oy), (4.0, 3.0, 5.0));
+        assert!((col.components[3] - 0.5).abs() < 0.02, "alpha ~0.5, got {}", col.components[3]);
+    }
+
+    #[test]
+    fn paint_canvas_cmds_sombra_agrega_draw() {
+        // Un fillRect con sombra encoda MÁS draw objects que sin sombra (la
+        // sombra blureada es un draw extra vía draw_blurred_rounded_rect).
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let imgs: std::collections::HashMap<String, PenikoImage> =
+            std::collections::HashMap::new();
+        let sin: Vec<Vec<serde_json::Value>> =
+            serde_json::from_str(r##"[["fillRect",10,10,40,40,"#ff0000",{"ga":1.0}]]"##).unwrap();
+        let con: Vec<Vec<serde_json::Value>> = serde_json::from_str(
+            r##"[["fillRect",10,10,40,40,"#ff0000",{"ga":1.0,"sc":"rgba(0,0,0,1)","sb":6,"sox":4,"soy":4}]]"##,
+        )
+        .unwrap();
+        let mut s1 = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut s1, &mut ts, rect, &sin, 100.0, 100.0, &imgs);
+        let mut s2 = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut s2, &mut ts, rect, &con, 100.0, 100.0, &imgs);
+        assert!(
+            s2.encoding().draw_tags.len() > s1.encoding().draw_tags.len(),
+            "la sombra debería agregar un draw object: {} vs {}",
+            s2.encoding().draw_tags.len(),
+            s1.encoding().draw_tags.len()
+        );
+    }
+
+    #[test]
+    fn sombra_llega_al_frame_end_to_end() {
+        // ctx.shadow* + fillRect → el snapshot del fillRect lleva sc/sb/sox/soy
+        // y canvas_shadow lo resuelve. Fase 7.199.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.url = "about:test".into();
+        t.box_tree = Some(parse(
+            r#"<body><canvas id="c" width="100" height="100"></canvas></body>"#,
+        ));
+        t.has_canvas = true;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "c".into(),
+            tag_name: "canvas".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: vec![("width".into(), "100".into()), ("height".into(), "100".into())],
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        rt.eval(
+            "var ctx=document.getElementById('c').getContext('2d');\
+             ctx.shadowColor='rgba(0,0,0,0.7)'; ctx.shadowBlur=8;\
+             ctx.shadowOffsetX=4; ctx.shadowOffsetY=4;\
+             ctx.fillStyle='#3366ff'; ctx.fillRect(20,20,40,40);",
+        )
+        .expect("draw");
+        apply_dom_mutations(t);
+        let frame = t.canvas_frames.get("c").expect("frame");
+        let fr = frame
+            .cmds
+            .iter()
+            .find(|c| c.first().and_then(|v| v.as_str()) == Some("fillRect"))
+            .expect("fillRect");
+        assert_eq!(fr[6].get("sc").and_then(|v| v.as_str()), Some("rgba(0,0,0,0.7)"));
+        assert_eq!(fr[6].get("sb").and_then(|v| v.as_f64()), Some(8.0));
+        assert_eq!(fr[6].get("sox").and_then(|v| v.as_f64()), Some(4.0));
+        assert!(canvas_shadow(Some(&fr[6]), 1.0).is_some(), "la sombra debería resolverse");
     }
 
     #[test]
