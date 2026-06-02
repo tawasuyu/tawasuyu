@@ -61,7 +61,9 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 };
 
 use llimphi_theme::Theme;
-use llimphi_ui::llimphi_compositor::{hit_test_click, measure_text_node, mount, paint, Mounted};
+use llimphi_ui::llimphi_compositor::{
+    hit_test_click, hit_test_scroll, measure_text_node, mount, paint, Mounted,
+};
 use llimphi_ui::llimphi_hal::{wgpu, Hal, RawSurface, Surface as _};
 use llimphi_ui::llimphi_layout::{taffy, ComputedLayout, LayoutTree};
 use llimphi_ui::llimphi_raster::{peniko::color::palette, vello, Renderer};
@@ -552,6 +554,11 @@ impl LayerApp {
         // La barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el
         // resto pinta su barra normal.
         let view = if self.shuma_panel == Some(pi) && self.shuma.open {
+            // Viewport del historial: la surface menos la barra, la línea de
+            // input y los paddings. Lo cacheamos para que el clamp del scroll
+            // en `update` (rueda/arrastre) sea exacto.
+            let vh = (h as f32 - self.shuma_bar_px as f32 - 60.0).max(40.0);
+            self.shuma.viewport_h = vh;
             render::shuma_open_view(
                 &self.cfg.surfaces[idx],
                 &self.surfaces[idx],
@@ -559,6 +566,7 @@ impl LayerApp {
                 &data,
                 &self.theme,
                 self.shuma_bar_px as f32,
+                vh,
             )
         } else {
             render::bar_view(
@@ -641,6 +649,10 @@ impl LayerApp {
                     b.collapsed = !b.collapsed;
                     self.marcar_shuma_dirty();
                 }
+            }
+            Msg::ShumaScroll(delta) => {
+                self.shuma.scroll_by(delta);
+                self.marcar_shuma_dirty();
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
             Msg::ActivateWindow(id) => self.activar_ventana(id),
@@ -897,6 +909,31 @@ impl PointerHandler for LayerApp {
         events: &[PointerEvent],
     ) {
         for e in events {
+            // Rueda sobre el historial del drawer: el nodo de scroll bajo el
+            // cursor consume el delta y emite `ShumaScroll`. Convención de
+            // signo igual que llimphi-ui (wayland y winit traen el eje y con
+            // signos opuestos, así que acá NO se niega).
+            if let PointerEventKind::Axis { vertical, .. } = e.kind {
+                let dy = if vertical.discrete != 0 {
+                    vertical.discrete as f32
+                } else {
+                    vertical.absolute as f32 / 20.0
+                };
+                if dy != 0.0 {
+                    let (px, py) = (e.position.0 as f32, e.position.1 as f32);
+                    if let Some(pi) = self.panel_de(&e.surface) {
+                        let msg = self.panels[pi].cache.as_ref().and_then(|c| {
+                            hit_test_scroll(&c.mounted, &c.computed, px, py)
+                                .and_then(|i| c.mounted.nodes.get(i))
+                                .and_then(|n| n.on_scroll.as_ref().and_then(|h| h(0.0, dy)))
+                        });
+                        if let Some(msg) = msg {
+                            self.handle_msg(msg);
+                        }
+                    }
+                }
+                continue;
+            }
             if let PointerEventKind::Press { button, .. } = e.kind {
                 if button != BTN_LEFT {
                     continue;

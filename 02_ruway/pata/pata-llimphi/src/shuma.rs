@@ -18,6 +18,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::View;
 
+use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use pata_core::WidgetSpec;
 use shuma_line::{split_pipeline, tokenize, Dialect};
 
@@ -114,6 +115,13 @@ pub struct ShumaState {
     pub blocks: Vec<DrawerBlock>,
     /// `true` mientras el comando corre en segundo plano.
     pub pending: bool,
+    /// Desplazamiento del historial, en px desde arriba (0 = la card más
+    /// vieja al tope; el máximo deja la más nueva pegada al fondo). El render
+    /// lo acota; al lanzar/terminar un comando salta al fondo.
+    pub scroll: f32,
+    /// Alto del viewport del historial en px — lo cachea el backend en cada
+    /// render para que el clamp del scroll (en `update`) sea exacto.
+    pub viewport_h: f32,
     /// Hotkey que abre/cierra el drawer (de la prop `hotkey`), o `None`.
     pub hotkey: Option<String>,
     /// Prompt al frente del input (`›`, `$`, …).
@@ -127,9 +135,54 @@ pub struct ShumaState {
     pub present: bool,
 }
 
+/// Métricas de layout del historial, en px — deben seguir al render
+/// (`card_view`) para que el alto estimado sea fiel y el scroll acote bien.
+const HEADER_H: f32 = 22.0;
+const LINE_H: f32 = 18.0;
+const CARD_GAP: f32 = 10.0;
+const BODY_GAP: f32 = 2.0;
+
 impl ShumaState {
     /// Tope de cards en el historial — más allá, las viejas se descartan.
     const MAX_BLOCKS: usize = 12;
+
+    /// Alto total estimado del historial, en px — base del clamp del scroll y
+    /// de la barra. Estimado desde el modelo con [`HEADER_H`]/[`LINE_H`] (el
+    /// render no devuelve medidas); fiel mientras `card_view` no cambie.
+    pub fn content_height(&self) -> f32 {
+        if self.blocks.is_empty() {
+            return LINE_H; // la pista de uso
+        }
+        let mut h = 0.0;
+        for b in &self.blocks {
+            h += HEADER_H;
+            if !b.collapsed {
+                let mut lines = b.lines.len();
+                if b.exit.is_none() {
+                    lines += 1; // la línea "…"
+                }
+                if matches!(b.exit, Some(c) if c != 0) {
+                    lines += 1; // el footer "exit N"
+                }
+                h += lines as f32 * LINE_H + BODY_GAP;
+            }
+            h += CARD_GAP;
+        }
+        h
+    }
+
+    /// Suma `delta` px al scroll y lo acota al viewport cacheado. Lo llama el
+    /// `update` al recibir la rueda o el arrastre de la barra.
+    pub fn scroll_by(&mut self, delta: f32) {
+        self.scroll = clamp_offset(self.scroll + delta, self.content_height(), self.viewport_h);
+    }
+
+    /// Pega el scroll al fondo (la card más nueva). Se llama al lanzar y al
+    /// terminar un comando para que la salida fresca quede a la vista; el
+    /// render lo acota al máximo real.
+    fn pin_bottom(&mut self) {
+        self.scroll = self.content_height();
+    }
 
     /// Empuja una card nueva en estado «corriendo» para `cmd` (con sus etapas
     /// de pipe ya resueltas) y marca el drawer como pendiente. Acota el
@@ -148,6 +201,7 @@ impl ShumaState {
             self.blocks.drain(0..drop);
         }
         self.pending = true;
+        self.pin_bottom();
     }
 
     /// Rellena la última card (la pendiente) con el resultado de la corrida.
@@ -157,6 +211,7 @@ impl ShumaState {
             b.lines = res.lines;
             b.exit = res.exit;
         }
+        self.pin_bottom();
     }
 }
 
@@ -167,6 +222,8 @@ impl Default for ShumaState {
             buffer: String::new(),
             blocks: Vec::new(),
             pending: false,
+            scroll: 0.0,
+            viewport_h: 300.0,
             hotkey: None,
             prompt: "›".into(),
             placeholder: "shuma".into(),
@@ -277,8 +334,9 @@ pub fn drawer_overlay(state: &ShumaState, screen: (i32, i32), theme: &Theme) -> 
         ])
     };
 
-    // Cuerpo: las cards del historial (paridad con el shell de shuma).
-    let cuerpo = blocks_view(state, theme);
+    // Cuerpo: las cards del historial (paridad con el shell de shuma). El
+    // viewport es el panel menos la línea de input y los paddings.
+    let cuerpo = blocks_view(state, theme, (alto - 76.0).max(40.0));
 
     let panel = View::new(Style {
         position: Position::Absolute,
@@ -336,7 +394,7 @@ pub fn drawer_overlay(state: &ShumaState, screen: (i32, i32), theme: &Theme) -> 
 /// layer surface ya *es* el panel del Quake (la barra crece hacia arriba), así
 /// que no hace falta scrim ni animación. Línea de input (prompt + buffer +
 /// cursor) arriba, salida del último comando debajo.
-pub fn drawer_body_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
+pub fn drawer_body_view(state: &ShumaState, theme: &Theme, viewport_h: f32) -> View<Msg> {
     let mut buf = state.buffer.clone();
     buf.push('▏'); // cursor
     let linea = View::new(Style {
@@ -357,7 +415,7 @@ pub fn drawer_body_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
         chip_text(&buf, 16.0, theme.fg_text),
     ]);
 
-    let cuerpo = blocks_view(state, theme);
+    let cuerpo = blocks_view(state, theme, viewport_h);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -385,29 +443,41 @@ pub fn drawer_body_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
 /// shuma), o la pista de uso si no hay ninguna. Lo comparten los dos backends
 /// (winit con scrim y layer-shell). Cada card es un `$ cmd` con sus etapas de
 /// pipe clickeables, su salida coloreada por stdout/stderr y su código.
-fn blocks_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
+fn blocks_view(state: &ShumaState, theme: &Theme, viewport_h: f32) -> View<Msg> {
     let col = Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: auto() },
-        // Pegado abajo: lo más nuevo queda a la vista, lo viejo clipa arriba.
-        justify_content: Some(JustifyContent::FlexEnd),
-        gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(CARD_GAP) },
         ..Default::default()
     };
-    if state.blocks.is_empty() {
-        return View::new(col).text(
+    let content = if state.blocks.is_empty() {
+        View::new(col).text(
             "shuma se despliega aquí — escribí un comando y Enter (Esc cierra)".to_string(),
             13.0,
             theme.fg_muted,
-        );
-    }
-    let cards = state
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(i, b)| card_view(i, b, theme))
-        .collect();
-    View::new(col).children(cards)
+        )
+    } else {
+        let cards = state
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| card_view(i, b, theme))
+            .collect();
+        View::new(col).children(cards)
+    };
+    // Área de scroll: el contenido se desplaza y se recorta al viewport; la
+    // rueda y el arrastre de la barra emiten `ShumaScroll(delta)`. El offset
+    // se acota acá mismo (el modelo puede guardar uno mayor sin romper nada).
+    let content_h = state.content_height();
+    let offset = clamp_offset(state.scroll, content_h, viewport_h);
+    scroll_y(
+        offset,
+        content_h,
+        viewport_h,
+        content,
+        Msg::ShumaScroll,
+        &ScrollPalette::from_theme(theme),
+    )
 }
 
 /// Una card: encabezado (`$` plegable + etapas de pipe clickeables) y, si no
@@ -580,5 +650,56 @@ mod tests {
         assert_eq!(last.exit, Some(0));
         assert_eq!(last.lines.len(), 1);
         assert!(!s.pending);
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn content_height_crece_con_cards_y_lineas() {
+        let mut s = ShumaState::default();
+        let vacio = s.content_height();
+        s.push_pending("a".into());
+        s.finish_last(RunResult {
+            lines: vec![OutLine { err: false, text: "x".into() }; 3],
+            exit: Some(0),
+        });
+        assert!(s.content_height() > vacio);
+    }
+
+    #[test]
+    fn scroll_by_acota_a_cero_y_al_maximo() {
+        let mut s = ShumaState::default();
+        s.viewport_h = 50.0;
+        // Historial alto: varias cards con salida.
+        for _ in 0..6 {
+            s.push_pending("cmd".into());
+            s.finish_last(RunResult {
+                lines: vec![OutLine { err: false, text: "l".into() }; 4],
+                exit: Some(0),
+            });
+        }
+        let max = (s.content_height() - s.viewport_h).max(0.0);
+        s.scroll = 0.0;
+        s.scroll_by(-100.0); // no baja de 0
+        assert_eq!(s.scroll, 0.0);
+        s.scroll_by(1e6); // no pasa del máximo
+        assert!((s.scroll - max).abs() < 0.01);
+    }
+
+    #[test]
+    fn lanzar_un_comando_pega_el_scroll_al_fondo() {
+        let mut s = ShumaState::default();
+        s.viewport_h = 40.0;
+        for _ in 0..6 {
+            s.push_pending("c".into());
+            s.finish_last(RunResult { lines: vec![], exit: Some(0) });
+        }
+        s.scroll = 0.0; // el usuario subió a ver lo viejo
+        s.push_pending("nuevo".into()); // un comando nuevo
+        // El scroll quedó pegado al fondo (>= el máximo tras el clamp del render).
+        assert!(s.scroll >= (s.content_height() - s.viewport_h).max(0.0));
     }
 }

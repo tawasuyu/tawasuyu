@@ -284,6 +284,7 @@ pub fn shuma_open_view(
     data: &BarData,
     theme: &Theme,
     bar_px: f32,
+    viewport_h: f32,
 ) -> View<Msg> {
     // El cuerpo del drawer ocupa todo lo que sobra por encima de la barra.
     let mut body_style = Style {
@@ -294,7 +295,8 @@ pub fn shuma_open_view(
         ..Default::default()
     };
     body_style.flex_grow = 1.0;
-    let body = View::new(body_style).children(vec![shuma::drawer_body_view(shuma_state, theme)]);
+    let body =
+        View::new(body_style).children(vec![shuma::drawer_body_view(shuma_state, theme, viewport_h)]);
 
     let bar = View::new(Style {
         size: Size {

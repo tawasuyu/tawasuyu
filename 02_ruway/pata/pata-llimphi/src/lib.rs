@@ -59,6 +59,8 @@ pub enum Msg {
     ShumaRunLine(String),
     /// Plegar/desplegar la card `idx` del historial.
     ShumaCollapse(usize),
+    /// Desplazar el historial del drawer `delta` px (rueda / arrastre de barra).
+    ShumaScroll(f32),
     /// Tick de la animación de despliegue (sólo re-render).
     ShumaAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
@@ -330,6 +332,7 @@ impl App for PataApp {
                     b.collapsed = !b.collapsed;
                 }
             }
+            Msg::ShumaScroll(delta) => model.shuma.scroll_by(delta),
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
             Msg::TrayActivate(key) => {

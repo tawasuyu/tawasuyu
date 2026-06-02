@@ -25,6 +25,8 @@ shuma-exec = { path = "../../shuma/sandbox/shuma-exec" }
 # etapas de pipe para las chips clickeables del drawer.
 shuma-line = { path = "../../shuma/sandbox/shuma-line" }
 llimphi-ui = { workspace = true }
+# Área de scroll del historial del drawer (clip + offset + barra arrastrable).
+llimphi-widget-scroll = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-motion = { workspace = true }
 chrono = { workspace = true }
