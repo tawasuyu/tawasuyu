@@ -112,6 +112,11 @@ enum Msg {
     Save,
     SaveResult(Result<(), String>),
     Scroll(i32),
+    /// La ventana cambió de tamaño (px físicos): se guarda el alto para
+    /// dimensionar el viewport del scroll del árbol.
+    WinResized(u32, u32),
+    /// Delta de scroll del árbol de archivos (px a sumar al offset).
+    TreeScroll(f32),
     /// Cambia el tab activo. El índice se asume válido; en caso contrario
     /// se ignora.
     ActivateTab(usize),
@@ -355,6 +360,13 @@ struct Model {
     edit_active: usize,
     /// Animación de aparición/swap del dropdown del menú principal.
     menu_anim: Tween<f32>,
+    /// Alto de la ventana en px (físicos). Lo actualiza `on_resize`;
+    /// arranca en `initial_size().1`. Se usa para dimensionar el viewport
+    /// del scroll del árbol de archivos.
+    win_h: f32,
+    /// Desplazamiento vertical del árbol de archivos (px, ≥0). El árbol
+    /// scrollea con la rueda (cursor encima) y la barra arrastrable.
+    tree_scroll: f32,
 }
 
 const RECENT_FILES_CAP: usize = 20;
@@ -441,6 +453,17 @@ impl FindBarState {
 }
 
 impl Model {
+    /// Alto visible del panel del árbol de archivos: la ventana menos el
+    /// chrome de arriba (menubar + header + separador) y de abajo
+    /// (separador + status). Es el `viewport_len` que consume el scroll.
+    fn tree_viewport_h(&self) -> f32 {
+        (self.win_h - MENU_H - HEADER_H - STATUS_H - 2.0 * SEP_H).max(0.0)
+    }
+    /// Alto total del contenido del árbol (una fila por nodo visible).
+    fn tree_content_h(&self) -> f32 {
+        self.nodes.len() as f32 * TREE_ROW_H
+    }
+
     fn active_tab(&self) -> Option<&Tab> {
         self.active.and_then(|i| self.tabs.get(i))
     }
@@ -569,6 +592,8 @@ impl App for EditorApp {
             menu_active: usize::MAX,
             edit_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
+            win_h: EditorApp::initial_size().1 as f32,
+            tree_scroll: 0.0,
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
@@ -620,6 +645,10 @@ impl App for EditorApp {
 
     fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
         crate::keys::handle_key(model, event)
+    }
+
+    fn on_resize(_model: &Self::Model, _width: u32, height: u32) -> Option<Self::Msg> {
+        Some(Msg::WinResized(_width, height))
     }
 
     fn view(model: &Model) -> View<Msg> {

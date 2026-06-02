@@ -179,7 +179,10 @@ pub fn scroll_y<Msg, F>(
     palette: &ScrollPalette,
 ) -> View<Msg>
 where
-    Msg: Clone + Send + Sync + 'static,
+    // `Msg` no necesita `Send + Sync`: los closures de rueda/arrastre
+    // capturan el `Arc<dyn Fn + Send + Sync>`, no un `Msg`. Sólo se exige
+    // `Clone` (para montar el `View`) y `'static`.
+    Msg: Clone + 'static,
     F: Fn(f32) -> Msg + Send + Sync + 'static,
 {
     let on_scroll = Arc::new(on_scroll);

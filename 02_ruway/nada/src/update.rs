@@ -198,6 +198,27 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 }
                 m
             }
+            Msg::WinResized(_w, h) => {
+                let mut m = model;
+                m.win_h = h as f32;
+                // Re-clampea el scroll del árbol: si la ventana creció, el
+                // contenido puede haber dejado de desbordar.
+                m.tree_scroll = llimphi_widget_scroll::clamp_offset(
+                    m.tree_scroll,
+                    m.tree_content_h(),
+                    m.tree_viewport_h(),
+                );
+                m
+            }
+            Msg::TreeScroll(delta) => {
+                let mut m = model;
+                m.tree_scroll = llimphi_widget_scroll::clamp_offset(
+                    m.tree_scroll + delta,
+                    m.tree_content_h(),
+                    m.tree_viewport_h(),
+                );
+                m
+            }
             Msg::ActivateTab(i) => activate_tab(model, i),
             Msg::CloseTab(i) => close_tab(model, i),
             Msg::NextTab => {

@@ -279,12 +279,24 @@ pub(crate) fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
         palette: TreePalette::from_theme(theme),
     };
 
+    // El árbol scrollea: viewport clipeado de alto = panel, contenido =
+    // una fila por nodo. Rueda (cursor encima) + barra arrastrable, sin
+    // tocar el on_wheel global (que sigue scrolleando el editor).
+    let scroller = llimphi_widget_scroll::scroll_y(
+        model.tree_scroll,
+        model.tree_content_h(),
+        model.tree_viewport_h(),
+        tree_view(spec),
+        Msg::TreeScroll,
+        &llimphi_widget_scroll::ScrollPalette::from_theme(theme),
+    );
+
     View::new(Style {
         size: Size { width: length(TREE_WIDTH), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![tree_view(spec)])
+    .children(vec![scroller])
 }
 
 pub(crate) fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
