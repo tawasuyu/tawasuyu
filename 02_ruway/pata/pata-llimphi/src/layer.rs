@@ -76,6 +76,17 @@ use crate::toplevel::{Toplevel, WindowEntry};
 use crate::tray::TrayHandle;
 use crate::{render, Model, Msg};
 
+/// Traza de diagnóstico gateada por `PATA_DIAG` (cualquier valor la enciende).
+/// Para depurar el camino layer-shell en hardware sin recompilar A/B:
+/// `PATA_DIAG=1 pata-llimphi 2>&1 | tee /tmp/pata.log`.
+macro_rules! diag {
+    ($($a:tt)*) => {
+        if std::env::var_os("PATA_DIAG").is_some() {
+            eprintln!($($a)*);
+        }
+    };
+}
+
 /// El estado wgpu de **una** layer surface (una barra). El `Hal` (instancia +
 /// device de wgpu) se comparte entre todas las barras, en [`LayerApp::hal`].
 struct PanelGpu {
@@ -197,6 +208,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     if bars.is_empty() {
         return Err("pata · la config no tiene ninguna superficie 'bar' para anclar".into());
     }
+    diag!("pata diag · backend LAYER-SHELL arranca · {} barra(s) en la config", bars.len());
 
     let conn = Connection::connect_to_env()?;
     let (globals, mut event_queue) = registry_queue_init(&conn)?;
@@ -449,7 +461,21 @@ impl LayerApp {
                 })
                 .expect("create_surface")
         };
-        let surface = RawSurface::from_surface(hal, wgpu_surface, w, h).expect("surface");
+        let surface = match RawSurface::from_surface(hal, wgpu_surface, w, h) {
+            Ok(s) => s,
+            // Sin formatos la WSI no soporta esta surface: en vez de paniquear,
+            // dejamos el panel sin gpu (no pinta) y seguimos — así un panel roto
+            // no tira todo el marco. Vuelve a intentar en el próximo `draw`.
+            Err(e) => {
+                eprintln!("pata layer · panel {pi} sin gpu: {e}");
+                return;
+            }
+        };
+        diag!(
+            "pata diag · panel {pi} surface creada {w}x{h} · backend={:?} format={:?}",
+            hal.adapter.get_info().backend,
+            surface.format(),
+        );
         let renderer = Renderer::new(hal).expect("renderer");
         self.panels[pi].gpu = Some(PanelGpu {
             surface,
@@ -547,6 +573,7 @@ impl LayerApp {
             eprintln!("pata layer · render: {e}");
         }
         gpu.surface.present(frame, hal);
+        diag!("pata diag · present panel {pi} {w}x{h}");
 
         // Recién con el cuadro presentado damos el panel por limpio: si la
         // adquisición hubiera fallado, `dirty` sigue puesto y el próximo
@@ -653,6 +680,7 @@ impl LayerShellHandler for LayerApp {
         let Some(pi) = self.panel_de(layer.wl_surface()) else {
             return;
         };
+        diag!("pata diag · configure panel {pi} new_size={cw}x{ch}");
         // El compositor nos da el tamaño definitivo (el eje libre ya resuelto).
         if cw > 0 {
             self.panels[pi].width = cw;
