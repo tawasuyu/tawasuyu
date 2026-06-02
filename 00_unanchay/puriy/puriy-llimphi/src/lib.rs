@@ -5666,7 +5666,7 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
 
     // Defaults según display: Block fila completa columnar, Inline en row
     // con altura auto, Flex toma sus props del nodo. None: cero.
-    let (default_direction, mut width, height) = match b.display {
+    let (default_direction, mut width, mut height) = match b.display {
         Display::Block => (FlexDirection::Column, percent(1.0_f32), auto()),
         Display::Flex => (map_flex_direction(b.flex_direction), percent(1.0_f32), auto()),
         Display::InlineFlex => (map_flex_direction(b.flex_direction), auto(), auto()),
@@ -5703,6 +5703,12 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
     // CSS `width` explícito gana sobre el default de display.
     if let Some(explicit) = length_to_taffy(b.width, zoom) {
         width = explicit;
+    }
+    // CSS `height` explícito gana sobre el default (auto = lo dimensiona el
+    // contenido). Los % de height sólo resuelven si el padre tiene altura
+    // definida — taffy lo maneja igual que en un browser.
+    if let Some(explicit) = length_to_taffy(b.height, zoom) {
+        height = explicit;
     }
     let max_size = Size {
         width: length_to_taffy(b.max_width, zoom).unwrap_or_else(auto),

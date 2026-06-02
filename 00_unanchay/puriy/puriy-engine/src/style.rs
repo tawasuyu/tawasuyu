@@ -38,6 +38,8 @@ pub struct ComputedStyle {
     pub padding: Sides<f32>,
     /// Ancho explícito. `Auto` = el default block-fills-parent.
     pub width: LengthVal,
+    /// Alto explícito. `Auto` = lo dimensiona el contenido.
+    pub height: LengthVal,
     /// Tope superior — útil para containers narrow ("max-width:800px").
     pub max_width: LengthVal,
     /// Alineación horizontal del texto dentro del box.
@@ -703,6 +705,7 @@ impl Default for ComputedStyle {
             margin: Sides::all(0.0),
             padding: Sides::all(0.0),
             width: LengthVal::Auto,
+            height: LengthVal::Auto,
             max_width: LengthVal::Auto,
             text_align: TextAlign::Left,
             line_height: None,
@@ -1598,6 +1601,7 @@ enum DeclKind {
     PaddingBottom(f32),
     PaddingLeft(f32),
     Width(LengthVal),
+    Height(LengthVal),
     MaxWidth(LengthVal),
     TextAlign(TextAlign),
     LineHeight(f32),
@@ -1701,6 +1705,7 @@ impl Decl {
             DeclKind::PaddingBottom(v) => s.padding.bottom = *v,
             DeclKind::PaddingLeft(v) => s.padding.left = *v,
             DeclKind::Width(v) => s.width = *v,
+            DeclKind::Height(v) => s.height = *v,
             DeclKind::MaxWidth(v) => s.max_width = *v,
             DeclKind::TextAlign(a) => s.text_align = *a,
             DeclKind::LineHeight(v) => s.line_height = Some(*v),
@@ -3284,6 +3289,7 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "padding-bottom" => parse_length_px(value).map(DeclKind::PaddingBottom),
         "padding-left" => parse_length_px(value).map(DeclKind::PaddingLeft),
         "width" => parse_length_or_pct(value).map(DeclKind::Width),
+        "height" => parse_length_or_pct(value).map(DeclKind::Height),
         "max-width" => parse_length_or_pct(value).map(DeclKind::MaxWidth),
         "text-align" => parse_text_align(value).map(DeclKind::TextAlign),
         "line-height" => parse_line_height(value).map(DeclKind::LineHeight),
@@ -3323,6 +3329,14 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "min-width" => parse_length_or_pct(value).map(DeclKind::MinWidth),
         "min-height" => parse_length_or_pct(value).map(DeclKind::MinHeight),
         "max-height" => parse_length_or_pct(value).map(DeclKind::MaxHeight),
+        // Tamaños lógicos → físicos (LTR + escritura horizontal): inline ↔
+        // width, block ↔ height. Fase 7.194.
+        "inline-size" => parse_length_or_pct(value).map(DeclKind::Width),
+        "block-size" => parse_length_or_pct(value).map(DeclKind::Height),
+        "min-inline-size" => parse_length_or_pct(value).map(DeclKind::MinWidth),
+        "min-block-size" => parse_length_or_pct(value).map(DeclKind::MinHeight),
+        "max-inline-size" => parse_length_or_pct(value).map(DeclKind::MaxWidth),
+        "max-block-size" => parse_length_or_pct(value).map(DeclKind::MaxHeight),
         "overflow" | "overflow-x" | "overflow-y" => {
             parse_overflow(value).map(DeclKind::Overflow)
         }

@@ -81,6 +81,8 @@ pub struct BoxNode {
     pub padding: Sides<f32>,
     /// Ancho explícito CSS (`auto` por defecto).
     pub width: LengthVal,
+    /// Alto explícito CSS (`auto` por defecto = lo dimensiona el contenido).
+    pub height: LengthVal,
     /// Tope superior del ancho.
     pub max_width: LengthVal,
     /// Alineación del texto inline dentro del bloque.
@@ -1073,6 +1075,7 @@ fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Option<Color>, f
     b.font_family = s.font_family.clone();
     b.padding = s.padding;
     b.width = s.width;
+    b.height = s.height;
     b.max_width = s.max_width;
     b.text_align = s.text_align;
     b.line_height = s.line_height;
@@ -1761,6 +1764,7 @@ fn empty_root() -> BoxNode {
         margin: Sides::all(0.0),
         padding: Sides::all(0.0),
         width: LengthVal::Auto,
+        height: LengthVal::Auto,
         max_width: LengthVal::Auto,
         text_align: TextAlign::Left,
         line_height: None,
@@ -2123,6 +2127,7 @@ fn build_node(
                 margin: effective_margin,
                 padding: style.padding,
                 width: style.width,
+                height: style.height,
                 max_width: style.max_width,
                 text_align: style.text_align,
                 line_height: style.line_height,
@@ -2267,6 +2272,7 @@ fn build_node(
                 margin: Sides::all(0.0),
                 padding: Sides::all(0.0),
                 width: LengthVal::Auto,
+                height: LengthVal::Auto,
                 max_width: LengthVal::Auto,
                 text_align: p.text_align,
                 line_height: p.line_height,
@@ -2356,6 +2362,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         margin: Sides::all(0.0),
         padding: Sides::all(0.0),
         width: LengthVal::Auto,
+        height: LengthVal::Auto,
         max_width: LengthVal::Auto,
         text_align: style.text_align,
         line_height: style.line_height,
@@ -3542,6 +3549,40 @@ mod tests {
         let b = box_by_id(&doc.box_tree, "b").unwrap();
         assert_eq!(b.inset_left, LengthVal::Px(8.0)); // inline-start = left (LTR)
         assert_eq!(b.inset_bottom, LengthVal::Px(12.0)); // block-end = bottom
+    }
+
+    #[test]
+    fn height_explicito_se_propaga_al_box() {
+        use crate::style::LengthVal;
+        let html = r#"<html><head><style>
+            #a { height: 200px; }
+            #b { height: 50%; }
+            #c { width: 100px; }
+        </style></head><body>
+            <div id="a">x</div><div id="b">y</div><div id="c">z</div>
+        </body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        assert_eq!(box_by_id(&doc.box_tree, "a").unwrap().height, LengthVal::Px(200.0));
+        assert_eq!(box_by_id(&doc.box_tree, "b").unwrap().height, LengthVal::Pct(50.0));
+        // Sin `height` declarado → Auto (lo dimensiona el contenido).
+        assert_eq!(box_by_id(&doc.box_tree, "c").unwrap().height, LengthVal::Auto);
+    }
+
+    #[test]
+    fn tamanos_logicos_inline_block() {
+        use crate::style::LengthVal;
+        let html = r#"<html><head><style>
+            #a { inline-size: 120px; block-size: 80px; }
+            #b { min-inline-size: 10px; max-block-size: 200px; }
+        </style></head><body><div id="a">x</div><div id="b">y</div></body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let a = box_by_id(&doc.box_tree, "a").unwrap();
+        // inline-size → width, block-size → height (LTR/horizontal).
+        assert_eq!(a.width, LengthVal::Px(120.0));
+        assert_eq!(a.height, LengthVal::Px(80.0));
+        let b = box_by_id(&doc.box_tree, "b").unwrap();
+        assert_eq!(b.min_width, LengthVal::Px(10.0));
+        assert_eq!(b.max_height, LengthVal::Px(200.0));
     }
 
     #[test]
