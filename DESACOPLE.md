@@ -48,7 +48,11 @@ Llimphi porque vivían en el frontend, no en un core. Auditoría de la suite
 
 - `pluma-editor-llimphi/cuerpo_ide.rs` — modelo de "zonas" (agrupación de átomos
   para derivar vía LLM) → `pluma-editor-cuerpo`.
-- `pluma-notebook-llimphi/main.rs` — router de kernels por lenguaje → `pluma-notebook-exec`.
+- ✅ **HECHO** `pluma-notebook-llimphi/main.rs` — el `MultiKernel` (dispatcher por string
+  de lenguaje: wasm/wat · python/py · media) salió a un crate agregador
+  **`pluma-notebook-kernel-multi`**. No podía ir a `pluma-notebook-exec` (ciclo: los kernels
+  concretos ya dependen de exec); el agregador depende de exec + los 3 kernels. La app pasa
+  de wirear 4 deps a 1 y deja de tener lógica de ruteo en el visor.
 - `mirada-greeter/sessions.rs` — enumeración de sesiones XDG → core.
 - ✅ **HECHO** `tinkuy` — `init_world` (lattice cúbico + drift CM + grilla) y el PRNG
   `SplitMix64`, calcados en `tinkuy-sim` y `tinkuy-llimphi`, unificados en

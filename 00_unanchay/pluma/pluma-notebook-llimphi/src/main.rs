@@ -21,11 +21,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use async_trait::async_trait;
-use pluma_notebook_exec::{Kernel, KernelError, KernelOutput};
-use pluma_notebook_kernel_media::MediaKernel;
-use pluma_notebook_kernel_python::PythonKernel;
-use pluma_notebook_kernel_wasm::WasmKernel;
+use pluma_notebook_kernel_multi::MultiKernel;
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -1251,39 +1247,6 @@ fn demo_notebook() -> Notebook {
     nb.set_position(grafico, Some(P::new(310.0, 320.0)));
 
     nb
-}
-
-/// Dispatcher por `language` — la pieza que junta wasmi + RustPython
-/// detrás del mismo trait `Kernel`. El visor delega acá y deja que cada
-/// celda elija su intérprete con un string.
-struct MultiKernel {
-    wasm: WasmKernel,
-    python: PythonKernel,
-    media: MediaKernel,
-}
-
-impl MultiKernel {
-    fn new() -> Self {
-        Self {
-            wasm: WasmKernel::new(),
-            python: PythonKernel::new(),
-            media: MediaKernel::new(),
-        }
-    }
-}
-
-#[async_trait]
-impl Kernel for MultiKernel {
-    async fn execute(&self, source: &str, language: &str) -> Result<KernelOutput, KernelError> {
-        match language {
-            "wasm" | "wat" => self.wasm.execute(source, language).await,
-            "python" | "py" => self.python.execute(source, language).await,
-            "media" => self.media.execute(source, language).await,
-            other => Err(KernelError::Runtime(format!(
-                "ningún kernel registrado para '{other}' (disponibles: wasm/wat, python/py, media)"
-            ))),
-        }
-    }
 }
 
 /// Calcula `(zoom, viewport)` para que TODO el bounding box entre en el

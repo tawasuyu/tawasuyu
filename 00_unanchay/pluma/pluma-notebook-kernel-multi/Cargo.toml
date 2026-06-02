@@ -1,0 +1,15 @@
+[package]
+name = "pluma-notebook-kernel-multi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma-notebook — kernel agregador: despacha por string de lenguaje (wasm/wat · python/py · media) al kernel concreto correspondiente detrás del trait Kernel. Agnóstico de GUI; cualquier frontend lo usa sin recablear los tres kernels."
+
+[dependencies]
+pluma-notebook-exec = { path = "../pluma-notebook-exec" }
+pluma-notebook-kernel-media = { path = "../pluma-notebook-kernel-media" }
+pluma-notebook-kernel-wasm = { path = "../pluma-notebook-kernel-wasm" }
+pluma-notebook-kernel-python = { path = "../pluma-notebook-kernel-python" }
+async-trait = { workspace = true }
