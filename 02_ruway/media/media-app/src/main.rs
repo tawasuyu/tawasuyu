@@ -80,7 +80,8 @@ use media_core::{
     PausableVideo, ProbedAudioSource, Seekable, SubtitleTrack, TestCard, ToneSource, Volume,
     VolumeAudio, Waterfall,
 };
-use media_core::color::{ColorControl, ColorVideo};
+use media_core::color::{ColorControl, ColorParams, ColorVideo};
+use media_core::config::MediaConfig;
 use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
@@ -156,6 +157,37 @@ enum Msg {
     /// Right-click en la raíz → abre el menú contextual anclado en
     /// `(x, y)` de ventana. Origen de la raíz es 0,0 ⇒ local == ventana.
     ContextMenuOpen(f32, f32),
+    /// Abre/cierra la ventana de configuración (`F2`).
+    ToggleSettings,
+    /// Edita un campo de la config desde la ventana de ajustes. Muta
+    /// `Model::config`, aplica a los handles vivos y persiste.
+    ConfigEdit(ConfigEdit),
+}
+
+/// Edición concreta sobre [`MediaConfig`] disparada por la ventana de
+/// configuración. Cada variante toca una pref; el handler la aplica y
+/// guarda `config.ron`.
+#[derive(Debug, Clone)]
+enum ConfigEdit {
+    // Audio.
+    VolumeDelta(f32),
+    ToggleEq,
+    ToggleNormalization,
+    NormTargetDelta(f32),
+    ToggleDownmix,
+    // Video.
+    ToggleColor,
+    ColorReset,
+    // Playlist.
+    ToggleResumeOnOpen,
+    CycleRepeatDefault,
+    ToggleShuffleDefault,
+    // Subtítulos.
+    ToggleAutoloadSidecar,
+    SubDelayDelta(i64),
+    SubFontDelta(f32),
+    // Comportamiento.
+    CrossfadeDelta(f32),
 }
 
 // Los tiles del grid reorderable son los [`TileId`] (= `PanelId` del
@@ -318,6 +350,115 @@ fn load_settings() -> ControlSettings {
     }
 }
 
+// ============================================================
+// MediaConfig — config unificada que edita la ventana de ajustes
+// ============================================================
+
+/// Path del `config.ron` unificado (prefs de playlist/audio/video/
+/// subtítulos/comportamiento, además de controles+layout que también
+/// viven en sus archivos legacy). Mismo directorio XDG que el resto.
+fn media_config_path() -> Option<PathBuf> {
+    config_file("config.ron")
+}
+
+/// Carga el `config.ron` o el default, saneado. Si no existe, siembra uno
+/// por defecto para que sea descubrible y editable a mano.
+fn load_media_config() -> MediaConfig {
+    let Some(path) = media_config_path() else {
+        return MediaConfig::default();
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(body) => match ron::from_str::<MediaConfig>(&body) {
+            Ok(c) => {
+                eprintln!("media-app: config cargada de {}", path.display());
+                c.sanitized()
+            }
+            Err(e) => {
+                eprintln!("media-app: config.ron inválido ({e}) — uso default");
+                MediaConfig::default()
+            }
+        },
+        Err(_) => {
+            let def = MediaConfig::default();
+            save_media_config(&def);
+            def
+        }
+    }
+}
+
+/// Persiste la config a `config.ron`. Falla silenciosa (sólo log).
+fn save_media_config(cfg: &MediaConfig) {
+    let Some(path) = media_config_path() else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match ron::ser::to_string_pretty(cfg, ron::ser::PrettyConfig::default()) {
+        Ok(txt) => {
+            if let Err(e) = std::fs::write(&path, txt) {
+                eprintln!("media-app: no pude escribir config.ron: {e}");
+            }
+        }
+        Err(e) => eprintln!("media-app: no pude serializar config: {e}"),
+    }
+}
+
+/// Empuja la config a los handles vivos de la cadena (lo que se aplica en
+/// caliente: volumen, EQ, color, normalización). Las prefs que sólo valen
+/// al cargar una pista (resume, autoload, repeat/shuffle por defecto,
+/// crossfade) se consultan en su punto de uso, no acá.
+fn apply_media_config(cfg: &MediaConfig) {
+    // Audio.
+    volume().set(cfg.audio.volume);
+    eq().set_enabled(cfg.audio.eq_enabled);
+    eq().set_all_gains(&cfg.audio.eq_bands_db);
+    dynamics().set_enabled(cfg.audio.normalization_enabled);
+    // Video (color).
+    color().set_enabled(cfg.video.color_enabled);
+    color().set_params(ColorParams {
+        brightness: cfg.video.brightness,
+        contrast: cfg.video.contrast,
+        gamma: cfg.video.gamma,
+        saturation: cfg.video.saturation,
+        hue: cfg.video.hue,
+    });
+}
+
+/// Aplica una [`ConfigEdit`] sobre la config (sin sanear — el caller lo
+/// hace después). Sólo muta el modelo; los handles vivos se actualizan en
+/// el handler de `Msg::ConfigEdit` vía [`apply_media_config`].
+fn apply_config_edit(cfg: &mut MediaConfig, edit: ConfigEdit) {
+    match edit {
+        ConfigEdit::VolumeDelta(d) => cfg.audio.volume += d,
+        ConfigEdit::ToggleEq => cfg.audio.eq_enabled = !cfg.audio.eq_enabled,
+        ConfigEdit::ToggleNormalization => {
+            cfg.audio.normalization_enabled = !cfg.audio.normalization_enabled
+        }
+        ConfigEdit::NormTargetDelta(d) => cfg.audio.normalization_target_lufs += d,
+        ConfigEdit::ToggleDownmix => cfg.audio.downmix_to_stereo = !cfg.audio.downmix_to_stereo,
+        ConfigEdit::ToggleColor => cfg.video.color_enabled = !cfg.video.color_enabled,
+        ConfigEdit::ColorReset => {
+            cfg.video.brightness = 0.0;
+            cfg.video.contrast = 1.0;
+            cfg.video.gamma = 1.0;
+            cfg.video.saturation = 1.0;
+            cfg.video.hue = 0.0;
+        }
+        ConfigEdit::ToggleResumeOnOpen => {
+            cfg.playlist.resume_on_open = !cfg.playlist.resume_on_open
+        }
+        ConfigEdit::CycleRepeatDefault => cfg.playlist.repeat = cfg.playlist.repeat.cycle(),
+        ConfigEdit::ToggleShuffleDefault => cfg.playlist.shuffle = !cfg.playlist.shuffle,
+        ConfigEdit::ToggleAutoloadSidecar => {
+            cfg.subtitles.autoload_sidecar = !cfg.subtitles.autoload_sidecar
+        }
+        ConfigEdit::SubDelayDelta(d) => cfg.subtitles.delay_ms += d,
+        ConfigEdit::SubFontDelta(d) => cfg.subtitles.font_scale += d,
+        ConfigEdit::CrossfadeDelta(d) => cfg.behavior.crossfade_secs += d,
+    }
+}
+
 struct Model {
     frames: u64,
     started_at: Instant,
@@ -354,6 +495,11 @@ struct Model {
     /// de texto editables, así que el contextual mapea a comandos de
     /// transporte/captura reales — no a edición.
     context_menu: Option<(f32, f32)>,
+    /// Config unificada editable (la fuente de verdad de la ventana de
+    /// ajustes). Se persiste a `config.ron` en cada cambio.
+    config: MediaConfig,
+    /// Si la ventana de configuración está abierta (`F2` la alterna).
+    settings_open: bool,
 }
 
 struct Pipeline {
@@ -1682,6 +1828,10 @@ impl App for MediaApp {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
         spawn_controles_watcher(handle);
         let (palette_commands, palette_cmds) = build_command_catalog(&settings());
+        let config = load_media_config();
+        // Empuja las prefs persistidas a los handles vivos antes del primer
+        // frame (volumen/EQ/color/normalización arrancan como el usuario dejó).
+        apply_media_config(&config);
         Model {
             frames: 0,
             started_at: Instant::now(),
@@ -1695,6 +1845,8 @@ impl App for MediaApp {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             context_menu: None,
+            config,
+            settings_open: false,
         }
     }
 
@@ -1721,6 +1873,19 @@ impl App for MediaApp {
             Msg::ToggleHelp => {
                 let mut m = model;
                 m.help_open = !m.help_open;
+                m
+            }
+            Msg::ToggleSettings => {
+                let mut m = model;
+                m.settings_open = !m.settings_open;
+                m
+            }
+            Msg::ConfigEdit(edit) => {
+                let mut m = model;
+                apply_config_edit(&mut m.config, edit);
+                m.config = std::mem::take(&mut m.config).sanitized();
+                apply_media_config(&m.config);
+                save_media_config(&m.config);
                 m
             }
             Msg::ReloadConfig => {
@@ -1831,6 +1996,8 @@ impl App for MediaApp {
         match &event.key {
             Key::Character(c) if c == "?" => return Some(Msg::ToggleHelp),
             Key::Named(NamedKey::Escape) if model.help_open => return Some(Msg::ToggleHelp),
+            Key::Named(NamedKey::Escape) if model.settings_open => return Some(Msg::ToggleSettings),
+            Key::Named(NamedKey::F2) => return Some(Msg::ToggleSettings),
             Key::Named(NamedKey::F5) => return Some(Msg::ReloadConfig),
             _ => {}
         }
@@ -1855,6 +2022,9 @@ impl App for MediaApp {
         // El palette tiene prioridad sobre la ayuda (sólo uno visible).
         if let Some(state) = model.palette.as_ref() {
             return Some(palette_overlay(model, state));
+        }
+        if model.settings_open {
+            return Some(settings_overlay(model));
         }
         if !model.help_open {
             return None;
@@ -2103,6 +2273,281 @@ fn palette_overlay(model: &Model, state: &PaletteState) -> View<Msg> {
     .children(vec![panel])
 }
 
+// ============================================================
+// Ventana de configuración (F2)
+// ============================================================
+
+/// Chip de toggle booleano: verde "sí" / gris "no".
+fn cfg_toggle(on: bool, edit: ConfigEdit) -> View<Msg> {
+    let (label, bg) = if on {
+        ("sí", Color::from_rgba8(56, 120, 84, 255))
+    } else {
+        ("no", Color::from_rgba8(74, 60, 70, 255))
+    };
+    chip_button(label, bg, Color::from_rgba8(235, 240, 248, 255), Msg::ConfigEdit(edit))
+}
+
+/// Chip de acción genérico de la ventana de config.
+fn cfg_chip(label: &str, edit: ConfigEdit) -> View<Msg> {
+    chip_button(
+        label,
+        Color::from_rgba8(55, 65, 80, 255),
+        Color::from_rgba8(220, 230, 245, 255),
+        Msg::ConfigEdit(edit),
+    )
+}
+
+/// Una fila de ajuste: etiqueta · valor · controles.
+fn settings_row(label: &str, value: &str, controls: Vec<View<Msg>>) -> View<Msg> {
+    let lab = View::new(Style {
+        size: Size {
+            width: length(148.0_f32),
+            height: length(40.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexStart),
+        ..Default::default()
+    })
+    .text(label.to_string(), 13.5, Color::from_rgba8(178, 193, 214, 255));
+    let val = View::new(Style {
+        size: Size {
+            width: length(60.0_f32),
+            height: length(40.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(value.to_string(), 13.5, Color::from_rgba8(232, 238, 248, 255));
+    let mut kids = vec![lab, val];
+    kids.extend(controls);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(44.0_f32),
+        },
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(kids)
+}
+
+/// Cabecera de sección dentro de la ventana de config.
+fn settings_header(title: &str) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(title.to_string(), 14.5, Color::from_rgba8(118, 182, 232, 255))
+}
+
+/// Columna (mitad del panel) que apila cabeceras y filas.
+fn settings_column(children: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(0.5_f32),
+            height: length(430.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(children)
+}
+
+/// La ventana de configuración: edita [`MediaConfig`] en vivo (cada cambio
+/// aplica a los handles y persiste a `config.ron`). Dos columnas para
+/// caber en el viewport sin scroll: Audio+Video / Playlist+Subtítulos+
+/// Comportamiento. `F2` o `Esc` la cierran; click fuera también.
+fn settings_overlay(model: &Model) -> View<Msg> {
+    let c = &model.config;
+    let (vw, vh) = model.viewport;
+    let box_w = 760.0_f32.min(vw - 24.0);
+    let box_h = 500.0_f32.min(vh - 24.0);
+    let x = ((vw - box_w) * 0.5).max(0.0);
+    let y = ((vh - box_h) * 0.5).max(0.0);
+
+    // --- columna izquierda: Audio + Video ---
+    let left = settings_column(vec![
+        settings_header("Audio"),
+        settings_row(
+            "Volumen",
+            &format!("{:.0}%", (c.audio.volume * 100.0).round()),
+            vec![
+                cfg_chip("−", ConfigEdit::VolumeDelta(-0.05)),
+                cfg_chip("+", ConfigEdit::VolumeDelta(0.05)),
+            ],
+        ),
+        settings_row("Ecualizador", "", vec![cfg_toggle(c.audio.eq_enabled, ConfigEdit::ToggleEq)]),
+        settings_row(
+            "Normalización",
+            "",
+            vec![cfg_toggle(c.audio.normalization_enabled, ConfigEdit::ToggleNormalization)],
+        ),
+        settings_row(
+            "Objetivo LUFS",
+            &format!("{:.0}", c.audio.normalization_target_lufs),
+            vec![
+                cfg_chip("−", ConfigEdit::NormTargetDelta(-1.0)),
+                cfg_chip("+", ConfigEdit::NormTargetDelta(1.0)),
+            ],
+        ),
+        settings_row(
+            "Downmix estéreo",
+            "",
+            vec![cfg_toggle(c.audio.downmix_to_stereo, ConfigEdit::ToggleDownmix)],
+        ),
+        settings_header("Video"),
+        settings_row("Ajuste de color", "", vec![cfg_toggle(c.video.color_enabled, ConfigEdit::ToggleColor)]),
+        settings_row("", "", vec![cfg_chip("reset color", ConfigEdit::ColorReset)]),
+    ]);
+
+    // --- columna derecha: Playlist + Subtítulos + Comportamiento ---
+    let right = settings_column(vec![
+        settings_header("Playlist"),
+        settings_row(
+            "Reanudar al abrir",
+            "",
+            vec![cfg_toggle(c.playlist.resume_on_open, ConfigEdit::ToggleResumeOnOpen)],
+        ),
+        settings_row(
+            "Repetición",
+            c.playlist.repeat.slug(),
+            vec![cfg_chip("ciclar", ConfigEdit::CycleRepeatDefault)],
+        ),
+        settings_row("Aleatorio", "", vec![cfg_toggle(c.playlist.shuffle, ConfigEdit::ToggleShuffleDefault)]),
+        settings_header("Subtítulos"),
+        settings_row(
+            "Auto-cargar sidecar",
+            "",
+            vec![cfg_toggle(c.subtitles.autoload_sidecar, ConfigEdit::ToggleAutoloadSidecar)],
+        ),
+        settings_row(
+            "Desfase (ms)",
+            &format!("{}", c.subtitles.delay_ms),
+            vec![
+                cfg_chip("−", ConfigEdit::SubDelayDelta(-100)),
+                cfg_chip("+", ConfigEdit::SubDelayDelta(100)),
+            ],
+        ),
+        settings_row(
+            "Tamaño de letra",
+            &format!("{:.1}×", c.subtitles.font_scale),
+            vec![
+                cfg_chip("−", ConfigEdit::SubFontDelta(-0.1)),
+                cfg_chip("+", ConfigEdit::SubFontDelta(0.1)),
+            ],
+        ),
+        settings_header("Comportamiento"),
+        settings_row(
+            "Crossfade (s)",
+            &format!("{:.1}", c.behavior.crossfade_secs),
+            vec![
+                cfg_chip("−", ConfigEdit::CrossfadeDelta(-0.5)),
+                cfg_chip("+", ConfigEdit::CrossfadeDelta(0.5)),
+            ],
+        ),
+    ]);
+
+    let columns = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(434.0_f32),
+        },
+        gap: Size {
+            width: length(20.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![left, right]);
+
+    let title = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(34.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::SpaceBetween),
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size {
+                width: length(300.0_f32),
+                height: length(34.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text("Configuración".to_string(), 18.0, Color::from_rgba8(235, 240, 248, 255)),
+        chip_button(
+            "cerrar",
+            Color::from_rgba8(70, 60, 70, 255),
+            Color::from_rgba8(235, 240, 248, 255),
+            Msg::ToggleSettings,
+        ),
+    ]);
+
+    let footer = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(
+        "Se guarda en config.ron · F2/Esc cierra · controles y orden de paneles: ver controles.ron".to_string(),
+        11.5,
+        Color::from_rgba8(140, 152, 170, 255),
+    );
+
+    let panel = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(x),
+            top: length(y),
+            right: auto(),
+            bottom: auto(),
+        },
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(box_w),
+            height: length(box_h),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(26, 30, 38, 245))
+    .radius(12.0)
+    .children(vec![title, columns, footer]);
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0, 0, 0, 150))
+    .on_click(Msg::ToggleSettings)
+    .children(vec![panel])
+}
+
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
 fn menubar_spec<'a>(
     menu: &'a AppMenu,
@@ -2145,6 +2590,7 @@ fn app_menu() -> AppMenu {
         )
         .menu(
             Menu::new("Ver")
+                .item(MenuItem::new("Configuración", "view.settings").shortcut("F2").separated())
                 .item(MenuItem::new("Paleta de comandos", "view.palette").shortcut("Ctrl+Shift+P"))
                 .item(MenuItem::new("Ayuda de atajos", "view.help").shortcut("?")),
         )
@@ -2171,6 +2617,7 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "play.next" => dispatch(NextTrack),
         "play.vol_up" => dispatch(VolumeBy { delta: vstep }),
         "play.vol_dn" => dispatch(VolumeBy { delta: -vstep }),
+        "view.settings" => handle.dispatch(Msg::ToggleSettings),
         "view.palette" => handle.dispatch(Msg::Palette(PaletteMsg::Open)),
         "view.help" => handle.dispatch(Msg::ToggleHelp),
         // "help.about" y desconocidos: no-op (sin diálogo todavía).
