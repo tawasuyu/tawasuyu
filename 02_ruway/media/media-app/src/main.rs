@@ -60,7 +60,7 @@
 //! se carga solo (S5, auto-carga sidecar).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -78,7 +78,7 @@ use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View
 use media_audio_cpal::AudioSink;
 use media_core::{
     AudioProbe, AudioSource, FrameSource, Levels, MixerAudio, Pause, PausableAudio,
-    PausableVideo, ProbedAudioSource, Seekable, SubtitleTrack, TestCard, ToneSource, Volume,
+    ProbedAudioSource, Seekable, SubtitleTrack, TestCard, ToneSource, Volume,
     VolumeAudio, Waterfall,
 };
 use media_core::color::{ColorControl, ColorParams, ColorVideo};
@@ -1499,10 +1499,20 @@ fn current_audio_position() -> Option<Duration> {
 /// Reinicia los contadores de sync A/V tras un seek o cambio de pista (los
 /// frames viejos no deben contar contra el nuevo punto). No-op si el
 /// pipeline todavía no se inicializó (el primer paint lo crea).
+/// Pedido de "presentar un frame de video YA aunque esté en pausa": lo activa
+/// cada seek (vía [`reset_av_sync_anchor`]). El render loop (`gpu_paint`) lo lee
+/// y, mientras esté puesto, tickea el video aun pausado y presenta el frame sin
+/// pasar por el drop de A/V; lo apaga recién cuando logró subir un frame (así un
+/// seek en la ruta ffmpeg, que respawnea el proceso, no se pierde el primer
+/// frame si tarda un par de paints en llegar).
+static SEEK_FORCE: AtomicBool = AtomicBool::new(false);
+
 fn reset_av_sync_anchor() {
     if let Some(pipe) = pipeline_slot().get() {
         pipe.sync.lock().reset();
     }
+    // Tras un seek, queremos ver el destino aunque estemos en pausa.
+    SEEK_FORCE.store(true, Ordering::Relaxed);
 }
 
 /// Mueve la posición del Playlist (= track actual) en `delta_secs`
@@ -2084,22 +2094,23 @@ fn default_snapshot_path() -> PathBuf {
     PathBuf::from(format!("media-snap-{secs}.png"))
 }
 
+// El gate de pausa del VIDEO ya no vive en un `PausableVideo`: lo decide el
+// render loop (`gpu_paint`), que es quien sabe si hay un seek pendiente. Así,
+// estando en pausa, un seek puede tickear y presentar el frame destino (lo que
+// `PausableVideo` impedía, porque devolvía `None` mientras estuviera pausado).
+// El audio sigue con `PausableAudio` aparte.
 fn new_testcard() -> Box<dyn FrameSource + Send> {
-    Box::new(PausableVideo::new(
-        TestCard::new(TESTCARD_W, TESTCARD_H, TESTCARD_FPS),
-        pause().clone(),
-    ))
+    Box::new(TestCard::new(TESTCARD_W, TESTCARD_H, TESTCARD_FPS))
 }
 
 fn build_video_source() -> Box<dyn FrameSource + Send> {
     let cfg = config_slot().get().expect("config set");
-    let p = pause().clone();
     match cfg.kind {
         VideoKind::Testcard => new_testcard(),
         VideoKind::Gif => {
             let path = video_path_slot().get().expect("video path set");
             match GifSource::from_path(path) {
-                Ok(s) => Box::new(PausableVideo::new(s, p)),
+                Ok(s) => Box::new(s),
                 Err(e) => {
                     eprintln!(
                         "media-app: error abriendo GIF {path:?}: {e} — caigo a testcard"
@@ -2111,7 +2122,7 @@ fn build_video_source() -> Box<dyn FrameSource + Send> {
         VideoKind::Image => {
             let path = video_path_slot().get().expect("video path set");
             match ImageSource::from_path(path) {
-                Ok(s) => Box::new(PausableVideo::new(s, p)),
+                Ok(s) => Box::new(s),
                 Err(e) => {
                     eprintln!(
                         "media-app: error abriendo imagen {path:?}: {e} — caigo a testcard"
@@ -2131,7 +2142,7 @@ fn build_video_source() -> Box<dyn FrameSource + Send> {
                     FfmpegVideoSource::from_session(s.clone())
                         .map_err(|e| e.to_string())
                 }) {
-                Ok(s) => Box::new(PausableVideo::new(s, p)),
+                Ok(s) => Box::new(s),
                 Err(e) => {
                     eprintln!("media-app: ffmpeg video: {e} — caigo a testcard");
                     new_testcard()
@@ -2141,7 +2152,7 @@ fn build_video_source() -> Box<dyn FrameSource + Send> {
         VideoKind::Av1 => {
             let path = video_path_slot().get().expect("video path set");
             match media_source_av1::Av1VideoSource::open(path) {
-                Ok(s) => Box::new(PausableVideo::new(s, p)),
+                Ok(s) => Box::new(s),
                 Err(e) => {
                     eprintln!("media-app: AV1 nativo {path:?}: {e} — caigo a testcard");
                     new_testcard()
@@ -2515,23 +2526,41 @@ impl App for MediaApp {
             let dt = wall_dt;
             let audio_pos = current_audio_position();
 
+            // Gate de pausa del video (antes lo hacía `PausableVideo`): si está
+            // en pausa no avanzamos el frame… salvo que haya un seek pendiente
+            // (`SEEK_FORCE`), en cuyo caso tickeamos igual para mostrar de
+            // inmediato el destino del salto y seguir pausados.
+            let force = SEEK_FORCE.load(Ordering::Relaxed);
+            let do_tick = !pause().is_paused() || force;
+
             let mut buf = pipe.buf.lock();
             let mut src = pipe.source.lock();
-            if let Some((w, h)) = src.tick(dt, &mut buf) {
-                let frame_pts = src.pts();
-                drop(src);
-                // Si hay reloj de audio (no ocupado) y la fuente conoce su
-                // PTS, la política descarta el frame si llegó tarde respecto
-                // del audio. Sin PTS o sin audio se presenta siempre.
-                let present = match (audio_pos, frame_pts) {
-                    (Some(audio), Some(pts)) => {
-                        !matches!(pipe.sync.lock().plan(audio, pts), FramePlan::Drop)
+            if do_tick {
+                if let Some((w, h)) = src.tick(dt, &mut buf) {
+                    let frame_pts = src.pts();
+                    drop(src);
+                    // Forzado por seek → presentar sí o sí (sin pasar por el
+                    // drop de A/V). Si no: con reloj de audio + PTS, la política
+                    // descarta el frame atrasado. Sin PTS o sin audio, siempre.
+                    let present = force
+                        || match (audio_pos, frame_pts) {
+                            (Some(audio), Some(pts)) => {
+                                !matches!(pipe.sync.lock().plan(audio, pts), FramePlan::Drop)
+                            }
+                            _ => true,
+                        };
+                    if present {
+                        pipe.surface.upload(&buf, w, h);
+                        *pipe.last_dim.lock() = (w, h);
+                        // Recién ahora apagamos el pedido de seek: si el frame
+                        // nuevo tardó en llegar (respawn de ffmpeg), seguimos
+                        // forzando en los próximos paints hasta presentarlo.
+                        if force {
+                            SEEK_FORCE.store(false, Ordering::Relaxed);
+                        }
                     }
-                    _ => true,
-                };
-                if present {
-                    pipe.surface.upload(&buf, w, h);
-                    *pipe.last_dim.lock() = (w, h);
+                } else {
+                    drop(src);
                 }
             } else {
                 drop(src);
