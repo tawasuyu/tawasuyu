@@ -40,6 +40,7 @@ pub mod toolbar;
 pub mod tracks;
 pub mod transform;
 pub mod viewport;
+pub mod waveform;
 pub mod layout;
 pub mod sync;
 
