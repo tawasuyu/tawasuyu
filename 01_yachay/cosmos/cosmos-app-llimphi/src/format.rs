@@ -6,8 +6,12 @@
 //! como path (`cosmos_render::glyphs`); acá son texto plano en filas, así que
 //! usamos códigos cortos.
 
+// Códigos alfabéticos de 3 letras (español) para los signos. Mismo motivo
+// que `simbolo_cuerpo`/`simbolo_aspecto`: los unicode `♈..♓` son ilegibles
+// como texto en una fila (y caían como `.notdef` en fuentes sin el bloque
+// astrológico). En el wheel sí van como path (`cosmos_render::glyphs`).
 const SIGNOS: [&str; 12] = [
-    "♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓",
+    "Ari", "Tau", "Gem", "Can", "Leo", "Vir", "Lib", "Esc", "Sag", "Cap", "Acu", "Pis",
 ];
 
 pub(crate) fn signo_de_longitud(deg: f32) -> &'static str {
