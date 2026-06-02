@@ -37,6 +37,16 @@ pub fn hex_corto(id: &ParticipanteId) -> String {
     s
 }
 
+/// Cómo viajan los bytes de un cuadro de video por el cable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FormatoCuadro {
+    /// RGBA8 crudo (4 bytes/pixel). Sin compresión — sólo para LAN o preview.
+    Rgba,
+    /// JPEG comprimido (MJPEG por cuadro). El default del cable: ~20-40× menos
+    /// bytes que RGBA, sin estado inter-cuadro (baja latencia).
+    Jpeg,
+}
+
 /// El protocolo de cable de uya. Cada conexión es full-duplex y transporta
 /// estos paquetes enmarcados (largo u32 + postcard) — ver `uya-app`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,13 +60,15 @@ pub enum Paquete {
     /// Estado de medios del emisor (cámara / micrófono encendidos). Se envía
     /// al conectar y cada vez que el humano togglea.
     Estado { camara: bool, microfono: bool },
-    /// Un cuadro de video RGBA8 (4 bytes/pixel) ya escalado a `ancho × alto`.
-    /// `seq` es monótono creciente para poder descartar cuadros viejos.
+    /// Un cuadro de video de `ancho × alto`, en el `formato` indicado (RGBA8
+    /// crudo o JPEG comprimido). `seq` es monótono creciente para descartar
+    /// cuadros viejos. El receptor decodifica a RGBA antes de pintarlo.
     Cuadro {
         ancho: u16,
         alto: u16,
         seq: u32,
-        rgba: Vec<u8>,
+        formato: FormatoCuadro,
+        datos: Vec<u8>,
     },
     /// Un bloque de audio PCM `f32` intercalado, en el formato nativo del
     /// emisor (`sample_rate` Hz, `canales`). El receptor lo mezcla/resamplea
@@ -178,7 +190,8 @@ mod tests {
                 ancho: 4,
                 alto: 2,
                 seq: 7,
-                rgba: vec![1, 2, 3, 4, 5, 6, 7, 8],
+                formato: FormatoCuadro::Jpeg,
+                datos: vec![1, 2, 3, 4, 5, 6, 7, 8],
             },
             Paquete::Audio {
                 sample_rate: 48_000,

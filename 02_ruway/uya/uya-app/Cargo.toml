@@ -52,3 +52,6 @@ tokio = { workspace = true }
 # aporta el `StreamExt` del aceptador de streams entrantes.
 tokio-util = { workspace = true }
 futures = { workspace = true }
+# Compresión de cuadros: JPEG (MJPEG) encode/decode. El mismo `image` del
+# workspace (feature jpeg ya activa).
+image = { workspace = true }

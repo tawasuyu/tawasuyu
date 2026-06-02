@@ -52,7 +52,9 @@ Anda hoy, end-to-end y feo a propósito:
   sirve cruzando NAT, no sólo en LAN. Streams multiplexados por `/uya/transporte/1.0.0`.
 - ✅ Identidad de app determinista por nombre (BLAKE3) en el handshake `Hola`.
 - ✅ Presencia: entrar / salir / estado de medios.
-- ✅ **Video en ambos sentidos** (cuadros RGBA enmarcados) + preview local.
+- ✅ **Video en ambos sentidos** + preview local. Comprimido con **JPEG por
+  cuadro** (MJPEG): ~40× menos bytes que RGBA crudo (192×144: 110 KB → ~2,8 KB),
+  sin estado inter-cuadro (baja latencia). El preview local va sin comprimir.
 - ✅ **Audio en ambos sentidos**: captura de micrófono (`MicSource`, o tono sintético
   con `UYA_TONO=1` sin micro), `Paquete::Audio` PCM `f32`, y una `MezclaRemota` que
   baja a mono + resamplea linealmente al formato del dispositivo + suma a los N pares,

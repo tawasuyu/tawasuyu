@@ -32,7 +32,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::sync::{mpsc as tmpsc, Mutex as TMutex};
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
 
-use uya_core::{id_desde_nombre, Paquete, ParticipanteId};
+use uya_core::{id_desde_nombre, FormatoCuadro, Paquete, ParticipanteId};
 
 use crate::audio::MezclaRemota;
 use crate::EventoUya;
@@ -395,15 +395,23 @@ async fn registrar(
                     ancho,
                     alto,
                     seq: _,
-                    rgba,
+                    formato,
+                    datos,
                 } => {
                     if let Some(id) = remoto {
-                        let _ = ev_tx.send(EventoUya::Cuadro {
-                            id,
-                            ancho,
-                            alto,
-                            rgba: Arc::new(rgba),
-                        });
+                        // Decodificar a RGBA según el formato del cable.
+                        let cuadro = match formato {
+                            FormatoCuadro::Rgba => Some((ancho, alto, datos)),
+                            FormatoCuadro::Jpeg => crate::video::decodar_jpeg(&datos),
+                        };
+                        if let Some((w, h, rgba)) = cuadro {
+                            let _ = ev_tx.send(EventoUya::Cuadro {
+                                id,
+                                ancho: w,
+                                alto: h,
+                                rgba: Arc::new(rgba),
+                            });
+                        }
                     }
                 }
                 Paquete::Audio {

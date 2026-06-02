@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use media_core::{FrameSource, TestCard};
-use uya_core::Paquete;
+use uya_core::{FormatoCuadro, Paquete};
 
 use crate::{Enlace, EventoUya};
 
@@ -28,6 +28,7 @@ pub fn iniciar_camara(enlace: Arc<Enlace>, ancho: u16, alto: u16, fps: f32) {
             let mut buf: Vec<u8> = Vec::new();
             let mut ultimo = Instant::now();
             let mut seq: u32 = 0;
+            let mut reporto_tam = false;
             let yo = enlace.yo();
             loop {
                 let ahora = Instant::now();
@@ -37,13 +38,36 @@ pub fn iniciar_camara(enlace: Arc<Enlace>, ancho: u16, alto: u16, fps: f32) {
                 if let Some((w, h)) = fuente.tick(dt, &mut buf) {
                     if enlace.camara_encendida() {
                         seq = seq.wrapping_add(1);
-                        let paquete = Paquete::Cuadro {
+                        // Para el cable: JPEG comprimido. Si el encode falla
+                        // (no debería), caemos a RGBA crudo.
+                        let (formato, datos) = match crate::video::encodar_jpeg(
+                            &buf,
+                            w,
+                            h,
+                            crate::video::CALIDAD,
+                        ) {
+                            Some(jpeg) => {
+                                if !reporto_tam {
+                                    eprintln!(
+                                        "uya: cuadro {w}x{h} RGBA={} → JPEG={} ({:.1}%)",
+                                        buf.len(),
+                                        jpeg.len(),
+                                        100.0 * jpeg.len() as f32 / buf.len().max(1) as f32
+                                    );
+                                    reporto_tam = true;
+                                }
+                                (FormatoCuadro::Jpeg, jpeg)
+                            }
+                            None => (FormatoCuadro::Rgba, buf.clone()),
+                        };
+                        enlace.emitir(&Paquete::Cuadro {
                             ancho: w as u16,
                             alto: h as u16,
                             seq,
-                            rgba: buf.clone(),
-                        };
-                        enlace.emitir(&paquete);
+                            formato,
+                            datos,
+                        });
+                        // Preview local: RGBA crudo, sin pasar por el códec.
                         let enviado = eventos.send(EventoUya::Cuadro {
                             id: yo,
                             ancho: w as u16,
