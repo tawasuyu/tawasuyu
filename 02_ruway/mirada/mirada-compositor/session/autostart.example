@@ -5,9 +5,13 @@
 # por # se ignoran. Cada línea se pasa a `sh -c`, así que valen las
 # variables, las tuberías y el `&` final no hace falta.
 
-# El shell de carmen — barra acoplada al pie con su línea de comandos.
-# carmen la reconoce por su app_id y le reserva la franja.
-shuma-shell --launcher
+# El marco pata — barra/dock acoplado a un borde; carmen lo reconoce por su
+# app_id y le reserva la franja. (Si no hay autostart, el compositor lo levanta
+# solo; acá lo ponemos explícito para combinarlo con shuma.)
+pata-llimphi
+# El shell de carmen propiamente dicho (shuma): barra superior con apps y
+# launcher. Es el binario que instala install-mirada-dm.sh.
+shuma-shell-llimphi
 
 # Una terminal para empezar.
 foot
