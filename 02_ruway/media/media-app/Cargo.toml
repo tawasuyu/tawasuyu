@@ -10,6 +10,7 @@ publish.workspace = true
 llimphi-surface = { path = "../../llimphi/llimphi-surface" }
 llimphi-theme = { workspace = true }
 llimphi-ui = { path = "../../llimphi/llimphi-ui" }
+llimphi-icons = { workspace = true }
 llimphi-widget-tiled = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }

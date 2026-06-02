@@ -88,6 +88,22 @@ pub enum Icon {
     // --- Sistema ---
     Settings,
     More,
+    // --- Multimedia ---
+    Play,
+    Pause,
+    Stop,
+    SkipBack,
+    SkipForward,
+    Rewind,
+    FastForward,
+    Volume,
+    VolumeMute,
+    Repeat,
+    Shuffle,
+    Record,
+    Equalizer,
+    Camera,
+    Gauge,
 }
 
 impl Icon {
@@ -119,6 +135,21 @@ impl Icon {
             Icon::Bell => "bell",
             Icon::Settings => "settings",
             Icon::More => "more",
+            Icon::Play => "play",
+            Icon::Pause => "pause",
+            Icon::Stop => "stop",
+            Icon::SkipBack => "skip_back",
+            Icon::SkipForward => "skip_forward",
+            Icon::Rewind => "rewind",
+            Icon::FastForward => "fast_forward",
+            Icon::Volume => "volume",
+            Icon::VolumeMute => "volume_mute",
+            Icon::Repeat => "repeat",
+            Icon::Shuffle => "shuffle",
+            Icon::Record => "record",
+            Icon::Equalizer => "equalizer",
+            Icon::Camera => "camera",
+            Icon::Gauge => "gauge",
         }
     }
 
@@ -150,6 +181,21 @@ impl Icon {
             Icon::Bell => path_bell(),
             Icon::Settings => path_settings(),
             Icon::More => path_more(),
+            Icon::Play => path_play(),
+            Icon::Pause => path_pause(),
+            Icon::Stop => path_stop(),
+            Icon::SkipBack => path_skip(true),
+            Icon::SkipForward => path_skip(false),
+            Icon::Rewind => path_seek(true),
+            Icon::FastForward => path_seek(false),
+            Icon::Volume => path_volume(false),
+            Icon::VolumeMute => path_volume(true),
+            Icon::Repeat => path_repeat(),
+            Icon::Shuffle => path_shuffle(),
+            Icon::Record => path_record(),
+            Icon::Equalizer => path_equalizer(),
+            Icon::Camera => path_camera(),
+            Icon::Gauge => path_gauge(),
         }
     }
 }
@@ -545,6 +591,194 @@ fn path_circle(cx: f64, cy: f64, r: f64, segments: usize) -> BezPath {
     p
 }
 
+// ---------------------------------------------------------------------
+// Multimedia — transporte de reproductor (media-app y demás)
+// ---------------------------------------------------------------------
+
+fn append(dst: &mut BezPath, src: &BezPath) {
+    for el in src.elements() {
+        dst.push(*el);
+    }
+}
+
+fn path_play() -> BezPath {
+    // Triángulo apuntando a la derecha.
+    let mut p = BezPath::new();
+    p.move_to((8.0, 5.0));
+    p.line_to((8.0, 19.0));
+    p.line_to((18.0, 12.0));
+    p.close_path();
+    p
+}
+
+fn path_pause() -> BezPath {
+    // Dos barras verticales.
+    let mut p = BezPath::new();
+    p.move_to((9.0, 6.0));
+    p.line_to((9.0, 18.0));
+    p.move_to((15.0, 6.0));
+    p.line_to((15.0, 18.0));
+    p
+}
+
+fn path_stop() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((7.0, 7.0));
+    p.line_to((17.0, 7.0));
+    p.line_to((17.0, 17.0));
+    p.line_to((7.0, 17.0));
+    p.close_path();
+    p
+}
+
+/// Saltar pista: barra + triángulo (a la izquierda si `back`).
+fn path_skip(back: bool) -> BezPath {
+    let mut p = BezPath::new();
+    if back {
+        p.move_to((7.0, 6.0));
+        p.line_to((7.0, 18.0));
+        p.move_to((17.0, 6.0));
+        p.line_to((17.0, 18.0));
+        p.line_to((8.0, 12.0));
+        p.close_path();
+    } else {
+        p.move_to((7.0, 6.0));
+        p.line_to((7.0, 18.0));
+        p.line_to((16.0, 12.0));
+        p.close_path();
+        p.move_to((17.0, 6.0));
+        p.line_to((17.0, 18.0));
+    }
+    p
+}
+
+/// Avance rápido: dos triángulos (a la izquierda si `rewind`).
+fn path_seek(rewind: bool) -> BezPath {
+    let mut p = BezPath::new();
+    if rewind {
+        p.move_to((11.0, 6.0));
+        p.line_to((11.0, 18.0));
+        p.line_to((4.0, 12.0));
+        p.close_path();
+        p.move_to((20.0, 6.0));
+        p.line_to((20.0, 18.0));
+        p.line_to((13.0, 12.0));
+        p.close_path();
+    } else {
+        p.move_to((4.0, 6.0));
+        p.line_to((4.0, 18.0));
+        p.line_to((11.0, 12.0));
+        p.close_path();
+        p.move_to((13.0, 6.0));
+        p.line_to((13.0, 18.0));
+        p.line_to((20.0, 12.0));
+        p.close_path();
+    }
+    p
+}
+
+/// Altavoz; con ondas (normal) o con una X (mute).
+fn path_volume(mute: bool) -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((3.0, 9.0));
+    p.line_to((8.0, 9.0));
+    p.line_to((12.0, 5.0));
+    p.line_to((12.0, 19.0));
+    p.line_to((8.0, 15.0));
+    p.line_to((3.0, 15.0));
+    p.close_path();
+    if mute {
+        p.move_to((15.0, 9.0));
+        p.line_to((21.0, 15.0));
+        p.move_to((21.0, 9.0));
+        p.line_to((15.0, 15.0));
+    } else {
+        p.move_to((15.0, 9.0));
+        p.quad_to((17.5, 12.0), (15.0, 15.0));
+        p.move_to((17.5, 7.0));
+        p.quad_to((21.5, 12.0), (17.5, 17.0));
+    }
+    p
+}
+
+fn path_repeat() -> BezPath {
+    // Dos flechas horizontales opuestas (loop compacto).
+    let mut p = BezPath::new();
+    p.move_to((6.0, 9.0));
+    p.line_to((16.0, 9.0));
+    p.move_to((14.0, 7.0));
+    p.line_to((17.0, 9.0));
+    p.line_to((14.0, 11.0));
+    p.move_to((18.0, 15.0));
+    p.line_to((8.0, 15.0));
+    p.move_to((10.0, 13.0));
+    p.line_to((7.0, 15.0));
+    p.line_to((10.0, 17.0));
+    p
+}
+
+fn path_shuffle() -> BezPath {
+    // Dos flechas que se cruzan.
+    let mut p = BezPath::new();
+    p.move_to((5.0, 8.0));
+    p.line_to((19.0, 16.0));
+    p.move_to((16.0, 15.5));
+    p.line_to((20.0, 16.5));
+    p.line_to((17.5, 13.0));
+    p.move_to((5.0, 16.0));
+    p.line_to((19.0, 8.0));
+    p.move_to((17.5, 11.0));
+    p.line_to((20.0, 7.5));
+    p.line_to((16.0, 8.5));
+    p
+}
+
+fn path_record() -> BezPath {
+    path_circle(12.0, 12.0, 5.0, 20)
+}
+
+fn path_equalizer() -> BezPath {
+    let mut p = BezPath::new();
+    // Tres deslizadores verticales.
+    p.move_to((7.0, 5.0));
+    p.line_to((7.0, 19.0));
+    p.move_to((12.0, 5.0));
+    p.line_to((12.0, 19.0));
+    p.move_to((17.0, 5.0));
+    p.line_to((17.0, 19.0));
+    // Perillas a distinta altura.
+    p.move_to((5.0, 9.0));
+    p.line_to((9.0, 9.0));
+    p.move_to((10.0, 14.0));
+    p.line_to((14.0, 14.0));
+    p.move_to((15.0, 8.0));
+    p.line_to((19.0, 8.0));
+    p
+}
+
+fn path_camera() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((4.0, 8.0));
+    p.line_to((7.0, 8.0));
+    p.line_to((9.0, 6.0));
+    p.line_to((15.0, 6.0));
+    p.line_to((17.0, 8.0));
+    p.line_to((20.0, 8.0));
+    p.line_to((20.0, 18.0));
+    p.line_to((4.0, 18.0));
+    p.close_path();
+    append(&mut p, &path_circle(12.0, 13.0, 3.5, 16));
+    p
+}
+
+fn path_gauge() -> BezPath {
+    // Esfera + aguja (velocidad).
+    let mut p = path_circle(12.0, 13.0, 6.0, 20);
+    p.move_to((12.0, 13.0));
+    p.line_to((16.0, 9.0));
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +791,10 @@ mod tests {
             Icon::ChevronUp, Icon::ChevronDown, Icon::ChevronLeft, Icon::ChevronRight,
             Icon::Home, Icon::Search, Icon::Info, Icon::Warning, Icon::Error,
             Icon::Bell, Icon::Settings, Icon::More,
+            Icon::Play, Icon::Pause, Icon::Stop, Icon::SkipBack, Icon::SkipForward,
+            Icon::Rewind, Icon::FastForward, Icon::Volume, Icon::VolumeMute,
+            Icon::Repeat, Icon::Shuffle, Icon::Record, Icon::Equalizer,
+            Icon::Camera, Icon::Gauge,
         ];
         for icon in all {
             let p = icon.path();
@@ -576,6 +814,10 @@ mod tests {
             Icon::ChevronUp, Icon::ChevronDown, Icon::ChevronLeft, Icon::ChevronRight,
             Icon::Home, Icon::Search, Icon::Info, Icon::Warning, Icon::Error,
             Icon::Bell, Icon::Settings, Icon::More,
+            Icon::Play, Icon::Pause, Icon::Stop, Icon::SkipBack, Icon::SkipForward,
+            Icon::Rewind, Icon::FastForward, Icon::Volume, Icon::VolumeMute,
+            Icon::Repeat, Icon::Shuffle, Icon::Record, Icon::Equalizer,
+            Icon::Camera, Icon::Gauge,
         ];
         let mut names: Vec<&str> = all.iter().map(|i| i.name()).collect();
         let n = names.len();

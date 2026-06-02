@@ -70,6 +70,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Position, Size, Style},
     AlignItems, FlexWrap, JustifyContent, Rect as TaffyRect,
 };
+use llimphi_icons::{icon_view, Icon};
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{self, TextBlock};
@@ -3705,15 +3706,23 @@ fn toolbar_view(model: &Model) -> View<Msg> {
                 flex_direction: FlexDirection::Row,
                 size: Size {
                     width: percent(1.0_f32),
-                    height: length(42.0_f32),
+                    height: length(48.0_f32),
                 },
                 gap: Size {
-                    width: length(6.0_f32),
+                    width: length(10.0_f32),
                     height: length(0.0_f32),
+                },
+                padding: TaffyRect {
+                    left: length(10.0_f32),
+                    right: length(10.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
                 },
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
+            .fill(Color::from_rgba8(28, 33, 43, 255))
+            .radius(10.0)
             .children(items)
         })
         .collect();
@@ -3722,11 +3731,11 @@ fn toolbar_view(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
-            height: length(n * 48.0_f32),
+            height: length(n * 56.0_f32),
         },
         gap: Size {
             width: length(0.0_f32),
-            height: length(6.0_f32),
+            height: length(8.0_f32),
         },
         ..Default::default()
     })
@@ -3747,42 +3756,76 @@ fn bar_label(text: String, width: f32, color: Color) -> View<Msg> {
     .text(text, 13.0, color)
 }
 
-/// Mapea un [`BarItem`] a su vista concreta. Los botones reusan
-/// `chip_button` + `Msg::Command`; los widgets especiales (timeline, reloj,
+/// Botón de barra con ícono del set canónico [`llimphi_icons`] (GUI
+/// desacoplada y consistente con el resto de la suite). `active` tinta el
+/// fondo/ícono (toggle encendido, reproduciendo, grabando…). `Record` va
+/// rojo por convención.
+fn icon_button(icon: Icon, active: bool, msg: Msg) -> View<Msg> {
+    let bg = if active {
+        Color::from_rgba8(46, 84, 110, 255)
+    } else {
+        Color::from_rgba8(44, 52, 66, 255)
+    };
+    let col = if matches!(icon, Icon::Record) {
+        Color::from_rgba8(232, 86, 86, 255)
+    } else if active {
+        Color::from_rgba8(150, 215, 245, 255)
+    } else {
+        Color::from_rgba8(214, 224, 240, 255)
+    };
+    View::new(Style {
+        size: Size {
+            width: length(40.0_f32),
+            height: length(34.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(Color::from_rgba8(70, 92, 120, 255))
+    .radius(8.0)
+    .on_click(msg)
+    .children(vec![icon_view::<Msg>(icon, col, 2.0)])
+}
+
+/// Mapea un [`BarItem`] a su vista concreta. Los botones-ícono reusan
+/// `icon_button` + `Msg::Command`; los widgets especiales (timeline, reloj,
 /// etiquetas, separador) se arman aparte.
 fn bar_item_view(item: BarItem) -> View<Msg> {
     use MediaCommand::*;
     let step = settings().seek_step_secs;
     let vstep = settings().volume_step;
-    let bg = Color::from_rgba8(48, 56, 70, 255);
-    let fg = Color::from_rgba8(222, 230, 244, 255);
-    let cmd = |label: &str, c: MediaCommand| chip_button(label, bg, fg, Msg::Command(c));
+    let snap = playback_snapshot();
+    // Botón-ícono que despacha un MediaCommand.
+    let icmd = |icon: Icon, active: bool, c: MediaCommand| icon_button(icon, active, Msg::Command(c));
     match item {
         BarItem::PlayPause => {
-            let label = if pause().is_paused() { "play" } else { "pausa" };
-            cmd(label, TogglePause)
+            let paused = pause().is_paused();
+            let icon = if paused { Icon::Play } else { Icon::Pause };
+            icon_button(icon, !paused, Msg::Command(TogglePause))
         }
-        BarItem::Stop => cmd("stop", SeekTo { fraction: 0.0 }),
-        BarItem::Prev => cmd("⟨trk", PrevTrack),
-        BarItem::Next => cmd("trk⟩", NextTrack),
-        BarItem::SeekBack => cmd(&format!("−{step}s"), SeekBy { secs: -step }),
-        BarItem::SeekForward => cmd(&format!("+{step}s"), SeekBy { secs: step }),
-        BarItem::VolumeDown => cmd("vol−", VolumeBy { delta: -vstep }),
-        BarItem::VolumeUp => cmd("vol+", VolumeBy { delta: vstep }),
-        BarItem::Mute => cmd("mute", SetVolume { level: 0.0 }),
-        BarItem::Repeat => cmd("rep", CycleRepeat),
-        BarItem::Shuffle => cmd("shuf", ToggleShuffle),
-        BarItem::SpeedDown => cmd("spd−", SpeedStep { dir: -1 }),
-        BarItem::SpeedUp => cmd("spd+", SpeedStep { dir: 1 }),
-        BarItem::SpeedReset => cmd("1×", SetSpeed { mult: 1.0 }),
-        BarItem::Snapshot => cmd("snap", Snapshot),
-        BarItem::Record => cmd("rec", ToggleRecord),
-        BarItem::Equalizer => cmd("eq", EqToggle),
-        BarItem::Settings => chip_button("⚙ cfg", bg, fg, Msg::ToggleSettings),
+        BarItem::Stop => icmd(Icon::Stop, false, SeekTo { fraction: 0.0 }),
+        BarItem::Prev => icmd(Icon::SkipBack, false, PrevTrack),
+        BarItem::Next => icmd(Icon::SkipForward, false, NextTrack),
+        BarItem::SeekBack => icmd(Icon::Rewind, false, SeekBy { secs: -step }),
+        BarItem::SeekForward => icmd(Icon::FastForward, false, SeekBy { secs: step }),
+        BarItem::VolumeDown => icmd(Icon::Minus, false, VolumeBy { delta: -vstep }),
+        BarItem::VolumeUp => icmd(Icon::Plus, false, VolumeBy { delta: vstep }),
+        BarItem::Mute => icmd(Icon::VolumeMute, volume().get() <= 1e-4, SetVolume { level: 0.0 }),
+        BarItem::Repeat => icmd(Icon::Repeat, snap.repeat_label != "rep-", CycleRepeat),
+        BarItem::Shuffle => icmd(Icon::Shuffle, snap.shuffle_on, ToggleShuffle),
+        BarItem::SpeedDown => icmd(Icon::ChevronDown, false, SpeedStep { dir: -1 }),
+        BarItem::SpeedUp => icmd(Icon::ChevronUp, false, SpeedStep { dir: 1 }),
+        BarItem::SpeedReset => icmd(Icon::Gauge, (snap.speed - 1.0).abs() < 1e-3, SetSpeed { mult: 1.0 }),
+        BarItem::Snapshot => icmd(Icon::Camera, false, Snapshot),
+        BarItem::Record => icon_button(Icon::Record, recorder().is_recording(), Msg::Command(ToggleRecord)),
+        BarItem::Equalizer => icmd(Icon::Equalizer, eq().is_enabled(), EqToggle),
+        BarItem::Settings => icon_button(Icon::Settings, false, Msg::ToggleSettings),
         BarItem::Timeline => View::new(Style {
             size: Size {
                 width: auto(),
-                height: length(36.0_f32),
+                height: length(34.0_f32),
             },
             flex_grow: 1.0,
             align_items: Some(AlignItems::Center),
@@ -3792,7 +3835,7 @@ fn bar_item_view(item: BarItem) -> View<Msg> {
         BarItem::Spacer => View::new(Style {
             size: Size {
                 width: auto(),
-                height: length(36.0_f32),
+                height: length(34.0_f32),
             },
             flex_grow: 1.0,
             ..Default::default()
