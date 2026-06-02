@@ -359,38 +359,55 @@ fn ansi_rgb(i: u8) -> (u8, u8, u8) {
 
 /// Traduce una tecla a los bytes que el shell espera por el PTY.
 fn translate_key(e: &KeyEvent) -> Option<Vec<u8>> {
-    match &e.key {
-        Key::Named(n) => Some(match n {
-            NamedKey::Enter => vec![b'\r'],
-            NamedKey::Backspace => vec![0x7f],
-            NamedKey::Tab => vec![b'\t'],
-            NamedKey::Escape => vec![0x1b],
-            NamedKey::ArrowUp => b"\x1b[A".to_vec(),
-            NamedKey::ArrowDown => b"\x1b[B".to_vec(),
-            NamedKey::ArrowRight => b"\x1b[C".to_vec(),
-            NamedKey::ArrowLeft => b"\x1b[D".to_vec(),
-            NamedKey::Home => b"\x1b[H".to_vec(),
-            NamedKey::End => b"\x1b[F".to_vec(),
-            NamedKey::Delete => b"\x1b[3~".to_vec(),
-            NamedKey::PageUp => b"\x1b[5~".to_vec(),
-            NamedKey::PageDown => b"\x1b[6~".to_vec(),
-            _ => return None,
-        }),
-        Key::Character(s) => {
-            let c = s.chars().next()?;
-            // Ctrl+letra → byte de control (Ctrl-C = 0x03, etc.).
-            if e.modifiers.ctrl && c.is_ascii() {
-                return Some(vec![(c.to_ascii_uppercase() as u8) & 0x1f]);
-            }
-            // Texto normal (respeta shift/mayúsculas/símbolos).
-            if let Some(t) = &e.text {
-                if !t.is_empty() {
-                    return Some(t.as_bytes().to_vec());
+    // 1. Teclas con secuencia de escape fija (navegación / edición). Las que
+    //    no listamos caen abajo, donde su `text` (Space, símbolos, etc.) se
+    //    manda tal cual — clave para no tragarse la barra espaciadora.
+    if let Key::Named(n) = &e.key {
+        let seq: &[u8] = match n {
+            NamedKey::Enter => b"\r",
+            NamedKey::Backspace => b"\x7f",
+            NamedKey::Tab => b"\t",
+            NamedKey::Escape => b"\x1b",
+            NamedKey::ArrowUp => b"\x1b[A",
+            NamedKey::ArrowDown => b"\x1b[B",
+            NamedKey::ArrowRight => b"\x1b[C",
+            NamedKey::ArrowLeft => b"\x1b[D",
+            NamedKey::Home => b"\x1b[H",
+            NamedKey::End => b"\x1b[F",
+            NamedKey::Delete => b"\x1b[3~",
+            NamedKey::PageUp => b"\x1b[5~",
+            NamedKey::PageDown => b"\x1b[6~",
+            _ => b"",
+        };
+        if !seq.is_empty() {
+            return Some(seq.to_vec());
+        }
+    }
+
+    // 2. Ctrl + letra → byte de control (Ctrl-C = 0x03, Ctrl-D = 0x04, …).
+    if e.modifiers.ctrl {
+        if let Key::Character(s) = &e.key {
+            if let Some(c) = s.chars().next() {
+                if c.is_ascii() {
+                    return Some(vec![(c.to_ascii_uppercase() as u8) & 0x1f]);
                 }
             }
-            Some(s.as_bytes().to_vec())
         }
-        // Unidentified / Dead: sin bytes que mandar.
-        _ => None,
     }
+
+    // 3. Texto imprimible resuelto por el backend (incluye Space, símbolos,
+    //    mayúsculas con Shift, AltGr, etc.).
+    if let Some(t) = &e.text {
+        if !t.is_empty() {
+            return Some(t.as_bytes().to_vec());
+        }
+    }
+
+    // 4. Fallback: el char crudo si no hubo `text`.
+    if let Key::Character(s) = &e.key {
+        if !s.is_empty() {
+            return Some(s.as_bytes().to_vec());
+        }
+    }
+    None
 }
