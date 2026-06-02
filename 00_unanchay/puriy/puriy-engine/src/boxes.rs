@@ -12,7 +12,8 @@ use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
 use crate::style::{
-    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, Corners, FlexDirection, FlexWrap,
+    AlignContent, AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, Corners,
+    FlexDirection, FlexWrap,
     GridTrackSize, JustifyContent, LengthVal, LinearGradient, ListStyleType, Outline, Overflow,
     PointerEvents, Position, Sides, StyleEngine, TextAlign, TextDecorationLine, TextShadow,
     TextTransform, Transform, VerticalAlign, Visibility, WhiteSpace,
@@ -122,6 +123,8 @@ pub struct BoxNode {
     pub flex_direction: FlexDirection,
     pub justify_content: JustifyContent,
     pub align_items: AlignItems,
+    /// `align-content` (distribución de líneas/pistas en el eje cruzado).
+    pub align_content: AlignContent,
     pub flex_wrap: FlexWrap,
     pub gap_row: f32,
     pub gap_column: f32,
@@ -1089,6 +1092,7 @@ fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Option<Color>, f
     b.flex_direction = s.flex_direction;
     b.justify_content = s.justify_content;
     b.align_items = s.align_items;
+    b.align_content = s.align_content;
     b.flex_wrap = s.flex_wrap;
     b.gap_row = s.gap_row;
     b.gap_column = s.gap_column;
@@ -1778,6 +1782,7 @@ fn empty_root() -> BoxNode {
         flex_direction: FlexDirection::Row,
         justify_content: JustifyContent::Start,
         align_items: AlignItems::Stretch,
+        align_content: AlignContent::Normal,
         flex_wrap: FlexWrap::NoWrap,
         gap_row: 0.0,
         gap_column: 0.0,
@@ -2141,6 +2146,7 @@ fn build_node(
                 flex_direction: style.flex_direction,
                 justify_content: style.justify_content,
                 align_items: style.align_items,
+                align_content: style.align_content,
                 flex_wrap: style.flex_wrap,
                 gap_row: style.gap_row,
                 gap_column: style.gap_column,
@@ -2286,6 +2292,7 @@ fn build_node(
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::Start,
                 align_items: AlignItems::Stretch,
+                align_content: AlignContent::Normal,
                 flex_wrap: FlexWrap::NoWrap,
                 gap_row: 0.0,
                 gap_column: 0.0,
@@ -2376,6 +2383,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         flex_direction: FlexDirection::Row,
         justify_content: JustifyContent::Start,
         align_items: AlignItems::Stretch,
+        align_content: AlignContent::Normal,
         flex_wrap: FlexWrap::NoWrap,
         gap_row: 0.0,
         gap_column: 0.0,

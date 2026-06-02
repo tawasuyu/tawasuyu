@@ -19,8 +19,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use llimphi_layout::taffy::prelude::{
-    auto, fr, length, percent, AlignItems, AlignSelf, BoxSizing, Dimension, FlexDirection,
-    FlexWrap, JustifyContent, LengthPercentageAuto, Position as TaffyPosition, Rect, Size, Style,
+    auto, fr, length, percent, AlignContent, AlignItems, AlignSelf, BoxSizing, Dimension,
+    FlexDirection, FlexWrap, JustifyContent, LengthPercentageAuto, Position as TaffyPosition, Rect,
+    Size, Style,
 };
 use llimphi_layout::taffy::{Display as TaffyDisplay, GridTemplateComponent, TrackSizingFunction};
 use llimphi_raster::kurbo::{Affine, Line, Point, Rect as KurboRect, RoundedRect, Stroke};
@@ -47,7 +48,8 @@ use llimphi_theme::Theme;
 use puriy_engine::{
     AlignItems as CssAlignItems, AlignSelf as CssAlignSelf, BoxNode, BoxShadow,
     BoxSizing as CssBoxSizing, BoxTree, Display, Engine, FlexDirection as CssFlexDirection,
-    FlexWrap as CssFlexWrap, GridTrackSize, JustifyContent as CssJustifyContent, LengthVal,
+    AlignContent as CssAlignContent, FlexWrap as CssFlexWrap, GridTrackSize,
+    JustifyContent as CssJustifyContent, LengthVal,
     LinearGradient, Overflow, PointerEvents, Position as CssPosition, TextAlign,
     TextDecorationLine, VerticalAlign, Visibility,
 };
@@ -5743,6 +5745,15 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
         None
     };
 
+    // align-content: distribución de líneas (flex multilínea) / pistas
+    // (grid) en el eje cruzado. Aplica tanto a flex como a grid; `Normal`
+    // deja el default de taffy (None ≈ stretch).
+    let align_content = if is_flex || is_grid {
+        map_align_content(b.align_content)
+    } else {
+        None
+    };
+
     // gap: aplica a flex (y a futuros grid). Taffy lo expone como
     // `Size { width: column-gap, height: row-gap }`.
     let gap = if is_flex {
@@ -5807,6 +5818,7 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
         flex_wrap,
         justify_content,
         align_items,
+        align_content,
         align_self,
         flex_grow: b.flex_grow,
         flex_shrink: b.flex_shrink,
@@ -5949,6 +5961,22 @@ fn map_align(a: CssAlignItems) -> AlignItems {
         CssAlignItems::End => AlignItems::End,
         CssAlignItems::Stretch => AlignItems::Stretch,
         CssAlignItems::Baseline => AlignItems::Baseline,
+    }
+}
+
+/// `align-content` CSS → taffy. `Normal` ⇒ `None` (taffy aplica su default,
+/// ≈ stretch para flex). `Start`/`End` mapean a `FlexStart`/`FlexEnd` para
+/// que respeten la dirección flex (row-reverse, etc.).
+fn map_align_content(a: CssAlignContent) -> Option<AlignContent> {
+    match a {
+        CssAlignContent::Normal => None,
+        CssAlignContent::Start => Some(AlignContent::Start),
+        CssAlignContent::Center => Some(AlignContent::Center),
+        CssAlignContent::End => Some(AlignContent::End),
+        CssAlignContent::Stretch => Some(AlignContent::Stretch),
+        CssAlignContent::SpaceBetween => Some(AlignContent::SpaceBetween),
+        CssAlignContent::SpaceAround => Some(AlignContent::SpaceAround),
+        CssAlignContent::SpaceEvenly => Some(AlignContent::SpaceEvenly),
     }
 }
 

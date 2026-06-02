@@ -94,6 +94,9 @@ pub struct ComputedStyle {
     pub justify_content: JustifyContent,
     /// Alineación vertical (eje cruzado) de los hijos flex.
     pub align_items: AlignItems,
+    /// Distribución de las líneas (flex multilínea) / pistas (grid) en el
+    /// eje cruzado. `Normal` = default de taffy. No hereda.
+    pub align_content: AlignContent,
     /// `nowrap` por default (CSS spec).
     pub flex_wrap: FlexWrap,
     /// Separación entre items en el eje principal (px). En CSS estándar,
@@ -274,6 +277,21 @@ pub enum AlignItems {
     End,
     Stretch,
     Baseline,
+}
+
+/// Distribución de las *líneas* en el eje cruzado (flex multilínea) o de
+/// las pistas en grid. CSS `align-content`. `Normal` (default) deja que
+/// taffy use su comportamiento por defecto (stretch para flex). No hereda.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignContent {
+    Normal,
+    Start,
+    Center,
+    End,
+    Stretch,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
 }
 
 /// ¿Hijos en una sola línea o wrap a múltiples?
@@ -722,6 +740,7 @@ impl Default for ComputedStyle {
             flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::Start,
             align_items: AlignItems::Stretch,
+            align_content: AlignContent::Normal,
             flex_wrap: FlexWrap::NoWrap,
             gap_row: 0.0,
             gap_column: 0.0,
@@ -1635,6 +1654,7 @@ enum DeclKind {
     FlexDirection(FlexDirection),
     JustifyContent(JustifyContent),
     AlignItems(AlignItems),
+    AlignContent(AlignContent),
     FlexWrap(FlexWrap),
     /// `gap: A B` setea ambos (row=A, column=B); `gap: V` los iguala.
     Gap { row: f32, column: f32 },
@@ -1739,6 +1759,7 @@ impl Decl {
             DeclKind::FlexDirection(d) => s.flex_direction = *d,
             DeclKind::JustifyContent(j) => s.justify_content = *j,
             DeclKind::AlignItems(a) => s.align_items = *a,
+            DeclKind::AlignContent(a) => s.align_content = *a,
             DeclKind::FlexWrap(w) => s.flex_wrap = *w,
             DeclKind::Gap { row, column } => {
                 s.gap_row = *row;
@@ -3322,6 +3343,7 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "flex-wrap" => parse_flex_wrap(value).map(DeclKind::FlexWrap),
         "justify-content" => parse_justify_content(value).map(DeclKind::JustifyContent),
         "align-items" => parse_align_items(value).map(DeclKind::AlignItems),
+        "align-content" => parse_align_content(value).map(DeclKind::AlignContent),
         "gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "row-gap" => parse_length_px(value).map(DeclKind::RowGap),
         "column-gap" => parse_length_px(value).map(DeclKind::ColumnGap),
@@ -4292,6 +4314,23 @@ fn parse_align_items(s: &str) -> Option<AlignItems> {
         "end" | "flex-end" => Some(AlignItems::End),
         "stretch" => Some(AlignItems::Stretch),
         "baseline" => Some(AlignItems::Baseline),
+        _ => None,
+    }
+}
+
+/// `align-content`. `normal` y `baseline` colapsan a `Normal` (default de
+/// taffy ≈ stretch); el resto mapea directo. `start`/`end` aceptan también
+/// la variante `flex-*`.
+fn parse_align_content(s: &str) -> Option<AlignContent> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "normal" | "baseline" => Some(AlignContent::Normal),
+        "start" | "flex-start" => Some(AlignContent::Start),
+        "center" => Some(AlignContent::Center),
+        "end" | "flex-end" => Some(AlignContent::End),
+        "stretch" => Some(AlignContent::Stretch),
+        "space-between" => Some(AlignContent::SpaceBetween),
+        "space-around" => Some(AlignContent::SpaceAround),
+        "space-evenly" => Some(AlignContent::SpaceEvenly),
         _ => None,
     }
 }
@@ -6467,6 +6506,36 @@ mod tests {
         assert_eq!(s.flex_wrap, FlexWrap::Wrap);
         assert_eq!(s.gap_row, 16.0);
         assert_eq!(s.gap_column, 24.0);
+    }
+
+    #[test]
+    fn parsea_align_content_valores_y_alias() {
+        assert_eq!(parse_align_content("space-between"), Some(AlignContent::SpaceBetween));
+        assert_eq!(parse_align_content("flex-start"), Some(AlignContent::Start));
+        assert_eq!(parse_align_content("flex-end"), Some(AlignContent::End));
+        assert_eq!(parse_align_content("center"), Some(AlignContent::Center));
+        assert_eq!(parse_align_content("stretch"), Some(AlignContent::Stretch));
+        // `normal` y `baseline` colapsan al default.
+        assert_eq!(parse_align_content("normal"), Some(AlignContent::Normal));
+        assert_eq!(parse_align_content("baseline"), Some(AlignContent::Normal));
+        assert_eq!(parse_align_content("garbage"), None);
+    }
+
+    #[test]
+    fn align_content_computa_en_flex_y_default_normal() {
+        let html = r#"<html><head><style>
+            .multi { display: flex; flex-wrap: wrap; align-content: space-around; }
+        </style></head><body>
+            <div class="multi"><span>a</span></div>
+            <section style="display:flex"><span>b</span></section>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let multi = dom.find("div").unwrap();
+        assert_eq!(eng.compute(&multi).align_content, AlignContent::SpaceAround);
+        // Sin declaración, el default es Normal (no hereda del flujo).
+        let plain = dom.find("section").unwrap();
+        assert_eq!(eng.compute(&plain).align_content, AlignContent::Normal);
     }
 
     #[test]
