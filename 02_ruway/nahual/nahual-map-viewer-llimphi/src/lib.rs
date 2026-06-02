@@ -40,6 +40,8 @@ use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{draw_block, Alignment, TextBlock};
 use llimphi_ui::View;
 
+pub mod vt;
+
 /// Tope de bytes a leer (16 MiB). Un GeoJSON más grande que eso es un
 /// dataset, no un documento a ojo; el caller puede subirlo si hace falta.
 pub const DEFAULT_MAP_BYTES_MAX: u64 = 16 * 1024 * 1024;
@@ -253,6 +255,28 @@ fn parse_into(src: &str, cap: usize) -> Result<(MapData, bool), String> {
     let mut budget = cap;
     collect(&value, &mut data, &mut budget, None, None);
     Ok((data, budget == 0))
+}
+
+/// Decodifica un tile vectorial MVT (`bytes` en `z/x/y`) a un [`MapData`]
+/// renderizable, reusando toda la maquinaria del visor: cada feature del tile
+/// queda con su capa de origen como nombre (calle/agua/edificio…). Es la
+/// costura entre el decoder soberano de [`vt`] y el render existente; sobre
+/// esto se monta el basemap PMTiles cuando exista el lector del contenedor.
+pub fn mvt_tile_to_mapdata(bytes: &[u8], z: u32, x: u32, y: u32) -> MapData {
+    let mut data = MapData::default();
+    let mut budget = MAX_VERTICES;
+    for tf in vt::decode_mvt_tile(bytes, z, x, y) {
+        if budget == 0 {
+            break;
+        }
+        let fi = make_feature(&mut data, Some(&tf.layer));
+        match tf.geom {
+            vt::TileGeom::Point(c) => push_points(&mut data, std::slice::from_ref(&c), &mut budget, fi),
+            vt::TileGeom::Line(l) => push_line(&mut data, l, &mut budget, fi),
+            vt::TileGeom::Polygon(rings) => push_polygon(&mut data, rings, &mut budget, fi),
+        }
+    }
+    data
 }
 
 /// Nombres de campos numéricos presentes en las features, en orden de primera
@@ -2621,6 +2645,56 @@ mod tests {
         let r = route(&d, [0.1, 0.4], [1.9, -0.3]).expect("ruta");
         assert_eq!(r.path.first(), Some(&[0.0, 0.0]));
         assert_eq!(r.path.last(), Some(&[2.0, 0.0]));
+    }
+
+    #[test]
+    fn mvt_tile_a_mapdata() {
+        // Tile MVT con una LINESTRING (codificado a mano en el módulo vt).
+        // Acá validamos la costura a MapData reutilizando el decoder.
+        // MoveTo(0,0) LineTo +(100,0): una línea de dos vértices.
+        fn varint(out: &mut Vec<u8>, mut v: u64) {
+            loop {
+                let mut b = (v & 0x7f) as u8;
+                v >>= 7;
+                if v != 0 {
+                    b |= 0x80;
+                }
+                out.push(b);
+                if v == 0 {
+                    break;
+                }
+            }
+        }
+        let zz = |v: i32| ((v << 1) ^ (v >> 31)) as u64;
+        let mut geom = Vec::new();
+        varint(&mut geom, (1 << 3) | 1); // MoveTo count 1
+        varint(&mut geom, zz(100));
+        varint(&mut geom, zz(100));
+        varint(&mut geom, (1 << 3) | 2); // LineTo count 1
+        varint(&mut geom, zz(50));
+        varint(&mut geom, zz(0));
+        let mut feat = Vec::new();
+        varint(&mut feat, (3 << 3) | 0);
+        varint(&mut feat, 2); // LINESTRING
+        varint(&mut feat, (4 << 3) | 2);
+        varint(&mut feat, geom.len() as u64);
+        feat.extend_from_slice(&geom);
+        let mut layer = Vec::new();
+        varint(&mut layer, (1 << 3) | 2);
+        varint(&mut layer, 5);
+        layer.extend_from_slice(b"roads");
+        varint(&mut layer, (2 << 3) | 2);
+        varint(&mut layer, feat.len() as u64);
+        layer.extend_from_slice(&feat);
+        let mut tile = Vec::new();
+        varint(&mut tile, (3 << 3) | 2);
+        varint(&mut tile, layer.len() as u64);
+        tile.extend_from_slice(&layer);
+
+        let d = mvt_tile_to_mapdata(&tile, 0, 0, 0);
+        assert_eq!(d.lines.len(), 1);
+        assert_eq!(d.lines[0].len(), 2);
+        assert_eq!(d.features[0].name.as_deref(), Some("roads"));
     }
 
     #[test]
