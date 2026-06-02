@@ -323,6 +323,21 @@ números son leyes.
   (entero, con cast como `season_period`). Con esto **todo** `SimParams` es
   editable desde el panel y serializable vía el `Escenario`; los packs
   cinéticos también se reproducen headless en la CLI.
+- ~~Librería visual de sprites reales~~ — ✓ (2026-06-02). Los glifos
+  unicode opacos dieron paso a una **librería de sprites vectoriales
+  procedurales** en `dominium-render-plan`: `SpritePrim::{Fill, Stroke,
+  Disc}` (polígono cerrado / polilínea con grosor / disco) y
+  `sprite_prims(id, cx, cy, size, carve)` que arma 8 iconos reales —
+  iglesia (cuerpo+techo+cruz), banco (frontón+columnas), casa, matraz de
+  laboratorio, sol (disco+rayos), luna creciente (disco − disco de
+  recorte), estrella de 5 puntas y chacana escalonada — cada uno con
+  acento de color temático. `RenderPlan` gana `sprites: Vec<SpritePrim>`;
+  `dominium-canvas-llimphi` los rasteriza con vello (`fill`/`stroke`/
+  `Circle`) por encima de los quads. Sin assets en disco, sin shaders,
+  sin trig en runtime (estrella/sol con tablas precomputadas) → el plan
+  sigue determinista. `sprite_id` desconocido cae al glifo `?`; `0` no
+  dibuja. Picker del panel ahora muestra el nombre legible
+  (`sprite_name`).
 
 Ninguno de estos cambia la base del §1.
 
@@ -360,7 +375,7 @@ Esa es la spec. El §1 la materializa en código.
   pintor (`dominium-render-plan`), ambos sin deps gráficas.
 - App Llimphi viva (`dominium-app-llimphi`): canvas + panel con editor visual
   de Conceptos (click/drag para crear/mover/seleccionar), rename inline,
-  editor de hack (trigger + acción forzada + duración), glifos por sprite_id,
+  editor de hack (trigger + acción forzada + duración), sprites vectoriales por sprite_id,
   sliders de `LayerMods`/`SimParams`/`ZWeights`, capas concéntricas andinas,
   toggle de sync físico y persistencia a `~/.config/dominium/pack.json`.
 - Mundo fractal a escala (240²) con mares persistentes, frenos termodinámicos,
@@ -373,7 +388,6 @@ Esa es la spec. El §1 la materializa en código.
 
 ### Pendiente
 
-- Librería visual de sprites reales (hoy glifos opacos por índice).
 - Profundizar emergencia social documentada (packs de Conceptos "iglesia",
   "banco", etc.) como escenarios reproducibles.
 - Vista web vía `pluma-notebook-kernel-dominium` como demo estable.

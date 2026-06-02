@@ -265,9 +265,15 @@ pub struct RenderPlan {
     #[serde(default)]
     pub polygons: Vec<Polygon>,
     /// Glifos a pintar **después** de los quads, en orden de inserción.
-    /// El backend usa `llimphi-text` para rasterizarlos.
+    /// El backend usa `llimphi-text` para rasterizarlos. Hoy sólo se usa
+    /// como fallback `?` para `sprite_id` desconocidos.
     #[serde(default)]
     pub glyphs: Vec<Glyph>,
+    /// Primitivas vectoriales de los sprites de Conceptos, a pintar
+    /// **después** de los quads/polígonos, en orden de inserción. El
+    /// backend las rasteriza con vello (relleno/trazo/disco).
+    #[serde(default)]
+    pub sprites: Vec<SpritePrim>,
     /// Caja envolvente de todos los quads — el backend la usa para
     /// centrar o escalar la vista.
     pub min_x: f32,
@@ -307,9 +313,289 @@ pub fn glyph_for_sprite(id: u32) -> Option<char> {
     }
 }
 
-/// Cantidad de sprite_ids con glifo definido (excluye 0 y el fallback).
+/// Cantidad de sprite_ids con sprite definido (excluye 0 y el fallback).
 /// Útil para los pickers de UI que ciclan a través de las opciones.
 pub const SPRITE_COUNT: u32 = 8;
+
+/// Nombre legible de un `sprite_id` — para los pickers del panel. `0` no
+/// dibuja nada; `1..=8` son la librería; el resto es desconocido.
+pub fn sprite_name(id: u32) -> &'static str {
+    match id {
+        0 => "—",
+        1 => "iglesia",
+        2 => "banco",
+        3 => "casa",
+        4 => "laboratorio",
+        5 => "sol",
+        6 => "luna",
+        7 => "estrella",
+        8 => "chacana",
+        _ => "?",
+    }
+}
+
+/// Una primitiva vectorial de un sprite procedural, ya resuelta a
+/// coordenadas de pantalla. El backend la rasteriza con vello:
+/// - `Fill`   — polígono cerrado relleno (≥3 vértices).
+/// - `Stroke` — polilínea (abierta) con grosor `width` px.
+/// - `Disc`   — disco relleno de centro `(cx, cy)` y radio `r`.
+///
+/// Es el reemplazo "dibujo de verdad" de los glifos opacos: cada Concepto
+/// emite un puñado de estas en vez de un solo carácter unicode. Cero
+/// assets en disco, cero shaders — sólo geometría que vello rellena.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SpritePrim {
+    Fill {
+        points: Vec<(f32, f32)>,
+        color: Color,
+    },
+    Stroke {
+        points: Vec<(f32, f32)>,
+        width: f32,
+        color: Color,
+    },
+    Disc {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        color: Color,
+    },
+}
+
+/// Tinta + acento + color de recorte de un sprite. `ink` pinta el detalle
+/// oscuro (trazos, puertas); `accent` el relleno temático; `carve` es el
+/// color de fondo con que se "talla" un hueco (lo usa la luna y el ojo de
+/// la chacana, pasándoles el color del tope del Concepto).
+struct SpriteInk {
+    ink: Color,
+    accent: Color,
+    carve: Color,
+}
+
+/// Acento temático por `sprite_id`. La tinta es un gris-tinta común; el
+/// acento le da identidad de color a cada icono (oro de iglesia, piedra de
+/// banco, terracota de casa, líquido cian de laboratorio, etc.).
+fn sprite_palette(id: u32, carve: Color) -> SpriteInk {
+    let ink = [0.07, 0.07, 0.10, 1.0];
+    let accent = match id {
+        1 => [0.86, 0.71, 0.33, 1.0], // iglesia — oro
+        2 => [0.78, 0.78, 0.83, 1.0], // banco — piedra
+        3 => [0.81, 0.46, 0.31, 1.0], // casa — terracota
+        4 => [0.31, 0.71, 0.86, 1.0], // laboratorio — líquido cian
+        5 => [0.98, 0.82, 0.26, 1.0], // sol — amarillo
+        6 => [0.92, 0.92, 0.80, 1.0], // luna — marfil
+        7 => [0.96, 0.81, 0.36, 1.0], // estrella — oro
+        8 => [0.82, 0.36, 0.30, 1.0], // chacana — rojo andino
+        _ => [0.80, 0.80, 0.80, 1.0],
+    };
+    SpriteInk { ink, accent, carve }
+}
+
+/// Emite las primitivas del sprite `id` centradas en `(cx, cy)`, a tamaño
+/// `size` (lado del icono en px), recortando huecos con `carve` (el color
+/// del tope del Concepto). Devuelve vacío para `id == 0` o ids
+/// desconocidos — esos caen al glifo `?` de feedback. Coordenadas de
+/// pantalla, eje Y hacia abajo. Cada icono se autoría en el cuadrado
+/// unitario `[-0.5, 0.5]²` y se escala/traslada por `size` y `(cx, cy)`.
+pub fn sprite_prims(id: u32, cx: f32, cy: f32, size: f32, carve: Color) -> Vec<SpritePrim> {
+    let pal = sprite_palette(id, carve);
+    // Punto del cuadrado unitario → pantalla.
+    let p = |ux: f32, uy: f32| (cx + ux * size, cy + uy * size);
+    // Grosor de trazo base, proporcional al icono.
+    let sw = size * 0.085;
+    let mut v: Vec<SpritePrim> = Vec::new();
+
+    match id {
+        // 1 · IGLESIA — cuerpo + techo a dos aguas + cruz.
+        1 => {
+            v.push(SpritePrim::Fill {
+                points: vec![p(-0.28, 0.5), p(-0.28, -0.05), p(0.28, -0.05), p(0.28, 0.5)],
+                color: pal.accent,
+            });
+            v.push(SpritePrim::Fill {
+                points: vec![p(-0.38, -0.05), p(0.0, -0.32), p(0.38, -0.05)],
+                color: pal.ink,
+            });
+            v.push(SpritePrim::Stroke {
+                points: vec![p(0.0, -0.32), p(0.0, -0.6)],
+                width: sw,
+                color: pal.ink,
+            });
+            v.push(SpritePrim::Stroke {
+                points: vec![p(-0.11, -0.5), p(0.11, -0.5)],
+                width: sw,
+                color: pal.ink,
+            });
+        }
+        // 2 · BANCO — frontón neoclásico + tres columnas + zócalo.
+        2 => {
+            v.push(SpritePrim::Fill {
+                points: vec![p(-0.46, 0.02), p(0.0, -0.3), p(0.46, 0.02)],
+                color: pal.accent,
+            });
+            for &cxn in &[-0.28_f32, 0.0, 0.28] {
+                v.push(SpritePrim::Stroke {
+                    points: vec![p(cxn, 0.06), p(cxn, 0.42)],
+                    width: sw * 1.3,
+                    color: pal.accent,
+                });
+            }
+            v.push(SpritePrim::Fill {
+                points: vec![p(-0.46, 0.42), p(0.46, 0.42), p(0.46, 0.52), p(-0.46, 0.52)],
+                color: pal.ink,
+            });
+        }
+        // 3 · CASA / COMUNA — cuerpo + techo + puerta.
+        3 => {
+            v.push(SpritePrim::Fill {
+                points: vec![p(-0.3, 0.5), p(-0.3, 0.02), p(0.3, 0.02), p(0.3, 0.5)],
+                color: pal.accent,
+            });
+            v.push(SpritePrim::Fill {
+                points: vec![p(-0.42, 0.02), p(0.0, -0.34), p(0.42, 0.02)],
+                color: pal.ink,
+            });
+            v.push(SpritePrim::Fill {
+                points: vec![p(-0.09, 0.5), p(-0.09, 0.2), p(0.09, 0.2), p(0.09, 0.5)],
+                color: pal.ink,
+            });
+        }
+        // 4 · LABORATORIO — matraz: cuello + cuerpo cónico + burbuja.
+        4 => {
+            v.push(SpritePrim::Fill {
+                points: vec![
+                    p(-0.1, -0.06),
+                    p(0.1, -0.06),
+                    p(0.32, 0.48),
+                    p(-0.32, 0.48),
+                ],
+                color: pal.accent,
+            });
+            v.push(SpritePrim::Stroke {
+                points: vec![p(-0.1, -0.42), p(-0.1, -0.06)],
+                width: sw,
+                color: pal.ink,
+            });
+            v.push(SpritePrim::Stroke {
+                points: vec![p(0.1, -0.42), p(0.1, -0.06)],
+                width: sw,
+                color: pal.ink,
+            });
+            v.push(SpritePrim::Stroke {
+                points: vec![p(-0.16, -0.42), p(0.16, -0.42)],
+                width: sw,
+                color: pal.ink,
+            });
+            v.push(SpritePrim::Disc {
+                cx: p(0.05, 0.3).0,
+                cy: p(0.05, 0.3).1,
+                r: size * 0.07,
+                color: pal.carve,
+            });
+        }
+        // 5 · SOL — disco central + ocho rayos.
+        5 => {
+            let dirs: [(f32, f32); 8] = [
+                (1.0, 0.0),
+                (0.707, -0.707),
+                (0.0, -1.0),
+                (-0.707, -0.707),
+                (-1.0, 0.0),
+                (-0.707, 0.707),
+                (0.0, 1.0),
+                (0.707, 0.707),
+            ];
+            for (dx, dy) in dirs {
+                v.push(SpritePrim::Stroke {
+                    points: vec![p(dx * 0.3, dy * 0.3), p(dx * 0.5, dy * 0.5)],
+                    width: sw,
+                    color: pal.accent,
+                });
+            }
+            v.push(SpritePrim::Disc {
+                cx,
+                cy,
+                r: size * 0.22,
+                color: pal.accent,
+            });
+        }
+        // 6 · LUNA — disco lleno menos un disco de recorte → creciente.
+        6 => {
+            v.push(SpritePrim::Disc {
+                cx,
+                cy,
+                r: size * 0.34,
+                color: pal.accent,
+            });
+            let (hx, hy) = p(0.18, -0.07);
+            v.push(SpritePrim::Disc {
+                cx: hx,
+                cy: hy,
+                r: size * 0.3,
+                color: pal.carve,
+            });
+        }
+        // 7 · ESTRELLA — polígono de 5 puntas (10 vértices, radio alterno).
+        7 => {
+            // Vértices unitarios ordenados por ángulo ascendente (alternan
+            // exterior/interior), precomputados para no usar trig en runtime.
+            const STAR: [(f32, f32, bool); 10] = [
+                (0.951, 0.309, true),   // 18°
+                (0.588, 0.809, false),  // 54°
+                (0.0, 1.0, true),       // 90°
+                (-0.588, 0.809, false), // 126°
+                (-0.951, 0.309, true),  // 162°
+                (-0.951, -0.309, false),// 198°
+                (-0.588, -0.809, true), // 234°
+                (0.0, -1.0, false),     // 270°
+                (0.588, -0.809, true),  // 306°
+                (0.951, -0.309, false), // 342°
+            ];
+            let (ro, ri) = (0.5_f32, 0.21_f32);
+            let pts = STAR
+                .iter()
+                .map(|&(ux, uy, outer)| {
+                    let r = if outer { ro } else { ri };
+                    p(ux * r, uy * r)
+                })
+                .collect();
+            v.push(SpritePrim::Fill {
+                points: pts,
+                color: pal.accent,
+            });
+        }
+        // 8 · CHACANA — cruz andina escalonada (cruz de 12 vértices) + ojo.
+        8 => {
+            let a = 0.17_f32; // semiancho de brazo
+            let b = 0.5_f32; // extensión del brazo
+            v.push(SpritePrim::Fill {
+                points: vec![
+                    p(-a, -b),
+                    p(a, -b),
+                    p(a, -a),
+                    p(b, -a),
+                    p(b, a),
+                    p(a, a),
+                    p(a, b),
+                    p(-a, b),
+                    p(-a, a),
+                    p(-b, a),
+                    p(-b, -a),
+                    p(-a, -a),
+                ],
+                color: pal.accent,
+            });
+            v.push(SpritePrim::Disc {
+                cx,
+                cy,
+                r: size * 0.1,
+                color: pal.carve,
+            });
+        }
+        _ => return Vec::new(),
+    }
+    v
+}
 
 /// Mezcla `n` colores con pesos: `Σ wᵢ·colorᵢ / Σ wᵢ`. Alpha del primero.
 fn blend(parts: &[(f32, Color)]) -> Color {
@@ -522,6 +808,7 @@ pub fn build_plan_with_overrides(
     // Cada celda emite 1 techo + hasta 2 caras laterales (este, sur).
     let mut polygons: Vec<Polygon> = Vec::with_capacity(g.cells() * 3);
     let mut glyphs: Vec<Glyph> = Vec::with_capacity(world.conceptos.len());
+    let mut sprites: Vec<SpritePrim> = Vec::new();
 
     // Lookup de la altura de una celda — None para fuera de bounds.
     let z_at = |cx: i64, cy: i64| -> Option<f32> {
@@ -701,18 +988,26 @@ pub fn build_plan_with_overrides(
             depth: c.pos_x + c.pos_y + 0.75,
         });
 
-        // Glifo del sprite_id (si hay uno definido), posado sobre el tope.
-        if let Some(ch) = glyph_for_sprite(c.sprite_id) {
-            let glyph_size = cfg.concepto_size * 1.15;
-            glyphs.push(Glyph {
-                ch,
-                // Aproximamos el centrado: parley pinta desde la esquina sup-izq.
-                x: tx - glyph_size * 0.4,
-                y: ty - glyph_size * 0.6,
-                size_px: glyph_size,
-                color: [0.05, 0.05, 0.08, 1.0],
-                depth: c.pos_x + c.pos_y + 0.85,
-            });
+        // Sprite vectorial del sprite_id, posado sobre el tope. La librería
+        // (`sprite_prims`) cubre 1..=8 con iconos reales; `0` no dibuja
+        // nada; un id desconocido cae al glifo `?` para feedback visual.
+        let sprite_size = cfg.concepto_size * 1.7;
+        let prims = sprite_prims(c.sprite_id, tx, ty - sprite_size * 0.08, sprite_size, cfg.palette.concepto);
+        if prims.is_empty() {
+            if c.sprite_id != 0 {
+                let glyph_size = cfg.concepto_size * 1.15;
+                glyphs.push(Glyph {
+                    ch: '?',
+                    // Aproximamos el centrado: parley pinta desde la esquina sup-izq.
+                    x: tx - glyph_size * 0.4,
+                    y: ty - glyph_size * 0.6,
+                    size_px: glyph_size,
+                    color: [0.05, 0.05, 0.08, 1.0],
+                    depth: c.pos_x + c.pos_y + 0.85,
+                });
+            }
+        } else {
+            sprites.extend(prims);
         }
     }
 
@@ -758,7 +1053,7 @@ pub fn build_plan_with_overrides(
     });
 
     // --- Caja envolvente: cubre quads + polygons + glifos ---
-    let mut plan = RenderPlan { quads, polygons, glyphs, ..Default::default() };
+    let mut plan = RenderPlan { quads, polygons, glyphs, sprites, ..Default::default() };
     let mut have_bounds = false;
     let bump = |plan: &mut RenderPlan, have: &mut bool, x: f32, y: f32, w: f32, h: f32| {
         if !*have {
@@ -1164,5 +1459,75 @@ mod tests {
         for p in &plan.polygons {
             assert_eq!(p.depth.fract(), 0.0, "polygon no-techo emitido en plano");
         }
+    }
+
+    #[test]
+    fn sprite_library_covers_one_to_eight() {
+        // Cada id 1..=8 produce ≥1 primitiva; 0 y un desconocido, ninguna.
+        for id in 1..=SPRITE_COUNT {
+            assert!(
+                !sprite_prims(id, 0.0, 0.0, 10.0, [1.0; 4]).is_empty(),
+                "sprite {id} debería emitir primitivas"
+            );
+        }
+        assert!(sprite_prims(0, 0.0, 0.0, 10.0, [1.0; 4]).is_empty());
+        assert!(sprite_prims(99, 0.0, 0.0, 10.0, [1.0; 4]).is_empty());
+    }
+
+    #[test]
+    fn known_sprite_emits_vectors_not_glyph() {
+        use dominium_core::{Concepto, LayerMods};
+        let mut world = World::new(8, 8);
+        world.conceptos.add(Concepto {
+            id: "iglesia".into(),
+            sprite_id: 1, // iglesia → librería vectorial
+            pos_x: 4.0,
+            pos_y: 4.0,
+            radius: 1.5,
+            mods: LayerMods::default(),
+            hack: None,
+            persuasion: None,
+        });
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        assert!(!plan.sprites.is_empty(), "el concepto emite sprites");
+        assert!(plan.glyphs.is_empty(), "ya no se usa glifo para ids conocidos");
+    }
+
+    #[test]
+    fn unknown_sprite_falls_back_to_question_glyph() {
+        use dominium_core::{Concepto, LayerMods};
+        let mut world = World::new(8, 8);
+        world.conceptos.add(Concepto {
+            id: "raro".into(),
+            sprite_id: 99, // desconocido → fallback '?'
+            pos_x: 4.0,
+            pos_y: 4.0,
+            radius: 1.5,
+            mods: LayerMods::default(),
+            hack: None,
+            persuasion: None,
+        });
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        assert!(plan.sprites.is_empty());
+        assert_eq!(plan.glyphs.len(), 1);
+        assert_eq!(plan.glyphs[0].ch, '?');
+    }
+
+    #[test]
+    fn sprite_id_zero_draws_nothing() {
+        use dominium_core::{Concepto, LayerMods};
+        let mut world = World::new(8, 8);
+        world.conceptos.add(Concepto {
+            id: "mudo".into(),
+            sprite_id: 0,
+            pos_x: 4.0,
+            pos_y: 4.0,
+            radius: 1.5,
+            mods: LayerMods::default(),
+            hack: None,
+            persuasion: None,
+        });
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        assert!(plan.sprites.is_empty() && plan.glyphs.is_empty());
     }
 }

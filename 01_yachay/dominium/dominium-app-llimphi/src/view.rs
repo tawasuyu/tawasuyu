@@ -512,11 +512,12 @@ fn append_conceptos_tab(
             DragPhase::End => None,
         },
     ));
-    let sprite_glyph = dominium_render_plan::glyph_for_sprite(c.sprite_id)
-        .map(|c| c.to_string())
-        .unwrap_or_else(|| "—".to_string());
     children.push(sized_button(
-        &format!("sprite: {} ({})", c.sprite_id, sprite_glyph),
+        &format!(
+            "sprite: {} ({})",
+            c.sprite_id,
+            dominium_render_plan::sprite_name(c.sprite_id)
+        ),
         btn_palette,
         Msg::CycleSprite,
     ));

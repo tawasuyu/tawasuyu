@@ -13,9 +13,9 @@
 
 #![forbid(unsafe_code)]
 
-use dominium_render_plan::{Color as PlanColor, RenderPlan};
+use dominium_render_plan::{Color as PlanColor, RenderPlan, SpritePrim};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
-use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, Rect as KurboRect};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Point, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{draw_block, TextBlock};
 use llimphi_ui::{PaintRect, View};
@@ -50,7 +50,11 @@ where
         view
     };
     view.paint_with(move |scene, ts, rect: PaintRect| {
-        if plan.quads.is_empty() && plan.polygons.is_empty() && plan.glyphs.is_empty() {
+        if plan.quads.is_empty()
+            && plan.polygons.is_empty()
+            && plan.glyphs.is_empty()
+            && plan.sprites.is_empty()
+        {
             return;
         }
         // Centra la maqueta: el centro de la caja envolvente del plan
@@ -106,6 +110,47 @@ where
                     &path,
                 );
                 pi += 1;
+            }
+        }
+        // Sprites vectoriales de los Conceptos, por encima de los quads.
+        // Cada primitiva es relleno (polígono cerrado), trazo (polilínea
+        // con grosor) o disco. Coordenadas ya en pantalla → sólo offset.
+        for prim in &plan.sprites {
+            match prim {
+                SpritePrim::Fill { points, color } => {
+                    if points.len() < 3 {
+                        continue;
+                    }
+                    let mut path = BezPath::new();
+                    path.move_to(Point::new(points[0].0 as f64 + off_x, points[0].1 as f64 + off_y));
+                    for pt in &points[1..] {
+                        path.line_to(Point::new(pt.0 as f64 + off_x, pt.1 as f64 + off_y));
+                    }
+                    path.close_path();
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, plan_color(*color), None, &path);
+                }
+                SpritePrim::Stroke { points, width, color } => {
+                    if points.len() < 2 {
+                        continue;
+                    }
+                    let mut path = BezPath::new();
+                    path.move_to(Point::new(points[0].0 as f64 + off_x, points[0].1 as f64 + off_y));
+                    for pt in &points[1..] {
+                        path.line_to(Point::new(pt.0 as f64 + off_x, pt.1 as f64 + off_y));
+                    }
+                    scene.stroke(
+                        &Stroke::new(*width as f64),
+                        Affine::IDENTITY,
+                        plan_color(*color),
+                        None,
+                        &path,
+                    );
+                }
+                SpritePrim::Disc { cx, cy, r, color } => {
+                    let circle =
+                        Circle::new(Point::new(*cx as f64 + off_x, *cy as f64 + off_y), *r as f64);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, plan_color(*color), None, &circle);
+                }
             }
         }
         // Glifos por encima de todo, sin re-shaping cacheado.
