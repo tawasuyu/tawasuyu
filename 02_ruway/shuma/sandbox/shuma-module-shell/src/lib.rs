@@ -126,6 +126,12 @@ pub struct ActiveRun {
     /// stdin del PTY y la pantalla se renderiza como grid de celdas.
     /// El daemon no soporta PTY remoto todavía — TUIs forzados a local.
     pub tui: Option<TuiSession>,
+    /// Bloque de output al que se adjunta TODA la salida de este run —
+    /// fijo desde el arranque. Sin esto, un comando lento que drena en
+    /// ticks posteriores se mezclaría con el bloque "actual" (p. ej. un
+    /// builtin tipeado mientras corre), o un job de fondo se metería en
+    /// la card del foreground. Cada run vive en su propia card.
+    pub block: u64,
 }
 
 /// Backend de ejecución abstracto. Local va por `shuma-exec`; Daemon
@@ -325,6 +331,18 @@ pub struct State {
     /// Bloques colapsados por el usuario (click en el header de la card).
     /// Se renderizan plegados, mostrando sólo el header + un resumen.
     pub collapsed: HashSet<u64>,
+    /// Scroll del panel de output, en px medidos desde el fondo. `0` =
+    /// pegado al fondo (lo último siempre visible, como una terminal).
+    /// Crece al rodar la rueda hacia arriba (ver historial). Lo clampa
+    /// la `view` contra el overflow real.
+    pub scroll_px: f32,
+    /// Alto del viewport de output (lo publica el painter del panel cada
+    /// frame; lo lee la `view` y el handler de rueda al frame siguiente).
+    pub out_viewport_h: Arc<Mutex<f32>>,
+    /// Overflow vertical del output (content_h − viewport_h, ≥0). Lo
+    /// publica la `view` y lo usa `Msg::Scroll` para clampar `scroll_px`
+    /// sin recalcular la geometría en el handler.
+    pub out_overflow: Arc<Mutex<f32>>,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -361,6 +379,9 @@ impl State {
             block_seq: 0,
             current_block: 0,
             collapsed: HashSet::new(),
+            scroll_px: 0.0,
+            out_viewport_h: Arc::new(Mutex::new(0.0)),
+            out_overflow: Arc::new(Mutex::new(0.0)),
         }
     }
 
@@ -377,11 +398,28 @@ impl State {
         push_line(&mut self.output, line);
     }
 
+    /// Reserva un bloque nuevo sin tocar `current_block` — para runs que
+    /// drenan asíncronos (foreground lento, jobs de fondo) y necesitan su
+    /// propia card aunque otros comandos se intercalen mientras tanto.
+    pub(crate) fn open_block(&mut self) -> u64 {
+        self.block_seq += 1;
+        self.block_seq
+    }
+
+    /// Empuja una línea en un bloque explícito (no en `current_block`).
+    /// La usa el drenado de runs async para que su salida quede en SU
+    /// card y no en la del comando que el usuario tipeó mientras tanto.
+    pub(crate) fn push_in_block(&mut self, block: u64, mut line: OutputLine) {
+        line.block = block;
+        push_line(&mut self.output, line);
+    }
+
     /// Vacía el buffer y el set de colapsos. No resetea `block_seq` —
     /// mantener ids monotónicos es inofensivo y evita reusos.
     pub(crate) fn clear_output(&mut self) {
         self.output.clear();
         self.collapsed.clear();
+        self.scroll_px = 0.0;
     }
 
     /// Cantidad de líneas en el buffer — alimenta el monitor.
@@ -546,6 +584,12 @@ pub enum Msg {
     /// Alterna plegado/desplegado de la card de un comando. La dispara el
     /// click en el header de la card (chevron + comando).
     ToggleBlock(u64),
+    /// Rueda del mouse sobre el panel de output. `delta` ya viene en px
+    /// (positivo = rodar hacia arriba / ver historial). Ajusta `scroll_px`.
+    Scroll(f32),
+    /// Re-ejecuta `line` como un comando nuevo — la dispara el click en
+    /// una etapa de pipe de la card (inspeccionar resultados intermedios).
+    RunLine(String),
 }
 
 mod update;
@@ -922,7 +966,11 @@ mod tests {
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         assert!(!s.is_running(), "& no debe dejar un foreground vivo");
         assert_eq!(s.bg_jobs.len(), 1);
-        assert!(s.output.iter().any(|l| l.text.contains("[0] background")));
+        // El header de la card del job: `[0] $ sleep 5 &`.
+        assert!(s
+            .output
+            .iter()
+            .any(|l| l.text.contains("[0]") && l.text.contains("sleep 5")));
         // Cancelar el job así no queda sleep colgado en el host.
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         s.input.set_text(":term 0");
@@ -1198,6 +1246,46 @@ mod tests {
             s.output.last().unwrap().block > b,
             "el segundo comando abre un bloque nuevo"
         );
+    }
+
+    #[test]
+    fn push_in_block_keeps_async_output_out_of_foreground_card() {
+        // El bug de "output mezclado": un job async drenando en su bloque
+        // NO debe contaminar el bloque del comando de foreground, aunque
+        // `current_block` apunte a este último.
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ fg")); // abre bloque fg
+        let fg_block = s.current_block;
+        let job_block = s.open_block(); // bloque propio del job (current sigue en fg)
+        s.push_in_block(job_block, OutputLine::stdout("salida del job"));
+        s.push_output(OutputLine::stdout("salida del fg"));
+        let bg = s
+            .output
+            .iter()
+            .find(|l| l.text == "salida del job")
+            .unwrap()
+            .block;
+        let fg = s
+            .output
+            .iter()
+            .find(|l| l.text == "salida del fg")
+            .unwrap()
+            .block;
+        assert_eq!(bg, job_block);
+        assert_eq!(fg, fg_block);
+        assert_ne!(bg, fg, "job y foreground en cards distintas");
+    }
+
+    #[test]
+    fn scroll_clamps_between_zero_and_overflow() {
+        let mut s = State::new(Source::Local);
+        *s.out_overflow.lock().unwrap() = 100.0;
+        s = update(s, Msg::Scroll(40.0));
+        assert_eq!(s.scroll_px, 40.0);
+        s = update(s, Msg::Scroll(200.0)); // pasa del tope → clamp a overflow
+        assert_eq!(s.scroll_px, 100.0);
+        s = update(s, Msg::Scroll(-500.0)); // de vuelta al fondo
+        assert_eq!(s.scroll_px, 0.0);
     }
 
     #[test]

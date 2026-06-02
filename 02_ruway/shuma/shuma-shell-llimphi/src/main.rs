@@ -34,23 +34,23 @@ mod config;
 
 use std::time::Duration;
 
+use llimphi_motion::{animate, motion, Tween};
+use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
     Rect,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, PathEl, Point, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::{App, DragPhase, Handle, KeyEvent, KeyState, PaintRect, View};
-use llimphi_motion::{animate, motion, Tween};
-use llimphi_theme::Theme;
+use llimphi_ui::{
+    App, DragPhase, Handle, KeyEvent, KeyState, Modifiers, PaintRect, View, WheelDelta,
+};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
-use shuma_module::{
-    ModuleContributions, MonitorSpec, ShortcutAction, ShortcutSpec, Source,
-};
-use std::collections::HashMap;
+use shuma_module::{ModuleContributions, MonitorSpec, ShortcutAction, ShortcutSpec, Source};
 use shuma_sysmon::{Snapshot, SystemSampler};
+use std::collections::HashMap;
 
 const HISTORY: usize = 60;
 const TICK: Duration = Duration::from_secs(1);
@@ -330,8 +330,11 @@ impl App for Shell {
         };
 
         let cfg = config::ShumaConfig::load_default();
-        let topbar = resolve_slot(cfg.topbar.as_ref())
-            .or_else(|| Some(Instance::launcher(shuma_module_launcher::State::from_apps_dir())));
+        let topbar = resolve_slot(cfg.topbar.as_ref()).or_else(|| {
+            Some(Instance::launcher(
+                shuma_module_launcher::State::from_apps_dir(),
+            ))
+        });
         let bottombar = resolve_slot(cfg.bottombar.as_ref()).or_else(|| {
             Some(Instance::command_bar(
                 shuma_module_commandbar::State::default(),
@@ -387,6 +390,22 @@ impl App for Shell {
         // teclas (input del REPL); el resto de módulos siguen sin
         // recibirlas hasta que las necesiten.
         forward_key_to_focused_shell(model, e)
+    }
+
+    fn on_wheel(
+        model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        _modifiers: Modifiers,
+    ) -> Option<Self::Msg> {
+        // `delta.y` viene en líneas (positivo = hacia abajo). El scroll
+        // del shell mide px desde el fondo, donde positivo = ver
+        // historial, así que invertimos y escalamos a ~40 px por línea.
+        let dpx = -delta.y * 40.0;
+        if dpx == 0.0 {
+            return None;
+        }
+        forward_wheel_to_focused_shell(model, dpx)
     }
 
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
@@ -463,7 +482,8 @@ impl App for Shell {
             Msg::MenuNav(dir) => {
                 if let Some(mi) = m.menu_open {
                     let menu = menu::app_menu(&m);
-                    m.menu_active = llimphi_widget_menubar::menubar_nav(&menu, mi, m.menu_active, dir);
+                    m.menu_active =
+                        llimphi_widget_menubar::menubar_nav(&menu, mi, m.menu_active, dir);
                 }
             }
             Msg::MenuActivate => {

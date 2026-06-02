@@ -171,6 +171,16 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.collapsed.insert(id);
             }
         }
+        Msg::Scroll(delta) => {
+            // `out_overflow` lo publicó la última `view`; clampa sin que
+            // el handler tenga que recomputar la geometría.
+            let overflow = s.out_overflow.lock().map(|g| *g).unwrap_or(0.0);
+            s.scroll_px = (s.scroll_px + delta).clamp(0.0, overflow);
+        }
+        Msg::RunLine(line) => {
+            s.input.set_text(line);
+            s = run_submitted(s);
+        }
         Msg::Tick => {
             s = drain_run(s);
         }
@@ -810,12 +820,16 @@ pub(crate) fn start_bg(mut s: State, line: String) -> State {
     let handle = shuma_exec::run(&bg_spec);
     let killer = handle.killer();
     let idx = s.bg_jobs.len();
-    s.push_output(OutputLine::notice(format!("[{idx}] background  {line}")));
+    // Cada job de fondo vive en SU propia card (bloque propio). Sin esto
+    // su salida se intercalaba en la card del comando de foreground.
+    let bg_block = s.open_block();
+    s.push_in_block(bg_block, OutputLine::prompt(format!("[{idx}] $ {line} &")));
     let active = ActiveRun {
         handle: BackendHandle::Local(handle),
         killer: Some(killer),
         command: line,
         tui: None,
+        block: bg_block,
     };
     s.bg_jobs.push(Arc::new(Mutex::new(active)));
     s
@@ -830,6 +844,9 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
     // backend). El lienzo refleja el intento.
     s.current_run_node = Some(s.intent_graph.record(line.clone()));
     s.current_run_bytes = 0;
+    // El prompt de este run ya abrió su bloque (current_block); fijamos
+    // que TODA su salida —drenada en ticks futuros— vaya a esa card.
+    let run_block = s.current_block;
     let active = match &s.source {
         Source::Local => {
             // Camino histórico — exec directo sobre esta máquina.
@@ -840,6 +857,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                 killer: Some(killer),
                 command: line,
                 tui,
+                block: run_block,
             }
         }
         Source::Daemon { socket, .. } => {
@@ -855,6 +873,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                     killer: Some(killer),
                     command: line,
                     tui,
+                    block: run_block,
                 }
             } else {
                 let sock = socket
@@ -866,6 +885,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                         killer: None,
                         command: line,
                         tui: None,
+                        block: run_block,
                     },
                     Err(e) => {
                         s.push_output(OutputLine::notice(format!("✘ daemon: {e}")));
@@ -889,6 +909,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                     killer: Some(killer),
                     command: line,
                     tui,
+                    block: run_block,
                 }
             } else {
                 let kp = match load_or_create_identity() {
@@ -913,6 +934,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                         killer: None,
                         command: line,
                         tui: None,
+                        block: run_block,
                     },
                     Err(e) => {
                         s.push_output(OutputLine::notice(format!("✘ daemon tcp: {e}")));
@@ -936,6 +958,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                 killer: Some(killer),
                 command: line,
                 tui,
+                block: run_block,
             }
         }
     };
@@ -1018,11 +1041,16 @@ pub(crate) fn drain_run(mut s: State) -> State {
         return s;
     };
     let mut finished_with: Option<RunEvent> = None;
+    // Bloque de ESTE run — toda su salida va a su card, aunque el usuario
+    // haya tipeado otros comandos (que movieron `current_block`) mientras
+    // corría.
+    let run_block;
     {
         let mut guard = match active_arc.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
+        run_block = guard.block;
         // Resize del PTY si el rect del panel cambió desde el último
         // tick. Cell size aproximado: 7.5 px ancho × 16 px alto (12 pt
         // monoespacio en Llimphi default). Si el panel se redimensiona
@@ -1058,18 +1086,20 @@ pub(crate) fn drain_run(mut s: State) -> State {
                 RunEvent::Stdout(line) => {
                     // +1 por el `\n` implícito de cada línea drenada.
                     s.current_run_bytes = s.current_run_bytes.saturating_add(line.len() as u64 + 1);
-                    s.push_output(OutputLine::stdout(line));
+                    s.push_in_block(run_block, OutputLine::stdout(line));
                 }
                 RunEvent::Stderr(line) => {
                     s.current_run_bytes = s.current_run_bytes.saturating_add(line.len() as u64 + 1);
-                    s.push_output(OutputLine::stderr(line));
+                    s.push_in_block(run_block, OutputLine::stderr(line));
                 }
-                RunEvent::Truncated => s.push_output(OutputLine::notice(
-                    "… (salida truncada por límite de captura)",
-                )),
-                RunEvent::Spilled(path) => {
-                    s.push_output(OutputLine::notice(format!("… (resto volcado a {path})")))
-                }
+                RunEvent::Truncated => s.push_in_block(
+                    run_block,
+                    OutputLine::notice("… (salida truncada por límite de captura)"),
+                ),
+                RunEvent::Spilled(path) => s.push_in_block(
+                    run_block,
+                    OutputLine::notice(format!("… (resto volcado a {path})")),
+                ),
                 RunEvent::Bytes(bytes) => {
                     s.current_run_bytes = s.current_run_bytes.saturating_add(bytes.len() as u64);
                     if let Some(tui) = guard.tui.as_mut() {
@@ -1090,7 +1120,7 @@ pub(crate) fn drain_run(mut s: State) -> State {
             RunEvent::Failed(e) => format!("✘ no se pudo spawnear: {e}"),
             _ => unreachable!(),
         };
-        s.push_output(OutputLine::notice(notice));
+        s.push_in_block(run_block, OutputLine::notice(notice));
         // Cerrá el nodo del grafo de intenciones — el lienzo lo refleja
         // como verde/rojo en el próximo render.
         if let Some(id) = s.current_run_node.take() {
@@ -1116,29 +1146,29 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
     // Snapshot de los Arc: `push_output` toma `&mut s`, incompatible con
     // retener el borrow de `s.bg_jobs` durante el loop.
     let jobs = s.bg_jobs.clone();
-    for (i, arc) in jobs.iter().enumerate() {
+    for arc in jobs.iter() {
         let mut keep = true;
-        let prefix = format!("[{i}] ");
         let mut finished: Option<RunEvent> = None;
+        // Bloque propio del job — su salida vive en SU card, nunca en la
+        // del foreground (era el bug del "output mezclado").
+        let job_block;
         {
             let mut guard = match arc.lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
+            job_block = guard.block;
             for ev in guard.handle.try_events() {
                 match ev {
-                    RunEvent::Stdout(line) => {
-                        s.push_output(OutputLine::stdout(format!("{prefix}{line}")))
-                    }
-                    RunEvent::Stderr(line) => {
-                        s.push_output(OutputLine::stderr(format!("{prefix}{line}")))
-                    }
+                    RunEvent::Stdout(line) => s.push_in_block(job_block, OutputLine::stdout(line)),
+                    RunEvent::Stderr(line) => s.push_in_block(job_block, OutputLine::stderr(line)),
                     RunEvent::Truncated => {
-                        s.push_output(OutputLine::notice(format!("{prefix}… (truncada)")))
+                        s.push_in_block(job_block, OutputLine::notice("… (truncada)"))
                     }
-                    RunEvent::Spilled(path) => {
-                        s.push_output(OutputLine::notice(format!("{prefix}… (volcado a {path})")))
-                    }
+                    RunEvent::Spilled(path) => s.push_in_block(
+                        job_block,
+                        OutputLine::notice(format!("… (volcado a {path})")),
+                    ),
                     RunEvent::Bytes(_) => {
                         // Background sin PTY — no debería emitir Bytes.
                     }
@@ -1150,12 +1180,12 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
         }
         if let Some(ev) = finished {
             let notice = match ev {
-                RunEvent::Exited(0) => format!("{prefix}✔ exit 0"),
-                RunEvent::Exited(code) => format!("{prefix}✘ exit {code}"),
-                RunEvent::Failed(e) => format!("{prefix}✘ failed: {e}"),
+                RunEvent::Exited(0) => "✔ exit 0".to_string(),
+                RunEvent::Exited(code) => format!("✘ exit {code}"),
+                RunEvent::Failed(e) => format!("✘ failed: {e}"),
                 _ => unreachable!(),
             };
-            s.push_output(OutputLine::notice(notice));
+            s.push_in_block(job_block, OutputLine::notice(notice));
             keep = false;
         }
         if keep {
@@ -1167,11 +1197,13 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
 }
 
 pub(crate) fn cancel_running(mut s: State) -> State {
+    let mut run_block = s.current_block;
     if let Some(arc) = s.running.as_ref() {
         let guard = match arc.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
+        run_block = guard.block;
         // Local: SIGKILL al grupo entero — Ctrl-C debe doler en una UI.
         // Remoto: cerrar el stream — el daemon detecta EOF y mata al
         // hijo. La forma del notice no cambia.
@@ -1182,7 +1214,7 @@ pub(crate) fn cancel_running(mut s: State) -> State {
         }
         // El próximo Tick observará `RunEvent::Exited` y limpiará el handle.
     }
-    s.push_output(OutputLine::notice("⏹ cancel (SIGKILL enviado)"));
+    s.push_in_block(run_block, OutputLine::notice("⏹ cancel (SIGKILL enviado)"));
     s
 }
 

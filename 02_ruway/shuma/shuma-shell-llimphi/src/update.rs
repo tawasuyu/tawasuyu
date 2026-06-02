@@ -17,9 +17,8 @@ pub(crate) fn apply_module_msg(mut m: Model, slot: Slot, msg: ModuleMsg) -> Mode
     // solo emite la intención.
     if let ModuleMsg::Canvas(shuma_module_canvas::Msg::InsertRef(text)) = &msg {
         if let Some(target) = first_shell_slot(&m) {
-            let insert_msg = ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(
-                text.clone(),
-            ));
+            let insert_msg =
+                ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(text.clone()));
             if let Slot::Tab(i) = &target {
                 m.active_tab = *i;
             }
@@ -84,16 +83,16 @@ pub(crate) fn resolve_instance(
 ) -> Option<Instance> {
     let label = label.unwrap_or_else(|| source.label());
     match id {
-        shuma_module_launcher::ID => {
-            Some(Instance::launcher(shuma_module_launcher::State::from_apps_dir()))
-        }
+        shuma_module_launcher::ID => Some(Instance::launcher(
+            shuma_module_launcher::State::from_apps_dir(),
+        )),
         shuma_module_commandbar::ID => Some(Instance::command_bar(
             shuma_module_commandbar::State::default(),
         )),
         shuma_module_shell::ID => Some(Instance::shell(label, source)),
-        shuma_module_matilda::ID => Some(Instance::matilda_with_inventory(
-            label, source, inventory,
-        )),
+        shuma_module_matilda::ID => {
+            Some(Instance::matilda_with_inventory(label, source, inventory))
+        }
         shuma_module_minga::ID => Some(Instance::minga(label, source)),
         shuma_module_canvas::ID => Some(Instance::canvas(label)),
         unknown => {
@@ -345,11 +344,7 @@ pub(crate) fn handle_shortcut(
             }
         }
         ShortcutAction::FocusTab { target } => {
-            if let Some(i) = m
-                .tabs
-                .iter()
-                .position(|inst| inst.kind.id() == target)
-            {
+            if let Some(i) = m.tabs.iter().position(|inst| inst.kind.id() == target) {
                 m.active_tab = i;
             }
         }
@@ -392,14 +387,14 @@ pub(crate) fn handle_shortcut(
                     );
                     let slot_back = slot.clone();
                     handle.spawn(move || {
-                        let msg = match shuma_module_matilda::discover_remote_blocking(
-                            &source, &desired,
-                        ) {
-                            Ok(inv) => shuma_module_matilda::Msg::SetCurrent(inv),
-                            Err(e) => shuma_module_matilda::Msg::LogLine(format!(
-                                "✘ discover remoto: {e}"
-                            )),
-                        };
+                        let msg =
+                            match shuma_module_matilda::discover_remote_blocking(&source, &desired)
+                            {
+                                Ok(inv) => shuma_module_matilda::Msg::SetCurrent(inv),
+                                Err(e) => shuma_module_matilda::Msg::LogLine(format!(
+                                    "✘ discover remoto: {e}"
+                                )),
+                            };
                         Msg::Module(slot_back, ModuleMsg::Matilda(msg))
                     });
                     return m;
@@ -419,9 +414,9 @@ pub(crate) fn handle_shortcut(
                             &source, &desired,
                         ) {
                             Ok(lines) => shuma_module_matilda::Msg::DryRunReport(lines),
-                            Err(e) => shuma_module_matilda::Msg::LogLine(format!(
-                                "✘ dry-run remoto: {e}"
-                            )),
+                            Err(e) => {
+                                shuma_module_matilda::Msg::LogLine(format!("✘ dry-run remoto: {e}"))
+                            }
                         };
                         Msg::Module(slot_back, ModuleMsg::Matilda(msg))
                     });
@@ -438,16 +433,15 @@ pub(crate) fn handle_shortcut(
                     );
                     let slot_back = slot.clone();
                     handle.spawn(move || {
-                        let msg = match shuma_module_matilda::apply_remote_blocking(
-                            &source, &desired,
-                        ) {
-                            Ok((lines, new_current)) => {
-                                shuma_module_matilda::Msg::ApplyReport { lines, new_current }
-                            }
-                            Err(e) => shuma_module_matilda::Msg::LogLine(format!(
-                                "✘ apply remoto: {e}"
-                            )),
-                        };
+                        let msg =
+                            match shuma_module_matilda::apply_remote_blocking(&source, &desired) {
+                                Ok((lines, new_current)) => {
+                                    shuma_module_matilda::Msg::ApplyReport { lines, new_current }
+                                }
+                                Err(e) => shuma_module_matilda::Msg::LogLine(format!(
+                                    "✘ apply remoto: {e}"
+                                )),
+                            };
                         Msg::Module(slot_back, ModuleMsg::Matilda(msg))
                     });
                     return m;
@@ -477,14 +471,12 @@ pub(crate) fn handle_shortcut(
             // Minga verify_all: recorre las raíces del snapshot y las
             // verifica una por una en un thread.
             if action_id == "minga.verify_all" {
-                if let (Some(repo_path), Some(alphas)) = (
-                    minga_repo_path(&slot, &m),
-                    minga_visible_alphas(&slot, &m),
-                ) {
+                if let (Some(repo_path), Some(alphas)) =
+                    (minga_repo_path(&slot, &m), minga_visible_alphas(&slot, &m))
+                {
                     let slot_back = slot.clone();
                     handle.spawn(move || {
-                        let results =
-                            shuma_module_minga::verify_all_blocking(&repo_path, &alphas);
+                        let results = shuma_module_minga::verify_all_blocking(&repo_path, &alphas);
                         Msg::Module(
                             slot_back,
                             ModuleMsg::Minga(shuma_module_minga::Msg::VerifyAllReady(results)),
@@ -534,9 +526,10 @@ pub(crate) fn minga_visible_alphas(
         Slot::Tab(i) => model.tabs.get(*i)?,
     };
     match &inst.state {
-        ModuleState::Minga(s) => s.snapshot.as_ref().map(|snap| {
-            snap.recent.iter().map(|r| r.alpha).collect()
-        }),
+        ModuleState::Minga(s) => s
+            .snapshot
+            .as_ref()
+            .map(|snap| snap.recent.iter().map(|r| r.alpha).collect()),
         _ => None,
     }
 }
@@ -544,6 +537,28 @@ pub(crate) fn minga_visible_alphas(
 /// Si la tab activa (o el slot Main, si lo hay) es un shell, genera el
 /// `Msg::Module` que reenvía la tecla. El módulo shell distingue Enter
 /// (submit) de inserción de texto internamente.
+/// Rutea la rueda del mouse al shell focado (mismo orden de prioridad
+/// que las teclas). `dpx` ya viene en px (positivo = ver historial).
+pub(crate) fn forward_wheel_to_focused_shell(model: &Model, dpx: f32) -> Option<Msg> {
+    if let Some(inst) = model.main.as_ref() {
+        if matches!(inst.state, ModuleState::Shell(_)) {
+            return Some(Msg::Module(
+                Slot::Main,
+                ModuleMsg::Shell(shuma_module_shell::Msg::Scroll(dpx)),
+            ));
+        }
+    }
+    if let Some(inst) = model.tabs.get(model.active_tab) {
+        if matches!(inst.state, ModuleState::Shell(_)) {
+            return Some(Msg::Module(
+                Slot::Tab(model.active_tab),
+                ModuleMsg::Shell(shuma_module_shell::Msg::Scroll(dpx)),
+            ));
+        }
+    }
+    None
+}
+
 pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Option<Msg> {
     // 1) Slot Main siempre gana — si está configurado como shell, las
     //    teclas van ahí. Permite al usuario poner el shell como módulo
@@ -616,9 +631,7 @@ pub(crate) fn dispatch_to_module(slot: &Slot, model: &Model, action_id: &str) ->
     };
     match inst.kind {
         Kind::Launcher => shuma_module_launcher::dispatch(action_id).map(ModuleMsg::Launcher),
-        Kind::CommandBar => {
-            shuma_module_commandbar::dispatch(action_id).map(ModuleMsg::CommandBar)
-        }
+        Kind::CommandBar => shuma_module_commandbar::dispatch(action_id).map(ModuleMsg::CommandBar),
         Kind::Shell => shuma_module_shell::dispatch(action_id).map(ModuleMsg::Shell),
         Kind::Matilda => shuma_module_matilda::dispatch(action_id).map(ModuleMsg::Matilda),
         Kind::Minga => shuma_module_minga::dispatch(action_id).map(ModuleMsg::Minga),

@@ -864,51 +864,96 @@ pub(crate) fn shell_header<HostMsg: Clone + 'static>(
     .text_aligned(label, 12.0, color, Alignment::Start)
 }
 
+// Geometría fija del panel de output. Debe coincidir EXACTAMENTE con los
+// `Style` de `output_pane`/`command_card`: el scroll calcula `content_h`
+// con estas constantes (no medimos el árbol; con alturas fijas alcanza).
+pub(crate) const PANE_PAD_V: f32 = 12.0; // padding top 6 + bottom 6 del column interno
+pub(crate) const PANE_GAP: f32 = 6.0; // gap entre cards / líneas sueltas
+pub(crate) const CARD_PAD_V: f32 = 9.0; // card padding top 4 + bottom 5
+pub(crate) const CARD_GAP: f32 = 2.0; // gap entre hijos de la card
+pub(crate) const HEADER_H: f32 = 20.0; // header de la card
+pub(crate) const STAGES_H: f32 = 20.0; // fila de etapas de pipe
+pub(crate) const ROW_H: f32 = 16.0; // una línea de output
+
 pub(crate) fn output_pane<HostMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
     lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
 ) -> View<HostMsg> {
-    // Tomamos las últimas N líneas que caben — sin scroll real todavía
-    // (el panel asume altura fija; el chasis lo recorta con flex).
-    const MAX_VISIBLE: usize = 200;
+    const MAX_VISIBLE: usize = 400;
     let start = state.output.len().saturating_sub(MAX_VISIBLE);
     let visible = &state.output[start..];
 
-    // Agrupamos líneas consecutivas con el mismo `block` en una card por
-    // comando (un `$ cmd` + su salida + su exit status). Las líneas sin
-    // un `Prompt` al frente (tope parcial tras capar, notices iniciales)
-    // van sueltas, sin chrome.
-    let mut children: Vec<View<HostMsg>> = Vec::new();
-    let mut i = 0usize;
-    while i < visible.len() {
-        let block = visible[i].block;
-        let mut j = i;
-        while j < visible.len() && visible[j].block == block {
-            j += 1;
+    // Agrupamos por `block` COLECTANDO todas las líneas del bloque aunque
+    // se intercalen en el buffer (un job de fondo que escupe entre líneas
+    // del foreground ya no fragmenta ni contamina ninguna card). El orden
+    // de las cards es el de primera aparición del bloque.
+    let mut order: Vec<u64> = Vec::new();
+    let mut groups: std::collections::HashMap<u64, Vec<&OutputLine>> =
+        std::collections::HashMap::new();
+    for line in visible {
+        if !groups.contains_key(&line.block) {
+            order.push(line.block);
         }
-        let group = &visible[i..j];
-        if group
-            .first()
+        groups.entry(line.block).or_default().push(line);
+    }
+
+    // Cada item lleva su alto exacto → `content_h` para el scroll.
+    let mut items: Vec<(View<HostMsg>, f32)> = Vec::new();
+    for id in &order {
+        let g = &groups[id];
+        if g.first()
             .map(|l| l.kind == OutputKind::Prompt)
             .unwrap_or(false)
         {
-            children.push(command_card::<HostMsg>(group, block, state, theme, lift));
+            items.push(command_card::<HostMsg>(
+                g.as_slice(),
+                *id,
+                state,
+                theme,
+                lift,
+            ));
         } else {
-            for line in group {
-                children.push(render_output_line::<HostMsg>(line, &state.cwd, theme, lift));
+            // Líneas sueltas (tope parcial tras capar, notices iniciales).
+            for &line in g.iter() {
+                items.push((
+                    render_output_line::<HostMsg>(line, &state.cwd, theme, lift),
+                    ROW_H,
+                ));
             }
         }
-        i = j;
     }
 
-    View::new(Style {
+    let content_h = if items.is_empty() {
+        PANE_PAD_V
+    } else {
+        PANE_PAD_V
+            + items.iter().map(|(_, h)| *h).sum::<f32>()
+            + PANE_GAP * (items.len() as f32 - 1.0)
+    };
+    let children: Vec<View<HostMsg>> = items.into_iter().map(|(v, _)| v).collect();
+
+    // Scroll: el viewport lo midió el painter el frame anterior. Por
+    // defecto pegado al fondo (lo último visible, como una terminal);
+    // `scroll_px` (rueda) desplaza hacia el historial. Publicamos el
+    // overflow para que `Msg::Scroll` clampe sin recomputar geometría.
+    let viewport_h = state.out_viewport_h.lock().map(|g| *g).unwrap_or(0.0);
+    let overflow = (content_h - viewport_h).max(0.0);
+    if let Ok(mut g) = state.out_overflow.lock() {
+        *g = overflow;
+    }
+    let ty: f64 = if viewport_h < 1.0 {
+        0.0 // primer frame, todavía sin medir → tope
+    } else {
+        (state.scroll_px.clamp(0.0, overflow) - overflow) as f64
+    };
+
+    let inner = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
             height: Dimension::auto(),
         },
-        flex_grow: 1.0,
         padding: Rect {
             left: length(8.0_f32),
             right: length(8.0_f32),
@@ -917,14 +962,39 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
         },
         gap: Size {
             width: length(0.0_f32),
-            height: length(6.0_f32),
+            height: length(PANE_GAP),
         },
         align_items: Some(AlignItems::Stretch),
         ..Default::default()
     })
+    .transform(vello::kurbo::Affine::translate((0.0, ty)))
+    .children(children);
+
+    // El painter publica el alto del viewport; coexiste con los hijos
+    // (el compositor pinta painter y luego children).
+    let slot = Arc::clone(&state.out_viewport_h);
+    let painter = move |_scene: &mut vello::Scene,
+                        _ts: &mut llimphi_ui::llimphi_text::Typesetter,
+                        rect: llimphi_ui::PaintRect| {
+        if let Ok(mut g) = slot.lock() {
+            *g = rect.h;
+        }
+    };
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
     .fill(theme.bg_panel)
     .radius(3.0)
-    .children(children)
+    .clip(true)
+    .paint_with(painter)
+    .children(vec![inner])
 }
 
 /// Color del badge de estado a partir del texto de la notice de cierre
@@ -945,16 +1015,101 @@ pub(crate) fn status_color(
     }
 }
 
+/// Extrae el comando crudo del texto del header (`$ ls | wc`, o el de un
+/// job de fondo `[0] $ sleep 5 &`) — para parsear las etapas del pipe.
+pub(crate) fn extract_command(header: &str) -> String {
+    let after = header.splitn(2, "$ ").nth(1).unwrap_or(header);
+    after.trim().trim_end_matches('&').trim_end().to_string()
+}
+
+/// Fila de etapas de un pipe: `⇢ a | b | c`, cada etapa clickable para
+/// re-ejecutar la línea truncada hasta ahí (inspeccionar intermedios).
+/// `None` si la línea no es un pipe de ≥2 etapas. Recuperada del shuma
+/// GPUI viejo (commit 3751aadb), ahora sobre Llimphi.
+pub(crate) fn pipe_stages_row<HostMsg: Clone + 'static>(
+    header_text: &str,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> Option<View<HostMsg>> {
+    let cmd = extract_command(header_text);
+    let toks = shuma_line::tokenize(&cmd, state_dialect_default());
+    let pipe = shuma_line::split_pipeline(&toks);
+    if pipe.stages.len() < 2 {
+        return None;
+    }
+    let raw_parts: Vec<&str> = cmd.split('|').collect();
+    let mut row_children: Vec<View<HostMsg>> = vec![View::new(Style {
+        size: Size {
+            width: length(16.0_f32),
+            height: length(16.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned("⇢".to_string(), 11.0, theme.fg_muted, Alignment::Start)];
+
+    for (i, st) in pipe.stages.iter().enumerate() {
+        let label = st
+            .command
+            .clone()
+            .unwrap_or_else(|| format!("etapa {}", i + 1));
+        // Prefijo a re-ejecutar: la línea hasta esta etapa, inclusive.
+        let prefix = raw_parts
+            .get(..=i)
+            .map(|p| p.join("|").trim().to_string())
+            .unwrap_or_else(|| cmd.clone());
+        let l = lift.clone();
+        row_children.push(
+            View::new(Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: length(16.0_f32),
+                },
+                padding: Rect {
+                    left: length(5.0_f32),
+                    right: length(5.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.bg_input)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(l(Msg::RunLine(prefix)))
+            .text_aligned(label, 11.0, theme.fg_text, Alignment::Start),
+        );
+    }
+
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(STAGES_H),
+            },
+            align_items: Some(AlignItems::Center),
+            gap: Size {
+                width: length(5.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(row_children),
+    )
+}
+
 /// Renderiza un bloque-comando como card desplegable: header (chevron +
-/// comando + badge de estado, clickable para plegar) y cuerpo (la salida,
-/// oculta si está colapsado). `group[0]` es el `Prompt`.
+/// comando + badge de estado, clickable para plegar), opcional fila de
+/// etapas de pipe, y cuerpo (la salida, oculta si está colapsado).
+/// `group[0]` es el `Prompt`. Devuelve `(view, alto_exacto)` — el alto
+/// alimenta el cálculo de scroll de `output_pane`.
 pub(crate) fn command_card<HostMsg: Clone + 'static>(
-    group: &[OutputLine],
+    group: &[&OutputLine],
     block: u64,
     state: &State,
     theme: &Theme,
     lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
-) -> View<HostMsg> {
+) -> (View<HostMsg>, f32) {
     let collapsed = state.collapsed.contains(&block);
     let header_text = group[0].text.clone();
 
@@ -962,7 +1117,7 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
     // cuerpo. Si hay varias, gana la última.
     let mut body: Vec<&OutputLine> = Vec::new();
     let mut badge: Option<(String, llimphi_ui::llimphi_raster::peniko::Color)> = None;
-    for l in &group[1..] {
+    for &l in &group[1..] {
         if let Some(color) = status_color(&l.text, theme) {
             badge = Some((l.text.clone(), color));
         } else {
@@ -970,7 +1125,15 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
         }
     }
     // Comando aún vivo (sin notice de cierre todavía): spinner en accent.
-    if badge.is_none() && state.current_block == block && state.is_running() {
+    // (Foreground o job de fondo: ambos siguen "vivos" hasta su exit.)
+    let still_running = badge.is_none()
+        && ((state.current_block == block && state.is_running())
+            || state.bg_jobs.iter().any(|j| {
+                j.lock()
+                    .map(|g| g.block == block && !g.handle.is_finished())
+                    .unwrap_or(false)
+            }));
+    if still_running {
         badge = Some(("⟳".to_string(), theme.accent));
     }
 
@@ -992,7 +1155,7 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
             flex_grow: 1.0,
             ..Default::default()
         })
-        .text_aligned(header_text, 12.0, theme.accent, Alignment::Start),
+        .text_aligned(header_text.clone(), 12.0, theme.accent, Alignment::Start),
     ];
     if let Some((btxt, bcolor)) = badge {
         header_children.push(
@@ -1011,7 +1174,7 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(20.0_f32),
+            height: length(HEADER_H),
         },
         align_items: Some(AlignItems::Center),
         padding: Rect {
@@ -1033,13 +1196,23 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
     .children(header_children);
 
     let mut card_children: Vec<View<HostMsg>> = vec![header];
+    let mut child_h_sum = HEADER_H;
+
+    // Fila de etapas de pipe (sólo si NO está colapsado y es un pipe).
+    if !collapsed {
+        if let Some(row) = pipe_stages_row::<HostMsg>(&header_text, theme, lift) {
+            card_children.push(row);
+            child_h_sum += STAGES_H;
+        }
+    }
+
     if collapsed {
         if !body.is_empty() {
             card_children.push(
                 View::new(Style {
                     size: Size {
                         width: percent(1.0_f32),
-                        height: length(16.0_f32),
+                        height: length(ROW_H),
                     },
                     ..Default::default()
                 })
@@ -1050,14 +1223,19 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                     Alignment::Start,
                 ),
             );
+            child_h_sum += ROW_H;
         }
     } else {
-        for line in &body {
+        for &line in &body {
             card_children.push(render_output_line::<HostMsg>(line, &state.cwd, theme, lift));
+            child_h_sum += ROW_H;
         }
     }
 
-    View::new(Style {
+    let n_children = card_children.len() as f32;
+    let card_h = CARD_PAD_V + child_h_sum + CARD_GAP * (n_children - 1.0);
+
+    let view = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
@@ -1071,13 +1249,15 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
         },
         gap: Size {
             width: length(0.0_f32),
-            height: length(2.0_f32),
+            height: length(CARD_GAP),
         },
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
     .radius(5.0)
-    .children(card_children)
+    .children(card_children);
+
+    (view, card_h)
 }
 
 /// Una "pieza" del partición de una línea: el texto, su color y el
