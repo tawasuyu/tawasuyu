@@ -25,7 +25,6 @@
 use std::error::Error;
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::time::{Duration, Instant};
 
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
@@ -71,7 +70,7 @@ use llimphi_ui::llimphi_text::Typesetter;
 use pata_core::widget::WidgetCtx;
 use pata_core::{Anchor, Config, SurfaceKind};
 
-use crate::sampler::Sampler;
+use crate::sampler::SamplerHandle;
 use crate::toplevel::{Toplevel, WindowEntry};
 use crate::tray::TrayHandle;
 use crate::{render, Model, Msg};
@@ -158,11 +157,11 @@ struct LayerApp {
     shuma_panel: Option<usize>,
     /// Grosor original (px) de esa barra — al que vuelve al replegar el drawer.
     shuma_bar_px: u32,
-    sampler: Sampler,
-    /// Último snapshot del sistema y cuándo se tomó: los frame-callbacks corren a
-    /// ~60fps, pero re-muestrear (y cambiar el CPU%) sólo tiene sentido ~1Hz.
+    /// Muestreador del sistema en su propio hilo (subprocesos wpctl/wl-paste sin
+    /// tocar el bucle de UI). Publica un snapshot ~1Hz; `maybe_sample` lo recoge.
+    sampler: SamplerHandle,
+    /// Último snapshot del sistema recogido del hilo de muestreo.
     ctx: WidgetCtx,
-    ultimo_sample: Option<Instant>,
     /// Comando del Quake corriendo en un hilo: su resultado llega por aquí. El
     /// latido del frame-callback lo sondea (`try_recv`) sin bloquear el loop.
     exec_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
@@ -301,9 +300,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         shuma,
         shuma_panel,
         shuma_bar_px,
-        sampler: Sampler::new(),
+        sampler: SamplerHandle::spawn(),
         ctx: WidgetCtx::default(),
-        ultimo_sample: None,
         exec_rx: None,
         panels,
         exit: false,
@@ -408,20 +406,16 @@ impl LayerApp {
         }
     }
 
-    /// Re-muestrea el sistema si pasó ~1s; si lo hace, marca todas las barras
-    /// para re-pintar. Muestrear a 60fps haría bailar el CPU% (delta ruidoso).
+    /// Recoge el último snapshot del hilo de muestreo (no bloquea). Si llegó uno
+    /// nuevo, `tick`ea los widgets y marca todas las barras para re-pintar. El
+    /// muestreo en sí (subprocesos que pueden colgarse) vive en `SamplerHandle`,
+    /// nunca acá: el bucle de UI no se bloquea aunque wpctl/wl-paste se cuelguen.
     fn maybe_sample(&mut self) {
-        let toca = self
-            .ultimo_sample
-            .map(|t| t.elapsed() >= Duration::from_secs(1))
-            .unwrap_or(true);
-        if !toca {
+        let Some((ctx, clipboard)) = self.sampler.latest() else {
             return;
-        }
-        self.ctx = self.sampler.sample();
-        self.clipboard = crate::sampler::leer_clipboard();
-        self.ultimo_sample = Some(Instant::now());
-        let ctx = self.ctx;
+        };
+        self.ctx = ctx;
+        self.clipboard = clipboard;
         for sw in &mut self.surfaces {
             for w in sw.core_mut() {
                 w.tick(&ctx);

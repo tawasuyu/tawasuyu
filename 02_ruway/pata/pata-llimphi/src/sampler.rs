@@ -7,6 +7,9 @@
 //! meminfo` para la RAM y `/sys/class/backlight` para el brillo. El volumen
 //! (PulseAudio/PipeWire) queda diferido —el medidor sale en 0% hasta entonces—.
 
+use std::io::Read;
+use std::time::{Duration, Instant};
+
 use chrono::{Datelike, Local, Timelike, Utc};
 
 use pata_core::widget::{ClockReading, WidgetCtx};
@@ -323,12 +326,85 @@ pub fn preview_clipboard(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Corre `cmd args` y devuelve su stdout si salió bien.
+/// Corre `cmd args` con un **tope de tiempo** y devuelve su stdout si salió bien
+/// dentro del plazo; si se pasa, mata el proceso y devuelve `None`.
+///
+/// El tope es la diferencia entre "anda" y "se cuelga": herramientas como
+/// `wl-paste` (sin `wlr-data-control` en el compositor) o `wpctl`/`pactl` (sin
+/// PipeWire/Pulse corriendo, típico en una sesión recién abierta) **bloquean
+/// indefinidamente**. Sin timeout, eso congelaba el muestreo —y con él el primer
+/// frame del marco— para siempre (pata no llegaba ni a crear su surface GPU).
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(cmd).args(args).output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    const PLAZO: Duration = Duration::from_millis(500);
+    let mut child = std::process::Command::new(cmd)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let inicio = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut buf = String::new();
+                child.stdout.take()?.read_to_string(&mut buf).ok()?;
+                return Some(buf);
+            }
+            Ok(None) => {
+                if inicio.elapsed() >= PLAZO {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Muestrea el sistema en un **hilo aparte** y publica el último snapshot por un
+/// canal. Los subprocesos (wpctl/pactl/wl-paste) corren ahí, **nunca en el hilo
+/// del bucle de UI**: si uno se cuelga o tarda, el marco sigue pintando y
+/// refrescando lo demás. Mismo patrón que el `TrayHandle`.
+pub struct SamplerHandle {
+    rx: std::sync::mpsc::Receiver<Snapshot>,
+}
+
+/// Lo que el hilo de muestreo publica cada ~1 s: el contexto de widgets + el
+/// preview del portapapeles.
+pub type Snapshot = (WidgetCtx, Option<String>);
+
+impl SamplerHandle {
+    /// Arranca el hilo de muestreo. Toma una muestra al toque y luego cada ~1 s.
+    pub fn spawn() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut sampler = Sampler::new();
+            loop {
+                let snapshot = (sampler.sample(), leer_clipboard());
+                if tx.send(snapshot).is_err() {
+                    break; // la app se fue: cortamos el hilo
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+        Self { rx }
+    }
+
+    /// El snapshot más reciente (drena la cola), o `None` si no llegó nada nuevo
+    /// desde la última vez. **No bloquea** — pensado para llamar por frame.
+    pub fn latest(&self) -> Option<Snapshot> {
+        let mut last = None;
+        while let Ok(snapshot) = self.rx.try_recv() {
+            last = Some(snapshot);
+        }
+        last
+    }
 }
 
 /// Parsea `wpctl get-volume`: `"Volume: 0.65"` o `"Volume: 0.65 [MUTED]"`.
