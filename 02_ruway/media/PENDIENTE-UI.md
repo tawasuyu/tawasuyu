@@ -47,11 +47,18 @@
    ↑/↓ en config > Barras).
 4. **Tercera barra** — el editor (config > Barras) ya tiene `+ agregar barra`;
    verificar end-to-end al correr.
-5. **Waveform de pista completa tipo Audacity** — ÚLTIMO pendiente grande.
-   Escaneo de picos del audio (decodificar toda la pista) + caché + dibujo con
-   eje de tiempo y playhead. Núcleo de picos = función pura testeable; obtener
-   las muestras = por fuente (nativas: decode; ffmpeg: scan). Es el más pesado.
-6. (libre) **Barras arriba/abajo del video** — ya cubierto en (3).
+5. ✅ **Waveform de pista completa tipo Audacity** (2026-06-02).
+   `media-core::waveform` (núcleo puro: `Waveform` + `PeaksBuilder` streaming,
+   +5 tests) + `foreign-av::decode_peaks` (escanea con ffmpeg a mono f32 8 kHz,
+   arma picos sin cargar todo en RAM). media-app: escaneo en hilo de fondo al
+   abrir (→ `waveform_slot` + `Msg::WaveformReady`); el 1er visor (Ver >
+   Visualizadores) dibuja la onda de TODA la pista con playhead + clic-para-seek;
+   mientras escanea cae a la onda en vivo. **Falta verificar al correr**: que
+   el escaneo termine y la onda + playhead se vean bien (necesita ffmpeg).
+
+**Todos los ítems del feedback de interfaz están cubiertos.** Refinamientos
+menores que quedaron anotados: scroll en la cola larga, reordenar la cola
+arrastrando, y validar a ojo el waveform/playhead con un archivo real.
    canvas. Agregar posición por barra (sobre/bajo el video) en
    `media-core::toolbar`/`layout` + respetarla en `toolbar_view`.
 4. **Tercera barra** — el editor de barras (config → Barras) ya tiene
