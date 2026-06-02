@@ -31,7 +31,9 @@ Llimphi porque vivían en el frontend, no en un core. Auditoría de la suite
   `cosmos-time::sidereal` + `cosmos-skywatch`; emitir `DrawCommand` como el resto.
 - `cosmos-app-llimphi/persist.rs` — store JSON de cartas paralelo a `cosmos-store`.
 - `media-app/main.rs` — `Playlist`/shuffle/repeat duplican `media-core::Playlist`.
-- `iniy-explorer-llimphi` — `calcular_reputaciones` duplicado del CLI; unificar en core.
+- ✅ **HECHO** `iniy-explorer-llimphi` — `calcular_reputaciones` (scoring puro en
+  memoria) movido a `iniy_store::calcular_reputaciones` (2 tests); el frontend lo
+  consume. La variante persistida sigue siendo `Store::recalcular_reputaciones` (SQL).
 - `/proc` parseado a mano en `sandokan-monitor-llimphi` (tab Sistema), `wawa-panel-llimphi`,
   `launcher-llimphi/host.rs` → un `host-sysmon-core` compartido.
 - `dominium-app-llimphi` — `worldgen.rs`/`packs.rs`/lifecycle de `sim.rs` (~700 LOC) → `dominium-core`.

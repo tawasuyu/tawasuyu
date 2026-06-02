@@ -317,3 +317,66 @@ fn migracion_anade_fuente_id_a_documentos_viejos() {
         .collect();
     assert!(cols.iter().any(|c| c == "fuente_id"));
 }
+
+// ---- calcular_reputaciones (scoring puro, regla #2) ----
+
+fn fuente_demo(nombre: &str) -> Fuente {
+    Fuente { id: FuenteId::nuevo(), nombre: nombre.into(), kind: None }
+}
+
+fn atribuida(asercion: Asercion, fuente: Fuente) -> AsercionAtribuida {
+    AsercionAtribuida { asercion, doc_titulo: "doc".into(), fuente: Some(fuente), citada: false }
+}
+
+#[test]
+fn reputaciones_apoyo_y_contradiccion_dan_extremos() {
+    let did = DocId::nuevo();
+    let cid = ChunkId::nuevo();
+    let (fa, fb) = (fuente_demo("A"), fuente_demo("B"));
+    let (fa_id, fb_id) = (fa.id, fb.id);
+    let a = asercion_demo(did, cid, "premisa de A");
+    let b = asercion_demo(did, cid, "hipótesis de B");
+    let (a_id, b_id) = (a.id, b.id);
+    let todas = vec![atribuida(a, fa), atribuida(b, fb)];
+
+    // A ⟹ B (entailment) ⇒ B recibe +1 apoyo ⇒ score 1.0; A sin entrante ⇒ 0.0
+    let apoyo = Implicacion {
+        premisa: a_id,
+        hipotesis: b_id,
+        relacion: RelacionNli { entailment: 0.9, contradiction: 0.05, neutral: 0.05 },
+    };
+    let reps = calcular_reputaciones(&todas, &[apoyo]);
+    assert_eq!(reps.get(&fb_id).copied(), Some(1.0));
+    assert_eq!(reps.get(&fa_id).copied(), Some(0.0));
+
+    // Misma arista pero contradictoria ⇒ B score -1.0
+    let contra = Implicacion {
+        premisa: a_id,
+        hipotesis: b_id,
+        relacion: RelacionNli { entailment: 0.05, contradiction: 0.9, neutral: 0.05 },
+    };
+    let reps = calcular_reputaciones(&todas, &[contra]);
+    assert_eq!(reps.get(&fb_id).copied(), Some(-1.0));
+}
+
+#[test]
+fn reputaciones_ignora_aristas_intra_fuente() {
+    let did = DocId::nuevo();
+    let cid = ChunkId::nuevo();
+    let f = fuente_demo("única");
+    let fid = f.id;
+    let a = asercion_demo(did, cid, "a");
+    let b = asercion_demo(did, cid, "b");
+    let (a_id, b_id) = (a.id, b.id);
+    // ambas aserciones de la MISMA fuente
+    let f2 = Fuente { id: fid, nombre: "única".into(), kind: None };
+    let todas = vec![atribuida(a, f), atribuida(b, f2)];
+    let imp = Implicacion {
+        premisa: a_id,
+        hipotesis: b_id,
+        relacion: RelacionNli { entailment: 0.9, contradiction: 0.0, neutral: 0.1 },
+    };
+    let reps = calcular_reputaciones(&todas, &[imp]);
+    // sin evidencia inter-fuente ⇒ score 0
+    assert_eq!(reps.get(&fid).copied(), Some(0.0));
+}

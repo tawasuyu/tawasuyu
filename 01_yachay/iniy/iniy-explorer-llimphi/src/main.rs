@@ -757,7 +757,7 @@ fn cargar_modelo(
     let reputaciones = if !persistidas.is_empty() {
         persistidas.into_iter().map(|r| (r.fuente_id, r.score)).collect()
     } else {
-        calcular_reputaciones(&aserciones, &imps)
+        iniy_store::calcular_reputaciones(&aserciones, &imps)
     };
     let n = imps.len();
     Ok((aserciones, fuentes, reputaciones, n, imps))
@@ -858,37 +858,8 @@ fn hash_id(id: &AsercionId) -> u64 {
 
 /// Cálculo de reputación duplicado del CLI (versión simplificada: solo el
 /// score). Para que el explorer no dependa de iniy-cli.
-fn calcular_reputaciones(
-    todas: &[AsercionAtribuida],
-    imps: &[Implicacion],
-) -> std::collections::HashMap<FuenteId, f32> {
-    use std::collections::HashMap;
-    let asercion_a_fuente: HashMap<AsercionId, FuenteId> = todas.iter()
-        .filter_map(|a| a.fuente.as_ref().map(|f| (a.asercion.id, f.id)))
-        .collect();
-    let mut apoyada: HashMap<FuenteId, u32> = HashMap::new();
-    let mut contradicha: HashMap<FuenteId, u32> = HashMap::new();
-    for imp in imps {
-        let Some(&fa) = asercion_a_fuente.get(&imp.premisa) else { continue; };
-        let Some(&fb) = asercion_a_fuente.get(&imp.hipotesis) else { continue; };
-        if fa == fb { continue; }
-        let rel = &imp.relacion;
-        if rel.entailment > rel.contradiction && rel.entailment > 0.0 {
-            *apoyada.entry(fb).or_default() += 1;
-        } else if rel.contradiction > 0.0 {
-            *contradicha.entry(fb).or_default() += 1;
-        }
-    }
-    let mut out = HashMap::new();
-    for fid in asercion_a_fuente.values().copied().collect::<std::collections::HashSet<_>>() {
-        let a = *apoyada.get(&fid).unwrap_or(&0) as f32;
-        let c = *contradicha.get(&fid).unwrap_or(&0) as f32;
-        let total = a + c;
-        let score = if total > 0.0 { (a - c) / total } else { 0.0 };
-        out.insert(fid, score);
-    }
-    out
-}
+// `calcular_reputaciones` (scoring puro de fuentes) vive ahora en
+// `iniy_store` (regla #2): el frontend lo consume, no lo reimplementa.
 
 fn main() {
     llimphi_ui::run::<Explorer>();

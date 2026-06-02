@@ -48,6 +48,56 @@ pub struct AsercionAtribuida {
     pub citada: bool,
 }
 
+/// Reputación en memoria de cada fuente a partir de las aserciones
+/// atribuidas y las implicaciones NLI entre ellas: por cada arista que
+/// vincule aserciones de fuentes distintas, cuenta un apoyo (entailment
+/// domina y es > 0) o una contradicción (contradiction > 0) sobre la
+/// fuente de la hipótesis. El score es `(apoyada − contradicha) /
+/// (apoyada + contradicha)` en `[-1, 1]`, o `0` sin evidencia.
+///
+/// Es el cómputo puro y agnóstico de GUI que antes vivía duplicado en
+/// `iniy-explorer-llimphi` (regla #2). La variante persistida en SQLite
+/// es [`Store::recalcular_reputaciones`]; ésta sirve para vistas vivas
+/// sin tocar la DB.
+pub fn calcular_reputaciones(
+    todas: &[AsercionAtribuida],
+    imps: &[Implicacion],
+) -> std::collections::HashMap<FuenteId, f32> {
+    use std::collections::{HashMap, HashSet};
+    let asercion_a_fuente: HashMap<AsercionId, FuenteId> = todas
+        .iter()
+        .filter_map(|a| a.fuente.as_ref().map(|f| (a.asercion.id, f.id)))
+        .collect();
+    let mut apoyada: HashMap<FuenteId, u32> = HashMap::new();
+    let mut contradicha: HashMap<FuenteId, u32> = HashMap::new();
+    for imp in imps {
+        let Some(&fa) = asercion_a_fuente.get(&imp.premisa) else {
+            continue;
+        };
+        let Some(&fb) = asercion_a_fuente.get(&imp.hipotesis) else {
+            continue;
+        };
+        if fa == fb {
+            continue;
+        }
+        let rel = &imp.relacion;
+        if rel.entailment > rel.contradiction && rel.entailment > 0.0 {
+            *apoyada.entry(fb).or_default() += 1;
+        } else if rel.contradiction > 0.0 {
+            *contradicha.entry(fb).or_default() += 1;
+        }
+    }
+    let mut out = HashMap::new();
+    for fid in asercion_a_fuente.values().copied().collect::<HashSet<_>>() {
+        let a = *apoyada.get(&fid).unwrap_or(&0) as f32;
+        let c = *contradicha.get(&fid).unwrap_or(&0) as f32;
+        let total = a + c;
+        let score = if total > 0.0 { (a - c) / total } else { 0.0 };
+        out.insert(fid, score);
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct FuenteResumen {
     pub fuente: Fuente,
