@@ -68,7 +68,7 @@ use llimphi_surface::ExternalSurface;
 use llimphi_ui::llimphi_hal::wgpu;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Position, Size, Style},
-    AlignItems, JustifyContent, Rect as TaffyRect,
+    AlignItems, FlexWrap, JustifyContent, Rect as TaffyRect,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
@@ -85,6 +85,7 @@ use media_core::config::MediaConfig;
 use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
+use media_core::toolbar::BarItem;
 use media_core::transform::{TransformControl, TransformVideo};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
@@ -159,9 +160,59 @@ enum Msg {
     ContextMenuOpen(f32, f32),
     /// Abre/cierra la ventana de configuración (`F2`).
     ToggleSettings,
+    /// Cambia la pestaña activa de la ventana de configuración.
+    SettingsTab(SettingsTab),
     /// Edita un campo de la config desde la ventana de ajustes. Muta
     /// `Model::config`, aplica a los handles vivos y persiste.
     ConfigEdit(ConfigEdit),
+    /// Edita las barras de controles desde la pestaña "Barras".
+    BarEdit(BarEdit),
+}
+
+/// Pestañas de la ventana de configuración.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    Audio,
+    Video,
+    Playback,
+    Bars,
+    Controls,
+}
+
+impl SettingsTab {
+    const ALL: &'static [SettingsTab] = &[
+        SettingsTab::Audio,
+        SettingsTab::Video,
+        SettingsTab::Playback,
+        SettingsTab::Bars,
+        SettingsTab::Controls,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            SettingsTab::Audio => "Audio",
+            SettingsTab::Video => "Video",
+            SettingsTab::Playback => "Reproducción",
+            SettingsTab::Bars => "Barras",
+            SettingsTab::Controls => "Controles",
+        }
+    }
+}
+
+/// Edición de las barras de controles (pestaña "Barras").
+#[derive(Debug, Clone)]
+enum BarEdit {
+    /// Agrega un item al final de la barra `bar`.
+    AddItem(usize, BarItem),
+    /// Quita el item `(bar, pos)`.
+    RemoveItem(usize, usize),
+    /// Reordena el item `(bar, pos)` un lugar (`dir` = -1/+1).
+    Nudge(usize, usize, i32),
+    /// Agrega una barra vacía.
+    AddBar,
+    /// Quita la barra `idx`.
+    RemoveBar(usize),
+    /// Fija a qué barra agrega el selector de items.
+    SetTarget(usize),
 }
 
 /// Edición concreta sobre [`MediaConfig`] disparada por la ventana de
@@ -459,6 +510,26 @@ fn apply_config_edit(cfg: &mut MediaConfig, edit: ConfigEdit) {
     }
 }
 
+/// Aplica una [`BarEdit`] sobre las barras (y el target). El saneo y el
+/// guardado los hace el handler de `Msg::BarEdit`.
+fn apply_bar_edit(model: &mut Model, edit: BarEdit) {
+    let tb = &mut model.config.toolbar;
+    match edit {
+        BarEdit::AddItem(bar, item) => tb.add_item(bar, item),
+        BarEdit::RemoveItem(bar, pos) => {
+            tb.remove_item(bar, pos);
+        }
+        BarEdit::Nudge(bar, pos, dir) => {
+            tb.nudge_item(bar, pos, dir);
+        }
+        BarEdit::AddBar => tb.add_bar(),
+        BarEdit::RemoveBar(idx) => {
+            tb.remove_bar(idx);
+        }
+        BarEdit::SetTarget(idx) => model.bar_target = idx,
+    }
+}
+
 struct Model {
     frames: u64,
     started_at: Instant,
@@ -500,6 +571,10 @@ struct Model {
     config: MediaConfig,
     /// Si la ventana de configuración está abierta (`F2` la alterna).
     settings_open: bool,
+    /// Pestaña activa de la ventana de configuración.
+    settings_tab: SettingsTab,
+    /// Barra a la que el selector de items agrega (pestaña "Barras").
+    bar_target: usize,
 }
 
 struct Pipeline {
@@ -1847,6 +1922,8 @@ impl App for MediaApp {
             context_menu: None,
             config,
             settings_open: false,
+            settings_tab: SettingsTab::Audio,
+            bar_target: 0,
         }
     }
 
@@ -1885,6 +1962,20 @@ impl App for MediaApp {
                 apply_config_edit(&mut m.config, edit);
                 m.config = std::mem::take(&mut m.config).sanitized();
                 apply_media_config(&m.config);
+                save_media_config(&m.config);
+                m
+            }
+            Msg::SettingsTab(tab) => {
+                let mut m = model;
+                m.settings_tab = tab;
+                m
+            }
+            Msg::BarEdit(edit) => {
+                let mut m = model;
+                apply_bar_edit(&mut m, edit);
+                m.config.toolbar = std::mem::take(&mut m.config.toolbar).sanitized();
+                // Mantén el target dentro de rango tras agregar/quitar barras.
+                m.bar_target = m.bar_target.min(m.config.toolbar.bars.len().saturating_sub(1));
                 save_media_config(&m.config);
                 m
             }
@@ -2141,7 +2232,10 @@ impl App for MediaApp {
         });
 
         let subs_strip = subtitle_strip();
-        let timeline = timeline_strip();
+        // Barras de controles configurables (estilo VLC/eww). Incluyen la
+        // línea de tiempo como un item más, así reemplazan al `timeline`
+        // suelto de antes.
+        let bars = toolbar_view(model);
 
         // --- Grilla reorderable de controles + visores ---
         // 3 cols × 2 rows; el orden lo decide el usuario arrastrando
@@ -2225,7 +2319,7 @@ impl App for MediaApp {
         // menú contextual del reproductor.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
         .children(vec![
-            menubar, title_text, canvas, subs_strip, timeline, tile_grid, footer,
+            menubar, title_text, canvas, subs_strip, bars, tile_grid, footer,
         ])
     }
 }
@@ -2350,33 +2444,58 @@ fn settings_header(title: &str) -> View<Msg> {
     .text(title.to_string(), 14.5, Color::from_rgba8(118, 182, 232, 255))
 }
 
-/// Columna (mitad del panel) que apila cabeceras y filas.
-fn settings_column(children: Vec<View<Msg>>) -> View<Msg> {
+/// Columna de contenido (una pestaña) — ancho completo del panel.
+fn content_column(children: Vec<View<Msg>>) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: percent(0.5_f32),
-            height: length(430.0_f32),
+            width: percent(1.0_f32),
+            height: length(388.0_f32),
         },
         ..Default::default()
     })
     .children(children)
 }
 
-/// La ventana de configuración: edita [`MediaConfig`] en vivo (cada cambio
-/// aplica a los handles y persiste a `config.ron`). Dos columnas para
-/// caber en el viewport sin scroll: Audio+Video / Playlist+Subtítulos+
-/// Comportamiento. `F2` o `Esc` la cierran; click fuera también.
-fn settings_overlay(model: &Model) -> View<Msg> {
-    let c = &model.config;
-    let (vw, vh) = model.viewport;
-    let box_w = 760.0_f32.min(vw - 24.0);
-    let box_h = 500.0_f32.min(vh - 24.0);
-    let x = ((vw - box_w) * 0.5).max(0.0);
-    let y = ((vh - box_h) * 0.5).max(0.0);
+/// Fila que envuelve sus hijos a varias líneas (paleta de items, selector).
+fn wrap_row(children: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_wrap: FlexWrap::Wrap,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(children)
+}
 
-    // --- columna izquierda: Audio + Video ---
-    let left = settings_column(vec![
+/// Chip ancho (cabe una etiqueta larga). Para la paleta y el editor de barras.
+fn wide_chip(label: &str, bg: Color, msg: Msg) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(116.0_f32),
+            height: length(30.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(Color::from_rgba8(80, 100, 130, 255))
+    .radius(7.0)
+    .text(label.to_string(), 12.5, Color::from_rgba8(225, 232, 245, 255))
+    .on_click(msg)
+}
+
+/// Contenido de la pestaña Audio.
+fn tab_audio(c: &MediaConfig) -> Vec<View<Msg>> {
+    vec![
         settings_header("Audio"),
         settings_row(
             "Volumen",
@@ -2405,13 +2524,21 @@ fn settings_overlay(model: &Model) -> View<Msg> {
             "",
             vec![cfg_toggle(c.audio.downmix_to_stereo, ConfigEdit::ToggleDownmix)],
         ),
+    ]
+}
+
+/// Contenido de la pestaña Video.
+fn tab_video(c: &MediaConfig) -> Vec<View<Msg>> {
+    vec![
         settings_header("Video"),
         settings_row("Ajuste de color", "", vec![cfg_toggle(c.video.color_enabled, ConfigEdit::ToggleColor)]),
         settings_row("", "", vec![cfg_chip("reset color", ConfigEdit::ColorReset)]),
-    ]);
+    ]
+}
 
-    // --- columna derecha: Playlist + Subtítulos + Comportamiento ---
-    let right = settings_column(vec![
+/// Contenido de la pestaña Reproducción (playlist + subtítulos + comportamiento).
+fn tab_playback(c: &MediaConfig) -> Vec<View<Msg>> {
+    vec![
         settings_header("Playlist"),
         settings_row(
             "Reanudar al abrir",
@@ -2455,21 +2582,220 @@ fn settings_overlay(model: &Model) -> View<Msg> {
                 cfg_chip("+", ConfigEdit::CrossfadeDelta(0.5)),
             ],
         ),
-    ]);
+    ]
+}
 
-    let columns = View::new(Style {
+/// Contenido de la pestaña Controles (keymap, sólo lectura por ahora).
+fn tab_controls() -> Vec<View<Msg>> {
+    let s = settings();
+    // Las teclas atadas como chips compactos (sólo informativo).
+    let keys: Vec<View<Msg>> = s
+        .keymap
+        .bindings
+        .iter()
+        .map(|b| {
+            View::new(Style {
+                size: Size {
+                    width: length(112.0_f32),
+                    height: length(28.0_f32),
+                },
+                justify_content: Some(JustifyContent::Center),
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .fill(Color::from_rgba8(40, 46, 58, 255))
+            .radius(6.0)
+            .text(
+                format!("{} · {}", b.chord.display(), short_action(&b.command)),
+                11.5,
+                Color::from_rgba8(200, 212, 228, 255),
+            )
+        })
+        .collect();
+    vec![
+        settings_header("Controles (teclado)"),
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(40.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(
+            "Editá controles.ron y apretá F5 para reasignar teclas. El editor visual de atajos llega después.".to_string(),
+            12.5,
+            Color::from_rgba8(150, 165, 185, 255),
+        ),
+        wrap_row(keys),
+    ]
+}
+
+/// Etiqueta corta de un comando para el chip de controles.
+fn short_action(cmd: &MediaCommand) -> &'static str {
+    use MediaCommand::*;
+    match cmd {
+        TogglePause => "play",
+        SeekBy { .. } => "seek",
+        SeekTo { .. } => "ir a",
+        VolumeBy { .. } | SetVolume { .. } => "vol",
+        NextTrack => "sig",
+        PrevTrack => "ant",
+        SpeedStep { .. } | SetSpeed { .. } => "vel",
+        CycleRepeat => "rep",
+        ToggleShuffle => "shuf",
+        Snapshot => "snap",
+        ToggleRecord => "rec",
+        Script { .. } => "script",
+        EqToggle | EqBandBy { .. } | EqReset => "eq",
+        AvSyncBy { .. } | AvSyncReset => "sync",
+        ColorToggle | ColorBy { .. } | ColorReset => "color",
+        _ => "acción",
+    }
+}
+
+/// Editor de barras (pestaña "Barras"): cada barra con sus items
+/// (clic = quitar) + reorden, un selector de barra destino y la paleta de
+/// items disponibles que se agregan a esa barra. Estilo VLC/eww.
+fn tab_bars(model: &Model) -> Vec<View<Msg>> {
+    let tb = &model.config.toolbar;
+    let mut out: Vec<View<Msg>> = vec![settings_header("Barras de controles")];
+
+    for (bi, bar) in tb.bars.iter().enumerate() {
+        let head = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(28.0_f32),
+            },
+            gap: Size {
+                width: length(8.0_f32),
+                height: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![
+            bar_label(format!("Barra {}", bi + 1), 70.0, Color::from_rgba8(118, 182, 232, 255)),
+            wide_chip("− quitar barra", Color::from_rgba8(74, 58, 64, 255), Msg::BarEdit(BarEdit::RemoveBar(bi))),
+        ]);
+        // Items: clic quita; ‹ › reordenan.
+        let chips: Vec<View<Msg>> = bar
+            .items
+            .iter()
+            .enumerate()
+            .flat_map(|(pi, &it)| {
+                vec![
+                    wide_chip(
+                        &format!("× {}", it.label()),
+                        Color::from_rgba8(52, 60, 74, 255),
+                        Msg::BarEdit(BarEdit::RemoveItem(bi, pi)),
+                    ),
+                    small_chip("‹", Msg::BarEdit(BarEdit::Nudge(bi, pi, -1))),
+                    small_chip("›", Msg::BarEdit(BarEdit::Nudge(bi, pi, 1))),
+                ]
+            })
+            .collect();
+        out.push(head);
+        out.push(wrap_row(chips));
+    }
+
+    // Selector de barra destino + agregar barra.
+    let mut targets: Vec<View<Msg>> = (0..tb.bars.len())
+        .map(|i| {
+            let bg = if i == model.bar_target {
+                Color::from_rgba8(60, 110, 150, 255)
+            } else {
+                Color::from_rgba8(48, 54, 66, 255)
+            };
+            wide_chip(&format!("→ Barra {}", i + 1), bg, Msg::BarEdit(BarEdit::SetTarget(i)))
+        })
+        .collect();
+    targets.push(wide_chip("+ barra nueva", Color::from_rgba8(48, 70, 58, 255), Msg::BarEdit(BarEdit::AddBar)));
+
+    // Paleta de items disponibles → agregan a la barra destino.
+    let palette: Vec<View<Msg>> = BarItem::ALL
+        .iter()
+        .map(|&it| {
+            wide_chip(
+                it.label(),
+                Color::from_rgba8(46, 54, 68, 255),
+                Msg::BarEdit(BarEdit::AddItem(model.bar_target, it)),
+            )
+        })
+        .collect();
+
+    out.push(settings_header("Agregar items a:"));
+    out.push(wrap_row(targets));
+    out.push(wrap_row(palette));
+    out
+}
+
+/// Chip pequeño cuadrado (reorden ‹ ›).
+fn small_chip(label: &str, msg: Msg) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(26.0_f32),
+            height: length(30.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(40, 46, 58, 255))
+    .hover_fill(Color::from_rgba8(80, 100, 130, 255))
+    .radius(6.0)
+    .text(label.to_string(), 14.0, Color::from_rgba8(220, 230, 245, 255))
+    .on_click(msg)
+}
+
+/// La ventana de configuración con pestañas. Edita [`MediaConfig`] en vivo
+/// (cada cambio aplica a los handles y persiste a `config.ron`). `F2`/`Esc`
+/// la cierran; click fuera también.
+fn settings_overlay(model: &Model) -> View<Msg> {
+    let c = &model.config;
+    let (vw, vh) = model.viewport;
+    let box_w = 760.0_f32.min(vw - 24.0);
+    let box_h = 506.0_f32.min(vh - 24.0);
+    let x = ((vw - box_w) * 0.5).max(0.0);
+    let y = ((vh - box_h) * 0.5).max(0.0);
+
+    // --- barra de pestañas ---
+    let tabs: Vec<View<Msg>> = SettingsTab::ALL
+        .iter()
+        .map(|&t| {
+            let active = t == model.settings_tab;
+            let bg = if active {
+                Color::from_rgba8(60, 110, 150, 255)
+            } else {
+                Color::from_rgba8(44, 50, 62, 255)
+            };
+            chip_button(t.label(), bg, Color::from_rgba8(228, 235, 246, 255), Msg::SettingsTab(t))
+        })
+        .collect();
+    let tab_bar = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(434.0_f32),
+            height: length(38.0_f32),
         },
         gap: Size {
-            width: length(20.0_f32),
+            width: length(6.0_f32),
             height: length(0.0_f32),
         },
+        align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .children(vec![left, right]);
+    .children(tabs);
+
+    // --- contenido de la pestaña activa ---
+    let content = content_column(match model.settings_tab {
+        SettingsTab::Audio => tab_audio(c),
+        SettingsTab::Video => tab_video(c),
+        SettingsTab::Playback => tab_playback(c),
+        SettingsTab::Bars => tab_bars(model),
+        SettingsTab::Controls => tab_controls(),
+    });
 
     let title = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -2508,7 +2834,7 @@ fn settings_overlay(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text(
-        "Se guarda en config.ron · F2/Esc cierra · controles y orden de paneles: ver controles.ron".to_string(),
+        "Se guarda en config.ron · F2/Esc cierra · en Barras: clic en un item lo quita, ‹ › reordenan".to_string(),
         11.5,
         Color::from_rgba8(140, 152, 170, 255),
     );
@@ -2534,7 +2860,7 @@ fn settings_overlay(model: &Model) -> View<Msg> {
     })
     .fill(Color::from_rgba8(26, 30, 38, 245))
     .radius(12.0)
-    .children(vec![title, columns, footer]);
+    .children(vec![title, tab_bar, content, footer]);
 
     View::new(Style {
         size: Size {
@@ -3064,6 +3390,145 @@ fn timeline_strip() -> View<Msg> {
     timeline_view(frac, &palette, |fraction| {
         Some(Msg::Command(MediaCommand::SeekTo { fraction }))
     })
+}
+
+/// Formatea una duración como `M:SS` (o `H:MM:SS` si pasa la hora).
+fn fmt_mmss(d: Duration) -> String {
+    let t = d.as_secs();
+    let (h, m, s) = (t / 3600, (t % 3600) / 60, t % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// Pinta las **barras de controles** configurables (estilo VLC/eww) desde
+/// `model.config.toolbar`. Una barra por fila; cada [`BarItem`] se mapea a
+/// un botón (con su `MediaCommand`) o a un widget especial. El usuario
+/// compone estas barras desde la pestaña "Barras" de la configuración.
+fn toolbar_view(model: &Model) -> View<Msg> {
+    let bars: Vec<View<Msg>> = model
+        .config
+        .toolbar
+        .bars
+        .iter()
+        .map(|bar| {
+            let items: Vec<View<Msg>> = bar.items.iter().map(|&it| bar_item_view(it)).collect();
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(42.0_f32),
+                },
+                gap: Size {
+                    width: length(6.0_f32),
+                    height: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .children(items)
+        })
+        .collect();
+    let n = bars.len().max(1) as f32;
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(n * 48.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(bars)
+}
+
+/// Texto fijo dentro de una barra (reloj, etiqueta de volumen, título).
+fn bar_label(text: String, width: f32, color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(width),
+            height: length(36.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(text, 13.0, color)
+}
+
+/// Mapea un [`BarItem`] a su vista concreta. Los botones reusan
+/// `chip_button` + `Msg::Command`; los widgets especiales (timeline, reloj,
+/// etiquetas, separador) se arman aparte.
+fn bar_item_view(item: BarItem) -> View<Msg> {
+    use MediaCommand::*;
+    let step = settings().seek_step_secs;
+    let vstep = settings().volume_step;
+    let bg = Color::from_rgba8(48, 56, 70, 255);
+    let fg = Color::from_rgba8(222, 230, 244, 255);
+    let cmd = |label: &str, c: MediaCommand| chip_button(label, bg, fg, Msg::Command(c));
+    match item {
+        BarItem::PlayPause => {
+            let label = if pause().is_paused() { "play" } else { "pausa" };
+            cmd(label, TogglePause)
+        }
+        BarItem::Stop => cmd("stop", SeekTo { fraction: 0.0 }),
+        BarItem::Prev => cmd("⟨trk", PrevTrack),
+        BarItem::Next => cmd("trk⟩", NextTrack),
+        BarItem::SeekBack => cmd(&format!("−{step}s"), SeekBy { secs: -step }),
+        BarItem::SeekForward => cmd(&format!("+{step}s"), SeekBy { secs: step }),
+        BarItem::VolumeDown => cmd("vol−", VolumeBy { delta: -vstep }),
+        BarItem::VolumeUp => cmd("vol+", VolumeBy { delta: vstep }),
+        BarItem::Mute => cmd("mute", SetVolume { level: 0.0 }),
+        BarItem::Repeat => cmd("rep", CycleRepeat),
+        BarItem::Shuffle => cmd("shuf", ToggleShuffle),
+        BarItem::SpeedDown => cmd("spd−", SpeedStep { dir: -1 }),
+        BarItem::SpeedUp => cmd("spd+", SpeedStep { dir: 1 }),
+        BarItem::SpeedReset => cmd("1×", SetSpeed { mult: 1.0 }),
+        BarItem::Snapshot => cmd("snap", Snapshot),
+        BarItem::Record => cmd("rec", ToggleRecord),
+        BarItem::Equalizer => cmd("eq", EqToggle),
+        BarItem::Settings => chip_button("⚙ cfg", bg, fg, Msg::ToggleSettings),
+        BarItem::Timeline => View::new(Style {
+            size: Size {
+                width: auto(),
+                height: length(36.0_f32),
+            },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![timeline_strip()]),
+        BarItem::Spacer => View::new(Style {
+            size: Size {
+                width: auto(),
+                height: length(36.0_f32),
+            },
+            flex_grow: 1.0,
+            ..Default::default()
+        }),
+        BarItem::Clock => {
+            let s = playback_snapshot();
+            let txt = match s.duration {
+                Some(d) => format!("{} / {}", fmt_mmss(s.position), fmt_mmss(d)),
+                None => fmt_mmss(s.position),
+            };
+            bar_label(txt, 120.0, Color::from_rgba8(180, 195, 215, 255))
+        }
+        BarItem::VolumeLabel => bar_label(
+            format!("vol {:.0}%", (volume().get() * 100.0).round()),
+            76.0,
+            Color::from_rgba8(180, 195, 215, 255),
+        ),
+        BarItem::Title => {
+            let label = config_slot().get().map(|c| c.label.clone()).unwrap_or_default();
+            bar_label(label, 220.0, Color::from_rgba8(200, 212, 230, 255))
+        }
+    }
 }
 
 fn waveform_panel<Msg: 'static>() -> View<Msg> {
