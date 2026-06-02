@@ -1128,6 +1128,9 @@ impl Selector {
         let mut ids = 0u32;
         let mut classes_etc = 0u32;
         let mut types = 0u32;
+        // Aportes ya pre-multiplicados (de `:is(...)`, que suma la
+        // especificidad de su argumento más específico, CSS spec).
+        let mut extra = 0u32;
         for c in &self.compounds {
             ids += c.ids.len() as u32;
             classes_etc += c.classes.len() as u32;
@@ -1146,6 +1149,12 @@ impl Selector {
                             types += 1;
                         }
                     }
+                    // `:is(...)` = la especificidad del argumento más específico.
+                    Pseudo::Is(list) => {
+                        extra += list.iter().map(compound_specificity).max().unwrap_or(0);
+                    }
+                    // `:where(...)` no aporta especificidad.
+                    Pseudo::Where(_) => {}
                     _ => classes_etc += 1,
                 }
             }
@@ -1153,8 +1162,23 @@ impl Selector {
                 types += 1;
             }
         }
-        ids * 100 + classes_etc * 10 + types
+        ids * 100 + classes_etc * 10 + types + extra
     }
+}
+
+/// Especificidad (a*100 + b*10 + c) de UN compound, para resolver el aporte
+/// de `:is(...)`. Aproxima `:is`/`:where` anidados como una clase (raro).
+fn compound_specificity(c: &Compound) -> u32 {
+    let ids = c.ids.len() as u32;
+    let mut classes = c.classes.len() as u32 + c.attrs.len() as u32;
+    let types = u32::from(matches!(c.tag, TagPart::Type(_)));
+    for p in &c.pseudos {
+        match p {
+            Pseudo::Where(_) => {}
+            _ => classes += 1,
+        }
+    }
+    ids * 100 + classes * 10 + types
 }
 
 /// Combinador CSS entre dos compounds consecutivos.
@@ -1268,6 +1292,11 @@ enum Pseudo {
     /// `:read-write` — control editable (input/textarea/contenteditable) sin
     /// `readonly`.
     ReadWrite,
+    /// `:is(a, b, ...)` — matchea si CUALQUIER compound de la lista matchea.
+    /// Especificidad: la del argumento más específico (CSS spec).
+    Is(Vec<Compound>),
+    /// `:where(a, b, ...)` — como `:is` pero aporta especificidad CERO.
+    Where(Vec<Compound>),
 }
 
 impl Compound {
@@ -1357,6 +1386,11 @@ fn pseudo_matches(
         Pseudo::Optional => return is_form_control(node) && !has("required"),
         Pseudo::ReadOnly => return has("readonly"),
         Pseudo::ReadWrite => return is_editable_control(node) && !has("readonly"),
+        Pseudo::Is(list) | Pseudo::Where(list) => {
+            return list
+                .iter()
+                .any(|c| c.matches_in_state(node, hover_active, focus_active))
+        }
         _ => {}
     }
     let Some(parent) = parent_of(node) else { return false };
@@ -1389,7 +1423,9 @@ fn pseudo_matches(
         | Pseudo::Required
         | Pseudo::Optional
         | Pseudo::ReadOnly
-        | Pseudo::ReadWrite => unreachable!("ya resueltos arriba"),
+        | Pseudo::ReadWrite
+        | Pseudo::Is(_)
+        | Pseudo::Where(_) => unreachable!("ya resueltos arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
         Pseudo::OnlyChild => elems.len() == 1,
@@ -2173,7 +2209,7 @@ fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewport: Viewpo
         if sel_raw.is_empty() {
             continue;
         }
-        for sel in sel_raw.split(',') {
+        for sel in split_top_level_commas(sel_raw) {
             let sel = sel.trim();
             let Some(selector) = parse_selector(sel) else {
                 continue;
@@ -2733,6 +2769,61 @@ fn substitute_vars(value: &str, vars: &HashMap<String, String>) -> String {
 /// Pseudoclases de estado (`:hover`, `:focus`, `:active`), `:not(...)`,
 /// `:nth-child(...)` y pseudo-elementos (`::before`) siguen sin soporte —
 /// el selector entero se ignora si los menciona.
+/// Divide una lista de selectores (`a, b, :is(c, d)`) por las comas de NIVEL
+/// SUPERIOR, respetando las que viven dentro de `(...)` o `[...]` (p.ej. la
+/// coma de `:is(h1, h2)` o de `[x="a,b"]` no separa selectores). Fase 7.188.
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth_paren = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut start = 0usize;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth_paren += 1,
+            ')' => depth_paren -= 1,
+            '[' => depth_bracket += 1,
+            ']' => depth_bracket -= 1,
+            ',' if depth_paren <= 0 && depth_bracket <= 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// Como `str::split_whitespace` pero sin partir dentro de `(...)` o `[...]`
+/// — así `:is(h1, h2)` o `[x="a b"]` quedan en un solo token mientras los
+/// combinadores descendientes (espacios de nivel 0) sí separan. Fase 7.188.
+fn split_ws_top_level(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth_p = 0i32;
+    let mut depth_b = 0i32;
+    let mut start: Option<usize> = None;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth_p += 1,
+            ')' => depth_p -= 1,
+            '[' => depth_b += 1,
+            ']' => depth_b -= 1,
+            _ => {}
+        }
+        if ch.is_whitespace() && depth_p <= 0 && depth_b <= 0 {
+            if let Some(st) = start.take() {
+                out.push(&s[st..i]);
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(st) = start {
+        out.push(&s[st..]);
+    }
+    out
+}
+
 fn parse_selector(sel: &str) -> Option<Selector> {
     let sel = sel.trim();
     // Strip pseudo-element del final (`::before`/`::after`). CSS también
@@ -2764,7 +2855,7 @@ fn parse_selector(sel: &str) -> Option<Selector> {
     let mut combinators: Vec<Combinator> = Vec::new();
     let mut pending_combinator: Option<Combinator> = None;
     let mut first = true;
-    for tok in normalized.split_whitespace() {
+    for tok in split_ws_top_level(&normalized) {
         match tok {
             ">" => pending_combinator = Some(Combinator::Child),
             "+" => pending_combinator = Some(Combinator::AdjacentSibling),
@@ -2951,6 +3042,24 @@ fn parse_compound(sel: &str) -> Option<Compound> {
                                 return None;
                             }
                             Pseudo::Not(Box::new(inner))
+                        }
+                        "is" | "where" => {
+                            // Lista de compounds separados por coma (sin
+                            // combinadores adentro — `parse_compound` parsea
+                            // uno solo). Split naive por `,` (no contempla
+                            // comas dentro de `[attr="a,b"]`, caso raro).
+                            let mut inner = Vec::new();
+                            for part in arg.split(',') {
+                                inner.push(parse_compound(part.trim())?);
+                            }
+                            if inner.is_empty() {
+                                return None;
+                            }
+                            if name == "is" {
+                                Pseudo::Is(inner)
+                            } else {
+                                Pseudo::Where(inner)
+                            }
                         }
                         _ => return None,
                     };

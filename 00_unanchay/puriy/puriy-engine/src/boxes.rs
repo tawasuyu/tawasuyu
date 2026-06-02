@@ -3435,6 +3435,39 @@ mod tests {
     }
 
     #[test]
+    fn pseudo_is_y_where_matchean_lista() {
+        let html = r#"<html><head><style>
+            :is(h1, h2) { color: red; }
+            .box :where(.a, .b) { background: green; }
+            #x:is(.on, .off) { color: blue; }
+        </style></head><body>
+            <h2 id="h">t</h2>
+            <div class="box"><span id="s" class="b">x</span></div>
+            <p id="x" class="on">p</p>
+        </body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        assert_eq!(box_by_id(&doc.box_tree, "h").unwrap().color, super::Color::rgb(255, 0, 0));
+        assert_eq!(
+            box_by_id(&doc.box_tree, "s").unwrap().background,
+            Some(super::Color::rgb(0, 128, 0))
+        );
+        assert_eq!(box_by_id(&doc.box_tree, "x").unwrap().color, super::Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn pseudo_where_no_aporta_especificidad() {
+        // `:where(#hero)` tiene especificidad 0 → lo vence el selector de tag
+        // `p` (que llega después y tiene especificidad 1). Si `:where` aportara
+        // los 100 del `#id`, ganaría el rojo.
+        let html = r#"<html><head><style>
+            :where(#hero) { color: red; }
+            p { color: green; }
+        </style></head><body><p id="hero">x</p></body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        assert_eq!(box_by_id(&doc.box_tree, "hero").unwrap().color, super::Color::rgb(0, 128, 0));
+    }
+
+    #[test]
     fn list_style_none_suprime_marker() {
         let html = r#"<html><head><style>
             ul { list-style-type: none }
