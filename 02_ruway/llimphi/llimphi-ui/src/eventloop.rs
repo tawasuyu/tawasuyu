@@ -251,12 +251,32 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     },
                 };
                 let cursor = (state.cursor.x as f32, state.cursor.y as f32);
-                if let Some(msg) = A::on_wheel(
-                    state.model.as_ref().expect("model"),
-                    wd,
-                    cursor,
-                    state.modifiers,
-                ) {
+                // Primero: ¿hay un nodo con `on_scroll` bajo el cursor? Si
+                // consume el evento (`Some`), no cae al `on_wheel` global.
+                // El overlay tiene prioridad, igual que con clicks. Se
+                // extrae el handler en un scope para soltar el borrow del
+                // cache antes de mutar el modelo.
+                let scroll_handler: Option<ScrollFn<A::Msg>> =
+                    if let Some(cache) = state.last_render.as_ref() {
+                        let (m, c) = match cache.overlay.as_ref() {
+                            Some(ov) => (&ov.mounted, &ov.computed),
+                            None => (&cache.mounted, &cache.computed),
+                        };
+                        hit_test_scroll(m, c, cursor.0, cursor.1)
+                            .and_then(|i| m.nodes[i].on_scroll.clone())
+                    } else {
+                        None
+                    };
+                let msg = match scroll_handler {
+                    Some(h) => h(wd.x, wd.y),
+                    None => A::on_wheel(
+                        state.model.as_ref().expect("model"),
+                        wd,
+                        cursor,
+                        state.modifiers,
+                    ),
+                };
+                if let Some(msg) = msg {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;

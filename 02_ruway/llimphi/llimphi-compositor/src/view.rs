@@ -24,10 +24,24 @@ impl<Msg> View<Msg> {
             on_drop: None,
             drop_hover_fill: None,
             clip: false,
+            on_scroll: None,
             alpha: None,
             transform: None,
             children: Vec::new(),
         }
+    }
+
+    /// Registra un handler de rueda local: si el cursor está sobre este
+    /// nodo cuando la rueda gira, el runtime lo invoca con el delta
+    /// `(dx, dy)` en líneas lógicas ANTES de caer al `App::on_wheel`
+    /// global. Devolver `Some(Msg)` consume el evento. Es la base de las
+    /// áreas de scroll autocontenidas (`llimphi-widget-scroll`).
+    pub fn on_scroll<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_scroll = Some(Arc::new(handler));
+        self
     }
 
     /// Aplica una transformación afín 2D a este nodo y todo su subtree,

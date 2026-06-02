@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-scroll"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-scroll — área de scroll vertical reutilizable: viewport clipeado + contenido desplazado + barra arrastrable. Stateless (el offset vive en el Model); rueda autocontenida vía View::on_scroll. Helpers puros: clamp_offset, ensure_visible, approach (scroll suave)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

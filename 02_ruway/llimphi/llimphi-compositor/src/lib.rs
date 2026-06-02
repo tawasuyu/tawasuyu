@@ -84,6 +84,16 @@ pub type DropFn<Msg> = Arc<dyn Fn(u64) -> Option<Msg> + Send + Sync>;
 /// necesita centrar o normalizar. Devolver `None` no dispara update.
 pub type ClickAtFn<Msg> = Arc<dyn Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
 
+/// Handler de rueda **local a un nodo**. Recibe el delta `(dx, dy)` en
+/// líneas lógicas (misma normalización que `App::on_wheel`: `dy` positivo
+/// = scroll hacia abajo). El runtime lo invoca cuando la rueda gira con el
+/// cursor sobre este nodo, ANTES de caer al `App::on_wheel` global: si el
+/// handler devuelve `Some(Msg)`, el evento se consume acá. Permite áreas
+/// de scroll autocontenidas (el widget `scroll` lo usa) sin que cada app
+/// rutee la rueda a mano por su `Model`. Devolver `None` deja pasar el
+/// evento al `on_wheel` global.
+pub type ScrollFn<Msg> = Arc<dyn Fn(f32, f32) -> Option<Msg> + Send + Sync>;
+
 /// Variante de [`DragFn`] que **conoce la posición inicial del press**
 /// relativa al rect del nodo. Útil cuando el caller necesita identificar
 /// qué entidad (Concepto, lemming, etc.) bajo el cursor agarró el drag.
@@ -224,6 +234,11 @@ pub struct View<Msg> {
     pub on_pointer_enter: Option<Msg>,
     /// Msg a emitir cuando el cursor sale del rect del nodo.
     pub on_pointer_leave: Option<Msg>,
+    /// Handler de rueda local. Si está presente y el cursor cae sobre este
+    /// nodo, el runtime lo invoca antes del `App::on_wheel` global; un
+    /// `Some(Msg)` consume el evento. Base de las áreas de scroll
+    /// autocontenidas. Ver [`ScrollFn`].
+    pub on_scroll: Option<ScrollFn<Msg>>,
     /// Opacidad multiplicada sobre TODO el subtree (este nodo + hijos),
     /// en `[0.0, 1.0]`. Se realiza con `scene.push_layer(Mix::Normal, a, …)`
     /// alrededor del rect del nodo: el subárbol se rasteriza en una capa
@@ -305,6 +320,7 @@ pub struct MountedNode<Msg> {
     pub clip: bool,
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
+    pub on_scroll: Option<ScrollFn<Msg>>,
     pub alpha: Option<f32>,
     /// Transformación afín 2D del nodo (alrededor del centro de su rect).
     /// Ver [`View::transform`]. `paint` la compone con la del padre.

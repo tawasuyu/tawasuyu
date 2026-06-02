@@ -38,6 +38,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip,
         on_pointer_enter,
         on_pointer_leave,
+        on_scroll,
         alpha,
         transform,
         children,
@@ -65,6 +66,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip,
         on_pointer_enter,
         on_pointer_leave,
+        on_scroll,
         alpha,
         transform,
         subtree_end: 0,
@@ -542,6 +544,19 @@ pub fn hit_test_drop<Msg>(
     y: f32,
 ) -> Option<usize> {
     hit_test_pred(mounted, computed, x, y, |n| n.on_drop.is_some())
+}
+
+/// Hit-test específico para áreas de scroll (nodos con `on_scroll`). El
+/// runtime lo usa al recibir la rueda: el nodo más al frente bajo el
+/// cursor con handler de scroll consume el evento antes del `on_wheel`
+/// global.
+pub fn hit_test_scroll<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.on_scroll.is_some())
 }
 
 #[cfg(test)]
