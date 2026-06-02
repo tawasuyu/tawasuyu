@@ -84,6 +84,7 @@ use media_core::color::{ColorControl, ColorParams, ColorVideo};
 use media_core::config::MediaConfig;
 use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
+use media_core::library::History;
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
 use media_core::toolbar::BarItem;
 use media_core::transform::{Rotation, Transform, TransformControl, TransformVideo};
@@ -529,6 +530,94 @@ fn apply_config_edit(cfg: &mut MediaConfig, edit: ConfigEdit) {
         ConfigEdit::SubDelayDelta(d) => cfg.subtitles.delay_ms += d,
         ConfigEdit::SubFontDelta(d) => cfg.subtitles.font_scale += d,
         ConfigEdit::CrossfadeDelta(d) => cfg.behavior.crossfade_secs += d,
+    }
+}
+
+// ============================================================
+// Historial / resume (U2)
+// ============================================================
+
+/// Historial de reproducción global (resume por medio). Se carga de
+/// `history.ron` al primer acceso y se persiste throttle/al salir.
+fn history() -> &'static Mutex<History> {
+    static SLOT: OnceLock<Mutex<History>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(load_history()))
+}
+
+fn history_path() -> Option<PathBuf> {
+    config_file("history.ron")
+}
+
+fn load_history() -> History {
+    let Some(p) = history_path() else {
+        return History::default();
+    };
+    match std::fs::read_to_string(&p) {
+        Ok(body) => ron::from_str::<History>(&body)
+            .map(History::sanitized)
+            .unwrap_or_default(),
+        Err(_) => History::default(),
+    }
+}
+
+/// Persiste el historial a `history.ron` (best-effort, sólo log).
+fn save_history() {
+    let Some(p) = history_path() else {
+        return;
+    };
+    let snapshot = history().lock().clone();
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(txt) = ron::ser::to_string_pretty(&snapshot, ron::ser::PrettyConfig::default()) {
+        let _ = std::fs::write(&p, txt);
+    }
+}
+
+/// Época Unix en segundos (para la recencia del historial).
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Clave del medio en reproducción = ruta del track actual. `None` sin
+/// playlist (tono/testcard) o si el lock está ocupado este frame.
+fn current_track_key() -> Option<String> {
+    let handle = playlist_slot().get().and_then(|o| o.as_ref())?;
+    let pl = handle.try_lock()?;
+    Some(pl.track_path().to_string_lossy().into_owned())
+}
+
+/// Salta a una posición **absoluta** (resume). No-op sin playlist.
+fn seek_audio_to_pos(pos: Duration) {
+    let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
+        return;
+    };
+    let mut src = handle.lock();
+    let dur = src.duration().unwrap_or(Duration::ZERO);
+    let target = if dur.is_zero() { pos } else { pos.min(dur) };
+    src.seek_to(target);
+    drop(src);
+    reset_av_sync_anchor();
+}
+
+/// Registra el avance de reproducción en el historial cada frame y guarda
+/// throttle (~cada 5 s). Best-effort: si no hay clave/posición, no hace nada.
+fn record_playback_progress(frame: u64) {
+    let s = playback_snapshot();
+    if !s.present {
+        return;
+    }
+    if let Some(key) = current_track_key() {
+        history()
+            .lock()
+            .update_position(&key, s.position, s.duration, now_secs());
+    }
+    // ~5 s a 30 fps (TICK_MS ≈ 33 ms).
+    if frame % 150 == 0 {
+        save_history();
     }
 }
 
@@ -1956,6 +2045,25 @@ impl App for MediaApp {
                 pl.toggle_shuffle();
             }
         }
+        // Resume (U2): si está activado y hay posición guardada para el
+        // track actual, salta ahí. Marca la reproducción en el historial.
+        // Lock bloqueante (estamos en init, no en el hilo de UI) para que la
+        // clave sea fiable; se suelta antes de seekear (Mutex no reentrante).
+        if config.playlist.resume_on_open {
+            let key = playlist_slot()
+                .get()
+                .and_then(|o| o.as_ref())
+                .map(|h| h.lock().track_path().to_string_lossy().into_owned());
+            if let Some(key) = key {
+                let resume = history()
+                    .lock()
+                    .resume_position(&key, Duration::from_secs(5));
+                if let Some(pos) = resume {
+                    seek_audio_to_pos(pos);
+                }
+                history().lock().note_play(&key, now_secs());
+            }
+        }
         Model {
             frames: 0,
             started_at: Instant::now(),
@@ -1978,10 +2086,14 @@ impl App for MediaApp {
 
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         match msg {
-            Msg::Tick => Model {
-                frames: model.frames.wrapping_add(1),
-                ..model
-            },
+            Msg::Tick => {
+                // Registra el avance en el historial (resume / U2).
+                record_playback_progress(model.frames);
+                Model {
+                    frames: model.frames.wrapping_add(1),
+                    ..model
+                }
+            }
             Msg::SwapTile { from, to } => {
                 let mut m = model;
                 if from != to && from < m.tile_order.len() && to < m.tile_order.len() {
@@ -3051,7 +3163,10 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "file.snapshot" => dispatch(Snapshot),
         "file.record" => dispatch(ToggleRecord),
         "file.reload" => handle.dispatch(Msg::ReloadConfig),
-        "file.quit" => std::process::exit(0),
+        "file.quit" => {
+            save_history();
+            std::process::exit(0)
+        }
         "play.toggle" => dispatch(TogglePause),
         "play.back" => dispatch(SeekBy { secs: -step }),
         "play.fwd" => dispatch(SeekBy { secs: step }),
