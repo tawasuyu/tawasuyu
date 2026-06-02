@@ -3335,6 +3335,52 @@ mod tests {
     }
 
     #[test]
+    fn pseudo_estado_checked_disabled_enabled() {
+        let html = r#"<html><head><style>
+            input:checked { background: red; }
+            input:disabled { color: green; }
+            input:enabled { color: blue; }
+            input:required { background: yellow; }
+        </style></head><body>
+            <input id="a" type="checkbox" checked>
+            <input id="b" type="checkbox">
+            <input id="c" type="text" disabled>
+            <input id="d" type="text" required>
+        </body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let red = super::Color::rgb(255, 0, 0);
+        let blue = super::Color::rgb(0, 0, 255);
+        // a: checked → fondo rojo; enabled → color azul.
+        assert_eq!(box_by_id(&doc.box_tree, "a").unwrap().background, Some(red));
+        assert_eq!(box_by_id(&doc.box_tree, "a").unwrap().color, blue);
+        // b: no checked → no rojo (conserva su fondo UA); enabled → azul.
+        assert_ne!(box_by_id(&doc.box_tree, "b").unwrap().background, Some(red));
+        assert_eq!(box_by_id(&doc.box_tree, "b").unwrap().color, blue);
+        // c: disabled → verde; NO enabled (no azul).
+        assert_eq!(box_by_id(&doc.box_tree, "c").unwrap().color, super::Color::rgb(0, 128, 0));
+        // d: required → fondo amarillo.
+        assert_eq!(box_by_id(&doc.box_tree, "d").unwrap().background, Some(super::Color::rgb(255, 255, 0)));
+    }
+
+    #[test]
+    fn pseudo_nth_of_type_y_only_of_type_y_nth_last() {
+        let html = r#"<html><head><style>
+            p:nth-of-type(2) { color: red; }
+            li:nth-last-child(1) { color: green; }
+            span:only-of-type { color: blue; }
+        </style></head><body>
+            <div><span id="sp">x</span><p id="p1">1</p><p id="p2">2</p></div>
+            <ul><li id="l1">a</li><li id="l2">b</li></ul>
+        </body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        assert_eq!(box_by_id(&doc.box_tree, "p2").unwrap().color, super::Color::rgb(255, 0, 0));
+        assert_ne!(box_by_id(&doc.box_tree, "p1").unwrap().color, super::Color::rgb(255, 0, 0));
+        assert_eq!(box_by_id(&doc.box_tree, "l2").unwrap().color, super::Color::rgb(0, 128, 0));
+        assert_ne!(box_by_id(&doc.box_tree, "l1").unwrap().color, super::Color::rgb(0, 128, 0));
+        assert_eq!(box_by_id(&doc.box_tree, "sp").unwrap().color, super::Color::rgb(0, 0, 255));
+    }
+
+    #[test]
     fn list_style_none_suprime_marker() {
         let html = r#"<html><head><style>
             ul { list-style-type: none }

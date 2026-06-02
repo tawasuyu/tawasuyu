@@ -1235,6 +1235,39 @@ enum Pseudo {
     /// `:not(simple)` — negación de un compound simple sin combinadores
     /// ni `:not` anidado. Almacenamos el compound interno completo.
     Not(Box<Compound>),
+    /// `:nth-of-type(an+b)` — posición 1-indexed entre hermanos del MISMO tag.
+    NthOfType {
+        a: i32,
+        b: i32,
+    },
+    /// `:nth-last-child(an+b)` — posición contando desde el final.
+    NthLastChild {
+        a: i32,
+        b: i32,
+    },
+    /// `:nth-last-of-type(an+b)` — posición desde el final entre el mismo tag.
+    NthLastOfType {
+        a: i32,
+        b: i32,
+    },
+    /// `:only-of-type` — único hermano de su tag.
+    OnlyOfType,
+    // === Pseudo-clases de estado (basadas en atributos del elemento) ===
+    /// `:checked` — `<input>`/`<option>` con el atributo `checked`/`selected`.
+    Checked,
+    /// `:disabled` — control con atributo `disabled`.
+    Disabled,
+    /// `:enabled` — control de formulario SIN `disabled`.
+    Enabled,
+    /// `:required` — control con atributo `required`.
+    Required,
+    /// `:optional` — control de formulario SIN `required`.
+    Optional,
+    /// `:read-only` — control con atributo `readonly`.
+    ReadOnly,
+    /// `:read-write` — control editable (input/textarea/contenteditable) sin
+    /// `readonly`.
+    ReadWrite,
 }
 
 impl Compound {
@@ -1310,10 +1343,20 @@ fn pseudo_matches(
     hover_active: bool,
     focus_active: bool,
 ) -> bool {
+    // Resueltos sin mirar el padre: flags externos, negación, y pseudo-clases
+    // de estado basadas en atributos del propio elemento.
+    let has = |name: &str| dom::attr(node, name).is_some();
     match p {
         Pseudo::Hover => return hover_active,
         Pseudo::Focus => return focus_active,
         Pseudo::Not(c) => return !c.matches_in_state(node, hover_active, focus_active),
+        Pseudo::Checked => return has("checked") || has("selected"),
+        Pseudo::Disabled => return has("disabled"),
+        Pseudo::Enabled => return is_form_control(node) && !has("disabled"),
+        Pseudo::Required => return has("required"),
+        Pseudo::Optional => return is_form_control(node) && !has("required"),
+        Pseudo::ReadOnly => return has("readonly"),
+        Pseudo::ReadWrite => return is_editable_control(node) && !has("readonly"),
         _ => {}
     }
     let Some(parent) = parent_of(node) else { return false };
@@ -1327,36 +1370,67 @@ fn pseudo_matches(
     let Some(pos) = elems.iter().position(|c| std::rc::Rc::ptr_eq(c, node)) else {
         return false;
     };
+    // Índice (0-based) entre hermanos del MISMO tag, y total de ese tag.
+    let my_tag = dom::element_name(node).unwrap_or_default();
+    let same_type: Vec<usize> = elems
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| dom::element_name(c).as_deref() == Some(my_tag.as_str()))
+        .map(|(i, _)| i)
+        .collect();
+    let type_pos = same_type.iter().position(|&i| i == pos).unwrap_or(0);
     match p {
-        Pseudo::Hover | Pseudo::Focus | Pseudo::Not(_) => unreachable!("ya resueltos arriba"),
+        Pseudo::Hover
+        | Pseudo::Focus
+        | Pseudo::Not(_)
+        | Pseudo::Checked
+        | Pseudo::Disabled
+        | Pseudo::Enabled
+        | Pseudo::Required
+        | Pseudo::Optional
+        | Pseudo::ReadOnly
+        | Pseudo::ReadWrite => unreachable!("ya resueltos arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
         Pseudo::OnlyChild => elems.len() == 1,
-        Pseudo::FirstOfType => {
-            let my_tag = dom::element_name(node).unwrap_or_default();
-            elems[..pos]
-                .iter()
-                .all(|c| dom::element_name(c).map(|t| t != my_tag).unwrap_or(true))
-        }
-        Pseudo::LastOfType => {
-            let my_tag = dom::element_name(node).unwrap_or_default();
-            elems[pos + 1..]
-                .iter()
-                .all(|c| dom::element_name(c).map(|t| t != my_tag).unwrap_or(true))
-        }
-        Pseudo::NthChild { a, b } => {
-            // `pos` es 0-indexed, CSS usa 1-indexed.
-            let p_css = (pos + 1) as i32;
-            let diff = p_css - *b;
-            if *a == 0 {
-                diff == 0
-            } else if *a > 0 {
-                diff >= 0 && diff % *a == 0
-            } else {
-                diff <= 0 && diff % *a == 0
-            }
+        Pseudo::FirstOfType => type_pos == 0,
+        Pseudo::LastOfType => type_pos + 1 == same_type.len(),
+        Pseudo::OnlyOfType => same_type.len() == 1,
+        Pseudo::NthChild { a, b } => nth_matches((pos + 1) as i32, *a, *b),
+        Pseudo::NthLastChild { a, b } => nth_matches((elems.len() - pos) as i32, *a, *b),
+        Pseudo::NthOfType { a, b } => nth_matches((type_pos + 1) as i32, *a, *b),
+        Pseudo::NthLastOfType { a, b } => {
+            nth_matches((same_type.len() - type_pos) as i32, *a, *b)
         }
     }
+}
+
+/// `true` si la posición CSS 1-indexed `p_css` satisface `a*k + b` para algún
+/// `k >= 0`. Compartido por `:nth-child`/`:nth-of-type`/`:nth-last-*`.
+fn nth_matches(p_css: i32, a: i32, b: i32) -> bool {
+    let diff = p_css - b;
+    if a == 0 {
+        diff == 0
+    } else if a > 0 {
+        diff >= 0 && diff % a == 0
+    } else {
+        diff <= 0 && diff % a == 0
+    }
+}
+
+/// Tags de control de formulario (para `:enabled`/`:optional`).
+fn is_form_control(node: &markup5ever_rcdom::Handle) -> bool {
+    matches!(
+        dom::element_name(node).as_deref(),
+        Some("input" | "select" | "textarea" | "button" | "option" | "optgroup" | "fieldset")
+    )
+}
+
+/// Controles editables (para `:read-write`): `<textarea>`, `<input>` y
+/// cualquier elemento con `contenteditable`.
+fn is_editable_control(node: &markup5ever_rcdom::Handle) -> bool {
+    matches!(dom::element_name(node).as_deref(), Some("textarea" | "input"))
+        || dom::attr(node, "contenteditable").is_some_and(|v| v != "false")
 }
 
 impl Rule {
@@ -2854,6 +2928,18 @@ fn parse_compound(sel: &str) -> Option<Compound> {
                             let (a, b) = parse_nth_arg(arg)?;
                             Pseudo::NthChild { a, b }
                         }
+                        "nth-of-type" => {
+                            let (a, b) = parse_nth_arg(arg)?;
+                            Pseudo::NthOfType { a, b }
+                        }
+                        "nth-last-child" => {
+                            let (a, b) = parse_nth_arg(arg)?;
+                            Pseudo::NthLastChild { a, b }
+                        }
+                        "nth-last-of-type" => {
+                            let (a, b) = parse_nth_arg(arg)?;
+                            Pseudo::NthLastOfType { a, b }
+                        }
                         "not" => {
                             let inner = parse_compound(arg)?;
                             // Anti-recursión: `:not(:not(...))` rechazamos.
@@ -2878,8 +2964,16 @@ fn parse_compound(sel: &str) -> Option<Compound> {
                     "only-child" => Pseudo::OnlyChild,
                     "first-of-type" => Pseudo::FirstOfType,
                     "last-of-type" => Pseudo::LastOfType,
+                    "only-of-type" => Pseudo::OnlyOfType,
                     "hover" => Pseudo::Hover,
                     "focus" | "focus-visible" | "focus-within" => Pseudo::Focus,
+                    "checked" => Pseudo::Checked,
+                    "disabled" => Pseudo::Disabled,
+                    "enabled" => Pseudo::Enabled,
+                    "required" => Pseudo::Required,
+                    "optional" => Pseudo::Optional,
+                    "read-only" => Pseudo::ReadOnly,
+                    "read-write" => Pseudo::ReadWrite,
                     _ => return None,
                 };
                 pseudos.push(p);
