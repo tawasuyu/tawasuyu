@@ -339,6 +339,34 @@ impl App for Dominium {
                         m.sim.params.abundance_threshold =
                             (m.sim.params.abundance_threshold + dv).clamp(lo, hi)
                     }
+                    ParamSlot::MoveSpeed => {
+                        m.sim.params.move_speed = (m.sim.params.move_speed + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::SyncRate => {
+                        m.sim.params.sync_rate = (m.sim.params.sync_rate + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::DegrPerExtract => {
+                        m.sim.params.degr_per_extract =
+                            (m.sim.params.degr_per_extract + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::ChildEnergyFrac => {
+                        m.sim.params.child_energy_frac =
+                            (m.sim.params.child_energy_frac + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::FightDamage => {
+                        m.sim.params.fight_damage = (m.sim.params.fight_damage + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::AbsorbFrac => {
+                        m.sim.params.absorb_frac = (m.sim.params.absorb_frac + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::DesperationThreshold => {
+                        m.sim.params.desperation_threshold =
+                            (m.sim.params.desperation_threshold + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::MaxEdad => {
+                        let v = (m.sim.params.max_edad as f32 + dv).clamp(lo, hi);
+                        m.sim.params.max_edad = v as u32;
+                    }
                 }
             }
             Msg::EditZWeight(slot, dv) => {

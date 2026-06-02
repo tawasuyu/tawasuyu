@@ -316,6 +316,13 @@ números son leyes.
   `replicate_threshold`, `abundance_threshold`. Son la termodinámica del
   flujo de energía (lo que decide boom/equilibrio/colapso); estaban
   hardcoded y ahora viajan en el `Escenario`.
+- ~~Cinética fina editable~~ — ✓ (2026-06-02). Grupo `[ CINÉTICA ]` en el
+  tab Mundo con los 8 escalares por-acción y de ciclo de vida que faltaban:
+  `move_speed`, `sync_rate`, `degr_per_extract`, `child_energy_frac`,
+  `fight_damage`, `absorb_frac`, `desperation_threshold`, `max_edad`
+  (entero, con cast como `season_period`). Con esto **todo** `SimParams` es
+  editable desde el panel y serializable vía el `Escenario`; los packs
+  cinéticos también se reproducen headless en la CLI.
 
 Ninguno de estos cambia la base del §1.
 
@@ -366,10 +373,6 @@ Esa es la spec. El §1 la materializa en código.
 
 ### Pendiente
 
-- Exponer los `SimParams` aún hardcoded restantes (cinéticos finos:
-  `move_speed`, `sync_rate`, `degr_per_extract`, `child_energy_frac`,
-  `fight_damage`, `absorb_frac`, `desperation_threshold`, `max_edad`) — los
-  levers económicos y de relieve ya son editables y serializables (2026-06-02).
 - Librería visual de sprites reales (hoy glifos opacos por índice).
 - Profundizar emergencia social documentada (packs de Conceptos "iglesia",
   "banco", etc.) como escenarios reproducibles.

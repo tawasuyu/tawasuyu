@@ -388,6 +388,17 @@ fn append_mundo_tab(
     children.push(param_slider("abundan", model.sim.params.abundance_threshold, ParamSlot::AbundanceThreshold, slider_palette));
 
     children.push(separator(theme));
+    children.push(label_view("[ CINÉTICA ]", 11.0, theme.fg_muted));
+    children.push(param_slider("velocid", model.sim.params.move_speed, ParamSlot::MoveSpeed, slider_palette));
+    children.push(param_slider("sync", model.sim.params.sync_rate, ParamSlot::SyncRate, slider_palette));
+    children.push(param_slider("cicatriz", model.sim.params.degr_per_extract, ParamSlot::DegrPerExtract, slider_palette));
+    children.push(param_slider("herencia", model.sim.params.child_energy_frac, ParamSlot::ChildEnergyFrac, slider_palette));
+    children.push(param_slider("daño", model.sim.params.fight_damage, ParamSlot::FightDamage, slider_palette));
+    children.push(param_slider("absorbe", model.sim.params.absorb_frac, ParamSlot::AbsorbFrac, slider_palette));
+    children.push(param_slider("desespe", model.sim.params.desperation_threshold, ParamSlot::DesperationThreshold, slider_palette));
+    children.push(param_slider("edad max", model.sim.params.max_edad as f32, ParamSlot::MaxEdad, slider_palette));
+
+    children.push(separator(theme));
     children.push(label_view("[ SCENARIO ]", 11.0, theme.fg_muted));
     let packs = scenario_packs();
     let (current_id, _) = packs[model.scenario_idx];

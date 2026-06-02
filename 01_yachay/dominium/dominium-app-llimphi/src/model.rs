@@ -143,6 +143,25 @@ pub(crate) enum ParamSlot {
     /// Umbral de abundancia por encima del cual el agente se fuerza a
     /// `Replicar` (0 = desactiva la transición).
     AbundanceThreshold,
+    // — Cinética fina: los escalares de cada acción atómica y del ciclo de
+    //   vida. Más quirúrgicos que la economía; tunean la "sensación" del
+    //   motor sin redefinir su balance macro.
+    /// Celdas por tick que avanza `Mover`.
+    MoveSpeed,
+    /// Tasa de convergencia del `vector_psi` en `Sincronizar` (0-1).
+    SyncRate,
+    /// Degradación añadida al suelo por cada `Extraer`.
+    DegrPerExtract,
+    /// Fracción de la energía del padre que hereda el hijo en `Replicar`.
+    ChildEnergyFrac,
+    /// Daño de energía que inflige `Degradar`.
+    FightDamage,
+    /// Fracción del daño que el atacante absorbe como energía.
+    AbsorbFrac,
+    /// Umbral de energía bajo el cual el agente se fuerza a `Degradar`.
+    DesperationThreshold,
+    /// Edad máxima; al superarla el agente muere (entero, en ticks).
+    MaxEdad,
 }
 
 impl ParamSlot {
@@ -174,6 +193,17 @@ impl ParamSlot {
             ParamSlot::MetabolicCost => (0.0, 0.5),
             ParamSlot::ReplicateThreshold => (0.0, 100.0),
             ParamSlot::AbundanceThreshold => (0.0, 150.0),
+            // Cinética fina — rangos alrededor de los defaults del motor.
+            ParamSlot::MoveSpeed => (0.0, 4.0),
+            ParamSlot::SyncRate => (0.0, 1.0),
+            ParamSlot::DegrPerExtract => (0.0, 0.2),
+            ParamSlot::ChildEnergyFrac => (0.0, 1.0),
+            ParamSlot::FightDamage => (0.0, 20.0),
+            ParamSlot::AbsorbFrac => (0.0, 1.0),
+            ParamSlot::DesperationThreshold => (0.0, 30.0),
+            // Edad máxima en ticks — 0 = inmortal (cuidado: sin cosecha por
+            // vejez la población sólo cae por desesperación/metabolismo).
+            ParamSlot::MaxEdad => (0.0, 20000.0),
         }
     }
 }
