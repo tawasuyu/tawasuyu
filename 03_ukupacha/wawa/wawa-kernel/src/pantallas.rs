@@ -68,6 +68,26 @@ pub fn fundar(ancho: usize, alto: usize) {
     });
 }
 
+/// FASE 64 :: funda el registro con VARIOS outputs de una vez — el primero es
+/// el primario (debe estar en el origen `(0,0)` por convencion de
+/// `mirada-layout::disponer`), el resto son secundarios con su region en el
+/// espacio compuesto. Lo invoca el arranque multi-scanout con las regiones que
+/// el driver virtio-gpu + `disponer` calcularon. Idempotente como `fundar`: una
+/// segunda invocacion (p.ej. el `fundar` mono-output del arranque de userspace)
+/// no remplaza el registro ya fundado. No-op si `regiones` viene vacio.
+pub fn fundar_outputs(regiones: &[RegionPantalla]) {
+    if regiones.is_empty() {
+        return;
+    }
+    OUTPUTS.call_once(|| {
+        let mut outputs = Vec::with_capacity(regiones.len());
+        for (id, region) in regiones.iter().enumerate() {
+            outputs.push(Output { id, region: *region });
+        }
+        Mutex::new(outputs)
+    });
+}
+
 /// La region del output PRIMARIO. `None` si el registro aun no se fundo —
 /// el kernel se levanta sin pantalla en ese caso, y el compositor jamas
 /// arranca, asi que en la practica esta funcion devuelve `Some` siempre que

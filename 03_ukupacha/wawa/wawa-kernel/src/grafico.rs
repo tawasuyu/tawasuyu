@@ -16,12 +16,19 @@ use embedded_graphics::geometry::{OriginDimensions, Size};
 use embedded_graphics::pixelcolor::{Rgb888, RgbColor};
 use embedded_graphics::Pixel;
 
-/// Ancho maximo de lienzo soportado (Full HD).
+/// Ancho maximo de lienzo soportado POR MONITOR (Full HD).
 pub(crate) const ANCHO_MAX: usize = 1920;
-/// Alto maximo de lienzo soportado (Full HD).
+/// Alto maximo de lienzo soportado POR MONITOR (Full HD).
 pub(crate) const ALTO_MAX: usize = 1080;
-/// Capacidad del lienzo intermedio, en pixeles de 32 bits.
-const PIXELES_MAX: usize = ANCHO_MAX * ALTO_MAX;
+/// Cuantos monitores cubre el lienzo GLOBAL como maximo. Fase 64 :: con
+/// multi-scanout el lienzo es la ENVOLVENTE de todos los outputs —dos 1080p en
+/// fila son 3840×1080—, asi que el respaldo debe alcanzar para `MAX_MONITORES`
+/// pantallas Full HD en cualquier disposicion (3840×1080 == 1920×2160 en
+/// pixeles). Debe casar con `gpu::MAX_CABEZAS`.
+pub(crate) const MAX_MONITORES: usize = 2;
+/// Capacidad del lienzo intermedio GLOBAL, en pixeles de 32 bits. Cubre la
+/// envolvente de hasta `MAX_MONITORES` monitores Full HD (~16.6 MiB en `.bss`).
+const PIXELES_MAX: usize = ANCHO_MAX * ALTO_MAX * MAX_MONITORES;
 
 // =============================================================================
 //  COLOR — la unidad indivisible del lenguaje visual de renaser
@@ -335,6 +342,14 @@ pub(crate) struct Pantalla {
     /// Formato de pixel — necesario para estampar capas que se pintan
     /// DIRECTAMENTE sobre el framebuffer, no sobre el lienzo (Fase 13).
     pub(crate) format: PixelFormat,
+    /// FASE 64 :: origen de esta pantalla en el LIENZO GLOBAL (espacio
+    /// compuesto). Con UN solo output es `(0, 0)` y todo se comporta como antes.
+    /// Con multi-scanout, cada `Pantalla` cubre la sub-region del lienzo global
+    /// `[origen_x, origen_x+ancho) × [origen_y, origen_y+alto)` y la blittea a SU
+    /// framebuffer (que arranca en local `(0, 0)`). El blit traduce coordenadas
+    /// globales del lienzo a locales del framebuffer restando este origen.
+    pub(crate) origen_x: usize,
+    pub(crate) origen_y: usize,
 }
 
 impl Pantalla {
@@ -357,7 +372,18 @@ impl Pantalla {
             paso_bytes,
             bytes_por_pixel: 4,
             format: PixelFormat::Bgr,
+            origen_x: 0,
+            origen_y: 0,
         }
+    }
+
+    /// FASE 64 :: reubica esta pantalla en `(origen_x, origen_y)` del lienzo
+    /// global. Lo usa el arranque multi-scanout para colocar cada monitor en su
+    /// posicion del escritorio compuesto (calculada por `mirada-layout::disponer`).
+    pub(crate) fn con_origen(mut self, origen_x: usize, origen_y: usize) -> Pantalla {
+        self.origen_x = origen_x;
+        self.origen_y = origen_y;
+        self
     }
 
     /// Adopta el framebuffer descrito por `info`. La memoria de video es
@@ -371,6 +397,8 @@ impl Pantalla {
             paso_bytes: info.stride * info.bytes_per_pixel,
             bytes_por_pixel: info.bytes_per_pixel,
             format: info.pixel_format,
+            origen_x: 0,
+            origen_y: 0,
         }
     }
 
@@ -382,11 +410,13 @@ impl Pantalla {
     /// optimizador lo materializa con instrucciones `rep movsq` o equivalentes
     /// SIMD—. Para FB de 1/2/3 bpp se recae al bucle volatil pixel a pixel.
     pub(crate) fn presentar(&mut self, lienzo: &Lienzo) {
+        // FASE 64 :: la region es el SPAN GLOBAL de esta pantalla en el lienzo.
+        // Con origen (0,0) y un solo output, coincide con `0..ancho × 0..alto`.
         let region = RegionPantalla {
-            x: 0,
-            y: 0,
-            ancho: self.ancho.min(lienzo.ancho),
-            alto: self.alto.min(lienzo.alto),
+            x: self.origen_x,
+            y: self.origen_y,
+            ancho: self.ancho,
+            alto: self.alto,
         };
         self.presentar_region(lienzo, region);
     }
@@ -396,34 +426,45 @@ impl Pantalla {
     /// blittear ese marco —no la pantalla entera—. La region se recorta tanto
     /// al lienzo como a la pantalla fisica antes de tocar memoria.
     pub(crate) fn presentar_region(&mut self, lienzo: &Lienzo, region: RegionPantalla) {
-        // Recorte: x_fin / y_fin a las dos superficies.
-        let x_ini = region.x.min(self.ancho).min(lienzo.ancho);
-        let y_ini = region.y.min(self.alto).min(lienzo.alto);
-        let x_fin = region
+        // FASE 64 :: `region` viene en coordenadas GLOBALES del lienzo. Esta
+        // pantalla cubre el span global `[origen_x, origen_x+ancho) ×
+        // [origen_y, origen_y+alto)`; su framebuffer arranca en local `(0,0)`.
+        // Recortamos la interseccion `region ∩ span ∩ lienzo` en coords globales
+        // y blitteamos traduciendo cada fila a coords LOCALES del framebuffer
+        // restando el origen. Con origen (0,0) y lienzo del tamaño del unico
+        // output, esto es identico al blit mono-pantalla de antes.
+        let span_x1 = self.origen_x.saturating_add(self.ancho);
+        let span_y1 = self.origen_y.saturating_add(self.alto);
+        let gx0 = region.x.max(self.origen_x);
+        let gy0 = region.y.max(self.origen_y);
+        let gx1 = region
             .x
             .saturating_add(region.ancho)
-            .min(self.ancho)
+            .min(span_x1)
             .min(lienzo.ancho);
-        let y_fin = region
+        let gy1 = region
             .y
             .saturating_add(region.alto)
-            .min(self.alto)
+            .min(span_y1)
             .min(lienzo.alto);
-        if x_fin <= x_ini || y_fin <= y_ini {
+        if gx1 <= gx0 || gy1 <= gy0 {
             return;
         }
-        let ancho = x_fin - x_ini;
+        let ancho = gx1 - gx0;
 
         if self.bytes_por_pixel == 4 {
             let bytes_por_fila = ancho * 4;
-            for y in y_ini..y_fin {
-                let fila_lienzo = y * lienzo.ancho + x_ini;
-                let fila_fisica = y * self.paso_bytes + x_ini * 4;
+            for gy in gy0..gy1 {
+                let fila_lienzo = gy * lienzo.ancho + gx0;
+                let local_y = gy - self.origen_y;
+                let local_x = gx0 - self.origen_x;
+                let fila_fisica = local_y * self.paso_bytes + local_x * 4;
                 // SEGURIDAD: `fila_lienzo + ancho` cae dentro de `lienzo.pixeles`
-                // (recorte garantiza x_fin <= lienzo.ancho), y `fila_fisica +
-                // bytes_por_fila` dentro del framebuffer. Memoria de video WC
-                // del firmware UEFI; memcpy es la operacion canonica de blit y
-                // LLVM no la elide (el *mut u8 cruza frontera FFI del cargador).
+                // (recorte garantiza gx1 <= lienzo.ancho), y `fila_fisica +
+                // bytes_por_fila` dentro del framebuffer de esta cabeza
+                // (local_x+ancho <= self.ancho, local_y < self.alto). Memoria de
+                // video; memcpy es la operacion canonica de blit y LLVM no la
+                // elide (el *mut u8 cruza frontera FFI del cargador/DMA).
                 unsafe {
                     let src = lienzo.pixeles.as_ptr().add(fila_lienzo) as *const u8;
                     let dst = self.base.add(fila_fisica);
@@ -431,13 +472,15 @@ impl Pantalla {
                 }
             }
         } else {
-            for y in y_ini..y_fin {
-                let fila_fisica = y * self.paso_bytes;
-                let fila_lienzo = y * lienzo.ancho;
-                for x in x_ini..x_fin {
-                    let pixel = lienzo.pixeles[fila_lienzo + x];
+            for gy in gy0..gy1 {
+                let fila_lienzo = gy * lienzo.ancho;
+                let local_y = gy - self.origen_y;
+                let fila_fisica = local_y * self.paso_bytes;
+                for gx in gx0..gx1 {
+                    let pixel = lienzo.pixeles[fila_lienzo + gx];
+                    let local_x = gx - self.origen_x;
                     unsafe {
-                        let destino = self.base.add(fila_fisica + x * self.bytes_por_pixel);
+                        let destino = self.base.add(fila_fisica + local_x * self.bytes_por_pixel);
                         escribir_pixel_volatil(destino, pixel, self.bytes_por_pixel);
                     }
                 }
@@ -533,28 +576,34 @@ impl Pantalla {
                 b: 0xF8,
             },
         );
+        // FASE 64 :: (x, y) son coords GLOBALES del lienzo. Solo estampamos las
+        // celdas del sprite que caen en el span global de ESTA pantalla,
+        // traduciendo a coords locales del framebuffer restando el origen. Con
+        // origen (0,0) es el estampado de siempre.
         for (fila, linea) in PUNTERO.iter().enumerate() {
-            let py = y + fila;
-            if py >= self.alto {
-                break;
+            let gy = y + fila;
+            if gy < self.origen_y || gy >= self.origen_y + self.alto {
+                continue;
             }
+            let local_y = gy - self.origen_y;
             for (col, &celda) in linea.iter().enumerate() {
-                let px = x + col;
-                if px >= self.ancho {
+                let gx = x + col;
+                if gx < self.origen_x || gx >= self.origen_x + self.ancho {
                     continue;
                 }
+                let local_x = gx - self.origen_x;
                 let valor = match celda {
                     b'#' => borde,
                     b'*' => relleno,
                     _ => continue,
                 };
-                // SEGURIDAD: (px, py) acotado a las dimensiones reales del
-                // framebuffer; el desplazamiento cae dentro de la memoria de
-                // video que el firmware nos entrego.
+                // SEGURIDAD: (local_x, local_y) acotado a las dimensiones reales
+                // del framebuffer de esta cabeza; el desplazamiento cae dentro de
+                // su memoria de video.
                 unsafe {
                     let destino = self
                         .base
-                        .add(py * self.paso_bytes + px * self.bytes_por_pixel);
+                        .add(local_y * self.paso_bytes + local_x * self.bytes_por_pixel);
                     escribir_pixel_volatil(destino, valor, self.bytes_por_pixel);
                 }
             }

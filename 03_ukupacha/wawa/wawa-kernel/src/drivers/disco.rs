@@ -39,10 +39,14 @@ use super::pci::CamPuertos;
 /// Tamaño de una pagina / marco fisico, en bytes.
 const PAGINA: u64 = 4096;
 
-/// Techo de marcos que gestiona el asignador de DMA: 4096 marcos => una arena
-/// de 16 MiB. El DMA del disco —colas virtio y buferes rebote— necesita una
+/// Techo de marcos que gestiona el asignador de DMA: 8192 marcos => una arena
+/// de 32 MiB. El DMA del disco —colas virtio y buferes rebote— necesita una
 /// fraccion minima de eso; el techo solo acota el tamaño del mapa de bits.
-const MAX_MARCOS: usize = 4096;
+/// Fase 64 :: subido de 4096 a 8192 porque el scanout virtio-gpu reclama UN
+/// framebuffer de ~2025 paginas (1080p) por monitor; con multi-scanout (2
+/// cabezas) hacen falta ~4050 paginas SOLO de framebuffers, mas las colas y el
+/// DMA de las apps (cota 128). 16 MiB se quedaba justo; 32 MiB deja holgura.
+const MAX_MARCOS: usize = 8192;
 
 /// Vendor ID de VirtIO; Device IDs de un disco de bloques (transicional/moderno).
 const VENDOR_VIRTIO: u16 = 0x1AF4;

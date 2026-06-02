@@ -66,6 +66,12 @@ wasmi = { version = "1.0", default-features = false, features = ["hash-collectio
 # --- Fase 6 :: drivers de hardware — el disco virtio-blk sobre el bus PCI ---
 # `virtio-drivers` bare-metal: el kernel implementa su `trait Hal` para el DMA.
 virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
+# Fase 64 :: el driver virtio-gpu MULTI-SCANOUT del kernel se construye sobre la
+# capa publica de `virtio-drivers` (transport + VirtQueue + Hal) y serializa los
+# comandos GPU con `zerocopy`; `bitflags` arma el set de features para begin_init.
+# Ambas versiones unifican con las que `virtio-drivers` ya arrastra (sin duplicar).
+zerocopy = { version = "0.8", default-features = false, features = ["derive"] }
+bitflags = "2"
 
 # --- Capa X (USB) :: controlador host xHCI sobre PCIe ---
 # `xhci` da definiciones tipadas de los registros del controlador (capability,

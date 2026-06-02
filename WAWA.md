@@ -381,6 +381,7 @@ verifica:
 | `1f406b3` (Fase 62) | `drivers/sonido.rs` — virtio‑sound: PCM real S16/2ch/44.1 kHz por DMA no‑bloqueante (`pcm_xfer_nb`/`pcm_xfer_ok`), `tarea_sonido` mantiene periodos en vuelo anti‑underrun, mezclador square‑wave con prioridad a la voz del sistema. `sys_tono`/`altavoz` enrutan aquí; bocina del PIT como fallback |
 | `95c63cf` | App `rimay` — verbo de embeddings bare‑metal (3.3 KiB .wasm), 14ª de GENESIS |
 | (Fase 63) | `wawactl gc` — control remoto del GC sobre virtio-console (`kernel/src/control.rs` + subcomando host). `mirada-layout::outputs` — geometría pura de disposición multi-output (down-payment de multi-monitor) |
+| (Fase 64) | **Multi-monitor** — driver virtio-gpu NATIVO multi-scanout (`drivers/gpu.rs`, sobre la capa pública `PciTransport`+`VirtQueue`+`Hal` de la crate, sin forkearla) que crea un recurso 2D + framebuffer DMA por cabeza y devuelve un `InfoGpu` por scanout. Render fan-out: lienzo GLOBAL del tamaño de la envolvente + N `Pantalla` con origen (`grafico.rs`), cada una blittea su sub-región; `consola` vuelca a primaria + extras; `gpu::presentar` flushea todas las cabezas. Boot dispone los outputs con `mirada-layout::disponer` y los funda en `pantallas`. Arena DMA 16→32 MiB. **Pendiente de validar en QEMU multi-display.** |
 
 ## 14. Plan — siguientes hitos
 
@@ -583,7 +584,32 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
    queda como endurecimiento futuro si se quiere la frontera de capacidad.
    **Pendiente de validar en QEMU** (el autor corre la imagen).
 
-2. **Multi-monitor — refactor estructural HECHO, bloqueador físico vigente**
+2. **Multi-monitor — IMPLEMENTADO (Fase 64), pendiente validar en QEMU.** El
+   bloqueador («forkear `virtio-drivers` o escribir driver propio») se resolvió
+   por la **segunda vía, sin forkear**: `drivers/gpu.rs` es ahora un driver
+   virtio-gpu NATIVO construido sobre la capa PÚBLICA de la crate
+   (`PciTransport` + `VirtQueue` + el `trait Hal`). Lee `num_scanouts` del config
+   space, crea un recurso 2D + framebuffer DMA por cabeza (hasta `MAX_CABEZAS=2`)
+   imponiendo la resolución del lienzo del kernel a cada scanout (así evita el
+   parseo frágil de display-info multi-pmode), y devuelve un `InfoGpu` por
+   cabeza. El **render** se completó (lo que abajo se daba por «pendiente»):
+   lienzo GLOBAL del tamaño de la envolvente + N `Pantalla` con origen que
+   blittean su sub-región; `consola::presentar[_region]` vuelca a primaria +
+   extras; `gpu::presentar` flushea todas las cabezas; el boot dispone los
+   outputs con `mirada-layout::disponer`/`envolvente` y los funda en `pantallas`.
+   El teselado por-output (Fase 59 v2) ya repartía ventanas por `pantallas::
+   todos()`, así que las ventanas se extienden entre monitores sin más. Arena DMA
+   subida 16→32 MiB (dos framebuffers 1080p = ~4050 páginas). **Verificado:**
+   `cargo build --target x86_64-unknown-none` + forja de imagen UEFI en verde.
+   **Falta:** correr en QEMU con `-device virtio-gpu-pci,max_outputs=2 -display
+   gtk` y confirmar que la segunda cabeza enciende. Limitaciones conocidas del
+   MVP: cursor por hardware solo en la cabeza primaria (en monitor 2 no hay
+   puntero visible); las ventanas del génesis nacen en el output 0 (mover una al
+   monitor 2 = comando «mover a output» aún no implementado); taskbar/launcher
+   solo en el primario. La nota histórica de abajo queda como contexto del
+   bloqueador ya superado:
+
+   ~~**Multi-monitor — refactor estructural HECHO, bloqueador físico vigente**~~
    (Fase 59 v1+v2). El **modelo** ya es N-output: el módulo `pantallas`
    (`pantallas.rs`) mantiene un registro `Once<Mutex<Vec<Output>>>`,
    `Ventana::output` asocia cada ventana a un output, y `aplicar_teselado`

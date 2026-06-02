@@ -77,7 +77,8 @@ use async_system::executor::Executor;
 use baliza::BALIZA_PANICO;
 use consola::{Consola, CONSOLA};
 use grafico::{
-    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, ALTO_MAX, ANCHO_MAX,
+    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, RegionPantalla, ALTO_MAX,
+    ANCHO_MAX,
 };
 
 /// Configuracion que el cargador `bootloader` aplicara antes de cedernos la CPU.
@@ -781,7 +782,14 @@ fn informar_almacen() {
     }
     // FASE 60 :: delatar quien gobierna el barrido de pantalla.
     if drivers::gpu::disponible() {
-        consola.escribir("gpu :: virtio-gpu -- el kernel gobierna el scanout\n");
+        let n = drivers::gpu::cabezas();
+        if n > 1 {
+            consola.escribir(&format!(
+                "gpu :: virtio-gpu -- el kernel gobierna {n} scanouts (multi-monitor)\n"
+            ));
+        } else {
+            consola.escribir("gpu :: virtio-gpu -- el kernel gobierna el scanout\n");
+        }
     } else {
         consola.escribir("gpu :: ausente -- escritorio sobre el framebuffer GOP\n");
     }
@@ -892,6 +900,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         traza("cache :: framebuffer GOP remarcado WC");
     }
 
+    // FASE 64 :: dimensiones del LIENZO GLOBAL (envolvente de todos los
+    // monitores) y monitores SECUNDARIOS. Por defecto un solo output del tamaño
+    // del lienzo per-scanout; el bloque multi-scanout de abajo los reescribe si
+    // virtio-gpu reporta mas de una cabeza.
+    let mut ancho_global = ancho_lienzo;
+    let mut alto_global = alto_lienzo;
+    let mut extras: Vec<Pantalla> = Vec::new();
+
     // --- 4.6. FASE 60 :: fundar la arena de marcos DMA y, sobre ella, TOMAR
     //          POSESION DEL SCANOUT via virtio-gpu. La arena —que el disco
     //          fundaba en su `init`— se adelanta aqui porque `KernelHal::
@@ -904,29 +920,82 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         drivers::disco::init(offset, inicio, fin);
         traza("disco :: arena DMA fundada");
         match drivers::gpu::montar(ancho_lienzo, alto_lienzo) {
-            Ok(info_gpu) => {
+            Ok(infos) if !infos.is_empty() => {
+                // El primer scanout es el PRIMARIO, anclado en el origen del
+                // lienzo global. La `pantalla` que la consola tomara es esta.
+                let primario = &infos[0];
                 pantalla = Pantalla::sobre_framebuffer(
-                    info_gpu.base,
-                    info_gpu.ancho,
-                    info_gpu.alto,
-                    info_gpu.paso_bytes,
+                    primario.base,
+                    primario.ancho,
+                    primario.alto,
+                    primario.paso_bytes,
                 );
-                // Re-apuntar la baliza al framebuffer de la GPU: el scanout que
-                // el operador ve es ahora el del kernel, no el GOP. Sin esto, la
-                // franja de panico se pintaria en una memoria que ya nadie barre.
+                // Re-apuntar la baliza al framebuffer de la GPU primaria: el
+                // scanout que el operador ve es ahora el del kernel, no el GOP.
                 BALIZA_PANICO.encender(
                     &pantalla,
                     codificar(pantalla.format, Color::ALERTA),
                     codificar(pantalla.format, Color::OOM),
                     codificar(pantalla.format, Color::FATAL_CARMESI),
                 );
-                traza("gpu :: scanout en posesion del kernel");
-                // FASE 62 :: subir el cursor por hardware. El puntero pasa a un
-                // plano que el host compone sobre el scanout: moverlo ya no
-                // fuerza un volcado de pantalla entera —la cura del lag—. Su
-                // punto caliente es el vertice noroeste de la flecha (0,0). Si
-                // el dispositivo lo rechaza, el puntero recae al estampado por
-                // software sin romper nada.
+                // FASE 64 :: disponer los scanouts en el espacio compuesto (en
+                // fila, izquierda→derecha) con la matematica pura ya probada de
+                // `mirada-layout::outputs`. El lienzo global pasa a ser la
+                // ENVOLVENTE; cada cabeza secundaria recibe una `Pantalla` con su
+                // origen global, que blittea solo su sub-region.
+                let tamanos: alloc::vec::Vec<(i32, i32)> = infos
+                    .iter()
+                    .map(|i| (i.ancho as i32, i.alto as i32))
+                    .collect();
+                let rects = mirada_layout::outputs::disponer(
+                    &tamanos,
+                    mirada_layout::outputs::Disposicion::Horizontal,
+                );
+                let env = mirada_layout::outputs::envolvente(&rects);
+                ancho_global = env.w as usize;
+                alto_global = env.h as usize;
+                for (i, info) in infos.iter().enumerate().skip(1) {
+                    let r = &rects[i];
+                    extras.push(
+                        Pantalla::sobre_framebuffer(
+                            info.base,
+                            info.ancho,
+                            info.alto,
+                            info.paso_bytes,
+                        )
+                        .con_origen(r.x as usize, r.y as usize),
+                    );
+                }
+                // Con multi-scanout, fundar YA el registro de outputs (primario +
+                // extras) que el compositor consulta para teselar por-monitor. Es
+                // idempotente: el `pantallas::fundar` del arranque de userspace ve
+                // el registro fundado y no lo pisa. Con un solo scanout NO se
+                // funda aqui — lo hace el camino de siempre con las dims primarias.
+                if infos.len() > 1 {
+                    let regiones: alloc::vec::Vec<RegionPantalla> = rects
+                        .iter()
+                        .map(|r| RegionPantalla {
+                            x: r.x as usize,
+                            y: r.y as usize,
+                            ancho: r.w as usize,
+                            alto: r.h as usize,
+                        })
+                        .collect();
+                    pantallas::fundar_outputs(&regiones);
+                    let _ = writeln!(
+                        baliza::Serie,
+                        "gpu :: {} scanouts -> escritorio compuesto {}x{}",
+                        infos.len(),
+                        ancho_global,
+                        alto_global,
+                    );
+                }
+                traza("gpu :: scanout(s) en posesion del kernel");
+                // FASE 62 :: subir el cursor por hardware sobre el scanout
+                // primario. El puntero pasa a un plano que el host compone: moverlo
+                // ya no fuerza un volcado de pantalla entera —la cura del lag—. Su
+                // punto caliente es el vertice noroeste de la flecha (0,0). Si el
+                // dispositivo lo rechaza, recae al estampado por software.
                 match drivers::gpu::instalar_cursor(&grafico::cursor_bgra_64(), 0, 0) {
                     Ok(()) => traza("gpu :: cursor por hardware vivo"),
                     Err(motivo) => {
@@ -934,6 +1003,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         traza("gpu :: cursor por hardware OMITIDO (estampado software)");
                     }
                 }
+            }
+            Ok(_) => {
+                // `montar` devolvio una lista vacia (no deberia ocurrir): se
+                // trata como ausencia de dispositivo — el escritorio sigue sobre
+                // el GOP del firmware con un solo output.
+                let _ = writeln!(baliza::Serie, "gpu :: sin scanouts utiles (fallback GOP)");
+                traza("gpu :: OMITIDO (sin scanouts)");
             }
             Err(motivo) => {
                 let _ = writeln!(baliza::Serie, "gpu :: {motivo} (fallback framebuffer GOP)");
@@ -959,10 +1035,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // El lienzo codifica sus pixeles al format de la pantalla ACTIVA: si la
     // GPU tomo el scanout es B8G8R8A8 (Bgr), si no, el del GOP. Asi el volcado
     // fila-a-fila es un `memcpy` puro, sin recodificar canal por canal.
-    let mut lienzo = Lienzo::nuevo(memoria, ancho_lienzo, alto_lienzo, pantalla.format);
+    // FASE 64 :: el lienzo es GLOBAL — cubre la envolvente de todos los
+    // monitores (con uno solo, == dims per-scanout de siempre). La composicion
+    // pinta sobre el en coords globales; cada `Pantalla` blittea su sub-region.
+    let mut lienzo = Lienzo::nuevo(memoria, ancho_global, alto_global, pantalla.format);
     lienzo.limpiar(Color::LIENZO_EN_REPOSO);
 
     let mut consola = Consola::nueva(lienzo, pantalla);
+    // FASE 64 :: entregarle los monitores secundarios. Vacio con un solo output.
+    consola.fijar_pantallas_extra(extras);
     consola.escribir("renaser :: fase 6.2 -- E/S de disco asincrona por interrupcion\n");
     consola.presentar();
     CONSOLA.call_once(|| Mutex::new(consola));
@@ -995,7 +1076,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     //          dispositivo auxiliar, el raton empieza a reportar, y el PIC
     //          desenmascara su IRQ12. Desde aqui hay un puntero en pantalla,
     //          y los clics pueden alcanzar al compositor.
-    drivers::raton::init(ancho_lienzo, alto_lienzo);
+    // FASE 64 :: el puntero se acota al ESCRITORIO GLOBAL (envolvente), no a un
+    // solo monitor — asi puede cruzar de un scanout al vecino.
+    drivers::raton::init(ancho_global, alto_global);
     traza("raton :: listo");
 
     // --- 6.65. FASE 61 :: montar la tableta virtio-input — un puntero ABSOLUTO
@@ -1003,7 +1086,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     //           relativo PS/2. COMPLEMENTA al raton: si no hay tableta, `montar`
     //           devuelve `Err` y el puntero sigue siendo el del PS/2. Se sondea
     //           en cada fotograma desde la tarea del compositor, no por IRQ.
-    match drivers::tableta::montar(ancho_lienzo, alto_lienzo) {
+    match drivers::tableta::montar(ancho_global, alto_global) {
         Ok(()) => reportar("tableta :: virtio-input -- puntero absoluto"),
         Err(motivo) => reportar(&format!("tableta :: {motivo} -- puntero PS/2 relativo")),
     }
