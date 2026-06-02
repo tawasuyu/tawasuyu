@@ -16,7 +16,7 @@ use llimphi_widget_edit_menu::EditAction;
 use llimphi_widget_text_input::TextInputState;
 
 use pixel_verbo_core::{OpPixel, Proveedor};
-use tullpu_core::{Hash, Lienzo, OpLocal};
+use tullpu_core::{Hash, Historial, Lienzo, OpLocal};
 use tullpu_render::{AlmacenEnMemoria, FormatoExport};
 use uuid::Uuid;
 
@@ -44,21 +44,11 @@ pub(crate) struct Model {
     /// la fila correspondiente pinta el text-input en vez del botón de
     /// nombre. F2 entra, Enter confirma, Escape cancela.
     pub(crate) renombrando: Option<(Uuid, TextInputState)>,
-    /// Pila de snapshots del [`Lienzo`] para undo/redo. Siempre no vacía:
-    /// `historial[0]` es el lienzo al inicializar. `cursor_historial` apunta
-    /// al estado vigente: `historial[cursor]` siempre cuadra con `lienzo` en
-    /// régimen estable. Una mutación trunca cualquier rama de redo (todo lo
-    /// que esté después de `cursor`) y pushea el nuevo estado al tope.
-    /// Capado a [`HIST_CAP`] entradas para no inflar RAM en sesiones largas.
-    pub(crate) historial: Vec<Lienzo>,
-    pub(crate) cursor_historial: usize,
-    /// Etiqueta del último snapshot pushado. Se usa para *coalescer* mutaciones
-    /// continuas: si la próxima mutación viene con la misma etiqueta y
-    /// estamos en el tope del historial, en lugar de agregar otra entrada se
-    /// sustituye la del tope. Sirve para que un drag del slider de opacidad
-    /// (decenas de eventos por segundo) cuente como una sola operación
-    /// reversible. Sin coalesce, deshacer un drag costaría 100 Ctrl+Z.
-    pub(crate) ultima_etiqueta_snapshot: Option<(Uuid, &'static str)>,
+    /// Pila de undo/redo del [`Lienzo`] (snapshots + cursor + coalescing por
+    /// etiqueta). El motor es `tullpu_core::Historial<Lienzo>` (regla #2);
+    /// `historial.rs` deja sólo los wrappers que tocan también `lienzo` y la
+    /// selección. Capado a [`HIST_CAP`] entradas.
+    pub(crate) hist: Historial<Lienzo>,
     /// Multiplicador de zoom sobre el fit-contain natural. 1.0 = fit (la
     /// imagen entra entera en el lienzo); 2.0 = el doble del tamaño fit;
     /// 0.5 = la mitad. Clamp en [`ZOOM_MIN`]..=[`ZOOM_MAX`].

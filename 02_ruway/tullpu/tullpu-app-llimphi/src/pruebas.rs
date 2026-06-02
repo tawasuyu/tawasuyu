@@ -8,7 +8,7 @@
     use llimphi_ui::{KeyState, Modifiers, PaintRect};
 
     use tullpu_core::{
-        Frescura, Lienzo, ModoFusion, OpLocal, OrigenCapa,
+        Frescura, Historial, Lienzo, ModoFusion, OpLocal, OrigenCapa,
     };
     use tullpu_render::{AlmacenEnMemoria, FormatoExport, FuenteBuffers};
     // Kernel puro usado sólo por tests (no re-exportado por `ops` porque el
@@ -42,7 +42,7 @@
         let cap = Capa::raster("c", hash);
         let id = cap.id;
         lienzo.apilar(cap);
-        let historial = vec![lienzo.clone()];
+        let hist = Historial::nuevo(lienzo.clone(), HIST_CAP);
         Model {
             lienzo,
             almacen,
@@ -56,9 +56,7 @@
             imagenes_disponibles: Vec::new(),
             picker: None,
             renombrando: None,
-            historial,
-            cursor_historial: 0,
-            ultima_etiqueta_snapshot: None,
+            hist,
             factor_zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
@@ -387,7 +385,7 @@
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo, lienzo_antes, "lienzo intacto");
         assert!(model.estado.contains("nada que deshacer"));
-        assert_eq!(model.cursor_historial, 0);
+        assert_eq!(model.hist.cursor(), 0);
     }
 
     #[test]
@@ -397,7 +395,7 @@
         let visible_original = model.lienzo.capa(id).unwrap().visible;
         model = <Tullpu as App>::update(model, Msg::ToggleVisible(id), &Handle::for_test());
         assert_eq!(model.lienzo.capa(id).unwrap().visible, !visible_original);
-        assert_eq!(model.historial.len(), 2);
+        assert_eq!(model.hist.len(), 2);
         // Undo: volvemos al estado anterior.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capa(id).unwrap().visible, visible_original);
@@ -416,15 +414,15 @@
         model = <Tullpu as App>::update(model, Msg::ToggleVisible(id), &Handle::for_test());
         // M2: invertirla de nuevo (la deja igual al estado original).
         model = <Tullpu as App>::update(model, Msg::ToggleVisible(id), &Handle::for_test());
-        assert_eq!(model.historial.len(), 3);
-        assert_eq!(model.cursor_historial, 2);
+        assert_eq!(model.hist.len(), 3);
+        assert_eq!(model.hist.cursor(), 2);
         // Undo: vuelvo a M1.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
-        assert_eq!(model.cursor_historial, 1);
+        assert_eq!(model.hist.cursor(), 1);
         // M3: ciclar blend → debe truncar M2.
         model = <Tullpu as App>::update(model, Msg::CiclarBlend(id), &Handle::for_test());
-        assert_eq!(model.historial.len(), 3, "M2 fue truncada");
-        assert_eq!(model.cursor_historial, 2);
+        assert_eq!(model.hist.len(), 3, "M2 fue truncada");
+        assert_eq!(model.hist.cursor(), 2);
         // Redo ahora no tiene a dónde ir.
         let snapshot = model.lienzo.clone();
         model = <Tullpu as App>::update(model, Msg::Redo, &Handle::for_test());
@@ -438,7 +436,7 @@
         // misma capa. El historial debe crecer en 1 sola entrada (la final).
         let mut model = modelo_minimo();
         let id = model.seleccionada.unwrap();
-        let len_inicial = model.historial.len();
+        let len_inicial = model.hist.len();
         for _ in 0..50 {
             model = <Tullpu as App>::update(
                 model,
@@ -447,7 +445,7 @@
             );
         }
         assert_eq!(
-            model.historial.len(),
+            model.hist.len(),
             len_inicial + 1,
             "el drag entero debe coalesce a 1 snapshot"
         );
@@ -478,7 +476,7 @@
         // que la capa B vino vía Agregar/Eliminar — para este test ad-hoc
         // basta con pushear directo).
         pushear_snapshot(&mut model, None);
-        let base = model.historial.len();
+        let base = model.hist.len();
 
         // Drag sobre A
         for _ in 0..3 {
@@ -488,7 +486,7 @@
                 &Handle::for_test(),
             );
         }
-        assert_eq!(model.historial.len(), base + 1);
+        assert_eq!(model.hist.len(), base + 1);
 
         // Drag sobre B (capa distinta → no coalesce con el de A)
         for _ in 0..3 {
@@ -499,7 +497,7 @@
             );
         }
         assert_eq!(
-            model.historial.len(),
+            model.hist.len(),
             base + 2,
             "drag en B agrega entrada propia"
         );
@@ -517,8 +515,8 @@
                 &Handle::for_test(),
             );
         }
-        assert_eq!(model.historial.len(), HIST_CAP);
-        assert_eq!(model.cursor_historial, HIST_CAP - 1);
+        assert_eq!(model.hist.len(), HIST_CAP);
+        assert_eq!(model.hist.cursor(), HIST_CAP - 1);
     }
 
     #[test]
@@ -544,7 +542,7 @@
         // historial con una entrada idéntica.
         let mut model = modelo_minimo();
         let id = model.seleccionada.unwrap();
-        let len_inicial = model.historial.len();
+        let len_inicial = model.hist.len();
         model = <Tullpu as App>::update(
             model,
             Msg::IniciarRenombrar(id),
@@ -554,7 +552,7 @@
             input.set_text("   "); // whitespace only — descartado por update
         }
         model = <Tullpu as App>::update(model, Msg::ConfirmarRenombrar, &Handle::for_test());
-        assert_eq!(model.historial.len(), len_inicial);
+        assert_eq!(model.hist.len(), len_inicial);
     }
 
     // ---- Fase 24: zoom y pan --------------------------------------------------
@@ -963,10 +961,10 @@
         // tiene una capa más, y un Undo lo deshace.
         let mut model = modelo_minimo();
         let n_antes = model.lienzo.capas.len();
-        let hist_antes = model.historial.len();
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(model, Msg::AgregarRelleno, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), n_antes + 1);
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         // Undo lo revierte.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), n_antes);
@@ -994,8 +992,7 @@
         model.lienzo.apilar(cap_a);
         model.seleccionada = Some(id_a);
         // Reseteamos el historial para que este sea el estado base.
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
+        model.hist.reiniciar(model.lienzo.clone());
         (model, id_b, id_a)
     }
 
@@ -1087,10 +1084,10 @@
         // Undo vuelven las 2 originales.
         let (mut model, id_b, id_a) =
             modelo_dos_capas([0, 0, 0, 255], [255, 255, 255, 255]);
-        let hist_antes = model.historial.len();
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(model, Msg::Combinar(id_a), &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), 1);
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), 2);
         // Los Uuid originales vuelven (el historial guarda el Lienzo
@@ -1132,8 +1129,7 @@
             model.lienzo.apilar(cap);
         }
         model.seleccionada = ids.first().copied();
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
+        model.hist.reiniciar(model.lienzo.clone());
         (model, ids)
     }
 
@@ -1251,10 +1247,10 @@
     fn msg_aplanar_dispatcha_y_undo_restaura() {
         let (mut model, ids) =
             modelo_n_capas(&[[1, 2, 3, 255], [4, 5, 6, 255], [7, 8, 9, 255]]);
-        let hist_antes = model.historial.len();
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(model, Msg::AplanarVisibles, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), 1);
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), 3);
         let ids_post: Vec<Uuid> = model.lienzo.capas.iter().map(|c| c.id).collect();
@@ -1423,16 +1419,15 @@
         let h = model.almacen.insertar(buf);
         let cap = Capa::raster("c", h);
         model.lienzo.apilar(cap);
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
-        let hist_antes = model.historial.len();
+        model.hist.reiniciar(model.lienzo.clone());
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(
             model,
             Msg::RotarLienzo { cw: true },
             &Handle::for_test(),
         );
         assert_eq!((model.lienzo.width, model.lienzo.height), (3, 2));
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!((model.lienzo.width, model.lienzo.height), (2, 3));
     }
@@ -1587,12 +1582,11 @@
         let cap = Capa::raster("isla", h);
         model.lienzo.apilar(cap);
         aplicar_y_recomponer(&mut model);
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
-        let hist_antes = model.historial.len();
+        model.hist.reiniciar(model.lienzo.clone());
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(model, Msg::AutotrimLienzo, &Handle::for_test());
         assert_eq!((model.lienzo.width, model.lienzo.height), (2, 2));
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!((model.lienzo.width, model.lienzo.height), (4, 4));
     }
@@ -1614,8 +1608,7 @@
         let id_deriv = derivada.id;
         model.lienzo.apilar(derivada);
         model.seleccionada = Some(id_deriv);
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
+        model.hist.reiniciar(model.lienzo.clone());
         (model, id_madre, id_deriv)
     }
 
@@ -1841,7 +1834,7 @@
         // entrada nueva de historial (mismo coalesce-key).
         let (mut model, _, deriv) =
             modelo_con_derivada(OpLocal::Brillo { delta: 0.0 });
-        let hist_antes = model.historial.len();
+        let hist_antes = model.hist.len();
         for _ in 0..30 {
             model = <Tullpu as App>::update(
                 model,
@@ -1854,7 +1847,7 @@
             );
         }
         assert_eq!(
-            model.historial.len(),
+            model.hist.len(),
             hist_antes + 1,
             "drag de slider coalesce a 1 entrada"
         );
@@ -2067,7 +2060,7 @@
             entrada_max: 1.0,
             gamma: 1.0,
         });
-        let hist_antes = model.historial.len();
+        let hist_antes = model.hist.len();
         // 20 deltas pequeños — todos misma capa, mismo param → 1 snapshot.
         for _ in 0..20 {
             model = <Tullpu as App>::update(
@@ -2080,7 +2073,7 @@
                 &Handle::for_test(),
             );
         }
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         // Un Undo revierte el drag completo de gamma.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         match &model.lienzo.capa(deriv).unwrap().origen {
@@ -2101,7 +2094,7 @@
             entrada_max: 1.0,
             gamma: 1.0,
         });
-        let hist_antes = model.historial.len();
+        let hist_antes = model.hist.len();
         for _ in 0..5 {
             model = <Tullpu as App>::update(
                 model,
@@ -2125,7 +2118,7 @@
             );
         }
         assert_eq!(
-            model.historial.len(),
+            model.hist.len(),
             hist_antes + 2,
             "min y max coalesce por separado"
         );
@@ -2523,12 +2516,11 @@
         let mut model = modelo_minimo();
         aplicar_y_recomponer(&mut model);
         model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
-        let hist_antes = model.historial.len();
+        model.hist.reiniciar(model.lienzo.clone());
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(model, Msg::RecortarASeleccion, &Handle::for_test());
         assert_eq!((model.lienzo.width, model.lienzo.height), (2, 2));
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!((model.lienzo.width, model.lienzo.height), (4, 4));
     }
@@ -2739,15 +2731,14 @@
         model.seleccionada = Some(id);
         aplicar_y_recomponer(&mut model);
         model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
-        let hist_antes = model.historial.len();
+        model.hist.reiniciar(model.lienzo.clone());
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(
             model,
             Msg::LimpiarSeleccionEnCapa,
             &Handle::for_test(),
         );
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         // El hash de la capa cambió.
         assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
         // Undo restaura el hash original.
@@ -2954,15 +2945,14 @@
         model.color_picked = Some([255, 0, 0, 255]);
         aplicar_y_recomponer(&mut model);
         model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
-        let hist_antes = model.historial.len();
+        model.hist.reiniciar(model.lienzo.clone());
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(
             model,
             Msg::RellenarSeleccionEnCapa,
             &Handle::for_test(),
         );
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
@@ -3123,15 +3113,14 @@
         model.seleccionada = Some(id);
         aplicar_y_recomponer(&mut model);
         model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
-        let hist_antes = model.historial.len();
+        model.hist.reiniciar(model.lienzo.clone());
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(
             model,
             Msg::DuplicarSeleccionACapa,
             &Handle::for_test(),
         );
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         assert_eq!(model.lienzo.capas.len(), 2);
         // Undo vuelve a una sola capa.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
@@ -3222,12 +3211,12 @@
         model.seleccionada = Some(id);
         aplicar_y_recomponer(&mut model);
         model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
-        let hist_antes = model.historial.len();
+        let hist_antes = model.hist.len();
         let n_capas = model.lienzo.capas.len();
         let ok = copiar_seleccion(&mut model);
         assert!(ok);
         // No tocó historial ni capas.
-        assert_eq!(model.historial.len(), hist_antes);
+        assert_eq!(model.hist.len(), hist_antes);
         assert_eq!(model.lienzo.capas.len(), n_capas);
         let clip = model.portapapeles.unwrap();
         assert_eq!((clip.w, clip.h), (2, 2));
@@ -3454,15 +3443,14 @@
             Msg::CopiarSeleccion,
             &Handle::for_test(),
         );
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
-        let hist_antes = model.historial.len();
+        model.hist.reiniciar(model.lienzo.clone());
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(
             model,
             Msg::PegarPortapapeles,
             &Handle::for_test(),
         );
-        assert_eq!(model.historial.len(), hist_antes + 1);
+        assert_eq!(model.hist.len(), hist_antes + 1);
         assert_eq!(model.lienzo.capas.len(), 2);
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capas.len(), 1);
@@ -3684,8 +3672,7 @@
         model.seleccionada = Some(id);
         aplicar_y_recomponer(&mut model);
         model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 1, y1: 1 });
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
+        model.hist.reiniciar(model.lienzo.clone());
         // Tres nudges seguidos coalescen a una sola entrada.
         for _ in 0..3 {
             model = <Tullpu as App>::update(
@@ -3694,7 +3681,7 @@
                 &Handle::for_test(),
             );
         }
-        assert_eq!(model.historial.len(), 2); // inicial + 1 coalescida
+        assert_eq!(model.hist.len(), 2); // inicial + 1 coalescida
         // Un solo Undo restaura el hash original de la capa.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capa(id).unwrap().contenido, hash_inicial);
@@ -3859,14 +3846,14 @@
     fn expandir_seleccion_dispatcha_y_no_toca_historial() {
         let mut model = modelo_minimo();
         model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
-        let hist_antes = model.historial.len();
+        let hist_antes = model.hist.len();
         model = <Tullpu as App>::update(
             model,
             Msg::ExpandirSeleccion(1),
             &Handle::for_test(),
         );
         // La selección no vive en el DAG → el historial no cambia.
-        assert_eq!(model.historial.len(), hist_antes);
+        assert_eq!(model.hist.len(), hist_antes);
         assert_eq!(
             model.seleccion,
             Some(RectImagen { x0: 0, y0: 0, x1: 4, y1: 4 })
@@ -3924,7 +3911,7 @@
     fn confirmar_renombrar_con_nuevo_nombre_si_genera_snapshot() {
         let mut model = modelo_minimo();
         let id = model.seleccionada.unwrap();
-        let len_inicial = model.historial.len();
+        let len_inicial = model.hist.len();
         model = <Tullpu as App>::update(
             model,
             Msg::IniciarRenombrar(id),
@@ -3934,7 +3921,7 @@
             input.set_text("renombrado");
         }
         model = <Tullpu as App>::update(model, Msg::ConfirmarRenombrar, &Handle::for_test());
-        assert_eq!(model.historial.len(), len_inicial + 1);
+        assert_eq!(model.hist.len(), len_inicial + 1);
         // Undo restaura el nombre original ("c").
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
         assert_eq!(model.lienzo.capa(id).unwrap().nombre, "c");
@@ -4198,8 +4185,7 @@
         model.seleccionada = Some(id);
         model.color_picked = Some([0, 0, 0, 255]);
         aplicar_y_recomponer(&mut model);
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
+        model.hist.reiniciar(model.lienzo.clone());
         // Trazo: press en (1,1) + 3 moves → debe coalescer a 1 entrada.
         model = <Tullpu as App>::update(
             model,
@@ -4214,24 +4200,24 @@
                 &Handle::for_test(),
             );
         }
-        assert_eq!(model.historial.len(), 2); // inicial + 1 trazo coalescido
+        assert_eq!(model.hist.len(), 2); // inicial + 1 trazo coalescido
         model = <Tullpu as App>::update(
             model,
             Msg::FinalizarTrazo,
             &Handle::for_test(),
         );
         assert!(model.pincel_drag.is_none());
-        assert!(model.ultima_etiqueta_snapshot.is_none());
+        assert!(model.hist.ultima_etiqueta().is_none());
         // Un segundo trazo arranca entrada NUEVA (la cadena se cortó).
         model = <Tullpu as App>::update(
             model,
             Msg::IniciarTrazo { lx: 5.0, ly: 5.0, rw: 8.0, rh: 8.0 },
             &Handle::for_test(),
         );
-        assert_eq!(model.historial.len(), 3);
+        assert_eq!(model.hist.len(), 3);
         // Un Undo deshace sólo el segundo trazo.
         model = <Tullpu as App>::update(model, Msg::Undo, &Handle::for_test());
-        assert_eq!(model.cursor_historial, 1);
+        assert_eq!(model.hist.cursor(), 1);
     }
 
     #[test]
@@ -4736,8 +4722,7 @@
         model.color_picked = Some([0, 0, 255, 255]);
         model.herramienta = Herramienta::Degradado;
         aplicar_y_recomponer(&mut model);
-        model.historial = vec![model.lienzo.clone()];
-        model.cursor_historial = 0;
+        model.hist.reiniciar(model.lienzo.clone());
         let hash0 = model.lienzo.capa(id).unwrap().contenido;
         // Press en (0,0), arrastre +8 en X, soltar.
         model = <Tullpu as App>::update(
@@ -4758,7 +4743,7 @@
         // Drag cerrado, capa cambiada, snapshot pusheado.
         assert!(model.gradiente_drag.is_none());
         assert_ne!(model.lienzo.capa(id).unwrap().contenido, hash0);
-        assert_eq!(model.historial.len(), 2);
+        assert_eq!(model.hist.len(), 2);
     }
 
     // ---- Máscaras de capa (fase 52) ----
@@ -4785,7 +4770,7 @@
         let buf = model.almacen.obtener(mh.unwrap()).unwrap();
         assert_eq!(buf.len(), (model.lienzo.width * model.lienzo.height) as usize);
         assert!(buf.iter().all(|&b| b == 255));
-        assert_eq!(model.historial.len(), 2);
+        assert_eq!(model.hist.len(), 2);
     }
 
     #[test]
@@ -4794,11 +4779,11 @@
         let id = model.seleccionada.unwrap();
         model = <Tullpu as App>::update(model, Msg::AgregarMascara, &Handle::for_test());
         let mh1 = model.lienzo.capa(id).unwrap().mascara;
-        let hist1 = model.historial.len();
+        let hist1 = model.hist.len();
         // Segunda vez: no-op (no pisa la máscara ni snapshotea).
         model = <Tullpu as App>::update(model, Msg::AgregarMascara, &Handle::for_test());
         assert_eq!(model.lienzo.capa(id).unwrap().mascara, mh1);
-        assert_eq!(model.historial.len(), hist1);
+        assert_eq!(model.hist.len(), hist1);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use llimphi_clipboard::SystemClipboard;
 use pixel_verbo_core::Proveedor;
 use pixel_verbo_daemon::ClienteBloqueante;
 use pixel_verbo_mock::ProveedorMock;
-use tullpu_core::{Capa, Lienzo};
+use tullpu_core::{Capa, Historial, Lienzo};
 use tullpu_render::AlmacenEnMemoria;
 use uuid::Uuid;
 
@@ -191,7 +191,7 @@ pub(crate) fn inicializar() -> Model {
     let imagenes_disponibles = walk_imagenes(&raiz);
 
     let imagen = recomponer(&lienzo, &almacen);
-    let historial = vec![lienzo.clone()];
+    let hist = Historial::nuevo(lienzo.clone(), HIST_CAP);
     let mut model = Model {
         lienzo,
         almacen,
@@ -205,9 +205,7 @@ pub(crate) fn inicializar() -> Model {
         imagenes_disponibles,
         picker: None,
         renombrando: None,
-        historial,
-        cursor_historial: 0,
-        ultima_etiqueta_snapshot: None,
+        hist,
         factor_zoom: 1.0,
         pan_x: 0.0,
         pan_y: 0.0,

@@ -301,8 +301,8 @@ impl App for Tullpu {
                     aplicar_y_recomponer(&mut model);
                     model.estado = format!(
                         "↶ undo · {}/{}",
-                        model.cursor_historial + 1,
-                        model.historial.len()
+                        model.hist.cursor() + 1,
+                        model.hist.len()
                     );
                 } else {
                     model.estado = "↶ nada que deshacer".into();
@@ -314,8 +314,8 @@ impl App for Tullpu {
                     aplicar_y_recomponer(&mut model);
                     model.estado = format!(
                         "↷ redo · {}/{}",
-                        model.cursor_historial + 1,
-                        model.historial.len()
+                        model.hist.cursor() + 1,
+                        model.hist.len()
                     );
                 } else {
                     model.estado = "↷ nada que rehacer".into();
@@ -784,7 +784,7 @@ impl App for Tullpu {
             Msg::FinalizarTrazo => {
                 model.pincel_drag = None;
                 // Cortar el coalesce: el próximo trazo es un Undo aparte.
-                model.ultima_etiqueta_snapshot = None;
+                model.hist.invalidar_etiqueta();
             }
             Msg::BumpRadioPincel(delta) => {
                 model.radio_pincel =
@@ -1258,8 +1258,8 @@ fn menubar_spec<'a>(
 fn app_menu(model: &Model) -> AppMenu {
     let hay_capa = model.seleccionada.is_some();
     let hay_sel = model.seleccion.is_some();
-    let can_undo = model.cursor_historial > 0;
-    let can_redo = model.cursor_historial + 1 < model.historial.len();
+    let can_undo = model.hist.puede_deshacer();
+    let can_redo = model.hist.puede_rehacer();
 
     let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
     if !can_undo {

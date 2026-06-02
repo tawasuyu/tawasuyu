@@ -22,6 +22,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod historial;
+pub use historial::{Etiqueta, Historial};
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

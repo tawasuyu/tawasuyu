@@ -19,27 +19,7 @@ use crate::model::*;
 /// agregar, rename, file drop). Las acciones de pura UI (Seleccionar,
 /// Recargar, Exportar, Picker abrir/cerrar) no producen snapshot.
 pub(crate) fn pushear_snapshot(model: &mut Model, etiqueta: Option<(Uuid, &'static str)>) {
-    let en_el_tope = model.cursor_historial + 1 == model.historial.len();
-    let coalesce = match (model.ultima_etiqueta_snapshot, etiqueta) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    };
-    if en_el_tope && coalesce {
-        // Drag continuo: sustituyo el tope con el nuevo estado. Un solo
-        // Ctrl+Z deshace el drag completo en vez de N micro-steps.
-        model.historial[model.cursor_historial] = model.lienzo.clone();
-    } else {
-        // Cualquier mutación nueva tras un Ctrl+Z aborta la rama de redo.
-        model.historial.truncate(model.cursor_historial + 1);
-        model.historial.push(model.lienzo.clone());
-        // Cap por memoria: desfilan las entradas más viejas. Si tiramos
-        // `n` entradas del frente, el cursor baja `n`.
-        while model.historial.len() > HIST_CAP {
-            model.historial.remove(0);
-        }
-        model.cursor_historial = model.historial.len() - 1;
-    }
-    model.ultima_etiqueta_snapshot = etiqueta;
+    model.hist.pushear(&model.lienzo, etiqueta);
 }
 
 /// Restaura el estado anterior del lienzo (cursor−−). Devuelve `true` si hubo
@@ -48,27 +28,24 @@ pub(crate) fn pushear_snapshot(model: &mut Model, etiqueta: Option<(Uuid, &'stat
 /// buffers "huérfanos" de la versión actual quedan dormidos pero accesibles
 /// si después se hace redo. Recomposición posterior a cargo del caller.
 pub(crate) fn aplicar_undo(model: &mut Model) -> bool {
-    if model.cursor_historial == 0 {
-        return false;
+    match model.hist.deshacer() {
+        Some(l) => {
+            model.lienzo = l.clone();
+            true
+        }
+        None => false,
     }
-    model.cursor_historial -= 1;
-    model.lienzo = model.historial[model.cursor_historial].clone();
-    // Cualquier mutación posterior al undo arranca rama nueva — invalidamos
-    // la etiqueta para que el primer push no se coalesce con el último drag
-    // que produjo el estado destino.
-    model.ultima_etiqueta_snapshot = None;
-    true
 }
 
 /// Reaplica un estado del que ya habíamos hecho undo (cursor++).
 pub(crate) fn aplicar_redo(model: &mut Model) -> bool {
-    if model.cursor_historial + 1 >= model.historial.len() {
-        return false;
+    match model.hist.rehacer() {
+        Some(l) => {
+            model.lienzo = l.clone();
+            true
+        }
+        None => false,
     }
-    model.cursor_historial += 1;
-    model.lienzo = model.historial[model.cursor_historial].clone();
-    model.ultima_etiqueta_snapshot = None;
-    true
 }
 
 /// Tras restaurar `model.lienzo` desde el historial, la selección puede
