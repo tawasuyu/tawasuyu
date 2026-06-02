@@ -542,11 +542,6 @@ impl App {
             left += sl;
             right += sr;
         }
-        if top != 0 || bottom != 0 || left != 0 || right != 0 {
-            println!(
-                "mirada-compositor · insets reservados t{top} b{bottom} l{left} r{right} (salida {ow}x{oh})."
-            );
-        }
         let ev = self.body.reserve_output(0, top, bottom, left, right);
         self.brain_feed(ev);
     }
@@ -735,13 +730,8 @@ impl CompositorHandler for App {
                 if !initial_sent {
                     layer.layer_surface().send_configure();
                 }
-                let geo = map.layer_geometry(&layer);
                 drop(map);
                 self.recompute_reservations();
-                let buf = with_renderer_surface_state(surface, |s| s.surface_size()).flatten();
-                println!(
-                    "mirada-compositor · layer commit: inicial_ya={initial_sent} geom={geo:?} buffer={buf:?}"
-                );
             }
         }
     }
@@ -770,13 +760,8 @@ impl WlrLayerShellHandler for App {
         };
         let desktop = DesktopLayerSurface::new(surface, namespace.clone());
         let mut map = layer_map_for_output(&output);
-        match map.map_layer(&desktop) {
-            Ok(()) => println!(
-                "mirada-compositor · layer surface «{namespace}» mapeado (capa {_layer:?})."
-            ),
-            Err(e) => eprintln!(
-                "mirada-compositor · no pude mapear el layer surface «{namespace}»: {e:?}"
-            ),
+        if let Err(e) = map.map_layer(&desktop) {
+            eprintln!("mirada-compositor · no pude mapear el layer surface «{namespace}»: {e:?}");
         }
         drop(map);
         self.recompute_reservations();

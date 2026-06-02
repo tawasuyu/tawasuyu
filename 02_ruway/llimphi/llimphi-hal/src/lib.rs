@@ -303,14 +303,6 @@ impl RawSurface {
     ) -> Result<Self, HalError> {
         let caps = surface.get_capabilities(&hal.adapter);
         let info = hal.adapter.get_info();
-        eprintln!(
-            "llimphi-hal · RawSurface: {} formato(s), {} alpha-mode(s) · adapter={:?}/{:?} «{}»",
-            caps.formats.len(),
-            caps.alpha_modes.len(),
-            info.backend,
-            info.device_type,
-            info.name,
-        );
         // Si la superficie no expone formatos, el compositor no la soporta por
         // este backend (Vulkan/GL WSI): error claro en vez de un panic por
         // indexar `formats[0]` sobre una lista vacía.
