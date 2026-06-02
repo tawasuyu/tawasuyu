@@ -229,6 +229,141 @@ impl History {
     }
 }
 
+// ============================================================
+// Bookmarks — marcas con etiqueta sobre el timeline (U6)
+// ============================================================
+
+/// Una marca puesta por el usuario en un punto de un medio: "acá está la
+/// escena buena", "retomar el estudio desde acá". A diferencia del
+/// [`ResumePoint`] (uno por medio, lo mueve el reproductor solo), de
+/// estas hay varias por medio y las pone el usuario a mano.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bookmark {
+    /// Identidad del medio (misma convención que [`ResumePoint::key`]).
+    pub key: String,
+    /// Punto marcado dentro del medio.
+    pub position: Duration,
+    /// Etiqueta libre del usuario (puede estar vacía).
+    pub label: String,
+}
+
+/// Colección de [`Bookmark`]s de toda la biblioteca, ordenada de forma
+/// canónica por `(key, position)` para que el `.ron` sea estable y la
+/// navegación "marca siguiente / anterior" sea un barrido lineal barato.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Bookmarks {
+    marks: Vec<Bookmark>,
+}
+
+impl Bookmarks {
+    pub fn len(&self) -> usize {
+        self.marks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.marks.is_empty()
+    }
+
+    /// Todas las marcas (en orden canónico `(key, position)`).
+    pub fn all(&self) -> &[Bookmark] {
+        &self.marks
+    }
+
+    /// Reordena las marcas a la forma canónica. Útil tras cargar un
+    /// `.ron` editado a mano. Idempotente.
+    pub fn sanitized(mut self) -> Bookmarks {
+        self.reorder();
+        self
+    }
+
+    /// Agrega una marca. Si ya existe una en (casi) la misma posición del
+    /// mismo medio (dentro de `epsilon`), actualiza su etiqueta en vez de
+    /// duplicar — así re-marcar el mismo punto renombra. Devuelve `true`
+    /// si se insertó una marca nueva (`false` si sólo renombró).
+    pub fn add(&mut self, key: &str, position: Duration, label: impl Into<String>) -> bool {
+        let label = label.into();
+        let epsilon = Duration::from_millis(500);
+        if let Some(m) = self.marks.iter_mut().find(|m| {
+            m.key == key && abs_diff(m.position, position) <= epsilon
+        }) {
+            m.label = label;
+            return false;
+        }
+        self.marks.push(Bookmark {
+            key: key.to_string(),
+            position,
+            label,
+        });
+        self.reorder();
+        true
+    }
+
+    /// Las marcas de un medio, en orden de posición ascendente.
+    pub fn for_media(&self, key: &str) -> Vec<&Bookmark> {
+        // `marks` ya está ordenado por (key, position), así que el filtro
+        // preserva el orden por posición.
+        self.marks.iter().filter(|m| m.key == key).collect()
+    }
+
+    /// Borra la marca de `key` más cercana a `position` dentro de
+    /// `epsilon`. Devuelve `true` si borró alguna.
+    pub fn remove_near(&mut self, key: &str, position: Duration, epsilon: Duration) -> bool {
+        let before = self.marks.len();
+        // Encuentra la más cercana dentro del epsilon y bórrala.
+        let target = self
+            .marks
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.key == key && abs_diff(m.position, position) <= epsilon)
+            .min_by_key(|(_, m)| abs_diff(m.position, position))
+            .map(|(i, _)| i);
+        if let Some(i) = target {
+            self.marks.remove(i);
+        }
+        self.marks.len() != before
+    }
+
+    /// Borra todas las marcas de un medio. Devuelve cuántas borró.
+    pub fn clear_media(&mut self, key: &str) -> usize {
+        let before = self.marks.len();
+        self.marks.retain(|m| m.key != key);
+        before - self.marks.len()
+    }
+
+    /// Primera marca de `key` estrictamente después de `t` (para "saltar a
+    /// la marca siguiente").
+    pub fn next_after(&self, key: &str, t: Duration) -> Option<&Bookmark> {
+        self.marks
+            .iter()
+            .filter(|m| m.key == key && m.position > t)
+            .min_by_key(|m| m.position)
+    }
+
+    /// Última marca de `key` estrictamente antes de `t` (para "saltar a la
+    /// marca anterior").
+    pub fn prev_before(&self, key: &str, t: Duration) -> Option<&Bookmark> {
+        self.marks
+            .iter()
+            .filter(|m| m.key == key && m.position < t)
+            .max_by_key(|m| m.position)
+    }
+
+    fn reorder(&mut self) {
+        self.marks
+            .sort_by(|a, b| a.key.cmp(&b.key).then_with(|| a.position.cmp(&b.position)));
+    }
+}
+
+/// Diferencia absoluta entre dos `Duration` (no hay `abs_diff` en std
+/// para `Duration` en este edition).
+fn abs_diff(a: Duration, b: Duration) -> Duration {
+    if a >= b {
+        a - b
+    } else {
+        b - a
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,5 +534,87 @@ mod tests {
         let txt = ron::ser::to_string(&h).expect("serializa");
         let back: History = ron::from_str(&txt).expect("deserializa");
         assert_eq!(h, back);
+    }
+
+    // ---------- Bookmarks (U6) ----------
+
+    #[test]
+    fn bookmarks_add_y_orden_canonico() {
+        let mut bm = Bookmarks::default();
+        assert!(bm.add("b", d(30), "tres"));
+        assert!(bm.add("a", d(20), "dos"));
+        assert!(bm.add("a", d(10), "uno"));
+        // Orden canónico (a@10, a@20, b@30).
+        let all = bm.all();
+        assert_eq!(all[0].key, "a");
+        assert_eq!(all[0].position, d(10));
+        assert_eq!(all[1].position, d(20));
+        assert_eq!(all[2].key, "b");
+    }
+
+    #[test]
+    fn bookmarks_add_renombra_misma_posicion() {
+        let mut bm = Bookmarks::default();
+        assert!(bm.add("a", d(10), "viejo"));
+        // Dentro del epsilon (500 ms) → renombra, no duplica.
+        assert!(!bm.add("a", d(10) + Duration::from_millis(200), "nuevo"));
+        assert_eq!(bm.len(), 1);
+        assert_eq!(bm.all()[0].label, "nuevo");
+    }
+
+    #[test]
+    fn bookmarks_for_media_filtra_y_ordena() {
+        let mut bm = Bookmarks::default();
+        bm.add("a", d(30), "");
+        bm.add("a", d(10), "");
+        bm.add("b", d(5), "");
+        let a = bm.for_media("a");
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].position, d(10));
+        assert_eq!(a[1].position, d(30));
+        assert_eq!(bm.for_media("b").len(), 1);
+        assert!(bm.for_media("z").is_empty());
+    }
+
+    #[test]
+    fn bookmarks_next_prev() {
+        let mut bm = Bookmarks::default();
+        bm.add("a", d(10), "");
+        bm.add("a", d(20), "");
+        bm.add("a", d(30), "");
+        assert_eq!(bm.next_after("a", d(15)).unwrap().position, d(20));
+        assert_eq!(bm.prev_before("a", d(25)).unwrap().position, d(20));
+        // En el borde exacto: next/prev son estrictos.
+        assert_eq!(bm.next_after("a", d(20)).unwrap().position, d(30));
+        assert_eq!(bm.prev_before("a", d(20)).unwrap().position, d(10));
+        // Fuera de rango.
+        assert!(bm.next_after("a", d(30)).is_none());
+        assert!(bm.prev_before("a", d(10)).is_none());
+    }
+
+    #[test]
+    fn bookmarks_remove_y_clear() {
+        let mut bm = Bookmarks::default();
+        bm.add("a", d(10), "");
+        bm.add("a", d(20), "");
+        bm.add("b", d(5), "");
+        // Borra la cercana a 10 (dentro de 1 s).
+        assert!(bm.remove_near("a", d(10) + Duration::from_millis(300), d(1)));
+        assert_eq!(bm.for_media("a").len(), 1);
+        // Nada cerca de 100.
+        assert!(!bm.remove_near("a", d(100), d(1)));
+        // clear_media borra todas las de b.
+        assert_eq!(bm.clear_media("b"), 1);
+        assert!(bm.for_media("b").is_empty());
+    }
+
+    #[test]
+    fn bookmarks_round_trip_ron() {
+        let mut bm = Bookmarks::default();
+        bm.add("peli.mp4", d(73), "escena clave");
+        bm.add("peli.mp4", d(300), "final");
+        let txt = ron::ser::to_string(&bm).expect("serializa");
+        let back: Bookmarks = ron::from_str(&txt).expect("deserializa");
+        assert_eq!(bm, back);
     }
 }
