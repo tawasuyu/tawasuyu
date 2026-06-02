@@ -1,0 +1,12 @@
+[package]
+name = "dominium-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium — sesión de simulación agnóstica de GUI: posee el World + parámetros + reloj (tick/epoch/seed) + ring de snapshots (rewind) + trails + clusters k-means, y orquesta el avance/reseed/colapso. El frontend sólo guarda estado de vista (cámara, selección, paneles) y delega el ciclo de vida acá."
+
+[dependencies]
+dominium-core = { path = "../dominium-core" }
+dominium-physics = { path = "../dominium-physics" }

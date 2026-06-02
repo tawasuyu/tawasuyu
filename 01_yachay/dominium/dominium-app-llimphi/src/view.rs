@@ -90,7 +90,7 @@ pub(crate) fn onboarding_bar(theme: &Theme) -> View<Msg> {
 }
 
 pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let estado = rimay_localize::t(if model.running {
+    let estado = rimay_localize::t(if model.sim.running {
         "dominium-status-running"
     } else {
         "dominium-status-paused"
@@ -101,9 +101,9 @@ pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
         "{}×{}  ·  pob {}  ·  epoch {}  ·  tick {}",
         GRID,
         GRID,
-        model.world.lemmings.len(),
-        model.epoch,
-        model.tick,
+        model.sim.world.lemmings.len(),
+        model.sim.epoch,
+        model.sim.tick,
     );
     let label_view = View::new(Style {
         size: Size {
@@ -178,7 +178,7 @@ pub(crate) fn side_panel(
 
     let header = label_view(&rimay_localize::t("dominium-header-sim"), 11.0, theme.fg_muted);
 
-    let play_label = rimay_localize::t(if model.running {
+    let play_label = rimay_localize::t(if model.sim.running {
         "dominium-btn-pause"
     } else {
         "dominium-btn-resume"
@@ -346,7 +346,7 @@ fn append_mundo_tab(
     ));
     children.push(stat_row(
         "season×",
-        &format!("{:.2}", model.params.season_factor(model.world.tick_count)),
+        &format!("{:.2}", model.sim.params.season_factor(model.sim.world.tick_count)),
         theme,
     ));
 
@@ -370,12 +370,12 @@ fn append_mundo_tab(
 
     children.push(separator(theme));
     children.push(label_view("[ MOTOR ]", 11.0, theme.fg_muted));
-    children.push(param_slider("climb", model.params.climb_cost, ParamSlot::ClimbCost, slider_palette));
-    children.push(param_slider("move", model.params.move_cost, ParamSlot::MoveCost, slider_palette));
-    children.push(param_slider("diffuse", model.params.diffusion_rate, ParamSlot::DiffusionRate, slider_palette));
-    children.push(param_slider("entropy", model.params.entropy_rate, ParamSlot::EntropyRate, slider_palette));
-    children.push(param_slider("season T", model.params.season_period as f32, ParamSlot::SeasonPeriod, slider_palette));
-    children.push(param_slider("season A", model.params.season_amplitude, ParamSlot::SeasonAmplitude, slider_palette));
+    children.push(param_slider("climb", model.sim.params.climb_cost, ParamSlot::ClimbCost, slider_palette));
+    children.push(param_slider("move", model.sim.params.move_cost, ParamSlot::MoveCost, slider_palette));
+    children.push(param_slider("diffuse", model.sim.params.diffusion_rate, ParamSlot::DiffusionRate, slider_palette));
+    children.push(param_slider("entropy", model.sim.params.entropy_rate, ParamSlot::EntropyRate, slider_palette));
+    children.push(param_slider("season T", model.sim.params.season_period as f32, ParamSlot::SeasonPeriod, slider_palette));
+    children.push(param_slider("season A", model.sim.params.season_amplitude, ParamSlot::SeasonAmplitude, slider_palette));
 
     children.push(separator(theme));
     children.push(label_view("[ SCENARIO ]", 11.0, theme.fg_muted));
@@ -412,14 +412,14 @@ fn append_conceptos_tab(
     children.push(label_view(
         &rimay_localize::t_args(
             "dominium-active-count",
-            &[("count", model.world.conceptos.len().to_string().into())],
+            &[("count", model.sim.world.conceptos.len().to_string().into())],
         ),
         12.0,
         theme.fg_text,
     ));
 
     // Hint contextual: si no hay conceptos, le decimos cómo crear uno.
-    if model.world.conceptos.items.is_empty() {
+    if model.sim.world.conceptos.items.is_empty() {
         children.push(label_view(
             "Click sobre el mapa para crear",
             11.0,
@@ -427,7 +427,7 @@ fn append_conceptos_tab(
         ));
     }
 
-    for (i, c) in model.world.conceptos.items.iter().enumerate() {
+    for (i, c) in model.sim.world.conceptos.items.iter().enumerate() {
         children.push(concepto_row(i, &c.id, model.selected == Some(i), theme));
     }
     children.push(sized_button(
@@ -458,7 +458,7 @@ fn append_conceptos_tab(
 
     // Editor del seleccionado.
     let Some(i) = model.selected else { return };
-    let Some(c) = model.world.conceptos.items.get(i) else { return };
+    let Some(c) = model.sim.world.conceptos.items.get(i) else { return };
     children.push(separator(theme));
     children.push(label_view(
         &rimay_localize::t("dominium-header-editar"),
@@ -631,39 +631,39 @@ fn append_psique_tab(
     children.push(label_view("[ CONTAGIO SOCIAL ]", 11.0, theme.fg_muted));
     children.push(param_slider(
         "psi mod",
-        model.params.psi_effect_modulation,
+        model.sim.params.psi_effect_modulation,
         ParamSlot::PsiModulation,
         slider_palette,
     ));
     children.push(param_slider(
         "radio soc",
-        model.params.social_radius,
+        model.sim.params.social_radius,
         ParamSlot::SocialRadius,
         slider_palette,
     ));
     children.push(param_slider(
         "contagio",
-        model.params.contagion_rate,
+        model.sim.params.contagion_rate,
         ParamSlot::ContagionRate,
         slider_palette,
     ));
     children.push(param_slider(
         "homofilia",
-        model.params.homophily_threshold,
+        model.sim.params.homophily_threshold,
         ParamSlot::HomophilyThreshold,
         slider_palette,
     ));
-    let big5_label = if model.params.big_five {
+    let big5_label = if model.sim.params.big_five {
         "✓  Big Five: ON (5D)"
     } else {
         "○  Big Five: OFF (4D)"
     };
     children.push(sized_button(big5_label, btn_palette, Msg::ToggleBigFive));
-    let policy_label = match model.params.action_policy {
+    let policy_label = match model.sim.params.action_policy {
         dominium_core::ActionPolicy::Fixed => "○  Política: Fixed".to_string(),
         dominium_core::ActionPolicy::PsiArgmax => format!(
             "✓  Política: PsiArgmax (T={})",
-            model.params.policy_reeval_period
+            model.sim.params.policy_reeval_period
         ),
     };
     children.push(sized_button(&policy_label, btn_palette, Msg::CyclePsiPolicy));
@@ -686,7 +686,7 @@ fn append_psique_tab(
             theme,
         ));
     }
-    if model.params.big_five {
+    if model.sim.params.big_five {
         children.push(stat_row(
             "polar EXTRA",
             &format!("{:.4}", psi_metrics.polarization_ext),
@@ -705,6 +705,7 @@ fn append_psique_tab(
         children.push(label_view("[ TRIBUS k-means ]", 11.0, theme.fg_muted));
         for (k, c) in CLUSTER_COLORS.iter().enumerate() {
             let n_in = model
+                .sim
                 .cluster_assignments
                 .iter()
                 .filter(|&&a| a as usize == k)
@@ -793,10 +794,10 @@ fn append_vista_tab(
 
     children.push(separator(theme));
     children.push(label_view("[ REWIND ]", 11.0, theme.fg_muted));
-    let max_rewind = model.snapshots.len().saturating_sub(1).max(1);
+    let max_rewind = model.sim.snapshots.len().saturating_sub(1).max(1);
     children.push(slider_view(
         "rewind",
-        model.rewind_offset as f32,
+        model.sim.rewind_offset as f32,
         0.0,
         max_rewind as f32,
         slider_palette,
@@ -805,9 +806,9 @@ fn append_vista_tab(
             DragPhase::End => None,
         },
     ));
-    if model.rewind_offset > 0 {
+    if model.sim.rewind_offset > 0 {
         children.push(sized_button(
-            &format!("▶  Vivo (estabas {} atrás)", model.rewind_offset),
+            &format!("▶  Vivo (estabas {} atrás)", model.sim.rewind_offset),
             btn_palette,
             Msg::RewindHome,
         ));

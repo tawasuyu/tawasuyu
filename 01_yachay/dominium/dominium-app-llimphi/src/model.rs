@@ -1,10 +1,8 @@
 //! Modelo de la app y mensajes del bucle Elm. La conducta vive en
 //! `update`/`view` (en `main.rs`); acá sólo los datos y los enums de edición.
 
-use std::collections::VecDeque;
-
-use dominium_core::{SimParams, World};
 use dominium_iso::{IsoProjector, ZWeights};
+use dominium_sim::Sim;
 use dominium_render_plan::PlanConfig;
 use llimphi_theme::Theme;
 use llimphi_clipboard::SystemClipboard;
@@ -13,15 +11,14 @@ use llimphi_widget_edit_menu::EditAction;
 use llimphi_widget_text_input::TextInputState;
 
 pub(crate) struct Model {
-    pub(crate) world: World,
-    pub(crate) params: SimParams,
+    /// Sesión de simulación (estado de dominio + reloj + historia): `world`,
+    /// `params`, `tick/epoch/rng_seed`, ring de snapshots (rewind), trails y
+    /// clusters. El ciclo de vida (`advance`/`reseed`/…) vive en `Sim`
+    /// (`dominium-sim`); el `Model` sólo guarda estado de vista.
+    pub(crate) sim: Sim,
     pub(crate) iso: IsoProjector,
     pub(crate) weights: ZWeights,
     pub(crate) cfg: PlanConfig,
-    pub(crate) running: bool,
-    pub(crate) tick: u64,
-    pub(crate) epoch: u64,
-    pub(crate) rng_seed: u64,
     /// Índice del Concepto seleccionado, si alguno. `None` cuando no hay
     /// selección. Si se "Limpia" la lista se resetea a `None`.
     pub(crate) selected: Option<usize>,
@@ -36,23 +33,6 @@ pub(crate) struct Model {
     /// Índice del scenario actual en `scenario_packs()`. El picker del panel
     /// lo cicla; "Sembrar pack" instala el JSON correspondiente.
     pub(crate) scenario_idx: usize,
-    /// Ring de snapshots del `World` — el último elemento es el más reciente
-    /// ya cosechado. `rewind_offset == 0` significa "presente" y se renderiza
-    /// `world`; `> 0` significa "mirar hacia atrás" y se renderiza
-    /// `snapshots[len - 1 - offset]` en modo read-only.
-    pub(crate) snapshots: VecDeque<World>,
-    /// Cuántos pasos hacia atrás está mirando el usuario. `0` = vivo.
-    /// Cuando `> 0`, el `Tick` deja de avanzar el mundo (la sim se
-    /// auto-pausa visualmente, pero el reloj real podría seguir si se
-    /// pidiera). Implementación: pausamos también el motor mientras hay
-    /// rewind, así no acumula divergencia.
-    pub(crate) rewind_offset: usize,
-    /// Trails: para cada lemming vivo, las últimas `TRAIL_CAP` posiciones
-    /// `(x, y)`. Como los lemmings se referencian por índice y `swap_remove`
-    /// puede mover índices, el trail se reconstruye cada tick desde
-    /// `lemmings.pos_x/pos_y` — sólo guardamos las posiciones, no su id.
-    /// Estructura: `trails[k]` es el snapshot del frame `tick - k`.
-    pub(crate) trails: VecDeque<Vec<(f32, f32)>>,
     /// Toggle para mostrar las trayectorias.
     pub(crate) show_trails: bool,
     /// Theme efectivo. Se construye en init desde `wawa-config` (con
@@ -63,15 +43,6 @@ pub(crate) struct Model {
     /// la creación puede fallar en plataformas sin ProjectDirs.
     /// Se mantiene viva mientras vive el `Model`.
     pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,
-    /// Asignación k-means → cluster por lemming. Vacío hasta que se entre
-    /// al modo PsiCluster o se ejecute el primer refresh. `assignments[i]`
-    /// ∈ `0..KMEANS_K` indica el cluster del lemming `i`. Si la población
-    /// cambia entre refrescos (spawn/kill), los índices nuevos caen en `0`
-    /// hasta el próximo refresh.
-    pub(crate) cluster_assignments: Vec<u8>,
-    /// Tick global en el que se calculó por última vez `cluster_assignments`.
-    /// Usado para gated refresh cada `KMEANS_REFRESH_TICKS`.
-    pub(crate) cluster_last_refresh: u64,
     /// Cuál tab del panel lateral está activo. La UI muestra los grupos
     /// relevantes según esta selección — el modelo es simple, sin lazy load.
     pub(crate) panel_tab: PanelTab,

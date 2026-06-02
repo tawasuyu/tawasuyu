@@ -26,12 +26,12 @@ mod sim;
 mod view;
 mod worldgen;
 
-use std::collections::VecDeque;
 use std::time::Duration;
 
 use dominium_core::{BehaviorHack, Conceptos, PsiMetrics, SimParams, Trigger, WorldStats};
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_render_plan::{build_plan_with_overrides, PlanConfig, RenderLayer, RenderMode};
+use dominium_sim::Sim;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     length, percent, Dimension, FlexDirection, Size, Style,
@@ -47,12 +47,11 @@ use llimphi_widget_menubar::{
 use llimphi_widget_text_input::TextInputState;
 use wawa_config_llimphi::theme_from_wawa;
 
-use crate::consts::{GRID, SNAPSHOT_RING_CAP, TICK_MS, TRAIL_CAP};
+use crate::consts::{GRID, KMEANS_REFRESH_TICKS, SNAPSHOT_RING_CAP, TICK_MS, TRAIL_CAP};
 use crate::model::{Layer, Model, Msg, PanelTab, ParamSlot, ZSlot};
 use crate::packs::{default_conceptos, load_user_pack, save_user_pack, scenario_packs};
 use crate::sim::{
-    advance, displayed_world, lemming_color_for, mirror_zweights_to_relieve, overlay_trails,
-    refresh_clusters, reseed, selected_mut, spawn_concepto_at,
+    lemming_color_for, mirror_zweights_to_relieve, overlay_trails, selected_mut, spawn_concepto_at,
 };
 use crate::view::{canvas_pane, onboarding_bar, side_panel, status_bar};
 use crate::worldgen::{bioma_palette, seed};
@@ -117,9 +116,20 @@ impl App for Dominium {
             abundance_threshold: 50.0,
             ..SimParams::default()
         };
-        Model {
-            world: seed(rng_seed),
+        // Sesión de simulación: dominio + reloj + historia. El seeder
+        // recarga el pack del usuario en cada reseed/colapso (igual que antes).
+        let sim = Sim::new(
+            seed(rng_seed),
             params,
+            rng_seed,
+            SNAPSHOT_RING_CAP,
+            TRAIL_CAP,
+            KMEANS_REFRESH_TICKS,
+            true,
+            Box::new(|s| seed(s)),
+        );
+        Model {
+            sim,
             // Scale 3.0 para que la grilla 240×240 entre en pantalla. z_factor
             // 0.55 levanta el relieve a algo perceptible sin que los picos
             // exploten: mares ~−25 px, llanura plana, colinas ~+10 px,
@@ -155,23 +165,14 @@ impl App for Dominium {
                 // si quiere "estampa".
                 texture: false,
             },
-            running: true,
-            tick: 0,
-            epoch: 0,
-            rng_seed,
             selected: None,
             sync_relieve: false,
             id_input: TextInputState::new(),
             id_input_focused: false,
             scenario_idx: 0,
-            snapshots: VecDeque::with_capacity(SNAPSHOT_RING_CAP),
-            rewind_offset: 0,
-            trails: VecDeque::with_capacity(TRAIL_CAP),
             show_trails: false,
             theme,
             _wawa_watcher: wawa_watcher,
-            cluster_assignments: Vec::new(),
-            cluster_last_refresh: 0,
             panel_tab: PanelTab::Mundo,
             onboarding_done: false,
             menu_open: None,
@@ -190,38 +191,39 @@ impl App for Dominium {
             Msg::Tick => {
                 // Si el usuario está revisando el pasado, la sim queda
                 // congelada para no acumular divergencia con el ring.
-                if m.running && m.rewind_offset == 0 {
-                    advance(&mut m);
+                if m.sim.running && m.sim.rewind_offset == 0 {
+                    m.sim
+                        .advance(matches!(m.cfg.render_mode, RenderMode::PsiCluster));
                 }
             }
             Msg::TogglePlay => {
-                m.running = !m.running;
+                m.sim.running = !m.sim.running;
             }
             Msg::Reseed => {
-                reseed(&mut m);
+                m.sim.reseed();
             }
             Msg::LimpiarConceptos => {
-                m.world.conceptos.clear();
+                m.sim.world.conceptos.clear();
                 // Romper los hack_locks vivos: sin Concepto que los sostenga,
                 // los lemmings vuelven a la lógica normal.
-                for lock in m.world.lemmings.hack_lock.iter_mut() {
+                for lock in m.sim.world.lemmings.hack_lock.iter_mut() {
                     *lock = 0;
                 }
                 m.selected = None;
             }
             Msg::SembrarConceptos => {
-                m.world.conceptos = default_conceptos();
+                m.sim.world.conceptos = default_conceptos();
                 m.selected = None;
             }
             Msg::SelectConcepto(i) => {
-                if i < m.world.conceptos.len() {
+                if i < m.sim.world.conceptos.len() {
                     m.selected = Some(i);
                 }
             }
             Msg::DeselectConcepto => m.selected = None,
             Msg::EditMod(layer, dv) => {
                 if let Some(i) = m.selected {
-                    if let Some(c) = m.world.conceptos.items.get_mut(i) {
+                    if let Some(c) = m.sim.world.conceptos.items.get_mut(i) {
                         let slot = match layer {
                             Layer::Materia => &mut c.mods.materia,
                             Layer::Psique => &mut c.mods.psique,
@@ -234,16 +236,16 @@ impl App for Dominium {
             }
             Msg::EditRadius(dv) => {
                 if let Some(i) = m.selected {
-                    if let Some(c) = m.world.conceptos.items.get_mut(i) {
+                    if let Some(c) = m.sim.world.conceptos.items.get_mut(i) {
                         c.radius = (c.radius + dv).clamp(0.5, 20.0);
                     }
                 }
             }
             Msg::DeleteSelected => {
                 if let Some(i) = m.selected.take() {
-                    if i < m.world.conceptos.len() {
-                        m.world.conceptos.remove(i);
-                        for lock in m.world.lemmings.hack_lock.iter_mut() {
+                    if i < m.sim.world.conceptos.len() {
+                        m.sim.world.conceptos.remove(i);
+                        for lock in m.sim.world.lemmings.hack_lock.iter_mut() {
                             *lock = 0;
                         }
                     }
@@ -253,41 +255,41 @@ impl App for Dominium {
                 let (lo, hi) = slot.range();
                 match slot {
                     ParamSlot::ClimbCost => {
-                        m.params.climb_cost = (m.params.climb_cost + dv).clamp(lo, hi)
+                        m.sim.params.climb_cost = (m.sim.params.climb_cost + dv).clamp(lo, hi)
                     }
                     ParamSlot::DiffusionRate => {
-                        m.params.diffusion_rate =
-                            (m.params.diffusion_rate + dv).clamp(lo, hi)
+                        m.sim.params.diffusion_rate =
+                            (m.sim.params.diffusion_rate + dv).clamp(lo, hi)
                     }
                     ParamSlot::EntropyRate => {
-                        m.params.entropy_rate = (m.params.entropy_rate + dv).clamp(lo, hi)
+                        m.sim.params.entropy_rate = (m.sim.params.entropy_rate + dv).clamp(lo, hi)
                     }
                     ParamSlot::MoveCost => {
-                        m.params.move_cost = (m.params.move_cost + dv).clamp(lo, hi)
+                        m.sim.params.move_cost = (m.sim.params.move_cost + dv).clamp(lo, hi)
                     }
                     ParamSlot::SeasonPeriod => {
-                        let v = (m.params.season_period as f32 + dv).clamp(lo, hi);
-                        m.params.season_period = v as u32;
+                        let v = (m.sim.params.season_period as f32 + dv).clamp(lo, hi);
+                        m.sim.params.season_period = v as u32;
                     }
                     ParamSlot::SeasonAmplitude => {
-                        m.params.season_amplitude =
-                            (m.params.season_amplitude + dv).clamp(lo, hi)
+                        m.sim.params.season_amplitude =
+                            (m.sim.params.season_amplitude + dv).clamp(lo, hi)
                     }
                     ParamSlot::PsiModulation => {
-                        m.params.psi_effect_modulation =
-                            (m.params.psi_effect_modulation + dv).clamp(lo, hi)
+                        m.sim.params.psi_effect_modulation =
+                            (m.sim.params.psi_effect_modulation + dv).clamp(lo, hi)
                     }
                     ParamSlot::SocialRadius => {
-                        m.params.social_radius =
-                            (m.params.social_radius + dv).clamp(lo, hi)
+                        m.sim.params.social_radius =
+                            (m.sim.params.social_radius + dv).clamp(lo, hi)
                     }
                     ParamSlot::ContagionRate => {
-                        m.params.contagion_rate =
-                            (m.params.contagion_rate + dv).clamp(lo, hi)
+                        m.sim.params.contagion_rate =
+                            (m.sim.params.contagion_rate + dv).clamp(lo, hi)
                     }
                     ParamSlot::HomophilyThreshold => {
-                        m.params.homophily_threshold =
-                            (m.params.homophily_threshold + dv).clamp(lo, hi)
+                        m.sim.params.homophily_threshold =
+                            (m.sim.params.homophily_threshold + dv).clamp(lo, hi)
                     }
                 }
             }
@@ -301,14 +303,14 @@ impl App for Dominium {
                 };
                 *s = (*s + dv).clamp(-2.0, 2.0);
                 if m.sync_relieve {
-                    mirror_zweights_to_relieve(&m.weights, &mut m.params.relieve);
+                    mirror_zweights_to_relieve(&m.weights, &mut m.sim.params.relieve);
                 }
             }
-            Msg::GuardarPack => save_user_pack(&m.world.conceptos),
+            Msg::GuardarPack => save_user_pack(&m.sim.world.conceptos),
             Msg::CargarPack => {
                 if let Some(cs) = load_user_pack() {
-                    m.world.conceptos = cs;
-                    for lock in m.world.lemmings.hack_lock.iter_mut() {
+                    m.sim.world.conceptos = cs;
+                    for lock in m.sim.world.lemmings.hack_lock.iter_mut() {
                         *lock = 0;
                     }
                     m.selected = None;
@@ -327,7 +329,7 @@ impl App for Dominium {
                 // pickeable acotado). Si pega, selecciona sin crear; si
                 // no, crea un Concepto nuevo ahí.
                 let mut hit: Option<usize> = None;
-                for (i, c) in m.world.conceptos.items.iter().enumerate() {
+                for (i, c) in m.sim.world.conceptos.items.iter().enumerate() {
                     let dx = wx - c.pos_x;
                     let dy = wy - c.pos_y;
                     let pick_r = c.radius.min(3.0);
@@ -344,7 +346,7 @@ impl App for Dominium {
             Msg::ToggleSyncRelieve => {
                 m.sync_relieve = !m.sync_relieve;
                 if m.sync_relieve {
-                    mirror_zweights_to_relieve(&m.weights, &mut m.params.relieve);
+                    mirror_zweights_to_relieve(&m.weights, &mut m.sim.params.relieve);
                 }
             }
             Msg::ToggleAndina => {
@@ -419,7 +421,7 @@ impl App for Dominium {
                 }
             }
             Msg::FocusIdInput => {
-                if let Some(c) = m.selected.and_then(|i| m.world.conceptos.items.get(i)) {
+                if let Some(c) = m.selected.and_then(|i| m.sim.world.conceptos.items.get(i)) {
                     m.id_input.set_text(c.id.clone());
                     m.id_input_focused = true;
                 }
@@ -443,8 +445,8 @@ impl App for Dominium {
                 let packs = scenario_packs();
                 let (_, json) = packs[m.scenario_idx];
                 if let Ok(cs) = serde_json::from_str::<Conceptos>(json) {
-                    m.world.conceptos = cs;
-                    for lock in m.world.lemmings.hack_lock.iter_mut() {
+                    m.sim.world.conceptos = cs;
+                    for lock in m.sim.world.lemmings.hack_lock.iter_mut() {
                         *lock = 0;
                     }
                     m.selected = None;
@@ -459,7 +461,7 @@ impl App for Dominium {
                 };
                 // Forzar refresh inmediato del k-means al entrar al modo.
                 if matches!(m.cfg.render_mode, RenderMode::PsiCluster) {
-                    refresh_clusters(&mut m);
+                    m.sim.refresh_clusters();
                 }
             }
             Msg::ToggleTrails => {
@@ -469,28 +471,28 @@ impl App for Dominium {
                 m.cfg.texture = !m.cfg.texture;
             }
             Msg::RewindBy(dv) => {
-                let cap = m.snapshots.len().saturating_sub(1);
-                let cur = m.rewind_offset as f32;
+                let cap = m.sim.snapshots.len().saturating_sub(1);
+                let cur = m.sim.rewind_offset as f32;
                 let next = (cur + dv).clamp(0.0, cap as f32);
-                m.rewind_offset = next as usize;
+                m.sim.rewind_offset = next as usize;
             }
             Msg::RewindHome => {
-                m.rewind_offset = 0;
+                m.sim.rewind_offset = 0;
             }
             Msg::ToggleBigFive => {
-                m.params.big_five = !m.params.big_five;
-                if m.params.big_five {
+                m.sim.params.big_five = !m.sim.params.big_five;
+                if m.sim.params.big_five {
                     // Saves Big Four que entraron sin columna psi5 hay que
                     // rellenarlos antes de que el motor consulte
                     // `lemmings.psi5[i]`.
-                    m.world.lemmings.ensure_psi5_len();
+                    m.sim.world.lemmings.ensure_psi5_len();
                 }
             }
             Msg::CyclePsiPolicy => {
-                m.params.action_policy = match m.params.action_policy {
+                m.sim.params.action_policy = match m.sim.params.action_policy {
                     dominium_core::ActionPolicy::Fixed => {
-                        if m.params.policy_reeval_period == 0 {
-                            m.params.policy_reeval_period = 20;
+                        if m.sim.params.policy_reeval_period == 0 {
+                            m.sim.params.policy_reeval_period = 20;
                         }
                         dominium_core::ActionPolicy::PsiArgmax
                     }
@@ -630,7 +632,7 @@ impl App for Dominium {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = model.theme;
-        let shown = displayed_world(model);
+        let shown = model.sim.displayed_world();
         let stats = WorldStats::from_world(shown);
 
         let status = status_bar(model, &theme);
@@ -645,7 +647,7 @@ impl App for Dominium {
             &model.cfg,
             |i| lemming_color_for(model, i),
         );
-        if model.show_trails && model.rewind_offset == 0 {
+        if model.show_trails && model.sim.rewind_offset == 0 {
             overlay_trails(&mut plan, model);
         }
         let plan_cx = (plan.min_x + plan.max_x) * 0.5;
@@ -819,9 +821,9 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
         renombrar = renombrar.disabled();
     }
 
-    let play_label = if model.running { "Pausar" } else { "Reproducir" };
+    let play_label = if model.sim.running { "Pausar" } else { "Reproducir" };
     let mut rewind = MenuItem::new("Volver al presente", "sim.rewindhome");
-    if model.rewind_offset == 0 {
+    if model.sim.rewind_offset == 0 {
         rewind = rewind.disabled();
     }
 

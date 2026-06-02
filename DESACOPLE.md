@@ -42,7 +42,7 @@ Llimphi porque vivían en el frontend, no en un core. Auditoría de la suite
   consume. La variante persistida sigue siendo `Store::recalcular_reputaciones` (SQL).
 - `/proc` parseado a mano en `sandokan-monitor-llimphi` (tab Sistema), `wawa-panel-llimphi`,
   `launcher-llimphi/host.rs` → un `host-sysmon-core` compartido.
-- 🟡 **PARCIAL** `dominium-app-llimphi` — generador procedural (`Lcg`+`fbm_noise`+`carve_river`+`seed`, ~360 LOC) movido a **`dominium_core::worldgen::seed(seed, grid, lemmings, conceptos)`** (3 tests); el `worldgen.rs` del frontend queda en 44 LOC (paleta de biomas + wrapper). Pendiente: `packs.rs` es datos+IO XDG (mover assets JSON al core) y `sim.rs` es casi todo orquestación `&mut Model` (glue de app, como tullpu — no se mueve sin partir el Model).
+- ✅ **HECHO** `dominium-app-llimphi` — (1) generador procedural → **`dominium_core::worldgen`** (3 tests; el `worldgen.rs` del frontend queda en paleta+wrapper). (2) **Model split**: el ciclo de vida de la simulación (`World`+`params`+reloj+ring de snapshots+trails+clusters y `advance`/`reseed`/`push_snapshot`/`refresh_clusters`/`displayed_world`) salió a **`dominium_sim::Sim`** (crate nuevo sobre core+physics, 4 tests). El `Model` pasó de 22 campos a `{ sim, + estado de vista }`; el reseed-recarga-packs se preserva con un `Seeder` boxeado. Sólo queda `packs.rs` (datos+IO XDG, assets JSON en la app — aceptable).
 
 ## Violaciones BAJA
 
