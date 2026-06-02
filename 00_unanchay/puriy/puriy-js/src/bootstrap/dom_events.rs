@@ -972,6 +972,40 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         }
         return null;
     };
+    // Fase 7.196 — `<canvas>` DOM: getContext('2d') + width/height. El
+    // contexto 2D es el mismo molde que `OffscreenCanvas` (bootstrap
+    // canvas2d.rs); lo registramos en `__puriy_dom_canvas_ctxs` con el id
+    // del elemento para que el chrome (`__puriy_collect_canvas`) drene sus
+    // comandos y los pinte con vello dentro del rect del box.
+    if (tag === 'canvas') {
+        // width/height reflejan los atributos HTML (enteros), default 300×150.
+        var _cw = parseInt(el._attributes_store['width'], 10);
+        var _ch = parseInt(el._attributes_store['height'], 10);
+        el.width = (_cw > 0) ? _cw : 300;
+        el.height = (_ch > 0) ? _ch : 150;
+        el._ctx = null;
+        el.getContext = function(type, attrs) {
+            if (type === '2d') {
+                if (this._ctx && globalThis.CanvasRenderingContext2D &&
+                    this._ctx instanceof globalThis.CanvasRenderingContext2D) return this._ctx;
+                if (!globalThis.CanvasRenderingContext2D) return null;
+                this._ctx = new globalThis.CanvasRenderingContext2D(this);
+                var reg = (globalThis.__puriy_dom_canvas_ctxs = globalThis.__puriy_dom_canvas_ctxs || []);
+                reg.push({ domId: this._id, ctx: this._ctx });
+                return this._ctx;
+            }
+            if ((type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') &&
+                typeof globalThis.__puriy_webgl_context === 'function') {
+                this._ctx = globalThis.__puriy_webgl_context(this, type, attrs);
+                return this._ctx;
+            }
+            return null;
+        };
+        el.toDataURL = function() { return 'data:image/png;base64,'; };
+        el.toBlob = function(cb) {
+            if (typeof cb === 'function' && globalThis.Blob) cb(new globalThis.Blob([], { type: 'image/png' }));
+        };
+    }
     return el;
 };
 // Fase 7.17 — matcher en JS-puro. Acepta selector compound (un solo

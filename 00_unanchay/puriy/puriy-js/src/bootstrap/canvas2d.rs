@@ -145,6 +145,19 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
 
     C._rec = function() { this._cmds.push(Array.prototype.slice.call(arguments)); };
 
+    // Fase 7.196 — snapshot del estilo activo, apendido a los comandos que
+    // pintan (fill/stroke/text/rect) para que el chrome sepa con qué color/
+    // ancho/alpha pintar sin re-derivar el estado (los setters de fillStyle
+    // etc. NO registran comandos). fillStyle/strokeStyle pueden ser un string
+    // (color CSS) o un objeto CanvasGradient (con _kind/_coords/_stops).
+    C._snapshot = function() {
+        var st = this._state;
+        return {
+            f: st.fillStyle, s: st.strokeStyle, lw: st.lineWidth, ga: st.globalAlpha,
+            fnt: st.font, lc: st.lineCap, lj: st.lineJoin, ta: st.textAlign, tb: st.textBaseline
+        };
+    };
+
     C.save = function() {
         var s = {}; for (var k in this._state) s[k] = this._state[k];
         s.transform = this._state.transform.slice();
@@ -179,7 +192,10 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     C.setTransform = function(a, b, c, d, e, f) {
         if (a != null && typeof a === 'object') { var m = a; this._state.transform = [m.a, m.b, m.c, m.d, m.e, m.f]; }
         else { this._state.transform = [a || 0, b || 0, c || 0, d || 0, e || 0, f || 0]; }
-        this._rec('setTransform');
+        // Fase 7.196 — registramos la matriz RESUELTA (no los args crudos, que
+        // pueden venir como DOMMatrix) para que el chrome la reaplique tal cual.
+        var t = this._state.transform;
+        this._rec('setTransform', t[0], t[1], t[2], t[3], t[4], t[5]);
     };
     C.resetTransform = function() { this._state.transform = [1, 0, 0, 1, 0, 0]; this._rec('resetTransform'); };
     C.getTransform = function() {
@@ -200,20 +216,46 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     C.rect = function(x, y, w, h) { this._path.rect(x, y, w, h); this._rec('rect', x, y, w, h); };
 
     function pathArg(self, a) { return (a instanceof Path2D) ? a : self._path; }
-    C.fill = function(a) { this._rec('fill'); };
-    C.stroke = function(a) { this._rec('stroke'); };
+    C.fill = function(a) { this._rec('fill', this._snapshot()); };
+    C.stroke = function(a) { this._rec('stroke', this._snapshot()); };
     C.clip = function(a) { this._rec('clip'); };
     C.isPointInPath = function() { return false; };
     C.isPointInStroke = function() { return false; };
 
     // Rectángulos.
-    C.clearRect = function(x, y, w, h) { this._rec('clearRect', x, y, w, h); };
-    C.fillRect = function(x, y, w, h) { this._rec('fillRect', x, y, w, h, this._state.fillStyle); };
-    C.strokeRect = function(x, y, w, h) { this._rec('strokeRect', x, y, w, h, this._state.strokeStyle); };
+    // Fase 7.196 — el chrome reproduce el log de comandos COMPLETO cada frame
+    // (la spec dice que el bitmap es persistente). Un clear/fill de canvas
+    // entero con transform identidad oculta todo lo anterior, así que ahí
+    // TRUNCAMOS el log: acota memoria en animaciones (rAF que limpian cada
+    // frame) y hace que el replay muestre sólo el frame actual.
+    C._covers_canvas = function(x, y, w, h) {
+        var t = this._state.transform;
+        var identity = t[0] === 1 && t[1] === 0 && t[2] === 0 && t[3] === 1 && t[4] === 0 && t[5] === 0;
+        if (!identity) return false;
+        var cw = (this.canvas && this.canvas.width) || 300;
+        var ch = (this.canvas && this.canvas.height) || 150;
+        return x <= 0 && y <= 0 && (x + w) >= cw && (y + h) >= ch;
+    };
+    C.clearRect = function(x, y, w, h) {
+        if (this._covers_canvas(x, y, w, h)) { this._cmds = []; }
+        else { this._rec('clearRect', x, y, w, h); }
+    };
+    C.fillRect = function(x, y, w, h) {
+        // Fondo opaco de canvas entero → también trunca (patrón común de
+        // limpiar pintando un rect de fondo en vez de clearRect).
+        if (this._covers_canvas(x, y, w, h) && this._state.globalAlpha >= 1 &&
+            typeof this._state.fillStyle === 'string' &&
+            this._state.fillStyle.indexOf('rgba') < 0 && this._state.fillStyle.indexOf('hsla') < 0 &&
+            this._state.fillStyle !== 'transparent') {
+            this._cmds = [];
+        }
+        this._rec('fillRect', x, y, w, h, this._state.fillStyle, this._snapshot());
+    };
+    C.strokeRect = function(x, y, w, h) { this._rec('strokeRect', x, y, w, h, this._state.strokeStyle, this._snapshot()); };
 
     // Texto.
-    C.fillText = function(text, x, y, maxWidth) { this._rec('fillText', String(text), x, y, maxWidth); };
-    C.strokeText = function(text, x, y, maxWidth) { this._rec('strokeText', String(text), x, y, maxWidth); };
+    C.fillText = function(text, x, y, maxWidth) { this._rec('fillText', String(text), x, y, maxWidth, this._snapshot()); };
+    C.strokeText = function(text, x, y, maxWidth) { this._rec('strokeText', String(text), x, y, maxWidth, this._snapshot()); };
     C.measureText = function(text) { return new TextMetrics(text, parseFontPx(this._state.font)); };
 
     // Imágenes.
@@ -278,6 +320,33 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         return new ImageBitmap(this.width, this.height);
     };
     globalThis.OffscreenCanvas = OffscreenCanvas;
+
+    // ---- Recolector para el chrome (Fase 7.196) ----
+    // Devuelve un frame por cada `<canvas>` DOM que pidió un contexto 2D:
+    // `{ id, width, height, cmds }`. El chrome lo serializa con
+    // `JSON.stringify` y lo interpreta en Rust para pintar con vello. Los
+    // contextos de `OffscreenCanvas` (sin domId) no se incluyen — no tienen
+    // box en la página. Si un canvas pidió contexto varias veces, queda el
+    // último (getContext cachea, así que en la práctica es el mismo).
+    globalThis.__puriy_dom_canvas_ctxs = globalThis.__puriy_dom_canvas_ctxs || [];
+    globalThis.__puriy_collect_canvas = function() {
+        var reg = globalThis.__puriy_dom_canvas_ctxs || [];
+        var byId = {};
+        for (var i = 0; i < reg.length; i++) {
+            var e = reg[i];
+            if (!e || !e.ctx || e.domId == null) continue;
+            var cv = e.ctx.canvas || {};
+            byId[e.domId] = {
+                id: String(e.domId),
+                width: cv.width || 300,
+                height: cv.height || 150,
+                cmds: e.ctx._cmds || []
+            };
+        }
+        var out = [];
+        for (var k in byId) { if (Object.prototype.hasOwnProperty.call(byId, k)) out.push(byId[k]); }
+        return out;
+    };
 
     void 0;
 })();

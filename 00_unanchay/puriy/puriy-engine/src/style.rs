@@ -1875,14 +1875,21 @@ fn default_display(tag: &str) -> Display {
         // las pinta. Sus descendientes (los `<rect>`/`<path>`/etc.) NO
         // entran al box tree.
         "svg" => Display::InlineBlock,
+        // `<canvas>`: inline-block dimensionado por sus atributos
+        // `width`/`height` (default 300×150 por spec). El engine marca el
+        // `BoxNode.canvas` con el tamaño intrínseco y el chrome drena los
+        // comandos 2D del runtime JS para pintarlos con vello (Fase 7.196).
+        // Sus hijos (contenido de fallback) NO entran al box tree porque
+        // soportamos canvas.
+        "canvas" => Display::InlineBlock,
         // `<iframe>` no tiene engine de sub-página todavía, pero
         // mostrarlo como block placeholder (border + label con la URL)
         // es mejor que ocultarlo — el lector ve QUE hay contenido
         // embebido y dónde apunta. El placeholder lo arma boxes.
         "iframe" => Display::Block,
-        // canvas/math/video/audio/object/embed: sin renderer todavía.
+        // math/video/audio/object/embed: sin renderer todavía.
         // Ocultos para no derramar texto basura en la página.
-        "canvas" | "math" | "video" | "audio" | "object" | "embed" => Display::None,
+        "math" | "video" | "audio" | "object" | "embed" => Display::None,
         _ => Display::Inline,
     }
 }
@@ -4072,7 +4079,11 @@ pub(crate) fn parse_color_named_or_hex(s: &str) -> Option<Color> {
     parse_color(s)
 }
 
-pub(crate) fn parse_color(s: &str) -> Option<Color> {
+/// Parsea un color CSS (`#rgb`/`#rrggbb`/`#rrggbbaa`, `rgb()`/`rgba()`,
+/// `hsl()`/`hsla()`, named colors) a [`Color`]. Público para que el chrome
+/// pinte `fillStyle`/`strokeStyle` de canvas (Fase 7.196). `None` si no
+/// parsea.
+pub fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim();
     // hex #RRGGBB / #RGB / #RRGGBBAA / #RGBA
     if let Some(hex) = s.strip_prefix('#') {
@@ -7379,17 +7390,19 @@ line2</pre></body></html>"#;
     }
 
     #[test]
-    fn ua_svg_inline_block_canvas_none() {
-        // SVG ahora se renderiza (primitivas básicas vía vello), así que
-        // queda como inline-block. canvas/math/video/etc. siguen
-        // ocultos hasta que tengan renderer.
-        let html = "<html><body><svg></svg><canvas></canvas></body></html>";
+    fn ua_svg_y_canvas_inline_block_video_none() {
+        // SVG y `<canvas>` se renderizan (primitivas vía vello / comandos 2D
+        // del runtime), así que quedan como inline-block (Fase 7.196 cableó
+        // canvas). math/video/audio/etc. siguen ocultos hasta tener renderer.
+        let html = "<html><body><svg></svg><canvas></canvas><video></video></body></html>";
         let dom = DomTree::parse(html);
         let eng = StyleEngine::from_dom(&dom);
         let svg = dom.find("svg").unwrap();
         let canvas = dom.find("canvas").unwrap();
+        let video = dom.find("video").unwrap();
         assert_eq!(eng.compute(&svg).display, Display::InlineBlock);
-        assert_eq!(eng.compute(&canvas).display, Display::None);
+        assert_eq!(eng.compute(&canvas).display, Display::InlineBlock);
+        assert_eq!(eng.compute(&video).display, Display::None);
     }
 
     #[test]

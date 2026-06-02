@@ -546,7 +546,11 @@ impl JsRuntime {
         // Construir el script en una sola pasada. Cada elemento se
         // delega a `__puriy_make_element` (en EVENTS_BOOTSTRAP) que
         // arma getters/setters de textContent/innerHTML/style.
-        let mut script = String::from("globalThis.__puriy_elements = {};\n");
+        // `__puriy_dom_canvas_ctxs` (Fase 7.196) se resetea junto con el
+        // índice de elementos: los contextos de canvas se re-registran cuando
+        // los scripts de esta carga llaman `canvas.getContext('2d')`.
+        let mut script =
+            String::from("globalThis.__puriy_elements = {};\nglobalThis.__puriy_dom_canvas_ctxs = [];\n");
         for el in elements {
             // class_list serializado como JSON array para que el JS
             // pueda iterar / Array.prototype.includes.
@@ -927,6 +931,25 @@ impl JsRuntime {
                 s.split('\n').map(|q| q.to_string()).collect()
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Fase 7.196 — serializa los `<canvas>` 2D del DOM a JSON para que el
+    /// chrome los pinte con vello. Devuelve un array
+    /// `[{id, width, height, cmds: [[op, ...args], ...]}]` (string JSON) o
+    /// `None` si no hay ningún canvas con contexto 2D pedido (caso común:
+    /// páginas sin canvas → cero costo de parseo aguas arriba). Cada
+    /// comando de pintado lleva, al final, un snapshot del estado
+    /// (`{f, s, lw, ga, fnt, ...}`) — ver `canvas2d.rs::_snapshot`.
+    pub fn canvas_json(&mut self) -> Option<String> {
+        let script = "(function(){ \
+            if (typeof globalThis.__puriy_collect_canvas !== 'function') return ''; \
+            var f = globalThis.__puriy_collect_canvas(); \
+            return (f && f.length) ? JSON.stringify(f) : ''; \
+        })()";
+        match self.eval(script) {
+            Ok(JsValue::String(s)) if !s.is_empty() => Some(s),
+            _ => None,
         }
     }
 
@@ -12720,6 +12743,49 @@ mod tests {
         rt.eval("var bmp = null; createImageBitmap({ width: 64, height: 32 }).then(function(b){ bmp = b; });").expect("e");
         assert_eq!(rt.eval("bmp.width").expect("e"), JsValue::Number(64.0));
         assert_eq!(rt.eval("bmp instanceof ImageBitmap").expect("e"), JsValue::Bool(true));
+    }
+
+    // ---- Fase 7.196 — Canvas 2D del DOM cableado al chrome ----
+    #[test]
+    fn canvas2d_dom_get_context_y_width_height() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "about:test", "").expect("doc");
+        let mut snap_c = snap("c", "canvas", "");
+        snap_c.attributes = vec![("width".into(), "200".into()), ("height".into(), "120".into())];
+        rt.set_elements(&[snap_c]).expect("els");
+        // El canvas DOM expone width/height de sus atributos y un getContext('2d').
+        assert_eq!(rt.eval("document.getElementById('c').width").expect("e"), JsValue::Number(200.0));
+        assert_eq!(rt.eval("document.getElementById('c').height").expect("e"), JsValue::Number(120.0));
+        rt.eval("var ctx = document.getElementById('c').getContext('2d');").expect("e");
+        assert_eq!(rt.eval("ctx instanceof CanvasRenderingContext2D").expect("e"), JsValue::Bool(true));
+        // getContext es idempotente y el contexto apunta al elemento DOM.
+        assert_eq!(rt.eval("document.getElementById('c').getContext('2d') === ctx").expect("e"), JsValue::Bool(true));
+        assert_eq!(rt.eval("ctx.canvas._id").expect("e"), JsValue::String("c".into()));
+    }
+
+    #[test]
+    fn canvas_json_serializa_comandos_del_dom_canvas() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "about:test", "").expect("doc");
+        let mut snap_c = snap("c", "canvas", "");
+        snap_c.attributes = vec![("width".into(), "100".into()), ("height".into(), "50".into())];
+        rt.set_elements(&[snap_c]).expect("els");
+        // Sin canvas dibujado todavía: el frame existe pero con cmds vacíos.
+        // Tras pedir contexto y pintar, canvas_json refleja el comando.
+        rt.eval("var ctx = document.getElementById('c').getContext('2d'); ctx.fillStyle = '#00ff00'; ctx.fillRect(5, 6, 10, 20);").expect("e");
+        let json = rt.canvas_json().expect("debería haber un frame de canvas");
+        assert!(json.contains("\"id\":\"c\""), "json: {json}");
+        assert!(json.contains("\"width\":100"), "json: {json}");
+        assert!(json.contains("fillRect"), "json: {json}");
+        assert!(json.contains("#00ff00"), "json: {json}");
+    }
+
+    #[test]
+    fn canvas_json_none_sin_canvas() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "about:test", "").expect("doc");
+        rt.set_elements(&[snap("d", "div", "hola")]).expect("els");
+        assert!(rt.canvas_json().is_none(), "sin canvas no hay frame");
     }
 
     // ---- Fase 7.151 — WebGL ----

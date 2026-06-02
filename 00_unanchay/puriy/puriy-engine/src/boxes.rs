@@ -241,6 +241,12 @@ pub struct BoxNode {
     /// las renderea adentro del rect del nodo (escalado por `viewBox` si
     /// existe; sino cada primitiva usa sus coords nativas).
     pub svg: Option<SvgScene>,
+    /// Si el nodo es `<canvas>`, su tamaño intrínseco `(width, height)` en
+    /// px CSS, tomado de los atributos `width`/`height` (default 300×150
+    /// por spec). El chrome casa el `element_id` de este box con el contexto
+    /// 2D del runtime JS (`__puriy_collect_canvas`) y drena sus comandos de
+    /// dibujo para pintarlos con vello. Fase 7.196.
+    pub canvas: Option<(f32, f32)>,
     /// Atributo HTML `id="..."` del elemento — usado por fragment
     /// navigation (`<a href="#foo">` busca el nodo con `element_id ==
     /// Some("foo")` y scrollea hasta él). `None` para nodos sin id y
@@ -1850,6 +1856,7 @@ fn empty_root() -> BoxNode {
         form_idx: None,
         select: None,
         svg: None,
+        canvas: None,
         element_id: None,
         class_list: Vec::new(),
         attributes: Vec::new(),
@@ -1980,6 +1987,22 @@ fn build_node(
             // flow). El chrome usa `b.svg` para paint_with.
             let svg = if tag.as_deref() == Some("svg") {
                 Some(collect_svg(node))
+            } else {
+                None
+            };
+            // `<canvas>`: tamaño intrínseco de los atributos `width`/`height`
+            // (px crudos; default 300×150 por spec). El chrome casa el
+            // `element_id` con el contexto 2D del runtime y pinta sus comandos.
+            let canvas = if tag.as_deref() == Some("canvas") {
+                let cw = dom::attr(node, "width")
+                    .and_then(|s| s.trim().parse::<f32>().ok())
+                    .filter(|v| *v > 0.0)
+                    .unwrap_or(300.0);
+                let ch = dom::attr(node, "height")
+                    .and_then(|s| s.trim().parse::<f32>().ok())
+                    .filter(|v| *v > 0.0)
+                    .unwrap_or(150.0);
+                Some((cw, ch))
             } else {
                 None
             };
@@ -2226,6 +2249,7 @@ fn build_node(
                 form_idx: None,
                 select,
                 svg,
+                canvas,
                 element_id: dom::attr(node, "id").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
                 class_list: dom::attr(node, "class")
                     .map(|s| {
@@ -2368,6 +2392,7 @@ fn build_node(
         form_idx: None,
         select: None,
         svg: None,
+        canvas: None,
         element_id: None,
         class_list: Vec::new(),
         attributes: Vec::new(),
@@ -2463,6 +2488,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         form_idx: None,
         select: None,
         svg: None,
+        canvas: None,
         element_id: None,
         class_list: Vec::new(),
         attributes: Vec::new(),
@@ -4569,6 +4595,32 @@ mod tests {
             }
         });
         assert_eq!(img_dims, Some((1, 1)), "el PNG data: debería decodificar a 1×1");
+    }
+
+    #[test]
+    fn canvas_genera_box_con_tamano_intrinseco() {
+        // `<canvas>` ya no es display:none (Fase 7.196): produce un box con
+        // `canvas: Some((w, h))` tomado de los atributos, default 300×150.
+        let html = r##"<html><body>
+            <canvas id="c1" width="200" height="120"></canvas>
+            <canvas id="c2"></canvas>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found: Vec<(String, Option<(f32, f32)>)> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("canvas") {
+                found.push((b.element_id.clone().unwrap_or_default(), b.canvas));
+            }
+        });
+        assert_eq!(
+            found,
+            vec![
+                ("c1".to_string(), Some((200.0, 120.0))),
+                ("c2".to_string(), Some((300.0, 150.0))),
+            ],
+            "canvas con atributos toma su tamaño; sin atributos cae a 300×150"
+        );
     }
 
     #[test]

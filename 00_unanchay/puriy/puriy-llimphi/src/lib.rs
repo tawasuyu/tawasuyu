@@ -248,6 +248,15 @@ pub struct TabState {
     /// worker de streaming. `close()` o una navegación lo prenden y el worker
     /// corta el stream y termina (Fase 7.182).
     es_cancel: std::collections::HashMap<u32, std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Frames de `<canvas>` 2D del runtime JS, keyeados por `element_id`
+    /// del canvas. Se refrescan (`refresh_canvas_frames`) tras correr
+    /// scripts, en cada tick y tras dispatchear eventos — el render del box
+    /// canvas (`render_canvas`) los interpreta y pinta con vello. Fase 7.196.
+    canvas_frames: std::collections::HashMap<String, CanvasFrame>,
+    /// `true` si el box tree de esta pestaña tiene al menos un `<canvas>`.
+    /// Gatea el refresh por tick (evita un `eval` por frame en páginas sin
+    /// canvas, que son la mayoría).
+    has_canvas: bool,
 }
 
 /// Resultado agregado de ejecutar todos los `<script>` de un load.
@@ -286,6 +295,8 @@ impl TabState {
             js_summary: JsSummary::default(),
             hover_tweens: std::collections::HashMap::new(),
             es_cancel: std::collections::HashMap::new(),
+            canvas_frames: std::collections::HashMap::new(),
+            has_canvas: false,
         }
     }
 
@@ -1000,6 +1011,17 @@ impl App for Puriy {
                         // EventSource (sus workers de streaming) para no fugar
                         // threads ni reinyectar al runtime viejo (Fase 7.182).
                         t.cancel_all_eventsources();
+                        // Fase 7.196 — ¿hay algún `<canvas>` en el árbol? Gatea
+                        // el refresh de frames (evita un `eval` por tick en
+                        // páginas sin canvas). Reset de frames stale del load previo.
+                        t.canvas_frames.clear();
+                        let mut has_canvas = false;
+                        box_tree.walk(|b| {
+                            if b.canvas.is_some() {
+                                has_canvas = true;
+                            }
+                        });
+                        t.has_canvas = has_canvas;
                         t.box_tree = Some(box_tree);
                         // Ancla el reloj de animaciones CSS de esta carga.
                         t.anim_start_ms = m.start.elapsed().as_millis() as u64;
@@ -3394,8 +3416,18 @@ fn tick_js_runtimes(m: &mut Model, now_ms: u64) -> Vec<Msg> {
 /// in-place sin requerir el handle.
 fn apply_dom_mutations(t: &mut TabState) -> Vec<Msg> {
     let mut out = Vec::new();
-    let Some(rt) = t.js.as_mut() else { return out };
-    let muts = rt.drain_dom_mutations();
+    // El borrow de `rt` se acota al drain para poder refrescar canvas (que
+    // re-borrowa `t`) sin conflicto.
+    let muts = match t.js.as_mut() {
+        Some(rt) => rt.drain_dom_mutations(),
+        None => return out,
+    };
+    // Fase 7.196 — refrescamos los frames de `<canvas>` SIEMPRE que se corra
+    // JS (no sólo cuando hay mutaciones DOM): dibujar en canvas no produce
+    // mutaciones. Gateado por `has_canvas` para no evaluar en páginas sin canvas.
+    if t.has_canvas {
+        refresh_canvas_frames(t);
+    }
     if muts.is_empty() {
         return out;
     }
@@ -4114,6 +4146,9 @@ struct RenderCtx<'a> {
     now_ms: u64,
     /// Tweens de transición en hover por `node_id` (estado de la pestaña).
     hover_tweens: &'a std::collections::HashMap<u32, HoverTween>,
+    /// Frames de `<canvas>` 2D keyeados por `element_id` — `render_canvas`
+    /// los busca por el id del box canvas. Fase 7.196.
+    canvas_frames: &'a std::collections::HashMap<String, CanvasFrame>,
 }
 
 fn viewport(
@@ -4163,6 +4198,7 @@ fn viewport(
         anim_elapsed_ms,
         now_ms,
         hover_tweens: &t.hover_tweens,
+        canvas_frames: &t.canvas_frames,
     };
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
@@ -4266,6 +4302,14 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // <svg>: bypass del flujo normal — pinta primitivas con vello.
     if let Some(scene) = &b.svg {
         return render_svg(scene, zoom);
+    }
+    // <canvas>: bypass — el frame del runtime JS se interpreta a vello.
+    if let Some((cw, ch)) = b.canvas {
+        let frame = b
+            .element_id
+            .as_deref()
+            .and_then(|id| ctx.canvas_frames.get(id));
+        return render_canvas(frame, cw, ch, zoom);
     }
     let style = box_style(b, zoom);
     let mut view = View::new(style);
@@ -5275,6 +5319,355 @@ fn select_overlay_view(idx: usize, selected: usize, info: puriy_engine::SelectIn
 /// `scene.width × scene.height` (escalado por zoom). Si `view_box` está
 /// definido, las primitivas se mapean a [0..1] vía viewBox y luego se
 /// escalan al rect del nodo (preservando aspect ratio, "meet").
+/// Frame de un `<canvas>` 2D recolectado del runtime JS (Fase 7.196).
+/// Espejo de lo que devuelve `__puriy_collect_canvas()`: el id del elemento,
+/// su tamaño intrínseco y la lista de comandos de dibujo (cada uno un array
+/// `[op, ...args]`, con un snapshot de estilo apendido en los que pintan).
+#[derive(serde::Deserialize, Clone, Debug, Default)]
+struct CanvasFrame {
+    id: String,
+    #[serde(default)]
+    width: f32,
+    #[serde(default)]
+    height: f32,
+    #[serde(default)]
+    cmds: Vec<Vec<serde_json::Value>>,
+}
+
+/// Refresca `t.canvas_frames` evaluando `__puriy_collect_canvas()` en el
+/// runtime y parseando el JSON. Llamado tras correr scripts, en cada tick y
+/// tras dispatchear eventos — cualquier momento en que el JS pudo dibujar.
+/// Barato cuando no hay canvas: `canvas_json` devuelve `None` (un `eval` mini).
+fn refresh_canvas_frames(t: &mut TabState) {
+    let Some(rt) = t.js.as_mut() else { return };
+    match rt.canvas_json() {
+        Some(json) => match serde_json::from_str::<Vec<CanvasFrame>>(&json) {
+            Ok(frames) => {
+                t.canvas_frames.clear();
+                for f in frames {
+                    t.canvas_frames.insert(f.id.clone(), f);
+                }
+            }
+            Err(_) => t.canvas_frames.clear(),
+        },
+        None => t.canvas_frames.clear(),
+    }
+}
+
+/// Extrae un `f64` de un valor JSON (default 0.0 si no es número).
+fn cnum(v: Option<&serde_json::Value>) -> f64 {
+    v.and_then(|x| x.as_f64()).unwrap_or(0.0)
+}
+
+/// Resuelve `fillStyle`/`strokeStyle` (string color CSS o objeto
+/// `CanvasGradient`) a un color sólido peniko, multiplicando el alpha por
+/// `ga` (globalAlpha). Los gradientes se degradan al color de su último
+/// stop (MVP — sin gradiente real todavía). Default negro opaco.
+fn canvas_color(v: Option<&serde_json::Value>, ga: f64) -> Color {
+    let base = match v {
+        Some(serde_json::Value::String(s)) => puriy_engine::parse_color(s),
+        Some(serde_json::Value::Object(o)) => {
+            // CanvasGradient: { _kind, _coords, _stops: [[offset, color], ...] }
+            o.get("_stops")
+                .and_then(|s| s.as_array())
+                .and_then(|arr| arr.last())
+                .and_then(|stop| stop.as_array())
+                .and_then(|pair| pair.get(1))
+                .and_then(|c| c.as_str())
+                .and_then(puriy_engine::parse_color)
+        }
+        _ => None,
+    }
+    .unwrap_or(puriy_engine::Color { r: 0, g: 0, b: 0, a: 255 });
+    let a = ((base.a as f64) * ga).clamp(0.0, 255.0) as u8;
+    Color::from_rgba8(base.r, base.g, base.b, a)
+}
+
+/// Px de fuente parseados de un string CSS `font` tipo `"16px sans-serif"`.
+fn canvas_font_px(font: Option<&str>) -> f32 {
+    let f = font.unwrap_or("10px sans-serif");
+    // Busca "<num>px".
+    if let Some(idx) = f.find("px") {
+        let start = f[..idx]
+            .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        if let Ok(v) = f[start..idx].parse::<f32>() {
+            if v > 0.0 {
+                return v;
+            }
+        }
+    }
+    10.0
+}
+
+/// Renderiza un `<canvas>` 2D: un View del tamaño intrínseco (escalado por
+/// zoom) cuyo `paint_with` interpreta el log de comandos del frame con vello.
+/// Si no hay frame (el script aún no pidió contexto / dibujó), devuelve el
+/// View vacío (rect transparente). Fase 7.196.
+fn render_canvas(frame: Option<&CanvasFrame>, intrinsic_w: f32, intrinsic_h: f32, zoom: f32) -> View<Msg> {
+    // El View se muestra al tamaño del box (atributos width/height del engine,
+    // escalado por zoom). El espacio de COORDENADAS de los comandos es el
+    // tamaño del buffer de dibujo (`frame.width/height`, que un script pudo
+    // cambiar vía `canvas.width = N`); si no hay frame, cae al intrínseco.
+    let w = intrinsic_w * zoom;
+    let h = intrinsic_h * zoom;
+    let cmds: Vec<Vec<serde_json::Value>> = frame.map(|f| f.cmds.clone()).unwrap_or_default();
+    let iw = frame
+        .map(|f| f.width)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(intrinsic_w)
+        .max(1.0) as f64;
+    let ih = frame
+        .map(|f| f.height)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(intrinsic_h)
+        .max(1.0) as f64;
+    View::new(Style {
+        size: Size { width: length(w), height: length(h) },
+        ..Default::default()
+    })
+    .paint_with(move |scene, ts, rect| {
+        paint_canvas_cmds(scene, ts, rect, &cmds, iw, ih);
+    })
+}
+
+/// Interpreta el log de comandos 2D contra `scene` (vello), mapeando el
+/// espacio de usuario del canvas (0..iw, 0..ih) al `rect` de pantalla. MVP:
+/// soporta fill/stroke de paths (move/line/bezier/quad/arc/ellipse/rect/
+/// roundRect/closePath), fillRect/strokeRect, fillText/strokeText, los
+/// transforms (save/restore/translate/scale/rotate/transform/setTransform/
+/// resetTransform/beginPath) y globalAlpha. Limitaciones: clip, drawImage,
+/// putImageData, patrones, sombras, dash y gradientes reales (degradan a un
+/// color sólido) quedan fuera.
+fn paint_canvas_cmds(
+    scene: &mut llimphi_raster::vello::Scene,
+    ts: &mut llimphi_ui::llimphi_text::Typesetter,
+    rect: llimphi_ui::PaintRect,
+    cmds: &[Vec<serde_json::Value>],
+    iw: f64,
+    ih: f64,
+) {
+    use llimphi_raster::kurbo::{BezPath, Shape};
+
+    // base: espacio de usuario del canvas → rect de pantalla.
+    let sx = rect.w as f64 / iw;
+    let sy = rect.h as f64 / ih;
+    let base = Affine::translate((rect.x as f64, rect.y as f64))
+        * Affine::scale_non_uniform(sx, sy);
+
+    let mut cur = Affine::IDENTITY; // transform actual del canvas (espacio usuario)
+    let mut tstack: Vec<Affine> = Vec::new();
+    let mut path = BezPath::new();
+
+    for cmd in cmds {
+        let Some(op) = cmd.first().and_then(|v| v.as_str()) else { continue };
+        let a = |i: usize| cnum(cmd.get(i));
+        match op {
+            "save" => tstack.push(cur),
+            "restore" => {
+                if let Some(t) = tstack.pop() {
+                    cur = t;
+                }
+            }
+            "translate" => cur *= Affine::translate((a(1), a(2))),
+            "scale" => cur *= Affine::scale_non_uniform(a(1), a(2)),
+            "rotate" => cur *= Affine::rotate(a(1)),
+            "transform" => {
+                cur *= Affine::new([a(1), a(2), a(3), a(4), a(5), a(6)]);
+            }
+            "setTransform" => {
+                cur = Affine::new([a(1), a(2), a(3), a(4), a(5), a(6)]);
+            }
+            "resetTransform" | "reset" => {
+                cur = Affine::IDENTITY;
+                if op == "reset" {
+                    path = BezPath::new();
+                    tstack.clear();
+                }
+            }
+            "beginPath" => path = BezPath::new(),
+            "closePath" => path.close_path(),
+            "moveTo" => path.move_to((a(1), a(2))),
+            "lineTo" => path.line_to((a(1), a(2))),
+            "bezierCurveTo" => path.curve_to((a(1), a(2)), (a(3), a(4)), (a(5), a(6))),
+            "quadraticCurveTo" => path.quad_to((a(1), a(2)), (a(3), a(4))),
+            "rect" => {
+                let (x, y, w, h) = (a(1), a(2), a(3), a(4));
+                path.move_to((x, y));
+                path.line_to((x + w, y));
+                path.line_to((x + w, y + h));
+                path.line_to((x, y + h));
+                path.close_path();
+            }
+            "roundRect" => {
+                // MVP: radio uniforme (primer valor) si lo hay, sino 0.
+                let (x, y, w, h) = (a(1), a(2), a(3), a(4));
+                let r = cmd.get(5).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let rr = RoundedRect::new(x, y, x + w, y + h, r);
+                path.extend(rr.path_elements(0.1));
+            }
+            "arc" => {
+                // arc(x, y, r, start, end, ccw=false)
+                let (cx, cy, r, start, end) = (a(1), a(2), a(3), a(4), a(5));
+                let ccw = cmd.get(6).and_then(|v| v.as_bool()).unwrap_or(false);
+                append_arc(&mut path, cx, cy, r, r, 0.0, start, end, ccw);
+            }
+            "ellipse" => {
+                // ellipse(x, y, rx, ry, rotation, start, end, ccw=false)
+                let (cx, cy, rx, ry, rot, start, end) =
+                    (a(1), a(2), a(3), a(4), a(5), a(6), a(7));
+                let ccw = cmd.get(8).and_then(|v| v.as_bool()).unwrap_or(false);
+                append_arc(&mut path, cx, cy, rx, ry, rot, start, end, ccw);
+            }
+            "arcTo" => {
+                // MVP: línea al primer punto de control (aproximación).
+                path.line_to((a(1), a(2)));
+            }
+            "fill" => {
+                let st = cmd.get(1);
+                let ga = style_field(st, "ga").unwrap_or(1.0);
+                let color = canvas_color(style_color(st, "f").as_ref(), ga);
+                scene.fill(Fill::NonZero, base * cur, color, None, &path);
+            }
+            "stroke" => {
+                let st = cmd.get(1);
+                let ga = style_field(st, "ga").unwrap_or(1.0);
+                let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
+                let color = canvas_color(style_color(st, "s").as_ref(), ga);
+                scene.stroke(&Stroke::new(lw), base * cur, color, None, &path);
+            }
+            "fillRect" => {
+                // ['fillRect', x, y, w, h, fillStyle, snapshot]
+                let ga = style_field(cmd.get(6), "ga").unwrap_or(1.0);
+                let color = canvas_color(cmd.get(5), ga);
+                let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
+                scene.fill(Fill::NonZero, base * cur, color, None, &r);
+            }
+            "strokeRect" => {
+                let st = cmd.get(6);
+                let ga = style_field(st, "ga").unwrap_or(1.0);
+                let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
+                let color = canvas_color(cmd.get(5), ga);
+                let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
+                scene.stroke(&Stroke::new(lw), base * cur, color, None, &r);
+            }
+            "fillText" | "strokeText" => {
+                // ['fillText', text, x, y, maxWidth, snapshot]
+                let text = cmd.get(1).and_then(|v| v.as_str()).unwrap_or("");
+                if text.is_empty() {
+                    continue;
+                }
+                let (x, y) = (a(2), a(3));
+                let st = cmd.get(5);
+                let ga = style_field(st, "ga").unwrap_or(1.0);
+                let key = if op == "fillText" { "f" } else { "s" };
+                let color = canvas_color(style_color(st, key).as_ref(), ga);
+                let px = canvas_font_px(style_str(st, "fnt").as_deref());
+                let layout = ts.layout(
+                    text,
+                    px,
+                    None,
+                    llimphi_ui::llimphi_text::Alignment::Start,
+                    1.0,
+                    false,
+                    None,
+                );
+                // textAlign: ajusta x. Baseline alphabetic ⇒ subimos ~0.8em.
+                let tw = layout.width() as f64;
+                let align = style_str(st, "ta").unwrap_or_default();
+                let dx = match align.as_str() {
+                    "center" => -tw / 2.0,
+                    "right" | "end" => -tw,
+                    _ => 0.0,
+                };
+                let ascent = (px as f64) * 0.8;
+                let xf = base * cur * Affine::translate((x + dx, y - ascent));
+                llimphi_ui::llimphi_text::draw_layout_xf(scene, &layout, color, xf);
+            }
+            // clip/clearRect/drawImage/putImageData: no-op en el MVP.
+            _ => {}
+        }
+    }
+}
+
+/// Apendea un arco/elipse al path (espacio usuario), manejando la dirección
+/// (clockwise por default en canvas, que con y-abajo es sweep positivo).
+/// Hace `move_to`/`line_to` al punto de inicio según haya o no subpath.
+fn append_arc(
+    path: &mut llimphi_raster::kurbo::BezPath,
+    cx: f64,
+    cy: f64,
+    rx: f64,
+    ry: f64,
+    rot: f64,
+    start: f64,
+    end: f64,
+    ccw: bool,
+) {
+    use llimphi_raster::kurbo::{Arc as KArc, PathEl, Point as KPoint};
+    use std::f64::consts::TAU;
+    let mut sweep = end - start;
+    if !ccw {
+        if sweep < 0.0 {
+            sweep = sweep.rem_euclid(TAU);
+        }
+        if sweep == 0.0 && end != start {
+            sweep = TAU;
+        }
+    } else {
+        if sweep > 0.0 {
+            sweep = -((-sweep).rem_euclid(TAU));
+        }
+        if sweep == 0.0 && end != start {
+            sweep = -TAU;
+        }
+    }
+    // Punto de inicio del arco (con rotación de elipse).
+    let (cs, sn) = (rot.cos(), rot.sin());
+    let lx = rx * start.cos();
+    let ly = ry * start.sin();
+    let sx = cx + lx * cs - ly * sn;
+    let sy = cy + lx * sn + ly * cs;
+    let start_pt = KPoint::new(sx, sy);
+    let empty = path.elements().is_empty();
+    if empty {
+        path.move_to(start_pt);
+    } else {
+        path.line_to(start_pt);
+    }
+    let arc = KArc::new((cx, cy), (rx, ry), start, sweep, rot);
+    for el in arc.append_iter(0.1) {
+        // append_iter continúa desde el punto actual (no emite MoveTo).
+        if !matches!(el, PathEl::MoveTo(_)) {
+            path.push(el);
+        }
+    }
+}
+
+/// Lee un campo numérico (`lw`, `ga`) del snapshot de estilo (objeto JSON).
+fn style_field(st: Option<&serde_json::Value>, key: &str) -> Option<f64> {
+    st.and_then(|v| v.as_object())
+        .and_then(|o| o.get(key))
+        .and_then(|x| x.as_f64())
+}
+
+/// Lee un campo string (`fnt`, `ta`) del snapshot de estilo.
+fn style_str(st: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    st.and_then(|v| v.as_object())
+        .and_then(|o| o.get(key))
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Lee `fillStyle`/`strokeStyle` (`f`/`s`) del snapshot — puede ser string
+/// (color) u objeto (gradiente); devuelve el `Value` para `canvas_color`.
+fn style_color(st: Option<&serde_json::Value>, key: &str) -> Option<serde_json::Value> {
+    st.and_then(|v| v.as_object())
+        .and_then(|o| o.get(key))
+        .cloned()
+}
+
 fn render_svg(scene: &puriy_engine::SvgScene, zoom: f32) -> View<Msg> {
     use llimphi_raster::kurbo::{Circle as KurboCircle, Line as KurboLine};
     let w = scene.width * zoom;
@@ -7861,6 +8254,80 @@ mod tests {
             }
         });
         assert_eq!(bg, Some(puriy_engine::Color::rgb(255, 0, 0)));
+    }
+
+    // ---- Fase 7.196 — Canvas 2D al render ----
+    #[test]
+    fn canvas_frame_deserializa_y_helpers() {
+        let json = r##"[{"id":"c","width":100,"height":50,"cmds":[["fillRect",1,2,3,4,"#ff0000",{"ga":1}]]}]"##;
+        let frames: Vec<CanvasFrame> = serde_json::from_str(json).expect("parse");
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].id, "c");
+        assert_eq!(frames[0].width, 100.0);
+        assert_eq!(frames[0].cmds[0][0].as_str(), Some("fillRect"));
+        // Helpers puros.
+        assert_eq!(canvas_font_px(Some("16px sans-serif")), 16.0);
+        assert_eq!(canvas_font_px(Some("bold 24.5px Arial")), 24.5);
+        assert_eq!(canvas_font_px(None), 10.0);
+        let c = canvas_color(Some(&serde_json::Value::String("#ff0000".into())), 0.5);
+        assert_eq!(c.to_rgba8().to_u8_array(), [255, 0, 0, 127]);
+    }
+
+    #[test]
+    fn paint_canvas_cmds_encodea_primitivas() {
+        // fillRect + un path con fill: la escena vello queda no-vacía. No
+        // necesita GPU (Scene es CPU-side). Smoke del intérprete.
+        let mut scene = llimphi_raster::vello::Scene::new();
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 50.0 };
+        let cmds: Vec<Vec<serde_json::Value>> =
+            serde_json::from_str(r##"[
+                ["fillRect", 1, 2, 3, 4, "#ff0000", {"ga": 1}],
+                ["beginPath"],
+                ["moveTo", 0, 0],
+                ["lineTo", 10, 10],
+                ["arc", 20, 20, 5, 0, 6.28],
+                ["fill", {"f": "#00ff00", "ga": 1}]
+            ]"##).unwrap();
+        assert!(scene.encoding().is_empty(), "escena arranca vacía");
+        paint_canvas_cmds(&mut scene, &mut ts, rect, &cmds, 100.0, 50.0);
+        assert!(!scene.encoding().is_empty(), "tras pintar debería haber segmentos");
+    }
+
+    #[test]
+    fn canvas_dibuja_y_refresca_frames_end_to_end() {
+        // Pipeline: box tree con <canvas>, snapshot con width/height, script
+        // que pide contexto y dibuja → apply_dom_mutations refresca los frames.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(
+            r#"<body><canvas id="c" width="120" height="80"></canvas></body>"#,
+        ));
+        t.has_canvas = true;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "c".into(),
+            tag_name: "canvas".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: vec![("width".into(), "120".into()), ("height".into(), "80".into())],
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        rt.eval("var ctx = document.getElementById('c').getContext('2d'); ctx.fillStyle = '#123456'; ctx.fillRect(10, 10, 40, 30);")
+            .expect("draw");
+        apply_dom_mutations(t);
+        let frame = t.canvas_frames.get("c").expect("frame del canvas");
+        assert_eq!(frame.width, 120.0);
+        assert_eq!(frame.height, 80.0);
+        assert!(
+            frame.cmds.iter().any(|c| c.first().and_then(|v| v.as_str()) == Some("fillRect")),
+            "el frame debería incluir el fillRect dibujado: {:?}",
+            frame.cmds
+        );
     }
 
     #[test]
