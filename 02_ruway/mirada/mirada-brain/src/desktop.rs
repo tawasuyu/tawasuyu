@@ -267,6 +267,40 @@ impl Desktop {
                     Vec::new()
                 }
             }
+            BodyEvent::Clicked { id } => {
+                // Foco-al-click: enfoca la ventana clickeada, esté donde
+                // esté, sin depender del foco-sigue-ratón. El z-order
+                // (levantar la flotante clickeada) lo resuelve el Cuerpo al
+                // pintar la enfocada encima.
+                self.apply(DesktopAction::FocusWindow(id))
+            }
+            BodyEvent::WindowDragged { id, x, y } => {
+                // Arrastre de una ventana teselada: la intercambia con la
+                // teselada que haya bajo el puntero. Una flotante no entra
+                // aquí (usa WindowFloatTo) — si llega, la ignoramos.
+                let active = self.active_index();
+                if self.workspaces[active].is_floating(id)
+                    || !self.workspaces[active].windows().contains(&id)
+                {
+                    return Vec::new();
+                }
+                let Some(o) = self.outputs.get(self.focused_output).copied() else {
+                    return Vec::new();
+                };
+                let target = self.workspaces[active]
+                    .layout(o.work_rect())
+                    .into_iter()
+                    .find(|(wid, rect)| {
+                        *wid != id
+                            && !self.workspaces[active].is_floating(*wid)
+                            && rect.contains(x, y)
+                    })
+                    .map(|(wid, _)| wid);
+                match target {
+                    Some(t) if self.workspaces[active].swap(id, t) => self.relayout(),
+                    _ => Vec::new(),
+                }
+            }
             BodyEvent::Keybind(key) => match self.keymap.lookup(&key) {
                 Some(action) => self.apply(action),
                 None => Vec::new(),
@@ -368,6 +402,39 @@ impl Desktop {
                         .map(centered_float_rect)
                         .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
                     ws.set_floating(id, Some(rect));
+                }
+                self.relayout()
+            }
+            DesktopAction::ToggleTiling => {
+                let screen = self.screen();
+                let ws = &mut self.workspaces[active];
+                // Las teseladas: las no flotantes que sí están en el orden.
+                let tiled: Vec<WindowId> = ws
+                    .windows()
+                    .iter()
+                    .copied()
+                    .filter(|&id| !ws.is_floating(id))
+                    .collect();
+                if tiled.is_empty() {
+                    // Todas flotando ya: devolverlas al teselado.
+                    let floating: Vec<WindowId> = ws.windows().to_vec();
+                    for id in floating {
+                        ws.set_floating(id, None);
+                    }
+                } else if let Some(base) = screen {
+                    // Hacerlas flotar todas, en cascada desde una base.
+                    let w = base.w * 3 / 5;
+                    let h = base.h * 3 / 5;
+                    for (i, id) in tiled.into_iter().enumerate() {
+                        let off = (i as i32) * 32;
+                        let rect = Rect::new(
+                            base.x + (base.w - w) / 2 + off,
+                            base.y + (base.h - h) / 2 + off,
+                            w,
+                            h,
+                        );
+                        ws.set_floating(id, Some(rect));
+                    }
                 }
                 self.relayout()
             }
@@ -1294,6 +1361,84 @@ mod tests {
         assert_eq!(d.workspace_loads()[0], 1);
         assert!(places(&cmds).iter().find(|x| x.id == 5).unwrap().floating);
         assert_eq!(d.focused_window(), Some(5));
+    }
+
+    #[test]
+    fn clicked_focuses_even_with_focus_follows_mouse_off() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen();
+        d.set_config(Config::from_ron("( focus_follows_mouse: false )").unwrap());
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada
+        // El hover ya no enfoca…
+        d.on_event(BodyEvent::PointerEntered { id: 1 });
+        assert_eq!(d.focused_window(), Some(2));
+        // …pero el click sí.
+        d.on_event(BodyEvent::Clicked { id: 1 });
+        assert_eq!(d.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn clicked_jumps_to_the_workspace_holding_the_window() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2);
+        d.on_event(BodyEvent::Keybind("Super+Shift+3".into())); // la 2 al esc. 3
+        assert_eq!(d.active_index(), 0);
+        d.on_event(BodyEvent::Clicked { id: 2 });
+        assert_eq!(d.active_index(), 2);
+        assert_eq!(d.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn dragging_a_tiled_window_swaps_with_the_window_under_the_pointer() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        assert_eq!(d.active_workspace().windows(), &[1, 2, 3]);
+        // El centro de la tesela de la 3.
+        let o = d.outputs()[d.focused_output()];
+        let layout = d.active_workspace().layout(o.work_rect());
+        let r3 = layout.iter().find(|(id, _)| *id == 3).unwrap().1;
+        let (cx, cy) = (r3.x + r3.w / 2, r3.y + r3.h / 2);
+        // Arrastrar la 1 sobre la 3 las intercambia, el foco sigue a la 1.
+        d.on_event(BodyEvent::WindowDragged { id: 1, x: cx, y: cy });
+        assert_eq!(d.active_workspace().windows(), &[3, 2, 1]);
+        assert_eq!(d.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn window_dragged_ignores_a_floating_window() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada → la flotamos
+        d.apply(DesktopAction::ToggleFloat);
+        let before = d.active_workspace().windows().to_vec();
+        let cmds = d.on_event(BodyEvent::WindowDragged { id: 2, x: 10, y: 10 });
+        assert!(cmds.is_empty());
+        assert_eq!(d.active_workspace().windows(), &before[..]);
+    }
+
+    #[test]
+    fn toggle_tiling_floats_all_then_restores() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        assert!([1, 2, 3]
+            .iter()
+            .all(|&id| !d.active_workspace().is_floating(id)));
+        // Todo flota.
+        d.apply(DesktopAction::ToggleTiling);
+        assert!([1, 2, 3]
+            .iter()
+            .all(|&id| d.active_workspace().is_floating(id)));
+        // Y vuelve al teselado.
+        d.apply(DesktopAction::ToggleTiling);
+        assert!([1, 2, 3]
+            .iter()
+            .all(|&id| !d.active_workspace().is_floating(id)));
     }
 
     #[test]

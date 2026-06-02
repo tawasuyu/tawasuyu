@@ -7,6 +7,7 @@ description = "Nakui — runtime Llimphi de la metainterfaz. Carga module.json d
 
 [dependencies]
 nakui-core = { path = "../nakui-core" }
+nakui-backend = { path = "../nakui-backend" }
 nahual-meta-schema = { path = "../../../02_ruway/nahual/libs/meta-schema" }
 nahual-meta-runtime = { path = "../../../02_ruway/nahual/libs/meta-runtime" }
 cards = { path = "../../../02_ruway/cards" }

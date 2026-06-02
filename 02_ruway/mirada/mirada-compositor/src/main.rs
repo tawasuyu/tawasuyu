@@ -240,12 +240,15 @@ struct DragGrab {
 }
 
 /// Qué le hace un arrastre a la ventana.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum DragMode {
-    /// Reubicar la ventana — la esquina la sigue al puntero.
+    /// Reubicar una ventana **flotante** — la esquina la sigue al puntero.
     Move,
     /// Redimensionarla — la esquina inferior-derecha sigue al puntero.
     Resize,
+    /// Reordenar una ventana **teselada**: la intercambia con la tesela
+    /// bajo el puntero (el Cerebro decide el swap), sin sacarla del teselado.
+    Tile,
 }
 
 /// El estado global del compositor.

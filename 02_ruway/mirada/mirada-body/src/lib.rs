@@ -253,6 +253,16 @@ impl BodyState {
         BodyEvent::PointerEntered { id }
     }
 
+    /// Construye un evento de click (foco-al-click) sobre una superficie.
+    pub fn clicked(&self, id: WindowId) -> BodyEvent {
+        BodyEvent::Clicked { id }
+    }
+
+    /// Construye un evento de arrastre teselado al punto `(x, y)`.
+    pub fn window_dragged(&self, id: WindowId, x: i32, y: i32) -> BodyEvent {
+        BodyEvent::WindowDragged { id, x, y }
+    }
+
     /// Construye un evento de atajo pulsado.
     pub fn keybind(&self, combo: impl Into<String>) -> BodyEvent {
         BodyEvent::Keybind(combo.into())

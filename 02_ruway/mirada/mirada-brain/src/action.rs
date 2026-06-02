@@ -42,6 +42,10 @@ pub enum DesktopAction {
     CloseFocused,
     /// Alterna entre flotante y teselada la ventana enfocada.
     ToggleFloat,
+    /// Alterna el escritorio entero entre teselado y flotante: si queda
+    /// alguna teselada, las hace flotar todas (en cascada); si ya están
+    /// todas flotando, las devuelve al teselado.
+    ToggleTiling,
     /// Alterna pantalla completa en la ventana enfocada.
     ToggleFullscreen,
     /// Guarda la ventana enfocada en el scratchpad (la oculta).
@@ -118,6 +122,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::MoveBackward => f.write_str("move-backward"),
             DesktopAction::CloseFocused => f.write_str("close-focused"),
             DesktopAction::ToggleFloat => f.write_str("toggle-float"),
+            DesktopAction::ToggleTiling => f.write_str("toggle-tiling"),
             DesktopAction::ToggleFullscreen => f.write_str("toggle-fullscreen"),
             DesktopAction::SendToScratchpad => f.write_str("send-to-scratchpad"),
             DesktopAction::ToggleScratchpad => f.write_str("toggle-scratchpad"),
@@ -152,6 +157,7 @@ impl FromStr for DesktopAction {
             "move-backward" => Self::MoveBackward,
             "close-focused" => Self::CloseFocused,
             "toggle-float" => Self::ToggleFloat,
+            "toggle-tiling" => Self::ToggleTiling,
             "toggle-fullscreen" => Self::ToggleFullscreen,
             "send-to-scratchpad" => Self::SendToScratchpad,
             "toggle-scratchpad" => Self::ToggleScratchpad,
@@ -230,6 +236,7 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+Shift+s".into(), DesktopAction::SendToScratchpad),
         ("Super+Shift+~".into(), DesktopAction::ToggleScratchpad),
         ("Super+space".into(), DesktopAction::CycleLayout),
+        ("Super+Shift+space".into(), DesktopAction::ToggleTiling),
         ("Super+t".into(), DesktopAction::SetLayout(LayoutMode::MasterStack)),
         ("Super+m".into(), DesktopAction::SetLayout(LayoutMode::Monocle)),
         ("Super+g".into(), DesktopAction::SetLayout(LayoutMode::Grid)),

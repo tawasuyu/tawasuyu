@@ -107,8 +107,19 @@ pub enum BodyEvent {
     WindowRetitled { id: WindowId, title: String },
     /// El usuario pulsó un atajo registrado con [`BrainCommand::GrabKeys`].
     Keybind(String),
-    /// El puntero entró en una ventana — el Cerebro puede enfocar al pasar.
+    /// El puntero entró en una ventana — el Cerebro puede enfocar al pasar
+    /// (foco-sigue-ratón, si la config lo habilita).
     PointerEntered { id: WindowId },
+    /// El usuario hizo click (botón primario) sobre una ventana — el
+    /// Cerebro la enfoca, esté donde esté, **sin** depender del
+    /// foco-sigue-ratón. Es el camino del foco-al-click.
+    Clicked { id: WindowId },
+    /// Arrastre interactivo de una ventana **teselada** sobre el punto
+    /// `(x, y)` de pantalla: el Cerebro la intercambia con la ventana
+    /// teselada que haya ahí (reordena el stack), conservándola teselada.
+    /// El arrastre de una flotante usa [`BodyEvent::WindowFloatTo`] en su
+    /// lugar — moverla, no intercambiarla.
+    WindowDragged { id: WindowId, x: i32, y: i32 },
     /// Un cliente pidió pantalla completa para su ventana (`true`), o la
     /// soltó (`false`) — `xdg_toplevel.set_fullscreen`.
     FullscreenRequest { id: WindowId, fullscreen: bool },

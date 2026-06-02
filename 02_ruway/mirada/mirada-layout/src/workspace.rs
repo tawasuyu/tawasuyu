@@ -188,6 +188,24 @@ impl Workspace {
         }
     }
 
+    /// Intercambia dos ventanas en el orden de teselado, dejando el foco en
+    /// `a`. No hace nada si alguna no está en el escritorio o son la misma.
+    /// Lo usa el arrastre interactivo de ventanas teseladas (swap-on-drag).
+    pub fn swap(&mut self, a: WindowId, b: WindowId) -> bool {
+        if a == b {
+            return false;
+        }
+        let (Some(ia), Some(ib)) = (
+            self.windows.iter().position(|&w| w == a),
+            self.windows.iter().position(|&w| w == b),
+        ) else {
+            return false;
+        };
+        self.windows.swap(ia, ib);
+        self.focus = ib;
+        true
+    }
+
     /// Lleva la ventana enfocada al primer puesto del orden de teselado
     /// (la posición maestra); el foco la acompaña. No hace nada si ya es
     /// la primera o el escritorio está vacío.
@@ -306,6 +324,22 @@ mod tests {
         assert_eq!(w.focused(), Some(1)); // el foco la acompañó
         w.move_focused_backward();
         assert_eq!(w.windows(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn swap_exchanges_two_windows_and_focuses_the_first() {
+        let mut w = ws();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        assert!(w.swap(1, 3));
+        assert_eq!(w.windows(), &[3, 2, 1]);
+        // El foco queda en la primera del par (la arrastrada).
+        assert_eq!(w.focused(), Some(1));
+        // Swap con la misma, o con una ausente, no hace nada.
+        assert!(!w.swap(2, 2));
+        assert!(!w.swap(2, 99));
+        assert_eq!(w.windows(), &[3, 2, 1]);
     }
 
     #[test]

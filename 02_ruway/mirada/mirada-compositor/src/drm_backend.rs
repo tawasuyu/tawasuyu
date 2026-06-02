@@ -227,10 +227,11 @@ impl DrmState {
             }
 
             // El shell va sobre todo; luego las flotantes; luego las
-            // teseladas. `sort_by_key` es estable: respeta el orden de
-            // apertura dentro de cada grupo.
+            // teseladas. Dentro de cada grupo, la enfocada se pinta encima
+            // (raise-on-focus). `sort_by_key` es estable: respeta el orden de
+            // apertura entre las no enfocadas.
             let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
-            shown.sort_by_key(|w| (!w.is_shell, !w.floating));
+            shown.sort_by_key(|w| (!w.is_shell, !w.floating, !w.focused));
             for w in &shown {
                 let (x, y) = crate::render_loc(w, output_h);
                 let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
@@ -472,24 +473,30 @@ impl DrmState {
                         .keyboard
                         .as_ref()
                         .is_some_and(|kb| kb.modifier_state().logo);
-                    let mode = match button {
-                        BTN_LEFT if super_held => Some(DragMode::Move),
-                        BTN_RIGHT if super_held => Some(DragMode::Resize),
+                    // `Super`+izquierdo arrastra: una flotante se mueve, una
+                    // teselada se reordena (swap). `Super`+derecho redimensiona
+                    // (flotando la ventana si estaba teselada).
+                    let (x, y) = self.app.pointer_loc;
+                    let hit = self.window_at(x, y);
+                    let mode = match (button, hit) {
+                        (BTN_LEFT, Some(i)) if super_held => Some(if self.app.windows[i].floating {
+                            DragMode::Move
+                        } else {
+                            DragMode::Tile
+                        }),
+                        (BTN_RIGHT, Some(_)) if super_held => Some(DragMode::Resize),
                         _ => None,
                     };
-                    if let Some(mode) = mode {
-                        let (x, y) = self.app.pointer_loc;
-                        if let Some(i) = self.window_at(x, y) {
-                            let w = &self.app.windows[i];
-                            let grab = DragGrab {
-                                id: w.id,
-                                mode,
-                                start_pointer: (x, y),
-                                start_rect: (w.loc.0, w.loc.1, w.size.0, w.size.1),
-                            };
-                            self.app.drag = Some(grab);
-                            return; // el arrastre captura el botón
-                        }
+                    if let (Some(mode), Some(i)) = (mode, hit) {
+                        let w = &self.app.windows[i];
+                        let grab = DragGrab {
+                            id: w.id,
+                            mode,
+                            start_pointer: (x, y),
+                            start_rect: (w.loc.0, w.loc.1, w.size.0, w.size.1),
+                        };
+                        self.app.drag = Some(grab);
+                        return; // el arrastre captura el botón
                     }
                 }
 
@@ -511,6 +518,17 @@ impl DrmState {
                     if let Some(surf) = self.app.keyboard_focusable_layer_under(x, y) {
                         if let Some(kb) = self.app.keyboard.clone() {
                             kb.set_focus(&mut self.app, Some(surf), SERIAL_COUNTER.next_serial());
+                        }
+                    } else if button == BTN_LEFT {
+                        // Foco-al-click: la ventana clickeada pide el foco al
+                        // Cerebro (que la pinta encima). Independiente del
+                        // foco-sigue-ratón; el click sigue llegando al cliente.
+                        if let Some(i) = self.window_at(x, y) {
+                            if !self.app.windows[i].is_shell {
+                                let id = self.app.windows[i].id;
+                                let ev = self.app.body.clicked(id);
+                                self.app.brain_feed(ev);
+                            }
                         }
                     }
                 }
@@ -654,6 +672,13 @@ impl DrmState {
         let id = drag.id;
 
         let (px, py) = self.app.pointer_loc;
+        // Arrastre de una teselada: el Cerebro la intercambia con la tesela
+        // bajo el puntero — no flota, sólo reordena el stack.
+        if mode == DragMode::Tile {
+            self.app
+                .brain_feed(BodyEvent::WindowDragged { id, x: px as i32, y: py as i32 });
+            return true;
+        }
         let dx = (px - spx) as i32;
         let dy = (py - spy) as i32;
         let rect = match mode {
@@ -664,6 +689,7 @@ impl DrmState {
                 (sw + dx).max(MIN_WINDOW),
                 (sh + dy).max(MIN_WINDOW),
             ),
+            DragMode::Tile => unreachable!("Tile se maneja arriba"),
         };
         self.app.brain_feed(BodyEvent::WindowFloatTo { id, rect });
         true
@@ -678,7 +704,7 @@ impl DrmState {
             .collect();
         idx.sort_by_key(|&i| {
             let w = &self.app.windows[i];
-            (!w.is_shell, !w.floating)
+            (!w.is_shell, !w.floating, !w.focused)
         });
         let output_h = self.app.output_size.1;
         idx.into_iter().find(|&i| {
