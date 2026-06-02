@@ -1173,6 +1173,13 @@ impl<A: App> Runtime<A> {
                         )
                     })
                 };
+                eprintln!(
+                    "[llimphi sec] click cursor=({:.0},{:.0}) hit={} on_click={}",
+                    cursor.x,
+                    cursor.y,
+                    hit.is_some(),
+                    hit.as_ref().map(|h| h.3.is_some()).unwrap_or(false)
+                );
                 // Misma prioridad que la primaria: drag_at + on_click_at, luego
                 // drag simple, luego on_click_at, luego on_click.
                 match hit {
