@@ -62,7 +62,7 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     XdgToplevelSurfaceData,
 };
-use smithay::wayland::output::OutputHandler;
+use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData, WlrLayerShellHandler,
     WlrLayerShellState,
@@ -260,6 +260,11 @@ struct App {
     /// La salida persistente — la necesita `layer_map_for_output` para
     /// arreglar anclajes y zonas exclusivas de los layer surfaces.
     output: Option<Output>,
+    /// Gestor de salidas con `xdg-output` (`zxdg_output_manager_v1`): waybar
+    /// y otras barras lo exigen para conocer nombre/geometría de las salidas.
+    /// Se conserva sólo para mantener vivo el global (de ahí el `allow`).
+    #[allow(dead_code)]
+    output_manager_state: OutputManagerState,
     keyboard: Option<KeyboardHandle<Self>>,
     pointer: Option<PointerHandle<Self>>,
     /// Posición del puntero en coordenadas globales.
@@ -1495,6 +1500,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         compositor_state: CompositorState::new::<App>(&dh),
         xdg_shell_state: XdgShellState::new::<App>(&dh),
         layer_shell_state: WlrLayerShellState::new::<App>(&dh),
+        output_manager_state: OutputManagerState::new_with_xdg_output::<App>(&dh),
         output: None,
         shm_state: ShmState::new::<App>(&dh, Vec::new()),
         dmabuf_state: DmabufState::new(),
