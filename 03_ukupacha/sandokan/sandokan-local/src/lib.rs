@@ -78,6 +78,13 @@ impl LocalEngine {
     /// Como [`Self::with_config`] pero con un `run_dir` explícito para los
     /// sockets de sesión. Útil para tests (dir temporal) y para correr varios
     /// engines aislados.
+    /// Conveniencia: engine con `run_dir` explícito y config de incarnación
+    /// por defecto. Para el binario daemon, que no quiere depender de
+    /// arje-incarnate sólo por `IncarnatorConfig::default()`.
+    pub fn in_dir(run_dir: PathBuf) -> Self {
+        Self::with_run_dir(IncarnatorConfig::default(), run_dir)
+    }
+
     pub fn with_run_dir(cfg: IncarnatorConfig, run_dir: PathBuf) -> Self {
         Self {
             base_cfg: cfg,

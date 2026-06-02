@@ -173,7 +173,11 @@ fn spawn_pty(
         stdout_fd: Some(slave_raw),
         stderr_fd: Some(slave_raw),
     };
-    let setup = ChildSetup::new().with(ChildPreExec::NewSession);
+    // NewSession + ControllingTty: el shell es session leader y toma el PTS
+    // como su controlling terminal → job control real (Ctrl-C al foreground).
+    let setup = ChildSetup::new()
+        .with(ChildPreExec::NewSession)
+        .with(ChildPreExec::ControllingTty);
 
     let outcome = Incarnator::new(cfg)
         .incarnate_full(card, stdio, setup)
@@ -523,6 +527,28 @@ mod tests {
         // Cierre ordenado.
         e.write_input(id, b"exit\n").await.ok();
         tokio::time::sleep(Duration::from_millis(300)).await;
+        e.stop(id, Duration::ZERO).await.ok();
+    }
+
+    #[tokio::test]
+    async fn interactive_session_has_a_controlling_tty() {
+        // `echo ... > /dev/tty` sólo funciona si el proceso TIENE un
+        // controlling terminal (TIOCSCTTY aplicado). Sin él, abrir /dev/tty
+        // da ENXIO y el comando no produce salida.
+        let e = LocalEngine::new();
+        let card = isolated_sh();
+        let id = card.id;
+        e.run_interactive(Intent::new(card), PtySize::default())
+            .await
+            .expect("run_interactive");
+        let mut att = e.attach(id).await.expect("attach");
+        e.write_input(id, b"echo CTTY_OK > /dev/tty\n")
+            .await
+            .expect("write");
+        assert!(
+            live_until(&mut att.live, "CTTY_OK", 4000).await,
+            "el shell no tiene controlling tty (/dev/tty falló)"
+        );
         e.stop(id, Duration::ZERO).await.ok();
     }
 

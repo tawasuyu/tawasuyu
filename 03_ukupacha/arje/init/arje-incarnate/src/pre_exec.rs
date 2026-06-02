@@ -23,6 +23,11 @@ pub enum ChildPreExec {
     Dumpable(bool),
     /// `setsid()` — nuevo session/group leader (desconecta del controlling tty).
     NewSession,
+    /// `ioctl(0, TIOCSCTTY)` — hace del PTY que está en fd 0 el **controlling
+    /// terminal** del proceso. Requiere ser session leader: combinar con
+    /// `NewSession` *antes* en la lista. Habilita job control real (Ctrl-C /
+    /// Ctrl-Z al foreground group, `/dev/tty`) en sesiones interactivas.
+    ControllingTty,
     /// `chdir(path)` — cambiar working dir. Path pre-allocado.
     Chdir(CString),
     /// `umask(mode)` — fijar umask (octal, e.g. 0o022).
@@ -154,6 +159,14 @@ pub unsafe fn apply_unchecked(ops: &[ChildPreExec]) -> i32 {
                 let r = unsafe { libc::setsid() };
                 if r < 0 {
                     return 113;
+                }
+            }
+            ChildPreExec::ControllingTty => {
+                // fd 0 ya es el PTS (el dup del stdio corre antes que las ops).
+                // arg 0 = no robar el tty de otra sesión.
+                let r = unsafe { libc::ioctl(0, libc::TIOCSCTTY, 0) };
+                if r != 0 {
+                    return 120;
                 }
             }
             ChildPreExec::Chdir(path) => {

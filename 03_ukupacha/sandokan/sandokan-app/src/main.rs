@@ -66,9 +66,24 @@ async fn main() -> anyhow::Result<()> {
             if let Some(parent) = socket.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
+            // run_dir de los <card_id>.sock + archivo de snapshot de sesiones,
+            // junto al socket del daemon.
+            let run_dir = socket
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."));
+            let snapshot = run_dir.join("sessions.json");
             println!("sandokan-daemon escuchando en {}", socket.display());
             println!("(Ctrl-C para salir)");
-            let engine = Arc::new(LocalEngine::new());
+            let engine = Arc::new(LocalEngine::in_dir(run_dir).with_snapshot_path(snapshot.clone()));
+            // Re-hidratación (Model 1): relanza las sesiones interactivas que
+            // estaban vivas antes del último apagado. Sus <card_id>.sock
+            // reaparecen → los fronts re-atajan sin enterarse del reinicio.
+            match engine.restore_snapshot(&snapshot).await {
+                Ok(0) => {}
+                Ok(n) => println!("re-hidratadas {n} sesión(es) interactiva(s)"),
+                Err(e) => eprintln!("snapshot no restaurado: {e}"),
+            }
             serve(engine, &socket).await?;
         }
         Cmd::Run { exec, args } => {
