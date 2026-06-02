@@ -9,6 +9,6 @@ publish.workspace = true
 description = "nahual-markdown-viewer-llimphi — visor de Markdown renderizado sobre Llimphi. Parsea el documento con pulldown-cmark y pinta bloques con estilo (encabezados de tamaño creciente, código en monoespaciada, listas con viñeta, citas en itálica) en vez del texto crudo del text viewer. Noveno visor del shell nahual."
 
 [dependencies]
+nahual-viewer-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-pulldown-cmark = { workspace = true }

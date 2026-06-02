@@ -9,5 +9,6 @@ publish.workspace = true
 description = "nahual-hex-viewer-llimphi — visor hex/ASCII sobre Llimphi. Vuelca los primeros KB de un binario (ELF/wasm/gzip/zip…) como `offset  hex  |ascii|` en fuente monoespaciada. Séptimo visor del shell nahual; convierte el '(binario — sin preview)' del text viewer en algo inspeccionable."
 
 [dependencies]
+nahual-viewer-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }

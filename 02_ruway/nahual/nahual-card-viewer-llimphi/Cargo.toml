@@ -9,6 +9,7 @@ publish.workspace = true
 description = "nahual-card-viewer-llimphi — visor estructurado de Cards (shared/card) sobre Llimphi. Renderiza label/id/kind/payload/supervisión/capacidades/referencias como filas legibles en vez del JSON crudo. Análogo Llimphi del text/image/video viewer del shell nahual."
 
 [dependencies]
+nahual-viewer-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 card-core = { path = "../../../shared/card/card-core" }

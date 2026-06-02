@@ -9,8 +9,6 @@ publish.workspace = true
 description = "nahual-archive-viewer-llimphi — visor de archivos comprimidos sobre Llimphi. Lista las entradas (nombres, tamaño, ratio) de ZIP (y su familia .jar/.apk/.epub/.docx/.xlsx/.pptx), tar y tar.gz en vez del volcado hex. Décimo visor del shell nahual."
 
 [dependencies]
+nahual-viewer-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-zip = { workspace = true }
-tar = { workspace = true }
-flate2 = { workspace = true }

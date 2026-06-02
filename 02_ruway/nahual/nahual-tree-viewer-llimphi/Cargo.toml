@@ -9,7 +9,6 @@ publish.workspace = true
 description = "nahual-tree-viewer-llimphi — visor de estructuras JSON/TOML sobre Llimphi. Parsea a un árbol y lo pinta indentado con tipo+tamaño por nodo, legible aun para JSON minificado (que el text viewer mostraría como una sola línea). Sexto visor del shell nahual."
 
 [dependencies]
+nahual-viewer-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }

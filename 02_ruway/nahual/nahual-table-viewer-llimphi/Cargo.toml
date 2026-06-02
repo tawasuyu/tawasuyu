@@ -9,5 +9,6 @@ publish.workspace = true
 description = "nahual-table-viewer-llimphi — visor de CSV/TSV sobre Llimphi. Parsea (con comillas básicas) y pinta una tabla alineada por columnas en fuente monoespaciada. Octavo visor del shell nahual; preview rápido de datos tabulares, distinto del editor de planillas nakui."
 
 [dependencies]
+nahual-viewer-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }

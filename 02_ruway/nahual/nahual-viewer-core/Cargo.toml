@@ -1,0 +1,19 @@
+[package]
+name = "nahual-viewer-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-viewer-core — núcleos agnósticos de GUI de los visores simples de nahual: parseo/decode + tipos de preview de CSV/TSV (table), JSON/TOML (tree), volcado hex, archivos zip/tar (archive), fuentes TTF/OTF (font), Markdown y Cards. Un módulo por formato; cada `*-viewer-llimphi` sólo pinta el preview. Sin dependencias de render."
+
+[dependencies]
+serde_json = { workspace = true }
+toml = { workspace = true }
+zip = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+ttf-parser = { workspace = true }
+pulldown-cmark = { workspace = true }
+card-core = { path = "../../../shared/card/card-core" }
