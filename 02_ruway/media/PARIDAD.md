@@ -37,8 +37,8 @@ conviene retomarlo con pantalla:
 - **Motor**: M2 hw decode, M3 seek frame-accurate, M4 frame stepping, M5
   pitch-correct speed.
 - **Subtítulos**: S2 pistas embebidas, S3 estilo visual ASS (libass-like).
-- **Mejoras a lo ya hecho**: R2 DASH A/V separados (calidad > 720p),
-  A5 ReplayGain/EBU R128 (medición automática), V4 hue.
+- **Mejoras a lo ya hecho**: R2 DASH A/V separados (calidad > 720p). *(A5
+  ReplayGain/EBU R128 ✅ y V4 hue ✅ cerrados 2026-06-02.)*
 
 Sugerencia al retomar: `cargo run -p media-app -- <archivo>` y ejercitar las
 features nuevas desde el command palette (Ctrl+Shift+P): grupos Orientación,
@@ -142,7 +142,18 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   wrapper `DynamicsAudio` — molde EQ. Insertado tras el EQ en ambas cadenas
   de audio (último estadio de ganancia). Comandos `MediaCommand::{NormToggle,
   NormGainBy{db},NormReset}` en el palette (grupo "Normalización"). +6 tests.
-  Falta la medición automática (ReplayGain / EBU R128) y downmix/upmix.
+  **Medición automática (ReplayGain / EBU R128) ✅ (2026-06-02)**: módulo nuevo
+  `media-core::loudness` con el algoritmo ITU-R BS.1770-4 completo — K-weighting
+  (dos biquads re-derivados por sample rate), bloques de 400 ms con 75 % de
+  solape, pesos de canal (surround 1.41, LFE excluido), doble gate (absoluto
+  −70 LUFS + relativo −10 LU). `LoudnessMeter` (streaming), `measure_lufs`
+  (one-shot), `LoudnessProbe` (tap pasivo `AudioSource`) y `gain_to_target_db`
+  que sale directo a `DynamicsControl::add_gain_db`. Objetivos
+  `REPLAYGAIN_TARGET_LUFS` (−18) y `EBU_R128_TARGET_LUFS` (−23). +7 tests
+  (linealidad −6 dB→−6 LU, gates, otra sample rate, probe pasivo). **Queda
+  wirear** el comando live `NormAuto` en `media-app` (insertar el
+  `LoudnessProbe` en ambas cadenas + handle compartido) — necesita audio para
+  validar. Falta también downmix/upmix.
 - **A6 — Gapless garantizado / crossfade** entre pistas.
 
 ### Track VIDEO
