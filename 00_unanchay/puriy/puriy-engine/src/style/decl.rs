@@ -1,0 +1,235 @@
+//! Declaraciones CSS: el tipo `Decl` (propiedad parseada + `!important`) y el
+//! enum `DeclKind` con todas las propiedades soportadas, más el `impl Decl` que
+//! aplica cada declaración sobre un `ComputedStyle`. Extraído de `style/mod.rs`
+//! (regla #1). Comparte los tipos del módulo `style` vía `use super::*`.
+use super::*;
+
+/// Una declaración CSS individual + flag `!important`.
+#[derive(Debug, Clone)]
+pub(crate) struct Decl {
+    pub(crate) kind: DeclKind,
+    pub(crate) important: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum DeclKind {
+    Color(Color),
+    Background(Color),
+    Display(Display),
+    FontSize(f32),
+    FontWeight(u16),
+    FontStyle(FontStyle),
+    FontFamily(String),
+    Margin(Sides<f32>),
+    MarginTop(f32),
+    MarginRight(f32),
+    MarginBottom(f32),
+    MarginLeft(f32),
+    Padding(Sides<f32>),
+    PaddingTop(f32),
+    PaddingRight(f32),
+    PaddingBottom(f32),
+    PaddingLeft(f32),
+    Width(LengthVal),
+    Height(LengthVal),
+    MaxWidth(LengthVal),
+    TextAlign(TextAlign),
+    LineHeight(f32),
+    BorderWidth(f32),
+    BorderColor(Color),
+    /// `border-style: solid` activa el dibujo del border; `none`/`hidden`
+    /// lo desactiva (color → None).
+    BorderEnabled(bool),
+    /// Variantes per-side: `border-top-width: 2px` setea sólo el top.
+    BorderSideWidth(BorderEdge, f32),
+    BorderSideColor(BorderEdge, Color),
+    BorderSideStyle(BorderEdge, bool),
+    BorderRadius(f32),
+    /// `border-top-left-radius` etc. — setean una esquina sola.
+    BorderCornerRadius(BorderCorner, f32),
+    /// `z-index: N`. Aplica sólo a positioned (absolute/fixed/relative);
+    /// para `position: static` el chrome lo ignora (matchea spec).
+    ZIndex(i32),
+    /// `content: ...` para `::before`/`::after`. Lista de items
+    /// (string/counter/attr) que se concatenan al inyectar el pseudo.
+    /// `None` = `content: none` (suprime el pseudo-element).
+    Content(Option<Vec<ContentItem>>),
+    /// `counter-reset: name [val] name2 [val2]...`.
+    CounterReset(Vec<(String, i32)>),
+    /// `counter-increment: name [delta] name2 [delta2]...`.
+    CounterIncrement(Vec<(String, i32)>),
+    /// `None` = `box-shadow: none` (limpia la sombra).
+    BoxShadow(Option<BoxShadow>),
+    TextDecoration(TextDecorationLine),
+    ListStyleType(ListStyleType),
+    FlexDirection(FlexDirection),
+    JustifyContent(JustifyContent),
+    AlignItems(AlignItems),
+    AlignContent(AlignContent),
+    JustifyItems(AlignItems),
+    JustifySelf(AlignSelf),
+    FlexWrap(FlexWrap),
+    /// `gap: A B` setea ambos (row=A, column=B); `gap: V` los iguala.
+    Gap { row: f32, column: f32 },
+    RowGap(f32),
+    ColumnGap(f32),
+    BoxSizing(BoxSizing),
+    MinWidth(LengthVal),
+    MinHeight(LengthVal),
+    MaxHeight(LengthVal),
+    /// `None` = `aspect-ratio: auto` (resetea).
+    AspectRatio(Option<f32>),
+    Overflow(Overflow),
+    WhiteSpace(WhiteSpace),
+    TextTransform(TextTransform),
+    Opacity(f32),
+    AlignSelf(AlignSelf),
+    FlexGrow(f32),
+    FlexShrink(f32),
+    FlexBasis(LengthVal),
+    OutlineWidth(f32),
+    OutlineColor(Color),
+    OutlineStyle(bool),
+    OutlineOffset(f32),
+    BackgroundGradient(LinearGradient),
+    /// `background-image: none` limpia el gradient (un autor puede
+    /// querer overridear un gradient heredado).
+    BackgroundGradientNone,
+    /// `background-image: url(...)` — URL absoluta o relativa, el engine
+    /// la resuelve contra el base del documento en `build_node`.
+    BackgroundImageUrl(String),
+    Position(Position),
+    InsetTop(LengthVal),
+    InsetRight(LengthVal),
+    InsetBottom(LengthVal),
+    InsetLeft(LengthVal),
+    VerticalAlign(VerticalAlign),
+    Visibility(Visibility),
+    PointerEvents(PointerEvents),
+    TextIndent(f32),
+    WordSpacing(f32),
+    LetterSpacing(f32),
+    TextShadows(Vec<TextShadow>),
+    /// Cadena vacía = `transform: none`.
+    Transforms(Vec<Transform>),
+    GridTemplateColumns(Vec<GridTrackSize>),
+    GridTemplateRows(Vec<GridTrackSize>),
+    /// `animation: ...`. `None` = `animation: none`.
+    Animation(Option<AnimationBinding>),
+    /// `transition: ...`. Vec vacío = `transition: none`.
+    Transitions(Vec<TransitionBinding>),
+}
+
+impl Decl {
+    pub(crate) fn apply(&self, s: &mut ComputedStyle) {
+        match &self.kind {
+            DeclKind::Color(c) => s.color = *c,
+            DeclKind::Background(c) => s.background = Some(*c),
+            DeclKind::Display(d) => s.display = *d,
+            DeclKind::FontSize(v) => s.font_size = *v,
+            DeclKind::FontWeight(w) => s.font_weight = *w,
+            DeclKind::FontStyle(fs) => s.font_style = *fs,
+            DeclKind::FontFamily(ff) => s.font_family = Some(ff.clone()),
+            DeclKind::Margin(v) => s.margin = *v,
+            DeclKind::MarginTop(v) => s.margin.top = *v,
+            DeclKind::MarginRight(v) => s.margin.right = *v,
+            DeclKind::MarginBottom(v) => s.margin.bottom = *v,
+            DeclKind::MarginLeft(v) => s.margin.left = *v,
+            DeclKind::Padding(v) => s.padding = *v,
+            DeclKind::PaddingTop(v) => s.padding.top = *v,
+            DeclKind::PaddingRight(v) => s.padding.right = *v,
+            DeclKind::PaddingBottom(v) => s.padding.bottom = *v,
+            DeclKind::PaddingLeft(v) => s.padding.left = *v,
+            DeclKind::Width(v) => s.width = *v,
+            DeclKind::Height(v) => s.height = *v,
+            DeclKind::MaxWidth(v) => s.max_width = *v,
+            DeclKind::TextAlign(a) => s.text_align = *a,
+            DeclKind::LineHeight(v) => s.line_height = Some(*v),
+            DeclKind::BorderWidth(v) => s.border_widths = Sides::all(*v),
+            DeclKind::BorderColor(c) => s.border_colors = Sides::all(Some(*c)),
+            DeclKind::BorderEnabled(on) => {
+                if !*on {
+                    s.border_colors = Sides::all(None);
+                    s.border_widths = Sides::all(0.0);
+                }
+            }
+            DeclKind::BorderSideWidth(side, v) => set_side_f32(&mut s.border_widths, *side, *v),
+            DeclKind::BorderSideColor(side, c) => set_side(&mut s.border_colors, *side, Some(*c)),
+            DeclKind::BorderSideStyle(side, on) => {
+                if !*on {
+                    set_side_f32(&mut s.border_widths, *side, 0.0);
+                    set_side(&mut s.border_colors, *side, None);
+                }
+            }
+            DeclKind::BorderRadius(v) => s.border_radii = Corners::all(*v),
+            DeclKind::BorderCornerRadius(corner, v) => {
+                set_corner(&mut s.border_radii, *corner, *v)
+            }
+            DeclKind::ZIndex(v) => s.z_index = *v,
+            DeclKind::Content(c) => s.content = c.clone(),
+            DeclKind::CounterReset(v) => s.counter_reset = v.clone(),
+            DeclKind::CounterIncrement(v) => s.counter_increment = v.clone(),
+            DeclKind::BoxShadow(v) => s.box_shadow = *v,
+            DeclKind::TextDecoration(t) => s.text_decoration = *t,
+            DeclKind::ListStyleType(t) => s.list_style_type = *t,
+            DeclKind::FlexDirection(d) => s.flex_direction = *d,
+            DeclKind::JustifyContent(j) => s.justify_content = *j,
+            DeclKind::AlignItems(a) => s.align_items = *a,
+            DeclKind::AlignContent(a) => s.align_content = *a,
+            DeclKind::JustifyItems(a) => s.justify_items = Some(*a),
+            DeclKind::JustifySelf(a) => s.justify_self = *a,
+            DeclKind::FlexWrap(w) => s.flex_wrap = *w,
+            DeclKind::Gap { row, column } => {
+                s.gap_row = *row;
+                s.gap_column = *column;
+            }
+            DeclKind::RowGap(v) => s.gap_row = *v,
+            DeclKind::ColumnGap(v) => s.gap_column = *v,
+            DeclKind::BoxSizing(b) => s.box_sizing = *b,
+            DeclKind::MinWidth(v) => s.min_width = *v,
+            DeclKind::MinHeight(v) => s.min_height = *v,
+            DeclKind::MaxHeight(v) => s.max_height = *v,
+            DeclKind::AspectRatio(v) => s.aspect_ratio = *v,
+            DeclKind::Overflow(o) => s.overflow = *o,
+            DeclKind::WhiteSpace(w) => s.white_space = *w,
+            DeclKind::TextTransform(t) => s.text_transform = *t,
+            DeclKind::Opacity(v) => s.opacity = *v,
+            DeclKind::AlignSelf(a) => s.align_self = *a,
+            DeclKind::FlexGrow(v) => s.flex_grow = *v,
+            DeclKind::FlexShrink(v) => s.flex_shrink = *v,
+            DeclKind::FlexBasis(v) => s.flex_basis = *v,
+            DeclKind::OutlineWidth(v) => s.outline.width = *v,
+            DeclKind::OutlineColor(c) => s.outline.color = Some(*c),
+            DeclKind::OutlineStyle(active) => {
+                s.outline.style_active = *active;
+                if !*active {
+                    s.outline.color = None;
+                }
+            }
+            DeclKind::OutlineOffset(v) => s.outline.offset = *v,
+            DeclKind::BackgroundGradient(g) => s.background_gradient = Some(g.clone()),
+            DeclKind::BackgroundGradientNone => {
+                s.background_gradient = None;
+                s.background_image_url = None;
+            }
+            DeclKind::BackgroundImageUrl(u) => s.background_image_url = Some(u.clone()),
+            DeclKind::Position(p) => s.position = *p,
+            DeclKind::InsetTop(v) => s.inset_top = *v,
+            DeclKind::InsetRight(v) => s.inset_right = *v,
+            DeclKind::InsetBottom(v) => s.inset_bottom = *v,
+            DeclKind::InsetLeft(v) => s.inset_left = *v,
+            DeclKind::VerticalAlign(va) => s.vertical_align = *va,
+            DeclKind::Visibility(v) => s.visibility = *v,
+            DeclKind::PointerEvents(pe) => s.pointer_events = *pe,
+            DeclKind::TextIndent(v) => s.text_indent = *v,
+            DeclKind::WordSpacing(v) => s.word_spacing = *v,
+            DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
+            DeclKind::TextShadows(shadows) => s.text_shadows = shadows.clone(),
+            DeclKind::Transforms(tr) => s.transforms = tr.clone(),
+            DeclKind::GridTemplateColumns(t) => s.grid_template_columns = t.clone(),
+            DeclKind::GridTemplateRows(t) => s.grid_template_rows = t.clone(),
+            DeclKind::Animation(a) => s.animation = a.clone(),
+            DeclKind::Transitions(t) => s.transitions = t.clone(),
+        }
+    }
+}
