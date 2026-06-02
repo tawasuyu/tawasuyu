@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::control::ControlSettings;
 use crate::layout::LayoutSettings;
 use crate::playlist::Repeat;
+use crate::toolbar::Toolbar;
 
 /// Configuración completa del reproductor. Una sección por pestaña de la
 /// ventana de configuración.
@@ -30,6 +31,9 @@ pub struct MediaConfig {
     /// Orden de los paneles de control.
     #[serde(default)]
     pub layout: LayoutSettings,
+    /// Barras de controles componibles (botones simples estilo VLC/eww).
+    #[serde(default)]
+    pub toolbar: Toolbar,
     /// Comportamiento de la cola: repeat/shuffle/resume por defecto.
     #[serde(default)]
     pub playlist: PlaylistPrefs,
@@ -52,6 +56,7 @@ impl Default for MediaConfig {
         MediaConfig {
             controls: ControlSettings::default(),
             layout: LayoutSettings::default(),
+            toolbar: Toolbar::default(),
             playlist: PlaylistPrefs::default(),
             audio: AudioPrefs::default(),
             video: VideoPrefs::default(),
@@ -68,6 +73,7 @@ impl MediaConfig {
         MediaConfig {
             controls: self.controls,
             layout: self.layout.sanitized(),
+            toolbar: self.toolbar.sanitized(),
             playlist: self.playlist.sanitized(),
             audio: self.audio.sanitized(),
             video: self.video.sanitized(),
