@@ -3284,6 +3284,18 @@ fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> Vec<Decl> {
             out.extend(parse_flex_flow_shorthand(value, important));
             continue;
         }
+        if prop.eq_ignore_ascii_case("place-content") {
+            out.extend(parse_place_content_shorthand(value, important));
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("place-items") {
+            out.extend(parse_place_items_shorthand(value, important));
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("place-self") {
+            out.extend(parse_place_self_shorthand(value, important));
+            continue;
+        }
         if prop.eq_ignore_ascii_case("outline") {
             out.extend(parse_outline_shorthand(value, important));
             continue;
@@ -4387,6 +4399,53 @@ fn parse_justify_self(s: &str) -> Option<AlignSelf> {
         "right" => Some(AlignSelf::End),
         other => parse_align_self(other),
     }
+}
+
+/// `place-content: <align-content> [<justify-content>]`. Un solo valor
+/// setea ambos ejes. Cada mitad se valida con su parser propio; las que no
+/// parsean se descartan (el otro eje igual se aplica).
+fn parse_place_content_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut out = Vec::new();
+    let mut it = value.split_whitespace();
+    let Some(a) = it.next() else { return out };
+    let b = it.next().unwrap_or(a);
+    if let Some(ac) = parse_align_content(a) {
+        out.push(Decl { kind: DeclKind::AlignContent(ac), important });
+    }
+    if let Some(jc) = parse_justify_content(b) {
+        out.push(Decl { kind: DeclKind::JustifyContent(jc), important });
+    }
+    out
+}
+
+/// `place-items: <align-items> [<justify-items>]`. Un solo valor = ambos.
+fn parse_place_items_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut out = Vec::new();
+    let mut it = value.split_whitespace();
+    let Some(a) = it.next() else { return out };
+    let b = it.next().unwrap_or(a);
+    if let Some(ai) = parse_align_items(a) {
+        out.push(Decl { kind: DeclKind::AlignItems(ai), important });
+    }
+    if let Some(ji) = parse_justify_items(b) {
+        out.push(Decl { kind: DeclKind::JustifyItems(ji), important });
+    }
+    out
+}
+
+/// `place-self: <align-self> [<justify-self>]`. Un solo valor = ambos.
+fn parse_place_self_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut out = Vec::new();
+    let mut it = value.split_whitespace();
+    let Some(a) = it.next() else { return out };
+    let b = it.next().unwrap_or(a);
+    if let Some(asf) = parse_align_self(a) {
+        out.push(Decl { kind: DeclKind::AlignSelf(asf), important });
+    }
+    if let Some(jsf) = parse_justify_self(b) {
+        out.push(Decl { kind: DeclKind::JustifySelf(jsf), important });
+    }
+    out
 }
 
 /// `gap: V` ⇒ row=V, column=V. `gap: R C` ⇒ row=R, column=C. Coincide
@@ -6590,6 +6649,41 @@ mod tests {
         // Sin declaración, el default es Normal (no hereda del flujo).
         let plain = dom.find("section").unwrap();
         assert_eq!(eng.compute(&plain).align_content, AlignContent::Normal);
+    }
+
+    #[test]
+    fn place_shorthands_expanden_ambos_ejes() {
+        let html = r#"<html><head><style>
+            .a { display: grid; place-content: center space-between; }
+            .b { display: grid; place-items: stretch; }
+            .c { place-self: end center; }
+        </style></head><body>
+            <div class="a"></div><div class="b"></div>
+            <span class="c">x</span>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        // place-content: align-content + justify-content.
+        let pc = parse_declarations("place-content: center space-between", &HashMap::new());
+        assert!(pc.iter().any(|d| matches!(d.kind, DeclKind::AlignContent(AlignContent::Center))));
+        assert!(pc
+            .iter()
+            .any(|d| matches!(d.kind, DeclKind::JustifyContent(JustifyContent::SpaceBetween))));
+        // place-items con un solo valor → align-items + justify-items iguales.
+        let pi = parse_declarations("place-items: stretch", &HashMap::new());
+        assert!(pi.iter().any(|d| matches!(d.kind, DeclKind::AlignItems(AlignItems::Stretch))));
+        assert!(pi.iter().any(|d| matches!(d.kind, DeclKind::JustifyItems(AlignItems::Stretch))));
+        // place-self: align-self + justify-self.
+        let ps = parse_declarations("place-self: end center", &HashMap::new());
+        assert!(ps.iter().any(|d| matches!(d.kind, DeclKind::AlignSelf(AlignSelf::End))));
+        assert!(ps.iter().any(|d| matches!(d.kind, DeclKind::JustifySelf(AlignSelf::Center))));
+        // Y que computa end-to-end sobre el árbol.
+        let a = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(a.align_content, AlignContent::Center);
+        assert_eq!(a.justify_content, JustifyContent::SpaceBetween);
+        let c = eng.compute(&dom.find("span").unwrap());
+        assert_eq!(c.align_self, AlignSelf::End);
+        assert_eq!(c.justify_self, AlignSelf::Center);
     }
 
     #[test]
