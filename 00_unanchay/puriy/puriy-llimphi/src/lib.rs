@@ -2120,8 +2120,8 @@ mod tests {
     use super::*;
     // Helpers del canvas extraídos a `canvas.rs` (pub(crate) para estos tests).
     use super::canvas::{
-        canvas_brush, canvas_color, canvas_font_px, canvas_shadow, canvas_stroke,
-        decode_canvas_images, paint_canvas_cmds,
+        canvas_brush, canvas_color, canvas_composite, canvas_font_px, canvas_shadow,
+        canvas_stroke, decode_canvas_images, paint_canvas_cmds,
     };
     // Tipos peniko/kurbo que sólo los tests del canvas usan (el código no-test
     // de lib.rs ya no, tras mover el painter a canvas.rs).
@@ -4334,6 +4334,95 @@ mod tests {
         assert_eq!(fr[6].get("sb").and_then(|v| v.as_f64()), Some(8.0));
         assert_eq!(fr[6].get("sox").and_then(|v| v.as_f64()), Some(4.0));
         assert!(canvas_shadow(Some(&fr[6]), 1.0).is_some(), "la sombra debería resolverse");
+    }
+
+    #[test]
+    fn canvas_composite_mapea_modos() {
+        // source-over (default) y desconocidos → None (sin capa de blend).
+        let so: serde_json::Value = serde_json::from_str(r#"{"gco":"source-over"}"#).unwrap();
+        assert!(canvas_composite(Some(&so)).is_none());
+        let raro: serde_json::Value = serde_json::from_str(r#"{"gco":"qwerty"}"#).unwrap();
+        assert!(canvas_composite(Some(&raro)).is_none());
+        assert!(canvas_composite(Some(&serde_json::json!({"ga": 1.0}))).is_none());
+        // Modo de mezcla → Mix (compose SrcOver).
+        use llimphi_raster::peniko::{Compose, Mix};
+        let mul: serde_json::Value = serde_json::from_str(r#"{"gco":"multiply"}"#).unwrap();
+        let bm = canvas_composite(Some(&mul)).expect("multiply mapea");
+        assert_eq!((bm.mix, bm.compose), (Mix::Multiply, Compose::SrcOver));
+        // Porter-Duff → Compose (mix Normal).
+        let lighter: serde_json::Value = serde_json::from_str(r#"{"gco":"lighter"}"#).unwrap();
+        let bm = canvas_composite(Some(&lighter)).expect("lighter mapea");
+        assert_eq!((bm.mix, bm.compose), (Mix::Normal, Compose::Plus));
+        let dout: serde_json::Value =
+            serde_json::from_str(r#"{"gco":"destination-out"}"#).unwrap();
+        assert_eq!(canvas_composite(Some(&dout)).unwrap().compose, Compose::DestOut);
+    }
+
+    #[test]
+    fn paint_canvas_cmds_composite_agrega_layer() {
+        // Un fillRect con globalCompositeOperation != source-over encoda MÁS
+        // draw objects (el push_layer/pop_layer de blend agrega tags de clip).
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let imgs: std::collections::HashMap<String, PenikoImage> =
+            std::collections::HashMap::new();
+        let sin: Vec<Vec<serde_json::Value>> =
+            serde_json::from_str(r##"[["fillRect",10,10,40,40,"#ff0000",{"ga":1.0}]]"##).unwrap();
+        let con: Vec<Vec<serde_json::Value>> = serde_json::from_str(
+            r##"[["fillRect",10,10,40,40,"#ff0000",{"ga":1.0,"gco":"lighter"}]]"##,
+        )
+        .unwrap();
+        let mut s1 = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut s1, &mut ts, rect, &sin, 100.0, 100.0, &imgs);
+        let mut s2 = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut s2, &mut ts, rect, &con, 100.0, 100.0, &imgs);
+        assert!(
+            s2.encoding().draw_tags.len() > s1.encoding().draw_tags.len(),
+            "la capa de blend debería agregar draw objects: {} vs {}",
+            s2.encoding().draw_tags.len(),
+            s1.encoding().draw_tags.len()
+        );
+    }
+
+    #[test]
+    fn gco_llega_al_frame_end_to_end() {
+        // ctx.globalCompositeOperation + fillRect → el snapshot lleva `gco` y
+        // canvas_composite lo resuelve. Fase 7.200.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.url = "about:test".into();
+        t.box_tree = Some(parse(
+            r#"<body><canvas id="c" width="100" height="100"></canvas></body>"#,
+        ));
+        t.has_canvas = true;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "c".into(),
+            tag_name: "canvas".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: vec![("width".into(), "100".into()), ("height".into(), "100".into())],
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        rt.eval(
+            "var ctx=document.getElementById('c').getContext('2d');\
+             ctx.globalCompositeOperation='multiply';\
+             ctx.fillStyle='#3366ff'; ctx.fillRect(20,20,40,40);",
+        )
+        .expect("draw");
+        apply_dom_mutations(t);
+        let frame = t.canvas_frames.get("c").expect("frame");
+        let fr = frame
+            .cmds
+            .iter()
+            .find(|c| c.first().and_then(|v| v.as_str()) == Some("fillRect"))
+            .expect("fillRect");
+        assert_eq!(fr[6].get("gco").and_then(|v| v.as_str()), Some("multiply"));
+        assert!(canvas_composite(Some(&fr[6])).is_some(), "el composite debería resolverse");
     }
 
     #[test]

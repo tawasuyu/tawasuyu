@@ -226,6 +226,13 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         if (st.shadowColor && (sb > 0 || sox !== 0 || soy !== 0)) {
             snap.sc = st.shadowColor; snap.sb = sb; snap.sox = sox; snap.soy = soy;
         }
+        // Fase 7.200 — globalCompositeOperation: sólo se apende cuando NO es el
+        // default ('source-over'), para no engordar cada snapshot. El chrome lo
+        // mapea a un BlendMode de vello (Mix/Compose) y envuelve el dibujo en
+        // una capa de blend.
+        if (st.globalCompositeOperation && st.globalCompositeOperation !== 'source-over') {
+            snap.gco = st.globalCompositeOperation;
+        }
         return snap;
     };
 

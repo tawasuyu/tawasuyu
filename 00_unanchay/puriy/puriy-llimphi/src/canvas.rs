@@ -10,8 +10,8 @@
 use llimphi_layout::taffy::prelude::{length, Size, Style};
 use llimphi_raster::kurbo::{Affine, Cap, Join, Point, Rect as KurboRect, RoundedRect, Stroke};
 use llimphi_raster::peniko::{
-    Blob, Brush, Color, ColorStop, ColorStops, Extend, Fill, Gradient, GradientKind,
-    Image as PenikoImage, ImageFormat, Mix,
+    BlendMode, Blob, Brush, Color, ColorStop, ColorStops, Compose, Extend, Fill, Gradient,
+    GradientKind, Image as PenikoImage, ImageFormat, Mix,
 };
 use llimphi_ui::View;
 
@@ -143,6 +143,48 @@ pub(crate) fn canvas_shadow(st: Option<&serde_json::Value>, ga: f64) -> Option<(
     }
     let a = ((col.a as f64) * ga).clamp(0.0, 255.0) as u8;
     Some((Color::from_rgba8(col.r, col.g, col.b, a), blur, ox, oy))
+}
+
+/// Resuelve `globalCompositeOperation` (campo `gco` del snapshot) a un
+/// `peniko::BlendMode` de vello. Devuelve `None` para `source-over` (el default
+/// — no hace falta capa de blend) o un modo desconocido. Los modos de *mezcla*
+/// (multiply/screen/overlay/…) mapean a `Mix` (compose SrcOver); los Porter-Duff
+/// (lighter/copy/destination-out/…) a `Compose` (mix Normal). El chrome envuelve
+/// el dibujo de la op en `push_layer(blend, base, todo_el_canvas)` para que la
+/// composición se evalúe contra el backdrop del canvas entero. Fase 7.200.
+pub(crate) fn canvas_composite(st: Option<&serde_json::Value>) -> Option<BlendMode> {
+    let gco = style_str(st, "gco")?;
+    let bm: BlendMode = match gco.as_str() {
+        "multiply" => Mix::Multiply.into(),
+        "screen" => Mix::Screen.into(),
+        "overlay" => Mix::Overlay.into(),
+        "darken" => Mix::Darken.into(),
+        "lighten" => Mix::Lighten.into(),
+        "color-dodge" => Mix::ColorDodge.into(),
+        "color-burn" => Mix::ColorBurn.into(),
+        "hard-light" => Mix::HardLight.into(),
+        "soft-light" => Mix::SoftLight.into(),
+        "difference" => Mix::Difference.into(),
+        "exclusion" => Mix::Exclusion.into(),
+        "hue" => Mix::Hue.into(),
+        "saturation" => Mix::Saturation.into(),
+        "color" => Mix::Color.into(),
+        "luminosity" => Mix::Luminosity.into(),
+        "lighter" => Compose::Plus.into(),
+        "plus-lighter" => Compose::PlusLighter.into(),
+        "copy" => Compose::Copy.into(),
+        "destination-over" => Compose::DestOver.into(),
+        "source-in" => Compose::SrcIn.into(),
+        "destination-in" => Compose::DestIn.into(),
+        "source-out" => Compose::SrcOut.into(),
+        "destination-out" => Compose::DestOut.into(),
+        "source-atop" => Compose::SrcAtop.into(),
+        "destination-atop" => Compose::DestAtop.into(),
+        "xor" => Compose::Xor.into(),
+        // "source-over" (default) y desconocidos → sin capa.
+        _ => return None,
+    };
+    Some(bm)
 }
 
 /// Recolecta (recursivamente, deduplicando contra `out`) los `src` de los
@@ -409,11 +451,14 @@ pub(crate) fn render_canvas(
 /// conic→sweep) en fill/stroke/rect, `clip` (recorte por path, balanceado con
 /// save/restore), line dash/cap/join (Fase 7.197), `drawImage` de imágenes
 /// decodificadas (Fase 7.197b, vía el mapa `images` keyeado por `src`),
-/// patrones `createPattern` (Fase 7.198) y sombras `shadow*` (Fase 7.199:
-/// `fillRect` con blur gaussiano real, el resto silueta desplazada).
-/// Limitaciones: putImageData, clearRect parcial, `globalCompositeOperation` y
-/// el `globalAlpha`/sombra sobre drawImage quedan fuera; el texto con gradiente
-/// degrada a color sólido (el typesetter sólo toma `Color`).
+/// patrones `createPattern` (Fase 7.198), sombras `shadow*` (Fase 7.199:
+/// `fillRect` con blur gaussiano real, el resto silueta desplazada) y
+/// `globalCompositeOperation` (Fase 7.200: blend modes de vello vía
+/// `push_layer`, en fill/stroke/rect/text — ver `canvas_composite`).
+/// Limitaciones: putImageData/getImageData (sin buffer CPU), clearRect parcial,
+/// y `globalCompositeOperation`/`globalAlpha`/sombra sobre drawImage quedan
+/// fuera (su comando no lleva snapshot); el texto con gradiente degrada a color
+/// sólido (el typesetter sólo toma `Color`).
 pub(crate) fn paint_canvas_cmds(
     scene: &mut llimphi_raster::vello::Scene,
     ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -430,6 +475,10 @@ pub(crate) fn paint_canvas_cmds(
     let sy = rect.h as f64 / ih;
     let base = Affine::translate((rect.x as f64, rect.y as f64))
         * Affine::scale_non_uniform(sx, sy);
+    // Rect del canvas entero (espacio usuario) — clip de las capas de blend de
+    // `globalCompositeOperation`, para que la composición se evalúe contra el
+    // backdrop de todo el canvas (Fase 7.200).
+    let whole = KurboRect::new(0.0, 0.0, iw, ih);
 
     let mut cur = Affine::IDENTITY; // transform actual del canvas (espacio usuario)
     let mut tstack: Vec<Affine> = Vec::new();
@@ -529,24 +578,38 @@ pub(crate) fn paint_canvas_cmds(
             "fill" => {
                 let st = cmd.get(1);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
+                let comp = canvas_composite(st);
+                if let Some(bm) = comp {
+                    scene.push_layer(bm, 1.0, base, &whole);
+                }
                 if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
                     let sxf = base * cur * Affine::translate((ox, oy));
                     scene.fill(Fill::NonZero, sxf, &Brush::Solid(col), None, &path);
                 }
                 let brush = canvas_brush(style_color(st, "f").as_ref(), ga, images);
                 scene.fill(Fill::NonZero, base * cur, &brush, None, &path);
+                if comp.is_some() {
+                    scene.pop_layer();
+                }
             }
             "stroke" => {
                 let st = cmd.get(1);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
                 let stroke = canvas_stroke(st, lw);
+                let comp = canvas_composite(st);
+                if let Some(bm) = comp {
+                    scene.push_layer(bm, 1.0, base, &whole);
+                }
                 if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
                     let sxf = base * cur * Affine::translate((ox, oy));
                     scene.stroke(&stroke, sxf, &Brush::Solid(col), None, &path);
                 }
                 let brush = canvas_brush(style_color(st, "s").as_ref(), ga, images);
                 scene.stroke(&stroke, base * cur, &brush, None, &path);
+                if comp.is_some() {
+                    scene.pop_layer();
+                }
             }
             "clip" => {
                 // Recorta el dibujo posterior al path actual. La capa se cierra
@@ -562,6 +625,10 @@ pub(crate) fn paint_canvas_cmds(
                 // ['fillRect', x, y, w, h, fillStyle, snapshot]
                 let ga = style_field(cmd.get(6), "ga").unwrap_or(1.0);
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
+                let comp = canvas_composite(cmd.get(6));
+                if let Some(bm) = comp {
+                    scene.push_layer(bm, 1.0, base, &whole);
+                }
                 // Sombra REAL blureada (gaussiana) — el caso estrella (cards,
                 // botones): rect desplazado por (ox,oy), std_dev = blur/2.
                 if let Some((col, blur, ox, oy)) = canvas_shadow(cmd.get(6), ga) {
@@ -570,6 +637,9 @@ pub(crate) fn paint_canvas_cmds(
                 }
                 let brush = canvas_brush(cmd.get(5), ga, images);
                 scene.fill(Fill::NonZero, base * cur, &brush, None, &r);
+                if comp.is_some() {
+                    scene.pop_layer();
+                }
             }
             "strokeRect" => {
                 let st = cmd.get(6);
@@ -577,12 +647,19 @@ pub(crate) fn paint_canvas_cmds(
                 let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
                 let stroke = canvas_stroke(st, lw);
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
+                let comp = canvas_composite(st);
+                if let Some(bm) = comp {
+                    scene.push_layer(bm, 1.0, base, &whole);
+                }
                 if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
                     let sxf = base * cur * Affine::translate((ox, oy));
                     scene.stroke(&stroke, sxf, &Brush::Solid(col), None, &r);
                 }
                 let brush = canvas_brush(cmd.get(5), ga, images);
                 scene.stroke(&stroke, base * cur, &brush, None, &r);
+                if comp.is_some() {
+                    scene.pop_layer();
+                }
             }
             "fillText" | "strokeText" => {
                 // ['fillText', text, x, y, maxWidth, snapshot]
@@ -593,6 +670,10 @@ pub(crate) fn paint_canvas_cmds(
                 let (x, y) = (a(2), a(3));
                 let st = cmd.get(5);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
+                let comp = canvas_composite(st);
+                if let Some(bm) = comp {
+                    scene.push_layer(bm, 1.0, base, &whole);
+                }
                 let key = if op == "fillText" { "f" } else { "s" };
                 let color = canvas_color(style_color(st, key).as_ref(), ga);
                 let px = canvas_font_px(style_str(st, "fnt").as_deref());
@@ -622,6 +703,9 @@ pub(crate) fn paint_canvas_cmds(
                 }
                 let xf = base * cur * Affine::translate((x + dx, y - ascent));
                 llimphi_ui::llimphi_text::draw_layout_xf(scene, &layout, color, xf);
+                if comp.is_some() {
+                    scene.pop_layer();
+                }
             }
             "drawImage" => {
                 // ['drawImage', src, ...nums] — nums: 2 (dx,dy), 4 (dx,dy,dw,dh)
