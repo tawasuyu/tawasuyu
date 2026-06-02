@@ -57,7 +57,7 @@ use puriy_engine::{
 };
 
 mod canvas;
-use canvas::{render_canvas, refresh_canvas_frames, CanvasFrame};
+use canvas::{collect_dom_image_pixels, render_canvas, refresh_canvas_frames, CanvasFrame};
 mod render;
 use render::*;
 mod chrome;
@@ -2121,7 +2121,7 @@ mod tests {
     // Helpers del canvas extraídos a `canvas.rs` (pub(crate) para estos tests).
     use super::canvas::{
         canvas_brush, canvas_color, canvas_composite, canvas_font_px, canvas_shadow,
-        canvas_stroke, decode_canvas_images, paint_canvas_cmds,
+        canvas_stroke, collect_dom_image_pixels, decode_canvas_images, paint_canvas_cmds,
     };
     // Tipos peniko/kurbo que sólo los tests del canvas usan (el código no-test
     // de lib.rs ya no, tras mover el painter a canvas.rs).
@@ -4488,6 +4488,62 @@ mod tests {
         let mut s_sub = llimphi_raster::vello::Scene::new();
         paint_canvas_cmds(&mut s_sub, &mut ts, rect, &sub, 100.0, 100.0, &images);
         assert!(!s_sub.encoding().is_empty(), "sub-rect con alpha+sombra debería pintar");
+    }
+
+    #[test]
+    fn drawimage_a_getimagedata_pipeline_end_to_end() {
+        // Fase 7.203 — flujo COMPLETO por run_scripts_on_tab: el chrome inyecta
+        // los píxeles del <img> antes del script, así un drawImage+getImageData
+        // (pipeline de filtros) lee la imagen real. El PNG 1×1 es rojo opaco.
+        let png_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+        let mut t = TabState::new("about:test".into());
+        t.url = "about:test".into();
+        t.has_canvas = true;
+        t.box_tree = Some(parse(&format!(
+            r#"<body><canvas id="c" width="4" height="4"></canvas><img id="i" src="{png_1x1}"></body>"#
+        )));
+        let scripts = vec![puriy_engine::ScriptInfo {
+            src: None,
+            inline: Some(
+                "var ctx=document.getElementById('c').getContext('2d');\
+                 var im=document.getElementById('i');\
+                 ctx.drawImage(im,0,0);\
+                 var g=ctx.getImageData(0,0,1,1);\
+                 globalThis.__r = g.data[0]+','+g.data[1]+','+g.data[2]+','+g.data[3];"
+                    .into(),
+            ),
+            type_attr: None,
+            is_module: false,
+            defer: false,
+            async_: false,
+        }];
+        run_scripts_on_tab(&mut t, &scripts, 0, None);
+        assert_eq!(t.js_summary.errors, 0, "el script no debería errar");
+        let r = t.js.as_mut().unwrap().eval("__r").expect("r");
+        // rojo opaco leído del framebuffer JS tras drawImage.
+        assert_eq!(r, puriy_js::JsValue::String("255,0,0,255".into()));
+    }
+
+    #[test]
+    fn collect_dom_image_pixels_decodifica_imgs() {
+        // Fase 7.203 — el chrome recolecta los píxeles de los <img> de la
+        // página (cuando hay canvas) para inyectarlos al runtime.
+        let png_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.url = "about:test".into();
+        t.has_canvas = true;
+        t.box_tree = Some(parse(&format!(
+            r#"<body><canvas id="c" width="10" height="10"></canvas><img id="i" src="{png_1x1}"></body>"#
+        )));
+        let px = collect_dom_image_pixels(t);
+        assert_eq!(px.len(), 1, "debería recolectar 1 img");
+        assert_eq!(px[0].0, png_1x1);
+        assert_eq!((px[0].1, px[0].2), (1, 1));
+        assert_eq!(px[0].3.len(), 4, "rgba de 1×1 = 4 bytes");
+        // Sin canvas → vacío (gate de costo).
+        t.has_canvas = false;
+        assert!(collect_dom_image_pixels(t).is_empty());
     }
 
     #[test]

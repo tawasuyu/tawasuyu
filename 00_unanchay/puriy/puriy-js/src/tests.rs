@@ -11035,6 +11035,45 @@
     }
 
     #[test]
+    fn canvas2d_drawimage_refleja_en_getimagedata() {
+        // Fase 7.203 — con los píxeles del <img> inyectados, un drawImage
+        // rasteriza al framebuffer y getImageData lo lee (pipeline de filtros).
+        let mut rt = JsRuntime::new().expect("rt");
+        // 1×1 rojo opaco (FF 00 00 FF) keyed por "redpix".
+        rt.set_canvas_image_pixels("redpix", 1, 1, "/wAA/w==").expect("inject");
+        rt.eval(
+            "var ctx=new OffscreenCanvas(10,10).getContext('2d');\
+             var g0=ctx.getImageData(3,3,1,1);\
+             ctx.drawImage({src:'redpix'}, 3, 3);\
+             var g=ctx.getImageData(3,3,1,1);",
+        )
+        .expect("e");
+        // Antes del drawImage: transparente.
+        assert_eq!(rt.eval("g0.data[3]").expect("e"), JsValue::Number(0.0));
+        // Después: rojo opaco leído del framebuffer.
+        assert_eq!(rt.eval("g.data[0]").expect("e"), JsValue::Number(255.0));
+        assert_eq!(rt.eval("g.data[1]").expect("e"), JsValue::Number(0.0));
+        assert_eq!(rt.eval("g.data[3]").expect("e"), JsValue::Number(255.0));
+        // Replay: drawImage ANTES del primer getImageData igual se refleja.
+        rt.eval(
+            "var c2=new OffscreenCanvas(8,8).getContext('2d');\
+             c2.drawImage({src:'redpix'}, 0, 0);\
+             var gg=c2.getImageData(0,0,1,1);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("gg.data[0]").expect("e"), JsValue::Number(255.0));
+        // Una imagen sin píxeles inyectados → no-op (transparente).
+        rt.eval(
+            "var c3=new OffscreenCanvas(8,8).getContext('2d');\
+             c3.getImageData(0,0,1,1);\
+             c3.drawImage({src:'ausente'}, 0, 0);\
+             var gh=c3.getImageData(0,0,1,1);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("gh.data[3]").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
     fn canvas2d_getimagedata_refleja_fillrect_previo() {
         // El framebuffer se crea perezoso en el primer getImageData y reproduce
         // los fillRect/clearRect ya en el log → un fillRect ANTES del primer

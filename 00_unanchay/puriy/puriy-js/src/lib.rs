@@ -906,6 +906,28 @@ impl JsRuntime {
         self.eval_raw(&script).map(|_| ())
     }
 
+    /// Inyecta los píxeles RGBA decodificados de un `<img>` de la página al
+    /// runtime, keyeados por su `src` crudo (lo que el JS ve como `img.src`).
+    /// El chrome lo llama ANTES de correr los scripts (Fase 7.203) para que un
+    /// `ctx.drawImage(img, …)` rasterice la imagen al framebuffer JS y un
+    /// `getImageData` posterior la lea (pipeline de filtros de imagen). `b64` es
+    /// `encode_base64(rgba)` (w·h·4 bytes); el lado JS lo decodifica con `atob`.
+    pub fn set_canvas_image_pixels(
+        &mut self,
+        src: &str,
+        width: u32,
+        height: u32,
+        b64: &str,
+    ) -> Result<(), JsError> {
+        let s = js_string_literal(src);
+        let d = js_string_literal(b64);
+        let script = format!(
+            "if (typeof globalThis.__puriy_set_canvas_image_pixels === 'function') {{ \
+                globalThis.__puriy_set_canvas_image_pixels({s}, {width}, {height}, {d}); }}"
+        );
+        self.eval_raw(&script).map(|_| ())
+    }
+
     /// Empuja el resultado de evaluar una media query al estado JS. Si el valor
     /// flipeó respecto al previo, dispara `change` en los `MediaQueryList` vivos
     /// de esa query (Fase 7.98). El chrome lo llama tras evaluar cada query

@@ -61,6 +61,11 @@ pub(crate) fn run_scripts_on_tab(
         .as_ref()
         .map(collect_element_snapshots)
         .unwrap_or_default();
+    // Fase 7.203 — píxeles de los <img> de la página, para inyectar al runtime
+    // antes de los scripts (drawImage→getImageData / pipeline de filtros).
+    // Se recolecta acá (préstamo compartido de `t`) antes del préstamo mutable
+    // de `t.js`; vacío si no hay canvas (gate de costo).
+    let dom_image_pixels = collect_dom_image_pixels(t);
     t.js = Some(rt);
     let rt = t.js.as_mut().unwrap();
     let _ = rt.set_document(&t.title, &t.url, &body_text);
@@ -88,6 +93,13 @@ pub(crate) fn run_scripts_on_tab(
     // viva exigiría resolver readText como promesa pendiente del chrome.)
     if let Some(clip) = system_clipboard {
         let _ = rt.set_clipboard(clip);
+    }
+    // Fase 7.203 — inyecta los píxeles de los <img> al runtime (base64) para
+    // que un `ctx.drawImage(img)` se refleje en el framebuffer JS y
+    // `getImageData` lea la imagen. Antes del primer script.
+    for (src, w, h, rgba) in &dom_image_pixels {
+        let b64 = puriy_engine::encode_base64(rgba);
+        let _ = rt.set_canvas_image_pixels(src, *w, *h, &b64);
     }
     let mut prev_stdout_len = rt.stdout().len();
     let mut prev_stderr_len = rt.stderr().len();

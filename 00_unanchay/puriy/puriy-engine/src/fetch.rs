@@ -158,6 +158,15 @@ fn data_url_mime(url: &str) -> String {
 /// (`data:<mime>,<texto>`). El MIME se descarta — el caller adivina el formato
 /// (las imágenes por sniffing). `None` si el prefijo no es `data:`, falta la
 /// coma separadora, o el payload base64 está corrupto.
+/// Codifica bytes a base64 estándar. Lo usa el chrome para inyectar los píxeles
+/// RGBA de los `<img>` de la página al runtime JS (Fase 7.203), de modo que un
+/// `ctx.drawImage(img)` se refleje en el framebuffer JS y `getImageData` lea la
+/// imagen (pipeline de filtros). El lado JS lo decodifica con `atob`.
+pub fn encode_base64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
 /// Decodifica un string base64 estándar (ignorando whitespace) a bytes. Lo usa
 /// el chrome para reconstruir los píxeles RGBA de `putImageData` (Fase 7.202),
 /// que el lado JS codifica con `btoa`. Devuelve `None` si no decodifica.

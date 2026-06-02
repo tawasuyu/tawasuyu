@@ -37,7 +37,7 @@ pub use boxes::{
     ImageData, InputKind, PathCmd, SelectInfo, SelectOption, SvgPrim, SvgScene,
 };
 pub use dom::{DomTree, MetaRefresh, ScriptInfo};
-pub use fetch::{decode_base64, fetch, fetch_full, FetchError, FetchResponse};
+pub use fetch::{decode_base64, encode_base64, fetch, fetch_full, FetchError, FetchResponse};
 pub use style::{
     AlignContent, AlignItems, AlignSelf, AnimationBinding, AnimationDirection, AnimationFillMode,
     AnimationIterations, BoxShadow, BoxSizing, ComputedStyle, ContentItem, EasingFunction,

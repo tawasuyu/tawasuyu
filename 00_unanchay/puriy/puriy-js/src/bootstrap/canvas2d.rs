@@ -70,6 +70,22 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         return globalThis.btoa(parts.join(''));
     }
 
+    // Fase 7.203 — registro de píxeles RGBA de los `<img>` de la página, que el
+    // chrome inyecta ANTES de correr los scripts (keyeado por el src crudo, lo
+    // que JS ve como `img.src`). `_fbDrawImage` los busca para rasterizar un
+    // `drawImage` al framebuffer → `getImageData` refleja la imagen (pipeline de
+    // filtros). Vacío si el chrome no inyectó nada (canvas sin <img>, o el host
+    // de test no lo cableó).
+    globalThis.__puriy_canvas_image_pixels = globalThis.__puriy_canvas_image_pixels || {};
+    globalThis.__puriy_set_canvas_image_pixels = function(src, w, h, b64) {
+        try {
+            var bin = globalThis.atob(b64);
+            var d = new Uint8ClampedArray(bin.length);
+            for (var i = 0; i < bin.length; i++) d[i] = bin.charCodeAt(i);
+            globalThis.__puriy_canvas_image_pixels[String(src)] = { width: w | 0, height: h | 0, data: d };
+        } catch (e) { /* base64 inválido → no registramos */ }
+    };
+
     // ---- ImageData ----
     function ImageData(a, b, c) {
         var w, h, data;
@@ -406,6 +422,9 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         var args = Array.prototype.slice.call(arguments);
         var src = '';
         if (image) src = image.src || image.currentSrc || image._src || '';
+        // Fase 7.203 — si hay framebuffer y los píxeles de esta imagen fueron
+        // inyectados, rasterizamos al buffer para que getImageData la lea.
+        if (this._fb) this._fbDrawImage(String(src), args.slice(1));
         // Fase 7.201 — apendamos el snapshot de estilo al final (igual que
         // fill/rect/text) para que el chrome aplique globalAlpha + sombra +
         // globalCompositeOperation a la imagen. El painter parsea las
@@ -440,6 +459,12 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
             var c = cs[i];
             if (c[0] === 'fillRect') this._fbFillRect(c[1], c[2], c[3], c[4], c[5], c[6] && c[6].ga);
             else if (c[0] === 'clearRect') this._fbClearRect(c[1], c[2], c[3], c[4]);
+            else if (c[0] === 'drawImage') {
+                // nums = args numéricos (descarta src string + snapshot objeto).
+                var dn = [];
+                for (var k = 2; k < c.length; k++) if (typeof c[k] === 'number') dn.push(c[k]);
+                this._fbDrawImage(c[1], dn);
+            }
         }
     };
     // Rasteriza un fillRect sólido al buffer (asume transform identidad — el
@@ -483,6 +508,50 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         for (var py = ya; py < yb; py++) {
             for (var px = xa; px < xb; px++) {
                 var i = (py * fbw + px) * 4; fb[i] = fb[i + 1] = fb[i + 2] = fb[i + 3] = 0;
+            }
+        }
+    };
+    // Rasteriza un drawImage al framebuffer (Fase 7.203) si los píxeles de la
+    // imagen fueron inyectados por el chrome (`__puriy_canvas_image_pixels`).
+    // Asume transform identidad (igual que _fbFillRect). `nums` = los args
+    // numéricos de drawImage (2/4/8). Escalado nearest-neighbor + sub-rect.
+    // src-over con globalAlpha. No-op si no hay fb o no hay píxeles.
+    C._fbDrawImage = function(src, nums) {
+        if (!this._fb) return;
+        var t = this._state.transform;
+        if (!(t[0] === 1 && t[1] === 0 && t[2] === 0 && t[3] === 1 && t[4] === 0 && t[5] === 0)) return;
+        var rec = globalThis.__puriy_canvas_image_pixels[String(src)];
+        if (!rec || !rec.data) return;
+        var iw = rec.width, ih = rec.height, sd = rec.data;
+        if (iw <= 0 || ih <= 0) return;
+        var sx, sy, sw, sh, dx, dy, dw, dh;
+        if (nums.length === 2) { sx = 0; sy = 0; sw = iw; sh = ih; dx = nums[0]; dy = nums[1]; dw = iw; dh = ih; }
+        else if (nums.length === 4) { sx = 0; sy = 0; sw = iw; sh = ih; dx = nums[0]; dy = nums[1]; dw = nums[2]; dh = nums[3]; }
+        else if (nums.length === 8) { sx = nums[0]; sy = nums[1]; sw = nums[2]; sh = nums[3]; dx = nums[4]; dy = nums[5]; dw = nums[6]; dh = nums[7]; }
+        else return;
+        if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+        var ga = this._state.globalAlpha;
+        dx = Math.round(dx); dy = Math.round(dy);
+        var dwR = Math.round(dw), dhR = Math.round(dh);
+        var fbw = this._fbw, fbh = this._fbh, fb = this._fb;
+        for (var ry = 0; ry < dhR; ry++) {
+            var ty = dy + ry; if (ty < 0 || ty >= fbh) continue;
+            var syi = (sy + (ry / dhR) * sh) | 0; if (syi < 0) syi = 0; else if (syi >= ih) syi = ih - 1;
+            for (var rx = 0; rx < dwR; rx++) {
+                var tx = dx + rx; if (tx < 0 || tx >= fbw) continue;
+                var sxi = (sx + (rx / dwR) * sw) | 0; if (sxi < 0) sxi = 0; else if (sxi >= iw) sxi = iw - 1;
+                var si = (syi * iw + sxi) * 4, ti = (ty * fbw + tx) * 4;
+                var a = (sd[si + 3] / 255) * ga;
+                if (a <= 0) continue;
+                if (a >= 1) { fb[ti] = sd[si]; fb[ti + 1] = sd[si + 1]; fb[ti + 2] = sd[si + 2]; fb[ti + 3] = 255; }
+                else {
+                    var da = fb[ti + 3] / 255, na = a + da * (1 - a);
+                    if (na <= 0) { fb[ti] = fb[ti + 1] = fb[ti + 2] = fb[ti + 3] = 0; continue; }
+                    fb[ti] = (sd[si] * a + fb[ti] * da * (1 - a)) / na;
+                    fb[ti + 1] = (sd[si + 1] * a + fb[ti + 1] * da * (1 - a)) / na;
+                    fb[ti + 2] = (sd[si + 2] * a + fb[ti + 2] * da * (1 - a)) / na;
+                    fb[ti + 3] = na * 255;
+                }
             }
         }
     };

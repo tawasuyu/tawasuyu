@@ -97,6 +97,53 @@ pub(crate) fn decode_canvas_images(t: &mut TabState) {
     }
 }
 
+/// Recolecta los píxeles RGBA decodificados de los `<img>` de la página, para
+/// que el chrome los inyecte al runtime JS ANTES de correr los scripts (Fase
+/// 7.203). Así un `ctx.drawImage(img, …)` rasteriza la imagen al framebuffer JS
+/// y un `getImageData` posterior la lee (pipeline de filtros de imagen). Sólo
+/// si la página tiene canvas (gate de costo — un canvas-less no paga nada).
+/// Keyea por el `src` crudo (lo que JS ve como `img.src`). Cap de 4 MP por
+/// imagen para no inyectar un base64 prohibitivo. Cache-backed vía
+/// `fetch_image_src`. Devuelve `(src, w, h, rgba)`.
+pub(crate) fn collect_dom_image_pixels(t: &TabState) -> Vec<(String, u32, u32, Vec<u8>)> {
+    if !t.has_canvas {
+        return Vec::new();
+    }
+    let Some(bt) = t.box_tree.as_ref() else {
+        return Vec::new();
+    };
+    let mut srcs: Vec<String> = Vec::new();
+    collect_img_srcs(&bt.root, &mut srcs);
+    if srcs.is_empty() {
+        return Vec::new();
+    }
+    let base = url::Url::parse(&t.url).ok();
+    let mut out = Vec::new();
+    for src in srcs {
+        if let Some(d) = puriy_engine::fetch_image_src(base.as_ref(), &src) {
+            if (d.width as u64) * (d.height as u64) > 4_000_000 {
+                continue; // imagen enorme → no inyectamos (base64 prohibitivo)
+            }
+            out.push((src, d.width, d.height, d.rgba));
+        }
+    }
+    out
+}
+
+/// Walk del box tree juntando los `src` de los `<img>` (deduplicados, no vacíos).
+fn collect_img_srcs(b: &puriy_engine::BoxNode, out: &mut Vec<String>) {
+    if b.tag.as_deref() == Some("img") {
+        if let Some((_, src)) = b.attributes.iter().find(|(k, _)| k == "src") {
+            if !src.is_empty() && !out.iter().any(|s| s == src) {
+                out.push(src.clone());
+            }
+        }
+    }
+    for c in &b.children {
+        collect_img_srcs(c, out);
+    }
+}
+
 /// Extrae un `f64` de un valor JSON (default 0.0 si no es número).
 fn cnum(v: Option<&serde_json::Value>) -> f64 {
     v.and_then(|x| x.as_f64()).unwrap_or(0.0)
