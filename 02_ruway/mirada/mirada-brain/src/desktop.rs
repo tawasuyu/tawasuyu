@@ -565,6 +565,21 @@ impl Desktop {
                 self.workspaces[active].promote_focused();
                 self.relayout()
             }
+            DesktopAction::SwapMaster => {
+                let ws = &mut self.workspaces[active];
+                let Some(focused) = ws.focused() else {
+                    return Vec::new();
+                };
+                let Some(&master) = ws.windows().first() else {
+                    return Vec::new();
+                };
+                // Sólo intercambia esas dos; el resto del orden no se mueve.
+                if focused != master && ws.swap(focused, master) {
+                    self.relayout()
+                } else {
+                    Vec::new()
+                }
+            }
             DesktopAction::SwitchWorkspace(n) => {
                 if n < self.workspaces.len() && n != active {
                     self.show_workspace(n);
@@ -581,6 +596,21 @@ impl Desktop {
                     Some(id) => {
                         self.workspaces[active].remove(id);
                         self.workspaces[n].add(id);
+                        self.relayout()
+                    }
+                    None => Vec::new(),
+                }
+            }
+            DesktopAction::MoveToWorkspace(n) => {
+                if n >= self.workspaces.len() || n == active {
+                    return Vec::new();
+                }
+                match self.workspaces[active].focused() {
+                    Some(id) => {
+                        self.workspaces[active].remove(id);
+                        self.workspaces[n].add(id);
+                        // …y salta con ella al escritorio destino.
+                        self.show_workspace(n);
                         self.relayout()
                     }
                     None => Vec::new(),
@@ -1174,6 +1204,37 @@ mod tests {
         d.apply(DesktopAction::DecMaster);
         d.apply(DesktopAction::DecMaster); // no baja de 1
         assert_eq!(d.active_workspace().params().master_count, 1);
+    }
+
+    #[test]
+    fn swap_master_exchanges_only_the_focused_and_the_master() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3, 4] {
+            open(&mut d, id);
+        }
+        d.apply(DesktopAction::FocusWindow(3));
+        d.apply(DesktopAction::SwapMaster);
+        // 3 pasa al puesto maestro, 1 a donde estaba 3; el resto intacto.
+        assert_eq!(d.active_workspace().windows(), &[3, 2, 1, 4]);
+        assert_eq!(d.focused_window(), Some(3));
+        // A diferencia de promote-to-master, que rota: promover la 4…
+        d.apply(DesktopAction::FocusWindow(4));
+        d.apply(DesktopAction::PromoteToMaster);
+        assert_eq!(d.active_workspace().windows(), &[4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn move_to_workspace_sends_the_window_and_follows_it() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada
+        d.apply(DesktopAction::MoveToWorkspace(2)); // índice 2 = escritorio 3
+        // La 2 viajó y el foco saltó con ella.
+        assert_eq!(d.active_index(), 2);
+        assert_eq!(d.focused_window(), Some(2));
+        assert_eq!(d.workspace_loads()[2], 1);
+        // El escritorio original conserva sólo la 1.
+        assert_eq!(d.workspace_loads()[0], 1);
     }
 
     #[test]

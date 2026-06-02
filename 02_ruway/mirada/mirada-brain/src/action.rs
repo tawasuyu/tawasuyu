@@ -107,12 +107,18 @@ pub enum DesktopAction {
     IncMaster,
     /// Saca una ventana del área maestra.
     DecMaster,
-    /// Lleva la ventana enfocada al puesto maestro (orden de teselado).
+    /// Lleva la ventana enfocada al puesto maestro (la inserta al frente,
+    /// desplazando al resto).
     PromoteToMaster,
+    /// Intercambia la ventana enfocada con la maestra (sólo esas dos; el
+    /// resto del orden queda igual). El foco acompaña a la ventana.
+    SwapMaster,
     /// Activa el escritorio virtual `n` (índice 0-based).
     SwitchWorkspace(usize),
-    /// Manda la ventana enfocada al escritorio virtual `n`.
+    /// Manda la ventana enfocada al escritorio virtual `n` (queda donde está).
     SendToWorkspace(usize),
+    /// Manda la ventana enfocada al escritorio `n` y salta con ella allí.
+    MoveToWorkspace(usize),
     /// Mueve el foco a la siguiente salida (monitor).
     FocusOutputNext,
     /// Mueve el foco a la salida (monitor) vecina en una dirección cardinal.
@@ -184,9 +190,11 @@ impl fmt::Display for DesktopAction {
             DesktopAction::IncMaster => f.write_str("inc-master"),
             DesktopAction::DecMaster => f.write_str("dec-master"),
             DesktopAction::PromoteToMaster => f.write_str("promote-to-master"),
+            DesktopAction::SwapMaster => f.write_str("swap-master"),
             // Los escritorios se numeran 1-based de cara al usuario.
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
+            DesktopAction::MoveToWorkspace(n) => write!(f, "move-to-workspace:{}", n + 1),
             DesktopAction::FocusOutputNext => f.write_str("focus-output-next"),
             DesktopAction::FocusOutputDir(d) => write!(f, "focus-output-{}", d.slug()),
             DesktopAction::SendToOutputDir(d) => write!(f, "send-to-output-{}", d.slug()),
@@ -221,6 +229,7 @@ impl FromStr for DesktopAction {
             "inc-master" => Self::IncMaster,
             "dec-master" => Self::DecMaster,
             "promote-to-master" => Self::PromoteToMaster,
+            "swap-master" => Self::SwapMaster,
             "focus-output-next" => Self::FocusOutputNext,
             "quit" => Self::Quit,
             _ => {
@@ -247,6 +256,8 @@ impl FromStr for DesktopAction {
                     )
                 } else if let Some(n) = s.strip_prefix("send-to-workspace:") {
                     Self::SendToWorkspace(parse_workspace(n)?)
+                } else if let Some(n) = s.strip_prefix("move-to-workspace:") {
+                    Self::MoveToWorkspace(parse_workspace(n)?)
                 } else if let Some(n) = s.strip_prefix("workspace:") {
                     Self::SwitchWorkspace(parse_workspace(n)?)
                 } else if let Some(cmd) = s.strip_prefix("spawn:") {
