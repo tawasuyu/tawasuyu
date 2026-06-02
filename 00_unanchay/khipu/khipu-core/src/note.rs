@@ -33,6 +33,15 @@ pub struct Note {
     /// pasa al archivo (no se borra). En payloads viejos arranca en 1.0.
     #[serde(default = "default_mass")]
     pub mass: f32,
+    /// Posición ancla en el lienzo del mapa, en coordenadas de mundo.
+    /// Se fija **una sola vez** cuando la nota se coloca (por gravedad
+    /// semántica, contra las notas ya asentadas) y se persiste: el mapa
+    /// es estable — un pensamiento conserva su domicilio para que la
+    /// memoria espacial pueda recordarlo. `None` = todavía sin colocar
+    /// (el caller le asigna lugar la primera vez que la pinta). En
+    /// payloads viejos arranca en `None` y se coloca al cargar.
+    #[serde(default)]
+    pub pos: Option<(f32, f32)>,
 }
 
 fn default_mass() -> f32 {
@@ -72,6 +81,7 @@ mod tests {
             updated_at: 0,
             last_access: 0,
             mass: 1.0,
+            pos: None,
         }
     }
 

@@ -46,6 +46,7 @@ impl NoteStore {
                 updated_at: now,
                 last_access: now,
                 mass: 1.0,
+                pos: None,
             },
         );
         id
@@ -105,6 +106,19 @@ impl NoteStore {
         match self.notes.get_mut(&id) {
             Some(n) => {
                 n.mass = mass;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Fija la posición ancla de una nota en el lienzo. Se llama una sola
+    /// vez al colocarla; de ahí en más el domicilio del pensamiento no se
+    /// mueve salvo que el usuario lo arrastre. `false` si la nota no existe.
+    pub fn set_pos(&mut self, id: NoteId, x: f32, y: f32) -> bool {
+        match self.notes.get_mut(&id) {
+            Some(n) => {
+                n.pos = Some((x, y));
                 true
             }
             None => false,
@@ -312,6 +326,16 @@ mod tests {
         let id = s.create("x", "y", vec![], 100);
         assert!(s.set_mass(id, 0.42));
         assert!((s.get(id).unwrap().mass - 0.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn set_pos_anchors_the_note_once() {
+        let mut s = NoteStore::new();
+        let id = s.create("x", "y", vec![], 100);
+        assert_eq!(s.get(id).unwrap().pos, None);
+        assert!(s.set_pos(id, 12.0, -8.0));
+        assert_eq!(s.get(id).unwrap().pos, Some((12.0, -8.0)));
+        assert!(!s.set_pos(9_999, 0.0, 0.0));
     }
 
     #[test]

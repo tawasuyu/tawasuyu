@@ -35,7 +35,7 @@ use directories::ProjectDirs;
 use khipu_share::{SharedNote, SignedBundle};
 use rimay_verbo::Provider;
 use khipu_core::{Note, NoteId, NoteStore};
-use khipu_gravity::{Gravity, GravityConfig, NotePlacement, Params, SemanticField};
+use khipu_gravity::{Gravity, Params, SemanticField};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_hal::winit::keyboard::{Key, NamedKey};
 use llimphi_ui::llimphi_layout::taffy::{
@@ -44,8 +44,8 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle as KurboCircle, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
-use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, KeyEvent, KeyState, View};
+use llimphi_ui::llimphi_text::{draw_block, Alignment, TextBlock};
+use llimphi_ui::{App, DragPhase, Handle, KeyEvent, KeyState, View};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_editor::{
     text_editor_view, EditorMetrics, EditorPalette, EditorState, PointerEvent,
@@ -242,6 +242,13 @@ enum Msg {
     EditMenuAction(EditAction),
     /// Cierra cualquier menú abierto (principal o de edición).
     CloseMenus,
+    /// Pan del mapa: delta de arrastre en pixels de pantalla.
+    MapPan(f32, f32),
+    /// Zoom del mapa: delta de rueda (líneas, signo winit). Acerca/aleja.
+    MapZoom(f32),
+    /// Click en el lienzo en coords locales `(lx, ly)` sobre un rect
+    /// `(w, h)`: selecciona la nota más cercana bajo el cursor, si hay.
+    MapClick(f32, f32, f32, f32),
 }
 
 struct Model {
@@ -312,6 +319,12 @@ struct Model {
     edit_anim: Tween<f32>,
     /// Portapapeles del sistema, compartido por todas las acciones de edición.
     clipboard: SystemClipboard,
+    /// Desplazamiento de la cámara del mapa, en coordenadas de mundo. El
+    /// lienzo es infinito; arrastrar el fondo desplaza este vector.
+    cam_pan: (f32, f32),
+    /// Escala de la cámara del mapa (1.0 = mundo:pantalla). La rueda la
+    /// cambia; el zoom semántico futuro decidirá qué se inyecta según ella.
+    cam_zoom: f32,
 }
 
 struct KhipuApp;
@@ -390,6 +403,10 @@ impl App for KhipuApp {
                     && model.store.get(id).is_some()
                 {
                     model.field.insert(id, v);
+                    // Recién ahora la nota tiene vector: le damos domicilio
+                    // en el mapa una sola vez, cerca de sus parientes. Si ya
+                    // tenía posición (re-embed por edición), no se mueve.
+                    place_note(&mut model, id);
                     persist(&model);
                 }
             }
@@ -712,6 +729,29 @@ impl App for KhipuApp {
                 model.menu_active = usize::MAX;
                 model.edit_menu = None;
                 model.edit_active = usize::MAX;
+            }
+            Msg::MapPan(dx, dy) => {
+                // El delta viene en pixels de pantalla; lo llevamos a
+                // mundo dividiendo por el zoom para que el arrastre se
+                // sienta 1:1 con el cursor a cualquier escala.
+                let z = model.cam_zoom.max(0.01);
+                model.cam_pan.0 += dx / z;
+                model.cam_pan.1 += dy / z;
+            }
+            Msg::MapZoom(dy) => {
+                // dy>0 = rueda hacia el usuario (winit invierte el signo en
+                // el event loop) → alejar. Factor multiplicativo, clamp para
+                // no perder el mapa.
+                let factor = (1.0 - dy * 0.12).clamp(0.5, 2.0);
+                model.cam_zoom = (model.cam_zoom * factor).clamp(0.15, 6.0);
+            }
+            Msg::MapClick(lx, ly, rw, rh) => {
+                if let Some(id) = pick_note(&model, lx, ly, rw, rh) {
+                    commit_edits(&mut model, h);
+                    reinforce_and_touch(&mut model, id);
+                    select(&mut model, id);
+                    persist(&model);
+                }
             }
         }
         model
@@ -1604,15 +1644,180 @@ fn join_or_dash(items: &[String]) -> String {
     }
 }
 
+/// Un nodo del mapa, ya resuelto a coordenadas de mundo + su masa viva.
+/// Datos planos para viajar dentro de la closure de pintura.
+struct MapNode {
+    id: NoteId,
+    /// Coordenadas de mundo (el domicilio fijo de la nota).
+    x: f32,
+    y: f32,
+    /// Masa "vivida" en el instante del render: enciende el brillo y el
+    /// tamaño. Decae con el tiempo → el mapa respira sin que toques nada.
+    mass: f32,
+    /// `false` si cayó bajo el horizonte (sólo se ve con archivo activo).
+    visible: bool,
+    color: Color,
+    label: String,
+}
+
+/// Mundo → pantalla local (relativa al rect del lienzo). El centro del
+/// rect es el ancla del zoom; `pan` se suma en mundo, luego se escala.
+fn world_to_local(wx: f32, wy: f32, w: f32, h: f32, pan: (f32, f32), zoom: f32) -> (f32, f32) {
+    (w * 0.5 + (wx + pan.0) * zoom, h * 0.5 + (wy + pan.1) * zoom)
+}
+
+/// Inversa de [`world_to_local`]: pantalla local → mundo. Para resolver
+/// qué nota cae bajo un click.
+fn local_to_world(lx: f32, ly: f32, w: f32, h: f32, pan: (f32, f32), zoom: f32) -> (f32, f32) {
+    let z = zoom.max(1e-3);
+    ((lx - w * 0.5) / z - pan.0, (ly - h * 0.5) / z - pan.1)
+}
+
+/// La nota colocada más cercana a un click en coords locales, dentro de un
+/// radio de tolerancia (~18 px de pantalla). `None` si el click cae en el
+/// vacío — así arrastrar el fondo no cambia la selección.
+fn pick_note(model: &Model, lx: f32, ly: f32, w: f32, h: f32) -> Option<NoteId> {
+    let (wx, wy) = local_to_world(lx, ly, w, h, model.cam_pan, model.cam_zoom);
+    let now = now_secs();
+    let mut best: Option<(NoteId, f32)> = None;
+    for id in &model.order {
+        let Some(n) = model.store.get(*id) else { continue };
+        let Some((px, py)) = n.pos else { continue };
+        if !model.show_archive {
+            let m = current_mass(&model.gravity, n, now);
+            if !model.gravity.is_visible(m) {
+                continue;
+            }
+        }
+        let d2 = (px - wx).powi(2) + (py - wy).powi(2);
+        if best.map(|(_, bd)| d2 < bd).unwrap_or(true) {
+            best = Some((*id, d2));
+        }
+    }
+    let tol = (18.0 / model.cam_zoom.max(1e-3)).powi(2);
+    best.filter(|(_, d2)| *d2 <= tol).map(|(id, _)| id)
+}
+
+/// Separación mínima entre nodos al colocarlos (coordenadas de mundo).
+const MAP_MIN_SEP: f32 = 30.0;
+/// Ángulo áureo en radianes — reparte determinísticamente lo que no tiene
+/// parentela semántica sin amontonarlo.
+const GOLDEN_ANGLE: f32 = 2.399_963_2;
+
+/// Le da a `id` un domicilio fijo en el mapa, **una sola vez**: cae en el
+/// baricentro de sus parientes semánticos (ponderado por afinidad) y, si
+/// quedó pegada a otra nota, se separa apenas. Determinista y dependiente
+/// sólo de las notas ya asentadas, así el orden de inserción es estable y
+/// el mapa nunca se reacomoda solo.
+fn place_note(model: &mut Model, id: NoteId) {
+    if model.store.get(id).map(|n| n.pos.is_some()).unwrap_or(true) {
+        return; // ya tiene domicilio (o no existe): no se mueve.
+    }
+    // Vecinos ya colocados: su afinidad con la nota nueva y su posición.
+    let mut kin: Vec<(f32, (f32, f32))> = Vec::new();
+    for other in &model.order {
+        if *other == id {
+            continue;
+        }
+        let Some(pos) = model.store.get(*other).and_then(|n| n.pos) else { continue };
+        let aff = model.field.affinity(id, *other).unwrap_or(0.0).max(0.0);
+        kin.push((aff, pos));
+    }
+
+    let target = if kin.is_empty() {
+        (0.0, 0.0) // primera nota del cuaderno: centro del mundo.
+    } else {
+        let wsum: f32 = kin.iter().map(|(w, _)| *w).sum();
+        if wsum > 1e-3 {
+            // Cae junto a su parentela: baricentro ponderado por afinidad.
+            let (mut tx, mut ty) = (0.0_f32, 0.0_f32);
+            for (w, (x, y)) in &kin {
+                tx += w * x;
+                ty += w * y;
+            }
+            (tx / wsum, ty / wsum)
+        } else {
+            // Ortogonal a todo: anillo determinista por id, lejos del núcleo.
+            let ang = id as f32 * GOLDEN_ANGLE;
+            let rad = 180.0 + 14.0 * (id as f32).sqrt();
+            (rad * ang.cos(), rad * ang.sin())
+        }
+    };
+
+    // Separación: empuja el target hasta despegarlo de cada vecino cercano.
+    let mut p = target;
+    for _ in 0..12 {
+        let mut moved = false;
+        for (_, q) in &kin {
+            let dx = p.0 - q.0;
+            let dy = p.1 - q.1;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d < MAP_MIN_SEP {
+                let (ux, uy) = if d > 1e-3 {
+                    (dx / d, dy / d)
+                } else {
+                    let a = id as f32 * GOLDEN_ANGLE;
+                    (a.cos(), a.sin())
+                };
+                let push = MAP_MIN_SEP - d;
+                p.0 += ux * push;
+                p.1 += uy * push;
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+
+    model.store.set_pos(id, p.0, p.1);
+}
+
 fn gravity_panel(model: &Model) -> View<Msg> {
-    let placements = model.field.gravity_layout(&GravityConfig::default());
+    let theme = model.theme;
+    let now = now_secs();
     let clusters = model.field.clusters(CLUSTER_THRESHOLD);
     let selected = model.selected;
-    let theme = model.theme;
-    let labels: Vec<(NoteId, String)> = placements
-        .iter()
-        .filter_map(|p| model.store.get(p.id).map(|n| (p.id, short_label(&n.title))))
-        .collect();
+    let pan = model.cam_pan;
+    let zoom = model.cam_zoom;
+
+    // Nodos colocados (los que ya tienen domicilio), con su masa viva.
+    let mut nodes: Vec<MapNode> = Vec::new();
+    for id in &model.order {
+        let Some(n) = model.store.get(*id) else { continue };
+        let Some((x, y)) = n.pos else { continue };
+        let mass = current_mass(&model.gravity, n, now);
+        let visible = model.gravity.is_visible(mass);
+        if !visible && !model.show_archive {
+            continue;
+        }
+        nodes.push(MapNode {
+            id: *id,
+            x,
+            y,
+            mass,
+            visible,
+            color: cluster_color(*id, &clusters, theme),
+            label: short_label(&n.title),
+        });
+    }
+
+    // Filamentos del nodo seleccionado: sus parientes más afines ya
+    // colocados. Elegir un pensamiento enciende sus vecinos (activación
+    // por difusión) — el motor de serendipia.
+    let mut links: Vec<((f32, f32), (f32, f32), f32)> = Vec::new();
+    if let Some(sel) = selected {
+        if let Some(sp) = model.store.get(sel).and_then(|n| n.pos) {
+            for (nid, aff) in model.field.nearest(sel, 6) {
+                if aff < 0.20 {
+                    continue;
+                }
+                if let Some(np) = model.store.get(nid).and_then(|n| n.pos) {
+                    links.push((sp, np, aff));
+                }
+            }
+        }
+    }
 
     let canvas = View::new(Style {
         size: Size {
@@ -1622,9 +1827,15 @@ fn gravity_panel(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .paint_with(move |scene, _ts, rect| {
-        paint_gravity(scene, rect, &placements, &clusters, &labels, selected, theme);
-    });
+    .paint_with(move |scene, ts, rect| {
+        paint_map(scene, ts, rect, &nodes, &links, selected, pan, zoom, theme);
+    })
+    .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
+        DragPhase::Move => Some(Msg::MapPan(dx, dy)),
+        DragPhase::End => None,
+    })
+    .on_scroll(|_dx, dy| Some(Msg::MapZoom(dy)))
+    .on_click_at(|lx, ly, w, h| Some(Msg::MapClick(lx, ly, w, h)));
 
     View::new(Style {
         size: Size {
@@ -1649,95 +1860,80 @@ fn gravity_panel(model: &Model) -> View<Msg> {
     .children(vec![canvas])
 }
 
-fn paint_gravity(
+#[allow(clippy::too_many_arguments)]
+fn paint_map(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    ts: &mut llimphi_ui::llimphi_text::Typesetter,
     rect: llimphi_ui::PaintRect,
-    placements: &[NotePlacement],
-    clusters: &[Vec<NoteId>],
-    labels: &[(NoteId, String)],
+    nodes: &[MapNode],
+    links: &[((f32, f32), (f32, f32), f32)],
     selected: Option<NoteId>,
+    pan: (f32, f32),
+    zoom: f32,
     theme: Theme,
 ) {
-    if placements.is_empty() || rect.w <= 0.0 || rect.h <= 0.0 {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
         return;
     }
-    let (min_x, max_x, min_y, max_y) = placements.iter().fold(
-        (f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY),
-        |(mnx, mxx, mny, mxy), p| {
-            (
-                mnx.min(p.x),
-                mxx.max(p.x),
-                mny.min(p.y),
-                mxy.max(p.y),
-            )
-        },
-    );
-    let pad = 36.0_f32;
-    let span_x = (max_x - min_x).max(1.0);
-    let span_y = (max_y - min_y).max(1.0);
-    let scale = ((rect.w - pad * 2.0).max(10.0) / span_x)
-        .min((rect.h - pad * 2.0).max(10.0) / span_y);
-    let cx = rect.x + rect.w * 0.5;
-    let cy = rect.y + rect.h * 0.5;
-    let mx = (min_x + max_x) * 0.5;
-    let my = (min_y + max_y) * 0.5;
-    let project = |p: &NotePlacement| -> (f32, f32) {
-        (cx + (p.x - mx) * scale, cy + (p.y - my) * scale)
+    // Pantalla absoluta = origen del rect + pantalla local.
+    let to_screen = |wx: f32, wy: f32| -> (f64, f64) {
+        let (lx, ly) = world_to_local(wx, wy, rect.w, rect.h, pan, zoom);
+        ((rect.x + lx) as f64, (rect.y + ly) as f64)
     };
 
-    for p in placements {
-        let (px, py) = project(p);
-        let color = cluster_color(p.id, clusters, theme);
-        let r = if selected == Some(p.id) { 9.0 } else { 6.0 };
-        let circle = KurboCircle::new((px as f64, py as f64), r);
-        scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &circle);
-        if selected == Some(p.id) {
-            let ring = KurboCircle::new((px as f64, py as f64), (r + 3.0) as f64);
-            scene.stroke(
-                &Stroke::new(2.0),
-                Affine::IDENTITY,
-                theme.accent,
-                None,
-                &ring,
-            );
-        }
-    }
-
-    let line_color = with_alpha(theme.border, 0.55);
-    for cluster in clusters {
-        if cluster.len() < 2 {
-            continue;
-        }
-        let pts: Vec<(f32, f32)> = cluster
-            .iter()
-            .filter_map(|cid| placements.iter().find(|p| p.id == *cid).map(project))
-            .collect();
-        if pts.len() < 2 {
-            continue;
-        }
-        let (sx, sy) = pts.iter().fold((0.0, 0.0), |(ax, ay), (x, y)| (ax + x, ay + y));
-        let cx_g = sx / pts.len() as f32;
-        let cy_g = sy / pts.len() as f32;
+    // Filamentos primero (debajo de los nodos). Más opacos cuanto más afín.
+    for (a, b, aff) in links {
+        let (ax, ay) = to_screen(a.0, a.1);
+        let (bx, by) = to_screen(b.0, b.1);
         let mut path = BezPath::new();
-        for (x, y) in &pts {
-            path.move_to((cx_g as f64, cy_g as f64));
-            path.line_to((*x as f64, *y as f64));
-        }
+        path.move_to((ax, ay));
+        path.line_to((bx, by));
+        let alpha = (0.18 + aff * 0.55).clamp(0.0, 0.85);
         scene.stroke(
-            &Stroke::new(1.0).with_dashes(0.0, [3.0, 3.0]),
+            &Stroke::new((0.8 + *aff as f64 * 1.6).max(0.6)),
             Affine::IDENTITY,
-            line_color,
+            with_alpha(theme.accent, alpha),
             None,
             &path,
         );
     }
 
-    // Etiquetas como rectángulos diminutos al lado de cada nodo
-    // serían un trabajo de typesetter; en MVP imprimimos sólo el
-    // título de la nota seleccionada arriba.
-    if let Some(sel) = selected {
-        if let Some((_, label)) = labels.iter().find(|(id, _)| *id == sel) {
-            let _ = label; // intencional: el texto va por View::text en otro nodo.
+    // Nodos: tamaño y brillo crecen con la masa viva (el mapa respira).
+    for n in nodes {
+        let (px, py) = to_screen(n.x, n.y);
+        let m = n.mass.clamp(0.0, 2.0);
+        // Radio base por masa, escalado apenas por zoom para no inflarse.
+        let r = (3.0 + m * 4.5) * (0.6 + 0.4 * zoom.clamp(0.5, 1.5));
+        // Brillo: las notas frescas arden; las que se enfrían se apagan
+        // hacia el fondo. Bajo el horizonte (archivo) van casi transparentes.
+        let glow = if n.visible {
+            (0.35 + m * 0.45).clamp(0.0, 1.0)
+        } else {
+            0.18
+        };
+        let color = with_alpha(n.color, glow);
+        // Halo tenue alrededor de las notas más encendidas.
+        if n.visible && m > 0.6 {
+            let halo = KurboCircle::new((px, py), (r + 5.0) as f64);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, with_alpha(n.color, 0.10), None, &halo);
+        }
+        let circle = KurboCircle::new((px, py), r as f64);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &circle);
+
+        if selected == Some(n.id) {
+            let ring = KurboCircle::new((px, py), (r + 3.0) as f64);
+            scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, theme.accent, None, &ring);
+        }
+
+        // Etiqueta: sólo si el zoom da espacio o es la seleccionada — para
+        // no saturar el mapa lejano. El texto sale del Typesetter.
+        if (zoom >= 0.9 || selected == Some(n.id)) && n.visible {
+            let lbl_col = with_alpha(theme.fg_text, (glow + 0.25).clamp(0.0, 1.0));
+            draw_block(
+                scene,
+                ts,
+                &TextBlock::simple(&n.label, 10.0, lbl_col, (px + r as f64 + 4.0, py - 7.0)),
+            );
         }
     }
 }
@@ -2586,6 +2782,8 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         edit_active: usize::MAX,
         edit_anim: Tween::idle(1.0),
         clipboard: SystemClipboard::new(),
+        cam_pan: (0.0, 0.0),
+        cam_zoom: 1.0,
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -2605,12 +2803,24 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
             .collect();
         for id in missing {
             embed_now(&mut model, id);
+            place_note(&mut model, id);
         }
     } else {
         let ids: Vec<NoteId> = model.order.clone();
         for id in ids {
             embed_now(&mut model, id);
         }
+    }
+    // Notas cargadas de disco sin posición (payloads viejos previos al
+    // anclaje) reciben domicilio ahora, en orden, contra las ya asentadas.
+    let unplaced: Vec<NoteId> = model
+        .order
+        .iter()
+        .copied()
+        .filter(|id| model.store.get(*id).map(|n| n.pos.is_none()).unwrap_or(false))
+        .collect();
+    for id in unplaced {
+        place_note(&mut model, id);
     }
     model
 }
@@ -2650,6 +2860,8 @@ fn seeded_model(embedder: Embedder) -> Model {
         edit_active: usize::MAX,
         edit_anim: Tween::idle(1.0),
         clipboard: SystemClipboard::new(),
+        cam_pan: (0.0, 0.0),
+        cam_zoom: 1.0,
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [
@@ -2694,6 +2906,7 @@ fn seeded_model(embedder: Embedder) -> Model {
         let id = model.store.create(title, body, tags, now);
         model.order.push(id);
         embed_now(&mut model, id);
+        place_note(&mut model, id);
     }
     model
 }
