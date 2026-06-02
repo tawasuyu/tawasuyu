@@ -47,6 +47,7 @@ impl DiscernPipeline {
         p.push(Box::new(GeoJsonProbe));
         p.push(Box::new(GpxProbe));
         p.push(Box::new(KmlProbe));
+        p.push(Box::new(PmtilesProbe));
         p.push(Box::new(JsonProbe));
         p.push(Box::new(TomlProbe));
         p.push(Box::new(TabularProbe));
@@ -361,6 +362,26 @@ impl Discerner for KmlProbe {
     }
 }
 
+/// PMTiles: contenedor binario de vector tiles. Magic `PMTiles` + versión 3.
+/// Emite lens `map` (mismo que GeoJSON/GPX/KML) para el visor de mapas.
+pub struct PmtilesProbe;
+
+impl Discerner for PmtilesProbe {
+    fn name(&self) -> &str { "pmtiles" }
+
+    fn discern(&self, s: &[u8], _h: &Hint<'_>) -> Option<Discernment> {
+        if s.len() < 8 || &s[0..7] != b"PMTiles" {
+            return None;
+        }
+        Some(Discernment {
+            ty: TypeRef::Primitive { name: "pmtiles".into() },
+            confidence: 0.99,
+            mime: Some("application/vnd.pmtiles".into()),
+            lens: Some("map".into()),
+        })
+    }
+}
+
 /// Texto UTF-8 plano. Fallback de baja confidence.
 pub struct Utf8Probe;
 
@@ -543,6 +564,16 @@ mod tests {
         let r = discern(kml).unwrap();
         assert_eq!(r.lens.as_deref(), Some("map"));
         assert_eq!(r.mime.as_deref(), Some("application/vnd.google-earth.kml+xml"));
+    }
+
+    #[test]
+    fn pmtiles_detectado_como_mapa() {
+        let mut b = b"PMTiles".to_vec();
+        b.push(3); // versión
+        b.extend_from_slice(&[0u8; 32]);
+        let r = discern(&b).unwrap();
+        assert_eq!(r.lens.as_deref(), Some("map"));
+        assert_eq!(r.mime.as_deref(), Some("application/vnd.pmtiles"));
     }
 
     #[test]

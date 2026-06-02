@@ -199,6 +199,7 @@ pub fn builtin_registry() -> Vec<ViewerCard> {
                 "application/vnd.geo+json",
                 "application/gpx+xml",
                 "application/vnd.google-earth.kml+xml",
+                "application/vnd.pmtiles",
             ],
             Normal,
         ),

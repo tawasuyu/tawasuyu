@@ -40,11 +40,12 @@ use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{draw_block, Alignment, TextBlock};
 use llimphi_ui::View;
 
+pub mod pmtiles;
 pub mod vt;
 
-/// Tope de bytes a leer (16 MiB). Un GeoJSON más grande que eso es un
-/// dataset, no un documento a ojo; el caller puede subirlo si hace falta.
-pub const DEFAULT_MAP_BYTES_MAX: u64 = 16 * 1024 * 1024;
+/// Tope de bytes a leer (128 MiB). Holgado para extractos PMTiles de ciudad;
+/// el caller puede subirlo. (Un planeta entero pide streaming, no leer todo.)
+pub const DEFAULT_MAP_BYTES_MAX: u64 = 128 * 1024 * 1024;
 
 /// Tope de vértices a retener. Cortar datasets enormes mantiene el panel
 /// instantáneo (vello rebuild es barato hasta ~500 K primitivos/frame).
@@ -185,6 +186,20 @@ impl MapData {
     fn total_features(&self) -> usize {
         self.points.len() + self.lines.len() + self.polygons.len()
     }
+
+    /// Anexa otro `MapData`, reindexando sus features (para fusionar varios
+    /// tiles en un solo mapa).
+    fn append(&mut self, other: MapData) {
+        let base = self.features.len();
+        self.features.extend(other.features);
+        self.labels.extend(other.labels);
+        self.points.extend(other.points);
+        self.point_feat.extend(other.point_feat.into_iter().map(|f| f + base));
+        self.lines.extend(other.lines);
+        self.line_feat.extend(other.line_feat.into_iter().map(|f| f + base));
+        self.polygons.extend(other.polygons);
+        self.polygon_feat.extend(other.polygon_feat.into_iter().map(|f| f + base));
+    }
 }
 
 /// Estado del visor. Replica la forma de los otros para que el shell lo
@@ -205,20 +220,29 @@ pub enum MapPreview {
     Error(String),
 }
 
-/// Lee el archivo y lo parsea a geometrías. La detección de tipo ya la hizo
-/// el shell (lens `map`); acá leemos UTF-8 y desarmamos el GeoJSON.
+/// Lee el archivo y lo parsea a geometrías, desambiguando el formato por
+/// contenido: PMTiles (binario), GPX/KML (XML), GeoJSON (JSON).
 pub fn load_map(path: &Path, max_bytes: u64) -> MapPreview {
     match std::fs::metadata(path) {
         Ok(meta) if meta.len() > max_bytes => return MapPreview::TooBig(meta.len()),
         Err(e) => return MapPreview::Error(e.to_string()),
         _ => {}
     }
-    let src = match std::fs::read_to_string(path) {
-        Ok(s) => s,
+    let raw = match std::fs::read(path) {
+        Ok(b) => b,
         Err(e) => return MapPreview::Error(e.to_string()),
     };
+    // PMTiles: contenedor binario de vector tiles (magic "PMTiles").
+    if raw.starts_with(PMTILES_MAGIC) {
+        return load_pmtiles_overview(raw);
+    }
+    // El resto es texto.
+    let src = match String::from_utf8(raw) {
+        Ok(s) => s,
+        Err(_) => return MapPreview::Error("archivo binario no reconocido".into()),
+    };
     // GPX/KML son XML (arrancan con `<`); GeoJSON es JSON (`{`/`[`). El shell
-    // rutea los tres al lens `map`, así que el visor desambigua por contenido.
+    // rutea todos al lens `map`, así que el visor desambigua por contenido.
     if src.trim_start().starts_with('<') {
         let head = &src[..src.len().min(2048)];
         if head.contains("<kml") {
@@ -277,6 +301,49 @@ pub fn mvt_tile_to_mapdata(bytes: &[u8], z: u32, x: u32, y: u32) -> MapData {
         }
     }
     data
+}
+
+/// Magic de un archivo PMTiles v3.
+const PMTILES_MAGIC: &[u8] = b"PMTiles";
+
+/// Carga una **vista general** de un `.pmtiles`: decodifica los tiles del zoom
+/// más bajo que cubra el contenido (pocos tiles) y los funde en un [`MapData`].
+/// Es el basemap soberano en su forma MVP: muestra el mapa completo a baja
+/// resolución, reutilizando todo el render. El streaming por viewport (más
+/// detalle al hacer zoom) es el paso siguiente.
+pub fn load_pmtiles_overview(bytes: Vec<u8>) -> MapPreview {
+    let pm = match pmtiles::PmTiles::from_bytes(bytes) {
+        Ok(p) => p,
+        Err(e) => return MapPreview::Error(e),
+    };
+    if pm.header.tile_type != 1 {
+        return MapPreview::Error("pmtiles: sólo se soportan tiles MVT".into());
+    }
+    // Elegí el zoom más bajo cuyos tiles no superen un tope (vista general).
+    const MAX_TILES: u32 = 64;
+    let mut chosen = pm.header.min_zoom as u32;
+    for z in pm.header.min_zoom as u32..=pm.header.max_zoom as u32 {
+        let span = 1u32 << z;
+        if span.saturating_mul(span) <= MAX_TILES {
+            chosen = z;
+        } else {
+            break;
+        }
+    }
+    let span = 1u32 << chosen;
+    let mut data = MapData::default();
+    for x in 0..span {
+        for y in 0..span {
+            if let Some(tile) = pm.tile(chosen, x, y) {
+                data.append(mvt_tile_to_mapdata(&tile, chosen, x, y));
+            }
+        }
+    }
+    if data.total_features() == 0 {
+        MapPreview::NoGeometry
+    } else {
+        MapPreview::Map { data, truncated: false }
+    }
 }
 
 /// Nombres de campos numéricos presentes en las features, en orden de primera
@@ -2695,6 +2762,84 @@ mod tests {
         assert_eq!(d.lines.len(), 1);
         assert_eq!(d.lines[0].len(), 2);
         assert_eq!(d.features[0].name.as_deref(), Some("roads"));
+    }
+
+    #[test]
+    fn pmtiles_overview_end_to_end() {
+        // Construye un MVT (una LINESTRING), lo envuelve en un .pmtiles mínimo
+        // y verifica que load_pmtiles_overview lo decodifica a MapData. Es el
+        // camino completo decoder MVT + contenedor PMTiles, con datos sintéticos
+        // (el archivo real validará compresión/Hilbert a escala).
+        fn varint(out: &mut Vec<u8>, mut v: u64) {
+            loop {
+                let mut b = (v & 0x7f) as u8;
+                v >>= 7;
+                if v != 0 {
+                    b |= 0x80;
+                }
+                out.push(b);
+                if v == 0 {
+                    break;
+                }
+            }
+        }
+        let zz = |v: i32| ((v << 1) ^ (v >> 31)) as u64;
+        // MVT con una línea de dos vértices, capa "roads".
+        let mut geom = Vec::new();
+        varint(&mut geom, (1 << 3) | 1);
+        varint(&mut geom, zz(100));
+        varint(&mut geom, zz(100));
+        varint(&mut geom, (1 << 3) | 2);
+        varint(&mut geom, zz(50));
+        varint(&mut geom, zz(0));
+        let mut feat = Vec::new();
+        varint(&mut feat, (3 << 3) | 0);
+        varint(&mut feat, 2);
+        varint(&mut feat, (4 << 3) | 2);
+        varint(&mut feat, geom.len() as u64);
+        feat.extend_from_slice(&geom);
+        let mut layer = Vec::new();
+        varint(&mut layer, (1 << 3) | 2);
+        varint(&mut layer, 5);
+        layer.extend_from_slice(b"roads");
+        varint(&mut layer, (2 << 3) | 2);
+        varint(&mut layer, feat.len() as u64);
+        layer.extend_from_slice(&feat);
+        let mut mvt = Vec::new();
+        varint(&mut mvt, (3 << 3) | 2);
+        varint(&mut mvt, layer.len() as u64);
+        mvt.extend_from_slice(&layer);
+
+        // .pmtiles mínimo (un tile en z0, sin compresión).
+        let mut dir = Vec::new();
+        varint(&mut dir, 1); // 1 entrada
+        varint(&mut dir, 0); // tile_id 0
+        varint(&mut dir, 1); // run_length
+        varint(&mut dir, mvt.len() as u64); // length
+        varint(&mut dir, 1); // offset+1
+        let root_off = 127u64;
+        let tile_off = root_off + dir.len() as u64;
+        let mut file = vec![0u8; 127];
+        file[0..7].copy_from_slice(b"PMTiles");
+        file[7] = 3;
+        file[8..16].copy_from_slice(&root_off.to_le_bytes());
+        file[16..24].copy_from_slice(&(dir.len() as u64).to_le_bytes());
+        file[40..48].copy_from_slice(&tile_off.to_le_bytes());
+        file[56..64].copy_from_slice(&tile_off.to_le_bytes());
+        file[64..72].copy_from_slice(&(mvt.len() as u64).to_le_bytes());
+        file[97] = 1; // internal none
+        file[98] = 1; // tile none
+        file[99] = 1; // mvt
+        file.extend_from_slice(&dir);
+        file.extend_from_slice(&mvt);
+
+        match load_pmtiles_overview(file) {
+            MapPreview::Map { data, .. } => {
+                assert_eq!(data.lines.len(), 1);
+                assert_eq!(data.features[0].name.as_deref(), Some("roads"));
+            }
+            other => panic!("esperaba Map, fue {other:?}"),
+        }
     }
 
     #[test]
