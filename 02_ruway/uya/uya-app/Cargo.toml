@@ -27,14 +27,21 @@ doctest = false
 [features]
 default = []
 # Captura desde una webcam real (v4l2, Linux) en vez de la TestCard sintética.
-# Off por defecto para que `cargo check --workspace` no arrastre v4l2.
-camara = ["dep:media-source-capture", "media-source-capture/camera"]
+# Off por defecto para que `cargo check --workspace` no arrastre v4l2/libclang.
+camara = ["media-source-capture/camera"]
 
 [dependencies]
 uya-core = { path = "../uya-core" }
 # TestCard (gradiente animado): la "cámara" por defecto, sin tocar hardware ni
-# sumar dependencias de sistema — el pipeline anda en cualquier máquina.
+# sumar dependencias de sistema — el pipeline anda en cualquier máquina. Aporta
+# además el trait `AudioSource` y `ToneSource` (tono sintético del micrófono).
 media-core = { path = "../../media/media-core" }
-# Cámara real, sólo bajo la feature `camara`.
-media-source-capture = { path = "../../media/media-source-capture", default-features = false, optional = true }
+# Micrófono real vía cpal (feature `mic`, siempre); cámara v4l2 sólo bajo
+# `camara`. El núcleo `live_audio`/`convert` no toca hardware.
+media-source-capture = { path = "../../media/media-source-capture", default-features = false, features = ["mic"] }
+# Reproducción de audio por el dispositivo de salida (cpal).
+media-audio-cpal = { path = "../../media/media-audio-cpal" }
+# El `AudioSink` lockea la fuente con un `parking_lot::Mutex` en su callback
+# realtime; usamos el mismo tipo para la `MezclaRemota`.
+parking_lot = { workspace = true }
 tokio = { workspace = true }

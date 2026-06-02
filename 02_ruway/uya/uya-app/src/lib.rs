@@ -10,11 +10,14 @@
 //  un hilo de la UI hace `for ev in rx { handle.dispatch(Msg::Red(ev)) }`.
 // =============================================================================
 
+mod audio;
 mod captura;
 mod enlace;
 
+pub use audio::{iniciar_microfono, iniciar_reproduccion, MezclaRemota};
 pub use captura::iniciar_camara;
 pub use enlace::Enlace;
+pub use media_audio_cpal::AudioSink;
 pub use uya_core::{
     hex_corto, id_desde_nombre, Paquete, Participante, ParticipanteId, Sala,
 };

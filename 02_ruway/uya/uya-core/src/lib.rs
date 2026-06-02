@@ -58,6 +58,14 @@ pub enum Paquete {
         seq: u32,
         rgba: Vec<u8>,
     },
+    /// Un bloque de audio PCM `f32` intercalado, en el formato nativo del
+    /// emisor (`sample_rate` Hz, `canales`). El receptor lo mezcla/resamplea
+    /// al formato de su dispositivo de salida (ver `uya-app::MezclaRemota`).
+    Audio {
+        sample_rate: u32,
+        canales: u8,
+        muestras: Vec<f32>,
+    },
     /// Me voy de la llamada (cuelgue ordenado).
     Adios,
 }
@@ -171,6 +179,11 @@ mod tests {
                 alto: 2,
                 seq: 7,
                 rgba: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            },
+            Paquete::Audio {
+                sample_rate: 48_000,
+                canales: 1,
+                muestras: vec![0.0, 0.5, -0.5, 1.0],
             },
             Paquete::Adios,
         ];

@@ -48,6 +48,10 @@ fn main() {
     }
 
     iniciar_camara(enlace.clone(), 192, 144, 12.0);
+    // Audio: reproducción sobre la mezcla remota + captura de micrófono.
+    let mezcla = enlace.mezcla();
+    let _sink = uya_app::iniciar_reproduccion(mezcla.clone());
+    uya_app::iniciar_microfono(enlace.clone());
 
     // Reporte: agregamos los cuadros por participante para no inundar la salida.
     let mut cuadros = std::collections::HashMap::<[u8; 32], u64>::new();
@@ -76,6 +80,7 @@ fn main() {
             for (id, n) in &cuadros {
                 println!("  · [{}] {n} cuadros", hex_corto(id));
             }
+            println!("  ♪ {} muestras de audio recibidas", mezcla.lock().recibidas());
             ultimo_reporte = std::time::Instant::now();
         }
     }

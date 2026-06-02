@@ -42,16 +42,19 @@ Anda hoy, end-to-end y feo a propósito:
 - ✅ Identidad determinista por nombre (BLAKE3, estilo agora/ayni).
 - ✅ Presencia: entrar / salir / estado de medios.
 - ✅ **Video en ambos sentidos** (cuadros RGBA enmarcados sobre TCP) + preview local.
+- ✅ **Audio en ambos sentidos**: captura de micrófono (`MicSource`, o tono sintético
+  con `UYA_TONO=1` sin micro), `Paquete::Audio` PCM `f32`, y una `MezclaRemota` que
+  baja a mono + resamplea linealmente al formato del dispositivo + suma a los N pares,
+  reproducida por `AudioSink` (cpal).
 - ✅ Cámara sintética por defecto (TestCard); webcam real v4l2 con `--features camara` en `uya-app`.
 - ✅ Toggle de cámara / micrófono y cuelgue.
 
 ## Pendiente (por orden)
 
-1. **Audio**: capturar micrófono (`media-source-capture::MicSource`) + reproducir
-   (`media-audio-cpal::AudioSink`), enmarcado como un nuevo `Paquete::Audio`.
-2. **Mudar el transporte a card-net** (P2P soberano: relay/dcutr/autonat ya hechos)
+1. **Mudar el transporte a card-net** (P2P soberano: relay/dcutr/autonat ya hechos)
    sin tocar `uya-core` ni la UI — sólo otra impl de `Enlace`. Identidad por `agora`.
-3. **Compresión** de cuadros (hoy RGBA crudo; sirve en LAN, no en WAN). Reusar
-   `media-encode-av1` / un codec liviano.
-4. **Malla N-a-N** automática (hoy es manual: cada par se conecta) y/o un SFU mínimo.
-5. **Marcar/conectar desde la UI** (hoy el par se pasa por `UYA_CONECTAR`).
+2. **Compresión** de video y audio (hoy RGBA + PCM crudos; sirve en LAN, no en WAN).
+   Reusar `media-encode-av1` (video) y `media-encode-opus` (audio).
+3. **Malla N-a-N** automática (hoy es manual: cada par se conecta) y/o un SFU mínimo.
+4. **Marcar/conectar desde la UI** (hoy el par se pasa por `UYA_CONECTAR`).
+5. **Eco/jitter**: cancelación de eco acústico y un jitter buffer adaptativo (hoy fijo ~1 s).

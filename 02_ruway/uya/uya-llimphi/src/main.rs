@@ -51,6 +51,9 @@ struct Modelo {
     cuadros: HashMap<ParticipanteId, CuadroUI>,
     cam_on: bool,
     mic_on: bool,
+    /// Salida de audio: hay que conservarla viva (al soltarla, el stream
+    /// de reproducción se cierra). `None` si no hay dispositivo de salida.
+    _audio: Option<uya_app::AudioSink>,
 }
 
 #[derive(Clone)]
@@ -98,6 +101,9 @@ impl App for Uya {
 
         // Cámara sintética (256×192 @ 12 fps): preview local + difusión a pares.
         iniciar_camara(enlace.clone(), 256, 192, 12.0);
+        // Audio: reproducción de la mezcla remota + captura de micrófono.
+        let audio = uya_app::iniciar_reproduccion(enlace.mezcla());
+        uya_app::iniciar_microfono(enlace.clone());
 
         // Hilo de red: cada evento se reinyecta al bucle Elm.
         let h = handle.clone();
@@ -113,6 +119,7 @@ impl App for Uya {
             cuadros: HashMap::new(),
             cam_on: true,
             mic_on: true,
+            _audio: audio,
         }
     }
 

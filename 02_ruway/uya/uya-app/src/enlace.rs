@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -32,6 +34,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use uya_core::{id_desde_nombre, Paquete, ParticipanteId};
 
+use crate::audio::MezclaRemota;
 use crate::EventoUya;
 
 /// Tope defensivo del tamaño de un cuadro/paquete entrante (8 MiB). Evita que
@@ -54,6 +57,9 @@ pub struct Enlace {
     camara: Arc<AtomicBool>,
     microfono: Arc<AtomicBool>,
     direccion_local: Option<SocketAddr>,
+    /// Mezcla del audio entrante de todos los pares; la alimenta el lector y la
+    /// drena el `AudioSink` de reproducción (ver `audio`).
+    mezcla: Arc<Mutex<MezclaRemota>>,
     /// Se conserva para que el runtime no muera mientras el `Enlace` viva.
     _rt: RtHandle,
 }
@@ -73,6 +79,7 @@ impl Enlace {
         let (dial_tx, mut dial_rx) = tokio::sync::mpsc::unbounded_channel::<SocketAddr>();
         let camara = Arc::new(AtomicBool::new(true));
         let microfono = Arc::new(AtomicBool::new(true));
+        let mezcla = Arc::new(Mutex::new(MezclaRemota::default()));
 
         // Bind sincrónico para conocer la dirección real (útil con puerto 0).
         let std_listener = match bind {
@@ -91,6 +98,7 @@ impl Enlace {
             let salida_tx = salida_tx.clone();
             let camara = camara.clone();
             let microfono = microfono.clone();
+            let mezcla_rt = mezcla.clone();
             let nombre_rt = nombre.clone();
             std::thread::Builder::new()
                 .name("uya-net".into())
@@ -109,6 +117,7 @@ impl Enlace {
                             let sal = salida_tx.clone();
                             let cam = camara.clone();
                             let mic = microfono.clone();
+                            let mez = mezcla_rt.clone();
                             let nom = nombre_rt.clone();
                             tokio::spawn(async move {
                                 while let Ok((stream, _)) = listener.accept().await {
@@ -120,6 +129,7 @@ impl Enlace {
                                         ev.clone(),
                                         cam.clone(),
                                         mic.clone(),
+                                        mez.clone(),
                                     );
                                 }
                             });
@@ -130,11 +140,12 @@ impl Enlace {
                             let sal = salida_tx.clone();
                             let cam = camara.clone();
                             let mic = microfono.clone();
+                            let mez = mezcla_rt.clone();
                             let nom = nombre_rt.clone();
                             tokio::spawn(async move {
                                 match TcpStream::connect(addr).await {
                                     Ok(stream) => {
-                                        conectar_par(stream, yo, nom, sal, ev, cam, mic)
+                                        conectar_par(stream, yo, nom, sal, ev, cam, mic, mez)
                                     }
                                     Err(e) => eprintln!("uya: no pude conectar a {addr}: {e}"),
                                 }
@@ -155,6 +166,7 @@ impl Enlace {
             camara,
             microfono,
             direccion_local,
+            mezcla,
             _rt: rt,
         };
         Ok((enlace, ev_rx))
@@ -179,6 +191,12 @@ impl Enlace {
     /// auto-preview por el mismo canal que la red.
     pub fn eventos(&self) -> Sender<EventoUya> {
         self.eventos.clone()
+    }
+
+    /// La mezcla del audio entrante, para abrir la reproducción sobre ella
+    /// (ver `audio::iniciar_reproduccion`).
+    pub fn mezcla(&self) -> Arc<Mutex<MezclaRemota>> {
+        self.mezcla.clone()
     }
 
     /// Pide conectarse a un par. La conexión ocurre en el runtime; los errores
@@ -230,6 +248,7 @@ impl Enlace {
 /// Arma una conexión ya establecida: un task escritor (difunde la salida) y el
 /// loop lector (traduce paquetes a `EventoUya`). Comparte el código entre
 /// entrantes y salientes — el protocolo es simétrico.
+#[allow(clippy::too_many_arguments)]
 fn conectar_par(
     stream: TcpStream,
     yo: ParticipanteId,
@@ -238,6 +257,7 @@ fn conectar_par(
     eventos: Sender<EventoUya>,
     camara: Arc<AtomicBool>,
     microfono: Arc<AtomicBool>,
+    mezcla: Arc<Mutex<MezclaRemota>>,
 ) {
     let _ = stream.set_nodelay(true);
     let (lectura, escritura) = stream.into_split();
@@ -314,11 +334,21 @@ fn conectar_par(
                         });
                     }
                 }
+                Paquete::Audio {
+                    sample_rate,
+                    canales,
+                    muestras,
+                } => {
+                    if let Some(id) = remoto {
+                        mezcla.lock().empujar(id, sample_rate, canales as u16, &muestras);
+                    }
+                }
                 Paquete::Adios => break,
             }
         }
         escritor.abort();
         if let Some(id) = remoto {
+            mezcla.lock().quitar(&id);
             let _ = eventos.send(EventoUya::Sale { id });
         }
     });
