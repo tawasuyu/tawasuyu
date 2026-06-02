@@ -91,7 +91,7 @@ use media_core::library::History;
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
 use media_core::chapters::Chapters;
 use media_core::metadata::{self, Metadata};
-use media_core::toolbar::BarItem;
+use media_core::toolbar::{BarItem, BarPosition};
 use media_core::transform::{Rotation, Transform, TransformControl, TransformVideo};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
@@ -230,6 +230,8 @@ enum BarEdit {
     RemoveBar(usize),
     /// Fija a qué barra agrega el selector de items.
     SetTarget(usize),
+    /// Alterna la barra `idx` entre arriba/abajo del video.
+    TogglePosition(usize),
 }
 
 /// Edición concreta sobre [`MediaConfig`] disparada por la ventana de
@@ -770,6 +772,11 @@ fn apply_bar_edit(model: &mut Model, edit: BarEdit) {
             tb.remove_bar(idx);
         }
         BarEdit::SetTarget(idx) => model.bar_target = idx,
+        BarEdit::TogglePosition(idx) => {
+            if let Some(bar) = tb.bars.get_mut(idx) {
+                bar.position = bar.position.toggled();
+            }
+        }
     }
 }
 
@@ -2612,10 +2619,11 @@ impl App for MediaApp {
         });
 
         let subs_strip = subtitle_strip();
-        // Barras de controles configurables (estilo VLC/eww). Incluyen la
-        // línea de tiempo como un item más, así reemplazan al `timeline`
-        // suelto de antes.
-        let bars = toolbar_view(model);
+        // Barras de controles configurables (estilo VLC/eww). Cada barra se
+        // ancla arriba o abajo del video según su `position`; acá las
+        // separamos en dos grupos para colocarlas a ambos lados del canvas.
+        let above_bars = toolbar_view_at(model, BarPosition::Above);
+        let below_bars = toolbar_view_at(model, BarPosition::Below);
 
         let time_label = {
             let s = playback_snapshot();
@@ -2671,10 +2679,20 @@ impl App for MediaApp {
             ..Default::default()
         })
         .children({
+            // Orden vertical: barras "arriba" → video → subtítulos → barras
+            // "abajo" → (visualizadores) → pie. Cada barra elige su lado.
+            let mut kids: Vec<View<Msg>> = Vec::new();
+            if let Some(v) = above_bars {
+                kids.push(v);
+            }
+            kids.push(canvas);
+            kids.push(subs_strip);
+            if let Some(v) = below_bars {
+                kids.push(v);
+            }
             // Visualizadores ocultos por default: sólo van si el usuario los
             // desplegó desde el menú Ver. Así por defecto se ve video + barras.
             // Son el "lienzo" del audio: forma de onda + waterfall + medidores.
-            let mut kids = vec![canvas, subs_strip, bars];
             if model.visualizers_open {
                 let visualizers = View::new(Style {
                     flex_direction: FlexDirection::Row,
@@ -3241,6 +3259,12 @@ fn tab_bars(model: &Model) -> Vec<View<Msg>> {
         })
         .children(vec![
             bar_label(format!("Barra {}", bi + 1), 70.0, Color::from_rgba8(118, 182, 232, 255)),
+            // Arriba/abajo del video.
+            wide_chip(
+                bar.position.label(),
+                Color::from_rgba8(48, 66, 80, 255),
+                Msg::BarEdit(BarEdit::TogglePosition(bi)),
+            ),
             wide_chip("− quitar barra", Color::from_rgba8(74, 58, 64, 255), Msg::BarEdit(BarEdit::RemoveBar(bi))),
         ]);
         // Items: clic quita; ‹ › reordenan. Con su ícono real.
@@ -3578,12 +3602,15 @@ fn fmt_mmss(d: Duration) -> String {
 /// `model.config.toolbar`. Una barra por fila; cada [`BarItem`] se mapea a
 /// un botón (con su `MediaCommand`) o a un widget especial. El usuario
 /// compone estas barras desde la pestaña "Barras" de la configuración.
-fn toolbar_view(model: &Model) -> View<Msg> {
+/// Renderiza las barras ancladas en `position` (arriba o abajo del video).
+/// Devuelve `None` si no hay ninguna allí — así `view` no reserva espacio.
+fn toolbar_view_at(model: &Model, position: BarPosition) -> Option<View<Msg>> {
     let bars: Vec<View<Msg>> = model
         .config
         .toolbar
         .bars
         .iter()
+        .filter(|bar| bar.position == position)
         .map(|bar| {
             let items: Vec<View<Msg>> = bar.items.iter().map(|&it| bar_item_view(it)).collect();
             View::new(Style {
@@ -3610,20 +3637,25 @@ fn toolbar_view(model: &Model) -> View<Msg> {
             .children(items)
         })
         .collect();
-    let n = bars.len().max(1) as f32;
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(n * 56.0_f32),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(8.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(bars)
+    if bars.is_empty() {
+        return None;
+    }
+    let n = bars.len() as f32;
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(n * 56.0_f32),
+            },
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(8.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(bars),
+    )
 }
 
 /// Texto fijo dentro de una barra (reloj, etiqueta de volumen, título).

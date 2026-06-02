@@ -152,15 +152,50 @@ impl BarItem {
     }
 }
 
-/// Una barra horizontal: lista ordenada de items.
+/// Dónde se ancla una barra respecto del video.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum BarPosition {
+    /// Encima del video.
+    Above,
+    /// Debajo del video (default — comportamiento histórico).
+    #[default]
+    Below,
+}
+
+impl BarPosition {
+    pub fn toggled(self) -> BarPosition {
+        match self {
+            BarPosition::Above => BarPosition::Below,
+            BarPosition::Below => BarPosition::Above,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BarPosition::Above => "↑ arriba",
+            BarPosition::Below => "↓ abajo",
+        }
+    }
+}
+
+/// Una barra horizontal: lista ordenada de items + dónde se ancla (arriba o
+/// abajo del video). `position` es `#[serde(default)]` = `Below`, así una
+/// config vieja (sin el campo) se lee como "abajo", el comportamiento previo.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bar {
     pub items: Vec<BarItem>,
+    #[serde(default)]
+    pub position: BarPosition,
 }
 
 impl Bar {
     pub fn new(items: Vec<BarItem>) -> Self {
-        Bar { items }
+        Bar { items, position: BarPosition::Below }
+    }
+
+    /// Como [`Self::new`] pero anclando la barra arriba o abajo del video.
+    pub fn at(items: Vec<BarItem>, position: BarPosition) -> Self {
+        Bar { items, position }
     }
 }
 
