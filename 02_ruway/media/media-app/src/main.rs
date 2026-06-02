@@ -2498,21 +2498,37 @@ impl App for MediaApp {
             Color::from_rgba8(150, 165, 185, 255),
         );
 
+        // El contenido (todo menos la menubar) va en un Column interno con
+        // el padding. La menubar queda flush en (0,0) del root, así se alinea
+        // con el overlay del dropdown (que se dibuja en absoluto 0,0); si la
+        // menubar estuviera padded, el overlay aparecería corrido y se vería
+        // "duplicada" al abrir un menú. (Mismo criterio que `nada`.)
+        let content = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: auto(),
+            },
+            flex_grow: 1.0,
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(12.0_f32),
+            },
+            padding: TaffyRect {
+                left: length(18.0_f32),
+                right: length(18.0_f32),
+                top: length(10.0_f32),
+                bottom: length(14.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![title_text, canvas, subs_strip, bars, tile_grid, footer]);
+
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
                 height: percent(1.0_f32),
-            },
-            gap: Size {
-                width: length(0.0_f32),
-                height: length(10.0_f32),
-            },
-            padding: TaffyRect {
-                left: length(16.0_f32),
-                right: length(16.0_f32),
-                top: length(12.0_f32),
-                bottom: length(12.0_f32),
             },
             ..Default::default()
         })
@@ -2520,9 +2536,7 @@ impl App for MediaApp {
         // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
         // menú contextual del reproductor.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![
-            menubar, title_text, canvas, subs_strip, bars, tile_grid, footer,
-        ])
+        .children(vec![menubar, content])
     }
 }
 
