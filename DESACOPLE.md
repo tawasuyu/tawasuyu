@@ -19,7 +19,7 @@ Llimphi porque vivían en el frontend, no en un core. Auditoría de la suite
 
 | # | Crate | Qué está mal | Adónde va |
 |---|-------|--------------|-----------|
-| 1 | `supay-app-llimphi` (`sim.rs`, `main.rs`) | motor raycaster entero (sim/IA/balística/LOS/tipos de mundo) sin core | nuevo `supay-mini-core` agnóstico |
+| 1 | ✅ **HECHO** `supay-app-llimphi` | motor raycaster extraído a `supay-mini-core` (commit 6374c84d): World{advance,fire,reset}+cast_ray+7 tests; app = frontend fino | — |
 | 2 | `nahual-*-viewer-llimphi` (sistémico) | cada visor parsea su formato dentro del crate UI; sin core | `nahual-viewer-core` (+ `nahual-geo-core` para map-viewer: PMTiles/MVT/GeoJSON/GPX/KML) |
 | 3 | `tullpu-app-llimphi` (`ops.rs`, `model.rs`) | ~2.2k LOC de motor de pintura buffer-puro + undo en el frontend | `tullpu-ops`/`tullpu-paint` (ya existe el crate) |
 | 4 | `nakui-ui-llimphi` (`backend.rs`), `nakui-sheet-llimphi` (`pivot.rs`) | WAL/persistencia (705 LOC) y motor de tabla dinámica en la GUI | `nakui-backend` / `nakui-sheet` core |
