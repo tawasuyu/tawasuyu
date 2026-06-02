@@ -2667,7 +2667,11 @@ fn content_column(children: Vec<View<Msg>>) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
-            height: length(388.0_f32),
+            height: length(362.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
         },
         ..Default::default()
     })
@@ -2684,8 +2688,8 @@ fn wrap_row(children: Vec<View<Msg>>) -> View<Msg> {
             height: auto(),
         },
         gap: Size {
-            width: length(6.0_f32),
-            height: length(6.0_f32),
+            width: length(8.0_f32),
+            height: length(8.0_f32),
         },
         ..Default::default()
     })
@@ -2750,7 +2754,11 @@ fn half_column(children: Vec<View<Msg>>) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(0.5_f32),
-            height: length(380.0_f32),
+            height: length(352.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
         },
         ..Default::default()
     })
@@ -2763,7 +2771,7 @@ fn two_columns(left: Vec<View<Msg>>, right: Vec<View<Msg>>) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(384.0_f32),
+            height: length(356.0_f32),
         },
         gap: Size {
             width: length(18.0_f32),
@@ -3039,8 +3047,8 @@ fn small_chip(label: &str, msg: Msg) -> View<Msg> {
 fn settings_overlay(model: &Model) -> View<Msg> {
     let c = &model.config;
     let (vw, vh) = model.viewport;
-    let box_w = 760.0_f32.min(vw - 24.0);
-    let box_h = 506.0_f32.min(vh - 24.0);
+    let box_w = 820.0_f32.min(vw - 24.0);
+    let box_h = 512.0_f32.min(vh - 24.0);
     let x = ((vw - box_w) * 0.5).max(0.0);
     let y = ((vh - box_h) * 0.5).max(0.0);
 
@@ -3138,12 +3146,18 @@ fn settings_overlay(model: &Model) -> View<Msg> {
         },
         gap: Size {
             width: length(0.0_f32),
-            height: length(6.0_f32),
+            height: length(10.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(18.0_f32),
+            right: length(18.0_f32),
+            top: length(14.0_f32),
+            bottom: length(14.0_f32),
         },
         ..Default::default()
     })
     .fill(Color::from_rgba8(26, 30, 38, 245))
-    .radius(12.0)
+    .radius(14.0)
     .children(vec![title, tab_bar, content, footer]);
 
     View::new(Style {
