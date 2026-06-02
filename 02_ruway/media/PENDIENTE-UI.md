@@ -29,16 +29,19 @@
 - ✅ **Visualizadores ocultables** (menú Ver, default ocultos).
 
 **Pendiente de esta tanda de feedback** (en orden sugerido):
-1. **Config con tabs de Llimphi + layout ordenado/delimitado** —
-   `llimphi-widget-tabs` (reemplaza los `chip_button`); el contenido en un
-   panel delimitado al tamaño. Reusable tal cual cuando la config pase a ventana
-   real. *Independiente del multiventana; se puede hacer ya sobre el overlay.*
-2. **Multiventana en Llimphi** (el grande) → config como ventana OS real con su
-   barra de título. Refactor del runtime (`eventloop.rs`, 891 líneas, todo
-   monoventana) + el trait `App` (retrocompatible, opt-in con defaults para no
-   romper las ~decenas de apps). **Alto riesgo, no verificable sin pantalla**
-   (además del bug de freeze abierto): hacerlo como paso dedicado y **correrlo**.
-3. **Barras arriba/abajo del video** — hoy las barras van todas debajo del
+1. ✅ **Multiventana en Llimphi** + **config en ventana OS real con tabs de
+   Llimphi + layout delimitado** (2026-06-02). Implementado como path ADITIVO
+   (la ventana primaria intacta → cero regresión; opt-in con defaults en el
+   trait `App`). `Handle::open_window/close_window`, `App::secondary_view/
+   secondary_title/on_secondary_close`, `Runtime.secondaries` que comparten
+   Hal/Renderer/modelo. media-app: F2 abre la ventana `CONFIG_WIN`,
+   `settings_content` la llena con `llimphi-widget-tabs`. **⚠ NO EJECUTADO**
+   (sin display): hay que **correrlo** y validar — apertura/render de la 2ª
+   ventana, ruteo de eventos (clicks en tabs, scroll, sliders, botón cerrar
+   del SO), e interacción con el bug de freeze. Riesgos no verificados:
+   crear una 2ª `WinitSurface` desde el mismo instance en Wayland; present_mode
+   de la secundaria.
+2. **Barras arriba/abajo del video** — hoy las barras van todas debajo del
    canvas. Agregar posición por barra (sobre/bajo el video) en
    `media-core::toolbar`/`layout` + respetarla en `toolbar_view`.
 4. **Tercera barra** — el editor de barras (config → Barras) ya tiene
