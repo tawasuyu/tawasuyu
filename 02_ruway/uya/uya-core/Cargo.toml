@@ -1,0 +1,32 @@
+# =============================================================================
+#  uya :: uya-core — el modelo agnóstico de una videollamada soberana
+# -----------------------------------------------------------------------------
+#  Uya es "cara" en quechua: una videollamada es, ante todo, ver caras en vivo.
+#  Este núcleo define ESO y nada más — el protocolo de cable (`Paquete`), la
+#  identidad del participante (BLAKE3 del nombre, estilo agora) y el roster de
+#  la sala (`Sala`). No sabe de transporte (eso es `uya-app`) ni de quién lo
+#  pinta (eso es `uya-llimphi`): la regla dura del repo, un `*-core` agnóstico.
+#
+#  (De-)serialización postcard como el resto de la suite. Se mantiene libre de
+#  std-pesado para poder viajar mañana a wawa (app WASM sobre akasha) sin
+#  reescribir el modelo, igual que `ayni-core`.
+# =============================================================================
+
+[package]
+name = "uya-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "uya — núcleo de la videollamada soberana: protocolo de cable + roster de sala, direccionado por identidad BLAKE3"
+
+[lib]
+doctest = false
+
+[dependencies]
+serde = { workspace = true }
+postcard = { workspace = true }
+# Identidad del participante = BLAKE3(nombre), la misma raíz determinista que
+# usan ayni/agora para derivar una identidad estable de un nombre.
+blake3 = { workspace = true }

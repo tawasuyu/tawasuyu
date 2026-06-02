@@ -1,0 +1,32 @@
+# =============================================================================
+#  uya :: uya-llimphi — la cara gráfica de la videollamada
+# -----------------------------------------------------------------------------
+#  Frontend Llimphi (bucle Elm) DELGADO sobre `uya-app`: una rejilla de caras
+#  (un tile por participante, su último cuadro RGBA pintado con `View::image`) y
+#  una barra con cámara / micrófono / colgar. Toda la lógica —transporte,
+#  captura, roster— vive en `uya-app`; la UI sólo pinta y captura la intención.
+#  MVP feo a propósito: la funcionalidad antes que la estética.
+#
+#      UYA_NOMBRE=Alicia UYA_ESCUCHAR=127.0.0.1:7800 cargo run -p uya-llimphi --release
+#      UYA_NOMBRE=Beto   UYA_ESCUCHAR=127.0.0.1:7801 \
+#        UYA_CONECTAR=127.0.0.1:7800 cargo run -p uya-llimphi --release
+# =============================================================================
+
+[package]
+name = "uya-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "uya — UI Llimphi de la videollamada soberana: rejilla de caras + controles de cámara/micrófono, sobre uya-app"
+
+[[bin]]
+name = "uya-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+uya-app = { path = "../uya-app" }
+# La UI saca View, App, el runtime y, vía re-export, peniko (Image/Blob/Color)
+# y taffy (layout) de un solo crate — sin sumar dependencias.
+llimphi-ui = { workspace = true }

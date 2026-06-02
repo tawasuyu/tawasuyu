@@ -1,0 +1,40 @@
+# =============================================================================
+#  uya :: uya-app — el pegamento: transporte + captura + identidad
+# -----------------------------------------------------------------------------
+#  Capa de aplicación compartida entre la CLI y el frontend Llimphi: levanta el
+#  transporte (TCP punto-a-punto, el mismo patrón MVP que `ayni`), corre la
+#  captura de video (TestCard sintética por defecto; cámara real v4l2 tras la
+#  feature `camara`) y reinyecta los eventos de la llamada (`EventoUya`) por un
+#  canal `std::mpsc` que la UI consume —exactamente como `ayni-app::Enlace`.
+#
+#  El transporte soberano destino es card-net (P2P con relay/dcutr/autonat ya
+#  hechos); arrancamos sobre TCP crudo para tener la llamada andando hoy (MVP
+#  feo a propósito) y mudarla a card-net sin tocar `uya-core` ni la UI.
+# =============================================================================
+
+[package]
+name = "uya-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "uya — capa de aplicación: transporte TCP, captura de video y bus de eventos de la videollamada, sobre uya-core"
+
+[lib]
+doctest = false
+
+[features]
+default = []
+# Captura desde una webcam real (v4l2, Linux) en vez de la TestCard sintética.
+# Off por defecto para que `cargo check --workspace` no arrastre v4l2.
+camara = ["dep:media-source-capture", "media-source-capture/camera"]
+
+[dependencies]
+uya-core = { path = "../uya-core" }
+# TestCard (gradiente animado): la "cámara" por defecto, sin tocar hardware ni
+# sumar dependencias de sistema — el pipeline anda en cualquier máquina.
+media-core = { path = "../../media/media-core" }
+# Cámara real, sólo bajo la feature `camara`.
+media-source-capture = { path = "../../media/media-source-capture", default-features = false, optional = true }
+tokio = { workspace = true }

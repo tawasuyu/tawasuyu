@@ -1,0 +1,49 @@
+// =============================================================================
+//  uya-app — el pegamento de la videollamada.
+// -----------------------------------------------------------------------------
+//  Re-exporta el modelo de `uya-core` y suma lo que toca al mundo real:
+//    · `Enlace`  — transporte TCP punto-a-punto (ver `enlace`).
+//    · `EventoUya` — lo que la UI recibe por su canal `std::mpsc`.
+//    · `iniciar_camara` — el hilo de captura (TestCard o webcam real).
+//
+//  Patrón calcado de `ayni-app`: `Enlace::abrir` devuelve `(Enlace, Receiver)`;
+//  un hilo de la UI hace `for ev in rx { handle.dispatch(Msg::Red(ev)) }`.
+// =============================================================================
+
+mod captura;
+mod enlace;
+
+pub use captura::iniciar_camara;
+pub use enlace::Enlace;
+pub use uya_core::{
+    hex_corto, id_desde_nombre, Paquete, Participante, ParticipanteId, Sala,
+};
+
+use std::sync::Arc;
+
+/// Lo que ocurre en la llamada, tal como lo ve la UI. El transporte y la
+/// captura empujan estos eventos al canal que la UI drena en su bucle Elm.
+#[derive(Clone, Debug)]
+pub enum EventoUya {
+    /// Un participante (yo o remoto) entró / se presentó.
+    Entra {
+        id: ParticipanteId,
+        nombre: String,
+    },
+    /// Un participante se fue (cuelgue o desconexión).
+    Sale { id: ParticipanteId },
+    /// Cambió el estado de medios de un participante.
+    Estado {
+        id: ParticipanteId,
+        camara: bool,
+        microfono: bool,
+    },
+    /// Llegó un cuadro de video de un participante. El RGBA va en `Arc` para
+    /// que la UI lo clone barato cada render.
+    Cuadro {
+        id: ParticipanteId,
+        ancho: u16,
+        alto: u16,
+        rgba: Arc<Vec<u8>>,
+    },
+}

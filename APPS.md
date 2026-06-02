@@ -321,6 +321,18 @@ cargo run -p tullpu-app-llimphi --release   # app de pintura
 cargo run -p pixel-verbo-daemon-bin         # daemon provider de pixels
 ```
 
+### uya (videollamada soberana)
+```bash
+cargo run -p uya-llimphi --release   # rejilla de caras + cámara/micrófono/colgar
+cargo run -p uya-cli                  # nodo headless (transporte + captura)
+```
+Dos extremos en local (uno escucha, otro conecta):
+```bash
+UYA_NOMBRE=Alicia UYA_ESCUCHAR=127.0.0.1:7800 cargo run -p uya-llimphi --release
+UYA_NOMBRE=Beto UYA_ESCUCHAR=127.0.0.1:7801 \
+  UYA_CONECTAR=127.0.0.1:7800 cargo run -p uya-llimphi --release
+```
+
 ### wawa (componentes host-side del SO)
 ```bash
 cargo run -p wawa-panel-llimphi --release   # panel de control de Wawa

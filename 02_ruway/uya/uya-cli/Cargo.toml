@@ -1,0 +1,27 @@
+# =============================================================================
+#  uya :: uya-cli — nodo headless de la videollamada (sin GPU)
+# -----------------------------------------------------------------------------
+#  Ejercita el transporte y la captura sin levantar la UI: arranca un `Enlace`,
+#  corre la TestCard y reporta por consola los eventos (entra/sale/estado +
+#  conteo de cuadros). Útil para probar la señalización entre dos procesos o
+#  como el otro extremo de una llamada con `uya-llimphi`.
+#
+#      UYA_NOMBRE=Beto UYA_ESCUCHAR=127.0.0.1:7801 \
+#        UYA_CONECTAR=127.0.0.1:7800 cargo run -p uya-cli
+# =============================================================================
+
+[package]
+name = "uya-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "uya — nodo headless: transporte + captura + log de eventos de la videollamada"
+
+[[bin]]
+name = "uya-cli"
+path = "src/main.rs"
+
+[dependencies]
+uya-app = { path = "../uya-app" }

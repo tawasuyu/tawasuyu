@@ -48,8 +48,12 @@ nativa**, no de que falte JIT.
 ### Tanda 2 — tiempo real (apalanca P2P + WebRTC que ya existen)
 3. **Chat / mensajería** — cliente Matrix/XMPP, o nativo sobre BrahmanNet/`chasqui` P2P.
    Reemplaza Slack/WhatsApp/Discord; la identidad de `agora` ya está.
-4. **Videollamadas** — el stack WebRTC ya vive en `puriy-js`; falta una UI de conferencia
-   nativa sobre P2P (akasha/minga) + `media` (video) + `takiy` (audio). Reemplaza Zoom/Meet.
+4. **Videollamadas** — **ARRANCADA** (`02_ruway/uya`, "cara" en quechua). MVP andando
+   end-to-end: identidad BLAKE3, presencia, video en ambos sentidos (RGBA sobre TCP) +
+   cámara/micrófono/colgar, sobre `media-core` (captura) y un frontend Llimphi de rejilla.
+   El stack WebRTC de `puriy-js` resultó ser sólo bindings JS (sin transporte nativo
+   reusable), así que `uya` monta señalización+media propios. Pendiente: audio, mudar el
+   transporte a card-net (P2P soberano, akasha/minga) y compresión de cuadros. Reemplaza Zoom/Meet.
 
 ### Tanda 3 — descubrimiento e información
 5. **Mapas / navegación** — tiles OSM + routing. Caro pero alto valor; reemplaza Google Maps.
