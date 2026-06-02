@@ -179,6 +179,32 @@ pub trait App: 'static {
         None
     }
 
+    /// Vista de una ventana OS **secundaria** identificada por `key` (la que
+    /// se pasó a [`Handle::open_window`]). El runtime la pinta en su propia
+    /// ventana y rutea sus eventos al mismo [`App::update`] — comparte modelo
+    /// con la primaria. `None` (default, o para una key desconocida) deja la
+    /// ventana en blanco. Las secundarias NO tienen capa de overlay
+    /// ([`App::view_overlay`] es sólo de la primaria); para diálogos dentro de
+    /// una secundaria, componerlos en su propio `secondary_view`.
+    fn secondary_view(_model: &Self::Model, _key: u64) -> Option<View<Self::Msg>> {
+        None
+    }
+
+    /// Título dinámico de una ventana secundaria (análogo a
+    /// [`App::window_title`] para la primaria). `None` deja el título con el
+    /// que se abrió.
+    fn secondary_title(_model: &Self::Model, _key: u64) -> Option<String> {
+        None
+    }
+
+    /// El usuario cerró una ventana secundaria con el botón del SO. El runtime
+    /// ya la destruyó; este callback es para que la app sincronice su modelo
+    /// (p. ej. marcar el panel como cerrado). Devolver `Some(Msg)` dispara un
+    /// `update`; `None` (default) no hace nada.
+    fn on_secondary_close(_model: &Self::Model, _key: u64) -> Option<Self::Msg> {
+        None
+    }
+
     /// Identificador de aplicación. En Wayland se mapea al `app_id` del
     /// xdg-toplevel (lo que el compositor usa para reconocer la ventana,
     /// p. ej. `carmen.greeter`). `None` deja que el sistema asigne uno.
@@ -199,6 +225,18 @@ pub trait App: 'static {
 pub enum UserEvent<Msg> {
     Msg(Msg),
     Quit,
+    /// Pide abrir una ventana OS **secundaria** con la `key` dada (la app la
+    /// usa para distinguir cuál es en [`App::secondary_view`]). Idempotente:
+    /// si ya existe una con esa key, se enfoca en vez de duplicar. La crea el
+    /// event loop (que tiene el `ActiveEventLoop`); por eso va por mensaje.
+    OpenWindow {
+        key: u64,
+        title: String,
+        width: u32,
+        height: u32,
+    },
+    /// Pide cerrar la ventana secundaria con esa `key`. No afecta a la primaria.
+    CloseWindow { key: u64 },
 }
 
 /// Asa al runtime de Llimphi. Clonable y enviable entre hilos: la usás para
@@ -250,6 +288,31 @@ impl<Msg: Send + 'static> Handle<Msg> {
                 let _ = p.send_event(UserEvent::Quit);
             }
             HandleInner::Test => {}
+        }
+    }
+
+    /// Abre una ventana OS **secundaria** (ver [`App::secondary_view`]). La
+    /// `key` la elige la app para reconocerla luego; abrir con una key que ya
+    /// existe sólo la enfoca (no duplica). El contenido lo pinta
+    /// `App::secondary_view(model, key)` y los eventos (click/tecla/…) reentran
+    /// al mismo `update`, así que la ventana comparte el modelo con la primaria.
+    /// Cerrala con [`Self::close_window`] o con el botón del SO.
+    pub fn open_window(&self, key: u64, title: impl Into<String>, width: u32, height: u32) {
+        if let HandleInner::Real(p) = &self.inner {
+            let _ = p.send_event(UserEvent::OpenWindow {
+                key,
+                title: title.into(),
+                width,
+                height,
+            });
+        }
+    }
+
+    /// Cierra la ventana secundaria con esa `key` (no-op si no existe). La
+    /// ventana primaria nunca se cierra por acá — para eso está [`Self::quit`].
+    pub fn close_window(&self, key: u64) {
+        if let HandleInner::Real(p) = &self.inner {
+            let _ = p.send_event(UserEvent::CloseWindow { key });
         }
     }
 
@@ -401,6 +464,38 @@ mod eventloop;
 struct Runtime<A: App> {
     handle: Handle<A::Msg>,
     state: Option<RuntimeState<A>>,
+    /// Ventanas OS secundarias abiertas (opt-in vía [`Handle::open_window`]).
+    /// Comparten el `Hal`/`Renderer` y el modelo de la primaria (`state`);
+    /// cada una lleva su propia surface + caches de interacción. Vacío en la
+    /// inmensa mayoría de las apps (monoventana) — coste cero.
+    secondaries: Vec<SecondaryState<A>>,
+}
+
+/// Estado por **ventana secundaria**. Espeja los campos de interacción de
+/// [`RuntimeState`] pero SIN modelo (vive en la primaria), sin overlay y sin
+/// `Hal`/`Renderer` propios (los toma prestados de la primaria al pintar).
+struct SecondaryState<A: App> {
+    /// La key con la que la app la abrió (la pasa a `secondary_view`).
+    key: u64,
+    window: Arc<Window>,
+    surface: WinitSurface,
+    scene: vello::Scene,
+    typesetter: llimphi_text::Typesetter,
+    layout: LayoutTree,
+    cursor: PhysicalPosition<f64>,
+    modifiers: Modifiers,
+    last_render: Option<SecRenderCache<A::Msg>>,
+    hovered: Option<usize>,
+    drag: Option<DragState<A::Msg>>,
+    last_title: Option<String>,
+}
+
+/// Cache de render de una ventana secundaria (como [`RenderCache`] pero sin
+/// capa de overlay). Sólo guarda el árbol montado + layout para hit-testear el
+/// próximo click/hover; el `hover_idx` actual vive en `SecondaryState::hovered`.
+struct SecRenderCache<Msg> {
+    mounted: Mounted<Msg>,
+    computed: ComputedLayout,
 }
 
 struct RuntimeState<A: App> {
@@ -503,6 +598,7 @@ pub fn run<A: App>() {
     let mut runtime: Runtime<A> = Runtime {
         handle,
         state: None,
+        secondaries: Vec::new(),
     };
     event_loop.run_app(&mut runtime).expect("run app");
 }
