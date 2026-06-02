@@ -202,6 +202,16 @@ enum Msg {
     MapClick(f32, f32),
     /// Cicla el campo numérico de coloreo (choropleth) del mapa.
     MapCycleColor,
+    /// Entra en modo búsqueda de features (`/`).
+    MapSearchStart,
+    /// Agrega texto a la consulta de búsqueda.
+    MapSearchInput(String),
+    /// Borra el último carácter de la consulta.
+    MapSearchBackspace,
+    /// Confirma la búsqueda: vuela al mejor resultado.
+    MapSearchSubmit,
+    /// Cancela la búsqueda.
+    MapSearchCancel,
     /// Drag del divisor — positivo = lista crece.
     ResizeList(f32),
     /// El bus `wawa-config` publicó una versión nueva.
@@ -299,6 +309,17 @@ impl App for Shell {
                 _ => None,
             };
         }
+        // Modo búsqueda del mapa: captura todo el teclado para la consulta.
+        if matches!(_model.preview, PreviewPane::Map(_)) && _model.map_view.searching {
+            return match &e.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::MapSearchCancel),
+                Key::Named(NamedKey::Enter) => Some(Msg::MapSearchSubmit),
+                Key::Named(NamedKey::Backspace) => Some(Msg::MapSearchBackspace),
+                Key::Named(NamedKey::Space) => Some(Msg::MapSearchInput(" ".to_string())),
+                Key::Character(c) => Some(Msg::MapSearchInput(c.to_string())),
+                _ => None,
+            };
+        }
         match &e.key {
             Key::Named(NamedKey::ArrowUp) => Some(Msg::Up),
             Key::Named(NamedKey::ArrowDown) => Some(Msg::Down),
@@ -319,6 +340,9 @@ impl App for Shell {
             }
             Key::Character(c) if c == "c" && matches!(_model.preview, PreviewPane::Map(_)) => {
                 Some(Msg::MapCycleColor)
+            }
+            Key::Character(c) if c == "/" && matches!(_model.preview, PreviewPane::Map(_)) => {
+                Some(Msg::MapSearchStart)
             }
             _ => None,
         }
@@ -461,6 +485,31 @@ impl App for Shell {
                     let fields = nahual_map_viewer_llimphi::numeric_fields(data);
                     m.map_view.color_field = next_in_cycle(&fields, &m.map_view.color_field);
                 }
+            }
+            Msg::MapSearchStart => {
+                m.map_view.searching = true;
+                m.map_view.query.clear();
+            }
+            Msg::MapSearchInput(s) => {
+                if m.map_view.searching {
+                    m.map_view.query.push_str(&s);
+                }
+            }
+            Msg::MapSearchBackspace => {
+                m.map_view.query.pop();
+            }
+            Msg::MapSearchCancel => {
+                m.map_view.searching = false;
+                m.map_view.query.clear();
+            }
+            Msg::MapSearchSubmit => {
+                if let PreviewPane::Map(MapPreview::Map { data, .. }) = &m.preview {
+                    let hits = nahual_map_viewer_llimphi::search(data, &m.map_view.query, 1);
+                    if let Some(&fi) = hits.first() {
+                        nahual_map_viewer_llimphi::focus_on(data, &mut m.map_view, fi);
+                    }
+                }
+                m.map_view.searching = false;
             }
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);

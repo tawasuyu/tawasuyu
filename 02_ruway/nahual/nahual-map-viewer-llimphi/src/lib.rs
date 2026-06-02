@@ -870,6 +870,10 @@ pub struct MapView {
     /// Campo numérico por el que colorear los polígonos (choropleth). `None`
     /// = relleno uniforme.
     pub color_field: Option<String>,
+    /// Modo búsqueda activo (captura el teclado para escribir la consulta).
+    pub searching: bool,
+    /// Consulta de búsqueda en curso.
+    pub query: String,
     rect: Arc<Mutex<Option<(f32, f32, f32, f32)>>>,
 }
 
@@ -881,6 +885,8 @@ impl Default for MapView {
             show_base: true,
             selected: None,
             color_field: None,
+            searching: false,
+            query: String::new(),
             rect: Arc::new(Mutex::new(None)),
         }
     }
@@ -898,6 +904,8 @@ impl MapView {
         self.zoom = 1.0;
         self.pan = (0.0, 0.0);
         self.selected = None;
+        self.searching = false;
+        self.query.clear();
     }
 
     /// Acumula un desplazamiento (de un arrastre), en píxeles físicos.
@@ -1053,6 +1061,17 @@ where
         (Some(n), _) => format!("mapa · {n}"),
         (None, _) => "(seleccioná un .geojson)".to_string(),
     };
+    // En modo búsqueda, el header muestra la consulta con un cursor.
+    let header_text = if view.searching {
+        format!("buscar: {}▏", view.query)
+    } else {
+        header_text
+    };
+    let header_color = if view.searching {
+        palette.fg_text
+    } else {
+        palette.fg_muted
+    };
 
     let header = View::new(Style {
         size: Size {
@@ -1063,7 +1082,7 @@ where
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(header_text, 10.0, palette.fg_muted, Alignment::Start);
+    .text_aligned(header_text, 10.0, header_color, Alignment::Start);
 
     let body = match state {
         MapPreview::Empty => simple_body("—", palette.fg_muted),
@@ -1148,10 +1167,18 @@ impl Projection {
         }
     }
 
+    /// lon/lat → coordenadas de pantalla **antes** de la cámara (fit puro).
+    /// Independiente de zoom/pan, base para centrar/encuadrar.
+    fn base(&self, [lon, lat]: Coord) -> (f64, f64) {
+        (
+            self.ox + (lon * self.kx - self.pmin_x) * self.scale,
+            self.oy + (self.max_lat - lat) * self.scale,
+        )
+    }
+
     /// lon/lat → pantalla (Y invertida), pasando por la cámara.
-    fn to_screen(&self, [lon, lat]: Coord) -> (f64, f64) {
-        let bx = self.ox + (lon * self.kx - self.pmin_x) * self.scale;
-        let by = self.oy + (self.max_lat - lat) * self.scale;
+    fn to_screen(&self, c: Coord) -> (f64, f64) {
+        let (bx, by) = self.base(c);
         (
             self.pivot_x + (bx - self.pivot_x) * self.zoom + self.pan.0,
             self.pivot_y + (by - self.pivot_y) * self.zoom + self.pan.1,
@@ -1207,6 +1234,129 @@ pub fn hit_test(data: &MapData, view: &MapView, fx: f64, fy: f64) -> Option<usiz
         }
     }
     None
+}
+
+/// Busca features cuyo nombre o propiedades casen con `query` (sin distinción
+/// de mayúsculas). Ranking: igualdad > prefijo > substring; el nombre pesa
+/// sobre las propiedades. Devuelve hasta `limit` índices de `data.features`.
+///
+/// Geocodificación local y soberana: no consulta ningún servicio externo —
+/// busca dentro de lo que ya cargaste. Para buscar direcciones de medio mundo
+/// alcanza con cargar un dataset (un archivo), no una API.
+pub fn search(data: &MapData, query: &str, limit: usize) -> Vec<usize> {
+    let q = fold(&query.trim().to_lowercase());
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut scored: Vec<(u8, usize)> = Vec::new();
+    for (fi, f) in data.features.iter().enumerate() {
+        // El nombre cuenta doble (peso 2×); las propiedades, simple.
+        let mut best = f.name.as_deref().map(|n| match_score(n, &q) * 2).unwrap_or(0);
+        for (_, v) in &f.props {
+            best = best.max(match_score(v, &q));
+        }
+        if best > 0 {
+            scored.push((best, fi));
+        }
+    }
+    // Mayor puntaje primero; a igual puntaje, orden estable por índice.
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    scored.into_iter().take(limit).map(|(_, fi)| fi).collect()
+}
+
+/// Puntaje de coincidencia de `q` (ya en minúsculas y sin acentos) en `s`:
+/// 3 igual, 2 prefijo, 1 substring, 0 nada. Plega acentos de `s` para que
+/// "peru" encuentre "Perú".
+fn match_score(s: &str, q: &str) -> u8 {
+    let l = fold(&s.to_lowercase());
+    if l == q {
+        3
+    } else if l.starts_with(q) {
+        2
+    } else if l.contains(q) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Plega acentos latinos comunes (es/pt) a su vocal base, para búsqueda
+/// tolerante a tildes. No es Unicode-completo, sólo lo usual en topónimos.
+fn fold(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ä' | 'â' | 'ã' => 'a',
+            'é' | 'è' | 'ë' | 'ê' => 'e',
+            'í' | 'ì' | 'ï' | 'î' => 'i',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
+            'ú' | 'ù' | 'ü' | 'û' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            other => other,
+        })
+        .collect()
+}
+
+/// Caja envolvente de las geometrías de una feature (por su índice).
+fn feature_bbox(data: &MapData, fi: usize) -> Option<BBox> {
+    let mut bb = BBox::empty();
+    for (i, p) in data.points.iter().enumerate() {
+        if data.point_feat.get(i) == Some(&fi) {
+            bb.expand(*p);
+        }
+    }
+    for (i, l) in data.lines.iter().enumerate() {
+        if data.line_feat.get(i) == Some(&fi) {
+            for c in l {
+                bb.expand(*c);
+            }
+        }
+    }
+    for (i, poly) in data.polygons.iter().enumerate() {
+        if data.polygon_feat.get(i) == Some(&fi) {
+            for ring in poly {
+                for c in ring {
+                    bb.expand(*c);
+                }
+            }
+        }
+    }
+    (!bb.is_empty()).then_some(bb)
+}
+
+/// Centra y encuadra la cámara sobre una feature (vuelo a resultado de
+/// búsqueda), y la deja seleccionada. La feature ocupa ~60% del panel; un
+/// punto suelto usa un zoom fijo cómodo. No-op si no hay rect/datos.
+pub fn focus_on(data: &MapData, view: &mut MapView, fi: usize) {
+    let Some((rx, ry, rw, rh)) = view.rect.lock().ok().and_then(|g| *g) else {
+        view.selected = Some(fi);
+        return;
+    };
+    let (Some(bb), Some(fbb)) = (data.bbox(), feature_bbox(data, fi)) else {
+        view.selected = Some(fi);
+        return;
+    };
+    let proj = Projection::fit(bb, (rx as f64, ry as f64, rw as f64, rh as f64), 1.0, (0.0, 0.0));
+    let (x0, y0) = proj.base([fbb.min_lon, fbb.max_lat]);
+    let (x1, y1) = proj.base([fbb.max_lon, fbb.min_lat]);
+    let fw = (x1 - x0).abs();
+    let fh = (y1 - y0).abs();
+    let degenerate = fw < 1e-6 && fh < 1e-6;
+    let zoom = if degenerate {
+        8.0
+    } else {
+        (0.6 * (rw as f64 / fw.max(1e-6)).min(rh as f64 / fh.max(1e-6)))
+            .clamp(MapView::ZOOM_MIN, MapView::ZOOM_MAX)
+    };
+    let target = [(fbb.min_lon + fbb.max_lon) * 0.5, (fbb.min_lat + fbb.max_lat) * 0.5];
+    let (bx, by) = proj.base(target);
+    view.zoom = zoom;
+    // pan que lleva el centro de la feature al centro del panel.
+    view.pan = (
+        -(bx - proj.pivot_x) * zoom,
+        -(by - proj.pivot_y) * zoom,
+    );
+    view.selected = Some(fi);
 }
 
 /// Distancia de un punto `(px, py)` al segmento `a–b`, en pantalla.
@@ -2197,6 +2347,46 @@ mod tests {
         let _ = scale_color(0.5);
         // fuera de rango se acota.
         assert_eq!(scale_color(-1.0).to_rgba8().b, scale_color(0.0).to_rgba8().b);
+    }
+
+    #[test]
+    fn search_rankea_nombre_sobre_props() {
+        let d = data_of(
+            r#"{"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":{"name":"Perú","capital":"Lima"},"geometry":{"type":"Point","coordinates":[-77,-12]}},
+                {"type":"Feature","properties":{"name":"Bolivia","nota":"vecino de Perú"},"geometry":{"type":"Point","coordinates":[-68,-16]}},
+                {"type":"Feature","properties":{"name":"Chile"},"geometry":{"type":"Point","coordinates":[-70,-33]}}
+            ]}"#,
+        );
+        // "peru": feature 0 (nombre exacto, peso doble) gana a feature 1
+        // (substring en una prop).
+        let hits = search(&d, "peru", 10);
+        assert_eq!(hits.first(), Some(&0));
+        assert!(hits.contains(&1));
+        assert!(!hits.contains(&2));
+        // Case-insensitive y por prefijo.
+        assert_eq!(search(&d, "CHI", 1), vec![2]);
+        // Busca también en propiedades (capital).
+        assert_eq!(search(&d, "lima", 1), vec![0]);
+        // Vacío → nada.
+        assert!(search(&d, "   ", 5).is_empty());
+    }
+
+    #[test]
+    fn focus_on_centra_y_selecciona() {
+        let d = data_of(
+            r#"{"type":"Feature","properties":{"name":"sq"},
+                "geometry":{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,10],[0,0]]]}}"#,
+        );
+        let mut view = MapView::default();
+        view.record_rect((0.0, 0.0, 100.0, 100.0));
+        focus_on(&d, &mut view, 0);
+        assert_eq!(view.selected, Some(0));
+        // El centro de la feature [5,5] debe caer en el centro del panel (50,50).
+        let bb = d.bbox().unwrap();
+        let proj = Projection::fit(bb, (0.0, 0.0, 100.0, 100.0), view.zoom, view.pan);
+        let (sx, sy) = proj.to_screen([5.0, 5.0]);
+        assert!((sx - 50.0).abs() < 0.5 && (sy - 50.0).abs() < 0.5, "({sx},{sy})");
     }
 
     #[test]
