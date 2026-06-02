@@ -320,11 +320,12 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 
 #### pata
 ```
-# una línea: cliente que pinta, clickea y escribe dentro del compositor mirada
-#            (sampler dmabuf no-bloqueante, data-control, input a layers). ⚠️ confirmar encuadre
+# una línea: el marco/launcher del escritorio: barras, paneles y dock con widgets
+#            colocables desde un archivo de config. El chrome configurable que
+#            rodea a las ventanas. pata = borde, repisa, andén.
 ```
-- subcrates: pata-core · pata-config · pata-llimphi
-- ✍️ resaltar / omitir / estado: _(elige adapter por render-node del compositor; sólo Intel)_
+- subcrates: pata-core (modelo agnóstico no_std+alloc: surfaces bar/panel/dock + widgets + layout; compartido por mirada-Linux y el launcher del kernel wawa) · pata-config (capa de carga Linux: TOML desde rutas XDG → modelo; el límite std→no_std) · pata-llimphi (frontend Linux sobre Llimphi + compositor mirada; muestrea reloj/CPU/RAM/volumen/brillo)
+- ✍️ resaltar / omitir / estado:
 
 #### raymi  ✅ = Calendario + Contactos
 ```
@@ -361,8 +362,9 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 
 #### tullpu
 ```
-# una línea: pintura/imagen. Kernel de pintura buffer-puro (tullpu-paint) + ops +
-#            render; daemon de embeddings de pixeles (pixel-verbo, análogo a rimay-verbo). ⚠️ confirmar
+# una línea: visor y editor de imágenes por capas (cada capa = objeto del DAG
+#            BLAKE3 → dedup; ops IA como nodos del DAG). Kernel de pintura
+#            buffer-puro (tullpu-paint) + ops + render. tullpu = color.
 ```
 - subcrates: tullpu-core · tullpu-{paint,ops,render} · tullpu-app-llimphi · pixel-verbo(-core,-mock,-daemon,-daemon-bin)
 - ✍️ resaltar / omitir / estado:
@@ -390,10 +392,10 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 
 #### arje
 ```
-# una línea: bootloader y vida temprana del sistema. Semillas, empaquetado,
-#            instalación, absorción de un sistema existente. ⚠️ ajustar (subcrates en disco difieren del README viejo)
+# una línea: el init del sistema y su vida temprana (bootloader → primer proceso).
+#            arje = principio/origen (gr. arkhē).
 ```
-- subcrates: arje-card · arje-card-llimphi · arje-compat  _(README viejo mencionaba arje-{seeds,packager,installer,absorb} — confirmar)_
+- subcrates: arje-card · arje-card-llimphi · arje-compat  _(✍️ describir el rol de cada uno; el README viejo hablaba de seeds/packager/installer/absorb — ese alcance puede haber migrado a arje-compat / sandokan-arje-engine)_
 - Ref: toolchain UEFI (musl/mtools/OVMF)
 - ✍️ resaltar / omitir / estado:
 
@@ -407,11 +409,12 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 
 #### sandokan
 ```
-# una línea: plano de control: quién arranca/para/supervisa/observa unidades en
-#            Linux y Wawa, sin duplicados. Process manager con UI Llimphi (sparkline CPU).
+# una línea: el orquestador / plano de control: quién arranca, para, supervisa y
+#            observa las unidades en Linux y Wawa, sin duplicados. Process manager
+#            con UI Llimphi (sparkline CPU).
 ```
-- subcrates: sandokan(-core) · sandokan-{local,remote,daemon,arje-engine} · sandokan-{app,monitor-llimphi}
-- SDD: `shared/sandokan/SDD.md` (plano de control)  ⚠️ _(hay sandokan en 03_ukupacha y en shared — aclarar la repartición en el README)_
+- subcrates (en `03_ukupacha/sandokan`): sandokan(-core) · sandokan-{local,remote,daemon,arje-engine} · sandokan-{app,monitor-llimphi}
+- nota: existe además `shared/sandokan` — el README debe aclarar la repartición (modelo/contrato compartido vs implementación). SDD autoritativo: `shared/sandokan/SDD.md`.
 - ✍️ resaltar / omitir / estado:
 
 #### wawa _(kernel + apps WASM)_
@@ -442,7 +445,10 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 - **sandokan** — plano de control (SDD autoritativo). _(ver nota de repartición arriba)_
 - **auth / card / ssh** — identidad, tarjetas/cards, transporte SSH. ✍️
 - **format** — formato nativo (BLAKE3 + DAG + postcard); núcleo `no_std`.
-- **akasha** ⚠️ _(referenciado por path desde wawa; confirmar ubicación real del crate)_
+- **akasha** — NO es un crate de `shared/`: es el **nombre del crate** que vive en
+  `03_ukupacha/wawa/wawa-fs` (nombre de crate ≠ nombre de dir). Es el filesystem
+  CAS + protocolo de red de wawa. Lo consumen `wawa-kernel` y `wawa-explorer-aoe`
+  por path. Documentarlo desde wawa, no acá.
 - **foreign-docx / foreign-av / foreign-fs / foreign-psd / foreign-ytdlp** — puentes
   a formatos/fuentes ajenos. Las apps trabajan en formato nativo; lo ajeno entra
   sólo por acá (rule #4).
