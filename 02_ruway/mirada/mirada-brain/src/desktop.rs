@@ -557,8 +557,8 @@ impl Desktop {
                 self.workspaces[active].set_mode(mode);
                 self.relayout()
             }
-            DesktopAction::GrowMaster => self.nudge_master(0.05),
-            DesktopAction::ShrinkMaster => self.nudge_master(-0.05),
+            DesktopAction::GrowMaster => self.nudge_master(self.config.master_step()),
+            DesktopAction::ShrinkMaster => self.nudge_master(-self.config.master_step()),
             DesktopAction::IncMaster => self.nudge_master_count(1),
             DesktopAction::DecMaster => self.nudge_master_count(-1),
             DesktopAction::PromoteToMaster => {
@@ -594,6 +594,34 @@ impl Desktop {
                     Vec::new()
                 }
             }
+            DesktopAction::FocusOutputDir(dir) => {
+                let Some(oid) = self.output_in_direction(dir) else {
+                    return Vec::new();
+                };
+                match self.outputs.iter().position(|o| o.id == oid) {
+                    Some(i) => {
+                        self.focused_output = i;
+                        self.relayout()
+                    }
+                    None => Vec::new(),
+                }
+            }
+            DesktopAction::SendToOutputDir(dir) => {
+                let Some(id) = self.workspaces[active].focused() else {
+                    return Vec::new();
+                };
+                let Some(oid) = self.output_in_direction(dir) else {
+                    return Vec::new();
+                };
+                let Some(ti) = self.outputs.iter().position(|o| o.id == oid) else {
+                    return Vec::new();
+                };
+                let target_ws = self.outputs[ti].workspace;
+                self.workspaces[active].remove(id);
+                self.workspaces[target_ws].add(id);
+                self.relayout()
+            }
+            DesktopAction::ResizeFloatDir(dir) => self.resize_float(dir),
             DesktopAction::Spawn(cmd) => vec![BrainCommand::Spawn(cmd)],
             DesktopAction::Quit => vec![BrainCommand::Shutdown],
         }
@@ -676,17 +704,60 @@ impl Desktop {
         }
     }
 
+    /// La salida (monitor) vecina en una dirección cardinal, por geometría.
+    /// `None` si hay menos de dos salidas o ninguna en esa dirección.
+    fn output_in_direction(&self, dir: Direction) -> Option<OutputId> {
+        if self.outputs.len() < 2 {
+            return None;
+        }
+        let cur = self.outputs.get(self.focused_output)?;
+        let cands: Vec<(OutputId, Rect)> = self.outputs.iter().map(|o| (o.id, o.rect)).collect();
+        nearest_in_direction(cur.rect, &cands, cur.id, dir)
+    }
+
+    /// Redimensiona la ventana flotante enfocada hacia una dirección, por
+    /// `float_step` px (acotada a un mínimo). No hace nada sobre teseladas.
+    fn resize_float(&mut self, dir: Direction) -> Vec<BrainCommand> {
+        const MIN: i32 = 80;
+        let active = self.active_index();
+        let Some(id) = self.workspaces[active].focused() else {
+            return Vec::new();
+        };
+        let Some(mut rect) = self.workspaces[active].floating_rect(id) else {
+            return Vec::new(); // no flota
+        };
+        let step = self.config.float_step();
+        match dir {
+            Direction::Right => rect.w = (rect.w + step).max(MIN),
+            Direction::Left => rect.w = (rect.w - step).max(MIN),
+            Direction::Down => rect.h = (rect.h + step).max(MIN),
+            Direction::Up => rect.h = (rect.h - step).max(MIN),
+        }
+        self.workspaces[active].set_floating(id, Some(rect));
+        self.relayout()
+    }
+
     /// Intercambia la ventana enfocada con su vecina **teselada** más
-    /// cercana en una dirección — mover la ventana por geometría. Sólo
-    /// aplica a teseladas (una flotante se mueve arrastrándola); sin vecina
-    /// en esa dirección, no hace nada. El foco acompaña a la ventana movida.
+    /// cercana en una dirección — mover la ventana por geometría. Una
+    /// ventana **flotante** se desplaza `float_step` px en esa dirección.
+    /// Sin vecina (teselada) en esa dirección, no hace nada. El foco
+    /// acompaña a la ventana movida.
     fn move_in_direction(&mut self, dir: Direction) -> Vec<BrainCommand> {
         let active = self.active_index();
         let Some(focused) = self.workspaces[active].focused() else {
             return Vec::new();
         };
-        if self.workspaces[active].is_floating(focused) {
-            return Vec::new();
+        // Una flotante se mueve nudgeando su posición, no intercambiando.
+        if let Some(mut rect) = self.workspaces[active].floating_rect(focused) {
+            let step = self.config.float_step();
+            match dir {
+                Direction::Left => rect.x -= step,
+                Direction::Right => rect.x += step,
+                Direction::Up => rect.y -= step,
+                Direction::Down => rect.y += step,
+            }
+            self.workspaces[active].set_floating(focused, Some(rect));
+            return self.relayout();
         }
         let Some(o) = self.outputs.get(self.focused_output).copied() else {
             return Vec::new();
@@ -799,23 +870,24 @@ impl Desktop {
     }
 }
 
-/// La ventana de `candidates` más cercana a `from` en la dirección `dir`,
-/// excluyendo a `self_id`. Pura — la base del foco espacial.
+/// El elemento de `candidates` (ventana o salida) más cercano a `from` en
+/// la dirección `dir`, excluyendo a `self_id`. Pura — la base del foco
+/// espacial entre ventanas y entre monitores.
 ///
-/// Criterio (estilo i3/sway): sólo cuentan las candidatas cuyo centro cae
+/// Criterio (estilo i3/sway): sólo cuentan los candidatos cuyo centro cae
 /// en el semiplano de esa dirección respecto al centro de `from`; entre
-/// ellas gana la de menor distancia en el eje principal, penalizando el
-/// desvío en el eje perpendicular (`×2`) para preferir la que está
+/// ellos gana el de menor distancia en el eje principal, penalizando el
+/// desvío en el eje perpendicular (`×2`) para preferir el que está
 /// «enfrente». Empates: el id menor, para ser determinista.
-fn nearest_in_direction(
+fn nearest_in_direction<T: Copy + Ord>(
     from: Rect,
-    candidates: &[(WindowId, Rect)],
-    self_id: WindowId,
+    candidates: &[(T, Rect)],
+    self_id: T,
     dir: Direction,
-) -> Option<WindowId> {
+) -> Option<T> {
     let center = |r: &Rect| (r.x + r.w / 2, r.y + r.h / 2);
     let (fx, fy) = center(&from);
-    let mut best: Option<(i64, WindowId)> = None;
+    let mut best: Option<(i64, T)> = None;
     for (id, rect) in candidates {
         if *id == self_id {
             continue;
@@ -1537,15 +1609,61 @@ mod tests {
     }
 
     #[test]
-    fn move_dir_does_nothing_for_a_floating_window() {
+    fn move_dir_nudges_a_floating_window() {
         let mut d = desktop_with_screen();
         open(&mut d, 1);
         open(&mut d, 2); // enfocada → flotar
         d.apply(DesktopAction::ToggleFloat);
-        let before = d.active_workspace().windows().to_vec();
-        let cmds = d.apply(DesktopAction::MoveDir(Direction::Left));
-        assert!(cmds.is_empty());
-        assert_eq!(d.active_workspace().windows(), &before[..]);
+        let r0 = d.active_workspace().floating_rect(2).unwrap();
+        d.apply(DesktopAction::MoveDir(Direction::Right));
+        let r1 = d.active_workspace().floating_rect(2).unwrap();
+        // Se desplazó float_step px a la derecha, sin cambiar tamaño.
+        assert_eq!(r1.x, r0.x + d.config().float_step());
+        assert_eq!((r1.w, r1.h), (r0.w, r0.h));
+    }
+
+    #[test]
+    fn resize_float_grows_and_shrinks_the_focused_floating_window() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1); // enfocada → flotar
+        d.apply(DesktopAction::ToggleFloat);
+        let r0 = d.active_workspace().floating_rect(1).unwrap();
+        let step = d.config().float_step();
+        d.apply(DesktopAction::ResizeFloatDir(Direction::Right));
+        assert_eq!(d.active_workspace().floating_rect(1).unwrap().w, r0.w + step);
+        d.apply(DesktopAction::ResizeFloatDir(Direction::Down));
+        assert_eq!(d.active_workspace().floating_rect(1).unwrap().h, r0.h + step);
+        // Sobre una teselada no hace nada.
+        open(&mut d, 2); // teselada, enfocada
+        assert!(d.apply(DesktopAction::ResizeFloatDir(Direction::Right)).is_empty());
+    }
+
+    #[test]
+    fn focus_and_send_to_output_dir_cross_monitors() {
+        let mut d = desktop_with_two_outputs(); // salida 0 a la izq, 1 a la der
+        open(&mut d, 1); // en la salida 0 (ws 0)
+        assert_eq!(d.active_index(), 0);
+        // Foco a la salida de la derecha → su escritorio (ws 1).
+        d.apply(DesktopAction::FocusOutputDir(Direction::Right));
+        assert_eq!(d.active_index(), 1);
+        // Volver a la izquierda.
+        d.apply(DesktopAction::FocusOutputDir(Direction::Left));
+        assert_eq!(d.active_index(), 0);
+        // Mandar la ventana 1 a la salida derecha → viaja al ws 1.
+        d.apply(DesktopAction::SendToOutputDir(Direction::Right));
+        assert_eq!(d.workspace_loads()[0], 0);
+        assert_eq!(d.workspace_loads()[1], 1);
+    }
+
+    #[test]
+    fn master_step_from_config_drives_grow_master() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen();
+        d.set_config(Config::from_ron("( master_step: 0.1 )").unwrap());
+        open(&mut d, 1);
+        let r0 = d.active_workspace().params().master_ratio;
+        d.apply(DesktopAction::GrowMaster);
+        assert!((d.active_workspace().params().master_ratio - (r0 + 0.1)).abs() < 1e-6);
     }
 
     #[test]
@@ -1640,6 +1758,50 @@ mod tests {
             [BrainCommand::SetDecorations(dec)] => assert_eq!(dec.border_width, 5),
             other => panic!("se esperaba un SetDecorations, no {other:?}"),
         }
+    }
+
+    #[test]
+    fn reload_config_preserves_open_windows_and_focus() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        d.apply(DesktopAction::FocusWindow(2));
+        d.reload_config(Config::from_ron("( gap: 14 )").unwrap());
+        // Las ventanas siguen ahí, el foco intacto — recargar no las pierde.
+        assert_eq!(d.active_workspace().windows(), &[1, 2, 3]);
+        assert_eq!(d.focused_window(), Some(2));
+        assert_eq!(d.active_workspace().params().gap, 14);
+    }
+
+    #[test]
+    fn reload_config_applies_focus_follows_mouse_live() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada
+        // Por defecto el hover enfoca.
+        d.on_event(BodyEvent::PointerEntered { id: 1 });
+        assert_eq!(d.focused_window(), Some(1));
+        // Recargar con foco-sigue-ratón apagado lo desactiva en vivo.
+        d.reload_config(Config::from_ron("( focus_follows_mouse: false )").unwrap());
+        d.on_event(BodyEvent::PointerEntered { id: 2 });
+        assert_eq!(d.focused_window(), Some(1)); // el hover ya no mueve el foco
+    }
+
+    #[test]
+    fn reload_config_applies_the_dropterm_command_live() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen();
+        d.reload_config(
+            Config::from_ron("( dropterm_cmd: \"foot --app-id mirada.dropterm\" )").unwrap(),
+        );
+        let cmds = d.apply(DesktopAction::ToggleDropterm);
+        assert_eq!(
+            cmds,
+            vec![BrainCommand::Spawn("foot --app-id mirada.dropterm".into())]
+        );
     }
 
     #[test]

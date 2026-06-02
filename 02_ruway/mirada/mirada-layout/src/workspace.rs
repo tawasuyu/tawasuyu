@@ -130,6 +130,12 @@ impl Workspace {
         self.floating.contains_key(&window)
     }
 
+    /// El rectángulo flotante de una ventana, si flota — para moverla o
+    /// redimensionarla por teclado.
+    pub fn floating_rect(&self, window: WindowId) -> Option<Rect> {
+        self.floating.get(&window).copied()
+    }
+
     /// La ventana en pantalla completa de este escritorio, si hay alguna.
     pub fn fullscreen(&self) -> Option<WindowId> {
         self.fullscreen

@@ -115,6 +115,15 @@ pub enum DesktopAction {
     SendToWorkspace(usize),
     /// Mueve el foco a la siguiente salida (monitor).
     FocusOutputNext,
+    /// Mueve el foco a la salida (monitor) vecina en una dirección cardinal.
+    FocusOutputDir(Direction),
+    /// Manda la ventana enfocada a la salida vecina en una dirección — pasa
+    /// al escritorio que muestra esa salida.
+    SendToOutputDir(Direction),
+    /// Redimensiona la ventana flotante enfocada hacia una dirección
+    /// (derecha/abajo agrandan; izquierda/arriba achican), por `float_step`
+    /// px. No hace nada sobre una teselada.
+    ResizeFloatDir(Direction),
     /// Lanza un programa — abre una terminal, un navegador, lo que sea.
     /// El comando se pasa a `sh -c` en el Cuerpo.
     Spawn(String),
@@ -179,6 +188,9 @@ impl fmt::Display for DesktopAction {
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
             DesktopAction::FocusOutputNext => f.write_str("focus-output-next"),
+            DesktopAction::FocusOutputDir(d) => write!(f, "focus-output-{}", d.slug()),
+            DesktopAction::SendToOutputDir(d) => write!(f, "send-to-output-{}", d.slug()),
+            DesktopAction::ResizeFloatDir(d) => write!(f, "resize-float-{}", d.slug()),
             DesktopAction::Spawn(cmd) => write!(f, "spawn:{cmd}"),
             DesktopAction::Quit => f.write_str("quit"),
         }
@@ -219,6 +231,12 @@ impl FromStr for DesktopAction {
                     )
                 } else if let Some(d) = s.strip_prefix("focus-").and_then(Direction::from_slug) {
                     Self::FocusDir(d)
+                } else if let Some(d) = s.strip_prefix("focus-output-").and_then(Direction::from_slug) {
+                    Self::FocusOutputDir(d)
+                } else if let Some(d) = s.strip_prefix("send-to-output-").and_then(Direction::from_slug) {
+                    Self::SendToOutputDir(d)
+                } else if let Some(d) = s.strip_prefix("resize-float-").and_then(Direction::from_slug) {
+                    Self::ResizeFloatDir(d)
                 } else if let Some(d) = s.strip_prefix("move-").and_then(Direction::from_slug) {
                     Self::MoveDir(d)
                 } else if let Some(id) = s.strip_prefix("focus-window:") {
@@ -385,6 +403,22 @@ mod tests {
         assert!("layout:fractal".parse::<DesktopAction>().is_err());
         assert!("focus-window:abc".parse::<DesktopAction>().is_err());
         assert!("teleport".parse::<DesktopAction>().is_err());
+    }
+
+    #[test]
+    fn directional_actions_round_trip_in_every_direction() {
+        for d in [Direction::Left, Direction::Right, Direction::Up, Direction::Down] {
+            for a in [
+                DesktopAction::FocusDir(d),
+                DesktopAction::MoveDir(d),
+                DesktopAction::FocusOutputDir(d),
+                DesktopAction::SendToOutputDir(d),
+                DesktopAction::ResizeFloatDir(d),
+            ] {
+                let text = a.to_string();
+                assert_eq!(text.parse::<DesktopAction>().unwrap(), a, "no redondea: {text}");
+            }
+        }
     }
 
     #[test]

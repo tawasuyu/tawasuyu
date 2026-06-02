@@ -69,6 +69,11 @@ pub struct Config {
     pub master_ratio: f32,
     /// Cuántas ventanas van en el área maestra (`nmaster`; al menos 1).
     pub master_count: usize,
+    /// Paso al agrandar/encoger el área maestra (`grow-master`/`shrink-master`).
+    /// Más chico = control más fino. Se acota al rango útil.
+    pub master_step: f32,
+    /// Paso en px al mover o redimensionar una ventana flotante por teclado.
+    pub float_step: i32,
     /// El foco del teclado sigue al puntero, sin necesidad de click.
     pub focus_follows_mouse: bool,
     /// Grosor del marco de ventana en píxeles; `0` = sin marco.
@@ -90,6 +95,8 @@ impl Default for Config {
             gap: lp.gap,
             master_ratio: lp.master_ratio,
             master_count: lp.master_count,
+            master_step: 0.05,
+            float_step: 40,
             focus_follows_mouse: true,
             border_width: dec.border_width,
             border_focus: dec.border_focus,
@@ -99,6 +106,16 @@ impl Default for Config {
 }
 
 impl Config {
+    /// El paso del área maestra, acotado a un rango útil (`0.01..=0.5`).
+    pub fn master_step(&self) -> f32 {
+        self.master_step.clamp(0.01, 0.5)
+    }
+
+    /// El paso en px para mover/redimensionar flotantes, al menos `1`.
+    pub fn float_step(&self) -> i32 {
+        self.float_step.max(1)
+    }
+
     /// El alto del dropdown acotado a `1..=100`, listo para multiplicar.
     pub fn dropterm_height_pct(&self) -> i32 {
         self.dropterm_height_pct.clamp(1, 100) as i32
@@ -194,6 +211,8 @@ const CONFIG_TEMPLATE: &str = "\
     gap: 8,                    // margen en px alrededor de cada ventana
     master_ratio: 0.6,         // fracción de ancho de la ventana maestra
     master_count: 1,           // cuántas ventanas en el área maestra
+    master_step: 0.05,         // paso de grow/shrink-master (más chico = más fino)
+    float_step: 40,            // paso en px para mover/redimensionar flotantes por teclado
 
     // El foco del teclado sigue al puntero (sin click). false = foco al clickear.
     focus_follows_mouse: true,

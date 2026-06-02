@@ -47,3 +47,41 @@ impl FileWatch {
         self.rx.try_iter().count() > 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Un `FileWatch` detecta una escritura del archivo vigilado. Es un test
+    /// de integración con el SO (inotify): si el entorno no provee un backend
+    /// de vigilancia (algunos sandboxes), `FileWatch::new` falla y el test se
+    /// salta — no queremos un test frágil que rompa el smoke del workspace.
+    #[test]
+    fn detects_a_write_to_the_watched_file() {
+        let dir = std::env::temp_dir().join(format!("mirada-watch-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("config.ron");
+        std::fs::write(&file, b"(\n)\n").unwrap();
+
+        let Ok(watch) = FileWatch::new(&file) else {
+            eprintln!("watch: sin backend de vigilancia en este entorno; salto el test.");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+        assert!(!watch.changed(), "recién creado: nada que reportar todavía");
+
+        // Reescribe el archivo y espera (acotado) a que el evento llegue.
+        std::fs::write(&file, b"( gap: 12 )\n").unwrap();
+        let mut seen = false;
+        for _ in 0..60 {
+            if watch.changed() {
+                seen = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50)); // hasta ~3 s
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(seen, "el FileWatch no reportó la escritura en 3 s");
+    }
+}

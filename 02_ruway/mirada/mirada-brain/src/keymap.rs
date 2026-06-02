@@ -225,7 +225,10 @@ const KEYMAP_HEADER: &str = "\
 //   grow-master / shrink-master      redimensiona el área maestra
 //   inc-master / dec-master          nº de ventanas maestras (nmaster)
 //   promote-to-master                la enfocada al puesto maestro
+//   resize-float-left/right/up/down   redimensiona la flotante enfocada
 //   focus-output-next                pasa el foco al siguiente monitor
+//   focus-output-left/right/up/down   foco al monitor vecino (por geometría)
+//   send-to-output-left/right/up/down manda la enfocada al monitor vecino
 //   workspace:N                      activa el escritorio N (1..9)
 //   send-to-workspace:N              manda la enfocada al escritorio N
 //   spawn:<comando>                  lanza un programa (p. ej. spawn:foot)
