@@ -18,9 +18,10 @@
 use serde::{Deserialize, Serialize};
 
 /// Política de fin de cola, espejo del control de VLC/mpv.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Repeat {
     /// Para al terminar la última entrada.
+    #[default]
     Off,
     /// Repite la entrada actual indefinidamente.
     One,

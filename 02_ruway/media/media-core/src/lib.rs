@@ -25,6 +25,7 @@ use std::time::Duration;
 
 pub mod channels;
 pub mod color;
+pub mod config;
 pub mod control;
 pub mod dynamics;
 pub mod eq;
