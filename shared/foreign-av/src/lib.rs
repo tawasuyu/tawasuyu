@@ -110,6 +110,11 @@ pub struct MediaInfo {
     pub duration: Duration,
     pub video: Option<VideoInfo>,
     pub audio: Option<AudioInfo>,
+    /// Fuente de **audio separada** (DASH): cuando es `Some`, el video sale de
+    /// `path` y el audio de esta otra ruta/URL, y la sesión los muxea con dos
+    /// entradas de ffmpeg (`-i path -i audio_path`). `None` ⇒ todo sale de
+    /// `path` (camino normal, una sola entrada). Lo arma [`probe_dash`].
+    pub audio_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -217,6 +222,30 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo, FfmpegError> {
         duration,
         video,
         audio,
+        audio_path: None,
+    })
+}
+
+/// Arma un [`MediaInfo`] **DASH** a partir de dos fuentes separadas: una con el
+/// video y otra con el audio (típico de yt-dlp `bv*+ba` en YouTube > 720p). Se
+/// hace un `probe` de cada una y se combina: el video y la duración salen de
+/// `video_src`, el audio de `audio_src`, y `audio_path` apunta a `audio_src`
+/// para que [`MediaSession`] spawnee ffmpeg con dos entradas. El `path` queda
+/// con la fuente de video.
+pub fn probe_dash(
+    video_src: impl AsRef<Path>,
+    audio_src: impl AsRef<Path>,
+) -> Result<MediaInfo, FfmpegError> {
+    let v = probe(&video_src)?;
+    let a = probe(&audio_src)?;
+    Ok(MediaInfo {
+        path: v.path,
+        // El contenedor de audio suele declarar mejor su duración; usamos la
+        // mayor de las dos como referencia del transporte.
+        duration: v.duration.max(a.duration),
+        video: v.video,
+        audio: a.audio,
+        audio_path: Some(audio_src.as_ref().to_path_buf()),
     })
 }
 
@@ -343,18 +372,33 @@ fn spawn_into(inner: &mut SessionInner, from: Duration) -> Result<(), FfmpegErro
     let vw_fd: RawFd = video_w.as_ref().map(|f| f.as_raw_fd()).unwrap_or(-1);
     let aw_fd: RawFd = audio_w.as_ref().map(|f| f.as_raw_fd()).unwrap_or(-1);
 
+    // DASH: el audio viene de una segunda entrada (`-i audio_path`); el `-map`
+    // del audio apunta entonces a la entrada 1. Sin `audio_path` todo sale de
+    // la entrada 0 (camino normal, intacto).
+    let dash_audio = inner.info.audio_path.clone();
+    let audio_input = if dash_audio.is_some() { 1 } else { 0 };
+    let ss = format!("{:.3}", from.as_secs_f64());
+
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-loglevel", "error", "-nostdin", "-ss"])
-        .arg(format!("{:.3}", from.as_secs_f64()))
+        .arg(&ss)
         .arg("-i")
         .arg(&inner.info.path);
+    if let Some(audio_path) = &dash_audio {
+        // Segundo input con su propio `-ss` para que arranque sincronizado
+        // con el video tras un seek.
+        cmd.arg("-ss").arg(&ss).arg("-i").arg(audio_path);
+    }
     if want_video {
         cmd.args(["-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:3"]);
     }
     if want_audio {
         let sr = inner.audio_sr.to_string();
         let ch = inner.audio_ch.to_string();
-        cmd.args(["-map", "0:a:0", "-vn", "-ar"])
+        cmd.arg("-map")
+            .arg(format!("{audio_input}:a:0"))
+            .arg("-vn")
+            .arg("-ar")
             .arg(sr)
             .arg("-ac")
             .arg(ch)

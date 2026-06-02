@@ -95,6 +95,7 @@ para un FreeTube útil es la capa de **navegación/descubrimiento** (búsqueda,
 canales, suscripciones, comentarios), que es el puente `shared/foreign-youtube`
 (Innertube/Invidious) + un frontend Llimphi — no el reproductor.
 
-Pendiente de R2 para calidad alta: el DASH con audio y video en URLs
-separadas (YouTube > 720p) — hoy `resolve` pide un único formato muxeado
-(`-f b`), suficiente para reproducir pero topado en resolución.
+Calidad alta (DASH A/V separados, YouTube > 720p) **✅ (2026-06-02)**:
+`foreign_ytdlp::resolve_best` (`-f bv*+ba/b`) devuelve video y audio en URLs
+separadas y `foreign_av::probe_dash` los muxea con dos entradas de ffmpeg, así
+que ya no quedamos topados en 720p. (Falta validar a oído con red real.)

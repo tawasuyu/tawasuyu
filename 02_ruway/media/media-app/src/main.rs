@@ -405,6 +405,14 @@ fn video_path_slot() -> &'static OnceLock<PathBuf> {
     &SLOT
 }
 
+/// URL de audio **separada** (DASH) cuando yt-dlp resolvió video y audio en
+/// streams distintos (R2, YouTube > 720p). `None` ⇒ stream muxeado normal.
+/// Si está, la sesión ffmpeg se abre con `probe_dash` (dos entradas).
+fn dash_audio_slot() -> &'static OnceLock<PathBuf> {
+    static SLOT: OnceLock<PathBuf> = OnceLock::new();
+    &SLOT
+}
+
 /// Probe del stream de audio que `audio_source_from_env` instaló.
 /// `None` cuando no hay audio (MEDIA_MUTE o el sink no abrió) —
 /// el visor entonces pinta una franja en silencio.
@@ -3074,9 +3082,19 @@ fn main() {
         // (puede ser ya directa, o degradar a testcard).
         Some(arg) if is_network_url(arg) => {
             let stream = if foreign_ytdlp::is_platform_url(arg) {
-                match foreign_ytdlp::resolve(arg) {
+                // R2 DASH: pedimos el mejor video+audio. Si vienen separados
+                // (YouTube > 720p), guardamos la URL de audio para abrir la
+                // sesión ffmpeg con dos entradas (`probe_dash`).
+                match foreign_ytdlp::resolve_best(arg) {
                     Ok(r) => {
-                        eprintln!("media-app: yt-dlp resolvió {arg} → stream directo");
+                        if let Some(audio) = &r.audio_url {
+                            eprintln!(
+                                "media-app: yt-dlp resolvió {arg} → DASH (video+audio separados)"
+                            );
+                            dash_audio_slot().set(PathBuf::from(audio.clone())).ok();
+                        } else {
+                            eprintln!("media-app: yt-dlp resolvió {arg} → stream muxeado");
+                        }
                         r.stream_url
                     }
                     Err(e) => {
@@ -3145,9 +3163,13 @@ fn main() {
     if let (Some(path), Some(VideoKind::Ffmpeg)) =
         (video_path_slot().get(), config_slot().get().map(|c| c.kind))
     {
-        match foreign_av::probe(path)
-            .and_then(MediaSession::open)
-        {
+        // DASH (R2): si hay una URL de audio separada, abrimos la sesión con
+        // dos entradas (video + audio); si no, el probe normal de una entrada.
+        let probed = match dash_audio_slot().get() {
+            Some(audio) => foreign_av::probe_dash(path, audio),
+            None => foreign_av::probe(path),
+        };
+        match probed.and_then(MediaSession::open) {
             Ok(session) => {
                 eprintln!(
                     "media-app: ffmpeg session abierta ({})",

@@ -37,8 +37,9 @@ conviene retomarlo con pantalla:
 - **Motor**: M2 hw decode, M3 seek frame-accurate, M4 frame stepping, M5
   pitch-correct speed.
 - **Subtítulos**: S2 pistas embebidas, S3 estilo visual ASS (libass-like).
-- **Mejoras a lo ya hecho**: R2 DASH A/V separados (calidad > 720p). *(A5
-  ReplayGain/EBU R128 ✅ y V4 hue ✅ cerrados 2026-06-02.)*
+- **Mejoras a lo ya hecho**: *(A5 ReplayGain/EBU R128 ✅, V4 hue ✅ y R2 DASH
+  A/V separados ✅ cerrados 2026-06-02 — todo lo testeable-en-CI del plan está
+  hecho; lo que resta necesita pantalla/GPU o red/audio real para verificar.)*
 
 Sugerencia al retomar: `cargo run -p media-app -- <archivo>` y ejercitar las
 features nuevas desde el command palette (Ctrl+Shift+P): grupos Orientación,
@@ -235,9 +236,16 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   existe): `is_platform_url` (allowlist de hosts, match exacto/sufijo) +
   `resolve` (`yt-dlp -f b -g` → URL de stream directo). `media-app` resuelve
   la página antes de pasarla al decoder de red (R1) y cae a la URL original
-  si yt-dlp falta o falla. Pide **un formato muxeado** (`-f b`) para una sola
-  entrada ffmpeg; el DASH con A/V separados (YouTube > 720p) queda pendiente
-  (necesita dos entradas o muxeo previo).
+  si yt-dlp falta o falla. **DASH A/V separados ✅ (2026-06-02)**: `resolve_best`
+  (`yt-dlp -f bv*+ba/b -g`) devuelve un `Resolved` con `stream_url` (video) y
+  `audio_url` opcional (audio) — `parse_g_output` es puro y testeado (1 línea →
+  muxeado, 2 → DASH video-luego-audio). `foreign-av` ganó `MediaInfo.audio_path`
+  + `probe_dash(video, audio)` + segunda entrada en el spawn (`-i video -i
+  audio`, `-map 0:v:0`/`-map 1:a:0`, con `-ss` por entrada para el seek);
+  el camino de una sola entrada queda intacto cuando `audio_path` es `None`.
+  `media-app` guarda la URL de audio en `dash_audio_slot` y abre la sesión con
+  `probe_dash`. Esto destapa > 720p en YouTube. **Pendiente verificar a oído
+  con red real** (la lógica de spawn de dos entradas no se testea en CI).
 - **R3 — Salida de streaming / transcoding** (modo servidor de VLC).
 - **R4 — DLNA/UPnP, Chromecast.**
 

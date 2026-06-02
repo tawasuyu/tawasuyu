@@ -13,14 +13,19 @@
 //! deja reproducir desde una plataforma: la página se resuelve acá a su
 //! stream directo y se enchufa al mismo camino de red.
 //!
-//! ## Alcance de esta versión
+//! ## Modos de resolución
 //!
-//! [`resolve`] pide a yt-dlp **un único formato muxeado** (`-f b`), así la
-//! URL resultante es una sola entrada que ffmpeg abre directo. Los formatos
-//! DASH con audio y video en URLs separadas (típico de YouTube > 720p)
-//! quedan para una versión futura — necesitarían dos entradas en ffmpeg o
-//! un muxeo previo. Si yt-dlp no está instalado, [`resolve`] devuelve
-//! [`YtdlpError::Spawn`] y el caller cae a tratar la URL como directa.
+//! - [`resolve`] pide a yt-dlp **un único formato muxeado** (`-f b`): una sola
+//!   URL que ffmpeg abre directo. Tope ~720p en YouTube (es lo único que
+//!   ofrece muxeado), pero es el camino más simple y robusto.
+//! - [`resolve_best`] pide el **mejor video + mejor audio** (`-f bv*+ba/b`):
+//!   en plataformas DASH (YouTube > 720p) yt-dlp devuelve **dos** URLs
+//!   separadas (video y audio), que el caller enchufa como dos entradas a
+//!   ffmpeg (`MediaSession` DASH de `foreign-av`). Si sólo hay muxeado, cae a
+//!   una sola URL (igual que [`resolve`]).
+//!
+//! Si yt-dlp no está instalado, ambas devuelven [`YtdlpError::Spawn`] y el
+//! caller cae a tratar la URL como directa.
 
 use std::process::{Command, Stdio};
 
@@ -77,10 +82,23 @@ impl std::error::Error for YtdlpError {}
 /// Resultado de resolver una página de plataforma.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
-    /// URL de stream directo, lista para el decoder de red (ffmpeg).
+    /// URL de stream directo de video (o muxeado, si `audio_url` es `None`),
+    /// lista para el decoder de red (ffmpeg).
     pub stream_url: String,
+    /// URL de stream directo de **audio**, presente sólo cuando la plataforma
+    /// entregó audio y video en URLs separadas (DASH, p. ej. YouTube > 720p).
+    /// `None` ⇒ `stream_url` ya es muxeado (audio+video en una sola entrada).
+    pub audio_url: Option<String>,
     /// La URL de página original (para mostrar como etiqueta).
     pub source_url: String,
+}
+
+impl Resolved {
+    /// `true` si el resultado son dos streams separados (DASH) que el caller
+    /// debe muxear con dos entradas de ffmpeg.
+    pub fn is_dash(&self) -> bool {
+        self.audio_url.is_some()
+    }
 }
 
 /// Extrae el host (en minúsculas, sin userinfo ni puerto) de una URL
@@ -120,20 +138,44 @@ pub fn is_platform_url(url: &str) -> bool {
     })
 }
 
-/// Resuelve `page_url` a una URL de stream directo invocando
-/// `yt-dlp -f b -g`. Pide un único formato muxeado para que la salida sea
-/// una sola URL que ffmpeg abre directo (ver el caveat del módulo sobre
-/// DASH). Devuelve [`YtdlpError::Spawn`] si yt-dlp no está disponible — el
-/// caller debería entonces tratar la URL como directa.
-pub fn resolve(page_url: &str) -> Result<Resolved, YtdlpError> {
+/// Parsea la salida de `yt-dlp -g` (una URL directa por línea) en un
+/// [`Resolved`]. Una sola línea no vacía ⇒ stream muxeado; **dos o más** ⇒
+/// DASH: yt-dlp imprime primero el video y después el audio, así que
+/// `stream_url` = 1ª línea y `audio_url` = 2ª. Función pura → testeable sin
+/// invocar el binario.
+fn parse_g_output(stdout: &str, page_url: &str) -> Result<Resolved, YtdlpError> {
+    let urls: Vec<String> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    match urls.as_slice() {
+        [] => Err(YtdlpError::Empty),
+        [muxed] => Ok(Resolved {
+            stream_url: muxed.clone(),
+            audio_url: None,
+            source_url: page_url.to_string(),
+        }),
+        // DASH: video primero, audio después (orden de `bv*+ba`). Líneas
+        // extra (raro) se ignoran.
+        [video, audio, ..] => Ok(Resolved {
+            stream_url: video.clone(),
+            audio_url: Some(audio.clone()),
+            source_url: page_url.to_string(),
+        }),
+    }
+}
+
+/// Lanza `yt-dlp -g` con un selector de formato dado y parsea su salida.
+fn run_yt_dlp(format: &str, page_url: &str) -> Result<Resolved, YtdlpError> {
     let output = Command::new("yt-dlp")
         .args([
             "--no-playlist",
             "--quiet",
             "--no-warnings",
-            // Un solo formato muxeado (audio+video en una URL).
             "-f",
-            "b",
+            format,
             // Imprime sólo la(s) URL(s) directa(s).
             "-g",
             page_url,
@@ -150,17 +192,25 @@ pub fn resolve(page_url: &str) -> Result<Resolved, YtdlpError> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stream_url = stdout
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .ok_or(YtdlpError::Empty)?
-        .to_string();
+    parse_g_output(&stdout, page_url)
+}
 
-    Ok(Resolved {
-        stream_url,
-        source_url: page_url.to_string(),
-    })
+/// Resuelve `page_url` a una **única URL muxeada** (`yt-dlp -f b -g`): audio y
+/// video en una sola entrada que ffmpeg abre directo. Tope ~720p en YouTube.
+/// Devuelve [`YtdlpError::Spawn`] si yt-dlp no está disponible — el caller
+/// debería entonces tratar la URL como directa. El resultado nunca trae
+/// `audio_url` (`is_dash()` es `false`).
+pub fn resolve(page_url: &str) -> Result<Resolved, YtdlpError> {
+    run_yt_dlp("b", page_url)
+}
+
+/// Resuelve `page_url` pidiendo el **mejor video + mejor audio**
+/// (`yt-dlp -f bv*+ba/b -g`). En plataformas DASH (YouTube > 720p) devuelve un
+/// [`Resolved`] con `stream_url` (video) y `audio_url` (audio) separados, que
+/// el caller muxea con dos entradas de ffmpeg; si sólo hay muxeado, cae a una
+/// sola URL (`is_dash()` = `false`). Misma semántica de error que [`resolve`].
+pub fn resolve_best(page_url: &str) -> Result<Resolved, YtdlpError> {
+    run_yt_dlp("bv*+ba/b", page_url)
 }
 
 #[cfg(test)]
@@ -208,5 +258,37 @@ mod tests {
         assert!(!is_platform_url("https://fakeyoutube.com/x"));
         // pero el subdominio legítimo sí.
         assert!(is_platform_url("https://music.youtube.com/x"));
+    }
+
+    #[test]
+    fn parse_una_url_es_muxeado() {
+        let r = parse_g_output("https://cdn/v.mp4\n", "https://yt/x").unwrap();
+        assert_eq!(r.stream_url, "https://cdn/v.mp4");
+        assert_eq!(r.audio_url, None);
+        assert!(!r.is_dash());
+        assert_eq!(r.source_url, "https://yt/x");
+    }
+
+    #[test]
+    fn parse_dos_urls_es_dash_video_luego_audio() {
+        // yt-dlp con bv*+ba imprime video y después audio.
+        let out = "https://cdn/video-1080.m4s\nhttps://cdn/audio.m4s\n";
+        let r = parse_g_output(out, "https://yt/x").unwrap();
+        assert!(r.is_dash());
+        assert_eq!(r.stream_url, "https://cdn/video-1080.m4s");
+        assert_eq!(r.audio_url.as_deref(), Some("https://cdn/audio.m4s"));
+    }
+
+    #[test]
+    fn parse_ignora_lineas_vacias_y_extra() {
+        let out = "\n  https://cdn/v\n\nhttps://cdn/a\nhttps://cdn/sobra\n";
+        let r = parse_g_output(out, "p").unwrap();
+        assert_eq!(r.stream_url, "https://cdn/v");
+        assert_eq!(r.audio_url.as_deref(), Some("https://cdn/a"));
+    }
+
+    #[test]
+    fn parse_vacio_es_error() {
+        assert!(matches!(parse_g_output("\n  \n", "p"), Err(YtdlpError::Empty)));
     }
 }
