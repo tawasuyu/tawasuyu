@@ -38,6 +38,7 @@ pub mod playlist;
 pub mod toolbar;
 pub mod tracks;
 pub mod transform;
+pub mod viewport;
 pub mod layout;
 pub mod sync;
 

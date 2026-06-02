@@ -30,8 +30,9 @@ cerrados (A1,A4,A5 · M1 · R1,R2 · S1,S4,S5 · V3,V4 · todo CONTROLES.md). Lo
 que **queda necesita correr la app/GPU o hardware** para verificarse, así que
 conviene retomarlo con pantalla:
 
-- **Video con pantalla**: V1 fullscreen (API de ventana de llimphi-ui), V2
-  aspect/crop/zoom (blit), V5 deinterlacing, V6 shaders, V8 HDR.
+- **Video con pantalla**: V1 fullscreen (API de ventana de llimphi-ui), V5
+  deinterlacing, V6 shaders, V8 HDR. (V2 aspect/crop/zoom: núcleo geométrico
+  ✅ 2026-06-02; falta el blit con `Layout`.)
 - **Audio con hardware**: A3 dispositivo de salida (cpal), A6 gapless/crossfade.
   (A2 selección de pista: núcleo + extracción ✅ 2026-06-02; falta menú +
   re-map en la app.)
@@ -102,7 +103,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 ### Pendiente
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
 - Track AUDIO A3 (dispositivo de salida — necesita hardware). **A2 (selección de pista: núcleo `tracks` + extracción `foreign-av`) ✅ · A4 (delay/sync) ✅ · A5 (normalización + limitador + downmix/upmix) ✅ · A6 (crossfade, kernel puro) ✅.** (A2 falta el menú + re-map en `media-app`.)
-- Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, hue incluido) ✅.**
+- Track VIDEO V1, V5–V8 (fullscreen, deinterlacing, filtros/shaders, HDR). **V2 (aspect/crop/zoom/pan, núcleo geométrico) ✅ · V3 (rotación/flip) ✅ · V4 (ajustes de color, hue incluido) ✅ · V7 (capítulos) ✅.** (V2 falta el blit con `Layout` en `media-app`.)
 - Track SUBTÍTULOS — núcleo completo. **S1 (ASS/SSA texto+timing) ✅ · S2 (pistas embebidas: núcleo `tracks` + extracción `foreign-av`) ✅ · S3 (estilo/colores/alineación ASS, núcleo) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.** (S2/S3 faltan render/menú en `media-app`.)
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
 - Track UX U3 (thumbnails en hover) y U4 (OSD) — necesitan decode/pantalla.
@@ -199,7 +200,18 @@ Ordenados por impacto. Cada fase es un bloque committeable.
 ### Track VIDEO
 
 - **V1 — Fullscreen real** del reproductor.
-- **V2 — Aspect ratio / crop / zoom / pan.**
+- **V2 — Aspect ratio / crop / zoom / pan.** ✅ *Núcleo cerrado
+  (2026-06-02).* `media-core::viewport`: cálculo puro de geometría. `FitMode`
+  (Fit/Fill/Stretch/Original, con `next()`/`label()`), `ViewControl`
+  versionado (modo + aspecto forzado opcional + zoom + pan + `Crop`
+  fraccional) con mutadores clampeados (`cycle_fit` resetea zoom/pan,
+  `zoom_by`, `pan_by`, `set_aspect`, `reset`, `sanitized`), y
+  `compute_layout(src, viewport, ctl) -> Layout{src,dst}` que devuelve qué
+  porción del frame muestrear y dónde pintarla (el `dst` puede exceder el
+  viewport en Fill/zoom/pan; la UI recorta). Maneja crop→aspecto efectivo,
+  centrado y tamaños inválidos. +12 tests. **Falta**: que el blit de
+  `media-app` use `Layout` (hoy escala el frame al panel entero) y comandos
+  en el palette — necesita pantalla.
 - **V3 — Rotación / flip.** ✅ *Cerrado (2026-06-01).* `media-core::transform`:
   transform puro `transform_rgba` (flip H/V en espacio de origen + rotación
   horaria 0/90/180/270°, mapeo forward, 90/270° intercambian `w↔h`) +
