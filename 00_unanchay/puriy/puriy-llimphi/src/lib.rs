@@ -5830,6 +5830,9 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
         size: Size { width, height },
         min_size,
         max_size,
+        // CSS aspect-ratio: taffy dimensiona el eje `auto` a partir del otro
+        // usando esta relación. `None` = sin relación.
+        aspect_ratio: b.aspect_ratio,
         margin: Rect {
             left: length(b.margin.left * zoom),
             right: length(b.margin.right * zoom),

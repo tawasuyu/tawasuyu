@@ -134,6 +134,8 @@ pub struct BoxNode {
     pub min_width: LengthVal,
     pub min_height: LengthVal,
     pub max_height: LengthVal,
+    /// CSS `aspect-ratio`. `None` = sin relación impuesta (`auto`).
+    pub aspect_ratio: Option<f32>,
     /// `hidden` aplica clip() en el chrome.
     pub overflow: Overflow,
     /// `white-space` define cómo collapse_whitespace trata el texto.
@@ -1100,6 +1102,7 @@ fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Option<Color>, f
     b.min_width = s.min_width;
     b.min_height = s.min_height;
     b.max_height = s.max_height;
+    b.aspect_ratio = s.aspect_ratio;
     b.overflow = s.overflow;
     b.white_space = s.white_space;
     b.text_transform = s.text_transform;
@@ -1790,6 +1793,7 @@ fn empty_root() -> BoxNode {
         min_width: LengthVal::Auto,
         min_height: LengthVal::Auto,
         max_height: LengthVal::Auto,
+        aspect_ratio: None,
         overflow: Overflow::Visible,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,
@@ -2154,6 +2158,7 @@ fn build_node(
                 min_width: style.min_width,
                 min_height: style.min_height,
                 max_height: style.max_height,
+                aspect_ratio: style.aspect_ratio,
                 overflow: style.overflow,
                 white_space: style.white_space,
                 text_transform: style.text_transform,
@@ -2300,6 +2305,7 @@ fn build_node(
                 min_width: LengthVal::Auto,
                 min_height: LengthVal::Auto,
                 max_height: LengthVal::Auto,
+                aspect_ratio: None,
                 overflow: Overflow::Visible,
                 white_space: WhiteSpace::Normal,
                 text_transform: TextTransform::None,
@@ -2391,6 +2397,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         min_width: LengthVal::Auto,
         min_height: LengthVal::Auto,
         max_height: LengthVal::Auto,
+        aspect_ratio: None,
         overflow: Overflow::Visible,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,

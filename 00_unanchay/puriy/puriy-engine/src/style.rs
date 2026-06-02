@@ -113,6 +113,10 @@ pub struct ComputedStyle {
     pub min_height: LengthVal,
     /// Alto máximo (max-width ya existe). `Auto` = sin tope.
     pub max_height: LengthVal,
+    /// CSS `aspect-ratio` (relación ancho/alto preferida). `None` = `auto`
+    /// (sin relación impuesta). El chrome lo pasa directo a taffy, que
+    /// dimensiona el eje que quedó `auto` a partir del otro. No hereda.
+    pub aspect_ratio: Option<f32>,
     /// Overflow del contenido. Default `Visible`.
     pub overflow: Overflow,
     /// Colapsado y wrap del texto.
@@ -748,6 +752,7 @@ impl Default for ComputedStyle {
             min_width: LengthVal::Auto,
             min_height: LengthVal::Auto,
             max_height: LengthVal::Auto,
+            aspect_ratio: None,
             overflow: Overflow::Visible,
             white_space: WhiteSpace::Normal,
             text_transform: TextTransform::None,
@@ -1664,6 +1669,8 @@ enum DeclKind {
     MinWidth(LengthVal),
     MinHeight(LengthVal),
     MaxHeight(LengthVal),
+    /// `None` = `aspect-ratio: auto` (resetea).
+    AspectRatio(Option<f32>),
     Overflow(Overflow),
     WhiteSpace(WhiteSpace),
     TextTransform(TextTransform),
@@ -1771,6 +1778,7 @@ impl Decl {
             DeclKind::MinWidth(v) => s.min_width = *v,
             DeclKind::MinHeight(v) => s.min_height = *v,
             DeclKind::MaxHeight(v) => s.max_height = *v,
+            DeclKind::AspectRatio(v) => s.aspect_ratio = *v,
             DeclKind::Overflow(o) => s.overflow = *o,
             DeclKind::WhiteSpace(w) => s.white_space = *w,
             DeclKind::TextTransform(t) => s.text_transform = *t,
@@ -3351,6 +3359,18 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "min-width" => parse_length_or_pct(value).map(DeclKind::MinWidth),
         "min-height" => parse_length_or_pct(value).map(DeclKind::MinHeight),
         "max-height" => parse_length_or_pct(value).map(DeclKind::MaxHeight),
+        // `aspect-ratio: auto` resetea; `W / H` o un número crudo fijan la
+        // relación. La forma `auto W/H` (auto + ratio) toma sólo el ratio.
+        "aspect-ratio" => {
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::AspectRatio(None))
+            } else {
+                // Descarta un prefijo `auto` opcional (`auto 16/9`).
+                let v = v.strip_prefix("auto").map(str::trim).unwrap_or(v);
+                parse_aspect_ratio(v).map(|r| DeclKind::AspectRatio(Some(r)))
+            }
+        }
         // Tamaños lógicos → físicos (LTR + escritura horizontal): inline ↔
         // width, block ↔ height. Fase 7.194.
         "inline-size" => parse_length_or_pct(value).map(DeclKind::Width),
@@ -6536,6 +6556,35 @@ mod tests {
         // Sin declaración, el default es Normal (no hereda del flujo).
         let plain = dom.find("section").unwrap();
         assert_eq!(eng.compute(&plain).align_content, AlignContent::Normal);
+    }
+
+    #[test]
+    fn aspect_ratio_propiedad_ratio_numero_y_auto() {
+        let html = r#"<html><head><style>
+            .wide { aspect-ratio: 16 / 9; }
+            .num  { aspect-ratio: 1.5; }
+            .both { aspect-ratio: auto 4/3; }
+            .reset{ aspect-ratio: auto; }
+        </style></head><body>
+            <div class="wide"></div><div class="num"></div>
+            <div class="both"></div><div class="reset"></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        // Verificamos el parse vía decl_kind_from_pair (más preciso que
+        // depender del orden de los div en el árbol).
+        let r = |css: &str| match decl_kind_from_pair("aspect-ratio", css) {
+            Some(DeclKind::AspectRatio(v)) => v,
+            other => panic!("inesperado: {other:?}"),
+        };
+        assert!((r("16 / 9").unwrap() - 16.0 / 9.0).abs() < 1e-6);
+        assert!((r("1.5").unwrap() - 1.5).abs() < 1e-6);
+        assert!((r("auto 4/3").unwrap() - 4.0 / 3.0).abs() < 1e-6);
+        assert_eq!(r("auto"), None);
+        assert!(decl_kind_from_pair("aspect-ratio", "garbage").is_none());
+        // Y que computa en el árbol (default None sin declaración).
+        let plain = eng.compute(&dom.find("body").unwrap());
+        assert_eq!(plain.aspect_ratio, None);
     }
 
     #[test]
