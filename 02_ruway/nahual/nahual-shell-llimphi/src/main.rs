@@ -212,6 +212,8 @@ enum Msg {
     MapSearchSubmit,
     /// Cancela la búsqueda.
     MapSearchCancel,
+    /// Alterna el modo ruteo (clics = origen/destino).
+    MapRouteToggle,
     /// Drag del divisor — positivo = lista crece.
     ResizeList(f32),
     /// El bus `wawa-config` publicó una versión nueva.
@@ -344,6 +346,9 @@ impl App for Shell {
             Key::Character(c) if c == "/" && matches!(_model.preview, PreviewPane::Map(_)) => {
                 Some(Msg::MapSearchStart)
             }
+            Key::Character(c) if c == "r" && matches!(_model.preview, PreviewPane::Map(_)) => {
+                Some(Msg::MapRouteToggle)
+            }
             _ => None,
         }
     }
@@ -472,13 +477,42 @@ impl App for Shell {
             Msg::MapToggleBase => m.map_view.toggle_base(),
             Msg::MapClick(fx, fy) => {
                 if let PreviewPane::Map(MapPreview::Map { data, .. }) = &m.preview {
-                    m.map_view.selected = nahual_map_viewer_llimphi::hit_test(
-                        data,
-                        &m.map_view,
-                        fx as f64,
-                        fy as f64,
-                    );
+                    if m.map_view.routing {
+                        // Ruteo: cada clic fija un punto; con dos, calcula la ruta.
+                        if let Some(c) =
+                            nahual_map_viewer_llimphi::unproject(data, &m.map_view, fx as f64, fy as f64)
+                        {
+                            if m.map_view.route_pins.len() >= 2 {
+                                m.map_view.clear_route();
+                            }
+                            m.map_view.route_pins.push(c);
+                            if m.map_view.route_pins.len() == 2 {
+                                let (a, b) = (m.map_view.route_pins[0], m.map_view.route_pins[1]);
+                                match nahual_map_viewer_llimphi::route(data, a, b) {
+                                    Some(res) => {
+                                        m.map_view.route_path = res.path;
+                                        m.map_view.route_meters = res.meters;
+                                    }
+                                    None => {
+                                        m.map_view.route_path.clear();
+                                        m.map_view.route_meters = 0.0;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        m.map_view.selected = nahual_map_viewer_llimphi::hit_test(
+                            data,
+                            &m.map_view,
+                            fx as f64,
+                            fy as f64,
+                        );
+                    }
                 }
+            }
+            Msg::MapRouteToggle => {
+                m.map_view.routing = !m.map_view.routing;
+                m.map_view.clear_route();
             }
             Msg::MapCycleColor => {
                 if let PreviewPane::Map(MapPreview::Map { data, .. }) = &m.preview {

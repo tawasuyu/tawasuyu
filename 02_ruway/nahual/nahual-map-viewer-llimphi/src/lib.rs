@@ -27,6 +27,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::{BinaryHeap, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -874,6 +875,14 @@ pub struct MapView {
     pub searching: bool,
     /// Consulta de búsqueda en curso.
     pub query: String,
+    /// Modo ruteo activo (los clics fijan origen/destino).
+    pub routing: bool,
+    /// Puntos de ruta marcados por el usuario (0..2), en lon/lat.
+    pub route_pins: Vec<Coord>,
+    /// Ruta calculada (polilínea a dibujar), vacía si no hay.
+    pub route_path: Vec<Coord>,
+    /// Longitud de la ruta calculada, en metros.
+    pub route_meters: f64,
     rect: Arc<Mutex<Option<(f32, f32, f32, f32)>>>,
 }
 
@@ -887,6 +896,10 @@ impl Default for MapView {
             color_field: None,
             searching: false,
             query: String::new(),
+            routing: false,
+            route_pins: Vec::new(),
+            route_path: Vec::new(),
+            route_meters: 0.0,
             rect: Arc::new(Mutex::new(None)),
         }
     }
@@ -906,6 +919,15 @@ impl MapView {
         self.selected = None;
         self.searching = false;
         self.query.clear();
+        self.routing = false;
+        self.clear_route();
+    }
+
+    /// Limpia los puntos y la ruta calculada (no toca el modo).
+    pub fn clear_route(&mut self) {
+        self.route_pins.clear();
+        self.route_path.clear();
+        self.route_meters = 0.0;
     }
 
     /// Acumula un desplazamiento (de un arrastre), en píxeles físicos.
@@ -1061,13 +1083,20 @@ where
         (Some(n), _) => format!("mapa · {n}"),
         (None, _) => "(seleccioná un .geojson)".to_string(),
     };
-    // En modo búsqueda, el header muestra la consulta con un cursor.
+    // En modo búsqueda/ruteo, el header refleja el estado.
     let header_text = if view.searching {
         format!("buscar: {}▏", view.query)
+    } else if view.routing {
+        let dist = if view.route_meters > 0.0 {
+            format!(" · {}", fmt_distance(view.route_meters / 1000.0))
+        } else {
+            String::new()
+        };
+        format!("ruta · {}/2 puntos{} · (clic origen y destino · r sale)", view.route_pins.len(), dist)
     } else {
         header_text
     };
-    let header_color = if view.searching {
+    let header_color = if view.searching || view.routing {
         palette.fg_text
     } else {
         palette.fg_muted
@@ -1359,6 +1388,153 @@ pub fn focus_on(data: &MapData, view: &mut MapView, fi: usize) {
     view.selected = Some(fi);
 }
 
+/// Convierte un clic (fracción `[0,1]` del rect) a lon/lat, invirtiendo la
+/// proyección actual. `None` si todavía no se pintó o no hay datos.
+pub fn unproject(data: &MapData, view: &MapView, fx: f64, fy: f64) -> Option<Coord> {
+    let (rx, ry, rw, rh) = view.rect.lock().ok().and_then(|g| *g)?;
+    if rw <= 0.0 || rh <= 0.0 {
+        return None;
+    }
+    let bb = data.bbox()?;
+    let proj = Projection::fit(bb, (rx as f64, ry as f64, rw as f64, rh as f64), view.zoom, view.pan);
+    Some(proj.inverse(rx as f64 + fx * rw as f64, ry as f64 + fy * rh as f64))
+}
+
+/// Distancia geodésica entre dos coordenadas (haversine), en metros.
+fn haversine(a: Coord, b: Coord) -> f64 {
+    const R: f64 = 6_371_000.0;
+    let (lat1, lat2) = (a[1].to_radians(), b[1].to_radians());
+    let dlat = (b[1] - a[1]).to_radians();
+    let dlon = (b[0] - a[0]).to_radians();
+    let h = (dlat * 0.5).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon * 0.5).sin().powi(2);
+    2.0 * R * h.sqrt().clamp(-1.0, 1.0).asin()
+}
+
+/// Resultado de un ruteo: la polilínea seguida y su longitud en metros.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteResult {
+    pub path: Vec<Coord>,
+    pub meters: f64,
+}
+
+/// Calcula la ruta más corta entre `from` y `to` sobre la red de líneas
+/// (`data.lines`), con A\* y heurística haversine. Soberano y offline: es
+/// matemática de grafos sobre el dato cargado, sin OSRM ni servicio externo.
+/// `None` si no hay red o los extremos quedan desconectados.
+///
+/// Los vértices se funden por proximidad (cuantización a ~0,1 m), así las
+/// líneas que comparten un cruce quedan conectadas en el grafo.
+pub fn route(data: &MapData, from: Coord, to: Coord) -> Option<RouteResult> {
+    if data.lines.is_empty() {
+        return None;
+    }
+    // Grafo no dirigido: nodos = vértices fundidos; aristas = tramos.
+    let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
+    let mut coords: Vec<Coord> = Vec::new();
+    let mut adj: Vec<Vec<(usize, f64)>> = Vec::new();
+    for line in &data.lines {
+        for w in line.windows(2) {
+            let a = intern_node(w[0], &mut ids, &mut coords, &mut adj);
+            let b = intern_node(w[1], &mut ids, &mut coords, &mut adj);
+            if a == b {
+                continue;
+            }
+            let d = haversine(w[0], w[1]);
+            adj[a].push((b, d));
+            adj[b].push((a, d));
+        }
+    }
+    let src = nearest_node(&coords, from)?;
+    let dst = nearest_node(&coords, to)?;
+
+    // A* con heurística admisible (línea recta haversine al destino).
+    let n = coords.len();
+    let mut g = vec![f64::INFINITY; n];
+    let mut came = vec![usize::MAX; n];
+    g[src] = 0.0;
+    let mut heap = BinaryHeap::new();
+    heap.push(AStarNode { f: haversine(coords[src], coords[dst]), node: src });
+    while let Some(AStarNode { node, .. }) = heap.pop() {
+        if node == dst {
+            break;
+        }
+        for &(nb, w) in &adj[node] {
+            let tentative = g[node] + w;
+            if tentative < g[nb] {
+                g[nb] = tentative;
+                came[nb] = node;
+                heap.push(AStarNode { f: tentative + haversine(coords[nb], coords[dst]), node: nb });
+            }
+        }
+    }
+    if g[dst].is_infinite() {
+        return None;
+    }
+    // Reconstruir el camino de destino a origen y darlo vuelta.
+    let mut path = Vec::new();
+    let mut cur = dst;
+    while cur != usize::MAX {
+        path.push(coords[cur]);
+        if cur == src {
+            break;
+        }
+        cur = came[cur];
+    }
+    path.reverse();
+    Some(RouteResult { path, meters: g[dst] })
+}
+
+/// Inserta (o reusa) el nodo del grafo para una coordenada, fundiendo por
+/// cuantización a ~1e-6° (~0,1 m) para unir cruces compartidos.
+fn intern_node(
+    c: Coord,
+    ids: &mut HashMap<(i64, i64), usize>,
+    coords: &mut Vec<Coord>,
+    adj: &mut Vec<Vec<(usize, f64)>>,
+) -> usize {
+    let k = ((c[0] * 1e6).round() as i64, (c[1] * 1e6).round() as i64);
+    if let Some(&i) = ids.get(&k) {
+        return i;
+    }
+    let i = coords.len();
+    ids.insert(k, i);
+    coords.push(c);
+    adj.push(Vec::new());
+    i
+}
+
+/// Nodo del grafo más cercano a una coordenada (snap del clic a la red).
+fn nearest_node(coords: &[Coord], c: Coord) -> Option<usize> {
+    coords
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| haversine(**a, c).total_cmp(&haversine(**b, c)))
+        .map(|(i, _)| i)
+}
+
+/// Entrada de la cola de prioridad de A\*: min-heap por `f` (total order vía
+/// `total_cmp`, invertido para que el menor quede en la cima).
+struct AStarNode {
+    f: f64,
+    node: usize,
+}
+impl PartialEq for AStarNode {
+    fn eq(&self, o: &Self) -> bool {
+        self.f == o.f
+    }
+}
+impl Eq for AStarNode {}
+impl Ord for AStarNode {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        o.f.total_cmp(&self.f)
+    }
+}
+impl PartialOrd for AStarNode {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
 /// Distancia de un punto `(px, py)` al segmento `a–b`, en pantalla.
 fn dist_point_seg(px: f64, py: f64, a: (f64, f64), b: (f64, f64)) -> f64 {
     let (ax, ay) = a;
@@ -1406,6 +1582,8 @@ where
     let show_base = view.show_base;
     let selected = view.selected;
     let color_field = view.color_field.clone();
+    let route_pins = view.route_pins.clone();
+    let route_path = view.route_path.clone();
     View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -1594,6 +1772,30 @@ where
                     scene.fill(Fill::NonZero, Affine::IDENTITY, hl, None, &Circle::new((x, y), 5.0));
                 }
             }
+        }
+
+        // --- Ruta calculada + pines de origen/destino ----------------
+        if !route_path.is_empty() {
+            let route_col = Color::from_rgba8(64, 220, 140, 255); // verde ruta
+            let path = ring_path(&route_path, &to_screen, false);
+            scene.stroke(&Stroke::new(3.2), Affine::IDENTITY, route_col, None, &path);
+        }
+        for (i, pin) in route_pins.iter().enumerate() {
+            let (x, y) = to_screen(*pin);
+            // Origen verde, destino rojo.
+            let col = if i == 0 {
+                Color::from_rgba8(64, 220, 140, 255)
+            } else {
+                Color::from_rgba8(235, 90, 70, 255)
+            };
+            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &Circle::new((x, y), 5.5));
+            scene.stroke(
+                &Stroke::new(1.4),
+                Affine::IDENTITY,
+                Color::from_rgba8(255, 255, 255, 230),
+                None,
+                &Circle::new((x, y), 5.5),
+            );
         }
 
         // --- Mobiliario cartográfico (fijo a pantalla) ---------------
@@ -2387,6 +2589,51 @@ mod tests {
         let proj = Projection::fit(bb, (0.0, 0.0, 100.0, 100.0), view.zoom, view.pan);
         let (sx, sy) = proj.to_screen([5.0, 5.0]);
         assert!((sx - 50.0).abs() < 0.5 && (sy - 50.0).abs() < 0.5, "({sx},{sy})");
+    }
+
+    #[test]
+    fn route_sobre_cuadricula() {
+        // Cuadrícula 2×2 de calles que comparten cruces exactos.
+        let d = data_of(
+            r#"{"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[0,0],[1,0],[2,0]]}},
+                {"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[0,1],[1,1],[2,1]]}},
+                {"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[0,0],[0,1]]}},
+                {"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[1,0],[1,1]]}},
+                {"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[2,0],[2,1]]}}
+            ]}"#,
+        );
+        // De la esquina (0,0) a la (2,1): A* encuentra un camino conectado.
+        let r = route(&d, [0.0, 0.0], [2.0, 1.0]).expect("debe haber ruta");
+        assert_eq!(r.path.first(), Some(&[0.0, 0.0]));
+        assert_eq!(r.path.last(), Some(&[2.0, 1.0]));
+        assert!(r.meters > 0.0);
+        // El camino más corto en la grilla atraviesa 3 tramos unitarios.
+        assert_eq!(r.path.len(), 4);
+    }
+
+    #[test]
+    fn route_snapea_al_nodo_mas_cercano() {
+        let d = data_of(
+            r#"{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[0,0],[1,0],[2,0]]}}"#,
+        );
+        // Clics fuera de la línea snapean a los extremos.
+        let r = route(&d, [0.1, 0.4], [1.9, -0.3]).expect("ruta");
+        assert_eq!(r.path.first(), Some(&[0.0, 0.0]));
+        assert_eq!(r.path.last(), Some(&[2.0, 0.0]));
+    }
+
+    #[test]
+    fn route_sin_lineas_no_hay_ruta() {
+        let d = data_of(r#"{"type":"Point","coordinates":[0,0]}"#);
+        assert!(route(&d, [0.0, 0.0], [1.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn haversine_distancia_conocida() {
+        // ~1 grado de latitud ≈ 111 km.
+        let m = haversine([0.0, 0.0], [0.0, 1.0]);
+        assert!((m - 111_195.0).abs() < 500.0, "{m}");
     }
 
     #[test]

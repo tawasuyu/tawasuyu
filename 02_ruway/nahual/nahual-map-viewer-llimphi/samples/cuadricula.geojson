@@ -1,0 +1,21 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    { "type": "Feature", "properties": { "name": "Calle 1" },
+      "geometry": { "type": "LineString", "coordinates": [[-71.99,-13.53],[-71.98,-13.53],[-71.97,-13.53],[-71.96,-13.53]] } },
+    { "type": "Feature", "properties": { "name": "Calle 2" },
+      "geometry": { "type": "LineString", "coordinates": [[-71.99,-13.52],[-71.98,-13.52],[-71.97,-13.52],[-71.96,-13.52]] } },
+    { "type": "Feature", "properties": { "name": "Calle 3" },
+      "geometry": { "type": "LineString", "coordinates": [[-71.99,-13.51],[-71.98,-13.51],[-71.97,-13.51],[-71.96,-13.51]] } },
+    { "type": "Feature", "properties": { "name": "Calle 4" },
+      "geometry": { "type": "LineString", "coordinates": [[-71.99,-13.50],[-71.98,-13.50],[-71.97,-13.50],[-71.96,-13.50]] } },
+    { "type": "Feature", "properties": { "name": "Avenida A" },
+      "geometry": { "type": "LineString", "coordinates": [[-71.99,-13.53],[-71.99,-13.52],[-71.99,-13.51],[-71.99,-13.50]] } },
+    { "type": "Feature", "properties": { "name": "Avenida B" },
+      "geometry": { "type": "LineString", "coordinates": [[-71.98,-13.53],[-71.98,-13.52],[-71.98,-13.51],[-71.98,-13.50]] } },
+    { "type": "Feature", "properties": { "name": "Avenida C" },
+      "geometry": { "type": "LineString", "coordinates": [[-71.97,-13.53],[-71.97,-13.52],[-71.97,-13.51],[-71.97,-13.50]] } },
+    { "type": "Feature", "properties": { "name": "Avenida D" },
+      "geometry": { "type": "LineString", "coordinates": [[-71.96,-13.53],[-71.96,-13.52],[-71.96,-13.51],[-71.96,-13.50]] } }
+  ]
+}
