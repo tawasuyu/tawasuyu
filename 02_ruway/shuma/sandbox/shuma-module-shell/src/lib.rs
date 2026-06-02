@@ -29,6 +29,7 @@
 
 #![forbid(unsafe_code)]
 
+use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, AlignItems, Dimension, FlexDirection, Size, Style},
     Rect,
@@ -36,13 +37,12 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::vello;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View};
-use llimphi_theme::Theme;
 use shuma_exec::{CommandSpec, Exec, Killer, RunEvent, RunHandle, StageSpec};
 use shuma_intent::SessionGraph;
-use shuma_remote_exec::RemoteRunHandle;
 use shuma_line::{LineState, TokenKind};
 use shuma_module::{ModuleContributions, ShortcutSpec, Source};
-use std::collections::VecDeque;
+use shuma_remote_exec::RemoteRunHandle;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -67,11 +67,18 @@ pub enum OutputKind {
     Notice,
 }
 
-/// Una línea del buffer de output con su tipo (para coloreado).
+/// Una línea del buffer de output con su tipo (para coloreado) y el
+/// bloque de comando al que pertenece. El render agrupa las líneas con
+/// el mismo `block` en una *card* desplegable (un `$ cmd` + su salida +
+/// su exit status). `block == 0` = líneas sueltas sin comando dueño.
 #[derive(Debug, Clone)]
 pub struct OutputLine {
     pub kind: OutputKind,
     pub text: String,
+    /// Bloque de comando. Lo asigna [`State::push_output`] — cada
+    /// `Prompt` abre uno nuevo (id monotónico) y las siguientes líneas
+    /// lo heredan. Por defecto `0` (las constructoras no lo conocen).
+    pub block: u64,
 }
 
 impl OutputLine {
@@ -79,24 +86,28 @@ impl OutputLine {
         Self {
             kind: OutputKind::Prompt,
             text: text.into(),
+            block: 0,
         }
     }
     pub fn stdout(text: impl Into<String>) -> Self {
         Self {
             kind: OutputKind::Stdout,
             text: text.into(),
+            block: 0,
         }
     }
     pub fn stderr(text: impl Into<String>) -> Self {
         Self {
             kind: OutputKind::Stderr,
             text: text.into(),
+            block: 0,
         }
     }
     pub fn notice(text: impl Into<String>) -> Self {
         Self {
             kind: OutputKind::Notice,
             text: text.into(),
+            block: 0,
         }
     }
 }
@@ -238,8 +249,8 @@ const PTY_COLS: u16 = 80;
 /// Tabla de comandos que pedimos PTY automáticamente. Otros pueden
 /// pedirlo con el prefijo `:tui ...`.
 const TUI_ALLOWLIST: &[&str] = &[
-    "vi", "vim", "nvim", "nano", "emacs", "helix", "hx", "htop", "btop", "top",
-    "less", "more", "man", "claude", "tig", "tui", "watch",
+    "vi", "vim", "nvim", "nano", "emacs", "helix", "hx", "htop", "btop", "top", "less", "more",
+    "man", "claude", "tig", "tui", "watch",
 ];
 
 /// Selección activa/última en el card de vim, en coordenadas locales px
@@ -305,6 +316,15 @@ pub struct State {
     pub current_run_bytes: u64,
     /// Selección del card de vim (drag-to-select). `None` = sin selección.
     pub vim_sel: Option<VimSel>,
+    /// Contador monotónico de bloques de comando. Cada `Prompt` lo
+    /// incrementa; nunca se reusa, así el colapso sobrevive al capado
+    /// del buffer (los ids no se reciclan al drenar líneas viejas).
+    pub block_seq: u64,
+    /// Bloque al que se adjuntan las líneas nuevas (el último `Prompt`).
+    pub current_block: u64,
+    /// Bloques colapsados por el usuario (click en el header de la card).
+    /// Se renderizan plegados, mostrando sólo el header + un resumen.
+    pub collapsed: HashSet<u64>,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -338,7 +358,30 @@ impl State {
             current_run_node: None,
             current_run_bytes: 0,
             vim_sel: None,
+            block_seq: 0,
+            current_block: 0,
+            collapsed: HashSet::new(),
         }
+    }
+
+    /// Empuja una línea al buffer asignándole bloque. Cada `Prompt` abre
+    /// un bloque nuevo (id monotónico); las demás líneas heredan el
+    /// bloque abierto. El render usa esto para agrupar cada comando con
+    /// su salida en una card desplegable.
+    pub(crate) fn push_output(&mut self, mut line: OutputLine) {
+        if line.kind == OutputKind::Prompt {
+            self.block_seq += 1;
+            self.current_block = self.block_seq;
+        }
+        line.block = self.current_block;
+        push_line(&mut self.output, line);
+    }
+
+    /// Vacía el buffer y el set de colapsos. No resetea `block_seq` —
+    /// mantener ids monotónicos es inofensivo y evita reusos.
+    pub(crate) fn clear_output(&mut self) {
+        self.output.clear();
+        self.collapsed.clear();
     }
 
     /// Cantidad de líneas en el buffer — alimenta el monitor.
@@ -493,7 +536,16 @@ pub enum Msg {
     VimPaste,
     /// Drag de selección sobre el card de vim. `dx`/`dy` = delta desde el
     /// evento anterior; `ax`/`ay` = posición del press (local al panel).
-    VimDrag { end: bool, dx: f32, dy: f32, ax: f32, ay: f32 },
+    VimDrag {
+        end: bool,
+        dx: f32,
+        dy: f32,
+        ax: f32,
+        ay: f32,
+    },
+    /// Alterna plegado/desplegado de la card de un comando. La dispara el
+    /// click en el header de la card (chevron + comando).
+    ToggleBlock(u64),
 }
 
 mod update;
@@ -875,7 +927,10 @@ mod tests {
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         s.input.set_text(":term 0");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
-        assert!(s.output.iter().any(|l| l.text.contains("[0] SIGTERM enviado")));
+        assert!(s
+            .output
+            .iter()
+            .any(|l| l.text.contains("[0] SIGTERM enviado")));
     }
 
     #[test]
@@ -1078,10 +1133,7 @@ mod tests {
             1,
             "Enter debe registrar el `%c1` en el grafo"
         );
-        assert_eq!(
-            s.intent_graph().commands()[0].intention,
-            "echo lienzo"
-        );
+        assert_eq!(s.intent_graph().commands()[0].intention, "echo lienzo");
         s = drain_until_idle(s);
         let node = &s.intent_graph().commands()[0];
         assert_eq!(node.status, shuma_intent::NodeStatus::Ok);
@@ -1124,5 +1176,46 @@ mod tests {
         s.input.set_text("sort ");
         s = update(s, Msg::InsertAtCursor("%p1".into()));
         assert_eq!(s.input.text(), "sort %p1");
+    }
+
+    #[test]
+    fn push_output_groups_lines_into_command_blocks() {
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ ls"));
+        s.push_output(OutputLine::stdout("a.txt"));
+        s.push_output(OutputLine::stdout("b.txt"));
+        s.push_output(OutputLine::notice("✔ exit 0"));
+        let b = s.output[0].block;
+        assert!(b > 0, "el prompt debe abrir un bloque > 0");
+        assert!(
+            s.output.iter().all(|l| l.block == b),
+            "comando + salida + exit comparten bloque: {:?}",
+            s.output.iter().map(|l| l.block).collect::<Vec<_>>()
+        );
+        // Un segundo prompt abre un bloque nuevo y monotónico.
+        s.push_output(OutputLine::prompt("$ pwd"));
+        assert!(
+            s.output.last().unwrap().block > b,
+            "el segundo comando abre un bloque nuevo"
+        );
+    }
+
+    #[test]
+    fn toggle_block_flips_collapsed_set() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::ToggleBlock(3));
+        assert!(s.collapsed.contains(&3), "primer toggle colapsa");
+        s = update(s, Msg::ToggleBlock(3));
+        assert!(!s.collapsed.contains(&3), "segundo toggle despliega");
+    }
+
+    #[test]
+    fn clear_output_also_drops_collapsed_set() {
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ ls"));
+        s.collapsed.insert(s.output[0].block);
+        s.clear_output();
+        assert!(s.output.is_empty());
+        assert!(s.collapsed.is_empty(), "clear limpia también los colapsos");
     }
 }

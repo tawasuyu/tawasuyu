@@ -80,8 +80,7 @@ pub fn update(state: State, msg: Msg) -> State {
                 // específico, en el futuro lo gateamos por allowlist.
                 let paste = (ev.modifiers.ctrl
                     && matches!(&ev.key, Key::Character(c) if c.eq_ignore_ascii_case("v")))
-                    || (ev.modifiers.shift
-                        && matches!(&ev.key, Key::Named(NamedKey::Insert)));
+                    || (ev.modifiers.shift && matches!(&ev.key, Key::Named(NamedKey::Insert)));
                 if paste {
                     forward_paste_to_pty(&s);
                     return s;
@@ -106,8 +105,7 @@ pub fn update(state: State, msg: Msg) -> State {
             // camino tiene su propio paste.)
             let is_paste = (ev.modifiers.ctrl
                 && matches!(&ev.key, Key::Character(c) if c.eq_ignore_ascii_case("v")))
-                || (ev.modifiers.shift
-                    && matches!(&ev.key, Key::Named(NamedKey::Insert)));
+                || (ev.modifiers.shift && matches!(&ev.key, Key::Named(NamedKey::Insert)));
             if is_paste {
                 if let Some(text) = read_clipboard() {
                     s.input.insert(&text);
@@ -166,7 +164,12 @@ pub fn update(state: State, msg: Msg) -> State {
             s.focused = true;
         }
         Msg::Clear => {
-            s.output.clear();
+            s.clear_output();
+        }
+        Msg::ToggleBlock(id) => {
+            if !s.collapsed.remove(&id) {
+                s.collapsed.insert(id);
+            }
         }
         Msg::Tick => {
             s = drain_run(s);
@@ -192,7 +195,13 @@ pub fn update(state: State, msg: Msg) -> State {
             // no-op silencioso si no.
             forward_paste_to_pty(&s);
         }
-        Msg::VimDrag { end, dx, dy, ax, ay } => {
+        Msg::VimDrag {
+            end,
+            dx,
+            dy,
+            ax,
+            ay,
+        } => {
             let fresh = s.vim_sel.map_or(true, |v| !v.active);
             if fresh {
                 s.vim_sel = Some(VimSel {
@@ -233,7 +242,12 @@ pub fn update(state: State, msg: Msg) -> State {
 pub(crate) fn open_decoration(mut s: State, kind: shuma_line::DecorationKind) -> State {
     use shuma_line::DecorationKind as Dk;
     match kind {
-        Dk::Path { abs, is_dir, is_executable, .. } => {
+        Dk::Path {
+            abs,
+            is_dir,
+            is_executable,
+            ..
+        } => {
             if is_dir {
                 // Directorios → cd. Cambia el cwd y lo refleja en el
                 // header sin "ejecutar" un comando.
@@ -345,7 +359,9 @@ pub(crate) fn common_prefix(items: &[String]) -> String {
 pub(crate) fn navigate_history(mut s: State, dir: shuma_history::Nav) -> State {
     let next = {
         let history = s.history.lock().unwrap();
-        history.navigate(s.history_cursor, dir).map(|(i, e)| (i, e.line.clone()))
+        history
+            .navigate(s.history_cursor, dir)
+            .map(|(i, e)| (i, e.line.clone()))
     };
     if let Some((i, line)) = next {
         s.history_cursor = Some(i);
@@ -477,12 +493,16 @@ pub(crate) fn set_clipboard(text: &str) {
 /// (estilo terminal), cada fila recortada de espacios al final.
 pub(crate) fn copy_vim_selection(s: &State) {
     let Some(vs) = s.vim_sel else { return };
-    let Some(arc) = s.running.as_ref() else { return };
+    let Some(arc) = s.running.as_ref() else {
+        return;
+    };
     let guard = match arc.lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
-    let Some(tui) = guard.tui.as_ref() else { return };
+    let Some(tui) = guard.tui.as_ref() else {
+        return;
+    };
     let screen = tui.parser.screen();
     let (rows, cols) = screen.size();
     let mut grid: Vec<Vec<char>> = Vec::with_capacity(rows as usize);
@@ -516,7 +536,11 @@ pub(crate) fn copy_vim_selection(s: &State) {
     for r in sr..=er {
         let line = &grid[r];
         let lo = if r == sr { sc.min(line.len()) } else { 0 };
-        let hi = if r == er { (ec + 1).min(line.len()) } else { line.len() };
+        let hi = if r == er {
+            (ec + 1).min(line.len())
+        } else {
+            line.len()
+        };
         if hi > lo {
             let seg: String = line[lo..hi].iter().collect();
             out.push_str(seg.trim_end());
@@ -590,7 +614,12 @@ pub(crate) fn current_ghost(s: &State) -> Option<String> {
         return None;
     }
     let history = s.history.lock().ok()?;
-    let corpus: Vec<String> = history.entries().iter().rev().map(|e| e.line.clone()).collect();
+    let corpus: Vec<String> = history
+        .entries()
+        .iter()
+        .rev()
+        .map(|e| e.line.clone())
+        .collect();
     shuma_line::ghost_suggestion(text, &corpus)
 }
 
@@ -601,7 +630,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
     if trimmed.is_empty() {
         return s;
     }
-    push_line(&mut s.output, OutputLine::prompt(format!("$ {trimmed}")));
+    s.push_output(OutputLine::prompt(format!("$ {trimmed}")));
 
     // Append al historial — todo lo que el usuario Enter-eó queda
     // registrado, builtins incluidos (para que `cd ../foo` reaparezca
@@ -611,11 +640,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let entry = shuma_history::Entry::new(
-            trimmed.clone(),
-            s.cwd.display().to_string(),
-            now,
-        );
+        let entry = shuma_history::Entry::new(trimmed.clone(), s.cwd.display().to_string(), now);
         if let Ok(mut h) = s.history.lock() {
             let _ = h.append(entry);
         }
@@ -629,18 +654,17 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             }
             "pwd" => {
                 let cwd_str = s.cwd.display().to_string();
-                push_line(&mut s.output, OutputLine::stdout(cwd_str));
+                s.push_output(OutputLine::stdout(cwd_str));
                 return s;
             }
             "clear" => {
-                s.output.clear();
+                s.clear_output();
                 return s;
             }
             "exit" => {
-                push_line(
-                    &mut s.output,
-                    OutputLine::notice("exit: el chasis maneja la salida (F12 para cerrar)"),
-                );
+                s.push_output(OutputLine::notice(
+                    "exit: el chasis maneja la salida (F12 para cerrar)",
+                ));
                 return s;
             }
             ":jobs" => return apply_jobs_list(s),
@@ -665,10 +689,9 @@ pub(crate) fn run_submitted(mut s: State) -> State {
     // si no, arrancamos ahora mismo.
     if s.running.is_some() {
         s.queue.push_back(trimmed);
-        push_line(
-            &mut s.output,
-            OutputLine::notice("⌛ en cola — esperando a que el comando actual termine"),
-        );
+        s.push_output(OutputLine::notice(
+            "⌛ en cola — esperando a que el comando actual termine",
+        ));
         return s;
     }
     start_run(s, trimmed)
@@ -684,24 +707,35 @@ pub(crate) enum JobSignal {
 /// Lista los bg_jobs con su índice y comando. Marca finalizados.
 pub(crate) fn apply_jobs_list(mut s: State) -> State {
     if s.bg_jobs.is_empty() {
-        push_line(&mut s.output, OutputLine::notice("(sin jobs en background)"));
+        s.push_output(OutputLine::notice("(sin jobs en background)"));
         return s;
     }
-    for (i, arc) in s.bg_jobs.iter().enumerate() {
+    // Snapshot de los Arc para no retener el borrow de `s.bg_jobs`
+    // mientras `push_output` toma `&mut s`.
+    let jobs = s.bg_jobs.clone();
+    for (i, arc) in jobs.iter().enumerate() {
         let (cmd, status) = match arc.lock() {
             Ok(g) => (
                 g.command.clone(),
-                if g.handle.is_finished() { "done" } else { "running" },
+                if g.handle.is_finished() {
+                    "done"
+                } else {
+                    "running"
+                },
             ),
             Err(p) => {
                 let g = p.into_inner();
-                (g.command.clone(), if g.handle.is_finished() { "done" } else { "running" })
+                (
+                    g.command.clone(),
+                    if g.handle.is_finished() {
+                        "done"
+                    } else {
+                        "running"
+                    },
+                )
             }
         };
-        push_line(
-            &mut s.output,
-            OutputLine::notice(format!("[{i}] {status}  {cmd}")),
-        );
+        s.push_output(OutputLine::notice(format!("[{i}] {status}  {cmd}")));
     }
     s
 }
@@ -712,18 +746,12 @@ pub(crate) fn apply_jobs_signal(mut s: State, rest: &str, sig: JobSignal) -> Sta
     let idx: usize = match rest.trim().parse() {
         Ok(n) => n,
         Err(_) => {
-            push_line(
-                &mut s.output,
-                OutputLine::notice("uso: :term N | :stop N | :cont N"),
-            );
+            s.push_output(OutputLine::notice("uso: :term N | :stop N | :cont N"));
             return s;
         }
     };
     let Some(arc) = s.bg_jobs.get(idx).cloned() else {
-        push_line(
-            &mut s.output,
-            OutputLine::notice(format!("no hay job [{idx}]")),
-        );
+        s.push_output(OutputLine::notice(format!("no hay job [{idx}]")));
         return s;
     };
     let guard = match arc.lock() {
@@ -751,14 +779,11 @@ pub(crate) fn apply_jobs_signal(mut s: State, rest: &str, sig: JobSignal) -> Sta
         JobSignal::Cont => "CONT",
     };
     drop(guard);
-    push_line(
-        &mut s.output,
-        OutputLine::notice(if acted {
-            format!("[{idx}] SIG{label} enviado")
-        } else {
-            format!("[{idx}] no se pudo enviar SIG{label}")
-        }),
-    );
+    s.push_output(OutputLine::notice(if acted {
+        format!("[{idx}] SIG{label} enviado")
+    } else {
+        format!("[{idx}] no se pudo enviar SIG{label}")
+    }));
     s
 }
 
@@ -785,10 +810,7 @@ pub(crate) fn start_bg(mut s: State, line: String) -> State {
     let handle = shuma_exec::run(&bg_spec);
     let killer = handle.killer();
     let idx = s.bg_jobs.len();
-    push_line(
-        &mut s.output,
-        OutputLine::notice(format!("[{idx}] background  {line}")),
-    );
+    s.push_output(OutputLine::notice(format!("[{idx}] background  {line}")));
     let active = ActiveRun {
         handle: BackendHandle::Local(handle),
         killer: Some(killer),
@@ -823,12 +845,9 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
         Source::Daemon { socket, .. } => {
             // PTY remoto no soportado; fallback a local con notice.
             if tui.is_some() {
-                push_line(
-                    &mut s.output,
-                    OutputLine::notice(
-                        "PTY remoto no soportado por el daemon — corro local",
-                    ),
-                );
+                s.push_output(OutputLine::notice(
+                    "PTY remoto no soportado por el daemon — corro local",
+                ));
                 let handle = shuma_exec::run(&spec);
                 let killer = handle.killer();
                 ActiveRun {
@@ -849,22 +868,20 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                         tui: None,
                     },
                     Err(e) => {
-                        push_line(
-                            &mut s.output,
-                            OutputLine::notice(format!("✘ daemon: {e}")),
-                        );
+                        s.push_output(OutputLine::notice(format!("✘ daemon: {e}")));
                         fail_pending_intent(&mut s);
                         return s;
                     }
                 }
             }
         }
-        Source::DaemonTcp { addr, server_pub_hex, .. } => {
+        Source::DaemonTcp {
+            addr,
+            server_pub_hex,
+            ..
+        } => {
             if tui.is_some() {
-                push_line(
-                    &mut s.output,
-                    OutputLine::notice("PTY remoto no soportado — corro local"),
-                );
+                s.push_output(OutputLine::notice("PTY remoto no soportado — corro local"));
                 let handle = shuma_exec::run(&spec);
                 let killer = handle.killer();
                 ActiveRun {
@@ -877,10 +894,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                 let kp = match load_or_create_identity() {
                     Ok(kp) => kp,
                     Err(e) => {
-                        push_line(
-                            &mut s.output,
-                            OutputLine::notice(format!("✘ identity: {e}")),
-                        );
+                        s.push_output(OutputLine::notice(format!("✘ identity: {e}")));
                         fail_pending_intent(&mut s);
                         return s;
                     }
@@ -888,10 +902,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                 let server_pub = match parse_pub_hex(server_pub_hex) {
                     Ok(p) => p,
                     Err(e) => {
-                        push_line(
-                            &mut s.output,
-                            OutputLine::notice(format!("✘ server_pub_hex: {e}")),
-                        );
+                        s.push_output(OutputLine::notice(format!("✘ server_pub_hex: {e}")));
                         fail_pending_intent(&mut s);
                         return s;
                     }
@@ -904,10 +915,7 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                         tui: None,
                     },
                     Err(e) => {
-                        push_line(
-                            &mut s.output,
-                            OutputLine::notice(format!("✘ daemon tcp: {e}")),
-                        );
+                        s.push_output(OutputLine::notice(format!("✘ daemon tcp: {e}")));
                         fail_pending_intent(&mut s);
                         return s;
                     }
@@ -918,12 +926,9 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
             // SSH (matilda usa esta variante para otra cosa). El shell
             // no tiene un transporte SSH para comandos arbitrarios aún;
             // fallback a local con notice claro.
-            push_line(
-                &mut s.output,
-                OutputLine::notice(
-                    "shell vía SSH no implementado todavía — corro local",
-                ),
-            );
+            s.push_output(OutputLine::notice(
+                "shell vía SSH no implementado todavía — corro local",
+            ));
             let handle = shuma_exec::run(&spec);
             let killer = handle.killer();
             ActiveRun {
@@ -1052,26 +1057,21 @@ pub(crate) fn drain_run(mut s: State) -> State {
             match ev {
                 RunEvent::Stdout(line) => {
                     // +1 por el `\n` implícito de cada línea drenada.
-                    s.current_run_bytes =
-                        s.current_run_bytes.saturating_add(line.len() as u64 + 1);
-                    push_line(&mut s.output, OutputLine::stdout(line));
+                    s.current_run_bytes = s.current_run_bytes.saturating_add(line.len() as u64 + 1);
+                    s.push_output(OutputLine::stdout(line));
                 }
                 RunEvent::Stderr(line) => {
-                    s.current_run_bytes =
-                        s.current_run_bytes.saturating_add(line.len() as u64 + 1);
-                    push_line(&mut s.output, OutputLine::stderr(line));
+                    s.current_run_bytes = s.current_run_bytes.saturating_add(line.len() as u64 + 1);
+                    s.push_output(OutputLine::stderr(line));
                 }
-                RunEvent::Truncated => push_line(
-                    &mut s.output,
-                    OutputLine::notice("… (salida truncada por límite de captura)"),
-                ),
-                RunEvent::Spilled(path) => push_line(
-                    &mut s.output,
-                    OutputLine::notice(format!("… (resto volcado a {path})")),
-                ),
+                RunEvent::Truncated => s.push_output(OutputLine::notice(
+                    "… (salida truncada por límite de captura)",
+                )),
+                RunEvent::Spilled(path) => {
+                    s.push_output(OutputLine::notice(format!("… (resto volcado a {path})")))
+                }
                 RunEvent::Bytes(bytes) => {
-                    s.current_run_bytes =
-                        s.current_run_bytes.saturating_add(bytes.len() as u64);
+                    s.current_run_bytes = s.current_run_bytes.saturating_add(bytes.len() as u64);
                     if let Some(tui) = guard.tui.as_mut() {
                         tui.parser.process(&bytes);
                     }
@@ -1090,7 +1090,7 @@ pub(crate) fn drain_run(mut s: State) -> State {
             RunEvent::Failed(e) => format!("✘ no se pudo spawnear: {e}"),
             _ => unreachable!(),
         };
-        push_line(&mut s.output, OutputLine::notice(notice));
+        s.push_output(OutputLine::notice(notice));
         // Cerrá el nodo del grafo de intenciones — el lienzo lo refleja
         // como verde/rojo en el próximo render.
         if let Some(id) = s.current_run_node.take() {
@@ -1113,7 +1113,10 @@ pub(crate) fn drain_run(mut s: State) -> State {
 /// para distinguir su origen.
 pub(crate) fn drain_bg_jobs(mut s: State) -> State {
     let mut next_jobs: Vec<Arc<Mutex<ActiveRun>>> = Vec::with_capacity(s.bg_jobs.len());
-    for (i, arc) in s.bg_jobs.iter().enumerate() {
+    // Snapshot de los Arc: `push_output` toma `&mut s`, incompatible con
+    // retener el borrow de `s.bg_jobs` durante el loop.
+    let jobs = s.bg_jobs.clone();
+    for (i, arc) in jobs.iter().enumerate() {
         let mut keep = true;
         let prefix = format!("[{i}] ");
         let mut finished: Option<RunEvent> = None;
@@ -1124,22 +1127,18 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
             };
             for ev in guard.handle.try_events() {
                 match ev {
-                    RunEvent::Stdout(line) => push_line(
-                        &mut s.output,
-                        OutputLine::stdout(format!("{prefix}{line}")),
-                    ),
-                    RunEvent::Stderr(line) => push_line(
-                        &mut s.output,
-                        OutputLine::stderr(format!("{prefix}{line}")),
-                    ),
-                    RunEvent::Truncated => push_line(
-                        &mut s.output,
-                        OutputLine::notice(format!("{prefix}… (truncada)")),
-                    ),
-                    RunEvent::Spilled(path) => push_line(
-                        &mut s.output,
-                        OutputLine::notice(format!("{prefix}… (volcado a {path})")),
-                    ),
+                    RunEvent::Stdout(line) => {
+                        s.push_output(OutputLine::stdout(format!("{prefix}{line}")))
+                    }
+                    RunEvent::Stderr(line) => {
+                        s.push_output(OutputLine::stderr(format!("{prefix}{line}")))
+                    }
+                    RunEvent::Truncated => {
+                        s.push_output(OutputLine::notice(format!("{prefix}… (truncada)")))
+                    }
+                    RunEvent::Spilled(path) => {
+                        s.push_output(OutputLine::notice(format!("{prefix}… (volcado a {path})")))
+                    }
                     RunEvent::Bytes(_) => {
                         // Background sin PTY — no debería emitir Bytes.
                     }
@@ -1156,7 +1155,7 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
                 RunEvent::Failed(e) => format!("{prefix}✘ failed: {e}"),
                 _ => unreachable!(),
             };
-            push_line(&mut s.output, OutputLine::notice(notice));
+            s.push_output(OutputLine::notice(notice));
             keep = false;
         }
         if keep {
@@ -1183,7 +1182,7 @@ pub(crate) fn cancel_running(mut s: State) -> State {
         }
         // El próximo Tick observará `RunEvent::Exited` y limpiará el handle.
     }
-    push_line(&mut s.output, OutputLine::notice("⏹ cancel (SIGKILL enviado)"));
+    s.push_output(OutputLine::notice("⏹ cancel (SIGKILL enviado)"));
     s
 }
 
@@ -1193,10 +1192,7 @@ pub(crate) fn apply_cd(mut s: State, rest: &str) -> State {
         match std::env::var("HOME") {
             Ok(h) => PathBuf::from(h),
             Err(_) => {
-                push_line(
-                    &mut s.output,
-                    OutputLine::notice("cd: HOME no está definido"),
-                );
+                s.push_output(OutputLine::notice("cd: HOME no está definido"));
                 return s;
             }
         }
@@ -1214,20 +1210,14 @@ pub(crate) fn apply_cd(mut s: State, rest: &str) -> State {
             if canonical.is_dir() {
                 s.cwd = canonical;
             } else {
-                push_line(
-                    &mut s.output,
-                    OutputLine::notice(format!(
-                        "cd: no es un directorio: {}",
-                        target.display()
-                    )),
-                );
+                s.push_output(OutputLine::notice(format!(
+                    "cd: no es un directorio: {}",
+                    target.display()
+                )));
             }
         }
         Err(e) => {
-            push_line(
-                &mut s.output,
-                OutputLine::notice(format!("cd: {}: {e}", target.display())),
-            );
+            s.push_output(OutputLine::notice(format!("cd: {}: {e}", target.display())));
         }
     }
     s

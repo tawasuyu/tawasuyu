@@ -42,7 +42,10 @@ pub fn view<HostMsg: Clone + 'static>(
 
 /// Color por `TokenKind` — paleta diseñada para que el comando salte y
 /// los flags/strings tengan su propio tono.
-pub(crate) fn token_color(kind: TokenKind, theme: &Theme) -> llimphi_ui::llimphi_raster::peniko::Color {
+pub(crate) fn token_color(
+    kind: TokenKind,
+    theme: &Theme,
+) -> llimphi_ui::llimphi_raster::peniko::Color {
     use llimphi_ui::llimphi_raster::peniko::Color;
     match kind {
         TokenKind::Command => theme.accent,
@@ -144,8 +147,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             let mut x = line_x_start;
             // Pintar tokens sobre el slice de la línea, usando el
             // tokenizer estándar (dialect por defecto = bash).
-            let tokens =
-                shuma_line::tokenize(line_str, state_dialect_default());
+            let tokens = shuma_line::tokenize(line_str, state_dialect_default());
             for tok in &tokens {
                 let color = token_color(tok.kind, &theme_clone);
                 let segment = &line_str[tok.start..tok.end];
@@ -191,8 +193,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             }
             // Cursor al final de una línea vacía / sin tokens hasta el cursor.
             if line_idx == cursor_line_idx
-                && (cursor_byte_in_line == line_str.len()
-                    || tokens.is_empty())
+                && (cursor_byte_in_line == line_str.len() || tokens.is_empty())
             {
                 cursor_x = x;
                 cursor_y = line_y;
@@ -232,12 +233,8 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
         if focused {
             use llimphi_ui::llimphi_raster::kurbo::Rect as KurboRect;
             use llimphi_ui::llimphi_raster::peniko::Fill;
-            let cursor_rect = KurboRect::new(
-                cursor_x,
-                cursor_y + 2.0,
-                cursor_x + 2.0,
-                cursor_y + LINE_H,
-            );
+            let cursor_rect =
+                KurboRect::new(cursor_x, cursor_y + 2.0, cursor_x + 2.0, cursor_y + LINE_H);
             scene.fill(
                 Fill::NonZero,
                 vello::kurbo::Affine::IDENTITY,
@@ -305,7 +302,14 @@ pub(crate) fn tui_panel<HostMsg: Clone + 'static>(
     let rect_slot = Arc::clone(&state.last_tui_rect);
     if let AppSkin::Vim = skin {
         let metrics_slot = Arc::clone(&state.vim_metrics);
-        return vim_panel::<HostMsg, _>(snapshot, theme, rect_slot, metrics_slot, state.vim_sel, lift);
+        return vim_panel::<HostMsg, _>(
+            snapshot,
+            theme,
+            rect_slot,
+            metrics_slot,
+            state.vim_sel,
+            lift,
+        );
     }
     generic_grid_panel::<HostMsg>(snapshot, theme, rect_slot)
 }
@@ -323,9 +327,7 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
                         rect: llimphi_ui::PaintRect| {
         use llimphi_ui::llimphi_raster::kurbo::Rect as KurboRect;
         use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
-        use llimphi_ui::llimphi_text::{
-            draw_layout, layout_block, Alignment as TAlign, TextBlock,
-        };
+        use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment as TAlign, TextBlock};
         // Publica el rect al state — el próximo Tick disparará resize
         // si las dims cambiaron.
         if let Ok(mut g) = rect_slot.lock() {
@@ -352,7 +354,13 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
                     let x0 = origin_x + c as f64 * cell_w;
                     let y0 = origin_y + r as f64 * cell_h;
                     let rect = KurboRect::new(x0, y0, x0 + cell_w, y0 + cell_h);
-                    scene.fill(Fill::NonZero, vello::kurbo::Affine::IDENTITY, bg, None, &rect);
+                    scene.fill(
+                        Fill::NonZero,
+                        vello::kurbo::Affine::IDENTITY,
+                        bg,
+                        None,
+                        &rect,
+                    );
                 }
             }
         }
@@ -559,12 +567,8 @@ where
             };
             if is_status {
                 // Fondo sutil para distinguir la barra de estado del buffer.
-                let bar = KurboRect::new(
-                    rect.x as f64,
-                    y - 2.0,
-                    (rect.x + rect.w) as f64,
-                    y + line_h,
-                );
+                let bar =
+                    KurboRect::new(rect.x as f64, y - 2.0, (rect.x + rect.w) as f64, y + line_h);
                 scene.fill(
                     Fill::NonZero,
                     vello::kurbo::Affine::IDENTITY,
@@ -713,10 +717,22 @@ pub(crate) fn vt_color(
 pub(crate) fn ansi_idx_to_color(i: u8) -> llimphi_ui::llimphi_raster::peniko::Color {
     use llimphi_ui::llimphi_raster::peniko::Color;
     const BASIC: [[u8; 3]; 16] = [
-        [0, 0, 0], [205, 49, 49], [13, 188, 121], [229, 229, 16],
-        [36, 114, 200], [188, 63, 188], [17, 168, 205], [229, 229, 229],
-        [102, 102, 102], [241, 76, 76], [35, 209, 139], [245, 245, 67],
-        [59, 142, 234], [214, 112, 214], [41, 184, 219], [255, 255, 255],
+        [0, 0, 0],
+        [205, 49, 49],
+        [13, 188, 121],
+        [229, 229, 16],
+        [36, 114, 200],
+        [188, 63, 188],
+        [17, 168, 205],
+        [229, 229, 229],
+        [102, 102, 102],
+        [241, 76, 76],
+        [35, 209, 139],
+        [245, 245, 67],
+        [59, 142, 234],
+        [214, 112, 214],
+        [41, 184, 219],
+        [255, 255, 255],
     ];
     if i < 16 {
         let [r, g, b] = BASIC[i as usize];
@@ -740,7 +756,10 @@ pub(crate) fn history_search_panel<HostMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
 ) -> View<HostMsg> {
-    let search = state.history_search.as_ref().expect("panel sólo se construye con search activo");
+    let search = state
+        .history_search
+        .as_ref()
+        .expect("panel sólo se construye con search activo");
     let matches: Vec<String> = {
         let history = state.history.lock().unwrap();
         history
@@ -806,7 +825,10 @@ pub(crate) fn history_search_panel<HostMsg: Clone + 'static>(
     .children(children)
 }
 
-pub(crate) fn shell_header<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<HostMsg> {
+pub(crate) fn shell_header<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+) -> View<HostMsg> {
     let status = if let Some(arc) = state.running.as_ref() {
         let cmd = match arc.lock() {
             Ok(g) => g.command.clone(),
@@ -853,9 +875,31 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
     let start = state.output.len().saturating_sub(MAX_VISIBLE);
     let visible = &state.output[start..];
 
-    let mut children: Vec<View<HostMsg>> = Vec::with_capacity(visible.len());
-    for line in visible {
-        children.push(render_output_line::<HostMsg>(line, &state.cwd, theme, lift));
+    // Agrupamos líneas consecutivas con el mismo `block` en una card por
+    // comando (un `$ cmd` + su salida + su exit status). Las líneas sin
+    // un `Prompt` al frente (tope parcial tras capar, notices iniciales)
+    // van sueltas, sin chrome.
+    let mut children: Vec<View<HostMsg>> = Vec::new();
+    let mut i = 0usize;
+    while i < visible.len() {
+        let block = visible[i].block;
+        let mut j = i;
+        while j < visible.len() && visible[j].block == block {
+            j += 1;
+        }
+        let group = &visible[i..j];
+        if group
+            .first()
+            .map(|l| l.kind == OutputKind::Prompt)
+            .unwrap_or(false)
+        {
+            children.push(command_card::<HostMsg>(group, block, state, theme, lift));
+        } else {
+            for line in group {
+                children.push(render_output_line::<HostMsg>(line, &state.cwd, theme, lift));
+            }
+        }
+        i = j;
     }
 
     View::new(Style {
@@ -866,10 +910,14 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
         },
         flex_grow: 1.0,
         padding: Rect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
-            top: length(8.0_f32),
-            bottom: length(8.0_f32),
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
         },
         align_items: Some(AlignItems::Stretch),
         ..Default::default()
@@ -877,6 +925,159 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
     .fill(theme.bg_panel)
     .radius(3.0)
     .children(children)
+}
+
+/// Color del badge de estado a partir del texto de la notice de cierre
+/// (`✔ exit 0`, `✘ exit N`, `⏹ cancel …`). `None` si la línea no es un
+/// estado de cierre — se queda en el cuerpo de la card.
+pub(crate) fn status_color(
+    text: &str,
+    theme: &Theme,
+) -> Option<llimphi_ui::llimphi_raster::peniko::Color> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let t = text.trim_start();
+    if t.starts_with('✔') {
+        Some(Color::from_rgba8(120, 200, 140, 255)) // verde "ok"
+    } else if t.starts_with('✘') || t.starts_with('⏹') {
+        Some(theme.fg_destructive)
+    } else {
+        None
+    }
+}
+
+/// Renderiza un bloque-comando como card desplegable: header (chevron +
+/// comando + badge de estado, clickable para plegar) y cuerpo (la salida,
+/// oculta si está colapsado). `group[0]` es el `Prompt`.
+pub(crate) fn command_card<HostMsg: Clone + 'static>(
+    group: &[OutputLine],
+    block: u64,
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    let collapsed = state.collapsed.contains(&block);
+    let header_text = group[0].text.clone();
+
+    // Separamos la notice de cierre (se promueve a badge) del resto del
+    // cuerpo. Si hay varias, gana la última.
+    let mut body: Vec<&OutputLine> = Vec::new();
+    let mut badge: Option<(String, llimphi_ui::llimphi_raster::peniko::Color)> = None;
+    for l in &group[1..] {
+        if let Some(color) = status_color(&l.text, theme) {
+            badge = Some((l.text.clone(), color));
+        } else {
+            body.push(l);
+        }
+    }
+    // Comando aún vivo (sin notice de cierre todavía): spinner en accent.
+    if badge.is_none() && state.current_block == block && state.is_running() {
+        badge = Some(("⟳".to_string(), theme.accent));
+    }
+
+    let chevron = if collapsed { "▸" } else { "▾" };
+    let mut header_children: Vec<View<HostMsg>> = vec![
+        View::new(Style {
+            size: Size {
+                width: length(14.0_f32),
+                height: length(16.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(chevron.to_string(), 11.0, theme.fg_muted, Alignment::Start),
+        View::new(Style {
+            size: Size {
+                width: Dimension::auto(),
+                height: length(16.0_f32),
+            },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .text_aligned(header_text, 12.0, theme.accent, Alignment::Start),
+    ];
+    if let Some((btxt, bcolor)) = badge {
+        header_children.push(
+            View::new(Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: length(16.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(btxt, 11.0, bcolor, Alignment::End),
+        );
+    }
+
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(20.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(8.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_input)
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(Msg::ToggleBlock(block)))
+    .children(header_children);
+
+    let mut card_children: Vec<View<HostMsg>> = vec![header];
+    if collapsed {
+        if !body.is_empty() {
+            card_children.push(
+                View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(16.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned(
+                    format!("⋯ {} líneas", body.len()),
+                    11.0,
+                    theme.fg_muted,
+                    Alignment::Start,
+                ),
+            );
+        }
+    } else {
+        for line in &body {
+            card_children.push(render_output_line::<HostMsg>(line, &state.cwd, theme, lift));
+        }
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(4.0_f32),
+            bottom: length(5.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(5.0)
+    .children(card_children)
 }
 
 /// Una "pieza" del partición de una línea: el texto, su color y el
@@ -984,13 +1185,8 @@ pub(crate) fn render_output_line<HostMsg: Clone + 'static>(
                     Alignment::Start,
                 );
             }
-            let children = build_span_children::<HostMsg>(
-                &line.text,
-                &decorations,
-                base,
-                theme,
-                lift,
-            );
+            let children =
+                build_span_children::<HostMsg>(&line.text, &decorations, base, theme, lift);
             View::new(Style {
                 flex_direction: FlexDirection::Row,
                 size: Size {
@@ -1029,17 +1225,31 @@ pub(crate) fn build_span_children<HostMsg: Clone + 'static>(
         // como un explorador de archivos (carpeta/imagen/código/…) en
         // vez de una lista de tokens sueltos.
         let label = match &p.deco {
-            Some(Dk::Path { abs, is_dir, is_executable, is_symlink }) => {
+            Some(Dk::Path {
+                abs,
+                is_dir,
+                is_executable,
+                is_symlink,
+            }) => {
                 let icon = shuma_line::file_icon(abs, *is_dir, *is_executable, *is_symlink);
                 format!("{icon} {}", p.text)
             }
             _ => p.text.clone(),
         };
-        let mut span_view: View<HostMsg> = View::new(Style { ..Default::default() })
-            .text_aligned(label, 12.0, p.color, Alignment::Start);
+        let mut span_view: View<HostMsg> = View::new(Style {
+            ..Default::default()
+        })
+        .text_aligned(label, 12.0, p.color, Alignment::Start);
         if let (true, Some(kind)) = (actionable, p.deco) {
             let l = lift.clone();
-            span_view = span_view.on_click(l(Msg::OpenDecoration(kind)));
+            // Feedback de hover: el span se resalta al pasar el cursor —
+            // un `ls` se siente como un explorador donde cada archivo
+            // "responde". (Llimphi no expone cursor-icon del SO; el
+            // realce es el afford idiomático, igual que en tree/button.)
+            span_view = span_view
+                .radius(3.0)
+                .hover_fill(theme.bg_row_hover)
+                .on_click(l(Msg::OpenDecoration(kind)));
         }
         out.push(span_view);
     }
@@ -1058,4 +1268,3 @@ pub(crate) fn pretty_path(p: &std::path::Path) -> String {
     }
     full
 }
-
