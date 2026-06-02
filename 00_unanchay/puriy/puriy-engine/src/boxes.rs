@@ -2933,6 +2933,41 @@ mod tests {
     }
 
     #[test]
+    fn import_en_style_inline_se_sigue() {
+        // `@import` de un data: CSS dentro de un <style> — sus reglas aplican.
+        let html = r##"<html><head><style>
+            @import url("data:text/css,p%7Bcolor%3A%23ff0000%7D");
+        </style></head><body><p>x</p></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found = false;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("p") && b.color == super::Color::rgb(255, 0, 0) {
+                found = true;
+            }
+        });
+        assert!(found, "la regla del @import no se aplicó");
+    }
+
+    #[test]
+    fn import_precede_a_las_reglas_propias_en_cascada() {
+        // @import pone rojo; la regla propia (después) lo pisa a azul → azul.
+        let html = r##"<html><head><style>
+            @import url("data:text/css,p%7Bcolor%3Ared%7D");
+            p { color: #0000ff }
+        </style></head><body><p>x</p></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut p_color = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("p") {
+                p_color = Some(b.color);
+            }
+        });
+        assert_eq!(p_color, Some(super::Color::rgb(0, 0, 255)), "la regla propia debe ganar al @import");
+    }
+
+    #[test]
     fn link_media_print_no_aplica_en_pantalla() {
         // `<link media="print">` no debe aplicar al render de pantalla; la
         // misma regla con `media="screen"` sí. DEFAULT_VIEWPORT es screen.

@@ -133,21 +133,31 @@ impl Engine {
                 .map(|q| evaluate_media_query(q, self.viewport))
                 .unwrap_or(true)
         };
-        let sheets: Vec<String> = dom
-            .collect_style_sources()
-            .into_iter()
-            .filter_map(|src| match src {
-                dom::StyleSource::Inline { css, media } => media_ok(&media).then_some(css),
+        let mut sheets: Vec<String> = Vec::new();
+        for src in dom.collect_style_sources() {
+            match src {
+                dom::StyleSource::Inline { css, media } => {
+                    if media_ok(&media) {
+                        // base del `<style>` inline = el documento.
+                        expand_sheet(&css, base.as_ref(), self.viewport, 0, &mut sheets);
+                    }
+                }
                 dom::StyleSource::External { href, media } => {
                     if !media_ok(&media) {
-                        return None;
+                        continue;
                     }
-                    let abs = resolve_resource_url(base.as_ref(), &href)?;
-                    let bytes = fetch::fetch_bytes(&abs).ok()?;
-                    Some(String::from_utf8_lossy(&bytes).into_owned())
+                    if let Some(abs) = resolve_resource_url(base.as_ref(), &href) {
+                        if let Ok(bytes) = fetch::fetch_bytes(&abs) {
+                            let css = String::from_utf8_lossy(&bytes).into_owned();
+                            // base de la hoja externa = su propia URL (los
+                            // `@import`/`url()` relativos cuelgan de ella).
+                            let sheet_base = url::Url::parse(&abs).ok();
+                            expand_sheet(&css, sheet_base.as_ref(), self.viewport, 0, &mut sheets);
+                        }
+                    }
                 }
-            })
-            .collect();
+            }
+        }
         let styles = StyleEngine::from_sheets_with_viewport(&sheets, self.viewport);
         let box_tree = boxes::build(&dom, &styles, url);
         let title = dom.title().unwrap_or_default();
@@ -191,6 +201,92 @@ fn resolve_resource_url(base: Option<&url::Url>, href: &str) -> Option<String> {
         };
     }
     base.and_then(|b| b.join(href).ok()).map(|u| u.to_string())
+}
+
+/// Profundidad máxima de anidamiento de `@import` — corta ciclos
+/// (`a.css` importa `b.css` que reimporta `a.css`) y cadenas patológicas.
+const MAX_IMPORT_DEPTH: u8 = 8;
+
+/// Expande una hoja de estilo siguiendo sus reglas `@import` y empuja el
+/// resultado aplanado a `out` en orden de cascada: cada hoja importada va
+/// ANTES del cuerpo que la importó (lo exige la spec — `@import` precede a las
+/// reglas propias). Los `@import` se resuelven contra `base` (la URL de ESTA
+/// hoja, no la del documento) y se bajan vía `fetch_bytes` (http/file/data:).
+/// Un `@import ... <media query>` que no matchea el viewport se saltea sin
+/// bajarlo. `@import` sólo se reconoce en la cabecera (antes de la primera `{`),
+/// que es donde la spec lo permite — así no confundimos un `@import` literal
+/// dentro de un valor/selector.
+fn expand_sheet(css: &str, base: Option<&url::Url>, vp: Viewport, depth: u8, out: &mut Vec<String>) {
+    if depth >= MAX_IMPORT_DEPTH {
+        out.push(css.to_string());
+        return;
+    }
+    let head_end = css.find('{').unwrap_or(css.len());
+    let head_lower = css[..head_end].to_ascii_lowercase();
+    // (rango en `css`, url, media opcional) de cada @import de la cabecera.
+    let mut imports: Vec<(usize, usize, String, Option<String>)> = Vec::new();
+    let mut search = 0;
+    while let Some(rel) = head_lower[search..].find("@import") {
+        let at = search + rel;
+        let Some(semi_rel) = css[at..].find(';') else { break };
+        let semi = at + semi_rel;
+        if let Some((url, media)) = parse_import_rule(&css[at + "@import".len()..semi]) {
+            imports.push((at, semi + 1, url, media));
+        }
+        search = semi + 1;
+    }
+    if imports.is_empty() {
+        out.push(css.to_string());
+        return;
+    }
+    // Cuerpo sin las líneas `@import` (parse_stylesheet no las necesita).
+    let mut body = String::new();
+    let mut cursor = 0;
+    for (s, e, _, _) in &imports {
+        body.push_str(&css[cursor..*s]);
+        cursor = *e;
+    }
+    body.push_str(&css[cursor..]);
+    // Hojas importadas PRIMERO (menor prioridad en la cascada).
+    for (_, _, url, media) in imports {
+        if let Some(m) = &media {
+            if !evaluate_media_query(m, vp) {
+                continue;
+            }
+        }
+        if let Some(abs) = resolve_resource_url(base, &url) {
+            if let Ok(bytes) = fetch::fetch_bytes(&abs) {
+                let imported = String::from_utf8_lossy(&bytes).into_owned();
+                let imported_base = url::Url::parse(&abs).ok();
+                expand_sheet(&imported, imported_base.as_ref(), vp, depth + 1, out);
+            }
+        }
+    }
+    out.push(body);
+}
+
+/// Parsea el cuerpo de un `@import` (el texto entre `@import` y `;`). Acepta
+/// `url("x")`, `url(x)` y la forma con string suelto `"x"`/`'x'`, seguidos de
+/// una media query opcional. Devuelve `(url, media)` o `None` si no parsea.
+fn parse_import_rule(rule: &str) -> Option<(String, Option<String>)> {
+    let s = rule.trim();
+    let (url, rest) = if s.len() >= 4 && s[..4].eq_ignore_ascii_case("url(") {
+        let after = &s[4..];
+        let end = after.find(')')?;
+        let inner = after[..end].trim().trim_matches(|c| c == '"' || c == '\'');
+        (inner.to_string(), after[end + 1..].trim())
+    } else if let Some(first) = s.chars().next().filter(|c| *c == '"' || *c == '\'') {
+        let after = &s[1..];
+        let end = after.find(first)?;
+        (after[..end].to_string(), after[end + 1..].trim())
+    } else {
+        return None;
+    };
+    if url.is_empty() {
+        return None;
+    }
+    let media = (!rest.is_empty()).then(|| rest.to_string());
+    Some((url, media))
 }
 
 /// Documento web parseado y layouted (en forma de box tree).
