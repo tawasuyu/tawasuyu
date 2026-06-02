@@ -48,7 +48,11 @@ conviene retomarlo con pantalla:
   **U4** (OSD), que necesitan decode/pantalla. Lo siguiente de estos 4 es el
   **wiring en `media-app`** (persistir los `.ron`, ofrecer "continuar",
   pintar carátula/marcas, editor de cola) — necesita correr la app.
-  `cargo test -p media-core` = **149 verde**, `--workspace` verde.
+- **Track AUDIO — más kernels puros (2026-06-02)**: **A5 downmix/upmix**
+  (`media-core::channels`, matrices de canales) y **A6 crossfade**
+  (`media-core::fade`, curvas + mezcla por bloque). Quedan **A2** (selección
+  de pista) y **A3** (dispositivo de salida), que necesitan hardware.
+  `cargo test -p media-core` = **163 verde**, `--workspace` verde.
 
 Sugerencia al retomar: `cargo run -p media-app -- <archivo>` y ejercitar las
 features nuevas desde el command palette (Ctrl+Shift+P): grupos Orientación,
@@ -95,7 +99,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 
 ### Pendiente
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
-- Track AUDIO A2/A3/A6 (selección de pista, dispositivo de salida, gapless/crossfade). **A4 (delay/sync) ✅ · A5 (normalización manual + limitador) ✅.**
+- Track AUDIO A2/A3 (selección de pista, dispositivo de salida — necesitan hardware). **A4 (delay/sync) ✅ · A5 (normalización + limitador + downmix/upmix) ✅ · A6 (crossfade, kernel puro) ✅.**
 - Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, hue incluido) ✅.**
 - Track SUBTÍTULOS S2, S3 (pistas embebidas, estilo configurable). **S1 (ASS/SSA texto+timing) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.**
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
@@ -171,8 +175,19 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   en el palette (grupo "Normalización") que lee `gain_to_target_db(−18 LUFS)` y
   fija `DynamicsControl::set_gain_db`. El medidor se autoconfigura con el rate del
   `fill` (los biquads K-weighting dependen del sample rate). Falta validar a
-  oído con audio real y downmix/upmix.
-- **A6 — Gapless garantizado / crossfade** entre pistas.
+  oído con audio real. **Downmix/upmix ✅ (2026-06-02)**: `media-core::channels`
+  — `remix_into` (sin alocar) + `remix` (aloca) con matrices estándar: 5.1→
+  estéreo downmix ITU-R BS.775 (`L+.707·C+.707·Ls`, LFE fuera), mono↔estéreo,
+  a-mono por promedio, estéreo→3+ con front L/R, fallback canal-a-canal. +7
+  tests. Falta que las fuentes multicanal lo usen (necesita audio real).
+- **A6 — Gapless garantizado / crossfade** entre pistas. ✅ *Kernel puro
+  cerrado (2026-06-02).* `media-core::fade`: curvas `linear` (suma de
+  ganancias = 1) y `equal_power` (`g_out²+g_in²=1`, sin bache de volumen a
+  mitad de transición) + `crossfade_into` (mezcla dos bloques intercalados
+  recorriendo el progress, encadenable) + `fade_in`/`fade_out` in-place. +7
+  tests. **Falta**: la máquina de transición entre pistas (qué pista termina,
+  cuál sigue, solapar sus buffers) vive en la capa de playlist de la app —
+  necesita correr la app.
 
 ### Track VIDEO
 
