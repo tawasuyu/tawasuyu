@@ -36,7 +36,8 @@ conviene retomarlo con pantalla:
   pista (multi-stream), A6 gapless/crossfade.
 - **Motor**: M2 hw decode, M3 seek frame-accurate, M4 frame stepping, M5
   pitch-correct speed.
-- **Subtítulos**: S2 pistas embebidas, S3 estilo visual ASS (libass-like).
+- **Subtítulos**: S2 pistas embebidas. (S3 núcleo de estilo ✅ 2026-06-02;
+  falta el render con color/fuente/posición — pantalla.)
 - **Mejoras a lo ya hecho**: *(A5 ReplayGain/EBU R128 ✅, V4 hue ✅ y R2 DASH
   A/V separados ✅ cerrados 2026-06-02.)*
 - **Track UX/BIBLIOTECA — core cerrado (2026-06-02)**: los 4 ítems sin
@@ -101,7 +102,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
 - Track AUDIO A2/A3 (selección de pista, dispositivo de salida — necesitan hardware). **A4 (delay/sync) ✅ · A5 (normalización + limitador + downmix/upmix) ✅ · A6 (crossfade, kernel puro) ✅.**
 - Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, hue incluido) ✅.**
-- Track SUBTÍTULOS S2, S3 (pistas embebidas, estilo configurable). **S1 (ASS/SSA texto+timing) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.**
+- Track SUBTÍTULOS S2 (pistas embebidas). **S1 (ASS/SSA texto+timing) ✅ · S3 (estilo/colores/alineación ASS, núcleo) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.**
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
 - Track UX U3 (thumbnails en hover) y U4 (OSD) — necesitan decode/pantalla.
   **U1 (modelo de orden de playlist) ✅ · U2 (resume/historial) ✅ · U5
@@ -240,7 +241,20 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   El **estilo visual** (fuente/color/posición/karaoke) queda para S3 — hoy se
   pinta como texto plano. +6 tests.
 - **S2 — Pistas embebidas** (muxeadas) + su selección.
-- **S3 — Estilo configurable** (fuente/tamaño/color/posición/fondo).
+- **S3 — Estilo configurable** (fuente/tamaño/color/posición/fondo). ✅
+  *Núcleo cerrado (2026-06-02).* `parse_ass` ahora extrae el estilo además del
+  texto: tipos nuevos `SubAlign` (numpad v4+ `\an` + legacy SSA `\a`),
+  `AssColor` (parser `&HAABBGGRR` con alfa→opacidad normalizada, BGR
+  invertido, y decimal SSA), `SubtitleStyle` (fuente/tamaño/colores
+  primary·outline·back/negrita·itálica/alineación/márgenes) y `StyleSheet`
+  (resolución case-insensitive con fallback a `Default`). Lee la sección
+  `[V4+ Styles]`/`[V4 Styles]` por su `Format:` (alineación numpad vs legacy
+  según la versión), y por cada `Dialogue` guarda `cue.style` + los overrides
+  inline `{\an}`/`{\a}`/`{\pos(x,y)}` en `cue.align`/`cue.pos` (ganan sobre el
+  estilo). `SubtitleTrack::{style_for,align_for}` combinan cue+sheet. +10
+  tests. **Falta**: que el renderer de `media-app` use color/fuente/posición
+  (hoy pinta texto plano abajo-centro) y los colores inline `\c`/karaoke `\k`
+  — necesita pantalla.
 - **S4 — Delay/sync de subtítulo** + subtítulo secundario. ✅ *Cerrado
   (2026-06-01, sin pista secundaria).* Offset firmado en ms (calca A4):
   `subtitle_strip` consulta `SubtitleTrack::at(t - delay)` (clamp ≥ 0), así

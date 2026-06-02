@@ -1373,28 +1373,250 @@ mod tests_audio_primitives {
 // Subtitles — SRT parser + query por timestamp
 // ============================================================
 
+/// Alineación de subtítulo estilo **numpad** ASS v4+ (`\an1`..`\an9`): el
+/// dígito mapea a las 9 anclas de un teclado numérico — `1` abajo-izquierda,
+/// `5` centro, `9` arriba-derecha. Es lo que el renderer usa para posicionar
+/// el texto en pantalla (S3). El default ASS es `2` (abajo-centro).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubAlign {
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    MiddleLeft,
+    MiddleCenter,
+    MiddleRight,
+    TopLeft,
+    TopCenter,
+    TopRight,
+}
+
+impl Default for SubAlign {
+    fn default() -> Self {
+        SubAlign::BottomCenter
+    }
+}
+
+impl SubAlign {
+    /// Desde el código numpad ASS v4+ (`\an`, columna `Alignment` de
+    /// `[V4+ Styles]`). `1`..`9`; fuera de rango → `None`.
+    pub fn from_numpad(n: u8) -> Option<Self> {
+        Some(match n {
+            1 => SubAlign::BottomLeft,
+            2 => SubAlign::BottomCenter,
+            3 => SubAlign::BottomRight,
+            4 => SubAlign::MiddleLeft,
+            5 => SubAlign::MiddleCenter,
+            6 => SubAlign::MiddleRight,
+            7 => SubAlign::TopLeft,
+            8 => SubAlign::TopCenter,
+            9 => SubAlign::TopRight,
+            _ => return None,
+        })
+    }
+
+    /// Código numpad (`1`..`9`) — el inverso de [`Self::from_numpad`].
+    pub fn numpad(self) -> u8 {
+        match self {
+            SubAlign::BottomLeft => 1,
+            SubAlign::BottomCenter => 2,
+            SubAlign::BottomRight => 3,
+            SubAlign::MiddleLeft => 4,
+            SubAlign::MiddleCenter => 5,
+            SubAlign::MiddleRight => 6,
+            SubAlign::TopLeft => 7,
+            SubAlign::TopCenter => 8,
+            SubAlign::TopRight => 9,
+        }
+    }
+
+    /// Desde el código **legacy SSA v4** (sección `[V4 Styles]` y override
+    /// `\a`): horizontal en los bits bajos (`1`=izq, `2`=centro, `3`=der),
+    /// `+4` sube a *toptitle*, `+8` a *midtitle*. P. ej. `5`=arriba-izq,
+    /// `10`=medio-centro, `11`=medio-der.
+    pub fn from_ssa_legacy(n: u8) -> Option<Self> {
+        let h = n & 0x3; // 1=izq, 2=centro, 3=der
+        if h == 0 {
+            return None;
+        }
+        let row = if n & 0x8 != 0 {
+            // middle
+            [SubAlign::MiddleLeft, SubAlign::MiddleCenter, SubAlign::MiddleRight]
+        } else if n & 0x4 != 0 {
+            // top
+            [SubAlign::TopLeft, SubAlign::TopCenter, SubAlign::TopRight]
+        } else {
+            [SubAlign::BottomLeft, SubAlign::BottomCenter, SubAlign::BottomRight]
+        };
+        Some(row[(h - 1) as usize])
+    }
+}
+
+/// Color ASS con opacidad. El formato en archivo es `&HAABBGGRR&` (hex,
+/// orden BGR invertido) o un entero decimal BGR (SSA v4 viejo). El byte de
+/// alfa de ASS es **transparencia** (`00`=opaco, `FF`=transparente); acá se
+/// normaliza a `a` = **opacidad** (`255`=opaco) para que el renderer no tenga
+/// que invertirlo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl AssColor {
+    pub const WHITE: AssColor = AssColor { r: 255, g: 255, b: 255, a: 255 };
+    pub const BLACK: AssColor = AssColor { r: 0, g: 0, b: 0, a: 255 };
+}
+
+/// Un estilo nombrado de la sección `[V4+ Styles]`/`[V4 Styles]`: lo que el
+/// renderer necesita para pintar un cue que referencia ese estilo. Sólo
+/// captura el subconjunto con impacto visual real (fuente, tamaño, colores,
+/// negrita/itálica, alineación, márgenes); el resto de columnas ASS
+/// (ScaleX/Y, Spacing, Angle, BorderStyle, Outline, Shadow, Encoding…) se
+/// ignoran por ahora.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubtitleStyle {
+    pub name: String,
+    pub font: String,
+    pub size: f32,
+    pub primary: AssColor,
+    pub outline: AssColor,
+    pub back: AssColor,
+    pub bold: bool,
+    pub italic: bool,
+    pub align: SubAlign,
+    pub margin_l: i32,
+    pub margin_r: i32,
+    pub margin_v: i32,
+}
+
+impl Default for SubtitleStyle {
+    fn default() -> Self {
+        SubtitleStyle {
+            name: "Default".into(),
+            font: "Arial".into(),
+            size: 18.0,
+            primary: AssColor::WHITE,
+            outline: AssColor::BLACK,
+            back: AssColor::BLACK,
+            bold: false,
+            italic: false,
+            align: SubAlign::default(),
+            margin_l: 0,
+            margin_r: 0,
+            margin_v: 0,
+        }
+    }
+}
+
+/// Colección de estilos nombrados de un ASS/SSA. Resolución case-insensitive;
+/// `resolve(None)` o un nombre desconocido cae al estilo `Default` si existe.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StyleSheet {
+    styles: Vec<SubtitleStyle>,
+}
+
+impl StyleSheet {
+    pub fn styles(&self) -> &[SubtitleStyle] {
+        &self.styles
+    }
+
+    pub fn len(&self) -> usize {
+        self.styles.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.styles.is_empty()
+    }
+
+    /// Estilo por nombre (case-insensitive), sin fallback.
+    pub fn get(&self, name: &str) -> Option<&SubtitleStyle> {
+        self.styles
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Resuelve el estilo aplicable: el nombrado si existe, si no el
+    /// `Default`, si no `None`.
+    pub fn resolve(&self, name: Option<&str>) -> Option<&SubtitleStyle> {
+        if let Some(n) = name {
+            if let Some(s) = self.get(n) {
+                return Some(s);
+            }
+        }
+        self.get("Default")
+    }
+}
+
 /// Una entrada de subtítulo con su rango temporal y el texto a
 /// mostrar mientras dure. `text` puede contener saltos de línea
 /// (las líneas múltiples del SRT se preservan con `\n`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Los campos `style`/`align`/`pos` sólo los llena el parser ASS/SSA (S3):
+/// `style` referencia un [`SubtitleStyle`] del [`StyleSheet`] de la pista,
+/// y `align`/`pos` son overrides inline del propio `Dialogue` (`{\an8}`,
+/// `{\pos(x,y)}`) que ganan sobre lo que diga el estilo. SRT/WebVTT los dejan
+/// en `None`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SubtitleCue {
     pub start: Duration,
     pub end: Duration,
     pub text: String,
+    /// Nombre del estilo ASS que aplica (columna `Style` del `Dialogue`).
+    pub style: Option<String>,
+    /// Override de alineación inline (`{\an8}`/`{\a..}`) — gana sobre el estilo.
+    pub align: Option<SubAlign>,
+    /// Override de posición absoluta inline (`{\pos(x,y)}`) en px de script.
+    pub pos: Option<(f32, f32)>,
+}
+
+impl SubtitleCue {
+    /// Cue de texto plano sin metadatos de estilo (lo que produce SRT/WebVTT).
+    pub fn plain(start: Duration, end: Duration, text: String) -> Self {
+        SubtitleCue { start, end, text, style: None, align: None, pos: None }
+    }
 }
 
 /// Pista de subtítulos ordenada por tiempo. Querys binarias para
 /// resolver "qué cue está activo en t". El consumidor (UI) le pasa
-/// la posición actual del audio y recibe el texto a pintar.
+/// la posición actual del audio y recibe el texto a pintar. Para ASS/SSA
+/// arrastra además su [`StyleSheet`] (S3): el renderer combina
+/// `cue.align`/`cue.style` con [`StyleSheet::resolve`].
 #[derive(Debug, Clone, Default)]
 pub struct SubtitleTrack {
     cues: Vec<SubtitleCue>,
+    styles: StyleSheet,
 }
 
 impl SubtitleTrack {
     pub fn new(mut cues: Vec<SubtitleCue>) -> Self {
         cues.sort_by_key(|c| c.start);
-        Self { cues }
+        Self { cues, styles: StyleSheet::default() }
+    }
+
+    /// Como [`Self::new`] pero adjuntando los estilos parseados (ASS/SSA).
+    pub fn with_styles(mut cues: Vec<SubtitleCue>, styles: StyleSheet) -> Self {
+        cues.sort_by_key(|c| c.start);
+        Self { cues, styles }
+    }
+
+    /// Los estilos nombrados de la pista (vacío salvo ASS/SSA).
+    pub fn styles(&self) -> &StyleSheet {
+        &self.styles
+    }
+
+    /// El estilo efectivo de un cue: el que nombra su columna `Style`, con
+    /// fallback al `Default` del sheet.
+    pub fn style_for(&self, cue: &SubtitleCue) -> Option<&SubtitleStyle> {
+        self.styles.resolve(cue.style.as_deref())
+    }
+
+    /// La alineación efectiva de un cue: override inline > estilo > default.
+    pub fn align_for(&self, cue: &SubtitleCue) -> SubAlign {
+        cue.align
+            .or_else(|| self.style_for(cue).map(|s| s.align))
+            .unwrap_or_default()
     }
 
     pub fn cues(&self) -> &[SubtitleCue] {
@@ -1491,7 +1713,7 @@ impl SubtitleTrack {
             if text.is_empty() {
                 continue;
             }
-            cues.push(SubtitleCue { start, end, text });
+            cues.push(SubtitleCue::plain(start, end, text));
         }
         if cues.is_empty() {
             return Err(format!(
@@ -1587,7 +1809,7 @@ impl SubtitleTrack {
             if text.is_empty() {
                 continue;
             }
-            cues.push(SubtitleCue { start, end, text });
+            cues.push(SubtitleCue::plain(start, end, text));
         }
         if cues.is_empty() {
             return Err(format!(
@@ -1599,17 +1821,22 @@ impl SubtitleTrack {
     }
 
     /// Parsea un cuerpo ASS/SSA (Advanced SubStation Alpha — el formato de
-    /// subtítulos de anime/karaoke, el `libass` de mpv). Sólo extrae el
-    /// **texto plano y su timing**: lee la sección `[Events]`, su línea
-    /// `Format:` para ubicar las columnas `Start`/`End`/`Text` (cae al orden
-    /// estándar v4+ si falta), parsea cada `Dialogue:` y descarta los
-    /// override tags (`{\i1}`, `{\an8}`, `{\pos(..)}`…), convirtiendo los
-    /// saltos `\N`/`\n` en líneas y `\h` en espacio. El estilo visual
-    /// (fuentes, colores, posición, karaoke) **no** se renderiza todavía —
-    /// eso sería S3 de `PARIDAD.md`; acá ASS entra al mismo pipeline de
-    /// texto que SRT/WebVTT.
+    /// subtítulos de anime/karaoke, el `libass` de mpv). Extrae **texto +
+    /// timing** (igual que SRT/WebVTT) y además, para S3, el **estilo visual**:
     ///
-    /// Tolerante: saltea `Dialogue` malformados (acumula avisos) y los
+    /// - La sección `[V4+ Styles]`/`[V4 Styles]` → un [`StyleSheet`] con cada
+    ///   `Style:` nombrado (fuente, tamaño, colores `&HAABBGGRR`, negrita/
+    ///   itálica, alineación numpad o legacy según la versión, márgenes).
+    /// - Por cada `Dialogue:`: su columna `Style` queda en `cue.style`, y los
+    ///   override tags inline `{\an8}`/`{\a..}` y `{\pos(x,y)}` quedan en
+    ///   `cue.align`/`cue.pos` (ganan sobre el estilo). El resto de los
+    ///   override tags se siguen descartando del texto (`strip_ass_markup`).
+    ///
+    /// El renderer combina ambos vía [`Self::style_for`]/[`Self::align_for`].
+    /// Lo que aún no se interpreta: karaoke (`\k`), colores inline (`\c`),
+    /// transformaciones (`\t`), dibujo vectorial (`\p`).
+    ///
+    /// Tolerante: saltea `Dialogue`/`Style` malformados (acumula avisos) y los
     /// `Comment:`. Si no hay ningún cue válido devuelve `Err`. Asume — como
     /// todo ASS real — que `Text` es la última columna, así las comas del
     /// diálogo no lo parten.
@@ -1617,16 +1844,30 @@ impl SubtitleTrack {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         let mut cues: Vec<SubtitleCue> = Vec::new();
         let mut warnings: Vec<String> = Vec::new();
+        let mut styles: Vec<SubtitleStyle> = Vec::new();
 
-        let mut in_events = false;
-        // Orden de columnas por defecto de ASS v4+ (Layer, Start, End,
-        // Style, Name, MarginL, MarginR, MarginV, Effect, Text). La línea
-        // `Format:` de `[Events]` lo sobreescribe si difiere (p. ej. SSA v4
-        // arranca con `Marked` en vez de `Layer`).
+        // Sección actual + bandera de versión legacy (SSA v4: `[V4 Styles]`,
+        // alineación con códigos legacy; v4+: `[V4+ Styles]`, numpad).
+        #[derive(PartialEq)]
+        enum Sec {
+            Other,
+            Styles,
+            Events,
+        }
+        let mut sec = Sec::Other;
+        let mut styles_legacy_align = false;
+
+        // Orden de columnas por defecto de ASS v4+ de `[Events]` (Layer, Start,
+        // End, Style, Name, MarginL, MarginR, MarginV, Effect, Text). La línea
+        // `Format:` lo sobreescribe si difiere (p. ej. SSA v4 arranca con
+        // `Marked` en vez de `Layer`).
         let mut idx_start = 1usize;
         let mut idx_end = 2usize;
+        let mut idx_style = 3usize;
         let mut idx_text = 9usize;
         let mut num_cols = 10usize;
+        // Orden de columnas de `[V4+ Styles]` (lo fija su propio `Format:`).
+        let mut style_fmt: Vec<String> = Vec::new();
 
         for line in text.lines() {
             let trimmed = line.trim();
@@ -1634,62 +1875,96 @@ impl SubtitleTrack {
                 continue;
             }
             if trimmed.starts_with('[') {
-                in_events = trimmed.eq_ignore_ascii_case("[Events]");
+                let lc = trimmed.to_ascii_lowercase();
+                sec = if lc == "[events]" {
+                    Sec::Events
+                } else if lc == "[v4+ styles]" || lc == "[v4 styles]" {
+                    styles_legacy_align = lc == "[v4 styles]";
+                    Sec::Styles
+                } else {
+                    Sec::Other
+                };
                 continue;
             }
-            if !in_events {
-                continue;
-            }
-            if let Some(rest) = trimmed.strip_prefix("Format:") {
-                let cols: Vec<String> = rest
-                    .split(',')
-                    .map(|c| c.trim().to_ascii_lowercase())
-                    .collect();
-                if !cols.is_empty() {
-                    num_cols = cols.len();
-                    if let Some(i) = cols.iter().position(|c| c == "start") {
-                        idx_start = i;
+            match sec {
+                Sec::Other => continue,
+                Sec::Styles => {
+                    if let Some(rest) = trimmed.strip_prefix("Format:") {
+                        style_fmt = rest
+                            .split(',')
+                            .map(|c| c.trim().to_ascii_lowercase())
+                            .collect();
+                        continue;
                     }
-                    if let Some(i) = cols.iter().position(|c| c == "end") {
-                        idx_end = i;
-                    }
-                    if let Some(i) = cols.iter().position(|c| c == "text") {
-                        idx_text = i;
+                    if let Some(rest) = trimmed.strip_prefix("Style:") {
+                        match parse_ass_style(rest, &style_fmt, styles_legacy_align) {
+                            Some(s) => styles.push(s),
+                            None => warnings.push(format!("Style inválido: '{trimmed}'")),
+                        }
                     }
                 }
-                continue;
-            }
-            let Some(rest) = trimmed.strip_prefix("Dialogue:") else {
-                // Comment:, Picture:, etc. — se ignoran.
-                continue;
-            };
-            // `Text` es la última columna: partimos en `num_cols` campos para
-            // que el último capture las comas del diálogo.
-            let fields: Vec<&str> = rest.splitn(num_cols, ',').collect();
-            if fields.len() < num_cols || idx_text >= fields.len() {
-                warnings.push(format!("Dialogue con pocos campos: '{trimmed}'"));
-                continue;
-            }
-            let start = match parse_ass_timestamp(fields[idx_start]) {
-                Ok(d) => d,
-                Err(e) => {
-                    warnings.push(e);
-                    continue;
+                Sec::Events => {
+                    if let Some(rest) = trimmed.strip_prefix("Format:") {
+                        let cols: Vec<String> = rest
+                            .split(',')
+                            .map(|c| c.trim().to_ascii_lowercase())
+                            .collect();
+                        if !cols.is_empty() {
+                            num_cols = cols.len();
+                            if let Some(i) = cols.iter().position(|c| c == "start") {
+                                idx_start = i;
+                            }
+                            if let Some(i) = cols.iter().position(|c| c == "end") {
+                                idx_end = i;
+                            }
+                            if let Some(i) = cols.iter().position(|c| c == "style") {
+                                idx_style = i;
+                            }
+                            if let Some(i) = cols.iter().position(|c| c == "text") {
+                                idx_text = i;
+                            }
+                        }
+                        continue;
+                    }
+                    let Some(rest) = trimmed.strip_prefix("Dialogue:") else {
+                        // Comment:, Picture:, etc. — se ignoran.
+                        continue;
+                    };
+                    // `Text` es la última columna: partimos en `num_cols`
+                    // campos para que el último capture las comas del diálogo.
+                    let fields: Vec<&str> = rest.splitn(num_cols, ',').collect();
+                    if fields.len() < num_cols || idx_text >= fields.len() {
+                        warnings.push(format!("Dialogue con pocos campos: '{trimmed}'"));
+                        continue;
+                    }
+                    let start = match parse_ass_timestamp(fields[idx_start]) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            warnings.push(e);
+                            continue;
+                        }
+                    };
+                    let end = match parse_ass_timestamp(fields[idx_end]) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            warnings.push(e);
+                            continue;
+                        }
+                    };
+                    let raw_text = fields[idx_text];
+                    let (align, pos) = extract_ass_overrides(raw_text);
+                    let body = strip_ass_markup(raw_text).trim().to_string();
+                    if body.is_empty() {
+                        continue;
+                    }
+                    let style = fields
+                        .get(idx_style)
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty() && *s != "*Default")
+                        .map(|s| s.to_string());
+                    cues.push(SubtitleCue { start, end, text: body, style, align, pos });
                 }
-            };
-            let end = match parse_ass_timestamp(fields[idx_end]) {
-                Ok(d) => d,
-                Err(e) => {
-                    warnings.push(e);
-                    continue;
-                }
-            };
-            let body = strip_ass_markup(fields[idx_text]);
-            let body = body.trim().to_string();
-            if body.is_empty() {
-                continue;
             }
-            cues.push(SubtitleCue { start, end, text: body });
         }
 
         if cues.is_empty() {
@@ -1698,7 +1973,7 @@ impl SubtitleTrack {
                 warnings.join(" · ")
             ));
         }
-        Ok(Self::new(cues))
+        Ok(Self::with_styles(cues, StyleSheet { styles }))
     }
 
     /// Autodetecta SRT vs WebVTT vs ASS/SSA y delega al parser
@@ -1789,6 +2064,139 @@ fn strip_ass_markup(s: &str) -> String {
         }
     }
     out
+}
+
+/// Parsea un color ASS: `&HAABBGGRR&` / `&HBBGGRR` (hex, BGR invertido) o un
+/// entero decimal BGR (SSA v4 viejo). El byte de alfa de ASS es transparencia
+/// (`00`=opaco); acá se normaliza a `a` = opacidad. Sin alfa → opaco.
+fn parse_ass_color(s: &str) -> Option<AssColor> {
+    let s = s.trim().trim_end_matches('&');
+    let (radix, body) = if let Some(h) =
+        s.strip_prefix("&H").or_else(|| s.strip_prefix("&h"))
+    {
+        (16, h)
+    } else if let Some(h) = s.strip_prefix('&') {
+        (16, h)
+    } else {
+        (10, s)
+    };
+    if body.is_empty() {
+        return None;
+    }
+    let v = u32::from_str_radix(body, radix).ok()?;
+    let has_alpha = body.len() > 6;
+    let r = (v & 0xff) as u8;
+    let g = ((v >> 8) & 0xff) as u8;
+    let b = ((v >> 16) & 0xff) as u8;
+    let a = if has_alpha {
+        255u8.wrapping_sub(((v >> 24) & 0xff) as u8)
+    } else {
+        255
+    };
+    Some(AssColor { r, g, b, a })
+}
+
+/// Parsea una línea `Style:` de `[V4+ Styles]`/`[V4 Styles]` contra el orden
+/// de columnas de su `Format:` (case-insensitive). Devuelve `None` si falta el
+/// nombre o las columnas no alcanzan. Los campos ausentes caen al default.
+/// `legacy_align` interpreta `Alignment` como código SSA v4 (vs numpad v4+).
+fn parse_ass_style(rest: &str, fmt: &[String], legacy_align: bool) -> Option<SubtitleStyle> {
+    if fmt.is_empty() {
+        return None;
+    }
+    // `Style:` no tiene campo con comas libres → split simple, recortando.
+    let vals: Vec<&str> = rest.splitn(fmt.len(), ',').map(str::trim).collect();
+    let get = |key: &str| -> Option<&str> {
+        fmt.iter().position(|c| c == key).and_then(|i| vals.get(i).copied())
+    };
+    let name = get("name").filter(|s| !s.is_empty())?.to_string();
+    let mut st = SubtitleStyle { name, ..SubtitleStyle::default() };
+    if let Some(f) = get("fontname").filter(|s| !s.is_empty()) {
+        st.font = f.to_string();
+    }
+    if let Some(sz) = get("fontsize").and_then(|s| s.parse::<f32>().ok()) {
+        if sz > 0.0 {
+            st.size = sz;
+        }
+    }
+    if let Some(c) = get("primarycolour").and_then(parse_ass_color) {
+        st.primary = c;
+    }
+    if let Some(c) = get("outlinecolour").and_then(parse_ass_color) {
+        st.outline = c;
+    }
+    if let Some(c) = get("backcolour").and_then(parse_ass_color) {
+        st.back = c;
+    }
+    // Bold/Italic ASS: -1 (o cualquier ≠0) = activo, 0 = inactivo.
+    if let Some(b) = get("bold").and_then(|s| s.parse::<i32>().ok()) {
+        st.bold = b != 0;
+    }
+    if let Some(it) = get("italic").and_then(|s| s.parse::<i32>().ok()) {
+        st.italic = it != 0;
+    }
+    if let Some(a) = get("alignment").and_then(|s| s.parse::<u8>().ok()) {
+        let parsed = if legacy_align {
+            SubAlign::from_ssa_legacy(a)
+        } else {
+            SubAlign::from_numpad(a)
+        };
+        if let Some(al) = parsed {
+            st.align = al;
+        }
+    }
+    if let Some(m) = get("marginl").and_then(|s| s.parse::<i32>().ok()) {
+        st.margin_l = m;
+    }
+    if let Some(m) = get("marginr").and_then(|s| s.parse::<i32>().ok()) {
+        st.margin_r = m;
+    }
+    if let Some(m) = get("marginv").and_then(|s| s.parse::<i32>().ok()) {
+        st.margin_v = m;
+    }
+    Some(st)
+}
+
+/// Escanea los bloques `{...}` de un `Text` de `Dialogue` por los override
+/// tags posicionales: `\an<d>` (numpad) o `\a<dd>` (legacy SSA) → alineación,
+/// y `\pos(x,y)` → posición absoluta. El último de cada tipo gana (ASS aplica
+/// de izquierda a derecha). El resto de los tags los descarta
+/// [`strip_ass_markup`]. `\a` desnudo (sin `n`) es siempre código legacy SSA.
+fn extract_ass_overrides(text: &str) -> (Option<SubAlign>, Option<(f32, f32)>) {
+    let mut align = None;
+    let mut pos = None;
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else { break };
+        let block = &after[..close];
+        // Tags dentro del bloque, separados por '\'.
+        for tag in block.split('\\') {
+            let tag = tag.trim();
+            if let Some(n) = tag.strip_prefix("an") {
+                if let Ok(v) = n.trim().parse::<u8>() {
+                    if let Some(a) = SubAlign::from_numpad(v) {
+                        align = Some(a);
+                    }
+                }
+            } else if let Some(n) = tag.strip_prefix('a') {
+                // `\a<dd>` legacy. (`\an` ya lo capturó la rama de arriba.)
+                if let Ok(v) = n.trim().parse::<u8>() {
+                    if let Some(a) = SubAlign::from_ssa_legacy(v) {
+                        align = Some(a);
+                    }
+                }
+            } else if let Some(args) = tag.strip_prefix("pos(") {
+                let args = args.trim_end_matches(')');
+                let mut it = args.split(',').map(|x| x.trim().parse::<f32>());
+                if let (Some(Ok(x)), Some(Ok(y))) = (it.next(), it.next()) {
+                    pos = Some((x, y));
+                }
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    (align, pos)
 }
 
 /// Timestamp ASS/SSA: `H:MM:SS.cc`, donde la fracción son **centésimas**
@@ -2113,5 +2521,152 @@ mod tests_subtitles {
     fn empty_ass_fails() {
         let err = SubtitleTrack::parse_ass("[Events]\n").unwrap_err();
         assert!(err.contains("Dialogue"));
+    }
+
+    // ---- S3: estilo ASS/SSA ----
+
+    #[test]
+    fn ass_color_hex_con_y_sin_alfa() {
+        // &HAABBGGRR: alfa=transparencia (00=opaco → opacidad 255).
+        let c = parse_ass_color("&H00FF8040").unwrap();
+        assert_eq!((c.r, c.g, c.b, c.a), (0x40, 0x80, 0xFF, 255));
+        // Sin alfa (6 dígitos) → opaco.
+        let c = parse_ass_color("&H00FF00").unwrap();
+        assert_eq!((c.r, c.g, c.b, c.a), (0x00, 0xFF, 0x00, 255));
+        // Alfa FF (transparente) → opacidad 0.
+        let c = parse_ass_color("&HFF0000FF").unwrap();
+        assert_eq!((c.r, c.g, c.b, c.a), (0xFF, 0x00, 0x00, 0));
+        // Decimal BGR (SSA viejo): 255 = rojo (0x0000FF en BGR).
+        let c = parse_ass_color("255").unwrap();
+        assert_eq!((c.r, c.g, c.b), (255, 0, 0));
+        assert!(parse_ass_color("&H").is_none());
+    }
+
+    #[test]
+    fn subalign_numpad_y_legacy() {
+        assert_eq!(SubAlign::from_numpad(8), Some(SubAlign::TopCenter));
+        assert_eq!(SubAlign::from_numpad(2), Some(SubAlign::BottomCenter));
+        assert_eq!(SubAlign::from_numpad(0), None);
+        assert_eq!(SubAlign::TopRight.numpad(), 9);
+        // Legacy SSA: 5 = top|left, 10 = mid|center, 11 = mid|right.
+        assert_eq!(SubAlign::from_ssa_legacy(5), Some(SubAlign::TopLeft));
+        assert_eq!(SubAlign::from_ssa_legacy(10), Some(SubAlign::MiddleCenter));
+        assert_eq!(SubAlign::from_ssa_legacy(11), Some(SubAlign::MiddleRight));
+        assert_eq!(SubAlign::from_ssa_legacy(2), Some(SubAlign::BottomCenter));
+        assert_eq!(SubAlign::from_ssa_legacy(0), None);
+    }
+
+    #[test]
+    fn ass_parsea_styles_v4plus() {
+        let src = "[V4+ Styles]\n\
+            Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, Alignment, MarginL, MarginR, MarginV\n\
+            Style: Default,Arial,28,&H00FFFFFF,&H00000000,&H00000000,0,0,2,10,10,20\n\
+            Style: Titulo,Verdana,48,&H0000FFFF,&H00000000,&H00000000,-1,0,8,0,0,0\n\
+            \n\
+            [Events]\n\
+            Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+            Dialogue: 0,0:00:01.00,0:00:03.00,Titulo,,0,0,0,,hola\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        let sheet = track.styles();
+        assert_eq!(sheet.len(), 2);
+        let def = sheet.get("default").unwrap();
+        assert_eq!(def.font, "Arial");
+        assert_eq!(def.size, 28.0);
+        assert_eq!(def.align, SubAlign::BottomCenter);
+        assert_eq!(def.margin_v, 20);
+        let tit = sheet.get("Titulo").unwrap();
+        assert!(tit.bold);
+        assert_eq!(tit.align, SubAlign::TopCenter);
+        assert_eq!(tit.primary, AssColor { r: 255, g: 255, b: 0, a: 255 });
+        // El cue referencia el estilo Titulo y lo resuelve.
+        let cue = &track.cues()[0];
+        assert_eq!(cue.style.as_deref(), Some("Titulo"));
+        assert_eq!(track.style_for(cue).unwrap().font, "Verdana");
+        assert_eq!(track.align_for(cue), SubAlign::TopCenter);
+    }
+
+    #[test]
+    fn ass_override_inline_gana_sobre_estilo() {
+        let src = "[V4+ Styles]\n\
+            Format: Name, Alignment\n\
+            Style: Default,2\n\
+            [Events]\n\
+            Format: Layer, Start, End, Style, Text\n\
+            Dialogue: 0,0:00:01.00,0:00:03.00,Default,{\\an8\\b1}arriba\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        let cue = &track.cues()[0];
+        assert_eq!(cue.text, "arriba"); // tags fuera del texto
+        assert_eq!(cue.align, Some(SubAlign::TopCenter));
+        // align_for prioriza el override inline sobre el estilo (que es 2).
+        assert_eq!(track.align_for(cue), SubAlign::TopCenter);
+    }
+
+    #[test]
+    fn ass_pos_inline() {
+        let src = "[Events]\n\
+            Format: Start, End, Text\n\
+            Dialogue: 0:00:01.00,0:00:02.00,{\\pos(320.5,100)}centro\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        let cue = &track.cues()[0];
+        assert_eq!(cue.text, "centro");
+        assert_eq!(cue.pos, Some((320.5, 100.0)));
+    }
+
+    #[test]
+    fn ass_a_legacy_inline() {
+        // `\a` desnudo (sin n) usa códigos legacy: 6 = top-center.
+        let src = "[Events]\n\
+            Format: Start, End, Text\n\
+            Dialogue: 0:00:01.00,0:00:02.00,{\\a6}x\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        assert_eq!(track.cues()[0].align, Some(SubAlign::TopCenter));
+    }
+
+    #[test]
+    fn ass_v4_legacy_styles_alignment() {
+        // Sección [V4 Styles] (SSA viejo) → alineación legacy.
+        let src = "[V4 Styles]\n\
+            Format: Name, Alignment\n\
+            Style: Default,6\n\
+            [Events]\n\
+            Format: Start, End, Text\n\
+            Dialogue: 0:00:01.00,0:00:02.00,hola\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        // 6 legacy = top-center (vs numpad 6 = middle-right).
+        assert_eq!(track.styles().get("Default").unwrap().align, SubAlign::TopCenter);
+    }
+
+    #[test]
+    fn ass_sin_styles_resuelve_a_none_y_default_align() {
+        let src = "[Events]\n\
+            Format: Start, End, Text\n\
+            Dialogue: 0:00:01.00,0:00:02.00,hola\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        assert!(track.styles().is_empty());
+        let cue = &track.cues()[0];
+        assert!(track.style_for(cue).is_none());
+        assert_eq!(track.align_for(cue), SubAlign::BottomCenter);
+    }
+
+    #[test]
+    fn srt_y_vtt_dejan_estilo_vacio() {
+        let srt = SubtitleTrack::parse_srt("1\n00:00:01,000 --> 00:00:02,000\nx\n").unwrap();
+        assert!(srt.styles().is_empty());
+        assert_eq!(srt.cues()[0].style, None);
+        assert_eq!(srt.align_for(&srt.cues()[0]), SubAlign::BottomCenter);
+    }
+
+    #[test]
+    fn stylesheet_resuelve_desconocido_a_default() {
+        let src = "[V4+ Styles]\n\
+            Format: Name, Fontname\n\
+            Style: Default,Arial\n\
+            [Events]\n\
+            Format: Start, End, Style, Text\n\
+            Dialogue: 0:00:01.00,0:00:02.00,NoExiste,hola\n";
+        let track = SubtitleTrack::parse_ass(src).unwrap();
+        let cue = &track.cues()[0];
+        // El estilo nombrado no existe → cae al Default.
+        assert_eq!(track.style_for(cue).unwrap().name, "Default");
     }
 }
