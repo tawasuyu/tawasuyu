@@ -10,9 +10,17 @@
 //! del `wl_surface`/`wl_display` (envuelta en [`RawSurface`]) y la pintamos
 //! reusando el pipeline de Llimphi (`mount → compute → paint → render`).
 //!
-//! **Estado**: pinta todas las barras de la config (varios bordes a la vez). El
-//! input (teclado para el Quake, clicks) y el drawer Quake llegan después. No se
-//! verifica headless: se itera en un compositor real.
+//! **Estado**: pinta todas las barras de la config (varios bordes a la vez),
+//! con input (teclado/clicks), drawer Quake, window_list, clipboard y tray.
+//! Verificado en Hyprland. No se verifica headless: se itera en un compositor
+//! real.
+//!
+//! **Gotcha Vulkan WSI + smithay (mirada):** NO reconfigurar el swapchain por
+//! cuadro. [`Self::draw`] llama a `surface.resize(w, h)` cada frame; por eso
+//! `RawSurface::resize` es no-op cuando el tamaño no cambia. Reconfigurar el
+//! swapchain reconstruye el `wl_buffer` y destruye el recién presentado antes de
+//! que el compositor lo componga — wlroots lo tolera, smithay no (la barra queda
+//! negra, el compositor ve `buffer=None`). Ver commit `b8747b90`.
 
 use std::error::Error;
 use std::ffi::c_void;

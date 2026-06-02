@@ -163,6 +163,13 @@ borde; shuma provee el contenido.
     (salvo `PATA_BACKEND=winit`), con fallback a la ventana winit.
     Verificado en runtime (Hyprland): salen todas las barras ancladas, sin
     error, y el muestreo/leyenda quietos.
+    - **Gotcha Vulkan WSI + smithay (mirada)** — `draw` redimensiona la surface
+      en cada cuadro (no hay evento de resize como en winit), así que
+      `RawSurface::resize` es **no-op cuando el tamaño no cambia**: reconfigurar
+      el swapchain por cuadro reconstruye el `wl_buffer` y destruye el recién
+      presentado antes de que el compositor lo componga — wlroots lo tolera,
+      smithay (mirada) no, y la barra quedaba negra (`buffer=None`). `acquire`
+      reconfigura+reintenta una vez ante `Outdated`/`Lost`. Fix en `b8747b90`.
   - **Input + Quake** ✅ (verificado en Hyprland): seat/keyboard/pointer
     vía sctk. Un cliente layer-shell **no recibe hotkeys globales**, así que el
     Quake se abre con **click** en la barra de shuma (foco de teclado vía
