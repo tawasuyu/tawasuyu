@@ -354,6 +354,11 @@ pub struct State {
     /// etapa alterna la pertenencia; al estar presente se muestran sus
     /// líneas capturadas en vivo (tee) bajo la fila de etapas.
     pub expanded_stages: HashSet<(u64, usize)>,
+    /// Patrones de comandos inferidos del historial (`shuma-infer`). Se
+    /// recalculan al cerrar cada comando y alimentan el ghost con la
+    /// secuencia predicha (no sólo el historial reciente). Vacío al
+    /// arrancar y hasta tener suficiente historial.
+    pub patterns: Vec<shuma_infer::EmergingPattern>,
     /// Scroll del panel de output, en px medidos desde el fondo. `0` =
     /// pegado al fondo (lo último siempre visible, como una terminal).
     /// Crece al rodar la rueda hacia arriba (ver historial). Lo clampa
@@ -403,6 +408,7 @@ impl State {
             current_block: 0,
             collapsed: HashSet::new(),
             expanded_stages: HashSet::new(),
+            patterns: Vec::new(),
             scroll_px: 0.0,
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
@@ -1013,6 +1019,53 @@ mod tests {
             .iter()
             .any(|l| l.stage.is_none() && l.text == "hola"));
         assert!(s.output.iter().any(|l| l.text == "✔ exit 0"));
+    }
+
+    #[test]
+    fn infer_predicts_next_command_in_a_repeated_sequence() {
+        // Historial con el patrón `git pull` → `make` repetido dos veces y
+        // un `git pull` final: el motor debe predecir `make` como
+        // continuación. cwd `/tmp/...` sin marcadores → sin gating.
+        let mut s = State::new(Source::Local);
+        let dir = "/tmp/shuma-infer-pred-test";
+        {
+            let mut h = s.history.lock().unwrap();
+            for (i, line) in ["git pull", "make", "git pull", "make", "git pull"]
+                .iter()
+                .enumerate()
+            {
+                let _ = h.append(shuma_history::Entry::new(*line, dir, i as u64));
+            }
+        }
+        refresh_patterns(&mut s);
+        assert!(!s.patterns.is_empty(), "debe emerger el patrón git→make");
+        // La continuación predicha empieza por `make` (puede seguir con el
+        // resto del patrón más largo, p. ej. `make && git pull`).
+        let pred = predicted_sequence(&s).expect("predice una continuación");
+        assert!(
+            pred.starts_with("make"),
+            "tras `git pull` predice `make…`, fue {pred:?}"
+        );
+    }
+
+    #[test]
+    fn ghost_uses_prediction_before_history() {
+        // Con el patrón aprendido, tipear `ma` debe sugerir `ke` (de la
+        // predicción `make`), aunque el historial no tenga un match mejor.
+        let mut s = State::new(Source::Local);
+        let dir = "/tmp/shuma-infer-ghost-test";
+        {
+            let mut h = s.history.lock().unwrap();
+            for (i, line) in ["git pull", "make", "git pull", "make", "git pull"]
+                .iter()
+                .enumerate()
+            {
+                let _ = h.append(shuma_history::Entry::new(*line, dir, i as u64));
+            }
+        }
+        refresh_patterns(&mut s);
+        s.input.set_text("ma");
+        assert_eq!(current_ghost(&s).as_deref(), Some("ke"));
     }
 
     #[test]
