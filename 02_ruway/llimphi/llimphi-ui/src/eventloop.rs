@@ -929,15 +929,24 @@ impl<A: App> Runtime<A> {
             prim.last_render = None;
             prim.window.request_redraw();
         }
-        // Repintamos las secundarias YA, de forma directa, en vez de pedir un
-        // redraw: en algunos compositores (Wayland) `request_redraw()` sobre
-        // una ventana secundaria no dispara `RedrawRequested`, así que el
-        // contenido quedaba congelado en el primer frame y su cache de
-        // hit-test (`last_render`) en `None` (los clicks no pegaban en nada).
-        // Como `dispatch_model` corre en cada Msg (incluido el tick ~33 fps),
-        // esto mantiene cada secundaria viva y su cache fresco.
-        for i in 0..self.secondaries.len() {
-            self.render_secondary(i);
+        // OJO: NO repintamos las secundarias acá. `dispatch_model` corre en
+        // cada Msg (incluido el tick ~33 fps), y repintar una secundaria por
+        // tick serializaba dos `acquire()` de swapchain en Wayland FIFO →
+        // ralentización y cuelgue. Cada secundaria se repinta sola al
+        // interactuar con ella (`handle_secondary_event` llama
+        // `render_secondary` tras un cambio) y en su `RedrawRequested` del
+        // compositor (expose/resize). El modelo igual quedó actualizado, así
+        // que el próximo repintado de la secundaria refleja el cambio.
+    }
+
+    /// Despacha un Msg y repinta la secundaria `idx` en el acto (si sigue
+    /// viva). El camino de los eventos de una secundaria: como su
+    /// `request_redraw` no dispara `RedrawRequested` en algunos compositores,
+    /// la pintamos directo tras el cambio.
+    fn dispatch_and_render_secondary(&mut self, idx: usize, msg: A::Msg) {
+        self.dispatch_model(msg);
+        if idx < self.secondaries.len() {
+            self.render_secondary(idx);
         }
     }
 
@@ -1098,12 +1107,11 @@ impl<A: App> Runtime<A> {
                 }
             }
             WindowEvent::Resized(size) => {
-                let sec = &mut self.secondaries[idx];
-                sec.surface.resize(size.width, size.height);
-                sec.window.request_redraw();
+                self.secondaries[idx].surface.resize(size.width, size.height);
+                self.render_secondary(idx);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                self.secondaries[idx].window.request_redraw();
+                self.render_secondary(idx);
             }
             WindowEvent::RedrawRequested => {
                 self.render_secondary(idx);
@@ -1141,9 +1149,9 @@ impl<A: App> Runtime<A> {
                     }
                 }
                 if let Some(msg) = drag_msg {
-                    self.dispatch_model(msg);
+                    self.dispatch_and_render_secondary(idx, msg);
                 } else if redraw {
-                    self.secondaries[idx].window.request_redraw();
+                    self.render_secondary(idx);
                 }
             }
             WindowEvent::MouseInput {
@@ -1195,7 +1203,7 @@ impl<A: App> Runtime<A> {
                             last_cursor: cursor,
                             payload,
                         });
-                        self.secondaries[idx].window.request_redraw();
+                        self.render_secondary(idx);
                     }
                     Some((Some(handler), _, payload, _, _, _)) => {
                         self.secondaries[idx].drag = Some(DragState {
@@ -1203,17 +1211,17 @@ impl<A: App> Runtime<A> {
                             last_cursor: cursor,
                             payload,
                         });
-                        self.secondaries[idx].window.request_redraw();
+                        self.render_secondary(idx);
                     }
                     Some((_, _, _, _, Some(handler), Some((ox, oy, rw, rh)))) => {
                         let lx = cursor.x as f32 - ox;
                         let ly = cursor.y as f32 - oy;
                         if let Some(msg) = handler(lx, ly, rw, rh) {
-                            self.dispatch_model(msg);
+                            self.dispatch_and_render_secondary(idx, msg);
                         }
                     }
                     Some((_, _, _, Some(msg), _, _)) => {
-                        self.dispatch_model(msg);
+                        self.dispatch_and_render_secondary(idx, msg);
                     }
                     _ => {}
                 }
@@ -1245,8 +1253,7 @@ impl<A: App> Runtime<A> {
                     if let Some(msg) = end_msg {
                         self.dispatch_model(msg);
                     }
-                    self.secondaries[idx].last_render = None;
-                    self.secondaries[idx].window.request_redraw();
+                    self.render_secondary(idx);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1266,7 +1273,7 @@ impl<A: App> Runtime<A> {
                     })
                 };
                 if let Some(msg) = handler.and_then(|h| h(wd.x, wd.y)) {
-                    self.dispatch_model(msg);
+                    self.dispatch_and_render_secondary(idx, msg);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1285,7 +1292,7 @@ impl<A: App> Runtime<A> {
                     .as_ref()
                     .and_then(|p| A::on_key(p.model.as_ref().expect("model"), &ev));
                 if let Some(msg) = msg {
-                    self.dispatch_model(msg);
+                    self.dispatch_and_render_secondary(idx, msg);
                 }
             }
             _ => {}
