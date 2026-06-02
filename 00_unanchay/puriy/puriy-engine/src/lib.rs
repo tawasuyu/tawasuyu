@@ -33,8 +33,8 @@ pub mod style;
 use thiserror::Error;
 
 pub use boxes::{
-    synthesize_box_node, BoxNode, BoxTree, Color, Display, FormInfo, FormMethod, InputKind,
-    PathCmd, SelectInfo, SelectOption, SvgPrim, SvgScene,
+    fetch_image_src, synthesize_box_node, BoxNode, BoxTree, Color, Display, FormInfo, FormMethod,
+    ImageData, InputKind, PathCmd, SelectInfo, SelectOption, SvgPrim, SvgScene,
 };
 pub use dom::{DomTree, MetaRefresh, ScriptInfo};
 pub use fetch::{fetch, fetch_full, FetchError, FetchResponse};

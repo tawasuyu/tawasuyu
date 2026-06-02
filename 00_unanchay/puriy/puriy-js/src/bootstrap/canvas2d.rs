@@ -53,6 +53,54 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         return Promise.resolve(new ImageBitmap(d[0], d[1]));
     };
 
+    // ---- Image (HTMLImageElement constructible, detached) ----
+    // Fase 7.197b — `new Image(); img.src = url; img.onload = …`. El chrome
+    // decodifica la URL al pintar el canvas; disparamos `load` de forma
+    // asíncrona (optimista) para que el patrón `onload → drawImage` corra.
+    if (globalThis.Image == null) {
+        function Image(w, h) {
+            this._attrs = {};
+            this.width = w | 0; this.height = h | 0;
+            this.naturalWidth = 0; this.naturalHeight = 0;
+            this.complete = false;
+            this.onload = null; this.onerror = null;
+            this._listeners = {};
+        }
+        Object.defineProperty(Image.prototype, 'src', {
+            get: function() { return this._attrs.src || ''; },
+            set: function(v) {
+                this._attrs.src = String(v);
+                this.complete = true;
+                var self = this;
+                var fire = function() {
+                    var ev = { type: 'load', target: self };
+                    if (typeof self.onload === 'function') self.onload(ev);
+                    var ls = (self._listeners['load'] || []).slice();
+                    for (var i = 0; i < ls.length; i++) ls[i].call(self, ev);
+                };
+                if (typeof queueMicrotask === 'function') queueMicrotask(fire);
+                else if (typeof setTimeout === 'function') setTimeout(fire, 0);
+                else fire();
+            },
+            enumerable: true, configurable: true
+        });
+        Object.defineProperty(Image.prototype, 'currentSrc', {
+            get: function() { return this._attrs.src || ''; },
+            enumerable: true, configurable: true
+        });
+        Image.prototype.addEventListener = function(type, cb) {
+            (this._listeners[type] = this._listeners[type] || []).push(cb);
+        };
+        Image.prototype.removeEventListener = function(type, cb) {
+            var ls = this._listeners[type]; if (!ls) return;
+            var i = ls.indexOf(cb); if (i >= 0) ls.splice(i, 1);
+        };
+        Image.prototype.setAttribute = function(k, v) { if (k === 'src') this.src = v; };
+        Image.prototype.getAttribute = function(k) { return k === 'src' ? this.src : null; };
+        globalThis.Image = Image;
+        if (globalThis.HTMLImageElement == null) globalThis.HTMLImageElement = Image;
+    }
+
     // ---- Path2D ----
     function Path2D(arg) {
         this._cmds = [];
@@ -259,8 +307,16 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     C.strokeText = function(text, x, y, maxWidth) { this._rec('strokeText', String(text), x, y, maxWidth, this._snapshot()); };
     C.measureText = function(text) { return new TextMetrics(text, parseFontPx(this._state.font)); };
 
-    // Imágenes.
-    C.drawImage = function() { this._rec.apply(this, ['drawImage'].concat(Array.prototype.slice.call(arguments))); };
+    // Imágenes. Fase 7.197b — resolvemos la fuente a su `src` (string) para
+    // que el chrome la decodifique y la pinte. Una fuente sin `src`
+    // (HTMLCanvasElement / ImageBitmap) registra src vacío → el painter la
+    // ignora (no-op). Las coordenadas (2 / 4 / 8 números) van tal cual.
+    C.drawImage = function(image) {
+        var args = Array.prototype.slice.call(arguments);
+        var src = '';
+        if (image) src = image.src || image.currentSrc || image._src || '';
+        this._rec.apply(this, ['drawImage', String(src)].concat(args.slice(1)));
+    };
 
     // Gradientes / patrones.
     C.createLinearGradient = function(x0, y0, x1, y1) { return new CanvasGradient('linear', [x0, y0, x1, y1]); };

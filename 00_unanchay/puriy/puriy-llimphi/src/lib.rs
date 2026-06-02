@@ -255,6 +255,11 @@ pub struct TabState {
     /// scripts, en cada tick y tras dispatchear eventos — el render del box
     /// canvas (`render_canvas`) los interpreta y pinta con vello. Fase 7.196.
     canvas_frames: std::collections::HashMap<String, CanvasFrame>,
+    /// Imágenes decodificadas referenciadas por `drawImage`, keyeadas por el
+    /// `src` crudo que el JS registró. `None` = falló la decodificación (no se
+    /// reintenta cada frame). Se poblan en `refresh_canvas_frames` resolviendo
+    /// contra `t.url` vía `fetch_image_src` (cache-backed). Fase 7.197b.
+    canvas_images: std::collections::HashMap<String, Option<PenikoImage>>,
     /// `true` si el box tree de esta pestaña tiene al menos un `<canvas>`.
     /// Gatea el refresh por tick (evita un `eval` por frame en páginas sin
     /// canvas, que son la mayoría).
@@ -298,6 +303,7 @@ impl TabState {
             hover_tweens: std::collections::HashMap::new(),
             es_cancel: std::collections::HashMap::new(),
             canvas_frames: std::collections::HashMap::new(),
+            canvas_images: std::collections::HashMap::new(),
             has_canvas: false,
         }
     }
@@ -1017,6 +1023,7 @@ impl App for Puriy {
                         // el refresh de frames (evita un `eval` por tick en
                         // páginas sin canvas). Reset de frames stale del load previo.
                         t.canvas_frames.clear();
+                        t.canvas_images.clear();
                         let mut has_canvas = false;
                         box_tree.walk(|b| {
                             if b.canvas.is_some() {
@@ -4151,6 +4158,8 @@ struct RenderCtx<'a> {
     /// Frames de `<canvas>` 2D keyeados por `element_id` — `render_canvas`
     /// los busca por el id del box canvas. Fase 7.196.
     canvas_frames: &'a std::collections::HashMap<String, CanvasFrame>,
+    /// Imágenes decodificadas para `drawImage`, keyeadas por `src`. Fase 7.197b.
+    canvas_images: &'a std::collections::HashMap<String, Option<PenikoImage>>,
 }
 
 fn viewport(
@@ -4201,6 +4210,7 @@ fn viewport(
         now_ms,
         hover_tweens: &t.hover_tweens,
         canvas_frames: &t.canvas_frames,
+        canvas_images: &t.canvas_images,
     };
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
@@ -4311,7 +4321,7 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             .element_id
             .as_deref()
             .and_then(|id| ctx.canvas_frames.get(id));
-        return render_canvas(frame, cw, ch, zoom);
+        return render_canvas(frame, ctx.canvas_images, cw, ch, zoom);
     }
     let style = box_style(b, zoom);
     let mut view = View::new(style);
@@ -5354,6 +5364,43 @@ fn refresh_canvas_frames(t: &mut TabState) {
         },
         None => t.canvas_frames.clear(),
     }
+    decode_canvas_images(t);
+}
+
+/// Decodifica (una vez) las imágenes referenciadas por comandos `drawImage`
+/// de los frames de canvas, resolviendo cada `src` crudo contra `t.url` vía el
+/// cache de imágenes del engine. El resultado (o `None` si falla) queda en
+/// `t.canvas_images` para que el painter lo busque sin re-decodificar cada
+/// frame. Fase 7.197b.
+fn decode_canvas_images(t: &mut TabState) {
+    // Recolecta los src nuevos (no decodificados aún) — préstamo separado de
+    // `canvas_frames` (inmutable) y `canvas_images` (mutable).
+    let mut nuevos: Vec<String> = Vec::new();
+    for frame in t.canvas_frames.values() {
+        for cmd in &frame.cmds {
+            if cmd.first().and_then(|v| v.as_str()) == Some("drawImage") {
+                if let Some(src) = cmd.get(1).and_then(|v| v.as_str()) {
+                    if !src.is_empty()
+                        && !t.canvas_images.contains_key(src)
+                        && !nuevos.iter().any(|s| s == src)
+                    {
+                        nuevos.push(src.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if nuevos.is_empty() {
+        return;
+    }
+    let base = url::Url::parse(&t.url).ok();
+    for src in nuevos {
+        let img = puriy_engine::fetch_image_src(base.as_ref(), &src).map(|d| {
+            let blob = Blob::from(d.rgba);
+            PenikoImage::new(blob, ImageFormat::Rgba8, d.width, d.height)
+        });
+        t.canvas_images.insert(src, img);
+    }
 }
 
 /// Extrae un `f64` de un valor JSON (default 0.0 si no es número).
@@ -5513,7 +5560,13 @@ fn canvas_font_px(font: Option<&str>) -> f32 {
 /// zoom) cuyo `paint_with` interpreta el log de comandos del frame con vello.
 /// Si no hay frame (el script aún no pidió contexto / dibujó), devuelve el
 /// View vacío (rect transparente). Fase 7.196.
-fn render_canvas(frame: Option<&CanvasFrame>, intrinsic_w: f32, intrinsic_h: f32, zoom: f32) -> View<Msg> {
+fn render_canvas(
+    frame: Option<&CanvasFrame>,
+    images: &std::collections::HashMap<String, Option<PenikoImage>>,
+    intrinsic_w: f32,
+    intrinsic_h: f32,
+    zoom: f32,
+) -> View<Msg> {
     // El View se muestra al tamaño del box (atributos width/height del engine,
     // escalado por zoom). El espacio de COORDENADAS de los comandos es el
     // tamaño del buffer de dibujo (`frame.width/height`, que un script pudo
@@ -5531,12 +5584,27 @@ fn render_canvas(frame: Option<&CanvasFrame>, intrinsic_w: f32, intrinsic_h: f32
         .filter(|v| *v > 0.0)
         .unwrap_or(intrinsic_h)
         .max(1.0) as f64;
+    // Sólo las imágenes que ESTE frame referencia (decodificadas), clonadas
+    // al closure (peniko::Image es Arc-backed → clon barato).
+    let mut frame_images: std::collections::HashMap<String, PenikoImage> =
+        std::collections::HashMap::new();
+    for cmd in &cmds {
+        if cmd.first().and_then(|v| v.as_str()) == Some("drawImage") {
+            if let Some(src) = cmd.get(1).and_then(|v| v.as_str()) {
+                if !frame_images.contains_key(src) {
+                    if let Some(Some(img)) = images.get(src) {
+                        frame_images.insert(src.to_string(), img.clone());
+                    }
+                }
+            }
+        }
+    }
     View::new(Style {
         size: Size { width: length(w), height: length(h) },
         ..Default::default()
     })
     .paint_with(move |scene, ts, rect| {
-        paint_canvas_cmds(scene, ts, rect, &cmds, iw, ih);
+        paint_canvas_cmds(scene, ts, rect, &cmds, iw, ih, &frame_images);
     })
 }
 
@@ -5547,9 +5615,11 @@ fn render_canvas(frame: Option<&CanvasFrame>, intrinsic_w: f32, intrinsic_h: f32
 /// transforms (save/restore/translate/scale/rotate/transform/setTransform/
 /// resetTransform/beginPath), globalAlpha, gradientes REALES (linear/radial/
 /// conic→sweep) en fill/stroke/rect, `clip` (recorte por path, balanceado con
-/// save/restore) y line dash/cap/join (Fase 7.197). Limitaciones: drawImage,
-/// putImageData, patrones, sombras y clearRect parcial quedan fuera; el texto
-/// con gradiente degrada a color sólido (el typesetter sólo toma `Color`).
+/// save/restore), line dash/cap/join (Fase 7.197) y `drawImage` de imágenes
+/// decodificadas (Fase 7.197b, vía el mapa `images` keyeado por `src`).
+/// Limitaciones: putImageData, patrones, sombras, clearRect parcial y el
+/// `globalAlpha` sobre drawImage quedan fuera; el texto con gradiente degrada a
+/// color sólido (el typesetter sólo toma `Color`).
 fn paint_canvas_cmds(
     scene: &mut llimphi_raster::vello::Scene,
     ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -5557,6 +5627,7 @@ fn paint_canvas_cmds(
     cmds: &[Vec<serde_json::Value>],
     iw: f64,
     ih: f64,
+    images: &std::collections::HashMap<String, PenikoImage>,
 ) {
     use llimphi_raster::kurbo::{BezPath, Shape};
 
@@ -5732,8 +5803,38 @@ fn paint_canvas_cmds(
                 let xf = base * cur * Affine::translate((x + dx, y - ascent));
                 llimphi_ui::llimphi_text::draw_layout_xf(scene, &layout, color, xf);
             }
-            // clearRect parcial / drawImage / putImageData: no-op (el MVP no
-            // tiene buffer persistente ni registro de imágenes decodificadas).
+            "drawImage" => {
+                // ['drawImage', src, ...nums] — nums: 2 (dx,dy), 4 (dx,dy,dw,dh)
+                // u 8 (sx,sy,sw,sh,dx,dy,dw,dh). El source rect default es la
+                // imagen entera (W×H decodificados).
+                let src = cmd.get(1).and_then(|v| v.as_str()).unwrap_or("");
+                let Some(img) = images.get(src) else { continue };
+                let (iw_i, ih_i) = (img.width as f64, img.height as f64);
+                let nums: Vec<f64> =
+                    cmd[2.min(cmd.len())..].iter().map(|v| v.as_f64().unwrap_or(0.0)).collect();
+                let (sx, sy, sw, sh, dx, dy, dw, dh) = match nums.len() {
+                    2 => (0.0, 0.0, iw_i, ih_i, nums[0], nums[1], iw_i, ih_i),
+                    4 => (0.0, 0.0, iw_i, ih_i, nums[0], nums[1], nums[2], nums[3]),
+                    8 => (nums[0], nums[1], nums[2], nums[3], nums[4], nums[5], nums[6], nums[7]),
+                    _ => continue,
+                };
+                if sw <= 0.0 || sh <= 0.0 || dw == 0.0 || dh == 0.0 {
+                    continue;
+                }
+                // Recorta al dest rect (necesario cuando el source es un
+                // sub-rect: draw_image pinta la imagen ENTERA, el clip la acota).
+                let dest = KurboRect::new(dx, dy, dx + dw, dy + dh);
+                scene.push_layer(Mix::Clip, 1.0, base * cur, &dest);
+                // Mapea espacio-pixel de la imagen → dest: el source (sx,sy)
+                // cae en (dx,dy) y (sx+sw,sy+sh) en (dx+dw,dy+dh).
+                let m = Affine::translate((dx, dy))
+                    * Affine::scale_non_uniform(dw / sw, dh / sh)
+                    * Affine::translate((-sx, -sy));
+                scene.draw_image(img, base * cur * m);
+                scene.pop_layer();
+            }
+            // clearRect parcial / putImageData: no-op (el MVP no tiene buffer
+            // persistente; globalAlpha no se aplica a drawImage).
             _ => {}
         }
     }
@@ -8441,7 +8542,7 @@ mod tests {
                 ["fill", {"f": "#00ff00", "ga": 1}]
             ]"##).unwrap();
         assert!(scene.encoding().is_empty(), "escena arranca vacía");
-        paint_canvas_cmds(&mut scene, &mut ts, rect, &cmds, 100.0, 50.0);
+        paint_canvas_cmds(&mut scene, &mut ts, rect, &cmds, 100.0, 50.0, &Default::default());
         assert!(!scene.encoding().is_empty(), "tras pintar debería haber segmentos");
     }
 
@@ -8566,7 +8667,7 @@ mod tests {
             ]"##,
         )
         .unwrap();
-        paint_canvas_cmds(&mut scene, &mut ts, rect, &cmds, 100.0, 50.0);
+        paint_canvas_cmds(&mut scene, &mut ts, rect, &cmds, 100.0, 50.0, &Default::default());
         assert!(!scene.encoding().is_empty(), "debería haber dibujo");
     }
 
@@ -8620,6 +8721,107 @@ mod tests {
             .expect("stroke");
         let ld = stk[1].get("ld").and_then(|v| v.as_array()).expect("ld");
         assert_eq!(ld.len(), 2);
+    }
+
+    #[test]
+    fn drawimage_de_img_dom_se_decodifica_end_to_end() {
+        // <canvas> + <img src=data:…> → ctx.drawImage(img) registra el src y
+        // refresh_canvas_frames (→ decode_canvas_images) lo decodifica.
+        let png_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.url = "about:test".into();
+        t.box_tree = Some(parse(
+            r#"<body><canvas id="c" width="100" height="100"></canvas></body>"#,
+        ));
+        t.has_canvas = true;
+        let mk = |id: &str, tag: &str, attrs: Vec<(String, String)>| puriy_js::ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: attrs,
+            dfs_index: 0,
+        };
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[
+            mk("c", "canvas", vec![("width".into(), "100".into()), ("height".into(), "100".into())]),
+            mk("i", "img", vec![("src".into(), png_1x1.into())]),
+        ])
+        .expect("set_elements");
+        rt.eval(
+            "var ctx = document.getElementById('c').getContext('2d');\
+             var im = document.getElementById('i');\
+             ctx.drawImage(im, 5, 5);",
+        )
+        .expect("draw");
+        apply_dom_mutations(t);
+        let frame = t.canvas_frames.get("c").expect("frame");
+        let di = frame
+            .cmds
+            .iter()
+            .find(|c| c.first().and_then(|v| v.as_str()) == Some("drawImage"))
+            .expect("drawImage en el frame");
+        assert_eq!(di.get(1).and_then(|v| v.as_str()), Some(png_1x1));
+        let img = t.canvas_images.get(png_1x1).expect("decodificada").as_ref();
+        assert_eq!(img.map(|i| (i.width, i.height)), Some((1, 1)));
+    }
+
+    #[test]
+    fn paint_canvas_cmds_drawimage_dibuja() {
+        // Una imagen 2×2 en el mapa + un drawImage que la coloca → la escena
+        // queda no-vacía. Cubre las 3 aridades (2/4/8 números).
+        let mut scene = llimphi_raster::vello::Scene::new();
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let img = PenikoImage::new(Blob::from(vec![255u8; 16]), ImageFormat::Rgba8, 2, 2);
+        let mut images = std::collections::HashMap::new();
+        images.insert("u".to_string(), img);
+        for cmds_src in [
+            r#"[["drawImage","u",10,10]]"#,                 // 3-arg
+            r#"[["drawImage","u",10,10,40,40]]"#,           // 5-arg
+            r#"[["drawImage","u",0,0,2,2,10,10,40,40]]"#,   // 9-arg (sub-rect)
+        ] {
+            let mut s = llimphi_raster::vello::Scene::new();
+            let cmds: Vec<Vec<serde_json::Value>> = serde_json::from_str(cmds_src).unwrap();
+            paint_canvas_cmds(&mut s, &mut ts, rect, &cmds, 100.0, 100.0, &images);
+            assert!(!s.encoding().is_empty(), "drawImage debería pintar: {cmds_src}");
+        }
+        // Un src ausente del mapa → no-op (no panic, escena vacía).
+        let cmds: Vec<Vec<serde_json::Value>> =
+            serde_json::from_str(r#"[["drawImage","falta",0,0]]"#).unwrap();
+        paint_canvas_cmds(&mut scene, &mut ts, rect, &cmds, 100.0, 100.0, &images);
+        assert!(scene.encoding().is_empty(), "src ausente no pinta");
+    }
+
+    #[test]
+    fn decode_canvas_images_resuelve_data_url() {
+        // decode_canvas_images decodifica el src de un drawImage (data: PNG 1×1)
+        // y lo deja en t.canvas_images.
+        let png_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.url = "about:test".into();
+        let cmds_json = format!(r#"[["drawImage","{png_1x1}",0,0]]"#);
+        t.canvas_frames.insert(
+            "c".into(),
+            CanvasFrame {
+                id: "c".into(),
+                width: 100.0,
+                height: 100.0,
+                cmds: serde_json::from_str(&cmds_json).unwrap(),
+            },
+        );
+        decode_canvas_images(t);
+        let got = t.canvas_images.get(png_1x1).expect("entrada decodificada");
+        let img = got.as_ref().expect("la imagen 1×1 decodifica");
+        assert_eq!((img.width, img.height), (1, 1));
+        // Segunda llamada no re-decodifica (idempotente: la clave ya existe).
+        decode_canvas_images(t);
+        assert_eq!(t.canvas_images.len(), 1);
     }
 
     #[test]

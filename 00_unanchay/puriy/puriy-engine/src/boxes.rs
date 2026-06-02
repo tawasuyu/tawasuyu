@@ -2890,7 +2890,7 @@ fn decode_image_bytes(bytes: &[u8]) -> Option<ImageData> {
 /// bloquea a propósito (no son navegables como `<a href>`), pero como fuente
 /// de un recurso son legítimos. El resto resuelve contra `base` y baja por
 /// HTTP/file. `None` si falta src o falla la decodificación.
-fn fetch_image_src(base: Option<&url::Url>, src: &str) -> Option<ImageData> {
+pub fn fetch_image_src(base: Option<&url::Url>, src: &str) -> Option<ImageData> {
     if crate::fetch::is_data_url(src.trim()) {
         return decode_image_bytes(&crate::fetch::decode_data_url(src.trim())?);
     }

@@ -972,6 +972,26 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         }
         return null;
     };
+    // Fase 7.197b — `<img>` DOM: `.src` refleja el atributo (el chrome lo
+    // resuelve contra la base del documento al decodificar para `drawImage`);
+    // `.naturalWidth/Height` quedan en 0 (el JS no conoce el tamaño decodificado
+    // — el painter usa el tamaño real). Suficiente para `ctx.drawImage(img,…)`.
+    if (tag === 'img') {
+        Object.defineProperty(el, 'src', {
+            get: function() { return this._attributes_store['src'] || ''; },
+            set: function(v) { this._attributes_store['src'] = String(v); },
+            enumerable: true, configurable: true
+        });
+        Object.defineProperty(el, 'currentSrc', {
+            get: function() { return this._attributes_store['src'] || ''; },
+            enumerable: true, configurable: true
+        });
+        el.naturalWidth = 0; el.naturalHeight = 0; el.complete = true;
+        var _iw = parseInt(el._attributes_store['width'], 10);
+        var _ih = parseInt(el._attributes_store['height'], 10);
+        if (_iw > 0) el.width = _iw;
+        if (_ih > 0) el.height = _ih;
+    }
     // Fase 7.196 — `<canvas>` DOM: getContext('2d') + width/height. El
     // contexto 2D es el mismo molde que `OffscreenCanvas` (bootstrap
     // canvas2d.rs); lo registramos en `__puriy_dom_canvas_ctxs` con el id
