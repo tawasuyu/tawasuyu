@@ -222,6 +222,9 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.focused = true;
             }
         }
+        Msg::RunGroup(idx) => {
+            s = run_group(s, idx);
+        }
         Msg::Tick => {
             s = drain_run(s);
         }

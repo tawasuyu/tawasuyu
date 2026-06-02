@@ -670,6 +670,9 @@ pub enum Msg {
     /// del próximo comando. La dispara el chip ↻ de una card. Si ya estaba
     /// armado el mismo bloque, lo desarma (toggle).
     SetReprocess(u64),
+    /// Ejecuta el grupo guardado de índice `idx` (0-based). La dispara el
+    /// click en su card del panel de grupos (equivale a la tecla F{idx+1}).
+    RunGroup(usize),
 }
 
 mod update;
@@ -1179,6 +1182,22 @@ mod tests {
         s.input.set_text(":save vacio");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         assert_eq!(s.groups.len(), 1, "no se crea grupo vacío");
+    }
+
+    #[test]
+    fn run_group_msg_executes_group() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.groups.push(CommandGroup {
+            name: "g".into(),
+            lines: vec!["echo desde_panel".into()],
+        });
+        s = update(s, Msg::RunGroup(0));
+        s = drain_until_idle(s);
+        assert!(s.output.iter().any(|l| l.text == "desde_panel"));
+        // Índice fuera de rango: no-op.
+        s = update(s, Msg::RunGroup(9));
+        assert!(!s.is_running());
     }
 
     #[test]

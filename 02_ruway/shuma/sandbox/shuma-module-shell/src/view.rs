@@ -11,9 +11,36 @@ pub fn view<HostMsg: Clone + 'static>(
     } else {
         output_pane::<HostMsg>(state, theme, &lift)
     };
+    // Panel de grupos [RUN] a la izquierda (rescate del shell GPUI): cada
+    // grupo guardado (`:save`) es una card clickable que lo ejecuta, con su
+    // tecla F. Sólo aparece si hay grupos y no estamos en un TUI fullscreen.
+    let body: View<HostMsg> = if !state.groups.is_empty() && !is_tui_active(state) {
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: Dimension::auto(),
+            },
+            flex_basis: length(0.0_f32),
+            flex_grow: 1.0,
+            min_size: Size {
+                width: Dimension::auto(),
+                height: length(0.0_f32),
+            },
+            gap: Size {
+                width: length(8.0_f32),
+                height: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Stretch),
+            ..Default::default()
+        })
+        .children(vec![groups_panel::<HostMsg>(state, theme, &lift), main_panel])
+    } else {
+        main_panel
+    };
     let input = shell_input_view(state, theme, lift.clone());
 
-    let mut children = vec![header, main_panel];
+    let mut children = vec![header, body];
     // Banner de reprocess: el próximo comando recibe por stdin el stdout
     // del bloque armado. Click → cancela (toggle).
     if let Some(src) = state.reprocess_source {
@@ -904,6 +931,94 @@ pub(crate) fn shell_header<HostMsg: Clone + 'static>(
         ..Default::default()
     })
     .text_aligned(label, 12.0, color, Alignment::Start)
+}
+
+/// Panel de grupos `[RUN]` a la izquierda: una card por grupo guardado
+/// (`:save`), clickable para ejecutarlo, con su tecla F. Ancho fijo. El
+/// caller ya garantizó que hay ≥1 grupo.
+pub(crate) fn groups_panel<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    const PANEL_W: f32 = 176.0;
+    let mut children: Vec<View<HostMsg>> = vec![View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned("GRUPOS".to_string(), 10.0, theme.fg_muted, Alignment::Start)];
+
+    for (i, g) in state.groups.iter().enumerate() {
+        let title = format!("F{}  {}", i + 1, g.name);
+        let sub = format!("{} cmds", g.lines.len());
+        let card = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(38.0_f32),
+            },
+            padding: Rect {
+                left: length(6.0_f32),
+                right: length(6.0_f32),
+                top: length(3.0_f32),
+                bottom: length(3.0_f32),
+            },
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_input)
+        .radius(4.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(Msg::RunGroup(i)))
+        .children(vec![
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(16.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(title, 12.0, theme.accent, Alignment::Start),
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(14.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(sub, 10.0, theme.fg_muted, Alignment::Start),
+        ]);
+        children.push(card);
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(PANEL_W),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(3.0)
+    .children(children)
 }
 
 /// Popup de completado: lista de candidatos con el actual resaltado. Se

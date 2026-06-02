@@ -64,6 +64,15 @@ fn main() {
         replace_end: 2,
     });
     state.completion_index = 1;
+    // Grupos guardados → panel [RUN] a la izquierda.
+    state.groups.push(shuma_module_shell::CommandGroup {
+        name: "build".into(),
+        lines: vec!["cargo build".into(), "cargo test".into()],
+    });
+    state.groups.push(shuma_module_shell::CommandGroup {
+        name: "deploy".into(),
+        lines: vec!["git push".into()],
+    });
 
     let v = shuma_module_shell::view::<()>(&state, &theme, |_m| ());
 
