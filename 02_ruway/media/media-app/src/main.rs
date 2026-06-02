@@ -86,6 +86,7 @@ use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
 use media_core::library::History;
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
+use media_core::metadata::{self, Metadata};
 use media_core::toolbar::BarItem;
 use media_core::transform::{Rotation, Transform, TransformControl, TransformVideo};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
@@ -531,6 +532,42 @@ fn apply_config_edit(cfg: &mut MediaConfig, edit: ConfigEdit) {
         ConfigEdit::SubFontDelta(d) => cfg.subtitles.font_scale += d,
         ConfigEdit::CrossfadeDelta(d) => cfg.behavior.crossfade_secs += d,
     }
+}
+
+// ============================================================
+// Metadata (U5) — tags del archivo en reproducción
+// ============================================================
+
+/// Tags del medio actual (título/artista/álbum/carátula), leídos una vez
+/// al arrancar. `Metadata::default()` (todo `None`) si el archivo no trae
+/// tags o no es local.
+fn media_metadata_slot() -> &'static OnceLock<Metadata> {
+    static SLOT: OnceLock<Metadata> = OnceLock::new();
+    &SLOT
+}
+
+/// Ruta del medio local en reproducción (track de la cola, o el archivo de
+/// video/imagen). `None` para tono/testcard o streams de red.
+fn current_media_path() -> Option<PathBuf> {
+    if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+        return Some(h.lock().track_path().to_path_buf());
+    }
+    video_path_slot()
+        .get()
+        .filter(|p| !p.as_os_str().is_empty())
+        .cloned()
+}
+
+/// Lee los primeros ~2 MB del archivo y parsea sus tags (ID3v2/FLAC). El
+/// tope cubre tags y la carátula típica sin cargar el archivo entero.
+fn load_media_metadata(path: &Path) -> Metadata {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Metadata::default();
+    };
+    let mut buf = Vec::new();
+    let _ = file.take(2 * 1024 * 1024).read_to_end(&mut buf);
+    metadata::parse(&buf)
 }
 
 // ============================================================
@@ -2044,6 +2081,10 @@ impl App for MediaApp {
             if config.playlist.shuffle && !pl.shuffle_on() {
                 pl.toggle_shuffle();
             }
+        }
+        // Metadata (U5): lee los tags del archivo actual una vez.
+        if let Some(p) = current_media_path() {
+            let _ = media_metadata_slot().set(load_media_metadata(&p));
         }
         // Resume (U2): si está activado y hay posición guardada para el
         // track actual, salta ahí. Marca la reproducción en el historial.
@@ -3756,8 +3797,17 @@ fn bar_item_view(item: BarItem) -> View<Msg> {
             Color::from_rgba8(180, 195, 215, 255),
         ),
         BarItem::Title => {
-            let label = config_slot().get().map(|c| c.label.clone()).unwrap_or_default();
-            bar_label(label, 220.0, Color::from_rgba8(200, 212, 230, 255))
+            let md = media_metadata_slot().get();
+            // Título del tag si lo hay; si no, la etiqueta del archivo.
+            let base = md
+                .and_then(|m| m.title.clone())
+                .or_else(|| config_slot().get().map(|c| c.label.clone()))
+                .unwrap_or_default();
+            let label = match md.and_then(|m| m.artist.as_deref()) {
+                Some(artist) if !artist.is_empty() => format!("{base} — {artist}"),
+                _ => base,
+            };
+            bar_label(label, 240.0, Color::from_rgba8(200, 212, 230, 255))
         }
     }
 }
