@@ -144,6 +144,10 @@ pub struct MapData {
     pub line_feat: Vec<usize>,
     /// Índice de feature de cada polígono (paralelo a `polygons`).
     pub polygon_feat: Vec<usize>,
+    /// Caja envolvente fija (basemap PMTiles): ancla la proyección a un marco
+    /// estable para que el mapa no salte mientras llegan tiles. Si es `None`,
+    /// la bbox se calcula del contenido.
+    pub bbox_override: Option<BBox>,
 }
 
 impl MapData {
@@ -158,8 +162,11 @@ impl MapData {
                 .sum::<usize>()
     }
 
-    /// Caja envolvente de todo el contenido, o `None` si no hay coordenadas.
+    /// Caja envolvente: el override fijo si está, o la de todo el contenido.
     pub fn bbox(&self) -> Option<BBox> {
+        if self.bbox_override.is_some() {
+            return self.bbox_override;
+        }
         let mut bb = BBox::empty();
         for p in &self.points {
             bb.expand(*p);
@@ -332,6 +339,8 @@ pub fn load_pmtiles_overview(bytes: Vec<u8>) -> MapPreview {
     }
     let span = 1u32 << chosen;
     let mut data = MapData::default();
+    // Ancla la proyección a los bounds del archivo (marco estable al streamear).
+    data.bbox_override = pmtiles_bounds(&pm.header);
     for x in 0..span {
         for y in 0..span {
             if let Some(tile) = pm.tile(chosen, x, y) {
@@ -343,6 +352,115 @@ pub fn load_pmtiles_overview(bytes: Vec<u8>) -> MapPreview {
         MapPreview::NoGeometry
     } else {
         MapPreview::Map { data, truncated: false }
+    }
+}
+
+/// Bounds del header como [`BBox`], si son válidos (algunos archivos los dejan
+/// en cero → caemos a "mundo entero").
+fn pmtiles_bounds(h: &pmtiles::Header) -> Option<BBox> {
+    let bb = BBox {
+        min_lon: h.min_lon,
+        min_lat: h.min_lat,
+        max_lon: h.max_lon,
+        max_lat: h.max_lat,
+    };
+    if bb.max_lon > bb.min_lon && bb.max_lat > bb.min_lat {
+        Some(bb)
+    } else {
+        Some(BBox { min_lon: -180.0, min_lat: -85.05, max_lon: 180.0, max_lat: 85.05 })
+    }
+}
+
+/// Basemap PMTiles **vivo**: mantiene el contenedor abierto y una caché de
+/// tiles decodificados, y entrega el [`MapData`] visible para la cámara actual
+/// (streaming por viewport). Sin red: todo sale del archivo local.
+///
+/// El host lo guarda mientras un `.pmtiles` esté abierto y llama a
+/// [`Basemap::viewport`] cuando la cámara cambia.
+pub struct Basemap {
+    pm: pmtiles::PmTiles,
+    bounds: BBox,
+    /// Tiles ya decodificados (`(z,x,y)` → geometrías). `None` = tile vacío.
+    cache: HashMap<(u32, u32, u32), MapData>,
+}
+
+impl Basemap {
+    /// Abre un `.pmtiles` ya en memoria como basemap vivo.
+    pub fn open(bytes: Vec<u8>) -> Result<Self, String> {
+        let pm = pmtiles::PmTiles::from_bytes(bytes)?;
+        if pm.header.tile_type != 1 {
+            return Err("pmtiles: sólo se soportan tiles MVT".into());
+        }
+        let bounds = pmtiles_bounds(&pm.header).unwrap();
+        Ok(Basemap { pm, bounds, cache: HashMap::new() })
+    }
+
+    /// Tope de tiles a fundir por viewport (evita explosiones de memoria).
+    const MAX_TILES: usize = 48;
+
+    /// Devuelve el [`MapData`] visible para `view`: elige el zoom de tiles
+    /// según el span visible y el ancho del panel, enumera los tiles que
+    /// tocan el viewport, los decodifica (cacheando) y los funde. La bbox
+    /// queda anclada a los bounds del archivo.
+    pub fn viewport(&mut self, view: &MapView) -> MapData {
+        let mut out = MapData::default();
+        out.bbox_override = Some(self.bounds);
+
+        let Some((rx, ry, rw, rh)) = view.rect() else {
+            return out;
+        };
+        let proj = Projection::fit(self.bounds, (rx as f64, ry as f64, rw as f64, rh as f64), view.zoom, view.pan);
+        // Esquinas del panel → lon/lat (región visible).
+        let a = proj.inverse(rx as f64, ry as f64);
+        let b = proj.inverse((rx + rw) as f64, (ry + rh) as f64);
+        let west = a[0].min(b[0]).max(-180.0);
+        let east = a[0].max(b[0]).min(180.0);
+        let south = a[1].min(b[1]).max(-85.05);
+        let north = a[1].max(b[1]).min(85.05);
+
+        let zmin = self.pm.header.min_zoom as u32;
+        let zmax = self.pm.header.max_zoom as u32;
+        let z = vt::zoom_for_span(west, east, rw as f64).clamp(zmin, zmax);
+
+        // Rango de tiles visibles (Y crece hacia el sur).
+        let (x0, y0) = vt::lonlat_to_tile(z, west, north);
+        let (x1, y1) = vt::lonlat_to_tile(z, east, south);
+        let (x0, x1) = (x0.min(x1), x0.max(x1));
+        let (y0, y1) = (y0.min(y1), y0.max(y1));
+
+        // Asegura los tiles en caché, respetando el tope.
+        let mut count = 0usize;
+        'outer: for x in x0..=x1 {
+            for y in y0..=y1 {
+                if count >= Self::MAX_TILES {
+                    break 'outer;
+                }
+                count += 1;
+                let key = (z, x, y);
+                if !self.cache.contains_key(&key) {
+                    let md = self
+                        .pm
+                        .tile(z, x, y)
+                        .map(|bytes| mvt_tile_to_mapdata(&bytes, z, x, y))
+                        .unwrap_or_default();
+                    self.cache.insert(key, md);
+                }
+            }
+        }
+        // Funde lo cacheado en el viewport.
+        let mut merged = 0usize;
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                if merged >= Self::MAX_TILES {
+                    break;
+                }
+                merged += 1;
+                if let Some(md) = self.cache.get(&(z, x, y)) {
+                    out.append(md.clone());
+                }
+            }
+        }
+        out
     }
 }
 
@@ -1073,6 +1191,11 @@ impl MapView {
             Some((rx, ry, rw, rh)) => x >= rx && x <= rx + rw && y >= ry && y <= ry + rh,
             None => false,
         }
+    }
+
+    /// Último rect físico pintado por el canvas (si ya se pintó alguna vez).
+    pub fn rect(&self) -> Option<(f32, f32, f32, f32)> {
+        self.rect.lock().ok().and_then(|g| *g)
     }
 
     /// Registra el rect físico del canvas (lo llama el propio canvas).
@@ -2840,6 +2963,89 @@ mod tests {
             }
             other => panic!("esperaba Map, fue {other:?}"),
         }
+    }
+
+    /// Construye un `.pmtiles` mínimo (z0, sin compresión) con una LINESTRING
+    /// en la capa "roads". Reutilizable por los tests de streaming.
+    fn tiny_pmtiles() -> Vec<u8> {
+        fn varint(out: &mut Vec<u8>, mut v: u64) {
+            loop {
+                let mut b = (v & 0x7f) as u8;
+                v >>= 7;
+                if v != 0 {
+                    b |= 0x80;
+                }
+                out.push(b);
+                if v == 0 {
+                    break;
+                }
+            }
+        }
+        let zz = |v: i32| ((v << 1) ^ (v >> 31)) as u64;
+        let mut geom = Vec::new();
+        varint(&mut geom, (1 << 3) | 1);
+        varint(&mut geom, zz(100));
+        varint(&mut geom, zz(100));
+        varint(&mut geom, (1 << 3) | 2);
+        varint(&mut geom, zz(50));
+        varint(&mut geom, zz(0));
+        let mut feat = Vec::new();
+        varint(&mut feat, (3 << 3) | 0);
+        varint(&mut feat, 2);
+        varint(&mut feat, (4 << 3) | 2);
+        varint(&mut feat, geom.len() as u64);
+        feat.extend_from_slice(&geom);
+        let mut layer = Vec::new();
+        varint(&mut layer, (1 << 3) | 2);
+        varint(&mut layer, 5);
+        layer.extend_from_slice(b"roads");
+        varint(&mut layer, (2 << 3) | 2);
+        varint(&mut layer, feat.len() as u64);
+        layer.extend_from_slice(&feat);
+        let mut mvt = Vec::new();
+        varint(&mut mvt, (3 << 3) | 2);
+        varint(&mut mvt, layer.len() as u64);
+        mvt.extend_from_slice(&layer);
+
+        let mut dir = Vec::new();
+        varint(&mut dir, 1);
+        varint(&mut dir, 0);
+        varint(&mut dir, 1);
+        varint(&mut dir, mvt.len() as u64);
+        varint(&mut dir, 1);
+        let root_off = 127u64;
+        let tile_off = root_off + dir.len() as u64;
+        let mut file = vec![0u8; 127];
+        file[0..7].copy_from_slice(b"PMTiles");
+        file[7] = 3;
+        file[8..16].copy_from_slice(&root_off.to_le_bytes());
+        file[16..24].copy_from_slice(&(dir.len() as u64).to_le_bytes());
+        file[40..48].copy_from_slice(&tile_off.to_le_bytes());
+        file[56..64].copy_from_slice(&tile_off.to_le_bytes());
+        file[64..72].copy_from_slice(&(mvt.len() as u64).to_le_bytes());
+        file[97] = 1;
+        file[98] = 1;
+        file[99] = 1;
+        file.extend_from_slice(&dir);
+        file.extend_from_slice(&mvt);
+        file
+    }
+
+    #[test]
+    fn basemap_viewport_funde_tiles_visibles() {
+        let mut bm = Basemap::open(tiny_pmtiles()).expect("abre basemap");
+        let view = MapView::default();
+        // Sin rect pintado: viewport vacío pero con bbox anclada.
+        let empty = bm.viewport(&view);
+        assert!(empty.lines.is_empty());
+        assert!(empty.bbox_override.is_some());
+        // Con rect: a zoom 1 / span mundial elige z0 y funde el tile 0/0/0.
+        view.record_rect((0.0, 0.0, 512.0, 512.0));
+        let md = bm.viewport(&view);
+        assert_eq!(md.lines.len(), 1);
+        assert!(md.bbox_override.is_some(), "la bbox queda anclada");
+        // Segunda llamada usa la caché (mismo resultado).
+        assert_eq!(bm.viewport(&view).lines.len(), 1);
     }
 
     #[test]

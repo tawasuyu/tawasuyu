@@ -106,7 +106,7 @@ use nahual_font_viewer_llimphi::{
     font_viewer_view, load_font, FontPreview, FontViewerPalette, DEFAULT_FONT_BYTES_MAX,
 };
 use nahual_map_viewer_llimphi::{
-    load_map, map_viewer_view, MapPreview, MapView, MapViewerPalette, DEFAULT_MAP_BYTES_MAX,
+    load_map, map_viewer_view, Basemap, MapPreview, MapView, MapViewerPalette, DEFAULT_MAP_BYTES_MAX,
 };
 use wawa_config_llimphi::theme_from_wawa;
 
@@ -177,6 +177,9 @@ struct Model {
     /// Cámara del visor de mapas (zoom/pan). Se resetea al cambiar de
     /// preview; la mutan el arrastre y la rueda sobre el panel del mapa.
     map_view: MapView,
+    /// Basemap PMTiles vivo, si el archivo abierto es un `.pmtiles`. Mantiene
+    /// el contenedor + caché de tiles para el streaming por viewport.
+    basemap: Option<Basemap>,
     /// Suscripción al bus de configuración del SO.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
@@ -289,6 +292,7 @@ impl App for Shell {
             menu_anim: Tween::idle(1.0),
             context_menu: None,
             map_view: MapView::default(),
+            basemap: None,
             _wawa_watcher: watcher,
         }
     }
@@ -421,6 +425,7 @@ impl App for Shell {
                                 }
                                 None => {
                                     m.preview = load_for(&path);
+                                    m.basemap = open_basemap_if_pmtiles(&path);
                                     // HTML: además de previsualizar el fuente,
                                     // abrir el archivo lo entrega a puriy (como
                                     // un file manager abre el visor default).
@@ -468,12 +473,17 @@ impl App for Shell {
             }
             Msg::MapPan(dx, dy) => {
                 m.map_view.pan_by(dx as f64, dy as f64);
+                restream_basemap(&mut m);
             }
             Msg::MapZoom(dy, cx, cy) => {
                 // Cada "línea" de rueda → ±12% de zoom, anclado al cursor.
                 m.map_view.zoom_at(1.12_f64.powf(dy as f64), cx, cy);
+                restream_basemap(&mut m);
             }
-            Msg::MapReset => m.map_view.reset(),
+            Msg::MapReset => {
+                m.map_view.reset();
+                restream_basemap(&mut m);
+            }
             Msg::MapToggleBase => m.map_view.toggle_base(),
             Msg::MapClick(fx, fy) => {
                 if let PreviewPane::Map(MapPreview::Map { data, .. }) = &m.preview {
@@ -544,6 +554,7 @@ impl App for Shell {
                     }
                 }
                 m.map_view.searching = false;
+                restream_basemap(&mut m);
             }
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);
@@ -953,6 +964,28 @@ fn clear_preview(m: &mut Model) {
     m.preview = PreviewPane::Empty;
     m.preview_of = None;
     m.preview_temp = None;
+    m.basemap = None;
+}
+
+/// Abre `path` como basemap PMTiles vivo si su magic lo delata.
+fn open_basemap_if_pmtiles(path: &Path) -> Option<Basemap> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.starts_with(b"PMTiles") {
+        Basemap::open(bytes).ok()
+    } else {
+        None
+    }
+}
+
+/// Si hay un basemap PMTiles abierto, recalcula el viewport (tiles visibles a
+/// la cámara actual) y lo deja como preview. Se llama tras cada cambio de
+/// cámara para el streaming.
+fn restream_basemap(m: &mut Model) {
+    let Some(bm) = m.basemap.as_mut() else {
+        return;
+    };
+    let md = bm.viewport(&m.map_view);
+    m.preview = PreviewPane::Map(MapPreview::Map { data: md, truncated: false });
 }
 
 /// Intenta montar `path` como una fuente no-POSIX. Hoy sólo prueba imagen
@@ -1131,6 +1164,7 @@ fn refresh_preview(m: &mut Model) {
         return;
     };
     m.preview = load_for(&path);
+    m.basemap = open_basemap_if_pmtiles(&path);
     m.preview_of = Some(path);
     // Encuadre fresco para el nuevo archivo (si fuera un mapa); los campos de
     // color son del archivo anterior, así que se descartan.

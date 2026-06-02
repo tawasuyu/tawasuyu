@@ -48,6 +48,26 @@ pub fn tile_to_lonlat(z: u32, x: u32, y: u32, extent: f64, px: f64, py: f64) -> 
     [lon, lat]
 }
 
+/// lon/lat → índice de tile `(x, y)` en el zoom `z` (esquema slippy/XYZ de
+/// Web Mercator). Acota a `[0, 2^z-1]`.
+pub fn lonlat_to_tile(z: u32, lon: f64, lat: f64) -> (u32, u32) {
+    let n = (1u64 << z) as f64;
+    let x = ((lon + 180.0) / 360.0 * n).floor();
+    let lat = lat.clamp(-85.05112878, 85.05112878).to_radians();
+    let y = ((1.0 - (lat.tan() + 1.0 / lat.cos()).ln() / std::f64::consts::PI) / 2.0 * n).floor();
+    let m = (n - 1.0).max(0.0);
+    (x.clamp(0.0, m) as u32, y.clamp(0.0, m) as u32)
+}
+
+/// Zoom de tiles para que un span de `west..east` grados ocupe el ancho del
+/// panel a ~512 px por tile. Sin acotar al rango del dataset (eso lo hace el
+/// llamador).
+pub fn zoom_for_span(west: f64, east: f64, panel_w: f64) -> u32 {
+    let span = (east - west).abs().max(1e-9);
+    let twoz = (360.0 / span) * (panel_w.max(1.0) / 512.0);
+    twoz.max(1.0).log2().floor().clamp(0.0, 22.0) as u32
+}
+
 // ---------------------------------------------------------------------------
 // Lector protobuf mínimo (wire format)
 // ---------------------------------------------------------------------------
@@ -306,6 +326,21 @@ mod tests {
         // Centro del mundo (z1, esquina compartida) = (0,0).
         let c = tile_to_lonlat(1, 1, 1, 4096.0, 0.0, 0.0);
         assert!(c[0].abs() < 1e-9 && c[1].abs() < 1e-6);
+    }
+
+    #[test]
+    fn lonlat_a_tile_y_zoom() {
+        // z=1: -180° → x0, +179° → x1; ecuador/Greenwich cae en el borde.
+        assert_eq!(lonlat_to_tile(1, -180.0, 80.0).0, 0);
+        assert_eq!(lonlat_to_tile(1, 179.0, 80.0).0, 1);
+        assert_eq!(lonlat_to_tile(1, -90.0, -80.0).1, 1); // hemisferio sur
+        // Ida y vuelta aproximada con tile_to_lonlat.
+        let (x, y) = lonlat_to_tile(4, -71.97, -13.5);
+        let ll = tile_to_lonlat(4, x, y, 1.0, 0.5, 0.5);
+        assert!((ll[0] - -71.97).abs() < 30.0 && (ll[1] - -13.5).abs() < 30.0);
+        // Zoom para spans conocidos.
+        assert_eq!(zoom_for_span(-180.0, 180.0, 512.0), 0);
+        assert_eq!(zoom_for_span(-90.0, 90.0, 512.0), 1);
     }
 
     #[test]
