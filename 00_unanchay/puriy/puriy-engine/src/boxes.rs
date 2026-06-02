@@ -3525,6 +3525,26 @@ mod tests {
     }
 
     #[test]
+    fn inset_logico_inline_y_block() {
+        use crate::style::LengthVal;
+        let html = r#"<html><head><style>
+            #a { position: absolute; inset-inline: 10px 20px; inset-block: 5px; }
+            #b { position: absolute; inset-inline-start: 8px; inset-block-end: 12px; }
+        </style></head><body><div id="a">x</div><div id="b">y</div></body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let a = box_by_id(&doc.box_tree, "a").unwrap();
+        // inset-inline: 10 20 → left=10 (start), right=20 (end), LTR.
+        assert_eq!(a.inset_left, LengthVal::Px(10.0));
+        assert_eq!(a.inset_right, LengthVal::Px(20.0));
+        // inset-block: 5 → top=bottom=5.
+        assert_eq!(a.inset_top, LengthVal::Px(5.0));
+        assert_eq!(a.inset_bottom, LengthVal::Px(5.0));
+        let b = box_by_id(&doc.box_tree, "b").unwrap();
+        assert_eq!(b.inset_left, LengthVal::Px(8.0)); // inline-start = left (LTR)
+        assert_eq!(b.inset_bottom, LengthVal::Px(12.0)); // block-end = bottom
+    }
+
+    #[test]
     fn list_style_none_suprime_marker() {
         let html = r#"<html><head><style>
             ul { list-style-type: none }

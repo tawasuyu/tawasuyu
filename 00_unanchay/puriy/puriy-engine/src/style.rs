@@ -4319,7 +4319,43 @@ fn parse_logical_box(prop: &str, value: &str, important: bool) -> Option<Vec<Dec
         MarginBottom, MarginLeft, MarginRight, MarginTop, PaddingBottom, PaddingLeft,
         PaddingRight, PaddingTop,
     };
+    use DeclKind::{InsetBottom, InsetLeft, InsetRight, InsetTop};
     let lower = prop.to_ascii_lowercase();
+    // `inset-inline`/`inset-block` y sus `-start`/`-end`: usan `LengthVal`
+    // (length/%/auto), no `f32` como margin/padding — firma aparte.
+    let inset_two: Option<(fn(LengthVal) -> DeclKind, fn(LengthVal) -> DeclKind)> =
+        match lower.as_str() {
+            "inset-inline" => Some((InsetLeft, InsetRight)),
+            "inset-block" => Some((InsetTop, InsetBottom)),
+            _ => None,
+        };
+    if let Some((a, b)) = inset_two {
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        let vals: Vec<LengthVal> =
+            parts.iter().filter_map(|p| parse_length_or_pct_or_auto(p)).collect();
+        if vals.is_empty() || vals.len() != parts.len() {
+            return Some(Vec::new());
+        }
+        let (s, e) = if vals.len() == 1 { (vals[0], vals[0]) } else { (vals[0], vals[1]) };
+        return Some(vec![
+            Decl { kind: a(s), important },
+            Decl { kind: b(e), important },
+        ]);
+    }
+    let inset_single: Option<fn(LengthVal) -> DeclKind> = match lower.as_str() {
+        "inset-inline-start" => Some(InsetLeft),
+        "inset-inline-end" => Some(InsetRight),
+        "inset-block-start" => Some(InsetTop),
+        "inset-block-end" => Some(InsetBottom),
+        _ => None,
+    };
+    if let Some(ctor) = inset_single {
+        return Some(
+            parse_length_or_pct_or_auto(value)
+                .map(|v| vec![Decl { kind: ctor(v), important }])
+                .unwrap_or_default(),
+        );
+    }
     // Lados emparejados (1–2 valores): (start_ctor, end_ctor).
     let two: Option<(fn(f32) -> DeclKind, fn(f32) -> DeclKind)> = match lower.as_str() {
         "margin-inline" => Some((MarginLeft, MarginRight)),
