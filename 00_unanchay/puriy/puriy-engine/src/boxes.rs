@@ -1816,7 +1816,18 @@ fn build_node(
         NodeData::Element { .. } => {
             let style = styles.compute_with_parent(node, parent_style);
             if style.display == Display::None {
-                return None;
+                // Distinguimos el `display:none` de RUIDO UA (script/style/
+                // option/colgroup/canvas/...) — que se descarta — del puesto
+                // por el AUTOR (CSS de la página), que se RETIENE como box
+                // oculto con su subárbol, para que un toggle de clase (restyle,
+                // Fase 7.184) pueda mostrarlo. El chrome no pinta ni reserva
+                // espacio para boxes `Display::None` (TaffyDisplay::None).
+                // Fase 7.185.
+                let tag = dom::element_name(node).unwrap_or_default();
+                if crate::style::tag_defaults_to_none(&tag) {
+                    return None;
+                }
+                // Cae a través: construye el box (display=None) y su subárbol.
             }
             // CSS counters: aplicar reset (sobrescribe) y luego
             // increment al entrar al nodo. Implementación pragmática
@@ -3275,6 +3286,52 @@ mod tests {
         doc.box_tree.set_element_class_list("p", vec!["on".into()]);
         doc.box_tree.restyle();
         assert_eq!(box_by_id(&doc.box_tree, "p").unwrap().color, super::Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn build_retiene_display_none_de_autor_y_descarta_ua() {
+        // Fase 7.185 — un elemento ocultado por CSS de autor se RETIENE en el
+        // box tree (oculto, con su subárbol) para poder mostrarlo luego; el
+        // ruido UA (`<script>`) se sigue descartando.
+        let html = r#"<html><head><style>
+            .modal { display: none; }
+        </style></head><body>
+            <div id="m" class="modal"><p id="inner">contenido</p></div>
+            <script>var x = 1;</script>
+            <span id="s">visible</span>
+        </body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let m = box_by_id(&doc.box_tree, "m").expect("modal de autor retenido");
+        assert_eq!(m.display, super::Display::None);
+        assert!(box_by_id(&doc.box_tree, "inner").is_some(), "subárbol retenido");
+        let mut script_text = false;
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.contains("var x") {
+                    script_text = true;
+                }
+            }
+        });
+        assert!(!script_text, "el texto del <script> no debe filtrarse al box tree");
+        assert!(box_by_id(&doc.box_tree, "s").is_some());
+    }
+
+    #[test]
+    fn restyle_muestra_modal_oculto_al_cargar() {
+        // El patrón clásico: modal arranca `display:none`, JS agrega `.open`
+        // para mostrarlo. Posible porque retenemos el box oculto al cargar.
+        let html = r#"<html><head><style>
+            .modal { display: none; }
+            .modal.open { display: block; }
+        </style></head><body>
+            <div id="m" class="modal">hola</div>
+        </body></html>"#;
+        let mut doc = Engine::new().load_html("about:test", html);
+        assert_eq!(box_by_id(&doc.box_tree, "m").unwrap().display, super::Display::None);
+        doc.box_tree
+            .set_element_class_list("m", vec!["modal".into(), "open".into()]);
+        doc.box_tree.restyle();
+        assert_eq!(box_by_id(&doc.box_tree, "m").unwrap().display, super::Display::Block);
     }
 
     #[test]

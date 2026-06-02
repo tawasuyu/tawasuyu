@@ -1728,6 +1728,15 @@ fn default_display(tag: &str) -> Display {
     }
 }
 
+/// `true` si el tag se oculta por defecto en la hoja UA (`script`/`style`/
+/// `head`/`option`/`colgroup`/`canvas`/...). Lo usa `boxes::build_node` para
+/// distinguir el `display:none` "de ruido UA" (que se descarta del box tree)
+/// del puesto por el autor (que se retiene como box oculto, para poder
+/// mostrarlo con un toggle de clase vía restyle). Fase 7.185.
+pub(crate) fn tag_defaults_to_none(tag: &str) -> bool {
+    default_display(tag) == Display::None
+}
+
 fn default_weight(tag: &str) -> u16 {
     match tag {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "b" | "strong" | "th" => 700,
