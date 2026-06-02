@@ -664,7 +664,10 @@ impl App {
             ("WAYLAND_DISPLAY".to_string(), wl),
             ("DBUS_SESSION_BUS_ADDRESS".to_string(), dbus_addr.clone()),
         ];
-        // Levanta el bus de sesión D-Bus como el usuario, si no hay uno.
+        // Levanta el bus de sesión D-Bus como el usuario, si no hay uno, y
+        // espera (acotado) a que el socket exista: si lanzáramos waybar/GTK
+        // antes, fallarían con «cannot autolaunch D-Bus». Es un bloqueo de
+        // una sola vez al iniciar la sesión, no en el bucle de render.
         if !std::path::Path::new(&bus_path).exists() {
             let env = self.session_env.clone();
             spawn_command(
@@ -672,6 +675,19 @@ impl App {
                 Some(user),
                 &env,
             );
+            for _ in 0..40 {
+                if std::path::Path::new(&bus_path).exists() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            if std::path::Path::new(&bus_path).exists() {
+                println!("mirada-compositor · bus D-Bus de sesión listo en {bus_path}.");
+            } else {
+                eprintln!(
+                    "mirada-compositor · el bus D-Bus no apareció (¿dbus-daemon instalado?); las apps que lo exijan pueden fallar."
+                );
+            }
         }
     }
 }
