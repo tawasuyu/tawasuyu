@@ -28,6 +28,7 @@ pub mod color;
 pub mod control;
 pub mod dynamics;
 pub mod eq;
+pub mod fade;
 pub mod library;
 pub mod loudness;
 pub mod metadata;
