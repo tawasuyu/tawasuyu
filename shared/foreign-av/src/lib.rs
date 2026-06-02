@@ -340,6 +340,58 @@ pub fn probe_dash(
     })
 }
 
+/// Escanea TODA la pista con ffmpeg y devuelve la envolvente de picos para la
+/// onda tipo Audacity (`media_core::waveform`). Decodea a **mono f32 de baja
+/// tasa** (`SCAN_RATE`, suficiente para la forma) y alimenta el `PeaksBuilder`
+/// en streaming leyendo el pipe de a un `f32` (con `BufReader`, sin cargar la
+/// pista entera en RAM). `buckets` ≈ ancho en px del visor. Pensado para correr
+/// en un hilo de fondo (tarda lo que tarde ffmpeg en decodear el archivo).
+pub fn decode_peaks(
+    path: impl AsRef<Path>,
+    buckets: usize,
+) -> Result<media_core::waveform::Waveform, FfmpegError> {
+    use media_core::waveform::PeaksBuilder;
+    use std::io::{BufReader, ErrorKind};
+
+    const SCAN_RATE: u32 = 8000;
+    let p = path.as_ref();
+    // Duración → total estimado de muestras para dimensionar los buckets.
+    let total = probe(p)
+        .map(|i| (i.duration.as_secs_f64() * SCAN_RATE as f64) as usize)
+        .unwrap_or(0);
+
+    let mut child = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(p)
+        .args(["-f", "f32le", "-ac", "1", "-ar", "8000", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| FfmpegError::Spawn(e.to_string()))?;
+    let out = child
+        .stdout
+        .take()
+        .ok_or_else(|| FfmpegError::Spawn("sin stdout de ffmpeg".into()))?;
+
+    let mut rdr = BufReader::new(out);
+    let mut builder = PeaksBuilder::new(total.max(buckets), buckets);
+    let mut b4 = [0u8; 4];
+    loop {
+        match rdr.read_exact(&mut b4) {
+            Ok(()) => builder.push(f32::from_le_bytes(b4)),
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(FfmpegError::Io(e));
+            }
+        }
+    }
+    let _ = child.wait();
+    Ok(builder.finish())
+}
+
 /// Velocidad de reproducción → filtros de ffmpeg, **con corrección de tono**
 /// (M5). El filtro `atempo` sólo acepta factores en `[0.5, 2.0]`, así que para
 /// velocidades fuera de ese rango se **encadenan** varios cuyo producto da la

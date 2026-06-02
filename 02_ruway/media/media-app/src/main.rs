@@ -183,6 +183,8 @@ enum Msg {
     PlaylistClosed,
     /// Salta a la pista `idx` de la cola (clic en la lista).
     JumpTrack(usize),
+    /// El escaneo de la onda de pista completa terminó (dispara repintado).
+    WaveformReady,
     /// Cambia la pestaña activa de la ventana de configuración.
     SettingsTab(SettingsTab),
     /// Desplaza el contenido de la ventana de config (rueda del mouse).
@@ -899,6 +901,14 @@ fn video_path_slot() -> &'static OnceLock<PathBuf> {
 fn playlist_labels_slot() -> &'static OnceLock<Vec<String>> {
     static SLOT: OnceLock<Vec<String>> = OnceLock::new();
     &SLOT
+}
+
+/// Onda de pista completa (tipo Audacity) computada en background por
+/// `foreign_av::decode_peaks`. `None` hasta que el escaneo termina (mientras
+/// tanto el visor cae a la onda en vivo). Lo lee el paint del waveform panel.
+fn waveform_slot() -> &'static Mutex<Option<media_core::waveform::Waveform>> {
+    static SLOT: OnceLock<Mutex<Option<media_core::waveform::Waveform>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
 }
 
 /// URL de audio **separada** (DASH) cuando yt-dlp resolvió video y audio en
@@ -2317,6 +2327,19 @@ impl App for MediaApp {
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
         spawn_controles_watcher(handle);
+        // Escaneo de la onda de pista completa (tipo Audacity) en un hilo de
+        // fondo: ffmpeg decodea todo el archivo a picos. Al terminar, el
+        // resultado queda en `waveform_slot` y `Msg::WaveformReady` dispara un
+        // repintado. Sólo para archivos locales (un stream de red no se escanea).
+        if let Some(path) = current_media_path() {
+            handle.spawn(move || {
+                match foreign_av::decode_peaks(&path, 1600) {
+                    Ok(w) => *waveform_slot().lock() = Some(w),
+                    Err(e) => eprintln!("media-app: escaneo de onda: {e}"),
+                }
+                Msg::WaveformReady
+            });
+        }
         let (palette_commands, palette_cmds) = build_command_catalog(&settings());
         // La config y todo el arranque que toca el Playlist ya se aplicó en
         // `main` ANTES de abrir cpal (ver apply_startup_config — evita el
@@ -2412,6 +2435,7 @@ impl App for MediaApp {
                 jump_playlist_to(i);
                 model
             }
+            Msg::WaveformReady => model, // sólo dispara el repintado
             Msg::ConfigEdit(edit) => {
                 let mut m = model;
                 apply_config_edit(&mut m.config, edit);
@@ -2800,7 +2824,7 @@ impl App for MediaApp {
                     },
                     ..Default::default()
                 })
-                .children(vec![waveform_panel(), waterfall_panel(), meters_panel()]);
+                .children(vec![fulltrack_waveform_view(), waterfall_panel(), meters_panel()]);
                 kids.push(visualizers);
             }
             kids.push(footer);
@@ -4001,6 +4025,83 @@ fn media_title_string() -> String {
         }
     }
     label
+}
+
+/// Onda de **pista completa** (tipo Audacity): dibuja la envolvente de picos
+/// que `foreign_av::decode_peaks` dejó en `waveform_slot`, con un playhead en
+/// la posición actual; clic en cualquier punto hace seek absoluto. Mientras el
+/// escaneo no terminó (slot vacío), cae al visor de onda en vivo.
+fn fulltrack_waveform_view() -> View<Msg> {
+    let peaks: Option<Vec<(f32, f32)>> = waveform_slot()
+        .lock()
+        .as_ref()
+        .filter(|w| !w.is_empty())
+        .map(|w| w.peaks().to_vec());
+    let Some(peaks) = peaks else {
+        return waveform_panel::<Msg>(); // todavía escaneando → onda en vivo
+    };
+
+    let stroke = Color::from_rgba8(120, 220, 170, 255);
+    let center_color = Color::from_rgba8(64, 74, 90, 255);
+    let playhead_color = Color::from_rgba8(242, 184, 92, 255);
+
+    View::new(Style {
+        size: Size { width: auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(14, 16, 22, 255))
+    .radius(8.0)
+    // Clic en la onda → seek absoluto a esa fracción de la pista.
+    .on_click_at(|lx, _ly, w, _h| {
+        let f = (lx / w.max(1.0)).clamp(0.0, 1.0);
+        Some(Msg::Command(MediaCommand::SeekTo { fraction: f }))
+    })
+    .paint_with(move |scene, _ts, rect| {
+        if rect.w <= 4.0 || rect.h <= 4.0 {
+            return;
+        }
+        let pad_x: f32 = 12.0;
+        let pad_y: f32 = 8.0;
+        let ix = rect.x + pad_x;
+        let iy = rect.y + pad_y;
+        let iw = (rect.w - 2.0 * pad_x).max(1.0);
+        let ih = (rect.h - 2.0 * pad_y).max(1.0);
+        let mid = iy + ih * 0.5;
+        let amp = ih * 0.5;
+
+        // Línea central.
+        let mut center = BezPath::new();
+        center.move_to((ix as f64, mid as f64));
+        center.line_to(((ix + iw) as f64, mid as f64));
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, center_color, None, &center);
+
+        // Una columna vertical (min→max) por bucket de picos.
+        let n = peaks.len().max(1);
+        let mut env = BezPath::new();
+        for (i, &(vmin, vmax)) in peaks.iter().enumerate() {
+            let x = ix + (i as f32 / n as f32) * iw;
+            let y_top = mid - vmax.clamp(-1.0, 1.0) * amp;
+            let y_bot = mid - vmin.clamp(-1.0, 1.0) * amp;
+            env.move_to((x as f64, y_top as f64));
+            env.line_to((x as f64, y_bot as f64));
+        }
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, stroke, None, &env);
+
+        // Playhead en la posición actual (fracción de la duración).
+        let s = playback_snapshot();
+        if let Some(dur) = s.duration {
+            let d = dur.as_secs_f32();
+            if d > 0.0 {
+                let f = (s.position.as_secs_f32() / d).clamp(0.0, 1.0);
+                let px = ix + f * iw;
+                let mut ph = BezPath::new();
+                ph.move_to((px as f64, iy as f64));
+                ph.line_to((px as f64, (iy + ih) as f64));
+                scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, playhead_color, None, &ph);
+            }
+        }
+    })
 }
 
 fn waveform_panel<Msg: 'static>() -> View<Msg> {
