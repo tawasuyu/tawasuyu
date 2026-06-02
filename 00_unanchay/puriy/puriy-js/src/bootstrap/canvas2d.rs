@@ -154,7 +154,8 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         var st = this._state;
         return {
             f: st.fillStyle, s: st.strokeStyle, lw: st.lineWidth, ga: st.globalAlpha,
-            fnt: st.font, lc: st.lineCap, lj: st.lineJoin, ta: st.textAlign, tb: st.textBaseline
+            fnt: st.font, lc: st.lineCap, lj: st.lineJoin, ta: st.textAlign, tb: st.textBaseline,
+            ld: st.lineDash, ldo: st.lineDashOffset
         };
     };
 

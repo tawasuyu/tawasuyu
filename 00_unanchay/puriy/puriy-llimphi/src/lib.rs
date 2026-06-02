@@ -24,10 +24,12 @@ use llimphi_layout::taffy::prelude::{
     Size, Style,
 };
 use llimphi_layout::taffy::{Display as TaffyDisplay, GridTemplateComponent, TrackSizingFunction};
-use llimphi_raster::kurbo::{Affine, Line, Point, Rect as KurboRect, RoundedRect, Stroke};
+use llimphi_raster::kurbo::{
+    Affine, Cap, Join, Line, Point, Rect as KurboRect, RoundedRect, Stroke,
+};
 use llimphi_raster::peniko::{
-    Blob, Color, ColorStop, ColorStops, Fill, Gradient, GradientKind, Image as PenikoImage,
-    ImageFormat,
+    Blob, Brush, Color, ColorStop, ColorStops, Fill, Gradient, GradientKind, Image as PenikoImage,
+    ImageFormat, Mix,
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
@@ -5383,6 +5385,112 @@ fn canvas_color(v: Option<&serde_json::Value>, ga: f64) -> Color {
     Color::from_rgba8(base.r, base.g, base.b, a)
 }
 
+/// Resuelve `fillStyle`/`strokeStyle` a un `peniko::Brush`: si es un objeto
+/// `CanvasGradient` con stops válidos devuelve un gradiente REAL (linear/
+/// radial/conic→sweep), si no degrada a color sólido (vía `canvas_color`).
+/// `ga` (globalAlpha) multiplica el alpha de cada stop. Las coordenadas del
+/// gradiente quedan en el espacio de usuario del canvas: el caller lo pinta
+/// con `transform = base*cur` y `brush_transform = None`, así el gradiente se
+/// posiciona en ese mismo espacio (Fase 7.197).
+fn canvas_brush(v: Option<&serde_json::Value>, ga: f64) -> Brush {
+    if let Some(serde_json::Value::Object(o)) = v {
+        if let Some(g) = build_canvas_gradient(o, ga) {
+            return Brush::Gradient(g);
+        }
+    }
+    Brush::Solid(canvas_color(v, ga))
+}
+
+/// Construye un `peniko::Gradient` desde el objeto JS `CanvasGradient`
+/// (`{_kind, _coords, _stops:[[offset,color],...]}`). Devuelve `None` si el
+/// tipo es desconocido, faltan stops (<2) o algún color no parsea — el caller
+/// cae a color sólido. `linear`: coords `[x0,y0,x1,y1]`; `radial`:
+/// `[x0,y0,r0,x1,y1,r1]`; `conic`: `[angle,x,y]` (→ `Sweep`, orientación
+/// aproximada — peniko mide CCW desde +x, canvas CW desde arriba).
+fn build_canvas_gradient(
+    o: &serde_json::Map<String, serde_json::Value>,
+    ga: f64,
+) -> Option<Gradient> {
+    let kind = o.get("_kind")?.as_str()?;
+    let coords: Vec<f64> = o
+        .get("_coords")?
+        .as_array()?
+        .iter()
+        .map(|v| v.as_f64().unwrap_or(0.0))
+        .collect();
+    let c = |i: usize| coords.get(i).copied().unwrap_or(0.0);
+    let stops_json = o.get("_stops")?.as_array()?;
+    if stops_json.len() < 2 {
+        return None;
+    }
+    let mut stops: Vec<ColorStop> = Vec::with_capacity(stops_json.len());
+    for s in stops_json {
+        let pair = s.as_array()?;
+        let off = pair.first()?.as_f64()? as f32;
+        let col = pair.get(1)?.as_str().and_then(puriy_engine::parse_color)?;
+        let a = ((col.a as f64) * ga).clamp(0.0, 255.0) as u8;
+        stops.push(ColorStop::from((off, Color::from_rgba8(col.r, col.g, col.b, a))));
+    }
+    let kind = match kind {
+        "linear" => GradientKind::Linear {
+            start: Point::new(c(0), c(1)),
+            end: Point::new(c(2), c(3)),
+        },
+        "radial" => GradientKind::Radial {
+            start_center: Point::new(c(0), c(1)),
+            start_radius: c(2) as f32,
+            end_center: Point::new(c(3), c(4)),
+            end_radius: c(5) as f32,
+        },
+        "conic" => {
+            let ang = c(0) as f32;
+            GradientKind::Sweep {
+                center: Point::new(c(1), c(2)),
+                start_angle: ang,
+                end_angle: ang + std::f32::consts::TAU,
+            }
+        }
+        _ => return None,
+    };
+    Some(Gradient {
+        kind,
+        stops: ColorStops(stops.into()),
+        ..Default::default()
+    })
+}
+
+/// Arma un `kurbo::Stroke` desde el snapshot de estilo: ancho `lw`, `lineCap`
+/// (`lc`), `lineJoin` (`lj`) y `setLineDash`/`lineDashOffset` (`ld`/`ldo`). Un
+/// patrón de dash de longitud impar se duplica (semántica de canvas). Fase 7.197.
+fn canvas_stroke(st: Option<&serde_json::Value>, lw: f64) -> Stroke {
+    let cap = match style_str(st, "lc").as_deref() {
+        Some("round") => Cap::Round,
+        Some("square") => Cap::Square,
+        _ => Cap::Butt,
+    };
+    let join = match style_str(st, "lj").as_deref() {
+        Some("round") => Join::Round,
+        Some("bevel") => Join::Bevel,
+        _ => Join::Miter,
+    };
+    let mut stroke = Stroke::new(lw).with_caps(cap).with_join(join);
+    let mut pattern: Vec<f64> = st
+        .and_then(|v| v.as_object())
+        .and_then(|o| o.get("ld"))
+        .and_then(|d| d.as_array())
+        .map(|arr| arr.iter().filter_map(|x| x.as_f64()).collect())
+        .unwrap_or_default();
+    if pattern.iter().any(|d| *d > 0.0) {
+        if pattern.len() % 2 == 1 {
+            let dup = pattern.clone();
+            pattern.extend(dup);
+        }
+        let offset = style_field(st, "ldo").unwrap_or(0.0);
+        stroke = stroke.with_dashes(offset, pattern);
+    }
+    stroke
+}
+
 /// Px de fuente parseados de un string CSS `font` tipo `"16px sans-serif"`.
 fn canvas_font_px(font: Option<&str>) -> f32 {
     let f = font.unwrap_or("10px sans-serif");
@@ -5437,9 +5545,11 @@ fn render_canvas(frame: Option<&CanvasFrame>, intrinsic_w: f32, intrinsic_h: f32
 /// soporta fill/stroke de paths (move/line/bezier/quad/arc/ellipse/rect/
 /// roundRect/closePath), fillRect/strokeRect, fillText/strokeText, los
 /// transforms (save/restore/translate/scale/rotate/transform/setTransform/
-/// resetTransform/beginPath) y globalAlpha. Limitaciones: clip, drawImage,
-/// putImageData, patrones, sombras, dash y gradientes reales (degradan a un
-/// color sólido) quedan fuera.
+/// resetTransform/beginPath), globalAlpha, gradientes REALES (linear/radial/
+/// conic→sweep) en fill/stroke/rect, `clip` (recorte por path, balanceado con
+/// save/restore) y line dash/cap/join (Fase 7.197). Limitaciones: drawImage,
+/// putImageData, patrones, sombras y clearRect parcial quedan fuera; el texto
+/// con gradiente degrada a color sólido (el typesetter sólo toma `Color`).
 fn paint_canvas_cmds(
     scene: &mut llimphi_raster::vello::Scene,
     ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -5459,15 +5569,41 @@ fn paint_canvas_cmds(
     let mut cur = Affine::IDENTITY; // transform actual del canvas (espacio usuario)
     let mut tstack: Vec<Affine> = Vec::new();
     let mut path = BezPath::new();
+    // Clips abiertos (push_layer) por nivel de save; `base_clips` los que se
+    // abrieron fuera de cualquier save. Se balancean en restore/reset y al
+    // terminar para no dejar layers colgando en la escena (Fase 7.197).
+    let mut clip_stack: Vec<u32> = Vec::new();
+    let mut base_clips: u32 = 0;
+    let pop_clips = |scene: &mut llimphi_raster::vello::Scene,
+                         clip_stack: &mut Vec<u32>,
+                         base_clips: &mut u32| {
+        while let Some(n) = clip_stack.pop() {
+            for _ in 0..n {
+                scene.pop_layer();
+            }
+        }
+        for _ in 0..*base_clips {
+            scene.pop_layer();
+        }
+        *base_clips = 0;
+    };
 
     for cmd in cmds {
         let Some(op) = cmd.first().and_then(|v| v.as_str()) else { continue };
         let a = |i: usize| cnum(cmd.get(i));
         match op {
-            "save" => tstack.push(cur),
+            "save" => {
+                tstack.push(cur);
+                clip_stack.push(0);
+            }
             "restore" => {
                 if let Some(t) = tstack.pop() {
                     cur = t;
+                }
+                if let Some(n) = clip_stack.pop() {
+                    for _ in 0..n {
+                        scene.pop_layer();
+                    }
                 }
             }
             "translate" => cur *= Affine::translate((a(1), a(2))),
@@ -5484,6 +5620,7 @@ fn paint_canvas_cmds(
                 if op == "reset" {
                     path = BezPath::new();
                     tstack.clear();
+                    pop_clips(scene, &mut clip_stack, &mut base_clips);
                 }
             }
             "beginPath" => path = BezPath::new(),
@@ -5527,30 +5664,40 @@ fn paint_canvas_cmds(
             "fill" => {
                 let st = cmd.get(1);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
-                let color = canvas_color(style_color(st, "f").as_ref(), ga);
-                scene.fill(Fill::NonZero, base * cur, color, None, &path);
+                let brush = canvas_brush(style_color(st, "f").as_ref(), ga);
+                scene.fill(Fill::NonZero, base * cur, &brush, None, &path);
             }
             "stroke" => {
                 let st = cmd.get(1);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
-                let color = canvas_color(style_color(st, "s").as_ref(), ga);
-                scene.stroke(&Stroke::new(lw), base * cur, color, None, &path);
+                let brush = canvas_brush(style_color(st, "s").as_ref(), ga);
+                scene.stroke(&canvas_stroke(st, lw), base * cur, &brush, None, &path);
+            }
+            "clip" => {
+                // Recorta el dibujo posterior al path actual. La capa se cierra
+                // en el `restore` que cierra el `save` correspondiente (o al
+                // terminar el frame si no hubo save).
+                scene.push_layer(Mix::Clip, 1.0, base * cur, &path);
+                match clip_stack.last_mut() {
+                    Some(top) => *top += 1,
+                    None => base_clips += 1,
+                }
             }
             "fillRect" => {
                 // ['fillRect', x, y, w, h, fillStyle, snapshot]
                 let ga = style_field(cmd.get(6), "ga").unwrap_or(1.0);
-                let color = canvas_color(cmd.get(5), ga);
+                let brush = canvas_brush(cmd.get(5), ga);
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
-                scene.fill(Fill::NonZero, base * cur, color, None, &r);
+                scene.fill(Fill::NonZero, base * cur, &brush, None, &r);
             }
             "strokeRect" => {
                 let st = cmd.get(6);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
-                let color = canvas_color(cmd.get(5), ga);
+                let brush = canvas_brush(cmd.get(5), ga);
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
-                scene.stroke(&Stroke::new(lw), base * cur, color, None, &r);
+                scene.stroke(&canvas_stroke(st, lw), base * cur, &brush, None, &r);
             }
             "fillText" | "strokeText" => {
                 // ['fillText', text, x, y, maxWidth, snapshot]
@@ -5585,10 +5732,14 @@ fn paint_canvas_cmds(
                 let xf = base * cur * Affine::translate((x + dx, y - ascent));
                 llimphi_ui::llimphi_text::draw_layout_xf(scene, &layout, color, xf);
             }
-            // clip/clearRect/drawImage/putImageData: no-op en el MVP.
+            // clearRect parcial / drawImage / putImageData: no-op (el MVP no
+            // tiene buffer persistente ni registro de imágenes decodificadas).
             _ => {}
         }
     }
+    // Cierra cualquier clip que quedó abierto (clip sin restore al final del
+    // frame) — la escena debe quedar balanceada.
+    pop_clips(scene, &mut clip_stack, &mut base_clips);
 }
 
 /// Apendea un arco/elipse al path (espacio usuario), manejando la dirección
@@ -8328,6 +8479,147 @@ mod tests {
             "el frame debería incluir el fillRect dibujado: {:?}",
             frame.cmds
         );
+    }
+
+    #[test]
+    fn canvas_brush_gradiente_y_degradacion() {
+        // String → Brush sólido.
+        let s = serde_json::Value::String("#ff0000".into());
+        assert!(matches!(canvas_brush(Some(&s), 1.0), Brush::Solid(_)));
+        // CanvasGradient linear con 2 stops → Brush::Gradient(Linear).
+        let lin: serde_json::Value = serde_json::from_str(
+            r##"{"_kind":"linear","_coords":[0,0,100,0],"_stops":[[0,"#ff0000"],[1,"#0000ff"]]}"##,
+        )
+        .unwrap();
+        match canvas_brush(Some(&lin), 1.0) {
+            Brush::Gradient(g) => {
+                assert!(matches!(g.kind, GradientKind::Linear { .. }));
+                assert_eq!(g.stops.0.len(), 2);
+            }
+            _ => panic!("debería ser gradiente"),
+        }
+        // Radial.
+        let rad: serde_json::Value = serde_json::from_str(
+            r##"{"_kind":"radial","_coords":[10,10,0,10,10,50],"_stops":[[0,"#fff"],[1,"#000"]]}"##,
+        )
+        .unwrap();
+        assert!(matches!(
+            canvas_brush(Some(&rad), 1.0),
+            Brush::Gradient(g) if matches!(g.kind, GradientKind::Radial { .. })
+        ));
+        // Gradiente con un solo stop (inválido) → degrada a sólido (último stop).
+        let bad: serde_json::Value =
+            serde_json::from_str(r##"{"_kind":"linear","_coords":[0,0,1,0],"_stops":[[0,"#0f0"]]}"##)
+                .unwrap();
+        assert!(matches!(canvas_brush(Some(&bad), 1.0), Brush::Solid(_)));
+        // globalAlpha multiplica el alpha de cada stop del gradiente.
+        match canvas_brush(Some(&lin), 0.5) {
+            Brush::Gradient(g) => {
+                let a = g.stops.0[0].color.components[3];
+                assert!((a - 0.5).abs() < 0.02, "alpha ~0.5, got {a}");
+            }
+            _ => panic!("gradiente"),
+        }
+    }
+
+    #[test]
+    fn canvas_stroke_dash_cap_join() {
+        // setLineDash con patrón impar se duplica; cap/join se mapean.
+        let st: serde_json::Value = serde_json::from_str(
+            r##"{"lc":"round","lj":"bevel","ld":[5,3,2],"ldo":1.0}"##,
+        )
+        .unwrap();
+        let stroke = canvas_stroke(Some(&st), 2.0);
+        assert_eq!(stroke.width, 2.0);
+        assert!(matches!(stroke.start_cap, Cap::Round));
+        assert!(matches!(stroke.join, Join::Bevel));
+        // 3 segmentos impares → duplicados a 6.
+        assert_eq!(stroke.dash_pattern.len(), 6);
+        assert_eq!(stroke.dash_offset, 1.0);
+        // Sin dash declarado → sin patrón.
+        let plain: serde_json::Value = serde_json::from_str(r##"{"lw":1}"##).unwrap();
+        assert!(canvas_stroke(Some(&plain), 1.0).dash_pattern.is_empty());
+    }
+
+    #[test]
+    fn paint_canvas_cmds_gradiente_clip_dash_balancea() {
+        // Gradiente real + clip dentro de save/restore + stroke punteado:
+        // la escena queda no-vacía y los push_layer del clip se balancean
+        // (no debe panicar ni dejar layers colgando).
+        let mut scene = llimphi_raster::vello::Scene::new();
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 50.0 };
+        let cmds: Vec<Vec<serde_json::Value>> = serde_json::from_str(
+            r##"[
+                ["save"],
+                ["beginPath"],
+                ["rect", 0, 0, 50, 50],
+                ["clip"],
+                ["fillRect", 0, 0, 100, 50,
+                    {"_kind":"linear","_coords":[0,0,100,0],"_stops":[[0,"#ff0000"],[1,"#0000ff"]]},
+                    {"ga": 1}],
+                ["restore"],
+                ["beginPath"],
+                ["moveTo", 0, 0],
+                ["lineTo", 100, 50],
+                ["stroke", {"s": "#000000", "lw": 2, "ld": [4, 4], "ldo": 0}]
+            ]"##,
+        )
+        .unwrap();
+        paint_canvas_cmds(&mut scene, &mut ts, rect, &cmds, 100.0, 50.0);
+        assert!(!scene.encoding().is_empty(), "debería haber dibujo");
+    }
+
+    #[test]
+    fn canvas_gradiente_y_dash_llegan_al_frame_end_to_end() {
+        // El JS construye un gradiente + setLineDash y el snapshot debe llevar
+        // el objeto CanvasGradient y el array `ld`.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(
+            r#"<body><canvas id="c" width="100" height="100"></canvas></body>"#,
+        ));
+        t.has_canvas = true;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "c".into(),
+            tag_name: "canvas".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: vec![("width".into(), "100".into()), ("height".into(), "100".into())],
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        rt.eval(
+            "var ctx = document.getElementById('c').getContext('2d');\
+             var g = ctx.createLinearGradient(0,0,100,0);\
+             g.addColorStop(0,'#ff0000'); g.addColorStop(1,'#0000ff');\
+             ctx.fillStyle = g; ctx.fillRect(0,0,100,100);\
+             ctx.setLineDash([6,4]); ctx.strokeStyle='#000';\
+             ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(100,100); ctx.stroke();",
+        )
+        .expect("draw");
+        apply_dom_mutations(t);
+        let frame = t.canvas_frames.get("c").expect("frame");
+        // El fillRect lleva el objeto gradiente en el arg 5.
+        let fr = frame
+            .cmds
+            .iter()
+            .find(|c| c.first().and_then(|v| v.as_str()) == Some("fillRect"))
+            .expect("fillRect");
+        assert_eq!(fr[5].get("_kind").and_then(|v| v.as_str()), Some("linear"));
+        assert_eq!(fr[5].get("_stops").and_then(|v| v.as_array()).map(|a| a.len()), Some(2));
+        // El stroke lleva el snapshot con `ld`.
+        let stk = frame
+            .cmds
+            .iter()
+            .find(|c| c.first().and_then(|v| v.as_str()) == Some("stroke"))
+            .expect("stroke");
+        let ld = stk[1].get("ld").and_then(|v| v.as_array()).expect("ld");
+        assert_eq!(ld.len(), 2);
     }
 
     #[test]
