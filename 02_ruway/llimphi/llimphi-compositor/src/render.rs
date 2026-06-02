@@ -390,6 +390,15 @@ pub fn paint_gpu<Msg>(
 /// más al frente (último en pre-orden) cuyo rect contiene `(x, y)` y para
 /// el cual `pred` devuelve `true`, respetando `clip`: si el punto cae
 /// afuera de un nodo con clip, el subárbol entero es invisible.
+///
+/// **Respeta `transform`**: igual que [`paint`], compone el afín acumulado
+/// de los ancestros (cada `transform` alrededor del centro del rect del
+/// nodo, convención CSS `transform-origin: 50% 50%`). El punto de pantalla
+/// `(x, y)` se lleva al espacio local del nodo invirtiendo ese afín, y se
+/// testea contra el rect sin transformar. Así un nodo rotado/escalado/
+/// trasladado recibe los clicks donde realmente se ve pintado (recorrido
+/// tipo Prezi, lienzos de tullpu, `@keyframes` de puriy). Un subárbol con
+/// afín singular (escala 0) es inalcanzable, igual que es invisible.
 pub fn hit_test_pred<Msg, F>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
@@ -402,6 +411,12 @@ where
 {
     let mut hit: Option<usize> = None;
     let mut clip_stack: Vec<usize> = Vec::new();
+    // Espejo del stack de transformaciones de `paint`: `cur_xf` es el
+    // producto acumulado de los `transform` de los ancestros activos
+    // (local → pantalla). Vacío ⇒ identidad ⇒ camino directo sin invertir
+    // (cero costo para la abrumadora mayoría de árboles sin transform).
+    let mut xf_stack: Vec<(usize, Affine)> = Vec::new();
+    let mut cur_xf = Affine::IDENTITY;
     let mut idx = 0;
     while idx < mounted.nodes.len() {
         while let Some(&end) = clip_stack.last() {
@@ -411,12 +426,46 @@ where
                 break;
             }
         }
+        while let Some(&(end, prev)) = xf_stack.last() {
+            if idx >= end {
+                cur_xf = prev;
+                xf_stack.pop();
+            } else {
+                break;
+            }
+        }
         let node = &mounted.nodes[idx];
         let Some(r) = computed.get(node.id) else {
             idx += 1;
             continue;
         };
-        let inside = x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+        // Componé el transform de este nodo igual que `paint`, ANTES de
+        // resolver el punto local (su propio rect ya cae en el espacio
+        // transformado).
+        if let Some(local) = node.transform {
+            let cx = (r.x + r.w * 0.5) as f64;
+            let cy = (r.y + r.h * 0.5) as f64;
+            let centered =
+                Affine::translate((cx, cy)) * local * Affine::translate((-cx, -cy));
+            xf_stack.push((node.subtree_end, cur_xf));
+            cur_xf *= centered;
+        }
+        // Punto en el espacio local del nodo. Sin transform activo, es el
+        // punto de pantalla tal cual. Con transform, se invierte el afín;
+        // si es singular (no invertible) el subárbol es inalcanzable.
+        let (lx, ly) = if xf_stack.is_empty() {
+            (x as f64, y as f64)
+        } else if cur_xf.determinant().abs() < 1e-9 {
+            idx = node.subtree_end;
+            continue;
+        } else {
+            let p = cur_xf.inverse() * Point::new(x as f64, y as f64);
+            (p.x, p.y)
+        };
+        let inside = lx >= r.x as f64
+            && lx < (r.x + r.w) as f64
+            && ly >= r.y as f64
+            && ly < (r.y + r.h) as f64;
         if node.clip {
             if !inside {
                 idx = node.subtree_end;
@@ -493,4 +542,71 @@ pub fn hit_test_drop<Msg>(
     y: f32,
 ) -> Option<usize> {
     hit_test_pred(mounted, computed, x, y, |n| n.on_drop.is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{hit_test_click, mount, View};
+    use llimphi_layout::taffy::prelude::*;
+    use llimphi_layout::{LayoutTree, Style};
+    use vello::kurbo::Affine;
+
+    /// Un hijo clickeable de 100×100 anclado arriba-izquierda. Devuelve
+    /// `(mounted, computed)` ya layouteados sobre un viewport 400×400.
+    fn fixture(
+        transform: Option<Affine>,
+    ) -> (crate::Mounted<()>, llimphi_layout::ComputedLayout) {
+        let mut child = View::<()>::new(Style {
+            size: Size {
+                width: length(100.0),
+                height: length(100.0),
+            },
+            ..Default::default()
+        })
+        .on_click(());
+        if let Some(xf) = transform {
+            child = child.transform(xf);
+        }
+        let root = View::<()>::new(Style {
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .children(vec![child]);
+        let mut layout = LayoutTree::new();
+        let mounted = mount(&mut layout, root);
+        let computed = layout.compute(mounted.root, (400.0, 400.0)).expect("layout");
+        (mounted, computed)
+    }
+
+    #[test]
+    fn sin_transform_el_hit_cae_en_el_rect() {
+        let (m, c) = fixture(None);
+        assert_eq!(hit_test_click(&m, &c, 50.0, 50.0), Some(1)); // dentro
+        assert_eq!(hit_test_click(&m, &c, 250.0, 50.0), None); // fuera
+    }
+
+    #[test]
+    fn traslacion_mueve_el_area_clickeable() {
+        // El nodo se ve corrido +200px en x; el click debe seguirlo.
+        let (m, c) = fixture(Some(Affine::translate((200.0, 0.0))));
+        assert_eq!(hit_test_click(&m, &c, 250.0, 50.0), Some(1)); // donde se ve
+        assert_eq!(hit_test_click(&m, &c, 50.0, 50.0), None); // ya no donde estaba
+    }
+
+    #[test]
+    fn rotacion_180_grados_alrededor_del_centro() {
+        // Rotar 180° alrededor del centro (50,50) deja el rect en su sitio:
+        // una esquina mapea a la opuesta, pero el cuadrado cubre lo mismo.
+        let (m, c) = fixture(Some(Affine::rotate(std::f64::consts::PI)));
+        assert_eq!(hit_test_click(&m, &c, 10.0, 10.0), Some(1));
+        assert_eq!(hit_test_click(&m, &c, 90.0, 90.0), Some(1));
+        assert_eq!(hit_test_click(&m, &c, 150.0, 150.0), None);
+    }
+
+    #[test]
+    fn escala_cero_es_inalcanzable() {
+        let (m, c) = fixture(Some(Affine::scale(0.0)));
+        assert_eq!(hit_test_click(&m, &c, 50.0, 50.0), None);
+    }
 }

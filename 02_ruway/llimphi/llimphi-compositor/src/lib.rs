@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use llimphi_layout::taffy::NodeId;
 use llimphi_layout::{ComputedLayout, LayoutTree, Style};
-use vello::kurbo::{Affine, Rect as KurboRect, RoundedRect};
+use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect};
 use vello::peniko::{Color, Fill, Image, Mix};
 
 mod render;
@@ -242,9 +242,11 @@ pub struct View<Msg> {
     /// acumulada del padre, así nodos anidados transforman en el espacio
     /// ya transformado de su ancestro — igual que CSS. `None` = identidad
     /// (la abrumadora mayoría de nodos). Pensado para `transform`/
-    /// `@keyframes` CSS de puriy (rotate/scale/translate). Limitaciones:
-    /// el hit-test usa los rects sin transformar, y los `painter`/`runs`
-    /// custom no heredan el afín.
+    /// `@keyframes` CSS de puriy (rotate/scale/translate). El hit-test
+    /// **respeta** el afín (un nodo transformado recibe clicks donde se ve
+    /// pintado). Limitación restante: los `painter`/`runs` custom no heredan
+    /// el afín, y la posición local que reciben los handlers `*_at` se
+    /// reporta en espacio de pantalla, no en el espacio local del nodo.
     pub transform: Option<Affine>,
     pub children: Vec<View<Msg>>,
 }
