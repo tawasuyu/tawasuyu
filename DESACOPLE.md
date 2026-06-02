@@ -20,7 +20,7 @@ Llimphi porque vivían en el frontend, no en un core. Auditoría de la suite
 | # | Crate | Qué está mal | Adónde va |
 |---|-------|--------------|-----------|
 | 1 | ✅ **HECHO** `supay-app-llimphi` | motor raycaster extraído a `supay-mini-core` (commit 6374c84d): World{advance,fire,reset}+cast_ray+7 tests; app = frontend fino | — |
-| 2 | `nahual-*-viewer-llimphi` (sistémico) | cada visor parsea su formato dentro del crate UI; sin core | `nahual-viewer-core` (+ `nahual-geo-core` para map-viewer: PMTiles/MVT/GeoJSON/GPX/KML) |
+| 2 | `nahual-*-viewer-llimphi` (sistémico) | cada visor parsea su formato dentro del crate UI; sin core | **parte 1/2 ✅** map-viewer → `nahual-geo-core` (PMTiles/MVT/GeoJSON/GPX/KML, 56 tests, commit 64d0ddb2). **parte 2/2 pendiente:** table/tree/hex/archive/font/markdown/card → `nahual-viewer-core` |
 | 3 | `tullpu-app-llimphi` (`ops.rs`, `model.rs`) | ~2.2k LOC de motor de pintura buffer-puro + undo en el frontend | `tullpu-ops`/`tullpu-paint` (ya existe el crate) |
 | 4 | `nakui-ui-llimphi` (`backend.rs`), `nakui-sheet-llimphi` (`pivot.rs`) | WAL/persistencia (705 LOC) y motor de tabla dinámica en la GUI | `nakui-backend` / `nakui-sheet` core |
 | 5 | `shuma-module-launcher` | dominio launcher duplicado (entry+discovery+spawn) | reusar `launcher-core` + `app_bus::ProcessLauncher` |
