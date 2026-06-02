@@ -26,6 +26,7 @@ pub mod metrics;
 pub mod params;
 pub mod psi_metrics;
 pub mod world;
+pub mod worldgen;
 
 pub use conceptos::{BehaviorHack, Concepto, Conceptos, LayerMods, Persuasion, Trigger};
 pub use epoch::Epoch;
