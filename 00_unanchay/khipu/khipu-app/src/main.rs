@@ -68,6 +68,10 @@ const EDITOR_VISIBLE_LINES: usize = 24;
 const LIST_WIDTH: f32 = 240.0;
 /// Ancho del editor flotante (overlay derecho sobre el mapa).
 const EDITOR_OVERLAY_W: f32 = 420.0;
+/// Zoom a partir del cual el nodo seleccionado deja de editarse en el panel
+/// lateral y pasa a abrirse como tarjeta anclada a su coordenada en el mapa
+/// (zoom semántico). Por debajo, el editor vuelve al overlay derecho.
+const ZOOM_INJECT: f32 = 1.6;
 const HEADER_H: f32 = 36.0;
 const ROW_H: f32 = 26.0;
 const FIELD_LABEL_SIZE: f32 = 10.0;
@@ -338,6 +342,12 @@ struct Model {
     /// permanente. Default `true` para no perder al usuario en el primer
     /// arranque.
     show_list: bool,
+    /// Último tamaño conocido del lienzo `(w, h)` en pixels. Lo aprende de
+    /// cada click (`on_click_at` lo trae) y sirve para anclar la tarjeta
+    /// del nodo en su coordenada de pantalla durante el zoom semántico,
+    /// que se calcula en `view()` antes de que corra el layout. Se corrige
+    /// solo en el siguiente click tras un resize.
+    canvas_size: (f32, f32),
 }
 
 struct KhipuApp;
@@ -759,6 +769,7 @@ impl App for KhipuApp {
                 model.cam_zoom = (model.cam_zoom * factor).clamp(0.15, 6.0);
             }
             Msg::MapClick(lx, ly, rw, rh) => {
+                model.canvas_size = (rw, rh);
                 if let Some(id) = pick_note(&model, lx, ly, rw, rh) {
                     commit_edits(&mut model, h);
                     reinforce_and_touch(&mut model, id);
@@ -815,9 +826,24 @@ impl App for KhipuApp {
 
         let header = header_view(model);
 
+        // Zoom semántico: con una nota seleccionada y el mapa lo bastante
+        // cerca, el nodo se "abre" como tarjeta anclada a su coordenada
+        // (in-situ). Lejos, el editor cae al panel lateral — un fallback
+        // para editar sin tener que acercarse.
+        let inplace = model
+            .selected
+            .filter(|_| model.cam_zoom >= ZOOM_INJECT)
+            .and_then(|id| node_screen_pos(model, id).map(|p| (id, p)));
+
         // El mapa es la interfaz: ocupa todo el cuerpo como capa de fondo.
-        // La lista y el editor flotan encima como overlays absolutos.
-        let map = gravity_panel(model);
+        // Si hay tarjeta in-situ, viaja como hija del canvas.
+        let injected: Vec<View<Msg>> = if let Some((_, (nx, ny))) = inplace {
+            let editor = editor_panel(model, &input_palette, &editor_palette);
+            vec![node_card(editor, nx, ny, model.canvas_size, &model.theme)]
+        } else {
+            Vec::new()
+        };
+        let map = gravity_panel(model, injected);
         let mut layers: Vec<View<Msg>> = vec![map];
 
         // Cajón de notas (izquierda): abierto a pedido, o forzado en modo
@@ -831,10 +857,8 @@ impl App for KhipuApp {
             layers.push(overlay_left(drawer, LIST_WIDTH));
         }
 
-        // Editor flotante (derecha): sólo cuando hay una nota viva bajo el
-        // cursor del pensamiento. Es el nodo "abierto" — precursor del zoom
-        // semántico, que después lo inyectará en la coordenada misma.
-        if model.selected.is_some() {
+        // Editor lateral: sólo si hay selección y NO se abrió in-situ.
+        if model.selected.is_some() && inplace.is_none() {
             let editor = editor_panel(model, &input_palette, &editor_palette);
             layers.push(overlay_right(editor, EDITOR_OVERLAY_W, &model.theme));
         }
@@ -1850,10 +1874,10 @@ fn overlay_left(child: View<Msg>, width: f32) -> View<Msg> {
     .children(vec![child])
 }
 
-/// Envuelve `child` como panel absoluto pegado al borde derecho, alto
-/// completo, con una barra de cierre arriba (× ⇒ deselecciona). Para el
-/// editor flotante del nodo abierto.
-fn overlay_right(child: View<Msg>, width: f32, theme: &Theme) -> View<Msg> {
+/// Columna interna del editor: barra de cierre (× ⇒ deselecciona) arriba +
+/// el editor abajo, sobre `bg_panel`. La comparten el overlay lateral y la
+/// tarjeta anclada del zoom semántico.
+fn editor_shell(child: View<Msg>, theme: &Theme) -> View<Msg> {
     let close = button("× cerrar", theme.bg_button, theme.fg_muted, Msg::Deselect);
     let close_row = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -1875,7 +1899,7 @@ fn overlay_right(child: View<Msg>, width: f32, theme: &Theme) -> View<Msg> {
     .fill(theme.bg_panel_alt)
     .children(vec![close]);
 
-    let inner = View::new(Style {
+    View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
@@ -1884,8 +1908,13 @@ fn overlay_right(child: View<Msg>, width: f32, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![close_row, child]);
+    .children(vec![close_row, child])
+}
 
+/// Envuelve `child` como panel absoluto pegado al borde derecho, alto
+/// completo, con barra de cierre. El editor del nodo abierto cuando se lo
+/// edita de lejos (zoom bajo): un fallback práctico al anclaje in-situ.
+fn overlay_right(child: View<Msg>, width: f32, theme: &Theme) -> View<Msg> {
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -1901,10 +1930,50 @@ fn overlay_right(child: View<Msg>, width: f32, theme: &Theme) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .children(vec![inner])
+    .children(vec![editor_shell(child, theme)])
 }
 
-fn gravity_panel(model: &Model) -> View<Msg> {
+/// Posición de pantalla (local al lienzo) del nodo `id`, usando el último
+/// tamaño de lienzo conocido + la cámara. `None` si la nota no tiene
+/// domicilio todavía.
+fn node_screen_pos(model: &Model, id: NoteId) -> Option<(f32, f32)> {
+    let (wx, wy) = model.store.get(id).and_then(|n| n.pos)?;
+    let (w, h) = model.canvas_size;
+    Some(world_to_local(wx, wy, w, h, model.cam_pan, model.cam_zoom))
+}
+
+/// La tarjeta del nodo abierto, anclada a su coordenada `(nx, ny)` de
+/// pantalla: el zoom semántico hecho carne — el editor vive EN el lugar del
+/// pensamiento, no en un panel aparte. Se clampea para no salirse del
+/// lienzo. Hija del canvas, así pan/zoom la arrastran con el nodo.
+fn node_card(child: View<Msg>, nx: f32, ny: f32, canvas: (f32, f32), theme: &Theme) -> View<Msg> {
+    let (cw_max, ch_max) = canvas;
+    let cw = 380.0_f32.min((cw_max - 16.0).max(220.0));
+    let ch = 440.0_f32.min((ch_max - 16.0).max(200.0));
+    // Anclada bajo el nodo, centrada en X, clampeada a la ventana.
+    let left = (nx - cw * 0.5).clamp(8.0, (cw_max - cw - 8.0).max(8.0));
+    let top = (ny + 16.0).clamp(8.0, (ch_max - ch - 8.0).max(8.0));
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(left),
+            top: length(top),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(cw),
+            height: length(ch),
+        },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .radius(8.0)
+    .children(vec![editor_shell(child, theme)])
+}
+
+fn gravity_panel(model: &Model, injected: Vec<View<Msg>>) -> View<Msg> {
     let theme = model.theme;
     let now = now_secs();
     let clusters = model.field.clusters(CLUSTER_THRESHOLD);
@@ -1966,7 +2035,11 @@ fn gravity_panel(model: &Model) -> View<Msg> {
         DragPhase::End => None,
     })
     .on_scroll(|_dx, dy| Some(Msg::MapZoom(dy)))
-    .on_click_at(|lx, ly, w, h| Some(Msg::MapClick(lx, ly, w, h)));
+    .on_click_at(|lx, ly, w, h| Some(Msg::MapClick(lx, ly, w, h)))
+    // La tarjeta del nodo abierto (zoom semántico) viaja como hija del
+    // canvas: se pinta encima de los nodos y la cámara la arrastra con el
+    // pensamiento al que pertenece.
+    .children(injected);
 
     View::new(Style {
         size: Size {
@@ -2927,6 +3000,7 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         cam_pan: (0.0, 0.0),
         cam_zoom: 1.0,
         show_list: true,
+        canvas_size: (1280.0, 640.0),
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -3006,6 +3080,7 @@ fn seeded_model(embedder: Embedder) -> Model {
         cam_pan: (0.0, 0.0),
         cam_zoom: 1.0,
         show_list: true,
+        canvas_size: (1280.0, 640.0),
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [
