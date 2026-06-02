@@ -118,6 +118,10 @@ impl Engine {
 
     /// Variante para tests / data URLs: parsea HTML ya en memoria.
     pub fn load_html(&self, url: &str, html: &str) -> Document {
+        // Instala el viewport real para toda la carga: resuelve `vw/vh/vmin/vmax`
+        // (en hojas y en `style="…"` inline parseado por `boxes::build`) contra
+        // el tamaño de ventana actual, no contra el viewport por defecto.
+        let _vp_scope = crate::style::ViewportScope::new(self.viewport);
         let dom = DomTree::parse(html);
         // Resuelve las hojas de estilo en orden de documento: `<style>` inline
         // se usa tal cual; `<link rel="stylesheet">` se baja (http/file/data:)

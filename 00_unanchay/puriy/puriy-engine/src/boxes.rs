@@ -2801,6 +2801,53 @@ mod tests {
     }
 
     #[test]
+    fn unidades_viewport_resuelven_contra_el_viewport_real() {
+        use crate::style::{LengthVal, Viewport};
+        // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la
+        // ventana, no contra DEFAULT_VIEWPORT (1280×800). Con viewport 800×600
+        // y `style="…"` inline (que parsea `boxes::build`, no la hoja):
+        //   50vw   = 50% de 800            = 400
+        //   50vh   = 50% de 600            = 300
+        //   50vmin = 50% de min(800,600)   = 300
+        //   50vmax = 50% de max(800,600)   = 400
+        let html = r#"<html><body>
+            <div id="vw" style="width:50vw"></div>
+            <div id="vh" style="width:50vh"></div>
+            <div id="vmin" style="width:50vmin"></div>
+            <div id="vmax" style="width:50vmax"></div>
+        </body></html>"#;
+        let vp = Viewport { width: 800.0, height: 600.0, dpr: 1.0 };
+        let doc = Engine::new().with_viewport(vp).load_html("about:test", html);
+        let mut widths = std::collections::HashMap::new();
+        doc.box_tree.walk(|b| {
+            if let Some(id) = b.element_id.as_deref() {
+                widths.insert(id.to_string(), b.width);
+            }
+        });
+        assert_eq!(widths.get("vw"), Some(&LengthVal::Px(400.0)));
+        assert_eq!(widths.get("vh"), Some(&LengthVal::Px(300.0)));
+        assert_eq!(widths.get("vmin"), Some(&LengthVal::Px(300.0)));
+        assert_eq!(widths.get("vmax"), Some(&LengthVal::Px(400.0)));
+    }
+
+    #[test]
+    fn unidades_viewport_default_sin_viewport_real() {
+        use crate::style::LengthVal;
+        // Sin `with_viewport`, el Engine usa DEFAULT_VIEWPORT (1280×800):
+        // 50vw = 640. Garantiza que el scope no contamina el path por defecto
+        // (se restaura al dropear al volver de `load_html`).
+        let html = r#"<html><body><div id="x" style="width:50vw"></div></body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let mut w = None;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("x") {
+                w = Some(b.width);
+            }
+        });
+        assert_eq!(w, Some(LengthVal::Px(640.0)));
+    }
+
+    #[test]
     fn list_style_none_suprime_marker() {
         let html = r#"<html><head><style>
             ul { list-style-type: none }

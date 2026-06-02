@@ -570,6 +570,41 @@ pub struct Viewport {
 
 pub const DEFAULT_VIEWPORT: Viewport = Viewport { width: 1280.0, height: 800.0, dpr: 1.0 };
 
+thread_local! {
+    /// Viewport activo para resolver unidades `vw`/`vh`/`vmin`/`vmax` durante
+    /// el parseo de un documento. `Engine::load_html` lo instala con el
+    /// viewport real (vía [`ViewportScope`]) antes de parsear hojas y construir
+    /// el box tree — incluido el `style="…"` inline que se parsea en
+    /// `boxes::build`. Fuera de ese scope (tests que llaman parsers sueltos)
+    /// cae a [`DEFAULT_VIEWPORT`], preservando el comportamiento previo.
+    static RESOLVE_VIEWPORT: std::cell::Cell<Viewport> = const { std::cell::Cell::new(DEFAULT_VIEWPORT) };
+}
+
+/// Guard RAII que instala `vp` como viewport de resolución de longitudes
+/// mientras viva, y restaura el anterior al dropear. Reentrante (anida bien).
+/// Lo usa `Engine::load_html` para que `50vw`/`100vh` resuelvan contra el
+/// tamaño real de la ventana en vez del viewport por defecto.
+pub struct ViewportScope(Viewport);
+
+impl ViewportScope {
+    pub fn new(vp: Viewport) -> Self {
+        let prev = RESOLVE_VIEWPORT.with(|c| c.replace(vp));
+        ViewportScope(prev)
+    }
+}
+
+impl Drop for ViewportScope {
+    fn drop(&mut self) {
+        RESOLVE_VIEWPORT.with(|c| c.set(self.0));
+    }
+}
+
+/// Viewport contra el que se resuelven las unidades viewport ahora mismo.
+/// `DEFAULT_VIEWPORT` salvo dentro de un [`ViewportScope`] activo.
+fn resolve_viewport() -> Viewport {
+    RESOLVE_VIEWPORT.with(|c| c.get())
+}
+
 impl<T: Copy> Sides<T> {
     pub const fn all(v: T) -> Self {
         Self { top: v, right: v, bottom: v, left: v }
@@ -4260,7 +4295,9 @@ fn parse_gradient_stop(s: &str) -> Option<GradientStop> {
 }
 
 /// Acepta `12px`, `1.5rem` (tratada como em*16), `0`. Sin unidad → px.
-/// `Nvw`/`Nvh`/`Nvmin`/`Nvmax` resuelven contra `DEFAULT_VIEWPORT`.
+/// `Nvw`/`Nvh`/`Nvmin`/`Nvmax` resuelven contra el viewport activo
+/// ([`resolve_viewport`]): el real bajo un `ViewportScope` (carga normal),
+/// `DEFAULT_VIEWPORT` fuera de él (parsers sueltos en tests).
 fn parse_length_px(s: &str) -> Option<f32> {
     let s = s.trim();
     if s == "0" {
@@ -4279,19 +4316,21 @@ fn parse_length_px(s: &str) -> Option<f32> {
     }
     if let Some(num) = s.strip_suffix("vmin") {
         let v: f32 = num.trim().parse().ok()?;
-        return Some(v * DEFAULT_VIEWPORT.width.min(DEFAULT_VIEWPORT.height) / 100.0);
+        let vp = resolve_viewport();
+        return Some(v * vp.width.min(vp.height) / 100.0);
     }
     if let Some(num) = s.strip_suffix("vmax") {
         let v: f32 = num.trim().parse().ok()?;
-        return Some(v * DEFAULT_VIEWPORT.width.max(DEFAULT_VIEWPORT.height) / 100.0);
+        let vp = resolve_viewport();
+        return Some(v * vp.width.max(vp.height) / 100.0);
     }
     if let Some(num) = s.strip_suffix("vw") {
         let v: f32 = num.trim().parse().ok()?;
-        return Some(v * DEFAULT_VIEWPORT.width / 100.0);
+        return Some(v * resolve_viewport().width / 100.0);
     }
     if let Some(num) = s.strip_suffix("vh") {
         let v: f32 = num.trim().parse().ok()?;
-        return Some(v * DEFAULT_VIEWPORT.height / 100.0);
+        return Some(v * resolve_viewport().height / 100.0);
     }
     s.parse().ok()
 }
@@ -6441,6 +6480,27 @@ line2</pre></body></html>"#;
         assert_eq!(parse_length_px("25vh"), Some(200.0));
         assert_eq!(parse_length_px("10vmin"), Some(80.0));
         assert_eq!(parse_length_px("10vmax"), Some(128.0));
+    }
+
+    #[test]
+    fn viewport_scope_cambia_y_restaura_la_resolucion() {
+        // Fuera de scope: DEFAULT_VIEWPORT (1280×800).
+        assert_eq!(parse_length_px("50vw"), Some(640.0));
+        {
+            let _g = ViewportScope::new(Viewport { width: 800.0, height: 600.0, dpr: 1.0 });
+            assert_eq!(parse_length_px("50vw"), Some(400.0));
+            assert_eq!(parse_length_px("50vh"), Some(300.0));
+            assert_eq!(parse_length_px("50vmin"), Some(300.0));
+            assert_eq!(parse_length_px("50vmax"), Some(400.0));
+            // Anida: el scope interno gana y el externo se recupera al salir.
+            {
+                let _g2 = ViewportScope::new(Viewport { width: 200.0, height: 200.0, dpr: 1.0 });
+                assert_eq!(parse_length_px("50vw"), Some(100.0));
+            }
+            assert_eq!(parse_length_px("50vw"), Some(400.0));
+        }
+        // Al dropear el guard, vuelve a DEFAULT.
+        assert_eq!(parse_length_px("50vw"), Some(640.0));
     }
 
     #[test]
