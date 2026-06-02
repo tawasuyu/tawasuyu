@@ -42,6 +42,28 @@ pub(crate) fn make_frame(
 // Render por frame
 // =====================================================================
 
+/// Renderiza un `SceneSnapshot` directamente a una `Scene` de vello, sin
+/// montar el bucle Elm de [`scene_view`] ni interpolar. Entry point público
+/// para herramientas de captura headless (volcado de frames a PNG, golden
+/// tests visuales) que necesitan ver exactamente lo que el renderer produce.
+/// `width`/`height` definen el viewport (origen en 0,0).
+pub fn render_snapshot(
+    scene: &mut Scene,
+    ts: &mut Typesetter,
+    width: f32,
+    height: f32,
+    snap: &SceneSnapshot,
+    cfg: &RenderConfig,
+) {
+    let rect = PaintRect {
+        x: 0.0,
+        y: 0.0,
+        w: width,
+        h: height,
+    };
+    render_frame(scene, ts, rect, snap, cfg);
+}
+
 pub(crate) fn render_frame(
     scene: &mut Scene,
     ts: &mut Typesetter,

@@ -24,3 +24,14 @@ supay-render-llimphi = { path = "../supay-render-llimphi" }
 supay-wad = { path = "../supay-wad" }
 supay-audio = { path = "../supay-audio" }
 rimay-localize = { path = "../../../shared/rimay-localize" }
+
+[dev-dependencies]
+# Volcado headless de frames a PNG (examples/dump_frame.rs): render a textura
+# vía llimphi-raster sobre llvmpipe + readback. Sirve para ver lo que el
+# renderer produce sin levantar ventana ni event loop.
+png = { workspace = true }
+pollster = { workspace = true }
+
+[[example]]
+name = "dump_frame"
+path = "examples/dump_frame.rs"
