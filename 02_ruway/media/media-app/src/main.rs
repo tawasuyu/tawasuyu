@@ -880,6 +880,13 @@ fn volume() -> &'static Volume {
     SLOT.get_or_init(|| Volume::new(1.0))
 }
 
+/// Volumen guardado mientras está silenciado (mute real). `Some` = mute
+/// activo; al des-silenciar restaura este valor. Ver `ToggleMute`.
+fn muted_volume() -> &'static Mutex<Option<f32>> {
+    static SLOT: OnceLock<Mutex<Option<f32>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
 /// Ecualizador gráfico de 10 bandas compartido con el wrapper
 /// [`EqualizerAudio`] en la cadena de audio. [`EqControl`] es clonable y
 /// lock-free en el callback realtime (compara una versión atómica); la UI
@@ -1538,6 +1545,7 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (SetVolume { level: 1.0 }, "Volumen"),
         (SetVolume { level: 0.5 }, "Volumen"),
         (SetVolume { level: 0.0 }, "Volumen"),
+        (ToggleMute, "Volumen"),
         (SpeedStep { dir: 1 }, "Velocidad"),
         (SpeedStep { dir: -1 }, "Velocidad"),
         (SetSpeed { mult: 1.0 }, "Velocidad"),
@@ -1670,6 +1678,18 @@ fn apply_command(cmd: MediaCommand) {
         }
         SetVolume { level } => {
             volume().update(|_| level);
+        }
+        ToggleMute => {
+            // Guarda el volumen al silenciar; lo restaura al des-silenciar.
+            let slot = muted_volume();
+            let mut g = slot.lock();
+            match g.take() {
+                Some(prev) => volume().update(|_| prev),
+                None => {
+                    *g = Some(volume().get());
+                    volume().update(|_| 0.0);
+                }
+            }
         }
         PrevTrack => {
             if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
@@ -2988,6 +3008,7 @@ fn short_action(cmd: &MediaCommand) -> &'static str {
         SeekBy { .. } => "seek",
         SeekTo { .. } => "ir a",
         VolumeBy { .. } | SetVolume { .. } => "vol",
+        ToggleMute => "mute",
         NextTrack => "sig",
         PrevTrack => "ant",
         SpeedStep { .. } | SetSpeed { .. } => "vel",
@@ -3620,7 +3641,7 @@ fn bar_item_view(item: BarItem) -> View<Msg> {
         BarItem::SeekForward => icmd(Icon::FastForward, false, SeekBy { secs: step }),
         BarItem::VolumeDown => icmd(Icon::Minus, false, VolumeBy { delta: -vstep }),
         BarItem::VolumeUp => icmd(Icon::Plus, false, VolumeBy { delta: vstep }),
-        BarItem::Mute => icmd(Icon::VolumeMute, volume().get() <= 1e-4, SetVolume { level: 0.0 }),
+        BarItem::Mute => icmd(Icon::VolumeMute, volume().get() <= 1e-4, ToggleMute),
         BarItem::Repeat => icmd(Icon::Repeat, snap.repeat_label != "rep-", CycleRepeat),
         BarItem::Shuffle => icmd(Icon::Shuffle, snap.shuffle_on, ToggleShuffle),
         BarItem::SpeedDown => icmd(Icon::ChevronDown, false, SpeedStep { dir: -1 }),

@@ -40,6 +40,9 @@ pub enum MediaCommand {
     VolumeBy { delta: f32 },
     /// Fija el volumen absoluto en `level` (0.0..=1.0).
     SetVolume { level: f32 },
+    /// Silencia / restaura el audio recordando el volumen previo (mute real,
+    /// a diferencia de `SetVolume{level:0}` que pierde el valor anterior).
+    ToggleMute,
     /// Pista siguiente de la playlist.
     NextTrack,
     /// Pista anterior de la playlist.
@@ -153,6 +156,7 @@ impl MediaCommand {
             VolumeBy { delta } if *delta < 0.0 => "Bajar volumen".to_string(),
             VolumeBy { .. } => "Subir volumen".to_string(),
             SetVolume { level } => format!("Volumen al {:.0}%", level * 100.0),
+            ToggleMute => "Silenciar / restaurar".to_string(),
             NextTrack => "Pista siguiente".to_string(),
             PrevTrack => "Pista anterior".to_string(),
             SpeedStep { dir } if *dir < 0 => "Velocidad más lenta".to_string(),
@@ -392,6 +396,7 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             ),
             b(KeyChord::key("n"), NextTrack),
             b(KeyChord::key("p"), PrevTrack),
+            b(KeyChord::key("m"), ToggleMute),
             b(KeyChord::key("l"), CycleRepeat),
             b(KeyChord::key("r"), ToggleShuffle),
             b(KeyChord::key("]"), SpeedStep { dir: 1 }),
