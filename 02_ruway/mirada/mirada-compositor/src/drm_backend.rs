@@ -498,7 +498,20 @@ impl DrmState {
                     return;
                 }
 
-                // Botón normal: a la ventana bajo el puntero.
+                // Click sobre una barra que acepta teclado (cabezal de shuma):
+                // le damos el foco de teclado para poder escribir en el drawer.
+                // (El click en sí llega al cliente vía pointer.button de abajo,
+                // porque el motion ya enfocó el puntero en esa layer.)
+                if pressed {
+                    let (x, y) = self.app.pointer_loc;
+                    if let Some(surf) = self.app.keyboard_focusable_layer_under(x, y) {
+                        if let Some(kb) = self.app.keyboard.clone() {
+                            kb.set_focus(&mut self.app, Some(surf), SERIAL_COUNTER.next_serial());
+                        }
+                    }
+                }
+
+                // Botón normal: a la ventana (o layer) bajo el puntero.
                 let Some(pointer) = self.app.pointer.clone() else {
                     return;
                 };
@@ -599,11 +612,15 @@ impl DrmState {
 
         // Foco-sigue-ratón: al pasar a otra ventana, que la enfoque quien
         // corresponda — el Cerebro para las teseladas, carmen mismo para
-        // el shell (que no vive en el Cerebro).
+        // el shell (que no vive en el Cerebro). PERO si una layer reclama teclado
+        // Exclusive (el drawer Quake de pata abierto), no le robamos el foco al
+        // mover el mouse sobre una ventana: seguís escribiendo en el drawer.
+        let exclusive_layer = self.app.exclusive_layer_surface().is_some();
         let hovered = hit.map(|i| self.app.windows[i].id);
         if hovered != self.last_pointer_window {
             self.last_pointer_window = hovered;
             match hit {
+                _ if exclusive_layer => {}
                 Some(i) if self.app.windows[i].is_shell => {
                     let surf = self.app.windows[i].surface.clone();
                     if let Some(kb) = self.app.keyboard.clone() {

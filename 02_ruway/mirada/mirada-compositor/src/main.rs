@@ -67,8 +67,8 @@ use smithay::wayland::shell::xdg::{
 };
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::shell::wlr_layer::{
-    Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData, WlrLayerShellHandler,
-    WlrLayerShellState,
+    KeyboardInteractivity, Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData,
+    WlrLayerShellHandler, WlrLayerShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::desktop::{layer_map_for_output, LayerSurface as DesktopLayerSurface, WindowSurfaceType};
@@ -329,6 +329,40 @@ impl App {
                     layer.wl_surface().clone(),
                     Point::from((geo.loc.x as f64, geo.loc.y as f64)),
                 ));
+            }
+        }
+        None
+    }
+
+    /// La layer surface bajo `(x, y)` que **acepta foco de teclado** (OnDemand o
+    /// Exclusive), para enfocarla al clickearla — el cabezal de shuma de `pata`
+    /// pide `OnDemand` y, al desplegar el drawer, `Exclusive`. `None` si la layer
+    /// de abajo no quiere teclado (o no hay ninguna).
+    fn keyboard_focusable_layer_under(&self, x: f64, y: f64) -> Option<WlSurface> {
+        let output = self.output.as_ref()?;
+        let map = layer_map_for_output(output);
+        for kind in [Layer::Overlay, Layer::Top] {
+            if let Some(layer) = map.layer_under(kind, (x, y)) {
+                return layer
+                    .can_receive_keyboard_focus()
+                    .then(|| layer.wl_surface().clone());
+            }
+        }
+        None
+    }
+
+    /// La layer surface (Overlay/Top, top-most) que reclama teclado **Exclusive**,
+    /// si hay alguna. Mientras exista, el foco-sigue-ratón NO le roba el teclado
+    /// (el drawer Quake de `pata` lo necesita para que escribas sin que mover el
+    /// mouse sobre una ventana le quite el foco).
+    fn exclusive_layer_surface(&self) -> Option<WlSurface> {
+        let output = self.output.as_ref()?;
+        let map = layer_map_for_output(output);
+        for kind in [Layer::Overlay, Layer::Top] {
+            if let Some(layer) = map.layers_on(kind).rev().find(|l| {
+                l.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive
+            }) {
+                return Some(layer.wl_surface().clone());
             }
         }
         None
