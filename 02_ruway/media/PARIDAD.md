@@ -216,7 +216,15 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   (±10°). +4 tests.
 - **V5 — Deinterlacing.**
 - **V6 — Filtros/shaders de video** (los glsl de mpv, los filtros de VLC).
-- **V7 — Capítulos** y navegación; menús DVD/Blu-ray (baja prioridad).
+- **V7 — Capítulos** y navegación. ✅ *Cerrado (2026-06-03, sin menús
+  DVD/Blu-ray).* `media-core::chapters`: `Chapter`/`Chapters` con `at`/`next`/
+  `prev` (anterior estilo VLC: reinicia el actual o retrocede) + parser puro
+  del formato **ffmetadata** (`[CHAPTER]` con `TIMEBASE`/`START`/`title`).
+  +7 tests. Wireado: `foreign_av::ffmetadata` extrae el texto vía `ffmpeg -f
+  ffmetadata -`; `media-app` lo parsea al arrancar (sólo archivos locales),
+  `MediaCommand::{ChapterNext,ChapterPrev}` seekean al inicio del capítulo
+  (palette grupo "Capítulos"), y el item Título de la barra muestra el
+  capítulo actual. Menús DVD/Blu-ray siguen fuera de alcance.
 - **V8 — HDR / tone-mapping.**
 
 ### Track SUBTÍTULOS
