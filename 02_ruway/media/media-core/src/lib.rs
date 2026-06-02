@@ -30,6 +30,7 @@ pub mod eq;
 pub mod library;
 pub mod loudness;
 pub mod metadata;
+pub mod playlist;
 pub mod transform;
 pub mod layout;
 pub mod sync;
