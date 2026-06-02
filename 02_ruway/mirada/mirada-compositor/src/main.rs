@@ -45,7 +45,7 @@ use smithay::reexports::wayland_server::protocol::wl_seat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, ListeningSocket};
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
-use smithay::utils::{Rectangle, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::utils::{Serial, Transform};
 use smithay::backend::egl::EGLDevice;
 use smithay::wayland::buffer::BufferHandler;
@@ -313,6 +313,27 @@ struct App {
 }
 
 impl App {
+    /// La layer surface **interactiva** (capas Overlay/Top — p. ej. las barras de
+    /// `pata`) bajo el punto físico `(x, y)`, con el origen de su geometría (para
+    /// las coords locales del puntero). Las capas Bottom/Background NO reciben
+    /// puntero (son fondo, como swaybg). `None` si no hay ninguna ahí. Lo usa el
+    /// ruteo del puntero para que los clicks lleguen a las barras, no sólo a las
+    /// ventanas.
+    fn layer_under(&self, x: f64, y: f64) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let output = self.output.as_ref()?;
+        let map = layer_map_for_output(output);
+        for kind in [Layer::Overlay, Layer::Top] {
+            if let Some(layer) = map.layer_under(kind, (x, y)) {
+                let geo = map.layer_geometry(layer)?;
+                return Some((
+                    layer.wl_surface().clone(),
+                    Point::from((geo.loc.x as f64, geo.loc.y as f64)),
+                ));
+            }
+        }
+        None
+    }
+
     /// Inyecta un evento del Cuerpo en el Cerebro y aplica su respuesta.
     fn brain_feed(&mut self, event: BodyEvent) {
         let cmds = match &mut self.brain {

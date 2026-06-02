@@ -548,6 +548,28 @@ impl DrmState {
             return;
         };
         let (x, y) = self.app.pointer_loc;
+
+        // Las capas Overlay/Top (las barras de `pata`) están por encima de las
+        // ventanas: el puntero va ahí primero. Sin esto, los clicks sólo llegaban
+        // a las ventanas y las barras quedaban muertas al mouse.
+        if let Some((surface, loc)) = self.app.layer_under(x, y) {
+            pointer.motion(
+                &mut self.app,
+                Some((surface, loc)),
+                &MotionEvent {
+                    location: Point::from((x, y)),
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                },
+            );
+            pointer.frame(&mut self.app);
+            // El cliente del layer pondría su propio cursor; por ahora, el default.
+            self.app.cursor_status = CursorImageStatus::default_named();
+            // Dejamos de sobrevolar cualquier ventana.
+            self.last_pointer_window = None;
+            return;
+        }
+
         let hit = self.window_at(x, y);
         let focus = hit.map(|i| {
             let w = &self.app.windows[i];
