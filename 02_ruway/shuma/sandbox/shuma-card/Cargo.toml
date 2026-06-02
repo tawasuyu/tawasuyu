@@ -10,8 +10,16 @@ description = "Tipos de shipote: WorkspaceSpec, PipelineSpec, CommandRef, FlowEd
 
 [dependencies]
 card-core = { path = "../../../../shared/card/card-core" }
+# Orquestador único de la suite (Linux): shuma compila sus specs a `Intent`
+# de sandokan en vez de manejar su propio ciclo de vida. Ver SDD de sandokan.
+sandokan-core = { path = "../../../../shared/sandokan/sandokan-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }
+
+[dev-dependencies]
+# Prueba end-to-end del puente: spec de shuma → Intent → proceso aislado real.
+sandokan-local = { path = "../../../../03_ukupacha/sandokan/sandokan-local" }
+tokio = { workspace = true }

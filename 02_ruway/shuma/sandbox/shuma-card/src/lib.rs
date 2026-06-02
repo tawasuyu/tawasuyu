@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 use card_core::{Card, Payload, Permissions, SomaSpec, Supervision};
+use sandokan_core::{Intent, IsolationLevel};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
@@ -333,6 +334,48 @@ impl WorkspaceSpec {
         c.supervision = Supervision::OneShot;
         Ok(c)
     }
+
+    /// Puente al orquestador único (sandokan): compila el workspace a una
+    /// `Intent` que cualquier `sandokan_core::Engine` (LocalEngine en este
+    /// host, DaemonEngine o RemoteEngine) puede encarnar. Es la Card
+    /// `Virtual` contenedora — aloja comandos hijos que se le unen.
+    pub fn to_intent(
+        &self,
+        id: WorkspaceId,
+        isolation: IsolationLevel,
+    ) -> Result<Intent, CompileError> {
+        Ok(Intent::new(self.to_card(id)?).with_isolation(isolation))
+    }
+
+    /// Puente "ambiente = un shell aislado" (slice 1: *solo aislarlo*).
+    /// A diferencia de [`Self::to_card`] (Card `Virtual` contenedora), esto
+    /// produce una Card **Native** que ejecuta `exec`/`argv` tomando el
+    /// `soma` del workspace como su propio aislamiento — el shell vive
+    /// directamente dentro de los namespaces del ambiente, sin un paso de
+    /// "unirse" a un contenedor aparte. La devuelve como `Intent` lista
+    /// para `Engine::run`.
+    pub fn shell_intent(
+        &self,
+        id: WorkspaceId,
+        exec: impl Into<String>,
+        argv: Vec<String>,
+        isolation: IsolationLevel,
+    ) -> Result<Intent, CompileError> {
+        if self.label.trim().is_empty() {
+            return Err(CompileError::EmptyWorkspaceLabel);
+        }
+        let mut c = Card::new(format!("shuma.workspace.{}", self.label));
+        c.id = id.0;
+        c.soma = self.soma.clone();
+        c.permissions = self.permissions.clone();
+        c.payload = Payload::Native {
+            exec: exec.into(),
+            argv,
+            envp: vec![],
+        };
+        c.supervision = Supervision::OneShot;
+        Ok(Intent::new(c).with_isolation(isolation))
+    }
 }
 
 impl CommandRef {
@@ -612,6 +655,82 @@ mod tests {
         let mut ws = sample_workspace();
         ws.label = String::new();
         assert!(ws.to_card(WorkspaceId::new()).is_err());
+    }
+
+    #[test]
+    fn workspace_compiles_to_intent_virtual() {
+        let ws = sample_workspace();
+        let intent = ws
+            .to_intent(WorkspaceId::new(), IsolationLevel::Standard)
+            .unwrap();
+        assert!(matches!(intent.card.payload, Payload::Virtual));
+        assert_eq!(intent.context.isolation, Some(IsolationLevel::Standard));
+    }
+
+    #[test]
+    fn shell_intent_is_native_and_inherits_workspace_soma() {
+        let mut ws = sample_workspace();
+        ws.soma.namespaces.user = true;
+        ws.soma.namespaces.pid = true;
+        let intent = ws
+            .shell_intent(
+                WorkspaceId::new(),
+                "/bin/sh",
+                vec!["-c".into(), "true".into()],
+                IsolationLevel::Standard,
+            )
+            .unwrap();
+        match &intent.card.payload {
+            Payload::Native { exec, .. } => assert_eq!(exec, "/bin/sh"),
+            other => panic!("esperaba Native, fue {other:?}"),
+        }
+        assert!(
+            intent.card.soma.namespaces.pid,
+            "el shell del ambiente hereda el soma del workspace"
+        );
+    }
+
+    /// Unificación del orquestador: un `WorkspaceSpec` de shuma se materializa
+    /// como un proceso aislado real **a través del `Engine` de sandokan**
+    /// (LocalEngine), sin que shuma maneje su propio ciclo de vida. El shell
+    /// sale 0 sólo si vio PID 1, probando que el aislamiento del ambiente se
+    /// aplicó end-to-end por el camino unificado.
+    #[tokio::test]
+    async fn workspace_shell_runs_isolated_via_sandokan_engine() {
+        use card_core::NamespaceSet;
+        use sandokan_core::Engine;
+        use sandokan_local::LocalEngine;
+
+        let mut ws = sample_workspace();
+        ws.soma.namespaces = NamespaceSet {
+            user: true,
+            pid: true,
+            mount: true,
+            uts: true,
+            ipc: true,
+            net: false,
+            cgroup: false,
+        };
+
+        let intent = ws
+            .shell_intent(
+                WorkspaceId::new(),
+                "/bin/sh",
+                vec!["-c".into(), "test $$ -eq 1".into()],
+                IsolationLevel::Standard,
+            )
+            .unwrap();
+        let id = intent.card_id();
+
+        let engine = LocalEngine::new();
+        engine.run(intent).await.expect("run vía sandokan");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let st = engine.status(id).await.expect("status");
+        assert!(st.is_terminal(), "el shell debió terminar, fue {st:?}");
+        assert!(
+            !st.is_failure(),
+            "exit 0 ⇒ el shell vio PID 1 (ambiente aislado). Estado: {st:?}"
+        );
     }
 
     #[test]
