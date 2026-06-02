@@ -27,6 +27,7 @@ pub mod color;
 pub mod control;
 pub mod dynamics;
 pub mod eq;
+pub mod library;
 pub mod loudness;
 pub mod transform;
 pub mod layout;
