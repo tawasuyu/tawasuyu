@@ -449,6 +449,12 @@ pub struct BoxTree {
     /// Forms del documento en orden DFS. Cada `<input>` que cae dentro
     /// de uno tiene `BoxNode.form_idx = Some(i)`.
     pub forms: Vec<FormInfo>,
+    /// Motor de estilos del documento, retenido para poder re-correr la
+    /// cascada CSS tras una mutación que cambie qué reglas matchean
+    /// (`classList.add/remove/toggle`, `className`, `setAttribute('class')`).
+    /// El DOM original se dropea tras la carga (es `!Send`), así que el
+    /// restyle reconstruye un DOM espejo del propio box tree (Fase 7.184).
+    pub styles: StyleEngine,
 }
 
 impl BoxTree {
@@ -504,6 +510,47 @@ impl BoxTree {
     /// limitado a propósito; ampliar cuando aparezcan casos reales.
     pub fn set_element_style(&mut self, id: &str, prop: &str, value: &str) -> bool {
         set_element_style_inner(&mut self.root, id, prop, value)
+    }
+
+    /// Reemplaza la lista de clases del nodo `element_id == id` por
+    /// `classes`. NO re-corre la cascada — el caller debe llamar
+    /// [`Self::restyle`] después (típicamente una sola vez tras drenar
+    /// todas las mutaciones de un evento). Devuelve `true` si encontró el
+    /// nodo. Mantiene el atributo `class` de `attributes` en sync para que
+    /// el DOM espejo del restyle lea las clases nuevas. Fase 7.184.
+    pub fn set_element_class_list(&mut self, id: &str, classes: Vec<String>) -> bool {
+        set_class_list_inner(&mut self.root, id, classes)
+    }
+
+    /// Re-aplica la cascada CSS a TODO el árbol reusando las reglas
+    /// retenidas (`self.styles`). Necesario tras un cambio de `classList`
+    /// u otra mutación que altere qué reglas matchean: un cambio en una
+    /// clase puede afectar descendientes (selectores descendientes,
+    /// herencia) y hermanos posteriores (`+`/`~`), así que recascadeamos
+    /// el documento entero. Reconstruye un DOM rcdom-espejo (sólo
+    /// elementos) del box tree y corre el MISMO motor de cascada que el
+    /// build inicial — sin duplicar el matcher. Fase 7.184.
+    ///
+    /// Limitaciones (documentadas en el SDD): no re-dropea ni resucita
+    /// nodos `display:none` (los que arrancaron ocultos al cargar nunca se
+    /// boxearon; los que están en el árbol sí togglean display); no
+    /// recolapsa márgenes (preserva el `margin` ya colapsado); no re-deriva
+    /// contenido de pseudo-elements ni animaciones.
+    pub fn restyle(&mut self) {
+        let BoxTree { root, styles, .. } = self;
+        if root.tag.is_some() {
+            if let Some(mirror) = mirror_element(root) {
+                restyle_apply(root, &mirror, None, styles);
+            }
+        } else {
+            // Root sintético (wrapper sin tag): aplica a sus hijos elemento
+            // como top-level (parent None), igual que `build` con `<body>`.
+            let doc = markup5ever_rcdom::Node::new(markup5ever_rcdom::NodeData::Document);
+            collect_mirror_children(root, &doc);
+            let mc = doc.children.borrow();
+            let mut mi = 0usize;
+            restyle_children(&mut root.children, &mc, &mut mi, None, styles);
+        }
     }
 
     /// Setea / actualiza el atributo `name` del nodo `id`. `name` va con
@@ -737,6 +784,10 @@ fn set_element_style_inner(
     value: &str,
 ) -> bool {
     if node.element_id.as_deref() == Some(target) {
+        // Persistimos la declaración inline en el atributo `style` para que
+        // un restyle posterior (classList) la re-aplique con prioridad inline
+        // — sin esto, la cascada pisaría lo que JS seteó vía `el.style.X`.
+        upsert_inline_style_attr(node, prop, value);
         return apply_style_to_node(node, prop, value);
     }
     for c in node.children.iter_mut() {
@@ -745,6 +796,48 @@ fn set_element_style_inner(
         }
     }
     false
+}
+
+/// Inserta o actualiza una declaración `prop: value` en el atributo `style`
+/// del nodo (kebab `prop`). Mantiene el resto de las declaraciones inline.
+/// Usado para que `el.style.X = Y` (Fase 7.8) persista a través del restyle
+/// (Fase 7.184), que re-parsea el atributo `style` desde el DOM espejo.
+fn upsert_inline_style_attr(node: &mut BoxNode, prop: &str, value: &str) {
+    let prop = prop.trim();
+    if prop.is_empty() {
+        return;
+    }
+    let existing = node
+        .attributes
+        .iter()
+        .find(|(k, _)| k == "style")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let mut decls: Vec<(String, String)> = Vec::new();
+    for seg in existing.split(';') {
+        let seg = seg.trim();
+        if seg.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = seg.split_once(':') {
+            decls.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    if let Some(slot) = decls.iter_mut().find(|(k, _)| k == prop) {
+        slot.1 = value.trim().to_string();
+    } else {
+        decls.push((prop.to_string(), value.trim().to_string()));
+    }
+    let serialized = decls
+        .iter()
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if let Some(slot) = node.attributes.iter_mut().find(|(k, _)| k == "style") {
+        slot.1 = serialized;
+    } else {
+        node.attributes.push(("style".to_string(), serialized));
+    }
 }
 
 fn apply_style_to_node(node: &mut BoxNode, prop: &str, value: &str) -> bool {
@@ -804,6 +897,219 @@ fn apply_style_to_node(node: &mut BoxNode, prop: &str, value: &str) -> bool {
         _ => {}
     }
     false
+}
+
+// ===================== Fase 7.184 — restyle on classList =====================
+
+/// Reemplaza recursivamente la `class_list` (y el atributo `class` espejo)
+/// del nodo con `element_id == id`. Devuelve `true` si lo encontró.
+fn set_class_list_inner(node: &mut BoxNode, id: &str, classes: Vec<String>) -> bool {
+    if node.element_id.as_deref() == Some(id) {
+        // Sincroniza el atributo `class` para que el DOM espejo del restyle
+        // (que lee de `attributes`) y `class_list` no diverjan.
+        let joined = classes.join(" ");
+        if let Some(slot) = node.attributes.iter_mut().find(|(k, _)| k == "class") {
+            slot.1 = joined;
+        } else if !joined.is_empty() {
+            node.attributes.push(("class".to_string(), joined));
+        }
+        node.class_list = classes;
+        return true;
+    }
+    for c in node.children.iter_mut() {
+        if set_class_list_inner(c, id, classes.clone()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Construye un Element rcdom espejo de un BoxNode elemento (`tag.is_some()`),
+/// con `id`/`class`/`style` + el resto de `attributes`, y sus hijos elemento
+/// (aplanando wrappers `tag=None`). Devuelve `None` si el box no es elemento.
+fn mirror_element(b: &BoxNode) -> Option<Handle> {
+    use markup5ever::interface::{Attribute, QualName};
+    use markup5ever::{LocalName, Namespace};
+    use markup5ever_rcdom::Node;
+    use std::cell::RefCell;
+
+    let tag = b.tag.as_deref()?;
+    let mk_attr = |name: &str, val: &str| Attribute {
+        name: QualName::new(None, Namespace::from(""), LocalName::from(name)),
+        value: val.into(),
+    };
+    let mut attrs: Vec<Attribute> = Vec::new();
+    // `id`/`class` desde los campos canónicos (la mutación de classList los
+    // actualiza ahí); el resto desde `attributes` sin pisar id/class.
+    if let Some(id) = b.element_id.as_deref() {
+        attrs.push(mk_attr("id", id));
+    }
+    if !b.class_list.is_empty() {
+        attrs.push(mk_attr("class", &b.class_list.join(" ")));
+    }
+    for (k, v) in &b.attributes {
+        if k == "id" || k == "class" {
+            continue;
+        }
+        attrs.push(mk_attr(k, v));
+    }
+    let elem = Node::new(NodeData::Element {
+        name: QualName::new(None, Namespace::from(""), LocalName::from(tag)),
+        attrs: RefCell::new(attrs),
+        template_contents: RefCell::new(None),
+        mathml_annotation_xml_integration_point: false,
+    });
+    collect_mirror_children(b, &elem);
+    Some(elem)
+}
+
+/// Empuja los Element espejo de los hijos ELEMENTO de `b` bajo
+/// `parent_mirror`, aplanando los wrappers `tag=None` (text leaves, markers,
+/// pseudo-content) — en el DOM real esos no son ancestros de los elementos.
+fn collect_mirror_children(b: &BoxNode, parent_mirror: &Handle) {
+    use std::rc::Rc;
+    for child in &b.children {
+        if child.tag.is_some() {
+            if let Some(cm) = mirror_element(child) {
+                cm.parent.set(Some(Rc::downgrade(parent_mirror)));
+                parent_mirror.children.borrow_mut().push(cm);
+            }
+        } else {
+            collect_mirror_children(child, parent_mirror);
+        }
+    }
+}
+
+/// Computa el estilo re-cascadeado de `b` (un elemento, pareado con su
+/// `mirror`) y lo aplica; luego recursa sobre sus hijos. `mirror.children`
+/// está en el mismo orden (elementos aplanados) que recorre `restyle_children`.
+fn restyle_apply(
+    b: &mut BoxNode,
+    mirror: &Handle,
+    parent_cs: Option<&ComputedStyle>,
+    styles: &StyleEngine,
+) {
+    let cs = styles.compute_with_parent(mirror, parent_cs);
+    // Deltas de hover/focus, igual criterio que `build_node`.
+    let hover_bg = {
+        let h = styles.compute_with_parent_in_state(mirror, parent_cs, true);
+        (h.background != cs.background).then_some(h.background).flatten()
+    };
+    let focus_bg = {
+        let f = styles.compute_with_parent_for_state(mirror, parent_cs, false, true);
+        (f.background != cs.background).then_some(f.background).flatten()
+    };
+    set_box_visual(b, &cs, hover_bg, focus_bg);
+    let mc = mirror.children.borrow();
+    let mut mi = 0usize;
+    restyle_children(&mut b.children, &mc, &mut mi, Some(&cs), styles);
+}
+
+/// Recorre los hijos de un elemento, pareando cada hijo ELEMENTO con el
+/// siguiente espejo (`mc[mi]`) y propagando estilo a los text leaves. Los
+/// wrappers `tag=None` se atraviesan transparentes (sin consumir espejo).
+fn restyle_children(
+    children: &mut [BoxNode],
+    mc: &[Handle],
+    mi: &mut usize,
+    parent_cs: Option<&ComputedStyle>,
+    styles: &StyleEngine,
+) {
+    for child in children.iter_mut() {
+        if child.tag.is_some() {
+            if let Some(cm) = mc.get(*mi) {
+                restyle_apply(child, cm, parent_cs, styles);
+            }
+            *mi += 1;
+        } else {
+            if let Some(p) = parent_cs {
+                set_leaf_inherited(child, p);
+            }
+            // Wrapper sin tag: atravesar a sus hijos manteniendo el mismo
+            // espejo/cursor (sus elementos son hijos del MISMO ancestro).
+            restyle_children(&mut child.children, mc, mi, parent_cs, styles);
+        }
+    }
+}
+
+/// Sobrescribe los campos visuales derivados del estilo en un BoxNode
+/// existente, preservando estructura/text/imagen/link/inputs y el `margin`
+/// ya colapsado (no recolapsamos en restyle).
+fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Option<Color>, focus_bg: Option<Color>) {
+    b.display = s.display;
+    b.background = s.background;
+    b.color = s.color;
+    b.font_size = s.font_size;
+    b.font_weight = s.font_weight;
+    b.font_style = s.font_style;
+    b.font_family = s.font_family.clone();
+    b.padding = s.padding;
+    b.width = s.width;
+    b.max_width = s.max_width;
+    b.text_align = s.text_align;
+    b.line_height = s.line_height;
+    b.border_widths = s.border_widths;
+    b.border_colors = s.border_colors;
+    b.border_radii = s.border_radii;
+    b.hover_background = hover_bg;
+    b.focus_background = focus_bg;
+    b.box_shadow = s.box_shadow;
+    b.z_index = s.z_index;
+    b.flex_direction = s.flex_direction;
+    b.justify_content = s.justify_content;
+    b.align_items = s.align_items;
+    b.flex_wrap = s.flex_wrap;
+    b.gap_row = s.gap_row;
+    b.gap_column = s.gap_column;
+    b.box_sizing = s.box_sizing;
+    b.min_width = s.min_width;
+    b.min_height = s.min_height;
+    b.max_height = s.max_height;
+    b.overflow = s.overflow;
+    b.white_space = s.white_space;
+    b.text_transform = s.text_transform;
+    b.opacity = s.opacity;
+    b.align_self = s.align_self;
+    b.flex_grow = s.flex_grow;
+    b.flex_shrink = s.flex_shrink;
+    b.flex_basis = s.flex_basis;
+    b.outline = s.outline;
+    b.background_gradient = s.background_gradient.clone();
+    b.position = s.position;
+    b.inset_top = s.inset_top;
+    b.inset_right = s.inset_right;
+    b.inset_bottom = s.inset_bottom;
+    b.inset_left = s.inset_left;
+    b.vertical_align = s.vertical_align;
+    b.visibility = s.visibility;
+    b.pointer_events = s.pointer_events;
+    b.text_indent = s.text_indent;
+    b.word_spacing = s.word_spacing;
+    b.text_shadows = s.text_shadows.clone();
+    b.transforms = s.transforms.clone();
+    b.grid_template_columns = s.grid_template_columns.clone();
+    b.grid_template_rows = s.grid_template_rows.clone();
+    b.text_decoration = s.text_decoration;
+}
+
+/// Propaga las propiedades CSS heredables del estilo del padre a una hoja
+/// de texto (mismo subconjunto que copia `compute_internal` del padre).
+fn set_leaf_inherited(leaf: &mut BoxNode, p: &ComputedStyle) {
+    leaf.color = p.color;
+    leaf.font_size = p.font_size;
+    leaf.font_weight = p.font_weight;
+    leaf.font_style = p.font_style;
+    leaf.font_family = p.font_family.clone();
+    leaf.text_align = p.text_align;
+    leaf.line_height = p.line_height;
+    leaf.text_decoration = p.text_decoration;
+    leaf.white_space = p.white_space;
+    leaf.text_transform = p.text_transform;
+    leaf.text_shadows = p.text_shadows.clone();
+    leaf.word_spacing = p.word_spacing;
+    leaf.text_indent = p.text_indent;
+    leaf.visibility = p.visibility;
+    leaf.pointer_events = p.pointer_events;
 }
 
 fn propagate_text_color(node: &mut BoxNode, c: Color) {
@@ -1031,7 +1337,7 @@ pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
     // por id, sin contar índices en walks paralelos frágiles.
     let mut node_cursor: u32 = 1;
     assign_node_ids(&mut root, &mut node_cursor);
-    BoxTree { root, forms }
+    BoxTree { root, forms, styles: styles.clone() }
 }
 
 /// Post-pass: numera cada nodo del árbol en orden DFS pre-orden empezando
@@ -2845,6 +3151,130 @@ mod tests {
             }
         });
         assert_eq!(w, Some(LengthVal::Px(640.0)));
+    }
+
+    fn box_by_id(bt: &super::BoxTree, id: &str) -> Option<super::BoxNode> {
+        let mut found = None;
+        bt.walk(|b| {
+            if found.is_none() && b.element_id.as_deref() == Some(id) {
+                found = Some(b.clone());
+            }
+        });
+        found
+    }
+
+    #[test]
+    fn restyle_aplica_regla_de_clase_agregada() {
+        // `.on` (no presente al cargar) + un selector descendiente `.on .child`.
+        // Tras agregar la clase y recascadear, el fondo del box y el color del
+        // hijo deben aparecer.
+        let html = r#"<html><head><style>
+            .on { background: red; }
+            .on .child { color: blue; }
+        </style></head><body>
+            <div id="box"><p id="p" class="child">x</p></div>
+        </body></html>"#;
+        let mut doc = Engine::new().load_html("about:test", html);
+        assert_eq!(box_by_id(&doc.box_tree, "box").unwrap().background, None);
+        assert!(doc.box_tree.set_element_class_list("box", vec!["on".to_string()]));
+        doc.box_tree.restyle();
+        assert_eq!(
+            box_by_id(&doc.box_tree, "box").unwrap().background,
+            Some(super::Color::rgb(255, 0, 0))
+        );
+        assert_eq!(box_by_id(&doc.box_tree, "p").unwrap().color, super::Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn restyle_quitar_clase_revierte_estilo() {
+        let html = r#"<html><head><style>
+            #box { background: green; }
+            #box.on { background: red; }
+        </style></head><body><div id="box" class="on">x</div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:test", html);
+        assert_eq!(
+            box_by_id(&doc.box_tree, "box").unwrap().background,
+            Some(super::Color::rgb(255, 0, 0))
+        );
+        doc.box_tree.set_element_class_list("box", vec![]);
+        doc.box_tree.restyle();
+        // Sin `.on`, gana la regla base `#box { background: green }`.
+        assert_eq!(
+            box_by_id(&doc.box_tree, "box").unwrap().background,
+            Some(super::Color::rgb(0, 128, 0))
+        );
+    }
+
+    #[test]
+    fn restyle_combinador_hermano_afecta_posterior() {
+        // Cambiar la clase de #t debe afectar a su HERMANO #pnl vía `+`.
+        // Sólo posible recascadeando el árbol entero, no sólo el subárbol.
+        let html = r#"<html><head><style>
+            .open + .panel { background: red; }
+        </style></head><body>
+            <div id="t" class="tab"></div>
+            <div id="pnl" class="panel">x</div>
+        </body></html>"#;
+        let mut doc = Engine::new().load_html("about:test", html);
+        assert_eq!(box_by_id(&doc.box_tree, "pnl").unwrap().background, None);
+        doc.box_tree
+            .set_element_class_list("t", vec!["tab".into(), "open".into()]);
+        doc.box_tree.restyle();
+        assert_eq!(
+            box_by_id(&doc.box_tree, "pnl").unwrap().background,
+            Some(super::Color::rgb(255, 0, 0))
+        );
+    }
+
+    #[test]
+    fn restyle_toggle_display_none_oculta_y_muestra() {
+        let html = r#"<html><head><style>
+            .hidden { display: none; }
+        </style></head><body><div id="box">x</div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:test", html);
+        assert_ne!(box_by_id(&doc.box_tree, "box").unwrap().display, super::Display::None);
+        doc.box_tree.set_element_class_list("box", vec!["hidden".into()]);
+        doc.box_tree.restyle();
+        assert_eq!(box_by_id(&doc.box_tree, "box").unwrap().display, super::Display::None);
+        doc.box_tree.set_element_class_list("box", vec![]);
+        doc.box_tree.restyle();
+        assert_ne!(box_by_id(&doc.box_tree, "box").unwrap().display, super::Display::None);
+    }
+
+    #[test]
+    fn restyle_sin_cambios_es_idempotente() {
+        let html = r#"<html><head><style>
+            #box { background: red; color: green; padding: 5px; font-size: 20px; }
+        </style></head><body><div id="box"><span id="s">hi</span></div></body></html>"#;
+        let mut doc = Engine::new().load_html("about:test", html);
+        let before_box = box_by_id(&doc.box_tree, "box").unwrap();
+        let before_s = box_by_id(&doc.box_tree, "s").unwrap();
+        doc.box_tree.restyle();
+        let after_box = box_by_id(&doc.box_tree, "box").unwrap();
+        let after_s = box_by_id(&doc.box_tree, "s").unwrap();
+        assert_eq!(before_box.background, after_box.background);
+        assert_eq!(before_box.color, after_box.color);
+        assert_eq!(before_box.display, after_box.display);
+        assert_eq!(before_box.padding.top, after_box.padding.top);
+        assert_eq!(before_box.font_size, after_box.font_size);
+        // El span hereda color/font del padre, igual antes y después.
+        assert_eq!(before_s.color, after_s.color);
+        assert_eq!(before_s.font_size, after_s.font_size);
+    }
+
+    #[test]
+    fn restyle_preserva_estilo_inline_seteado_por_js() {
+        // `el.style.color='red'` (via set_element_style) debe sobrevivir a un
+        // restyle posterior por classList: la cascada re-parsea el atributo
+        // `style` y el inline gana sobre la regla `.on { color: blue }`.
+        let html = r#"<html><head><style>.on { color: blue; }</style></head>
+            <body><p id="p">x</p></body></html>"#;
+        let mut doc = Engine::new().load_html("about:test", html);
+        doc.box_tree.set_element_style("p", "color", "red");
+        assert_eq!(box_by_id(&doc.box_tree, "p").unwrap().color, super::Color::rgb(255, 0, 0));
+        doc.box_tree.set_element_class_list("p", vec!["on".into()]);
+        doc.box_tree.restyle();
+        assert_eq!(box_by_id(&doc.box_tree, "p").unwrap().color, super::Color::rgb(255, 0, 0));
     }
 
     #[test]

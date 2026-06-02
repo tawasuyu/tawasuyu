@@ -758,6 +758,7 @@ impl Default for ComputedStyle {
 }
 
 /// Almacena reglas parseadas + función de "computar para nodo".
+#[derive(Debug, Clone)]
 pub struct StyleEngine {
     rules: Vec<Rule>,
     /// CSS variables declaradas en `:root`/`html`/`*`. Se substituyen en
@@ -1030,7 +1031,7 @@ impl StyleEngine {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Rule {
     selector: Selector,
     decls: Vec<Decl>,

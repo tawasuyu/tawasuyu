@@ -3432,6 +3432,7 @@ fn apply_dom_mutations(t: &mut TabState) -> Vec<Msg> {
         return out;
     }
     let Some(bt) = t.box_tree.as_mut() else { return out };
+    let mut needs_restyle = false;
     for m in muts {
         if m.kind == "text" {
             bt.set_element_text_content(&m.id, &m.value);
@@ -3605,8 +3606,27 @@ fn apply_dom_mutations(t: &mut TabState) -> Vec<Msg> {
             if let Some(pos) = found_at {
                 t.scroll_y = (pos.saturating_sub(1) as f32) * 30.0;
             }
+        } else if m.kind == "classList" {
+            // Fase 7.184 — classList.add/remove/toggle/className/setAttribute
+            // ('class') publican la lista completa de clases. Actualizamos la
+            // `class_list` del nodo y marcamos para recascadear una sola vez
+            // al final (un handler puede togglear varias clases por evento).
+            let classes: Vec<String> = m
+                .value
+                .split_whitespace()
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            if bt.set_element_class_list(&m.id, classes) {
+                needs_restyle = true;
+            }
         }
-        // Otros kinds (`classList`, ...) llegarán en fases siguientes.
+    }
+    if needs_restyle {
+        // Recascada del documento entero: un cambio de clase puede afectar
+        // descendientes (selectores descendientes/herencia) y hermanos
+        // posteriores (`+`/`~`). Reusa el motor de cascada del build.
+        bt.restyle();
     }
     out
 }
@@ -7737,6 +7757,54 @@ mod tests {
         });
         assert_eq!(li_count, 1);
         assert!(text_found, "el <li> debe tener un text leaf 'hola'");
+    }
+
+    #[test]
+    fn classlist_add_recascadea_y_aplica_regla() {
+        // Fase 7.184 — `el.classList.add('on')` publica la mutación 'classList';
+        // el chrome actualiza la clase y re-corre la cascada → el `.on` aplica.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.box_tree = Some(parse(
+            r#"<html><head><style>.on { background: red; }</style></head>
+               <body><div id="box">x</div></body></html>"#,
+        ));
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "box".into(),
+            tag_name: "div".into(),
+            text_content: "x".into(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: Vec::new(),
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        // Antes del toggle: sin background.
+        let bg0 = {
+            let bt = t.box_tree.as_ref().unwrap();
+            let mut bg = None;
+            bt.walk(|b| {
+                if b.element_id.as_deref() == Some("box") {
+                    bg = b.background;
+                }
+            });
+            bg
+        };
+        assert_eq!(bg0, None);
+        rt.eval("document.getElementById('box').classList.add('on');")
+            .expect("eval");
+        apply_dom_mutations(t);
+        let bt = t.box_tree.as_ref().unwrap();
+        let mut bg = None;
+        bt.walk(|b| {
+            if b.element_id.as_deref() == Some("box") {
+                bg = b.background;
+            }
+        });
+        assert_eq!(bg, Some(puriy_engine::Color::rgb(255, 0, 0)));
     }
 
     #[test]

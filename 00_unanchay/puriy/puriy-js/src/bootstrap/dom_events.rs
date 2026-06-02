@@ -174,29 +174,43 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         enumerable: true,
         configurable: true
     });
+    // Fase 7.184 — publica una mutación 'classList' con la lista completa
+    // de clases para que el chrome re-corra la cascada CSS (restyle). Los
+    // elementos sintéticos aún no insertados no publican (el appendChild
+    // posterior lleva las clases en el payload), igual que textContent.
+    el._emit_classlist = function() {
+        if (el._synthetic && !el._inserted) return;
+        globalThis.__puriy_dirty.push({
+            id: el._id,
+            kind: 'classList',
+            value: el._classList.join(' ')
+        });
+    };
     // className: getter/setter — refleja _classList. Permite leer el
-    // string original ("foo bar") y mutarlo (split by space). Fase 7.8
-    // no aplica el restyle (cambiar clases no re-corre la cascada CSS)
-    // pero sí mantiene el lado JS sincronizado.
+    // string original ("foo bar") y mutarlo (split by space). Fase 7.184
+    // publica la mutación de restyle al setear.
     Object.defineProperty(el, 'className', {
         get: function() { return el._classList.join(' '); },
         set: function(v) {
             el._classList = String(v).split(/\s+/).filter(function(s) { return s.length > 0; });
+            el._emit_classlist();
         },
         enumerable: true,
         configurable: true
     });
     el.classList = {
         contains: function(c) { return el._classList.indexOf(c) >= 0; },
-        add: function(c) { if (el._classList.indexOf(c) < 0) el._classList.push(c); },
+        add: function(c) {
+            if (el._classList.indexOf(c) < 0) { el._classList.push(c); el._emit_classlist(); }
+        },
         remove: function(c) {
             var i = el._classList.indexOf(c);
-            if (i >= 0) el._classList.splice(i, 1);
+            if (i >= 0) { el._classList.splice(i, 1); el._emit_classlist(); }
         },
         toggle: function(c) {
             var i = el._classList.indexOf(c);
-            if (i >= 0) { el._classList.splice(i, 1); return false; }
-            else { el._classList.push(c); return true; }
+            if (i >= 0) { el._classList.splice(i, 1); el._emit_classlist(); return false; }
+            else { el._classList.push(c); el._emit_classlist(); return true; }
         }
     };
     Object.defineProperty(el, 'textContent', {

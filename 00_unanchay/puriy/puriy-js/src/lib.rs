@@ -2292,6 +2292,26 @@ mod tests {
     }
 
     #[test]
+    fn classlist_publica_mutacion_para_restyle() {
+        // Fase 7.184 — add/remove/className publican la mutación 'classList'
+        // con la lista COMPLETA de clases para que el chrome recascadee.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_class("x", "div", "", "foo")]).expect("e");
+        rt.eval("document.getElementById('x').classList.add('bar')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let cl: Vec<_> = muts.iter().filter(|m| m.kind == "classList").collect();
+        assert_eq!(cl.len(), 1, "una mutación classList: {muts:?}");
+        assert_eq!(cl[0].id, "x");
+        assert_eq!(cl[0].value, "foo bar");
+        // className setter publica la lista nueva completa.
+        rt.eval("document.getElementById('x').className = 'a b'").expect("e");
+        let muts = rt.drain_dom_mutations();
+        let cl: Vec<_> = muts.iter().filter(|m| m.kind == "classList").collect();
+        assert_eq!(cl.last().expect("classList mut").value, "a b");
+    }
+
+    #[test]
     fn query_selector_id_consulta_indice() {
         let mut rt = JsRuntime::new().expect("rt");
         rt.set_document("t", "u", "b").expect("d");
