@@ -36,6 +36,7 @@ pub mod loudness;
 pub mod metadata;
 pub mod playlist;
 pub mod toolbar;
+pub mod tracks;
 pub mod transform;
 pub mod layout;
 pub mod sync;

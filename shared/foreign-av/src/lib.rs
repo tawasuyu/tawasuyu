@@ -52,6 +52,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use media_core::tracks::{MediaTrack, TrackKind};
 use media_core::{AudioSource, FrameSource, Seekable};
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -115,6 +116,10 @@ pub struct MediaInfo {
     /// entradas de ffmpeg (`-i path -i audio_path`). `None` ⇒ todo sale de
     /// `path` (camino normal, una sola entrada). Lo arma [`probe_dash`].
     pub audio_path: Option<PathBuf>,
+    /// Todas las pistas de audio y subtítulo embebidas (S2/A2). El consumidor
+    /// arma un `media_core::tracks::TrackSet` para ofrecer su selección. El
+    /// video y el audio "primarios" siguen en `video`/`audio` (compat).
+    pub tracks: Vec<MediaTrack>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -138,18 +143,76 @@ struct ProbeRoot {
 
 #[derive(Deserialize)]
 struct ProbeStream {
+    index: Option<u32>,
     codec_type: Option<String>,
+    codec_name: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
     r_frame_rate: Option<String>,
     avg_frame_rate: Option<String>,
     sample_rate: Option<String>,
     channels: Option<u16>,
+    tags: Option<ProbeTags>,
+    disposition: Option<ProbeDisposition>,
+}
+
+#[derive(Deserialize)]
+struct ProbeTags {
+    language: Option<String>,
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProbeDisposition {
+    default: Option<i32>,
+    forced: Option<i32>,
 }
 
 #[derive(Deserialize)]
 struct ProbeFormat {
     duration: Option<String>,
+}
+
+/// Convierte los streams de un `ffprobe -show_streams -of json` en las pistas
+/// de audio/subtítulo agnósticas de `media_core`. Función **pura** (sin
+/// subprocess) para poder testearla con fixtures; `probe` la alimenta con la
+/// salida real. Ignora video/datos/adjuntos: sólo audio y subtítulo son
+/// seleccionables. `und` (idioma indefinido) se descarta como `lang`.
+fn streams_to_tracks(streams: &[ProbeStream]) -> Vec<MediaTrack> {
+    streams
+        .iter()
+        .filter_map(|s| {
+            let kind = match s.codec_type.as_deref() {
+                Some("audio") => TrackKind::Audio,
+                Some("subtitle") => TrackKind::Subtitle,
+                _ => return None,
+            };
+            let (lang, title) = match &s.tags {
+                Some(t) => (
+                    t.language
+                        .as_deref()
+                        .filter(|l| !l.is_empty() && *l != "und")
+                        .map(str::to_string),
+                    t.title.as_deref().filter(|t| !t.is_empty()).map(str::to_string),
+                ),
+                None => (None, None),
+            };
+            let (default, forced) = match &s.disposition {
+                Some(d) => (d.default.unwrap_or(0) != 0, d.forced.unwrap_or(0) != 0),
+                None => (false, false),
+            };
+            Some(MediaTrack {
+                index: s.index.unwrap_or(0),
+                kind,
+                codec: s.codec_name.clone().unwrap_or_default(),
+                lang,
+                title,
+                default,
+                forced,
+                channels: if kind == TrackKind::Audio { s.channels } else { None },
+            })
+        })
+        .collect()
 }
 
 /// Corre `ffprobe` y devuelve metadata de los streams primarios.
@@ -239,12 +302,15 @@ pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo, FfmpegError> {
         .map(Duration::from_secs_f64)
         .unwrap_or(Duration::ZERO);
 
+    let tracks = streams_to_tracks(&root.streams);
+
     Ok(MediaInfo {
         path: p.to_path_buf(),
         duration,
         video,
         audio,
         audio_path: None,
+        tracks,
     })
 }
 
@@ -268,6 +334,9 @@ pub fn probe_dash(
         video: v.video,
         audio: a.audio,
         audio_path: Some(audio_src.as_ref().to_path_buf()),
+        // DASH son dos fuentes de una sola pista cada una; no hay menú de
+        // pistas embebidas que ofrecer.
+        tracks: Vec::new(),
     })
 }
 
@@ -868,5 +937,55 @@ mod tests {
             clamp_pos(Duration::from_secs(5), Duration::ZERO),
             Duration::from_secs(5)
         );
+    }
+
+    #[test]
+    fn streams_to_tracks_filtra_y_mapea() {
+        // Fixture estilo `ffprobe -show_streams -of json` de un MKV con video,
+        // dos audios (uno default) y dos subtítulos (uno forced).
+        let json = r#"{
+            "streams": [
+                { "index": 0, "codec_type": "video", "codec_name": "h264" },
+                { "index": 1, "codec_type": "audio", "codec_name": "ac3", "channels": 6,
+                  "tags": { "language": "eng" },
+                  "disposition": { "default": 1, "forced": 0 } },
+                { "index": 2, "codec_type": "audio", "codec_name": "aac", "channels": 2,
+                  "tags": { "language": "spa", "title": "Latino" },
+                  "disposition": { "default": 0, "forced": 0 } },
+                { "index": 3, "codec_type": "subtitle", "codec_name": "subrip",
+                  "tags": { "language": "und" } },
+                { "index": 4, "codec_type": "subtitle", "codec_name": "ass",
+                  "tags": { "language": "spa" },
+                  "disposition": { "default": 0, "forced": 1 } },
+                { "index": 5, "codec_type": "attachment", "codec_name": "ttf" }
+            ]
+        }"#;
+        let root: ProbeRoot = serde_json::from_str(json).unwrap();
+        let tracks = streams_to_tracks(&root.streams);
+        // video y attachment quedan fuera: 2 audio + 2 subtítulo.
+        assert_eq!(tracks.len(), 4);
+
+        let a0 = &tracks[0];
+        assert_eq!((a0.index, a0.kind), (1, TrackKind::Audio));
+        assert_eq!(a0.codec, "ac3");
+        assert_eq!(a0.lang.as_deref(), Some("eng"));
+        assert!(a0.default);
+        assert_eq!(a0.channels, Some(6));
+
+        let a1 = &tracks[1];
+        assert_eq!(a1.title.as_deref(), Some("Latino"));
+
+        // Subtítulo `und` → lang None; el subtítulo es forced sin canales.
+        let s0 = &tracks[2];
+        assert_eq!((s0.index, s0.kind), (3, TrackKind::Subtitle));
+        assert_eq!(s0.lang, None);
+        assert_eq!(s0.channels, None);
+        let s1 = &tracks[3];
+        assert!(s1.forced);
+
+        // Y arma un TrackSet usable: default audio = index 1, sub forced activo.
+        let set = media_core::tracks::TrackSet::from_tracks(tracks);
+        assert_eq!(set.current_audio().unwrap().index, 1);
+        assert_eq!(set.current_subtitle().unwrap().index, 4);
     }
 }

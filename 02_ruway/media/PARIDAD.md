@@ -32,8 +32,9 @@ conviene retomarlo con pantalla:
 
 - **Video con pantalla**: V1 fullscreen (API de ventana de llimphi-ui), V2
   aspect/crop/zoom (blit), V5 deinterlacing, V6 shaders, V8 HDR.
-- **Audio con hardware**: A3 dispositivo de salida (cpal), A2 selección de
-  pista (multi-stream), A6 gapless/crossfade.
+- **Audio con hardware**: A3 dispositivo de salida (cpal), A6 gapless/crossfade.
+  (A2 selección de pista: núcleo + extracción ✅ 2026-06-02; falta menú +
+  re-map en la app.)
 - **Motor**: M2 hw decode, M3 seek frame-accurate, M4 frame stepping, M5
   pitch-correct speed.
 - **Subtítulos**: S2 pistas embebidas. (S3 núcleo de estilo ✅ 2026-06-02;
@@ -100,9 +101,9 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 
 ### Pendiente
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
-- Track AUDIO A2/A3 (selección de pista, dispositivo de salida — necesitan hardware). **A4 (delay/sync) ✅ · A5 (normalización + limitador + downmix/upmix) ✅ · A6 (crossfade, kernel puro) ✅.**
+- Track AUDIO A3 (dispositivo de salida — necesita hardware). **A2 (selección de pista: núcleo `tracks` + extracción `foreign-av`) ✅ · A4 (delay/sync) ✅ · A5 (normalización + limitador + downmix/upmix) ✅ · A6 (crossfade, kernel puro) ✅.** (A2 falta el menú + re-map en `media-app`.)
 - Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, hue incluido) ✅.**
-- Track SUBTÍTULOS S2 (pistas embebidas). **S1 (ASS/SSA texto+timing) ✅ · S3 (estilo/colores/alineación ASS, núcleo) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.**
+- Track SUBTÍTULOS — núcleo completo. **S1 (ASS/SSA texto+timing) ✅ · S2 (pistas embebidas: núcleo `tracks` + extracción `foreign-av`) ✅ · S3 (estilo/colores/alineación ASS, núcleo) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.** (S2/S3 faltan render/menú en `media-app`.)
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
 - Track UX U3 (thumbnails en hover) y U4 (OSD) — necesitan decode/pantalla.
   **U1 (modelo de orden de playlist) ✅ · U2 (resume/historial) ✅ · U5
@@ -143,6 +144,11 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   bandas ISO estilo VLC. Puro-DSP, sin deps, 100% testeable en CI. Vive en
   `media-core::eq`, compone en la cadena entre Volume y Probe.
 - **A2 — Selección de pista de audio** (archivos multi-stream / multi-idioma).
+  ✅ *Núcleo + extracción cerrados (2026-06-02).* Comparte el modelo de S2:
+  `media-core::tracks::TrackSet` (lista de pistas de audio + selección/ciclado)
+  alimentado por `foreign-av::streams_to_tracks`. **Falta**: el menú en
+  `media-app` y re-mapear el stream de audio en ffmpeg (`-map 0:<index>`) al
+  cambiar — necesita correr la app (y, en el camino DASH, no aplica).
 - **A3 — Selección de dispositivo de salida** (hoy `media-audio-cpal` usa
   sólo el default output device).
 - **A4 — Delay/sync de audio** (`--audio-delay`). ✅ *Cerrado (2026-06-01).*
@@ -240,7 +246,20 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   suma la env `MEDIA_ASS`. ASS entra al mismo pipeline de texto que SRT/VTT.
   El **estilo visual** (fuente/color/posición/karaoke) queda para S3 — hoy se
   pinta como texto plano. +6 tests.
-- **S2 — Pistas embebidas** (muxeadas) + su selección.
+- **S2 — Pistas embebidas** (muxeadas) + su selección. ✅ *Núcleo +
+  extracción cerrados (2026-06-02; comparte modelo con A2).* `media-core::
+  tracks`: `MediaTrack` (índice de stream, tipo audio/subtítulo, códec,
+  idioma ISO-639, título, default/forced, canales) + `TrackSet` con la
+  lógica de selección agnóstica — reparte por tipo, selección inicial
+  (audio default/primera; subtítulo forced→default→**apagado** estilo VLC),
+  `select_audio`/`select_subtitle(Option)`/`cycle_audio`/`cycle_subtitle`
+  (ciclo `v` apaga al final) + `label()` legible. **Extracción** en
+  `shared/foreign-av` (regla #4): `probe` ahora lee `tags`/`disposition`/
+  `index`/`codec_name` de cada stream y los mapea a `MediaTrack` vía
+  `streams_to_tracks` (pura, testeada con fixture JSON; `und`→sin idioma,
+  filtra video/adjuntos); `MediaInfo.tracks` los expone. +9 tests (core) +1
+  (foreign-av). **Falta**: que `media-app` ofrezca los menús y le pase el
+  `index` al decoder (re-`-map` de ffmpeg) — necesita correr la app.
 - **S3 — Estilo configurable** (fuente/tamaño/color/posición/fondo). ✅
   *Núcleo cerrado (2026-06-02).* `parse_ass` ahora extrae el estilo además del
   texto: tipos nuevos `SubAlign` (numpad v4+ `\an` + legacy SSA `\a`),
