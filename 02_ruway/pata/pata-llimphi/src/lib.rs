@@ -312,7 +312,7 @@ impl App for PataApp {
                     let cmd = std::mem::take(&mut model.shuma.buffer);
                     model.shuma.pending = true;
                     model.shuma.output = None;
-                    handle.spawn(move || Msg::ShumaResult(shuma::ejecutar_stand_in(&cmd)));
+                    handle.spawn(move || Msg::ShumaResult(shuma::ejecutar(&cmd)));
                 }
             }
             Msg::ShumaResult(res) => {

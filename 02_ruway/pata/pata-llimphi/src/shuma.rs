@@ -6,12 +6,9 @@
 //! escritorio, con un input que captura el teclado. Repliega al cerrar.
 //!
 //! La ejecución del comando es, estrictamente, trabajo de `shuma` (no de
-//! `pata`). Mientras no exista el puente a `shuma`, [`ejecutar_stand_in`] corre
-//! el comando por `sh -c` como **sustituto temporal** —el mismo patrón que usa
-//! `mirada-launcher`—; cuando el shell de `shuma` sea embebible, reemplaza a
-//! esta función sin tocar el mecanismo del drawer.
-
-use std::process::Command;
+//! `pata`). El puente del SDD §5 ya existe: [`ejecutar`] corre el comando por
+//! el **ejecutor real de shuma** (`shuma-exec`) —captura acotada, eventos en
+//! streaming— en vez de un `sh -c` pelado. El mecanismo del drawer no cambia.
 
 use llimphi_motion::Tween;
 use llimphi_theme::Theme;
@@ -335,23 +332,64 @@ fn chip_text(t: &str, size: f32, color: llimphi_theme::Color) -> View<Msg> {
     .text(t.to_string(), size, color)
 }
 
-/// **Sustituto temporal de shuma**: corre el comando por `sh -c` y devuelve su
-/// stdout, o el stderr/explicación como error. Bloqueante: se llama desde un
-/// `Handle::spawn`. Reemplazar por el puente a `shuma` cuando exista.
-pub fn ejecutar_stand_in(cmd: &str) -> Result<String, String> {
-    let salida = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .output()
-        .map_err(|e| format!("no pude lanzar sh: {e}"))?;
-    if salida.status.success() {
-        Ok(String::from_utf8_lossy(&salida.stdout).trim_end().to_string())
-    } else {
-        let err = String::from_utf8_lossy(&salida.stderr);
-        Err(if err.trim().is_empty() {
-            format!("salió con código {}", salida.status)
-        } else {
-            err.trim_end().to_string()
-        })
+/// El puente pata→shuma (SDD §5): ejecuta `cmd` por el **ejecutor real de
+/// shuma** (`shuma-exec`) y devuelve su stdout, o el stderr/código como error.
+/// Reúne los eventos en streaming hasta el final; la captura está acotada a
+/// [`CAPTURE_CAP`] (lo que excede se marca como truncado). Bloqueante: se
+/// llama desde un hilo de fondo (`Handle::spawn` o `std::thread`).
+pub fn ejecutar(cmd: &str) -> Result<String, String> {
+    use shuma_exec::{run, CommandSpec, RunEvent};
+
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "/".to_string());
+    let spec = CommandSpec::shell(cmd, cwd).with_limit(CAPTURE_CAP);
+
+    let mut out = String::new();
+    let mut err = String::new();
+    let mut code = 0i32;
+    let mut failed: Option<String> = None;
+    let mut truncated = false;
+    for ev in run(&spec).wait_all() {
+        match ev {
+            RunEvent::Stdout(l) => {
+                out.push_str(&l);
+                out.push('\n');
+            }
+            RunEvent::Stderr(l) => {
+                err.push_str(&l);
+                err.push('\n');
+            }
+            RunEvent::Exited(c) => code = c,
+            RunEvent::Failed(m) => failed = Some(m),
+            RunEvent::Truncated => truncated = true,
+            RunEvent::Spilled(p) => out.push_str(&format!("\n… (salida volcada a {p})")),
+            // Sólo aparece en modo PTY; el drawer no lo usa.
+            RunEvent::Bytes(_) => {}
+        }
     }
+
+    if let Some(m) = failed {
+        return Err(m);
+    }
+    if truncated {
+        out.push_str(&format!("\n… (salida truncada a {CAPTURE_CAP} bytes)"));
+    }
+    let out = out.trim_end().to_string();
+    if code != 0 {
+        let body = if !err.trim().is_empty() {
+            err.trim_end().to_string()
+        } else {
+            out
+        };
+        return Err(if body.is_empty() {
+            format!("salió con código {code}")
+        } else {
+            format!("{body}\n(código {code})")
+        });
+    }
+    Ok(out)
 }
+
+/// Tope de captura del drawer, en bytes — un comando charlatán no infla la RAM.
+const CAPTURE_CAP: usize = 256 * 1024;

@@ -391,21 +391,27 @@ impl LayerApp {
         self.panels[pi].dirty = true;
     }
 
-    /// Enter en el drawer: lanza el comando **detached** (no bloquea, no espera
-    /// a que termine — clave para apps GUI como kitty) y **cierra el drawer**,
-    /// soltando el foco Exclusive para que la app lanzada reciba el teclado.
-    /// Es la UX de un lanzador (rofi/wofi-run): tecleás, Enter, abre y se va.
-    /// Para una terminal de verdad con shell, está la dropdown del WM (`Super+\``).
+    /// Enter en el drawer: corre el comando por el **ejecutor real de shuma**
+    /// (`shuma::ejecutar`, sobre `shuma-exec`) en un hilo de fondo y muestra su
+    /// salida en el drawer — el puente pata→shuma del SDD §5. El hilo manda el
+    /// `Result` por un canal que `poll_exec` sondea cada frame; la UI no se
+    /// bloquea. El drawer **queda abierto** (sigue Exclusive, podés encadenar
+    /// comandos y leer la salida); se cierra con Esc. Para lanzar una app GUI y
+    /// olvidarte, está el launcher (clic en un ítem) o `Super+p`.
     fn shuma_submit(&mut self) {
         let cmd = std::mem::take(&mut self.shuma.buffer);
         if cmd.trim().is_empty() {
             self.marcar_shuma_dirty();
             return;
         }
-        crate::spawn_cmd(&cmd);
-        self.shuma.pending = false;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::shuma::ejecutar(&cmd));
+        });
+        self.exec_rx = Some(rx);
+        self.shuma.pending = true;
         self.shuma.output = None;
-        self.set_shuma_open(false);
+        self.marcar_shuma_dirty();
     }
 
     /// Sondea (sin bloquear) si el comando del Quake terminó; si sí, guarda su
