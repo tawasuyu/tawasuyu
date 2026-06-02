@@ -1625,6 +1625,14 @@ impl App for Puriy {
                 if let Some(c) = t.input_checks.get_mut(idx) {
                     *c = !*c;
                 }
+                // Fase 7.187 — refleja el nuevo estado en el atributo `checked`
+                // del box y recascadea para que `:checked`/`:checked + label`
+                // se actualicen al togglear en vivo.
+                let checks = t.input_checks.clone();
+                if let Some(bt) = t.box_tree.as_mut() {
+                    bt.sync_checked_from(&checks);
+                    bt.restyle();
+                }
             }
             Msg::SelectRadio(idx) => {
                 // Encontrá el `name` de este radio + form_idx; los radios
@@ -1658,6 +1666,13 @@ impl App for Puriy {
                         counter += 1;
                     }
                 });
+                // Fase 7.187 — espeja el estado del grupo de radios al atributo
+                // `checked` de los boxes y recascadea (`:checked` en vivo).
+                let checks = t.input_checks.clone();
+                if let Some(bt) = t.box_tree.as_mut() {
+                    bt.sync_checked_from(&checks);
+                    bt.restyle();
+                }
             }
             Msg::SubmitForm(idx) => {
                 // Tratamos como si el input idx estuviera focado.

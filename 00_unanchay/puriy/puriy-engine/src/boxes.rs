@@ -522,6 +522,16 @@ impl BoxTree {
         set_class_list_inner(&mut self.root, id, classes)
     }
 
+    /// Sincroniza el atributo `checked` (presencia) de cada control de
+    /// formulario con `checks[i]`, en orden DFS (el mismo que indexa el
+    /// `input_checks` del chrome), para que un restyle re-evalúe
+    /// `:checked`/`:checked + label`. NO recascadea — el caller llama
+    /// [`Self::restyle`] después. Fase 7.187.
+    pub fn sync_checked_from(&mut self, checks: &[bool]) {
+        let mut counter = 0usize;
+        sync_checked_inner(&mut self.root, checks, &mut counter);
+    }
+
     /// Re-aplica la cascada CSS a TODO el árbol reusando las reglas
     /// retenidas (`self.styles`). Necesario tras un cambio de `classList`
     /// u otra mutación que altere qué reglas matchean: un cambio en una
@@ -922,6 +932,24 @@ fn set_class_list_inner(node: &mut BoxNode, id: &str, classes: Vec<String>) -> b
         }
     }
     false
+}
+
+/// Recorre en DFS los controles (`input_kind.is_some()`) y fija/quita el
+/// atributo `checked` de cada uno según `checks[counter]`.
+fn sync_checked_inner(node: &mut BoxNode, checks: &[bool], counter: &mut usize) {
+    if node.input_kind.is_some() {
+        let checked = checks.get(*counter).copied().unwrap_or(false);
+        let has = node.attributes.iter().any(|(k, _)| k == "checked");
+        if checked && !has {
+            node.attributes.push(("checked".to_string(), String::new()));
+        } else if !checked && has {
+            node.attributes.retain(|(k, _)| k != "checked");
+        }
+        *counter += 1;
+    }
+    for c in node.children.iter_mut() {
+        sync_checked_inner(c, checks, counter);
+    }
 }
 
 /// Construye un Element rcdom espejo de un BoxNode elemento (`tag.is_some()`),
@@ -3378,6 +3406,32 @@ mod tests {
         assert_eq!(box_by_id(&doc.box_tree, "l2").unwrap().color, super::Color::rgb(0, 128, 0));
         assert_ne!(box_by_id(&doc.box_tree, "l1").unwrap().color, super::Color::rgb(0, 128, 0));
         assert_eq!(box_by_id(&doc.box_tree, "sp").unwrap().color, super::Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn sync_checked_y_restyle_actualiza_pseudo_checked() {
+        // Fase 7.187 — togglear un checkbox actualiza el atributo `checked` y
+        // recascadea: `:checked` y `:checked + label` aplican en vivo.
+        let html = r#"<html><head><style>
+            input:checked { background: red; }
+            input:checked + label { color: blue; }
+        </style></head><body>
+            <input id="cb" type="checkbox"><label id="lb">L</label>
+        </body></html>"#;
+        let mut doc = Engine::new().load_html("about:test", html);
+        let red = super::Color::rgb(255, 0, 0);
+        let blue = super::Color::rgb(0, 0, 255);
+        assert_ne!(box_by_id(&doc.box_tree, "cb").unwrap().background, Some(red));
+        // Marcar (el checkbox es el control índice 0).
+        doc.box_tree.sync_checked_from(&[true]);
+        doc.box_tree.restyle();
+        assert_eq!(box_by_id(&doc.box_tree, "cb").unwrap().background, Some(red));
+        assert_eq!(box_by_id(&doc.box_tree, "lb").unwrap().color, blue);
+        // Desmarcar revierte ambos.
+        doc.box_tree.sync_checked_from(&[false]);
+        doc.box_tree.restyle();
+        assert_ne!(box_by_id(&doc.box_tree, "cb").unwrap().background, Some(red));
+        assert_ne!(box_by_id(&doc.box_tree, "lb").unwrap().color, blue);
     }
 
     #[test]
