@@ -4491,6 +4491,82 @@ mod tests {
     }
 
     #[test]
+    fn paint_canvas_cmds_putimagedata_dibuja() {
+        // Fase 7.202 — un comando putImageData con base64 RGBA válido pinta.
+        // "/wAA/w==" = 1 pixel rojo opaco (FF 00 00 FF).
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let imgs: std::collections::HashMap<String, PenikoImage> =
+            std::collections::HashMap::new();
+        let cmds: Vec<Vec<serde_json::Value>> =
+            serde_json::from_str(r#"[["putImageData",3,4,1,1,"/wAA/w=="]]"#).unwrap();
+        let mut scene = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut scene, &mut ts, rect, &cmds, 100.0, 100.0, &imgs);
+        assert!(!scene.encoding().is_empty(), "putImageData debería pintar");
+        // base64 inválido / dims en cero → no-op (no panic).
+        let mala: Vec<Vec<serde_json::Value>> =
+            serde_json::from_str(r#"[["putImageData",0,0,0,0,"@@@"]]"#).unwrap();
+        let mut s2 = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut s2, &mut ts, rect, &mala, 100.0, 100.0, &imgs);
+        assert!(s2.encoding().is_empty(), "putImageData inválido no pinta");
+    }
+
+    #[test]
+    fn putimagedata_llega_al_frame_end_to_end() {
+        // ctx.putImageData por el runtime JS real → el frame lleva el comando
+        // con dx/dy/w/h/base64, y el painter lo dibuja. Fase 7.202.
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.url = "about:test".into();
+        t.box_tree = Some(parse(
+            r#"<body><canvas id="c" width="20" height="20"></canvas></body>"#,
+        ));
+        t.has_canvas = true;
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[puriy_js::ElementSnapshot {
+            id: "c".into(),
+            tag_name: "canvas".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: vec![("width".into(), "20".into()), ("height".into(), "20".into())],
+            dfs_index: 0,
+        }])
+        .expect("set_elements");
+        rt.eval(
+            "var ctx=document.getElementById('c').getContext('2d');\
+             var id=ctx.createImageData(2,2);\
+             for(var i=0;i<id.data.length;i+=4){id.data[i]=10;id.data[i+1]=20;id.data[i+2]=30;id.data[i+3]=255;}\
+             ctx.putImageData(id,1,1);\
+             var back=ctx.getImageData(1,1,1,1);",
+        )
+        .expect("draw");
+        // getImageData round-trip dentro del runtime.
+        assert_eq!(rt.eval("back.data[0]").expect("e"), puriy_js::JsValue::Number(10.0));
+        assert_eq!(rt.eval("back.data[2]").expect("e"), puriy_js::JsValue::Number(30.0));
+        apply_dom_mutations(t);
+        let frame = t.canvas_frames.get("c").expect("frame");
+        let put = frame
+            .cmds
+            .iter()
+            .find(|c| c.first().and_then(|v| v.as_str()) == Some("putImageData"))
+            .expect("putImageData");
+        assert_eq!(put.get(3).and_then(|v| v.as_u64()), Some(2)); // w
+        assert_eq!(put.get(4).and_then(|v| v.as_u64()), Some(2)); // h
+        assert!(put.get(5).and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()), "base64 presente");
+        // El painter lo dibuja.
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 40.0, h: 40.0 };
+        let imgs: std::collections::HashMap<String, PenikoImage> =
+            std::collections::HashMap::new();
+        let mut scene = llimphi_raster::vello::Scene::new();
+        paint_canvas_cmds(&mut scene, &mut ts, rect, &frame.cmds, 20.0, 20.0, &imgs);
+        assert!(!scene.encoding().is_empty(), "el frame con putImageData debería pintar");
+    }
+
+    #[test]
     fn decode_canvas_images_resuelve_data_url() {
         // decode_canvas_images decodifica el src de un drawImage (data: PNG 1×1)
         // y lo deja en t.canvas_images.

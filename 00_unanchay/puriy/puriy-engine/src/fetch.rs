@@ -158,6 +158,17 @@ fn data_url_mime(url: &str) -> String {
 /// (`data:<mime>,<texto>`). El MIME se descarta — el caller adivina el formato
 /// (las imágenes por sniffing). `None` si el prefijo no es `data:`, falta la
 /// coma separadora, o el payload base64 está corrupto.
+/// Decodifica un string base64 estándar (ignorando whitespace) a bytes. Lo usa
+/// el chrome para reconstruir los píxeles RGBA de `putImageData` (Fase 7.202),
+/// que el lado JS codifica con `btoa`. Devuelve `None` si no decodifica.
+pub fn decode_base64(s: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(cleaned.as_bytes())
+        .ok()
+}
+
 pub fn decode_data_url(url: &str) -> Option<Vec<u8>> {
     if !is_data_url(url) {
         return None;

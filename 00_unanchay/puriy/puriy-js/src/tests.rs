@@ -10999,8 +10999,57 @@
         assert_eq!(rt.eval("id.data.length").expect("e"), JsValue::Number(80.0));
         assert_eq!(rt.eval("id.data instanceof Uint8ClampedArray").expect("e"), JsValue::Bool(true));
         assert_eq!(rt.eval("new ImageData(2, 2).colorSpace").expect("e"), JsValue::String("srgb".into()));
-        // getImageData devuelve ceros (el host lo rellena con el framebuffer real).
+        // getImageData de un canvas virgen → todo transparente (0).
         assert_eq!(rt.eval("ctx.getImageData(0, 0, 3, 3).data.length").expect("e"), JsValue::Number(36.0));
+        assert_eq!(rt.eval("ctx.getImageData(0, 0, 3, 3).data[3]").expect("e"), JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn canvas2d_get_put_image_data_roundtrip() {
+        // Fase 7.202 — getImageData/putImageData reales sobre un framebuffer JS.
+        let mut rt = JsRuntime::new().expect("rt");
+        // putImageData de un pixel rojo opaco en (2,3) → getImageData lo lee.
+        rt.eval(
+            "var ctx = new OffscreenCanvas(10, 10).getContext('2d');\
+             var id = ctx.createImageData(1, 1);\
+             id.data[0]=255; id.data[1]=0; id.data[2]=0; id.data[3]=255;\
+             ctx.putImageData(id, 2, 3);\
+             var got = ctx.getImageData(2, 3, 1, 1);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("got.data[0]").expect("e"), JsValue::Number(255.0));
+        assert_eq!(rt.eval("got.data[3]").expect("e"), JsValue::Number(255.0));
+        // Un pixel vecino sigue transparente.
+        assert_eq!(rt.eval("ctx.getImageData(0,0,1,1).data[3]").expect("e"), JsValue::Number(0.0));
+        // fillRect sólido (transform identidad) → getImageData lee el color.
+        rt.eval("ctx.fillStyle='#00ff00'; ctx.fillRect(5,5,2,2); var f=ctx.getImageData(5,5,1,1);")
+            .expect("e");
+        assert_eq!(rt.eval("f.data[1]").expect("e"), JsValue::Number(255.0));
+        assert_eq!(rt.eval("f.data[3]").expect("e"), JsValue::Number(255.0));
+        // putImageData registró un comando (base64) para que el painter lo dibuje.
+        assert_eq!(
+            rt.eval("ctx._cmds.some(function(c){return c[0]==='putImageData' && typeof c[5]==='string';})")
+                .expect("e"),
+            JsValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn canvas2d_getimagedata_refleja_fillrect_previo() {
+        // El framebuffer se crea perezoso en el primer getImageData y reproduce
+        // los fillRect/clearRect ya en el log → un fillRect ANTES del primer
+        // getImageData igual se lee (Fase 7.202, replay).
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.eval(
+            "var c = new OffscreenCanvas(8, 8).getContext('2d');\
+             c.fillStyle='rgb(0,0,255)'; c.fillRect(0,0,4,4);\
+             var g = c.getImageData(1, 1, 1, 1);",
+        )
+        .expect("e");
+        assert_eq!(rt.eval("g.data[2]").expect("e"), JsValue::Number(255.0));
+        assert_eq!(rt.eval("g.data[3]").expect("e"), JsValue::Number(255.0));
+        // Fuera del rect lleno → transparente.
+        assert_eq!(rt.eval("c.getImageData(6,6,1,1).data[3]").expect("e"), JsValue::Number(0.0));
     }
 
     #[test]

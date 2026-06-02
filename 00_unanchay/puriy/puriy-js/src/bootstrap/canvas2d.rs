@@ -7,8 +7,9 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
 // path actual, save/restore) es 100% funcional y observable desde JS.
 //   · `new OffscreenCanvas(w, h).getContext('2d')` es el punto de entrada constructible
 //     sin DOM; el chrome cablea `HTMLCanvasElement.getContext` con el mismo molde.
-//   · `getImageData` devuelve un `ImageData` de ceros (el host lo rellena con el
-//     framebuffer real); `measureText` da métricas sintéticas proporcionales al font.
+//   · `getImageData`/`putImageData` son REALES (Fase 7.202): el contexto lleva
+//     un framebuffer RGBA propio en JS (perezoso) que refleja putImageData +
+//     fillRect/clearRect sólidos; `measureText` da métricas sintéticas.
 //   · `convertToBlob()` / `transferToImageBitmap()` / `createImageBitmap()` resuelven
 //     con objetos sintéticos; el host reemplaza los bytes reales.
 (function() {
@@ -17,6 +18,57 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     var nextId = 1;
 
     function clamp255(v) { v = v | 0; return v < 0 ? 0 : (v > 255 ? 255 : v); }
+
+    // Fase 7.202 — soporte real de getImageData/putImageData vía un framebuffer
+    // RGBA por contexto, mantenido en JS (getImageData es síncrono y el chrome
+    // sólo interactúa por eval-in/read-out → el buffer debe vivir acá).
+    // `parseFbColor` resuelve un fillStyle string a [r,g,b,a(0..255)] para
+    // rasterizar fillRect al buffer; devuelve null para gradientes/patrones/
+    // colores no reconocidos (esa op no se rasteriza → no se refleja en
+    // getImageData). `bytesToB64` codifica los píxeles para el comando que el
+    // painter dibuja.
+    var FB_NAMED = {
+        transparent: [0, 0, 0, 0], black: [0, 0, 0, 255], white: [255, 255, 255, 255],
+        red: [255, 0, 0, 255], green: [0, 128, 0, 255], lime: [0, 255, 0, 255],
+        blue: [0, 0, 255, 255], yellow: [255, 255, 0, 255], cyan: [0, 255, 255, 255],
+        aqua: [0, 255, 255, 255], magenta: [255, 0, 255, 255], fuchsia: [255, 0, 255, 255],
+        gray: [128, 128, 128, 255], grey: [128, 128, 128, 255], silver: [192, 192, 192, 255],
+        orange: [255, 165, 0, 255], purple: [128, 0, 128, 255]
+    };
+    function parseFbColor(s) {
+        if (typeof s !== 'string') return null;
+        s = s.trim().toLowerCase();
+        if (FB_NAMED[s]) return FB_NAMED[s].slice();
+        if (s.charAt(0) === '#') {
+            var h = s.slice(1);
+            var hx = function(a, b) { return parseInt(h.slice(a, b), 16); };
+            if (h.length === 3 || h.length === 4) {
+                var r = parseInt(h[0] + h[0], 16), g = parseInt(h[1] + h[1], 16), b = parseInt(h[2] + h[2], 16);
+                var a = h.length === 4 ? parseInt(h[3] + h[3], 16) : 255;
+                return [r, g, b, a];
+            }
+            if (h.length === 6 || h.length === 8) {
+                return [hx(0, 2), hx(2, 4), hx(4, 6), h.length === 8 ? hx(6, 8) : 255];
+            }
+            return null;
+        }
+        var m = /^rgba?\(([^)]+)\)/.exec(s);
+        if (m) {
+            var p = m[1].split(/[,\/\s]+/).filter(function(x) { return x.length; });
+            if (p.length < 3) return null;
+            var pc = function(x) { return clamp255(x.indexOf('%') >= 0 ? Math.round(parseFloat(x) * 2.55) : parseInt(x, 10)); };
+            var av = p.length > 3 ? Math.round((parseFloat(p[3]) || 0) * 255) : 255;
+            return [pc(p[0]), pc(p[1]), pc(p[2]), clamp255(av)];
+        }
+        return null;
+    }
+    function bytesToB64(u8) {
+        var CH = 0x8000, parts = [];
+        for (var i = 0; i < u8.length; i += CH) {
+            parts.push(String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + CH, u8.length))));
+        }
+        return globalThis.btoa(parts.join(''));
+    }
 
     // ---- ImageData ----
     function ImageData(a, b, c) {
@@ -248,6 +300,7 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     };
     C.reset = function() {
         this._cmds = []; this._state = defaultState(); this._stack = []; this._path = new Path2D();
+        this._fb = null; // Fase 7.202 — descarta el framebuffer (se re-crea perezoso)
         this._rec('reset');
     };
 
@@ -315,10 +368,19 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
         return x <= 0 && y <= 0 && (x + w) >= cw && (y + h) >= ch;
     };
     C.clearRect = function(x, y, w, h) {
+        this._fbClearRect(x, y, w, h); // Fase 7.202: no-op si no hay framebuffer
         if (this._covers_canvas(x, y, w, h)) { this._cmds = []; }
         else { this._rec('clearRect', x, y, w, h); }
     };
     C.fillRect = function(x, y, w, h) {
+        // Fase 7.202 — rasteriza al framebuffer (si existe) cuando el transform
+        // es identidad, para que un getImageData posterior lea el color.
+        if (this._fb) {
+            var t = this._state.transform;
+            if (t[0] === 1 && t[1] === 0 && t[2] === 0 && t[3] === 1 && t[4] === 0 && t[5] === 0) {
+                this._fbFillRect(x, y, w, h, this._state.fillStyle, this._state.globalAlpha);
+            }
+        }
         // Fondo opaco de canvas entero → también trunca (patrón común de
         // limpiar pintando un rect de fondo en vez de clearRect).
         if (this._covers_canvas(x, y, w, h) && this._state.globalAlpha >= 1 &&
@@ -357,13 +419,129 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     C.createConicGradient = function(a, x, y) { return new CanvasGradient('conic', [a, x, y]); };
     C.createPattern = function(image, repetition) { return new CanvasPattern(image, repetition); };
 
+    // ---- Framebuffer RGBA por contexto (Fase 7.202) ----
+    // Se crea perezosamente al primer getImageData/putImageData (un canvas que
+    // sólo dibuja vectores/imágenes para mostrar NO paga el costo). Al crearlo
+    // se reproducen los fillRect/clearRect ya en el log para que un
+    // `fillRect(...); getImageData(...)` lea el color. Dimensiones = las del
+    // canvas (re-aloca si cambian).
+    C._ensureFb = function() {
+        var cw = (this.canvas && this.canvas.width) | 0, ch = (this.canvas && this.canvas.height) | 0;
+        if (cw <= 0) cw = 300;
+        if (ch <= 0) ch = 150;
+        if (this._fb && this._fbw === cw && this._fbh === ch) return;
+        this._fb = new Uint8ClampedArray(cw * ch * 4);
+        this._fbw = cw; this._fbh = ch;
+        this._fbReplay();
+    };
+    C._fbReplay = function() {
+        var cs = this._cmds;
+        for (var i = 0; i < cs.length; i++) {
+            var c = cs[i];
+            if (c[0] === 'fillRect') this._fbFillRect(c[1], c[2], c[3], c[4], c[5], c[6] && c[6].ga);
+            else if (c[0] === 'clearRect') this._fbClearRect(c[1], c[2], c[3], c[4]);
+        }
+    };
+    // Rasteriza un fillRect sólido al buffer (asume transform identidad — el
+    // caller live lo verifica; el replay lo asume). src-over con alpha*ga.
+    C._fbFillRect = function(x, y, w, h, style, ga) {
+        if (!this._fb) return;
+        var col = parseFbColor(style);
+        if (!col) return;
+        var sa = (col[3] / 255) * (ga == null ? 1 : ga);
+        if (sa <= 0) return;
+        x = Math.round(x); y = Math.round(y);
+        var x2 = Math.round(x + w), y2 = Math.round(y + h), tmp;
+        if (x2 < x) { tmp = x; x = x2; x2 = tmp; }
+        if (y2 < y) { tmp = y; y = y2; y2 = tmp; }
+        var fbw = this._fbw, fbh = this._fbh, fb = this._fb;
+        var xa = Math.max(0, x), ya = Math.max(0, y), xb = Math.min(fbw, x2), yb = Math.min(fbh, y2);
+        var r = col[0], g = col[1], b = col[2];
+        for (var py = ya; py < yb; py++) {
+            for (var px = xa; px < xb; px++) {
+                var i = (py * fbw + px) * 4;
+                if (sa >= 1) { fb[i] = r; fb[i + 1] = g; fb[i + 2] = b; fb[i + 3] = 255; }
+                else {
+                    var da = fb[i + 3] / 255, na = sa + da * (1 - sa);
+                    if (na <= 0) { fb[i] = fb[i + 1] = fb[i + 2] = fb[i + 3] = 0; continue; }
+                    fb[i] = (r * sa + fb[i] * da * (1 - sa)) / na;
+                    fb[i + 1] = (g * sa + fb[i + 1] * da * (1 - sa)) / na;
+                    fb[i + 2] = (b * sa + fb[i + 2] * da * (1 - sa)) / na;
+                    fb[i + 3] = na * 255;
+                }
+            }
+        }
+    };
+    C._fbClearRect = function(x, y, w, h) {
+        if (!this._fb) return;
+        x = Math.round(x); y = Math.round(y);
+        var x2 = Math.round(x + w), y2 = Math.round(y + h), tmp;
+        if (x2 < x) { tmp = x; x = x2; x2 = tmp; }
+        if (y2 < y) { tmp = y; y = y2; y2 = tmp; }
+        var fbw = this._fbw, fbh = this._fbh, fb = this._fb;
+        var xa = Math.max(0, x), ya = Math.max(0, y), xb = Math.min(fbw, x2), yb = Math.min(fbh, y2);
+        for (var py = ya; py < yb; py++) {
+            for (var px = xa; px < xb; px++) {
+                var i = (py * fbw + px) * 4; fb[i] = fb[i + 1] = fb[i + 2] = fb[i + 3] = 0;
+            }
+        }
+    };
+
     // ImageData.
     C.createImageData = function(a, b) {
         if (a instanceof ImageData) return new ImageData(a.width, a.height);
         return new ImageData(Math.abs(a | 0), Math.abs(b | 0));
     };
-    C.getImageData = function(sx, sy, sw, sh) { return new ImageData(Math.abs(sw | 0), Math.abs(sh | 0)); };
-    C.putImageData = function(imageData, dx, dy) { this._rec('putImageData', this._id, dx, dy); };
+    // getImageData REAL: lee el sub-rect del framebuffer (Fase 7.202). Fuera de
+    // bordes → transparente (default del ImageData nuevo). sw/sh negativos
+    // invierten el origen (spec).
+    C.getImageData = function(sx, sy, sw, sh) {
+        var aw = Math.abs(sw | 0), ah = Math.abs(sh | 0);
+        var out = new ImageData(aw, ah); // lanza IndexSizeError si 0 (spec)
+        this._ensureFb();
+        sx = sx | 0; sy = sy | 0;
+        if ((sw | 0) < 0) sx += (sw | 0);
+        if ((sh | 0) < 0) sy += (sh | 0);
+        var fbw = this._fbw, fbh = this._fbh, fb = this._fb, d = out.data;
+        for (var ry = 0; ry < ah; ry++) {
+            var fy = sy + ry; if (fy < 0 || fy >= fbh) continue;
+            for (var rx = 0; rx < aw; rx++) {
+                var fx = sx + rx; if (fx < 0 || fx >= fbw) continue;
+                var di = (ry * aw + rx) * 4, si = (fy * fbw + fx) * 4;
+                d[di] = fb[si]; d[di + 1] = fb[si + 1]; d[di + 2] = fb[si + 2]; d[di + 3] = fb[si + 3];
+            }
+        }
+        return out;
+    };
+    // putImageData REAL: blitea los píxeles al framebuffer (REEMPLAZA, sin
+    // blend — spec) y registra un comando con los píxeles en base64 para que el
+    // painter los dibuje. Bypassa el transform del contexto (spec). Soporta el
+    // dirty rect opcional (args 4-7) sobre el blit al buffer.
+    C.putImageData = function(imageData, dx, dy, dirtyX, dirtyY, dirtyW, dirtyH) {
+        if (!imageData || !imageData.data) return;
+        this._ensureFb();
+        dx = dx | 0; dy = dy | 0;
+        var iw = imageData.width | 0, ih = imageData.height | 0, src = imageData.data;
+        var fbw = this._fbw, fbh = this._fbh, fb = this._fb;
+        var ox = 0, oy = 0, ow = iw, oh = ih, tmp;
+        if (arguments.length >= 7) {
+            ox = dirtyX | 0; oy = dirtyY | 0; ow = dirtyW | 0; oh = dirtyH | 0;
+            if (ow < 0) { ox += ow; ow = -ow; }
+            if (oh < 0) { oy += oh; oh = -oh; }
+            if (ox < 0) { ow += ox; ox = 0; }
+            if (oy < 0) { oh += oy; oy = 0; }
+            ow = Math.min(ow, iw - ox); oh = Math.min(oh, ih - oy);
+        }
+        for (var ry = 0; ry < oh; ry++) {
+            var syp = oy + ry, ty = dy + syp; if (ty < 0 || ty >= fbh) continue;
+            for (var rx = 0; rx < ow; rx++) {
+                var sxp = ox + rx, tx = dx + sxp; if (tx < 0 || tx >= fbw) continue;
+                var si = (syp * iw + sxp) * 4, ti = (ty * fbw + tx) * 4;
+                fb[ti] = src[si]; fb[ti + 1] = src[si + 1]; fb[ti + 2] = src[si + 2]; fb[ti + 3] = src[si + 3];
+            }
+        }
+        this._rec('putImageData', dx, dy, iw, ih, bytesToB64(src));
+    };
 
     // Line dash.
     C.setLineDash = function(segments) { this._state.lineDash = (segments || []).slice(); };

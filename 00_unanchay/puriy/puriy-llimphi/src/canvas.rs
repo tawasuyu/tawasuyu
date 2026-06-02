@@ -456,8 +456,10 @@ pub(crate) fn render_canvas(
 /// `globalCompositeOperation` (Fase 7.200: blend modes de vello vía
 /// `push_layer`, en fill/stroke/rect/text/drawImage — ver `canvas_composite`),
 /// y sobre `drawImage` también `globalAlpha` + sombra (Fase 7.201, vía el
-/// snapshot apendido al comando).
-/// Limitaciones: putImageData/getImageData (sin buffer CPU), clearRect parcial;
+/// snapshot apendido al comando), y `putImageData` (Fase 7.202: los píxeles
+/// vienen del framebuffer JS en base64, dibujados sin transform — getImageData
+/// se resuelve enteramente en el runtime JS).
+/// Limitaciones: clearRect parcial no borra píxeles ya pintados en la escena;
 /// la sombra de `drawImage` es rectangular (los límites dest, no la silueta
 /// alpha de la imagen); el texto con gradiente degrada a color sólido (el
 /// typesetter sólo toma `Color`).
@@ -764,8 +766,28 @@ pub(crate) fn paint_canvas_cmds(
                     scene.pop_layer();
                 }
             }
-            // clearRect parcial / putImageData: no-op (el MVP no tiene buffer
-            // persistente — putImageData/getImageData se cierran aparte).
+            "putImageData" => {
+                // ['putImageData', dx, dy, w, h, base64rgba] — Fase 7.202. Los
+                // píxeles vienen del framebuffer JS (getImageData/putImageData
+                // round-trip real). putImageData IGNORA el transform y el clip
+                // del contexto (spec) → se dibuja en coords de canvas vía `base`.
+                let (dx, dy) = (a(1), a(2));
+                let w = cmd.get(3).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let h = cmd.get(4).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let Some(b64) = cmd.get(5).and_then(|v| v.as_str()) else { continue };
+                if w == 0 || h == 0 {
+                    continue;
+                }
+                let Some(bytes) = puriy_engine::decode_base64(b64) else { continue };
+                if bytes.len() < (w as usize) * (h as usize) * 4 {
+                    continue;
+                }
+                let img = PenikoImage::new(Blob::from(bytes), ImageFormat::Rgba8, w, h);
+                scene.draw_image(&img, base * Affine::translate((dx, dy)));
+            }
+            // clearRect parcial: no-op de render (el MVP no borra píxeles ya
+            // pintados en la escena vello; sí los borra del framebuffer JS, así
+            // que getImageData lo refleja).
             _ => {}
         }
     }
