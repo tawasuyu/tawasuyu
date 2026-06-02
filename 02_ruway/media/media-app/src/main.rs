@@ -423,6 +423,57 @@ fn media_config_path() -> Option<PathBuf> {
     config_file("config.ron")
 }
 
+/// Config cargada al arrancar, guardada para que `init` la lea sin volver
+/// a tocar disco ni el `Playlist`. La pone [`apply_startup_config`].
+fn media_config_slot() -> &'static OnceLock<MediaConfig> {
+    static SLOT: OnceLock<MediaConfig> = OnceLock::new();
+    &SLOT
+}
+
+/// Aplica TODO el arranque que depende del `Playlist` (defaults de cola,
+/// resume, metadata). **Debe llamarse en `main` ANTES de abrir el sink
+/// cpal**: una vez que el callback de audio corre, retiene el lock del
+/// `Playlist` mientras bloquea en el pipe de ffmpeg —que no avanza hasta
+/// que el paint drene el video, que aún no arrancó—, así que un lock
+/// bloqueante acá colgaría la app antes de mostrar la ventana (el deadlock
+/// de `project_media_render_thread_deadlock`). Acá cpal todavía no abrió,
+/// el lock está libre, y todo es fiable.
+fn apply_startup_config() {
+    let config = load_media_config();
+    // Handles vivos (volumen/EQ/color/normalización/orientación) — no
+    // tocan el Playlist, pero los dejamos acá para tenerlo todo junto.
+    apply_media_config(&config);
+    // Defaults de la cola.
+    if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+        let mut pl = h.lock();
+        pl.set_repeat(repeat_mode_from(config.playlist.repeat));
+        if config.playlist.shuffle && !pl.shuffle_on() {
+            pl.toggle_shuffle();
+        }
+    }
+    // Resume (U2): salta a la posición guardada del track actual.
+    if config.playlist.resume_on_open {
+        let key = playlist_slot()
+            .get()
+            .and_then(|o| o.as_ref())
+            .map(|h| h.lock().track_path().to_string_lossy().into_owned());
+        if let Some(key) = key {
+            let resume = history()
+                .lock()
+                .resume_position(&key, Duration::from_secs(5));
+            if let Some(pos) = resume {
+                seek_audio_to_pos(pos);
+            }
+            history().lock().note_play(&key, now_secs());
+        }
+    }
+    // Metadata (U5): tags del archivo actual.
+    if let Some(p) = current_media_path() {
+        let _ = media_metadata_slot().set(load_media_metadata(&p));
+    }
+    let _ = media_config_slot().set(config);
+}
+
 /// Carga el `config.ron` o el default, saneado. Si no existe, siembra uno
 /// por defecto para que sea descubrible y editable a mano.
 fn load_media_config() -> MediaConfig {
@@ -2070,42 +2121,11 @@ impl App for MediaApp {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
         spawn_controles_watcher(handle);
         let (palette_commands, palette_cmds) = build_command_catalog(&settings());
-        let config = load_media_config();
-        // Empuja las prefs persistidas a los handles vivos antes del primer
-        // frame (volumen/EQ/color/normalización/orientación arrancan como el
-        // usuario dejó).
-        apply_media_config(&config);
-        // Defaults de la cola (repeat/shuffle) sobre el Playlist vivo.
-        if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
-            let mut pl = h.lock();
-            pl.set_repeat(repeat_mode_from(config.playlist.repeat));
-            if config.playlist.shuffle && !pl.shuffle_on() {
-                pl.toggle_shuffle();
-            }
-        }
-        // Metadata (U5): lee los tags del archivo actual una vez.
-        if let Some(p) = current_media_path() {
-            let _ = media_metadata_slot().set(load_media_metadata(&p));
-        }
-        // Resume (U2): si está activado y hay posición guardada para el
-        // track actual, salta ahí. Marca la reproducción en el historial.
-        // Lock bloqueante (estamos en init, no en el hilo de UI) para que la
-        // clave sea fiable; se suelta antes de seekear (Mutex no reentrante).
-        if config.playlist.resume_on_open {
-            let key = playlist_slot()
-                .get()
-                .and_then(|o| o.as_ref())
-                .map(|h| h.lock().track_path().to_string_lossy().into_owned());
-            if let Some(key) = key {
-                let resume = history()
-                    .lock()
-                    .resume_position(&key, Duration::from_secs(5));
-                if let Some(pos) = resume {
-                    seek_audio_to_pos(pos);
-                }
-                history().lock().note_play(&key, now_secs());
-            }
-        }
+        // La config y todo el arranque que toca el Playlist ya se aplicó en
+        // `main` ANTES de abrir cpal (ver apply_startup_config — evita el
+        // deadlock). Acá sólo clonamos la config para el Model; NUNCA
+        // lockear el Playlist en init.
+        let config = media_config_slot().get().cloned().unwrap_or_default();
         Model {
             frames: 0,
             started_at: Instant::now(),
@@ -4470,6 +4490,10 @@ fn main() {
     // termina.
     let _audio_sink = if std::env::var("MEDIA_MUTE").is_err() {
         let (source, probe) = audio_source_from_env();
+        // Aplica la config persistida (incl. lo que toca el Playlist) ANTES
+        // de abrir cpal: después el callback retiene el lock del Playlist y
+        // un lock bloqueante colgaría el arranque (ver apply_startup_config).
+        apply_startup_config();
         match AudioSink::open(source) {
             Ok(sink) => {
                 eprintln!(
@@ -4487,6 +4511,9 @@ fn main() {
             }
         }
     } else {
+        // Sin cpal no hay contención del Playlist: igual aplicamos config y
+        // metadata para el arranque.
+        apply_startup_config();
         audio_probe_slot().set(None).ok();
         None
     };
