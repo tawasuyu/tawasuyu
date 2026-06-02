@@ -3190,6 +3190,10 @@ fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> Vec<Decl> {
             out.extend(parse_border_shorthand(value, important));
             continue;
         }
+        if let Some(decls) = parse_logical_border(prop, value, important) {
+            out.extend(decls);
+            continue;
+        }
         if let Some(edge) = match_border_side_prop(prop, "") {
             out.extend(parse_border_side_shorthand(edge, value, important));
             continue;
@@ -3561,6 +3565,56 @@ fn parse_border_side_shorthand(edge: BorderEdge, value: &str, important: bool) -
         out.push(Decl { kind: DeclKind::BorderSideColor(edge, c), important });
     }
     out
+}
+
+/// Propiedades lógicas de borde → físicas (LTR + escritura horizontal):
+/// `border-inline*` ↔ left/right, `border-block*` ↔ top/bottom; `-start` =
+/// left/top, `-end` = right/bottom. Cubre el shorthand (`border-inline:`),
+/// los de ambos lados por propiedad (`border-inline-width/-color/-style`),
+/// los de un lado (`border-inline-start:`) y los longhands de un lado
+/// (`border-inline-start-width`, etc.). Fase 7.193.
+fn parse_logical_border(prop: &str, value: &str, important: bool) -> Option<Vec<Decl>> {
+    let lc = prop.to_ascii_lowercase();
+    let rest = lc.strip_prefix("border-")?;
+    // (start, end) según el eje.
+    let (axis, after) = if let Some(a) = rest.strip_prefix("inline") {
+        ((BorderEdge::Left, BorderEdge::Right), a)
+    } else if let Some(a) = rest.strip_prefix("block") {
+        ((BorderEdge::Top, BorderEdge::Bottom), a)
+    } else {
+        return None;
+    };
+    // `after` aísla lado (`-start`/`-end`/ambos) y sub-propiedad.
+    let (edges, sub): (Vec<BorderEdge>, &str) = if let Some(s) = after.strip_prefix("-start") {
+        (vec![axis.0], s)
+    } else if let Some(s) = after.strip_prefix("-end") {
+        (vec![axis.1], s)
+    } else {
+        (vec![axis.0, axis.1], after)
+    };
+    let mut out = Vec::new();
+    for edge in edges {
+        match sub {
+            "" => out.extend(parse_border_side_shorthand(edge, value, important)),
+            "-width" => {
+                if let Some(w) = parse_length_px(value) {
+                    out.push(Decl { kind: DeclKind::BorderSideWidth(edge, w), important });
+                }
+            }
+            "-color" => {
+                if let Some(c) = parse_color(value) {
+                    out.push(Decl { kind: DeclKind::BorderSideColor(edge, c), important });
+                }
+            }
+            "-style" => {
+                if let Some(s) = parse_border_style(value) {
+                    out.push(Decl { kind: DeclKind::BorderSideStyle(edge, s), important });
+                }
+            }
+            _ => return None, // sufijo desconocido → no es una lógica de borde
+        }
+    }
+    Some(out)
 }
 
 /// Parsea `text-decoration` o `text-decoration-line`. Acepta el shorthand

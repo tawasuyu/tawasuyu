@@ -3545,6 +3545,30 @@ mod tests {
     }
 
     #[test]
+    fn border_logico_inline_y_block() {
+        let html = r#"<html><head><style>
+            #a { border-inline: 3px solid red; }
+            #b { border-block-start: 5px solid blue; border-inline-end-width: 7px; }
+        </style></head><body><div id="a">x</div><div id="b">y</div></body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let red = super::Color::rgb(255, 0, 0);
+        let blue = super::Color::rgb(0, 0, 255);
+        let a = box_by_id(&doc.box_tree, "a").unwrap();
+        // border-inline: 3px solid red → left y right (LTR), no top/bottom.
+        assert_eq!(a.border_widths.left, 3.0);
+        assert_eq!(a.border_widths.right, 3.0);
+        assert_eq!(a.border_widths.top, 0.0);
+        assert_eq!(a.border_colors.left, Some(red));
+        assert_eq!(a.border_colors.right, Some(red));
+        let b = box_by_id(&doc.box_tree, "b").unwrap();
+        // border-block-start = top.
+        assert_eq!(b.border_widths.top, 5.0);
+        assert_eq!(b.border_colors.top, Some(blue));
+        // border-inline-end-width = right-width.
+        assert_eq!(b.border_widths.right, 7.0);
+    }
+
+    #[test]
     fn list_style_none_suprime_marker() {
         let html = r#"<html><head><style>
             ul { list-style-type: none }
