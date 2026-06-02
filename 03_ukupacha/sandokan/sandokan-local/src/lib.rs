@@ -8,7 +8,10 @@
 //! `DaemonEngine` y `RemoteEngine` (transportes) se construirán sobre
 //! este mismo contrato en crates separados.
 
+mod interactive;
 mod proc;
+
+pub use interactive::{Attachment, PtySize};
 
 use arje_incarnate::{Incarnator, IncarnatorConfig};
 use async_trait::async_trait;
@@ -18,6 +21,7 @@ use nix::unistd::Pid;
 use sandokan_core::{Engine, EngineError, ExecHandle, Intent, TelemetryFrame};
 use sandokan_lifecycle::LifecycleState;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 use ulid::Ulid;
@@ -33,6 +37,26 @@ struct Entity {
 pub struct LocalEngine {
     base_cfg: IncarnatorConfig,
     registry: Mutex<HashMap<Ulid, Entity>>,
+    /// Sesiones interactivas vivas (PTY retenido) indexadas por card_id.
+    /// Vacío para entidades no interactivas (`run`).
+    sessions: Mutex<interactive::SessionMap>,
+    /// Directorio donde vive un socket por sesión interactiva
+    /// (`<run_dir>/<card_id>.sock`). El front (shuma) **siempre** se conecta
+    /// a ese path por card_id, sin asumir quién atiende detrás — hoy el
+    /// engine in-process (Model 1), mañana un holder por sesión (Model 2).
+    run_dir: PathBuf,
+}
+
+/// Directorio por defecto de los sockets de sesión: `$SANDOKAN_RUN_DIR`, o
+/// `$XDG_RUNTIME_DIR/sandokan`, o `/tmp/sandokan-<uid>` como último recurso.
+fn default_run_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("SANDOKAN_RUN_DIR") {
+        return PathBuf::from(d);
+    }
+    if let Ok(x) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(x).join("sandokan");
+    }
+    PathBuf::from(format!("/tmp/sandokan-{}", nix::unistd::getuid().as_raw()))
 }
 
 impl LocalEngine {
@@ -44,10 +68,25 @@ impl LocalEngine {
     /// Crea un engine con una `IncarnatorConfig` explícita (bus socket,
     /// env extra, strict_caps).
     pub fn with_config(cfg: IncarnatorConfig) -> Self {
+        Self::with_run_dir(cfg, default_run_dir())
+    }
+
+    /// Como [`Self::with_config`] pero con un `run_dir` explícito para los
+    /// sockets de sesión. Útil para tests (dir temporal) y para correr varios
+    /// engines aislados.
+    pub fn with_run_dir(cfg: IncarnatorConfig, run_dir: PathBuf) -> Self {
         Self {
             base_cfg: cfg,
             registry: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
+            run_dir,
         }
+    }
+
+    /// Path canónico del socket de una sesión interactiva. El front se conecta
+    /// **siempre** acá por `card_id`, sin conocer quién atiende detrás.
+    pub fn session_socket_path(&self, card_id: Ulid) -> PathBuf {
+        self.run_dir.join(format!("{card_id}.sock"))
     }
 
     /// Marca el estado de una entidad (best-effort; ignora lock envenenado).
@@ -139,6 +178,7 @@ impl Engine for LocalEngine {
             loop {
                 if reap(pid).is_some() {
                     self.mark(card_id, LifecycleState::Killed);
+                    self.drop_session(card_id);
                     return Ok(());
                 }
                 if Instant::now() >= deadline {
@@ -152,6 +192,7 @@ impl Engine for LocalEngine {
         let _ = kill(npid, Signal::SIGKILL);
         let _ = waitpid(npid, None);
         self.mark(card_id, LifecycleState::Killed);
+        self.drop_session(card_id);
         Ok(())
     }
 

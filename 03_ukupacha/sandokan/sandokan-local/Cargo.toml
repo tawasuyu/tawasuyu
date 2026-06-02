@@ -14,5 +14,6 @@ arje-incarnate = { path = "../../arje/init/arje-incarnate" }
 card-core = { path = "../../../shared/card/card-core" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
-nix = { workspace = true }
+# `term` agrega openpty/Winsize para las sesiones interactivas (PTY).
+nix = { workspace = true, features = ["term"] }
 ulid = { workspace = true }
