@@ -1137,20 +1137,10 @@ impl Selector {
             classes_etc += c.attrs.len() as u32;
             for p in &c.pseudos {
                 match p {
-                    // CSS spec: :not(X) aporta la especificidad de X, no
-                    // la suya propia. Sumamos las partes del compound
-                    // interno.
-                    Pseudo::Not(inner) => {
-                        ids += inner.ids.len() as u32;
-                        classes_etc += inner.classes.len() as u32;
-                        classes_etc += inner.attrs.len() as u32;
-                        classes_etc += inner.pseudos.len() as u32;
-                        if matches!(inner.tag, TagPart::Type(_)) {
-                            types += 1;
-                        }
-                    }
-                    // `:is(...)` = la especificidad del argumento más específico.
-                    Pseudo::Is(list) => {
+                    // CSS spec: `:not(...)` e `:is(...)` aportan la
+                    // especificidad de su argumento MÁS específico (para un
+                    // solo arg, idéntico a contar sus partes).
+                    Pseudo::Not(list) | Pseudo::Is(list) => {
                         extra += list.iter().map(compound_specificity).max().unwrap_or(0);
                     }
                     // `:where(...)` no aporta especificidad.
@@ -1256,9 +1246,9 @@ enum Pseudo {
         a: i32,
         b: i32,
     },
-    /// `:not(simple)` — negación de un compound simple sin combinadores
-    /// ni `:not` anidado. Almacenamos el compound interno completo.
-    Not(Box<Compound>),
+    /// `:not(a, b, ...)` — negación de una lista de compounds simples (sin
+    /// combinadores ni `:not` anidado). Matchea si NINGUNO matchea.
+    Not(Vec<Compound>),
     /// `:nth-of-type(an+b)` — posición 1-indexed entre hermanos del MISMO tag.
     NthOfType {
         a: i32,
@@ -1378,7 +1368,11 @@ fn pseudo_matches(
     match p {
         Pseudo::Hover => return hover_active,
         Pseudo::Focus => return focus_active,
-        Pseudo::Not(c) => return !c.matches_in_state(node, hover_active, focus_active),
+        Pseudo::Not(list) => {
+            return !list
+                .iter()
+                .any(|c| c.matches_in_state(node, hover_active, focus_active))
+        }
         Pseudo::Checked => return has("checked") || has("selected"),
         Pseudo::Disabled => return has("disabled"),
         Pseudo::Enabled => return is_form_control(node) && !has("disabled"),
@@ -3032,16 +3026,20 @@ fn parse_compound(sel: &str) -> Option<Compound> {
                             Pseudo::NthLastOfType { a, b }
                         }
                         "not" => {
-                            let inner = parse_compound(arg)?;
-                            // Anti-recursión: `:not(:not(...))` rechazamos.
-                            if inner
-                                .pseudos
-                                .iter()
-                                .any(|p| matches!(p, Pseudo::Not(_)))
-                            {
+                            // CSS4: lista de compounds (`:not(.a, .b)`).
+                            let mut inner = Vec::new();
+                            for part in arg.split(',') {
+                                let c = parse_compound(part.trim())?;
+                                // Anti-recursión: `:not(:not(...))` rechazamos.
+                                if c.pseudos.iter().any(|p| matches!(p, Pseudo::Not(_))) {
+                                    return None;
+                                }
+                                inner.push(c);
+                            }
+                            if inner.is_empty() {
                                 return None;
                             }
-                            Pseudo::Not(Box::new(inner))
+                            Pseudo::Not(inner)
                         }
                         "is" | "where" => {
                             // Lista de compounds separados por coma (sin

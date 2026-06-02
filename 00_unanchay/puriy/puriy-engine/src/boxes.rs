@@ -3489,6 +3489,23 @@ mod tests {
     }
 
     #[test]
+    fn pseudo_not_con_lista() {
+        // CSS4: `:not(.a, .b)` no matchea si el elemento tiene .a O .b.
+        let html = r#"<html><head><style>
+            li:not(.skip, .hidden) { color: red; }
+        </style></head><body><ul>
+            <li id="n1">uno</li>
+            <li id="n2" class="skip">dos</li>
+            <li id="n3" class="hidden">tres</li>
+        </ul></body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let red = super::Color::rgb(255, 0, 0);
+        assert_eq!(box_by_id(&doc.box_tree, "n1").unwrap().color, red); // sin clases → rojo
+        assert_ne!(box_by_id(&doc.box_tree, "n2").unwrap().color, red); // .skip → excluido
+        assert_ne!(box_by_id(&doc.box_tree, "n3").unwrap().color, red); // .hidden → excluido
+    }
+
+    #[test]
     fn list_style_none_suprime_marker() {
         let html = r#"<html><head><style>
             ul { list-style-type: none }
