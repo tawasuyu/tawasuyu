@@ -670,15 +670,30 @@
 
     #[test]
     fn overlay_invuln_dominates_damage() {
-        // Si hay invuln activo + damage, gana invuln (blanco, no rojo).
+        // Si hay invuln activo + damage, gana invuln: `draw_player_overlays`
+        // toma el camino de inversión real de color (blend Difference) en
+        // cuanto `invuln_active` es true, sin llegar a los tintes planos de
+        // `overlay_rgba`. Verificamos esa dominancia.
         let ov = PlayerOverlays {
             damage_count: 80,
             power_invuln: 200,
             ..Default::default()
         };
-        let (r, g, b, _a) = overlay_rgba(&ov, 0).expect("overlay activo");
-        // Blanco: r ~ g ~ b, todos altos.
-        assert!(r > 180 && g > 180 && b > 180, "expected white-ish, got ({r}, {g}, {b})");
+        assert!(invuln_active(&ov, 0), "invuln debe dominar y disparar el invert");
+    }
+
+    #[test]
+    fn invuln_blinks_in_final_tics() {
+        // En los últimos 32 tics la invulnerabilidad parpadea con bit 3 del
+        // tick; fuera de esa ventana está siempre activa.
+        let long = PlayerOverlays { power_invuln: 500, ..Default::default() };
+        assert!(invuln_active(&long, 0), "lejos del final: siempre on");
+        assert!(invuln_active(&long, 0xF), "lejos del final: on aun con bit3");
+        let ending = PlayerOverlays { power_invuln: 10, ..Default::default() };
+        assert!(invuln_active(&ending, 0x8), "fin + bit3 set → visible");
+        assert!(!invuln_active(&ending, 0x0), "fin + bit3 clear → invisible (blink)");
+        let none = PlayerOverlays::default();
+        assert!(!invuln_active(&none, 0x8), "sin invuln nunca activo");
     }
 
     #[test]

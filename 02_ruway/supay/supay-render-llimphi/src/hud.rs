@@ -237,18 +237,43 @@ pub(crate) fn draw_weapon_sprite(
 // overlays no aparecen "gratis" — los pintamos como rect full-screen
 // semi-transparente al final del frame.
 
+/// `true` si la invulnerabilidad está activa y *visible* este tick. Doom
+/// blinkea el colormap invertido en los últimos 32 tics (~0.9 s) — bit 3
+/// del tick lo prende/apaga. Extraído para que `draw_player_overlays`
+/// decida entre la inversión real (abajo) y los tintes planos.
+pub(crate) fn invuln_active(ov: &PlayerOverlays, tick: u64) -> bool {
+    ov.power_invuln > 0 && (ov.power_invuln > 4 * 32 || (tick & 0x8) != 0)
+}
+
 /// Pinta el overlay del jugador (damage/pickup/radsuit/invuln) sobre
 /// todo el viewport. No-op si no hay overlays activos.
 pub(crate) fn draw_player_overlays(scene: &mut Scene, rect: PaintRect, ov: &PlayerOverlays, tick: u64) {
-    let Some((r, g, b, a)) = overlay_rgba(ov, tick) else {
-        return;
-    };
     let path = Rect::new(
         rect.x as f64,
         rect.y as f64,
         (rect.x + rect.w) as f64,
         (rect.y + rect.h) as f64,
     );
+    // Invulnerabilidad: **inversión real de color** del colormap de Doom,
+    // no la aproximación blanca translúcida de antes. Empujamos una capa
+    // con blend `Difference` y la rellenamos de blanco — `|fondo − blanco|`
+    // = negativo fotográfico de todo lo pintado hasta ahora (escena 3D +
+    // arma + viñeta). Domina cualquier otro overlay, como en Doom.
+    if invuln_active(ov, tick) {
+        use llimphi_ui::llimphi_raster::peniko::{BlendMode, Compose, Mix};
+        scene.push_layer(
+            BlendMode::new(Mix::Difference, Compose::SrcOver),
+            1.0,
+            Affine::IDENTITY,
+            &path,
+        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, Color::WHITE, None, &path);
+        scene.pop_layer();
+        return;
+    }
+    let Some((r, g, b, a)) = overlay_rgba(ov, tick) else {
+        return;
+    };
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
@@ -266,14 +291,9 @@ pub(crate) fn draw_player_overlays(scene: &mut Scene, rect: PaintRect, ov: &Play
 pub(crate) fn overlay_rgba(ov: &PlayerOverlays, tick: u64) -> Option<(u8, u8, u8, u8)> {
     use PlayerOverlays as O;
     let _ = std::mem::size_of::<O>();
-    // Invulnerability: blink 32 tics finales, blanco brillante.
-    let invuln_active = ov.power_invuln > 0
-        && (ov.power_invuln > 4 * 32 || (tick & 0x8) != 0);
-    if invuln_active {
-        // Blanco semi-translúcido — aproximación cheap del invert colors
-        // de Doom. Subir alpha hace que la escena "se desature".
-        return Some((220, 220, 232, 110));
-    }
+    // Nota: la invulnerabilidad NO se resuelve acá — `draw_player_overlays`
+    // la pinta como inversión real de color (blend Difference) antes de
+    // consultar esta función, así que aquí sólo viven los tintes planos.
     // Damage: red flash 8 niveles, alpha cada 8 pts de damagecount.
     if ov.damage_count > 0 {
         // Doom: (dc + 7) >> 3 → niveles 1..8. NUMREDPALS=8.
