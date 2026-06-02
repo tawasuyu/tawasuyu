@@ -74,7 +74,7 @@ use llimphi_icons::{icon_view, Icon};
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{self, TextBlock};
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use media_audio_cpal::AudioSink;
 use media_core::{
     AudioProbe, AudioSource, FrameSource, Levels, MixerAudio, Pause, PausableAudio,
@@ -165,6 +165,8 @@ enum Msg {
     ToggleSettings,
     /// Cambia la pestaña activa de la ventana de configuración.
     SettingsTab(SettingsTab),
+    /// Desplaza el contenido de la ventana de config (rueda del mouse).
+    SettingsScroll(f32),
     /// Edita un campo de la config desde la ventana de ajustes. Muta
     /// `Model::config`, aplica a los handles vivos y persiste.
     ConfigEdit(ConfigEdit),
@@ -786,6 +788,8 @@ struct Model {
     settings_tab: SettingsTab,
     /// Barra a la que el selector de items agrega (pestaña "Barras").
     bar_target: usize,
+    /// Desplazamiento vertical (px) del contenido de la pestaña activa.
+    settings_scroll: f32,
 }
 
 struct Pipeline {
@@ -2143,6 +2147,7 @@ impl App for MediaApp {
             settings_open: false,
             settings_tab: SettingsTab::Audio,
             bar_target: 0,
+            settings_scroll: 0.0,
         }
     }
 
@@ -2178,6 +2183,7 @@ impl App for MediaApp {
             Msg::ToggleSettings => {
                 let mut m = model;
                 m.settings_open = !m.settings_open;
+                m.settings_scroll = 0.0;
                 m
             }
             Msg::ConfigEdit(edit) => {
@@ -2190,7 +2196,17 @@ impl App for MediaApp {
             }
             Msg::SettingsTab(tab) => {
                 let mut m = model;
+                if m.settings_tab != tab {
+                    m.settings_scroll = 0.0; // empieza arriba en cada pestaña
+                }
                 m.settings_tab = tab;
+                m
+            }
+            Msg::SettingsScroll(dy) => {
+                let mut m = model;
+                // Rueda hacia abajo baja el contenido (sube el offset). Clamp
+                // generoso; el sobre-scroll sólo muestra espacio en blanco.
+                m.settings_scroll = (m.settings_scroll - dy * 28.0).clamp(0.0, 900.0);
                 m
             }
             Msg::BarEdit(edit) => {
@@ -2273,6 +2289,19 @@ impl App for MediaApp {
     /// traduce la tecla a un [`KeyChord`] y la resuelve contra el keymap
     /// de [`settings`]. media-app no tiene text-input, así que no hace
     /// falta routing de foco.
+    fn on_wheel(
+        model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        _modifiers: Modifiers,
+    ) -> Option<Self::Msg> {
+        // Con la ventana de config abierta, la rueda scrollea su contenido.
+        if model.settings_open {
+            return Some(Msg::SettingsScroll(delta.y));
+        }
+        None
+    }
+
     fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
         // Palette abierto: el módulo se lleva TODAS las teclas (filtro,
         // ↓↑, Enter, Esc). Mismo patrón que nada.
@@ -2460,35 +2489,24 @@ impl App for MediaApp {
         // suelto de antes.
         let bars = toolbar_view(model);
 
-        // --- Grilla reorderable de controles + visores ---
-        // 3 cols × 2 rows; el orden lo decide el usuario arrastrando
-        // por la title bar. Default `[Transport, Volume, Playlist,
-        // Recorder, Waveform, Waterfall]`.
-        use llimphi_widget_tiled::{
-            tiled_view_reorderable_cols, TileSpec, TiledPalette,
-        };
-        let palette = TiledPalette::from_theme(&llimphi_theme::Theme::dark());
-        let tiles: Vec<TileSpec<Msg>> = model
-            .tile_order
-            .iter()
-            .map(|&id| TileSpec {
-                label: id.slug().into(),
-                content: tile_content(id),
-            })
-            .collect();
-        let tile_grid = View::new(Style {
+        // --- Visores ---
+        // Los controles ya viven en las barras de íconos (toolbar_view); acá
+        // sólo quedan los visores como "lienzo" del audio: forma de onda +
+        // waterfall (spectrogram). Reemplazan a las viejas tiles de control
+        // (transport/volume/playlist/recorder), que eran feas y redundantes.
+        let visualizers = View::new(Style {
+            flex_direction: FlexDirection::Row,
             size: Size {
                 width: percent(1.0_f32),
-                height: length(220.0_f32),
+                height: length(200.0_f32),
+            },
+            gap: Size {
+                width: length(10.0_f32),
+                height: length(0.0_f32),
             },
             ..Default::default()
         })
-        .children(vec![tiled_view_reorderable_cols(
-            tiles,
-            3,
-            |from, to| Some(Msg::SwapTile { from, to }),
-            &palette,
-        )]);
+        .children(vec![waveform_panel(), waterfall_panel(), meters_panel()]);
 
         let time_label = {
             let s = playback_snapshot();
@@ -2543,7 +2561,7 @@ impl App for MediaApp {
             },
             ..Default::default()
         })
-        .children(vec![title_text, canvas, subs_strip, bars, tile_grid, footer]);
+        .children(vec![title_text, canvas, subs_strip, bars, visualizers, footer]);
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -2682,20 +2700,39 @@ fn settings_header(title: &str) -> View<Msg> {
 }
 
 /// Columna de contenido (una pestaña) — ancho completo del panel.
-fn content_column(children: Vec<View<Msg>>) -> View<Msg> {
-    View::new(Style {
+/// Caja de contenido con scroll: recorta a `visible_h` y desplaza el
+/// contenido `scroll` px hacia arriba (margen superior negativo). El clip
+/// oculta lo que sobresale; la rueda mueve `scroll` (ver `on_wheel`).
+fn scroll_box(children: Vec<View<Msg>>, visible_h: f32, scroll: f32) -> View<Msg> {
+    let inner = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
-            height: length(362.0_f32),
+            height: auto(),
         },
         gap: Size {
             width: length(0.0_f32),
             height: length(4.0_f32),
         },
+        margin: TaffyRect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(-scroll),
+            bottom: length(0.0_f32),
+        },
         ..Default::default()
     })
-    .children(children)
+    .children(children);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(visible_h),
+        },
+        ..Default::default()
+    })
+    .clip(true)
+    .children(vec![inner])
 }
 
 /// Fila que envuelve sus hijos a varias líneas (paleta de items, selector).
@@ -2969,9 +3006,90 @@ fn short_action(cmd: &MediaCommand) -> &'static str {
 /// Editor de barras (pestaña "Barras"): cada barra con sus items
 /// (clic = quitar) + reorden, un selector de barra destino y la paleta de
 /// items disponibles que se agregan a esa barra. Estilo VLC/eww.
+/// Ícono del set canónico para un [`BarItem`] de acción (los widgets
+/// especiales —timeline/reloj/etiqueta/título/separador— no tienen).
+fn bar_item_icon(item: BarItem) -> Option<Icon> {
+    Some(match item {
+        BarItem::PlayPause => Icon::Play,
+        BarItem::Stop => Icon::Stop,
+        BarItem::Prev => Icon::SkipBack,
+        BarItem::Next => Icon::SkipForward,
+        BarItem::SeekBack => Icon::Rewind,
+        BarItem::SeekForward => Icon::FastForward,
+        BarItem::VolumeDown => Icon::Minus,
+        BarItem::VolumeUp => Icon::Plus,
+        BarItem::Mute => Icon::VolumeMute,
+        BarItem::Repeat => Icon::Repeat,
+        BarItem::Shuffle => Icon::Shuffle,
+        BarItem::SpeedDown => Icon::ChevronDown,
+        BarItem::SpeedUp => Icon::ChevronUp,
+        BarItem::SpeedReset => Icon::Gauge,
+        BarItem::Snapshot => Icon::Camera,
+        BarItem::Record => Icon::Record,
+        BarItem::Equalizer => Icon::Equalizer,
+        BarItem::Settings => Icon::Settings,
+        _ => return None,
+    })
+}
+
+/// Chip del editor de barras: ícono (si lo hay) + etiqueta. Mismo lenguaje
+/// visual que los botones reales de abajo del video. `msg` se dispara al
+/// click (quitar en las barras, agregar en la paleta).
+fn editor_item_chip(item: BarItem, bg: Color, msg: Msg) -> View<Msg> {
+    let fg = Color::from_rgba8(225, 232, 245, 255);
+    let mut kids: Vec<View<Msg>> = Vec::new();
+    if let Some(ic) = bar_item_icon(item) {
+        kids.push(
+            View::new(Style {
+                size: Size {
+                    width: length(20.0_f32),
+                    height: length(22.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![icon_view::<Msg>(ic, fg, 1.8)]),
+        );
+    }
+    kids.push(
+        View::new(Style {
+            size: Size {
+                width: length(84.0_f32),
+                height: length(22.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(item.label().to_string(), 11.5, fg),
+    );
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: length(124.0_f32),
+            height: length(30.0_f32),
+        },
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(4.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(Color::from_rgba8(80, 100, 130, 255))
+    .radius(7.0)
+    .on_click(msg)
+    .children(kids)
+}
+
 fn tab_bars(model: &Model) -> Vec<View<Msg>> {
     let tb = &model.config.toolbar;
-    let mut out: Vec<View<Msg>> = vec![settings_header("Barras de controles")];
+    let mut out: Vec<View<Msg>> = vec![settings_header("Barras de controles — clic en un item lo quita")];
 
     for (bi, bar) in tb.bars.iter().enumerate() {
         let head = View::new(Style {
@@ -2991,15 +3109,15 @@ fn tab_bars(model: &Model) -> Vec<View<Msg>> {
             bar_label(format!("Barra {}", bi + 1), 70.0, Color::from_rgba8(118, 182, 232, 255)),
             wide_chip("− quitar barra", Color::from_rgba8(74, 58, 64, 255), Msg::BarEdit(BarEdit::RemoveBar(bi))),
         ]);
-        // Items: clic quita; ‹ › reordenan.
+        // Items: clic quita; ‹ › reordenan. Con su ícono real.
         let chips: Vec<View<Msg>> = bar
             .items
             .iter()
             .enumerate()
             .flat_map(|(pi, &it)| {
                 vec![
-                    wide_chip(
-                        &format!("× {}", it.label()),
+                    editor_item_chip(
+                        it,
                         Color::from_rgba8(52, 60, 74, 255),
                         Msg::BarEdit(BarEdit::RemoveItem(bi, pi)),
                     ),
@@ -3025,12 +3143,12 @@ fn tab_bars(model: &Model) -> Vec<View<Msg>> {
         .collect();
     targets.push(wide_chip("+ barra nueva", Color::from_rgba8(48, 70, 58, 255), Msg::BarEdit(BarEdit::AddBar)));
 
-    // Paleta de items disponibles → agregan a la barra destino.
+    // Paleta de items disponibles → agregan a la barra destino, con ícono.
     let palette: Vec<View<Msg>> = BarItem::ALL
         .iter()
         .map(|&it| {
-            wide_chip(
-                it.label(),
+            editor_item_chip(
+                it,
                 Color::from_rgba8(46, 54, 68, 255),
                 Msg::BarEdit(BarEdit::AddItem(model.bar_target, it)),
             )
@@ -3101,13 +3219,14 @@ fn settings_overlay(model: &Model) -> View<Msg> {
     .children(tabs);
 
     // --- contenido de la pestaña activa ---
-    let content = content_column(match model.settings_tab {
+    let rows = match model.settings_tab {
         SettingsTab::Audio => tab_audio(c),
         SettingsTab::Video => tab_video(c),
         SettingsTab::Playback => tab_playback(c),
         SettingsTab::Bars => tab_bars(model),
         SettingsTab::Controls => tab_controls(),
-    });
+    };
+    let content = scroll_box(rows, 348.0_f32, model.settings_scroll);
 
     let title = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -3178,6 +3297,9 @@ fn settings_overlay(model: &Model) -> View<Msg> {
     })
     .fill(Color::from_rgba8(26, 30, 38, 245))
     .radius(14.0)
+    // Click inerte: intercepta los clicks sobre el panel para que NO
+    // burbujeen al scrim (que cierra). Reselecciona la pestaña actual = no-op.
+    .on_click(Msg::SettingsTab(model.settings_tab))
     .children(vec![title, tab_bar, content, footer]);
 
     View::new(Style {
@@ -3306,350 +3428,6 @@ fn context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
     })
 }
 
-/// Despacha por TileId al builder concreto. Cada tile arma su propio
-/// contenido — controles co-localizados con la info que afectan.
-fn tile_content(id: TileId) -> View<Msg> {
-    match id {
-        TileId::Transport => transport_tile(),
-        TileId::Volume => volume_tile(),
-        TileId::Equalizer => equalizer_tile(),
-        TileId::Playlist => playlist_tile(),
-        TileId::Recorder => recorder_tile(),
-        TileId::Waveform => waveform_panel(),
-        TileId::Waterfall => waterfall_panel(),
-    }
-}
-
-/// Tile de transporte: prev/play-pause/next + back/fwd 5s. Los chips
-/// de track se apagan si no hay playlist.
-fn transport_tile() -> View<Msg> {
-    let paused = pause().is_paused();
-    let pause_btn = chip_button(
-        if paused { "play" } else { "pause" },
-        if paused {
-            Color::from_rgba8(60, 140, 90, 255)
-        } else {
-            Color::from_rgba8(55, 65, 80, 255)
-        },
-        Color::from_rgba8(220, 230, 245, 255),
-        Msg::Command(MediaCommand::TogglePause),
-    );
-
-    let playlist_active = playback_snapshot().len > 1;
-    let pl_bg = if playlist_active {
-        Color::from_rgba8(55, 65, 80, 255)
-    } else {
-        Color::from_rgba8(40, 46, 56, 255)
-    };
-    let pl_fg = if playlist_active {
-        Color::from_rgba8(220, 230, 245, 255)
-    } else {
-        Color::from_rgba8(100, 110, 125, 255)
-    };
-    let prev_btn = chip_button("⟨trk", pl_bg, pl_fg, Msg::Command(MediaCommand::PrevTrack));
-    let next_btn = chip_button("trk⟩", pl_bg, pl_fg, Msg::Command(MediaCommand::NextTrack));
-
-    let seekable = playlist_slot().get().and_then(|o| o.as_ref()).is_some();
-    let seek_bg = if seekable {
-        Color::from_rgba8(55, 65, 80, 255)
-    } else {
-        Color::from_rgba8(40, 46, 56, 255)
-    };
-    let seek_fg = if seekable {
-        Color::from_rgba8(220, 230, 245, 255)
-    } else {
-        Color::from_rgba8(100, 110, 125, 255)
-    };
-    let step = settings().seek_step_secs;
-    let back_btn = chip_button(
-        &format!("«{step}s"),
-        seek_bg,
-        seek_fg,
-        Msg::Command(MediaCommand::SeekBy { secs: -step }),
-    );
-    let fwd_btn = chip_button(
-        &format!("{step}s»"),
-        seek_bg,
-        seek_fg,
-        Msg::Command(MediaCommand::SeekBy { secs: step }),
-    );
-
-    tile_chip_grid(vec![prev_btn, pause_btn, next_btn, back_btn, fwd_btn])
-}
-
-/// Tile de volumen: vol-/vol+ con el porcentaje al medio y la barra
-/// de peak/RMS abajo. La info (los medidores) está pegada al control
-/// (vol+/-) — el usuario ve el efecto del slider sin saltar de tile.
-fn volume_tile() -> View<Msg> {
-    let vol_label = format!("vol {:.0}%", (volume().get() * 100.0).round());
-    let vol_text = View::new(Style {
-        size: Size {
-            width: length(76.0_f32),
-            height: length(36.0_f32),
-        },
-        justify_content: Some(JustifyContent::Center),
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .text(vol_label, 13.0, Color::from_rgba8(180, 195, 215, 255));
-    let vstep = settings().volume_step;
-    let vol_dn = chip_button(
-        "vol−",
-        Color::from_rgba8(55, 65, 80, 255),
-        Color::from_rgba8(220, 230, 245, 255),
-        Msg::Command(MediaCommand::VolumeBy { delta: -vstep }),
-    );
-    let vol_up = chip_button(
-        "vol+",
-        Color::from_rgba8(55, 65, 80, 255),
-        Color::from_rgba8(220, 230, 245, 255),
-        Msg::Command(MediaCommand::VolumeBy { delta: vstep }),
-    );
-
-    let row = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(40.0_f32),
-        },
-        gap: Size {
-            width: length(8.0_f32),
-            height: length(0.0_f32),
-        },
-        justify_content: Some(JustifyContent::Center),
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .children(vec![vol_dn, vol_text, vol_up]);
-
-    let meters = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(48.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![meters_panel()]);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(4.0_f32),
-        },
-        justify_content: Some(JustifyContent::Center),
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .children(vec![row, meters])
-}
-
-/// Tile del ecualizador: gráfico de las 10 bandas (barras desde -12..+12
-/// dB respecto a la línea 0 dB) + chips on/off y flat. El ajuste fino por
-/// banda vive en el command palette (grupo "Ecualizador") y la tecla `e`
-/// togglea el EQ entero. Apagado, las barras se pintan grises (bypass).
-fn equalizer_tile() -> View<Msg> {
-    let enabled = eq().is_enabled();
-    let gains = eq().gains();
-
-    let graph = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(96.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(Color::from_rgba8(14, 16, 22, 255))
-    .radius(8.0)
-    .paint_with(move |scene, _ts, rect| {
-        if rect.w <= 4.0 || rect.h <= 4.0 {
-            return;
-        }
-        let pad: f32 = 6.0;
-        let inner_x = rect.x + pad;
-        let inner_y = rect.y + pad;
-        let inner_w = (rect.w - 2.0 * pad).max(1.0);
-        let inner_h = (rect.h - 2.0 * pad).max(1.0);
-        let mid_y = inner_y + inner_h * 0.5;
-
-        // Línea 0 dB de referencia.
-        let mut zero = BezPath::new();
-        zero.move_to((inner_x as f64, mid_y as f64));
-        zero.line_to(((inner_x + inner_w) as f64, mid_y as f64));
-        scene.stroke(
-            &Stroke::new(1.0),
-            Affine::IDENTITY,
-            Color::from_rgba8(80, 92, 110, 255),
-            None,
-            &zero,
-        );
-
-        let n = gains.len().max(1);
-        let slot_w = inner_w / n as f32;
-        let bar_w = (slot_w * 0.6).max(2.0);
-        let half = inner_h * 0.5;
-        for (i, &g) in gains.iter().enumerate() {
-            let norm = (g / 12.0).clamp(-1.0, 1.0);
-            let h = (norm.abs() * half).max(1.0);
-            let cx = inner_x + (i as f32 + 0.5) * slot_w;
-            let x0 = cx - bar_w * 0.5;
-            let (y0, y1) = if norm >= 0.0 {
-                (mid_y - h, mid_y)
-            } else {
-                (mid_y, mid_y + h)
-            };
-            let bar = KurboRect::new(x0 as f64, y0 as f64, (x0 + bar_w) as f64, y1 as f64);
-            let col = if !enabled {
-                Color::from_rgba8(70, 80, 95, 255)
-            } else if norm >= 0.0 {
-                Color::from_rgba8(110, 200, 150, 255)
-            } else {
-                Color::from_rgba8(210, 150, 90, 255)
-            };
-            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &bar);
-        }
-    });
-
-    let toggle = chip_button(
-        if enabled { "eq on" } else { "eq off" },
-        if enabled {
-            Color::from_rgba8(60, 110, 150, 255)
-        } else {
-            Color::from_rgba8(40, 46, 56, 255)
-        },
-        Color::from_rgba8(220, 230, 245, 255),
-        Msg::Command(MediaCommand::EqToggle),
-    );
-    let flat = chip_button(
-        "flat",
-        Color::from_rgba8(55, 65, 80, 255),
-        Color::from_rgba8(220, 230, 245, 255),
-        Msg::Command(MediaCommand::EqReset),
-    );
-    let controls = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(40.0_f32),
-        },
-        gap: Size {
-            width: length(8.0_f32),
-            height: length(0.0_f32),
-        },
-        justify_content: Some(JustifyContent::Center),
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .children(vec![toggle, flat]);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(4.0_f32),
-        },
-        justify_content: Some(JustifyContent::Center),
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .children(vec![graph, controls])
-}
-
-/// Tile de playlist: repeat/shuffle/speed. Los tres están apagados si
-/// no hay playlist activa.
-fn playlist_tile() -> View<Msg> {
-    let seekable = playlist_slot().get().and_then(|o| o.as_ref()).is_some();
-    let bg_on = Color::from_rgba8(55, 65, 80, 255);
-    let bg_off = Color::from_rgba8(40, 46, 56, 255);
-    let fg_on = Color::from_rgba8(220, 230, 245, 255);
-    let fg_off = Color::from_rgba8(100, 110, 125, 255);
-    let bg = if seekable { bg_on } else { bg_off };
-    let fg = if seekable { fg_on } else { fg_off };
-
-    let current_speed = playback_snapshot().speed;
-    let speed_label = format!("{:.2}×", current_speed);
-    let speed_btn = chip_button(
-        &speed_label,
-        bg,
-        fg,
-        Msg::Command(MediaCommand::SpeedStep { dir: 1 }),
-    );
-
-    let (repeat_label, shuffle_on) = {
-        let s = playback_snapshot();
-        (s.repeat_label, s.shuffle_on)
-    };
-    let loop_btn = chip_button(repeat_label, bg, fg, Msg::Command(MediaCommand::CycleRepeat));
-    let shuf_bg = if shuffle_on {
-        Color::from_rgba8(60, 110, 150, 255)
-    } else {
-        bg
-    };
-    let shuf_btn = chip_button(
-        if shuffle_on { "shuf!" } else { "shuf-" },
-        shuf_bg,
-        fg,
-        Msg::Command(MediaCommand::ToggleShuffle),
-    );
-
-    tile_chip_grid(vec![loop_btn, shuf_btn, speed_btn])
-}
-
-/// Tile de captura: rec + snap. Cuando `rec` está activo el chip se
-/// pinta en rojo y dice `stop`.
-fn recorder_tile() -> View<Msg> {
-    let recording = recorder().is_recording();
-    let rec_btn = chip_button(
-        if recording { "stop" } else { "rec" },
-        if recording {
-            Color::from_rgba8(200, 65, 65, 255)
-        } else {
-            Color::from_rgba8(55, 65, 80, 255)
-        },
-        Color::from_rgba8(245, 235, 235, 255),
-        Msg::Command(MediaCommand::ToggleRecord),
-    );
-    let snap_btn = chip_button(
-        "snap",
-        Color::from_rgba8(55, 65, 80, 255),
-        Color::from_rgba8(220, 230, 245, 255),
-        Msg::Command(MediaCommand::Snapshot),
-    );
-    tile_chip_grid(vec![rec_btn, snap_btn])
-}
-
-/// Layout helper: fila de chips centrada vertical y horizontalmente
-/// dentro del cuerpo del tile. Lo comparten los tiles de transport,
-/// playlist y recorder — toman lo que el tiled les dé y centran.
-fn tile_chip_grid(chips: Vec<View<Msg>>) -> View<Msg> {
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        gap: Size {
-            width: length(6.0_f32),
-            height: length(0.0_f32),
-        },
-        justify_content: Some(JustifyContent::Center),
-        align_items: Some(AlignItems::Center),
-        // Wrap permite que si la columna se hace estrecha los chips
-        // bajen de fila en vez de cortarse.
-        flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
-        ..Default::default()
-    })
-    .children(chips)
-}
-
 /// Franja debajo del canvas que muestra el cue de subtítulo activo
 /// según la posición del playlist. Si no hay SRT cargado, queda con
 /// altura 0 (invisible) para no morder layout.
@@ -3687,10 +3465,6 @@ fn subtitle_strip<Msg: 'static>() -> View<Msg> {
     .text(text, 18.0, Color::from_rgba8(240, 240, 240, 255))
 }
 
-/// Panel inferior con la forma de onda del último tramo del stream
-/// (mezcla de canales en mono para mostrarse en una sola línea).
-/// Cuando no hay probe (audio muteado) muestra una línea de centro
-/// con leyenda "audio off".
 /// Barra de progreso clickeable bajo el video — scrubbing estilo VLC.
 /// Delega en el widget reusable `llimphi-widget-timeline`: la app sólo
 /// calcula la fracción de avance (posición/duración del player vivo) y
