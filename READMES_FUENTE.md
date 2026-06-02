@@ -248,11 +248,14 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 - **YA tiene README.md + LEEME.md propios** (tesis completa fase a fase) — la generación debería partir de ahí, no reescribir desde cero. Estado: P0–P7 cerradas (2026-05-31).
 - ✍️ resaltar / omitir / estado:
 
-#### cards  ⚠️ confirmar
+#### cards  ✅ = Brahman (proyector de Cards)
 ```
-# una línea: ✍️ (carpeta `cards` sin Cargo.toml propio visible — ¿agrupador de
-#            crates relacionados con Cards/Brahman? confirmá rol y contenido)
+# una línea: Brahman — brazo unificado: lee múltiples formatos de Card
+#            (Ente/Monad/UiModule/…) vía Nickel y los proyecta a una estructura
+#            canónica única.
 ```
+- crate único `cards` (sin subcrates). Deps: card-core · chasqui-card · nahual-meta-schema · nickel-lang. Templates `.ncl` (ente/monad/ui_module).
+- Ref: `BRAHMAN.md`
 - ✍️ resaltar / omitir / estado:
 
 #### chasqui
@@ -323,12 +326,13 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 - subcrates: pata-core · pata-config · pata-llimphi
 - ✍️ resaltar / omitir / estado: _(elige adapter por render-node del compositor; sólo Intel)_
 
-#### raymi  ⚠️ confirmar
+#### raymi  ✅ = Calendario + Contactos
 ```
-# una línea: ✍️ (raymi = "fiesta/celebración"; tiene net/store/app/core/llimphi —
-#            confirmá qué hace; aparece como hotspot multi-agente)
+# una línea: agenda nativa: calendario y contactos (CalDAV/CardDAV). El compañero
+#            de paloma que cierra el reemplazo de Google Workspace. raymi = los
+#            festivales del calendario andino (Inti Raymi, Qhapaq Raymi…).
 ```
-- subcrates: raymi-core · raymi-{net,store} · raymi-{app,llimphi}
+- subcrates: raymi-core (modelo agnóstico: eventos, RRULE, calendarios, contactos + trait transporte; reusa la capa de cuentas de paloma) · raymi-net (iCalendar/vCard + cliente CalDAV/CardDAV) · raymi-store (caché offline-first postcard+BLAKE3, sync incremental por UID) · raymi-app (binario; NetBackend autodescubierto, fallback demo) · raymi-llimphi (vista mes + agenda del día + lista/detalle de contactos)
 - ✍️ resaltar / omitir / estado:
 
 #### shuma
@@ -474,13 +478,11 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 > apenas existan; mientras no haya crate, NO se genera README (sólo queda anotada).
 
 > Ya mapeadas a dominios existentes (NO van acá, tienen su bloque en §3):
-> **Correo → `paloma`** · **Chat → `ayni`**. Mantenidas fuera de esta lista.
-
-**Tanda 1 — "Google Workspace" diario:**
-- **Calendario + Contactos** — CalDAV/CardDAV; comparte capa de cuentas con `paloma` (correo). ✍️
+> **Correo → `paloma`** · **Chat → `ayni`** · **Calendario+Contactos → `raymi`**.
+> Mantenidas fuera de esta lista.
 
 **Tanda 2 — tiempo real (P2P + WebRTC ya existen):**
-- **Videollamadas** — UI de conferencia sobre P2P (akasha/minga) + `media` (video) + `takiy` (audio); stack WebRTC vive en `puriy-js`. _⚠️ ¿`raymi`?_ ✍️
+- **Videollamadas** — UI de conferencia sobre P2P (akasha/minga) + `media` (video) + `takiy` (audio); stack WebRTC vive en `puriy-js`. ✍️
 
 **Tanda 3 — descubrimiento e información:**
 - **Mapas / navegación** — tiles OSM + routing como canvas Llimphi (GPU directo). ✍️

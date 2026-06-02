@@ -13,29 +13,10 @@
 use std::time::Instant;
 
 use tinkuy_core::{
-    kinetic_energy, reflect_walls, temperature, total_momentum,
+    kinetic_energy, lattice_cubica, reflect_walls, temperature, total_momentum,
     velocity_verlet_step, Grid3D, IntegratorParams, Outbox, Snapshot, World,
 };
 use tinkuy_forces::{clear_accelerations, lennard_jones, LjParams};
-
-// ─── PRNG determinista ────────────────────────────────────────────────────────
-
-struct SplitMix64(u64);
-impl SplitMix64 {
-    fn new(seed: u64) -> Self { Self(seed) }
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    /// Uniforme en [-1, 1].
-    fn next_centered(&mut self) -> f32 {
-        let bits = self.next_u64();
-        (bits as i64 as f64 / i64::MAX as f64) as f32
-    }
-}
 
 // ─── CLI parsing (sin clap) ───────────────────────────────────────────────────
 
@@ -115,57 +96,9 @@ const KB:      f64 = 1.0; // unidades reducidas
 
 fn init_world(cfg: &Cfg) -> (World, Grid3D, [f32; 3], [f32; 3]) {
     // Cubic lattice: ⌈N^(1/3)⌉ por eje. n_actual puede exceder cfg.n; ajustamos.
+    // El setup canónico (lattice + drift CM + grilla) vive en tinkuy-core.
     let side = (cfg.n as f32).cbrt().ceil() as usize;
-    let n_actual = side * side * side;
-    let l = side as f32 * SPACING + CUTOFF; // margen para evitar self-overlap
-
-    let bounds_min = [0.0; 3];
-    let bounds_max = [l, l, l];
-
-    let mut w = World::with_capacity(n_actual);
-    let mut rng = SplitMix64::new(cfg.seed);
-
-    // velocidades térmicas ~ U(-1,1) escaladas para que ⟨KE⟩ ≈ (3/2)N·kB·T0.
-    // En unidades reducidas, σ_v = √T0.
-    let vscale = cfg.temperature_init.sqrt();
-
-    let half = SPACING * 0.5;
-    for k in 0..side {
-        for j in 0..side {
-            for i in 0..side {
-                let x = i as f32 * SPACING + half + (CUTOFF * 0.5);
-                let y = j as f32 * SPACING + half + (CUTOFF * 0.5);
-                let z = k as f32 * SPACING + half + (CUTOFF * 0.5);
-                let vx = rng.next_centered() * vscale;
-                let vy = rng.next_centered() * vscale;
-                let vz = rng.next_centered() * vscale;
-                w.spawn([x, y, z], [vx, vy, vz], 1.0, 0.0);
-            }
-        }
-    }
-
-    // Sustrae drift del centro de masas: garantiza Σp = 0 (sin rotación
-    // espuria del sistema entero por sesgo del RNG).
-    let [px, py, pz] = total_momentum(&w);
-    let m_total = n_actual as f64; // todas masa 1.0
-    let dvx = (px / m_total) as f32;
-    let dvy = (py / m_total) as f32;
-    let dvz = (pz / m_total) as f32;
-    for i in 0..n_actual {
-        w.vxs.0[i] -= dvx;
-        w.vys.0[i] -= dvy;
-        w.vzs.0[i] -= dvz;
-    }
-
-    // Grilla: cell_size = cutoff garantiza que vecinos quepan en 27 celdas.
-    let dims_x = ((l / CUTOFF).ceil() as u32).max(3);
-    let g = {
-        let mut g = Grid3D::new(bounds_min, CUTOFF, [dims_x; 3], n_actual);
-        g.rebuild(&w);
-        g
-    };
-
-    (w, g, bounds_min, bounds_max)
+    lattice_cubica(side, SPACING, CUTOFF, cfg.seed, cfg.temperature_init)
 }
 
 // ─── Reporte ──────────────────────────────────────────────────────────────────

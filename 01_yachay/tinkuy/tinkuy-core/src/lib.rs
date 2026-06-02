@@ -16,6 +16,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod ecs;
+pub mod escenarios;
 pub mod grid;
 pub mod integrator;
 pub mod observables;
@@ -23,6 +24,7 @@ pub mod snapshot;
 pub mod walls;
 
 pub use ecs::{Aligned64, EntityHandle, World};
+pub use escenarios::{lattice_cubica, SplitMix64};
 pub use grid::{CellId, Grid3D, Outbox, Transfer};
 pub use integrator::{velocity_verlet_step, IntegratorParams};
 pub use observables::{kinetic_energy, temperature, total_momentum};

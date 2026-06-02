@@ -27,9 +27,15 @@ Llimphi porque vivían en el frontend, no en un core. Auditoría de la suite
 
 ## Violaciones MEDIA
 
-- `cosmos-app-llimphi/astrocarto.rs` — reinventa sidéreo/JD que ya está en
-  `cosmos-time::sidereal` + `cosmos-skywatch`; emitir `DrawCommand` como el resto.
-- `cosmos-app-llimphi/persist.rs` — store JSON de cartas paralelo a `cosmos-store`.
+- ⚠️ **REEVALUADO** `cosmos-app-llimphi/astrocarto.rs` — el JD/GMST local NO se puede
+  sustituir behavior-preserving por `cosmos-time`: `JulianDate::from_calendar` usa ERFA
+  (no Meeus) y `GMST` es IAU-2006 (requiere UT1+TT+ΔT) vs. el Meeus-12.4-sobre-JD-UT del
+  tile → cambia las líneas renderizadas. El refactor sano (regla #2) es extraer el cómputo
+  geométrico (MC/IC/Asc/Desc) a un `cosmos-astrocarto` con la misma matemática y que el
+  tile sólo pinte; pendiente por la sutileza de replicar exacto el corte circumpolar.
+- ⚠️ **REEVALUADO** `cosmos-app-llimphi/persist.rs` — NO es duplicación de `cosmos-store`:
+  es la capa JSON hand-editable + watcher (UX deliberada tipo `wawa-config`, distinta del
+  store estructurado tipo DB). Unificarlas cambiaría la UX, no es dedup. Se deja.
 - `media-app/main.rs` — `Playlist`/shuffle/repeat duplican `media-core::Playlist`.
 - ✅ **HECHO** `iniy-explorer-llimphi` — `calcular_reputaciones` (scoring puro en
   memoria) movido a `iniy_store::calcular_reputaciones` (2 tests); el frontend lo
@@ -44,7 +50,10 @@ Llimphi porque vivían en el frontend, no en un core. Auditoría de la suite
   para derivar vía LLM) → `pluma-editor-cuerpo`.
 - `pluma-notebook-llimphi/main.rs` — router de kernels por lenguaje → `pluma-notebook-exec`.
 - `mirada-greeter/sessions.rs` — enumeración de sesiones XDG → core.
-- `tinkuy` — `init_world` duplicado con `tinkuy-sim` → `tinkuy-core::escenarios`.
+- ✅ **HECHO** `tinkuy` — `init_world` (lattice cúbico + drift CM + grilla) y el PRNG
+  `SplitMix64`, calcados en `tinkuy-sim` y `tinkuy-llimphi`, unificados en
+  `tinkuy_core::escenarios::lattice_cubica` + `SplitMix64` (3 tests). Ambos frontends
+  quedan como wrappers de una línea que sólo fijan sus parámetros (n/seed/temp).
 - `nahual/libs/meta-runtime` + `meta-schema` — crates huérfanos (cablear o borrar).
 
 ## Limpios (referencia de cómo se hace bien)

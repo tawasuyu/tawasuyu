@@ -58,8 +58,8 @@ use llimphi_widget_tiled::{tiled_view_reorderable_cols, TileSpec, TiledPalette};
 use app_bus::{AppMenu, Menu, MenuItem};
 
 use tinkuy_core::{
-    kinetic_energy, reflect_walls, temperature, total_momentum, velocity_verlet_step,
-    Grid3D, IntegratorParams, Outbox, Snapshot, World,
+    kinetic_energy, lattice_cubica, reflect_walls, temperature, total_momentum,
+    velocity_verlet_step, Grid3D, IntegratorParams, Outbox, Snapshot, World,
 };
 use tinkuy_dsl::{compile, optimize};
 use tinkuy_forces::{clear_accelerations, DslForce};
@@ -231,70 +231,12 @@ struct SnapshotEntry {
     bytes: Arc<[u8]>,
 }
 
-// ─── PRNG determinista (igual que tinkuy-sim, sin dep externa) ─────────────────
-
-struct SplitMix64(u64);
-impl SplitMix64 {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    fn next_centered(&mut self) -> f32 {
-        let bits = self.next_u64();
-        (bits as i64 as f64 / i64::MAX as f64) as f32
-    }
-}
-
 // ─── Inicialización del mundo ─────────────────────────────────────────────────
 
 fn init_world() -> (World, Grid3D, [f32; 3], [f32; 3]) {
-    let n_actual = SIDE * SIDE * SIDE;
-    let l = SIDE as f32 * SPACING + CUTOFF;
-
-    let bounds_min = [0.0; 3];
-    let bounds_max = [l, l, l];
-
-    let mut w = World::with_capacity(n_actual);
-    let mut rng = SplitMix64::new(0xC0FFEE);
-    let vscale = TEMP_INIT.sqrt();
-    let half = SPACING * 0.5;
-    for k in 0..SIDE {
-        for j in 0..SIDE {
-            for i in 0..SIDE {
-                let x = i as f32 * SPACING + half + (CUTOFF * 0.5);
-                let y = j as f32 * SPACING + half + (CUTOFF * 0.5);
-                let z = k as f32 * SPACING + half + (CUTOFF * 0.5);
-                let vx = rng.next_centered() * vscale;
-                let vy = rng.next_centered() * vscale;
-                let vz = rng.next_centered() * vscale;
-                w.spawn([x, y, z], [vx, vy, vz], 1.0, 0.0);
-            }
-        }
-    }
-
-    // Sustrae drift del CM — Σp = 0 al arranque, igual que tinkuy-sim.
-    let [px, py, pz] = total_momentum(&w);
-    let m_total = n_actual as f64;
-    let dvx = (px / m_total) as f32;
-    let dvy = (py / m_total) as f32;
-    let dvz = (pz / m_total) as f32;
-    for i in 0..n_actual {
-        w.vxs.0[i] -= dvx;
-        w.vys.0[i] -= dvy;
-        w.vzs.0[i] -= dvz;
-    }
-
-    let dims_x = ((l / CUTOFF).ceil() as u32).max(3);
-    let mut g = Grid3D::new(bounds_min, CUTOFF, [dims_x; 3], n_actual);
-    g.rebuild(&w);
-
-    (w, g, bounds_min, bounds_max)
+    // Setup canónico (lattice cúbico + drift CM + grilla) en tinkuy-core,
+    // igual que tinkuy-sim. Acá fijamos los parámetros de esta app.
+    lattice_cubica(SIDE, SPACING, CUTOFF, 0xC0FFEE, TEMP_INIT)
 }
 
 /// Captura observables y devuelve también el `Snapshot` — `bytes` viajan al
