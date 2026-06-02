@@ -1024,7 +1024,17 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
             width: percent(1.0_f32),
             height: Dimension::auto(),
         },
+        // Región scrolleable en una flex column: `flex_basis: 0` +
+        // `min_height: 0` para que tome SÓLO el espacio sobrante (tras el
+        // header y el input) y NO el tamaño de su contenido. Sin esto el
+        // alto del contenido (un `ls` largo) se filtra al flex-basis y el
+        // panel aplasta/expulsa el input. El contenido se clipa adentro.
+        flex_basis: length(0.0_f32),
         flex_grow: 1.0,
+        min_size: Size {
+            width: Dimension::auto(),
+            height: length(0.0_f32),
+        },
         ..Default::default()
     })
     .fill(theme.bg_panel)
