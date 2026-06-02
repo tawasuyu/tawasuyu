@@ -87,6 +87,7 @@ use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
 use media_core::library::History;
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
+use media_core::chapters::Chapters;
 use media_core::metadata::{self, Metadata};
 use media_core::toolbar::BarItem;
 use media_core::transform::{Rotation, Transform, TransformControl, TransformVideo};
@@ -469,9 +470,12 @@ fn apply_startup_config() {
             history().lock().note_play(&key, now_secs());
         }
     }
-    // Metadata (U5): tags del archivo actual.
-    if let Some(p) = current_media_path() {
+    // Metadata (U5) + capítulos (V7): sólo de archivos locales reales — en
+    // una URL de red, leer/spawnear ffmpeg al arranque colgaría o bajaría
+    // datos. `current_media_path` puede devolver una URL-como-path.
+    if let Some(p) = current_media_path().filter(|p| p.is_file()) {
         let _ = media_metadata_slot().set(load_media_metadata(&p));
+        let _ = chapters_slot().set(load_chapters(&p));
     }
     let _ = media_config_slot().set(config);
 }
@@ -622,6 +626,21 @@ fn load_media_metadata(path: &Path) -> Metadata {
     let mut buf = Vec::new();
     let _ = file.take(2 * 1024 * 1024).read_to_end(&mut buf);
     metadata::parse(&buf)
+}
+
+/// Capítulos del medio actual (V7), extraídos una vez al arrancar.
+fn chapters_slot() -> &'static OnceLock<Chapters> {
+    static SLOT: OnceLock<Chapters> = OnceLock::new();
+    &SLOT
+}
+
+/// Extrae los capítulos del archivo vía ffmpeg (ffmetadata) y los parsea.
+/// `Chapters` vacío si el archivo no trae o ffmpeg falla.
+fn load_chapters(path: &Path) -> Chapters {
+    match foreign_av::ffmetadata(path) {
+        Ok(text) => Chapters::parse_ffmetadata(&text),
+        Err(_) => Chapters::default(),
+    }
 }
 
 // ============================================================
@@ -1538,6 +1557,8 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (SeekTo { fraction: 0.0 }, "Transporte"),
         (PrevTrack, "Playlist"),
         (NextTrack, "Playlist"),
+        (ChapterPrev, "Capítulos"),
+        (ChapterNext, "Capítulos"),
         (CycleRepeat, "Playlist"),
         (ToggleShuffle, "Playlist"),
         (VolumeBy { delta: vstep }, "Volumen"),
@@ -1699,6 +1720,22 @@ fn apply_command(cmd: MediaCommand) {
         NextTrack => {
             if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
                 h.lock().next();
+            }
+        }
+        ChapterNext => {
+            if let Some(ch) = chapters_slot().get() {
+                let pos = playback_snapshot().position;
+                if let Some(c) = ch.next(pos) {
+                    seek_audio_to_pos(c.start);
+                }
+            }
+        }
+        ChapterPrev => {
+            if let Some(ch) = chapters_slot().get() {
+                let pos = playback_snapshot().position;
+                if let Some(c) = ch.prev(pos, Duration::from_secs(3)) {
+                    seek_audio_to_pos(c.start);
+                }
             }
         }
         SpeedStep { dir } => step_speed(dir),
@@ -3011,6 +3048,7 @@ fn short_action(cmd: &MediaCommand) -> &'static str {
         ToggleMute => "mute",
         NextTrack => "sig",
         PrevTrack => "ant",
+        ChapterNext | ChapterPrev => "cap",
         SpeedStep { .. } | SetSpeed { .. } => "vel",
         CycleRepeat => "rep",
         ToggleShuffle => "shuf",
@@ -3689,11 +3727,19 @@ fn bar_item_view(item: BarItem) -> View<Msg> {
                 .and_then(|m| m.title.clone())
                 .or_else(|| config_slot().get().map(|c| c.label.clone()))
                 .unwrap_or_default();
-            let label = match md.and_then(|m| m.artist.as_deref()) {
+            let mut label = match md.and_then(|m| m.artist.as_deref()) {
                 Some(artist) if !artist.is_empty() => format!("{base} — {artist}"),
                 _ => base,
             };
-            bar_label(label, 240.0, Color::from_rgba8(200, 212, 230, 255))
+            // Capítulo actual (V7), si lo hay.
+            if let Some(ch) = chapters_slot().get() {
+                if let Some((_, c)) = ch.at(playback_snapshot().position) {
+                    if !c.title.is_empty() {
+                        label = format!("{label}  ·  ▸ {}", c.title);
+                    }
+                }
+            }
+            bar_label(label, 300.0, Color::from_rgba8(200, 212, 230, 255))
         }
     }
 }

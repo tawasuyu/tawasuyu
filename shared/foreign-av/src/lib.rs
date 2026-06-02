@@ -153,6 +153,28 @@ struct ProbeFormat {
 }
 
 /// Corre `ffprobe` y devuelve metadata de los streams primarios.
+/// Extrae los metadatos en formato **ffmetadata** del archivo (incluye los
+/// bloques `[CHAPTER]`), vía `ffmpeg -f ffmetadata -`. Devuelve el texto
+/// crudo para que el consumidor lo parsee (p. ej. `media_core::chapters`).
+/// El core no sabe de ffmpeg; este puente sí (regla #4).
+pub fn ffmetadata(path: impl AsRef<Path>) -> Result<String, FfmpegError> {
+    let p = path.as_ref();
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(p)
+        .args(["-f", "ffmetadata", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| FfmpegError::Spawn(e.to_string()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(FfmpegError::Probe(stderr.trim().to_string()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo, FfmpegError> {
     let p = path.as_ref();
     let output = Command::new("ffprobe")

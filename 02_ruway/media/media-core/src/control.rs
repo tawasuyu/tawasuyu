@@ -47,6 +47,11 @@ pub enum MediaCommand {
     NextTrack,
     /// Pista anterior de la playlist.
     PrevTrack,
+    /// Capítulo siguiente (V7): salta al inicio del próximo capítulo.
+    ChapterNext,
+    /// Capítulo anterior (V7): reinicia el capítulo actual o, si recién
+    /// empezó, salta al inicio del anterior (estilo VLC).
+    ChapterPrev,
     /// Cicla la velocidad de reproducción `dir` pasos por la lista de
     /// `speed_steps` (+1 sube, -1 baja).
     SpeedStep { dir: i32 },
@@ -159,6 +164,8 @@ impl MediaCommand {
             ToggleMute => "Silenciar / restaurar".to_string(),
             NextTrack => "Pista siguiente".to_string(),
             PrevTrack => "Pista anterior".to_string(),
+            ChapterNext => "Capítulo siguiente".to_string(),
+            ChapterPrev => "Capítulo anterior".to_string(),
             SpeedStep { dir } if *dir < 0 => "Velocidad más lenta".to_string(),
             SpeedStep { .. } => "Velocidad más rápida".to_string(),
             SetSpeed { mult } => format!("Velocidad {mult:.2}×"),
