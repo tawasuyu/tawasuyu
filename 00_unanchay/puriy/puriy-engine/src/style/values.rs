@@ -1,0 +1,785 @@
+//! Tipos de valores CSS computados: `ComputedStyle` y todos los enums/structs
+//! que la representan (longitudes, flex/grid, colores de gradiente, sombras,
+//! transforms, animaciones, viewport, `Sides`/`Corners`), con sus `Default`.
+//! Extraído de `style/mod.rs` (regla #1). Comparte los tipos del módulo `style`
+//! y del crate vía `use super::*`.
+use super::*;
+
+/// Estilo computado por nodo. Defaults razonables — un nodo sin reglas
+/// que matchen igual produce un box renderizable (texto negro sobre
+/// transparente).
+#[derive(Debug, Clone)]
+pub struct ComputedStyle {
+    pub display: Display,
+    pub color: Color,
+    pub background: Option<Color>,
+    pub font_size: f32,
+    pub font_weight: u16,
+    /// CSS `font-style`: normal vs italic/oblique. Heredable.
+    pub font_style: FontStyle,
+    /// CSS `font-family` como string crudo (acepta lista con fallbacks).
+    /// `None` = sin override; usa la fuente default del runtime.
+    pub font_family: Option<String>,
+    pub margin: Sides<f32>,
+    pub padding: Sides<f32>,
+    /// Ancho explícito. `Auto` = el default block-fills-parent.
+    pub width: LengthVal,
+    /// Alto explícito. `Auto` = lo dimensiona el contenido.
+    pub height: LengthVal,
+    /// Tope superior — útil para containers narrow ("max-width:800px").
+    pub max_width: LengthVal,
+    /// Alineación horizontal del texto dentro del box.
+    pub text_align: TextAlign,
+    /// Altura de línea como multiplicador del font-size. `None` =
+    /// default razonable (1.4) en el caller.
+    pub line_height: Option<f32>,
+    /// Ancho del border en px por lado. `0` = ese lado sin border.
+    /// El shorthand `border: 2px solid red` setea los 4 lados; las
+    /// propiedades `border-top/right/bottom/left[-width]` los setean
+    /// individualmente.
+    pub border_widths: Sides<f32>,
+    /// Color del border por lado. `None` = ese lado no se dibuja aunque
+    /// `width > 0`. Mismo modelo que `border_widths`.
+    pub border_colors: Sides<Option<Color>>,
+    /// Radio del corner-radius en px por esquina (0 = esquina viva).
+    /// El shorthand `border-radius: 8px` setea las 4; las propiedades
+    /// `border-top-left-radius` etc. las setean individualmente.
+    pub border_radii: Corners<f32>,
+    /// `box-shadow` simplificado. `None` = sin sombra.
+    pub box_shadow: Option<BoxShadow>,
+    /// `z-index` aplicado al stacking order entre siblings positioned
+    /// (absolute/fixed). Para nodos en flow normal (static), CSS spec
+    /// dice que z-index no aplica y se ignora. `0` = default.
+    pub z_index: i32,
+    /// `content: ...` para pseudo-elementos `::before`/`::after`.
+    /// `None` = no hay content (pseudo-element NO se materializa). Sólo
+    /// se consulta en estilos computados para pseudo-elements; en el
+    /// estilo del elemento real, content es no-op (matchea spec).
+    ///
+    /// Es un `Vec` porque `content:` admite concatenación de items:
+    /// `content: "Sección " counter(sec) ": " attr(data-title)`.
+    pub content: Option<Vec<ContentItem>>,
+    /// `counter-reset: name [val] name2 [val2]...`. Cada par crea o
+    /// resetea un contador en el scope del nodo. Se aplica antes que
+    /// `counter-increment` al entrar al nodo en el DFS.
+    pub counter_reset: Vec<(String, i32)>,
+    /// `counter-increment: name [delta] name2 [delta2]...`. Cada par
+    /// incrementa el contador correspondiente; si no existía, lo crea
+    /// implícitamente (CSS spec: el reset implícito es 0).
+    pub counter_increment: Vec<(String, i32)>,
+    /// `text-decoration-line` reducido al subset que pintamos.
+    /// `None` = sin decoración (default HTML, salvo `<a>`/`<u>`/`<s>`).
+    pub text_decoration: TextDecorationLine,
+    /// Marker que `<li>` pinta delante del contenido. Hereda (CSS spec).
+    /// Default `Disc` (CSS default); UA stylesheet override en `<ol>` y
+    /// `<ul>` por consistencia.
+    pub list_style_type: ListStyleType,
+    /// Solo relevante si `display` es `Flex`/`InlineFlex`. Default Row.
+    pub flex_direction: FlexDirection,
+    /// Distribución horizontal (eje principal) de los hijos flex.
+    pub justify_content: JustifyContent,
+    /// Alineación vertical (eje cruzado) de los hijos flex.
+    pub align_items: AlignItems,
+    /// Distribución de las líneas (flex multilínea) / pistas (grid) en el
+    /// eje cruzado. `Normal` = default de taffy. No hereda.
+    pub align_content: AlignContent,
+    /// `justify-items` (grid): alineación por defecto de los items en el eje
+    /// inline. `None` = default de taffy. No hereda.
+    pub justify_items: Option<AlignItems>,
+    /// `justify-self` (grid item): pisa el `justify-items` del contenedor
+    /// para ese item. `Auto` = hereda del contenedor. No hereda.
+    pub justify_self: AlignSelf,
+    /// `nowrap` por default (CSS spec).
+    pub flex_wrap: FlexWrap,
+    /// Separación entre items en el eje principal (px). En CSS estándar,
+    /// `column-gap` para row-direction, `row-gap` para column-direction.
+    /// Acá los separamos para mapear directo a taffy.
+    pub gap_row: f32,
+    pub gap_column: f32,
+    /// Cómo se cuentan padding/border dentro del width. Default
+    /// `ContentBox` (CSS spec); los resets modernos lo fuerzan a
+    /// BorderBox.
+    pub box_sizing: BoxSizing,
+    /// Ancho/alto mínimos.
+    pub min_width: LengthVal,
+    pub min_height: LengthVal,
+    /// Alto máximo (max-width ya existe). `Auto` = sin tope.
+    pub max_height: LengthVal,
+    /// CSS `aspect-ratio` (relación ancho/alto preferida). `None` = `auto`
+    /// (sin relación impuesta). El chrome lo pasa directo a taffy, que
+    /// dimensiona el eje que quedó `auto` a partir del otro. No hereda.
+    pub aspect_ratio: Option<f32>,
+    /// Overflow del contenido. Default `Visible`.
+    pub overflow: Overflow,
+    /// Colapsado y wrap del texto.
+    pub white_space: WhiteSpace,
+    /// Transformación de texto pre-render.
+    pub text_transform: TextTransform,
+    /// 0..1. Multiplica alpha del background/border al pintar.
+    /// `text` queda sin tocar (el spec exige multiplicar todo el
+    /// subárbol, pero acá pragmaticamente sólo afecta el propio nodo —
+    /// matchea el uso real donde opacity se aplica a overlays).
+    pub opacity: f32,
+    /// Item-side de flex.
+    pub align_self: AlignSelf,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    /// `Auto` = el width del item; `Px/Pct` = base explícita.
+    pub flex_basis: LengthVal,
+    /// Outline (fuera del border, sin afectar layout).
+    pub outline: Outline,
+    /// `background-image: linear-gradient(...)`. Cuando es Some, el
+    /// chrome lo pinta detrás (o encima del background sólido).
+    pub background_gradient: Option<LinearGradient>,
+    /// `background-image: url(...)` — URL sin resolver (puede ser
+    /// relativa). El engine la resuelve y descarga en `build_node`; el
+    /// chrome consume el resultado vía `BoxNode.background_image`.
+    pub background_image_url: Option<String>,
+    /// CSS `position`. Default Static.
+    pub position: Position,
+    /// Insets (top/right/bottom/left). `Auto` por default.
+    pub inset_top: LengthVal,
+    pub inset_right: LengthVal,
+    pub inset_bottom: LengthVal,
+    pub inset_left: LengthVal,
+    /// `vertical-align` para inline / inline-block / cells.
+    pub vertical_align: VerticalAlign,
+    /// `visibility: hidden` → ocupa espacio pero no se pinta.
+    pub visibility: Visibility,
+    /// `pointer-events: none` → ignora clics/hover.
+    pub pointer_events: PointerEvents,
+    /// Sangrado de primera línea de un bloque (en px).
+    pub text_indent: f32,
+    /// Espacio extra entre palabras (en px). Heredable.
+    pub word_spacing: f32,
+    /// Espacio extra entre letras (en px). Heredable. Espejo de
+    /// `word_spacing`: hoy se parsea/hereda/almacena en el `BoxNode` pero el
+    /// chrome todavía no lo pinta (la capa de texto compartida no expone
+    /// tracking aún) — mismo estado que `word-spacing`.
+    pub letter_spacing: f32,
+    /// Sombras del texto. Vacío = ninguna.
+    pub text_shadows: Vec<TextShadow>,
+    /// Cadena de transformaciones (translate/scale/rotate) aplicadas
+    /// en orden. Vacío = identidad.
+    pub transforms: Vec<Transform>,
+    /// Para `display: grid` — pistas de columnas y filas.
+    pub grid_template_columns: Vec<GridTrackSize>,
+    pub grid_template_rows: Vec<GridTrackSize>,
+    /// `animation: <name> <duration> ...` colapsado en una binding.
+    /// `None` = sin animación. **Sólo parseado**: no hay runtime de tween
+    /// todavía, así que esto no anima nada (ver Fase B4). El runtime
+    /// futuro cruzaría `name` contra [`StyleEngine::keyframes`].
+    pub animation: Option<AnimationBinding>,
+    /// `transition: <prop> <duration> ...`. Lista separada por coma →
+    /// varios bindings. Vacío = sin transición. **Sólo parseado** — sin
+    /// runtime de tween no dispara nada (ver Fase B4).
+    pub transitions: Vec<TransitionBinding>,
+}
+
+/// Estilo del marker de `<li>`. Reducido al subset que el chrome puede
+/// pintar como texto plano (sin imágenes ni cuadritos pintados a mano).
+/// `Decimal`/`*Alpha`/`*Roman` requieren conocer la posición del `<li>`
+/// entre sus hermanos — `boxes::build_node` la calcula y la sustituye.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListStyleType {
+    None,
+    Disc,
+    Circle,
+    Square,
+    Decimal,
+    LowerAlpha,
+    UpperAlpha,
+    LowerRoman,
+    UpperRoman,
+}
+
+/// Línea decorativa que el chrome dibuja sobre/atravesando/debajo del
+/// texto del nodo. CSS spec dice que la propiedad NO se hereda — los
+/// descendientes inline heredan la decoración por propagación visual,
+/// no computacional. Acá la tratamos como heredable porque dibujamos
+/// por leaf de texto: sin propagar, `<a>foo <b>bar</b></a>` rendearía
+/// `foo` subrayado y `bar` sin subrayar. Override explícito a `None`
+/// la suprime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextDecorationLine {
+    None,
+    Underline,
+    LineThrough,
+    Overline,
+}
+
+/// CSS `font-style`. Heredable. `Oblique` lo tratamos igual que
+/// `Italic` (parley sintetiza si la fuente no tiene oblique nativo).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontStyle {
+    #[default]
+    Normal,
+    Italic,
+}
+
+/// Sombra rectangular detrás del box. `blur_px` y `spread_px` se
+/// combinan en una expansión efectiva del rect — gaussian blur real
+/// queda para cuando el render-pipeline soporte multi-pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_px: f32,
+    pub spread_px: f32,
+    pub color: Color,
+}
+
+/// Valor longitud de CSS reducido al subset que soportamos: `auto`,
+/// `Npx`, `N%`. `em`/`rem` se resuelven a px en parse time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LengthVal {
+    Auto,
+    Px(f32),
+    Pct(f32),
+}
+
+/// 4 valores por lado (top/right/bottom/left). Lo usan `margin` y
+/// `padding` para no perder información del shorthand CSS — un
+/// `padding: 10px 20px` se queda con `top/bottom=10, right/left=20`
+/// en vez de colapsarse a un único `f32`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sides<T: Copy> {
+    pub top: T,
+    pub right: T,
+    pub bottom: T,
+    pub left: T,
+}
+
+/// Eje principal de un contenedor `display: flex`. Default `Row`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexDirection {
+    Row,
+    RowReverse,
+    Column,
+    ColumnReverse,
+}
+
+/// Distribución del espacio libre a lo largo del eje principal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JustifyContent {
+    Start,
+    Center,
+    End,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// Alineación de los items en el eje cruzado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignItems {
+    Start,
+    Center,
+    End,
+    Stretch,
+    Baseline,
+}
+
+/// Distribución de las *líneas* en el eje cruzado (flex multilínea) o de
+/// las pistas en grid. CSS `align-content`. `Normal` (default) deja que
+/// taffy use su comportamiento por defecto (stretch para flex). No hereda.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignContent {
+    Normal,
+    Start,
+    Center,
+    End,
+    Stretch,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// ¿Hijos en una sola línea o wrap a múltiples?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexWrap {
+    NoWrap,
+    Wrap,
+    WrapReverse,
+}
+
+/// Modelo de caja CSS: cómo se cuentan `padding` y `border` dentro del
+/// `width`/`height`. CSS default `ContentBox` (width = sólo contenido);
+/// la mayoría de los resets modernos fuerzan `BorderBox`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxSizing {
+    ContentBox,
+    BorderBox,
+}
+
+/// `align-items` por item — pisa el del contenedor para ese hijo.
+/// `Auto` significa heredar del padre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignSelf {
+    Auto,
+    Start,
+    Center,
+    End,
+    Stretch,
+    Baseline,
+}
+
+/// Comportamiento de overflow del contenido del box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overflow {
+    Visible,
+    Hidden,
+}
+
+/// `white-space` controla colapsado de espacios y wrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhiteSpace {
+    /// Default: runs internos colapsan a un solo espacio, wrap libre.
+    Normal,
+    /// Sin wrap; runs internos colapsan.
+    NoWrap,
+    /// Preserva todo (espacios, tabs, newlines).
+    Pre,
+    /// Preserva espacios/newlines; wrap permitido en cualquier espacio.
+    PreWrap,
+    /// Colapsa runs internos a uno, pero preserva newlines.
+    PreLine,
+}
+
+/// `text-transform` aplica una transformación al texto antes de
+/// pintarlo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextTransform {
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
+
+/// `outline` se pinta fuera del border (sin ocupar layout). Útil para
+/// focus rings y debug. `style_active=false` (CSS `none`/`hidden`) lo
+/// desactiva aunque haya width/color.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Outline {
+    pub width: f32,
+    pub color: Option<Color>,
+    pub style_active: bool,
+    /// Distancia del border al outline. Default 0.
+    pub offset: f32,
+}
+
+impl Default for Outline {
+    fn default() -> Self {
+        Self { width: 0.0, color: None, style_active: true, offset: 0.0 }
+    }
+}
+
+/// Un stop de `linear-gradient`. `pos` es la fracción (0..1) del eje;
+/// si `None`, se distribuye automáticamente entre stops adyacentes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientStop {
+    pub color: Color,
+    pub pos: Option<f32>,
+}
+
+/// `background-image: linear-gradient(...)`. Subset: ángulo en grados
+/// (0 = bottom→top, 90 = left→right), 2+ stops. Conic/radial quedan
+/// para más adelante.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinearGradient {
+    /// Ángulo CSS en grados — 0 = up, 90 = right, 180 = down, 270 = left.
+    pub angle_deg: f32,
+    pub stops: Vec<GradientStop>,
+}
+
+/// CSS `position`. `Static` = el default (no position; los insets
+/// se ignoran). `Fixed`/`Sticky` los fakeamos como Absolute/Relative en
+/// el chrome — taffy 0.9 sólo expone esos dos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Position {
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+    Sticky,
+}
+
+/// CSS `vertical-align` para inline / inline-block. Mapea a alignment
+/// del item en el contexto del padre. `Super`/`Sub` los aproximamos
+/// como Top/Bottom respectivamente.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalAlign {
+    Baseline,
+    Top,
+    Middle,
+    Bottom,
+    Super,
+    Sub,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Visible,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEvents {
+    Auto,
+    None,
+}
+
+/// Una sombra de texto. CSS permite varias separadas por coma.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_px: f32,
+    pub color: Color,
+}
+
+/// Una transformación CSS individual. Las cadenas `transform: rotate(45deg)
+/// scale(2) translate(10px, 20px)` se aplican en orden de izquierda a
+/// derecha como matrices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Transform {
+    /// Pixeles X/Y.
+    Translate(f32, f32),
+    /// Factores X/Y (uno solo si CSS da un valor).
+    Scale(f32, f32),
+    /// Grados (sentido horario en pantalla = sentido CSS).
+    Rotate(f32),
+}
+
+/// Tamaño de track para `display: grid`. `Fr(N)` = fracción del espacio
+/// remanente (CSS unit `fr`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridTrackSize {
+    Auto,
+    Px(f32),
+    Pct(f32),
+    Fr(f32),
+}
+
+/// Función de easing de una `transition`/`animation`. El runtime de
+/// tween (Fase B4+, todavía NO implementado) la usaría para mapear el
+/// progreso lineal `t∈[0,1]` al progreso efectivo. Por ahora sólo se
+/// parsea y se guarda en `ComputedStyle` — no anima nada.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EasingFunction {
+    Linear,
+    Ease,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    /// `step-start` ≡ `steps(1, start)`.
+    StepStart,
+    /// `step-end` ≡ `steps(1, end)`.
+    StepEnd,
+    /// `cubic-bezier(x1, y1, x2, y2)` — los dos puntos de control.
+    CubicBezier(f32, f32, f32, f32),
+    /// `steps(n, jump-term)`. `jump_start=true` ⇒ `steps(n, start)`
+    /// (salto al inicio del intervalo); `false` ⇒ `steps(n, end)`.
+    Steps(u32, bool),
+}
+
+impl Default for EasingFunction {
+    fn default() -> Self {
+        // CSS spec: el default de `transition-timing-function` y
+        // `animation-timing-function` es `ease`.
+        EasingFunction::Ease
+    }
+}
+
+/// Número de iteraciones de una animación (`animation-iteration-count`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnimationIterations {
+    Count(f32),
+    Infinite,
+}
+
+/// `animation-direction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationDirection {
+    Normal,
+    Reverse,
+    Alternate,
+    AlternateReverse,
+}
+
+/// `animation-fill-mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationFillMode {
+    None,
+    Forwards,
+    Backwards,
+    Both,
+}
+
+/// `animation-play-state`. `Paused` congela el progreso de la animación en
+/// el frame actual (lo consume el runtime de tween en `anim.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationPlayState {
+    Running,
+    Paused,
+}
+
+/// `animation: <name> <duration> <timing> <delay> <iteration> <direction>
+/// <fill> <play-state>` colapsado en una sola binding. Si el shorthand
+/// lista varias animaciones separadas por coma nos quedamos con la primera.
+/// El runtime de tween vive en `anim.rs` (rescatado del frente engine). Los
+/// tokens se clasifican por forma, no por posición, así que el orden
+/// laxo del wild (`animation: spin 2s linear infinite`) se tolera.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimationBinding {
+    pub name: String,
+    /// Duración en segundos.
+    pub duration_s: f32,
+    pub timing: EasingFunction,
+    /// Retardo en segundos.
+    pub delay_s: f32,
+    pub iterations: AnimationIterations,
+    pub direction: AnimationDirection,
+    pub fill_mode: AnimationFillMode,
+    pub play_state: AnimationPlayState,
+}
+
+/// `transition: <property> <duration> <timing> <delay>`. Una lista
+/// separada por coma produce varios bindings. `property` queda como
+/// string cruda (`opacity`, `transform`, `all`...) — el matching contra
+/// las propiedades animables real lo hará el runtime de tween (Fase B4+).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransitionBinding {
+    pub property: String,
+    pub duration_s: f32,
+    pub timing: EasingFunction,
+    pub delay_s: f32,
+}
+
+/// Un paso de un `@keyframes`: el offset normalizado en el timeline
+/// (`from` = 0.0, `to` = 1.0, `50%` = 0.5) + las declaraciones crudas
+/// (`prop`, `value`) que aplican en ese punto. Guardamos los pares SIN
+/// parsear porque el runtime de animación (Fase B4+) todavía no existe;
+/// cuando llegue, los re-parseará con la maquinaria de `Decl` para
+/// derivar el overlay interpolado entre pasos.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframeStep {
+    pub offset: f32,
+    pub declarations: Vec<(String, String)>,
+}
+
+/// Definición de un `@keyframes name { ... }`. Los pasos quedan ordenados
+/// por `offset` ascendente.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Keyframes {
+    pub steps: Vec<KeyframeStep>,
+}
+
+/// Viewport asumido por el parser para resolver unidades `vw`/`vh`/
+/// `vmin`/`vmax` y para evaluar `@media` queries. Por ahora es
+/// constante (1280×800 — desktop típico). Cuando puriy soporte resize
+/// dinámico del viewport, pasará a ser un parámetro de `StyleEngine`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Viewport {
+    pub width: f32,
+    pub height: f32,
+    /// Factor de escala (DPI lógico) — `window.devicePixelRatio`. 1.0 normal,
+    /// 2.0 HiDPI/Retina. Lo consume `evaluate_media_query` para las features
+    /// `min/max-resolution` (`Ndppx` / `Ndpi`). Default 1.0.
+    pub dpr: f32,
+}
+
+pub const DEFAULT_VIEWPORT: Viewport = Viewport { width: 1280.0, height: 800.0, dpr: 1.0 };
+
+thread_local! {
+    /// Viewport activo para resolver unidades `vw`/`vh`/`vmin`/`vmax` durante
+    /// el parseo de un documento. `Engine::load_html` lo instala con el
+    /// viewport real (vía [`ViewportScope`]) antes de parsear hojas y construir
+    /// el box tree — incluido el `style="…"` inline que se parsea en
+    /// `boxes::build`. Fuera de ese scope (tests que llaman parsers sueltos)
+    /// cae a [`DEFAULT_VIEWPORT`], preservando el comportamiento previo.
+    static RESOLVE_VIEWPORT: std::cell::Cell<Viewport> = const { std::cell::Cell::new(DEFAULT_VIEWPORT) };
+}
+
+/// Guard RAII que instala `vp` como viewport de resolución de longitudes
+/// mientras viva, y restaura el anterior al dropear. Reentrante (anida bien).
+/// Lo usa `Engine::load_html` para que `50vw`/`100vh` resuelvan contra el
+/// tamaño real de la ventana en vez del viewport por defecto.
+pub struct ViewportScope(Viewport);
+
+impl ViewportScope {
+    pub fn new(vp: Viewport) -> Self {
+        let prev = RESOLVE_VIEWPORT.with(|c| c.replace(vp));
+        ViewportScope(prev)
+    }
+}
+
+impl Drop for ViewportScope {
+    fn drop(&mut self) {
+        RESOLVE_VIEWPORT.with(|c| c.set(self.0));
+    }
+}
+
+/// Viewport contra el que se resuelven las unidades viewport ahora mismo.
+/// `DEFAULT_VIEWPORT` salvo dentro de un [`ViewportScope`] activo.
+pub(crate) fn resolve_viewport() -> Viewport {
+    RESOLVE_VIEWPORT.with(|c| c.get())
+}
+
+impl<T: Copy> Sides<T> {
+    pub const fn all(v: T) -> Self {
+        Self { top: v, right: v, bottom: v, left: v }
+    }
+}
+
+impl Default for Sides<f32> {
+    fn default() -> Self {
+        Self::all(0.0)
+    }
+}
+
+/// Valores por esquina (top-left, top-right, bottom-right, bottom-left)
+/// — usado por `border-radius` per-corner. El shorthand `border-radius`
+/// setea las 4; las longhand `border-{top|bottom}-{left|right}-radius`
+/// las setean individualmente.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Corners<T: Copy> {
+    pub top_left: T,
+    pub top_right: T,
+    pub bottom_right: T,
+    pub bottom_left: T,
+}
+
+impl<T: Copy> Corners<T> {
+    pub const fn all(v: T) -> Self {
+        Self { top_left: v, top_right: v, bottom_right: v, bottom_left: v }
+    }
+}
+
+impl Default for Corners<f32> {
+    fn default() -> Self {
+        Self::all(0.0)
+    }
+}
+
+/// Lado de un border (`border-top-width: 2px` → `Top`, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderEdge {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+/// Esquina de un border-radius (`border-top-left-radius` → `TopLeft`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderCorner {
+    TopLeft,
+    TopRight,
+    BottomRight,
+    BottomLeft,
+}
+
+pub(crate) fn set_side<T: Copy>(sides: &mut Sides<T>, edge: BorderEdge, v: T) {
+    match edge {
+        BorderEdge::Top => sides.top = v,
+        BorderEdge::Right => sides.right = v,
+        BorderEdge::Bottom => sides.bottom = v,
+        BorderEdge::Left => sides.left = v,
+    }
+}
+
+pub(crate) fn set_side_f32(sides: &mut Sides<f32>, edge: BorderEdge, v: f32) {
+    set_side(sides, edge, v)
+}
+
+pub(crate) fn set_corner(corners: &mut Corners<f32>, corner: BorderCorner, v: f32) {
+    match corner {
+        BorderCorner::TopLeft => corners.top_left = v,
+        BorderCorner::TopRight => corners.top_right = v,
+        BorderCorner::BottomRight => corners.bottom_right = v,
+        BorderCorner::BottomLeft => corners.bottom_left = v,
+    }
+}
+
+/// Alineación horizontal del contenido inline dentro de un bloque.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+impl Default for ComputedStyle {
+    fn default() -> Self {
+        Self {
+            display: Display::Inline,
+            color: Color::BLACK,
+            background: None,
+            font_size: 16.0,
+            font_weight: 400,
+            font_style: FontStyle::Normal,
+            font_family: None,
+            margin: Sides::all(0.0),
+            padding: Sides::all(0.0),
+            width: LengthVal::Auto,
+            height: LengthVal::Auto,
+            max_width: LengthVal::Auto,
+            text_align: TextAlign::Left,
+            line_height: None,
+            border_widths: Sides::all(0.0),
+            border_colors: Sides::all(None),
+            border_radii: Corners::all(0.0),
+            box_shadow: None,
+            z_index: 0,
+            content: None,
+            counter_reset: Vec::new(),
+            counter_increment: Vec::new(),
+            text_decoration: TextDecorationLine::None,
+            list_style_type: ListStyleType::Disc,
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::Start,
+            align_items: AlignItems::Stretch,
+            align_content: AlignContent::Normal,
+            justify_items: None,
+            justify_self: AlignSelf::Auto,
+            flex_wrap: FlexWrap::NoWrap,
+            gap_row: 0.0,
+            gap_column: 0.0,
+            box_sizing: BoxSizing::ContentBox,
+            min_width: LengthVal::Auto,
+            min_height: LengthVal::Auto,
+            max_height: LengthVal::Auto,
+            aspect_ratio: None,
+            overflow: Overflow::Visible,
+            white_space: WhiteSpace::Normal,
+            text_transform: TextTransform::None,
+            opacity: 1.0,
+            align_self: AlignSelf::Auto,
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+            flex_basis: LengthVal::Auto,
+            outline: Outline::default(),
+            background_gradient: None,
+            background_image_url: None,
+            position: Position::Static,
+            inset_top: LengthVal::Auto,
+            inset_right: LengthVal::Auto,
+            inset_bottom: LengthVal::Auto,
+            inset_left: LengthVal::Auto,
+            vertical_align: VerticalAlign::Baseline,
+            visibility: Visibility::Visible,
+            pointer_events: PointerEvents::Auto,
+            text_indent: 0.0,
+            word_spacing: 0.0,
+            letter_spacing: 0.0,
+            text_shadows: Vec::new(),
+            transforms: Vec::new(),
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            animation: None,
+            transitions: Vec::new(),
+        }
+    }
+}
