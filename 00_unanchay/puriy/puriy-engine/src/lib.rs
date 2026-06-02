@@ -27,6 +27,7 @@ pub mod cookies;
 pub mod dom;
 pub mod fetch;
 pub mod scripts;
+pub mod sse;
 pub mod style;
 
 use thiserror::Error;

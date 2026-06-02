@@ -833,6 +833,31 @@ impl JsRuntime {
         self.eval(&script).map(|_| ())
     }
 
+    /// Reinyecta un evento de un `EventSource` (Fase 7.182). `kind` es
+    /// `"open"`/`"message"`/`"error"`; para `message`, `event_type`/`data`/
+    /// `last_id` portan el evento ya parseado del wire SSE (el worker del
+    /// chrome lo arma con `sse::SseParser`). Para `open`/`error` los strings
+    /// van vacíos. Usa `eval` para drenar microtasks que los listeners encolen.
+    pub fn es_dispatch(
+        &mut self,
+        id: u32,
+        kind: &str,
+        event_type: &str,
+        data: &str,
+        last_id: &str,
+    ) -> Result<(), JsError> {
+        let script = format!(
+            "if (typeof globalThis.__puriy_es_dispatch === 'function') {{ \
+                globalThis.__puriy_es_dispatch({id}, {kind}, {a}, {b}, {c}); }}",
+            id = id,
+            kind = js_string_literal(kind),
+            a = js_string_literal(event_type),
+            b = js_string_literal(data),
+            c = js_string_literal(last_id),
+        );
+        self.eval(&script).map(|_| ())
+    }
+
     /// Fase 7.28 — sync de las dimensiones del viewport del chrome. El
     /// chrome lo llama en `Msg::Loaded` y en `Msg::Resize` (cuando
     /// implementado). Habilita que `window.innerWidth`/`innerHeight` y
@@ -7864,6 +7889,30 @@ mod tests {
         assert_eq!(rt.eval("named").expect("e"), JsValue::String("parche".into()));
         // ...y NO disparó onmessage (que sigue en 'hola').
         assert_eq!(rt.eval("onmsgEnNamed").expect("e"), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn es_dispatch_metodo_host_entrega_open_y_message() {
+        // El wrapper Rust `JsRuntime::es_dispatch` (el que llama el worker del
+        // chrome) llega al listener igual que el hook crudo.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "https://example.com/", "b").expect("d");
+        rt.eval(
+            "var log = []; var es = new EventSource('/s'); \
+             es.onopen = function() { log.push('open:' + es.readyState); }; \
+             es.onmessage = function(e) { log.push('msg:' + e.data + ':' + e.lastEventId); };",
+        )
+        .expect("e");
+        let id = match rt.eval("es._id").expect("e") {
+            JsValue::Number(n) => n as u32,
+            other => panic!("es._id no es número: {other:?}"),
+        };
+        rt.es_dispatch(id, "open", "", "", "").expect("open");
+        rt.es_dispatch(id, "message", "message", "hola", "7").expect("msg");
+        assert_eq!(
+            rt.eval("log.join('|')").expect("e"),
+            JsValue::String("open:1|msg:hola:7".into())
+        );
     }
 
     #[test]

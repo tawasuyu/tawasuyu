@@ -242,6 +242,10 @@ pub struct TabState {
     /// nodo con `:hover { background }` + `transition`. Reset en cada
     /// navegación/load para no arrastrar ids de un árbol viejo.
     hover_tweens: std::collections::HashMap<u32, HoverTween>,
+    /// `EventSource` vivos: id JS → flag de cancelación compartido con su
+    /// worker de streaming. `close()` o una navegación lo prenden y el worker
+    /// corta el stream y termina (Fase 7.182).
+    es_cancel: std::collections::HashMap<u32, std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Resultado agregado de ejecutar todos los `<script>` de un load.
@@ -279,7 +283,18 @@ impl TabState {
             js: None,
             js_summary: JsSummary::default(),
             hover_tweens: std::collections::HashMap::new(),
+            es_cancel: std::collections::HashMap::new(),
         }
+    }
+
+    /// Cancela todos los `EventSource` vivos de esta pestaña (sus workers
+    /// cortan el stream) y limpia el registro. Se llama al navegar/recargar
+    /// (el runtime viejo se destruye) y al cerrar la pestaña.
+    fn cancel_all_eventsources(&mut self) {
+        for flag in self.es_cancel.values() {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.es_cancel.clear();
     }
 
     fn can_back(&self) -> bool {
@@ -620,6 +635,25 @@ pub enum Msg {
     /// porque escribir el portapapeles necesita `&mut Model.clipboard`, que
     /// `apply_dom_mutations` (sólo `&mut TabState`) no alcanza (Fase 7.176).
     SetSystemClipboard(String),
+    /// `new EventSource(url)` — abre un stream SSE. Lo emite `apply_dom_mutations`
+    /// (mutación `kind:'eventsource'`, acción `open`). El update arm crea el flag
+    /// de cancelación y spawnea el worker de streaming (Fase 7.182).
+    EsOpen { tab: TabId, gen: u64, es_id: u32, url: String },
+    /// `es.close()` — el update arm prende el flag de cancelación del worker.
+    EsClose { tab: TabId, es_id: u32 },
+    /// Evento ya parseado que el worker SSE reinyecta al runtime: `kind` es
+    /// `open`/`message`/`error`; para `message`, los otros campos portan el
+    /// evento. Mismo gen check que el resto de async — se descarta si la
+    /// pestaña se cerró o fue pisada por otra navegación.
+    EsDispatch {
+        tab: TabId,
+        gen: u64,
+        es_id: u32,
+        kind: String,
+        event_type: String,
+        data: String,
+        last_id: String,
+    },
     /// Tick periódico del reactor JS — disparado por `Handle::spawn_periodic`
     /// cada `JS_POLL_PERIOD_MS`. Para cada pestaña con `JsRuntime` y timers
     /// vivos, avanza el reloj a `Model.start.elapsed_ms()` y corre los
@@ -960,6 +994,10 @@ impl App for Puriy {
                         t.focused_input = autofocus_idx;
                         // Árbol nuevo → los node_id viejos ya no aplican.
                         t.hover_tweens.clear();
+                        // El runtime previo se va a destruir: cortá sus
+                        // EventSource (sus workers de streaming) para no fugar
+                        // threads ni reinyectar al runtime viejo (Fase 7.182).
+                        t.cancel_all_eventsources();
                         t.box_tree = Some(box_tree);
                         // Ancla el reloj de animaciones CSS de esta carga.
                         t.anim_start_ms = m.start.elapsed().as_millis() as u64;
@@ -1269,6 +1307,8 @@ impl App for Puriy {
             }
             Msg::CloseTab(idx) => {
                 if idx < m.tabs.len() {
+                    // Corta los EventSource de la pestaña antes de tirarla.
+                    m.tabs[idx].cancel_all_eventsources();
                     m.tabs.remove(idx);
                 }
                 if m.tabs.is_empty() {
@@ -1436,6 +1476,41 @@ impl App for Puriy {
                 // `navigator.clipboard.writeText`/`write` → portapapeles real
                 // (Fase 7.176). Degrada a no-op si no hay backend (headless).
                 m.clipboard.set(&text);
+            }
+            Msg::EsOpen { tab, gen, es_id, url } => {
+                // Abre el stream SSE (Fase 7.182). Sólo si la pestaña sigue viva
+                // y en el mismo gen (no se navegó mientras tanto).
+                if let Some(idx) = m.tab_idx(tab) {
+                    if m.tabs[idx].gen == gen {
+                        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                        m.tabs[idx].es_cancel.insert(es_id, cancel.clone());
+                        spawn_eventsource(tab, gen, es_id, url, cancel, handle.clone());
+                    }
+                }
+            }
+            Msg::EsClose { tab, es_id } => {
+                if let Some(idx) = m.tab_idx(tab) {
+                    if let Some(flag) = m.tabs[idx].es_cancel.remove(&es_id) {
+                        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+            Msg::EsDispatch { tab, gen, es_id, kind, event_type, data, last_id } => {
+                if let Some(idx) = m.tab_idx(tab) {
+                    if m.tabs[idx].gen == gen {
+                        let now_ms = m.start.elapsed().as_millis() as u64;
+                        let t = &mut m.tabs[idx];
+                        if let Some(rt) = t.js.as_mut() {
+                            let _ = rt.set_now_ms(now_ms);
+                            rt.set_fuel(puriy_js::DEFAULT_FUEL);
+                            let _ = rt.es_dispatch(es_id, &kind, &event_type, &data, &last_id);
+                            // Un handler SSE puede haber tocado el DOM.
+                            for req in apply_dom_mutations(t) {
+                                handle.dispatch(req);
+                            }
+                        }
+                    }
+                }
             }
             Msg::FetchComplete { tab, gen, fetch_id, result } => {
                 let tab_idx = m.tabs.iter().position(|t| t.id == tab && t.gen == gen);
@@ -3327,6 +3402,27 @@ fn apply_dom_mutations(t: &mut TabState) -> Vec<Msg> {
             if let Some(text) = text {
                 out.push(Msg::SetSystemClipboard(text.to_string()));
             }
+        } else if m.kind == "eventsource" {
+            // EventSource: `<id> GS open GS <url> GS <withCred>` o `<id> GS close`.
+            // El worker de streaming lo arranca/corta el update loop (necesita
+            // handle + `&mut tab` para el flag de cancelación).
+            let parts: Vec<&str> = m.value.split('\u{001D}').collect();
+            if let Some(es_id) = parts.first().and_then(|s| s.parse::<u32>().ok()) {
+                match parts.get(1).copied() {
+                    Some("open") => {
+                        if let Some(url) = parts.get(2) {
+                            out.push(Msg::EsOpen {
+                                tab: t.id,
+                                gen: t.gen,
+                                es_id,
+                                url: url.to_string(),
+                            });
+                        }
+                    }
+                    Some("close") => out.push(Msg::EsClose { tab: t.id, es_id }),
+                    _ => {}
+                }
+            }
         } else {
             other_muts.push(m);
         }
@@ -3701,6 +3797,41 @@ fn spawn_load(
             }
             Err(e) => handle.dispatch(Msg::LoadFailed { tab, gen, err: e.to_string() }),
         }
+    });
+}
+
+/// Worker de un `EventSource` (Fase 7.182): corre el stream SSE en un thread
+/// dedicado y reinyecta cada evento al runtime vía `Msg::EsDispatch`. El
+/// `cancel` (compartido con `TabState.es_cancel`) lo corta en `close()` o al
+/// navegar. La reconexión/parseo viven en `puriy_engine::sse::run_eventsource`.
+fn spawn_eventsource(
+    tab: TabId,
+    gen: u64,
+    es_id: u32,
+    url: String,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Handle<Msg>,
+) {
+    std::thread::spawn(move || {
+        let cancelled = || cancel.load(std::sync::atomic::Ordering::Relaxed);
+        let emit = |kind: &str, ev: Option<&puriy_engine::sse::SseEvent>| {
+            handle.dispatch(Msg::EsDispatch {
+                tab,
+                gen,
+                es_id,
+                kind: kind.to_string(),
+                event_type: ev.map(|e| e.event_type.clone()).unwrap_or_default(),
+                data: ev.map(|e| e.data.clone()).unwrap_or_default(),
+                last_id: ev.map(|e| e.last_id.clone()).unwrap_or_default(),
+            });
+        };
+        puriy_engine::sse::run_eventsource(
+            &url,
+            &cancelled,
+            || emit("open", None),
+            |ev| emit("message", Some(ev)),
+            || emit("error", None),
+        );
     });
 }
 
@@ -7314,6 +7445,59 @@ mod tests {
             })
             .collect();
         assert_eq!(writes, vec!["copiado por JS"]);
+    }
+
+    #[test]
+    fn eventsource_mutation_emite_es_open_y_close() {
+        // El bootstrap de EventSource publica una mutación `kind:'eventsource'`
+        // al construir y al cerrar; apply_dom_mutations las traduce a
+        // Msg::EsOpen/EsClose (sin abrir red — eso es del worker).
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.js.as_mut().unwrap().eval("var es = new EventSource('http://x/sse');").expect("e");
+        let out = apply_dom_mutations(t);
+        assert!(
+            out.iter().any(|msg| matches!(msg, Msg::EsOpen { es_id: 1, url, .. } if url == "http://x/sse")),
+            "no se emitió EsOpen"
+        );
+        t.js.as_mut().unwrap().eval("es.close();").expect("e");
+        let out2 = apply_dom_mutations(t);
+        assert!(
+            out2.iter().any(|msg| matches!(msg, Msg::EsClose { es_id: 1, .. })),
+            "no se emitió EsClose"
+        );
+    }
+
+    #[test]
+    fn es_dispatch_msg_entrega_evento_al_listener() {
+        // Msg::EsDispatch (lo que manda el worker) debe llegar al onmessage del
+        // EventSource correcto, vía el host method rt.es_dispatch.
+        let mut m = model_con_script(
+            "var got = null; var es = new EventSource('http://x/sse'); \
+             es.onmessage = function(e) { got = e.data + ':' + e.lastEventId; };",
+        );
+        let es_id = match m.tabs[0].js.as_mut().unwrap().eval("es._id").unwrap() {
+            puriy_js::JsValue::Number(n) => n as u32,
+            other => panic!("es._id no es número: {other:?}"),
+        };
+        let (tab, gen) = (m.tabs[0].id, m.tabs[0].gen);
+        let h: Handle<Msg> = Handle::for_test();
+        let m = Puriy::update(
+            m,
+            Msg::EsDispatch {
+                tab,
+                gen,
+                es_id,
+                kind: "message".into(),
+                event_type: "message".into(),
+                data: "hola".into(),
+                last_id: "9".into(),
+            },
+            &h,
+        );
+        let mut m = m;
+        let got = m.tabs[0].js.as_mut().unwrap().eval("got").expect("e");
+        assert_eq!(got, puriy_js::JsValue::String("hola:9".into()));
     }
 
     #[test]
