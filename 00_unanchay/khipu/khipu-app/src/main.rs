@@ -39,7 +39,7 @@ use khipu_gravity::{Gravity, Params, SemanticField};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_hal::winit::keyboard::{Key, NamedKey};
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Rect, Size, Style},
+    prelude::{auto, length, percent, FlexDirection, Position, Rect, Size, Style},
     AlignItems, Dimension, JustifyContent,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle as KurboCircle, Stroke};
@@ -66,6 +66,8 @@ const EMBED_DIM: usize = 16;
 const CLUSTER_THRESHOLD: f32 = 0.55;
 const EDITOR_VISIBLE_LINES: usize = 24;
 const LIST_WIDTH: f32 = 240.0;
+/// Ancho del editor flotante (overlay derecho sobre el mapa).
+const EDITOR_OVERLAY_W: f32 = 420.0;
 const HEADER_H: f32 = 36.0;
 const ROW_H: f32 = 26.0;
 const FIELD_LABEL_SIZE: f32 = 10.0;
@@ -249,6 +251,12 @@ enum Msg {
     /// Click en el lienzo en coords locales `(lx, ly)` sobre un rect
     /// `(w, h)`: selecciona la nota más cercana bajo el cursor, si hay.
     MapClick(f32, f32, f32, f32),
+    /// Abre/cierra el cajón de notas (overlay izquierdo).
+    ToggleList,
+    /// Cierra el editor flotante: deselecciona y vuelve al mapa limpio.
+    Deselect,
+    /// Escape en el mapa: cierra lo de más arriba (editor → cajón → foco).
+    EscapeMap,
 }
 
 struct Model {
@@ -325,6 +333,11 @@ struct Model {
     /// Escala de la cámara del mapa (1.0 = mundo:pantalla). La rueda la
     /// cambia; el zoom semántico futuro decidirá qué se inyecta según ella.
     cam_zoom: f32,
+    /// `true` mientras el cajón de notas (overlay izquierdo) está abierto.
+    /// El mapa es la interfaz; la lista es un cajón invocable, no un panel
+    /// permanente. Default `true` para no perder al usuario en el primer
+    /// arranque.
+    show_list: bool,
 }
 
 struct KhipuApp;
@@ -753,6 +766,26 @@ impl App for KhipuApp {
                     persist(&model);
                 }
             }
+            Msg::ToggleList => {
+                model.show_list = !model.show_list;
+            }
+            Msg::Deselect => {
+                commit_edits(&mut model, h);
+                deselect(&mut model);
+                persist(&model);
+            }
+            Msg::EscapeMap => {
+                // Cierra la capa más cercana al usuario, en orden.
+                if model.selected.is_some() {
+                    commit_edits(&mut model, h);
+                    deselect(&mut model);
+                    persist(&model);
+                } else if model.show_list {
+                    model.show_list = false;
+                } else {
+                    model.focus = Focus::None;
+                }
+            }
         }
         model
     }
@@ -781,18 +814,32 @@ impl App for KhipuApp {
         }
 
         let header = header_view(model);
-        // Mientras hay pares pendientes de elegir, el panel izquierdo
-        // muestra la lista de pares en vez de las notas.
-        let list = if model.receiving {
-            receive_panel(model, &palette, &input_palette)
-        } else {
-            list_panel(model, &palette, &input_palette)
-        };
-        let editor = editor_panel(model, &input_palette, &editor_palette);
-        let gravity = gravity_panel(model);
+
+        // El mapa es la interfaz: ocupa todo el cuerpo como capa de fondo.
+        // La lista y el editor flotan encima como overlays absolutos.
+        let map = gravity_panel(model);
+        let mut layers: Vec<View<Msg>> = vec![map];
+
+        // Cajón de notas (izquierda): abierto a pedido, o forzado en modo
+        // recibir (muestra los pares en vez de las notas).
+        if model.show_list || model.receiving {
+            let drawer = if model.receiving {
+                receive_panel(model, &palette, &input_palette)
+            } else {
+                list_panel(model, &palette, &input_palette)
+            };
+            layers.push(overlay_left(drawer, LIST_WIDTH));
+        }
+
+        // Editor flotante (derecha): sólo cuando hay una nota viva bajo el
+        // cursor del pensamiento. Es el nodo "abierto" — precursor del zoom
+        // semántico, que después lo inyectará en la coordenada misma.
+        if model.selected.is_some() {
+            let editor = editor_panel(model, &input_palette, &editor_palette);
+            layers.push(overlay_right(editor, EDITOR_OVERLAY_W, &model.theme));
+        }
 
         let body = View::new(Style {
-            flex_direction: FlexDirection::Row,
             size: Size {
                 width: percent(1.0_f32),
                 height: Dimension::auto(),
@@ -804,7 +851,7 @@ impl App for KhipuApp {
             },
             ..Default::default()
         })
-        .children(vec![list, editor, gravity]);
+        .children(layers);
 
         // Barra de menú principal: primer hijo del column raíz.
         let menu = app_menu(model);
@@ -926,7 +973,7 @@ impl App for KhipuApp {
                 return Some(Msg::NewNote);
             }
             if matches!(&event.key, Key::Named(NamedKey::Escape)) {
-                return Some(Msg::Focus(Focus::None));
+                return Some(Msg::EscapeMap);
             }
         }
         Some(Msg::Key(event.clone()))
@@ -964,6 +1011,13 @@ fn header_view(model: &Model) -> View<Msg> {
     })
     .text_aligned(title, 14.0, model.theme.fg_text, Alignment::Start);
 
+    let list_label = if model.show_list { "ocultar notas" } else { "☰ notas" };
+    let list_btn = button(
+        list_label,
+        model.theme.bg_button,
+        if model.show_list { model.theme.accent } else { model.theme.fg_muted },
+        Msg::ToggleList,
+    );
     let new_btn = button(
         "+ nueva  (Ctrl+N)",
         model.theme.bg_button,
@@ -1044,6 +1098,7 @@ fn header_view(model: &Model) -> View<Msg> {
     .fill(model.theme.bg_panel_alt)
     .children(vec![
         title_node,
+        list_btn,
         new_btn,
         archive_btn,
         del_btn,
@@ -1773,6 +1828,82 @@ fn place_note(model: &mut Model, id: NoteId) {
     model.store.set_pos(id, p.0, p.1);
 }
 
+/// Envuelve `child` como cajón absoluto pegado al borde izquierdo, alto
+/// completo con un margen. El mapa de fondo sigue recibiendo pan/zoom en
+/// el resto de la ventana; sólo los clicks sobre el cajón los come él.
+fn overlay_left(child: View<Msg>, width: f32) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(8.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+            right: auto(),
+        },
+        size: Size {
+            width: length(width),
+            height: auto(),
+        },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![child])
+}
+
+/// Envuelve `child` como panel absoluto pegado al borde derecho, alto
+/// completo, con una barra de cierre arriba (× ⇒ deselecciona). Para el
+/// editor flotante del nodo abierto.
+fn overlay_right(child: View<Msg>, width: f32, theme: &Theme) -> View<Msg> {
+    let close = button("× cerrar", theme.bg_button, theme.fg_muted, Msg::Deselect);
+    let close_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        flex_shrink: 0.0,
+        justify_content: Some(JustifyContent::End),
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![close]);
+
+    let inner = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![close_row, child]);
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: auto(),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+            right: length(8.0_f32),
+        },
+        size: Size {
+            width: length(width),
+            height: auto(),
+        },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![inner])
+}
+
 fn gravity_panel(model: &Model) -> View<Msg> {
     let theme = model.theme;
     let now = now_secs();
@@ -2233,6 +2364,17 @@ fn select(model: &mut Model, id: NoteId) {
     model.body.set_text(&note.body);
     model.tags.set_text(note.tags.join(", "));
     model.focus = Focus::Body;
+}
+
+/// Suelta la nota seleccionada y limpia los campos del editor. El editor
+/// flotante desaparece y el mapa queda libre — el equivalente a alejarse
+/// del nodo (precursor del zoom semántico).
+fn deselect(model: &mut Model) {
+    model.selected = None;
+    model.title.set_text(String::new());
+    model.body = EditorState::default();
+    model.tags.set_text(String::new());
+    model.focus = Focus::None;
 }
 
 /// Pide el embedding de `id` en segundo plano. Asigna una secuencia
@@ -2784,6 +2926,7 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         clipboard: SystemClipboard::new(),
         cam_pan: (0.0, 0.0),
         cam_zoom: 1.0,
+        show_list: true,
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -2862,6 +3005,7 @@ fn seeded_model(embedder: Embedder) -> Model {
         clipboard: SystemClipboard::new(),
         cam_pan: (0.0, 0.0),
         cam_zoom: 1.0,
+        show_list: true,
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [
