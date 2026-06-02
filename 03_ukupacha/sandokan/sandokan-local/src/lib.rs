@@ -229,4 +229,104 @@ mod tests {
             Err(EngineError::NotFound(_))
         ));
     }
+
+    /// Card que corre `/bin/sh -c "<cmd>"` sin namespaces. Sin aislamiento
+    /// a propósito: el path fork+exec de `arje-incarnate` es confiable bajo
+    /// el runtime de test (la correctitud de los namespaces la cubren los
+    /// tests de `arje-incarnate`; acá probamos el contrato del Engine).
+    fn sh_card(label: &str, cmd: &str) -> card_core::Card {
+        use card_core::{NamespaceSet, Payload};
+        let mut c = card_core::Card::new(label);
+        c.payload = Payload::Native {
+            exec: "/bin/sh".into(),
+            argv: vec!["-c".into(), cmd.into()],
+            envp: vec![],
+        };
+        c.soma.namespaces = NamespaceSet::default();
+        c
+    }
+
+    #[tokio::test]
+    async fn runs_tracks_and_kills_a_real_process() {
+        let e = LocalEngine::new();
+        let card = sh_card("sandbox-sleep", "sleep 30");
+        let id = card.id;
+        let handle = e.run(Intent::new(card)).await.expect("run");
+        assert_eq!(handle.card_id, id);
+
+        // Aparece como activa y en Running.
+        assert_eq!(e.list().await.unwrap().len(), 1);
+        assert_eq!(e.status(id).await.unwrap(), LifecycleState::Running);
+
+        // Telemetría real: el proceso ocupa memoria (RSS leído de /proc).
+        let t = e.telemetry(id).await.unwrap();
+        assert!(t.mem_bytes > 0, "esperaba RSS > 0, fue {}", t.mem_bytes);
+        assert!(t.nproc >= 1);
+
+        // Stop inmediato (SIGKILL). Tras reapear, no queda activa.
+        e.stop(id, Duration::ZERO).await.expect("stop");
+        assert!(e.list().await.unwrap().is_empty());
+        assert!(e.status(id).await.unwrap().is_terminal());
+    }
+
+    #[tokio::test]
+    async fn graceful_stop_terminates_via_sigterm() {
+        let e = LocalEngine::new();
+        // `sleep` termina con la acción default de SIGTERM, así que el
+        // período de gracia lo cierra sin llegar al SIGKILL.
+        let card = sh_card("sandbox-grace", "sleep 30");
+        let id = card.id;
+        e.run(Intent::new(card)).await.expect("run");
+        assert_eq!(e.list().await.unwrap().len(), 1);
+
+        e.stop(id, Duration::from_secs(2)).await.expect("stop");
+        assert!(e.status(id).await.unwrap().is_terminal());
+        assert!(e.list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pid_namespace_isolates_the_child_as_pid_1() {
+        use card_core::{NamespaceSet, Payload};
+        // En un PID namespace propio, el primer proceso se ve como PID 1.
+        // `test $$ -eq 1` sale 0 sólo si el aislamiento se aplicó. Requiere
+        // user namespace para que un uid no privilegiado pueda crear el
+        // resto (funciona acá: unprivileged_userns_clone=1).
+        let e = LocalEngine::new();
+        let mut c = card_core::Card::new("isolated");
+        c.payload = Payload::Native {
+            exec: "/bin/sh".into(),
+            argv: vec!["-c".into(), "test $$ -eq 1".into()],
+            envp: vec![],
+        };
+        c.soma.namespaces = NamespaceSet {
+            user: true,
+            pid: true,
+            mount: true,
+            uts: true,
+            ipc: true,
+            net: false,
+            cgroup: false,
+        };
+        let id = c.id;
+        e.run(Intent::new(c)).await.expect("run isolated");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(
+            e.status(id).await.unwrap(),
+            LifecycleState::Exited { code: 0 },
+            "el hijo debería ser PID 1 dentro de su pidns"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_that_exits_on_its_own_leaves_active_set() {
+        let e = LocalEngine::new();
+        let card = sh_card("sandbox-quick", "true");
+        let id = card.id;
+        e.run(Intent::new(card)).await.expect("run");
+        // Damos un instante a que salga y reapeamos vía list/status.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let st = e.status(id).await.unwrap();
+        assert!(st.is_terminal(), "esperaba terminal, fue {st:?}");
+        assert!(e.list().await.unwrap().is_empty());
+    }
 }
