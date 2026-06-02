@@ -9,8 +9,6 @@ publish.workspace = true
 description = "nahual-map-viewer-llimphi — visor de mapas GeoJSON y GPX sobre Llimphi. Parsea geometrías (puntos, líneas, polígonos) con serde_json y tracks/waypoints GPS con quick-xml, las proyecta con corrección por coseno de latitud, las pinta sobre un mapa-base mundial embebido (Natural Earth) con pan/zoom, rejilla, escala y etiquetas. Duodécimo visor del shell nahual."
 
 [dependencies]
+nahual-geo-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-serde_json = { workspace = true }
-quick-xml = { workspace = true }
-flate2 = { workspace = true }

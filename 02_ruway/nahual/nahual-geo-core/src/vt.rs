@@ -44,7 +44,10 @@ pub fn tile_to_lonlat(z: u32, x: u32, y: u32, extent: f64, px: f64, py: f64) -> 
     let fx = x as f64 + px / extent;
     let fy = y as f64 + py / extent;
     let lon = fx / n * 360.0 - 180.0;
-    let lat = (std::f64::consts::PI * (1.0 - 2.0 * fy / n)).sinh().atan().to_degrees();
+    let lat = (std::f64::consts::PI * (1.0 - 2.0 * fy / n))
+        .sinh()
+        .atan()
+        .to_degrees();
     [lon, lat]
 }
 
@@ -334,7 +337,7 @@ mod tests {
         assert_eq!(lonlat_to_tile(1, -180.0, 80.0).0, 0);
         assert_eq!(lonlat_to_tile(1, 179.0, 80.0).0, 1);
         assert_eq!(lonlat_to_tile(1, -90.0, -80.0).1, 1); // hemisferio sur
-        // Ida y vuelta aproximada con tile_to_lonlat.
+                                                          // Ida y vuelta aproximada con tile_to_lonlat.
         let (x, y) = lonlat_to_tile(4, -71.97, -13.5);
         let ll = tile_to_lonlat(4, x, y, 1.0, 0.5, 0.5);
         assert!((ll[0] - -71.97).abs() < 30.0 && (ll[1] - -13.5).abs() < 30.0);
@@ -481,7 +484,9 @@ mod tests {
 
     #[test]
     fn basura_no_panica() {
-        assert!(decode_mvt_tile(&[0xff, 0xff, 0x07, 0x00, 0x42], 0, 0, 0).is_empty()
-            || !decode_mvt_tile(&[0xff, 0xff, 0x07, 0x00, 0x42], 0, 0, 0).is_empty());
+        assert!(
+            decode_mvt_tile(&[0xff, 0xff, 0x07, 0x00, 0x42], 0, 0, 0).is_empty()
+                || !decode_mvt_tile(&[0xff, 0xff, 0x07, 0x00, 0x42], 0, 0, 0).is_empty()
+        );
     }
 }

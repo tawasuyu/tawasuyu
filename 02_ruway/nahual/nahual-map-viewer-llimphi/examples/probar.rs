@@ -17,20 +17,27 @@ fn main() {
     let (polys, verts, labels) = world_base_stats();
     println!("Mapa-base embebido: {polys} polígonos · {verts} vértices · {labels} países\n");
     // Path del argumento, o el sample que viene con el crate.
-    let path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/andes.geojson")
-    });
+    let path = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/andes.geojson"));
 
     // Si es PMTiles, además de la vista general, prueba el streaming por
     // viewport a varios zooms (debe mostrar más detalle al acercar).
-    if std::fs::read(&path).map(|b| b.starts_with(b"PMTiles")).unwrap_or(false) {
+    if std::fs::read(&path)
+        .map(|b| b.starts_with(b"PMTiles"))
+        .unwrap_or(false)
+    {
         streaming_demo(&path);
     }
 
     println!("Cargando: {}", path.display());
     match load_map(&path, DEFAULT_MAP_BYTES_MAX) {
         MapPreview::Map { data, truncated } => {
-            println!("✓ mapa parseado{}", if truncated { " (truncado)" } else { "" });
+            println!(
+                "✓ mapa parseado{}",
+                if truncated { " (truncado)" } else { "" }
+            );
             println!("  puntos    : {}", data.points.len());
             println!("  líneas    : {}", data.lines.len());
             println!("  polígonos : {}", data.polygons.len());
@@ -46,7 +53,10 @@ fn main() {
                 println!("  punto[{i}] = lon {:.3}, lat {:.3}", p[0], p[1]);
             }
             for l in &data.labels {
-                println!("  rótulo    : {:?} @ lon {:.3}, lat {:.3}", l.text, l.at[0], l.at[1]);
+                println!(
+                    "  rótulo    : {:?} @ lon {:.3}, lat {:.3}",
+                    l.text, l.at[0], l.at[1]
+                );
             }
         }
         MapPreview::NoGeometry => println!("✗ JSON sin geometrías GeoJSON"),

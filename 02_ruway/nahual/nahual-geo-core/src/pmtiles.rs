@@ -73,7 +73,10 @@ impl PmTiles {
             return Err("pmtiles: magic inválido".into());
         }
         if data[7] != 3 {
-            return Err(format!("pmtiles: versión {} no soportada (sólo v3)", data[7]));
+            return Err(format!(
+                "pmtiles: versión {} no soportada (sólo v3)",
+                data[7]
+            ));
         }
         let header = Header {
             root_offset: u64le(&data, 8),
@@ -135,7 +138,12 @@ fn parse_directory(b: &[u8]) -> Option<Vec<Entry>> {
         return None; // guardia anti-corrupción
     }
     let mut entries = vec![
-        Entry { tile_id: 0, offset: 0, length: 0, run_length: 0 };
+        Entry {
+            tile_id: 0,
+            offset: 0,
+            length: 0,
+            run_length: 0
+        };
         n
     ];
     // tile_ids (delta-encoded).
@@ -325,7 +333,7 @@ mod tests {
         h[16..24].copy_from_slice(&root_len.to_le_bytes());
         // metadata 24..40 = 0
         h[40..48].copy_from_slice(&tile_off.to_le_bytes()); // leaf offset (sin leaves)
-        // leaf length 48..56 = 0
+                                                            // leaf length 48..56 = 0
         h[56..64].copy_from_slice(&tile_off.to_le_bytes());
         h[64..72].copy_from_slice(&(tile_bytes.len() as u64).to_le_bytes());
         h[97] = 1; // internal: none

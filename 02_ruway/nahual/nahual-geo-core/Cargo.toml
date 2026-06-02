@@ -1,0 +1,14 @@
+[package]
+name = "nahual-geo-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-geo-core — núcleo geoespacial agnóstico de GUI del visor de mapas de nahual. Parsea GeoJSON/GPX/KML y tiles vectoriales (PMTiles v3 + MVT/Mapbox), modela el mundo (MapData/BBox/FeatureProps/MapView), proyecta equirectangular fit-to-bounds con cámara (zoom/pan), y resuelve hit-test, búsqueda, ruteo A* y el basemap por viewport con cache LRU. Sin dependencias de render: el frontend (`nahual-map-viewer-llimphi` u otro: TUI/web/headless) sólo lo pinta."
+
+[dependencies]
+serde_json = { workspace = true }
+quick-xml = { workspace = true }
+flate2 = { workspace = true }
