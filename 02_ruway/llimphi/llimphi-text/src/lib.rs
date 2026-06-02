@@ -29,12 +29,42 @@ impl Default for Typesetter {
     }
 }
 
+/// DejaVu Sans embebida como **fallback universal de símbolos**. El motor
+/// confía en las fuentes del sistema vía fontique, pero muchas instalaciones
+/// (p. ej. solo Liberation/Adwaita) carecen de glyphs para flechas (`→`),
+/// formas geométricas (`● ▶`), dingbats (`✓ ✗ ✎`), avisos (`⚠`) o astro
+/// (`♈ ☉ ☽`) — y entonces parley pinta el "tofu" (□). DejaVu cubre todo ese
+/// rango; la registramos y la enganchamos al fallback del script `Common`
+/// (`Zyyy`), que es donde Unicode clasifica esos símbolos. Así cualquier app
+/// Llimphi deja de mostrar cuadrados sin tocar una línea de su código.
+/// Licencia: Bitstream Vera + Arev (libre, redistribuible).
+const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
+
 impl Typesetter {
     pub fn new() -> Self {
+        let mut font_cx = parley::FontContext::new();
+        Self::install_symbol_fallback(&mut font_cx);
         Self {
-            font_cx: parley::FontContext::new(),
+            font_cx,
             layout_cx: parley::LayoutContext::new(),
             runs_cx: parley::LayoutContext::new(),
+        }
+    }
+
+    /// Registra DejaVu Sans y la apila como último recurso para los símbolos
+    /// del script `Common` (flechas, geométricos, dingbats, astro…). Ver la
+    /// nota de [`DEJAVU_SANS`]. Best-effort: si algo falla, el texto sigue
+    /// funcionando con las fuentes del sistema (solo reaparecería el tofu).
+    fn install_symbol_fallback(font_cx: &mut parley::FontContext) {
+        use parley::fontique::Blob;
+        let blob = Blob::new(std::sync::Arc::new(DEJAVU_SANS));
+        let registered = font_cx.collection.register_fonts(blob, None);
+        if let Some((family_id, _)) = registered.first() {
+            // `Zyyy` (Common) es el script de la inmensa mayoría de los
+            // símbolos que daban tofu; lo apilamos al final del fallback.
+            font_cx
+                .collection
+                .append_fallbacks("Zyyy", std::iter::once(*family_id));
         }
     }
 
