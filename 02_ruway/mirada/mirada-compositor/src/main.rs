@@ -59,6 +59,7 @@ use smithay::wayland::compositor::{
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
+use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
 use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler, XdgDecorationState};
 use smithay::wayland::shell::xdg::{
@@ -74,8 +75,9 @@ use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::desktop::{layer_map_for_output, LayerSurface as DesktopLayerSurface, WindowSurfaceType};
 use smithay::output::Output;
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_layer_shell,
-    delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
+    delegate_layer_shell, delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration,
+    delegate_xdg_shell,
 };
 
 use auth_core::{SessionTicket, UserInfo};
@@ -256,6 +258,13 @@ struct App {
     dmabuf_state: DmabufState,
     seat_state: SeatState<Self>,
     data_device_state: DataDeviceState,
+    /// Estado de `zwlr_data_control_manager_v1` — lectura/escritura del
+    /// portapapeles SIN robar foco. Sin esto, `wl-paste` (el widget `clipboard`
+    /// de pata lo corre ~1Hz) caía a su fallback: crear una surface de tamaño 0,
+    /// robar el foco de teclado para leer la selección, y destruirla — titilando
+    /// el foco cada segundo. También lo usan cliphist y los gestores de
+    /// portapapeles.
+    data_control_state: DataControlState,
     seat: Seat<Self>,
     /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
     /// waybar, swaybg, wofi, mako).
@@ -988,6 +997,12 @@ impl DataDeviceHandler for App {
         &self.data_device_state
     }
 }
+
+impl DataControlHandler for App {
+    fn data_control_state(&self) -> &DataControlState {
+        &self.data_control_state
+    }
+}
 impl ClientDndGrabHandler for App {}
 impl ServerDndGrabHandler for App {
     fn send(&mut self, _mime_type: String, _fd: std::os::unix::io::OwnedFd, _seat: Seat<Self>) {}
@@ -1023,6 +1038,7 @@ delegate_dmabuf!(App);
 delegate_shm!(App);
 delegate_seat!(App);
 delegate_data_device!(App);
+delegate_data_control!(App);
 delegate_output!(App);
 
 // ---------------------------------------------------------------------
@@ -1580,6 +1596,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         dmabuf_state: DmabufState::new(),
         seat_state,
         data_device_state: DataDeviceState::new::<App>(&dh),
+        data_control_state: DataControlState::new::<App, _>(&dh, None, |_| true),
         seat,
         keyboard: None,
         pointer: None,
