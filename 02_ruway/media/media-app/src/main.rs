@@ -101,6 +101,7 @@ use llimphi_widget_shortcuts_help::{
 };
 use llimphi_widget_timeline::{timeline_view, TimelinePalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
+use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
@@ -126,6 +127,8 @@ use parking_lot::Mutex;
 const TESTCARD_W: u32 = 480;
 const TESTCARD_H: u32 = 270;
 const TESTCARD_FPS: f32 = 30.0;
+/// Key de la ventana OS secundaria de configuración (multiventana llimphi-ui).
+const CONFIG_WIN: u64 = 1;
 const TICK_MS: u64 = 33;
 /// Capacidad del ring del probe. ~85 ms a 48 kHz · 2 ch — suficiente
 /// para una franja de visor responsiva sin meter latencia ni RAM.
@@ -165,8 +168,13 @@ enum Msg {
     /// Right-click en la raíz → abre el menú contextual anclado en
     /// `(x, y)` de ventana. Origen de la raíz es 0,0 ⇒ local == ventana.
     ContextMenuOpen(f32, f32),
-    /// Abre/cierra la ventana de configuración (`F2`).
+    /// Abre/cierra la ventana de configuración (`F2`). Abre/cierra una
+    /// **ventana OS secundaria** (multiventana de llimphi-ui).
     ToggleSettings,
+    /// El usuario cerró la ventana de config con el botón del SO: sólo
+    /// sincroniza el modelo (la ventana ya la destruyó el runtime; no hay que
+    /// volver a pedir cerrarla).
+    SettingsClosed,
     /// Cambia la pestaña activa de la ventana de configuración.
     SettingsTab(SettingsTab),
     /// Desplaza el contenido de la ventana de config (rueda del mouse).
@@ -2209,6 +2217,22 @@ impl App for MediaApp {
         })
     }
 
+    /// Contenido de la ventana OS de configuración (multiventana). Sólo la
+    /// `CONFIG_WIN`; cualquier otra key queda en blanco.
+    fn secondary_view(model: &Self::Model, key: u64) -> Option<View<Self::Msg>> {
+        (key == CONFIG_WIN && model.settings_open).then(|| settings_content(model))
+    }
+
+    fn secondary_title(_model: &Self::Model, key: u64) -> Option<String> {
+        (key == CONFIG_WIN).then(|| "Configuración — media".to_string())
+    }
+
+    /// El usuario cerró la ventana de config con el botón del SO → sincroniza
+    /// el modelo (sin volver a pedir cerrar la ventana, que ya no existe).
+    fn on_secondary_close(_model: &Self::Model, key: u64) -> Option<Self::Msg> {
+        (key == CONFIG_WIN).then_some(Msg::SettingsClosed)
+    }
+
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
         spawn_controles_watcher(handle);
@@ -2273,6 +2297,18 @@ impl App for MediaApp {
                 let mut m = model;
                 m.settings_open = !m.settings_open;
                 m.settings_scroll = 0.0;
+                // La config es una ventana OS aparte (secundaria): abrir/cerrar
+                // la ventana real, no un overlay.
+                if m.settings_open {
+                    handle.open_window(CONFIG_WIN, "Configuración — media", 760, 600);
+                } else {
+                    handle.close_window(CONFIG_WIN);
+                }
+                m
+            }
+            Msg::SettingsClosed => {
+                let mut m = model;
+                m.settings_open = false;
                 m
             }
             Msg::ConfigEdit(edit) => {
@@ -2455,9 +2491,7 @@ impl App for MediaApp {
         if let Some(state) = model.palette.as_ref() {
             return Some(palette_overlay(model, state));
         }
-        if model.settings_open {
-            return Some(settings_overlay(model));
-        }
+        // La config ya NO es overlay: vive en su ventana OS (secondary_view).
         if !model.help_open {
             return None;
         }
@@ -3282,43 +3316,15 @@ fn small_chip(label: &str, msg: Msg) -> View<Msg> {
 /// La ventana de configuración con pestañas. Edita [`MediaConfig`] en vivo
 /// (cada cambio aplica a los handles y persiste a `config.ron`). `F2`/`Esc`
 /// la cierran; click fuera también.
-fn settings_overlay(model: &Model) -> View<Msg> {
+/// Contenido de la **ventana OS** de configuración (multiventana). Llena la
+/// ventana: tabs de Llimphi (`llimphi-widget-tabs`, reemplazan los viejos
+/// chip-buttons) arriba + el contenido de la pestaña activa scrolleable +
+/// una línea de ayuda al pie. Sin scrim ni "cerrar" propio: el chrome del SO
+/// (barra de título + botón cerrar) los aporta la ventana.
+fn settings_content(model: &Model) -> View<Msg> {
     let c = &model.config;
-    let (vw, vh) = model.viewport;
-    let box_w = 820.0_f32.min(vw - 24.0);
-    let box_h = 512.0_f32.min(vh - 24.0);
-    let x = ((vw - box_w) * 0.5).max(0.0);
-    let y = ((vh - box_h) * 0.5).max(0.0);
 
-    // --- barra de pestañas ---
-    let tabs: Vec<View<Msg>> = SettingsTab::ALL
-        .iter()
-        .map(|&t| {
-            let active = t == model.settings_tab;
-            let bg = if active {
-                Color::from_rgba8(60, 110, 150, 255)
-            } else {
-                Color::from_rgba8(44, 50, 62, 255)
-            };
-            chip_button(t.label(), bg, Color::from_rgba8(228, 235, 246, 255), Msg::SettingsTab(t))
-        })
-        .collect();
-    let tab_bar = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(38.0_f32),
-        },
-        gap: Size {
-            width: length(6.0_f32),
-            height: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .children(tabs);
-
-    // --- contenido de la pestaña activa ---
+    // Contenido de la pestaña activa (scrolleable).
     let rows = match model.settings_tab {
         SettingsTab::Audio => tab_audio(c),
         SettingsTab::Video => tab_video(c),
@@ -3326,35 +3332,23 @@ fn settings_overlay(model: &Model) -> View<Msg> {
         SettingsTab::Bars => tab_bars(model),
         SettingsTab::Controls => tab_controls(),
     };
-    let content = scroll_box(rows, 348.0_f32, model.settings_scroll);
+    let content = scroll_box(rows, 486.0_f32, model.settings_scroll);
 
-    let title = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(34.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::SpaceBetween),
-        ..Default::default()
-    })
-    .children(vec![
-        View::new(Style {
-            size: Size {
-                width: length(300.0_f32),
-                height: length(34.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text("Configuración".to_string(), 18.0, Color::from_rgba8(235, 240, 248, 255)),
-        chip_button(
-            "cerrar",
-            Color::from_rgba8(70, 60, 70, 255),
-            Color::from_rgba8(235, 240, 248, 255),
-            Msg::ToggleSettings,
-        ),
-    ]);
+    // Tabs de Llimphi: barra + contenido del tab activo, en un solo widget.
+    let labels: Vec<String> = SettingsTab::ALL.iter().map(|t| t.label().to_string()).collect();
+    let active = SettingsTab::ALL
+        .iter()
+        .position(|&t| t == model.settings_tab)
+        .unwrap_or(0);
+    let tabs = tabs_view(TabsSpec {
+        labels,
+        active,
+        on_select: |i: usize| Msg::SettingsTab(SettingsTab::ALL[i]),
+        content,
+        tab_height: 40.0,
+        palette: TabsPalette::from_theme(&llimphi_theme::Theme::dark()),
+        tab_width: None,
+    });
 
     let footer = View::new(Style {
         size: Size {
@@ -3365,53 +3359,33 @@ fn settings_overlay(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text(
-        "Se guarda en config.ron · F2/Esc cierra · en Barras: clic en un item lo quita, ‹ › reordenan".to_string(),
+        "Se guarda en config.ron · Esc cierra · en Barras: clic en un item lo quita, ‹ › reordenan"
+            .to_string(),
         11.5,
         Color::from_rgba8(140, 152, 170, 255),
     );
 
-    let panel = View::new(Style {
-        position: Position::Absolute,
-        inset: TaffyRect {
-            left: length(x),
-            top: length(y),
-            right: auto(),
-            bottom: auto(),
-        },
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: length(box_w),
-            height: length(box_h),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(10.0_f32),
-        },
-        padding: TaffyRect {
-            left: length(18.0_f32),
-            right: length(18.0_f32),
-            top: length(14.0_f32),
-            bottom: length(14.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(Color::from_rgba8(26, 30, 38, 245))
-    .radius(14.0)
-    // Click inerte: intercepta los clicks sobre el panel para que NO
-    // burbujeen al scrim (que cierra). Reselecciona la pestaña actual = no-op.
-    .on_click(Msg::SettingsTab(model.settings_tab))
-    .children(vec![title, tab_bar, content, footer]);
-
+    // Column que llena la ventana, delimitado con padding.
     View::new(Style {
+        flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(8.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(14.0_f32),
+            bottom: length(12.0_f32),
+        },
         ..Default::default()
     })
-    .fill(Color::from_rgba8(0, 0, 0, 150))
-    .on_click(Msg::ToggleSettings)
-    .children(vec![panel])
+    .fill(Color::from_rgba8(24, 28, 36, 255))
+    .children(vec![tabs, footer])
 }
 
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.

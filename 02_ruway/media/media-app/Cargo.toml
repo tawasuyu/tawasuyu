@@ -19,6 +19,7 @@ app-bus = { workspace = true }
 llimphi-widget-shortcuts-help = { workspace = true }
 llimphi-widget-timeline = { workspace = true }
 llimphi-widget-slider = { workspace = true }
+llimphi-widget-tabs = { workspace = true }
 llimphi-module-command-palette = { workspace = true }
 image = { workspace = true }
 media-audio-cpal = { path = "../media-audio-cpal" }
