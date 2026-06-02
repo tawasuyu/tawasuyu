@@ -10,6 +10,46 @@
 > (mapeo de entrada → acción, ya ✅). Cuando un ítem se cierre, moverlo a
 > "Hecho" en `PARIDAD.md` y borrarlo de acá.
 
+## Sesión 2026-06-02 — decisiones y avance
+
+**Decisiones del usuario** (válidas para todo lo de abajo):
+- **Config = ventana OS real** → hay que **extender Llimphi a multiventana**
+  (hoy es monoventana). Es el cambio grande pendiente (ver más abajo).
+- **Título de ventana dinámico**: ✅ hecho (`App::window_title`).
+- **Visualizadores** ("cajas grandes"): ocultables, **default ocultos**. ✅ hecho.
+- **Waveform tipo Audacity**: onda de la **pista completa** (decodificar/escanear
+  todo el audio, con eje de tiempo + playhead). Pendiente.
+
+**Hecho esta sesión** (en `origin/main`):
+- ✅ **Seek en pausa salta de inmediato** al destino y sigue pausado (flag
+  `SEEK_FORCE`, gate de pausa del video movido al render loop).
+- ✅ **Título dinámico de ventana** (`llimphi-ui::App::window_title`) + media-app
+  lo usa con el título del medio; se quitó el cartelón sobre el video.
+- ✅ **Slider de volumen graduable** con el mouse en el medio (`−`[slider]`+`).
+- ✅ **Visualizadores ocultables** (menú Ver, default ocultos).
+
+**Pendiente de esta tanda de feedback** (en orden sugerido):
+1. **Config con tabs de Llimphi + layout ordenado/delimitado** —
+   `llimphi-widget-tabs` (reemplaza los `chip_button`); el contenido en un
+   panel delimitado al tamaño. Reusable tal cual cuando la config pase a ventana
+   real. *Independiente del multiventana; se puede hacer ya sobre el overlay.*
+2. **Multiventana en Llimphi** (el grande) → config como ventana OS real con su
+   barra de título. Refactor del runtime (`eventloop.rs`, 891 líneas, todo
+   monoventana) + el trait `App` (retrocompatible, opt-in con defaults para no
+   romper las ~decenas de apps). **Alto riesgo, no verificable sin pantalla**
+   (además del bug de freeze abierto): hacerlo como paso dedicado y **correrlo**.
+3. **Barras arriba/abajo del video** — hoy las barras van todas debajo del
+   canvas. Agregar posición por barra (sobre/bajo el video) en
+   `media-core::toolbar`/`layout` + respetarla en `toolbar_view`.
+4. **Tercera barra** — el editor de barras (config → Barras) ya tiene
+   `AddBar`; verificar que agregar una 3ª barra funcione end-to-end y, si hace
+   falta, exponerlo mejor.
+5. **Panel de playlist/cola** — vista de la cola (drawer o panel), reusando el
+   modelo. Adoptar `media-core::playlist` (U1) de paso.
+6. **Waveform de pista completa** (Audacity) — escaneo de picos del audio +
+   caché + dibujo con eje de tiempo y playhead (reemplaza/complementa el visor
+   en vivo). Necesita decodificar toda la pista (helper en `foreign-av`/fuentes).
+
 ## Cómo trabajar esto
 
 El núcleo de cada ítem **ya existe y está testeado**: lo que sigue es trabajo
