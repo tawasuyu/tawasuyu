@@ -210,7 +210,8 @@ const KEYMAP_HEADER: &str = "\
 // Acciones:
 //   focus-next / focus-prev          mueve el foco (cíclico)
 //   focus-left/right/up/down         mueve el foco espacial (Super+flechas)
-//   move-forward / move-backward     reordena la ventana enfocada
+//   move-forward / move-backward     reordena la ventana enfocada (orden)
+//   move-left/right/up/down          mueve la ventana por geometría (Super+Shift+flechas)
 //   close-focused                    cierra la enfocada
 //   toggle-float                     alterna flotante / teselada (una)
 //   toggle-tiling                    alterna todo el escritorio teselado/flotante

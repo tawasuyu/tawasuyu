@@ -376,6 +376,7 @@ impl Desktop {
                 self.relayout()
             }
             DesktopAction::FocusDir(dir) => self.focus_in_direction(dir),
+            DesktopAction::MoveDir(dir) => self.move_in_direction(dir),
             DesktopAction::FocusWindow(id) => {
                 // En el escritorio activo basta enfocar; si la ventana
                 // está en otro, lo traemos a la salida enfocada.
@@ -671,6 +672,36 @@ impl Desktop {
         };
         match nearest_in_direction(from, &layout, focused, dir) {
             Some(target) if self.workspaces[active].focus_window(target) => self.relayout(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Intercambia la ventana enfocada con su vecina **teselada** más
+    /// cercana en una dirección — mover la ventana por geometría. Sólo
+    /// aplica a teseladas (una flotante se mueve arrastrándola); sin vecina
+    /// en esa dirección, no hace nada. El foco acompaña a la ventana movida.
+    fn move_in_direction(&mut self, dir: Direction) -> Vec<BrainCommand> {
+        let active = self.active_index();
+        let Some(focused) = self.workspaces[active].focused() else {
+            return Vec::new();
+        };
+        if self.workspaces[active].is_floating(focused) {
+            return Vec::new();
+        }
+        let Some(o) = self.outputs.get(self.focused_output).copied() else {
+            return Vec::new();
+        };
+        let layout = self.workspaces[active].layout(o.work_rect());
+        let Some(from) = layout.iter().find(|(id, _)| *id == focused).map(|(_, r)| *r) else {
+            return Vec::new();
+        };
+        // Sólo teseladas son candidatas a intercambio.
+        let tiled: Vec<(WindowId, Rect)> = layout
+            .into_iter()
+            .filter(|(id, _)| !self.workspaces[active].is_floating(*id))
+            .collect();
+        match nearest_in_direction(from, &tiled, focused, dir) {
+            Some(target) if self.workspaces[active].swap(focused, target) => self.relayout(),
             _ => Vec::new(),
         }
     }
@@ -1484,6 +1515,37 @@ mod tests {
         // Y de vuelta a la derecha.
         d.apply(DesktopAction::FocusDir(Direction::Right));
         assert_eq!(d.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn move_dir_swaps_the_focused_tile_with_its_neighbor() {
+        let mut d = desktop_with_screen();
+        d.apply(DesktopAction::SetLayout(LayoutMode::Columns));
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        assert_eq!(d.active_workspace().windows(), &[1, 2, 3]);
+        assert_eq!(d.focused_window(), Some(3)); // columna derecha
+        // Mover a la izquierda intercambia la 3 con su vecina (la 2).
+        d.apply(DesktopAction::MoveDir(Direction::Left));
+        assert_eq!(d.active_workspace().windows(), &[1, 3, 2]);
+        assert_eq!(d.focused_window(), Some(3)); // el foco acompaña a la movida
+        // Y a la derecha la devuelve.
+        d.apply(DesktopAction::MoveDir(Direction::Right));
+        assert_eq!(d.active_workspace().windows(), &[1, 2, 3]);
+        assert_eq!(d.focused_window(), Some(3));
+    }
+
+    #[test]
+    fn move_dir_does_nothing_for_a_floating_window() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada → flotar
+        d.apply(DesktopAction::ToggleFloat);
+        let before = d.active_workspace().windows().to_vec();
+        let cmds = d.apply(DesktopAction::MoveDir(Direction::Left));
+        assert!(cmds.is_empty());
+        assert_eq!(d.active_workspace().windows(), &before[..]);
     }
 
     #[test]

@@ -70,6 +70,9 @@ pub enum DesktopAction {
     /// Enfoca una ventana concreta por su id; si está en otro escritorio,
     /// salta a él. Para clics de taskbar o `mirada-ctl focus-window`.
     FocusWindow(WindowId),
+    /// Intercambia la ventana enfocada con su vecina teselada en una
+    /// dirección cardinal (mueve la ventana por geometría) — Super+Shift+flechas.
+    MoveDir(Direction),
     /// Adelanta la ventana enfocada en el orden de teselado.
     MoveForward,
     /// Atrasa la ventana enfocada en el orden de teselado.
@@ -154,6 +157,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::FocusNext => f.write_str("focus-next"),
             DesktopAction::FocusPrev => f.write_str("focus-prev"),
             DesktopAction::FocusDir(d) => write!(f, "focus-{}", d.slug()),
+            DesktopAction::MoveDir(d) => write!(f, "move-{}", d.slug()),
             DesktopAction::FocusWindow(id) => write!(f, "focus-window:{id}"),
             DesktopAction::MoveForward => f.write_str("move-forward"),
             DesktopAction::MoveBackward => f.write_str("move-backward"),
@@ -215,6 +219,8 @@ impl FromStr for DesktopAction {
                     )
                 } else if let Some(d) = s.strip_prefix("focus-").and_then(Direction::from_slug) {
                     Self::FocusDir(d)
+                } else if let Some(d) = s.strip_prefix("move-").and_then(Direction::from_slug) {
+                    Self::MoveDir(d)
                 } else if let Some(id) = s.strip_prefix("focus-window:") {
                     Self::FocusWindow(
                         id.trim()
@@ -268,6 +274,11 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+Right".into(), DesktopAction::FocusDir(Direction::Right)),
         ("Super+Up".into(), DesktopAction::FocusDir(Direction::Up)),
         ("Super+Down".into(), DesktopAction::FocusDir(Direction::Down)),
+        // Mover la ventana enfocada por geometría — Super+Shift+flechas.
+        ("Super+Shift+Left".into(), DesktopAction::MoveDir(Direction::Left)),
+        ("Super+Shift+Right".into(), DesktopAction::MoveDir(Direction::Right)),
+        ("Super+Shift+Up".into(), DesktopAction::MoveDir(Direction::Up)),
+        ("Super+Shift+Down".into(), DesktopAction::MoveDir(Direction::Down)),
         ("Super+Shift+j".into(), DesktopAction::MoveForward),
         ("Super+Shift+k".into(), DesktopAction::MoveBackward),
         ("Super+q".into(), DesktopAction::CloseFocused),
