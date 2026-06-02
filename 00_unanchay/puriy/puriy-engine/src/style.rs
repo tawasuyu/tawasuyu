@@ -3226,6 +3226,10 @@ fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> Vec<Decl> {
             out.extend(parse_inset_shorthand(value, important));
             continue;
         }
+        if let Some(decls) = parse_logical_box(prop, value, important) {
+            out.extend(decls);
+            continue;
+        }
         if prop.eq_ignore_ascii_case("flex-flow") {
             out.extend(parse_flex_flow_shorthand(value, important));
             continue;
@@ -4304,6 +4308,58 @@ fn parse_align_self(s: &str) -> Option<AlignSelf> {
 /// - `flex: auto` → `1 1 auto`
 /// - `flex: <number>` → `N 1 0%` (basis 0%, common preset)
 /// Devuelve 3 decls atómicas (grow + shrink + basis).
+/// Propiedades lógicas de caja (`margin-inline`/`margin-block`/`padding-*` y
+/// sus `-start`/`-end`), mapeadas a las físicas asumiendo LTR + escritura
+/// horizontal (el caso por defecto). `inline` ↔ left/right, `block` ↔
+/// top/bottom; `start`=left/top, `end`=right/bottom. Las dos-lados aceptan
+/// 1–2 valores (`margin-inline: 10px` o `10px 20px`). Devuelve `None` si el
+/// nombre no es una propiedad lógica conocida. Fase 7.191.
+fn parse_logical_box(prop: &str, value: &str, important: bool) -> Option<Vec<Decl>> {
+    use DeclKind::{
+        MarginBottom, MarginLeft, MarginRight, MarginTop, PaddingBottom, PaddingLeft,
+        PaddingRight, PaddingTop,
+    };
+    let lower = prop.to_ascii_lowercase();
+    // Lados emparejados (1–2 valores): (start_ctor, end_ctor).
+    let two: Option<(fn(f32) -> DeclKind, fn(f32) -> DeclKind)> = match lower.as_str() {
+        "margin-inline" => Some((MarginLeft, MarginRight)),
+        "margin-block" => Some((MarginTop, MarginBottom)),
+        "padding-inline" => Some((PaddingLeft, PaddingRight)),
+        "padding-block" => Some((PaddingTop, PaddingBottom)),
+        _ => None,
+    };
+    if let Some((a, b)) = two {
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        let vals: Vec<f32> = parts.iter().filter_map(|p| parse_length_px(p)).collect();
+        if vals.is_empty() || vals.len() != parts.len() {
+            return Some(Vec::new());
+        }
+        let (s, e) = if vals.len() == 1 { (vals[0], vals[0]) } else { (vals[0], vals[1]) };
+        return Some(vec![
+            Decl { kind: a(s), important },
+            Decl { kind: b(e), important },
+        ]);
+    }
+    // Un solo lado (`-start`/`-end`).
+    let single: Option<fn(f32) -> DeclKind> = match lower.as_str() {
+        "margin-inline-start" => Some(MarginLeft),
+        "margin-inline-end" => Some(MarginRight),
+        "margin-block-start" => Some(MarginTop),
+        "margin-block-end" => Some(MarginBottom),
+        "padding-inline-start" => Some(PaddingLeft),
+        "padding-inline-end" => Some(PaddingRight),
+        "padding-block-start" => Some(PaddingTop),
+        "padding-block-end" => Some(PaddingBottom),
+        _ => None,
+    };
+    let ctor = single?;
+    Some(
+        parse_length_px(value)
+            .map(|v| vec![Decl { kind: ctor(v), important }])
+            .unwrap_or_default(),
+    )
+}
+
 /// `inset: <t> [r] [b] [l]` — 1..4 valores con la distribución de `margin`
 /// (1→todos, 2→TB/LR, 3→T/LR/B, 4→TRBL). Cada valor acepta length/%/auto.
 /// Expande a los cuatro longhands `top`/`right`/`bottom`/`left`. Fase 7.189.

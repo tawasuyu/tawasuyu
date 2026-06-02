@@ -3506,6 +3506,25 @@ mod tests {
     }
 
     #[test]
+    fn propiedades_logicas_de_caja() {
+        let html = r#"<html><head><style>
+            #a { margin-inline: 10px 20px; padding-block: 5px; }
+            #b { margin-inline-start: 8px; padding-block-end: 12px; }
+        </style></head><body><div id="a">x</div><div id="b">y</div></body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let a = box_by_id(&doc.box_tree, "a").unwrap();
+        // margin-inline: 10 20 → left=10 (start), right=20 (end), LTR.
+        assert_eq!(a.margin.left, 10.0);
+        assert_eq!(a.margin.right, 20.0);
+        // padding-block: 5 → top=bottom=5.
+        assert_eq!(a.padding.top, 5.0);
+        assert_eq!(a.padding.bottom, 5.0);
+        let b = box_by_id(&doc.box_tree, "b").unwrap();
+        assert_eq!(b.margin.left, 8.0); // inline-start = left (LTR)
+        assert_eq!(b.padding.bottom, 12.0); // block-end = bottom
+    }
+
+    #[test]
     fn list_style_none_suprime_marker() {
         let html = r#"<html><head><style>
             ul { list-style-type: none }
