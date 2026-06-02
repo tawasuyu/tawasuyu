@@ -130,6 +130,20 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     CanvasPattern.prototype.setTransform = function(m) { this._transform = m || null; };
     globalThis.CanvasPattern = CanvasPattern;
 
+    // Fase 7.198 — normaliza un valor de fillStyle/strokeStyle para el snapshot:
+    // un CanvasPattern (objeto con _image/_repetition) se serializa a un
+    // descriptor liviano {_pattern, src, rep} que el chrome decodifica vía el
+    // mismo pipeline de imágenes que `drawImage`; un string (color) o un
+    // CanvasGradient ({_kind/_coords/_stops}) pasan tal cual (ya serializables).
+    function serStyle(v) {
+        if (v && typeof v === 'object' && v._image !== undefined && v._repetition !== undefined) {
+            var im = v._image;
+            var src = (im && (im.src || im.currentSrc || im._src)) || '';
+            return { _pattern: true, src: String(src), rep: v._repetition };
+        }
+        return v;
+    }
+
     function TextMetrics(text, fontPx) {
         var w = String(text).length * fontPx * 0.5;
         this.width = w;
@@ -201,7 +215,7 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
     C._snapshot = function() {
         var st = this._state;
         return {
-            f: st.fillStyle, s: st.strokeStyle, lw: st.lineWidth, ga: st.globalAlpha,
+            f: serStyle(st.fillStyle), s: serStyle(st.strokeStyle), lw: st.lineWidth, ga: st.globalAlpha,
             fnt: st.font, lc: st.lineCap, lj: st.lineJoin, ta: st.textAlign, tb: st.textBaseline,
             ld: st.lineDash, ldo: st.lineDashOffset
         };
@@ -298,9 +312,9 @@ pub(crate) const CANVAS2D_BOOTSTRAP: &str = r#"
             this._state.fillStyle !== 'transparent') {
             this._cmds = [];
         }
-        this._rec('fillRect', x, y, w, h, this._state.fillStyle, this._snapshot());
+        this._rec('fillRect', x, y, w, h, serStyle(this._state.fillStyle), this._snapshot());
     };
-    C.strokeRect = function(x, y, w, h) { this._rec('strokeRect', x, y, w, h, this._state.strokeStyle, this._snapshot()); };
+    C.strokeRect = function(x, y, w, h) { this._rec('strokeRect', x, y, w, h, serStyle(this._state.strokeStyle), this._snapshot()); };
 
     // Texto.
     C.fillText = function(text, x, y, maxWidth) { this._rec('fillText', String(text), x, y, maxWidth, this._snapshot()); };

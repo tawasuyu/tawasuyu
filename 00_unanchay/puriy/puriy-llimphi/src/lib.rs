@@ -28,8 +28,8 @@ use llimphi_raster::kurbo::{
     Affine, Cap, Join, Line, Point, Rect as KurboRect, RoundedRect, Stroke,
 };
 use llimphi_raster::peniko::{
-    Blob, Brush, Color, ColorStop, ColorStops, Fill, Gradient, GradientKind, Image as PenikoImage,
-    ImageFormat, Mix,
+    Blob, Brush, Color, ColorStop, ColorStops, Extend, Fill, Gradient, GradientKind,
+    Image as PenikoImage, ImageFormat, Mix,
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
@@ -5373,23 +5373,31 @@ fn refresh_canvas_frames(t: &mut TabState) {
 /// `t.canvas_images` para que el painter lo busque sin re-decodificar cada
 /// frame. Fase 7.197b.
 fn decode_canvas_images(t: &mut TabState) {
-    // Recolecta los src nuevos (no decodificados aún) — préstamo separado de
-    // `canvas_frames` (inmutable) y `canvas_images` (mutable).
-    let mut nuevos: Vec<String> = Vec::new();
+    // Recolecta los src referenciados (drawImage + patrones createPattern),
+    // deduplicados — préstamo separado de `canvas_frames` (inmutable) y
+    // `canvas_images` (mutable). Luego filtra los ya decodificados.
+    let mut candidatos: Vec<String> = Vec::new();
     for frame in t.canvas_frames.values() {
         for cmd in &frame.cmds {
+            // drawImage: el src va en el arg 1.
             if cmd.first().and_then(|v| v.as_str()) == Some("drawImage") {
                 if let Some(src) = cmd.get(1).and_then(|v| v.as_str()) {
-                    if !src.is_empty()
-                        && !t.canvas_images.contains_key(src)
-                        && !nuevos.iter().any(|s| s == src)
-                    {
-                        nuevos.push(src.to_string());
+                    if !src.is_empty() && !candidatos.iter().any(|s| s == src) {
+                        candidatos.push(src.to_string());
                     }
                 }
             }
+            // createPattern: descriptores {_pattern,src,rep} anidados en los
+            // snapshots de estilo (fill/stroke/rect) — escaneo recursivo.
+            for v in cmd {
+                collect_pattern_srcs(v, &mut candidatos);
+            }
         }
     }
+    let nuevos: Vec<String> = candidatos
+        .into_iter()
+        .filter(|s| !t.canvas_images.contains_key(s))
+        .collect();
     if nuevos.is_empty() {
         return;
     }
@@ -5432,15 +5440,84 @@ fn canvas_color(v: Option<&serde_json::Value>, ga: f64) -> Color {
     Color::from_rgba8(base.r, base.g, base.b, a)
 }
 
-/// Resuelve `fillStyle`/`strokeStyle` a un `peniko::Brush`: si es un objeto
-/// `CanvasGradient` con stops válidos devuelve un gradiente REAL (linear/
-/// radial/conic→sweep), si no degrada a color sólido (vía `canvas_color`).
-/// `ga` (globalAlpha) multiplica el alpha de cada stop. Las coordenadas del
-/// gradiente quedan en el espacio de usuario del canvas: el caller lo pinta
-/// con `transform = base*cur` y `brush_transform = None`, así el gradiente se
-/// posiciona en ese mismo espacio (Fase 7.197).
-fn canvas_brush(v: Option<&serde_json::Value>, ga: f64) -> Brush {
+/// Recolecta (recursivamente, deduplicando contra `out`) los `src` de los
+/// descriptores de patrón `{_pattern:true, src, rep}` que `createPattern`
+/// inyecta en los snapshots de estilo. Se reusa el mismo mapa de imágenes
+/// decodificadas que `drawImage` (Fase 7.198).
+fn collect_pattern_srcs(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(o) => {
+            if o.get("_pattern").and_then(|p| p.as_bool()) == Some(true) {
+                if let Some(src) = o.get("src").and_then(|s| s.as_str()) {
+                    if !src.is_empty() && !out.iter().any(|s2| s2 == src) {
+                        out.push(src.to_string());
+                    }
+                }
+            }
+            for val in o.values() {
+                collect_pattern_srcs(val, out);
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for val in a {
+                collect_pattern_srcs(val, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Construye un `Brush::Image` desde un descriptor de patrón
+/// `{_pattern, src, rep}` (Fase 7.198). `rep` mapea a los modos de extensión
+/// de peniko: `repeat`→Repeat/Repeat, `repeat-x`→Repeat/Pad, `repeat-y`→
+/// Pad/Repeat, `no-repeat`→Pad/Pad. `ga` (globalAlpha) se aplica como
+/// multiplicador de alpha de la imagen. Devuelve `None` si falta el src o la
+/// imagen no está decodificada (el caller cae a color sólido). El patrón se
+/// ancla al origen del espacio de usuario del canvas (el caller pinta con
+/// `transform = base*cur`, `brush_transform = None`).
+fn build_canvas_pattern(
+    o: &serde_json::Map<String, serde_json::Value>,
+    ga: f64,
+    images: &std::collections::HashMap<String, PenikoImage>,
+) -> Option<Brush> {
+    let src = o.get("src")?.as_str()?;
+    if src.is_empty() {
+        return None;
+    }
+    let img = images.get(src)?;
+    let (xe, ye) = match o.get("rep").and_then(|r| r.as_str()).unwrap_or("repeat") {
+        "repeat-x" => (Extend::Repeat, Extend::Pad),
+        "repeat-y" => (Extend::Pad, Extend::Repeat),
+        "no-repeat" => (Extend::Pad, Extend::Pad),
+        _ => (Extend::Repeat, Extend::Repeat),
+    };
+    let img = img
+        .clone()
+        .with_x_extend(xe)
+        .with_y_extend(ye)
+        .with_alpha(ga.clamp(0.0, 1.0) as f32);
+    Some(Brush::Image(img))
+}
+
+/// Resuelve `fillStyle`/`strokeStyle` a un `peniko::Brush`: un descriptor de
+/// patrón (`createPattern`) → `Brush::Image` tileado (Fase 7.198); un objeto
+/// `CanvasGradient` con stops válidos → gradiente REAL (linear/radial/conic→
+/// sweep); si no, degrada a color sólido (vía `canvas_color`). `ga`
+/// (globalAlpha) multiplica el alpha de cada stop / la imagen. Las coordenadas
+/// del gradiente/patrón quedan en el espacio de usuario del canvas: el caller
+/// lo pinta con `transform = base*cur` y `brush_transform = None`, así se
+/// posiciona en ese mismo espacio (Fase 7.197/7.198).
+fn canvas_brush(
+    v: Option<&serde_json::Value>,
+    ga: f64,
+    images: &std::collections::HashMap<String, PenikoImage>,
+) -> Brush {
     if let Some(serde_json::Value::Object(o)) = v {
+        if o.get("_pattern").and_then(|p| p.as_bool()) == Some(true) {
+            if let Some(b) = build_canvas_pattern(o, ga, images) {
+                return b;
+            }
+        }
         if let Some(g) = build_canvas_gradient(o, ga) {
             return Brush::Gradient(g);
         }
@@ -5588,14 +5665,24 @@ fn render_canvas(
     // al closure (peniko::Image es Arc-backed → clon barato).
     let mut frame_images: std::collections::HashMap<String, PenikoImage> =
         std::collections::HashMap::new();
+    let mut refs: Vec<String> = Vec::new();
     for cmd in &cmds {
         if cmd.first().and_then(|v| v.as_str()) == Some("drawImage") {
             if let Some(src) = cmd.get(1).and_then(|v| v.as_str()) {
-                if !frame_images.contains_key(src) {
-                    if let Some(Some(img)) = images.get(src) {
-                        frame_images.insert(src.to_string(), img.clone());
-                    }
+                if !src.is_empty() && !refs.iter().any(|s| s == src) {
+                    refs.push(src.to_string());
                 }
+            }
+        }
+        // Patrones (createPattern): src anidado en los snapshots de estilo.
+        for v in cmd {
+            collect_pattern_srcs(v, &mut refs);
+        }
+    }
+    for src in refs {
+        if !frame_images.contains_key(&src) {
+            if let Some(Some(img)) = images.get(&src) {
+                frame_images.insert(src, img.clone());
             }
         }
     }
@@ -5735,14 +5822,14 @@ fn paint_canvas_cmds(
             "fill" => {
                 let st = cmd.get(1);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
-                let brush = canvas_brush(style_color(st, "f").as_ref(), ga);
+                let brush = canvas_brush(style_color(st, "f").as_ref(), ga, images);
                 scene.fill(Fill::NonZero, base * cur, &brush, None, &path);
             }
             "stroke" => {
                 let st = cmd.get(1);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
-                let brush = canvas_brush(style_color(st, "s").as_ref(), ga);
+                let brush = canvas_brush(style_color(st, "s").as_ref(), ga, images);
                 scene.stroke(&canvas_stroke(st, lw), base * cur, &brush, None, &path);
             }
             "clip" => {
@@ -5758,7 +5845,7 @@ fn paint_canvas_cmds(
             "fillRect" => {
                 // ['fillRect', x, y, w, h, fillStyle, snapshot]
                 let ga = style_field(cmd.get(6), "ga").unwrap_or(1.0);
-                let brush = canvas_brush(cmd.get(5), ga);
+                let brush = canvas_brush(cmd.get(5), ga, images);
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
                 scene.fill(Fill::NonZero, base * cur, &brush, None, &r);
             }
@@ -5766,7 +5853,7 @@ fn paint_canvas_cmds(
                 let st = cmd.get(6);
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let lw = style_field(st, "lw").unwrap_or(1.0).max(0.01);
-                let brush = canvas_brush(cmd.get(5), ga);
+                let brush = canvas_brush(cmd.get(5), ga, images);
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
                 scene.stroke(&canvas_stroke(st, lw), base * cur, &brush, None, &r);
             }
@@ -8584,15 +8671,17 @@ mod tests {
 
     #[test]
     fn canvas_brush_gradiente_y_degradacion() {
+        let imgs: std::collections::HashMap<String, PenikoImage> =
+            std::collections::HashMap::new();
         // String → Brush sólido.
         let s = serde_json::Value::String("#ff0000".into());
-        assert!(matches!(canvas_brush(Some(&s), 1.0), Brush::Solid(_)));
+        assert!(matches!(canvas_brush(Some(&s), 1.0, &imgs), Brush::Solid(_)));
         // CanvasGradient linear con 2 stops → Brush::Gradient(Linear).
         let lin: serde_json::Value = serde_json::from_str(
             r##"{"_kind":"linear","_coords":[0,0,100,0],"_stops":[[0,"#ff0000"],[1,"#0000ff"]]}"##,
         )
         .unwrap();
-        match canvas_brush(Some(&lin), 1.0) {
+        match canvas_brush(Some(&lin), 1.0, &imgs) {
             Brush::Gradient(g) => {
                 assert!(matches!(g.kind, GradientKind::Linear { .. }));
                 assert_eq!(g.stops.0.len(), 2);
@@ -8605,21 +8694,49 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            canvas_brush(Some(&rad), 1.0),
+            canvas_brush(Some(&rad), 1.0, &imgs),
             Brush::Gradient(g) if matches!(g.kind, GradientKind::Radial { .. })
         ));
         // Gradiente con un solo stop (inválido) → degrada a sólido (último stop).
         let bad: serde_json::Value =
             serde_json::from_str(r##"{"_kind":"linear","_coords":[0,0,1,0],"_stops":[[0,"#0f0"]]}"##)
                 .unwrap();
-        assert!(matches!(canvas_brush(Some(&bad), 1.0), Brush::Solid(_)));
+        assert!(matches!(canvas_brush(Some(&bad), 1.0, &imgs), Brush::Solid(_)));
         // globalAlpha multiplica el alpha de cada stop del gradiente.
-        match canvas_brush(Some(&lin), 0.5) {
+        match canvas_brush(Some(&lin), 0.5, &imgs) {
             Brush::Gradient(g) => {
                 let a = g.stops.0[0].color.components[3];
                 assert!((a - 0.5).abs() < 0.02, "alpha ~0.5, got {a}");
             }
             _ => panic!("gradiente"),
+        }
+        // Patrón (createPattern): con la imagen decodificada → Brush::Image;
+        // sin imagen en el mapa → degrada a sólido.
+        let pat: serde_json::Value =
+            serde_json::from_str(r##"{"_pattern":true,"src":"u","rep":"repeat"}"##).unwrap();
+        assert!(matches!(canvas_brush(Some(&pat), 1.0, &imgs), Brush::Solid(_)));
+        let mut con_img = imgs.clone();
+        con_img.insert(
+            "u".into(),
+            PenikoImage::new(Blob::from(vec![255u8, 0, 0, 255]), ImageFormat::Rgba8, 1, 1),
+        );
+        match canvas_brush(Some(&pat), 0.5, &con_img) {
+            Brush::Image(im) => {
+                assert!(matches!(im.x_extend, Extend::Repeat));
+                assert!(matches!(im.y_extend, Extend::Repeat));
+                assert!((im.alpha - 0.5).abs() < 0.001, "alpha ~0.5, got {}", im.alpha);
+            }
+            _ => panic!("debería ser patrón de imagen"),
+        }
+        // repeat-x → Repeat en x, Pad en y.
+        let pat_x: serde_json::Value =
+            serde_json::from_str(r##"{"_pattern":true,"src":"u","rep":"repeat-x"}"##).unwrap();
+        match canvas_brush(Some(&pat_x), 1.0, &con_img) {
+            Brush::Image(im) => {
+                assert!(matches!(im.x_extend, Extend::Repeat));
+                assert!(matches!(im.y_extend, Extend::Pad));
+            }
+            _ => panic!("patrón repeat-x"),
         }
     }
 
@@ -8768,6 +8885,69 @@ mod tests {
         assert_eq!(di.get(1).and_then(|v| v.as_str()), Some(png_1x1));
         let img = t.canvas_images.get(png_1x1).expect("decodificada").as_ref();
         assert_eq!(img.map(|i| (i.width, i.height)), Some((1, 1)));
+    }
+
+    #[test]
+    fn createpattern_de_img_dom_se_decodifica_end_to_end() {
+        // <canvas> + <img> → ctx.createPattern(img,'repeat') usado como
+        // fillStyle: el snapshot del fillRect lleva el descriptor {_pattern,src}
+        // y decode_canvas_images (vía refresh) decodifica ese src. Fase 7.198.
+        let png_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+        let mut m = model_con_script("/* boot */");
+        let t = &mut m.tabs[0];
+        t.url = "about:test".into();
+        t.box_tree = Some(parse(
+            r#"<body><canvas id="c" width="100" height="100"></canvas></body>"#,
+        ));
+        t.has_canvas = true;
+        let mk = |id: &str, tag: &str, attrs: Vec<(String, String)>| puriy_js::ElementSnapshot {
+            id: id.into(),
+            tag_name: tag.into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: Vec::new(),
+            attributes: attrs,
+            dfs_index: 0,
+        };
+        let rt = t.js.as_mut().expect("rt");
+        rt.set_elements(&[
+            mk("c", "canvas", vec![("width".into(), "100".into()), ("height".into(), "100".into())]),
+            mk("i", "img", vec![("src".into(), png_1x1.into())]),
+        ])
+        .expect("set_elements");
+        rt.eval(
+            "var ctx = document.getElementById('c').getContext('2d');\
+             var im = document.getElementById('i');\
+             var pat = ctx.createPattern(im, 'repeat');\
+             ctx.fillStyle = pat;\
+             ctx.fillRect(0, 0, 50, 50);",
+        )
+        .expect("draw");
+        apply_dom_mutations(t);
+        let frame = t.canvas_frames.get("c").expect("frame");
+        // El fillRect lleva el descriptor de patrón en el arg 5.
+        let fr = frame
+            .cmds
+            .iter()
+            .find(|c| c.first().and_then(|v| v.as_str()) == Some("fillRect"))
+            .expect("fillRect en el frame");
+        assert_eq!(fr[5].get("_pattern").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(fr[5].get("src").and_then(|v| v.as_str()), Some(png_1x1));
+        assert_eq!(fr[5].get("rep").and_then(|v| v.as_str()), Some("repeat"));
+        // decode_canvas_images recogió el src del patrón y lo decodificó.
+        let img = t.canvas_images.get(png_1x1).expect("decodificada").as_ref();
+        assert_eq!(img.map(|i| (i.width, i.height)), Some((1, 1)));
+        // El painter pinta el patrón (escena no-vacía).
+        let mut images: std::collections::HashMap<String, PenikoImage> =
+            std::collections::HashMap::new();
+        images.insert(png_1x1.into(), img.unwrap().clone());
+        let mut scene = llimphi_raster::vello::Scene::new();
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        paint_canvas_cmds(&mut scene, &mut ts, rect, &frame.cmds, 100.0, 100.0, &images);
+        assert!(!scene.encoding().is_empty(), "el patrón debería pintar");
     }
 
     #[test]

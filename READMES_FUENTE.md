@@ -237,14 +237,16 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 
 ### 02_ruway — HACER
 
-#### ayni  ⚠️ confirmar alcance
+#### ayni  ✅ = el dominio Chat
 ```
-# una línea: chat persona-a-persona soberano, local-first, sobre chasqui+agora+minga
-#            (MLS, DAG content-addressed, multilienzo).
+# una línea: chat persona-a-persona soberano, local-first, sin servidor. La
+#            conversación como grafo criptográfico reproducible (BLAKE3 + DAG +
+#            postcard), identidad agora Ed25519, E2EE MLS (RFC 9420), transporte
+#            chasqui/minga/akasha. No es "otro wasap": es ayni (reciprocidad).
 ```
-- subcrates: ayni-core · ayni-{crypto,index,sync,store,minga,ai,net?} · ayni-{app,llimphi,cli}
-- mapea a: hueco planeado "Chat / mensajería" (APPS-NATIVAS Tanda 2 #3) — confirmar si ayni ES ese dominio.
-- ✍️ resaltar / omitir / estado: _(en memoria figuraba "no arrancado"; confirmar si ya hay material real)_
+- subcrates: ayni-core (DAG firmado, no_std+alloc) · ayni-crypto (Ed25519 + E2EE X25519/HKDF/ChaCha) · ayni-sync (Transporte+TCP+anti-entropía Merkle) · ayni-minga (P2P libp2p) · ayni-store (sled) · ayni-app (núcleo de app) · ayni-cli (`ayni`) · ayni-llimphi (UI) · ayni-index (búsqueda rimay) · ayni-ai (multilienzo vía pluma-llm)
+- **YA tiene README.md + LEEME.md propios** (tesis completa fase a fase) — la generación debería partir de ahí, no reescribir desde cero. Estado: P0–P7 cerradas (2026-05-31).
+- ✍️ resaltar / omitir / estado:
 
 #### cards  ⚠️ confirmar
 ```
@@ -305,14 +307,13 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 - subcrates: nahual-{viewer-core,source-core,thumb-core,geo-core} · nahual-shell-llimphi · nahual-file-explorer-llimphi · nahual-{text,image,video,audio,markdown,svg,hex,font,tree,table,map,card,archive}-viewer-llimphi · nahual-gallery-llimphi
 - ✍️ resaltar / omitir / estado:
 
-#### paloma  ⚠️ confirmar
+#### paloma  ✅ = el dominio Correo
 ```
-# una línea: ✍️ (paloma → correo? cliente IMAP/SMTP/JMAP nativo. tiene net/store/
-#            app/llimphi/core; confirmá función exacta)
+# una línea: cliente de correo nativo (IMAP/SMTP/JMAP). El reemplazo de Gmail en
+#            gioser: núcleo agnóstico + frontend Llimphi, identidad/firma por agora.
 ```
-- subcrates: paloma-core · paloma-{net,store} · paloma-{app,llimphi}
-- mapea a: hueco planeado "Correo" (APPS-NATIVAS Tanda 1 #1) — fuerte candidato; confirmar.
-- ✍️ resaltar / omitir / estado:
+- subcrates: paloma-core · paloma-net · paloma-store · paloma-app · paloma-llimphi
+- ✍️ resaltar / omitir / estado: _(confirmar madurez real de la implementación)_
 
 #### pata
 ```
@@ -472,12 +473,13 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 > "open-with universal" de `nahual`. Pre-escribí su README acá si querés que salga
 > apenas existan; mientras no haya crate, NO se genera README (sólo queda anotada).
 
+> Ya mapeadas a dominios existentes (NO van acá, tienen su bloque en §3):
+> **Correo → `paloma`** · **Chat → `ayni`**. Mantenidas fuera de esta lista.
+
 **Tanda 1 — "Google Workspace" diario:**
-- **Correo** — cliente IMAP/SMTP/JMAP nativo (reemplaza Gmail). Reusa `puriy-net` (TCP/TLS), `rimay` (búsqueda semántica), `agora` (identidad/firma). _⚠️ posible = `paloma` (ya en disco)._ ✍️
-- **Calendario + Contactos** — CalDAV/CardDAV; comparte capa de cuentas con correo. ✍️
+- **Calendario + Contactos** — CalDAV/CardDAV; comparte capa de cuentas con `paloma` (correo). ✍️
 
 **Tanda 2 — tiempo real (P2P + WebRTC ya existen):**
-- **Chat / mensajería** — sobre BrahmanNet/`chasqui` P2P; identidad `agora`. _⚠️ posible = `ayni` (ya en disco)._ ✍️
 - **Videollamadas** — UI de conferencia sobre P2P (akasha/minga) + `media` (video) + `takiy` (audio); stack WebRTC vive en `puriy-js`. _⚠️ ¿`raymi`?_ ✍️
 
 **Tanda 3 — descubrimiento e información:**
