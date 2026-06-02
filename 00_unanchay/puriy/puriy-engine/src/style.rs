@@ -97,6 +97,12 @@ pub struct ComputedStyle {
     /// Distribución de las líneas (flex multilínea) / pistas (grid) en el
     /// eje cruzado. `Normal` = default de taffy. No hereda.
     pub align_content: AlignContent,
+    /// `justify-items` (grid): alineación por defecto de los items en el eje
+    /// inline. `None` = default de taffy. No hereda.
+    pub justify_items: Option<AlignItems>,
+    /// `justify-self` (grid item): pisa el `justify-items` del contenedor
+    /// para ese item. `Auto` = hereda del contenedor. No hereda.
+    pub justify_self: AlignSelf,
     /// `nowrap` por default (CSS spec).
     pub flex_wrap: FlexWrap,
     /// Separación entre items en el eje principal (px). En CSS estándar,
@@ -745,6 +751,8 @@ impl Default for ComputedStyle {
             justify_content: JustifyContent::Start,
             align_items: AlignItems::Stretch,
             align_content: AlignContent::Normal,
+            justify_items: None,
+            justify_self: AlignSelf::Auto,
             flex_wrap: FlexWrap::NoWrap,
             gap_row: 0.0,
             gap_column: 0.0,
@@ -1660,6 +1668,8 @@ enum DeclKind {
     JustifyContent(JustifyContent),
     AlignItems(AlignItems),
     AlignContent(AlignContent),
+    JustifyItems(AlignItems),
+    JustifySelf(AlignSelf),
     FlexWrap(FlexWrap),
     /// `gap: A B` setea ambos (row=A, column=B); `gap: V` los iguala.
     Gap { row: f32, column: f32 },
@@ -1767,6 +1777,8 @@ impl Decl {
             DeclKind::JustifyContent(j) => s.justify_content = *j,
             DeclKind::AlignItems(a) => s.align_items = *a,
             DeclKind::AlignContent(a) => s.align_content = *a,
+            DeclKind::JustifyItems(a) => s.justify_items = Some(*a),
+            DeclKind::JustifySelf(a) => s.justify_self = *a,
             DeclKind::FlexWrap(w) => s.flex_wrap = *w,
             DeclKind::Gap { row, column } => {
                 s.gap_row = *row;
@@ -3352,6 +3364,8 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "justify-content" => parse_justify_content(value).map(DeclKind::JustifyContent),
         "align-items" => parse_align_items(value).map(DeclKind::AlignItems),
         "align-content" => parse_align_content(value).map(DeclKind::AlignContent),
+        "justify-items" => parse_justify_items(value).map(DeclKind::JustifyItems),
+        "justify-self" => parse_justify_self(value).map(DeclKind::JustifySelf),
         "gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "row-gap" => parse_length_px(value).map(DeclKind::RowGap),
         "column-gap" => parse_length_px(value).map(DeclKind::ColumnGap),
@@ -4352,6 +4366,26 @@ fn parse_align_content(s: &str) -> Option<AlignContent> {
         "space-around" => Some(AlignContent::SpaceAround),
         "space-evenly" => Some(AlignContent::SpaceEvenly),
         _ => None,
+    }
+}
+
+/// `justify-items` (grid). Reusa el subset de `align-items` y agrega
+/// `left`/`right` (que en escritura LTR equivalen a start/end). `normal`
+/// se descarta → queda el default None. `auto`/`legacy` también.
+fn parse_justify_items(s: &str) -> Option<AlignItems> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "left" => Some(AlignItems::Start),
+        "right" => Some(AlignItems::End),
+        other => parse_align_items(other),
+    }
+}
+
+/// `justify-self` (grid item). Reusa `align-self` + `left`/`right`.
+fn parse_justify_self(s: &str) -> Option<AlignSelf> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "left" => Some(AlignSelf::Start),
+        "right" => Some(AlignSelf::End),
+        other => parse_align_self(other),
     }
 }
 
@@ -6556,6 +6590,34 @@ mod tests {
         // Sin declaración, el default es Normal (no hereda del flujo).
         let plain = dom.find("section").unwrap();
         assert_eq!(eng.compute(&plain).align_content, AlignContent::Normal);
+    }
+
+    #[test]
+    fn justify_items_y_self_grid_parse_y_computa() {
+        // Parsers (incluye alias left/right y descarte de `normal`).
+        assert_eq!(parse_justify_items("center"), Some(AlignItems::Center));
+        assert_eq!(parse_justify_items("left"), Some(AlignItems::Start));
+        assert_eq!(parse_justify_items("right"), Some(AlignItems::End));
+        assert_eq!(parse_justify_items("stretch"), Some(AlignItems::Stretch));
+        assert_eq!(parse_justify_items("normal"), None);
+        assert_eq!(parse_justify_self("auto"), Some(AlignSelf::Auto));
+        assert_eq!(parse_justify_self("right"), Some(AlignSelf::End));
+        assert_eq!(parse_justify_self("flex-start"), Some(AlignSelf::Start));
+
+        let html = r#"<html><head><style>
+            .g { display: grid; justify-items: center; }
+            .cell { justify-self: end; }
+        </style></head><body>
+            <div class="g"><span class="cell">x</span></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let g = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(g.justify_items, Some(AlignItems::Center));
+        let cell = eng.compute(&dom.find("span").unwrap());
+        assert_eq!(cell.justify_self, AlignSelf::End);
+        // Default sin declaración.
+        assert_eq!(g.justify_self, AlignSelf::Auto);
     }
 
     #[test]

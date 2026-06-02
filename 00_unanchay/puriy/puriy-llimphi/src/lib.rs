@@ -5819,6 +5819,10 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
         justify_content,
         align_items,
         align_content,
+        // justify-items / justify-self: taffy sólo los usa en grid (los
+        // ignora en flex). `None`/`Auto` → default de taffy.
+        justify_items: b.justify_items.map(map_align),
+        justify_self: map_align_self(b.justify_self),
         align_self,
         flex_grow: b.flex_grow,
         flex_shrink: b.flex_shrink,

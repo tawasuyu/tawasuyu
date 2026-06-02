@@ -125,6 +125,9 @@ pub struct BoxNode {
     pub align_items: AlignItems,
     /// `align-content` (distribución de líneas/pistas en el eje cruzado).
     pub align_content: AlignContent,
+    /// `justify-items`/`justify-self` (grid). `None`/`Auto` = default taffy.
+    pub justify_items: Option<AlignItems>,
+    pub justify_self: AlignSelf,
     pub flex_wrap: FlexWrap,
     pub gap_row: f32,
     pub gap_column: f32,
@@ -1095,6 +1098,8 @@ fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Option<Color>, f
     b.justify_content = s.justify_content;
     b.align_items = s.align_items;
     b.align_content = s.align_content;
+    b.justify_items = s.justify_items;
+    b.justify_self = s.justify_self;
     b.flex_wrap = s.flex_wrap;
     b.gap_row = s.gap_row;
     b.gap_column = s.gap_column;
@@ -1786,6 +1791,8 @@ fn empty_root() -> BoxNode {
         justify_content: JustifyContent::Start,
         align_items: AlignItems::Stretch,
         align_content: AlignContent::Normal,
+        justify_items: None,
+        justify_self: AlignSelf::Auto,
         flex_wrap: FlexWrap::NoWrap,
         gap_row: 0.0,
         gap_column: 0.0,
@@ -2151,6 +2158,8 @@ fn build_node(
                 justify_content: style.justify_content,
                 align_items: style.align_items,
                 align_content: style.align_content,
+                justify_items: style.justify_items,
+                justify_self: style.justify_self,
                 flex_wrap: style.flex_wrap,
                 gap_row: style.gap_row,
                 gap_column: style.gap_column,
@@ -2298,6 +2307,8 @@ fn build_node(
                 justify_content: JustifyContent::Start,
                 align_items: AlignItems::Stretch,
                 align_content: AlignContent::Normal,
+                justify_items: None,
+                justify_self: AlignSelf::Auto,
                 flex_wrap: FlexWrap::NoWrap,
                 gap_row: 0.0,
                 gap_column: 0.0,
@@ -2390,6 +2401,8 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         justify_content: JustifyContent::Start,
         align_items: AlignItems::Stretch,
         align_content: AlignContent::Normal,
+        justify_items: None,
+        justify_self: AlignSelf::Auto,
         flex_wrap: FlexWrap::NoWrap,
         gap_row: 0.0,
         gap_column: 0.0,
