@@ -355,6 +355,7 @@ members = [
     "02_ruway/shuma/baremetal/matilda-plan",
     "02_ruway/shuma/sandbox/shuma-card",
     "02_ruway/shuma/sandbox/shuma-config",
+    "02_ruway/shuma/sandbox/shuma-term",
     "02_ruway/shuma/sandbox/shuma-core",
     "02_ruway/shuma/sandbox/shuma-discern",
     "02_ruway/shuma/sandbox/shuma-exec",
