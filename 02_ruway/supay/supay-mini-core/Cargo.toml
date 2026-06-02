@@ -1,0 +1,11 @@
+[package]
+name = "supay-mini-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "supay-mini-core — mundo + simulación del raycaster mini de supay (Fase 0), agnóstico de GUI. Mapa, entidades (jugador/enemigos/balas/pickups/decals/flashes), tick determinístico 35 Hz, colisión sliding, AI de persecución, balística, y la geometría del raycast (DDA + line-of-sight). Sin dependencias de render: el frontend (`supay-app-llimphi` u otro) sólo lo pinta."
+
+[dependencies]

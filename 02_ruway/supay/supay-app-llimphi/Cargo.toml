@@ -13,6 +13,7 @@ name = "supay-app-llimphi"
 path = "src/main.rs"
 
 [dependencies]
+supay-mini-core = { path = "../supay-mini-core" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-menubar = { workspace = true }

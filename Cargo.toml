@@ -373,6 +373,7 @@ members = [
     "02_ruway/supay/supay-app-llimphi",
     "02_ruway/supay/supay-audio",
     "02_ruway/supay/supay-core",
+    "02_ruway/supay/supay-mini-core",
     "02_ruway/supay/supay-doom-llimphi",
     "02_ruway/supay/supay-render-llimphi",
     "02_ruway/supay/supay-scene",

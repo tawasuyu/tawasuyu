@@ -1,90 +1,7 @@
+// El mundo + la geometría del raycast (cast_ray/RayHit/tile/MAP/FOV/
+// entidades) y los helpers de render (rgb/material_color/…) llegan vía
+// el padre, que re-exporta el core agnóstico.
 use super::*;
-
-// =====================================================================
-// Raycaster (DDA estilo Lode Vandevenne)
-// =====================================================================
-
-pub(crate) struct RayHit {
-    /// Distancia perpendicular al plano de cámara (no euclidean — evita
-    /// fish-eye en la altura del slice).
-    pub(crate) perp_dist: f32,
-    pub(crate) material: u8,
-    /// `true` si la pared golpeada es E/W (vertical grid edge);
-    /// `false` si N/S. Se usa para el sombreado tipo Doom.
-    pub(crate) side_ew: bool,
-    /// Posición horizontal del hit dentro de la pared, en `[0, 1)`.
-    /// Las texturas procedurales por slice la usan para variar el
-    /// patrón a lo largo de la pared (ladrillos, paneles).
-    pub(crate) wall_x: f32,
-}
-
-pub(crate) fn cast_ray(px: f32, py: f32, ray_angle: f32) -> RayHit {
-    let (sin, cos) = ray_angle.sin_cos();
-    let dir_x = cos;
-    let dir_y = sin;
-
-    let delta_x = if dir_x.abs() < 1e-6 { 1e6 } else { (1.0_f32 / dir_x).abs() };
-    let delta_y = if dir_y.abs() < 1e-6 { 1e6 } else { (1.0_f32 / dir_y).abs() };
-
-    let mut map_x = px.floor() as i32;
-    let mut map_y = py.floor() as i32;
-
-    let (step_x, mut side_x) = if dir_x < 0.0 {
-        (-1, (px - map_x as f32) * delta_x)
-    } else {
-        (1, (map_x as f32 + 1.0 - px) * delta_x)
-    };
-    let (step_y, mut side_y) = if dir_y < 0.0 {
-        (-1, (py - map_y as f32) * delta_y)
-    } else {
-        (1, (map_y as f32 + 1.0 - py) * delta_y)
-    };
-
-    let mut side_ew = false;
-    let mut hit = 0_u8;
-    // Loop con tope alto por seguridad — el mapa está cerrado.
-    for _ in 0..256 {
-        if side_x < side_y {
-            side_x += delta_x;
-            map_x += step_x;
-            side_ew = true;
-        } else {
-            side_y += delta_y;
-            map_y += step_y;
-            side_ew = false;
-        }
-        let t = tile(map_x, map_y);
-        if t != 0 {
-            hit = t;
-            break;
-        }
-    }
-
-    // Distancia perpendicular: una de las dos componentes según el lado.
-    let perp = if side_ew {
-        (map_x as f32 - px + (1 - step_x) as f32 * 0.5) / dir_x
-    } else {
-        (map_y as f32 - py + (1 - step_y) as f32 * 0.5) / dir_y
-    };
-    let perp = perp.max(0.0001);
-
-    // wall_x: posición en la pared donde golpeó el rayo, normalizada
-    // a [0, 1). Para paredes E/W (lado vertical) viene de Y; para N/S
-    // de X. Es la coordenada que usan las texturas procedurales.
-    let wall_x_raw = if side_ew {
-        py + perp * dir_y
-    } else {
-        px + perp * dir_x
-    };
-    let wall_x = wall_x_raw - wall_x_raw.floor();
-
-    RayHit {
-        perp_dist: perp,
-        material: hit,
-        side_ew,
-        wall_x,
-    }
-}
 
 // =====================================================================
 // Texturas procedurales — sin bitmaps. Cada material define un
@@ -117,7 +34,11 @@ pub(crate) fn techbase_mul(wall_x: f32, wall_y: f32) -> f32 {
     let _ = wall_x;
     // Junta cada 0.25 con grosor ~0.04.
     let row_pos = (wall_y * 4.0).fract();
-    let joint = if row_pos < 0.05 || row_pos > 0.95 { 0.78 } else { 1.0 };
+    let joint = if row_pos < 0.05 || row_pos > 0.95 {
+        0.78
+    } else {
+        1.0
+    };
     // Gradiente vertical sutil (más oscuro abajo).
     let grad = 0.92 + 0.10 * (1.0 - wall_y);
     joint * grad
@@ -136,7 +57,11 @@ pub(crate) fn brick_mul(wall_x: f32, wall_y: f32) -> f32 {
     let h_joint = if by < 0.10 { 0.55 } else { 1.0 };
     // Junta vertical cada 0.5 (ladrillos de medio metro).
     let v_pos = (bx * 2.0).fract();
-    let v_joint = if v_pos < 0.06 || v_pos > 0.94 { 0.62 } else { 1.0 };
+    let v_joint = if v_pos < 0.06 || v_pos > 0.94 {
+        0.62
+    } else {
+        1.0
+    };
     // Variación interna por ladrillo (pseudo-random pero determinístico).
     let brick_id = ((bx * 2.0).floor() as i32 + row * 7) as u32;
     let variation = 0.96 + ((brick_id.wrapping_mul(2_654_435_761) >> 24) & 0xF) as f32 / 200.0;
@@ -148,7 +73,11 @@ pub(crate) fn brick_mul(wall_x: f32, wall_y: f32) -> f32 {
 pub(crate) fn metal_mul(wall_x: f32, wall_y: f32) -> f32 {
     let panel_x = (wall_x * 4.0).fract();
     // Bordes verticales del panel.
-    let edge_v = if panel_x < 0.06 || panel_x > 0.94 { 0.72 } else { 1.0 };
+    let edge_v = if panel_x < 0.06 || panel_x > 0.94 {
+        0.72
+    } else {
+        1.0
+    };
     // Tornillos en esquinas (intersección de bordes).
     let near_top = wall_y < 0.06 || (wall_y - 0.5).abs() < 0.03;
     let near_edge = panel_x < 0.10 || panel_x > 0.90;
@@ -174,19 +103,20 @@ pub(crate) fn slime_mul(wall_x: f32, wall_y: f32, tick: u64) -> f32 {
 // =====================================================================
 
 pub(crate) fn scene_pane(model: &Model) -> View<Msg> {
-    // Capturamos snapshot del frame. Todo Send+Sync trivial.
-    let px = model.px;
-    let py = model.py;
-    let pa = model.pa;
-    let tick = model.tick;
-    let bullets = model.bullets.clone();
-    let decals = model.decals.clone();
-    let static_sprites = model.static_sprites.clone();
-    let enemies = model.enemies.clone();
-    let pickups = model.pickups.clone();
-    let temp_lights = model.temp_lights.clone();
-    let game_over = model.game_over;
-    let victory = model.victory;
+    // Capturamos snapshot del frame desde el mundo (core). Todo Send+Sync.
+    let w = &model.world;
+    let px = w.px;
+    let py = w.py;
+    let pa = w.pa;
+    let tick = w.tick;
+    let bullets = w.bullets.clone();
+    let decals = w.decals.clone();
+    let static_sprites = w.static_sprites.clone();
+    let enemies = w.enemies.clone();
+    let pickups = w.pickups.clone();
+    let temp_lights = w.temp_lights.clone();
+    let game_over = w.game_over;
+    let victory = w.victory;
 
     View::new(Style {
         size: Size {
@@ -219,9 +149,23 @@ pub(crate) fn scene_pane(model: &Model) -> View<Msg> {
             &temp_lights,
         );
         if game_over {
-            draw_overlay(scene, ts, rect, "MUERTO", "SPACE para reiniciar", (0.95, 0.30, 0.25));
+            draw_overlay(
+                scene,
+                ts,
+                rect,
+                "MUERTO",
+                "SPACE para reiniciar",
+                (0.95, 0.30, 0.25),
+            );
         } else if victory {
-            draw_overlay(scene, ts, rect, "VICTORIA", "SPACE para reiniciar", (0.50, 0.95, 0.55));
+            draw_overlay(
+                scene,
+                ts,
+                rect,
+                "VICTORIA",
+                "SPACE para reiniciar",
+                (0.50, 0.95, 0.55),
+            );
         }
     })
 }
@@ -297,7 +241,11 @@ pub(crate) fn draw_scene(
         }
 
         let base = material_color(hit.material);
-        let lit = (base.0 * light_mul.0, base.1 * light_mul.1, base.2 * light_mul.2);
+        let lit = (
+            base.0 * light_mul.0,
+            base.1 * light_mul.1,
+            base.2 * light_mul.2,
+        );
 
         // Altura del slice en píxeles.
         let line_h = (h / corrected as f64).min(h * 4.0);
@@ -324,12 +272,8 @@ pub(crate) fn draw_scene(
             if seg_y_bot <= seg_y_top {
                 continue; // segmento entero fuera del viewport
             }
-            let r = llimphi_ui::llimphi_raster::kurbo::Rect::new(
-                x_pix,
-                seg_y_top,
-                x_right,
-                seg_y_bot,
-            );
+            let r =
+                llimphi_ui::llimphi_raster::kurbo::Rect::new(x_pix, seg_y_top, x_right, seg_y_bot);
             scene.fill(
                 Fill::NonZero,
                 llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
@@ -360,14 +304,24 @@ pub(crate) fn draw_scene(
             EnemyState::Dying(_) => (SpriteKind::DyingImp, 0.65),
             EnemyState::Dead => (SpriteKind::Corpse, 0.30),
         };
-        all_sprites.push(Sprite { x: e.x, y: e.y, kind, scale });
+        all_sprites.push(Sprite {
+            x: e.x,
+            y: e.y,
+            kind,
+            scale,
+        });
     }
     for p in pickups {
         let kind = match p.kind {
             PickupKind::Ammo => SpriteKind::AmmoBox,
             PickupKind::Health => SpriteKind::HealthKit,
         };
-        all_sprites.push(Sprite { x: p.x, y: p.y, kind, scale: 0.35 });
+        all_sprites.push(Sprite {
+            x: p.x,
+            y: p.y,
+            kind,
+            scale: 0.35,
+        });
     }
     for b in bullets {
         all_sprites.push(Sprite {
@@ -481,8 +435,10 @@ pub(crate) fn draw_sprites(
         let (y_top, y_bot) = match s.kind {
             SpriteKind::Bullet => {
                 let half = sprite_h as f64 * 0.5;
-                ((y_mid - half).max(rect.y as f64),
-                 (y_mid + half).min((rect.y + rect.h) as f64))
+                (
+                    (y_mid - half).max(rect.y as f64),
+                    (y_mid + half).min((rect.y + rect.h) as f64),
+                )
             }
             _ => {
                 let y_bot_g = (y_mid + slice_h * 0.5 + bob as f64).min((rect.y + rect.h) as f64);
@@ -494,14 +450,18 @@ pub(crate) fn draw_sprites(
         // Color con shading + fog + lighting puntual. Para sprites
         // dinámicos pasamos lista vacía de bullets/temp_lights (un
         // sprite no se ilumina a sí mismo; usa su color base).
-        let (base, _appearance_h) = s.appearance();
+        let (base, _appearance_h) = sprite_appearance(s.kind);
         let lights = lighting_contribution(s.x, s.y, tick, &[], &[]);
         let light_mul = (
             (AMBIENT + lights.0).min(2.0),
             (AMBIENT + lights.1).min(2.0),
             (AMBIENT + lights.2).min(2.0),
         );
-        let mut col = (base.0 * light_mul.0, base.1 * light_mul.1, base.2 * light_mul.2);
+        let mut col = (
+            base.0 * light_mul.0,
+            base.1 * light_mul.1,
+            base.2 * light_mul.2,
+        );
         col = shade_by_dist(col, ty);
         col = apply_fog(col, ty);
         let color = rgb(col.0, col.1, col.2);
@@ -572,7 +532,7 @@ pub(crate) fn draw_overlay(
         max_width: Some(rect.w),
         alignment: llimphi_ui::llimphi_text::Alignment::Center,
         line_height: 1.0,
-    
+
         italic: false,
         font_family: None,
     };
@@ -590,7 +550,7 @@ pub(crate) fn draw_overlay(
         max_width: Some(rect.w),
         alignment: llimphi_ui::llimphi_text::Alignment::Center,
         line_height: 1.0,
-    
+
         italic: false,
         font_family: None,
     };
@@ -600,7 +560,10 @@ pub(crate) fn draw_overlay(
 
 /// Crosshair central — dos rectángulos finos cruzados con un punto
 /// hueco en medio. No es interactivo, sólo orienta el aim.
-pub(crate) fn draw_crosshair(scene: &mut llimphi_ui::llimphi_raster::vello::Scene, rect: PaintRect) {
+pub(crate) fn draw_crosshair(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    rect: PaintRect,
+) {
     let cx = rect.x as f64 + rect.w as f64 * 0.5;
     let cy = rect.y as f64 + rect.h as f64 * 0.5;
     let arm: f64 = 8.0;
@@ -645,7 +608,10 @@ pub(crate) fn draw_crosshair(scene: &mut llimphi_ui::llimphi_raster::vello::Scen
     );
 }
 
-pub(crate) fn draw_sky_and_floor(scene: &mut llimphi_ui::llimphi_raster::vello::Scene, rect: PaintRect) {
+pub(crate) fn draw_sky_and_floor(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    rect: PaintRect,
+) {
     let bands = 16_usize;
     let h = rect.h as f64;
     let band_h = h / bands as f64 * 0.5; // mitad superior = cielo, mitad inferior = piso
@@ -745,7 +711,7 @@ pub(crate) fn draw_minimap(
     // bullets/decals/enemies no van al minimap — son ruidosos o
     // requieren state que el minimap no recibe.
     for s in initial_static_sprites().iter() {
-        let (base, _) = s.appearance();
+        let (base, _) = sprite_appearance(s.kind);
         let dot = llimphi_ui::llimphi_raster::kurbo::Circle::new(
             (x0 + s.x as f64 * cell, y0 + s.y as f64 * cell),
             2.0,
@@ -788,11 +754,20 @@ pub(crate) fn draw_minimap(
     let right = pa + FOV * 0.5;
     let mut path = BezPath::new();
     path.move_to((pxc, pyc));
-    path.line_to((pxc + left.cos() as f64 * fov_len, pyc + left.sin() as f64 * fov_len));
+    path.line_to((
+        pxc + left.cos() as f64 * fov_len,
+        pyc + left.sin() as f64 * fov_len,
+    ));
     path.move_to((pxc, pyc));
-    path.line_to((pxc + right.cos() as f64 * fov_len, pyc + right.sin() as f64 * fov_len));
+    path.line_to((
+        pxc + right.cos() as f64 * fov_len,
+        pyc + right.sin() as f64 * fov_len,
+    ));
     path.move_to((pxc, pyc));
-    path.line_to((pxc + pa.cos() as f64 * fov_len * 1.1, pyc + pa.sin() as f64 * fov_len * 1.1));
+    path.line_to((
+        pxc + pa.cos() as f64 * fov_len * 1.1,
+        pyc + pa.sin() as f64 * fov_len * 1.1,
+    ));
     scene.stroke(
         &Stroke::new(1.0),
         llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
