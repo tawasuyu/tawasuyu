@@ -117,6 +117,8 @@ pub enum ColorParam {
     Contrast,
     Gamma,
     Saturation,
+    /// Rotación de matiz en grados (`-180..180`).
+    Hue,
 }
 
 impl ColorParam {
@@ -127,6 +129,7 @@ impl ColorParam {
             ColorParam::Contrast => "contraste",
             ColorParam::Gamma => "gamma",
             ColorParam::Saturation => "saturación",
+            ColorParam::Hue => "matiz",
         }
     }
 }

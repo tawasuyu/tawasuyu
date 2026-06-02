@@ -86,7 +86,7 @@ formatos/protocolos ajenos entran por `shared/foreign-*` (regla #4).
 ### Pendiente
 - M2 (decode por hardware), M3 (seek frame-accurate ffmpeg), M4 (frame stepping), M5 (pitch-correct speed).
 - Track AUDIO A2/A3/A6 (selección de pista, dispositivo de salida, gapless/crossfade). **A4 (delay/sync) ✅ · A5 (normalización manual + limitador) ✅.**
-- Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, sin hue) ✅.**
+- Track VIDEO V1, V2, V5–V8 (fullscreen, aspect/crop/zoom, deinterlacing, filtros/shaders, capítulos, HDR). **V3 (rotación/flip) ✅ · V4 (ajustes de color, hue incluido) ✅.**
 - Track SUBTÍTULOS S2, S3 (pistas embebidas, estilo configurable). **S1 (ASS/SSA texto+timing) ✅ · S4 (delay/sync) ✅ · S5 (auto-carga sidecar) ✅.**
 - Track RED R3–R4 (streaming server, DLNA/Chromecast). **R1 (URL/HLS/RTSP) ✅ · R2 (yt-dlp, formato muxeado) ✅.**
 - Track UX U1–U6 (editor de playlist, resume, thumbnails en hover, OSD, metadata/cover, bookmarks).
@@ -165,7 +165,11 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   o deshabilitado. Wireado en `media-app` (envuelve toda fuente de video,
   testcard incluido) con comandos `MediaCommand::{ColorToggle,ColorReset,
   ColorBy{param,delta}}` (`ColorParam` Brightness/Contrast/Gamma/Saturation)
-  en el palette (grupo "Color"). +8 tests. Falta **hue** (rotación de matiz).
+  en el palette (grupo "Color"). +8 tests. **Hue (rotación de matiz) ✅
+  (2026-06-02)**: parámetro `hue` en grados, rotación del vector cromático en
+  YIQ (`rotate_hue`, preserva la luma `Y` y es bypass exacto en 0°), wrapped a
+  `(-180,180]` en `ColorControl::add_hue`, `ColorParam::Hue` en el palette
+  (±10°). +4 tests.
 - **V5 — Deinterlacing.**
 - **V6 — Filtros/shaders de video** (los glsl de mpv, los filtros de VLC).
 - **V7 — Capítulos** y navegación; menús DVD/Blu-ray (baja prioridad).

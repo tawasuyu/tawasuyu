@@ -24,11 +24,14 @@
 //! 2. **Brillo** como offset aditivo: `+ brightness`.
 //! 3. **Saturación** mezclando contra la luma Rec.709:
 //!    `luma + saturation * (c - luma)`.
-//! 4. **Gamma** como potencia: `c^(1/gamma)`.
+//! 4. **Matiz** (hue): rotación del vector cromático en espacio YIQ por un
+//!    ángulo en grados (lo que hace el control "hue" de NTSC y `--hue` de
+//!    mpv). Con ángulo 0 el round-trip YIQ→RGB es la identidad.
+//! 5. **Gamma** como potencia: `c^(1/gamma)`.
 //!
 //! Cada parámetro tiene su identidad (contraste 1, brillo 0, saturación 1,
-//! gamma 1); con todos en identidad el wrapper hace **bypass real** (no
-//! recorre el buffer).
+//! matiz 0, gamma 1); con todos en identidad el wrapper hace **bypass real**
+//! (no recorre el buffer).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,6 +42,28 @@ use crate::FrameSource;
 const LUMA_R: f32 = 0.2126;
 const LUMA_G: f32 = 0.7152;
 const LUMA_B: f32 = 0.0722;
+
+/// Rota el matiz de un píxel `rgb` (canales `0..1`) por un ángulo dado vía
+/// su `cos`/`sin` ya calculados. Convierte a YIQ (NTSC), gira el plano
+/// cromático `(I, Q)` por el ángulo y vuelve a RGB. Con `cos=1, sin=0`
+/// (ángulo 0) el round-trip es la identidad, por lo que el caller se lo
+/// saltea. La luma `Y` no se toca: rotar el matiz no cambia el brillo.
+fn rotate_hue(rgb: [f32; 3], cos: f32, sin: f32) -> [f32; 3] {
+    let [r, g, b] = rgb;
+    // RGB → YIQ.
+    let y = 0.299 * r + 0.587 * g + 0.114 * b;
+    let i = 0.595_716 * r - 0.274_453 * g - 0.321_263 * b;
+    let q = 0.211_456 * r - 0.522_591 * g + 0.311_135 * b;
+    // Giro del vector cromático.
+    let i2 = i * cos - q * sin;
+    let q2 = i * sin + q * cos;
+    // YIQ → RGB.
+    [
+        y + 0.955_69 * i2 + 0.619_86 * q2,
+        y - 0.272_122 * i2 - 0.647_368 * q2,
+        y - 1.106_890 * i2 + 1.704_614 * q2,
+    ]
+}
 
 /// Parámetros de ajuste de color. La identidad ([`Default`]) deja la
 /// imagen intacta. Los rangos son sugerencias para la UI; [`ColorAdjust`]
@@ -57,6 +82,9 @@ pub struct ColorParams {
     /// Saturación: mezcla entre escala de grises (`0.0`) y la imagen
     /// (`1.0`); `>1` sobresatura. Rango útil `0.0..4.0`.
     pub saturation: f32,
+    /// Rotación de matiz en **grados**. `0.0` = sin cambio; rango útil
+    /// `-180.0..180.0` (envuelve). Rota el vector cromático en YIQ.
+    pub hue: f32,
 }
 
 impl Default for ColorParams {
@@ -66,6 +94,7 @@ impl Default for ColorParams {
             contrast: 1.0,
             gamma: 1.0,
             saturation: 1.0,
+            hue: 0.0,
         }
     }
 }
@@ -78,6 +107,7 @@ impl ColorParams {
             && self.contrast == 1.0
             && self.gamma == 1.0
             && self.saturation == 1.0
+            && self.hue == 0.0
     }
 }
 
@@ -113,9 +143,15 @@ impl ColorAdjust {
             contrast,
             gamma,
             saturation,
+            hue,
         } = self.params;
         // Gamma 0 sería división por cero; clampeamos a un mínimo sano.
         let inv_gamma = 1.0 / gamma.max(1e-3);
+        // Pre-cómputo del coseno/seno del ángulo de matiz (una vez por frame).
+        let hue_rot = (hue != 0.0).then(|| {
+            let rad = hue.to_radians();
+            (rad.cos(), rad.sin())
+        });
 
         for px in buf.chunks_exact_mut(4) {
             let mut rgb = [
@@ -134,7 +170,11 @@ impl ColorAdjust {
                     *c = luma + saturation * (*c - luma);
                 }
             }
-            // 4) gamma + clamp final → u8.
+            // 4) matiz: rotación del vector cromático en YIQ.
+            if let Some((cos, sin)) = hue_rot {
+                rgb = rotate_hue(rgb, cos, sin);
+            }
+            // 5) gamma + clamp final → u8.
             for (i, c) in rgb.iter().enumerate() {
                 let v = c.clamp(0.0, 1.0).powf(inv_gamma);
                 px[i] = (v * 255.0 + 0.5) as u8;
@@ -235,6 +275,18 @@ impl ColorControl {
         {
             let mut g = self.lock();
             g.params.saturation = (g.params.saturation + delta).clamp(0.0, 4.0);
+        }
+        self.bump();
+    }
+
+    /// Suma `delta` grados al matiz, envolviendo a `-180.0..180.0`.
+    pub fn add_hue(&self, delta: f32) {
+        {
+            let mut g = self.lock();
+            // Normaliza a (-180, 180] para que girar de a poco no se trabe
+            // en los topes (a diferencia de un clamp duro).
+            let h = (g.params.hue + delta + 180.0).rem_euclid(360.0) - 180.0;
+            g.params.hue = h;
         }
         self.bump();
     }
@@ -413,6 +465,76 @@ mod tests {
         assert_eq!(c.params().saturation, 4.0);
         c.reset();
         assert!(c.params().is_identity());
+    }
+
+    #[test]
+    fn matiz_cero_es_identidad() {
+        let adj = ColorAdjust::new(ColorParams {
+            hue: 0.0,
+            ..Default::default()
+        });
+        assert!(adj.params().is_identity());
+        let mut buf = px(200, 64, 30);
+        adj.process(&mut buf);
+        // hue=0 ⇒ bypass exacto.
+        assert_eq!(&buf[0..3], &[200, 64, 30]);
+    }
+
+    #[test]
+    fn matiz_no_toca_grises() {
+        // Un gris (R=G=B) no tiene croma: rotar el matiz no debe cambiarlo.
+        let adj = ColorAdjust::new(ColorParams {
+            hue: 90.0,
+            ..Default::default()
+        });
+        let mut buf = px(120, 120, 120);
+        adj.process(&mut buf);
+        for c in &buf[0..3] {
+            assert!((*c as i32 - 120).abs() <= 1, "gris derivó a {}", c);
+        }
+    }
+
+    #[test]
+    fn matiz_preserva_la_luma() {
+        // Rotar el matiz conserva la luma NTSC (`Y`). Lo verificamos sobre el
+        // helper puro para que el clamp a gamut + el redondeo a u8 no
+        // contaminen la igualdad (un color saturado puede salirse del cubo
+        // RGB tras rotar, y ahí sí cambia la luma del píxel final).
+        let luma = |[r, g, b]: [f32; 3]| 0.299 * r + 0.587 * g + 0.114 * b;
+        let rgb = [0.6, 0.3, 0.45];
+        for deg in [30.0f32, 120.0, -90.0, 200.0] {
+            let rad = deg.to_radians();
+            let out = rotate_hue(rgb, rad.cos(), rad.sin());
+            assert!(
+                (luma(rgb) - luma(out)).abs() < 1e-4,
+                "deg {deg}: luma {} → {}",
+                luma(rgb),
+                luma(out)
+            );
+        }
+    }
+
+    #[test]
+    fn matiz_mueve_el_color() {
+        // Un color en gamut tras rotar debe cambiar (no es bypass).
+        let adj = ColorAdjust::new(ColorParams {
+            hue: 120.0,
+            ..Default::default()
+        });
+        let mut buf = px(150, 110, 130);
+        adj.process(&mut buf);
+        assert!(buf[0..3] != [150, 110, 130], "no movió el color");
+    }
+
+    #[test]
+    fn control_matiz_envuelve() {
+        let c = ColorControl::default();
+        c.add_hue(200.0);
+        // 200 envuelve a -160 (rango (-180, 180]).
+        assert!((c.params().hue - (-160.0)).abs() < 1e-3, "fue {}", c.params().hue);
+        c.add_hue(-100.0);
+        // -260 envuelve a 100.
+        assert!((c.params().hue - 100.0).abs() < 1e-3, "fue {}", c.params().hue);
     }
 
     struct Solid(u8);

@@ -1096,6 +1096,8 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (ColorBy { param: ColorParam::Gamma, delta: -0.1 }, "Color"),
         (ColorBy { param: ColorParam::Saturation, delta: 0.1 }, "Color"),
         (ColorBy { param: ColorParam::Saturation, delta: -0.1 }, "Color"),
+        (ColorBy { param: ColorParam::Hue, delta: 10.0 }, "Color"),
+        (ColorBy { param: ColorParam::Hue, delta: -10.0 }, "Color"),
         (RotateBy { dir: 1 }, "Orientación"),
         (RotateBy { dir: -1 }, "Orientación"),
         (FlipH, "Orientación"),
@@ -1281,6 +1283,7 @@ fn apply_command(cmd: MediaCommand) {
                 ColorParam::Contrast => c.add_contrast(delta),
                 ColorParam::Gamma => c.add_gamma(delta),
                 ColorParam::Saturation => c.add_saturation(delta),
+                ColorParam::Hue => c.add_hue(delta),
             }
         }
         ColorReset => {
