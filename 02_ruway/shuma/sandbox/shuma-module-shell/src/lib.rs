@@ -359,6 +359,22 @@ pub struct State {
     /// secuencia predicha (no sólo el historial reciente). Vacío al
     /// arrancar y hasta tener suficiente historial.
     pub patterns: Vec<shuma_infer::EmergingPattern>,
+    /// Tope de captura de stdout por run, en bytes. `0` = sin tope. Lo fija
+    /// el builtin `:limit <MB>`.
+    pub capture_limit_bytes: usize,
+    /// Si volcar a disco la salida que excede el tope (`:spill on`). Sólo
+    /// tiene efecto con `capture_limit_bytes > 0`.
+    pub spill: bool,
+    /// Bloque cuyo stdout alimenta el stdin del próximo run (reprocess —
+    /// el `%pN` del lienzo). Lo arma el chip ↻ de una card y se consume en
+    /// el siguiente submit. `None` = sin reprocess armado.
+    pub reprocess_source: Option<u64>,
+    /// Grupos de comandos guardados con `:save <nombre>` — ejecutables por
+    /// F1..F8 (índice 0-based = número de F menos 1).
+    pub groups: Vec<CommandGroup>,
+    /// Largo del historial en el último `:save` — los comandos desde acá
+    /// son los que entran al próximo grupo.
+    pub group_anchor: usize,
     /// Scroll del panel de output, en px medidos desde el fondo. `0` =
     /// pegado al fondo (lo último siempre visible, como una terminal).
     /// Crece al rodar la rueda hacia arriba (ver historial). Lo clampa
@@ -380,11 +396,23 @@ pub struct HistorySearch {
     pub selected: usize,
 }
 
+/// Grupo de comandos guardado (`:save <nombre>`) — una secuencia ejecutable
+/// como una sola línea (`l1 && l2 && …`) desde una tecla de función.
+#[derive(Debug, Clone)]
+pub struct CommandGroup {
+    pub name: String,
+    pub lines: Vec<String>,
+}
+
 impl State {
     pub fn new(source: Source) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
         let completion_source = Arc::new(ShellSource::new(&cwd));
         let history = Arc::new(Mutex::new(open_history()));
+        // El anchor de grupos arranca al final del historial durable: el
+        // primer `:save` agrupa sólo lo tipeado en ESTA sesión, no meses
+        // de historial persistido.
+        let group_anchor = history.lock().map(|h| h.len()).unwrap_or(0);
         Self {
             source,
             cwd,
@@ -409,6 +437,11 @@ impl State {
             collapsed: HashSet::new(),
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
+            capture_limit_bytes: 0,
+            spill: false,
+            reprocess_source: None,
+            groups: Vec::new(),
+            group_anchor,
             scroll_px: 0.0,
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
@@ -450,6 +483,7 @@ impl State {
         self.output.clear();
         self.collapsed.clear();
         self.expanded_stages.clear();
+        self.reprocess_source = None;
         self.scroll_px = 0.0;
     }
 
@@ -625,6 +659,10 @@ pub enum Msg {
     /// (tee). La dispara el click en su chip; muestra/oculta las líneas
     /// intermedias ya capturadas sin re-ejecutar nada.
     ToggleStage { block: u64, stage: usize },
+    /// Arma el reprocess: el stdout del bloque `block` alimentará el stdin
+    /// del próximo comando. La dispara el chip ↻ de una card. Si ya estaba
+    /// armado el mismo bloque, lo desarma (toggle).
+    SetReprocess(u64),
 }
 
 mod update;
@@ -1089,6 +1127,103 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         assert_eq!(git_branch(&base), None);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn limit_builtin_sets_capture_bytes() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text(":limit 5");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.capture_limit_bytes, 5 * 1024 * 1024);
+        assert!(!s.is_running(), "`:limit` no spawnea proceso");
+        // `:limit 0` quita el tope.
+        s.input.set_text(":limit 0");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.capture_limit_bytes, 0);
+    }
+
+    #[test]
+    fn spill_builtin_toggles_flag() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text(":spill on");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.spill);
+        s.input.set_text(":spill off");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(!s.spill);
+    }
+
+    #[test]
+    fn save_group_captures_recent_commands() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        // Dos comandos reales (no meta) + un :save.
+        for line in ["echo uno", "echo dos"] {
+            s.input.set_text(line);
+            s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+            s = drain_until_idle(s);
+        }
+        s.input.set_text(":save build");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.groups.len(), 1);
+        assert_eq!(s.groups[0].name, "build");
+        assert_eq!(s.groups[0].lines, vec!["echo uno", "echo dos"]);
+        // El anchor avanzó: un segundo :save sin comandos nuevos no agrupa.
+        s.input.set_text(":save vacio");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.groups.len(), 1, "no se crea grupo vacío");
+    }
+
+    #[test]
+    fn fkey_runs_saved_group() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        // F1 sin grupos: no hace nada.
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::F1), None)));
+        assert!(!s.is_running());
+        // Guardamos un grupo de un comando y lo corremos con F1.
+        s.groups.push(CommandGroup {
+            name: "g".into(),
+            lines: vec!["echo desde_f1".into()],
+        });
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::F1), None)));
+        s = drain_until_idle(s);
+        assert!(s.output.iter().any(|l| l.text == "desde_f1"));
+    }
+
+    #[test]
+    fn reprocess_feeds_block_stdout_as_stdin() {
+        // Corre `printf "b\\na\\nc\\n"`, arma reprocess sobre su bloque, y
+        // corre `sort`: debe recibir esa salida por stdin y ordenarla.
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text("printf 'b\\na\\nc\\n'");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        s = drain_until_idle(s);
+        let src_block = s.output.iter().find(|l| l.text == "b").unwrap().block;
+        s = update(s, Msg::SetReprocess(src_block));
+        assert_eq!(s.reprocess_source, Some(src_block));
+        s.input.set_text("sort");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.reprocess_source.is_none(), "el submit consume el reprocess");
+        s = drain_until_idle(s);
+        // La salida de `sort` (en su propio bloque) está ordenada: a,b,c.
+        let sorted: Vec<String> = s
+            .output
+            .iter()
+            .filter(|l| l.block != src_block && l.kind == OutputKind::Stdout)
+            .map(|l| l.text.clone())
+            .collect();
+        assert_eq!(sorted, vec!["a", "b", "c"], "sort recibió el stdin reprocesado");
+    }
+
+    #[test]
+    fn set_reprocess_toggles_off_same_block() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::SetReprocess(3));
+        assert_eq!(s.reprocess_source, Some(3));
+        s = update(s, Msg::SetReprocess(3));
+        assert_eq!(s.reprocess_source, None, "re-armar el mismo bloque desarma");
     }
 
     #[test]

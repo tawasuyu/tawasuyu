@@ -119,6 +119,11 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.history_search = Some(HistorySearch::default());
                 return s;
             }
+            // F1..F8: ejecuta el grupo guardado de esa posición (`:save`).
+            // (F12 lo reserva el chasis para cerrar.)
+            if let Some(idx) = fkey_index(&ev.key) {
+                return run_group(s, idx);
+            }
             // Enter: ejecuta — pero si el texto deja una construcción
             // abierta (quote, paren, heredoc, `\` final, pipe pendiente),
             // insertamos un salto de línea y seguimos editando.
@@ -185,6 +190,15 @@ pub fn update(state: State, msg: Msg) -> State {
             let key = (block, stage);
             if !s.expanded_stages.remove(&key) {
                 s.expanded_stages.insert(key);
+            }
+        }
+        Msg::SetReprocess(block) => {
+            // Toggle: re-armar el mismo bloque lo desarma.
+            if s.reprocess_source == Some(block) {
+                s.reprocess_source = None;
+            } else {
+                s.reprocess_source = Some(block);
+                s.focused = true;
             }
         }
         Msg::Tick => {
@@ -812,6 +826,10 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":term" => return apply_jobs_signal(s, rest, JobSignal::Term),
             ":stop" => return apply_jobs_signal(s, rest, JobSignal::Stop),
             ":cont" => return apply_jobs_signal(s, rest, JobSignal::Cont),
+            ":limit" => return apply_capture_limit(s, rest),
+            ":spill" => return apply_spill(s, rest),
+            ":save" => return save_group(s, rest),
+            ":groups" => return apply_groups_list(s),
             _ => {}
         }
     }
@@ -928,6 +946,160 @@ pub(crate) fn apply_jobs_signal(mut s: State, rest: &str, sig: JobSignal) -> Sta
     s
 }
 
+/// `:limit <MB>` — tope de captura de stdout por run. `0` = sin tope.
+pub(crate) fn apply_capture_limit(mut s: State, rest: &str) -> State {
+    match rest.trim().parse::<usize>() {
+        Ok(mb) => {
+            s.capture_limit_bytes = mb.saturating_mul(1024 * 1024);
+            let msg = if mb == 0 {
+                "captura sin tope".to_string()
+            } else {
+                format!("captura limitada a {mb} MB por comando")
+            };
+            s.push_output(OutputLine::notice(msg));
+        }
+        Err(_) => s.push_output(OutputLine::notice("uso: :limit <MB>  (0 = sin tope)")),
+    }
+    s
+}
+
+/// `:spill on|off` — volcar a disco la salida que excede el `:limit`.
+pub(crate) fn apply_spill(mut s: State, rest: &str) -> State {
+    let arg = rest.trim();
+    let on = matches!(arg, "on" | "si" | "sí" | "1" | "true");
+    let off = matches!(arg, "off" | "no" | "0" | "false");
+    if !on && !off {
+        s.push_output(OutputLine::notice("uso: :spill on|off"));
+        return s;
+    }
+    s.spill = on;
+    let note = match (on, s.capture_limit_bytes) {
+        (true, 0) => "spill activado — pero sin `:limit <MB>` no tiene efecto",
+        (true, _) => "spill activado — la salida excedente se vuelca a disco",
+        (false, _) => "spill desactivado",
+    };
+    s.push_output(OutputLine::notice(note));
+    s
+}
+
+/// `:save <nombre>` — guarda como grupo los comandos del historial desde el
+/// último `:save` (excluyendo los meta-comandos `:`). Ejecutables por F1..F8.
+pub(crate) fn save_group(mut s: State, rest: &str) -> State {
+    let name = rest.trim().to_string();
+    if name.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :save <nombre>  (agrupa los comandos desde el último :save)",
+        ));
+        return s;
+    }
+    let (lines, hist_len) = {
+        let Ok(h) = s.history.lock() else {
+            return s;
+        };
+        let entries = h.entries();
+        // El propio `:save` ya entró al historial: lo excluimos junto con el
+        // resto de meta-comandos `:`.
+        let upto = entries.len().saturating_sub(1);
+        let lines: Vec<String> = entries
+            .get(s.group_anchor..upto)
+            .unwrap_or(&[])
+            .iter()
+            .map(|e| e.line.clone())
+            .filter(|l| !l.trim_start().starts_with(':'))
+            .collect();
+        (lines, entries.len())
+    };
+    if lines.is_empty() {
+        s.push_output(OutputLine::notice(
+            "nada que guardar — corré algún comando antes de `:save`",
+        ));
+        return s;
+    }
+    // El próximo grupo arranca desde acá.
+    s.group_anchor = hist_len;
+    // Reemplaza un grupo homónimo, si existe.
+    let n = lines.len();
+    if let Some(g) = s.groups.iter_mut().find(|g| g.name == name) {
+        g.lines = lines;
+    } else {
+        s.groups.push(CommandGroup { name: name.clone(), lines });
+    }
+    let fkey = s
+        .groups
+        .iter()
+        .position(|g| g.name == name)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    s.push_output(OutputLine::notice(format!(
+        "grupo «{name}» guardado ({n} comandos) — F{fkey} lo ejecuta"
+    )));
+    s
+}
+
+/// `:groups` — lista los grupos guardados con su tecla de función.
+pub(crate) fn apply_groups_list(mut s: State) -> State {
+    if s.groups.is_empty() {
+        s.push_output(OutputLine::notice(
+            "(sin grupos — `:save <nombre>` guarda los últimos comandos)",
+        ));
+        return s;
+    }
+    let rows: Vec<String> = s
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(i, g)| format!("F{}  {}  ({} cmds)", i + 1, g.name, g.lines.len()))
+        .collect();
+    for r in rows {
+        s.push_output(OutputLine::notice(r));
+    }
+    s
+}
+
+/// Reconstruye el stdout de un bloque (su card) uniendo las líneas
+/// `Stdout` sin etapa — para alimentarlo como stdin de un reprocess.
+pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {
+    let mut out = String::new();
+    for l in &s.output {
+        if l.block == block && l.kind == OutputKind::Stdout && l.stage.is_none() {
+            out.push_str(&l.text);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Índice de grupo (0-based) para F1..F8; `None` para cualquier otra tecla.
+pub(crate) fn fkey_index(key: &Key) -> Option<usize> {
+    match key {
+        Key::Named(NamedKey::F1) => Some(0),
+        Key::Named(NamedKey::F2) => Some(1),
+        Key::Named(NamedKey::F3) => Some(2),
+        Key::Named(NamedKey::F4) => Some(3),
+        Key::Named(NamedKey::F5) => Some(4),
+        Key::Named(NamedKey::F6) => Some(5),
+        Key::Named(NamedKey::F7) => Some(6),
+        Key::Named(NamedKey::F8) => Some(7),
+        _ => None,
+    }
+}
+
+/// Ejecuta el grupo de índice `idx` (0-based) como una sola línea
+/// (`l1 && l2 && …`). No-op si no existe ese grupo.
+pub(crate) fn run_group(s: State, idx: usize) -> State {
+    let Some(joined) = s
+        .groups
+        .get(idx)
+        .map(|g| g.lines.join(" && "))
+        .filter(|j| !j.is_empty())
+    else {
+        return s;
+    };
+    let mut s = s;
+    s.input.set_text(joined);
+    run_submitted(s)
+}
+
 /// Variante de `start_run` que arranca como job background. La salida
 /// se mergea al output buffer prefijada por `[N]`. Devuelve `s` con el
 /// nuevo job en `bg_jobs`.
@@ -968,7 +1140,29 @@ pub(crate) fn start_bg(mut s: State, line: String) -> State {
 
 pub(crate) fn start_run(mut s: State, line: String) -> State {
     let cwd_str = s.cwd.display().to_string();
-    let (spec, tui) = build_spec(&line, &cwd_str);
+    let (mut spec, tui) = build_spec(&line, &cwd_str);
+    // Config de captura y reprocess sólo aplican a runs no-PTY (los TUI
+    // capturan a vt100, no a buffer, y no consumen stdin reprocesado).
+    if tui.is_none() {
+        spec.capture_limit = s.capture_limit_bytes;
+        spec.spill_path = (s.spill && s.capture_limit_bytes > 0).then(|| {
+            std::env::temp_dir().join(format!(
+                "shuma-spill-{}-{}.log",
+                std::process::id(),
+                s.current_block
+            ))
+        });
+        // Reprocess armado: el stdout del bloque fuente alimenta el stdin.
+        if let Some(src) = s.reprocess_source.take() {
+            let data = gather_block_stdout(&s, src);
+            if !data.is_empty() {
+                spec.stdin_data = Some(data);
+            }
+        }
+    } else {
+        // Un run TUI desarma cualquier reprocess pendiente (no aplica).
+        s.reprocess_source = None;
+    }
     // Registramos la intención antes de hacer spawn — si el spawn
     // remoto falla, igual queda el nodo `%cN` con status `Failed`
     // marcado más abajo (vía el RunEvent::Failed que retorna el

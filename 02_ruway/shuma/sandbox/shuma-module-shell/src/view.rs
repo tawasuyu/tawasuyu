@@ -13,7 +13,37 @@ pub fn view<HostMsg: Clone + 'static>(
     };
     let input = shell_input_view(state, theme, lift.clone());
 
-    let mut children = vec![header, main_panel, input];
+    let mut children = vec![header, main_panel];
+    // Banner de reprocess: el próximo comando recibe por stdin el stdout
+    // del bloque armado. Click → cancela (toggle).
+    if let Some(src) = state.reprocess_source {
+        children.push(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(18.0_f32),
+                },
+                padding: Rect {
+                    left: length(8.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.bg_input)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::SetReprocess(src)))
+            .text_aligned(
+                format!("» reprocesando la salida del bloque #{src} — Enter ejecuta · click cancela"),
+                10.0,
+                theme.accent,
+                Alignment::Start,
+            ),
+        );
+    }
+    children.push(input);
     if state.history_search.is_some() {
         children.push(history_search_panel::<HostMsg>(state, theme));
     }
@@ -1317,6 +1347,40 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
         })
         .text_aligned(header_text.clone(), 12.0, theme.accent, Alignment::Start),
     ];
+    // Chip de reprocess: alimenta el stdout de esta card como stdin del
+    // próximo comando. Sólo en cards con stdout. Hit-test innermost-wins:
+    // el chip gana el click sobre el header (que pliega el bloque).
+    let has_stdout = group
+        .iter()
+        .any(|l| l.kind == OutputKind::Stdout && l.stage.is_none());
+    if has_stdout {
+        let armed = state.reprocess_source == Some(block);
+        let (fill, fg) = if armed {
+            (theme.accent, theme.bg_panel)
+        } else {
+            (theme.bg_input, theme.fg_muted)
+        };
+        header_children.push(
+            View::new(Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: length(16.0_f32),
+                },
+                padding: Rect {
+                    left: length(5.0_f32),
+                    right: length(5.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(fill)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::SetReprocess(block)))
+            .text_aligned("» stdin".to_string(), 10.0, fg, Alignment::Start),
+        );
+    }
     if let Some((btxt, bcolor)) = badge {
         header_children.push(
             View::new(Style {

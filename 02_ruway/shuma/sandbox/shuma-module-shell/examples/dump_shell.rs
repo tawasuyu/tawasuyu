@@ -47,6 +47,8 @@ fn main() {
     state.block_seq = block;
     state.current_block = block;
     state.expanded_stages.insert((block, 0));
+    // Reprocess armado sobre este bloque → chip resaltado + banner.
+    state.reprocess_source = Some(block);
 
     let v = shuma_module_shell::view::<()>(&state, &theme, |_m| ());
 

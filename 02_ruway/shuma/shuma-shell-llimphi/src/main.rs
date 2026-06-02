@@ -61,6 +61,43 @@ const TICK: Duration = Duration::from_secs(1);
 const SHELL_TICK: Duration = Duration::from_millis(100);
 const MONITORS_INITIAL_WIDTH: f32 = 280.0;
 
+/// `Source` por defecto de la tab shell según las env vars del proceso —
+/// para que `SHUMA_REMOTE*` enrute los comandos al daemon sin shumarc.
+/// (rescate del `detect_remote_transport` del shell GPUI):
+///
+/// - `SHUMA_REMOTE_TCP_ADDR=host:port` + `SHUMA_REMOTE_TCP_PUB=<hex>`
+///   → TCP autenticado Noise XK (`DaemonTcp`). La keypair propia la carga
+///   `start_run` al conectar; acá sólo pasamos addr + pubkey del server.
+/// - `SHUMA_REMOTE_SOCKET=/path` → daemon por ese Unix socket.
+/// - `SHUMA_REMOTE=1` → daemon por el socket canónico (`socket: None`).
+/// - sin ninguna → `Local` (ejecución directa).
+fn default_shell_source() -> Source {
+    let nonempty = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    if let (Some(addr), Some(pub_hex)) = (
+        nonempty("SHUMA_REMOTE_TCP_ADDR"),
+        nonempty("SHUMA_REMOTE_TCP_PUB"),
+    ) {
+        return Source::DaemonTcp {
+            addr,
+            server_pub_hex: pub_hex,
+            label: None,
+        };
+    }
+    if let Some(path) = nonempty("SHUMA_REMOTE_SOCKET") {
+        return Source::Daemon {
+            socket: Some(std::path::PathBuf::from(path)),
+            label: None,
+        };
+    }
+    if std::env::var("SHUMA_REMOTE").as_deref() == Ok("1") {
+        return Source::Daemon {
+            socket: None,
+            label: None,
+        };
+    }
+    Source::Local
+}
+
 fn main() {
     rimay_localize::init();
     llimphi_ui::run::<Shell>();
@@ -349,7 +386,7 @@ impl App for Shell {
             // lienzo se mantiene en sync con el grafo del shell cada
             // `SHELL_TICK` (~100 ms).
             vec![
-                Instance::shell(rimay_localize::t("shuma-label-shell"), Source::Local),
+                Instance::shell(rimay_localize::t("shuma-label-shell"), default_shell_source()),
                 Instance::canvas(rimay_localize::t("shuma-label-canvas")),
                 Instance::matilda(rimay_localize::t("shuma-label-matilda"), Source::Local),
             ]
