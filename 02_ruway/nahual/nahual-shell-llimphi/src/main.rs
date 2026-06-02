@@ -42,7 +42,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod viewer_registry;
 use viewer_registry::ViewerKind;
@@ -144,6 +144,11 @@ enum PreviewPane {
 /// derecho cuando es de los que avanzan.
 const FRAME_TICK: Duration = Duration::from_millis(33);
 
+/// Intervalo mínimo entre re-streams del basemap PMTiles (debounce): los
+/// pans/zooms se acumulan y se recalcula el viewport a lo sumo cada tanto,
+/// para no rehacer la fusión de tiles en cada evento de arrastre.
+const RESTREAM_THROTTLE: Duration = Duration::from_millis(90);
+
 struct Model {
     explorer: FileExplorerState,
     /// Fuente no-POSIX montada sobre el panel izquierdo (Brahman Fase 3).
@@ -180,6 +185,11 @@ struct Model {
     /// Basemap PMTiles vivo, si el archivo abierto es un `.pmtiles`. Mantiene
     /// el contenedor + caché de tiles para el streaming por viewport.
     basemap: Option<Basemap>,
+    /// La cámara cambió y el basemap necesita re-streamear. El Tick lo procesa
+    /// con throttle (debounce): coalesce muchos pans en pocos recálculos.
+    basemap_dirty: bool,
+    /// Último instante en que se re-streameó (para el throttle).
+    last_restream: Option<Instant>,
     /// Suscripción al bus de configuración del SO.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
@@ -293,6 +303,8 @@ impl App for Shell {
             context_menu: None,
             map_view: MapView::default(),
             basemap: None,
+            basemap_dirty: false,
+            last_restream: None,
             _wawa_watcher: watcher,
         }
     }
@@ -426,6 +438,7 @@ impl App for Shell {
                                 None => {
                                     m.preview = load_for(&path);
                                     m.basemap = open_basemap_if_pmtiles(&path);
+                                    m.basemap_dirty = m.basemap.is_some();
                                     // HTML: además de previsualizar el fuente,
                                     // abrir el archivo lo entrega a puriy (como
                                     // un file manager abre el visor default).
@@ -473,16 +486,16 @@ impl App for Shell {
             }
             Msg::MapPan(dx, dy) => {
                 m.map_view.pan_by(dx as f64, dy as f64);
-                restream_basemap(&mut m);
+                m.basemap_dirty = true;
             }
             Msg::MapZoom(dy, cx, cy) => {
                 // Cada "línea" de rueda → ±12% de zoom, anclado al cursor.
                 m.map_view.zoom_at(1.12_f64.powf(dy as f64), cx, cy);
-                restream_basemap(&mut m);
+                m.basemap_dirty = true;
             }
             Msg::MapReset => {
                 m.map_view.reset();
-                restream_basemap(&mut m);
+                m.basemap_dirty = true;
             }
             Msg::MapToggleBase => m.map_view.toggle_base(),
             Msg::MapClick(fx, fy) => {
@@ -554,20 +567,34 @@ impl App for Shell {
                     }
                 }
                 m.map_view.searching = false;
-                restream_basemap(&mut m);
+                m.basemap_dirty = true;
             }
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);
                 // nahual-shell no usa rimay_localize hoy; si en el
                 // futuro lo hace, agregar el set_locale acá.
             }
-            Msg::Tick => match &mut m.preview {
-                PreviewPane::Video(state) => {
-                    state.tick(FRAME_TICK);
+            Msg::Tick => {
+                match &mut m.preview {
+                    PreviewPane::Video(state) => {
+                        state.tick(FRAME_TICK);
+                    }
+                    PreviewPane::Audio(state) => state.tick(FRAME_TICK),
+                    _ => {}
                 }
-                PreviewPane::Audio(state) => state.tick(FRAME_TICK),
-                _ => {}
-            },
+                // Debounce del streaming del basemap: coalesce los pans/zooms
+                // y re-streamea a lo sumo cada `RESTREAM_THROTTLE`.
+                if m.basemap_dirty && m.basemap.is_some() {
+                    let now = Instant::now();
+                    let ready = m
+                        .last_restream
+                        .map_or(true, |t| now.duration_since(t) >= RESTREAM_THROTTLE);
+                    if ready && restream_basemap(&mut m) {
+                        m.last_restream = Some(now);
+                        m.basemap_dirty = false;
+                    }
+                }
+            }
             Msg::TogglePlay => match &mut m.preview {
                 PreviewPane::Video(state) => state.toggle_play(),
                 PreviewPane::Audio(state) => state.toggle_play(),
@@ -980,12 +1007,20 @@ fn open_basemap_if_pmtiles(path: &Path) -> Option<Basemap> {
 /// Si hay un basemap PMTiles abierto, recalcula el viewport (tiles visibles a
 /// la cámara actual) y lo deja como preview. Se llama tras cada cambio de
 /// cámara para el streaming.
-fn restream_basemap(m: &mut Model) {
+/// Devuelve `true` si re-streameó (había basemap y el canvas ya registró su
+/// rect). `false` deja el pedido pendiente para reintentar (p. ej. en el
+/// primer tick tras abrir, antes del primer paint).
+fn restream_basemap(m: &mut Model) -> bool {
     let Some(bm) = m.basemap.as_mut() else {
-        return;
+        return false;
     };
+    // Sin rect aún (no se pintó): conservamos el overview y reintentamos.
+    if m.map_view.rect().is_none() {
+        return false;
+    }
     let md = bm.viewport(&m.map_view);
     m.preview = PreviewPane::Map(MapPreview::Map { data: md, truncated: false });
+    true
 }
 
 /// Intenta montar `path` como una fuente no-POSIX. Hoy sólo prueba imagen
@@ -1165,6 +1200,7 @@ fn refresh_preview(m: &mut Model) {
     };
     m.preview = load_for(&path);
     m.basemap = open_basemap_if_pmtiles(&path);
+    m.basemap_dirty = m.basemap.is_some();
     m.preview_of = Some(path);
     // Encuadre fresco para el nuevo archivo (si fuera un mapa); los campos de
     // color son del archivo anterior, así que se descartan.

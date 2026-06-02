@@ -380,8 +380,18 @@ fn pmtiles_bounds(h: &pmtiles::Header) -> Option<BBox> {
 pub struct Basemap {
     pm: pmtiles::PmTiles,
     bounds: BBox,
-    /// Tiles ya decodificados (`(z,x,y)` → geometrías). `None` = tile vacío.
-    cache: HashMap<(u32, u32, u32), MapData>,
+    /// Tiles ya decodificados (`(z,x,y)` → geometrías), con marca de uso para
+    /// el desalojo LRU.
+    cache: HashMap<(u32, u32, u32), CacheEntry>,
+    /// Reloj lógico monótono: cada viewport lo incrementa y marca los tiles
+    /// que toca, para saber cuáles son los menos usados.
+    clock: u64,
+}
+
+/// Entrada de caché: tile decodificado + último reloj en que se usó.
+struct CacheEntry {
+    used: u64,
+    data: MapData,
 }
 
 impl Basemap {
@@ -392,11 +402,18 @@ impl Basemap {
             return Err("pmtiles: sólo se soportan tiles MVT".into());
         }
         let bounds = pmtiles_bounds(&pm.header).unwrap();
-        Ok(Basemap { pm, bounds, cache: HashMap::new() })
+        Ok(Basemap { pm, bounds, cache: HashMap::new(), clock: 0 })
     }
 
     /// Tope de tiles a fundir por viewport (evita explosiones de memoria).
     const MAX_TILES: usize = 48;
+    /// Tope de tiles decodificados en caché (desalojo LRU al excederlo).
+    const CACHE_CAP: usize = 256;
+
+    /// Tiles actualmente en caché (diagnóstico/tests).
+    pub fn cache_len(&self) -> usize {
+        self.cache.len()
+    }
 
     /// Devuelve el [`MapData`] visible para `view`: elige el zoom de tiles
     /// según el span visible y el ancho del panel, enumera los tiles que
@@ -428,7 +445,13 @@ impl Basemap {
         let (x0, x1) = (x0.min(x1), x0.max(x1));
         let (y0, y1) = (y0.min(y1), y0.max(y1));
 
-        // Asegura los tiles en caché, respetando el tope.
+        // Reloj nuevo para este viewport: los tiles que toquemos quedan como
+        // los más recientes (a salvo del desalojo de este frame).
+        self.clock += 1;
+        let now = self.clock;
+
+        // Asegura los tiles en caché (decodificando los nuevos), tocando su
+        // marca de uso, respetando el tope por viewport.
         let mut count = 0usize;
         'outer: for x in x0..=x1 {
             for y in y0..=y1 {
@@ -437,16 +460,21 @@ impl Basemap {
                 }
                 count += 1;
                 let key = (z, x, y);
-                if !self.cache.contains_key(&key) {
-                    let md = self
-                        .pm
-                        .tile(z, x, y)
-                        .map(|bytes| mvt_tile_to_mapdata(&bytes, z, x, y))
-                        .unwrap_or_default();
-                    self.cache.insert(key, md);
+                match self.cache.get_mut(&key) {
+                    Some(entry) => entry.used = now,
+                    None => {
+                        let data = self
+                            .pm
+                            .tile(z, x, y)
+                            .map(|bytes| mvt_tile_to_mapdata(&bytes, z, x, y))
+                            .unwrap_or_default();
+                        self.cache.insert(key, CacheEntry { used: now, data });
+                    }
                 }
             }
         }
+        evict_lru(&mut self.cache, Self::CACHE_CAP);
+
         // Funde lo cacheado en el viewport.
         let mut merged = 0usize;
         for x in x0..=x1 {
@@ -455,12 +483,28 @@ impl Basemap {
                     break;
                 }
                 merged += 1;
-                if let Some(md) = self.cache.get(&(z, x, y)) {
-                    out.append(md.clone());
+                if let Some(entry) = self.cache.get(&(z, x, y)) {
+                    out.append(entry.data.clone());
                 }
             }
         }
         out
+    }
+}
+
+/// Desaloja las entradas menos usadas hasta que la caché entre en `cap`.
+/// Las tocadas en el viewport actual tienen el reloj más alto, así que el
+/// desalojo nunca pisa lo que se está por usar.
+fn evict_lru(cache: &mut HashMap<(u32, u32, u32), CacheEntry>, cap: usize) {
+    while cache.len() > cap {
+        // Encuentra la entrada de menor `used` (la más vieja).
+        let oldest = cache.iter().min_by_key(|(_, e)| e.used).map(|(k, _)| *k);
+        match oldest {
+            Some(k) => {
+                cache.remove(&k);
+            }
+            None => break,
+        }
     }
 }
 
@@ -3029,6 +3073,24 @@ mod tests {
         file.extend_from_slice(&dir);
         file.extend_from_slice(&mvt);
         file
+    }
+
+    #[test]
+    fn evict_lru_saca_los_mas_viejos() {
+        let mut cache: HashMap<(u32, u32, u32), CacheEntry> = HashMap::new();
+        for i in 0..10u64 {
+            cache.insert(
+                (0, i as u32, 0),
+                CacheEntry { used: i, data: MapData::default() },
+            );
+        }
+        // Capamos a 4: quedan los 4 de mayor `used` (6,7,8,9).
+        evict_lru(&mut cache, 4);
+        assert_eq!(cache.len(), 4);
+        assert!(cache.contains_key(&(0, 9, 0)));
+        assert!(cache.contains_key(&(0, 6, 0)));
+        assert!(!cache.contains_key(&(0, 5, 0)));
+        assert!(!cache.contains_key(&(0, 0, 0)));
     }
 
     #[test]
