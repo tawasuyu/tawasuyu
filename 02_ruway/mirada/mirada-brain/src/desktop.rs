@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use mirada_layout::{LayoutParams, Rect, WindowId, Workspace};
 use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId};
 
-use crate::action::{DesktopAction, WORKSPACE_COUNT};
+use crate::action::{Direction, DesktopAction, WORKSPACE_COUNT};
 use crate::config::Config;
 use crate::keymap::Keymap;
 use crate::rules::Rules;
@@ -375,6 +375,7 @@ impl Desktop {
                 self.workspaces[active].focus_prev();
                 self.relayout()
             }
+            DesktopAction::FocusDir(dir) => self.focus_in_direction(dir),
             DesktopAction::FocusWindow(id) => {
                 // En el escritorio activo basta enfocar; si la ventana
                 // está en otro, lo traemos a la salida enfocada.
@@ -652,6 +653,28 @@ impl Desktop {
         self.relayout()
     }
 
+    /// Mueve el foco a la ventana más cercana en una dirección cardinal,
+    /// según la geometría real del escritorio activo (no el orden de
+    /// teselado). Sin ventana enfocada, sin salida, o sin candidata en esa
+    /// dirección, no hace nada.
+    fn focus_in_direction(&mut self, dir: Direction) -> Vec<BrainCommand> {
+        let active = self.active_index();
+        let Some(focused) = self.workspaces[active].focused() else {
+            return Vec::new();
+        };
+        let Some(o) = self.outputs.get(self.focused_output).copied() else {
+            return Vec::new();
+        };
+        let layout = self.workspaces[active].layout(o.work_rect());
+        let Some(from) = layout.iter().find(|(id, _)| *id == focused).map(|(_, r)| *r) else {
+            return Vec::new();
+        };
+        match nearest_in_direction(from, &layout, focused, dir) {
+            Some(target) if self.workspaces[active].focus_window(target) => self.relayout(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Recalcula la geometría de **todas** las salidas y la empaqueta en
     /// un único [`BrainCommand::Place`]. Sin salidas, no hay nada que
     /// colocar.
@@ -743,6 +766,52 @@ impl Desktop {
         }
         lines
     }
+}
+
+/// La ventana de `candidates` más cercana a `from` en la dirección `dir`,
+/// excluyendo a `self_id`. Pura — la base del foco espacial.
+///
+/// Criterio (estilo i3/sway): sólo cuentan las candidatas cuyo centro cae
+/// en el semiplano de esa dirección respecto al centro de `from`; entre
+/// ellas gana la de menor distancia en el eje principal, penalizando el
+/// desvío en el eje perpendicular (`×2`) para preferir la que está
+/// «enfrente». Empates: el id menor, para ser determinista.
+fn nearest_in_direction(
+    from: Rect,
+    candidates: &[(WindowId, Rect)],
+    self_id: WindowId,
+    dir: Direction,
+) -> Option<WindowId> {
+    let center = |r: &Rect| (r.x + r.w / 2, r.y + r.h / 2);
+    let (fx, fy) = center(&from);
+    let mut best: Option<(i64, WindowId)> = None;
+    for (id, rect) in candidates {
+        if *id == self_id {
+            continue;
+        }
+        let (cx, cy) = center(rect);
+        let (dx, dy) = ((cx - fx) as i64, (cy - fy) as i64);
+        // ¿Está en el semiplano de la dirección? (`primary` > 0) y, si sí,
+        // el coste = primary + 2·|perpendicular|.
+        let (primary, perp) = match dir {
+            Direction::Left => (-dx, dy),
+            Direction::Right => (dx, dy),
+            Direction::Up => (-dy, dx),
+            Direction::Down => (dy, dx),
+        };
+        if primary <= 0 {
+            continue;
+        }
+        let cost = primary + 2 * perp.abs();
+        let better = match best {
+            None => true,
+            Some((c, bid)) => cost < c || (cost == c && *id < bid),
+        };
+        if better {
+            best = Some((cost, *id));
+        }
+    }
+    best.map(|(_, id)| id)
 }
 
 /// El rectángulo de la terminal dropdown: anclada arriba, a todo el ancho,
@@ -1377,6 +1446,44 @@ mod tests {
         assert_eq!(d.workspace_loads()[0], 1);
         assert!(places(&cmds).iter().find(|x| x.id == 5).unwrap().floating);
         assert_eq!(d.focused_window(), Some(5));
+    }
+
+    #[test]
+    fn nearest_in_direction_picks_the_window_in_front() {
+        let from = Rect::new(0, 0, 100, 100); // centro (50,50)
+        let cands = vec![
+            (1, Rect::new(0, 0, 100, 100)),   // la propia
+            (2, Rect::new(200, 0, 100, 100)), // a la derecha, enfrente
+            (3, Rect::new(200, 400, 100, 100)), // a la derecha pero muy abajo
+            (4, Rect::new(-200, 0, 100, 100)), // a la izquierda
+        ];
+        assert_eq!(nearest_in_direction(from, &cands, 1, Direction::Right), Some(2));
+        assert_eq!(nearest_in_direction(from, &cands, 1, Direction::Left), Some(4));
+        // Hacia arriba no hay nada (todas a la misma altura o abajo).
+        assert_eq!(nearest_in_direction(from, &cands, 1, Direction::Up), None);
+    }
+
+    #[test]
+    fn focus_dir_moves_focus_spatially_in_columns() {
+        let mut d = desktop_with_screen();
+        // Tres columnas: la 1 a la izquierda, la 3 a la derecha.
+        d.apply(DesktopAction::SetLayout(LayoutMode::Columns));
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        // La última abierta (3) queda enfocada, en la columna derecha.
+        assert_eq!(d.focused_window(), Some(3));
+        // Foco a la izquierda → la del medio, luego la primera.
+        d.apply(DesktopAction::FocusDir(Direction::Left));
+        assert_eq!(d.focused_window(), Some(2));
+        d.apply(DesktopAction::FocusDir(Direction::Left));
+        assert_eq!(d.focused_window(), Some(1));
+        // Más a la izquierda no hay nada: el foco no se mueve.
+        d.apply(DesktopAction::FocusDir(Direction::Left));
+        assert_eq!(d.focused_window(), Some(1));
+        // Y de vuelta a la derecha.
+        d.apply(DesktopAction::FocusDir(Direction::Right));
+        assert_eq!(d.focused_window(), Some(2));
     }
 
     #[test]

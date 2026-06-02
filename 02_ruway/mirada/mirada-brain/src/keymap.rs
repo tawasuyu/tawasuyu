@@ -208,10 +208,12 @@ const KEYMAP_HEADER: &str = "\
 // tecla, en ese orden (p. ej. \"Super+Shift+j\", \"Super+space\").
 //
 // Acciones:
-//   focus-next / focus-prev          mueve el foco
+//   focus-next / focus-prev          mueve el foco (cíclico)
+//   focus-left/right/up/down         mueve el foco espacial (Super+flechas)
 //   move-forward / move-backward     reordena la ventana enfocada
 //   close-focused                    cierra la enfocada
-//   toggle-float                     alterna flotante / teselada
+//   toggle-float                     alterna flotante / teselada (una)
+//   toggle-tiling                    alterna todo el escritorio teselado/flotante
 //   toggle-fullscreen                alterna pantalla completa
 //   send-to-scratchpad               guarda la enfocada en el scratchpad
 //   toggle-scratchpad                invoca / oculta la del scratchpad

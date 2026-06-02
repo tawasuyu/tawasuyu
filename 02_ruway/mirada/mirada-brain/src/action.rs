@@ -18,6 +18,39 @@ use mirada_layout::{LayoutMode, WindowId};
 /// Número de escritorios virtuales que mantiene el `Desktop`.
 pub const WORKSPACE_COUNT: usize = 9;
 
+/// Una dirección cardinal en pantalla — para el foco (y, a futuro, el
+/// movimiento) espacial entre ventanas teseladas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl Direction {
+    /// El sufijo textual de la dirección — `"left"`, `"right"`, …
+    fn slug(self) -> &'static str {
+        match self {
+            Direction::Left => "left",
+            Direction::Right => "right",
+            Direction::Up => "up",
+            Direction::Down => "down",
+        }
+    }
+
+    /// La dirección desde su sufijo, o `None` si no calza.
+    fn from_slug(s: &str) -> Option<Direction> {
+        Some(match s {
+            "left" => Direction::Left,
+            "right" => Direction::Right,
+            "up" => Direction::Up,
+            "down" => Direction::Down,
+            _ => return None,
+        })
+    }
+}
+
 /// Una orden de escritorio de alto nivel.
 ///
 /// Es serializable (`postcard`) para viajar por el API de control
@@ -31,6 +64,9 @@ pub enum DesktopAction {
     FocusNext,
     /// Mueve el foco a la ventana anterior.
     FocusPrev,
+    /// Mueve el foco a la ventana teselada más cercana en una dirección
+    /// cardinal (espacial, no cíclico) — el `Super+flechas` clásico.
+    FocusDir(Direction),
     /// Enfoca una ventana concreta por su id; si está en otro escritorio,
     /// salta a él. Para clics de taskbar o `mirada-ctl focus-window`.
     FocusWindow(WindowId),
@@ -117,6 +153,7 @@ impl fmt::Display for DesktopAction {
         match self {
             DesktopAction::FocusNext => f.write_str("focus-next"),
             DesktopAction::FocusPrev => f.write_str("focus-prev"),
+            DesktopAction::FocusDir(d) => write!(f, "focus-{}", d.slug()),
             DesktopAction::FocusWindow(id) => write!(f, "focus-window:{id}"),
             DesktopAction::MoveForward => f.write_str("move-forward"),
             DesktopAction::MoveBackward => f.write_str("move-backward"),
@@ -176,6 +213,8 @@ impl FromStr for DesktopAction {
                         layout_from_slug(slug)
                             .ok_or_else(|| format!("modo de teselado desconocido: '{slug}'"))?,
                     )
+                } else if let Some(d) = s.strip_prefix("focus-").and_then(Direction::from_slug) {
+                    Self::FocusDir(d)
                 } else if let Some(id) = s.strip_prefix("focus-window:") {
                     Self::FocusWindow(
                         id.trim()
@@ -224,6 +263,11 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
     let mut map = vec![
         ("Super+j".into(), DesktopAction::FocusNext),
         ("Super+k".into(), DesktopAction::FocusPrev),
+        // Foco espacial estilo i3/sway — el clásico Super+flechas.
+        ("Super+Left".into(), DesktopAction::FocusDir(Direction::Left)),
+        ("Super+Right".into(), DesktopAction::FocusDir(Direction::Right)),
+        ("Super+Up".into(), DesktopAction::FocusDir(Direction::Up)),
+        ("Super+Down".into(), DesktopAction::FocusDir(Direction::Down)),
         ("Super+Shift+j".into(), DesktopAction::MoveForward),
         ("Super+Shift+k".into(), DesktopAction::MoveBackward),
         ("Super+q".into(), DesktopAction::CloseFocused),
