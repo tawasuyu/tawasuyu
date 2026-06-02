@@ -11,6 +11,7 @@
 //! la misma secuencia de eventos da siempre el mismo estado.
 //!
 //! - [`action`] — las acciones de escritorio y el mapa de teclas.
+//! - [`config`] — la [`Config`] general del WM (dropterm, teselado, foco).
 //! - [`desktop`] — el [`Desktop`]: el estado y el bucle `evento → comandos`.
 //! - [`keymap`] — el [`Keymap`] configurable en RON, recargable en caliente.
 //! - [`rules`] — las [`Rules`] de ventana (escritorio/flotante por `app_id`).
@@ -19,12 +20,14 @@
 #![forbid(unsafe_code)]
 
 pub mod action;
+pub mod config;
 pub mod ctl;
 pub mod desktop;
 pub mod keymap;
 pub mod rules;
 
 pub use action::{default_keymap, DesktopAction, WORKSPACE_COUNT};
+pub use config::{Config, DROPTERM_APP_ID};
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine};
 pub use desktop::{Desktop, Output, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};

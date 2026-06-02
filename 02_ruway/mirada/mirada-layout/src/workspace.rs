@@ -61,6 +61,12 @@ impl Workspace {
         &self.params
     }
 
+    /// Reemplaza todos los parámetros del teselado de una vez — lo usa la
+    /// config del usuario al fijar gap/ratio/nmaster/modo iniciales.
+    pub fn set_params(&mut self, params: LayoutParams) {
+        self.params = params;
+    }
+
     /// Cambia el modo de teselado.
     pub fn set_mode(&mut self, mode: LayoutMode) {
         self.params.mode = mode;

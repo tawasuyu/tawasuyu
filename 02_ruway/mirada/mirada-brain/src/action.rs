@@ -81,7 +81,7 @@ pub enum DesktopAction {
 
 /// El nombre RON-seguro de un modo de teselado (sin guiones problemáticos
 /// para identificadores: aquí van como valor de cadena, no de enum).
-fn layout_slug(mode: LayoutMode) -> &'static str {
+pub(crate) fn layout_slug(mode: LayoutMode) -> &'static str {
     match mode {
         LayoutMode::MasterStack => "master-stack",
         LayoutMode::Monocle => "monocle",
@@ -94,7 +94,7 @@ fn layout_slug(mode: LayoutMode) -> &'static str {
 }
 
 /// Modo de teselado desde su `slug`.
-fn layout_from_slug(slug: &str) -> Option<LayoutMode> {
+pub(crate) fn layout_from_slug(slug: &str) -> Option<LayoutMode> {
     Some(match slug {
         "master-stack" => LayoutMode::MasterStack,
         "monocle" => LayoutMode::Monocle,

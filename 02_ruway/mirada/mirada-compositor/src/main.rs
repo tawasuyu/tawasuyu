@@ -1509,6 +1509,15 @@ fn load_user_rules() -> Rules {
     }
 }
 
+/// Carga la config general del WM (`~/.config/mirada/config.ron`), o los
+/// valores por defecto si no hay archivo.
+fn load_user_config() -> mirada_brain::Config {
+    match mirada_brain::Config::default_path() {
+        Some(p) => mirada_brain::Config::load_or_default(&p),
+        None => mirada_brain::Config::default(),
+    }
+}
+
 /// Arma un Cerebro embebido: un `Desktop` con el keymap del usuario y
 /// sus reglas de ventana. Lo usan tanto el modo autónomo como el modo
 /// greeter (el DM es siempre autónomo — un Cerebro externo no tiene
@@ -1519,6 +1528,7 @@ fn embedded_brain(keymap_path: &Option<std::path::PathBuf>) -> Brain {
         None => Keymap::default(),
     };
     let mut desktop = Desktop::with_keymap(keymap);
+    desktop.set_config(load_user_config());
     desktop.set_rules(load_user_rules());
     Brain::Embedded(desktop)
 }

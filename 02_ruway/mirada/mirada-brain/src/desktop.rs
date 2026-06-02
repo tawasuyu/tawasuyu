@@ -6,8 +6,11 @@ use mirada_layout::{LayoutParams, Rect, WindowId, Workspace};
 use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId};
 
 use crate::action::{DesktopAction, WORKSPACE_COUNT};
+use crate::config::Config;
 use crate::keymap::Keymap;
 use crate::rules::Rules;
+
+pub use crate::config::DROPTERM_APP_ID;
 
 /// Lo que el Cerebro sabe de una ventana: su identidad de aplicación.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -68,6 +71,8 @@ pub struct Desktop {
     keymap: Keymap,
     /// Reglas de ventana — escritorio/flotante por `app_id`/título.
     rules: Rules,
+    /// Config general del WM — dropterm, parámetros del teselado, foco.
+    config: Config,
     /// Ventanas del scratchpad: se invocan flotando y se ocultan a
     /// voluntad; mientras están guardadas no viven en ningún escritorio.
     scratchpad: Vec<WindowId>,
@@ -99,6 +104,7 @@ impl Desktop {
             windows: HashMap::new(),
             keymap,
             rules: Rules::default(),
+            config: Config::default(),
             scratchpad: Vec::new(),
         }
     }
@@ -107,6 +113,23 @@ impl Desktop {
     /// abran a partir de ahora; las ya abiertas no se tocan.
     pub fn set_rules(&mut self, rules: Rules) {
         self.rules = rules;
+    }
+
+    /// Aplica la config general del WM. Los parámetros de teselado
+    /// (modo/gap/ratio/nmaster) se siembran en **todos** los escritorios;
+    /// el resto (dropterm, foco-sigue-ratón) se consulta cuando hace falta.
+    /// Pensado para llamarse una vez al arrancar, antes de conectar salidas.
+    pub fn set_config(&mut self, config: Config) {
+        let params = config.layout_params();
+        for ws in &mut self.workspaces {
+            ws.set_params(params);
+        }
+        self.config = config;
+    }
+
+    /// La config general vigente — para un HUD o un editor de ajustes.
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// El comando que registra los atajos globales en el Cuerpo. La app
@@ -201,9 +224,10 @@ impl Desktop {
                     .unwrap_or(self.active_index());
                 self.workspaces[ws].add(id);
                 if is_dropterm {
+                    let pct = self.config.dropterm_height_pct();
                     let rect = self
                         .screen()
-                        .map(dropdown_rect)
+                        .map(|s| dropdown_rect(s, pct))
                         .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
                     self.workspaces[ws].set_floating(id, Some(rect));
                 } else if outcome.floating {
@@ -231,8 +255,11 @@ impl Desktop {
                 Vec::new()
             }
             BodyEvent::PointerEntered { id } => {
-                // Foco al pasar el puntero, sólo si la ventana está en el
-                // escritorio activo.
+                // Foco al pasar el puntero, si la config lo habilita y la
+                // ventana está en el escritorio activo.
+                if !self.config.focus_follows_mouse {
+                    return Vec::new();
+                }
                 let active = self.active_index();
                 if self.workspaces[active].focus_window(id) {
                     self.relayout()
@@ -420,18 +447,20 @@ impl Desktop {
                                 ws.remove(id);
                             }
                             self.scratchpad.retain(|&w| w != id);
+                            let pct = self.config.dropterm_height_pct();
                             let rect = self
                                 .screen()
-                                .map(dropdown_rect)
+                                .map(|s| dropdown_rect(s, pct))
                                 .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
                             self.workspaces[active].add(id);
                             self.workspaces[active].set_floating(id, Some(rect));
                         }
                         self.relayout()
                     }
-                    // Aún no existe: la creamos perezosamente. Al abrirse,
-                    // `WindowOpened` la reconoce y la baja flotando+enfocada.
-                    None => vec![BrainCommand::Spawn(DROPTERM_CMD.into())],
+                    // Aún no existe: la creamos perezosamente con el comando
+                    // de la config. Al abrirse, `WindowOpened` la reconoce
+                    // (por su `app_id`) y la baja flotando+enfocada.
+                    None => vec![BrainCommand::Spawn(self.config.dropterm_cmd.clone())],
                 }
             }
             DesktopAction::CycleLayout => {
@@ -633,18 +662,11 @@ impl Desktop {
     }
 }
 
-/// `app_id` con el que se marca y reconoce la terminal dropdown (quake).
-/// La crea `ToggleDropterm` con [`DROPTERM_CMD`] y se la reconoce al abrir.
-pub const DROPTERM_APP_ID: &str = "mirada.dropterm";
-
-/// Comando que lanza la terminal dropdown. `kitty --class` fija el `app_id`
-/// en Wayland, que es como la reconocemos. Configurable en rondas futuras.
-const DROPTERM_CMD: &str = "kitty --class mirada.dropterm";
-
 /// El rectángulo de la terminal dropdown: anclada arriba, a todo el ancho,
-/// 45 % del alto — el gesto «quake» de bajar desde el borde superior.
-fn dropdown_rect(screen: Rect) -> Rect {
-    Rect::new(screen.x, screen.y, screen.w, (screen.h * 45 / 100).max(1))
+/// `pct` % del alto — el gesto «quake» de bajar desde el borde superior.
+/// El porcentaje sale de la config ([`Config::dropterm_height_pct`]).
+fn dropdown_rect(screen: Rect, pct: i32) -> Rect {
+    Rect::new(screen.x, screen.y, screen.w, (screen.h * pct / 100).max(1))
 }
 
 /// El rectángulo flotante por defecto: 60 % de la pantalla, centrado.
@@ -1230,9 +1252,11 @@ mod tests {
     #[test]
     fn dropterm_lazy_spawns_when_absent() {
         let mut d = desktop_with_screen();
-        // Sin terminal dropdown todavía: el toggle la crea.
+        // Sin terminal dropdown todavía: el toggle la crea con el comando
+        // de la config (por defecto, kitty con el app_id de la dropterm).
         let cmds = d.apply(DesktopAction::ToggleDropterm);
-        assert_eq!(cmds, vec![BrainCommand::Spawn(super::DROPTERM_CMD.into())]);
+        let cmd = crate::config::Config::default().dropterm_cmd;
+        assert_eq!(cmds, vec![BrainCommand::Spawn(cmd)]);
     }
 
     #[test]
@@ -1270,6 +1294,55 @@ mod tests {
         assert_eq!(d.workspace_loads()[0], 1);
         assert!(places(&cmds).iter().find(|x| x.id == 5).unwrap().floating);
         assert_eq!(d.focused_window(), Some(5));
+    }
+
+    #[test]
+    fn set_config_seeds_the_layout_params_of_every_workspace() {
+        use crate::config::Config;
+        let mut d = Desktop::new();
+        let cfg = Config::from_ron(r#"( gap: 20, master_ratio: 0.4, layout: "grid" )"#).unwrap();
+        d.set_config(cfg);
+        d.on_event(BodyEvent::OutputAdded { id: 0, width: 1920, height: 1080 });
+        let p = d.active_workspace().params();
+        assert_eq!(p.gap, 20);
+        assert_eq!(p.mode, LayoutMode::Grid);
+        assert!((p.master_ratio - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn focus_follows_mouse_can_be_disabled_by_config() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen();
+        d.set_config(Config::from_ron("( focus_follows_mouse: false )").unwrap());
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada
+        // Con el foco-sigue-ratón apagado, pasar el puntero no cambia el foco.
+        d.on_event(BodyEvent::PointerEntered { id: 1 });
+        assert_eq!(d.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn config_sets_the_dropterm_command_and_height() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen(); // 1920×1080
+        d.set_config(
+            Config::from_ron("( dropterm_cmd: \"foot --app-id mirada.dropterm\", dropterm_height_pct: 30 )")
+                .unwrap(),
+        );
+        // El spawn perezoso usa el comando de la config.
+        let cmds = d.apply(DesktopAction::ToggleDropterm);
+        assert_eq!(
+            cmds,
+            vec![BrainCommand::Spawn("foot --app-id mirada.dropterm".into())]
+        );
+        // Y al abrirse, baja al 30 % del alto.
+        let cmds = d.on_event(BodyEvent::WindowOpened {
+            id: 9,
+            app_id: super::DROPTERM_APP_ID.into(),
+            title: "t".into(),
+        });
+        let p = places(&cmds).iter().find(|x| x.id == 9).unwrap();
+        assert_eq!(p.rect.h, 1080 * 30 / 100);
     }
 
     #[test]
