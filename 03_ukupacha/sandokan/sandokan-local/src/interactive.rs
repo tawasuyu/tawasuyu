@@ -22,7 +22,6 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use arje_incarnate::{ChildPreExec, ChildSetup, ChildStdio, Incarnator};
-use card_core::Card;
 use nix::pty::{openpty, OpenptyResult, Winsize};
 use sandokan_core::{EngineError, ExecHandle, Intent};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -35,7 +34,7 @@ use crate::{Entity, LocalEngine};
 use sandokan_lifecycle::LifecycleState;
 
 /// Tamaño del PTY en celdas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PtySize {
     pub rows: u16,
     pub cols: u16,
@@ -98,6 +97,26 @@ pub(crate) struct Session {
     sock_path: PathBuf,
     /// Tarea del servidor de socket. Se aborta al dropear la sesión.
     server: JoinHandle<()>,
+    /// Spec re-corrible (Intent + tamaño) para la re-hidratación del Model 1:
+    /// al reiniciar el daemon, la sesión se relanza con esto y reaparece su
+    /// `<card_id>.sock` con el mismo id → el front re-ataja sin enterarse.
+    spec: SessionSnapshot,
+}
+
+/// Snapshot re-corrible de una sesión interactiva: su `Intent` (que ya lleva
+/// el `card_id` en `card.id`) y el tamaño del PTY. Es lo que persiste el
+/// daemon para re-hidratar sus sesiones tras un reinicio (Model 1: relanza un
+/// shell fresco, igual que tmux pierde sesiones si muere el server).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionSnapshot {
+    pub intent: Intent,
+    pub size: PtySize,
+}
+
+/// El estado interactivo persistible del engine: todas sus sesiones vivas.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EngineSnapshot {
+    pub sessions: Vec<SessionSnapshot>,
 }
 
 impl Drop for Session {
@@ -142,11 +161,12 @@ impl Session {
 /// Crea un PTY, encarna la Card aislada con su slave como stdio (+ setsid),
 /// retiene el master y arranca el hilo lector. Devuelve la sesión + el pid.
 fn spawn_pty(
-    card: &Card,
+    intent: &Intent,
     cfg: arje_incarnate::IncarnatorConfig,
     size: PtySize,
     sock_path: PathBuf,
 ) -> Result<(Session, i32), EngineError> {
+    let card = &intent.card;
     let ws = Winsize {
         ws_row: size.rows,
         ws_col: size.cols,
@@ -218,6 +238,10 @@ fn spawn_pty(
             tx,
             sock_path,
             server,
+            spec: SessionSnapshot {
+                intent: intent.clone(),
+                size,
+            },
         },
         pid,
     ))
@@ -306,7 +330,7 @@ impl LocalEngine {
             std::fs::create_dir_all(parent)
                 .map_err(|e| EngineError::Transport(format!("mkdir run_dir: {e}")))?;
         }
-        let (session, pid) = spawn_pty(&intent.card, cfg, size, sock_path)?;
+        let (session, pid) = spawn_pty(&intent, cfg, size, sock_path)?;
 
         let handle = ExecHandle {
             card_id,
@@ -365,10 +389,64 @@ impl LocalEngine {
 /// El mapa de sesiones vive en `LocalEngine`; este alias lo nombra en lib.rs.
 pub(crate) type SessionMap = HashMap<Ulid, Arc<Session>>;
 
+// ---------------------------------------------------------------------------
+// Re-hidratación (Model 1): persistir specs de sesiones vivas y relanzarlas
+// al reiniciar el daemon. El shell es fresco, pero conserva su card_id → su
+// `<card_id>.sock` reaparece y el front re-ataja sin enterarse.
+// ---------------------------------------------------------------------------
+
+impl LocalEngine {
+    /// Snapshot de las sesiones interactivas vivas, para persistir.
+    pub fn interactive_snapshot(&self) -> EngineSnapshot {
+        let sessions = self
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .values()
+            .map(|s| s.spec.clone())
+            .collect();
+        EngineSnapshot { sessions }
+    }
+
+    /// Re-hidrata sesiones desde un snapshot: relanza cada una (shell fresco)
+    /// con su `card_id` original. Devuelve un handle (o error) por sesión.
+    pub async fn rehydrate(&self, snap: EngineSnapshot) -> Vec<Result<ExecHandle, EngineError>> {
+        let mut out = Vec::with_capacity(snap.sessions.len());
+        for s in snap.sessions {
+            out.push(self.run_interactive(s.intent, s.size).await);
+        }
+        out
+    }
+
+    /// Persiste el snapshot interactivo a un archivo JSON (crea el dir padre).
+    pub fn save_snapshot(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let bytes = serde_json::to_vec_pretty(&self.interactive_snapshot())
+            .map_err(std::io::Error::other)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, bytes)
+    }
+
+    /// Carga un snapshot JSON y re-hidrata sus sesiones. Archivo ausente =
+    /// no-op (devuelve 0). Devuelve cuántas sesiones se relanzaron.
+    pub async fn restore_snapshot(&self, path: &std::path::Path) -> std::io::Result<usize> {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e),
+        };
+        let snap: EngineSnapshot = serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
+        let n = snap.sessions.len();
+        self.rehydrate(snap).await;
+        Ok(n)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use card_core::{NamespaceSet, Payload};
+    use card_core::{Card, NamespaceSet, Payload};
     use sandokan_core::Engine;
     use std::time::Duration;
 
@@ -514,5 +592,58 @@ mod tests {
         e.stop(id, Duration::ZERO).await.ok();
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(!path.exists(), "el socket debió borrarse al stop: {path:?}");
+    }
+
+    /// Re-hidratación Model 1: un engine arranca una sesión y la persiste; un
+    /// engine nuevo (mismo run_dir, simulando reinicio del daemon) la restaura
+    /// y la sesión revive con el MISMO card_id → su `<card_id>.sock` reaparece
+    /// y responde. El front re-ataja sin enterarse del reinicio.
+    #[tokio::test]
+    async fn rehydrates_session_into_same_card_socket() {
+        use tokio::net::UnixStream;
+
+        let dir = std::env::temp_dir().join(format!("sandokan-rehy-{}", Ulid::new()));
+        let snap_path = dir.join("snapshot.json");
+        let card = isolated_sh();
+        let id = card.id;
+
+        // Engine A: arranca la sesión, persiste, y "muere" (sale del scope).
+        {
+            let a =
+                LocalEngine::with_run_dir(arje_incarnate::IncarnatorConfig::default(), dir.clone());
+            a.run_interactive(Intent::new(card), PtySize::default())
+                .await
+                .expect("run A");
+            a.save_snapshot(&snap_path).expect("save snapshot");
+            assert_eq!(a.interactive_snapshot().sessions.len(), 1);
+            a.stop(id, Duration::ZERO).await.ok(); // mata + borra el socket viejo
+        }
+
+        // Engine B: mismo run_dir, restaura desde el archivo.
+        let b = LocalEngine::with_run_dir(arje_incarnate::IncarnatorConfig::default(), dir.clone());
+        let n = b.restore_snapshot(&snap_path).await.expect("restore");
+        assert_eq!(n, 1, "debió re-hidratar exactamente 1 sesión");
+
+        // La sesión revive con el MISMO card_id → mismo socket.
+        let path = b.session_socket_path(id);
+        for _ in 0..50 {
+            if path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            path.exists(),
+            "la sesión re-hidratada no recreó su <card_id>.sock: {path:?}"
+        );
+
+        // Y funciona: comando + lectura por el socket re-creado.
+        let mut c = UnixStream::connect(&path).await.expect("connect rehydrated");
+        c.write_all(b"echo REHYDRATED\n").await.unwrap();
+        assert!(
+            socket_until(&mut c, "REHYDRATED", 4000).await,
+            "la sesión re-hidratada no respondió"
+        );
+        b.stop(id, Duration::ZERO).await.ok();
     }
 }

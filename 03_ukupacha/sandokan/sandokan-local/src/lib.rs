@@ -11,7 +11,7 @@
 mod interactive;
 mod proc;
 
-pub use interactive::{Attachment, PtySize};
+pub use interactive::{Attachment, EngineSnapshot, PtySize, SessionSnapshot};
 
 use arje_incarnate::{Incarnator, IncarnatorConfig};
 use async_trait::async_trait;
