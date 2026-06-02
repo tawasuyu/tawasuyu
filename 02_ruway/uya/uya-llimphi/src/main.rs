@@ -8,13 +8,13 @@
 //
 //  Configuración por entorno (calcada de ayni):
 //    UYA_NOMBRE    nombre → identidad determinista (default "yo")
-//    UYA_ESCUCHAR  bind donde escuchar (default 127.0.0.1:7800)
-//    UYA_CONECTAR  par(es) a conectar al arrancar (coma-separado, opcional)
+//    UYA_ESCUCHAR  multiaddr donde escuchar (default /ip4/0.0.0.0/tcp/0)
+//    UYA_CONECTAR  multiaddr(s) dialable(s) a conectar (con /p2p/<peerid>,
+//                  coma-separado; lo imprime el otro nodo al arrancar)
 // =============================================================================
 
 use std::collections::HashMap;
 use std::env;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use uya_app::{iniciar_camara, Enlace, EventoUya, ParticipanteId, Sala};
@@ -81,21 +81,16 @@ impl App for Uya {
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         let nombre = env::var("UYA_NOMBRE").unwrap_or_else(|_| "yo".into());
-        let bind: SocketAddr = env::var("UYA_ESCUCHAR")
-            .unwrap_or_else(|_| "127.0.0.1:7800".into())
-            .parse()
-            .expect("UYA_ESCUCHAR debe ser ip:puerto");
+        let bind = env::var("UYA_ESCUCHAR").unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".into());
 
-        let (enlace, rx) = Enlace::abrir(nombre.clone(), Some(bind))
+        let (enlace, rx) = Enlace::abrir(nombre.clone(), &bind)
             .unwrap_or_else(|e| panic!("uya: no pude escuchar en {bind}: {e}"));
         let enlace = Arc::new(enlace);
+        println!("uya: dialable en {}", enlace.direccion_local());
 
         if let Ok(pares) = env::var("UYA_CONECTAR") {
-            for par in pares.split(',').filter(|s| !s.trim().is_empty()) {
-                match par.trim().parse::<SocketAddr>() {
-                    Ok(addr) => enlace.conectar(addr),
-                    Err(e) => eprintln!("uya: dirección inválida '{par}': {e}"),
-                }
+            for par in pares.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                enlace.conectar(par);
             }
         }
 

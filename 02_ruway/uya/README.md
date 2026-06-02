@@ -11,37 +11,48 @@ agnóstico + frontends Llimphi intercambiables, sin navegador ni JIT de por medi
 | Crate | Rol |
 |---|---|
 | `uya-core` | Modelo agnóstico: protocolo de cable (`Paquete`), identidad determinista (`ParticipanteId = BLAKE3(nombre)`) y roster de la sala (`Sala`). No sabe de transporte ni de UI. |
-| `uya-app` | Pegamento: transporte TCP punto-a-punto (`Enlace`), captura de video (TestCard sintética por defecto; webcam v4l2 tras la feature `camara`) y bus de eventos (`EventoUya`) hacia la UI. |
+| `uya-app` | Pegamento: transporte P2P soberano sobre **card-net** (`BrahmanNet`/libp2p, con relay/dcutr/autonat), captura de video (TestCard sintética por defecto; webcam v4l2 tras la feature `camara`), audio (mic→mezcla→`AudioSink`) y bus de eventos (`EventoUya`) hacia la UI. |
 | `uya-cli` | Nodo headless: ejercita transporte + captura y reporta eventos por consola. Sin GPU. |
 | `uya-llimphi` | Cara gráfica (bucle Elm): rejilla de caras (un tile por participante, su último cuadro RGBA con `View::image`) + barra de cámara/micrófono/colgar. |
 
 ## Probar
 
-Dos ventanas, una llamada local (uno escucha, el otro conecta):
+El transporte es libp2p: cada nodo imprime al arrancar su **multiaddr dialable**
+(con `/p2p/<peerid>`). Para llamar a alguien, pasale esa dirección por
+`UYA_CONECTAR`. Dos ventanas:
 
 ```bash
-UYA_NOMBRE=Alicia UYA_ESCUCHAR=127.0.0.1:7800 cargo run -p uya-llimphi --release
-UYA_NOMBRE=Beto   UYA_ESCUCHAR=127.0.0.1:7801 \
-  UYA_CONECTAR=127.0.0.1:7800 cargo run -p uya-llimphi --release
+# 1) Arrancá Alicia y copiá la dirección dialable que imprime:
+UYA_NOMBRE=Alicia UYA_ESCUCHAR=/ip4/0.0.0.0/tcp/7800 cargo run -p uya-llimphi --release
+#    → "uya: dialable en /ip4/127.0.0.1/tcp/7800/p2p/12D3KooW..."
+
+# 2) Conectá Beto a esa dirección:
+UYA_NOMBRE=Beto UYA_ESCUCHAR=/ip4/0.0.0.0/tcp/7801 \
+  UYA_CONECTAR=/ip4/127.0.0.1/tcp/7800/p2p/12D3KooW... cargo run -p uya-llimphi --release
 ```
 
-Headless (sin ventana), para probar la señalización entre procesos:
+Headless (sin ventana / sin GPU), mismo flujo con `uya-cli` (reporta cuadros y
+muestras de audio recibidas):
 
 ```bash
-UYA_NOMBRE=Alicia UYA_ESCUCHAR=127.0.0.1:7810 cargo run -p uya-cli
-UYA_NOMBRE=Beto   UYA_ESCUCHAR=127.0.0.1:7811 UYA_CONECTAR=127.0.0.1:7810 cargo run -p uya-cli
+UYA_NOMBRE=Alicia UYA_ESCUCHAR=/ip4/0.0.0.0/tcp/7810 cargo run -p uya-cli
+UYA_NOMBRE=Beto UYA_CONECTAR=<dirección dialable de Alicia> cargo run -p uya-cli
 ```
 
-Variables: `UYA_NOMBRE` (→ identidad), `UYA_ESCUCHAR` (bind), `UYA_CONECTAR`
-(par(es) a conectar al arrancar, coma-separado).
+Variables: `UYA_NOMBRE` (→ identidad), `UYA_ESCUCHAR` (multiaddr de escucha,
+default `/ip4/0.0.0.0/tcp/0`), `UYA_CONECTAR` (multiaddr(s) dialable(s),
+coma-separado), `UYA_TONO=1` (tono sintético si no hay micrófono).
 
 ## Estado (MVP)
 
 Anda hoy, end-to-end y feo a propósito:
 
-- ✅ Identidad determinista por nombre (BLAKE3, estilo agora/ayni).
+- ✅ **Transporte P2P soberano** sobre card-net (`BrahmanNet`/libp2p): Noise +
+  Yamux + relay/dcutr/autonat — el mismo nodo que ayni/minga/agora, así que
+  sirve cruzando NAT, no sólo en LAN. Streams multiplexados por `/uya/transporte/1.0.0`.
+- ✅ Identidad de app determinista por nombre (BLAKE3) en el handshake `Hola`.
 - ✅ Presencia: entrar / salir / estado de medios.
-- ✅ **Video en ambos sentidos** (cuadros RGBA enmarcados sobre TCP) + preview local.
+- ✅ **Video en ambos sentidos** (cuadros RGBA enmarcados) + preview local.
 - ✅ **Audio en ambos sentidos**: captura de micrófono (`MicSource`, o tono sintético
   con `UYA_TONO=1` sin micro), `Paquete::Audio` PCM `f32`, y una `MezclaRemota` que
   baja a mono + resamplea linealmente al formato del dispositivo + suma a los N pares,
@@ -51,10 +62,14 @@ Anda hoy, end-to-end y feo a propósito:
 
 ## Pendiente (por orden)
 
-1. **Mudar el transporte a card-net** (P2P soberano: relay/dcutr/autonat ya hechos)
-   sin tocar `uya-core` ni la UI — sólo otra impl de `Enlace`. Identidad por `agora`.
-2. **Compresión** de video y audio (hoy RGBA + PCM crudos; sirve en LAN, no en WAN).
-   Reusar `media-encode-av1` (video) y `media-encode-opus` (audio).
-3. **Malla N-a-N** automática (hoy es manual: cada par se conecta) y/o un SFU mínimo.
-4. **Marcar/conectar desde la UI** (hoy el par se pasa por `UYA_CONECTAR`).
-5. **Eco/jitter**: cancelación de eco acústico y un jitter buffer adaptativo (hoy fijo ~1 s).
+1. **Compresión** de video y audio (hoy RGBA + PCM crudos; ya viaja por libp2p,
+   pero sin comprimir es caro en WAN). Reusar `media-encode-av1` (video) y
+   `media-encode-opus` (audio).
+2. **Identidad por agora**: hoy el PeerId libp2p es aleatorio por arranque (la
+   dirección dialable cambia). Derivar el keypair del nombre (PeerId estable) y,
+   mejor, atar la identidad de app a `agora` (firma del `Hola`).
+3. **Descubrimiento por DHT**: `BrahmanNet` ya trae Kademlia — anunciar/encontrar
+   pares por una clave de sala en vez de pasar la multiaddr a mano.
+4. **Malla N-a-N** automática (hoy cada par se conecta) y/o un SFU mínimo.
+5. **Marcar/conectar desde la UI** (hoy la dirección se pasa por `UYA_CONECTAR`).
+6. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).

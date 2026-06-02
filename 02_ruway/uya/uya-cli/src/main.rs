@@ -6,12 +6,12 @@
 //  señalización sin necesidad de GPU/ventana.
 //
 //      UYA_NOMBRE   nombre → identidad determinista (default "cli")
-//      UYA_ESCUCHAR dirección de escucha (default 127.0.0.1:7801)
-//      UYA_CONECTAR par(es) a conectar al arrancar (coma-separado, opcional)
+//      UYA_ESCUCHAR multiaddr de escucha (default /ip4/0.0.0.0/tcp/0)
+//      UYA_CONECTAR multiaddr(s) dialable(s) a conectar (coma-separado, con
+//                   /p2p/<peerid>; lo imprime el otro nodo al arrancar)
 // =============================================================================
 
 use std::env;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,31 +19,22 @@ use uya_app::{hex_corto, iniciar_camara, Enlace, EventoUya};
 
 fn main() {
     let nombre = env::var("UYA_NOMBRE").unwrap_or_else(|_| "cli".into());
-    let bind: SocketAddr = env::var("UYA_ESCUCHAR")
-        .unwrap_or_else(|_| "127.0.0.1:7801".into())
-        .parse()
-        .expect("UYA_ESCUCHAR debe ser una dirección válida (ip:puerto)");
+    let bind = env::var("UYA_ESCUCHAR").unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".into());
 
-    let (enlace, rx) = Enlace::abrir(nombre.clone(), Some(bind))
+    let (enlace, rx) = Enlace::abrir(nombre.clone(), &bind)
         .unwrap_or_else(|e| panic!("uya-cli: no pude escuchar en {bind}: {e}"));
     let enlace = Arc::new(enlace);
 
-    if let Some(dir) = enlace.direccion_local() {
-        println!(
-            "uya-cli: {nombre} [{}] escuchando en {dir}",
-            hex_corto(&enlace.yo())
-        );
-    }
+    println!(
+        "uya-cli: {nombre} [{}] dialable en\n  {}",
+        hex_corto(&enlace.yo()),
+        enlace.direccion_local()
+    );
 
     if let Ok(pares) = env::var("UYA_CONECTAR") {
-        for par in pares.split(',').filter(|s| !s.trim().is_empty()) {
-            match par.trim().parse::<SocketAddr>() {
-                Ok(addr) => {
-                    println!("uya-cli: conectando a {addr}");
-                    enlace.conectar(addr);
-                }
-                Err(e) => eprintln!("uya-cli: dirección inválida '{par}': {e}"),
-            }
+        for par in pares.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            println!("uya-cli: conectando a {par}");
+            enlace.conectar(par);
         }
     }
 

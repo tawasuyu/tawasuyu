@@ -44,4 +44,11 @@ media-audio-cpal = { path = "../../media/media-audio-cpal" }
 # El `AudioSink` lockea la fuente con un `parking_lot::Mutex` en su callback
 # realtime; usamos el mismo tipo para la `MezclaRemota`.
 parking_lot = { workspace = true }
+# Transporte P2P soberano: el mismo nodo libp2p (relay/dcutr/autonat) que usan
+# ayni/minga/agora. Streams multiplexados por `StreamProtocol`.
+card-net = { path = "../../../shared/card/card-net" }
 tokio = { workspace = true }
+# `.compat()` adapta el `Stream` libp2p (futures io) a tokio io; `futures`
+# aporta el `StreamExt` del aceptador de streams entrantes.
+tokio-util = { workspace = true }
+futures = { workspace = true }
