@@ -929,9 +929,15 @@ impl<A: App> Runtime<A> {
             prim.last_render = None;
             prim.window.request_redraw();
         }
-        for sec in &mut self.secondaries {
-            sec.last_render = None;
-            sec.window.request_redraw();
+        // Repintamos las secundarias YA, de forma directa, en vez de pedir un
+        // redraw: en algunos compositores (Wayland) `request_redraw()` sobre
+        // una ventana secundaria no dispara `RedrawRequested`, así que el
+        // contenido quedaba congelado en el primer frame y su cache de
+        // hit-test (`last_render`) en `None` (los clicks no pegaban en nada).
+        // Como `dispatch_model` corre en cada Msg (incluido el tick ~33 fps),
+        // esto mantiene cada secundaria viva y su cache fresco.
+        for i in 0..self.secondaries.len() {
+            self.render_secondary(i);
         }
     }
 
@@ -1173,28 +1179,6 @@ impl<A: App> Runtime<A> {
                         )
                     })
                 };
-                {
-                    let sec = &self.secondaries[idx];
-                    let (root, nodes, first_click) = sec
-                        .last_render
-                        .as_ref()
-                        .map(|c| {
-                            let root = c.computed.get(c.mounted.root).map(|r| (r.w, r.h));
-                            let fc = c
-                                .mounted
-                                .nodes
-                                .iter()
-                                .find(|n| n.on_click.is_some())
-                                .and_then(|n| c.computed.get(n.id))
-                                .map(|r| (r.x, r.y, r.w, r.h));
-                            (root, c.mounted.nodes.len(), fc)
-                        })
-                        .unwrap_or((None, 0, None));
-                    eprintln!(
-                        "[llimphi sec] click cursor=({:.0},{:.0}) hit={} root={:?} nodes={} 1er_onclick={:?}",
-                        cursor.x, cursor.y, hit.is_some(), root, nodes, first_click
-                    );
-                }
                 // Misma prioridad que la primaria: drag_at + on_click_at, luego
                 // drag simple, luego on_click_at, luego on_click.
                 match hit {
