@@ -2933,6 +2933,30 @@ mod tests {
     }
 
     #[test]
+    fn link_relativo_resuelve_contra_base_href() {
+        // `<base href="file://<dir>/">` + `<link href="x.css">` relativo debe
+        // bajar `<dir>/x.css` (no contra la URL del documento). file:// = sin red.
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("puriy_basehref_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.css"), "p { color: #00ff00 }").unwrap();
+        let base = format!("file://{}/", dir.display());
+        let html = format!(
+            r##"<html><head><base href="{base}"><link rel="stylesheet" href="x.css"></head><body><p>v</p></body></html>"##
+        );
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", &html);
+        let mut found = false;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("p") && b.color == super::Color::rgb(0, 255, 0) {
+                found = true;
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(found, "el <link> relativo no resolvió contra <base href>");
+    }
+
+    #[test]
     fn import_en_style_inline_se_sigue() {
         // `@import` de un data: CSS dentro de un <style> — sus reglas aplican.
         let html = r##"<html><head><style>

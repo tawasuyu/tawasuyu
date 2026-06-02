@@ -123,7 +123,18 @@ impl Engine {
         // contra la base. Una hoja externa que falle se saltea (queda sin sus
         // reglas, como un browser tras un 404 de CSS). Hojas relativas con base
         // no-http (`about:test` en tests) no resuelven → sin red.
-        let base = url::Url::parse(url).ok();
+        // Base para resolver hrefs relativos de hojas/`@import`: honra
+        // `<base href>` igual que `boxes::build` (consistencia con `<img>`/`<a>`).
+        let doc_base = url::Url::parse(url).ok();
+        let base = dom
+            .base_href()
+            .as_deref()
+            .and_then(|href| {
+                url::Url::parse(href)
+                    .ok()
+                    .or_else(|| doc_base.as_ref().and_then(|b| b.join(href).ok()))
+            })
+            .or(doc_base);
         // El atributo `media` del `<link>`/`<style>` gatea la hoja: una que no
         // matchea el viewport (`media="print"` en pantalla, `media="(max-width:
         // 600px)"` en ventana ancha) se descarta entera, sin bajarla.
