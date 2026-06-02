@@ -3468,6 +3468,27 @@ mod tests {
     }
 
     #[test]
+    fn shorthand_inset_y_flex_flow() {
+        use crate::style::LengthVal;
+        let html = r#"<html><head><style>
+            #a { position: absolute; inset: 10px 20px; }
+            #b { display: flex; flex-flow: column wrap; }
+        </style></head><body>
+            <div id="a">x</div><div id="b">y</div>
+        </body></html>"#;
+        let doc = Engine::new().load_html("about:test", html);
+        let a = box_by_id(&doc.box_tree, "a").unwrap();
+        // `inset: 10px 20px` → top/bottom=10, right/left=20.
+        assert_eq!(a.inset_top, LengthVal::Px(10.0));
+        assert_eq!(a.inset_right, LengthVal::Px(20.0));
+        assert_eq!(a.inset_bottom, LengthVal::Px(10.0));
+        assert_eq!(a.inset_left, LengthVal::Px(20.0));
+        let b = box_by_id(&doc.box_tree, "b").unwrap();
+        assert_eq!(b.flex_direction, super::FlexDirection::Column);
+        assert_eq!(b.flex_wrap, super::FlexWrap::Wrap);
+    }
+
+    #[test]
     fn list_style_none_suprime_marker() {
         let html = r#"<html><head><style>
             ul { list-style-type: none }

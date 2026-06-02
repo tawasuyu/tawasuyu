@@ -3224,6 +3224,14 @@ fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> Vec<Decl> {
             out.extend(parse_flex_shorthand(value, important));
             continue;
         }
+        if prop.eq_ignore_ascii_case("inset") {
+            out.extend(parse_inset_shorthand(value, important));
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("flex-flow") {
+            out.extend(parse_flex_flow_shorthand(value, important));
+            continue;
+        }
         if prop.eq_ignore_ascii_case("outline") {
             out.extend(parse_outline_shorthand(value, important));
             continue;
@@ -4298,6 +4306,46 @@ fn parse_align_self(s: &str) -> Option<AlignSelf> {
 /// - `flex: auto` → `1 1 auto`
 /// - `flex: <number>` → `N 1 0%` (basis 0%, common preset)
 /// Devuelve 3 decls atómicas (grow + shrink + basis).
+/// `inset: <t> [r] [b] [l]` — 1..4 valores con la distribución de `margin`
+/// (1→todos, 2→TB/LR, 3→T/LR/B, 4→TRBL). Cada valor acepta length/%/auto.
+/// Expande a los cuatro longhands `top`/`right`/`bottom`/`left`. Fase 7.189.
+fn parse_inset_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    let vals: Vec<LengthVal> =
+        parts.iter().filter_map(|p| parse_length_or_pct_or_auto(p)).collect();
+    // Si algún token no parsea, descartamos el shorthand entero (CSS spec).
+    if vals.is_empty() || vals.len() != parts.len() {
+        return Vec::new();
+    }
+    let (t, r, b, l) = match vals.as_slice() {
+        [a] => (*a, *a, *a, *a),
+        [a, b2] => (*a, *b2, *a, *b2),
+        [a, b2, c] => (*a, *b2, *c, *b2),
+        [a, b2, c, d, ..] => (*a, *b2, *c, *d),
+        [] => return Vec::new(),
+    };
+    vec![
+        Decl { kind: DeclKind::InsetTop(t), important },
+        Decl { kind: DeclKind::InsetRight(r), important },
+        Decl { kind: DeclKind::InsetBottom(b), important },
+        Decl { kind: DeclKind::InsetLeft(l), important },
+    ]
+}
+
+/// `flex-flow: <direction> || <wrap>` (en cualquier orden) → `flex-direction`
+/// + `flex-wrap`. Fase 7.189.
+fn parse_flex_flow_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut out = Vec::new();
+    for tok in value.split_whitespace() {
+        if let Some(d) = parse_flex_direction(tok) {
+            out.push(Decl { kind: DeclKind::FlexDirection(d), important });
+        } else if let Some(w) = parse_flex_wrap(tok) {
+            out.push(Decl { kind: DeclKind::FlexWrap(w), important });
+        }
+    }
+    out
+}
+
 fn parse_flex_shorthand(value: &str, important: bool) -> Vec<Decl> {
     let v = value.trim().to_ascii_lowercase();
     let (grow, shrink, basis) = if v == "none" {
