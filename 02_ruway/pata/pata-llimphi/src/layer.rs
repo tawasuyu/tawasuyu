@@ -435,15 +435,14 @@ impl LayerApp {
     }
 
     /// Crea el estado wgpu de un panel sobre los punteros raw de Wayland
-    /// (`wl_display` + `wl_surface`). El `Hal` se comparte; lo crea el primero.
+    /// (`wl_display` + `wl_surface`). El `Hal` se comparte; lo crea el primer panel
+    /// **eligiendo el adaptador compatible con su surface** (el dispositivo que
+    /// mirada compone) — clave en multi-GPU/Optimus. Los paneles siguientes reusan
+    /// ese `Hal` (mismo compositor → mismo dispositivo, el adaptador ya sirve).
     fn ensure_gpu(&mut self, pi: usize) {
         if self.panels[pi].gpu.is_some() {
             return;
         }
-        if self.hal.is_none() {
-            self.hal = Some(pollster::block_on(Hal::new(None)).expect("hal"));
-        }
-        let hal = self.hal.as_ref().expect("hal");
         let display_ptr = self.conn.backend().display_ptr() as *mut c_void;
         let surface_ptr = self.panels[pi].layer.wl_surface().id().as_ptr() as *mut c_void;
         let (w, h) = (self.panels[pi].width, self.panels[pi].height);
@@ -455,24 +454,47 @@ impl LayerApp {
         ));
         // SAFETY: los handles apuntan a objetos Wayland que `self` mantiene vivos
         // (la conexión y la layer surface) durante toda la vida de la surface.
-        let wgpu_surface = unsafe {
-            hal.instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                    raw_display_handle: display_handle,
-                    raw_window_handle: window_handle,
-                })
-                .expect("create_surface")
+        let make_target = || wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: display_handle,
+            raw_window_handle: window_handle,
         };
-        let surface = match RawSurface::from_surface(hal, wgpu_surface, w, h) {
-            Ok(s) => s,
+
+        let surface = if self.hal.is_none() {
+            // Primer panel: crea el Hal pidiendo el adaptador compatible con ESTA
+            // surface (no `HighPerformance` a ciegas, que en Optimus agarraría la
+            // GPU equivocada → 0 formatos).
+            match pollster::block_on(unsafe { Hal::new_for_raw_surface(make_target, w, h) }) {
+                Ok((hal, surface)) => {
+                    self.hal = Some(hal);
+                    surface
+                }
+                Err(e) => {
+                    eprintln!("pata layer · panel {pi} sin gpu: {e}");
+                    return;
+                }
+            }
+        } else {
+            // Paneles siguientes: reusan el Hal ya creado.
+            let hal = self.hal.as_ref().expect("hal");
+            let wgpu_surface = match unsafe { hal.instance.create_surface_unsafe(make_target()) } {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("pata layer · panel {pi} sin gpu: {e}");
+                    return;
+                }
+            };
             // Sin formatos la WSI no soporta esta surface: en vez de paniquear,
-            // dejamos el panel sin gpu (no pinta) y seguimos — así un panel roto
-            // no tira todo el marco. Vuelve a intentar en el próximo `draw`.
-            Err(e) => {
-                eprintln!("pata layer · panel {pi} sin gpu: {e}");
-                return;
+            // dejamos el panel sin gpu (no pinta) y seguimos — un panel roto no
+            // tira todo el marco. Reintenta en el próximo `draw`.
+            match RawSurface::from_surface(hal, wgpu_surface, w, h) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("pata layer · panel {pi} sin gpu: {e}");
+                    return;
+                }
             }
         };
+        let hal = self.hal.as_ref().expect("hal");
         diag!(
             "pata diag · panel {pi} surface creada {w}x{h} · backend={:?} format={:?}",
             hal.adapter.get_info().backend,

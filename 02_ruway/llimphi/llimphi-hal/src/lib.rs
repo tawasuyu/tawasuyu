@@ -176,6 +176,88 @@ impl Hal {
             queue,
         })
     }
+
+    /// Construye el `Hal` **y** una [`RawSurface`] a la vez, eligiendo el adaptador
+    /// **compatible con esa surface** — el dispositivo que el compositor sabe
+    /// presentar. Es el camino correcto para el backend layer-shell de `pata`.
+    ///
+    /// El problema que resuelve: en sistemas multi-GPU (Optimus), pedir el
+    /// adaptador sin pista de surface (`new(None)` con `HighPerformance`) puede
+    /// elegir la dGPU mientras el compositor compone en la iGPU → los dmabuf
+    /// cruzan dispositivos y `get_capabilities` devuelve 0 formatos (la surface
+    /// "no expone formatos"). Pasar `compatible_surface` ata el adaptador al
+    /// dispositivo del compositor. Como la surface hace falta ANTES de pedir el
+    /// adaptador, y `new` crea la instancia internamente, este constructor une los
+    /// dos pasos.
+    ///
+    /// `make_target` reconstruye el `SurfaceTargetUnsafe` cada vez que se llama
+    /// (los `RawHandle` son `Copy`): `create_surface_unsafe` consume el target y
+    /// puede que probemos dos instancias (PRIMARY y, si no hay adaptador, todos
+    /// los backends — el GL de Mesa/Wayland revienta en teardown, por eso PRIMARY
+    /// primero, igual que [`Hal::new`]).
+    ///
+    /// # Safety
+    /// Los handles que produce `make_target` deben apuntar a objetos Wayland/…
+    /// vivos durante toda la vida de la `RawSurface` devuelta.
+    pub async unsafe fn new_for_raw_surface(
+        make_target: impl Fn() -> wgpu::SurfaceTargetUnsafe,
+        width: u32,
+        height: u32,
+    ) -> Result<(Self, RawSurface), HalError> {
+        // PRIMARY (Vulkan/Metal/DX12) primero; si no hay adaptador compatible, a
+        // todos los backends recreando instancia y surface.
+        let primary = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            ..Default::default()
+        });
+        let prim_surface = unsafe { primary.create_surface_unsafe(make_target()) }
+            .map_err(|e| HalError::CreateSurface(e.to_string()))?;
+        let prim_adapter = primary
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: Some(&prim_surface),
+            })
+            .await;
+        let (instance, adapter, wgpu_surface) = match prim_adapter {
+            Some(a) => (primary, a, prim_surface),
+            None => {
+                let all = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+                let surface = unsafe { all.create_surface_unsafe(make_target()) }
+                    .map_err(|e| HalError::CreateSurface(e.to_string()))?;
+                let a = all
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::HighPerformance,
+                        force_fallback_adapter: false,
+                        compatible_surface: Some(&surface),
+                    })
+                    .await
+                    .ok_or(HalError::NoAdapter)?;
+                (all, a, surface)
+            }
+        };
+        let limits = wgpu::Limits::default().using_resolution(adapter.limits());
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("llimphi-hal-device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: limits,
+                    memory_hints: wgpu::MemoryHints::Performance,
+                },
+                None,
+            )
+            .await
+            .map_err(|e| HalError::RequestDevice(e.to_string()))?;
+        let hal = Self {
+            instance,
+            adapter,
+            device,
+            queue,
+        };
+        let surface = RawSurface::from_surface(&hal, wgpu_surface, width, height)?;
+        Ok((hal, surface))
+    }
 }
 
 /// Surface basada en `winit::window::Window`. Mantiene una textura
