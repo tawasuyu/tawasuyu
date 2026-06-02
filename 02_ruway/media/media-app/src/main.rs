@@ -129,6 +129,8 @@ const TESTCARD_H: u32 = 270;
 const TESTCARD_FPS: f32 = 30.0;
 /// Key de la ventana OS secundaria de configuración (multiventana llimphi-ui).
 const CONFIG_WIN: u64 = 1;
+/// Key de la ventana OS secundaria de lista de reproducción / cola.
+const PLAYLIST_WIN: u64 = 2;
 const TICK_MS: u64 = 33;
 /// Capacidad del ring del probe. ~85 ms a 48 kHz · 2 ch — suficiente
 /// para una franja de visor responsiva sin meter latencia ni RAM.
@@ -175,6 +177,12 @@ enum Msg {
     /// sincroniza el modelo (la ventana ya la destruyó el runtime; no hay que
     /// volver a pedir cerrarla).
     SettingsClosed,
+    /// Abre/cierra la ventana de lista de reproducción (cola).
+    TogglePlaylist,
+    /// El SO cerró la ventana de cola: sincroniza el modelo.
+    PlaylistClosed,
+    /// Salta a la pista `idx` de la cola (clic en la lista).
+    JumpTrack(usize),
     /// Cambia la pestaña activa de la ventana de configuración.
     SettingsTab(SettingsTab),
     /// Desplaza el contenido de la ventana de config (rueda del mouse).
@@ -831,6 +839,8 @@ struct Model {
     /// está visible. Default **oculto**: por defecto se ve sólo video + barras;
     /// se despliega desde el menú Ver. (Estado de sesión, no se persiste aún.)
     visualizers_open: bool,
+    /// Si la ventana de lista de reproducción (cola) está abierta.
+    playlist_open: bool,
 }
 
 struct Pipeline {
@@ -879,6 +889,15 @@ enum VideoKind {
 /// Vacío para Testcard.
 fn video_path_slot() -> &'static OnceLock<PathBuf> {
     static SLOT: OnceLock<PathBuf> = OnceLock::new();
+    &SLOT
+}
+
+/// Nombres de las pistas de la playlist, cacheados al crearla (son estáticos
+/// en media-app: la cola se arma una vez desde los argumentos). La ventana de
+/// cola los lee de acá sin lockear el `Playlist` (evita el deadlock del paint);
+/// el índice actual lo toma del `playback_snapshot`.
+fn playlist_labels_slot() -> &'static OnceLock<Vec<String>> {
+    static SLOT: OnceLock<Vec<String>> = OnceLock::new();
     &SLOT
 }
 
@@ -1375,6 +1394,40 @@ impl Playlist {
         self.step(-1)
     }
 
+    /// Salta a la pista `target` (índice absoluto). No-op si está fuera de
+    /// rango o ya es la actual. Sincroniza la posición de shuffle si aplica.
+    fn jump_to(&mut self, target: usize) {
+        if target >= self.tracks.len() || target == self.idx {
+            return;
+        }
+        match LoadedTrack::from_path(&self.tracks[target]) {
+            Ok(mut t) => {
+                t.set_speed(self.speed);
+                t.set_loop(matches!(self.repeat, RepeatMode::One));
+                self.idx = target;
+                self.current = t;
+                if let Some(sh) = self.shuffle.as_mut() {
+                    if let Some(p) = sh.order.iter().position(|&i| i == target) {
+                        sh.pos = p;
+                    }
+                }
+            }
+            Err(e) => eprintln!("media-app: salto de pista falló: {e}"),
+        }
+    }
+
+    /// Nombres (basename) de cada pista, para pintar la cola.
+    fn track_labels(&self) -> Vec<String> {
+        self.tracks
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.display().to_string())
+            })
+            .collect()
+    }
+
     /// Verifica si la pista terminó (en modo no-loop) y avanza según
     /// `repeat`. Llamado desde [`AudioSource::fill`] del Playlist
     /// después de cada bloque para que el siguiente bloque ya salga
@@ -1552,6 +1605,16 @@ fn seek_audio_by(delta_secs: i64) {
     src.seek_to(Duration::from_secs_f64(new_s));
     drop(src);
     // El video no debe interpretar el salto como tiempo transcurrido.
+    reset_av_sync_anchor();
+}
+
+/// Salta a la pista `idx` de la cola (clic en la ventana de playlist). No-op
+/// sin playlist. Mismo patrón que `seek_audio_to`: lock breve + re-ancla A/V.
+fn jump_playlist_to(idx: usize) {
+    let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
+        return;
+    };
+    handle.lock().jump_to(idx);
     reset_av_sync_anchor();
 }
 
@@ -2224,20 +2287,31 @@ impl App for MediaApp {
         })
     }
 
-    /// Contenido de la ventana OS de configuración (multiventana). Sólo la
-    /// `CONFIG_WIN`; cualquier otra key queda en blanco.
+    /// Contenido de las ventanas OS secundarias (multiventana): config y cola.
     fn secondary_view(model: &Self::Model, key: u64) -> Option<View<Self::Msg>> {
-        (key == CONFIG_WIN && model.settings_open).then(|| settings_content(model))
+        match key {
+            CONFIG_WIN if model.settings_open => Some(settings_content(model)),
+            PLAYLIST_WIN if model.playlist_open => Some(playlist_content()),
+            _ => None,
+        }
     }
 
     fn secondary_title(_model: &Self::Model, key: u64) -> Option<String> {
-        (key == CONFIG_WIN).then(|| "Configuración — media".to_string())
+        match key {
+            CONFIG_WIN => Some("Configuración — media".to_string()),
+            PLAYLIST_WIN => Some("Lista de reproducción — media".to_string()),
+            _ => None,
+        }
     }
 
-    /// El usuario cerró la ventana de config con el botón del SO → sincroniza
-    /// el modelo (sin volver a pedir cerrar la ventana, que ya no existe).
+    /// El usuario cerró una ventana secundaria con el botón del SO → sincroniza
+    /// el modelo (sin volver a pedir cerrarla, que ya no existe).
     fn on_secondary_close(_model: &Self::Model, key: u64) -> Option<Self::Msg> {
-        (key == CONFIG_WIN).then_some(Msg::SettingsClosed)
+        match key {
+            CONFIG_WIN => Some(Msg::SettingsClosed),
+            PLAYLIST_WIN => Some(Msg::PlaylistClosed),
+            _ => None,
+        }
     }
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
@@ -2268,6 +2342,7 @@ impl App for MediaApp {
             bar_target: 0,
             settings_scroll: 0.0,
             visualizers_open: false,
+            playlist_open: false,
         }
     }
 
@@ -2317,6 +2392,25 @@ impl App for MediaApp {
                 let mut m = model;
                 m.settings_open = false;
                 m
+            }
+            Msg::TogglePlaylist => {
+                let mut m = model;
+                m.playlist_open = !m.playlist_open;
+                if m.playlist_open {
+                    handle.open_window(PLAYLIST_WIN, "Lista de reproducción — media", 420, 560);
+                } else {
+                    handle.close_window(PLAYLIST_WIN);
+                }
+                m
+            }
+            Msg::PlaylistClosed => {
+                let mut m = model;
+                m.playlist_open = false;
+                m
+            }
+            Msg::JumpTrack(i) => {
+                jump_playlist_to(i);
+                model
             }
             Msg::ConfigEdit(edit) => {
                 let mut m = model;
@@ -3412,6 +3506,86 @@ fn settings_content(model: &Model) -> View<Msg> {
     .children(vec![tabs, footer])
 }
 
+/// Contenido de la ventana OS de lista de reproducción (cola). Lista las
+/// pistas (nombres cacheados en `playlist_labels_slot`), resalta la actual
+/// (índice del `playback_snapshot`) y cada fila salta a esa pista al clickear
+/// (`Msg::JumpTrack`). v1 sin scroll: si la cola es muy larga, agrandar la
+/// ventana (la recorta).
+fn playlist_content() -> View<Msg> {
+    let labels = playlist_labels_slot().get();
+    let cur = playback_snapshot().idx;
+    let header = settings_header("Lista de reproducción — clic en una pista para saltar");
+
+    let rows: Vec<View<Msg>> = match labels {
+        Some(ls) if !ls.is_empty() => ls
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let active = i == cur;
+                let bg = if active {
+                    Color::from_rgba8(48, 86, 120, 255)
+                } else {
+                    Color::from_rgba8(30, 36, 46, 255)
+                };
+                let fg = if active {
+                    Color::from_rgba8(236, 243, 250, 255)
+                } else {
+                    Color::from_rgba8(196, 206, 222, 255)
+                };
+                View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+                    padding: TaffyRect {
+                        left: length(10.0_f32),
+                        right: length(10.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    align_items: Some(AlignItems::Center),
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .fill(bg)
+                .hover_fill(Color::from_rgba8(60, 72, 90, 255))
+                .radius(6.0)
+                .text(format!("{:>2}.  {name}", i + 1), 13.0, fg)
+                .on_click(Msg::JumpTrack(i))
+            })
+            .collect(),
+        _ => vec![View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text("Sin lista de reproducción.".to_string(), 13.0, Color::from_rgba8(150, 162, 182, 255))],
+    };
+
+    let list = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        flex_grow: 1.0,
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
+        ..Default::default()
+    })
+    .children(rows);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        padding: TaffyRect {
+            left: length(14.0_f32),
+            right: length(14.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(24, 28, 36, 255))
+    .clip(true)
+    .children(vec![header, list])
+}
+
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
 fn menubar_spec<'a>(
     menu: &'a AppMenu,
@@ -3455,6 +3629,7 @@ fn app_menu() -> AppMenu {
         .menu(
             Menu::new("Ver")
                 .item(MenuItem::new("Configuración", "view.settings").shortcut("F2").separated())
+                .item(MenuItem::new("Lista de reproducción", "view.playlist"))
                 .item(MenuItem::new("Visualizadores de audio", "view.visualizers"))
                 .item(MenuItem::new("Paleta de comandos", "view.palette").shortcut("Ctrl+Shift+P"))
                 .item(MenuItem::new("Ayuda de atajos", "view.help").shortcut("?")),
@@ -3486,6 +3661,7 @@ fn handle_menu_command(mut model: Model, cmd: &str, handle: &Handle<Msg>) -> Mod
         "play.vol_up" => dispatch(VolumeBy { delta: vstep }),
         "play.vol_dn" => dispatch(VolumeBy { delta: -vstep }),
         "view.settings" => handle.dispatch(Msg::ToggleSettings),
+        "view.playlist" => handle.dispatch(Msg::TogglePlaylist),
         "view.visualizers" => model.visualizers_open = !model.visualizers_open,
         "view.palette" => handle.dispatch(Msg::Palette(PaletteMsg::Open)),
         "view.help" => handle.dispatch(Msg::ToggleHelp),
@@ -4463,6 +4639,7 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
                     .cloned()
                     .unwrap_or_else(|| PathBuf::from("video"));
                 let pl = Playlist::new_single(label, LoadedTrack::FfmpegAudio(audio));
+                playlist_labels_slot().set(pl.track_labels()).ok();
                 let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(pl));
                 playlist_slot().set(Some(shared.clone())).ok();
                 let pausable = PausableAudio::new(
@@ -4524,6 +4701,7 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
                     pl.len(),
                     pl.track_path().display(),
                 );
+                playlist_labels_slot().set(pl.track_labels()).ok();
                 let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(pl));
                 playlist_slot().set(Some(shared.clone())).ok();
                 Box::new(SharedAudio { inner: shared })
