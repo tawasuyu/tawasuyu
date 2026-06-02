@@ -47,8 +47,11 @@ use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Listeni
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
 use smithay::utils::{Rectangle, SERIAL_COUNTER};
 use smithay::utils::{Serial, Transform};
+use smithay::backend::egl::EGLDevice;
 use smithay::wayland::buffer::BufferHandler;
-use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
+use smithay::wayland::dmabuf::{
+    DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
+};
 use smithay::wayland::compositor::{
     with_states, with_surface_tree_downward, CompositorClientState, CompositorHandler,
     CompositorState, SurfaceAttributes, TraversalAction,
@@ -1425,11 +1428,42 @@ fn announce_output(
 /// GPU (GPUI, navegadores acelerados) pueden ser clientes del compositor.
 fn announce_dmabuf(app: &mut App, dh: &DisplayHandle, renderer: &GlesRenderer) {
     let formats: Vec<_> = renderer.dmabuf_formats().into_iter().collect();
-    println!(
-        "mirada-compositor · dmabuf: {} format(s) anunciado(s).",
-        formats.len()
-    );
-    app.dmabuf_state.create_global::<App>(dh, formats);
+    // Nodo de render del adaptador del renderer — necesario para armar el
+    // *default feedback* de dmabuf v4.
+    let render_node = EGLDevice::device_for_display(renderer.egl_context().display())
+        .ok()
+        .and_then(|dev| dev.try_get_render_node().ok().flatten());
+    let feedback = render_node.and_then(|node| {
+        DmabufFeedbackBuilder::new(node.dev_id(), formats.clone())
+            .build()
+            .ok()
+    });
+    match feedback {
+        // dmabuf **v4 con default feedback**. La WSI Vulkan de Mesa lo EXIGE para
+        // determinar el dispositivo y los formatos presentables: con sólo el
+        // global v3 (sin feedback) los clientes wgpu/Vulkan ven **0 formatos** y
+        // no pueden crear swapchain (era el bug de `pata` por layer-shell, que
+        // caía a winit y paniqueaba). EGL/GL y los búferes shm (waybar) andaban
+        // con v3; el path Vulkan WSI no. Clientes que se bindean a v3 siguen
+        // recibiendo los formatos de la tranche principal.
+        Some(feedback) => {
+            app.dmabuf_state
+                .create_global_with_default_feedback::<App>(dh, &feedback);
+            println!(
+                "mirada-compositor · dmabuf v4 (feedback): {} format(s) anunciado(s).",
+                formats.len()
+            );
+        }
+        // Sin nodo de render no se puede armar feedback: caemos al global v3.
+        None => {
+            let n = formats.len();
+            app.dmabuf_state.create_global::<App>(dh, formats);
+            eprintln!(
+                "mirada-compositor · dmabuf v3 sin feedback ({n} fmt) — sin nodo de render; \
+                 los clientes Vulkan podrían ver 0 formatos."
+            );
+        }
+    }
 }
 
 /// Lo que comparten los dos backends gráficos: el `Display` de Wayland,
