@@ -278,6 +278,8 @@ struct ManagedWindow {
     focused: bool,
     /// `true` si es la ventana del shell — acoplada al pie, sin teselar.
     is_shell: bool,
+    /// `true` si está a pantalla completa — no lleva barra de título ni marco.
+    fullscreen: bool,
     /// Título del cliente — para pintar la etiqueta (barra de título).
     /// Se actualiza en `title_changed`.
     title: String,
@@ -648,13 +650,20 @@ impl App {
     fn exec_op(&mut self, op: BodyOp) {
         match op {
             BodyOp::Configure { id, rect, visible, floating, fullscreen } => {
+                // La barra de título reserva una franja arriba: la superficie
+                // del cliente se configura más baja por `tb` (no-shell, no
+                // fullscreen). `w.size` guarda la celda entera; `render_loc`
+                // baja la superficie por `tb`.
+                let tbh = self.decorations.titlebar_height.max(0);
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
                     w.loc = (rect.x, rect.y);
                     w.size = (rect.w, rect.h);
                     w.visible = visible;
                     w.floating = floating;
+                    w.fullscreen = fullscreen;
+                    let tb = if w.is_shell || fullscreen { 0 } else { tbh };
                     w.toplevel.with_pending_state(|s| {
-                        s.size = Some((rect.w.max(1), rect.h.max(1)).into());
+                        s.size = Some((rect.w.max(1), (rect.h - tb).max(1)).into());
                         if fullscreen {
                             s.states.set(xdg_toplevel::State::Fullscreen);
                         } else {
@@ -746,6 +755,7 @@ impl App {
             floating: false,
             focused: false,
             is_shell,
+            fullscreen: false,
             title: title.clone(),
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
         });
@@ -1506,7 +1516,21 @@ fn layer_render_elements(
     (over, under)
 }
 
-fn render_loc(w: &ManagedWindow, output_h: i32) -> (i32, i32) {
+/// El alto efectivo de la barra de título de `w`: `0` para el shell y las
+/// ventanas a pantalla completa (no llevan), el `titlebar_height` configurado
+/// para el resto. Acotado a `>= 0`.
+fn titlebar_for(w: &ManagedWindow, titlebar_height: i32) -> i32 {
+    if w.is_shell || w.fullscreen {
+        0
+    } else {
+        titlebar_height.max(0)
+    }
+}
+
+/// La posición de la **superficie** del cliente. `titlebar_height` reserva esa
+/// franja arriba de la celda (la superficie baja por `tb`); el resto centra la
+/// superficie en el área de contenido si el cliente presenta algo más chico.
+fn render_loc(w: &ManagedWindow, output_h: i32, titlebar_height: i32) -> (i32, i32) {
     if w.is_shell {
         // Sólo el anclaje inferior crece hacia arriba cuando el cliente
         // presenta una superficie más alta que la franja (cajón desplegado);
@@ -1517,13 +1541,16 @@ fn render_loc(w: &ManagedWindow, output_h: i32) -> (i32, i32) {
         }
         return w.loc;
     }
+    let tb = titlebar_for(w, titlebar_height);
+    let content_top = w.loc.1 + tb;
+    let content_h = (w.size.1 - tb).max(1);
     match with_renderer_surface_state(&w.surface, |s| s.surface_size()) {
         Some(Some(size)) => {
             let dx = ((w.size.0 - size.w) / 2).max(0);
-            let dy = ((w.size.1 - size.h) / 2).max(0);
-            (w.loc.0 + dx, w.loc.1 + dy)
+            let dy = ((content_h - size.h) / 2).max(0);
+            (w.loc.0 + dx, content_top + dy)
         }
-        _ => w.loc,
+        _ => (w.loc.0, content_top),
     }
 }
 
@@ -2194,11 +2221,14 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
             let mut shown: Vec<&ManagedWindow> =
                 state.windows.iter().filter(|w| w.visible).collect();
             shown.sort_by_key(|w| (!w.is_shell, !w.floating));
+            // El backend winit anidado no pinta decoración; pasa el alto de
+            // barra para que la superficie quede donde el DRM la pondría.
+            let tbh = state.decorations.titlebar_height;
             let window_elems = shown.iter().flat_map(|w| {
                 render_elements_from_surface_tree(
                     renderer,
                     &w.surface,
-                    render_loc(w, output_h),
+                    render_loc(w, output_h, tbh),
                     1.0,
                     1.0,
                     Kind::Unspecified,

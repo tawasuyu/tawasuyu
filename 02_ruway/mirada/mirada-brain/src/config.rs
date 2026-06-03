@@ -82,6 +82,9 @@ pub struct Config {
     pub border_focus: [u8; 4],
     /// Color RGBA (`0..=255`) del marco de las ventanas sin foco.
     pub border_normal: [u8; 4],
+    /// Alto de la barra de título en px; `0` = sin barra (sólo el título de la
+    /// ventana enfocada superpuesto). Se reserva arriba de cada ventana.
+    pub titlebar_height: i32,
     /// Ruta a la fuente para las etiquetas del compositor (título, menú).
     /// Vacía = se prueba una lista de fuentes comunes del sistema.
     pub font_path: String,
@@ -126,6 +129,7 @@ impl Default for Config {
             border_width: dec.border_width,
             border_focus: dec.border_focus,
             border_normal: dec.border_normal,
+            titlebar_height: dec.titlebar_height,
             font_path: String::new(),
             wallpaper_path: String::new(),
             menu: Vec::new(),
@@ -156,6 +160,7 @@ impl Config {
             border_width: self.border_width.max(0),
             border_focus: self.border_focus,
             border_normal: self.border_normal,
+            titlebar_height: self.titlebar_height.max(0),
         }
     }
 
@@ -249,6 +254,9 @@ const CONFIG_TEMPLATE: &str = "\
     border_width: 2,
     border_focus: (92, 143, 235, 255),    // azul al foco
     border_normal: (56, 56, 69, 255),     // gris discreto sin foco
+    // Barra de título sobre cada ventana (px). 0 = sin barra (sólo el título
+    // de la ventana enfocada, superpuesto). La franja se reserva arriba.
+    titlebar_height: 24,
 
     // Fuente para las etiquetas (título, menú). Vacía = se prueba una lista
     // de fuentes comunes del sistema (Liberation, DejaVu, Noto, Adwaita…).

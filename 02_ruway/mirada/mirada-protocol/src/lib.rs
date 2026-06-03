@@ -64,16 +64,22 @@ pub struct Decorations {
     pub border_focus: [u8; 4],
     /// Color RGBA del marco de las ventanas sin foco.
     pub border_normal: [u8; 4],
+    /// Alto de la barra de título en píxeles; `0` = sin barra de título (sólo
+    /// se muestra el título de la ventana enfocada superpuesto, como antes).
+    /// La franja se reserva arriba de cada ventana (no-shell): la superficie
+    /// del cliente se achica y la barra se pinta encima.
+    pub titlebar_height: i32,
 }
 
 impl Default for Decorations {
     /// Los valores históricos del Cuerpo: marco de 2 px, azul al foco,
-    /// gris discreto sin él. Fuente única — la config parte de aquí.
+    /// gris discreto sin él, barra de título de 24 px.
     fn default() -> Self {
         Self {
             border_width: 2,
             border_focus: [92, 143, 235, 255],
             border_normal: [56, 56, 69, 255],
+            titlebar_height: 24,
         }
     }
 }
@@ -306,6 +312,7 @@ mod tests {
             border_width: 3,
             border_focus: [10, 20, 30, 255],
             border_normal: [1, 2, 3, 4],
+            titlebar_height: 24,
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();

@@ -172,6 +172,29 @@ fn load_wallpaper(path: &str, w: i32, h: i32) -> Option<MemoryRenderBuffer> {
     ))
 }
 
+/// Rasteriza un título a un `MemoryRenderBuffer` (Argb8888); si no rasteriza
+/// nada, devuelve un búfer 1×1 transparente. Lo cachea el llamador.
+fn title_buffer(tr: &crate::text::TextRenderer, title: &str) -> MemoryRenderBuffer {
+    match tr.rasterize(title, TITLE_PX, TITLE_COLOR) {
+        Some(r) => MemoryRenderBuffer::from_slice(
+            &r.rgba,
+            Fourcc::Argb8888,
+            (r.width, r.height),
+            1,
+            Transform::Normal,
+            None,
+        ),
+        None => MemoryRenderBuffer::from_slice(
+            &[0u8; 4],
+            Fourcc::Argb8888,
+            (1, 1),
+            1,
+            Transform::Normal,
+            None,
+        ),
+    }
+}
+
 /// Códigos de botón de `<linux/input-event-codes.h>`.
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -244,8 +267,11 @@ impl DrmState {
             if !w.visible || w.is_shell {
                 continue; // el shell no lleva marco
             }
-            let (x, y) = crate::render_loc(w, output_h);
-            let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
+            let tb = crate::titlebar_for(w, dec.titlebar_height);
+            let (x, y) = crate::render_loc(w, output_h, dec.titlebar_height);
+            let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, w.size.1 - tb));
+            // El marco envuelve barra de título + superficie.
+            let (x, y, sh) = (x, y - tb, sh + tb);
             let color = rgba_f32(if w.focused {
                 dec.border_focus
             } else {
@@ -427,44 +453,67 @@ impl DrmState {
             // apertura entre las no enfocadas.
             let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
             shown.sort_by_key(|w| (!w.is_shell, !w.floating, !w.focused));
+            let tbh = self.app.decorations.titlebar_height;
             for w in &shown {
-                let (x, y) = crate::render_loc(w, output_h);
-                let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
-                // Etiqueta de título de la ventana ENFOCADA: rasterizada (con
-                // caché) y compuesta encima de su superficie. Es la primera
-                // prueba real del render de texto y la semilla de la barra de
-                // título. Se pinta primero en el bloque → queda arriba de todo
-                // lo de esta ventana.
-                if w.focused && !w.is_shell && !w.title.is_empty() {
+                let tb = crate::titlebar_for(w, tbh);
+                let (x, y) = crate::render_loc(w, output_h, tbh); // pos de la superficie
+                let (sw, sh) =
+                    crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
+                // El rect decorado envuelve barra de título + superficie.
+                let dec_y = y - tb;
+                let dec_h = sh + tb;
+
+                if tb > 0 {
+                    // Barra de título real: una franja arriba de la superficie,
+                    // coloreada por el foco, con el título a la izquierda.
                     if let Some(tr) = &self.text {
-                        let color = TITLE_COLOR;
-                        // Tope simple: los títulos cambian seguido (cwd de una
-                        // terminal, etc.); sin esto la caché crecería sin fin.
+                        if !w.title.is_empty() {
+                            if self.text_cache.len() > 256 {
+                                self.text_cache.clear();
+                            }
+                            let buf = self
+                                .text_cache
+                                .entry((w.title.clone(), TITLE_COLOR))
+                                .or_insert_with(|| title_buffer(tr, &w.title));
+                            let ty = dec_y + (tb - TITLE_PX as i32) / 2;
+                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                                &mut self.renderer,
+                                ((x + 8) as f64, ty as f64),
+                                buf,
+                                None,
+                                None,
+                                None,
+                                Kind::Unspecified,
+                            ) {
+                                out.push(Frame::Text(el));
+                            }
+                        }
+                    }
+                    let color = rgba_f32(if w.focused {
+                        self.app.decorations.border_focus
+                    } else {
+                        self.app.decorations.border_normal
+                    });
+                    let mut bar = SolidColorBuffer::default();
+                    bar.update((sw, tb), color);
+                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &bar,
+                        (x, dec_y),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                } else if w.focused && !w.is_shell && !w.title.is_empty() {
+                    // Sin barra (titlebar_height = 0): el viejo comportamiento,
+                    // el título de la enfocada superpuesto sobre su superficie.
+                    if let Some(tr) = &self.text {
                         if self.text_cache.len() > 256 {
                             self.text_cache.clear();
                         }
                         let buf = self
                             .text_cache
-                            .entry((w.title.clone(), color))
-                            .or_insert_with(|| match tr.rasterize(&w.title, TITLE_PX, color) {
-                                Some(r) => MemoryRenderBuffer::from_slice(
-                                    &r.rgba,
-                                    Fourcc::Argb8888,
-                                    (r.width, r.height),
-                                    1,
-                                    Transform::Normal,
-                                    None,
-                                ),
-                                // Nada que pintar: un búfer 1×1 transparente.
-                                None => MemoryRenderBuffer::from_slice(
-                                    &[0u8; 4],
-                                    Fourcc::Argb8888,
-                                    (1, 1),
-                                    1,
-                                    Transform::Normal,
-                                    None,
-                                ),
-                            });
+                            .entry((w.title.clone(), TITLE_COLOR))
+                            .or_insert_with(|| title_buffer(tr, &w.title));
                         if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                             &mut self.renderer,
                             ((x + 6) as f64, (y + 4) as f64),
@@ -478,10 +527,10 @@ impl DrmState {
                         }
                     }
                 }
-                // El marco, encima de la propia superficie de la ventana
-                // — el shell no lleva, y se omite si el grosor es 0.
+                // El marco, alrededor de la decoración completa (barra +
+                // superficie) — el shell no lleva, y se omite si el grosor es 0.
                 if !w.is_shell && self.app.decorations.border_width > 0 {
-                    let rects = border_rects(x, y, sw, sh, self.app.decorations.border_width);
+                    let rects = border_rects(x, dec_y, sw, dec_h, self.app.decorations.border_width);
                     for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
                         out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
                             buf,
@@ -940,7 +989,8 @@ impl DrmState {
         let hit = self.window_at(x, y);
         let focus = hit.map(|i| {
             let w = &self.app.windows[i];
-            let (lx, ly) = crate::render_loc(w, self.app.output_size.1);
+            let (lx, ly) =
+                crate::render_loc(w, self.app.output_size.1, self.app.decorations.titlebar_height);
             (
                 w.surface.clone(),
                 Point::<f64, Logical>::from((lx as f64, ly as f64)),
@@ -1039,10 +1089,14 @@ impl DrmState {
             (!w.is_shell, !w.floating, !w.focused)
         });
         let output_h = self.app.output_size.1;
+        let tbh = self.app.decorations.titlebar_height;
         idx.into_iter().find(|&i| {
             let w = &self.app.windows[i];
-            let (lx, ly) = crate::render_loc(w, output_h);
-            let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
+            let tb = crate::titlebar_for(w, tbh);
+            let (lx, ly) = crate::render_loc(w, output_h, tbh);
+            let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
+            // Impacto sobre la SUPERFICIE (la barra de título es chrome inerte
+            // en este MVP: no captura el puntero hacia el cliente).
             x >= lx as f64 && y >= ly as f64 && x < (lx + sw) as f64 && y < (ly + sh) as f64
         })
     }
