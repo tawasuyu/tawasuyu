@@ -662,6 +662,8 @@ impl App for Cosmos {
             nav_cut: None,
             sphere_yaw: ui.sphere_yaw,
             sphere_pitch: ui.sphere_pitch,
+            wheel_zoom: 1.0,
+            wheel_pan: (0.0, 0.0),
             nav_w: ui.nav_w,
             tools_w: ui.tools_w,
             nav_open: ui.nav_open,
@@ -712,6 +714,17 @@ impl App for Cosmos {
                 m.sphere_yaw = 26.0;
                 m.sphere_pitch = -64.0;
                 persist = true;
+            }
+            Msg::WheelPan(dx, dy) => {
+                m.wheel_pan.0 += dx;
+                m.wheel_pan.1 += dy;
+            }
+            Msg::WheelZoom(factor) => {
+                m.wheel_zoom = (m.wheel_zoom * factor).clamp(0.25, 8.0);
+            }
+            Msg::WheelResetView => {
+                m.wheel_zoom = 1.0;
+                m.wheel_pan = (0.0, 0.0);
             }
             // navegación
             Msg::ToggleNavNode(key) => m.toggle_nav(key),

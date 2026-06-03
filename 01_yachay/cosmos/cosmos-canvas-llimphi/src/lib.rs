@@ -25,6 +25,33 @@ use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{layout_block, Alignment, TextBlock, Typesetter};
 use llimphi_ui::{PaintRect, View};
 
+/// Zoom + paneo aplicados sobre el aspect-fit base del canvas. `zoom`
+/// multiplica la escala; `pan` desplaza el origen en píxeles de pantalla.
+/// `Default` (zoom 1, pan 0) = aspect-fit centrado puro.
+#[derive(Debug, Clone, Copy)]
+pub struct ViewTransform {
+    pub zoom: f32,
+    pub pan: (f32, f32),
+}
+
+impl Default for ViewTransform {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            pan: (0.0, 0.0),
+        }
+    }
+}
+
+/// Escala y offset (en coords de pantalla) para un rect dado y transform.
+fn fit(rect_w: f32, rect_h: f32, wheel_size: f32, t: ViewTransform) -> (f64, f64, f64) {
+    let scale = (rect_w.min(rect_h) / wheel_size) as f64 * t.zoom.max(0.01) as f64;
+    let disp = wheel_size as f64 * scale;
+    let off_x = (rect_w as f64 - disp) * 0.5 + t.pan.0 as f64;
+    let off_y = (rect_h as f64 - disp) * 0.5 + t.pan.1 as f64;
+    (scale, off_x, off_y)
+}
+
 /// Construye un View que pinta `commands` centrados en su rect.
 ///
 /// `wheel_size` debe coincidir con `CompositionOpts::size` que se
@@ -35,6 +62,19 @@ pub fn canvas_view<Msg>(
     commands: Vec<DrawCommand>,
     wheel_size: f32,
     background: Option<Color>,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+{
+    canvas_view_ex(commands, wheel_size, background, ViewTransform::default())
+}
+
+/// Como [`canvas_view`] pero con zoom + paneo.
+pub fn canvas_view_ex<Msg>(
+    commands: Vec<DrawCommand>,
+    wheel_size: f32,
+    background: Option<Color>,
+    t: ViewTransform,
 ) -> View<Msg>
 where
     Msg: Clone + 'static,
@@ -55,11 +95,10 @@ where
         if commands.is_empty() || wheel_size <= 0.0 {
             return;
         }
-        // Aspect-fit centrado: lado del wheel ↔ min(rect.w, rect.h).
-        let scale = (rect.w.min(rect.h) / wheel_size) as f64;
-        let disp = wheel_size as f64 * scale;
-        let off_x = rect.x as f64 + (rect.w as f64 - disp) * 0.5;
-        let off_y = rect.y as f64 + (rect.h as f64 - disp) * 0.5;
+        // Aspect-fit centrado + zoom/pan del usuario.
+        let (scale, off_local_x, off_local_y) = fit(rect.w, rect.h, wheel_size, t);
+        let off_x = rect.x as f64 + off_local_x;
+        let off_y = rect.y as f64 + off_local_y;
         // El transform global aplica a las primitivas geométricas; el
         // texto lo posicionamos absoluto (parley no compone bien con
         // transforms para sizing/alignment).
@@ -86,19 +125,39 @@ where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(f32, f32) -> Option<Msg> + Send + Sync + 'static,
 {
-    let view = canvas_view::<Msg>(commands, wheel_size, background);
+    canvas_view_clickable_ex(
+        commands,
+        wheel_size,
+        background,
+        ViewTransform::default(),
+        on_click,
+    )
+}
+
+/// Como [`canvas_view_clickable`] pero con zoom + paneo; el hit-test
+/// invierte el mismo transform para que el click siga cayendo sobre el
+/// glyph correcto a cualquier zoom/pan.
+pub fn canvas_view_clickable_ex<Msg, F>(
+    commands: Vec<DrawCommand>,
+    wheel_size: f32,
+    background: Option<Color>,
+    t: ViewTransform,
+    on_click: F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(f32, f32) -> Option<Msg> + Send + Sync + 'static,
+{
+    let view = canvas_view_ex::<Msg>(commands, wheel_size, background, t);
     view.on_click_at(move |local_x, local_y, rect_w, rect_h| {
         if wheel_size <= 0.0 {
             return None;
         }
-        // Invertir el aspect-fit que aplica `paint_with`.
-        let scale = rect_w.min(rect_h) / wheel_size;
-        let disp = wheel_size * scale;
-        let off_x = (rect_w - disp) * 0.5;
-        let off_y = (rect_h - disp) * 0.5;
-        let wheel_x = (local_x - off_x) / scale;
-        let wheel_y = (local_y - off_y) / scale;
-        on_click(wheel_x, wheel_y)
+        // Invertir el aspect-fit + zoom/pan que aplica `paint_with`.
+        let (scale, off_x, off_y) = fit(rect_w, rect_h, wheel_size, t);
+        let wheel_x = (local_x as f64 - off_x) / scale;
+        let wheel_y = (local_y as f64 - off_y) / scale;
+        on_click(wheel_x as f32, wheel_y as f32)
     })
 }
 

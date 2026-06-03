@@ -419,6 +419,13 @@ pub(crate) enum Msg {
     SphereRotate(f32, f32),
     /// Resetea la orientación de la esfera 3D.
     SphereReset,
+    /// Paneo del lienzo de la rueda (Δx, Δy en píxeles de pantalla) —
+    /// emitido por el drag y por la rueda del ratón.
+    WheelPan(f32, f32),
+    /// Multiplica el zoom del lienzo de la rueda por el factor dado.
+    WheelZoom(f32),
+    /// Restaura zoom 1× y paneo 0 (encuadre).
+    WheelResetView,
     /// Expande/colapsa un nodo (grupo o contacto) del árbol de datos.
     ToggleNavNode(String),
     /// Selecciona un nodo del árbol; carta→carga, contenedor→toggle.
@@ -527,6 +534,9 @@ pub(crate) struct Model {
     // esfera 3D (orientación)
     pub(crate) sphere_yaw: f32,
     pub(crate) sphere_pitch: f32,
+    // rueda 2D: zoom + paneo del lienzo (transitorio, no se persiste)
+    pub(crate) wheel_zoom: f32,
+    pub(crate) wheel_pan: (f32, f32),
     // layout guardable (3 zonas resizables)
     pub(crate) nav_w: f32,
     pub(crate) tools_w: f32,

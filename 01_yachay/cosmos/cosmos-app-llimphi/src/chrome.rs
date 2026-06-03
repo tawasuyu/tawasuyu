@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use cosmos_canvas_llimphi::{canvas_view, canvas_view_clickable};
+use cosmos_canvas_llimphi::{canvas_view, canvas_view_clickable_ex, ViewTransform};
 use cosmos_render::{
     compose_sphere, compose_wheel_with_hits, CompositionOpts, DrawCommand, Palette, Rgba,
     SphereOpts, SphereView, TextAnchor,
@@ -912,7 +912,7 @@ fn graphic_for(
     theme: &Theme,
 ) -> View<Msg> {
     match model.chart_view {
-        ChartView::Estandar => wheel_canvas(model, render, size),
+        ChartView::Estandar => wheel_canvas(model, render, size, theme),
         ChartView::Carto => crate::astrocarto::tile_astrocarto(chart, render, theme),
         ChartView::Esfera3d => sphere_canvas(model, render, size, theme),
         ChartView::Cielo => sky_canvas(model, size, theme),
@@ -1286,7 +1286,7 @@ fn pending_view(msg: &str, theme: &Theme) -> View<Msg> {
 
 /// La rueda natal 2D como canvas clickeable (sólo el gráfico), de la carta
 /// cuyo `render` se pasa, al tamaño `size`.
-fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32) -> View<Msg> {
+fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme) -> View<Msg> {
     let opts = CompositionOpts {
         size,
         rot_offset_deg: model.cfg.rot_offset_deg,
@@ -1303,15 +1303,29 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32) -
     // Offset del menú contextual: origen del centro ≈ nav (resizable) +
     // barra de menú + cabecera del switcher. (Aprox. en mosaico.)
     let nav_off = model.nav_w + if model.nav_open { 6.0 } else { 0.0 };
-    let canvas = canvas_view_clickable::<Msg, _>(commands, size, Some(canvas_bg), move |wx, wy| {
+    let t = ViewTransform {
+        zoom: model.wheel_zoom,
+        pan: model.wheel_pan,
+    };
+    // Paso de paneo por "línea" de rueda.
+    const WHEEL_STEP: f32 = 26.0;
+    let canvas = canvas_view_clickable_ex::<Msg, _>(commands, size, Some(canvas_bg), t, move |wx, wy| {
         let picked: Option<String> = hits.pick(wx, wy).map(str::to_string);
         Some(Msg::SelectBody(picked))
     })
+    // Drag: paneo del lienzo. Coexiste con el on_click_at (el press
+    // selecciona el cuerpo; el movimiento panea).
+    .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
+        DragPhase::Move => Some(Msg::WheelPan(dx, dy)),
+        DragPhase::End => None,
+    })
+    // Rueda del ratón: paneo horizontal/vertical.
+    .on_scroll(|dx, dy| Some(Msg::WheelPan(dx * WHEEL_STEP, dy * WHEEL_STEP)))
     .on_right_click_at(move |lx, ly, _w, _h| {
         Some(Msg::OpenCanvasCtx(nav_off + lx, MENU_BAR_H + TAB_BAR_H + ly))
     });
 
-    View::new(Style {
+    let canvas_box = View::new(Style {
         size: Size {
             width: length(size),
             height: length(size),
@@ -1319,7 +1333,80 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32) -
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![canvas])
+    .children(vec![canvas]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(size),
+            height: auto(),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![zoom_controls(model, theme), canvas_box])
+}
+
+/// Botonera de zoom/encuadre del lienzo de la rueda.
+fn zoom_controls(model: &Model, theme: &Theme) -> View<Msg> {
+    let btn = |icon: Icon, msg: Msg| -> View<Msg> {
+        View::new(Style {
+            size: Size {
+                width: length(26.0_f32),
+                height: length(24.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .radius(4.0)
+        .fill(theme.bg_panel)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(msg)
+        .children(vec![glyphs::icon_view(icon, 15.0, theme.fg_text)])
+    };
+    let pct = View::new(Style {
+        size: Size {
+            width: length(46.0_f32),
+            height: length(24.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{:.0}%", model.wheel_zoom * 100.0),
+        11.0,
+        theme.fg_muted,
+        Alignment::Center,
+    );
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: auto(),
+            height: length(26.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(4.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        btn(Icon::ZoomOut, Msg::WheelZoom(0.8)),
+        pct,
+        btn(Icon::ZoomIn, Msg::WheelZoom(1.25)),
+        btn(Icon::Refresh, Msg::WheelResetView),
+    ])
 }
 
 // =====================================================================
