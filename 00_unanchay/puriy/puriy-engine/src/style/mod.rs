@@ -500,6 +500,47 @@ mod tests {
     }
 
     #[test]
+    fn font_shorthand_expande_longhands() {
+        // `font:` shorthand reparte style/weight/size/line-height/family.
+        let html = r#"<html><head><style>
+            .a{font:italic bold 20px/1.5 "Helvetica", sans-serif}
+            .b{font:16px serif}
+            .c{font:300 2rem monospace}
+            .d{font:caption}
+        </style></head><body>
+            <p class="a">a</p><p class="b">b</p>
+            <p class="c">c</p><p class="d">d</p>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        // .a — todos los ejes presentes.
+        let a = eng.compute(&ps[0]);
+        assert_eq!(a.font_style, FontStyle::Italic);
+        assert_eq!(a.font_weight, 700);
+        assert_eq!(a.font_size, 20.0);
+        assert!((a.line_height.unwrap() - 1.5).abs() < 1e-6);
+        assert_eq!(a.font_family.as_deref(), Some(r#""Helvetica", sans-serif"#));
+        // .b — sólo size + family; el resto queda en defaults heredados.
+        let b = eng.compute(&ps[1]);
+        assert_eq!(b.font_size, 16.0);
+        assert_eq!(b.font_style, FontStyle::Normal);
+        assert_eq!(b.font_family.as_deref(), Some("serif"));
+        // .c — weight numérico + rem.
+        let c = eng.compute(&ps[2]);
+        assert_eq!(c.font_weight, 300);
+        assert_eq!(c.font_size, 32.0);
+        assert_eq!(c.font_family.as_deref(), Some("monospace"));
+        // .d — fuente de sistema: shorthand ignorado, size queda en default UA.
+        assert_eq!(eng.compute(&ps[3]).font_size, 16.0);
+    }
+
+    #[test]
     fn parsea_calc_solo_px() {
         // calc(10px + 5px) resuelve a Px(15) en parse time.
         assert_eq!(parse_length_or_pct("calc(10px + 5px)"), Some(LengthVal::Px(15.0)));

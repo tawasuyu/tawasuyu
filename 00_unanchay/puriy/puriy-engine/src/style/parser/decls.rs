@@ -80,6 +80,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_flex_shorthand(value, important));
             continue;
         }
+        if prop.eq_ignore_ascii_case("font") {
+            out.extend(parse_font_shorthand(value, important));
+            continue;
+        }
         if prop.eq_ignore_ascii_case("inset") {
             out.extend(parse_inset_shorthand(value, important));
             continue;

@@ -1144,6 +1144,95 @@ pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl>
     out
 }
 
+/// Shorthand `font:` — expande a font-style / font-weight / font-size /
+/// line-height / font-family. Sintaxis CSS:
+///   font: [ <style> || <variant> || <weight> || <stretch> ]?
+///         <size> [ / <line-height> ]? <family>
+/// `size` y `family` son obligatorios; las palabras de fuente de sistema
+/// (`caption`/`menu`/…) no se soportan y devuelven vacío. `font-variant`
+/// y `font-stretch` se reconocen para no romper el parseo pero se ignoran
+/// (no tenemos esos ejes todavía).
+pub(crate) fn parse_font_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let v = value.trim();
+    // Palabras de fuente de sistema: no soportadas.
+    if matches!(
+        v.to_ascii_lowercase().as_str(),
+        "caption" | "icon" | "menu" | "message-box" | "small-caption" | "status-bar"
+    ) {
+        return Vec::new();
+    }
+    // El `/` separa size de line-height (`16px/1.5` o `16px / 1.5`). Lo
+    // rodeamos de espacios para tokenizar uniforme; font-family no usa `/`.
+    let spaced = v.replace('/', " / ");
+    let mut words = spaced.split_whitespace().peekable();
+
+    let mut style: Option<FontStyle> = None;
+    let mut weight: Option<u16> = None;
+    let mut size: Option<f32> = None;
+
+    // Prefijo: style || variant || weight || stretch en cualquier orden,
+    // hasta toparnos con el token de tamaño. Los pesos numéricos (100..900)
+    // se reconocen ANTES de probar el tamaño para no confundir `300` con un
+    // `font-size` crudo.
+    while let Some(&w) = words.peek() {
+        if w == "/" {
+            break;
+        }
+        let wl = w.to_ascii_lowercase();
+        match wl.as_str() {
+            // `normal` aplica a style/variant/weight: no cambia nada.
+            "normal" => {}
+            "italic" | "oblique" => style = Some(FontStyle::Italic),
+            "bold" | "bolder" => weight = Some(700),
+            "lighter" => weight = Some(300),
+            "100" | "200" | "300" | "400" | "500" | "600" | "700" | "800" | "900" => {
+                weight = wl.parse().ok();
+            }
+            // font-variant / font-stretch keywords: reconocidos pero ignorados.
+            "small-caps" | "all-small-caps" | "ultra-condensed" | "extra-condensed"
+            | "condensed" | "semi-condensed" | "semi-expanded" | "expanded"
+            | "extra-expanded" | "ultra-expanded" => {}
+            // No es keyword de prefijo → debe ser el tamaño (px/em/rem/calc…).
+            _ => {
+                if let Some(px) = parse_px_or_math(w) {
+                    size = Some(px);
+                    words.next();
+                }
+                break;
+            }
+        }
+        words.next();
+    }
+
+    let Some(fs) = size else {
+        return Vec::new();
+    };
+    let mut out = vec![Decl { kind: DeclKind::FontSize(fs), important }];
+    if let Some(s) = style {
+        out.push(Decl { kind: DeclKind::FontStyle(s), important });
+    }
+    if let Some(w) = weight {
+        out.push(Decl { kind: DeclKind::FontWeight(w), important });
+    }
+
+    // line-height opcional tras `/`.
+    if words.peek() == Some(&"/") {
+        words.next();
+        if let Some(lh_word) = words.next() {
+            if let Some(lh) = parse_line_height(lh_word) {
+                out.push(Decl { kind: DeclKind::LineHeight(lh), important });
+            }
+        }
+    }
+
+    // Resto = font-family (obligatoria; puede traer varias familias por coma).
+    let family: Vec<&str> = words.collect();
+    if !family.is_empty() {
+        out.push(Decl { kind: DeclKind::FontFamily(family.join(" ")), important });
+    }
+    out
+}
+
 /// `background-image: linear-gradient(...)` o `none`. Devuelve un
 /// `DeclKind` listo (Background o BackgroundGradient o None).
 pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
