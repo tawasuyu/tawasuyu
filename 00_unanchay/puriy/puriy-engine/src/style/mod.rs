@@ -453,6 +453,18 @@ mod tests {
         let (from, _, _) = conic(&grad("conic-gradient(from 45deg, red, blue)"));
         assert!((from - 45.0).abs() < 1e-3);
         assert_eq!(grad("conic-gradient(red, blue)").stops.len(), 2);
+
+        // Posiciones de stop angulares: `90deg`/`0.25turn` → Px(grados); `%`
+        // sigue siendo Pct. El render trata el eje cónico como 360°.
+        let g = grad("conic-gradient(red 90deg, blue 0.25turn, lime 75%)");
+        assert_eq!(g.stops[0].pos, Some(LengthVal::Px(90.0)));
+        assert_eq!(g.stops[1].pos, Some(LengthVal::Px(90.0)));
+        assert_eq!(g.stops[2].pos, Some(LengthVal::Pct(75.0)));
+        // Doble posición angular `red 0deg 90deg` ⇒ dos stops.
+        let g = grad("repeating-conic-gradient(red 0deg 90deg, blue 90deg 180deg)");
+        assert_eq!(g.stops.len(), 4);
+        assert_eq!(g.stops[0].pos, Some(LengthVal::Px(0.0)));
+        assert_eq!(g.stops[1].pos, Some(LengthVal::Px(90.0)));
     }
 
     #[test]

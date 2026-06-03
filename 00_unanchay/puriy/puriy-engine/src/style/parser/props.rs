@@ -1821,7 +1821,7 @@ pub(crate) fn parse_linear_gradient(args: &str) -> Option<LinearGradient> {
     let angle_deg = angle_deg.unwrap_or(180.0);
     let mut stops: Vec<GradientStop> = Vec::new();
     for raw in &parts[stops_start_idx..] {
-        push_gradient_stops(raw, &mut stops);
+        push_gradient_stops(raw, false, &mut stops);
     }
     if stops.len() < 2 {
         return None;
@@ -1848,7 +1848,7 @@ pub(crate) fn parse_radial_gradient(args: &str) -> Option<LinearGradient> {
     };
     let mut stops: Vec<GradientStop> = Vec::new();
     for raw in &parts[stops_start..] {
-        push_gradient_stops(raw, &mut stops);
+        push_gradient_stops(raw, false, &mut stops);
     }
     if stops.len() < 2 {
         return None;
@@ -1877,7 +1877,7 @@ pub(crate) fn parse_conic_gradient(args: &str) -> Option<LinearGradient> {
     };
     let mut stops: Vec<GradientStop> = Vec::new();
     for raw in &parts[stops_start..] {
-        push_gradient_stops(raw, &mut stops);
+        push_gradient_stops(raw, true, &mut stops);
     }
     if stops.len() < 2 {
         return None;
@@ -2026,12 +2026,16 @@ pub(crate) fn parse_gradient_direction(s: &str) -> (Option<f32>, bool) {
     (None, false)
 }
 
-/// Parsea una posición de stop: `40%` → `Pct(40)`, `10px`/`1rem`/`0` →
-/// `Px(...)` (px reales, no la vieja heurística `/100`). Devuelve `None` si
-/// el token no es una posición válida.
-fn parse_stop_pos(p: &str) -> Option<LengthVal> {
+/// Parsea una posición de stop: `40%` → `Pct(40)`. En un gradiente lineal o
+/// radial el resto es una longitud (`10px`/`1rem`/`0` → `Px(...)`, px reales,
+/// no la vieja heurística `/100`); en uno **cónico** es un ángulo
+/// (`90deg`/`0.25turn` → `Px(grados)`, ya que el render trata el eje cónico
+/// como 360°). Devuelve `None` si el token no es una posición válida.
+fn parse_stop_pos(p: &str, conic: bool) -> Option<LengthVal> {
     if let Some(pct) = p.strip_suffix('%') {
         pct.trim().parse::<f32>().ok().map(LengthVal::Pct)
+    } else if conic {
+        parse_angle_deg(p).map(LengthVal::Px)
     } else {
         parse_length_px(p).map(LengthVal::Px)
     }
@@ -2042,7 +2046,7 @@ fn parse_stop_pos(p: &str) -> Option<LengthVal> {
 /// `<color> <pos> <pos>` (doble posición CSS — atajo `#ccc 0 10px` que
 /// equivale a dos stops del mismo color; omnipresente en franjas
 /// `repeating-*`). Devuelve `false` si el token no es un stop válido.
-fn push_gradient_stops(raw: &str, out: &mut Vec<GradientStop>) -> bool {
+fn push_gradient_stops(raw: &str, conic: bool, out: &mut Vec<GradientStop>) -> bool {
     let parts: Vec<&str> = raw.split_whitespace().collect();
     match parts.as_slice() {
         [c] => match parse_color(c) {
@@ -2054,15 +2058,15 @@ fn push_gradient_stops(raw: &str, out: &mut Vec<GradientStop>) -> bool {
         },
         [c, p] => match parse_color(c) {
             Some(color) => {
-                out.push(GradientStop { color, pos: parse_stop_pos(p) });
+                out.push(GradientStop { color, pos: parse_stop_pos(p, conic) });
                 true
             }
             None => false,
         },
         [c, p1, p2] => match parse_color(c) {
             Some(color) => {
-                out.push(GradientStop { color, pos: parse_stop_pos(p1) });
-                out.push(GradientStop { color, pos: parse_stop_pos(p2) });
+                out.push(GradientStop { color, pos: parse_stop_pos(p1, conic) });
+                out.push(GradientStop { color, pos: parse_stop_pos(p2, conic) });
                 true
             }
             None => false,
@@ -2071,11 +2075,11 @@ fn push_gradient_stops(raw: &str, out: &mut Vec<GradientStop>) -> bool {
     }
 }
 
-/// Compat: parsea un único stop (sin doble posición). Usado por tests.
+/// Compat: parsea un único stop lineal/radial (sin doble posición). Usado por tests.
 #[cfg(test)]
 pub(crate) fn parse_gradient_stop(s: &str) -> Option<GradientStop> {
     let mut v = Vec::new();
-    if push_gradient_stops(s, &mut v) {
+    if push_gradient_stops(s, false, &mut v) {
         v.into_iter().next()
     } else {
         None
