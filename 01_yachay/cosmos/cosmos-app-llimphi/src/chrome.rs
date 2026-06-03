@@ -146,6 +146,30 @@ impl MenuEntry {
 /// Lado del lienzo de cada carta en modo mosaico.
 const TILE_SIZE: f32 = 360.0;
 
+/// Paleta del lienzo según el tema activo (claro/oscuro).
+fn graphics_palette(model: &Model) -> Palette {
+    if model.cfg.theme_dark {
+        Palette::dark()
+    } else {
+        Palette::light()
+    }
+}
+
+/// Fondo del lienzo según el tema activo.
+fn graphics_bg(model: &Model) -> Color {
+    if model.cfg.theme_dark {
+        Color::from_rgba8(8, 10, 16, 255)
+    } else {
+        Color::from_rgba8(246, 247, 250, 255)
+    }
+}
+
+/// Convierte un `Color` (peniko) a `Rgba` (cosmos-render).
+fn rgba_of(c: Color) -> Rgba {
+    let [r, g, b, a] = c.components;
+    Rgba { r, g, b, a }
+}
+
 /// Marca de "activo" en las entradas de menú. Bullet (U+2022, presente en
 /// las fuentes default) en vez de ✓ que cae como `.notdef`.
 fn check(label: &str, on: bool) -> String {
@@ -968,10 +992,14 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme) -> View<Msg> {
     let cx = size / 2.0;
     let cy = size / 2.0;
     let r = size * 0.42;
-    let grid = Rgba { r: 0.35, g: 0.40, b: 0.50, a: 1.0 };
-    let card = Rgba { r: 0.65, g: 0.70, b: 0.80, a: 1.0 };
-    let body_col = Rgba { r: 0.95, g: 0.85, b: 0.45, a: 1.0 };
-    let label_col = Rgba { r: 0.85, g: 0.88, b: 0.95, a: 1.0 };
+    let grid = rgba_of(theme.border);
+    let card = rgba_of(theme.fg_muted);
+    let body_col = if model.cfg.theme_dark {
+        Rgba { r: 0.95, g: 0.85, b: 0.45, a: 1.0 }
+    } else {
+        Rgba { r: 0.85, g: 0.60, b: 0.10, a: 1.0 }
+    };
+    let label_col = rgba_of(theme.fg_text);
 
     let mut cmds: Vec<DrawCommand> = Vec::new();
     // Horizonte + anillos de altitud (30°, 60°).
@@ -1057,7 +1085,7 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme) -> View<Msg> {
         });
     }
 
-    let bg = Color::from_rgba8(8, 10, 16, 255);
+    let bg = graphics_bg(model);
     let canvas = canvas_view::<Msg>(cmds, size, Some(bg));
     View::new(Style {
         size: Size {
@@ -1255,7 +1283,7 @@ fn chart_switcher(model: &Model, theme: &Theme) -> View<Msg> {
 fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme) -> View<Msg> {
     let opts = SphereOpts {
         size,
-        palette: Palette::dark(),
+        palette: graphics_palette(model),
         ..Default::default()
     };
     let view = SphereView {
@@ -1263,7 +1291,7 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
         pitch_deg: model.sphere_pitch,
     };
     let commands = compose_sphere(render, &view, &opts);
-    let canvas_bg = Color::from_rgba8(8, 10, 16, 255);
+    let canvas_bg = graphics_bg(model);
     let canvas = canvas_view::<Msg>(commands, size, Some(canvas_bg));
     let canvas_box = View::new(Style {
         size: Size {
@@ -1349,7 +1377,7 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, t
         size,
         rot_offset_deg: model.cfg.rot_offset_deg,
         include_bodies: true,
-        palette: Palette::dark(),
+        palette: graphics_palette(model),
         draw_ascensional_cross: model.cfg.asc_cross,
         show_coord_labels: model.cfg.coord_labels,
         show_minor_aspects: model.cfg.minor_aspects,
@@ -1357,7 +1385,7 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, t
         selected_body: model.selected_body.clone(),
     };
     let (commands, hits) = compose_wheel_with_hits(render, &opts);
-    let canvas_bg = Color::from_rgba8(8, 10, 16, 255);
+    let canvas_bg = graphics_bg(model);
     // Offset del menú contextual: origen del centro ≈ nav (resizable) +
     // barra de menú + cabecera del switcher. (Aprox. en mosaico.)
     let nav_off = model.nav_w + if model.nav_open { 6.0 } else { 0.0 };
