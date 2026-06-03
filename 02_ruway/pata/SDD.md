@@ -291,7 +291,18 @@ borde; shuma provee el contenido.
     del cache de hit-test y reubica la surface bajo el widget (`set_margin`/
     `set_size`); al salir se oculta fuera de vista. Cajita opaca (no depende de
     transparencia de surface). Runtime a validar en compositor (norma de pata).
-- **Fase 9** — kernel launcher de wawa sobre `pata-core`.
+- **Fase 9 (arrancada)** — kernel launcher de wawa sobre `pata-core`. El kernel
+  enlaza `pata-core` por `path` (`default-features = false`, como mirada-layout) y
+  consume el **mismo** modelo de widgets que el frontend Llimphi: `compositor::
+  pata_marco` arma un `WidgetCtx` desde los datos del kernel (la RAM real del heap,
+  vía `memory::allocator::stats`), construye los widgets (`build_all`), los
+  `tick`ea y traduce cada `WidgetView` a las primitivas del framebuffer
+  (`grafico::Lienzo` + `texto::rasterizar`). Hoy pinta el cluster de indicadores
+  del taskbar (medidor de RAM) a la izquierda del reloj — un modelo, dos pinceles,
+  sobre bare-metal. Compila con `cargo +nightly check --target x86_64-unknown-none
+  -Z build-std=core,alloc`; runtime a validar en QEMU (norma de wawa).
+  Pendiente: `pata_core::resolve` para el marco de pantalla completa, el config por
+  akasha (en vez de armado en memoria) y el ruteo de input al `start_button`.
 - **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
   excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
   nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se

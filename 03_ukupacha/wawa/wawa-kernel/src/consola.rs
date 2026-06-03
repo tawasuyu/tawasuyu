@@ -669,6 +669,20 @@ impl Consola {
         let r = taskbar.reloj_region;
         let base_y = r.y + (r.alto + 14) / 2;
         self.pintar_etiqueta(r.x, base_y, taskbar.reloj, 16.0, Color::PANEL, Color::TEXTO);
+
+        // Fase 9 :: el cluster de indicadores del marco (`pata`), a la izquierda
+        // del reloj. `pata-core` —el MISMO modelo que el frontend Llimphi en
+        // Linux— maneja el medidor de RAM (dato real del heap del kernel),
+        // pintado aquí sobre el framebuffer. Un modelo, dos pinceles.
+        const CLUSTER_ANCHO: usize = 180;
+        let cluster_x = r.x.saturating_sub(CLUSTER_ANCHO + 16);
+        let region = RegionPantalla {
+            x: cluster_x,
+            y: taskbar.area.y,
+            ancho: CLUSTER_ANCHO,
+            alto: taskbar.area.alto,
+        };
+        crate::compositor::pata_marco::pintar_cluster(&mut self.lienzo, region, Color::PANEL);
     }
 
     /// Rasteriza una cadena de texto a un tamaño dado, en (x, base_y), sobre

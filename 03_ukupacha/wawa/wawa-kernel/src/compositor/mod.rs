@@ -338,6 +338,7 @@ mod escenario;
 mod geometria;
 mod launcher;
 mod mando;
+pub(crate) mod pata_marco;
 mod raton;
 
 pub use ciclo::*;

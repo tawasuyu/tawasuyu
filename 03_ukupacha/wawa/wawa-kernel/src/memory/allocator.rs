@@ -40,3 +40,12 @@ pub fn init() {
         ASIGNADOR.lock().init(inicio, TAM_HEAP);
     }
 }
+
+/// `(bytes_usados, bytes_totales)` del heap del kernel. Lo consume el medidor de
+/// RAM del marco (`compositor::pata_marco`): el primer dato real del sistema que
+/// `pata-core` pinta sobre el framebuffer de wawa. No llamar desde dentro de una
+/// asignación (tomaría el lock del asignador dos veces).
+pub fn stats() -> (usize, usize) {
+    let heap = ASIGNADOR.lock();
+    (heap.used(), heap.size())
+}

@@ -106,6 +106,15 @@ akasha = { path = "../wawa-fs" }
 # APAGADA: el kernel computa el layout en memoria, no lo serializa.
 mirada-layout = { path = "../../../02_ruway/mirada/mirada-layout" }
 
+# --- Fase 9 (pata) :: el marco del escritorio sobre el framebuffer ---
+# `pata-core` es el modelo agnóstico del marco (barras/paneles/dock + widgets +
+# layout). El MISMO crate que el frontend Llimphi usa en Linux: acá el kernel lo
+# consume para pintar sus indicadores (medidor de RAM, reloj) sobre el
+# framebuffer. `no_std + alloc`, cruzando la frontera por `path` como
+# mirada-layout. La feature `serde` queda APAGADA: el config se arma en memoria
+# (en el futuro llegará por akasha, no por TOML).
+pata-core = { path = "../../../02_ruway/pata/pata-core", default-features = false }
+
 # --- Fase 25 :: criptografia del manifiesto (sello Ed25519) ---
 # El kernel SOLO verifica firmas; el firmador vive fuera (wawactl, peers).
 # Esto evita empotrar la clave privada en el binario y limita el incendio
