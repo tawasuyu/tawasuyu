@@ -132,9 +132,10 @@ pub(crate) fn tile_astrocarto(
         llimphi_ui::DragPhase::Move => Some(Msg::WheelPan(dx, dy)),
         llimphi_ui::DragPhase::End => None,
     })
-    .paint_with(move |scene, _ts, rect: llimphi_ui::PaintRect| {
-        use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
+    .paint_with(move |scene, ts, rect: llimphi_ui::PaintRect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, Stroke};
         use llimphi_ui::llimphi_raster::peniko::Color as PColor;
+        use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment, TextBlock};
         // Aspect-fit centrado + zoom/paneo del usuario.
         let scale_x = rect.w as f64 / ASTROCARTO_W as f64;
         let scale_y = rect.h as f64 / ASTROCARTO_H as f64;
@@ -144,6 +145,12 @@ pub(crate) fn tile_astrocarto(
         let off_x = rect.x as f64 + (rect.w as f64 - disp_w) * 0.5 + pan.0;
         let off_y = rect.y as f64 + (rect.h as f64 - disp_h) * 0.5 + pan.1;
         let xform = Affine::translate((off_x, off_y)) * Affine::scale(scale);
+        // Grosor de trazo medido en PÍXELES de pantalla: las líneas no
+        // engordan con el zoom (el `scale` las inflaría), apenas crecen
+        // un pelo (zoom^0.15) para acompañar el acercamiento. Como la
+        // escena va escalada por `scale`, dividimos por `scale` para que
+        // el ancho final en pantalla sea el pedido.
+        let px_w = move |screen_px: f64| screen_px * zoom.powf(0.15) / scale;
 
         // Mapa de fondo: continentes (world-countries.geojson vía
         // nahual-geo-core). Relleno tenue de tierra + contorno de costas.
@@ -181,33 +188,74 @@ pub(crate) fn tile_astrocarto(
                     None,
                     &path,
                 );
-                scene.stroke(&Stroke::new(0.4), xform, coast, None, &path);
+                scene.stroke(&Stroke::new(px_w(0.6)), xform, coast, None, &path);
             }
         }
 
-        // Grilla (graticule) más densa para dar sensación de mapa.
+        // Grilla (graticule). El acercamiento ABRE detalle: aparece una
+        // grilla fina entre las líneas mayores. Mayores cada 30°/30°;
+        // las finas cada 10° (zoom ≥ 2.5) o 5° (zoom ≥ 5).
         let grid_color = PColor::from_rgba8(
             (grid.components[0] * 255.0) as u8,
             (grid.components[1] * 255.0) as u8,
             (grid.components[2] * 255.0) as u8,
             80,
         );
-        for lat in [-75.0_f64, -60.0, -45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0, 60.0, 75.0] {
+        let minor_color = PColor::from_rgba8(
+            (grid.components[0] * 255.0) as u8,
+            (grid.components[1] * 255.0) as u8,
+            (grid.components[2] * 255.0) as u8,
+            38,
+        );
+        let minor_step = if zoom >= 5.0 {
+            5.0_f64
+        } else if zoom >= 2.5 {
+            10.0
+        } else {
+            0.0
+        };
+        // Paralelos finos.
+        if minor_step > 0.0 {
+            let mut lat = -85.0_f64;
+            while lat <= 85.0 {
+                if (lat / 30.0).fract().abs() > 1e-6 {
+                    let (_, y) = project_lon_lat(0.0, lat);
+                    let mut p = BezPath::new();
+                    p.move_to((0.0, y as f64));
+                    p.line_to((ASTROCARTO_W as f64, y as f64));
+                    scene.stroke(&Stroke::new(px_w(0.4)), xform, minor_color, None, &p);
+                }
+                lat += minor_step;
+            }
+            let mut lon = -180.0_f64;
+            while lon <= 180.0 {
+                if (lon / 30.0).fract().abs() > 1e-6 {
+                    let (x, _) = project_lon_lat(lon, 0.0);
+                    let mut p = BezPath::new();
+                    p.move_to((x as f64, 0.0));
+                    p.line_to((x as f64, ASTROCARTO_H as f64));
+                    scene.stroke(&Stroke::new(px_w(0.4)), xform, minor_color, None, &p);
+                }
+                lon += minor_step;
+            }
+        }
+        // Paralelos mayores cada 30°.
+        for lat in [-60.0_f64, -30.0, 0.0, 30.0, 60.0] {
             let (_, y) = project_lon_lat(0.0, lat);
             let mut p = BezPath::new();
             p.move_to((0.0, y as f64));
             p.line_to((ASTROCARTO_W as f64, y as f64));
-            scene.stroke(&Stroke::new(0.5), xform, grid_color, None, &p);
+            let w = if lat.abs() < 0.5 { px_w(0.9) } else { px_w(0.5) };
+            scene.stroke(&Stroke::new(w), xform, grid_color, None, &p);
         }
-        // Meridianos cada 30° de longitud.
+        // Meridianos mayores cada 30°.
         let mut lon = -150.0_f64;
-        while lon <= 150.0 {
+        while lon <= 180.0 {
             let (x, _) = project_lon_lat(lon, 0.0);
             let mut p = BezPath::new();
             p.move_to((x as f64, 0.0));
             p.line_to((x as f64, ASTROCARTO_H as f64));
-            // Meridiano de Greenwich un poco más marcado.
-            let w = if lon.abs() < 0.5 { 0.9 } else { 0.5 };
+            let w = if lon.abs() < 0.5 { px_w(0.9) } else { px_w(0.5) };
             scene.stroke(&Stroke::new(w), xform, grid_color, None, &p);
             lon += 30.0;
         }
@@ -223,7 +271,7 @@ pub(crate) fn tile_astrocarto(
             let mut p = BezPath::new();
             p.move_to((x_mc as f64, 0.0));
             p.line_to((x_mc as f64, ASTROCARTO_H as f64));
-            scene.stroke(&Stroke::new(1.4), xform, body_color, None, &p);
+            scene.stroke(&Stroke::new(px_w(1.5)), xform, body_color, None, &p);
 
             // IC: línea vertical punteada para distinguir.
             let (x_ic, _) = project_lon_lat(ic_lon, 0.0);
@@ -231,7 +279,7 @@ pub(crate) fn tile_astrocarto(
             p.move_to((x_ic as f64, 0.0));
             p.line_to((x_ic as f64, ASTROCARTO_H as f64));
             scene.stroke(
-                &Stroke::new(1.0).with_dashes(0.0, [4.0, 4.0]),
+                &Stroke::new(px_w(1.1)).with_dashes(0.0, [px_w(4.0), px_w(4.0)]),
                 xform,
                 body_color,
                 None,
@@ -275,10 +323,10 @@ pub(crate) fn tile_astrocarto(
                     phi_deg += 3.0;
                 }
                 if rise_started {
-                    scene.stroke(&Stroke::new(0.8), xform, body_color, None, &rise);
+                    scene.stroke(&Stroke::new(px_w(0.9)), xform, body_color, None, &rise);
                 }
                 if set_started {
-                    scene.stroke(&Stroke::new(0.8), xform, body_color, None, &set);
+                    scene.stroke(&Stroke::new(px_w(0.9)), xform, body_color, None, &set);
                 }
             }
         }
@@ -287,7 +335,7 @@ pub(crate) fn tile_astrocarto(
         let (px, py) = project_lon_lat(natal_lon, natal_lat);
         let mark = llimphi_ui::llimphi_raster::kurbo::Circle::new(
             (px as f64, py as f64),
-            3.0,
+            px_w(3.0),
         );
         scene.fill(
             llimphi_ui::llimphi_raster::peniko::Fill::NonZero,
@@ -296,6 +344,59 @@ pub(crate) fn tile_astrocarto(
             None,
             &mark,
         );
+
+        // Etiquetas de coordenadas — tamaño FIJO en pantalla (no escalan
+        // con el zoom): se dibujan en coordenadas de pantalla aplicando
+        // `xform` al punto del mapa. Paralelos sobre el borde izquierdo,
+        // meridianos sobre el borde inferior del mapa.
+        let label_col = PColor::from_rgba8(
+            (grid.components[0] * 255.0) as u8,
+            (grid.components[1] * 255.0) as u8,
+            (grid.components[2] * 255.0) as u8,
+            210,
+        );
+        let draw_label = |scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+                              ts: &mut llimphi_ui::llimphi_text::Typesetter,
+                              wx: f64,
+                              wy: f64,
+                              text: &str| {
+            let sp = xform * Point::new(wx, wy);
+            let block = TextBlock {
+                text,
+                size_px: 9.5,
+                color: label_col,
+                origin: (sp.x + 2.0, sp.y - 5.0),
+                max_width: None,
+                alignment: Alignment::Start,
+                line_height: 1.0,
+                italic: false,
+                font_family: None,
+            };
+            let layout = layout_block(ts, &block);
+            draw_layout(scene, &layout, label_col, block.origin);
+        };
+        for lat in [-60.0_f64, -30.0, 0.0, 30.0, 60.0] {
+            let (_, y) = project_lon_lat(2.0, lat);
+            let txt = if lat.abs() < 0.5 {
+                "Ec.".to_string()
+            } else if lat > 0.0 {
+                format!("{}°N", lat as i32)
+            } else {
+                format!("{}°S", (-lat) as i32)
+            };
+            draw_label(scene, ts, 2.0, y as f64, &txt);
+        }
+        for lon in [-120.0_f64, -60.0, 0.0, 60.0, 120.0] {
+            let (x, _) = project_lon_lat(lon, -86.0);
+            let txt = if lon.abs() < 0.5 {
+                "0°".to_string()
+            } else if lon > 0.0 {
+                format!("{}°E", lon as i32)
+            } else {
+                format!("{}°O", (-lon) as i32)
+            };
+            draw_label(scene, ts, x as f64, 158.0, &txt);
+        }
     });
 
     // Columna a alto completo: el lienzo ocupa todo el espacio (base más
