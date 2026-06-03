@@ -169,6 +169,13 @@ pub enum Request {
         /// Texto a alimentar por stdin — para reprocesar salidas previas.
         #[serde(default)]
         stdin_data: Option<String>,
+        /// Captura por etapa (tee): en un pipe `Direct`, el daemon
+        /// intercepta el stdout de cada etapa intermedia y lo emite como
+        /// [`Response::ExecStageStdout`] además de alimentar a la
+        /// siguiente. `#[serde(default)]` => clientes viejos lo omiten y
+        /// el daemon corre sin tee (comportamiento previo).
+        #[serde(default)]
+        capture_stages: bool,
     },
 }
 
@@ -321,6 +328,12 @@ pub enum Response {
     ExecStarted { pid: i32 },
     /// Una línea de stdout del proceso.
     ExecStdout(String),
+    /// Una línea de stdout de una etapa **intermedia** de un pipe
+    /// `Direct` (tee). Sólo aparece si el cliente pidió
+    /// `capture_stages: true` en el `ExecStream`. `stage` es el índice
+    /// 0-based de la etapa que la emitió. Espeja
+    /// `shuma_exec::RunEvent::StageStdout`.
+    ExecStageStdout { stage: usize, line: String },
     /// Una línea de stderr del proceso.
     ExecStderr(String),
     /// La captura alcanzó el tope; lo siguiente se descarta. El proceso
@@ -535,14 +548,16 @@ mod tests {
             },
             capture_limit_bytes: 1024,
             stdin_data: None,
+            capture_stages: true,
         };
         let bytes = postcard::to_allocvec(&req).unwrap();
         let back: Request = postcard::from_bytes(&bytes).unwrap();
         match back {
-            Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } => {
+            Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data, capture_stages } => {
                 assert_eq!(cwd, "/tmp");
                 assert_eq!(capture_limit_bytes, 1024);
                 assert!(stdin_data.is_none());
+                assert!(capture_stages);
                 if let ExecKind::Direct { stages } = exec {
                     assert_eq!(stages.len(), 1);
                     assert_eq!(stages[0].program, "echo");

@@ -361,8 +361,8 @@ async fn handle_client(
         // El subprotocolo `ExecStream` produce N frames sobre la misma
         // conexión hasta un terminal. Lo manejamos inline en vez de pasar
         // por `dispatch` (que es request/response 1:1).
-        if let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } = req {
-            handle_exec_stream(&mut stream, cwd, exec, capture_limit_bytes, stdin_data).await?;
+        if let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data, capture_stages } = req {
+            handle_exec_stream(&mut stream, cwd, exec, capture_limit_bytes, stdin_data, capture_stages).await?;
             continue;
         }
 
@@ -381,6 +381,7 @@ async fn handle_exec_stream(
     exec: ProtoExecKind,
     capture_limit_bytes: usize,
     stdin_data: Option<String>,
+    capture_stages: bool,
 ) -> anyhow::Result<()> {
     let exec = match exec {
         ProtoExecKind::Shell { line, program } => shuma_exec::Exec::Shell { line, program },
@@ -397,7 +398,7 @@ async fn handle_exec_stream(
         capture_limit: capture_limit_bytes,
         spill_path: None, // el cliente no expone path local del daemon
         stdin_data,
-        capture_stages: false,
+        capture_stages,
     };
     let mut handle = shuma_exec::run(&spec);
     // Capturamos el "Killer" antes de mover el RunHandle al hilo bridge —
@@ -464,10 +465,13 @@ async fn handle_exec_stream(
 fn exec_event_to_response(ev: shuma_exec::RunEvent) -> Response {
     match ev {
         shuma_exec::RunEvent::Stdout(l) => Response::ExecStdout(l),
-        // El daemon no activa `capture_stages`, así que no debería ver
-        // salida por etapa; si llegara, la reemitimos como stdout normal
-        // (el protocolo de wire no distingue etapas) para no perderla.
-        shuma_exec::RunEvent::StageStdout { line, .. } => Response::ExecStdout(line),
+        // Salida de una etapa intermedia del pipe (tee). Sólo aparece si
+        // el cliente pidió `capture_stages: true`; la reemitimos como su
+        // propio frame para que el cliente la pinte en el desplegable de
+        // la etapa correspondiente, no mezclada con el stdout final.
+        shuma_exec::RunEvent::StageStdout { stage, line } => {
+            Response::ExecStageStdout { stage, line }
+        }
         shuma_exec::RunEvent::Stderr(l) => Response::ExecStderr(l),
         shuma_exec::RunEvent::Truncated => Response::ExecTruncated,
         shuma_exec::RunEvent::Spilled(p) => Response::ExecSpilled(p),
@@ -532,8 +536,8 @@ async fn handle_enc_client(
         };
         audit_request(&peer_id, &req);
 
-        if let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } = req {
-            handle_exec_stream_enc(&mut ch, cwd, exec, capture_limit_bytes, stdin_data).await?;
+        if let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data, capture_stages } = req {
+            handle_exec_stream_enc(&mut ch, cwd, exec, capture_limit_bytes, stdin_data, capture_stages).await?;
             continue;
         }
 
@@ -555,6 +559,7 @@ async fn handle_exec_stream_enc<S>(
     exec: ProtoExecKind,
     capture_limit_bytes: usize,
     stdin_data: Option<String>,
+    capture_stages: bool,
 ) -> anyhow::Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
@@ -574,7 +579,7 @@ where
         capture_limit: capture_limit_bytes,
         spill_path: None,
         stdin_data,
-        capture_stages: false,
+        capture_stages,
     };
     let mut handle = shuma_exec::run(&spec);
     let killer = handle.killer();
@@ -1239,6 +1244,7 @@ mod tests {
                 },
                 0,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1282,6 +1288,7 @@ mod tests {
                 },
                 0,
                 None,
+                false,
             )
             .await;
             // Esperamos un error de I/O al intentar escribir tras el close;
@@ -1313,6 +1320,7 @@ mod tests {
                 },
                 0,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1329,5 +1337,59 @@ mod tests {
         }
         server_task.await.unwrap();
         assert_eq!(got, "5");
+    }
+
+    /// Con `capture_stages: true`, un pipe `Direct` de dos etapas debe
+    /// emitir el tee de la etapa intermedia como frames
+    /// `ExecStageStdout { stage: 0, .. }` además del stdout final. Es la
+    /// invariante del "live tee" sobre el transporte del daemon.
+    #[tokio::test]
+    async fn exec_stream_tees_intermediate_stage() {
+        let (mut server, mut client) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = tokio::spawn(async move {
+            handle_exec_stream(
+                &mut server,
+                ".".into(),
+                // `printf "a\nb\n" | cat` — la etapa 0 (printf) es la
+                // intermedia que se intercepta; la 1 (cat) da el final.
+                ProtoExecKind::Direct {
+                    stages: vec![
+                        ExecStage {
+                            program: "printf".into(),
+                            args: vec!["a\\nb\\n".into()],
+                        },
+                        ExecStage { program: "cat".into(), args: vec![] },
+                    ],
+                },
+                0,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        });
+        let mut frames: Vec<Response> = Vec::new();
+        loop {
+            let r: Response = read_frame(&mut client).await.expect("read frame");
+            let terminal = r.is_exec_terminal();
+            frames.push(r);
+            if terminal {
+                break;
+            }
+        }
+        server_task.await.unwrap();
+        // Debe haber al menos un frame de tee de la etapa 0.
+        assert!(
+            frames
+                .iter()
+                .any(|f| matches!(f, Response::ExecStageStdout { stage: 0, line } if line == "a")),
+            "no llegó el tee de la etapa intermedia: {frames:?}"
+        );
+        // Y el stdout final ("b" o "a"/"b") debe seguir llegando aparte.
+        assert!(
+            frames.iter().any(|f| matches!(f, Response::ExecStdout(_))),
+            "no llegó el stdout final: {frames:?}"
+        );
+        assert!(matches!(frames.last(), Some(Response::ExecExited(0))));
     }
 }

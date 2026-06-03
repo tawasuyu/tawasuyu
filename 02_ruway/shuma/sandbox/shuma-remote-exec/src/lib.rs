@@ -151,6 +151,7 @@ pub fn run(spec: &CommandSpec, socket: &std::path::Path) -> Result<RemoteRunHand
         exec: exec_proto,
         capture_limit_bytes: spec.capture_limit,
         stdin_data: spec.stdin_data.clone(),
+        capture_stages: spec.capture_stages,
     };
 
     // Conexión sincronicamente: si falla, devolvemos antes de spawnear
@@ -227,6 +228,9 @@ fn response_to_event(r: Response) -> Option<RunEvent> {
     match r {
         Response::ExecStarted { .. } => None, // metadato, no es un RunEvent
         Response::ExecStdout(l) => Some(RunEvent::Stdout(l)),
+        Response::ExecStageStdout { stage, line } => {
+            Some(RunEvent::StageStdout { stage, line })
+        }
         Response::ExecStderr(l) => Some(RunEvent::Stderr(l)),
         Response::ExecTruncated => Some(RunEvent::Truncated),
         Response::ExecSpilled(p) => Some(RunEvent::Spilled(p)),
@@ -285,6 +289,7 @@ pub fn run_tcp(
         exec: exec_proto,
         capture_limit_bytes: spec.capture_limit,
         stdin_data: spec.stdin_data.clone(),
+        capture_stages: spec.capture_stages,
     };
 
     std::thread::spawn(move || {
@@ -370,7 +375,8 @@ mod tests {
     /// puente sync→async que el daemon real.
     async fn serve_exec_stream(mut stream: tokio::net::UnixStream) {
         let req: Request = read_frame(&mut stream).await.expect("read request");
-        let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } = req else {
+        let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data, capture_stages } = req
+        else {
             panic!("esperaba ExecStream");
         };
         let exec_local = match exec {
@@ -388,7 +394,7 @@ mod tests {
             capture_limit: capture_limit_bytes,
             spill_path: None,
             stdin_data,
-            capture_stages: false,
+            capture_stages,
         };
         let mut h = shuma_exec::run(&spec);
         let killer = h.killer();
@@ -409,6 +415,9 @@ mod tests {
                     let terminal = matches!(ev, RunEvent::Exited(_) | RunEvent::Failed(_));
                     let resp = match ev {
                         RunEvent::Stdout(l) => Response::ExecStdout(l),
+                        RunEvent::StageStdout { stage, line } => {
+                            Response::ExecStageStdout { stage, line }
+                        }
                         RunEvent::Stderr(l) => Response::ExecStderr(l),
                         RunEvent::Truncated => Response::ExecTruncated,
                         RunEvent::Spilled(p) => Response::ExecSpilled(p),
@@ -418,7 +427,6 @@ mod tests {
                         // usan Exec::Direct), pero el match debe ser
                         // exhaustivo.
                         RunEvent::Bytes(_) => continue,
-                        RunEvent::StageStdout { .. } => continue,
                     };
                     if write_frame(&mut stream, &resp).await.is_err() {
                         killer.kill();
@@ -500,6 +508,45 @@ mod tests {
     }
 
     #[test]
+    fn stage_capture_round_trips_through_remote_client() {
+        // Un pipe de dos etapas con captura activa: el tee de la etapa
+        // intermedia debe sobrevivir el transporte y volver como
+        // `RunEvent::StageStdout`, no perderse ni colapsar a Stdout.
+        let sock = temp_socket();
+        let sock_for_server = sock.clone();
+        let server = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(one_shot_server(sock_for_server));
+        });
+        while !sock.exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let spec = CommandSpec::direct(
+            vec![
+                StageSpec { program: "printf".into(), args: vec!["a\\nb\\n".into()] },
+                StageSpec { program: "cat".into(), args: vec![] },
+            ],
+            ".",
+        )
+        .with_stage_capture();
+        let mut h = run(&spec, &sock).expect("run remote");
+        let mut saw_stage = false;
+        while let Some(ev) = h.next_event() {
+            if let RunEvent::StageStdout { stage, line } = ev {
+                if stage == 0 && line == "a" {
+                    saw_stage = true;
+                }
+            }
+        }
+        server.join().unwrap();
+        assert!(saw_stage, "el tee de la etapa intermedia no llegó por el cliente remoto");
+        assert!(h.is_finished());
+    }
+
+    #[test]
     fn kill_propagates_to_remote_process() {
         let sock = temp_socket();
         let sock_for_server = sock.clone();
@@ -558,7 +605,8 @@ mod tests {
         mut ch: shuma_link::FramedChannel<tokio::net::TcpStream>,
     ) {
         let req: Request = ch.recv_postcard().await.expect("recv request");
-        let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } = req else {
+        let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data, capture_stages } = req
+        else {
             panic!("esperaba ExecStream");
         };
         let exec_local = match exec {
@@ -576,7 +624,7 @@ mod tests {
             capture_limit: capture_limit_bytes,
             spill_path: None,
             stdin_data,
-            capture_stages: false,
+            capture_stages,
         };
         let mut h = shuma_exec::run(&spec);
         let killer = h.killer();
@@ -592,13 +640,15 @@ mod tests {
             let terminal = matches!(ev, RunEvent::Exited(_) | RunEvent::Failed(_));
             let resp = match ev {
                 RunEvent::Stdout(l) => Response::ExecStdout(l),
+                RunEvent::StageStdout { stage, line } => {
+                    Response::ExecStageStdout { stage, line }
+                }
                 RunEvent::Stderr(l) => Response::ExecStderr(l),
                 RunEvent::Truncated => Response::ExecTruncated,
                 RunEvent::Spilled(p) => Response::ExecSpilled(p),
                 RunEvent::Exited(c) => Response::ExecExited(c),
                 RunEvent::Failed(m) => Response::ExecFailed(m),
                 RunEvent::Bytes(_) => continue, // Test server no usa PTY
-                RunEvent::StageStdout { .. } => continue, // sin captura por etapa
             };
             if ch.send_postcard(&resp).await.is_err() {
                 killer.kill();
