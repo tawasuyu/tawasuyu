@@ -251,6 +251,11 @@ impl StyleEngine {
             style.orphans = p.orphans;
             style.widows = p.widows;
             style.color_scheme = p.color_scheme;
+            // CSS Lists 3 — list-style-{position,image,type} heredan. CSS
+            // Generated Content 3 — quotes hereda. counter-set NO.
+            style.list_style_position = p.list_style_position;
+            style.list_style_image = p.list_style_image.clone();
+            style.quotes = p.quotes.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -2979,6 +2984,180 @@ mod tests {
     }
 
     #[test]
+    fn list_style_position_fase_7_294() {
+        assert_eq!(parse_list_style_position("outside"), Some(ListStylePosition::Outside));
+        assert_eq!(parse_list_style_position("INSIDE"), Some(ListStylePosition::Inside));
+        assert_eq!(parse_list_style_position("middle"), None);
+
+        let html = r##"<html><head><style>
+            body { list-style-position: inside }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.list_style_position, ListStylePosition::Inside);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).list_style_position,
+            ListStylePosition::Inside
+        );
+    }
+
+    #[test]
+    fn list_style_image_fase_7_295() {
+        assert_eq!(parse_list_style_image("none"), None);
+        assert_eq!(parse_list_style_image(""), None);
+        assert_eq!(
+            parse_list_style_image("url(bullet.png)"),
+            Some("bullet.png".to_string())
+        );
+        assert_eq!(
+            parse_list_style_image("url(\"b.svg\")"),
+            Some("b.svg".to_string())
+        );
+        // Subset: no aceptamos gradients ni image() todavía.
+        assert_eq!(parse_list_style_image("linear-gradient(red, blue)"), None);
+
+        let html = r##"<html><head><style>
+            body { list-style-image: url(bullet.png) }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.list_style_image, Some("bullet.png".to_string()));
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).list_style_image,
+            Some("bullet.png".to_string())
+        );
+    }
+
+    #[test]
+    fn list_style_shorthand_fase_7_296() {
+        // Shorthand cubre los 3 longhands en orden libre.
+        let html = r##"<html><head><style>
+            body { list-style: square inside url(b.png) }
+            div.none { list-style: none }
+            div.plain {}
+        </style></head><body>
+          <div class="none"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.list_style_type, ListStyleType::Square);
+        assert_eq!(body_cs.list_style_position, ListStylePosition::Inside);
+        assert_eq!(body_cs.list_style_image, Some("b.png".to_string()));
+        // `list-style: none` apaga type + image.
+        let none = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(none.list_style_type, ListStyleType::None);
+        assert_eq!(none.list_style_image, None);
+        // position no se toca con `none` — sigue heredando del padre.
+        assert_eq!(none.list_style_position, ListStylePosition::Inside);
+    }
+
+    #[test]
+    fn counter_set_fase_7_297() {
+        // Default = 0 (a diferencia de counter-increment cuyo default es 1).
+        let html = r##"<html><head><style>
+            body { counter-set: page 1 chapter }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.counter_set.len(), 2);
+        assert_eq!(body_cs.counter_set[0], ("page".to_string(), 1));
+        assert_eq!(body_cs.counter_set[1], ("chapter".to_string(), 0));
+        // NO se hereda.
+        let plain = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(plain.counter_set.is_empty());
+    }
+
+    #[test]
+    fn quotes_fase_7_298() {
+        assert_eq!(parse_quotes("auto"), Quotes::Auto);
+        assert_eq!(parse_quotes("none"), Quotes::None);
+        let q = parse_quotes(r#""«" "»" "‹" "›""#);
+        assert_eq!(
+            q,
+            Quotes::Pairs(vec![
+                ("«".to_string(), "»".to_string()),
+                ("‹".to_string(), "›".to_string()),
+            ])
+        );
+        // Impares (sin cierre) → cae a Auto.
+        assert_eq!(parse_quotes(r#""«" "»" "‹""#), Quotes::Auto);
+        // Sin comillas → cae a Auto.
+        assert_eq!(parse_quotes("foo bar"), Quotes::Auto);
+
+        let html = r##"<html><head><style>
+            body { quotes: "“" "”" "‘" "’" }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        if let Quotes::Pairs(pairs) = &body_cs.quotes {
+            assert_eq!(pairs.len(), 2);
+            assert_eq!(pairs[0], ("“".to_string(), "”".to_string()));
+            assert_eq!(pairs[1], ("‘".to_string(), "’".to_string()));
+        } else {
+            panic!("esperaba Pairs, vino {:?}", body_cs.quotes);
+        }
+        // SÍ se hereda.
+        let plain = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(matches!(plain.quotes, Quotes::Pairs(_)));
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(
@@ -4555,17 +4734,7 @@ mod tests {
         assert_eq!(parse_list_style_type("georgian"), None);
     }
 
-    #[test]
-    fn parsea_list_style_shorthand() {
-        // Cuando aparece un keyword reconocido, se captura.
-        assert_eq!(parse_list_style_shorthand("square inside"), Some(ListStyleType::Square));
-        assert_eq!(parse_list_style_shorthand("none"), Some(ListStyleType::None));
-        // Sin keywords reconocibles, devolvemos None y el caller mantiene
-        // el valor anterior.
-        assert_eq!(parse_list_style_shorthand("url(foo.png)"), None);
-    }
-
-    #[test]
+#[test]
     fn ua_aplica_decimal_a_ol_y_disc_a_ul() {
         let html = "<html><body><ol><li>x</li></ol><ul><li>y</li></ul></body></html>";
         let dom = DomTree::parse(html);

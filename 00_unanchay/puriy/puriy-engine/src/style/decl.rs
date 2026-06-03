@@ -280,6 +280,12 @@ pub(crate) enum DeclKind {
     Orphans(u32),
     Widows(u32),
     ColorScheme(ColorScheme),
+    ListStylePosition(ListStylePosition),
+    /// `None` = `list-style-image: none`.
+    ListStyleImage(Option<String>),
+    /// `counter-set: name [N] ...`. Mismo shape que `counter-reset`.
+    CounterSet(Vec<(String, i32)>),
+    Quotes(Quotes),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -512,6 +518,10 @@ impl Decl {
             DeclKind::Orphans(n) => s.orphans = *n,
             DeclKind::Widows(n) => s.widows = *n,
             DeclKind::ColorScheme(c) => s.color_scheme = *c,
+            DeclKind::ListStylePosition(p) => s.list_style_position = *p,
+            DeclKind::ListStyleImage(u) => s.list_style_image = u.clone(),
+            DeclKind::CounterSet(v) => s.counter_set = v.clone(),
+            DeclKind::Quotes(q) => s.quotes = q.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

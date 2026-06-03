@@ -185,6 +185,12 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_outline_shorthand(value, important));
             continue;
         }
+        // `list-style` shorthand (Fase 7.296): `<type> || <position> || <image>`.
+        // `none` apaga `type` y `image`; el resto cae en su longhand.
+        if prop.eq_ignore_ascii_case("list-style") {
+            out.extend(parse_list_style_shorthand_full(value, important));
+            continue;
+        }
         // `column-rule` shorthand (Fase 7.280): mismo shape que `outline`.
         if prop.eq_ignore_ascii_case("column-rule") {
             out.extend(parse_column_rule_shorthand(value, important));
@@ -349,10 +355,13 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             _ => parse_length_px(value).map(|p| DeclKind::TextUnderlineOffset(Some(p))),
         },
         "list-style-type" => parse_list_style_type(value).map(DeclKind::ListStyleType),
-        // `list-style` shorthand reducido: sólo capturamos el `-type`.
-        // Image y position los ignoramos — `none` desactiva el marker
-        // entero (matchea el comportamiento del browser).
-        "list-style" => parse_list_style_shorthand(value).map(DeclKind::ListStyleType),
+        "list-style-position" => {
+            parse_list_style_position(value).map(DeclKind::ListStylePosition)
+        }
+        "list-style-image" => Some(DeclKind::ListStyleImage(parse_list_style_image(value))),
+        // `list-style` shorthand: ruteado por `parse_declarations` para
+        // emitir varias longhands en orden libre. Acá NO se dispatcha.
+        "list-style" => None,
         "flex-direction" => parse_flex_direction(value).map(DeclKind::FlexDirection),
         "flex-wrap" => parse_flex_wrap(value).map(DeclKind::FlexWrap),
         "justify-content" => parse_justify_content(value).map(DeclKind::JustifyContent),
@@ -557,6 +566,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "orphans" => parse_positive_int(value).map(DeclKind::Orphans),
         "widows" => parse_positive_int(value).map(DeclKind::Widows),
         "color-scheme" => parse_color_scheme(value).map(DeclKind::ColorScheme),
+        "counter-set" => Some(DeclKind::CounterSet(parse_counter_list(value, 0))),
+        "quotes" => Some(DeclKind::Quotes(parse_quotes(value))),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1617,6 +1628,141 @@ pub(crate) fn parse_color_scheme(value: &str) -> Option<ColorScheme> {
     Some(cs)
 }
 
+/// `list-style-position`: `inside | outside`. Fase 7.294.
+pub(crate) fn parse_list_style_position(value: &str) -> Option<ListStylePosition> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "outside" => Some(ListStylePosition::Outside),
+        "inside" => Some(ListStylePosition::Inside),
+        _ => None,
+    }
+}
+
+/// `list-style-image`: `none | url(...)` (subset). Comparte el shape con
+/// `mask-image`; el resto de generated images (linear-gradient, etc.)
+/// quedan fuera. Fase 7.295.
+pub(crate) fn parse_list_style_image(value: &str) -> Option<String> {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    let lower = v.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("url(") {
+        let close = v.rfind(')')?;
+        let inner = v[lower.len() - rest.len()..close].trim();
+        let inner = inner
+            .trim_start_matches(['"', '\''])
+            .trim_end_matches(['"', '\'']);
+        if inner.is_empty() {
+            return None;
+        }
+        return Some(inner.to_string());
+    }
+    None
+}
+
+/// `list-style` shorthand (Fase 7.296): orden libre de `<type>`,
+/// `<position>`, `<image>`. `none` (la primera ocurrencia) marca type=None
+/// + image=None.
+pub(crate) fn parse_list_style_shorthand_full(value: &str, important: bool) -> Vec<Decl> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut found_type = false;
+    let mut found_position = false;
+    let mut found_image = false;
+    let mut none_count = 0usize;
+    for tok in v.split_whitespace() {
+        let tok_lower = tok.to_ascii_lowercase();
+        if tok_lower == "none" {
+            none_count += 1;
+            continue;
+        }
+        if !found_position {
+            if let Some(p) = parse_list_style_position(tok) {
+                out.push(Decl { kind: DeclKind::ListStylePosition(p), important });
+                found_position = true;
+                continue;
+            }
+        }
+        if !found_image && tok_lower.starts_with("url(") {
+            if let Some(u) = parse_list_style_image(tok) {
+                out.push(Decl { kind: DeclKind::ListStyleImage(Some(u)), important });
+                found_image = true;
+                continue;
+            }
+        }
+        if !found_type {
+            if let Some(t) = parse_list_style_type(tok) {
+                out.push(Decl { kind: DeclKind::ListStyleType(t), important });
+                found_type = true;
+                continue;
+            }
+        }
+    }
+    // `none` aplica a type+image (un solo `none` apaga ambos; dos `none`
+    // también pero el efecto es el mismo).
+    if none_count >= 1 {
+        if !found_type {
+            out.push(Decl { kind: DeclKind::ListStyleType(ListStyleType::None), important });
+        }
+        if !found_image {
+            out.push(Decl { kind: DeclKind::ListStyleImage(None), important });
+        }
+    }
+    out
+}
+
+/// `quotes`: `auto | none | <pair>+` donde cada par es `<string> <string>`.
+/// Fase 7.298.
+pub(crate) fn parse_quotes(value: &str) -> Quotes {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") || v.is_empty() {
+        return Quotes::Auto;
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Quotes::None;
+    }
+    // Recortar pares de strings sucesivos: "«" "»" "‹" "›".
+    let mut strings = Vec::new();
+    let bytes = v.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip whitespace.
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let quote = bytes[i] as char;
+        if quote != '"' && quote != '\'' {
+            // Token no-string: descartar todo (fallback a Auto).
+            return Quotes::Auto;
+        }
+        i += 1;
+        let start = i;
+        while i < bytes.len() && bytes[i] as char != quote {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return Quotes::Auto;
+        }
+        strings.push(v[start..i].to_string());
+        i += 1;
+    }
+    if strings.is_empty() || strings.len() % 2 != 0 {
+        return Quotes::Auto;
+    }
+    let mut pairs = Vec::with_capacity(strings.len() / 2);
+    let mut it = strings.into_iter();
+    while let (Some(open), Some(close)) = (it.next(), it.next()) {
+        pairs.push((open, close));
+    }
+    Quotes::Pairs(pairs)
+}
+
 /// `break-inside`: `auto | avoid | avoid-page | avoid-column | avoid-region`.
 /// Acepta también el legacy `page-break-inside` (CSS 2.1) que sólo conoce
 /// `auto | avoid` — los valores avoid-* se aceptan en el callsite legacy,
@@ -2035,20 +2181,6 @@ pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
         "upper-roman" => Some(ListStyleType::UpperRoman),
         _ => None,
     }
-}
-
-/// Shorthand `list-style: [type] [position] [image]` muy reducido. Sólo
-/// extraemos el primer token que matchee un `-type` keyword. `list-style:
-/// none` desactiva el marker (matchea browsers — `none` ahí setea ambos
-/// `-type` e `-image` a none, y como no tenemos `-image`, alcanza con
-/// poner `-type` en `None`).
-pub(crate) fn parse_list_style_shorthand(s: &str) -> Option<ListStyleType> {
-    for tok in s.split_whitespace() {
-        if let Some(t) = parse_list_style_type(tok) {
-            return Some(t);
-        }
-    }
-    None
 }
 
 pub(crate) fn parse_text_align(s: &str) -> Option<TextAlign> {

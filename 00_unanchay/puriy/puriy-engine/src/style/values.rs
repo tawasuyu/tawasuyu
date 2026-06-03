@@ -378,6 +378,21 @@ pub struct ComputedStyle {
     /// `color-scheme` (Fase 7.293). Default `Normal` (sin compromiso).
     /// **Heredable**. Plumb: el chrome no toggea UA defaults dark vs light.
     pub color_scheme: ColorScheme,
+    /// `list-style-position` (Fase 7.294). Default `Outside`. **Heredable**.
+    /// Plumb: el chrome pinta el marker siempre afuera.
+    pub list_style_position: ListStylePosition,
+    /// `list-style-image` (Fase 7.295). `None` = `none`. **Heredable**.
+    /// Plumb: el marker no se reemplaza por la imagen aún.
+    pub list_style_image: Option<String>,
+    /// `counter-set: name [N] ...` (Fase 7.297). Vacío = sin counter-set.
+    /// Idéntico shape a `counter-reset` (default 0). NO heredable.
+    pub counter_set: Vec<(String, i32)>,
+    /// `quotes` (Fase 7.298). `Auto` (default) deja la UA elegir; vacío
+    /// = `none` (los `open-quote`/`close-quote` no insertan nada); con
+    /// pares concretos, el (open, close) por nivel de anidamiento se
+    /// recicla en el último par si se profundiza más allá. **Heredable**.
+    /// Plumb: el `content: open-quote` no se resuelve contra esta tabla.
+    pub quotes: Quotes,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -882,6 +897,27 @@ pub struct ColorScheme {
 impl ColorScheme {
     /// `normal` = light=false, dark=false, only=false.
     pub const NORMAL: Self = Self { light: false, dark: false, only: false };
+}
+
+/// `list-style-position` (CSS Lists 3). Default `Outside`. Fase 7.294.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListStylePosition {
+    #[default]
+    Outside,
+    Inside,
+}
+
+/// `quotes` (CSS Generated Content 3). Default `Auto` — la UA elige.
+/// `None` (afuera del enum, `Quotes::None`) deja los `open-quote`/
+/// `close-quote` mudos. `Pairs(vec)` fija pares concretos por nivel
+/// de anidamiento. Fase 7.298.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Quotes {
+    #[default]
+    Auto,
+    None,
+    /// Lista `(open, close)` por nivel — el último par se recicla.
+    Pairs(Vec<(String, String)>),
 }
 
 impl ContainFlags {
@@ -1864,6 +1900,10 @@ impl Default for ComputedStyle {
             orphans: 2,
             widows: 2,
             color_scheme: ColorScheme::NORMAL,
+            list_style_position: ListStylePosition::Outside,
+            list_style_image: None,
+            counter_set: Vec::new(),
+            quotes: Quotes::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
