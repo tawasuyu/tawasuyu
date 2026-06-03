@@ -901,38 +901,48 @@ impl App {
         self.recompute_reservations();
     }
 
-    /// Recalcula y publica al Cerebro el área reservada del borde: suma la
-    /// franja del shell (pata) y las zonas exclusivas de los layer surfaces
-    /// (waybar y compañía). Fuente única de los insets del teselado.
+    /// Recalcula y publica al Cerebro el área reservada del borde **por
+    /// salida**: cada output reporta sus propias zonas exclusivas de layer
+    /// surfaces (waybar, mako, swaybg…), y la primaria suma además la
+    /// franja del shell (pata) si el dock está acoplado. Es la fuente única
+    /// de los insets del teselado — el Brain ya soporta reservas distintas
+    /// por `OutputId` (`Output.reserved`), así que un dock en monitor
+    /// secundario no tapa las ventanas teseladas de ESE monitor.
     fn recompute_reservations(&mut self) {
-        let (ow, oh) = self.output_size;
-        if ow == 0 || oh == 0 {
-            return;
-        }
-        let (mut top, mut bottom, mut left, mut right) = (0, 0, 0, 0);
-        // Lo que los layer surfaces dejan libre (zona no exclusiva).
-        if let Some(output) = self.output.clone() {
-            let z = layer_map_for_output(&output).non_exclusive_zone();
+        let dock = shell_dock();
+        let has_shell = self.windows.iter().any(|w| w.is_shell);
+        let outputs = self.outputs.clone();
+        for (i, output) in outputs.iter().enumerate() {
+            let Some(mode) = output.current_mode() else { continue };
+            let (ow, oh) = (mode.size.w, mode.size.h);
+            if ow == 0 || oh == 0 {
+                continue;
+            }
+            let (mut top, mut bottom, mut left, mut right) = (0, 0, 0, 0);
+            // Layer surfaces de ESTA salida (smithay las cuelga por output).
+            let z = layer_map_for_output(output).non_exclusive_zone();
             top += z.loc.y.max(0);
             left += z.loc.x.max(0);
             right += (ow - (z.loc.x + z.size.w)).max(0);
             bottom += (oh - (z.loc.y + z.size.h)).max(0);
+            // El dock pata vive sólo en la primaria (index 0). Autohide no
+            // reserva: se superpone al revelarse, las ventanas usan todo.
+            let is_primary = i == 0;
+            if is_primary && has_shell && !dock.autohide {
+                let limite = if dock.anchor.es_horizontal() { oh } else { ow };
+                let t = dock.thickness.clamp(1, limite.max(1));
+                let (st, sb, sl, sr) = shell_insets(dock.anchor, t);
+                top += st;
+                bottom += sb;
+                left += sl;
+                right += sr;
+            }
+            if is_primary {
+                self.reserved = (top, bottom, left, right);
+            }
+            let ev = self.body.reserve_output(i as u32, top, bottom, left, right);
+            self.brain_feed(ev);
         }
-        // Franja del shell (pata), si está acoplado. Con autohide el dock
-        // nunca reserva: se superpone al revelarse, las ventanas usan todo.
-        let dock = shell_dock();
-        if !dock.autohide && self.windows.iter().any(|w| w.is_shell) {
-            let limite = if dock.anchor.es_horizontal() { oh } else { ow };
-            let t = dock.thickness.clamp(1, limite.max(1));
-            let (st, sb, sl, sr) = shell_insets(dock.anchor, t);
-            top += st;
-            bottom += sb;
-            left += sl;
-            right += sr;
-        }
-        self.reserved = (top, bottom, left, right);
-        let ev = self.body.reserve_output(0, top, bottom, left, right);
-        self.brain_feed(ev);
     }
 
     /// Con el dock autoescondido, ajusta su visibilidad según el puntero

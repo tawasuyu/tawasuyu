@@ -483,22 +483,38 @@ impl DrmState {
         )
     }
 
-    /// El área útil (rect menos reservas del shell) **de una salida concreta**.
-    /// Las reservas son globales: hoy el shell vive en la primaria, así que
-    /// sólo a ella se le descuentan. Devuelve rect en coords globales.
+    /// El área útil (rect menos reservas) **de una salida concreta**: a las
+    /// layers exclusivas de su `layer_map` se le suma, sólo en la primaria,
+    /// la franja del shell (pata). Devuelve rect en coords globales — el
+    /// teselado y las zonas de arrastre lo usan como dominio efectivo.
     fn output_work_rect(&self, idx: usize) -> Rect {
         let o = &self.outputs[idx];
+        // Layers exclusivas de ESTA salida: la zona "no exclusiva" da los
+        // insets directos.
+        let z = smithay::desktop::layer_map_for_output(&o.output).non_exclusive_zone();
+        let mut top = z.loc.y.max(0);
+        let mut left = z.loc.x.max(0);
+        let mut right = (o.rect.w - (z.loc.x + z.size.w)).max(0);
+        let mut bottom = (o.rect.h - (z.loc.y + z.size.h)).max(0);
+        // El dock del shell (pata) sólo se descuenta en la primaria.
         if idx == Self::PRIMARY {
-            let (top, bottom, left, right) = self.app.reserved;
-            Rect::new(
-                o.rect.x + left,
-                o.rect.y + top,
-                (o.rect.w - left - right).max(1),
-                (o.rect.h - top - bottom).max(1),
-            )
-        } else {
-            o.rect
+            let (rt, rb, rl, rr) = self.app.reserved;
+            // Las reservas del shell ya están sumadas en `self.app.reserved`
+            // (recompute_reservations las publica), pero `app.reserved`
+            // incluye también las de layer-shell (no podemos restarlas
+            // limpiamente). Tomamos `max` para no doble-contar: la mayor
+            // gana, y el shell (que es la suma) cubre los dos casos.
+            top = top.max(rt);
+            bottom = bottom.max(rb);
+            left = left.max(rl);
+            right = right.max(rr);
         }
+        Rect::new(
+            o.rect.x + left,
+            o.rect.y + top,
+            (o.rect.w - left - right).max(1),
+            (o.rect.h - top - bottom).max(1),
+        )
     }
 
     /// Compone un cuadro por cada salida y avisa a los clientes una sola vez.
