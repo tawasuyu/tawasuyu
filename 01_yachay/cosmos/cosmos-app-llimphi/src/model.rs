@@ -109,16 +109,6 @@ impl ToolCat {
         }
     }
 
-    /// Glifo corto para el rail vertical (estilo Photoshop).
-    pub(crate) fn glyph(self) -> &'static str {
-        match self {
-            ToolCat::Principal => "△",
-            ToolCat::Analisis => "✦",
-            ToolCat::Astronomia => "☾",
-            ToolCat::Sistema => "⚙",
-        }
-    }
-
     pub(crate) fn all() -> &'static [ToolCat] {
         &[
             ToolCat::Principal,

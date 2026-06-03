@@ -20,8 +20,19 @@ use llimphi_ui::View;
 
 use crate::astroview;
 use crate::chrome;
+use crate::glyphs::{self, Icon};
 use crate::model::{Model, Msg, ToolCat, ToolPanel, TOOLS_RAIL_W};
 use crate::view;
+
+/// Icono del rail vertical para cada categoría.
+fn cat_icon(cat: ToolCat) -> Icon {
+    match cat {
+        ToolCat::Principal => Icon::Triangle,
+        ToolCat::Analisis => Icon::Star,
+        ToolCat::Astronomia => Icon::Moon,
+        ToolCat::Sistema => Icon::Gear,
+    }
+}
 
 /// El panel derecho completo: acordeón (crece) + rail de categorías
 /// (fijo, pegado al borde). Pensado para vivir dentro de la zona
@@ -54,6 +65,7 @@ fn category_rail(model: &Model, theme: &Theme) -> View<Msg> {
     let mut btns: Vec<View<Msg>> = Vec::new();
     for cat in ToolCat::all() {
         let active = model.tool_cat == *cat;
+        let fg = if active { theme.accent } else { theme.fg_text };
         let mut btn = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -64,9 +76,9 @@ fn category_rail(model: &Model, theme: &Theme) -> View<Msg> {
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .text_aligned(cat.glyph().to_string(), 16.0, theme.fg_text, Alignment::Center)
         .hover_fill(theme.bg_row_hover)
-        .on_click(Msg::SelectToolCat(*cat));
+        .on_click(Msg::SelectToolCat(*cat))
+        .children(vec![glyphs::icon_view(cat_icon(*cat), 20.0, fg)]);
         if active {
             btn = btn.fill(theme.bg_selected);
         }
@@ -140,7 +152,32 @@ fn accordion_view(model: &Model, theme: &Theme) -> View<Msg> {
 /// está expandida, su cuerpo ocupando el espacio disponible.
 fn collapsible(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
     let expanded = model.panel_expanded(panel);
-    let chevron = if expanded { "▾" } else { "▸" };
+    let chevron = glyphs::icon_view(
+        if expanded { Icon::ChevronDown } else { Icon::ChevronRight },
+        12.0,
+        theme.fg_muted,
+    );
+    let chevron_box = View::new(Style {
+        size: Size {
+            width: length(16.0_f32),
+            height: length(26.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![chevron]);
+    let title = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(0.0_f32),
+            height: length(26.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(panel.title().to_string(), 12.0, theme.fg_text, Alignment::Start);
 
     let head = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -151,7 +188,7 @@ fn collapsible(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
         padding: Rect {
-            left: length(8.0_f32),
+            left: length(6.0_f32),
             right: length(8.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
@@ -161,12 +198,7 @@ fn collapsible(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
     .fill(theme.bg_panel)
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::ToggleToolPanel(panel))
-    .text_aligned(
-        format!("{chevron}  {}", panel.title()),
-        12.0,
-        theme.fg_text,
-        Alignment::Start,
-    );
+    .children(vec![chevron_box, title]);
 
     if !expanded {
         return head;

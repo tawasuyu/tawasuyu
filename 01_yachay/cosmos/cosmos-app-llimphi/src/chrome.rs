@@ -146,11 +146,13 @@ impl MenuEntry {
 /// Lado del lienzo de cada carta en modo mosaico.
 const TILE_SIZE: f32 = 360.0;
 
+/// Marca de "activo" en las entradas de menú. Bullet (U+2022, presente en
+/// las fuentes default) en vez de ✓ que cae como `.notdef`.
 fn check(label: &str, on: bool) -> String {
     if on {
-        format!("✓ {label}")
+        format!("•  {label}")
     } else {
-        format!("   {label}")
+        format!("     {label}")
     }
 }
 
@@ -707,31 +709,67 @@ fn nav_row(n: &NavNode, vis: usize, model: &Model, theme: &Theme) -> View<Msg> {
 fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
     let has_sel = model.nav_selected.is_some();
     let has_cut = model.nav_cut.is_some();
-    let btn = |label: &str, msg: Msg, enabled: bool| -> View<Msg> {
+    // Botón "nuevo X": icono (plus) + etiqueta.
+    let new_btn = |label: &str, msg: Msg, enabled: bool| -> View<Msg> {
+        let fg = if enabled { theme.fg_text } else { theme.fg_muted };
+        let plus = if enabled { theme.accent } else { theme.fg_muted };
         let mut v = View::new(Style {
+            flex_direction: FlexDirection::Row,
             size: Size {
                 width: auto(),
                 height: length(22.0_f32),
             },
             flex_shrink: 0.0,
             align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
             padding: Rect {
-                left: length(7.0_f32),
-                right: length(7.0_f32),
+                left: length(3.0_f32),
+                right: length(5.0_f32),
                 top: length(0.0_f32),
                 bottom: length(0.0_f32),
             },
             ..Default::default()
         })
-        .radius(4.0);
+        .radius(4.0)
+        .children(vec![
+            glyphs::icon_view(Icon::Plus, 13.0, plus),
+            View::new(Style {
+                size: Size {
+                    width: auto(),
+                    height: length(22.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(label.to_string(), 11.0, fg, Alignment::Start),
+        ]);
         if enabled {
-            v = v
-                .text_aligned(label.to_string(), 12.0, theme.fg_text, Alignment::Center)
-                .hover_fill(theme.bg_row_hover)
-                .on_click(msg);
+            v = v.hover_fill(theme.bg_row_hover).on_click(msg);
+        }
+        v
+    };
+    // Botón icónico (renombrar/cortar/pegar/borrar).
+    let icon_btn = |icon: Icon, msg: Msg, enabled: bool, destructive: bool| -> View<Msg> {
+        let fg = if !enabled {
+            theme.fg_muted
+        } else if destructive {
+            theme.fg_destructive
         } else {
-            v = v.text_aligned(label.to_string(), 12.0, theme.fg_muted, Alignment::Center);
+            theme.fg_text
+        };
+        let mut v = View::new(Style {
+            size: Size {
+                width: length(24.0_f32),
+                height: length(22.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .radius(4.0)
+        .children(vec![glyphs::icon_view(icon, 15.0, fg)]);
+        if enabled {
+            v = v.hover_fill(theme.bg_row_hover).on_click(msg);
         }
         v
     };
@@ -745,7 +783,7 @@ fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(3.0_f32),
+            width: length(2.0_f32),
             height: length(0.0_f32),
         },
         padding: Rect {
@@ -758,13 +796,13 @@ fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel_alt)
     .children(vec![
-        btn("＋grupo", Msg::NewGroup, true),
-        btn("＋contacto", Msg::NewContact, true),
-        btn("＋carta", Msg::NewChart, has_sel),
-        btn("✎", Msg::RenameStart, has_sel),
-        btn("✂", Msg::CutNode, has_sel),
-        btn("📋", Msg::PasteNode, has_cut),
-        btn("🗑", Msg::DeleteSelected, has_sel),
+        new_btn("grupo", Msg::NewGroup, true),
+        new_btn("contacto", Msg::NewContact, true),
+        new_btn("carta", Msg::NewChart, has_sel),
+        icon_btn(Icon::Pencil, Msg::RenameStart, has_sel, false),
+        icon_btn(Icon::Scissors, Msg::CutNode, has_sel, false),
+        icon_btn(Icon::Clipboard, Msg::PasteNode, has_cut, false),
+        icon_btn(Icon::Trash, Msg::DeleteSelected, has_sel, true),
     ])
 }
 
@@ -1063,9 +1101,9 @@ fn chart_tabs(model: &Model, theme: &Theme) -> View<Msg> {
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .text_aligned("✕".to_string(), 11.0, theme.fg_muted, Alignment::Center)
         .hover_fill(theme.bg_row_hover)
-        .on_click(Msg::CloseChartTab(i));
+        .on_click(Msg::CloseChartTab(i))
+        .children(vec![glyphs::icon_view(Icon::Close, 11.0, theme.fg_muted)]);
 
         let mut tabv = View::new(Style {
             flex_direction: FlexDirection::Row,
@@ -1103,9 +1141,14 @@ fn chart_tabs(model: &Model, theme: &Theme) -> View<Msg> {
             ..Default::default()
         }),
     );
-    let toggle_glyph = if model.tile_mode { "▭ pestañas" } else { "▦ mosaico" };
+    let (toggle_icon, toggle_label) = if model.tile_mode {
+        (Icon::Window, "pestañas")
+    } else {
+        (Icon::Grid, "mosaico")
+    };
     kids.push(
         View::new(Style {
+            flex_direction: FlexDirection::Row,
             size: Size {
                 width: auto(),
                 height: percent(1.0_f32),
@@ -1113,6 +1156,10 @@ fn chart_tabs(model: &Model, theme: &Theme) -> View<Msg> {
             flex_shrink: 0.0,
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
+            gap: Size {
+                width: length(4.0_f32),
+                height: length(0.0_f32),
+            },
             padding: Rect {
                 left: length(8.0_f32),
                 right: length(8.0_f32),
@@ -1121,9 +1168,20 @@ fn chart_tabs(model: &Model, theme: &Theme) -> View<Msg> {
             },
             ..Default::default()
         })
-        .text_aligned(toggle_glyph.to_string(), 11.0, theme.fg_muted, Alignment::Center)
         .hover_fill(theme.bg_row_hover)
-        .on_click(Msg::ToggleTileMode),
+        .on_click(Msg::ToggleTileMode)
+        .children(vec![
+            glyphs::icon_view(toggle_icon, 14.0, theme.fg_muted),
+            View::new(Style {
+                size: Size {
+                    width: auto(),
+                    height: percent(1.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(toggle_label.to_string(), 11.0, theme.fg_muted, Alignment::Center),
+        ]),
     );
 
     View::new(Style {
@@ -1237,7 +1295,7 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
 /// Botonera de rotación de la esfera 3D.
 fn sphere_controls(theme: &Theme) -> View<Msg> {
     let step = 15.0_f32;
-    let btn = |label: &str, msg: Msg| -> View<Msg> {
+    let btn = |icon: Icon, msg: Msg| -> View<Msg> {
         View::new(Style {
             size: Size {
                 width: length(30.0_f32),
@@ -1251,8 +1309,8 @@ fn sphere_controls(theme: &Theme) -> View<Msg> {
         .radius(4.0)
         .fill(theme.bg_panel)
         .hover_fill(theme.bg_row_hover)
-        .text_aligned(label.to_string(), 13.0, theme.fg_text, Alignment::Center)
         .on_click(msg)
+        .children(vec![glyphs::icon_view(icon, 14.0, theme.fg_text)])
     };
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -1269,11 +1327,11 @@ fn sphere_controls(theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![
-        btn("◀", Msg::SphereRotate(-step, 0.0)),
-        btn("▶", Msg::SphereRotate(step, 0.0)),
-        btn("▲", Msg::SphereRotate(0.0, -step)),
-        btn("▼", Msg::SphereRotate(0.0, step)),
-        btn("⟳", Msg::SphereReset),
+        btn(Icon::ArrowLeft, Msg::SphereRotate(-step, 0.0)),
+        btn(Icon::ArrowRight, Msg::SphereRotate(step, 0.0)),
+        btn(Icon::ArrowUp, Msg::SphereRotate(0.0, -step)),
+        btn(Icon::ArrowDown, Msg::SphereRotate(0.0, step)),
+        btn(Icon::Refresh, Msg::SphereReset),
     ])
 }
 

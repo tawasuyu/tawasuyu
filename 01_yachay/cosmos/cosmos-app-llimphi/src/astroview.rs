@@ -246,7 +246,7 @@ pub(crate) fn view_sundial(a: &AstroState, theme: &Theme) -> View<Msg> {
                 theme.fg_text,
             ));
             rows.push(line(
-                format!("(gnomon de 1 m → sombra de {:.2} m)", ratio),
+                format!("(gnomon de 1 m -> sombra de {:.2} m)", ratio),
                 10.0,
                 theme.fg_muted,
             ));
@@ -315,7 +315,7 @@ pub(crate) fn view_eclipses(a: &AstroState, theme: &Theme) -> View<Msg> {
     ));
     rows.push(line(
         format!(
-            "separación ☉☽ {:.3}°   (r☉ {:.3}°, r☽ {:.3}°)",
+            "separación Sol·Luna {:.3}°   (r Sol {:.3}°, r Luna {:.3}°)",
             s.separation_deg, s.sun_apparent_radius_deg, s.moon_apparent_radius_deg
         ),
         11.0,
