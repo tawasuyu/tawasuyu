@@ -545,6 +545,18 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "border-spacing" => parse_border_spacing(value).map(|(h, v)| DeclKind::BorderSpacing { h, v }),
         "caption-side" => parse_caption_side(value).map(DeclKind::CaptionSide),
         "empty-cells" => parse_empty_cells(value).map(DeclKind::EmptyCells),
+        // `break-before` / `break-after` (CSS Fragmentation 3) + alias
+        // legacy `page-break-before` / `page-break-after` (CSS 2.1, subset
+        // auto/avoid/always/left/right).
+        "break-before" | "page-break-before" => {
+            parse_break_between(value).map(DeclKind::BreakBefore)
+        }
+        "break-after" | "page-break-after" => {
+            parse_break_between(value).map(DeclKind::BreakAfter)
+        }
+        "orphans" => parse_positive_int(value).map(DeclKind::Orphans),
+        "widows" => parse_positive_int(value).map(DeclKind::Widows),
+        "color-scheme" => parse_color_scheme(value).map(DeclKind::ColorScheme),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1535,6 +1547,74 @@ pub(crate) fn parse_empty_cells(value: &str) -> Option<EmptyCells> {
         "hide" => Some(EmptyCells::Hide),
         _ => None,
     }
+}
+
+/// `break-before` / `break-after`: superset que cubre el legacy
+/// `page-break-*` (auto/avoid/always/left/right) y los valores nuevos
+/// (page/recto/verso/column/region + variantes avoid-*). Fase 7.289 / 7.290.
+pub(crate) fn parse_break_between(value: &str) -> Option<BreakBetween> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(BreakBetween::Auto),
+        "avoid" => Some(BreakBetween::Avoid),
+        "always" => Some(BreakBetween::Always),
+        "avoid-page" => Some(BreakBetween::AvoidPage),
+        "page" => Some(BreakBetween::Page),
+        "left" => Some(BreakBetween::Left),
+        "right" => Some(BreakBetween::Right),
+        "recto" => Some(BreakBetween::Recto),
+        "verso" => Some(BreakBetween::Verso),
+        "avoid-column" => Some(BreakBetween::AvoidColumn),
+        "column" => Some(BreakBetween::Column),
+        "avoid-region" => Some(BreakBetween::AvoidRegion),
+        "region" => Some(BreakBetween::Region),
+        _ => None,
+    }
+}
+
+/// Entero positivo (>= 1). Para `orphans` y `widows`. Fase 7.291 / 7.292.
+pub(crate) fn parse_positive_int(value: &str) -> Option<u32> {
+    value.trim().parse::<u32>().ok().filter(|n| *n >= 1)
+}
+
+/// `color-scheme: normal | [light||dark] [only]?`. Tokens duplicados o
+/// desconocidos descartan la declaración. Fase 7.293.
+pub(crate) fn parse_color_scheme(value: &str) -> Option<ColorScheme> {
+    let v = value.trim().to_ascii_lowercase();
+    if v == "normal" {
+        return Some(ColorScheme::NORMAL);
+    }
+    let mut cs = ColorScheme { light: false, dark: false, only: false };
+    for tok in v.split_whitespace() {
+        match tok {
+            "light" => {
+                if cs.light {
+                    return None;
+                }
+                cs.light = true;
+            }
+            "dark" => {
+                if cs.dark {
+                    return None;
+                }
+                cs.dark = true;
+            }
+            "only" => {
+                if cs.only {
+                    return None;
+                }
+                cs.only = true;
+            }
+            _ => return None,
+        }
+    }
+    // `only` por sí solo no aporta nada; necesita al menos un esquema.
+    if cs.only && !cs.light && !cs.dark {
+        return None;
+    }
+    if !cs.light && !cs.dark && !cs.only {
+        return None;
+    }
+    Some(cs)
 }
 
 /// `break-inside`: `auto | avoid | avoid-page | avoid-column | avoid-region`.

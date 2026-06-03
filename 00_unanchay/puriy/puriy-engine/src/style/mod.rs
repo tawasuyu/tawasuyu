@@ -246,6 +246,11 @@ impl StyleEngine {
             style.border_spacing_v = p.border_spacing_v;
             style.caption_side = p.caption_side;
             style.empty_cells = p.empty_cells;
+            // CSS Fragmentation — orphans/widows heredan; break-before/after NO.
+            // CSS Color Adjustment — color-scheme hereda.
+            style.orphans = p.orphans;
+            style.widows = p.widows;
+            style.color_scheme = p.color_scheme;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -2804,6 +2809,173 @@ mod tests {
             eng.compute_with_parent(&divs[0], Some(&body_cs)).empty_cells,
             EmptyCells::Hide
         );
+    }
+
+    #[test]
+    fn break_before_fase_7_289() {
+        assert_eq!(parse_break_between("auto"), Some(BreakBetween::Auto));
+        assert_eq!(parse_break_between("AVOID-PAGE"), Some(BreakBetween::AvoidPage));
+        assert_eq!(parse_break_between("page"), Some(BreakBetween::Page));
+        assert_eq!(parse_break_between("recto"), Some(BreakBetween::Recto));
+        assert_eq!(parse_break_between("column"), Some(BreakBetween::Column));
+        assert_eq!(parse_break_between("avoid-region"), Some(BreakBetween::AvoidRegion));
+        assert_eq!(parse_break_between("nope"), None);
+
+        // Alias legacy `page-break-before`.
+        let html = r##"<html><head><style>
+            body { break-before: page }
+            div.legacy { page-break-before: always }
+            div.plain {}
+        </style></head><body>
+          <div class="legacy"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.break_before, BreakBetween::Page);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).break_before,
+            BreakBetween::Always
+        );
+        // NO se hereda → default Auto.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).break_before,
+            BreakBetween::Auto
+        );
+    }
+
+    #[test]
+    fn break_after_fase_7_290() {
+        // Mismo parser, comparte el dominio con break-before.
+        let html = r##"<html><head><style>
+            body { break-after: avoid-column }
+            div.legacy { page-break-after: left }
+            div.plain {}
+        </style></head><body>
+          <div class="legacy"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.break_after, BreakBetween::AvoidColumn);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).break_after,
+            BreakBetween::Left
+        );
+        // NO se hereda → default Auto.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).break_after,
+            BreakBetween::Auto
+        );
+    }
+
+    #[test]
+    fn orphans_fase_7_291() {
+        assert_eq!(parse_positive_int("3"), Some(3));
+        assert_eq!(parse_positive_int("0"), None);
+        assert_eq!(parse_positive_int("-1"), None);
+        assert_eq!(parse_positive_int("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { orphans: 4 }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.orphans, 4);
+        // SÍ se hereda.
+        assert_eq!(eng.compute_with_parent(&divs[0], Some(&body_cs)).orphans, 4);
+    }
+
+    #[test]
+    fn widows_fase_7_292() {
+        let html = r##"<html><head><style>
+            body { widows: 5 }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.widows, 5);
+        // SÍ se hereda.
+        assert_eq!(eng.compute_with_parent(&divs[0], Some(&body_cs)).widows, 5);
+    }
+
+    #[test]
+    fn color_scheme_fase_7_293() {
+        assert_eq!(parse_color_scheme("normal"), Some(ColorScheme::NORMAL));
+        assert_eq!(
+            parse_color_scheme("light dark"),
+            Some(ColorScheme { light: true, dark: true, only: false })
+        );
+        assert_eq!(
+            parse_color_scheme("only LIGHT"),
+            Some(ColorScheme { light: true, dark: false, only: true })
+        );
+        // Duplicado descarta.
+        assert!(parse_color_scheme("light light").is_none());
+        // Token desconocido descarta.
+        assert!(parse_color_scheme("light sepia").is_none());
+        // `only` solo no es válido.
+        assert!(parse_color_scheme("only").is_none());
+
+        let html = r##"<html><head><style>
+            body { color-scheme: light dark }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(body_cs.color_scheme.light && body_cs.color_scheme.dark);
+        // SÍ se hereda.
+        let plain = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(plain.color_scheme.light && plain.color_scheme.dark);
     }
 
     #[test]

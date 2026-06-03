@@ -367,6 +367,17 @@ pub struct ComputedStyle {
     pub caption_side: CaptionSide,
     /// `empty-cells` (Fase 7.288). Default `Show`. **Heredable**. Plumb.
     pub empty_cells: EmptyCells,
+    /// `break-before` (Fase 7.289). Default `Auto`. NO heredable. Plumb.
+    pub break_before: BreakBetween,
+    /// `break-after` (Fase 7.290). Default `Auto`. NO heredable. Plumb.
+    pub break_after: BreakBetween,
+    /// `orphans` (Fase 7.291). Default 2. **Heredable**. Plumb.
+    pub orphans: u32,
+    /// `widows` (Fase 7.292). Default 2. **Heredable**. Plumb.
+    pub widows: u32,
+    /// `color-scheme` (Fase 7.293). Default `Normal` (sin compromiso).
+    /// **Heredable**. Plumb: el chrome no toggea UA defaults dark vs light.
+    pub color_scheme: ColorScheme,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -833,6 +844,44 @@ pub enum EmptyCells {
     #[default]
     Show,
     Hide,
+}
+
+/// `break-before` / `break-after` (CSS Fragmentation 3). Default `Auto`.
+/// Comparten dominio de valores. Fase 7.289 / 7.290.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BreakBetween {
+    #[default]
+    Auto,
+    Avoid,
+    /// Forzar break (genérico).
+    Always,
+    /// Variantes específicas por tipo de break.
+    AvoidPage,
+    Page,
+    Left,
+    Right,
+    Recto,
+    Verso,
+    AvoidColumn,
+    Column,
+    AvoidRegion,
+    Region,
+}
+
+/// `color-scheme` (CSS Color Adjustment 1). Default `Normal` (sin
+/// compromiso). El valor `Only(...)` marca el `only` opt-in (un browser
+/// fuera del set no puede caer a otro). Heredable. Fase 7.293.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ColorScheme {
+    pub light: bool,
+    pub dark: bool,
+    /// `only` marca que el UA no debe caer al esquema opuesto.
+    pub only: bool,
+}
+
+impl ColorScheme {
+    /// `normal` = light=false, dark=false, only=false.
+    pub const NORMAL: Self = Self { light: false, dark: false, only: false };
 }
 
 impl ContainFlags {
@@ -1810,6 +1859,11 @@ impl Default for ComputedStyle {
             border_spacing_v: 0.0,
             caption_side: CaptionSide::Top,
             empty_cells: EmptyCells::Show,
+            break_before: BreakBetween::Auto,
+            break_after: BreakBetween::Auto,
+            orphans: 2,
+            widows: 2,
+            color_scheme: ColorScheme::NORMAL,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
