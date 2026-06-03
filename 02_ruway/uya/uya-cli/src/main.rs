@@ -79,6 +79,9 @@ fn main() {
             Ok(EventoUya::Cuadro { id, .. }) => {
                 *cuadros.entry(id).or_insert(0) += 1;
             }
+            Ok(EventoUya::Mensaje { nombre, texto, .. }) => {
+                println!("  💬 {nombre}: {texto}");
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }

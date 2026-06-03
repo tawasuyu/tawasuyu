@@ -24,7 +24,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, FlexDirection, FlexWrap, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image as PenikoImage, ImageFormat};
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{
+    App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
+};
 
 use llimphi_clipboard::SystemClipboard;
 use llimphi_widget_edit_menu::{self as editmenu, EditAction};
@@ -42,11 +44,31 @@ const TEXTO: Color = Color::from_rgba8(222, 226, 233, 255);
 const TENUE: Color = Color::from_rgba8(128, 134, 146, 255);
 const ACENTO: Color = Color::from_rgba8(120, 210, 184, 255);
 
+/// Cuántos renglones de charla pinta la ventana visible (con scroll por rueda).
+const VENTANA_CHARLA: usize = 14;
+
 /// El último cuadro de video conocido de un participante.
 struct CuadroUI {
     ancho: u16,
     alto: u16,
     rgba: Arc<Vec<u8>>,
+}
+
+/// Una línea de la charla, ya resuelta a nombre + cuerpo.
+struct LineaCharla {
+    nombre: String,
+    texto: String,
+    /// `true` si la escribí yo (se pinta con acento).
+    yo: bool,
+}
+
+/// Qué campo de texto tiene el foco del teclado.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Foco {
+    /// La barra de unión (pegar dirección de un par).
+    Conectar,
+    /// La charla (escribir un mensaje a la sala).
+    Charla,
 }
 
 struct Modelo {
@@ -59,6 +81,14 @@ struct Modelo {
     mi_dir: String,
     /// Campo donde se pega/teclea la dirección de un par a conectar.
     conectar_input: TextInputState,
+    /// Campo donde se escribe un mensaje de la charla.
+    charla_input: TextInputState,
+    /// El hilo de la charla (cronológico; lo más nuevo al final).
+    charla: Vec<LineaCharla>,
+    /// Líneas desplazadas desde el fondo (0 = pegado a lo más nuevo).
+    charla_scroll: usize,
+    /// Qué campo de texto recibe el teclado.
+    foco: Foco,
     /// Clipboard del sistema, para pegar la dirección con Ctrl/Cmd+V.
     clipboard: SystemClipboard,
     /// Salida de audio: hay que conservarla viva (al soltarla, el stream
@@ -70,15 +100,19 @@ struct Modelo {
 enum Msg {
     /// Un evento de la llamada llegó por el hilo de red.
     Red(EventoUya),
-    /// Una tecla para el campo de conectar.
+    /// Una tecla para el campo enfocado.
     Tecla(KeyEvent),
     /// Conectar a la dirección tecleada/pegada.
     Conectar,
+    /// Enviar el mensaje escrito en la charla.
+    EnviarCharla,
+    /// Mover el foco del teclado a un campo (clic).
+    Enfocar(Foco),
+    /// Desplazar el hilo de la charla (+N hacia lo más viejo).
+    ScrollCharla(i32),
     ToggleCamara,
     ToggleMicrofono,
     Colgar,
-    /// No-op (p. ej. foco de un campo).
-    Nada,
 }
 
 struct Uya;
@@ -145,21 +179,41 @@ impl App for Uya {
             mic_on: true,
             mi_dir,
             conectar_input: TextInputState::new(),
+            charla_input: TextInputState::new(),
+            charla: Vec::new(),
+            charla_scroll: 0,
+            foco: Foco::Charla,
             clipboard: SystemClipboard::new(),
             _audio: audio,
         }
     }
 
-    fn on_key(_model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
+    fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
         }
         match &e.key {
-            // Enter conecta a lo que haya en el campo.
-            Key::Named(NamedKey::Enter) => Some(Msg::Conectar),
-            // Todo lo demás (incluido Ctrl/Cmd+V) va al campo de conectar.
+            // Enter dispara la acción del campo enfocado.
+            Key::Named(NamedKey::Enter) => Some(match model.foco {
+                Foco::Conectar => Msg::Conectar,
+                Foco::Charla => Msg::EnviarCharla,
+            }),
+            // Todo lo demás (incluido Ctrl/Cmd+V) va al campo enfocado.
             _ => Some(Msg::Tecla(e.clone())),
         }
+    }
+
+    fn on_wheel(
+        _model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        _mods: Modifiers,
+    ) -> Option<Self::Msg> {
+        if delta.y.abs() < f32::EPSILON {
+            return None;
+        }
+        // y>0 ⇒ rueda hacia abajo ⇒ ver más viejos (subir el offset).
+        Some(Msg::ScrollCharla(if delta.y > 0.0 { 3 } else { -3 }))
     }
 
     fn update(mut model: Self::Model, msg: Self::Msg, _handle: &Handle<Self::Msg>) -> Self::Model {
@@ -188,6 +242,14 @@ impl App for Uya {
             }) => {
                 model.cuadros.insert(id, CuadroUI { ancho, alto, rgba });
             }
+            Msg::Red(EventoUya::Mensaje { id, nombre, texto }) => {
+                model.charla.push(LineaCharla {
+                    nombre,
+                    texto,
+                    yo: id == model.sala.yo,
+                });
+                model.charla_scroll = 0;
+            }
             Msg::ToggleCamara => {
                 model.cam_on = !model.cam_on;
                 model.enlace.set_camara(model.cam_on);
@@ -200,17 +262,20 @@ impl App for Uya {
                 model.enlace.set_microfono(model.mic_on);
             }
             Msg::Tecla(e) => {
-                // Ctrl/Cmd+V pega del clipboard; el resto edita el campo.
+                // El tecleo va al campo enfocado; Ctrl/Cmd+V pega del clipboard.
+                let campo = match model.foco {
+                    Foco::Conectar => &mut model.conectar_input,
+                    Foco::Charla => &mut model.charla_input,
+                };
                 let es_v = matches!(&e.key, Key::Character(c) if c.eq_ignore_ascii_case("v"));
                 if (e.modifiers.ctrl || e.modifiers.meta) && es_v {
-                    editmenu::apply(
-                        model.conectar_input.editor_mut(),
-                        EditAction::Paste,
-                        &mut model.clipboard,
-                    );
+                    editmenu::apply(campo.editor_mut(), EditAction::Paste, &mut model.clipboard);
                 } else {
-                    model.conectar_input.apply_key(&e);
+                    campo.apply_key(&e);
                 }
+            }
+            Msg::Enfocar(f) => {
+                model.foco = f;
             }
             Msg::Conectar => {
                 let dir = model.conectar_input.text().trim().to_string();
@@ -219,13 +284,31 @@ impl App for Uya {
                     model.conectar_input.clear();
                 }
             }
+            Msg::EnviarCharla => {
+                let texto = model.charla_input.text().trim().to_string();
+                if !texto.is_empty() {
+                    model.enlace.enviar_mensaje(texto.clone());
+                    // Eco local: la red no me devuelve mis propios mensajes.
+                    model.charla.push(LineaCharla {
+                        nombre: format!("{} (yo)", model.sala.mi_nombre),
+                        texto,
+                        yo: true,
+                    });
+                    model.charla_scroll = 0;
+                    model.charla_input.clear();
+                }
+            }
+            Msg::ScrollCharla(d) => {
+                let max = model.charla.len().saturating_sub(VENTANA_CHARLA);
+                let nuevo = model.charla_scroll as i32 + d;
+                model.charla_scroll = nuevo.clamp(0, max as i32) as usize;
+            }
             Msg::Colgar => {
                 model.enlace.colgar();
                 model.sala.participantes.clear();
                 let yo = model.sala.yo;
                 model.cuadros.retain(|id, _| *id == yo);
             }
-            Msg::Nada => {}
         }
         model
     }
@@ -270,6 +353,18 @@ impl App for Uya {
         .fill(FONDO)
         .children(tiles);
 
+        // Zona superior: rejilla de caras (crece) + panel de charla (fijo).
+        let superior = View::new(Style {
+            size: Size {
+                width: percent(1.0),
+                height: auto(),
+            },
+            flex_direction: FlexDirection::Row,
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .children(vec![rejilla, panel_charla(model)]);
+
         View::new(Style {
             size: Size {
                 width: percent(1.0),
@@ -279,8 +374,93 @@ impl App for Uya {
             ..Default::default()
         })
         .fill(FONDO)
-        .children(vec![rejilla, barra_conectar(model), barra_controles(model)])
+        .children(vec![superior, barra_conectar(model), barra_controles(model)])
     }
+}
+
+/// El panel lateral de la charla: título + hilo con scroll + campo de envío.
+fn panel_charla(model: &Modelo) -> View<Msg> {
+    let titulo = View::new(Style {
+        size: Size {
+            width: percent(1.0),
+            height: length(26.0),
+        },
+        ..Default::default()
+    })
+    .text("charla", 14.0, ACENTO);
+
+    // Ventana visible del hilo: las últimas `VENTANA_CHARLA` líneas, corridas
+    // por el offset de scroll (0 = pegado a lo más nuevo).
+    let total = model.charla.len();
+    let fin = total.saturating_sub(model.charla_scroll);
+    let ini = fin.saturating_sub(VENTANA_CHARLA);
+    let mut lineas: Vec<View<Msg>> = Vec::new();
+    if total == 0 {
+        lineas.push(linea_charla_view("— sin mensajes todavía —", TENUE));
+    } else {
+        for l in &model.charla[ini..fin] {
+            let color = if l.yo { ACENTO } else { TEXTO };
+            lineas.push(linea_charla_view(&format!("{}: {}", l.nombre, l.texto), color));
+        }
+    }
+
+    let hilo = View::new(Style {
+        size: Size {
+            width: percent(1.0),
+            height: auto(),
+        },
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        gap: Size {
+            width: length(0.0),
+            height: length(4.0),
+        },
+        ..Default::default()
+    })
+    .children(lineas);
+
+    let campo = View::new(Style {
+        size: Size {
+            width: percent(1.0),
+            height: length(34.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        &model.charla_input,
+        "escribí y Enter…",
+        model.foco == Foco::Charla,
+        &TextInputPalette::default(),
+        Msg::Enfocar(Foco::Charla),
+    )]);
+
+    View::new(Style {
+        size: Size {
+            width: length(280.0),
+            height: percent(1.0),
+        },
+        flex_direction: FlexDirection::Column,
+        gap: Size {
+            width: length(0.0),
+            height: length(8.0),
+        },
+        padding: rect_all(12.0),
+        ..Default::default()
+    })
+    .fill(BARRA_BG)
+    .children(vec![titulo, hilo, campo])
+}
+
+/// Una línea del hilo de la charla.
+fn linea_charla_view(texto: &str, color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .text(texto.to_string(), 13.0, color)
 }
 
 /// La barra de unión: mi dirección dialable (para compartir) + un campo donde
@@ -307,9 +487,9 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
     .children(vec![text_input_view(
         &model.conectar_input,
         "pegá (Ctrl+V) la dirección de un par y Enter…",
-        true,
+        model.foco == Foco::Conectar,
         &TextInputPalette::default(),
-        Msg::Nada,
+        Msg::Enfocar(Foco::Conectar),
     )]);
 
     View::new(Style {

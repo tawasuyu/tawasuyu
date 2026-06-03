@@ -52,4 +52,12 @@ pub enum EventoUya {
         alto: u16,
         rgba: Arc<Vec<u8>>,
     },
+    /// Llegó un mensaje de texto de la charla. `nombre` viene resuelto desde el
+    /// roster del receptor (el que lo recibió por `Hola`), con respaldo al hex
+    /// corto del id si todavía no se conoce.
+    Mensaje {
+        id: ParticipanteId,
+        nombre: String,
+        texto: String,
+    },
 }

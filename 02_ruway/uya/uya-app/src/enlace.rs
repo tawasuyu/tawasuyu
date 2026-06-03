@@ -262,6 +262,14 @@ impl Enlace {
         self.emitir(&Paquete::Adios);
     }
 
+    /// Difunde un mensaje de texto a la sala (la charla). El eco local lo pinta
+    /// la UI por su cuenta —no vuelve por la red—, igual que en `ayni`.
+    pub fn enviar_mensaje(&self, texto: impl Into<String>) {
+        self.emitir(&Paquete::Mensaje {
+            texto: texto.into(),
+        });
+    }
+
     fn anunciar_estado(&self) {
         self.emitir(&Paquete::Estado {
             camara: self.camara_encendida(),
@@ -486,6 +494,8 @@ async fn registrar(
     let malla = malla.clone();
     tokio::spawn(async move {
         let mut remoto: Option<ParticipanteId> = None;
+        // Nombre del par (aprendido del `Hola`), para etiquetar sus mensajes.
+        let mut remoto_nombre: Option<String> = None;
         // Decoder Opus con estado, propio de esta conexión (lazy).
         let mut dec: Option<OpusDecoder> = None;
         loop {
@@ -500,6 +510,7 @@ async fn registrar(
             match paquete {
                 Paquete::Hola { id, nombre } => {
                     remoto = Some(id);
+                    remoto_nombre = Some(nombre.clone());
                     let _ = ev_tx.send(EventoUya::Entra { id, nombre });
                 }
                 Paquete::Estado { camara, microfono } => {
@@ -549,6 +560,14 @@ async fn registrar(
                                 mezcla.lock().empujar(id, 48_000, 1, &pcm);
                             }
                         }
+                    }
+                }
+                Paquete::Mensaje { texto } => {
+                    if let Some(id) = remoto {
+                        let nombre = remoto_nombre
+                            .clone()
+                            .unwrap_or_else(|| uya_core::hex_corto(&id));
+                        let _ = ev_tx.send(EventoUya::Mensaje { id, nombre, texto });
                     }
                 }
                 Paquete::Pares { direcciones } => {
