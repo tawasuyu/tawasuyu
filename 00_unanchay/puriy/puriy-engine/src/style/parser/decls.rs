@@ -630,6 +630,21 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "backface-visibility" => {
             parse_backface_visibility(value).map(DeclKind::BackfaceVisibility)
         }
+        "scrollbar-width" => {
+            parse_scrollbar_width(value).map(DeclKind::ScrollbarWidth)
+        }
+        "scrollbar-color" => {
+            parse_scrollbar_color(value).map(DeclKind::ScrollbarColor)
+        }
+        "scrollbar-gutter" => {
+            parse_scrollbar_gutter(value).map(DeclKind::ScrollbarGutter)
+        }
+        "overflow-anchor" => {
+            parse_overflow_anchor(value).map(DeclKind::OverflowAnchor)
+        }
+        "overflow-clip-margin" => {
+            parse_overflow_clip_margin(value).map(DeclKind::OverflowClipMargin)
+        }
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -2318,6 +2333,124 @@ pub(crate) fn parse_backface_visibility(value: &str) -> Option<BackfaceVisibilit
         "hidden" => Some(BackfaceVisibility::Hidden),
         _ => None,
     }
+}
+
+/// `scrollbar-width`: `auto | thin | none`. Fase 7.319.
+pub(crate) fn parse_scrollbar_width(value: &str) -> Option<ScrollbarWidth> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ScrollbarWidth::Auto),
+        "thin" => Some(ScrollbarWidth::Thin),
+        "none" => Some(ScrollbarWidth::None),
+        _ => None,
+    }
+}
+
+/// `scrollbar-color`: `auto | <thumb> <track>` (2 colores obligatorios).
+/// Fase 7.320.
+pub(crate) fn parse_scrollbar_color(
+    value: &str,
+) -> Option<Option<ScrollbarColorPair>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(None);
+    }
+    // Dos colores. Como un color puede contener espacios (rgb(...)),
+    // tokenizamos respetando paréntesis.
+    let toks = split_top_level_ws(v);
+    if toks.len() != 2 {
+        return None;
+    }
+    let thumb = parse_color(&toks[0])?;
+    let track = parse_color(&toks[1])?;
+    Some(Some(ScrollbarColorPair { thumb, track }))
+}
+
+/// `scrollbar-gutter`: `auto | stable [both-edges]?`. Fase 7.321.
+pub(crate) fn parse_scrollbar_gutter(value: &str) -> Option<ScrollbarGutter> {
+    let toks: Vec<String> = value
+        .trim()
+        .split_whitespace()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    match toks.as_slice() {
+        [a] if a == "auto" => Some(ScrollbarGutter::AUTO),
+        [a] if a == "stable" => Some(ScrollbarGutter::STABLE),
+        [a, b] if a == "stable" && b == "both-edges" => {
+            Some(ScrollbarGutter::STABLE_BOTH)
+        }
+        // `both-edges stable` también es válido por orden libre (la spec
+        // no manda orden); aceptamos ambos.
+        [a, b] if a == "both-edges" && b == "stable" => {
+            Some(ScrollbarGutter::STABLE_BOTH)
+        }
+        _ => None,
+    }
+}
+
+/// `overflow-anchor`: `auto | none`. Fase 7.322.
+pub(crate) fn parse_overflow_anchor(value: &str) -> Option<OverflowAnchor> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(OverflowAnchor::Auto),
+        "none" => Some(OverflowAnchor::None),
+        _ => None,
+    }
+}
+
+/// `overflow-clip-margin`: `<visual-box> || <length>` (al menos uno;
+/// length >= 0). Si falta visual-box, default `padding-box`; si falta
+/// length, default `0px`. `0px` solo (sin visual-box) emite `None`
+/// (sin extensión). Fase 7.323.
+pub(crate) fn parse_overflow_clip_margin(
+    value: &str,
+) -> Option<Option<OverflowClipMargin>> {
+    let mut visual_box: Option<VisualBox> = None;
+    let mut length: Option<f32> = None;
+    for tok in value.trim().split_whitespace() {
+        match tok.to_ascii_lowercase().as_str() {
+            "content-box" => {
+                if visual_box.is_some() {
+                    return None;
+                }
+                visual_box = Some(VisualBox::ContentBox);
+            }
+            "padding-box" => {
+                if visual_box.is_some() {
+                    return None;
+                }
+                visual_box = Some(VisualBox::PaddingBox);
+            }
+            "border-box" => {
+                if visual_box.is_some() {
+                    return None;
+                }
+                visual_box = Some(VisualBox::BorderBox);
+            }
+            other => {
+                if length.is_some() {
+                    return None;
+                }
+                let n = parse_length_px(other)?;
+                if n < 0.0 {
+                    return None;
+                }
+                length = Some(n);
+            }
+        }
+    }
+    if visual_box.is_none() && length.is_none() {
+        return None;
+    }
+    let len = length.unwrap_or(0.0);
+    let vb = visual_box.unwrap_or(VisualBox::PaddingBox);
+    // length=0 + visual_box=default → semánticamente equivalente a
+    // “sin extensión”. Mantenemos `Some(...)` igualmente para preservar
+    // la intención del autor; sólo emitimos `None` cuando el valor
+    // explícito es justamente `0px` (sin visual-box) — eso lo deja
+    // como un reset suave del shorthand.
+    if visual_box.is_none() && len == 0.0 {
+        return Some(None);
+    }
+    Some(Some(OverflowClipMargin { visual_box: vb, length: len }))
 }
 
 /// `break-inside`: `auto | avoid | avoid-page | avoid-column | avoid-region`.

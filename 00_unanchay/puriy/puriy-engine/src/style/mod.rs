@@ -275,6 +275,11 @@ impl StyleEngine {
             style.text_emphasis_color = p.text_emphasis_color;
             style.text_emphasis_position = p.text_emphasis_position;
             style.ruby_position = p.ruby_position;
+            // CSS Scrollbars 1 — scrollbar-width y scrollbar-color heredan.
+            // scrollbar-gutter (CSS Overflow 3), overflow-anchor (CSS Scroll
+            // Anchoring 1) y overflow-clip-margin (CSS Overflow 4) NO heredan.
+            style.scrollbar_width = p.scrollbar_width;
+            style.scrollbar_color = p.scrollbar_color;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -4026,6 +4031,224 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).backface_visibility,
             BackfaceVisibility::Visible
+        );
+    }
+
+    #[test]
+    fn scrollbar_width_fase_7_319() {
+        assert_eq!(parse_scrollbar_width("auto"), Some(ScrollbarWidth::Auto));
+        assert_eq!(parse_scrollbar_width("THIN"), Some(ScrollbarWidth::Thin));
+        assert_eq!(parse_scrollbar_width("none"), Some(ScrollbarWidth::None));
+        assert_eq!(parse_scrollbar_width("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { scrollbar-width: thin }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.scrollbar_width, ScrollbarWidth::Thin);
+        // SÍ hereda (CSS Scrollbars 1).
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).scrollbar_width,
+            ScrollbarWidth::Thin
+        );
+    }
+
+    #[test]
+    fn scrollbar_color_fase_7_320() {
+        assert_eq!(parse_scrollbar_color("auto"), Some(None));
+        // Dos colores — keyword.
+        let two = parse_scrollbar_color("red blue").unwrap().unwrap();
+        assert_eq!((two.thumb.r, two.thumb.g, two.thumb.b), (255, 0, 0));
+        assert_eq!((two.track.r, two.track.g, two.track.b), (0, 0, 255));
+        // Dos colores — rgb(...) con espacios internos.
+        let rgb = parse_scrollbar_color("rgb(10,20,30) rgb(40,50,60)")
+            .unwrap()
+            .unwrap();
+        assert_eq!((rgb.thumb.r, rgb.thumb.g, rgb.thumb.b), (10, 20, 30));
+        assert_eq!((rgb.track.r, rgb.track.g, rgb.track.b), (40, 50, 60));
+        // Uno solo (falta track) → inválido.
+        assert_eq!(parse_scrollbar_color("red"), None);
+        assert_eq!(parse_scrollbar_color("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { scrollbar-color: red blue }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        let pair = body_cs.scrollbar_color.unwrap();
+        assert_eq!((pair.thumb.r, pair.thumb.g, pair.thumb.b), (255, 0, 0));
+        // SÍ hereda.
+        let div_pair = eng
+            .compute_with_parent(&divs[0], Some(&body_cs))
+            .scrollbar_color
+            .unwrap();
+        assert_eq!((div_pair.track.r, div_pair.track.g, div_pair.track.b), (0, 0, 255));
+    }
+
+    #[test]
+    fn scrollbar_gutter_fase_7_321() {
+        assert_eq!(parse_scrollbar_gutter("auto"), Some(ScrollbarGutter::AUTO));
+        assert_eq!(parse_scrollbar_gutter("stable"), Some(ScrollbarGutter::STABLE));
+        assert_eq!(
+            parse_scrollbar_gutter("stable both-edges"),
+            Some(ScrollbarGutter::STABLE_BOTH)
+        );
+        // Orden libre (`both-edges stable`).
+        assert_eq!(
+            parse_scrollbar_gutter("both-edges stable"),
+            Some(ScrollbarGutter::STABLE_BOTH)
+        );
+        // `both-edges` solo (sin `stable`) → inválido.
+        assert_eq!(parse_scrollbar_gutter("both-edges"), None);
+        assert_eq!(parse_scrollbar_gutter("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { scrollbar-gutter: stable both-edges }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.scrollbar_gutter, ScrollbarGutter::STABLE_BOTH);
+        // NO hereda — vuelve a auto.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).scrollbar_gutter,
+            ScrollbarGutter::AUTO
+        );
+    }
+
+    #[test]
+    fn overflow_anchor_fase_7_322() {
+        assert_eq!(parse_overflow_anchor("auto"), Some(OverflowAnchor::Auto));
+        assert_eq!(parse_overflow_anchor("NONE"), Some(OverflowAnchor::None));
+        assert_eq!(parse_overflow_anchor("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { overflow-anchor: none }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.overflow_anchor, OverflowAnchor::None);
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).overflow_anchor,
+            OverflowAnchor::Auto
+        );
+    }
+
+    #[test]
+    fn overflow_clip_margin_fase_7_323() {
+        // length sola → padding-box.
+        assert_eq!(
+            parse_overflow_clip_margin("10px"),
+            Some(Some(OverflowClipMargin {
+                visual_box: VisualBox::PaddingBox,
+                length: 10.0
+            }))
+        );
+        // visual-box solo → length 0.
+        assert_eq!(
+            parse_overflow_clip_margin("content-box"),
+            Some(Some(OverflowClipMargin {
+                visual_box: VisualBox::ContentBox,
+                length: 0.0
+            }))
+        );
+        // Ambos.
+        assert_eq!(
+            parse_overflow_clip_margin("border-box 5px"),
+            Some(Some(OverflowClipMargin {
+                visual_box: VisualBox::BorderBox,
+                length: 5.0
+            }))
+        );
+        // Orden libre.
+        assert_eq!(
+            parse_overflow_clip_margin("5px border-box"),
+            Some(Some(OverflowClipMargin {
+                visual_box: VisualBox::BorderBox,
+                length: 5.0
+            }))
+        );
+        // `0px` solo → reset (None).
+        assert_eq!(parse_overflow_clip_margin("0px"), Some(None));
+        // Negativo descarta.
+        assert_eq!(parse_overflow_clip_margin("-1px"), None);
+        // Dos visual-box descarta.
+        assert_eq!(parse_overflow_clip_margin("border-box content-box"), None);
+        // Vacío descarta.
+        assert_eq!(parse_overflow_clip_margin(""), None);
+
+        let html = r##"<html><head><style>
+            body { overflow-clip-margin: content-box 8px }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.overflow_clip_margin,
+            Some(OverflowClipMargin {
+                visual_box: VisualBox::ContentBox,
+                length: 8.0
+            })
+        );
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).overflow_clip_margin,
+            None
         );
     }
 

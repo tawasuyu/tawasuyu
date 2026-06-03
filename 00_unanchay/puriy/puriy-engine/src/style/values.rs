@@ -450,6 +450,23 @@ pub struct ComputedStyle {
     /// Plumb: el chrome siempre pinta la cara, incluso cuando una
     /// `rotateY(180deg)` la voltearía.
     pub backface_visibility: BackfaceVisibility,
+    /// `scrollbar-width` (Fase 7.319). Default `Auto`. **Heredable**
+    /// (CSS Scrollbars 1). Plumb: la UA scrollbar es la única — no
+    /// ajustamos su grosor.
+    pub scrollbar_width: ScrollbarWidth,
+    /// `scrollbar-color` (Fase 7.320). `None` = `auto`. **Heredable**.
+    /// Plumb: no pintamos el thumb/track con estos colores.
+    pub scrollbar_color: Option<ScrollbarColorPair>,
+    /// `scrollbar-gutter` (Fase 7.321). Default `Auto`. NO hereda.
+    /// Plumb: no reservamos un canal cuando la barra no está montada.
+    pub scrollbar_gutter: ScrollbarGutter,
+    /// `overflow-anchor` (Fase 7.322). Default `Auto`. NO hereda.
+    /// Plumb: no hay scroll anchoring real (no reanclamos al
+    /// reflowear contenido encima del viewport).
+    pub overflow_anchor: OverflowAnchor,
+    /// `overflow-clip-margin` (Fase 7.323). `None` = sin extensión.
+    /// NO hereda. Plumb: el chrome usa el rect normal de clipping.
+    pub overflow_clip_margin: Option<OverflowClipMargin>,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1210,6 +1227,69 @@ pub enum BackfaceVisibility {
     #[default]
     Visible,
     Hidden,
+}
+
+/// `scrollbar-width` (CSS Scrollbars 1). Heredable. Default `Auto`.
+/// `None` = sin barra. Fase 7.319.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollbarWidth {
+    #[default]
+    Auto,
+    Thin,
+    None,
+}
+
+/// `scrollbar-color: <thumb> <track>` (CSS Scrollbars 1). El valor `auto`
+/// se modela como `Option::None` del field padre — esta struct sólo
+/// existe cuando ambos colores fueron declarados. Fase 7.320.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollbarColorPair {
+    pub thumb: Color,
+    pub track: Color,
+}
+
+/// `scrollbar-gutter` (CSS Overflow 3). NO hereda. Default `Auto`.
+/// `Stable` reserva el espacio aunque la barra no esté montada;
+/// `stable_both_edges` además duplica el gutter en el lado opuesto.
+/// Fase 7.321.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScrollbarGutter {
+    pub stable: bool,
+    pub both_edges: bool,
+}
+
+impl ScrollbarGutter {
+    pub const AUTO: Self = Self { stable: false, both_edges: false };
+    pub const STABLE: Self = Self { stable: true, both_edges: false };
+    pub const STABLE_BOTH: Self = Self { stable: true, both_edges: true };
+}
+
+/// `overflow-anchor` (CSS Scroll Anchoring 1). NO hereda. Default
+/// `Auto` (el browser decide). `None` desactiva el reanclaje en este
+/// subárbol. Fase 7.322.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverflowAnchor {
+    #[default]
+    Auto,
+    None,
+}
+
+/// `overflow-clip-margin` (CSS Overflow 4). Extiende el clip de
+/// `overflow: clip` afuera del padding-box. `length` siempre en px no
+/// negativo; `visual_box` indica la caja desde la que se mide
+/// (default `PaddingBox` en CSS). Fase 7.323.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OverflowClipMargin {
+    pub visual_box: VisualBox,
+    pub length: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VisualBox {
+    ContentBox,
+    #[default]
+    PaddingBox,
+    BorderBox,
 }
 
 impl ContainFlags {
@@ -2215,6 +2295,11 @@ impl Default for ComputedStyle {
             perspective: None,
             perspective_origin: PerspectiveOrigin::default(),
             backface_visibility: BackfaceVisibility::Visible,
+            scrollbar_width: ScrollbarWidth::Auto,
+            scrollbar_color: None,
+            scrollbar_gutter: ScrollbarGutter::AUTO,
+            overflow_anchor: OverflowAnchor::Auto,
+            overflow_clip_margin: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
