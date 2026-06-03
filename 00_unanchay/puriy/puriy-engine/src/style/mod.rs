@@ -2016,6 +2016,236 @@ mod tests {
     }
 
     #[test]
+    fn scroll_snap_align_fase_7_269() {
+        assert_eq!(parse_scroll_snap_align("none"), Some(ScrollSnapAlign::None));
+        assert_eq!(parse_scroll_snap_align("START"), Some(ScrollSnapAlign::Start));
+        assert_eq!(parse_scroll_snap_align("end"), Some(ScrollSnapAlign::End));
+        assert_eq!(parse_scroll_snap_align("center"), Some(ScrollSnapAlign::Center));
+        assert_eq!(parse_scroll_snap_align("middle"), None);
+
+        // Shorthand: 1 valor → ambos ejes; 2 valores → block + inline.
+        let html = r##"<html><head><style>
+            body { scroll-snap-align: start end }
+            div.solo { scroll-snap-align: center }
+            div.split { scroll-snap-align-block: end; scroll-snap-align-inline: start }
+            div.plain {}
+        </style></head><body>
+          <div class="solo"></div><div class="split"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.scroll_snap_align_block, ScrollSnapAlign::Start);
+        assert_eq!(body_cs.scroll_snap_align_inline, ScrollSnapAlign::End);
+        let solo = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(solo.scroll_snap_align_block, ScrollSnapAlign::Center);
+        assert_eq!(solo.scroll_snap_align_inline, ScrollSnapAlign::Center);
+        let split = eng.compute_with_parent(&divs[1], Some(&body_cs));
+        assert_eq!(split.scroll_snap_align_block, ScrollSnapAlign::End);
+        assert_eq!(split.scroll_snap_align_inline, ScrollSnapAlign::Start);
+        // NO se hereda → default None.
+        let plain = eng.compute_with_parent(&divs[2], Some(&body_cs));
+        assert_eq!(plain.scroll_snap_align_block, ScrollSnapAlign::None);
+        assert_eq!(plain.scroll_snap_align_inline, ScrollSnapAlign::None);
+    }
+
+    #[test]
+    fn scroll_snap_stop_fase_7_270() {
+        assert_eq!(parse_scroll_snap_stop("normal"), Some(ScrollSnapStop::Normal));
+        assert_eq!(parse_scroll_snap_stop("ALWAYS"), Some(ScrollSnapStop::Always));
+        assert_eq!(parse_scroll_snap_stop("never"), None);
+
+        let html = r##"<html><head><style>
+            body { scroll-snap-stop: always }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.scroll_snap_stop, ScrollSnapStop::Always);
+        // NO se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).scroll_snap_stop,
+            ScrollSnapStop::Normal
+        );
+    }
+
+    #[test]
+    fn scroll_padding_fase_7_271() {
+        // Sides 1–4 valores con `LengthVal`.
+        assert_eq!(
+            parse_sides_lp("10px"),
+            Some(Sides {
+                top: LengthVal::Px(10.0),
+                right: LengthVal::Px(10.0),
+                bottom: LengthVal::Px(10.0),
+                left: LengthVal::Px(10.0),
+            })
+        );
+        assert_eq!(
+            parse_sides_lp("auto 5%"),
+            Some(Sides {
+                top: LengthVal::Auto,
+                right: LengthVal::Pct(5.0),
+                bottom: LengthVal::Auto,
+                left: LengthVal::Pct(5.0),
+            })
+        );
+        assert!(parse_sides_lp("nope").is_none());
+
+        let html = r##"<html><head><style>
+            body { scroll-padding: 10px 20px 30px 40px }
+            div.lh { scroll-padding-top: 5px; scroll-padding-left: 15% }
+            div.plain {}
+        </style></head><body>
+          <div class="lh"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.scroll_padding.top, LengthVal::Px(10.0));
+        assert_eq!(body_cs.scroll_padding.right, LengthVal::Px(20.0));
+        assert_eq!(body_cs.scroll_padding.bottom, LengthVal::Px(30.0));
+        assert_eq!(body_cs.scroll_padding.left, LengthVal::Px(40.0));
+        // Longhands sobre default (NO se hereda del body — empieza en auto).
+        let lh = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(lh.scroll_padding.top, LengthVal::Px(5.0));
+        assert_eq!(lh.scroll_padding.right, LengthVal::Auto);
+        assert_eq!(lh.scroll_padding.bottom, LengthVal::Auto);
+        assert_eq!(lh.scroll_padding.left, LengthVal::Pct(15.0));
+        // NO se hereda → todos auto.
+        let plain = eng.compute_with_parent(&divs[1], Some(&body_cs));
+        assert_eq!(plain.scroll_padding.top, LengthVal::Auto);
+        assert_eq!(plain.scroll_padding.left, LengthVal::Auto);
+    }
+
+    #[test]
+    fn scroll_margin_fase_7_272() {
+        let html = r##"<html><head><style>
+            body { scroll-margin: 8px 16px }
+            div.full { scroll-margin: 1px 2px 3px 4px }
+            div.lh { scroll-margin-top: 7px; scroll-margin-right: 9px }
+            div.plain {}
+        </style></head><body>
+          <div class="full"></div><div class="lh"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        // 2-valor: top/bottom=8, left/right=16.
+        assert_eq!(body_cs.scroll_margin.top, 8.0);
+        assert_eq!(body_cs.scroll_margin.right, 16.0);
+        assert_eq!(body_cs.scroll_margin.bottom, 8.0);
+        assert_eq!(body_cs.scroll_margin.left, 16.0);
+        // 4-valor explícito.
+        let full = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(full.scroll_margin.top, 1.0);
+        assert_eq!(full.scroll_margin.right, 2.0);
+        assert_eq!(full.scroll_margin.bottom, 3.0);
+        assert_eq!(full.scroll_margin.left, 4.0);
+        // Longhands sobre default (NO hereda).
+        let lh = eng.compute_with_parent(&divs[1], Some(&body_cs));
+        assert_eq!(lh.scroll_margin.top, 7.0);
+        assert_eq!(lh.scroll_margin.right, 9.0);
+        assert_eq!(lh.scroll_margin.bottom, 0.0);
+        assert_eq!(lh.scroll_margin.left, 0.0);
+        // NO se hereda → todo 0.
+        let plain = eng.compute_with_parent(&divs[2], Some(&body_cs));
+        assert_eq!(plain.scroll_margin.top, 0.0);
+        assert_eq!(plain.scroll_margin.right, 0.0);
+    }
+
+    #[test]
+    fn touch_action_fase_7_273() {
+        assert_eq!(parse_touch_action("auto"), Some(TouchAction::Auto));
+        assert_eq!(parse_touch_action("NONE"), Some(TouchAction::None));
+        assert_eq!(parse_touch_action("manipulation"), Some(TouchAction::Manipulation));
+        assert_eq!(
+            parse_touch_action("pan-x"),
+            Some(TouchAction::Pan { pan_x: true, pan_y: false, pinch_zoom: false })
+        );
+        // `pan-left` se aplasta a pan-x; `pan-up` a pan-y; combinable con pinch-zoom.
+        assert_eq!(
+            parse_touch_action("pan-left pan-up pinch-zoom"),
+            Some(TouchAction::Pan { pan_x: true, pan_y: true, pinch_zoom: true })
+        );
+        // Token inválido descarta la regla entera.
+        assert_eq!(parse_touch_action("pan-x bogus"), None);
+        // Sin pan ni pinch-zoom no es válido (no debería pasar por el path
+        // de palabras sueltas, pero por las dudas).
+        assert_eq!(parse_touch_action(""), None);
+
+        let html = r##"<html><head><style>
+            body { touch-action: pan-y pinch-zoom }
+            div.none { touch-action: none }
+            div.plain {}
+        </style></head><body>
+          <div class="none"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.touch_action,
+            TouchAction::Pan { pan_x: false, pan_y: true, pinch_zoom: true }
+        );
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).touch_action,
+            TouchAction::None
+        );
+        // NO se hereda → default Auto.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).touch_action,
+            TouchAction::Auto
+        );
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(

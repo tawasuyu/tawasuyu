@@ -109,6 +109,20 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `scroll-snap-align: <block> [<inline>]` — con 1 valor se aplica a
+        // ambos ejes. Fase 7.269.
+        if prop.eq_ignore_ascii_case("scroll-snap-align") {
+            let mut tokens = value.split_whitespace();
+            let block = tokens.next().and_then(parse_scroll_snap_align);
+            let inline = tokens.next().and_then(parse_scroll_snap_align).or(block);
+            if let Some(b) = block {
+                out.push(Decl { kind: DeclKind::ScrollSnapAlignBlock(b), important });
+            }
+            if let Some(i) = inline {
+                out.push(Decl { kind: DeclKind::ScrollSnapAlignInline(i), important });
+            }
+            continue;
+        }
         if prop.eq_ignore_ascii_case("flex") {
             out.extend(parse_flex_shorthand(value, important));
             continue;
@@ -461,6 +475,29 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // `overscroll-behavior` shorthand: ver `parse_declarations`.
         "scroll-snap-type" => parse_scroll_snap_type(value).map(DeclKind::ScrollSnapType),
+        // `scroll-snap-align` shorthand: ver `parse_declarations`.
+        "scroll-snap-align-block" => {
+            parse_scroll_snap_align(value).map(DeclKind::ScrollSnapAlignBlock)
+        }
+        "scroll-snap-align-inline" => {
+            parse_scroll_snap_align(value).map(DeclKind::ScrollSnapAlignInline)
+        }
+        "scroll-snap-stop" => parse_scroll_snap_stop(value).map(DeclKind::ScrollSnapStop),
+        "scroll-padding" => parse_sides_lp(value).map(DeclKind::ScrollPadding),
+        "scroll-padding-top" => parse_length_or_pct(value).map(DeclKind::ScrollPaddingTop),
+        "scroll-padding-right" => {
+            parse_length_or_pct(value).map(DeclKind::ScrollPaddingRight)
+        }
+        "scroll-padding-bottom" => {
+            parse_length_or_pct(value).map(DeclKind::ScrollPaddingBottom)
+        }
+        "scroll-padding-left" => parse_length_or_pct(value).map(DeclKind::ScrollPaddingLeft),
+        "scroll-margin" => parse_sides(value).map(DeclKind::ScrollMargin),
+        "scroll-margin-top" => parse_length_px(value).map(DeclKind::ScrollMarginTop),
+        "scroll-margin-right" => parse_length_px(value).map(DeclKind::ScrollMarginRight),
+        "scroll-margin-bottom" => parse_length_px(value).map(DeclKind::ScrollMarginBottom),
+        "scroll-margin-left" => parse_length_px(value).map(DeclKind::ScrollMarginLeft),
+        "touch-action" => parse_touch_action(value).map(DeclKind::TouchAction),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1081,6 +1118,76 @@ pub(crate) fn parse_scroll_snap_type(value: &str) -> Option<ScrollSnapType> {
         None => ScrollSnapStrictness::Proximity,
     };
     Some(ScrollSnapType(Some((axis, strict))))
+}
+
+/// `scroll-snap-align` (un solo valor por eje). Fase 7.269.
+pub(crate) fn parse_scroll_snap_align(value: &str) -> Option<ScrollSnapAlign> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(ScrollSnapAlign::None),
+        "start" => Some(ScrollSnapAlign::Start),
+        "end" => Some(ScrollSnapAlign::End),
+        "center" => Some(ScrollSnapAlign::Center),
+        _ => None,
+    }
+}
+
+/// `scroll-snap-stop`: `normal | always`. Fase 7.270.
+pub(crate) fn parse_scroll_snap_stop(value: &str) -> Option<ScrollSnapStop> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(ScrollSnapStop::Normal),
+        "always" => Some(ScrollSnapStop::Always),
+        _ => None,
+    }
+}
+
+/// Shorthand de 1–4 valores con `LengthVal` (acepta `auto`/px/%) para
+/// `scroll-padding`. Fase 7.271.
+pub(crate) fn parse_sides_lp(value: &str) -> Option<Sides<LengthVal>> {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    let parsed: Vec<LengthVal> = parts
+        .iter()
+        .map(|t| parse_length_or_pct(t))
+        .collect::<Option<Vec<_>>>()?;
+    Some(match parsed.as_slice() {
+        [a] => Sides { top: *a, right: *a, bottom: *a, left: *a },
+        [v, h] => Sides { top: *v, right: *h, bottom: *v, left: *h },
+        [t, h, b] => Sides { top: *t, right: *h, bottom: *b, left: *h },
+        [t, r, b, l] => Sides { top: *t, right: *r, bottom: *b, left: *l },
+        _ => return None,
+    })
+}
+
+/// `touch-action`: `auto | none | manipulation | [ pan-x|pan-left|pan-right ]
+/// || [ pan-y|pan-up|pan-down ] || pinch-zoom`. Los `pan-left/right/up/down`
+/// se aplastan al eje correspondiente (no modelamos dirección por simplicidad
+/// — la spec admite la combinación, pero el chrome tampoco las distingue
+/// todavía). Fase 7.273.
+pub(crate) fn parse_touch_action(value: &str) -> Option<TouchAction> {
+    let v = value.trim().to_ascii_lowercase();
+    if v == "auto" {
+        return Some(TouchAction::Auto);
+    }
+    if v == "none" {
+        return Some(TouchAction::None);
+    }
+    if v == "manipulation" {
+        return Some(TouchAction::Manipulation);
+    }
+    let mut pan_x = false;
+    let mut pan_y = false;
+    let mut pinch_zoom = false;
+    for tok in v.split_whitespace() {
+        match tok {
+            "pan-x" | "pan-left" | "pan-right" => pan_x = true,
+            "pan-y" | "pan-up" | "pan-down" => pan_y = true,
+            "pinch-zoom" => pinch_zoom = true,
+            _ => return None,
+        }
+    }
+    if !pan_x && !pan_y && !pinch_zoom {
+        return None;
+    }
+    Some(TouchAction::Pan { pan_x, pan_y, pinch_zoom })
 }
 
 /// `font-kerning`: `auto | normal | none`.

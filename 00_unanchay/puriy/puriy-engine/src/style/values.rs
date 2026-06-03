@@ -306,6 +306,21 @@ pub struct ComputedStyle {
     pub overscroll_behavior_y: OverscrollBehavior,
     /// `scroll-snap-type` (Fase 7.268). NO heredable. Plumb.
     pub scroll_snap_type: ScrollSnapType,
+    /// `scroll-snap-align` (Fase 7.269). Tupla block/inline. NO heredable.
+    /// Plumb: el chrome no resuelve el snap.
+    pub scroll_snap_align_block: ScrollSnapAlign,
+    pub scroll_snap_align_inline: ScrollSnapAlign,
+    /// `scroll-snap-stop` (Fase 7.270). NO heredable. Plumb.
+    pub scroll_snap_stop: ScrollSnapStop,
+    /// `scroll-padding` (Fase 7.271). Sides T/R/B/L con `LengthVal`
+    /// (acepta `auto` + px + %). NO heredable. Plumb.
+    pub scroll_padding: Sides<LengthVal>,
+    /// `scroll-margin` (Fase 7.272). Sides T/R/B/L en px. NO heredable.
+    /// Plumb.
+    pub scroll_margin: Sides<f32>,
+    /// `touch-action` (Fase 7.273). NO heredable. CSS Pointer Events 2.
+    /// Plumb: el chrome no rutea pointer events según este hint.
+    pub touch_action: TouchAction,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -621,6 +636,43 @@ pub enum ScrollSnapStrictness {
 /// se declaró. Fase 7.268.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScrollSnapType(pub Option<(ScrollSnapAxis, ScrollSnapStrictness)>);
+
+/// `scroll-snap-align` (CSS Scroll Snap 1). Default `None` (no snap).
+/// El shorthand acepta 1 o 2 valores; con 1 se aplica a block + inline.
+/// Fase 7.269.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollSnapAlign {
+    #[default]
+    None,
+    Start,
+    End,
+    Center,
+}
+
+/// `scroll-snap-stop` (CSS Scroll Snap 1). Default `Normal` (el snap
+/// puede saltearse). `Always` fuerza parar en cada snap point. Fase 7.270.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollSnapStop {
+    #[default]
+    Normal,
+    Always,
+}
+
+/// `touch-action` (CSS Pointer Events 2). Default `Auto`. `Pan { ... }`
+/// modela la combinación `pan-x` / `pan-y` / `pinch-zoom`; al menos uno
+/// debe estar en `true` (validado por el parser). Fase 7.273.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TouchAction {
+    #[default]
+    Auto,
+    None,
+    Manipulation,
+    Pan {
+        pan_x: bool,
+        pan_y: bool,
+        pinch_zoom: bool,
+    },
+}
 
 /// `font-kerning`. Heredable. Default `Auto`. Fase 7.259.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1544,6 +1596,17 @@ impl Default for ComputedStyle {
             overscroll_behavior_x: OverscrollBehavior::Auto,
             overscroll_behavior_y: OverscrollBehavior::Auto,
             scroll_snap_type: ScrollSnapType(None),
+            scroll_snap_align_block: ScrollSnapAlign::None,
+            scroll_snap_align_inline: ScrollSnapAlign::None,
+            scroll_snap_stop: ScrollSnapStop::Normal,
+            scroll_padding: Sides {
+                top: LengthVal::Auto,
+                right: LengthVal::Auto,
+                bottom: LengthVal::Auto,
+                left: LengthVal::Auto,
+            },
+            scroll_margin: Sides::all(0.0),
+            touch_action: TouchAction::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
