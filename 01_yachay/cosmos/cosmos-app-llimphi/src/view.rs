@@ -49,7 +49,10 @@ where
             width: percent(1.0_f32),
             height: Dimension::auto(),
         },
-        flex_grow: 1.0,
+        // Alto guiado por el contenido (los paneles del acordeón se
+        // autoajustan a su tabla), no por el espacio disponible.
+        flex_grow: 0.0,
+        flex_shrink: 0.0,
         min_size: Size {
             width: length(0.0_f32),
             height: length(0.0_f32),
@@ -57,7 +60,7 @@ where
         padding: Rect {
             left: length(12.0_f32),
             right: length(12.0_f32),
-            top: length(10.0_f32),
+            top: length(8.0_f32),
             bottom: length(10.0_f32),
         },
         gap: Size {
@@ -66,7 +69,6 @@ where
         },
         ..Default::default()
     })
-    .clip(true)
     .children(children)
 }
 

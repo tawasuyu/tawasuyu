@@ -18,6 +18,8 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
+use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
+
 use crate::astroview;
 use crate::chrome;
 use crate::glyphs::{self, Icon};
@@ -103,8 +105,10 @@ fn category_rail(model: &Model, theme: &Theme) -> View<Msg> {
 // =====================================================================
 
 fn accordion_view(model: &Model, theme: &Theme) -> View<Msg> {
-    // Cabecera de la categoría activa.
+    // Cabecera de la categoría activa (texto centrado vertical: nodo de
+    // alto auto dentro de una fila centrada).
     let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
             height: length(24.0_f32),
@@ -120,12 +124,19 @@ fn accordion_view(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
+    .children(vec![View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        ..Default::default()
+    })
     .text_aligned(
         model.tool_cat.title().to_uppercase(),
         10.0,
         theme.fg_muted,
         Alignment::Start,
-    );
+    )]);
 
     let mut kids: Vec<View<Msg>> = vec![header];
     for panel in model.tool_cat.panels() {
@@ -143,38 +154,60 @@ fn accordion_view(model: &Model, theme: &Theme) -> View<Msg> {
             width: length(0.0_f32),
             height: length(0.0_f32),
         },
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
         ..Default::default()
     })
+    .clip(true)
     .children(kids)
 }
 
-/// Una sección colapsable: cabecera clickeable (chevron + título) y, si
-/// está expandida, su cuerpo ocupando el espacio disponible.
+const HEAD_H: f32 = 28.0;
+
+/// Una sección colapsable como **card** con firma de panel (gradiente +
+/// hairline) en la caja y una tira de cabecera con su propio gradiente.
+/// El alto lo guía el contenido (auto), no el espacio disponible.
 fn collapsible(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
     let expanded = model.panel_expanded(panel);
-    let chevron = glyphs::icon_view(
-        if expanded { Icon::ChevronDown } else { Icon::ChevronRight },
-        12.0,
-        theme.fg_muted,
-    );
+    let box_style = PanelStyle::from_theme(theme);
+    // Cabecera: gradiente propio sobre bg_panel_alt; hairline sólo cuando
+    // está expandida (refuerza la separación con el cuerpo).
+    let mut head_style = PanelStyle::from_theme(theme);
+    head_style.bg_base = theme.bg_panel_alt;
+    head_style.radius = 0.0;
+    head_style.hairline_alpha = if expanded { 0.30 } else { 0.0 };
+
     let chevron_box = View::new(Style {
         size: Size {
-            width: length(16.0_f32),
-            height: length(26.0_f32),
+            width: length(18.0_f32),
+            height: length(HEAD_H),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .children(vec![chevron]);
+    .children(vec![glyphs::icon_view(
+        if expanded { Icon::ChevronDown } else { Icon::ChevronRight },
+        12.0,
+        theme.fg_muted,
+    )]);
+
+    // Título: alto auto → centrado vertical por el align_items de la fila.
     let title = View::new(Style {
         flex_grow: 1.0,
         size: Size {
             width: percent(0.0_f32),
-            height: length(26.0_f32),
+            height: Dimension::auto(),
         },
-        align_items: Some(AlignItems::Center),
         ..Default::default()
     })
     .text_aligned(panel.title().to_string(), 12.0, theme.fg_text, Alignment::Start);
@@ -183,7 +216,7 @@ fn collapsible(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(26.0_f32),
+            height: length(HEAD_H),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
@@ -195,33 +228,35 @@ fn collapsible(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
+    .paint_with(panel_signature_painter(head_style))
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::ToggleToolPanel(panel))
     .children(vec![chevron_box, title]);
 
-    if !expanded {
-        return head;
+    let mut kids = vec![head];
+    if expanded {
+        kids.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Column,
+                flex_shrink: 0.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: Dimension::auto(),
+                },
+                min_size: Size {
+                    width: length(0.0_f32),
+                    height: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![body_for(panel, model, theme)]),
+        );
     }
 
-    let body = View::new(Style {
-        flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
-        size: Size {
-            width: percent(1.0_f32),
-            height: Dimension::auto(),
-        },
-        min_size: Size {
-            width: length(0.0_f32),
-            height: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![body_for(panel, model, theme)]);
-
+    // Card: gradiente de caja + esquinas redondeadas + clip.
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
+        flex_shrink: 0.0,
         size: Size {
             width: percent(1.0_f32),
             height: Dimension::auto(),
@@ -232,7 +267,10 @@ fn collapsible(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .children(vec![head, body])
+    .paint_with(panel_signature_painter(box_style))
+    .radius(box_style.radius)
+    .clip(true)
+    .children(kids)
 }
 
 /// Cuerpo de cada panel — reusa las tablas existentes.
