@@ -283,8 +283,13 @@ borde; shuma provee el contenido.
   - **Hover en todos los widgets** ✅ — el layer-shell pasaba `None` a `paint`, así
     que `hover_fill` estaba muerto; ahora trackea `Motion`/`Leave` →
     `hit_test_hover` → `hover_idx`. Todos los widgets dan realce al pasar el cursor.
-  - **Tooltip flotante (texto)** ⏳ — pendiente: necesita una surface popup aparte
-    (las barras son finas y recortan), a validar en compositor. La base (hover
-    tracking) ya está.
+  - **Tooltip flotante (texto)** ✅ — cada widget lleva su tooltip vía el primitivo
+    nuevo `View::tooltip` de Llimphi (medidores: etiqueta + leyenda; ventanas/tray/
+    clipboard: el texto completo, útil cuando la barra lo recorta). El layer-shell
+    crea una **layer surface dedicada en `Overlay`** con región de input vacía (no
+    roba puntero); al cambiar el nodo hovereado, `update_tooltip` lee texto + rect
+    del cache de hit-test y reubica la surface bajo el widget (`set_margin`/
+    `set_size`); al salir se oculta fuera de vista. Cajita opaca (no depende de
+    transparencia de surface). Runtime a validar en compositor (norma de pata).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
