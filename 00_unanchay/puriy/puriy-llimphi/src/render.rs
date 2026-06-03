@@ -2140,33 +2140,22 @@ pub(crate) fn map_align_self(a: CssAlignSelf) -> Option<AlignSelf> {
     }
 }
 
-/// Calcula el segmento (start, end) que cruza el rect en la dirección
-/// CSS (0deg = up, 90deg = right, etc.) y arma un peniko::Gradient
-/// linear con los stops del nodo. Aplica `alpha_mul` (opacity) a cada
-/// stop. Devuelve None si los stops no se pueden representar.
+/// Arma un `peniko::Gradient` desde un gradiente CSS contra el rect. Lineal:
+/// segmento (start, end) en la dirección CSS (0deg = up, 90deg = right…).
+/// Radial (`g.radial` Some): círculo centrado en `at <pos>` con radio según
+/// `<size>` (closest/farthest side/corner). Aplica `alpha_mul` (opacity) a
+/// cada stop. Devuelve None si los stops no se pueden representar.
 pub(crate) fn build_linear_gradient_brush(
     g: &LinearGradient,
     rect: llimphi_ui::PaintRect,
     alpha_mul: f32,
 ) -> Option<Gradient> {
+    use puriy_engine::style::{LengthVal, RadialSize};
     if g.stops.len() < 2 {
         return None;
     }
-    // CSS: 0deg = up (negative y), 90 = right (+x), 180 = down (+y),
-    // 270 = left (-x). Convertimos a radianes y direccion en
-    // espacio de pantalla (y crece hacia abajo).
-    let theta = (g.angle_deg).to_radians();
-    let dx = theta.sin() as f64;
-    let dy = -theta.cos() as f64;
     let w = rect.w as f64;
     let h = rect.h as f64;
-    // Largo del segmento que cubre el rect en la dirección (dx, dy):
-    // proyectamos cada esquina sobre el eje y tomamos el rango.
-    let cx = rect.x as f64 + w * 0.5;
-    let cy = rect.y as f64 + h * 0.5;
-    let half_len = (dx.abs() * w + dy.abs() * h) * 0.5;
-    let start = Point::new(cx - dx * half_len, cy - dy * half_len);
-    let end = Point::new(cx + dx * half_len, cy + dy * half_len);
 
     // Stops: si pos es None, distribuir uniformemente.
     let n = g.stops.len();
@@ -2179,8 +2168,62 @@ pub(crate) fn build_linear_gradient_brush(
         let c = Color::from_rgba8(s.color.r, s.color.g, s.color.b, a);
         peniko_stops.push(ColorStop::from((pos, c)));
     }
+
+    let kind = if let Some(spec) = &g.radial {
+        // Centro: resuelve `cx`/`cy` (Pct contra el span, Px crudo) en
+        // espacio del rect.
+        let resolve = |v: LengthVal, span: f64, origin: f64| -> f64 {
+            match v {
+                LengthVal::Pct(p) => origin + span * (p as f64) / 100.0,
+                LengthVal::Px(px) => origin + px as f64,
+                LengthVal::Auto => origin + span * 0.5,
+            }
+        };
+        let cxp = resolve(spec.cx, w, rect.x as f64);
+        let cyp = resolve(spec.cy, h, rect.y as f64);
+        // Distancias a lados y esquinas.
+        let (dl, dr) = ((cxp - rect.x as f64).abs(), (rect.x as f64 + w - cxp).abs());
+        let (dt, db) = ((cyp - rect.y as f64).abs(), (rect.y as f64 + h - cyp).abs());
+        let corner = |x: f64, y: f64| ((cxp - x).powi(2) + (cyp - y).powi(2)).sqrt();
+        let corners = [
+            corner(rect.x as f64, rect.y as f64),
+            corner(rect.x as f64 + w, rect.y as f64),
+            corner(rect.x as f64, rect.y as f64 + h),
+            corner(rect.x as f64 + w, rect.y as f64 + h),
+        ];
+        let fmin = |a: f64, b: f64| a.min(b);
+        let fmax = |a: f64, b: f64| a.max(b);
+        let radius = match spec.size {
+            RadialSize::ClosestSide => dl.min(dr).min(dt).min(db),
+            RadialSize::FarthestSide => dl.max(dr).max(dt).max(db),
+            RadialSize::ClosestCorner => corners.iter().copied().fold(f64::MAX, fmin),
+            RadialSize::FarthestCorner => corners.iter().copied().fold(0.0, fmax),
+        }
+        .max(1.0);
+        let center = Point::new(cxp, cyp);
+        GradientKind::Radial {
+            start_center: center,
+            start_radius: 0.0,
+            end_center: center,
+            end_radius: radius as f32,
+        }
+    } else {
+        // CSS: 0deg = up (negative y), 90 = right (+x), 180 = down (+y),
+        // 270 = left (-x). Convertimos a radianes y dirección en espacio
+        // de pantalla (y crece hacia abajo).
+        let theta = (g.angle_deg).to_radians();
+        let dx = theta.sin() as f64;
+        let dy = -theta.cos() as f64;
+        let cx = rect.x as f64 + w * 0.5;
+        let cy = rect.y as f64 + h * 0.5;
+        let half_len = (dx.abs() * w + dy.abs() * h) * 0.5;
+        let start = Point::new(cx - dx * half_len, cy - dy * half_len);
+        let end = Point::new(cx + dx * half_len, cy + dy * half_len);
+        GradientKind::Linear { start, end }
+    };
+
     Some(Gradient {
-        kind: GradientKind::Linear { start, end },
+        kind,
         stops: ColorStops(peniko_stops.into()),
         ..Default::default()
     })

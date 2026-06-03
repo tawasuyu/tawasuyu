@@ -402,6 +402,34 @@ mod tests {
     }
 
     #[test]
+    fn parsea_radial_gradient() {
+        let grad = |v: &str| match parse_background_image(v) {
+            Some(DeclKind::BackgroundGradient(g)) => g,
+            other => panic!("esperaba gradiente, {other:?}"),
+        };
+        // Sin prelude: default farthest-corner at center, 2 stops.
+        let g = grad("radial-gradient(red, blue)");
+        let spec = g.radial.expect("debe ser radial");
+        assert_eq!(spec.size, RadialSize::FarthestCorner);
+        assert_eq!(spec.cx, LengthVal::Pct(50.0));
+        assert_eq!(spec.cy, LengthVal::Pct(50.0));
+        assert_eq!(g.stops.len(), 2);
+        // shape + size + posición.
+        let g = grad("radial-gradient(circle closest-side at 30% 70%, red 0%, blue 100%)");
+        let spec = g.radial.unwrap();
+        assert_eq!(spec.size, RadialSize::ClosestSide);
+        assert_eq!(spec.cx, LengthVal::Pct(30.0));
+        assert_eq!(spec.cy, LengthVal::Pct(70.0));
+        // Sólo `at <pos>` con keywords.
+        let g = grad("radial-gradient(at top left, red, blue)");
+        let spec = g.radial.unwrap();
+        assert_eq!(spec.cx, LengthVal::Pct(0.0));
+        assert_eq!(spec.cy, LengthVal::Pct(0.0));
+        // El lineal sigue sin radial.
+        assert!(grad("linear-gradient(to right, red, blue)").radial.is_none());
+    }
+
+    #[test]
     fn parsea_named_colors_extendidos() {
         // Tabla CSS3 completa: colores que antes dropeaban la declaración.
         assert_eq!(parse_color("coral"), Some(Color::rgb(255, 127, 80)));

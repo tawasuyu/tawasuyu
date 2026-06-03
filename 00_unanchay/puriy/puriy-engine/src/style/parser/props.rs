@@ -1402,6 +1402,9 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
     if let Some(args) = strip_fn(v, "linear-gradient") {
         return parse_linear_gradient(args).map(DeclKind::BackgroundGradient);
     }
+    if let Some(args) = strip_fn(v, "radial-gradient") {
+        return parse_radial_gradient(args).map(DeclKind::BackgroundGradient);
+    }
     if let Some(args) = strip_fn(v, "url") {
         // url('foo') / url("foo") / url(foo) — trimea comillas.
         let raw = args.trim();
@@ -1415,7 +1418,7 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
         }
         return Some(DeclKind::BackgroundImageUrl(url.to_string()));
     }
-    // Otros gradientes (`radial-gradient`, `conic-gradient`) o `cross-fade`
+    // Otros gradientes (`conic-gradient`, `repeating-*`) o `cross-fade`
     // no soportados — silencio.
     None
 }
@@ -1808,7 +1811,88 @@ pub(crate) fn parse_linear_gradient(args: &str) -> Option<LinearGradient> {
         return None;
     }
     let _ = stops_start;
-    Some(LinearGradient { angle_deg, stops })
+    Some(LinearGradient { angle_deg, stops, radial: None })
+}
+
+/// Parsea el contenido de `radial-gradient(...)`. Sintaxis aceptada (MVP):
+/// `radial-gradient([<shape> || <size>]? [at <position>]?, <stop>, <stop>…)`.
+/// `<shape>` = `circle`/`ellipse` (no se distingue en el render), `<size>` =
+/// `closest-side`/`closest-corner`/`farthest-side`/`farthest-corner`,
+/// `<position>` reutiliza el parser de `background-position`. Si el primer
+/// segmento no es un prelude válido, se trata como el primer stop (default
+/// `farthest-corner at center`). Fase 7.226.
+pub(crate) fn parse_radial_gradient(args: &str) -> Option<LinearGradient> {
+    let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let (spec, stops_start) = match parse_radial_prelude(parts[0]) {
+        Some(spec) => (spec, 1),
+        None => (RadialSpec::default(), 0),
+    };
+    let mut stops: Vec<GradientStop> = Vec::new();
+    for raw in &parts[stops_start..] {
+        if let Some(s) = parse_gradient_stop(raw) {
+            stops.push(s);
+        }
+    }
+    if stops.len() < 2 {
+        return None;
+    }
+    Some(LinearGradient { angle_deg: 0.0, stops, radial: Some(spec) })
+}
+
+/// Interpreta el primer segmento de un `radial-gradient` como prelude
+/// (shape/size/`at <pos>`). `None` si parece un color stop (para que el
+/// caller lo trate como tal).
+fn parse_radial_prelude(s: &str) -> Option<RadialSpec> {
+    let lc = s.to_ascii_lowercase();
+    let mut spec = RadialSpec::default();
+    let mut matched = false;
+    // Separa el `at <position>` del head (shape/size).
+    let (head, pos_part) = match lc.split_once(" at ") {
+        Some((h, p)) => (h.trim().to_string(), Some(p.trim().to_string())),
+        None => {
+            if let Some(p) = lc.strip_prefix("at ") {
+                (String::new(), Some(p.trim().to_string()))
+            } else {
+                (lc.clone(), None)
+            }
+        }
+    };
+    for tok in head.split_whitespace() {
+        match tok {
+            "circle" | "ellipse" => matched = true,
+            "closest-side" => {
+                spec.size = RadialSize::ClosestSide;
+                matched = true;
+            }
+            "closest-corner" => {
+                spec.size = RadialSize::ClosestCorner;
+                matched = true;
+            }
+            "farthest-side" => {
+                spec.size = RadialSize::FarthestSide;
+                matched = true;
+            }
+            "farthest-corner" => {
+                spec.size = RadialSize::FarthestCorner;
+                matched = true;
+            }
+            // Token desconocido en el head → no es prelude (es un stop).
+            _ => return None,
+        }
+    }
+    if let Some(p) = pos_part {
+        if let Some(DeclKind::BackgroundPosition(bp)) = parse_background_position(&p) {
+            spec.cx = bp.x;
+            spec.cy = bp.y;
+            matched = true;
+        } else {
+            return None;
+        }
+    }
+    matched.then_some(spec)
 }
 
 /// Si el token es una dirección/ángulo válido devuelve `(Some(deg),

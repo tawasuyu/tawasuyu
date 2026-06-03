@@ -426,14 +426,46 @@ pub struct GradientStop {
     pub pos: Option<f32>,
 }
 
-/// `background-image: linear-gradient(...)`. Subset: ángulo en grados
-/// (0 = bottom→top, 90 = left→right), 2+ stops. Conic/radial quedan
-/// para más adelante.
+/// Tamaño de un `radial-gradient` — qué borde/esquina toca el círculo en su
+/// stop final. Default `FarthestCorner`. Fase 7.226.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadialSize {
+    ClosestSide,
+    ClosestCorner,
+    FarthestSide,
+    FarthestCorner,
+}
+
+/// Geometría de un `radial-gradient`. El render lo trata como círculo (peniko
+/// `Radial` es circular): forma `circle`/`ellipse` no se distingue todavía.
+/// `cx`/`cy` = centro (`at <position>`, default 50% 50%). Fase 7.226.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RadialSpec {
+    pub size: RadialSize,
+    pub cx: LengthVal,
+    pub cy: LengthVal,
+}
+
+impl Default for RadialSpec {
+    fn default() -> Self {
+        Self {
+            size: RadialSize::FarthestCorner,
+            cx: LengthVal::Pct(50.0),
+            cy: LengthVal::Pct(50.0),
+        }
+    }
+}
+
+/// `background-image: linear-gradient(...)` / `radial-gradient(...)`. Para el
+/// lineal: `angle_deg` (0 = bottom→top, 90 = left→right). Si `radial` es
+/// `Some`, el gradiente es radial y `angle_deg` se ignora. 2+ stops.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinearGradient {
     /// Ángulo CSS en grados — 0 = up, 90 = right, 180 = down, 270 = left.
     pub angle_deg: f32,
     pub stops: Vec<GradientStop>,
+    /// Si `Some`, el gradiente es radial (Fase 7.226).
+    pub radial: Option<RadialSpec>,
 }
 
 /// CSS `position`. `Static` = el default (no position; los insets
