@@ -501,8 +501,50 @@ mod tests {
     fn parsea_calc_invalido_devuelve_none() {
         // Tokens incompletos / mismatched parens / op desconocido.
         assert!(parse_length_or_pct("calc(10px +)").is_none());
-        assert!(parse_length_or_pct("calc(10px * 2)").is_none());
         assert!(parse_length_or_pct("calc(10px").is_none());
+        // Sumar número y longitud es inválido (CSS).
+        assert!(parse_length_or_pct("calc(10px + 2)").is_none());
+        // longitud * longitud inválido.
+        assert!(parse_length_or_pct("calc(10px * 5px)").is_none());
+        // división por cero.
+        assert!(parse_length_or_pct("calc(10px / 0)").is_none());
+    }
+
+    #[test]
+    fn parsea_calc_mul_div_y_precedencia() {
+        // `*` y `/` por escalar.
+        assert_eq!(parse_length_or_pct("calc(10px * 2)"), Some(LengthVal::Px(20.0)));
+        assert_eq!(parse_length_or_pct("calc(2 * 10px)"), Some(LengthVal::Px(20.0)));
+        assert_eq!(parse_length_or_pct("calc(100px / 4)"), Some(LengthVal::Px(25.0)));
+        // Precedencia: `*` antes que `+`.
+        assert_eq!(parse_length_or_pct("calc(10px + 2 * 5px)"), Some(LengthVal::Px(20.0)));
+        // Paréntesis fuerzan el orden.
+        assert_eq!(parse_length_or_pct("calc((10px + 2px) * 3)"), Some(LengthVal::Px(36.0)));
+        // % puro con `/`.
+        assert_eq!(parse_length_or_pct("calc(90% / 3)"), Some(LengthVal::Pct(30.0)));
+        // Unidades absolutas: rem→px (×16).
+        assert_eq!(parse_length_or_pct("calc(1rem + 4px)"), Some(LengthVal::Px(20.0)));
+    }
+
+    #[test]
+    fn parsea_min_max_clamp() {
+        // min/max con px puro → exacto.
+        assert_eq!(parse_length_or_pct("min(10px, 20px)"), Some(LengthVal::Px(10.0)));
+        assert_eq!(parse_length_or_pct("max(10px, 20px, 5px)"), Some(LengthVal::Px(20.0)));
+        // clamp(lo, val, hi) acota.
+        assert_eq!(parse_length_or_pct("clamp(10px, 15px, 20px)"), Some(LengthVal::Px(15.0)));
+        assert_eq!(parse_length_or_pct("clamp(10px, 5px, 20px)"), Some(LengthVal::Px(10.0)));
+        assert_eq!(parse_length_or_pct("clamp(10px, 25px, 20px)"), Some(LengthVal::Px(20.0)));
+        // Unidades mezcladas pero todas absolutas (rem→px) → exacto.
+        assert_eq!(parse_length_or_pct("clamp(1rem, 2rem, 3rem)"), Some(LengthVal::Px(32.0)));
+        // % puro.
+        assert_eq!(parse_length_or_pct("max(50%, 80%)"), Some(LengthVal::Pct(80.0)));
+        // Mezcla px/% incomparable → degrada al primer arg.
+        assert_eq!(parse_length_or_pct("min(100%, 600px)"), Some(LengthVal::Pct(100.0)));
+        // clamp incomparable → degrada al valor central.
+        assert_eq!(parse_length_or_pct("clamp(1rem, 50%, 3rem)"), Some(LengthVal::Pct(50.0)));
+        // calc anidado dentro de min.
+        assert_eq!(parse_length_or_pct("min(calc(10px + 5px), 20px)"), Some(LengthVal::Px(15.0)));
     }
 
     #[test]

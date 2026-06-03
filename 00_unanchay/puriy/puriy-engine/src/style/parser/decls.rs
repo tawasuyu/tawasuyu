@@ -633,8 +633,10 @@ pub(crate) fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
     if let Some(num) = s.strip_suffix('%') {
         return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
     }
-    if let Some(inner) = strip_calc(s) {
-        return parse_calc_expr(inner);
+    // Funciones matemáticas: `calc()`/`min()`/`max()`/`clamp()` (anidables,
+    // con precedencia `*`/`/` sobre `+`/`-` y paréntesis).
+    if is_math_fn(s) {
+        return eval_calc(s).and_then(calcval_to_length);
     }
     parse_length_px(s).map(LengthVal::Px)
 }
@@ -797,102 +799,282 @@ pub(crate) fn is_valid_counter_name(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Si `s` matchea `calc(...)` (case-insensitive), devuelve el contenido
-/// entre paréntesis. Sino `None`.
-pub(crate) fn strip_calc(s: &str) -> Option<&str> {
-    let lower = s.to_ascii_lowercase();
-    let stripped = lower.strip_prefix("calc(")?.strip_suffix(')')?;
-    // Recortamos del original (mantiene casing del inner por si tiene
-    // hex colors en el futuro — hoy sólo números/units, no importa).
-    let start = "calc(".len();
-    Some(&s[start..s.len() - 1])
-        .filter(|_| !stripped.is_empty())
+/// Valor intermedio de la evaluación de `calc()`/`min`/`max`/`clamp`: un
+/// número adimensional, o una longitud con componente absoluto (`px`) +
+/// componente porcentual (`pct`). px/em/rem/vw/vh/vmin/vmax se resuelven a
+/// px en parse-time; sólo `%` queda como componente `pct`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum CalcVal {
+    Number(f32),
+    Length { px: f32, pct: f32 },
 }
 
-/// Parsea un expression `calc()` mínimo: `<term> <+|-> <term>` o un
-/// único `<term>`. Resuelve en parse time, conservando `Pct` cuando hay
-/// mezcla (caso `calc(100% - 20px)` queda como `Pct(100)` y se pierde
-/// el offset — taffy no soporta calc nativo y aproximarlo a más
-/// precisión requeriría conocer el container, que no tenemos acá).
-pub(crate) fn parse_calc_expr(inner: &str) -> Option<LengthVal> {
-    let toks = tokenize_calc(inner);
-    if toks.is_empty() || toks.len() % 2 == 0 {
-        // Sin tokens, o longitud par (1+op+term tiene que ser impar).
+/// `true` si `s` arranca con una función matemática CSS (`calc`/`min`/
+/// `max`/`clamp`) seguida de `(`.
+pub(crate) fn is_math_fn(s: &str) -> bool {
+    let l = s.trim_start().to_ascii_lowercase();
+    ["calc(", "min(", "max(", "clamp("].iter().any(|p| l.starts_with(p))
+}
+
+/// Convierte un `CalcVal` final a `LengthVal`. Un número crudo sólo es
+/// válido si es 0 (un número no es una longitud). Mezcla px+pct degrada a
+/// `Pct` (se pierde el offset px — sin container width, igual que el calc
+/// histórico). Ver [`parse_length_or_pct`].
+pub(crate) fn calcval_to_length(v: CalcVal) -> Option<LengthVal> {
+    match v {
+        CalcVal::Number(n) if n == 0.0 => Some(LengthVal::Px(0.0)),
+        CalcVal::Number(_) => None,
+        CalcVal::Length { px, pct } => {
+            if pct == 0.0 {
+                Some(LengthVal::Px(px))
+            } else {
+                // pct puro o mezcla → Pct (mezcla pierde el offset px).
+                Some(LengthVal::Pct(pct))
+            }
+        }
+    }
+}
+
+/// Evalúa una expresión matemática CSS (`calc`/`min`/`max`/`clamp`, con
+/// anidamiento, precedencia `*`/`/` sobre `+`/`-` y paréntesis) a un
+/// `CalcVal`. `None` si la sintaxis es inválida.
+pub(crate) fn eval_calc(s: &str) -> Option<CalcVal> {
+    let mut p = CalcCtx { b: s.as_bytes(), i: 0, src: s };
+    let v = p.expr()?;
+    p.ws();
+    if p.i != p.b.len() {
         return None;
     }
-    let mut acc = parse_calc_term(toks[0])?;
-    let mut i = 1;
-    while i + 1 < toks.len() {
-        let op = toks[i];
-        let rhs = parse_calc_term(toks[i + 1])?;
-        acc = combine_calc(acc, op, rhs)?;
-        i += 2;
-    }
-    Some(acc)
+    Some(v)
 }
 
-/// Tokens del calc: separamos números+unidad de operadores `+`/`-`/`*`/
-/// `/`. CSS spec requiere whitespace alrededor de `+`/`-` (no de `*`/`/`).
-/// Por simplicidad sólo soportamos `+` y `-` con whitespace.
-pub(crate) fn tokenize_calc(s: &str) -> Vec<&str> {
-    let mut out: Vec<&str> = Vec::new();
-    let bytes = s.as_bytes();
-    let mut start = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b' ' || c == b'\t' || c == b'\n' {
-            if i > start {
-                out.push(&s[start..i]);
-            }
-            // Detectar operador como token único si está rodeado de spaces.
-            if i + 1 < bytes.len() && (bytes[i + 1] == b'+' || bytes[i + 1] == b'-') {
-                // Skip leading spaces hasta el operador.
-                let op_start = i + 1;
-                if op_start + 1 < bytes.len()
-                    && (bytes[op_start + 1] == b' ' || bytes[op_start + 1] == b'\t')
-                {
-                    out.push(&s[op_start..op_start + 1]);
-                    i = op_start + 1;
-                    start = i;
-                    continue;
-                }
-            }
-            start = i + 1;
+/// Parser recursivo-descendente sobre los bytes de la expresión.
+struct CalcCtx<'a> {
+    b: &'a [u8],
+    i: usize,
+    src: &'a str,
+}
+
+impl CalcCtx<'_> {
+    fn ws(&mut self) {
+        while self.i < self.b.len() && (self.b[self.i] as char).is_ascii_whitespace() {
+            self.i += 1;
         }
-        i += 1;
     }
-    if start < bytes.len() {
-        out.push(&s[start..]);
+    fn peek(&self) -> Option<u8> {
+        self.b.get(self.i).copied()
     }
-    out
+
+    /// `expr := term ((' + ' | ' - ') term)*` — `+`/`-` exigen whitespace.
+    fn expr(&mut self) -> Option<CalcVal> {
+        let mut acc = self.term()?;
+        loop {
+            self.ws();
+            let Some(c) = self.peek() else { break };
+            if c == b'+' || c == b'-' {
+                // CSS exige whitespace alrededor de `+`/`-` (antes ya hubo
+                // por `ws()`; exigimos también después para no confundir con
+                // un signo de número).
+                let after_ws = self
+                    .b
+                    .get(self.i + 1)
+                    .is_some_and(|x| (*x as char).is_ascii_whitespace());
+                if !after_ws {
+                    break;
+                }
+                self.i += 1;
+                let rhs = self.term()?;
+                acc = calc_add(acc, rhs, if c == b'+' { 1.0 } else { -1.0 })?;
+            } else {
+                break;
+            }
+        }
+        Some(acc)
+    }
+
+    /// `term := factor (('*' | '/') factor)*` — `*`/`/` sin whitespace req.
+    fn term(&mut self) -> Option<CalcVal> {
+        let mut acc = self.factor()?;
+        loop {
+            self.ws();
+            let Some(c) = self.peek() else { break };
+            if c == b'*' || c == b'/' {
+                self.i += 1;
+                let rhs = self.factor()?;
+                acc = if c == b'*' { calc_mul(acc, rhs)? } else { calc_div(acc, rhs)? };
+            } else {
+                break;
+            }
+        }
+        Some(acc)
+    }
+
+    /// `factor := '(' expr ')' | func '(' args ')' | número`.
+    fn factor(&mut self) -> Option<CalcVal> {
+        self.ws();
+        let c = self.peek()?;
+        if c == b'(' {
+            self.i += 1;
+            let v = self.expr()?;
+            self.ws();
+            if self.peek()? != b')' {
+                return None;
+            }
+            self.i += 1;
+            return Some(v);
+        }
+        if c.is_ascii_alphabetic() {
+            let start = self.i;
+            while self.i < self.b.len() && self.b[self.i].is_ascii_alphabetic() {
+                self.i += 1;
+            }
+            let name = self.src[start..self.i].to_ascii_lowercase();
+            // CSS no permite whitespace entre el nombre y `(`.
+            if self.peek() != Some(b'(') {
+                return None;
+            }
+            self.i += 1;
+            let args = self.args()?;
+            return apply_math_fn(&name, &args);
+        }
+        self.number()
+    }
+
+    /// Lista de expresiones separadas por coma hasta el `)`.
+    fn args(&mut self) -> Option<Vec<CalcVal>> {
+        let mut out = Vec::new();
+        loop {
+            out.push(self.expr()?);
+            self.ws();
+            match self.peek()? {
+                b',' => self.i += 1,
+                b')' => {
+                    self.i += 1;
+                    return Some(out);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Número con unidad opcional o signo líder.
+    fn number(&mut self) -> Option<CalcVal> {
+        self.ws();
+        let start = self.i;
+        if matches!(self.peek(), Some(b'+') | Some(b'-')) {
+            self.i += 1;
+        }
+        let mut saw_digit = false;
+        while self.i < self.b.len() {
+            let c = self.b[self.i];
+            if c.is_ascii_digit() {
+                saw_digit = true;
+                self.i += 1;
+            } else if c == b'.' || c.is_ascii_alphabetic() || c == b'%' {
+                self.i += 1;
+            } else {
+                break;
+            }
+        }
+        if !saw_digit {
+            return None;
+        }
+        classify_calc_num(self.src[start..self.i].trim())
+    }
 }
 
-pub(crate) fn parse_calc_term(tok: &str) -> Option<LengthVal> {
-    let tok = tok.trim();
-    if let Some(num) = tok.strip_suffix('%') {
-        return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
+/// Clasifica un token numérico: `%` → componente pct; número crudo →
+/// `Number`; con unidad (px/em/rem/vw/…) → componente px resuelto.
+fn classify_calc_num(t: &str) -> Option<CalcVal> {
+    let t = t.trim();
+    if let Some(p) = t.strip_suffix('%') {
+        return p.trim().parse::<f32>().ok().map(|v| CalcVal::Length { px: 0.0, pct: v });
     }
-    parse_length_px(tok).map(LengthVal::Px)
+    if let Ok(n) = t.parse::<f32>() {
+        return Some(CalcVal::Number(n));
+    }
+    parse_length_px(t).map(|px| CalcVal::Length { px, pct: 0.0 })
 }
 
-pub(crate) fn combine_calc(a: LengthVal, op: &str, b: LengthVal) -> Option<LengthVal> {
-    let sign = match op {
-        "+" => 1.0,
-        "-" => -1.0,
-        _ => return None,
-    };
+fn calc_add(a: CalcVal, b: CalcVal, sign: f32) -> Option<CalcVal> {
     match (a, b) {
-        (LengthVal::Px(x), LengthVal::Px(y)) => Some(LengthVal::Px(x + sign * y)),
-        (LengthVal::Pct(x), LengthVal::Pct(y)) => Some(LengthVal::Pct(x + sign * y)),
-        // Mezcla pct/px: conservamos el pct ignorando el offset px.
-        // Aproximación pragmática — taffy no soporta calc nativo y un
-        // valor mixto requeriría el container width, no disponible acá.
-        (LengthVal::Pct(p), LengthVal::Px(_)) | (LengthVal::Px(_), LengthVal::Pct(p)) => {
-            Some(LengthVal::Pct(p))
+        (CalcVal::Number(x), CalcVal::Number(y)) => Some(CalcVal::Number(x + sign * y)),
+        (CalcVal::Length { px: p1, pct: q1 }, CalcVal::Length { px: p2, pct: q2 }) => {
+            Some(CalcVal::Length { px: p1 + sign * p2, pct: q1 + sign * q2 })
+        }
+        // Sumar número + longitud es inválido en CSS.
+        _ => None,
+    }
+}
+
+fn calc_mul(a: CalcVal, b: CalcVal) -> Option<CalcVal> {
+    match (a, b) {
+        (CalcVal::Number(x), CalcVal::Number(y)) => Some(CalcVal::Number(x * y)),
+        (CalcVal::Number(x), CalcVal::Length { px, pct })
+        | (CalcVal::Length { px, pct }, CalcVal::Number(x)) => {
+            Some(CalcVal::Length { px: px * x, pct: pct * x })
+        }
+        // longitud * longitud es inválido.
+        _ => None,
+    }
+}
+
+fn calc_div(a: CalcVal, b: CalcVal) -> Option<CalcVal> {
+    match (a, b) {
+        (CalcVal::Number(x), CalcVal::Number(y)) if y != 0.0 => Some(CalcVal::Number(x / y)),
+        (CalcVal::Length { px, pct }, CalcVal::Number(y)) if y != 0.0 => {
+            Some(CalcVal::Length { px: px / y, pct: pct / y })
         }
         _ => None,
     }
+}
+
+fn apply_math_fn(name: &str, args: &[CalcVal]) -> Option<CalcVal> {
+    match name {
+        "calc" => (args.len() == 1).then(|| args[0]),
+        "min" => reduce_minmax(args, true),
+        "max" => reduce_minmax(args, false),
+        "clamp" if args.len() == 3 => clamp_calc(args[0], args[1], args[2]),
+        _ => None,
+    }
+}
+
+/// `true` si todos los valores son comparables (misma dimensión): todos
+/// número, todos px puro, o todos pct puro.
+fn all_comparable(vs: &[CalcVal]) -> bool {
+    vs.iter().all(|v| matches!(v, CalcVal::Number(_)))
+        || vs.iter().all(|v| matches!(v, CalcVal::Length { pct, .. } if *pct == 0.0))
+        || vs.iter().all(|v| matches!(v, CalcVal::Length { px, .. } if *px == 0.0))
+}
+
+/// `min()`/`max()`. Si los args son comparables resuelve exacto; si hay
+/// mezcla incomparable (px vs %) degrada al primer arg (sin container).
+fn reduce_minmax(args: &[CalcVal], is_min: bool) -> Option<CalcVal> {
+    let first = *args.first()?;
+    let pick = |a: f32, b: f32| if is_min { a.min(b) } else { a.max(b) };
+    if !all_comparable(args) {
+        return Some(first); // incomparable → degradar
+    }
+    let scalar = |v: &CalcVal| match v {
+        CalcVal::Number(n) => *n,
+        CalcVal::Length { px, pct } => px + pct, // uno es 0 (all_comparable)
+    };
+    let best = args.iter().map(scalar).reduce(pick)?;
+    Some(match first {
+        CalcVal::Number(_) => CalcVal::Number(best),
+        CalcVal::Length { pct, .. } if pct == 0.0 => CalcVal::Length { px: best, pct: 0.0 },
+        CalcVal::Length { .. } => CalcVal::Length { px: 0.0, pct: best },
+    })
+}
+
+/// `clamp(lo, val, hi)` = `max(lo, min(val, hi))`. Si los tres no son
+/// comparables, degrada al valor central (`val`, el preferido).
+fn clamp_calc(lo: CalcVal, val: CalcVal, hi: CalcVal) -> Option<CalcVal> {
+    if all_comparable(&[lo, val, hi]) {
+        let upper = reduce_minmax(&[val, hi], true)?;
+        return reduce_minmax(&[lo, upper], false);
+    }
+    Some(val)
 }
 
 /// Acepta multiplicador adimensional (`1.5`, `1.6`), `Npx`, `Nem`/`Nrem`.
