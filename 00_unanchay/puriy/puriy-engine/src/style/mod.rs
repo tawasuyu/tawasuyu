@@ -221,6 +221,13 @@ impl StyleEngine {
             style.overflow_wrap = p.overflow_wrap;
             style.word_break = p.word_break;
             style.hyphens = p.hyphens;
+            // writing-mode, direction (CSS Writing Modes 3) heredan;
+            // unicode-bidi NO hereda. font-stretch (CSS Fonts 4) y
+            // image-rendering (CSS Images 3) también heredan.
+            style.writing_mode = p.writing_mode;
+            style.direction = p.direction;
+            style.font_stretch = p.font_stretch;
+            style.image_rendering = p.image_rendering;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -1164,6 +1171,211 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[1], Some(&body_cs)).resize,
             Resize::None
+        );
+    }
+
+    #[test]
+    fn writing_mode_fase_7_249() {
+        assert_eq!(parse_writing_mode("horizontal-tb"), Some(WritingMode::HorizontalTb));
+        assert_eq!(parse_writing_mode("VERTICAL-RL"), Some(WritingMode::VerticalRl));
+        assert_eq!(parse_writing_mode("vertical-lr"), Some(WritingMode::VerticalLr));
+        assert_eq!(parse_writing_mode("sideways-rl"), Some(WritingMode::SidewaysRl));
+        assert_eq!(parse_writing_mode("sideways-lr"), Some(WritingMode::SidewaysLr));
+        // Aliases legacy fuera de scope.
+        assert_eq!(parse_writing_mode("lr-tb"), None);
+        assert_eq!(parse_writing_mode("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { writing-mode: vertical-rl }
+            p.over { writing-mode: horizontal-tb }
+            p.plain {}
+        </style></head><body>
+          <p class="over"></p><p class="plain"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.writing_mode, WritingMode::VerticalRl);
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs)).writing_mode,
+            WritingMode::HorizontalTb
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&ps[1], Some(&body_cs)).writing_mode,
+            WritingMode::VerticalRl
+        );
+    }
+
+    #[test]
+    fn direction_fase_7_250() {
+        assert_eq!(parse_direction("ltr"), Some(Direction::Ltr));
+        assert_eq!(parse_direction("RTL"), Some(Direction::Rtl));
+        assert_eq!(parse_direction("auto"), None);
+
+        let html = r##"<html><head><style>
+            body { direction: rtl }
+            div.lr { direction: ltr }
+            div.plain {}
+        </style></head><body>
+          <div class="lr"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.direction, Direction::Rtl);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).direction,
+            Direction::Ltr
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).direction,
+            Direction::Rtl
+        );
+    }
+
+    #[test]
+    fn unicode_bidi_fase_7_251() {
+        assert_eq!(parse_unicode_bidi("normal"), Some(UnicodeBidi::Normal));
+        assert_eq!(parse_unicode_bidi("embed"), Some(UnicodeBidi::Embed));
+        assert_eq!(parse_unicode_bidi("ISOLATE"), Some(UnicodeBidi::Isolate));
+        assert_eq!(parse_unicode_bidi("bidi-override"), Some(UnicodeBidi::BidiOverride));
+        assert_eq!(parse_unicode_bidi("isolate-override"), Some(UnicodeBidi::IsolateOverride));
+        assert_eq!(parse_unicode_bidi("plaintext"), Some(UnicodeBidi::Plaintext));
+        assert_eq!(parse_unicode_bidi("xxx"), None);
+
+        // `unicode-bidi` NO se hereda (CSS Writing Modes 3).
+        let html = r##"<html><head><style>
+            body { unicode-bidi: embed }
+            span.b { unicode-bidi: isolate }
+            span.plain {}
+        </style></head><body>
+          <span class="b"></span><span class="plain"></span>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut spans = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("span") => spans.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.unicode_bidi, UnicodeBidi::Embed);
+        assert_eq!(
+            eng.compute_with_parent(&spans[0], Some(&body_cs)).unicode_bidi,
+            UnicodeBidi::Isolate
+        );
+        // NO se hereda → default Normal.
+        assert_eq!(
+            eng.compute_with_parent(&spans[1], Some(&body_cs)).unicode_bidi,
+            UnicodeBidi::Normal
+        );
+    }
+
+    #[test]
+    fn font_stretch_fase_7_252() {
+        // Keywords.
+        assert!((parse_font_stretch("normal").unwrap() - 1.0).abs() < 1e-3);
+        assert!((parse_font_stretch("CONDENSED").unwrap() - 0.75).abs() < 1e-3);
+        assert!((parse_font_stretch("ultra-expanded").unwrap() - 2.0).abs() < 1e-3);
+        assert!((parse_font_stretch("ultra-condensed").unwrap() - 0.50).abs() < 1e-3);
+        // Porcentaje.
+        assert!((parse_font_stretch("125%").unwrap() - 1.25).abs() < 1e-3);
+        // Clamp: 300% → 200%.
+        assert!((parse_font_stretch("300%").unwrap() - 2.0).abs() < 1e-3);
+        assert!((parse_font_stretch("10%").unwrap() - 0.5).abs() < 1e-3);
+        assert_eq!(parse_font_stretch("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { font-stretch: expanded }
+            p.c { font-stretch: 75% }
+            p.plain {}
+        </style></head><body>
+          <p class="c"></p><p class="plain"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!((body_cs.font_stretch - 1.25).abs() < 1e-3);
+        assert!(
+            (eng.compute_with_parent(&ps[0], Some(&body_cs)).font_stretch - 0.75).abs() < 1e-3
+        );
+        // Heredado.
+        assert!(
+            (eng.compute_with_parent(&ps[1], Some(&body_cs)).font_stretch - 1.25).abs() < 1e-3
+        );
+    }
+
+    #[test]
+    fn image_rendering_fase_7_253() {
+        assert_eq!(parse_image_rendering("auto"), Some(ImageRendering::Auto));
+        assert_eq!(parse_image_rendering("SMOOTH"), Some(ImageRendering::Smooth));
+        assert_eq!(parse_image_rendering("crisp-edges"), Some(ImageRendering::CrispEdges));
+        assert_eq!(parse_image_rendering("pixelated"), Some(ImageRendering::Pixelated));
+        // Legacy CSS2 → Auto.
+        assert_eq!(parse_image_rendering("optimizeSpeed"), Some(ImageRendering::Auto));
+        assert_eq!(parse_image_rendering("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { image-rendering: pixelated }
+            img.over { image-rendering: smooth }
+            img.plain {}
+        </style></head><body>
+          <img class="over"/><img class="plain"/>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut imgs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("img") => imgs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.image_rendering, ImageRendering::Pixelated);
+        assert_eq!(
+            eng.compute_with_parent(&imgs[0], Some(&body_cs)).image_rendering,
+            ImageRendering::Smooth
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&imgs[1], Some(&body_cs)).image_rendering,
+            ImageRendering::Pixelated
         );
     }
 

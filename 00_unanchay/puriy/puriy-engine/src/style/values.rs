@@ -242,6 +242,21 @@ pub struct ComputedStyle {
     /// `overflow` distinto a `visible` (CSS UI 4); el chrome aún no pinta
     /// el grip ni el handle de drag. Plumb.
     pub resize: Resize,
+    /// `writing-mode` (Fase 7.249). Heredable. Sólo `HorizontalTb` se
+    /// renderiza con layout real — los vertical-* y sideways-* quedan
+    /// parseados pero el shaper no rota glifos todavía.
+    pub writing_mode: WritingMode,
+    /// `direction` (Fase 7.250). Heredable. Plumb: el shaper no reordena
+    /// bidi todavía; sólo afecta cómo se interpreta `text-align: start`.
+    pub direction: Direction,
+    /// `unicode-bidi` (Fase 7.251). NO heredable. Plumb: sin runtime BiDi.
+    pub unicode_bidi: UnicodeBidi,
+    /// `font-stretch` (Fase 7.252). Heredable. Sin axis variable wired al
+    /// shaper — se almacena como porcentaje (50%-200%) normalizado a 1.0.
+    pub font_stretch: f32,
+    /// `image-rendering` (Fase 7.253). Heredable. Plumb: el chrome no
+    /// elige el sampler GPU a partir de este flag aún.
+    pub image_rendering: ImageRendering,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -447,6 +462,56 @@ pub enum Resize {
     Vertical,
     Block,
     Inline,
+}
+
+/// `writing-mode`: orientación de bloque. Default `HorizontalTb`
+/// (occidental). Heredable. Fase 7.249. Plumb: el resto de los modos
+/// quedan parseados pero el shaper no rota glifos todavía.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WritingMode {
+    #[default]
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
+}
+
+/// `direction`: dirección base del texto del elemento. Heredable.
+/// Default `Ltr`. Fase 7.250. Plumb: sin BiDi runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+/// `unicode-bidi`: trato del elemento por el algoritmo BiDi. NO heredable.
+/// Default `Normal`. Fase 7.251. Plumb.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnicodeBidi {
+    #[default]
+    Normal,
+    Embed,
+    Isolate,
+    BidiOverride,
+    IsolateOverride,
+    Plaintext,
+}
+
+/// `image-rendering`: hint del sampler al pintar `<img>` y backgrounds.
+/// Heredable. Default `Auto`. Fase 7.253. Plumb: el chrome aún no elige
+/// `nearest` vs `linear` en función de este flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageRendering {
+    #[default]
+    Auto,
+    /// CSS Images 3 `smooth` — bilinear/trilinear (lo que el GPU haga).
+    Smooth,
+    /// CSS Images 3 `crisp-edges` — sin antialiasing en escala (ideal pixel art).
+    CrispEdges,
+    /// CSS Images 4 `pixelated` — nearest-neighbour explícito.
+    Pixelated,
 }
 
 /// CSS `border-style` reducido al subset que el chrome pinta: `solid`
@@ -1237,6 +1302,11 @@ impl Default for ComputedStyle {
             word_break: WordBreak::Normal,
             hyphens: Hyphens::Manual,
             resize: Resize::None,
+            writing_mode: WritingMode::HorizontalTb,
+            direction: Direction::Ltr,
+            unicode_bidi: UnicodeBidi::Normal,
+            font_stretch: 1.0,
+            image_rendering: ImageRendering::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

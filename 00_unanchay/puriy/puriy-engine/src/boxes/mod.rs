@@ -14,13 +14,14 @@ use crate::dom::{self, DomTree};
 use crate::style::{
     AlignContent, AlignItems, AlignSelf, BackgroundClip, BackgroundOrigin, BackgroundPosition,
     BackgroundRepeat, BackgroundSize, BorderLineStyle,
-    BoxShadow, BoxSizing, ComputedStyle, Corners, Cursor,
+    BoxShadow, BoxSizing, ComputedStyle, Corners, Cursor, Direction,
     FlexDirection, FlexWrap,
-    GridTrackSize, Hyphens, JustifyContent, LengthVal, LinearGradient, ListStyleType, ObjectFit,
-    Outline, Overflow, OverflowWrap, PointerEvents, Position, Resize, ScrollBehavior, Sides,
-    StyleEngine, TabSize, TextAlign, TextDecorationLine,
+    GridTrackSize, Hyphens, ImageRendering, JustifyContent, LengthVal, LinearGradient,
+    ListStyleType, ObjectFit, Outline, Overflow, OverflowWrap, PointerEvents, Position, Resize,
+    ScrollBehavior, Sides, StyleEngine, TabSize, TextAlign, TextDecorationLine,
     TextDecorationStyle, TextOverflow, TextShadow,
-    TextTransform, Transform, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    TextTransform, Transform, UnicodeBidi, UserSelect, VerticalAlign, Visibility, WhiteSpace,
+    WordBreak, WritingMode,
 };
 
 /// Modelo de datos (`Color`/`Display`/`BoxNode`/`BoxTree` + tipos auxiliares).

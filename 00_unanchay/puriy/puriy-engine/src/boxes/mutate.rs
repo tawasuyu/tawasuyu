@@ -236,6 +236,12 @@ pub(crate) fn inherit_style_to_child(parent: &BoxNode, child: &mut BoxNode) {
     child.overflow_wrap = parent.overflow_wrap;
     child.word_break = parent.word_break;
     child.hyphens = parent.hyphens;
+    // writing-mode, direction, font-stretch, image-rendering heredan.
+    // unicode-bidi NO.
+    child.writing_mode = parent.writing_mode;
+    child.direction = parent.direction;
+    child.font_stretch = parent.font_stretch;
+    child.image_rendering = parent.image_rendering;
     // Propagar al text leaf interno (primer hijo si es text node).
     for c in child.children.iter_mut() {
         if c.text.is_some() {
@@ -703,6 +709,11 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.word_break = s.word_break;
     b.hyphens = s.hyphens;
     b.resize = s.resize;
+    b.writing_mode = s.writing_mode;
+    b.direction = s.direction;
+    b.unicode_bidi = s.unicode_bidi;
+    b.font_stretch = s.font_stretch;
+    b.image_rendering = s.image_rendering;
     b.text_indent = s.text_indent;
     b.word_spacing = s.word_spacing;
     b.letter_spacing = s.letter_spacing;
@@ -749,6 +760,10 @@ pub(crate) fn set_leaf_inherited(leaf: &mut BoxNode, p: &ComputedStyle) {
     leaf.overflow_wrap = p.overflow_wrap;
     leaf.word_break = p.word_break;
     leaf.hyphens = p.hyphens;
+    leaf.writing_mode = p.writing_mode;
+    leaf.direction = p.direction;
+    leaf.font_stretch = p.font_stretch;
+    leaf.image_rendering = p.image_rendering;
 }
 
 pub(crate) fn propagate_text_color(node: &mut BoxNode, c: Color) {

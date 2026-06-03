@@ -193,6 +193,16 @@ pub struct BoxNode {
     pub hyphens: Hyphens,
     /// `resize`. NO heredable. Fase 7.248.
     pub resize: Resize,
+    /// `writing-mode`. Heredable. Fase 7.249.
+    pub writing_mode: WritingMode,
+    /// `direction`. Heredable. Fase 7.250.
+    pub direction: Direction,
+    /// `unicode-bidi`. NO heredable. Fase 7.251.
+    pub unicode_bidi: UnicodeBidi,
+    /// `font-stretch` normalizado a 0.5..=2.0. Heredable. Fase 7.252.
+    pub font_stretch: f32,
+    /// `image-rendering`. Heredable. Fase 7.253.
+    pub image_rendering: ImageRendering,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no

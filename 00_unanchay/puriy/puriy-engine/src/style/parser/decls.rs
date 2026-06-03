@@ -409,6 +409,11 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_hyphens(value).map(DeclKind::Hyphens)
         }
         "resize" => parse_resize(value).map(DeclKind::Resize),
+        "writing-mode" => parse_writing_mode(value).map(DeclKind::WritingMode),
+        "direction" => parse_direction(value).map(DeclKind::Direction),
+        "unicode-bidi" => parse_unicode_bidi(value).map(DeclKind::UnicodeBidi),
+        "font-stretch" => parse_font_stretch(value).map(DeclKind::FontStretch),
+        "image-rendering" => parse_image_rendering(value).map(DeclKind::ImageRendering),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -694,6 +699,87 @@ pub(crate) fn parse_resize(value: &str) -> Option<Resize> {
         "vertical" => Some(Resize::Vertical),
         "block" => Some(Resize::Block),
         "inline" => Some(Resize::Inline),
+        _ => None,
+    }
+}
+
+/// `writing-mode`: orientación de bloque. Soporta los 5 valores
+/// modernos. Case-insensitive. Inválido = `None` (dropea la regla).
+pub(crate) fn parse_writing_mode(value: &str) -> Option<WritingMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "horizontal-tb" => Some(WritingMode::HorizontalTb),
+        "vertical-rl" => Some(WritingMode::VerticalRl),
+        "vertical-lr" => Some(WritingMode::VerticalLr),
+        "sideways-rl" => Some(WritingMode::SidewaysRl),
+        "sideways-lr" => Some(WritingMode::SidewaysLr),
+        // Aliases legacy (`lr-tb`, `tb-rl`, `tb-lr`) y `tb` quedan fuera.
+        _ => None,
+    }
+}
+
+/// `direction`: dirección base. Case-insensitive.
+pub(crate) fn parse_direction(value: &str) -> Option<Direction> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "ltr" => Some(Direction::Ltr),
+        "rtl" => Some(Direction::Rtl),
+        _ => None,
+    }
+}
+
+/// `unicode-bidi`: 6 valores. Case-insensitive.
+pub(crate) fn parse_unicode_bidi(value: &str) -> Option<UnicodeBidi> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(UnicodeBidi::Normal),
+        "embed" => Some(UnicodeBidi::Embed),
+        "isolate" => Some(UnicodeBidi::Isolate),
+        "bidi-override" => Some(UnicodeBidi::BidiOverride),
+        "isolate-override" => Some(UnicodeBidi::IsolateOverride),
+        "plaintext" => Some(UnicodeBidi::Plaintext),
+        _ => None,
+    }
+}
+
+/// `font-stretch`: keyword o porcentaje 50%..200%. Devuelve el
+/// multiplicador (1.0 = normal). Valores fuera del rango se clampan
+/// — coherente con CSS Fonts 4 (`font-stretch: 1%` y `200%` se aceptan,
+/// pero acá conservamos el rango oficial de keywords).
+pub(crate) fn parse_font_stretch(value: &str) -> Option<f32> {
+    let v = value.trim().to_ascii_lowercase();
+    let kw = match v.as_str() {
+        "ultra-condensed" => Some(0.50),
+        "extra-condensed" => Some(0.625),
+        "condensed" => Some(0.75),
+        "semi-condensed" => Some(0.875),
+        "normal" => Some(1.0),
+        "semi-expanded" => Some(1.125),
+        "expanded" => Some(1.25),
+        "extra-expanded" => Some(1.50),
+        "ultra-expanded" => Some(2.00),
+        _ => None,
+    };
+    if let Some(k) = kw {
+        return Some(k);
+    }
+    // `Npc%`.
+    if let Some(pct) = v.strip_suffix('%') {
+        if let Ok(p) = pct.trim().parse::<f32>() {
+            if p >= 0.0 {
+                return Some((p / 100.0).clamp(0.5, 2.0));
+            }
+        }
+    }
+    None
+}
+
+/// `image-rendering`: 4 keywords. Case-insensitive. `optimizeSpeed` /
+/// `optimizeQuality` (CSS2 legacy) caen a `Auto` por compat.
+pub(crate) fn parse_image_rendering(value: &str) -> Option<ImageRendering> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ImageRendering::Auto),
+        "smooth" => Some(ImageRendering::Smooth),
+        "crisp-edges" => Some(ImageRendering::CrispEdges),
+        "pixelated" => Some(ImageRendering::Pixelated),
+        "optimizespeed" | "optimizequality" => Some(ImageRendering::Auto),
         _ => None,
     }
 }
