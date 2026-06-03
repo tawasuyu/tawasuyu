@@ -121,15 +121,16 @@ fn cells_row(cells: Vec<View<Msg>>) -> View<Msg> {
     .children(cells)
 }
 
-/// Celda de texto de ancho fijo.
+/// Celda de texto de ancho fijo. Alto `auto` (= alto del texto) para que
+/// el `align_items: Center` de la fila lo centre verticalmente — un texto
+/// `Start` se ancla arriba si su nodo es más alto que el glifo.
 fn txt_cell(text: String, w: f32, size: f32, color: Color, align: Alignment) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: length(w),
-            height: length(ROW_H),
+            height: Dimension::auto(),
         },
         flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
         ..Default::default()
     })
     .text_aligned(text, size, color, align)

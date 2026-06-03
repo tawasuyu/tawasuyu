@@ -658,11 +658,13 @@ fn nav_row(n: &NavNode, vis: usize, model: &Model, theme: &Theme) -> View<Msg> {
             Msg::RenameStart,
         )])
     } else {
+        // Alto `auto` (= alto del texto) para que el `align_items: Center`
+        // de la fila lo centre verticalmente.
         View::new(Style {
             flex_grow: 1.0,
             size: Size {
                 width: percent(0.0_f32),
-                height: length(TREE_ROW_H),
+                height: auto(),
             },
             padding: Rect {
                 left: length(2.0_f32),
@@ -670,7 +672,6 @@ fn nav_row(n: &NavNode, vis: usize, model: &Model, theme: &Theme) -> View<Msg> {
                 top: length(0.0_f32),
                 bottom: length(0.0_f32),
             },
-            align_items: Some(AlignItems::Center),
             ..Default::default()
         })
         .text_aligned(n.label.clone(), 12.0, theme.fg_text, Alignment::Start)
