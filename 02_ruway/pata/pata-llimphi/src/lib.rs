@@ -33,6 +33,7 @@ use llimphi_motion::{animate, motion, Tween};
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 
+use pata_core::config::{FloatingCard, SurfaceKind};
 use pata_core::widget::{build, Widget, WidgetCtx};
 use pata_core::{Config, Frame, Rect};
 
@@ -165,6 +166,10 @@ pub struct Model {
     pub frame: Frame,
     /// Widgets vivos, en el mismo orden que `cfg.surfaces`.
     pub surfaces: Vec<SurfaceWidgets>,
+    /// Tarjetas flotantes (estilo conky) de las superficies `Panel`, cada una con
+    /// sus widgets vivos. En layer-shell cada tarjeta es su propia surface; en el
+    /// path winit se pintan en absoluto sobre la ventana única.
+    pub cards: Vec<(FloatingCard, Vec<Box<dyn Widget>>)>,
     /// Estado del cabezal del shell y su drawer Quake.
     pub shuma: ShumaState,
     /// Muestreador del sistema (con estado para el delta de CPU).
@@ -224,10 +229,30 @@ impl Model {
         (surfaces, shuma)
     }
 
-    /// `tick`ea todos los widgets de core con el contexto dado.
+    /// Construye las tarjetas flotantes de todas las superficies `Panel` con sus
+    /// widgets vivos. Compartido por el path winit ([`PataApp::init`]) y el
+    /// layer-shell ([`crate::layer`]): el modelo se escribe una vez.
+    pub fn construir_cards(cfg: &Config) -> Vec<(FloatingCard, Vec<Box<dyn Widget>>)> {
+        cfg.surfaces
+            .iter()
+            .filter(|s| s.kind == SurfaceKind::Panel)
+            .flat_map(|s| s.cards.iter())
+            .map(|card| {
+                let ws = card.widgets.iter().map(build).collect();
+                (card.clone(), ws)
+            })
+            .collect()
+    }
+
+    /// `tick`ea todos los widgets de core (barras y tarjetas) con el contexto dado.
     fn tick_widgets(&mut self, ctx: &WidgetCtx) {
         for sw in &mut self.surfaces {
             for w in sw.core_mut() {
+                w.tick(ctx);
+            }
+        }
+        for (_, ws) in &mut self.cards {
+            for w in ws {
                 w.tick(ctx);
             }
         }
@@ -270,6 +295,7 @@ impl App for PataApp {
         let screen = PANTALLA;
         let frame = pata_core::resolve(&cfg, Rect::new(0, 0, screen.0, screen.1));
         let (surfaces, shuma) = Model::construir(&cfg);
+        let cards = Model::construir_cards(&cfg);
         let mut sampler = Sampler::new();
         let ctx = sampler.sample();
         let clipboard = crate::sampler::leer_clipboard();
@@ -282,6 +308,7 @@ impl App for PataApp {
             cfg,
             frame,
             surfaces,
+            cards,
             shuma,
             sampler,
             clipboard,

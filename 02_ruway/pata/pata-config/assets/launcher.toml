@@ -56,6 +56,25 @@ kind = "ram_meter"
 [[surfaces.end]]
 kind = "cpu_meter"
 
+# --- Panel: tarjetas flotantes estilo conky sobre el escritorio ---
+# Un panel no reserva franja: sus tarjetas flotan en (x, y) con tamaño (w, h).
+# En layer-shell cada tarjeta es su propia surface en la capa de fondo.
+[[surfaces]]
+kind = "panel"
+
+[[surfaces.cards]]
+x = 40
+y = 80
+w = 220
+h = 110
+title = "sistema"
+
+[[surfaces.cards.widgets]]
+kind = "cpu_meter"
+
+[[surfaces.cards.widgets]]
+kind = "ram_meter"
+
 # --- Shell: barra inferior autoescondible con el input de shuma ---
 # Al escribir, el frontend despliega el resto de shuma estilo Quake.
 [[surfaces]]

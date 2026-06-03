@@ -69,7 +69,8 @@ use llimphi_ui::llimphi_layout::{taffy, ComputedLayout, LayoutTree};
 use llimphi_ui::llimphi_raster::{peniko::color::palette, vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 
-use pata_core::widget::WidgetCtx;
+use pata_core::config::FloatingCard;
+use pata_core::widget::{Widget, WidgetCtx};
 use pata_core::{Anchor, Config, SurfaceKind};
 
 use crate::sampler::SamplerHandle;
@@ -105,10 +106,24 @@ struct RenderCache {
     computed: ComputedLayout,
 }
 
-/// Una barra = una layer surface anclada a un borde, con su propio estado wgpu.
+/// El estado de una tarjeta flotante (estilo conky) montada como su propia layer
+/// surface: la spec (título/tamaño) + sus widgets vivos. La diferencia con una
+/// barra es que vive en `Layer::Bottom` sobre el escritorio, no reserva franja y
+/// no toma teclado.
+struct CardState {
+    spec: FloatingCard,
+    widgets: Vec<Box<dyn Widget>>,
+}
+
+/// Una layer surface de pata: o una **barra** anclada a un borde (con sus tres
+/// slots), o una **tarjeta flotante** (`card`). En ambos casos lleva su propio
+/// estado wgpu y su cache de hit-test.
 struct Panel {
-    /// Índice de su superficie en `cfg.surfaces`.
+    /// Índice de su superficie en `cfg.surfaces` (la barra, o el `Panel` dueño de
+    /// la tarjeta).
     idx: usize,
+    /// `Some` si esta surface es una tarjeta flotante; `None` si es una barra.
+    card: Option<CardState>,
     layer: LayerSurface,
     /// El árbol del último frame (para hit-test de clicks).
     cache: Option<RenderCache>,
@@ -247,6 +262,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         layer.commit();
         panels.push(Panel {
             idx,
+            card: None,
             layer,
             cache: None,
             width: size.0.max(1),
@@ -254,6 +270,45 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             dirty: true,
             gpu: None,
         });
+    }
+
+    // Tarjetas flotantes (estilo conky): cada `card` de una superficie `Panel` es
+    // su propia layer surface en `Layer::Bottom` (sobre el escritorio, debajo de
+    // las ventanas), anclada a la esquina superior-izquierda con margen (x, y) y
+    // del tamaño (w, h) de la tarjeta. No reserva franja ni toma teclado.
+    for (idx, s) in cfg.surfaces.iter().enumerate() {
+        if s.kind != SurfaceKind::Panel {
+            continue;
+        }
+        for card in &s.cards {
+            let (cw, ch) = (card.w.max(1.0) as u32, card.h.max(1.0) as u32);
+            let wl_surface = compositor.create_surface(&qh);
+            let layer = layer_shell.create_layer_surface(
+                &qh,
+                wl_surface,
+                Layer::Bottom,
+                Some("pata-card".to_string()),
+                None,
+            );
+            layer.set_anchor(LayerAnchor::TOP | LayerAnchor::LEFT);
+            layer.set_size(cw, ch);
+            // Margen: (top, right, bottom, left). (x, y) desde la esquina sup-izq.
+            layer.set_margin(card.y as i32, 0, 0, card.x as i32);
+            layer.set_exclusive_zone(0);
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer.commit();
+            let widgets = card.widgets.iter().map(pata_core::widget::build).collect();
+            panels.push(Panel {
+                idx,
+                card: Some(CardState { spec: card.clone(), widgets }),
+                layer,
+                cache: None,
+                width: cw,
+                height: ch,
+                dirty: true,
+                gpu: None,
+            });
+        }
     }
 
     // ¿Qué barra hospeda el shuma_input? Esa recibe foco de teclado al clickearla
@@ -444,7 +499,13 @@ impl LayerApp {
                 w.tick(&ctx);
             }
         }
+        // Las tarjetas flotantes tienen sus widgets en su propio Panel.
         for p in &mut self.panels {
+            if let Some(c) = p.card.as_mut() {
+                for w in &mut c.widgets {
+                    w.tick(&ctx);
+                }
+            }
             p.dirty = true;
         }
     }
@@ -553,9 +614,12 @@ impl LayerApp {
             clipboard: self.clipboard.as_deref(),
             tray: &tray_items,
         };
-        // La barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el
-        // resto pinta su barra normal.
-        let view = if self.shuma_panel == Some(pi) && self.shuma.open {
+        // Una tarjeta flotante pinta su contenido (relleno de su surface); la
+        // barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el resto
+        // pinta su barra normal.
+        let view = if let Some(c) = self.panels[pi].card.as_ref() {
+            render::card_view(&c.spec, &c.widgets, &self.theme)
+        } else if self.shuma_panel == Some(pi) && self.shuma.open {
             // Viewport del historial: la surface menos la barra, la línea de
             // input y los paddings. Lo cacheamos para que el clamp del scroll
             // en `update` (rueda/arrastre) sea exacto.

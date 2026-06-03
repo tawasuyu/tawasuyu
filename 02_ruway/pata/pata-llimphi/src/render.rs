@@ -19,9 +19,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::View;
 
-use pata_core::config::Surface;
+use pata_core::config::{FloatingCard, Surface};
 use pata_core::layout::Rect;
-use pata_core::widget::WidgetView;
+use pata_core::widget::{Widget, WidgetView};
 
 use crate::shuma::{self, ShumaState};
 use crate::toplevel::WindowEntry;
@@ -215,6 +215,73 @@ fn etiqueta(t: &str, theme: &Theme) -> View<Msg> {
     .text(t.to_string(), 12.0, theme.fg_muted)
 }
 
+/// El **interior** de una tarjeta flotante (estilo conky): título opcional +
+/// widgets apilados, rellenando su contenedor (100%×100%). Lo usa el backend
+/// layer-shell, donde la propia layer surface ya tiene el tamaño de la tarjeta.
+/// Para el path winit, [`card_view_absolute`] lo posiciona en (x, y).
+pub fn card_view(card: &FloatingCard, widgets: &[Box<dyn Widget>], theme: &Theme) -> View<Msg> {
+    let mut hijos: Vec<View<Msg>> = Vec::new();
+    if let Some(t) = &card.title {
+        hijos.push(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(20.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::FlexStart),
+                ..Default::default()
+            })
+            .text(t.clone(), 12.0, theme.fg_muted),
+        );
+    }
+    for w in widgets {
+        hijos.push(widget_view(&w.view(), theme));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .children(hijos)
+}
+
+/// Una tarjeta flotante posicionada en **absoluto** en (x, y) con tamaño (w, h)
+/// — para el path winit, donde todas las superficies viven en una sola ventana.
+fn card_view_absolute(card: &FloatingCard, widgets: &[Box<dyn Widget>], theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(card.x),
+            top: length(card.y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(card.w),
+            height: length(card.h),
+        },
+        ..Default::default()
+    })
+    .children(vec![card_view(card, widgets, theme)])
+}
+
 /// El `View` raíz: cubre la pantalla y coloca cada superficie en su rect.
 pub fn root(model: &Model) -> View<Msg> {
     let (sw, sh) = model.screen;
@@ -244,6 +311,13 @@ pub fn root(model: &Model) -> View<Msg> {
             &data,
             &model.theme,
         ));
+    }
+
+    // Tarjetas flotantes (estilo conky), posicionadas en absoluto sobre la
+    // pantalla. En layer-shell cada una es su propia surface; acá (winit) viven
+    // en la ventana única.
+    for (card, ws) in &model.cards {
+        superficies.push(card_view_absolute(card, ws, &model.theme));
     }
 
     View::new(Style {
