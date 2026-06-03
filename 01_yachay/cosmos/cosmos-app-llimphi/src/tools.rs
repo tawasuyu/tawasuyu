@@ -142,31 +142,60 @@ pub(crate) fn tools_panel(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![scroll_box, rail])
+    .children(vec![rail, scroll_box])
 }
 
 // =====================================================================
 // Rail vertical de categorías (tabs estilo Photoshop)
 // =====================================================================
 
+/// Rail de categorías: tabs verticales **a la izquierda** del panel, sólo
+/// del alto de sus dientes (no toda la vertical), pegado arriba para no
+/// solapar con el lienzo. Cada diente lleva su icono; el activo va con un
+/// borde de acento a la izquierda (estilo pestaña).
 fn category_rail(model: &Model, theme: &Theme) -> View<Msg> {
     let mut btns: Vec<View<Msg>> = Vec::new();
     for cat in ToolCat::all() {
         let active = model.tool_cat == *cat;
-        let fg = if active { theme.accent } else { theme.fg_text };
-        let mut btn = View::new(Style {
+        let fg = if active { theme.accent } else { theme.fg_muted };
+        // Marca de acento a la izquierda del diente activo.
+        let accent_bar = View::new(Style {
             size: Size {
-                width: percent(1.0_f32),
-                height: length(46.0_f32),
+                width: length(3.0_f32),
+                height: length(40.0_f32),
             },
             flex_shrink: 0.0,
+            ..Default::default()
+        });
+        let accent_bar = if active {
+            accent_bar.fill(theme.accent).radius(2.0)
+        } else {
+            accent_bar
+        };
+        let icon_box = View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(0.0_f32),
+                height: length(42.0_f32),
+            },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
+        .children(vec![glyphs::icon_view(cat_icon(*cat), 20.0, fg)]);
+        let mut btn = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(42.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
         .hover_fill(theme.bg_row_hover)
         .on_click(Msg::SelectToolCat(*cat))
-        .children(vec![glyphs::icon_view(cat_icon(*cat), 20.0, fg)]);
+        .children(vec![accent_bar, icon_box]);
         if active {
             btn = btn.fill(theme.bg_selected);
         }
@@ -175,14 +204,16 @@ fn category_rail(model: &Model, theme: &Theme) -> View<Msg> {
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
+        // Alto auto = sólo los dientes; alineado arriba.
         size: Size {
             width: length(TOOLS_RAIL_W),
-            height: percent(1.0_f32),
+            height: Dimension::auto(),
         },
         flex_shrink: 0.0,
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
+    .radius(4.0)
     .children(btns)
 }
 
