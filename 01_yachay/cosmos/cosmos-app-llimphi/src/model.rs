@@ -580,6 +580,12 @@ pub(crate) enum Msg {
     RectifyRun,
     /// Aplica el mejor offset hallado a la hora de nacimiento de la carta.
     RectifyApply,
+    /// Elige la clave arco↔año (`true` = Naibod, `false` = Ptolomeo).
+    RectifySetKey(bool),
+    /// Cambia la edad de inspección de triggers en `delta` años.
+    RectifyAgeDelta(f64),
+    /// Recalcula los triggers GR a la edad de inspección.
+    RectifyTriggers,
     // diálogos modales (crear contacto / crear carta)
     OpenNewContactDialog,
     OpenNewChartDialog,
@@ -698,6 +704,12 @@ pub(crate) struct Model {
     pub(crate) rectify_events: Vec<f64>,
     /// Resultado del último barrido de rectificación.
     pub(crate) rectify_result: Option<cosmos_engine::Rectificacion>,
+    /// Clave arco↔año: `true` = Naibod (default), `false` = Ptolomeo.
+    pub(crate) rectify_naibod: bool,
+    /// Edad (años) a la que inspeccionar los triggers GR.
+    pub(crate) rectify_age: f64,
+    /// Triggers GR (contactos directo/converso) calculados a `rectify_age`.
+    pub(crate) rectify_triggers: Vec<cosmos_render::GrTrigger>,
     /// Diálogo modal abierto (crear contacto / crear carta), si lo hay.
     pub(crate) dialog: Option<crate::dialog::Dialog>,
     /// Campo del diálogo que tiene el foco de teclado.

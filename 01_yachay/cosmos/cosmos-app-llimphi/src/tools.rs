@@ -81,7 +81,9 @@ fn panel_rows(panel: ToolPanel, model: &Model) -> usize {
         ToolPanel::Mareas => 10,
         ToolPanel::Eclipses => 10,
         ToolPanel::Efemerides => 14,
-        ToolPanel::Rectificador => 8 + model.rectify_events.len() + 4,
+        ToolPanel::Rectificador => {
+            18 + model.rectify_events.len() + model.rectify_triggers.len()
+        }
         ToolPanel::Configuracion => 22,
     }
 }

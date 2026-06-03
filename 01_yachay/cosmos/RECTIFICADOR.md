@@ -53,6 +53,30 @@ del panel de herramientas.
    carta (`hour:minute:second`), marca la certeza como *exacta*, persiste
    la carta y recomputa. El jog vuelve a `0`.
 
+## Clave arco↔año
+
+El selector **Naibod / Ptolomeo** elige la conversión arco→tiempo:
+
+- **Naibod** — 0°59′08.33″/año (movimiento solar medio). Default moderno.
+- **Ptolomeo** — 1°/año (clásica).
+
+Afecta tanto el barrido (*Rectificar*) como los triggers GR. Cambiarla con
+triggers en pantalla los recalcula.
+
+## Triggers GR (HUD)
+
+Debajo del barrido, el HUD lista los **contactos del Sistema GR** a una
+**edad de inspección** (`-5 -1 +1 +5` años + `ver triggers`): cada fila es
+un promisor dirigido que cae sobre un punto natal —
+
+`promisor · D/C · objetivo · orbe`
+
+donde **D** = dirección directa y **C** = conversa. Las filas marcadas
+**«convergencia»** (en acento) son las señales fuertes: el mismo punto
+natal tocado por una directa y una conversa dentro del micro-orbe — el
+indicio de rectificación que el Sistema GR busca. Ajustá la edad a la de
+cada evento conocido y mirá si hay convergencia cerca.
+
 ## Lectura de la curva
 
 - Un **valle único y profundo** → rectificación confiable.
@@ -63,9 +87,7 @@ del panel de herramientas.
 
 ## Notas
 
-- La clave arco↔año por defecto es **Naibod** (0°59′08.33″/año, estándar
-  moderno). El motor también soporta **Ptolomeo** (1°/año); hoy el panel
-  usa Naibod.
+- La clave arco↔año se elige en el panel (Naibod por defecto).
 - La ventana del barrido es de **±2 h**. Si la hora registrada puede estar
   más lejos, conviene primero acercarse con el jog y luego rectificar.
 - El jog y el barrido **no modifican la carta** hasta que tocás *Aplicar*.

@@ -2077,6 +2077,15 @@ pub(crate) fn rectify_view(model: &Model, theme: &Theme) -> View<Msg> {
         mini_btn("0", Msg::RectifyResetOffset, true, theme),
     ]));
 
+    // Clave arco↔año.
+    rows.push(view::section_label("Clave arco↔año".to_string(), theme));
+    rows.push(segmented_view(
+        &["Naibod", "Ptolomeo"],
+        if model.rectify_naibod { 0 } else { 1 },
+        |i| Msg::RectifySetKey(i == 0),
+        &SegmentedPalette::from_theme(theme),
+    ));
+
     // Eventos conocidos.
     rows.push(view::section_label("Eventos conocidos (edad)".to_string(), theme));
     for (i, age) in model.rectify_events.iter().enumerate() {
@@ -2122,7 +2131,69 @@ pub(crate) fn rectify_view(model: &Model, theme: &Theme) -> View<Msg> {
         rows.push(profile_curve(&res.perfil, res.mejor_offset_segundos, theme));
     }
 
+    // HUD de triggers GR (contactos directo/converso a una edad).
+    rows.push(view::section_label(
+        format!("Triggers GR — edad {:.1} a", model.rectify_age),
+        theme,
+    ));
+    rows.push(mini_row(vec![
+        mini_btn("-5", Msg::RectifyAgeDelta(-5.0), true, theme),
+        mini_btn("-1", Msg::RectifyAgeDelta(-1.0), true, theme),
+        mini_btn("+1", Msg::RectifyAgeDelta(1.0), true, theme),
+        mini_btn("+5", Msg::RectifyAgeDelta(5.0), true, theme),
+        mini_btn("ver triggers", Msg::RectifyTriggers, true, theme),
+    ]));
+    for t in model.rectify_triggers.iter().take(24) {
+        let col = if t.event { theme.accent } else { theme.fg_text };
+        let dir = match t.direction {
+            cosmos_render::GrDirection::Direct => "D",
+            cosmos_render::GrDirection::Converse => "C",
+        };
+        let cells: Vec<View<Msg>> = vec![
+            glyphs::body_view(&t.promissor, 15.0, col),
+            txt_cell(dir.to_string(), 14.0, 11.0, theme.fg_muted),
+            glyphs::body_view(&t.natal_target, 15.0, col),
+            txt_cell(format!("{:.2}°", t.orb_deg), 52.0, 11.0, theme.fg_muted),
+            txt_cell(
+                if t.event { "convergencia".into() } else { String::new() },
+                80.0,
+                10.0,
+                theme.accent,
+            ),
+        ];
+        rows.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(20.0_f32),
+                },
+                flex_shrink: 0.0,
+                align_items: Some(AlignItems::Center),
+                gap: Size {
+                    width: length(4.0_f32),
+                    height: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(cells),
+        );
+    }
+
     view::tile_container(rows, theme)
+}
+
+/// Celda de texto de ancho fijo (alto auto, centrado vertical por la fila).
+fn txt_cell(text: String, w: f32, size: f32, color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(w),
+            height: auto(),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(text, size, color, Alignment::Start)
 }
 
 /// Curva del perfil de rectificación: error vs offset (su valle marca la

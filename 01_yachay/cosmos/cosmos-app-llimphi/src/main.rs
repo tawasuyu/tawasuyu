@@ -528,7 +528,8 @@ fn run_rectify(m: &mut Model) {
         .iter()
         .map(|&edad_years| cosmos_engine::EventoConocido { edad_years })
         .collect();
-    match cosmos_engine::rectificar(&m.chart, &eventos, 120, "naibod") {
+    let key = rectify_key(m);
+    match cosmos_engine::rectificar(&m.chart, &eventos, 120, key) {
         Ok(res) => {
             let secs = res.mejor_offset_segundos;
             m.status_note = Some(format!(
@@ -540,6 +541,33 @@ fn run_rectify(m: &mut Model) {
             m.rectify_result = Some(res);
         }
         Err(e) => m.error = Some(format!("rectificar: {e}")),
+    }
+}
+
+/// Clave arco↔año para el motor.
+fn rectify_key(m: &Model) -> &'static str {
+    if m.rectify_naibod {
+        "naibod"
+    } else {
+        "ptolemy"
+    }
+}
+
+/// Calcula los triggers GR (contactos directo/converso) a la edad de
+/// inspección, con la carta y el offset de jog actuales.
+fn compute_triggers(m: &mut Model) {
+    let req = cosmos_engine::PipelineRequest::PrimaryDirections {
+        target_age_years: m.rectify_age,
+        key: rectify_key(m).to_string(),
+    };
+    match cosmos_engine::compose(&m.chart, m.rectify_offset_min, &[req]) {
+        Ok(r) => {
+            m.rectify_triggers = r.gr_triggers;
+            if m.rectify_triggers.is_empty() {
+                m.status_note = Some(format!("Sin triggers GR a los {:.1} años", m.rectify_age));
+            }
+        }
+        Err(e) => m.error = Some(format!("triggers GR: {e}")),
     }
 }
 
@@ -894,6 +922,9 @@ impl App for Cosmos {
             rectify_offset_min: 0,
             rectify_events: Vec::new(),
             rectify_result: None,
+            rectify_naibod: true,
+            rectify_age: 30.0,
+            rectify_triggers: Vec::new(),
             dialog: None,
             dialog_field: dialog::DialogField::Name,
             dialog_input: llimphi_widget_text_input::TextInputState::new(),
@@ -1148,6 +1179,16 @@ impl App for Cosmos {
             }
             Msg::RectifyRun => run_rectify(&mut m),
             Msg::RectifyApply => apply_rectify(&mut m),
+            Msg::RectifySetKey(naibod) => {
+                m.rectify_naibod = naibod;
+                if !m.rectify_triggers.is_empty() {
+                    compute_triggers(&mut m);
+                }
+            }
+            Msg::RectifyAgeDelta(d) => {
+                m.rectify_age = (m.rectify_age + d).clamp(0.0, 120.0);
+            }
+            Msg::RectifyTriggers => compute_triggers(&mut m),
             // diálogos modales
             Msg::OpenNewContactDialog => open_contact_dialog(&mut m),
             Msg::OpenNewChartDialog => open_chart_dialog(&mut m),
