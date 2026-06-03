@@ -445,6 +445,44 @@ impl DrmState {
             .unwrap_or(Self::PRIMARY)
     }
 
+    /// Acota un punto al **interior de algún output**, respetando la geometría
+    /// real. Si `(x, y)` ya cae sobre un output, se devuelve tal cual; si no
+    /// (zona muerta entre rects de distinto tamaño), se proyecta al borde
+    /// del output euclídeamente más cercano. Sin esto, el cursor podía
+    /// quedar atrapado en zonas que ninguna salida pinta — el usuario lo ve
+    /// como un cursor fantasma sobre fondo negro.
+    fn clamp_to_outputs(&self, x: f64, y: f64) -> (f64, f64) {
+        let xi = x.round() as i32;
+        let yi = y.round() as i32;
+        if self.outputs.iter().any(|o| {
+            xi >= o.rect.x
+                && yi >= o.rect.y
+                && xi < o.rect.x + o.rect.w
+                && yi < o.rect.y + o.rect.h
+        }) {
+            return (x, y);
+        }
+        // El menor cuadrado-distancia al rect proyecta `(x, y)` al borde.
+        let mut best = (self.outputs[Self::PRIMARY].rect, f64::INFINITY);
+        for o in &self.outputs {
+            let r = o.rect;
+            if r.w <= 0 || r.h <= 0 {
+                continue;
+            }
+            let cx = x.clamp(r.x as f64, (r.x + r.w - 1) as f64);
+            let cy = y.clamp(r.y as f64, (r.y + r.h - 1) as f64);
+            let d = (x - cx).powi(2) + (y - cy).powi(2);
+            if d < best.1 {
+                best = (r, d);
+            }
+        }
+        let r = best.0;
+        (
+            x.clamp(r.x as f64, (r.x + r.w - 1) as f64),
+            y.clamp(r.y as f64, (r.y + r.h - 1) as f64),
+        )
+    }
+
     /// El área útil (rect menos reservas del shell) **de una salida concreta**.
     /// Las reservas son globales: hoy el shell vive en la primaria, así que
     /// sólo a ella se le descuentan. Devuelve rect en coords globales.
@@ -1192,9 +1230,13 @@ impl DrmState {
 
             // --- Puntero: movimiento relativo (ratón, touchpad) ----------
             InputEvent::PointerMotion { event } => {
-                let (mut x, mut y) = self.app.pointer_loc;
-                x = (x + event.delta_x()).clamp(0.0, self.output_size.0);
-                y = (y + event.delta_y()).clamp(0.0, self.output_size.1);
+                let (x0, y0) = self.app.pointer_loc;
+                // Pre-acotado al bounding box: descarta los outliers extremos
+                // sin hacer rondas innecesarias en `clamp_to_outputs`.
+                let x = (x0 + event.delta_x()).clamp(0.0, self.output_size.0);
+                let y = (y0 + event.delta_y()).clamp(0.0, self.output_size.1);
+                // Proyectado al output más cercano si cayó en zona muerta.
+                let (x, y) = self.clamp_to_outputs(x, y);
                 self.app.pointer_loc = (x, y);
                 if self.root_menu.is_some() {
                     // El menú vive en coords locales a su salida.
@@ -1218,10 +1260,9 @@ impl DrmState {
                     self.output_size.1 as i32,
                 ));
                 let pos = event.position_transformed(space);
-                self.app.pointer_loc = (
-                    pos.x.clamp(0.0, self.output_size.0),
-                    pos.y.clamp(0.0, self.output_size.1),
-                );
+                let x = pos.x.clamp(0.0, self.output_size.0);
+                let y = pos.y.clamp(0.0, self.output_size.1);
+                self.app.pointer_loc = self.clamp_to_outputs(x, y);
                 if self.root_menu.is_some() {
                     let (x, y) = self.app.pointer_loc;
                     let idx = self.menu_output_idx.unwrap_or(Self::PRIMARY);
