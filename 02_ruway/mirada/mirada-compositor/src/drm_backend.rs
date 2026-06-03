@@ -1696,6 +1696,47 @@ impl DrmState {
         })
     }
 
+    /// Reenumera los conectores DRM y reporta cómo difieren de
+    /// [`Self::outputs`]: conectores Connected sin OutputCtx (un monitor
+    /// nuevo se enchufó) y OutputCtx cuyos conectores ya no están
+    /// Connected (un monitor se desenchufó). **Hoy sólo loguea** —crear y
+    /// destruir un `DrmCompositor` en caliente exige refactor de la
+    /// disposición global y del registro `App.outputs`; la detección queda
+    /// como zócalo para enchufarle la acción más tarde.
+    fn detect_connector_changes(&mut self) {
+        let resources = match self.drm.resource_handles() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("mirada-compositor · hotplug · no pude releer DRM: {e}");
+                return;
+            }
+        };
+        // Mapa nombre→Connected actual del kernel.
+        let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for &h in resources.connectors() {
+            let Ok(c) = self.drm.get_connector(h, false) else {
+                continue;
+            };
+            if c.state() == ConnectorState::Connected {
+                live.insert(format!("{:?}-{}", c.interface(), c.interface_id()));
+            }
+        }
+        // Conectores que se conectaron tras el arranque: no hay OutputCtx.
+        let known: std::collections::HashSet<String> =
+            self.outputs.iter().map(|o| o.name.clone()).collect();
+        for new in live.difference(&known) {
+            println!(
+                "mirada-compositor · hotplug · monitor «{new}» enchufado — TODO: añadir OutputCtx"
+            );
+        }
+        // OutputCtx cuyos conectores se desenchufaron: no llegan más VBlanks.
+        for gone in known.difference(&live) {
+            println!(
+                "mirada-compositor · hotplug · monitor «{gone}» desenchufado — TODO: drop OutputCtx + brain.remove_output"
+            );
+        }
+    }
+
     /// Work rect del monitor bajo el puntero — el "lienzo" de zonas para
     /// arrastres. Multi-monitor: los zonas se escalan al monitor donde
     /// está la acción, no al desktop global.
@@ -2031,6 +2072,39 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             DrmEvent::Error(e) => eprintln!("mirada-compositor · DRM: {e}"),
         })
         .map_err(|e| format!("insert drm: {e}"))?;
+
+    // Hotplug: udev notifica cuando un monitor se conecta/desconecta. Hoy
+    // sólo *detectamos* y logueamos la diferencia con los `outputs` actuales —
+    // crear/destruir un `OutputCtx` en caliente exige reconstruir el
+    // DrmSurface + DrmCompositor + smithay::Output desde dentro del bucle,
+    // refactor pendiente. Mientras tanto, el log avisa al usuario y queda
+    // como zócalo para enchufarle la creación dinámica.
+    let udev = match smithay::backend::udev::UdevBackend::new(&seat_name) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("mirada-compositor · UdevBackend no arranca ({e}); sin hotplug");
+            return Err(format!("insert drm: udev: {e}").into());
+        }
+    };
+    handle
+        .insert_source(udev, |event, _meta, state| {
+            use smithay::backend::udev::UdevEvent;
+            match event {
+                UdevEvent::Added { device_id, path } => {
+                    println!(
+                        "mirada-compositor · hotplug · GPU añadida: {} ({device_id:?}) — TODO: enumerar",
+                        path.display()
+                    );
+                }
+                UdevEvent::Changed { device_id: _ } => state.detect_connector_changes(),
+                UdevEvent::Removed { device_id, .. } => {
+                    println!(
+                        "mirada-compositor · hotplug · GPU retirada ({device_id:?}) — TODO: drop output_ctxs"
+                    );
+                }
+            }
+        })
+        .map_err(|e| format!("insert udev: {e}"))?;
 
     // Teclado y ratón vía libinput. Guardamos un clon del contexto (es
     // un manejador con contador de referencias) para suspenderlo y
