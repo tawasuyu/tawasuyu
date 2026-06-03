@@ -390,6 +390,29 @@ impl DrmState {
                 }
             }
 
+            // Pista de revelado del dock autoescondido: una franja fina en el
+            // borde anclado mientras está oculto, para indicar dónde acercar el
+            // puntero para revelarlo.
+            if crate::shell_dock().autohide && self.app.shell_hidden {
+                let (ow, oh) = self.app.output_size;
+                if ow > 0 && oh > 0 {
+                    let dock = crate::shell_dock();
+                    let limite = if dock.anchor.es_horizontal() { oh } else { ow };
+                    let t = dock.thickness.clamp(1, limite.max(1));
+                    let (bx, by, bw, bh) =
+                        crate::shell_reveal_band(dock.anchor, ow, oh, t, crate::SHELL_REVEAL_BAND);
+                    let mut band = SolidColorBuffer::default();
+                    band.update((bw, bh), menu_hl_color);
+                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &band,
+                        (bx, by),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                }
+            }
+
             // Layer surfaces (waybar, swaybg…): los Overlay/Top van encima
             // de las ventanas; los Bottom/Background, debajo. Front-to-back.
             let (over_layers, under_layers) =
@@ -688,6 +711,7 @@ impl DrmState {
                     m.update_hover(x.round() as i32, y.round() as i32);
                     return; // con el menú abierto, el puntero lo navega
                 }
+                self.app.update_shell_autohide(x, y);
                 if !self.drag_update() {
                     self.pointer_motion(time);
                 }
@@ -709,6 +733,8 @@ impl DrmState {
                     m.update_hover(x.round() as i32, y.round() as i32);
                     return; // con el menú abierto, el puntero lo navega
                 }
+                let (x, y) = self.app.pointer_loc;
+                self.app.update_shell_autohide(x, y);
                 if !self.drag_update() {
                     self.pointer_motion(time);
                 }

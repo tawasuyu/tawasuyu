@@ -151,11 +151,19 @@ impl ShellAnchor {
 /// - `MIRADA_SHELL_APP_ID` — identidad de la ventana-marco (default `gioser.pata`).
 /// - `MIRADA_SHELL_ANCHOR` — borde (`top`/`bottom`/`left`/`right`, default `bottom`).
 /// - `MIRADA_SHELL_THICKNESS` — grosor en px (default `40`).
+/// - `MIRADA_SHELL_AUTOHIDE` — `1`/`true` para autoesconder el dock: nunca
+///   reserva su franja (las ventanas usan toda la pantalla) y sólo se muestra,
+///   superpuesto, al acercar el puntero al borde anclado.
 struct ShellDock {
     app_id: String,
     anchor: ShellAnchor,
     thickness: i32,
+    autohide: bool,
 }
+
+/// Banda fina (px) del borde anclado que revela el dock autoescondido, y
+/// grosor de la sutil franja-pista que se pinta mientras está oculto.
+const SHELL_REVEAL_BAND: i32 = 3;
 
 /// La config del shell, leída del entorno la primera vez que se consulta.
 fn shell_dock() -> &'static ShellDock {
@@ -171,10 +179,14 @@ fn shell_dock() -> &'static ShellDock {
             .and_then(|s| s.trim().parse::<i32>().ok())
             .filter(|t| *t > 0)
             .unwrap_or(SHELL_DOCK_DEFAULT);
+        let autohide = std::env::var("MIRADA_SHELL_AUTOHIDE")
+            .map(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
         ShellDock {
             app_id,
             anchor,
             thickness,
+            autohide,
         }
     })
 }
@@ -204,6 +216,48 @@ fn shell_insets(anchor: ShellAnchor, t: i32) -> (i32, i32, i32, i32) {
         ShellAnchor::Bottom => (0, t, 0, 0),
         ShellAnchor::Left => (0, 0, t, 0),
         ShellAnchor::Right => (0, 0, 0, t),
+    }
+}
+
+/// La franja-pista `(x, y, w, h)` que se pinta en el borde mientras el dock
+/// autoescondido está oculto: una banda fina de grosor `band` pegada al borde
+/// anclado, a lo ancho/alto de la franja del dock. Pura.
+fn shell_reveal_band(anchor: ShellAnchor, ow: i32, oh: i32, t: i32, band: i32) -> (i32, i32, i32, i32) {
+    let (sx, sy, sw, sh) = shell_strip(anchor, ow, oh, t);
+    match anchor {
+        ShellAnchor::Top => (sx, 0, sw, band),
+        ShellAnchor::Bottom => (sx, oh - band, sw, band),
+        ShellAnchor::Left => (0, sy, band, sh),
+        ShellAnchor::Right => (ow - band, sy, band, sh),
+    }
+}
+
+/// Decide el próximo estado oculto/visible del dock autoescondido según el
+/// puntero. Asimétrico (con histéresis): si está oculto, sólo se revela al
+/// tocar la banda fina del borde (`edge_band`); si está visible, sólo se
+/// oculta cuando el puntero sale de la franja completa del dock. Pura.
+fn autohide_next_hidden(
+    anchor: ShellAnchor,
+    ow: i32,
+    oh: i32,
+    t: i32,
+    px: i32,
+    py: i32,
+    hidden: bool,
+    edge_band: i32,
+) -> bool {
+    let (sx, sy, sw, sh) = shell_strip(anchor, ow, oh, t);
+    let over_strip = px >= sx && px < sx + sw && py >= sy && py < sy + sh;
+    let at_edge = match anchor {
+        ShellAnchor::Top => py <= edge_band,
+        ShellAnchor::Bottom => py >= oh - edge_band,
+        ShellAnchor::Left => px <= edge_band,
+        ShellAnchor::Right => px >= ow - edge_band,
+    };
+    if hidden {
+        !at_edge
+    } else {
+        !over_strip
     }
 }
 
@@ -297,6 +351,9 @@ struct App {
     /// Tamaño real de la salida (con la franja del shell incluida) — lo
     /// fija el backend; sirve para acoplar la ventana del shell.
     output_size: (i32, i32),
+    /// Con el dock autoescondido (`MIRADA_SHELL_AUTOHIDE`), si está oculto
+    /// ahora. Sin autohide se ignora. El puntero cerca del borde lo alterna.
+    shell_hidden: bool,
 
     /// Ventanas gestionadas, en orden de aparición.
     windows: Vec<ManagedWindow>,
@@ -719,11 +776,13 @@ impl App {
         let t = dock.thickness.clamp(1, limite.max(1));
 
         // Dimensiona la ventana del shell y la fija en la franja del borde.
+        // Con autohide, su visibilidad la decide el puntero (estado actual).
+        let visible = !(dock.autohide && self.shell_hidden);
         if let Some(w) = self.windows.iter_mut().find(|w| w.is_shell) {
             let (x, y, sw, sh) = shell_strip(dock.anchor, ow, oh, t);
             w.loc = (x, y);
             w.size = (sw, sh);
-            w.visible = true;
+            w.visible = visible;
             w.toplevel.with_pending_state(|s| {
                 s.size = Some((sw.max(1), sh.max(1)).into());
             });
@@ -752,9 +811,10 @@ impl App {
             right += (ow - (z.loc.x + z.size.w)).max(0);
             bottom += (oh - (z.loc.y + z.size.h)).max(0);
         }
-        // Franja del shell (pata), si está acoplado.
-        if self.windows.iter().any(|w| w.is_shell) {
-            let dock = shell_dock();
+        // Franja del shell (pata), si está acoplado. Con autohide el dock
+        // nunca reserva: se superpone al revelarse, las ventanas usan todo.
+        let dock = shell_dock();
+        if !dock.autohide && self.windows.iter().any(|w| w.is_shell) {
             let limite = if dock.anchor.es_horizontal() { oh } else { ow };
             let t = dock.thickness.clamp(1, limite.max(1));
             let (st, sb, sl, sr) = shell_insets(dock.anchor, t);
@@ -765,6 +825,41 @@ impl App {
         }
         let ev = self.body.reserve_output(0, top, bottom, left, right);
         self.brain_feed(ev);
+    }
+
+    /// Con el dock autoescondido, ajusta su visibilidad según el puntero
+    /// `(px, py)`: se revela al tocar la banda del borde anclado y se oculta al
+    /// salir de su franja. Devuelve `true` si el estado cambió (el backend lo
+    /// usa para recomponer). No-op sin autohide o sin dock acoplado.
+    fn update_shell_autohide(&mut self, px: f64, py: f64) -> bool {
+        let dock = shell_dock();
+        if !dock.autohide {
+            return false;
+        }
+        let (ow, oh) = self.output_size;
+        if ow == 0 || oh == 0 || !self.windows.iter().any(|w| w.is_shell) {
+            return false;
+        }
+        let limite = if dock.anchor.es_horizontal() { oh } else { ow };
+        let t = dock.thickness.clamp(1, limite.max(1));
+        let next = autohide_next_hidden(
+            dock.anchor,
+            ow,
+            oh,
+            t,
+            px.round() as i32,
+            py.round() as i32,
+            self.shell_hidden,
+            SHELL_REVEAL_BAND,
+        );
+        if next == self.shell_hidden {
+            return false;
+        }
+        self.shell_hidden = next;
+        if let Some(w) = self.windows.iter_mut().find(|w| w.is_shell) {
+            w.visible = !next;
+        }
+        true
     }
 
     /// El backend informa de un tamaño de salida nuevo (arranque o
@@ -1849,6 +1944,8 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         cursor_status: CursorImageStatus::default_named(),
         drag: None,
         output_size: (0, 0),
+        // Con autohide, el dock arranca oculto (se revela al tocar el borde).
+        shell_hidden: shell_dock().autohide,
         windows: Vec::new(),
         body: BodyState::new(),
         brain,
@@ -2260,5 +2357,33 @@ mod tests {
         assert_eq!(shell_insets(ShellAnchor::Bottom, 40), (0, 40, 0, 0));
         assert_eq!(shell_insets(ShellAnchor::Left, 48), (0, 0, 48, 0));
         assert_eq!(shell_insets(ShellAnchor::Right, 48), (0, 0, 0, 48));
+    }
+
+    #[test]
+    fn autohide_bottom_revela_en_el_borde_y_oculta_al_salir() {
+        let (ow, oh, t, b) = (800, 600, 40, SHELL_REVEAL_BAND);
+        // Oculto: sólo tocar la banda del borde inferior revela.
+        assert!(!autohide_next_hidden(ShellAnchor::Bottom, ow, oh, t, 400, 599, true, b));
+        assert!(autohide_next_hidden(ShellAnchor::Bottom, ow, oh, t, 400, 300, true, b));
+        // Visible: se mantiene sobre la franja (y∈[560,600)), se oculta al salir.
+        assert!(!autohide_next_hidden(ShellAnchor::Bottom, ow, oh, t, 400, 570, false, b));
+        assert!(autohide_next_hidden(ShellAnchor::Bottom, ow, oh, t, 400, 500, false, b));
+    }
+
+    #[test]
+    fn autohide_top_usa_el_borde_superior() {
+        let (ow, oh, t, b) = (800, 600, 30, SHELL_REVEAL_BAND);
+        assert!(!autohide_next_hidden(ShellAnchor::Top, ow, oh, t, 400, 1, true, b));
+        assert!(autohide_next_hidden(ShellAnchor::Top, ow, oh, t, 400, 200, true, b));
+        assert!(!autohide_next_hidden(ShellAnchor::Top, ow, oh, t, 400, 10, false, b));
+        assert!(autohide_next_hidden(ShellAnchor::Top, ow, oh, t, 400, 100, false, b));
+    }
+
+    #[test]
+    fn banda_de_revelado_pegada_al_borde() {
+        // Bottom: 3px abajo, a todo el ancho.
+        assert_eq!(shell_reveal_band(ShellAnchor::Bottom, 800, 600, 40, 3), (0, 597, 800, 3));
+        // Right: 3px a la derecha, a todo el alto.
+        assert_eq!(shell_reveal_band(ShellAnchor::Right, 800, 600, 40, 3), (797, 0, 3, 600));
     }
 }
