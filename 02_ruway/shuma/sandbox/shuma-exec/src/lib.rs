@@ -384,6 +384,54 @@ impl RunHandle {
     pub fn is_finished(&self) -> bool {
         self.finished
     }
+
+    /// Asa "fría" para controlar el PTY (stdin + resize) desde otra
+    /// tarea/hilo sin tocar el lock de eventos — espejo de [`Killer`]
+    /// para el lado de entrada. La usa el daemon: el `RunHandle` se mueve
+    /// a un hilo-puente que bloquea en `next_event()`, mientras la tarea
+    /// async conserva este `PtyControl` para reenviar las teclas y los
+    /// resize que llegan del cliente remoto.
+    pub fn pty_control(&self) -> PtyControl {
+        PtyControl {
+            stdin_tx: self.stdin_tx.clone(),
+            pty_master: Arc::clone(&self.pty_master),
+        }
+    }
+}
+
+/// Asa cloneable de **control de entrada** de un run PTY: escribe stdin y
+/// reescala, sin compartir el lock de eventos del [`RunHandle`]. Igual que
+/// con [`RunHandle::write_input`]/[`RunHandle::resize`], las operaciones
+/// son no-op fuera de modo [`Exec::Pty`].
+#[derive(Clone)]
+pub struct PtyControl {
+    stdin_tx: Sender<Vec<u8>>,
+    pty_master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+}
+
+impl PtyControl {
+    /// Escribe bytes en el stdin del PTY. Ver [`RunHandle::write_input`].
+    pub fn write_input(&self, bytes: Vec<u8>) -> bool {
+        self.stdin_tx.send(bytes).is_ok()
+    }
+
+    /// Reescala el PTY. Ver [`RunHandle::resize`].
+    pub fn resize(&self, rows: u16, cols: u16) -> bool {
+        let Ok(mut guard) = self.pty_master.lock() else {
+            return false;
+        };
+        let Some(master) = guard.as_mut() else {
+            return false;
+        };
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .is_ok()
+    }
 }
 
 /// Vuelca el resto de un pipe a un archivo con **copia cero** (`splice`):

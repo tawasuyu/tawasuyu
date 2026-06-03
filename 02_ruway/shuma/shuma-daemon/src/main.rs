@@ -365,6 +365,11 @@ async fn handle_client(
             handle_exec_stream(&mut stream, cwd, exec, capture_limit_bytes, stdin_data, capture_stages).await?;
             continue;
         }
+        // PTY remoto: la conexión pasa a modo full-duplex y se consume
+        // hasta el exit (cierra al terminar, como el path cifrado).
+        if let Request::ExecPty { cwd, program, args, rows, cols } = req {
+            return handle_pty_stream(stream, cwd, program, args, rows, cols).await;
+        }
 
         let resp = dispatch(&mgr, &disc, &pool, daemon_started, req).await;
         write_frame(&mut stream, &resp).await?;
@@ -488,6 +493,172 @@ fn exec_event_to_response(ev: shuma_exec::RunEvent) -> Response {
     }
 }
 
+/// Traductor del lado PTY: lo que produce `Exec::Pty` son `Bytes` crudos
+/// (la salida del terminal); el resto de variantes no debería aparecer.
+fn pty_event_to_response(ev: shuma_exec::RunEvent) -> Response {
+    match ev {
+        shuma_exec::RunEvent::Bytes(b) => Response::ExecBytes(b),
+        shuma_exec::RunEvent::Exited(c) => Response::ExecExited(c),
+        shuma_exec::RunEvent::Failed(m) => Response::ExecFailed(m),
+        // Un PTY captura a su propia pantalla (vt100), no a buffers de
+        // línea; estas variantes no deberían darse. Si pasan, las
+        // reemitimos como bytes para no perderlas.
+        shuma_exec::RunEvent::Stdout(l) | shuma_exec::RunEvent::Stderr(l) => {
+            Response::ExecBytes(l.into_bytes())
+        }
+        shuma_exec::RunEvent::StageStdout { line, .. } => Response::ExecBytes(line.into_bytes()),
+        shuma_exec::RunEvent::Truncated | shuma_exec::RunEvent::Spilled(_) => {
+            Response::ExecBytes(Vec::new())
+        }
+    }
+}
+
+/// Subprotocolo `ExecPty` (texto plano): spawnea un PTY y multiplexa la
+/// conexión en full-duplex. Una **tarea lectora** dedicada decodifica los
+/// frames del cliente (`PtyInput`/`PtyResize`) y maneja el PTY, mientras
+/// el loop principal escribe la salida del terminal (`ExecBytes`). Separar
+/// lectura y escritura en mitades owned evita cancelar un `read_frame` a
+/// mitad de frame (cancel-safety) sin malabares de borrow.
+async fn handle_pty_stream(
+    stream: UnixStream,
+    cwd: String,
+    program: String,
+    args: Vec<String>,
+    rows: u16,
+    cols: u16,
+) -> anyhow::Result<()> {
+    let spec = pty_spec(cwd, program, args, rows, cols);
+    let mut handle = shuma_exec::run(&spec);
+    let killer = handle.killer();
+    let pty = handle.pty_control();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<shuma_exec::RunEvent>();
+    let _bridge = std::thread::spawn(move || {
+        while let Some(ev) = handle.next_event() {
+            if tx.send(ev).is_err() {
+                return;
+            }
+        }
+    });
+
+    let (mut rd, mut wr) = tokio::io::split(stream);
+    // Tarea lectora: drena frames del cliente y maneja el PTY directo.
+    let reader = tokio::spawn(async move {
+        loop {
+            match read_frame::<Request, _>(&mut rd).await {
+                Ok(Request::PtyInput { bytes }) => {
+                    pty.write_input(bytes);
+                }
+                Ok(Request::PtyResize { rows, cols }) => {
+                    pty.resize(rows, cols);
+                }
+                Ok(_) => {} // frame fuera del protocolo PTY: ignorar
+                Err(_) => {
+                    // EOF/error = cliente cerró → matar el PTY (SSH).
+                    killer.kill();
+                    break;
+                }
+            }
+        }
+    });
+
+    // Loop de escritura: salida del terminal hasta el terminal.
+    while let Some(ev) = rx.recv().await {
+        let terminal = matches!(
+            ev,
+            shuma_exec::RunEvent::Exited(_) | shuma_exec::RunEvent::Failed(_)
+        );
+        let resp = pty_event_to_response(ev);
+        if write_frame(&mut wr, &resp).await.is_err() {
+            break;
+        }
+        if terminal {
+            break;
+        }
+    }
+    reader.abort();
+    Ok(())
+}
+
+/// Versión cifrada de [`handle_pty_stream`]. Consume el `FramedChannel`
+/// (el `split` es owned) y usa sus mitades `FramedReader`/`FramedWriter`.
+async fn handle_pty_stream_enc<S>(
+    ch: FramedChannel<S>,
+    cwd: String,
+    program: String,
+    args: Vec<String>,
+    rows: u16,
+    cols: u16,
+) -> anyhow::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let spec = pty_spec(cwd, program, args, rows, cols);
+    let mut handle = shuma_exec::run(&spec);
+    let killer = handle.killer();
+    let pty = handle.pty_control();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<shuma_exec::RunEvent>();
+    let _bridge = std::thread::spawn(move || {
+        while let Some(ev) = handle.next_event() {
+            if tx.send(ev).is_err() {
+                return;
+            }
+        }
+    });
+
+    let (mut rd, mut wr) = ch.split();
+    let reader = tokio::spawn(async move {
+        loop {
+            match rd.recv_postcard::<Request>().await {
+                Ok(Request::PtyInput { bytes }) => {
+                    pty.write_input(bytes);
+                }
+                Ok(Request::PtyResize { rows, cols }) => {
+                    pty.resize(rows, cols);
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    killer.kill();
+                    break;
+                }
+            }
+        }
+    });
+
+    while let Some(ev) = rx.recv().await {
+        let terminal = matches!(
+            ev,
+            shuma_exec::RunEvent::Exited(_) | shuma_exec::RunEvent::Failed(_)
+        );
+        let resp = pty_event_to_response(ev);
+        if wr.send_postcard(&resp).await.is_err() {
+            break;
+        }
+        if terminal {
+            break;
+        }
+    }
+    reader.abort();
+    Ok(())
+}
+
+/// `CommandSpec` para un PTY remoto — común a los dos handlers.
+fn pty_spec(
+    cwd: String,
+    program: String,
+    args: Vec<String>,
+    rows: u16,
+    cols: u16,
+) -> shuma_exec::CommandSpec {
+    shuma_exec::CommandSpec {
+        exec: shuma_exec::Exec::Pty { program, args, cols, rows },
+        cwd,
+        capture_limit: 0,
+        spill_path: None,
+        stdin_data: None,
+        capture_stages: false,
+    }
+}
+
 /// Atiende una conexión TCP autenticada por Noise XK.
 ///
 /// Flujo:
@@ -539,6 +710,12 @@ async fn handle_enc_client(
         if let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data, capture_stages } = req {
             handle_exec_stream_enc(&mut ch, cwd, exec, capture_limit_bytes, stdin_data, capture_stages).await?;
             continue;
+        }
+        // PTY remoto cifrado: consume el canal (el split es owned) y cierra
+        // la conexión al terminar — el cliente abre una conexión dedicada
+        // por sesión PTY, igual que con los runs no-PTY.
+        if let Request::ExecPty { cwd, program, args, rows, cols } = req {
+            return handle_pty_stream_enc(ch, cwd, program, args, rows, cols).await;
         }
 
         let resp = dispatch(&mgr, &disc, &pool, daemon_started, req).await;
@@ -678,8 +855,16 @@ fn audit_request(peer: &str, req: &Request) {
             };
             ("exec.stream", format!("cwd={cwd} {summary}"))
         }
-        // Reads (no audit):
-        Request::Ping
+        Request::ExecPty { cwd, program, args, .. } => (
+            "exec.pty",
+            format!("cwd={cwd} {program} {}", args.join(" ")),
+        ),
+        // Reads / alta frecuencia (no audit). Las teclas y resizes de un
+        // PTY no se auditan línea a línea — la apertura (`exec.pty`) ya
+        // quedó registrada.
+        Request::PtyInput { .. }
+        | Request::PtyResize { .. }
+        | Request::Ping
         | Request::Health
         | Request::WorkspaceList
         | Request::WorkspaceStats { .. }
@@ -1073,11 +1258,15 @@ async fn dispatch(
             }
         }
 
-        // `ExecStream` se atiende inline en `handle_client` con el
-        // subprotocolo de streaming; nunca debería llegar aquí. Si lo
-        // hace, devolvemos un error explícito en vez de panic.
-        Request::ExecStream { .. } => Response::Error {
-            message: "ExecStream debe atenderse en handle_client; no por dispatch".into(),
+        // `ExecStream`/`ExecPty` se atienden inline en `handle_client` con
+        // sus subprotocolos; los frames `PtyInput`/`PtyResize` sólo viven
+        // dentro de un `ExecPty` ya en curso. Nunca deberían llegar a
+        // `dispatch` (request/response 1:1). Si lo hacen, error explícito.
+        Request::ExecStream { .. }
+        | Request::ExecPty { .. }
+        | Request::PtyInput { .. }
+        | Request::PtyResize { .. } => Response::Error {
+            message: "frame de streaming/PTY fuera de su subprotocolo; no por dispatch".into(),
         },
     }
 }

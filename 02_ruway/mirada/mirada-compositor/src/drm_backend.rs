@@ -390,8 +390,13 @@ struct DrmState {
     wallpaper_fit: mirada_brain::WallpaperFit,
     /// Árbol del menú raíz (de la config), con submenús anidados.
     menu_entries: Vec<crate::menu::MenuNode>,
-    /// Menú raíz abierto, si lo hay (click derecho sobre el fondo).
+    /// Menú raíz abierto, si lo hay (click derecho sobre el fondo). Sus
+    /// coordenadas son **locales** a la salida [`Self::menu_output_idx`]:
+    /// el menú se abre en el monitor donde se hizo right-click.
     root_menu: Option<crate::menu::RootMenu>,
+    /// Índice de la salida en la que vive el menú raíz abierto. `None` =
+    /// no hay menú.
+    menu_output_idx: Option<usize>,
     /// Zonas de arrastre activas (fracciones del área útil) — el preset actual.
     zones: Vec<ZoneFrac>,
     /// Todos los presets de zonas (preset 0 = `config.zones`, luego
@@ -424,19 +429,51 @@ impl DrmState {
         self.outputs.iter().position(|o| o.crtc == crtc)
     }
 
-    /// Compone el cursor y las ventanas en la salida primaria, y wallpapers
-    /// en las secundarias. Si hubo cambios, encola el cuadro de cada salida.
+    /// Índice de la salida que contiene el punto global `(gx, gy)`. Si el
+    /// punto cae en zona muerta entre rects (puede pasar con salidas de
+    /// distinto tamaño dispuestas side-by-side), devuelve la primaria.
+    fn output_at_point(&self, gx: i32, gy: i32) -> usize {
+        self.outputs
+            .iter()
+            .position(|o| {
+                gx >= o.rect.x
+                    && gy >= o.rect.y
+                    && gx < o.rect.x + o.rect.w
+                    && gy < o.rect.y + o.rect.h
+            })
+            .unwrap_or(Self::PRIMARY)
+    }
+
+    /// El área útil (rect menos reservas del shell) **de una salida concreta**.
+    /// Las reservas son globales: hoy el shell vive en la primaria, así que
+    /// sólo a ella se le descuentan. Devuelve rect en coords globales.
+    fn output_work_rect(&self, idx: usize) -> Rect {
+        let o = &self.outputs[idx];
+        if idx == Self::PRIMARY {
+            let (top, bottom, left, right) = self.app.reserved;
+            Rect::new(
+                o.rect.x + left,
+                o.rect.y + top,
+                (o.rect.w - left - right).max(1),
+                (o.rect.h - top - bottom).max(1),
+            )
+        } else {
+            o.rect
+        }
+    }
+
+    /// Compone un cuadro por cada salida y avisa a los clientes una sola vez.
+    /// Si una salida tiene su `pending_flip` puesto, se saltea hasta el
+    /// próximo VBlank. Refresca los búferes de marco una vez al principio.
     fn render(&mut self) {
         if !self.active {
             return; // la sesión está en otra VT — no tocamos la GPU
         }
-        // Primario: pipeline completo (windows, layers, menú, zonas, HUD).
-        self.render_primary();
-        // Secundarias: sólo wallpaper. Las ventanas/layer-shell se quedan en
-        // primario hasta tener distribución global.
-        for i in 1..self.outputs.len() {
-            self.render_secondary(i);
+        self.refresh_window_borders();
+        for i in 0..self.outputs.len() {
+            self.render_output(i);
         }
+        self.send_frames_to_clients();
     }
 
     /// Si el puntero global cae sobre `rect`, emite el cursor en coordenadas
@@ -602,27 +639,271 @@ impl DrmState {
         }
     }
 
-    /// Render del pipeline completo en la salida primaria.
-    fn render_primary(&mut self) {
-        if self.outputs[Self::PRIMARY].pending_flip {
-            return; // aún esperamos el VBlank del cuadro anterior
+    /// Emite el HUD del preset activo en la salida `rect` — un panel discreto
+    /// arriba al centro de la salida (no del escritorio global) mientras dure
+    /// la ventana de feedback. Si el deadline pasó, limpia el estado. Llamar
+    /// sólo en la salida dueña del HUD (hoy la primaria).
+    fn emit_hud(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        let Some(deadline) = self.preset_hud_until else {
+            return;
+        };
+        if Instant::now() >= deadline {
+            self.preset_hud_until = None;
+            return;
         }
-        // `output_h` se usa para anclar el shell al borde inferior; el shell
-        // vive en la primaria, así que usamos su altura, no la total.
-        let output_h = self.outputs[Self::PRIMARY].rect.h;
+        let Some(tr) = &self.text else { return };
+        if self.preset_hud_label.is_empty() {
+            return;
+        }
+        let Some(r) = tr.rasterize(&self.preset_hud_label, HUD_TEXT_PX, HUD_TEXT_COLOR) else {
+            return;
+        };
+        let tw = r.width;
+        let th = r.height;
+        let panel_w = tw + 2 * HUD_PAD;
+        let panel_h = th.max(HUD_TEXT_PX as i32) + 2 * HUD_PAD;
+        // Centra el panel en el ancho de la salida (no del escritorio total),
+        // en coords locales — el frame de esta salida arranca en (0,0).
+        let panel_x = ((rect.w - panel_w) / 2).max(0);
+        let panel_y = HUD_TOP;
+        let tx = panel_x + (panel_w - tw) / 2;
+        let ty = panel_y + (panel_h - th) / 2;
+        let buf = MemoryRenderBuffer::from_slice(
+            &r.rgba,
+            Fourcc::Argb8888,
+            (tw, th),
+            1,
+            Transform::Normal,
+            None,
+        );
+        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+            &mut self.renderer,
+            (tx as f64, ty as f64),
+            &buf,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            into.push(Frame::Text(el));
+        }
+        let mut bg = SolidColorBuffer::default();
+        bg.update((panel_w, panel_h), HUD_BG);
+        into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+            &bg,
+            (panel_x, panel_y),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        )));
+    }
 
-        // Paso 1 · refresca los búferes del marco de cada ventana — su
-        // tamaño (sigue al contenido) y su color (según el foco). Cada
-        // `SolidColorBuffer` sube su contador de daño sólo si algo cambió.
+    /// Emite el overlay de zonas de arrastre (drag-to-zone) — visible sólo
+    /// durante un arrastre Move/Tile. Las zonas se escalan al monitor bajo
+    /// el puntero y se emiten traducidas a coords locales de `rect`. Si las
+    /// zonas no caen sobre `rect` (drag en otro monitor), no emite nada.
+    fn emit_zone_overlay(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        let drag_mode = self.app.drag.as_ref().map(|d| d.mode);
+        if !matches!(drag_mode, Some(DragMode::Move) | Some(DragMode::Tile)) {
+            return;
+        }
+        if self.zones.is_empty() {
+            return;
+        }
+        let wr = self.work_rect();
+        // Las zonas son del monitor bajo el puntero — si ese no es esta
+        // salida, no las pintamos acá.
+        if wr.x + wr.w <= rect.x
+            || wr.y + wr.h <= rect.y
+            || wr.x >= rect.x + rect.w
+            || wr.y >= rect.y + rect.h
+        {
+            return;
+        }
+        let acc = self.app.decorations.border_focus;
+        let fill = |a: f32| {
+            [
+                acc[0] as f32 / 255.0,
+                acc[1] as f32 / 255.0,
+                acc[2] as f32 / 255.0,
+                a,
+            ]
+        };
+        for (i, z) in self.zones.iter().enumerate() {
+            let r = z.to_rect(wr);
+            let color = if Some(i) == self.drag_zone { fill(0.40) } else { fill(0.16) };
+            let mut buf = SolidColorBuffer::default();
+            buf.update((r.w, r.h), color);
+            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                &buf,
+                (r.x - rect.x, r.y - rect.y),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            )));
+        }
+    }
+
+    /// Emite el menú raíz en `rect` si esta salida es la dueña del menú.
+    /// El menú vive en **coords locales** de su salida (se abrió ahí), así
+    /// que las posiciones de las columnas no necesitan traducción.
+    fn emit_menu(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        let Some(m) = self.root_menu.as_ref() else { return };
+        // El menú se rasteriza con el puntero **local** a su salida — así
+        // resaltado y hover apuntan a la fila correcta.
+        let (px, py) = self.app.pointer_loc;
+        let cols = m.render(px.round() as i32 - rect.x, py.round() as i32 - rect.y);
+        let menu_hl_color = rgba_f32(self.app.decorations.border_focus);
+        if self.text_cache.len() > 256 {
+            self.text_cache.clear();
+        }
+        for col in cols.iter().rev() {
+            // Texto (caché).
+            if let Some(tr) = &self.text {
+                for row in &col.rows {
+                    let label = if row.submenu {
+                        format!("{}   ›", row.label)
+                    } else {
+                        row.label.clone()
+                    };
+                    let buf = self
+                        .text_cache
+                        .entry((label.clone(), MENU_TEXT_COLOR))
+                        .or_insert_with(|| {
+                            match tr.rasterize(&label, MENU_TEXT_PX, MENU_TEXT_COLOR) {
+                                Some(r) => MemoryRenderBuffer::from_slice(
+                                    &r.rgba,
+                                    Fourcc::Argb8888,
+                                    (r.width, r.height),
+                                    1,
+                                    Transform::Normal,
+                                    None,
+                                ),
+                                None => MemoryRenderBuffer::from_slice(
+                                    &[0u8; 4],
+                                    Fourcc::Argb8888,
+                                    (1, 1),
+                                    1,
+                                    Transform::Normal,
+                                    None,
+                                ),
+                            }
+                        });
+                    let ty = row.y + (crate::menu::ITEM_H - MENU_TEXT_PX as i32) / 2;
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        &mut self.renderer,
+                        ((row.x + 10) as f64, ty as f64),
+                        buf,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        into.push(Frame::Text(el));
+                    }
+                }
+            }
+            // Resaltado.
+            for row in &col.rows {
+                if row.highlighted {
+                    let mut hl = SolidColorBuffer::default();
+                    hl.update((col.w, crate::menu::ITEM_H), menu_hl_color);
+                    into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &hl,
+                        (row.x, row.y),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                }
+            }
+            // Fondo.
+            let mut bg = SolidColorBuffer::default();
+            bg.update((col.w, col.h), MENU_BG);
+            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                &bg,
+                (col.x, col.y),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            )));
+        }
+    }
+
+    /// Emite la pista de revelado del dock autoescondido — una franja fina en
+    /// el borde anclado mientras está oculto. Sólo en la salida donde vive
+    /// el shell (primaria).
+    fn emit_reveal_band(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        if !(crate::shell_dock().autohide && self.app.shell_hidden) {
+            return;
+        }
+        let (ow, oh) = (rect.w, rect.h);
+        if ow <= 0 || oh <= 0 {
+            return;
+        }
+        let dock = crate::shell_dock();
+        let limite = if dock.anchor.es_horizontal() { oh } else { ow };
+        let t = dock.thickness.clamp(1, limite.max(1));
+        let (bx, by, bw, bh) =
+            crate::shell_reveal_band(dock.anchor, ow, oh, t, crate::SHELL_REVEAL_BAND);
+        let menu_hl_color = rgba_f32(self.app.decorations.border_focus);
+        let mut band = SolidColorBuffer::default();
+        band.update((bw, bh), menu_hl_color);
+        into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+            &band,
+            (bx, by),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        )));
+    }
+
+    /// Emite el wallpaper de la salida `idx` al fondo (rearmándolo si quedó
+    /// stale). Cada salida tiene su propio búfer escalado.
+    fn emit_wallpaper(&mut self, idx: usize, into: &mut Vec<Frame<GlesRenderer>>) {
+        let Some(path) = self.wallpaper_path.clone() else {
+            return;
+        };
+        let ctx = &mut self.outputs[idx];
+        let size = (ctx.rect.w, ctx.rect.h);
+        let stale = ctx
+            .wallpaper
+            .as_ref()
+            .map(|(_, s)| *s != size)
+            .unwrap_or(true);
+        if stale && size.0 > 0 && size.1 > 0 {
+            ctx.wallpaper = load_wallpaper(&path, self.wallpaper_fit, size.0, size.1)
+                .map(|b| (b, size));
+        }
+        let Some((buf, _)) = &ctx.wallpaper else {
+            return;
+        };
+        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+            &mut self.renderer,
+            (0.0, 0.0),
+            buf,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            into.push(Frame::Text(el));
+        }
+    }
+
+    /// Refresca los búferes de marco (color por foco) de todas las ventanas
+    /// visibles. Es estado global que no depende de cuál salida se está
+    /// rindiendo — se hace una vez al inicio de [`Self::render`].
+    fn refresh_window_borders(&mut self) {
         let dec = self.app.decorations;
+        let output_h = self.outputs[Self::PRIMARY].rect.h;
         for w in &mut self.app.windows {
             if !w.visible || w.is_shell {
-                continue; // el shell no lleva marco
+                continue;
             }
             let tb = crate::titlebar_for(w, dec.titlebar_height);
             let (x, y) = crate::render_loc(w, output_h, dec.titlebar_height);
             let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, w.size.1 - tb));
-            // El marco envuelve barra de título + superficie.
             let (x, y, sh) = (x, y - tb, sh + tb);
             let color = rgba_f32(if w.focused {
                 dec.border_focus
@@ -634,295 +915,12 @@ impl DrmState {
                 buf.update((bw, bh), color);
             }
         }
+    }
 
-        // Snapshot del menú raíz (sin retener préstamos de `self` dentro del
-        // bloque de elementos, donde se toma `&mut self.renderer`): las
-        // columnas abiertas en cascada, ya colocadas y con resaltado resuelto.
-        let menu_render: Option<Vec<crate::menu::MenuColView>> = self.root_menu.as_ref().map(|m| {
-            let (px, py) = self.app.pointer_loc;
-            m.render(px.round() as i32, py.round() as i32)
-        });
-        let menu_hl_color = rgba_f32(self.app.decorations.border_focus);
-
-        // Snapshot de las zonas de arrastre: sólo durante un arrastre Move/Tile.
-        // `(rects en px, índice resaltado bajo el puntero)`.
-        let zone_overlay: Option<(Vec<Rect>, Option<usize>)> = {
-            let m = self.app.drag.as_ref().map(|d| d.mode);
-            if matches!(m, Some(DragMode::Move) | Some(DragMode::Tile)) && !self.zones.is_empty() {
-                let wr = self.work_rect();
-                let rects = self.zones.iter().map(|z| z.to_rect(wr)).collect();
-                Some((rects, self.drag_zone))
-            } else {
-                None
-            }
-        };
-
-        // Paso 2 · arma los elementos — lista front-to-back (índice 0 =
-        // encima): el cursor, y por cada ventana su marco sobre su
-        // superficie. Las flotantes van antes que las teseladas.
-        let elements: Vec<Frame<GlesRenderer>> = {
-            let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
-            let primary_rect = self.outputs[Self::PRIMARY].rect;
-
-            // El cursor sólo se pinta si el puntero global cae sobre la
-            // salida primaria; las secundarias lo emiten por su cuenta.
-            self.emit_cursor(primary_rect, &mut out);
-
-            // HUD del preset activo: panel discreto arriba al centro mientras
-            // dura la ventana de feedback (HUD_DURATION). Después del deadline
-            // el siguiente cuadro lo borra (damasca el área). Va bajo el
-            // cursor pero sobre el resto. Se rasteriza fresco en cada cuadro
-            // — son ~90 rasterizaciones durante la vida del HUD; los búferes
-            // son del tamaño del texto, sin caché.
-            if let Some(deadline) = self.preset_hud_until {
-                if Instant::now() >= deadline {
-                    self.preset_hud_until = None;
-                } else if let Some(tr) = &self.text {
-                    if !self.preset_hud_label.is_empty() {
-                        if let Some(r) =
-                            tr.rasterize(&self.preset_hud_label, HUD_TEXT_PX, HUD_TEXT_COLOR)
-                        {
-                            let tw = r.width;
-                            let th = r.height;
-                            let panel_w = tw + 2 * HUD_PAD;
-                            let panel_h = th.max(HUD_TEXT_PX as i32) + 2 * HUD_PAD;
-                            let (ow, _oh) = self.app.output_size;
-                            let panel_x = ((ow as i32 - panel_w) / 2).max(0);
-                            let panel_y = HUD_TOP;
-                            let tx = panel_x + (panel_w - tw) / 2;
-                            let ty = panel_y + (panel_h - th) / 2;
-                            let buf = MemoryRenderBuffer::from_slice(
-                                &r.rgba,
-                                Fourcc::Argb8888,
-                                (tw, th),
-                                1,
-                                Transform::Normal,
-                                None,
-                            );
-                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                                &mut self.renderer,
-                                (tx as f64, ty as f64),
-                                &buf,
-                                None,
-                                None,
-                                None,
-                                Kind::Unspecified,
-                            ) {
-                                out.push(Frame::Text(el));
-                            }
-                            let mut bg = SolidColorBuffer::default();
-                            bg.update((panel_w, panel_h), HUD_BG);
-                            out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                                &bg,
-                                (panel_x, panel_y),
-                                1.0,
-                                1.0,
-                                Kind::Unspecified,
-                            )));
-                        }
-                    }
-                }
-            }
-
-            // Zonas de arrastre (drag-to-zone): mientras se arrastra, se pintan
-            // tenues sobre las ventanas; la que está bajo el puntero, más fuerte
-            // (es donde aterrizará al soltar). Bajo el cursor/menú.
-            if let Some((rects, hot)) = &zone_overlay {
-                let acc = self.app.decorations.border_focus;
-                let fill = |a: f32| {
-                    [
-                        acc[0] as f32 / 255.0,
-                        acc[1] as f32 / 255.0,
-                        acc[2] as f32 / 255.0,
-                        a,
-                    ]
-                };
-                for (i, r) in rects.iter().enumerate() {
-                    let color = if Some(i) == *hot { fill(0.40) } else { fill(0.16) };
-                    let mut buf = SolidColorBuffer::default();
-                    buf.update((r.w, r.h), color);
-                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                        &buf,
-                        (r.x, r.y),
-                        1.0,
-                        1.0,
-                        Kind::Unspecified,
-                    )));
-                }
-            }
-
-            // Menú raíz (openbox) — bajo el cursor, sobre todo lo demás. Una
-            // columna por nivel de submenú abierto. Se recorren de la más
-            // profunda a la raíz (la lista es front-to-back: lo primero queda
-            // arriba), así una columna hija solapada queda sobre su padre.
-            // Dentro de cada columna: texto, luego resaltado, luego fondo.
-            if let Some(cols) = &menu_render {
-                if self.text_cache.len() > 256 {
-                    self.text_cache.clear();
-                }
-                for col in cols.iter().rev() {
-                    // Texto de cada fila (rasterizado, con la caché). A los
-                    // submenús se les agrega un indicador `›`.
-                    if let Some(tr) = &self.text {
-                        for row in &col.rows {
-                            let label = if row.submenu {
-                                format!("{}   ›", row.label)
-                            } else {
-                                row.label.clone()
-                            };
-                            let buf = self
-                                .text_cache
-                                .entry((label.clone(), MENU_TEXT_COLOR))
-                                .or_insert_with(|| {
-                                    match tr.rasterize(&label, MENU_TEXT_PX, MENU_TEXT_COLOR) {
-                                        Some(r) => MemoryRenderBuffer::from_slice(
-                                            &r.rgba,
-                                            Fourcc::Argb8888,
-                                            (r.width, r.height),
-                                            1,
-                                            Transform::Normal,
-                                            None,
-                                        ),
-                                        None => MemoryRenderBuffer::from_slice(
-                                            &[0u8; 4],
-                                            Fourcc::Argb8888,
-                                            (1, 1),
-                                            1,
-                                            Transform::Normal,
-                                            None,
-                                        ),
-                                    }
-                                });
-                            let ty = row.y + (crate::menu::ITEM_H - MENU_TEXT_PX as i32) / 2;
-                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                                &mut self.renderer,
-                                ((row.x + 10) as f64, ty as f64),
-                                buf,
-                                None,
-                                None,
-                                None,
-                                Kind::Unspecified,
-                            ) {
-                                out.push(Frame::Text(el));
-                            }
-                        }
-                    }
-                    // Resaltado de las filas activas (hover / submenú abierto).
-                    for row in &col.rows {
-                        if row.highlighted {
-                            let mut hl = SolidColorBuffer::default();
-                            hl.update((col.w, crate::menu::ITEM_H), menu_hl_color);
-                            out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                                &hl,
-                                (row.x, row.y),
-                                1.0,
-                                1.0,
-                                Kind::Unspecified,
-                            )));
-                        }
-                    }
-                    // Fondo de la columna.
-                    let mut bg = SolidColorBuffer::default();
-                    bg.update((col.w, col.h), MENU_BG);
-                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                        &bg,
-                        (col.x, col.y),
-                        1.0,
-                        1.0,
-                        Kind::Unspecified,
-                    )));
-                }
-            }
-
-            // Pista de revelado del dock autoescondido: una franja fina en el
-            // borde anclado mientras está oculto, para indicar dónde acercar el
-            // puntero para revelarlo.
-            if crate::shell_dock().autohide && self.app.shell_hidden {
-                let (ow, oh) = self.app.output_size;
-                if ow > 0 && oh > 0 {
-                    let dock = crate::shell_dock();
-                    let limite = if dock.anchor.es_horizontal() { oh } else { ow };
-                    let t = dock.thickness.clamp(1, limite.max(1));
-                    let (bx, by, bw, bh) =
-                        crate::shell_reveal_band(dock.anchor, ow, oh, t, crate::SHELL_REVEAL_BAND);
-                    let mut band = SolidColorBuffer::default();
-                    band.update((bw, bh), menu_hl_color);
-                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                        &band,
-                        (bx, by),
-                        1.0,
-                        1.0,
-                        Kind::Unspecified,
-                    )));
-                }
-            }
-
-            // Layer surfaces (waybar, swaybg…): los Overlay/Top van encima
-            // de las ventanas; los Bottom/Background, debajo. Front-to-back.
-            let (over_layers, under_layers) =
-                crate::layer_render_elements(self.app.output.as_ref(), &mut self.renderer);
-            for el in over_layers {
-                out.push(Frame::Window(el));
-            }
-
-            // Ventanas: el helper filtra por intersección con la primaria y
-            // emite cada una traducida (primary.rect arranca en 0,0, así que
-            // la traducción es identidad para la mayoría).
-            self.emit_windows(primary_rect, &mut out);
-
-            // Layer surfaces de fondo (Bottom/Background) — debajo de todo.
-            for el in under_layers {
-                out.push(Frame::Window(el));
-            }
-
-            // Wallpaper — al fondo de todo (la lista es front-to-back, así que
-            // va último). Se (re)arma perezosamente al tamaño de la salida.
-            if let Some(path) = self.wallpaper_path.clone() {
-                let primary = &mut self.outputs[Self::PRIMARY];
-                let size = (primary.rect.w, primary.rect.h);
-                let stale = primary
-                    .wallpaper
-                    .as_ref()
-                    .map(|(_, s)| *s != size)
-                    .unwrap_or(true);
-                if stale && size.0 > 0 && size.1 > 0 {
-                    primary.wallpaper = load_wallpaper(&path, self.wallpaper_fit, size.0, size.1)
-                        .map(|b| (b, size));
-                }
-                if let Some((buf, _)) = &primary.wallpaper {
-                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                        &mut self.renderer,
-                        (0.0, 0.0),
-                        buf,
-                        None,
-                        None,
-                        None,
-                        Kind::Unspecified,
-                    ) {
-                        out.push(Frame::Text(el));
-                    }
-                }
-            }
-            out
-        };
-        let primary = &mut self.outputs[Self::PRIMARY];
-        match primary.compositor.render_frame::<_, _>(
-            &mut self.renderer,
-            &elements,
-            CLEAR_COLOR,
-            FrameFlags::DEFAULT,
-        ) {
-            Ok(result) => {
-                if !result.is_empty {
-                    match primary.compositor.queue_frame(()) {
-                        Ok(()) => primary.pending_flip = true,
-                        Err(e) => eprintln!("mirada-compositor · queue_frame: {e}"),
-                    }
-                }
-            }
-            Err(e) => eprintln!("mirada-compositor · render_frame: {e}"),
-        }
-        // Avisa a cada cliente de que puede dibujar el siguiente cuadro.
+    /// Avisa a cada cliente (ventanas, layers de la primaria, cursor) de
+    /// que puede dibujar el siguiente cuadro. Se llama una sola vez por
+    /// `render`, no por salida.
+    fn send_frames_to_clients(&mut self) {
         let time = self.start.elapsed().as_millis() as u32;
         for w in &self.app.windows {
             send_frames_surface_tree(&w.surface, time);
@@ -932,7 +930,6 @@ impl DrmState {
                 send_frames_surface_tree(layer.wl_surface(), time);
             }
         }
-        // También a la superficie del cursor, por si es un cursor animado.
         if let CursorImageStatus::Surface(surface) = &self.app.cursor_status {
             if surface.alive() {
                 send_frames_surface_tree(surface, time);
@@ -940,51 +937,68 @@ impl DrmState {
         }
     }
 
-    /// Render de una salida **secundaria**: cursor (si el puntero cae sobre
-    /// ella) + ventanas visibles cuyo rect intersecta esta salida (traducidas
-    /// a coords locales) + wallpaper al tamaño nativo de la salida. No
-    /// lleva layer-shell, menú raíz, zonas ni HUD: eso sigue en primaria
-    /// hasta tener pipeline replicado por monitor.
-    fn render_secondary(&mut self, idx: usize) {
+    /// Render unificado de una salida. Cada feature decide si pertenece o
+    /// no a esta salida (gates por dueño) — el cursor en la del puntero,
+    /// HUD/layer-shell/reveal-band en primaria, menú y zonas en la salida
+    /// donde se inició la acción, ventanas y wallpaper en todas.
+    fn render_output(&mut self, idx: usize) {
         if self.outputs[idx].pending_flip {
             return;
         }
         let rect = self.outputs[idx].rect;
+        let is_primary = idx == Self::PRIMARY;
+        let owns_menu = self.menu_output_idx == Some(idx);
+
         let elements: Vec<Frame<GlesRenderer>> = {
             let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
-            // Cursor: sólo si el puntero está sobre esta salida.
+
+            // 1. Cursor (si el puntero cae sobre esta salida).
             self.emit_cursor(rect, &mut out);
-            // Ventanas: las que caen sobre esta salida, traducidas.
-            self.emit_windows(rect, &mut out);
-            // Wallpaper al fondo.
-            if let Some(path) = self.wallpaper_path.clone() {
-                let ctx = &mut self.outputs[idx];
-                let size = (ctx.rect.w, ctx.rect.h);
-                let stale = ctx
-                    .wallpaper
-                    .as_ref()
-                    .map(|(_, s)| *s != size)
-                    .unwrap_or(true);
-                if stale && size.0 > 0 && size.1 > 0 {
-                    ctx.wallpaper = load_wallpaper(&path, self.wallpaper_fit, size.0, size.1)
-                        .map(|b| (b, size));
-                }
-                if let Some((buf, _)) = &ctx.wallpaper {
-                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                        &mut self.renderer,
-                        (0.0, 0.0),
-                        buf,
-                        None,
-                        None,
-                        None,
-                        Kind::Unspecified,
-                    ) {
-                        out.push(Frame::Text(el));
-                    }
-                }
+
+            // 2. HUD del preset (primaria por ahora; centrado en su rect).
+            if is_primary {
+                self.emit_hud(rect, &mut out);
             }
+
+            // 3. Zonas de arrastre — en la salida bajo el puntero durante
+            //    un drag (helper filtra por intersección de work-rect).
+            self.emit_zone_overlay(rect, &mut out);
+
+            // 4. Menú raíz — sólo en la salida donde se abrió.
+            if owns_menu {
+                self.emit_menu(rect, &mut out);
+            }
+
+            // 5. Pista de revelado del dock autoescondido — primaria, el
+            //    shell vive ahí.
+            if is_primary {
+                self.emit_reveal_band(rect, &mut out);
+            }
+
+            // 6. Layer surfaces (waybar, swaybg…). Smithay las cuelga del
+            //    `Output` primario; por ahora se renderizan sólo ahí.
+            if is_primary {
+                let (over_layers, under_layers) =
+                    crate::layer_render_elements(self.app.output.as_ref(), &mut self.renderer);
+                for el in over_layers {
+                    out.push(Frame::Window(el));
+                }
+                // 7a. Ventanas entre layers Overlay/Top y Bottom/Background.
+                self.emit_windows(rect, &mut out);
+                for el in under_layers {
+                    out.push(Frame::Window(el));
+                }
+            } else {
+                // 7b. Sin layers en secundarias: ventanas y abajo wallpaper.
+                self.emit_windows(rect, &mut out);
+            }
+
+            // 8. Wallpaper al fondo (por salida).
+            self.emit_wallpaper(idx, &mut out);
+
             out
         };
+
         let ctx = &mut self.outputs[idx];
         match ctx.compositor.render_frame::<_, _>(
             &mut self.renderer,
@@ -1069,6 +1083,7 @@ impl DrmState {
             }
             self.zones = self.zone_presets.get(self.active_preset).cloned().unwrap_or_default();
             self.root_menu = None; // un menú abierto puede quedar obsoleto
+            self.menu_output_idx = None;
             let new_wp = self.app.config_wallpaper_path();
             let new_fit = self.app.config_wallpaper_fit();
             if new_wp != self.wallpaper_path || new_fit != self.wallpaper_fit {
@@ -1177,8 +1192,13 @@ impl DrmState {
                 x = (x + event.delta_x()).clamp(0.0, self.output_size.0);
                 y = (y + event.delta_y()).clamp(0.0, self.output_size.1);
                 self.app.pointer_loc = (x, y);
-                if let Some(m) = self.root_menu.as_mut() {
-                    m.update_hover(x.round() as i32, y.round() as i32);
+                if self.root_menu.is_some() {
+                    // El menú vive en coords locales a su salida.
+                    let idx = self.menu_output_idx.unwrap_or(Self::PRIMARY);
+                    let r = self.outputs[idx].rect;
+                    let lx = x.round() as i32 - r.x;
+                    let ly = y.round() as i32 - r.y;
+                    self.root_menu.as_mut().unwrap().update_hover(lx, ly);
                     return; // con el menú abierto, el puntero lo navega
                 }
                 self.app.update_shell_autohide(x, y);
@@ -1198,9 +1218,13 @@ impl DrmState {
                     pos.x.clamp(0.0, self.output_size.0),
                     pos.y.clamp(0.0, self.output_size.1),
                 );
-                if let Some(m) = self.root_menu.as_mut() {
+                if self.root_menu.is_some() {
                     let (x, y) = self.app.pointer_loc;
-                    m.update_hover(x.round() as i32, y.round() as i32);
+                    let idx = self.menu_output_idx.unwrap_or(Self::PRIMARY);
+                    let r = self.outputs[idx].rect;
+                    let lx = x.round() as i32 - r.x;
+                    let ly = y.round() as i32 - r.y;
+                    self.root_menu.as_mut().unwrap().update_hover(lx, ly);
                     return; // con el menú abierto, el puntero lo navega
                 }
                 let (x, y) = self.app.pointer_loc;
@@ -1222,21 +1246,26 @@ impl DrmState {
                 if pressed && self.root_menu.is_some() {
                     use crate::menu::ClickResult;
                     let (x, y) = self.app.pointer_loc;
+                    let idx = self.menu_output_idx.unwrap_or(Self::PRIMARY);
+                    let r = self.outputs[idx].rect;
+                    let lx = x.round() as i32 - r.x;
+                    let ly = y.round() as i32 - r.y;
                     let res = if button == BTN_LEFT {
-                        self.root_menu
-                            .as_mut()
-                            .unwrap()
-                            .click(x.round() as i32, y.round() as i32)
+                        self.root_menu.as_mut().unwrap().click(lx, ly)
                     } else {
                         ClickResult::Close
                     };
                     match res {
                         ClickResult::Launch(cmd) => {
                             self.root_menu = None;
+                            self.menu_output_idx = None;
                             self.app.spawn_user(&cmd);
                         }
                         ClickResult::Stay => {}
-                        ClickResult::Close => self.root_menu = None,
+                        ClickResult::Close => {
+                            self.root_menu = None;
+                            self.menu_output_idx = None;
+                        }
                     }
                     return; // el menú captura el botón
                 }
@@ -1255,12 +1284,18 @@ impl DrmState {
                         .is_some_and(|kb| kb.modifier_state().logo);
                     let (x, y) = self.app.pointer_loc;
                     if !super_held && self.window_at(x, y).is_none() {
+                        // El menú vive en el monitor donde se hizo el click; su
+                        // origen y su rect de acotamiento son **locales** a ese
+                        // monitor — así no se sale del borde de su pantalla.
+                        let idx = self.output_at_point(x.round() as i32, y.round() as i32);
+                        let r = self.outputs[idx].rect;
+                        self.menu_output_idx = Some(idx);
                         self.root_menu = Some(crate::menu::RootMenu::open(
-                            x.round() as i32,
-                            y.round() as i32,
+                            x.round() as i32 - r.x,
+                            y.round() as i32 - r.y,
                             self.menu_entries.clone(),
-                            self.output_size.0 as i32,
-                            self.output_size.1 as i32,
+                            r.w,
+                            r.h,
                         ));
                         return; // el botón abrió el menú, no va al cliente
                     }
@@ -1601,28 +1636,29 @@ impl DrmState {
         })
     }
 
-    /// El área de trabajo en px: la salida menos las reservas (dock/layers).
-    /// Las zonas se escalan a ella, así no aterrizan bajo la barra.
+    /// Work rect del monitor bajo el puntero — el "lienzo" de zonas para
+    /// arrastres. Multi-monitor: los zonas se escalan al monitor donde
+    /// está la acción, no al desktop global.
     fn work_rect(&self) -> Rect {
-        let (ow, oh) = self.app.output_size;
-        let (top, bottom, left, right) = self.app.reserved;
-        Rect::new(left, top, (ow - left - right).max(1), (oh - top - bottom).max(1))
+        let (px, py) = self.app.pointer_loc;
+        self.output_work_rect(self.output_at_point(px.round() as i32, py.round() as i32))
     }
 
-    /// El rect en píxeles de la zona `i` (fracciones escaladas al área útil).
+    /// El rect en píxeles de la zona `i`, escalado al work-rect del
+    /// monitor bajo el puntero. Devuelve coords globales.
     fn zone_rect(&self, i: usize) -> Option<Rect> {
         let wr = self.work_rect();
         self.zones.get(i).map(|z| z.to_rect(wr))
     }
 
-    /// El índice de la zona de arrastre bajo `(x, y)`, si la hay.
+    /// El índice de la zona de arrastre bajo `(x, y)`, si la hay. Las zonas
+    /// se hit-testean contra el work-rect del monitor que contiene `(x,y)`.
     fn zone_at(&self, x: f64, y: f64) -> Option<usize> {
-        let (ow, oh) = self.app.output_size;
-        if ow == 0 || oh == 0 || self.zones.is_empty() {
+        if self.zones.is_empty() {
             return None;
         }
-        let wr = self.work_rect();
         let (xi, yi) = (x.round() as i32, y.round() as i32);
+        let wr = self.output_work_rect(self.output_at_point(xi, yi));
         self.zones.iter().position(|z| {
             let r = z.to_rect(wr);
             xi >= r.x && yi >= r.y && xi < r.x + r.w && yi < r.y + r.h
@@ -2017,6 +2053,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         wallpaper_fit,
         menu_entries,
         root_menu: None,
+        menu_output_idx: None,
         zones,
         zone_presets,
         active_preset: 0,

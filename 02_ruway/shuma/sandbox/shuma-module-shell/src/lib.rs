@@ -184,14 +184,15 @@ impl BackendHandle {
     pub fn write_input(&self, bytes: Vec<u8>) -> bool {
         match self {
             BackendHandle::Local(h) => h.write_input(bytes),
-            // Remote no soporta PTY → write_input no aplica.
-            BackendHandle::Remote(_) => false,
+            // En PTY remoto, el asa enruta las teclas al daemon; en runs
+            // remotos no-PTY es no-op (devuelve false).
+            BackendHandle::Remote(h) => h.write_input(bytes),
         }
     }
     pub fn resize(&self, rows: u16, cols: u16) -> bool {
         match self {
             BackendHandle::Local(h) => h.resize(rows, cols),
-            BackendHandle::Remote(_) => false,
+            BackendHandle::Remote(h) => h.resize(rows, cols),
         }
     }
 }

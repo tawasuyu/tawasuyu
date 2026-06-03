@@ -11,7 +11,6 @@ use shuma_card::{PipelineSpec, WorkspaceId, WorkspaceSpec};
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 use ulid::Ulid;
 
 pub const DEFAULT_SOCK_NAME: &str = "shuma.sock";
@@ -177,6 +176,32 @@ pub enum Request {
         #[serde(default)]
         capture_stages: bool,
     },
+
+    /// Abre un **PTY remoto**: el daemon spawnea `program args` bajo un
+    /// pseudo-terminal de `rows`×`cols` y la conexión entra en modo
+    /// **full-duplex** dedicado:
+    /// - server→cliente: una secuencia de [`Response::ExecBytes`] (la
+    ///   salida cruda del terminal, con escapes ANSI) terminada por
+    ///   `ExecExited`/`ExecFailed`.
+    /// - cliente→server: cero o más [`Request::PtyInput`] (teclas) y
+    ///   [`Request::PtyResize`] (cambios de tamaño), hasta que cierra.
+    ///
+    /// El cliente aborta cerrando la conexión (EOF) — convención SSH/PTY,
+    /// igual que [`Request::ExecStream`]. A diferencia de `ExecStream`, la
+    /// dirección cliente→server lleva frames reales, no sólo el cierre.
+    ExecPty {
+        cwd: String,
+        program: String,
+        args: Vec<String>,
+        rows: u16,
+        cols: u16,
+    },
+    /// (Sólo dentro de un `ExecPty`) bytes de stdin del usuario hacia el
+    /// PTY remoto — teclas, paste, etc.
+    PtyInput { bytes: Vec<u8> },
+    /// (Sólo dentro de un `ExecPty`) la ventana del cliente cambió de
+    /// tamaño; el daemon reescala el PTY (`TIOCSWINSZ`).
+    PtyResize { rows: u16, cols: u16 },
 }
 
 /// Cómo ejecutar — variante serializable paralela a `shuma_exec::Exec`.
@@ -342,6 +367,10 @@ pub enum Response {
     /// La captura excedió el tope y la cola se está volcando al fichero
     /// indicado (path en el lado del daemon, no del cliente).
     ExecSpilled(String),
+    /// Bytes crudos de salida de un PTY remoto (`ExecPty`): stdout y
+    /// stderr mezclados, con escapes ANSI. El cliente los alimenta tal
+    /// cual a su parser vt100. No es terminal.
+    ExecBytes(Vec<u8>),
     /// Terminal. Código de salida del proceso (de la última etapa en un
     /// pipe directo).
     ExecExited(i32),
@@ -453,7 +482,16 @@ pub enum ProtocolError {
 // Framing helpers
 // =====================================================================
 
-pub async fn write_frame<T: Serialize>(stream: &mut UnixStream, msg: &T) -> Result<(), ProtocolError> {
+// Genéricos sobre el transporte (`AsyncRead`/`AsyncWrite`) y no sólo
+// `UnixStream`: así el sub-protocolo PTY puede leer y escribir frames en
+// las **mitades** de un stream splitteado (`ReadHalf`/`WriteHalf`) para
+// hablar full-duplex sin cortar a mitad de frame. `UnixStream` cumple el
+// bound, así que todos los callers previos siguen compilando igual.
+pub async fn write_frame<T, S>(stream: &mut S, msg: &T) -> Result<(), ProtocolError>
+where
+    T: Serialize,
+    S: AsyncWriteExt + Unpin,
+{
     let bytes = postcard::to_allocvec(msg)?;
     if bytes.len() > MAX_FRAME {
         return Err(ProtocolError::FrameOversize(bytes.len()));
@@ -465,9 +503,11 @@ pub async fn write_frame<T: Serialize>(stream: &mut UnixStream, msg: &T) -> Resu
     Ok(())
 }
 
-pub async fn read_frame<T: for<'de> Deserialize<'de>>(
-    stream: &mut UnixStream,
-) -> Result<T, ProtocolError> {
+pub async fn read_frame<T, S>(stream: &mut S) -> Result<T, ProtocolError>
+where
+    T: for<'de> Deserialize<'de>,
+    S: AsyncReadExt + Unpin,
+{
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::UnexpectedEof {

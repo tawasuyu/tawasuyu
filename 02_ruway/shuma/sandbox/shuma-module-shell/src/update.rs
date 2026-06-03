@@ -1245,24 +1245,28 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
             }
         }
         Source::Daemon { socket, .. } => {
-            // PTY remoto no soportado; fallback a local con notice.
+            let sock = socket
+                .clone()
+                .unwrap_or_else(shuma_protocol::default_socket_path);
+            // PTY remoto full-duplex: conservamos la `TuiSession` para
+            // pintar el terminal localmente; las teclas/resize viajan al
+            // daemon por el asa remota.
             if tui.is_some() {
-                s.push_output(OutputLine::notice(
-                    "PTY remoto no soportado por el daemon — corro local",
-                ));
-                let handle = shuma_exec::run(&spec);
-                let killer = handle.killer();
-                ActiveRun {
-                    handle: BackendHandle::Local(handle),
-                    killer: Some(killer),
-                    command: line,
-                    tui,
-                    block: run_block,
+                match shuma_remote_exec::run_pty(&spec, &sock) {
+                    Ok(h) => ActiveRun {
+                        handle: BackendHandle::Remote(h),
+                        killer: None,
+                        command: line,
+                        tui,
+                        block: run_block,
+                    },
+                    Err(e) => {
+                        s.push_output(OutputLine::notice(format!("✘ daemon pty: {e}")));
+                        fail_pending_intent(&mut s);
+                        return s;
+                    }
                 }
             } else {
-                let sock = socket
-                    .clone()
-                    .unwrap_or_else(shuma_protocol::default_socket_path);
                 match shuma_remote_exec::run(&spec, &sock) {
                     Ok(h) => ActiveRun {
                         handle: BackendHandle::Remote(h),
@@ -1284,34 +1288,40 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
             server_pub_hex,
             ..
         } => {
+            // Identidad y pubkey del server hacen falta en ambos caminos
+            // (PTY y no-PTY); las resolvemos una vez antes de ramificar.
+            let kp = match load_or_create_identity() {
+                Ok(kp) => kp,
+                Err(e) => {
+                    s.push_output(OutputLine::notice(format!("✘ identity: {e}")));
+                    fail_pending_intent(&mut s);
+                    return s;
+                }
+            };
+            let server_pub = match parse_pub_hex(server_pub_hex) {
+                Ok(p) => p,
+                Err(e) => {
+                    s.push_output(OutputLine::notice(format!("✘ server_pub_hex: {e}")));
+                    fail_pending_intent(&mut s);
+                    return s;
+                }
+            };
             if tui.is_some() {
-                s.push_output(OutputLine::notice("PTY remoto no soportado — corro local"));
-                let handle = shuma_exec::run(&spec);
-                let killer = handle.killer();
-                ActiveRun {
-                    handle: BackendHandle::Local(handle),
-                    killer: Some(killer),
-                    command: line,
-                    tui,
-                    block: run_block,
+                match shuma_remote_exec::run_pty_tcp(&spec, addr, kp, server_pub) {
+                    Ok(h) => ActiveRun {
+                        handle: BackendHandle::Remote(h),
+                        killer: None,
+                        command: line,
+                        tui,
+                        block: run_block,
+                    },
+                    Err(e) => {
+                        s.push_output(OutputLine::notice(format!("✘ daemon tcp pty: {e}")));
+                        fail_pending_intent(&mut s);
+                        return s;
+                    }
                 }
             } else {
-                let kp = match load_or_create_identity() {
-                    Ok(kp) => kp,
-                    Err(e) => {
-                        s.push_output(OutputLine::notice(format!("✘ identity: {e}")));
-                        fail_pending_intent(&mut s);
-                        return s;
-                    }
-                };
-                let server_pub = match parse_pub_hex(server_pub_hex) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        s.push_output(OutputLine::notice(format!("✘ server_pub_hex: {e}")));
-                        fail_pending_intent(&mut s);
-                        return s;
-                    }
-                };
                 match shuma_remote_exec::run_tcp(&spec, addr, kp, server_pub) {
                     Ok(h) => ActiveRun {
                         handle: BackendHandle::Remote(h),

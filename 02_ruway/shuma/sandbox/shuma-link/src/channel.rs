@@ -11,10 +11,10 @@
 //! bytes (Noise max 65 535 − 16 de tag). Llamadas con payload mayor
 //! devuelven `FrameError::Oversize`.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 
 /// Tope del payload claro por mensaje Noise (en bytes).
 pub const MAX_PAYLOAD: usize = 65535 - 16;
@@ -91,6 +91,22 @@ where
         self.stream
     }
 
+    /// Parte el canal en mitades **lectura** y **escritura** que se pueden
+    /// usar concurrentemente desde tareas/ramas `select!` distintas —
+    /// necesario para full-duplex (PTY remoto: leer teclas mientras se
+    /// escribe la salida del terminal). El estado Noise se comparte por
+    /// `Arc<Mutex>`: cada operación toma el lock sólo para la transformación
+    /// cripto en memoria (no a través de un `await`), así que un `recv`
+    /// bloqueado esperando bytes nunca frena al `send` del otro lado.
+    pub fn split(self) -> (FramedReader<S>, FramedWriter<S>) {
+        let (rd, wr) = tokio::io::split(self.stream);
+        let noise = Arc::new(self.noise);
+        (
+            FramedReader { rd, noise: Arc::clone(&noise) },
+            FramedWriter { wr, noise },
+        )
+    }
+
     /// Conveniencia: serializa `msg` con postcard y lo envía como un
     /// frame cifrado. El daemon y `shuma-remote-exec` lo usan para
     /// emitir `Request`/`Response` sobre la conexión autenticada,
@@ -111,6 +127,91 @@ where
     {
         let bytes = self.recv().await?;
         postcard::from_bytes(&bytes).map_err(FrameError::Postcard)
+    }
+}
+
+/// Mitad de **lectura** de un [`FramedChannel`] splitteado. Sólo recibe.
+/// El estado Noise lo comparte (vía `Arc<Mutex>`) con su
+/// [`FramedWriter`] hermano.
+pub struct FramedReader<S> {
+    rd: ReadHalf<S>,
+    noise: Arc<Mutex<snow::TransportState>>,
+}
+
+/// Mitad de **escritura** de un [`FramedChannel`] splitteado. Sólo envía.
+pub struct FramedWriter<S> {
+    wr: WriteHalf<S>,
+    noise: Arc<Mutex<snow::TransportState>>,
+}
+
+impl<S> FramedReader<S>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
+    /// Espejo de [`FramedChannel::recv`] sobre la mitad de lectura.
+    pub async fn recv(&mut self) -> Result<Vec<u8>, FrameError> {
+        let mut len_buf = [0u8; 4];
+        match self.rd.read_exact(&mut len_buf).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(FrameError::Closed)
+            }
+            Err(e) => return Err(FrameError::Io(e)),
+        }
+        let len = u32::from_be_bytes(len_buf) as usize;
+        if len > MAX_PAYLOAD + 16 {
+            return Err(FrameError::Oversize(len));
+        }
+        let mut ct = vec![0u8; len];
+        self.rd.read_exact(&mut ct).await.map_err(FrameError::Io)?;
+        let mut pt = vec![0u8; len];
+        let n = {
+            let mut noise = self.noise.lock().expect("noise mutex");
+            noise.read_message(&ct, &mut pt).map_err(FrameError::Snow)?
+        };
+        pt.truncate(n);
+        Ok(pt)
+    }
+
+    /// Espejo de [`FramedChannel::recv_postcard`] sobre la mitad de lectura.
+    pub async fn recv_postcard<T>(&mut self) -> Result<T, FrameError>
+    where
+        T: for<'de> serde::Deserialize<'de>,
+    {
+        let bytes = self.recv().await?;
+        postcard::from_bytes(&bytes).map_err(FrameError::Postcard)
+    }
+}
+
+impl<S> FramedWriter<S>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
+    /// Espejo de [`FramedChannel::send`] sobre la mitad de escritura.
+    pub async fn send(&mut self, payload: &[u8]) -> Result<(), FrameError> {
+        if payload.len() > MAX_PAYLOAD {
+            return Err(FrameError::Oversize(payload.len()));
+        }
+        let mut ct = vec![0u8; payload.len() + 16];
+        let n = {
+            let mut noise = self.noise.lock().expect("noise mutex");
+            noise.write_message(payload, &mut ct).map_err(FrameError::Snow)?
+        };
+        ct.truncate(n);
+        let len = (n as u32).to_be_bytes();
+        self.wr.write_all(&len).await.map_err(FrameError::Io)?;
+        self.wr.write_all(&ct).await.map_err(FrameError::Io)?;
+        self.wr.flush().await.map_err(FrameError::Io)?;
+        Ok(())
+    }
+
+    /// Espejo de [`FramedChannel::send_postcard`] sobre la mitad de escritura.
+    pub async fn send_postcard<T: serde::Serialize>(
+        &mut self,
+        msg: &T,
+    ) -> Result<(), FrameError> {
+        let bytes = postcard::to_allocvec(msg).map_err(FrameError::Postcard)?;
+        self.send(&bytes).await
     }
 }
 

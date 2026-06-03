@@ -45,7 +45,7 @@ pub mod handshake;
 pub mod identity;
 pub mod peers;
 
-pub use channel::FramedChannel;
+pub use channel::{FramedChannel, FramedReader, FramedWriter};
 pub use handshake::{client_handshake, server_handshake, HandshakeError};
 pub use identity::{Keypair, KeypairError, PublicKey};
 pub use peers::KnownPeers;
