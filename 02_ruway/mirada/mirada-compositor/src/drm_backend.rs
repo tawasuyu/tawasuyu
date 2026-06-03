@@ -55,7 +55,7 @@ use smithay::reexports::drm::control::connector::State as ConnectorState;
 use smithay::reexports::drm::control::{Device as ControlDevice, ModeTypeFlags};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
-use smithay::reexports::wayland_server::{Display, ListeningSocket};
+use smithay::reexports::wayland_server::{Display, DisplayHandle, ListeningSocket};
 use smithay::utils::{
     DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
 };
@@ -359,10 +359,18 @@ struct DrmState {
     /// El dispositivo DRM — se conserva para pausarlo y reactivarlo al
     /// conmutar de VT.
     drm: DrmDevice,
+    /// Recursos para crear `OutputCtx` nuevos en caliente (hotplug). Se
+    /// guardan acá porque la creación inicial los necesita y el handler de
+    /// `UdevEvent::Changed` también, dentro del bucle de eventos.
+    gbm: GbmDevice<DrmDeviceFd>,
+    allocator: GbmAllocator<DrmDeviceFd>,
+    exporter: GbmFramebufferExporter<DrmDeviceFd>,
+    renderer_formats: smithay::backend::allocator::format::FormatSet,
+    /// Handle al display Wayland — `announce_output` lo necesita al crear
+    /// el `wl_output` global de cada monitor nuevo.
+    dh: DisplayHandle,
     /// Salidas físicas activas: una por conector. `outputs[0]` es la
-    /// primaria — soporta layer-shell, tiling, menú, zonas, HUD. Las
-    /// secundarias renderizan sólo wallpaper hasta tener distribución
-    /// global de ventanas.
+    /// primaria — soporta layer-shell, tiling, menú, zonas, HUD.
     outputs: Vec<OutputCtx>,
     renderer: GlesRenderer,
     /// Contexto `libinput` — se suspende y reanuda al conmutar de VT.
@@ -1696,14 +1704,12 @@ impl DrmState {
         })
     }
 
-    /// Reenumera los conectores DRM y reporta cómo difieren de
-    /// [`Self::outputs`]: conectores Connected sin OutputCtx (un monitor
-    /// nuevo se enchufó) y OutputCtx cuyos conectores ya no están
-    /// Connected (un monitor se desenchufó). **Hoy sólo loguea** —crear y
-    /// destruir un `DrmCompositor` en caliente exige refactor de la
-    /// disposición global y del registro `App.outputs`; la detección queda
-    /// como zócalo para enchufarle la acción más tarde.
+    /// Reenumera los conectores DRM y aplica las diferencias con
+    /// [`Self::outputs`]: monitores recién enchufados se agregan, los que
+    /// dejan de estar Connected se quitan. En cualquier cambio, se re-dispone
+    /// la geometría global, se notifica al Brain y se rearman las reservas.
     fn detect_connector_changes(&mut self) {
+        use smithay::reexports::drm::control::{connector, crtc};
         let resources = match self.drm.resource_handles() {
             Ok(r) => r,
             Err(e) => {
@@ -1711,30 +1717,204 @@ impl DrmState {
                 return;
             }
         };
-        // Mapa nombre→Connected actual del kernel.
-        let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Conectores Connected ahora, con su handle + nombre.
+        let mut live: Vec<(connector::Handle, String)> = Vec::new();
         for &h in resources.connectors() {
             let Ok(c) = self.drm.get_connector(h, false) else {
                 continue;
             };
             if c.state() == ConnectorState::Connected {
-                live.insert(format!("{:?}-{}", c.interface(), c.interface_id()));
+                live.push((h, format!("{:?}-{}", c.interface(), c.interface_id())));
             }
         }
-        // Conectores que se conectaron tras el arranque: no hay OutputCtx.
-        let known: std::collections::HashSet<String> =
+        let live_names: std::collections::HashSet<&str> =
+            live.iter().map(|(_, n)| n.as_str()).collect();
+        let known_names: std::collections::HashSet<String> =
             self.outputs.iter().map(|o| o.name.clone()).collect();
-        for new in live.difference(&known) {
-            println!(
-                "mirada-compositor · hotplug · monitor «{new}» enchufado — TODO: añadir OutputCtx"
-            );
+
+        let mut changed = false;
+
+        // 1 · Desenchufes — drop OutputCtx + remove_output al Brain.
+        let to_remove: Vec<usize> = self
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| !live_names.contains(o.name.as_str()))
+            .map(|(i, _)| i)
+            .collect();
+        for &i in to_remove.iter().rev() {
+            let name = self.outputs[i].name.clone();
+            println!("mirada-compositor · hotplug · monitor «{name}» desenchufado");
+            let ev = self.app.body.remove_output(i as u32);
+            self.app.brain_feed(ev);
+            // Drop del compositor + smithay::Output: la GPU libera recursos.
+            let _ = self.outputs.remove(i);
+            changed = true;
         }
-        // OutputCtx cuyos conectores se desenchufaron: no llegan más VBlanks.
-        for gone in known.difference(&live) {
-            println!(
-                "mirada-compositor · hotplug · monitor «{gone}» desenchufado — TODO: drop OutputCtx + brain.remove_output"
-            );
+
+        // 2 · Enchufes — armar OutputCtx para cada conector nuevo.
+        let used_crtcs: Vec<crtc::Handle> = self.outputs.iter().map(|o| o.crtc).collect();
+        let mut taken: Vec<crtc::Handle> = used_crtcs.clone();
+        for (conn_handle, name) in &live {
+            if known_names.contains(name) {
+                continue;
+            }
+            let Ok(conn) = self.drm.get_connector(*conn_handle, false) else {
+                continue;
+            };
+            // Modo: el de mayor área (a igualdad, mayor refresco).
+            let Some(mode) = conn
+                .modes()
+                .iter()
+                .max_by_key(|m| {
+                    let (w, h) = m.size();
+                    (w as u32 * h as u32, m.vrefresh())
+                })
+                .copied()
+            else {
+                continue;
+            };
+            // CRTC libre compatible.
+            let crtc_choice = conn
+                .encoders()
+                .iter()
+                .filter_map(|enc| self.drm.get_encoder(*enc).ok())
+                .find_map(|enc| {
+                    resources
+                        .filter_crtcs(enc.possible_crtcs())
+                        .into_iter()
+                        .find(|c| !taken.contains(c))
+                });
+            let Some(crtc_h) = crtc_choice else {
+                eprintln!("mirada-compositor · hotplug · «{name}» sin CRTC libre — se ignora");
+                continue;
+            };
+            taken.push(crtc_h);
+            match self.armar_output_ctx(*conn_handle, crtc_h, mode, name.clone()) {
+                Ok(ctx) => {
+                    println!("mirada-compositor · hotplug · monitor «{}» enchufado", ctx.name);
+                    let (w, h) = mode.size();
+                    let ev = self.app.body.add_output(
+                        self.outputs.len() as u32,
+                        w as i32,
+                        h as i32,
+                    );
+                    self.app.brain_feed(ev);
+                    self.outputs.push(ctx);
+                    changed = true;
+                }
+                Err(e) => eprintln!("mirada-compositor · hotplug · falló «{name}»: {e}"),
+            }
         }
+
+        if changed {
+            self.redisponer_outputs();
+        }
+    }
+
+    /// Crea un `OutputCtx` nuevo desde un conector recién enchufado: arma
+    /// `DrmSurface` + `DrmCompositor` + `smithay::Output` con la escala y
+    /// transformación que mande la config. Idéntica a la rama del discovery
+    /// inicial — el día que haya que tocar uno hay que tocar el otro.
+    fn armar_output_ctx(
+        &mut self,
+        conn_handle: smithay::reexports::drm::control::connector::Handle,
+        crtc_h: smithay::reexports::drm::control::crtc::Handle,
+        mode: smithay::reexports::drm::control::Mode,
+        name: String,
+    ) -> Result<OutputCtx, String> {
+        let (w, h) = mode.size();
+        let surface = self
+            .drm
+            .create_surface(crtc_h, mode, &[conn_handle])
+            .map_err(|e| format!("create_surface: {e}"))?;
+        let scale_120 = self.app.config_output_scale_120_for(&name);
+        let transform = self.app.config_output_transform_for(&name);
+        let scale_f64 = (if scale_120 > 0 { scale_120 } else { 120 }) as f64 / 120.0;
+        let mode_source = OutputModeSource::Static {
+            size: Size::from((w as i32, h as i32)),
+            scale: Scale::from(scale_f64),
+            transform,
+        };
+        let compositor: Compositor = DrmCompositor::new(
+            mode_source,
+            surface,
+            None,
+            self.allocator.clone(),
+            self.exporter.clone(),
+            [Fourcc::Argb8888, Fourcc::Xrgb8888],
+            self.renderer_formats.clone(),
+            self.drm.cursor_size(),
+            Some(self.gbm.clone()),
+        )
+        .map_err(|e| format!("DrmCompositor::new: {e}"))?;
+        let refresh_mhz = mode.vrefresh() as i32 * 1000;
+        let smithay_out = crate::announce_output(
+            &self.dh,
+            &name,
+            w as i32,
+            h as i32,
+            refresh_mhz,
+            scale_120,
+            transform,
+        );
+        let wp_path = self.app.config_wallpaper_path_for(&name);
+        let wp_fit = self.app.config_wallpaper_fit_for(&name);
+        Ok(OutputCtx {
+            name,
+            output: smithay_out,
+            crtc: crtc_h,
+            compositor,
+            // rect lo fija `redisponer_outputs` después de añadir.
+            rect: Rect::new(0, 0, w as i32, h as i32),
+            refresh_mhz,
+            wallpaper: None,
+            wallpaper_path: wp_path,
+            wallpaper_fit: wp_fit,
+            pending_flip: false,
+        })
+    }
+
+    /// Re-ordena las salidas por `(order, name)` de la config, recalcula sus
+    /// rects globales con `mirada-layout::disponer`, actualiza el espacio
+    /// total y resincroniza `app.outputs`/`app.output`/`app.output_size`,
+    /// invalida wallpapers (rearmados al próximo render) y re-emite las
+    /// reservas. Lo que NO toca: ventanas — el Brain decide a dónde van.
+    fn redisponer_outputs(&mut self) {
+        if self.outputs.is_empty() {
+            self.app.outputs.clear();
+            self.app.output = None;
+            self.app.output_size = (1, 1);
+            return;
+        }
+        // Sort por (order, name) — primaria queda en outputs[0].
+        let app_ref = &self.app;
+        self.outputs.sort_by(|a, b| {
+            let oa = app_ref.config_output_order_for(&a.name);
+            let ob = app_ref.config_output_order_for(&b.name);
+            oa.cmp(&ob).then_with(|| a.name.cmp(&b.name))
+        });
+        let tamanos: Vec<(i32, i32)> = self.outputs.iter().map(|o| (o.rect.w, o.rect.h)).collect();
+        let disp = self.app.config_output_disposition();
+        let rects = mirada_brain::disponer(&tamanos, disp);
+        for (ctx, r) in self.outputs.iter_mut().zip(rects.iter()) {
+            ctx.rect = *r;
+            ctx.wallpaper = None; // el tamaño global no cambia, pero la posición sí
+        }
+        let env = mirada_brain::envolvente(&rects);
+        let total_w = env.w.max(1);
+        let total_h = env.h.max(1);
+        self.app.output_size = (total_w, total_h);
+        self.output_size = (total_w as f64, total_h as f64);
+        // Resincronizar el registro Wayland.
+        self.app.outputs = self.outputs.iter().map(|c| c.output.clone()).collect();
+        self.app.output = self.outputs.first().map(|c| c.output.clone());
+        // Reposicionar el puntero al centro de la primaria si quedó fuera.
+        let (px, py) = self.app.pointer_loc;
+        let (px, py) = self.clamp_to_outputs(px, py);
+        self.app.pointer_loc = (px, py);
+        // Reservas y borders pueden cambiar con la nueva geometría.
+        self.app.recompute_reservations();
     }
 
     /// Work rect del monitor bajo el puntero — el "lienzo" de zonas para
@@ -2073,12 +2253,12 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         })
         .map_err(|e| format!("insert drm: {e}"))?;
 
-    // Hotplug: udev notifica cuando un monitor se conecta/desconecta. Hoy
-    // sólo *detectamos* y logueamos la diferencia con los `outputs` actuales —
-    // crear/destruir un `OutputCtx` en caliente exige reconstruir el
-    // DrmSurface + DrmCompositor + smithay::Output desde dentro del bucle,
-    // refactor pendiente. Mientras tanto, el log avisa al usuario y queda
-    // como zócalo para enchufarle la creación dinámica.
+    // Hotplug: udev notifica cuando un monitor se conecta/desconecta o
+    // cuando aparece/desaparece una GPU. En `Changed` reenumeramos los
+    // conectores y reconciliamos `outputs` (crear OutputCtx para los
+    // recién enchufados, dropear los desenchufados). Los eventos
+    // `Added`/`Removed` de GPU completa se logean: el compositor hoy
+    // sirve una sola GPU, cambiar la primaria pide reiniciar.
     let udev = match smithay::backend::udev::UdevBackend::new(&seat_name) {
         Ok(u) => u,
         Err(e) => {
@@ -2091,15 +2271,15 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             use smithay::backend::udev::UdevEvent;
             match event {
                 UdevEvent::Added { device_id, path } => {
-                    println!(
-                        "mirada-compositor · hotplug · GPU añadida: {} ({device_id:?}) — TODO: enumerar",
+                    eprintln!(
+                        "mirada-compositor · hotplug · GPU añadida: {} ({device_id:?}); ignorada (multi-GPU pendiente)",
                         path.display()
                     );
                 }
                 UdevEvent::Changed { device_id: _ } => state.detect_connector_changes(),
                 UdevEvent::Removed { device_id, .. } => {
-                    println!(
-                        "mirada-compositor · hotplug · GPU retirada ({device_id:?}) — TODO: drop output_ctxs"
+                    eprintln!(
+                        "mirada-compositor · hotplug · GPU retirada ({device_id:?}); ignorada (multi-GPU pendiente)"
                     );
                 }
             }
@@ -2195,11 +2375,17 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // Lista de presets: el 0 es `config.zones`, luego los de `zone_presets`.
     let mut zone_presets = vec![zones.clone()];
     zone_presets.extend(app.config_zone_presets());
+    let dh = display.handle();
     let mut state = DrmState {
         app,
         session: session.clone(),
         display,
         drm,
+        gbm: gbm.clone(),
+        allocator: allocator.clone(),
+        exporter: exporter.clone(),
+        renderer_formats: renderer_formats.clone(),
+        dh,
         outputs: output_ctxs,
         renderer,
         libinput: libinput_handle,
