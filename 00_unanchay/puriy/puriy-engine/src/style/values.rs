@@ -202,6 +202,12 @@ pub struct ComputedStyle {
     /// value de `color`). NUNCA se hereda ni viaja al `BoxNode` (se limpia
     /// antes de devolver el estilo). Ver Fase 7.210.
     pub current_color: Vec<ColorTarget>,
+    /// `font-size` relativo pendiente (multiplicador `em`/`%`/`larger`/
+    /// `smaller`) a resolver contra el font-size HEREDADO. Transitorio:
+    /// `Decl::apply` lo setea, `compute_with_parent` lo resuelve al cierre
+    /// y lo limpia. Un `font-size` absoluto posterior lo borra (cascada).
+    /// Ver Fase 7.223.
+    pub font_size_rel: Option<f32>,
 }
 
 /// Propiedad-destino de una declaración `currentColor`. Se resuelve al
@@ -909,6 +915,7 @@ impl Default for ComputedStyle {
             animation: None,
             transitions: Vec::new(),
             current_color: Vec::new(),
+            font_size_rel: None,
         }
     }
 }

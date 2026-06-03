@@ -208,6 +208,9 @@ impl StyleEngine {
             style.visibility = p.visibility;
             style.pointer_events = p.pointer_events;
         }
+        // Font-size heredado (antes de la cascada): base contra la que se
+        // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
+        let inherited_font_size = style.font_size;
         let Some(local) = dom::element_name(node) else {
             return style;
         };
@@ -303,6 +306,13 @@ impl StyleEngine {
                 d.apply(&mut style);
             }
         }
+        // `font-size` relativo: resuelto al cierre contra el font-size
+        // heredado (no contra un font-size absoluto del mismo elemento —
+        // ese ya habría limpiado el flag en `apply`). Se limpia el buffer.
+        if let Some(m) = style.font_size_rel.take() {
+            style.font_size = inherited_font_size * m;
+        }
+
         // `currentColor`: resuelto al cierre contra el `color` ya computado
         // (used value). Se vacía el buffer para que NO se herede ni viaje
         // al BoxNode.
@@ -538,6 +548,45 @@ mod tests {
         assert_eq!(c.font_family.as_deref(), Some("monospace"));
         // .d — fuente de sistema: shorthand ignorado, size queda en default UA.
         assert_eq!(eng.compute(&ps[3]).font_size, 16.0);
+    }
+
+    #[test]
+    fn font_size_relativo_em_pct_keywords() {
+        // `em`/`%`/`larger` resuelven contra el font-size HEREDADO (20px);
+        // `rem` y los keywords absolutos quedan fijos.
+        let html = r#"<html><head><style>
+            .em{font-size:1.5em}
+            .pct{font-size:150%}
+            .larger{font-size:larger}
+            .large{font-size:large}
+            .rem{font-size:2rem}
+        </style></head><body>
+            <div style="font-size:20px">
+                <p class="em">a</p><p class="pct">b</p>
+                <p class="larger">c</p><p class="large">d</p>
+                <p class="rem">e</p>
+            </div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut div = None;
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("div") => div = Some(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        // El `<div style="font-size:20px">` es el padre heredado.
+        let parent = eng.compute(div.as_ref().unwrap());
+        assert_eq!(parent.font_size, 20.0);
+        let fs = |i: usize| eng.compute_with_parent(&ps[i], Some(&parent)).font_size;
+        assert_eq!(fs(0), 30.0); // 1.5em × 20
+        assert_eq!(fs(1), 30.0); // 150% × 20
+        assert!((fs(2) - 24.0).abs() < 1e-3); // larger = ×1.2 × 20
+        assert_eq!(fs(3), 18.0); // large = absoluto
+        assert_eq!(fs(4), 32.0); // 2rem = root 16
     }
 
     #[test]

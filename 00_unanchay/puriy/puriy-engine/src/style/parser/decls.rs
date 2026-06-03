@@ -185,7 +185,7 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         "background-color" => parse_color(value).map(DeclKind::Background),
         "display" => parse_display(value).map(DeclKind::Display),
-        "font-size" => parse_px_or_math(value).map(DeclKind::FontSize),
+        "font-size" => parse_font_size(value),
         "font-weight" => parse_weight(value).map(DeclKind::FontWeight),
         "font-style" => parse_font_style(value).map(DeclKind::FontStyle),
         "font-family" => Some(DeclKind::FontFamily(value.trim().to_string())),
@@ -1024,6 +1024,43 @@ fn classify_calc_num(t: &str) -> Option<CalcVal> {
         return Some(CalcVal::Number(n));
     }
     parse_length_px(t).map(|px| CalcVal::Length { px, pct: 0.0 })
+}
+
+/// `font-size`: distingue valores absolutos (px/rem/vw/`calc`/`clamp` y los
+/// keywords absolutos `medium`/`large`/…) de los relativos al font-size
+/// HEREDADO (`em`, `%`, `larger`/`smaller`), que se difieren a la resolución
+/// en `compute_with_parent`. `rem` queda absoluto (root = 16px). Fase 7.223.
+pub(crate) fn parse_font_size(value: &str) -> Option<DeclKind> {
+    let v = value.trim();
+    match v.to_ascii_lowercase().as_str() {
+        // Keywords relativos al heredado.
+        "larger" => return Some(DeclKind::FontSizeRel(1.2)),
+        "smaller" => return Some(DeclKind::FontSizeRel(1.0 / 1.2)),
+        // Keywords absolutos (escala estándar CSS, medium = 16px).
+        "xx-small" => return Some(DeclKind::FontSize(9.0)),
+        "x-small" => return Some(DeclKind::FontSize(10.0)),
+        "small" => return Some(DeclKind::FontSize(13.0)),
+        "medium" => return Some(DeclKind::FontSize(16.0)),
+        "large" => return Some(DeclKind::FontSize(18.0)),
+        "x-large" => return Some(DeclKind::FontSize(24.0)),
+        "xx-large" => return Some(DeclKind::FontSize(32.0)),
+        "xxx-large" => return Some(DeclKind::FontSize(48.0)),
+        _ => {}
+    }
+    // `%` → multiplicador relativo al heredado.
+    if let Some(p) = v.strip_suffix('%') {
+        return p.trim().parse::<f32>().ok().map(|n| DeclKind::FontSizeRel(n / 100.0));
+    }
+    // `em` (no `rem`) → relativo al font-size del padre.
+    if let Some(num) = v.strip_suffix("em") {
+        if !num.ends_with('r') {
+            if let Ok(n) = num.trim().parse::<f32>() {
+                return Some(DeclKind::FontSizeRel(n));
+            }
+        }
+    }
+    // Absoluto: px / rem / vw / calc / clamp / …
+    parse_px_or_math(v).map(DeclKind::FontSize)
 }
 
 /// Longitud px de un solo valor, aceptando funciones matemáticas que

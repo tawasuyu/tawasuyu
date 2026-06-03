@@ -17,6 +17,9 @@ pub(crate) enum DeclKind {
     Background(Color),
     Display(Display),
     FontSize(f32),
+    /// `font-size` relativo: multiplicador (`em`/`%`/`larger`/`smaller`)
+    /// resuelto al cierre contra el font-size heredado. Ver Fase 7.223.
+    FontSizeRel(f32),
     FontWeight(u16),
     FontStyle(FontStyle),
     FontFamily(String),
@@ -142,7 +145,14 @@ impl Decl {
             DeclKind::Color(c) => s.color = *c,
             DeclKind::Background(c) => s.background = Some(*c),
             DeclKind::Display(d) => s.display = *d,
-            DeclKind::FontSize(v) => s.font_size = *v,
+            // Absoluto: fija el font-size y descarta cualquier relativo
+            // pendiente de menor orden en la cascada.
+            DeclKind::FontSize(v) => {
+                s.font_size = *v;
+                s.font_size_rel = None;
+            }
+            // Relativo: difiere la resolución (contra el heredado) al cierre.
+            DeclKind::FontSizeRel(m) => s.font_size_rel = Some(*m),
             DeclKind::FontWeight(w) => s.font_weight = *w,
             DeclKind::FontStyle(fs) => s.font_style = *fs,
             DeclKind::FontFamily(ff) => s.font_family = Some(ff.clone()),
