@@ -461,6 +461,9 @@ pub(crate) enum Msg {
     OpenCanvasCtx(f32, f32),
     CtxPick(usize),
     CloseCtx,
+    // menú contextual sobre una fila del árbol de datos
+    OpenNavCtx(String, f32, f32),
+    NavCtxPick(usize),
     // layout guardable (paneles laterales tipo móvil)
     SetNavWidth(f32),
     SetToolsWidth(f32),
@@ -540,6 +543,8 @@ pub(crate) struct Model {
     /// Animación de aparición/swap del dropdown del menú principal (0→1).
     pub(crate) menu_anim: Tween<f32>,
     pub(crate) ctx_open: Option<(f32, f32)>,
+    /// Menú contextual de una fila del árbol: `(clave del nodo, ancla)`.
+    pub(crate) nav_ctx: Option<(String, (f32, f32))>,
     // watchers
     pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     pub(crate) _chart_watcher: Option<notify::RecommendedWatcher>,

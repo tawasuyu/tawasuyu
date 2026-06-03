@@ -7,7 +7,8 @@
 //! arrancar (y tras mutaciones) y deja un `Vec<NavNode>` cacheado en el
 //! `Model`. Cargar una carta sí va al store por id (`get_chart`).
 
-use cosmos_model::{Chart, ChartId, ChartKind, ContactId, GroupId};
+pub(crate) use cosmos_model::ChartKind;
+use cosmos_model::{Chart, ChartId, ContactId, GroupId};
 use cosmos_store::Store;
 
 use crate::persist::{list_cards, load_card};
@@ -71,6 +72,8 @@ pub(crate) struct NavNode {
     pub(crate) kind: NavKind,
     /// Id de la carta (sólo en nodos `Chart`) para `get_chart`.
     pub(crate) chart_id: Option<String>,
+    /// Tipo de carta (sólo en nodos `Chart`) — define su icono en el árbol.
+    pub(crate) chart_kind: Option<ChartKind>,
 }
 
 /// Abre (o crea) el store SQLite en el config dir de wawa. `None` si no
@@ -173,6 +176,7 @@ fn walk_groups(
             label: g.name.clone(),
             kind: NavKind::Group,
             chart_id: None,
+            chart_kind: None,
         });
         // Subgrupos primero, luego contactos del grupo.
         walk_groups(store, Some(g.id), Some(gkey.clone()), depth + 1, out);
@@ -197,6 +201,7 @@ fn add_contacts(
             label: c.name.clone(),
             kind: NavKind::Contact,
             chart_id: None,
+            chart_kind: None,
         });
         let charts = store.list_charts(c.id).unwrap_or_default();
         for ch in charts {
@@ -207,6 +212,7 @@ fn add_contacts(
                 label: ch.label.clone(),
                 kind: NavKind::Chart,
                 chart_id: Some(ch.id.to_string()),
+                chart_kind: Some(ch.kind),
             });
         }
     }

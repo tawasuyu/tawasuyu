@@ -20,9 +20,10 @@ use llimphi_ui::llimphi_layout::taffy::{
     style::FlexWrap,
     AlignItems, JustifyContent, Rect,
 };
+use llimphi_ui::llimphi_raster::kurbo::{Line as KurboLine, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{DragPhase, View};
+use llimphi_ui::{DragPhase, PaintRect, View};
 use llimphi_widget_context_menu::{
     context_menu_view, context_menu_view_ex, ContextMenuExtras, ContextMenuItem,
     ContextMenuPalette, ContextMenuSpec,
@@ -32,11 +33,11 @@ use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use llimphi_widget_switch::{switch_view, SwitchPalette};
-use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
 use std::collections::HashMap;
 
-use crate::library::{NavKind, NavNode};
+use crate::glyphs::{self, Icon};
+use crate::library::{ChartKind, NavKind, NavNode};
 use crate::model::MenuKind;
 use crate::model::{
     ChartView, Model, Msg, OverlayKind, ToolCat, WheelOpt, HARMONICS, MENU_BAR_H, MENU_BTN_W,
@@ -252,6 +253,97 @@ pub(crate) fn ctx_entries(m: &Model) -> Vec<MenuEntry> {
 }
 
 // =====================================================================
+// Menú contextual de una fila del árbol de datos
+// =====================================================================
+
+/// Acción del menú contextual del árbol — resuelta por `main::update`
+/// contra el índice clickeado (misma fuente que pinta el menú).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum NavAct {
+    NewGroup,
+    NewContact,
+    NewChart,
+    Rename,
+    Cut,
+    Paste,
+    Duplicate,
+    Delete,
+}
+
+/// Una entrada del menú contextual del árbol.
+pub(crate) struct NavCtxItem {
+    label: &'static str,
+    /// `None` = separador.
+    pub(crate) act: Option<NavAct>,
+    enabled: bool,
+    destructive: bool,
+}
+
+impl NavCtxItem {
+    fn act(label: &'static str, act: NavAct) -> Self {
+        Self { label, act: Some(act), enabled: true, destructive: false }
+    }
+    fn sep() -> Self {
+        Self { label: "", act: None, enabled: true, destructive: false }
+    }
+    fn enabled(mut self, b: bool) -> Self {
+        self.enabled = b;
+        self
+    }
+    fn destructive(mut self) -> Self {
+        self.destructive = true;
+        self
+    }
+    fn to_item(&self) -> ContextMenuItem {
+        if self.act.is_none() {
+            return ContextMenuItem::separator();
+        }
+        let mut it = ContextMenuItem::action(self.label.to_string());
+        if !self.enabled {
+            it = it.disabled();
+        }
+        if self.destructive {
+            it = it.destructive();
+        }
+        it
+    }
+}
+
+/// Entradas del menú contextual según el tipo del nodo `key`.
+pub(crate) fn nav_ctx_entries(m: &Model, key: &str) -> Vec<NavCtxItem> {
+    let has_cut = m.nav_cut.is_some();
+    let kind = m.node(key).map(|n| n.kind);
+    match kind {
+        Some(NavKind::Group) => vec![
+            NavCtxItem::act("Nuevo subgrupo", NavAct::NewGroup),
+            NavCtxItem::act("Nuevo contacto", NavAct::NewContact),
+            NavCtxItem::sep(),
+            NavCtxItem::act("Renombrar", NavAct::Rename),
+            NavCtxItem::act("Cortar", NavAct::Cut),
+            NavCtxItem::act("Pegar aquí", NavAct::Paste).enabled(has_cut),
+            NavCtxItem::sep(),
+            NavCtxItem::act("Eliminar grupo", NavAct::Delete).destructive(),
+        ],
+        Some(NavKind::Contact) => vec![
+            NavCtxItem::act("Nueva carta", NavAct::NewChart),
+            NavCtxItem::sep(),
+            NavCtxItem::act("Renombrar", NavAct::Rename),
+            NavCtxItem::act("Cortar", NavAct::Cut),
+            NavCtxItem::sep(),
+            NavCtxItem::act("Eliminar contacto", NavAct::Delete).destructive(),
+        ],
+        Some(NavKind::Chart) => vec![
+            NavCtxItem::act("Duplicar carta", NavAct::Duplicate),
+            NavCtxItem::sep(),
+            NavCtxItem::act("Renombrar", NavAct::Rename),
+            NavCtxItem::sep(),
+            NavCtxItem::act("Eliminar carta", NavAct::Delete).destructive(),
+        ],
+        None => vec![NavCtxItem::act("Nuevo grupo", NavAct::NewGroup)],
+    }
+}
+
+// =====================================================================
 // Barra de menú principal
 // =====================================================================
 
@@ -367,75 +459,92 @@ fn ancestors_expanded(
     true
 }
 
-/// Árbol izquierdo: explorador de datos jerárquico (grupo → contacto →
-/// carta) sobre `cosmos-store`, estilo file-manager. Las gráficas y
-/// análisis ya no viven acá — el centro switchea el tipo de gráfica y la
-/// derecha trae los módulos de análisis.
-pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
-    let mut rows: Vec<TreeRow<Msg>> = Vec::new();
+/// Alto de fila del árbol y sangría por nivel.
+const TREE_ROW_H: f32 = 22.0;
+const TREE_INDENT: f32 = 14.0;
+/// Offset vertical absoluto del primer renglón del árbol (barra de menú +
+/// barra de acciones del explorador). Usado para anclar el menú
+/// contextual de fila cerca del cursor.
+const TREE_TOP: f32 = MENU_BAR_H + 28.0 + 4.0;
 
+/// Icono de un nodo según su tipo (grupo abierto/cerrado, contacto, o el
+/// tipo de carta).
+fn nav_icon(n: &NavNode, expanded: bool, theme: &Theme) -> View<Msg> {
+    match n.kind {
+        NavKind::Group => glyphs::icon_view(
+            if expanded { Icon::FolderOpen } else { Icon::Folder },
+            15.0,
+            theme.accent,
+        ),
+        NavKind::Contact => glyphs::icon_view(Icon::Person, 15.0, theme.fg_text),
+        NavKind::Chart => {
+            glyphs::chart_kind_view(n.chart_kind.unwrap_or(ChartKind::Natal), 15.0, theme.fg_text)
+        }
+    }
+}
+
+/// Árbol izquierdo: explorador de datos jerárquico (grupo → contacto →
+/// carta) sobre `cosmos-store`, estilo file-manager. Filas con icono por
+/// tipo, líneas guía de indentación, chevron de expandir y menú
+/// contextual (click derecho). Las gráficas y análisis ya no viven acá.
+pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
     let by_key: HashMap<&str, &NavNode> =
         model.nav_nodes.iter().map(|n| (n.key.as_str(), n)).collect();
 
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    let mut vis = 0usize;
     for n in &model.nav_nodes {
         if !ancestors_expanded(n, &by_key, model) {
             continue;
         }
-        let is_container = n.kind != NavKind::Chart;
-        let selected = model.nav_selected.as_deref() == Some(n.key.as_str());
-        let click = Msg::NavClick(n.key.clone());
-        let toggle = if is_container {
-            Msg::ToggleNavNode(n.key.clone())
-        } else {
-            click.clone()
-        };
-        // Renombrado in-situ: el nodo en edición muestra el text input en
-        // el lugar de su label (sin barra aparte). El ruteo de teclas
-        // (Enter/Escape) lo hace `App::on_key`.
-        let editor = if model.nav_rename.as_deref() == Some(n.key.as_str()) {
-            Some(text_input_view(
-                &model.rename_input,
-                "nombre…",
-                true,
-                &TextInputPalette::from_theme(theme),
-                Msg::RenameStart,
-            ))
-        } else {
-            None
-        };
-        rows.push(TreeRow {
-            label: n.label.clone(),
-            depth: n.depth,
-            has_children: is_container,
-            expanded: is_container && model.nav_expanded.contains(&n.key),
-            selected,
-            on_toggle: toggle,
-            on_select: click,
-            editor,
-        });
+        rows.push(nav_row(n, vis, model, theme));
+        vis += 1;
     }
 
-    if rows.is_empty() {
-        rows.push(TreeRow {
-            label: "(biblioteca vacía)".to_string(),
-            depth: 0,
-            has_children: false,
-            expanded: false,
-            selected: false,
-            on_toggle: Msg::CloseCtx,
-            on_select: Msg::CloseCtx,
-            editor: None,
-        });
-    }
-
-    let tree = tree_view(TreeSpec {
-        rows,
-        row_height: 22.0,
-        indent_px: 14.0,
-        palette: TreePalette::from_theme(theme),
-    });
-
-    let kids: Vec<View<Msg>> = vec![nav_toolbar(model, theme), tree];
+    let body: View<Msg> = if rows.is_empty() {
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(TREE_ROW_H),
+            },
+            padding: Rect {
+                left: length(10.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(
+            "(biblioteca vacía)".to_string(),
+            12.0,
+            theme.fg_muted,
+            Alignment::Start,
+        )
+    } else {
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(0.0_f32),
+            },
+            min_size: Size {
+                width: length(0.0_f32),
+                height: length(0.0_f32),
+            },
+            padding: Rect {
+                left: length(0.0_f32),
+                right: length(0.0_f32),
+                top: length(4.0_f32),
+                bottom: length(4.0_f32),
+            },
+            ..Default::default()
+        })
+        .clip(true)
+        .children(rows)
+    };
 
     View::new(Style {
         size: Size {
@@ -450,7 +559,147 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(kids)
+    .children(vec![nav_toolbar(model, theme), body])
+}
+
+/// Una fila del árbol: líneas guía + chevron + icono + label (o editor de
+/// renombrado). Click selecciona/carga; click derecho abre el menú
+/// contextual de la fila.
+fn nav_row(n: &NavNode, vis: usize, model: &Model, theme: &Theme) -> View<Msg> {
+    let is_container = n.kind != NavKind::Chart;
+    let expanded = is_container && model.nav_expanded.contains(&n.key);
+    let selected = model.nav_selected.as_deref() == Some(n.key.as_str());
+    let indent = n.depth as f32 * TREE_INDENT;
+
+    // Chevron (icono dibujado) — sólo en contenedores.
+    let chevron: View<Msg> = if is_container {
+        View::new(Style {
+            size: Size {
+                width: length(14.0_f32),
+                height: length(TREE_ROW_H),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .hover_fill(theme.bg_row_hover)
+        .on_click(Msg::ToggleNavNode(n.key.clone()))
+        .children(vec![glyphs::icon_view(
+            if expanded { Icon::ChevronDown } else { Icon::ChevronRight },
+            11.0,
+            theme.fg_muted,
+        )])
+    } else {
+        View::new(Style {
+            size: Size {
+                width: length(14.0_f32),
+                height: length(TREE_ROW_H),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+    };
+
+    let icon_box = View::new(Style {
+        size: Size {
+            width: length(20.0_f32),
+            height: length(TREE_ROW_H),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![nav_icon(n, expanded, theme)]);
+
+    // Label o editor de renombrado in-situ.
+    let label: View<Msg> = if model.nav_rename.as_deref() == Some(n.key.as_str()) {
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(0.0_f32),
+                height: length(TREE_ROW_H),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![text_input_view(
+            &model.rename_input,
+            "nombre…",
+            true,
+            &TextInputPalette::from_theme(theme),
+            Msg::RenameStart,
+        )])
+    } else {
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(0.0_f32),
+                height: length(TREE_ROW_H),
+            },
+            padding: Rect {
+                left: length(2.0_f32),
+                right: length(6.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(n.label.clone(), 12.0, theme.fg_text, Alignment::Start)
+    };
+
+    // Líneas guía de indentación, pintadas por debajo de los hijos.
+    let guide = theme.border;
+    let depth = n.depth;
+    let row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(TREE_ROW_H),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(6.0_f32 + indent),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(if selected {
+        theme.bg_selected
+    } else {
+        theme.bg_panel
+    })
+    .hover_fill(theme.bg_row_hover)
+    .paint_with(move |scene, _ts, rect: PaintRect| {
+        if depth == 0 {
+            return;
+        }
+        let stroke = Stroke::new(1.0);
+        let col = guide;
+        for k in 0..depth {
+            let x = (rect.x + 6.0 + k as f32 * TREE_INDENT + 7.0) as f64;
+            let l = KurboLine::new((x, rect.y as f64), (x, (rect.y + rect.h) as f64));
+            scene.stroke(&stroke, llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY, col, None, &l);
+        }
+    })
+    .on_click(Msg::NavClick(n.key.clone()))
+    .on_right_click_at({
+        let key = n.key.clone();
+        move |lx, ly, _w, _h| {
+            Some(Msg::OpenNavCtx(
+                key.clone(),
+                lx,
+                TREE_TOP + vis as f32 * TREE_ROW_H + ly,
+            ))
+        }
+    })
+    .children(vec![chevron, icon_box, label]);
+    row
 }
 
 /// Barra de acciones del explorador: crear grupo/contacto/carta sobre la
@@ -1285,6 +1534,24 @@ pub(crate) fn overlay_view(model: &Model, theme: &Theme) -> Option<View<Msg>> {
             items,
             active: usize::MAX,
             on_pick: Arc::new(Msg::CtxPick),
+            on_dismiss: Msg::CloseCtx,
+            palette: pal,
+        }));
+    }
+    if let Some((key, anchor)) = &model.nav_ctx {
+        let entries = nav_ctx_entries(model, key);
+        let items: Vec<ContextMenuItem> = entries.iter().map(NavCtxItem::to_item).collect();
+        let header = model
+            .node(key)
+            .map(|n| n.label.to_uppercase())
+            .unwrap_or_else(|| "ÁRBOL".to_string());
+        return Some(context_menu_view(ContextMenuSpec {
+            anchor: *anchor,
+            viewport: VIEWPORT,
+            header: Some(header),
+            items,
+            active: usize::MAX,
+            on_pick: Arc::new(Msg::NavCtxPick),
             on_dismiss: Msg::CloseCtx,
             palette: pal,
         }));

@@ -527,6 +527,31 @@ fn apply_cmd(m: &mut Model, cmd: MenuCmd) {
     }
 }
 
+/// Ejecuta una acción del menú contextual del árbol sobre el nodo ya
+/// seleccionado (lo dejó `OpenNavCtx`).
+fn apply_nav_act(m: &mut Model, act: chrome::NavAct) {
+    use chrome::NavAct;
+    match act {
+        NavAct::NewGroup => new_group(m),
+        NavAct::NewContact => new_contact(m),
+        NavAct::NewChart => new_chart(m),
+        NavAct::Rename => {
+            if let Some(key) = m.nav_selected.clone() {
+                start_rename(m, key);
+            }
+        }
+        NavAct::Cut => {
+            m.nav_cut = m.nav_selected.clone();
+            if m.nav_cut.is_some() {
+                m.status_note = Some("Cortado — elegí un grupo destino y pegá".into());
+            }
+        }
+        NavAct::Paste => paste_node(m),
+        NavAct::Duplicate => do_duplicar(m),
+        NavAct::Delete => delete_selected(m),
+    }
+}
+
 fn save_ui(m: &Model) {
     save_ui_state(&UiState {
         overlays: m.overlays.clone(),
@@ -648,6 +673,7 @@ impl App for Cosmos {
             menu_active: usize::MAX,
             menu_anim: llimphi_motion::Tween::idle(1.0),
             ctx_open: None,
+            nav_ctx: None,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
         }
@@ -820,7 +846,29 @@ impl App for Cosmos {
                     persist = true;
                 }
             }
-            Msg::CloseCtx => m.ctx_open = None,
+            Msg::CloseCtx => {
+                m.ctx_open = None;
+                m.nav_ctx = None;
+            }
+            // menú contextual del árbol de datos
+            Msg::OpenNavCtx(key, x, y) => {
+                m.nav_selected = Some(key.clone());
+                m.nav_ctx = Some((key, (x, y)));
+                m.ctx_open = None;
+                m.menu_open = None;
+            }
+            Msg::NavCtxPick(idx) => {
+                let act = m
+                    .nav_ctx
+                    .as_ref()
+                    .map(|(k, _)| chrome::nav_ctx_entries(&m, k))
+                    .and_then(|entries| entries.get(idx).and_then(|e| e.act));
+                m.nav_ctx = None;
+                if let Some(act) = act {
+                    apply_nav_act(&mut m, act);
+                    persist = true;
+                }
+            }
             // layout guardable
             Msg::SetNavWidth(dx) => m.nudge_nav(dx),
             Msg::SetToolsWidth(dx) => m.nudge_tools(dx),
