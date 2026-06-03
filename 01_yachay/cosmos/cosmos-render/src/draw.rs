@@ -464,8 +464,9 @@ pub fn compose_wheel_with_hits(
     });
 
     // === Tinte translúcido de las casas geocéntricas ===
-    // Cada sector se colorea por el elemento del signo en su cusp, con
-    // opacidad baja — da color a las casas sin tapar lo que va encima.
+    // Cada sector se colorea por el color del lore de SU casa (Casa I =
+    // color de Aries, II = Tauro, …), con opacidad baja — da a cada casa
+    // su identidad de dominio sin tapar lo que va encima.
     for layer in &model.layers {
         if !matches!(layer.kind, crate::LayerKind::Houses) || layer.module_id == "topocentric" {
             continue;
@@ -475,19 +476,13 @@ pub fn compose_wheel_with_hits(
             for i in 0..n {
                 let from = cusps_deg[i];
                 let to = cusps_deg[(i + 1) % n];
-                let sign_idx = ((from.rem_euclid(360.0)) / 30.0) as usize % 12;
-                let elem = match sign_idx % 4 {
-                    0 => pal.fire,
-                    1 => pal.earth,
-                    2 => pal.air,
-                    _ => pal.water,
-                };
+                let casa = pal.house(i);
                 let pts = house_sector_points(
                     cx, cy, from, to, asc, rot, house_inner_r, house_outer_r,
                 );
                 out.push(DrawCommand::Polygon {
                     points: pts,
-                    fill: Some(elem.with_alpha(0.11)),
+                    fill: Some(casa.with_alpha(0.12)),
                     stroke: None,
                     stroke_w: 0.0,
                 });

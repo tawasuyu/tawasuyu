@@ -182,15 +182,46 @@ impl Palette {
         }
     }
 
-    /// Color del signo zodiacal por su elemento (fire/earth/air/water).
+    /// Color tradicional del signo zodiacal — su **color del lore**, no el
+    /// del elemento. Cada signo lleva su correspondencia clásica (Aries
+    /// rojo, Tauro verde, Géminis amarillo, Cáncer plata, Leo oro, Virgo
+    /// añil-pizarra, Libra rosa, Escorpio carmesí, Sagitario púrpura,
+    /// Capricornio tierra, Acuario azul eléctrico, Piscis verde-mar). La
+    /// claridad se adapta al tema para que se lea sobre fondo claro u
+    /// oscuro; el matiz es el mismo.
     pub fn sign(&self, sym: &str) -> Rgba {
-        match sym {
-            "aries" | "leo" | "sagittarius" => self.fire,
-            "taurus" | "virgo" | "capricorn" => self.earth,
-            "gemini" | "libra" | "aquarius" => self.air,
-            "cancer" | "scorpio" | "pisces" => self.water,
-            _ => self.fg_muted,
-        }
+        // (hue°, saturación, L oscuro, L claro)
+        let (h, s, ld, ll) = match sym {
+            "aries" => (2.0, 0.78, 0.60, 0.46),
+            "taurus" => (128.0, 0.45, 0.52, 0.36),
+            "gemini" => (50.0, 0.80, 0.62, 0.46),
+            "cancer" => (205.0, 0.20, 0.78, 0.52),
+            "leo" => (38.0, 0.88, 0.60, 0.46),
+            "virgo" => (235.0, 0.24, 0.60, 0.42),
+            "libra" => (330.0, 0.55, 0.72, 0.55),
+            "scorpio" => (348.0, 0.62, 0.50, 0.38),
+            "sagittarius" => (275.0, 0.55, 0.64, 0.48),
+            "capricorn" => (24.0, 0.42, 0.44, 0.32),
+            "aquarius" => (195.0, 0.74, 0.62, 0.46),
+            "pisces" => (165.0, 0.50, 0.58, 0.42),
+            _ => return self.fg_muted,
+        };
+        hsla(h, s, if self.is_dark { ld } else { ll }, 1.0)
+    }
+
+    /// Ids zodiacales en orden natural (Aries=0 … Piscis=11).
+    pub const ZODIAC: [&'static str; 12] = [
+        "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra",
+        "scorpio", "sagittarius", "capricorn", "aquarius", "pisces",
+    ];
+
+    /// Color del lore de una **casa** por su número (0 = Casa I … 11 =
+    /// Casa XII). La casa toma el color de su signo natural: la Casa I
+    /// es la casa de Aries, la II la de Tauro, etc. — la correspondencia
+    /// rueda-zodíaco del lore. Da a cada casa una identidad estable,
+    /// distinta de qué signo cae sobre su cúspide en una carta dada.
+    pub fn house(&self, idx: usize) -> Rgba {
+        self.sign(Self::ZODIAC[idx % 12])
     }
 
     /// Color del anillo de casas (sistema ascensional Polich-Page).
