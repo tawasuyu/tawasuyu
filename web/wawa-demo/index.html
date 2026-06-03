@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>wawa · demo web</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="escritorio">
+    <header id="barra">
+      <span class="marca">wawa</span>
+      <span class="separador">·</span>
+      <span class="contexto">demo web</span>
+      <span class="estado" id="estado">cargando…</span>
+    </header>
+
+    <main id="lienzos">
+      <section class="ventana" data-app="hello_wasm">
+        <header class="titulo">
+          <span class="punto"></span>
+          <span class="nombre">hello_wasm</span>
+          <span class="hint">W A S D para mover</span>
+        </header>
+        <canvas id="canvas-hello" width="480" height="560" tabindex="0"></canvas>
+      </section>
+    </main>
+
+    <footer id="pie">
+      <span>módulo <code>renaser</code> · <code>sys_render_frame</code> · <code>sys_get_scancode</code></span>
+    </footer>
+  </div>
+
+  <script type="module" src="wawa.js"></script>
+</body>
+</html>
