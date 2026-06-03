@@ -291,7 +291,7 @@ borde; shuma provee el contenido.
     del cache de hit-test y reubica la surface bajo el widget (`set_margin`/
     `set_size`); al salir se oculta fuera de vista. Cajita opaca (no depende de
     transparencia de surface). Runtime a validar en compositor (norma de pata).
-- **Fase 9 (arrancada)** — kernel launcher de wawa sobre `pata-core`. El kernel
+- **Fase 9 ✅** — kernel launcher de wawa sobre `pata-core`. El kernel
   enlaza `pata-core` por `path` (`default-features = false`, como mirada-layout) y
   consume el **mismo** modelo de widgets que el frontend Llimphi: `compositor::
   pata_marco` arma un `WidgetCtx` desde los datos del kernel (la RAM real del heap,
@@ -330,10 +330,18 @@ borde; shuma provee el contenido.
     de la barra (el equivalente al `Frame::work_area` de resolve). `region_barra_
     marco` deriva la franja una sola vez; el render la pinta ahí y el ratón
     hit-testea el `start_button` ahí — sin drift entre reservar, pintar y clickear.
-  - Pendiente: que un proceso de userspace **proponga** un config nuevo (syscall
-    que engendra el nodo y reancla el manifiesto, como `sys_config_proponer`) +
-    invalidar el cache; cuando el config sea dinámico, la reserva deberá leer el
-    grosor resuelto en vez de la constante `ALTO_BARRA`.
+  - **Propuesta de config desde userspace** — la capacidad WASM
+    `sys_marco_proponer(ptr, len)` (en `wasm/env/config.rs`, gateada por
+    `PERMISO_CONFIG` + foco, espejo de `sys_config_proponer`) recibe un
+    `WireConfig` postcard de la app, lo valida, lo graba en el grafo y reemplaza
+    el marco activo (`pata_marco::proponer`) — el config por akasha es
+    bidireccional. El cache es un `Mutex<Config>` que la propuesta reescribe.
+  - Cierre: el launcher de wawa corre sobre el MISMO `pata-core` que Linux —
+    declarativo, resuelto por `resolve`, con widgets, render al framebuffer,
+    input al `start_button`, y config por akasha (lectura + escritura). Refinos
+    futuros (no de Fase 9): que la reserva de franja lea el grosor resuelto
+    cuando una app proponga una barra de otro alto; persistir el marco activo en
+    el manifiesto (hoy el puntero vive en memoria, el nodo sí en el grafo).
 - **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
   excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
   nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se

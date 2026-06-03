@@ -81,6 +81,46 @@ pub(crate) fn enlazar_config(
             }
         },
     )?;
+
+    // --- CAPACIDAD 19 :: sys_marco_proponer(ptr, len) -> i32 ---
+    // El camino para mutar el **marco del escritorio** (la barra de menú de
+    // `pata`) desde una app: entrega un puntero + largo a un `WireConfig`
+    // serializado con postcard (el espejo postcard-safe de `pata_core`) en su
+    // memoria lineal. El kernel lo deserializa (validándolo), lo graba como un
+    // nodo NUEVO del grafo direccionado por contenido y reemplaza el marco
+    // activo — el siguiente `tick` pinta el marco nuevo. Mismo espíritu que
+    // `sys_config_proponer`: sin estados mutables sueltos, el config viaja por
+    // akasha. Gateada por PERMISO_CONFIG y por el foco (el marco lo gobierna el
+    // usuario, que interactúa con la ventana enfocada).
+    //
+    // Devuelve 0 al aplicar, -2 si la app no está enfocada, y `PayloadInvalido`
+    // si el largo es absurdo o los bytes no son un `WireConfig` válido.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_marco_proponer",
+        |caller: Caller<'_, ContextoCapacidades>, ptr: u32, len: u32| -> Result<i32, Error> {
+            if crate::compositor::foco() != caller.data().indice_app {
+                return Ok(CodigoError::SinFoco.como_i32());
+            }
+            // Tope defensivo: el config del marco es pequeño; lo absurdo se
+            // rechaza antes de tocar la memoria o el grafo.
+            if len == 0 || len > 64 * 1024 {
+                return Ok(CodigoError::PayloadInvalido.como_i32());
+            }
+            let memoria = obtener_memoria(&caller)?;
+            let datos = memoria.data(&caller);
+            let bytes = rango(
+                datos,
+                ptr,
+                len as usize,
+                "WASM :: sys_marco_proponer desbordo la memoria lineal",
+            )?;
+            match crate::compositor::pata_marco::proponer(bytes) {
+                Ok(()) => Ok(CodigoError::Ok.como_i32()),
+                Err(_) => Ok(CodigoError::PayloadInvalido.como_i32()),
+            }
+        },
+    )?;
     } // PERMISO_CONFIG
 
     // --- CAPACIDAD 18 :: sys_config_paleta(salida) -> i32 ---

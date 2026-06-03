@@ -20,7 +20,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use spin::Once;
+use spin::{Mutex, Once};
 
 use pata_core::layout::Rect as MarcoRect;
 use pata_core::widget::{build_all, WidgetCtx, WidgetView};
@@ -74,15 +74,36 @@ fn marco_por_defecto() -> Config {
 /// marco nunca se queda sin config. El resultado se cachea (`Once`): los frames
 /// siguientes no re-tocan el grafo.
 ///
-/// Pendiente: que un proceso de userspace **proponga** un config nuevo (vía un
-/// syscall que engendra el nodo y reancla el manifiesto, como
-/// `sys_config_proponer`), e invalidar este cache al reanclar.
-fn marco() -> &'static Config {
-    static MARCO: Once<Config> = Once::new();
+/// Un proceso de userspace puede **proponer** un config nuevo vía el syscall
+/// `sys_marco_proponer` (ver [`proponer`]), que reemplaza el contenido de esta
+/// celda — de ahí que sea un `Mutex` y no un `Once` inmutable.
+static MARCO: Once<Mutex<Config>> = Once::new();
+
+/// La celda del config del marco, inicializada perezosamente con el round-trip
+/// por akasha del [`marco_por_defecto`]. La comparten el render (lectura) y el
+/// syscall de propuesta (escritura).
+fn marco_cell() -> &'static Mutex<Config> {
     MARCO.call_once(|| {
         let def = marco_por_defecto();
-        cargar_de_akasha(&def).unwrap_or(def)
+        Mutex::new(cargar_de_akasha(&def).unwrap_or(def))
     })
+}
+
+/// **Propone** un config nuevo desde userspace: los `bytes` son un [`WireConfig`]
+/// serializado con postcard (el espejo postcard-safe). El kernel lo deserializa
+/// (validándolo), lo re-serializa canónico y lo **graba en el grafo**
+/// direccionado por contenido, y reemplaza el marco activo — el próximo frame
+/// pinta el nuevo. Lo invoca la capacidad WASM `sys_marco_proponer`. Devuelve
+/// error si los bytes no son un `WireConfig` válido o el grafo no acepta el nodo;
+/// en ese caso el marco activo no cambia.
+pub(crate) fn proponer(bytes: &[u8]) -> Result<(), &'static str> {
+    let wire: WireConfig =
+        postcard::from_bytes(bytes).map_err(|_| "marco :: config propuesto invalido")?;
+    // Re-serializar desde el wire ya parseado garantiza un nodo canónico.
+    let canon = postcard::to_allocvec(&wire).map_err(|_| "marco :: serializacion fallida")?;
+    let _hash = almacen::almacenar(canon, Vec::new())?;
+    *marco_cell().lock() = Config::from(wire);
+    Ok(())
 }
 
 /// Graba `cfg` en el grafo (postcard sobre su espejo `wire`) y lo lee de vuelta,
@@ -260,14 +281,14 @@ fn pintar_barra(lienzo: &mut Lienzo, rect: MarcoRect, s: &Surface, ctx: &WidgetC
 /// wawa) y pinta cada barra resuelta en su rect, con sus tres slots. La llama el
 /// compositor (`consola::recomponer`) tras componer el escritorio.
 pub(crate) fn pintar_marco(lienzo: &mut Lienzo, area: RegionPantalla) {
-    let cfg = marco();
+    let cfg = marco_cell().lock();
     let pantalla = MarcoRect::new(
         area.x as i32,
         area.y as i32,
         area.ancho as i32,
         area.alto as i32,
     );
-    let frame = resolve(cfg, pantalla);
+    let frame = resolve(&cfg, pantalla);
     let ctx = ctx_kernel();
     for placed in &frame.surfaces {
         let s = &cfg.surfaces[placed.index];
@@ -285,14 +306,14 @@ pub(crate) fn pintar_marco(lienzo: &mut Lienzo, area: RegionPantalla) {
 /// target generoso (el padding + el glifo). Espeja la posición que pinta
 /// [`pintar_barra`] (start pegado al borde izquierdo, en `bar.x + PAD`).
 pub(crate) fn start_button_rect(area: RegionPantalla) -> Option<RegionPantalla> {
-    let cfg = marco();
+    let cfg = marco_cell().lock();
     let pantalla = MarcoRect::new(
         area.x as i32,
         area.y as i32,
         area.ancho as i32,
         area.alto as i32,
     );
-    let frame = resolve(cfg, pantalla);
+    let frame = resolve(&cfg, pantalla);
     let ctx = ctx_kernel();
     for placed in &frame.surfaces {
         let s = &cfg.surfaces[placed.index];
