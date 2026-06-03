@@ -1218,6 +1218,7 @@ pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl>
     let mut color: Option<Color> = None;
     let mut current: bool = false;
     let mut style_active: Option<bool> = None;
+    let mut line_style: Option<BorderLineStyle> = None;
     for tok in value.split_whitespace() {
         if !current && color.is_none() && is_current_color(tok) {
             current = true;
@@ -1232,6 +1233,7 @@ pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl>
         if style_active.is_none() {
             if let Some(active) = parse_border_style(tok) {
                 style_active = Some(active);
+                line_style = parse_border_line_style(tok);
                 continue;
             }
         }
@@ -1259,6 +1261,9 @@ pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl>
     }
     if style_active.is_some() {
         out.push(Decl { kind: DeclKind::OutlineStyle(true), important });
+    }
+    if let Some(ls) = line_style {
+        out.push(Decl { kind: DeclKind::OutlineStylePattern(ls), important });
     }
     out
 }

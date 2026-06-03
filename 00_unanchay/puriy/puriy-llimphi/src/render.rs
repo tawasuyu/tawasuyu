@@ -1776,6 +1776,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
             b.outline.color.unwrap(),
             b.outline.width * z,
             b.outline.offset * z,
+            b.outline.style,
         ))
     } else {
         None
@@ -2011,21 +2012,33 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 scene.stroke(&side_stroke(w as f64), Affine::IDENTITY, color, None, &line);
             }
         }
-        if let Some((oc, ow, off)) = outline {
-            let stroke = Stroke::new(ow as f64);
-            let half = stroke.width * 0.5;
+        if let Some((oc, ow, off, ostyle)) = outline {
+            let w = ow as f64;
+            let half = w * 0.5;
             // outline se dibuja FUERA del border, separado por `offset`.
             let outset = (off as f64) + half;
-            let r = RoundedRect::new(
-                rect.x as f64 - outset,
-                rect.y as f64 - outset,
-                (rect.x + rect.w) as f64 + outset,
-                (rect.y + rect.h) as f64 + outset,
-                radius + outset,
-            );
+            let mk_r = |extra: f64| {
+                RoundedRect::new(
+                    rect.x as f64 - off as f64 - extra,
+                    rect.y as f64 - off as f64 - extra,
+                    (rect.x + rect.w) as f64 + off as f64 + extra,
+                    (rect.y + rect.h) as f64 + off as f64 + extra,
+                    radius + off as f64 + extra,
+                )
+            };
             let a = (oc.a as f32 * alpha_mul) as u8;
             let color = Color::from_rgba8(oc.r, oc.g, oc.b, a);
-            scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+            if let BorderLineStyle::Double = ostyle {
+                let sw = (w / 3.0).max(1.0);
+                scene.stroke(&Stroke::new(sw), Affine::IDENTITY, color, None, &mk_r(sw * 0.5));
+                scene.stroke(&Stroke::new(sw), Affine::IDENTITY, color, None, &mk_r(w - sw * 0.5));
+            } else {
+                let mut stroke = Stroke::new(w);
+                if let Some(p) = border_dash_pattern(ostyle, w) {
+                    stroke = stroke.with_dashes(0.0, p);
+                }
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &mk_r(half));
+            }
         }
         if let Some(d) = deco {
             let line_kind = d.line;

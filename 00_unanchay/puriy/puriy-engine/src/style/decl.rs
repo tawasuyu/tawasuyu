@@ -160,6 +160,8 @@ pub(crate) enum DeclKind {
     OutlineWidth(f32),
     OutlineColor(Color),
     OutlineStyle(bool),
+    /// Patrón visual del outline (`dashed`/`dotted`/`double`/`solid`).
+    OutlineStylePattern(BorderLineStyle),
     OutlineOffset(f32),
     BackgroundGradient(LinearGradient),
     /// `background-image: none` limpia el gradient (un autor puede
@@ -320,6 +322,7 @@ impl Decl {
                     s.outline.color = None;
                 }
             }
+            DeclKind::OutlineStylePattern(p) => s.outline.style = *p,
             DeclKind::OutlineOffset(v) => s.outline.offset = *v,
             DeclKind::BackgroundGradient(g) => s.background_gradient = Some(g.clone()),
             DeclKind::BackgroundGradientNone => {

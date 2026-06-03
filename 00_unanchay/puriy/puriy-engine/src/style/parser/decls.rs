@@ -49,6 +49,16 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `outline-style`: togglea style_active + fija el patrón visual.
+        if prop.eq_ignore_ascii_case("outline-style") {
+            if let Some(on) = parse_border_style(value) {
+                out.push(Decl { kind: DeclKind::OutlineStyle(on), important });
+                if let Some(ls) = parse_border_line_style(value) {
+                    out.push(Decl { kind: DeclKind::OutlineStylePattern(ls), important });
+                }
+            }
+            continue;
+        }
         if let Some(decls) = parse_logical_border(prop, value, important) {
             out.extend(decls);
             continue;

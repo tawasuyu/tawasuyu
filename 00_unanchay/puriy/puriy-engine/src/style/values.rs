@@ -453,13 +453,21 @@ pub struct Outline {
     pub width: f32,
     pub color: Option<Color>,
     pub style_active: bool,
+    /// Patrón visual del outline (reusa el enum de border). Default `Solid`.
+    pub style: BorderLineStyle,
     /// Distancia del border al outline. Default 0.
     pub offset: f32,
 }
 
 impl Default for Outline {
     fn default() -> Self {
-        Self { width: 0.0, color: None, style_active: true, offset: 0.0 }
+        Self {
+            width: 0.0,
+            color: None,
+            style_active: true,
+            style: BorderLineStyle::Solid,
+            offset: 0.0,
+        }
     }
 }
 

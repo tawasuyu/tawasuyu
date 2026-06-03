@@ -774,6 +774,39 @@ mod tests {
     }
 
     #[test]
+    fn outline_style_dashed_dotted() {
+        let html = r##"<html><head><style>
+            div.sh { outline: 2px dashed red }
+            div.ls { outline-color: blue; outline-width: 3px; outline-style: dotted }
+            div.db { outline: 4px double green }
+            div.none { outline: 1px solid black; outline-style: none }
+            div.plain { outline: 1px solid black }
+        </style></head><body>
+            <div class="sh"></div><div class="ls"></div><div class="db"></div>
+            <div class="none"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        assert_eq!(divs.len(), 5);
+        let sh = eng.compute(&divs[0]).outline;
+        assert_eq!(sh.style, BorderLineStyle::Dashed);
+        assert!(sh.style_active);
+        assert_eq!(sh.width, 2.0);
+        assert_eq!(eng.compute(&divs[1]).outline.style, BorderLineStyle::Dotted);
+        assert_eq!(eng.compute(&divs[2]).outline.style, BorderLineStyle::Double);
+        // `outline-style: none` apaga (style_active=false).
+        assert!(!eng.compute(&divs[3]).outline.style_active);
+        // Default → Solid.
+        assert_eq!(eng.compute(&divs[4]).outline.style, BorderLineStyle::Solid);
+    }
+
+    #[test]
     fn border_style_dashed_dotted_double() {
         // Parser del keyword → patrón visual.
         assert_eq!(parse_border_line_style("dashed"), Some(BorderLineStyle::Dashed));
