@@ -14,7 +14,7 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 
 use crate::model::Msg;
-use crate::view::{line, tile_container};
+use crate::view::line;
 
 const ASTROCARTO_OBLIQUITY: f64 = 23.4393;
 const ASTROCARTO_W: f32 = 320.0;
@@ -115,9 +115,13 @@ pub(crate) fn tile_astrocarto(
     let canvas = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(ASTROCARTO_H + 4.0),
+            height: percent(0.0_f32),
         },
-        flex_shrink: 0.0,
+        flex_grow: 1.0,
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
         ..Default::default()
     })
     .fill(bg)
@@ -140,6 +144,46 @@ pub(crate) fn tile_astrocarto(
         let off_x = rect.x as f64 + (rect.w as f64 - disp_w) * 0.5 + pan.0;
         let off_y = rect.y as f64 + (rect.h as f64 - disp_h) * 0.5 + pan.1;
         let xform = Affine::translate((off_x, off_y)) * Affine::scale(scale);
+
+        // Mapa de fondo: continentes (world-countries.geojson vía
+        // nahual-geo-core). Relleno tenue de tierra + contorno de costas.
+        let land_fill = PColor::from_rgba8(
+            (grid.components[0] * 255.0) as u8,
+            (grid.components[1] * 255.0) as u8,
+            (grid.components[2] * 255.0) as u8,
+            38,
+        );
+        let coast = PColor::from_rgba8(
+            (grid.components[0] * 255.0) as u8,
+            (grid.components[1] * 255.0) as u8,
+            (grid.components[2] * 255.0) as u8,
+            150,
+        );
+        for poly in &nahual_geo_core::world_base().polygons {
+            for ring in poly {
+                if ring.len() < 2 {
+                    continue;
+                }
+                let mut path = BezPath::new();
+                for (i, c) in ring.iter().enumerate() {
+                    let (x, y) = project_lon_lat(c[0], c[1]);
+                    if i == 0 {
+                        path.move_to((x as f64, y as f64));
+                    } else {
+                        path.line_to((x as f64, y as f64));
+                    }
+                }
+                path.close_path();
+                scene.fill(
+                    llimphi_ui::llimphi_raster::peniko::Fill::NonZero,
+                    xform,
+                    land_fill,
+                    None,
+                    &path,
+                );
+                scene.stroke(&Stroke::new(0.4), xform, coast, None, &path);
+            }
+        }
 
         // Grilla (graticule) más densa para dar sensación de mapa.
         let grid_color = PColor::from_rgba8(
@@ -254,17 +298,37 @@ pub(crate) fn tile_astrocarto(
         );
     });
 
-    tile_container(
-        vec![
-            canvas,
-            line(
-                rimay_localize::t("cosmos-astrocarto-leyenda"),
-                9.0,
-                theme.fg_muted,
-            ),
-        ],
-        theme,
-    )
+    // Columna a alto completo: el lienzo ocupa todo el espacio (base más
+    // grande), la leyenda abajo.
+    let legend = line(
+        rimay_localize::t("cosmos-astrocarto-leyenda"),
+        9.0,
+        theme.fg_muted,
+    );
+    View::new(Style {
+        flex_direction: llimphi_ui::llimphi_layout::taffy::prelude::FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        padding: llimphi_ui::llimphi_layout::taffy::Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(8.0_f32),
+            bottom: length(6.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![canvas, legend])
 }
 
 fn wrap_lon(lon: f64) -> f64 {

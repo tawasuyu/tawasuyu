@@ -25,6 +25,7 @@ cosmos-sundial = { path = "../cosmos-sundial" }
 cosmos-tides = { path = "../cosmos-tides" }
 cosmos-rise-set = { path = "../cosmos-rise-set" }
 cosmos-eclipses = { path = "../cosmos-eclipses" }
+nahual-geo-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
