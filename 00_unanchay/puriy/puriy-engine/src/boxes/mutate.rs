@@ -231,6 +231,11 @@ pub(crate) fn inherit_style_to_child(parent: &BoxNode, child: &mut BoxNode) {
     // text-overflow NO se hereda (CSS spec); scroll-behavior y tab-size sí.
     child.scroll_behavior = parent.scroll_behavior;
     child.tab_size = parent.tab_size;
+    // user-select, overflow-wrap, word-break, hyphens heredan. resize NO.
+    child.user_select = parent.user_select;
+    child.overflow_wrap = parent.overflow_wrap;
+    child.word_break = parent.word_break;
+    child.hyphens = parent.hyphens;
     // Propagar al text leaf interno (primer hijo si es text node).
     for c in child.children.iter_mut() {
         if c.text.is_some() {
@@ -693,6 +698,11 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.text_overflow = s.text_overflow;
     b.scroll_behavior = s.scroll_behavior;
     b.tab_size = s.tab_size;
+    b.user_select = s.user_select;
+    b.overflow_wrap = s.overflow_wrap;
+    b.word_break = s.word_break;
+    b.hyphens = s.hyphens;
+    b.resize = s.resize;
     b.text_indent = s.text_indent;
     b.word_spacing = s.word_spacing;
     b.letter_spacing = s.letter_spacing;
@@ -735,6 +745,10 @@ pub(crate) fn set_leaf_inherited(leaf: &mut BoxNode, p: &ComputedStyle) {
     leaf.cursor = p.cursor;
     leaf.scroll_behavior = p.scroll_behavior;
     leaf.tab_size = p.tab_size;
+    leaf.user_select = p.user_select;
+    leaf.overflow_wrap = p.overflow_wrap;
+    leaf.word_break = p.word_break;
+    leaf.hyphens = p.hyphens;
 }
 
 pub(crate) fn propagate_text_color(node: &mut BoxNode, c: Color) {

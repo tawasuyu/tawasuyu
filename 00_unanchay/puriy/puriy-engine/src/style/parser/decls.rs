@@ -396,6 +396,19 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "text-overflow" => parse_text_overflow(value).map(DeclKind::TextOverflow),
         "scroll-behavior" => parse_scroll_behavior(value).map(DeclKind::ScrollBehavior),
         "tab-size" | "-moz-tab-size" => parse_tab_size(value).map(DeclKind::TabSize),
+        // CSS UI 4 — `user-select` con sus prefijos legacy.
+        "user-select" | "-webkit-user-select" | "-moz-user-select" | "-ms-user-select" => {
+            parse_user_select(value).map(DeclKind::UserSelect)
+        }
+        // `word-wrap` es alias legacy IE; CSS Text 3 los unificó.
+        "overflow-wrap" | "word-wrap" => {
+            parse_overflow_wrap(value).map(DeclKind::OverflowWrap)
+        }
+        "word-break" => parse_word_break(value).map(DeclKind::WordBreak),
+        "hyphens" | "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" => {
+            parse_hyphens(value).map(DeclKind::Hyphens)
+        }
+        "resize" => parse_resize(value).map(DeclKind::Resize),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -613,6 +626,74 @@ pub(crate) fn parse_scroll_behavior(value: &str) -> Option<ScrollBehavior> {
     match value.trim().to_ascii_lowercase().as_str() {
         "auto" => Some(ScrollBehavior::Auto),
         "smooth" => Some(ScrollBehavior::Smooth),
+        _ => None,
+    }
+}
+
+/// `user-select`: subset CSS UI 4. Case-insensitive. `none` desactiva
+/// la selección por mouse; `text` la fuerza incluso en elementos donde
+/// el UA la suprime; `all` selecciona el subárbol entero al click;
+/// `contain` aísla la selección al elemento (sin propagar al padre).
+pub(crate) fn parse_user_select(value: &str) -> Option<UserSelect> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(UserSelect::Auto),
+        "none" => Some(UserSelect::None),
+        "text" => Some(UserSelect::Text),
+        "all" => Some(UserSelect::All),
+        "contain" => Some(UserSelect::Contain),
+        _ => None,
+    }
+}
+
+/// `overflow-wrap`: `normal` (quiebres del idioma), `break-word`
+/// (cualquier punto si no entra), `anywhere` (idem `break-word` pero
+/// además contribuye al `min-content`). Alias `word-wrap`.
+pub(crate) fn parse_overflow_wrap(value: &str) -> Option<OverflowWrap> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(OverflowWrap::Normal),
+        "break-word" => Some(OverflowWrap::BreakWord),
+        "anywhere" => Some(OverflowWrap::Anywhere),
+        _ => None,
+    }
+}
+
+/// `word-break`: `normal`, `break-all` (cualquier carácter, típico CJK),
+/// `keep-all` (sólo separadores reales). `break-word` legacy se mapea a
+/// `Normal` por compat (CSS spec dice computar a `normal` y setear
+/// `overflow-wrap: anywhere` — acá no lo cruzamos para no acoplar).
+pub(crate) fn parse_word_break(value: &str) -> Option<WordBreak> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(WordBreak::Normal),
+        "break-all" => Some(WordBreak::BreakAll),
+        "keep-all" => Some(WordBreak::KeepAll),
+        "break-word" => Some(WordBreak::Normal),
+        _ => None,
+    }
+}
+
+/// `hyphens`: control de hyphenation. `auto` requeriría diccionarios
+/// por idioma — lo aceptamos como valor pero el shaper no lo aplica.
+pub(crate) fn parse_hyphens(value: &str) -> Option<Hyphens> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(Hyphens::None),
+        "manual" => Some(Hyphens::Manual),
+        "auto" => Some(Hyphens::Auto),
+        _ => None,
+    }
+}
+
+/// `resize`: el usuario arrastra el borde para redimensionar.
+/// `block`/`inline` mapean a vertical/horizontal en `writing-mode`
+/// horizontal-tb (el único que soportamos). Sólo aplica si el elemento
+/// tiene `overflow != visible` por spec; ese chequeo queda al consumidor.
+pub(crate) fn parse_resize(value: &str) -> Option<Resize> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(Resize::None),
+        "both" => Some(Resize::Both),
+        "horizontal" => Some(Resize::Horizontal),
+        "vertical" => Some(Resize::Vertical),
+        "block" => Some(Resize::Block),
+        "inline" => Some(Resize::Inline),
         _ => None,
     }
 }

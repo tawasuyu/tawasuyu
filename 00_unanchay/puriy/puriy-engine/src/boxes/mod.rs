@@ -16,11 +16,11 @@ use crate::style::{
     BackgroundRepeat, BackgroundSize, BorderLineStyle,
     BoxShadow, BoxSizing, ComputedStyle, Corners, Cursor,
     FlexDirection, FlexWrap,
-    GridTrackSize, JustifyContent, LengthVal, LinearGradient, ListStyleType, ObjectFit, Outline,
-    Overflow, PointerEvents, Position, ScrollBehavior, Sides, StyleEngine,
-    TabSize, TextAlign, TextDecorationLine,
+    GridTrackSize, Hyphens, JustifyContent, LengthVal, LinearGradient, ListStyleType, ObjectFit,
+    Outline, Overflow, OverflowWrap, PointerEvents, Position, Resize, ScrollBehavior, Sides,
+    StyleEngine, TabSize, TextAlign, TextDecorationLine,
     TextDecorationStyle, TextOverflow, TextShadow,
-    TextTransform, Transform, VerticalAlign, Visibility, WhiteSpace,
+    TextTransform, Transform, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Modelo de datos (`Color`/`Display`/`BoxNode`/`BoxTree` + tipos auxiliares).

@@ -223,6 +223,25 @@ pub struct ComputedStyle {
     /// shaper aún no consume este campo (los `\t` se renderizan según
     /// el comportamiento default de parley).
     pub tab_size: TabSize,
+    /// `user-select` (Fase 7.244). Heredable (CSS UI 4). Controla si el
+    /// usuario puede seleccionar el texto del elemento. Sólo parseado/
+    /// propagado — el chrome todavía no consulta este campo al construir
+    /// las selecciones del text-input shared.
+    pub user_select: UserSelect,
+    /// `overflow-wrap` (Fase 7.245). Heredable. Controla si se permite
+    /// quebrar palabras largas. Alias legacy `word-wrap`. Sólo plumb.
+    pub overflow_wrap: OverflowWrap,
+    /// `word-break` (Fase 7.246). Heredable. Controla cómo se quiebran
+    /// palabras en el wrap. Subset (`break-word` se aplana a `Normal`
+    /// por compat antigua de IE). Plumb.
+    pub word_break: WordBreak,
+    /// `hyphens` (Fase 7.247). Heredable. `auto` requeriría diccionarios
+    /// de hyphenation por idioma — fuera de scope. Plumb.
+    pub hyphens: Hyphens,
+    /// `resize` (Fase 7.248). NO heredable. Sólo aplica a elementos con
+    /// `overflow` distinto a `visible` (CSS UI 4); el chrome aún no pinta
+    /// el grip ni el handle de drag. Plumb.
+    pub resize: Resize,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -369,6 +388,65 @@ pub enum ScrollBehavior {
 pub enum TabSize {
     Chars(u16),
     Px(f32),
+}
+
+/// `user-select`: controla si el usuario puede seleccionar texto del
+/// elemento. `Auto` = default del UA (texto seleccionable en bloque
+/// de texto; no en widgets nativos). Heredable. Fase 7.244.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UserSelect {
+    #[default]
+    Auto,
+    None,
+    Text,
+    All,
+    Contain,
+}
+
+/// `overflow-wrap` (alias legacy `word-wrap`): permite que el text shaper
+/// quiebre dentro de una palabra cuando la línea no le alcanza. Default
+/// `Normal` (sólo quiebra en oportunidades válidas del idioma).
+/// Heredable. Fase 7.245.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverflowWrap {
+    #[default]
+    Normal,
+    BreakWord,
+    Anywhere,
+}
+
+/// `word-break`: política de quiebre de palabra. `BreakAll` (CJK) y
+/// `KeepAll` (sólo en separadores reales). Heredable. Fase 7.246.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WordBreak {
+    #[default]
+    Normal,
+    BreakAll,
+    KeepAll,
+}
+
+/// `hyphens`: control de hyphenation. `Auto` requeriría diccionarios por
+/// idioma; quedó como acepto-pero-no-aplico. Heredable. Fase 7.247.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hyphens {
+    #[default]
+    Manual,
+    None,
+    Auto,
+}
+
+/// `resize`: el usuario puede arrastrar el borde del elemento para
+/// redimensionarlo (típicamente `<textarea>`). Default `None`.
+/// NO heredable. Fase 7.248.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Resize {
+    #[default]
+    None,
+    Both,
+    Horizontal,
+    Vertical,
+    Block,
+    Inline,
 }
 
 /// CSS `border-style` reducido al subset que el chrome pinta: `solid`
@@ -1154,6 +1232,11 @@ impl Default for ComputedStyle {
             text_overflow: TextOverflow::Clip,
             scroll_behavior: ScrollBehavior::Auto,
             tab_size: TabSize::Chars(8),
+            user_select: UserSelect::Auto,
+            overflow_wrap: OverflowWrap::Normal,
+            word_break: WordBreak::Normal,
+            hyphens: Hyphens::Manual,
+            resize: Resize::None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

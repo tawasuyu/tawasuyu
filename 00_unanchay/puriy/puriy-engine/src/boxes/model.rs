@@ -183,6 +183,16 @@ pub struct BoxNode {
     pub scroll_behavior: ScrollBehavior,
     /// `tab-size`. Heredable. Fase 7.243.
     pub tab_size: TabSize,
+    /// `user-select`. Heredable. Fase 7.244.
+    pub user_select: UserSelect,
+    /// `overflow-wrap`. Heredable. Fase 7.245.
+    pub overflow_wrap: OverflowWrap,
+    /// `word-break`. Heredable. Fase 7.246.
+    pub word_break: WordBreak,
+    /// `hyphens`. Heredable. Fase 7.247.
+    pub hyphens: Hyphens,
+    /// `resize`. NO heredable. Fase 7.248.
+    pub resize: Resize,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no

@@ -215,6 +215,12 @@ impl StyleEngine {
             // text-overflow NO hereda (CSS UI 3).
             style.scroll_behavior = p.scroll_behavior;
             style.tab_size = p.tab_size;
+            // user-select (CSS UI 4) hereda; overflow-wrap, word-break,
+            // hyphens (CSS Text 3) también. resize (CSS UI 4) NO hereda.
+            style.user_select = p.user_select;
+            style.overflow_wrap = p.overflow_wrap;
+            style.word_break = p.word_break;
+            style.hyphens = p.hyphens;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -959,6 +965,205 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&pres[1], Some(&body_cs)).tab_size,
             TabSize::Chars(4)
+        );
+    }
+
+    #[test]
+    fn user_select_fase_7_244() {
+        assert_eq!(parse_user_select("none"), Some(UserSelect::None));
+        assert_eq!(parse_user_select("TEXT"), Some(UserSelect::Text));
+        assert_eq!(parse_user_select("all"), Some(UserSelect::All));
+        assert_eq!(parse_user_select("contain"), Some(UserSelect::Contain));
+        assert_eq!(parse_user_select("auto"), Some(UserSelect::Auto));
+        assert_eq!(parse_user_select("nada"), None);
+
+        let html = r##"<html><head><style>
+            body { user-select: text }
+            div.lock { user-select: none }
+            div.plain {}
+        </style></head><body>
+          <div class="lock"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.user_select, UserSelect::Text);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).user_select,
+            UserSelect::None
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).user_select,
+            UserSelect::Text
+        );
+    }
+
+    #[test]
+    fn overflow_wrap_fase_7_245() {
+        assert_eq!(parse_overflow_wrap("normal"), Some(OverflowWrap::Normal));
+        assert_eq!(parse_overflow_wrap("break-word"), Some(OverflowWrap::BreakWord));
+        assert_eq!(parse_overflow_wrap("ANYWHERE"), Some(OverflowWrap::Anywhere));
+        assert_eq!(parse_overflow_wrap("nope"), None);
+
+        // `word-wrap` alias legacy.
+        let html = r##"<html><head><style>
+            body { word-wrap: break-word }
+            p.b {}
+            p.over { overflow-wrap: anywhere }
+        </style></head><body>
+          <p class="b"></p><p class="over"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.overflow_wrap, OverflowWrap::BreakWord);
+        // Heredado del body.
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs)).overflow_wrap,
+            OverflowWrap::BreakWord
+        );
+        assert_eq!(
+            eng.compute_with_parent(&ps[1], Some(&body_cs)).overflow_wrap,
+            OverflowWrap::Anywhere
+        );
+    }
+
+    #[test]
+    fn word_break_fase_7_246() {
+        assert_eq!(parse_word_break("normal"), Some(WordBreak::Normal));
+        assert_eq!(parse_word_break("break-all"), Some(WordBreak::BreakAll));
+        assert_eq!(parse_word_break("keep-all"), Some(WordBreak::KeepAll));
+        // `break-word` legacy → Normal por compat.
+        assert_eq!(parse_word_break("break-word"), Some(WordBreak::Normal));
+        assert_eq!(parse_word_break("nada"), None);
+
+        let html = r##"<html><head><style>
+            body { word-break: break-all }
+            p.k { word-break: keep-all }
+            p.plain {}
+        </style></head><body>
+          <p class="k"></p><p class="plain"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.word_break, WordBreak::BreakAll);
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs)).word_break,
+            WordBreak::KeepAll
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&ps[1], Some(&body_cs)).word_break,
+            WordBreak::BreakAll
+        );
+    }
+
+    #[test]
+    fn hyphens_fase_7_247() {
+        assert_eq!(parse_hyphens("none"), Some(Hyphens::None));
+        assert_eq!(parse_hyphens("MANUAL"), Some(Hyphens::Manual));
+        assert_eq!(parse_hyphens("auto"), Some(Hyphens::Auto));
+        assert_eq!(parse_hyphens("x"), None);
+
+        let html = r##"<html><head><style>
+            body { -webkit-hyphens: auto }
+            p.off { hyphens: none }
+            p.plain {}
+        </style></head><body>
+          <p class="off"></p><p class="plain"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.hyphens, Hyphens::Auto);
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs)).hyphens,
+            Hyphens::None
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&ps[1], Some(&body_cs)).hyphens,
+            Hyphens::Auto
+        );
+    }
+
+    #[test]
+    fn resize_fase_7_248() {
+        assert_eq!(parse_resize("none"), Some(Resize::None));
+        assert_eq!(parse_resize("both"), Some(Resize::Both));
+        assert_eq!(parse_resize("HORIZONTAL"), Some(Resize::Horizontal));
+        assert_eq!(parse_resize("vertical"), Some(Resize::Vertical));
+        assert_eq!(parse_resize("block"), Some(Resize::Block));
+        assert_eq!(parse_resize("inline"), Some(Resize::Inline));
+        assert_eq!(parse_resize("auto"), None);
+
+        // `resize` NO se hereda (CSS UI 4).
+        let html = r##"<html><head><style>
+            body { resize: both }
+            div.r { resize: vertical }
+            div.plain {}
+        </style></head><body>
+          <div class="r"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.resize, Resize::Both);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).resize,
+            Resize::Vertical
+        );
+        // NO se hereda → default `None`.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).resize,
+            Resize::None
         );
     }
 
