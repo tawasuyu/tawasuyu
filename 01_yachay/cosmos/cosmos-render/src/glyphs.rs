@@ -144,6 +144,236 @@ pub fn retrograde_marker(cx: f32, cy: f32, size: f32, color: Rgba) -> DrawComman
     }
 }
 
+/// Devuelve los comandos para dibujar el glyph de un aspecto
+/// (`"conjunction"`, `"opposition"`, `"trine"`, …) centrado en
+/// `(cx, cy)`. Mismo motivo que [`planet_commands`]/[`sign_commands`]:
+/// los unicode ☌☍△□⚹ caen como `.notdef` en las fuentes default. Si el
+/// `kind` no es reconocido devuelve un punto relleno (bullet).
+pub fn aspect_commands(
+    kind: &str,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    color: Rgba,
+    stroke_w: f32,
+) -> Vec<DrawCommand> {
+    let r = size * 0.5;
+    let stroke = Some(color);
+    match kind {
+        // ─── Conjunción ☌: círculo con cola hacia arriba-derecha ─────
+        "conjunction" => {
+            let bcx = cx - r * 0.18;
+            let bcy = cy + r * 0.22;
+            let br = r * 0.42;
+            vec![
+                DrawCommand::Circle {
+                    cx: bcx,
+                    cy: bcy,
+                    r: br,
+                    stroke,
+                    fill: None,
+                    stroke_w,
+                },
+                DrawCommand::Line {
+                    x1: bcx + br * 0.55,
+                    y1: bcy - br * 0.55,
+                    x2: cx + r * 0.75,
+                    y2: cy - r * 0.85,
+                    color,
+                    width: stroke_w,
+                    dash: None,
+                },
+            ]
+        }
+        // ─── Oposición ☍: dos discos unidos por una recta ────────────
+        "opposition" => {
+            let dot = r * 0.22;
+            vec![
+                DrawCommand::Line {
+                    x1: cx,
+                    y1: cy - r * 0.7,
+                    x2: cx,
+                    y2: cy + r * 0.7,
+                    color,
+                    width: stroke_w,
+                    dash: None,
+                },
+                DrawCommand::Circle {
+                    cx,
+                    cy: cy - r * 0.7,
+                    r: dot,
+                    stroke: None,
+                    fill: Some(color),
+                    stroke_w: 0.0,
+                },
+                DrawCommand::Circle {
+                    cx,
+                    cy: cy + r * 0.7,
+                    r: dot,
+                    stroke: None,
+                    fill: Some(color),
+                    stroke_w: 0.0,
+                },
+            ]
+        }
+        // ─── Trígono △: triángulo equilátero apuntando arriba ────────
+        "trine" => vec![DrawCommand::Polygon {
+            points: vec![
+                (cx, cy - r * 0.8),
+                (cx + r * 0.72, cy + r * 0.55),
+                (cx - r * 0.72, cy + r * 0.55),
+            ],
+            fill: None,
+            stroke,
+            stroke_w,
+        }],
+        // ─── Cuadratura □: cuadrado ──────────────────────────────────
+        "square" => {
+            let s = r * 0.62;
+            vec![DrawCommand::Polygon {
+                points: vec![
+                    (cx - s, cy - s),
+                    (cx + s, cy - s),
+                    (cx + s, cy + s),
+                    (cx - s, cy + s),
+                ],
+                fill: None,
+                stroke,
+                stroke_w,
+            }]
+        }
+        // ─── Sextil ✶: asterisco de 6 puntas (3 rectas por el centro) ─
+        "sextile" => {
+            let mut out = Vec::with_capacity(3);
+            for k in 0..3 {
+                let ang = std::f32::consts::PI * (k as f32) / 3.0 + std::f32::consts::FRAC_PI_2;
+                let (s, c) = ang.sin_cos();
+                out.push(DrawCommand::Line {
+                    x1: cx - c * r * 0.8,
+                    y1: cy - s * r * 0.8,
+                    x2: cx + c * r * 0.8,
+                    y2: cy + s * r * 0.8,
+                    color,
+                    width: stroke_w,
+                    dash: None,
+                });
+            }
+            out
+        }
+        // ─── Quincuncio ⚻: pico con tallo vertical (Y sin bifurcar) ──
+        "quincunx" => vec![
+            DrawCommand::Line {
+                x1: cx,
+                y1: cy + r * 0.8,
+                x2: cx,
+                y2: cy - r * 0.25,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+            DrawCommand::Line {
+                x1: cx,
+                y1: cy - r * 0.25,
+                x2: cx - r * 0.6,
+                y2: cy - r * 0.8,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+            DrawCommand::Line {
+                x1: cx,
+                y1: cy - r * 0.25,
+                x2: cx + r * 0.6,
+                y2: cy - r * 0.8,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+        ],
+        // ─── Semisextil: medio sextil (un chevron ∧) ─────────────────
+        "semi_sextile" => vec![
+            DrawCommand::Line {
+                x1: cx - r * 0.6,
+                y1: cy + r * 0.5,
+                x2: cx,
+                y2: cy - r * 0.5,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+            DrawCommand::Line {
+                x1: cx,
+                y1: cy - r * 0.5,
+                x2: cx + r * 0.6,
+                y2: cy + r * 0.5,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+        ],
+        // ─── Semicuadratura ∠: ángulo recto abierto ──────────────────
+        "semi_square" => vec![
+            DrawCommand::Line {
+                x1: cx - r * 0.65,
+                y1: cy + r * 0.55,
+                x2: cx + r * 0.65,
+                y2: cy + r * 0.55,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+            DrawCommand::Line {
+                x1: cx - r * 0.65,
+                y1: cy + r * 0.55,
+                x2: cx + r * 0.4,
+                y2: cy - r * 0.6,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+        ],
+        // ─── Sesquicuadratura: ángulo + tilde (semicuadratura×1.5) ───
+        "sesquiquadrate" => vec![
+            DrawCommand::Line {
+                x1: cx - r * 0.65,
+                y1: cy + r * 0.55,
+                x2: cx + r * 0.65,
+                y2: cy + r * 0.55,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+            DrawCommand::Line {
+                x1: cx - r * 0.65,
+                y1: cy + r * 0.55,
+                x2: cx + r * 0.4,
+                y2: cy - r * 0.6,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+            DrawCommand::Line {
+                x1: cx + r * 0.15,
+                y1: cy - r * 0.7,
+                x2: cx + r * 0.7,
+                y2: cy - r * 0.2,
+                color,
+                width: stroke_w,
+                dash: None,
+            },
+        ],
+        // Fallback: bullet relleno.
+        _ => vec![DrawCommand::Circle {
+            cx,
+            cy,
+            r: r * 0.22,
+            stroke: None,
+            fill: Some(color),
+            stroke_w: 0.0,
+        }],
+    }
+}
+
 // =====================================================================
 // Implementaciones por planeta
 // =====================================================================
