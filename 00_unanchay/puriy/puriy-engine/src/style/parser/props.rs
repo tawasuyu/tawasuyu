@@ -2173,6 +2173,18 @@ pub(crate) fn parse_pointer_events(s: &str) -> Option<PointerEvents> {
     }
 }
 
+/// `object-fit: fill | contain | cover | none | scale-down`. Fase 7.230.
+pub(crate) fn parse_object_fit(s: &str) -> Option<ObjectFit> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "fill" => Some(ObjectFit::Fill),
+        "contain" => Some(ObjectFit::Contain),
+        "cover" => Some(ObjectFit::Cover),
+        "none" => Some(ObjectFit::None),
+        "scale-down" => Some(ObjectFit::ScaleDown),
+        _ => None,
+    }
+}
+
 /// `text-shadow: <x> <y> [blur] <color>[, <x> <y> [blur] <color>]*`.
 /// `none` → vector vacío. Devuelve None si ningún shadow es válido.
 pub(crate) fn parse_text_shadows(value: &str) -> Option<Vec<TextShadow>> {

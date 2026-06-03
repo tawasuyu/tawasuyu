@@ -4373,6 +4373,28 @@ mod tests {
     }
 
     #[test]
+    fn object_fit_scale_por_modo() {
+        use puriy_engine::ObjectFit;
+        // Imagen 100×50 (2:1) en caja 200×200, zoom 1.
+        let (iw, ih, rw, rh, z) = (100.0, 50.0, 200.0, 200.0, 1.0);
+        // Fill: estira por eje independiente.
+        assert_eq!(object_fit_scale(ObjectFit::Fill, rw, rh, iw, ih, z), (2.0, 4.0));
+        // Contain: min de las dos (2.0) → cabe sin recortar.
+        assert_eq!(object_fit_scale(ObjectFit::Contain, rw, rh, iw, ih, z), (2.0, 2.0));
+        // Cover: max de las dos (4.0) → cubre, recorta horizontal.
+        assert_eq!(object_fit_scale(ObjectFit::Cover, rw, rh, iw, ih, z), (4.0, 4.0));
+        // None: tamaño natural × zoom.
+        assert_eq!(object_fit_scale(ObjectFit::None, rw, rh, iw, ih, z), (1.0, 1.0));
+        // ScaleDown: min(contain=2, natural=1) = 1 (la imagen es chica → no agranda).
+        assert_eq!(object_fit_scale(ObjectFit::ScaleDown, rw, rh, iw, ih, z), (1.0, 1.0));
+        // ScaleDown con imagen grande (300×300) en caja 100×100: contain=1/3 < 1 → encoge.
+        let (sx, sy) = object_fit_scale(ObjectFit::ScaleDown, 100.0, 100.0, 300.0, 300.0, 1.0);
+        assert!((sx - 1.0 / 3.0).abs() < 1e-9 && (sy - 1.0 / 3.0).abs() < 1e-9);
+        // Imagen degenerada → escala neutra (no divide por cero).
+        assert_eq!(object_fit_scale(ObjectFit::Cover, rw, rh, 0.0, ih, z), (1.0, 1.0));
+    }
+
+    #[test]
     fn paint_extra_bg_layers_pinta_imagen_y_gradiente() {
         // Fase 7.206 — las capas extra (debajo de la capa 0) se pintan: una
         // imagen vía paint_background_image y un gradiente lineal vía fill.

@@ -657,6 +657,37 @@ mod tests {
     }
 
     #[test]
+    fn parsea_object_fit_y_llega_a_computed() {
+        // Parser: keywords válidos (case-insensitive) e inválido → None.
+        assert_eq!(parse_object_fit("cover"), Some(ObjectFit::Cover));
+        assert_eq!(parse_object_fit("scale-down"), Some(ObjectFit::ScaleDown));
+        assert_eq!(parse_object_fit("CONTAIN"), Some(ObjectFit::Contain));
+        assert_eq!(parse_object_fit("fill"), Some(ObjectFit::Fill));
+        assert_eq!(parse_object_fit("stretch"), None);
+
+        let html = r##"<html><head><style>
+            img.cov { object-fit: cover }
+            img.plain { color: red }
+        </style></head><body>
+            <img class="cov" src="x.png">
+            <img class="plain" src="y.png">
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut imgs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("img") {
+                imgs.push(n.clone());
+            }
+        });
+        assert_eq!(imgs.len(), 2);
+        assert_eq!(eng.compute(&imgs[0]).object_fit, Some(ObjectFit::Cover));
+        // Sin object-fit declarado → None (el chrome mantiene su encaje
+        // por defecto, contain responsivo vía el compositor).
+        assert_eq!(eng.compute(&imgs[1]).object_fit, None);
+    }
+
+    #[test]
     fn font_size_acepta_calc_y_clamp() {
         // Tipografía fluida: font-size con funciones matemáticas de
         // unidades absolutas resuelve en parse-time.

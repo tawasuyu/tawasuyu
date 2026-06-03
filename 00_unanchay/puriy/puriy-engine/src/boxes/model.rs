@@ -155,6 +155,8 @@ pub struct BoxNode {
     pub vertical_align: VerticalAlign,
     pub visibility: Visibility,
     pub pointer_events: PointerEvents,
+    /// `object-fit` de un `<img>` (`None` = no especificado). Fase 7.230.
+    pub object_fit: Option<ObjectFit>,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no

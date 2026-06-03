@@ -450,7 +450,10 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     if let Some(img) = &b.image {
         let blob = Blob::from(img.rgba.clone());
         let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
-        return image_view(img.width, img.height, zoom).image(peniko);
+        return match b.object_fit {
+            Some(fit) => image_fit_view(b, peniko, fit, zoom),
+            None => image_view(img.width, img.height, zoom).image(peniko),
+        };
     }
 
     if let Some(text) = &b.text {
@@ -831,6 +834,98 @@ pub(crate) fn image_view(width: u32, height: u32, zoom: f32) -> View<Msg> {
     })
 }
 
+/// Escala por eje `(sx, sy)` que aplica `object-fit` a una imagen de tamaño
+/// natural `iw×ih` dentro de una caja `rw×rh` (en px de pantalla). `z` = zoom
+/// (factor que vuelve el tamaño natural a px de pantalla, para `None`/
+/// `ScaleDown`). `Fill` estira por eje; `Contain`/`Cover` preservan aspecto
+/// (cabe / cubre); `None` deja el natural; `ScaleDown` = menor entre contain
+/// y natural. Fase 7.230.
+pub(crate) fn object_fit_scale(
+    fit: puriy_engine::ObjectFit,
+    rw: f64,
+    rh: f64,
+    iw: f64,
+    ih: f64,
+    z: f64,
+) -> (f64, f64) {
+    use puriy_engine::ObjectFit;
+    if iw <= 0.0 || ih <= 0.0 {
+        return (1.0, 1.0);
+    }
+    match fit {
+        ObjectFit::Fill => (rw / iw, rh / ih),
+        ObjectFit::Contain => {
+            let s = (rw / iw).min(rh / ih);
+            (s, s)
+        }
+        ObjectFit::Cover => {
+            let s = (rw / iw).max(rh / ih);
+            (s, s)
+        }
+        ObjectFit::None => (z, z),
+        ObjectFit::ScaleDown => {
+            let s = (rw / iw).min(rh / ih).min(z);
+            (s, s)
+        }
+    }
+}
+
+/// View de un `<img>` con `object-fit` explícito (Fase 7.230). A diferencia de
+/// [`image_view`] (que delega el encaje al compositor — siempre contain), aquí
+/// dibujamos la imagen a mano (`paint_with`) con el escalado pedido y la
+/// recortamos a la caja. El tamaño de la caja sale de las dimensiones CSS
+/// (`width`/`height`) si están, si no del intrínseco. `object-position` queda
+/// fijo en el centro (50% 50%).
+pub(crate) fn image_fit_view(
+    b: &BoxNode,
+    peniko: PenikoImage,
+    fit: puriy_engine::ObjectFit,
+    zoom: f32,
+) -> View<Msg> {
+    let iw = peniko.width.max(1) as f64;
+    let ih = peniko.height.max(1) as f64;
+    let w_dim = length_to_taffy(b.width, zoom).unwrap_or_else(|| length(iw as f32 * zoom));
+    let h_dim = length_to_taffy(b.height, zoom).unwrap_or_else(|| length(ih as f32 * zoom));
+    let z = zoom as f64;
+    View::new(Style {
+        size: Size { width: w_dim, height: h_dim },
+        // Igual que image_view: clamp responsivo al contenedor.
+        max_size: Size { width: percent(1.0_f32), height: auto() },
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(4.0_f32 * zoom),
+            bottom: length(4.0_f32 * zoom),
+        },
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        let rw = rect.w as f64;
+        let rh = rect.h as f64;
+        if rw <= 0.0 || rh <= 0.0 {
+            return;
+        }
+        let (sx, sy) = object_fit_scale(fit, rw, rh, iw, ih, z);
+        let dw = iw * sx;
+        let dh = ih * sy;
+        let tx = rect.x as f64 + (rw - dw) * 0.5;
+        let ty = rect.y as f64 + (rh - dh) * 0.5;
+        let clip = RoundedRect::new(
+            rect.x as f64,
+            rect.y as f64,
+            (rect.x + rect.w) as f64,
+            (rect.y + rect.h) as f64,
+            0.0,
+        );
+        scene.push_layer(llimphi_raster::peniko::Mix::Clip, 1.0, Affine::IDENTITY, &clip);
+        scene.draw_image(
+            &peniko,
+            Affine::translate((tx, ty)) * Affine::scale_non_uniform(sx, sy),
+        );
+        scene.pop_layer();
+    })
+}
+
 pub(crate) fn render_link_subtree(
     b: &BoxNode,
     target: &str,
@@ -880,9 +975,12 @@ pub(crate) fn render_link_subtree(
     if let Some(img) = &b.image {
         let blob = Blob::from(img.rgba.clone());
         let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
-        return image_view(img.width, img.height, zoom)
-            .image(peniko)
-            .on_click(nav_msg(target));
+        return match b.object_fit {
+            Some(fit) => image_fit_view(b, peniko, fit, zoom).on_click(nav_msg(target)),
+            None => image_view(img.width, img.height, zoom)
+                .image(peniko)
+                .on_click(nav_msg(target)),
+        };
     }
     if let Some(text) = &b.text {
         let base = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };

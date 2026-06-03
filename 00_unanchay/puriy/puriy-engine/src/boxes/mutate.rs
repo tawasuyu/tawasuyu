@@ -670,6 +670,7 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.vertical_align = s.vertical_align;
     b.visibility = s.visibility;
     b.pointer_events = s.pointer_events;
+    b.object_fit = s.object_fit;
     b.text_indent = s.text_indent;
     b.word_spacing = s.word_spacing;
     b.letter_spacing = s.letter_spacing;

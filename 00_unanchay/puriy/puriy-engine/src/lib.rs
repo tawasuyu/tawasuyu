@@ -43,7 +43,7 @@ pub use style::{
     AnimationIterations, BackgroundPosition, BackgroundRepeat, BackgroundSize,
     BoxShadow, BoxSizing, ComputedStyle, ContentItem, EasingFunction,
     FlexDirection, FlexWrap, FontStyle, GradientStop, GridTrackSize, JustifyContent, KeyframeStep,
-    Keyframes, LengthVal, LinearGradient, Outline, Overflow, PointerEvents, Position,
+    Keyframes, LengthVal, LinearGradient, ObjectFit, Outline, Overflow, PointerEvents, Position,
     PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine, TextShadow, TextTransform,
     Transform, TransitionBinding, VerticalAlign, Viewport, Visibility, WhiteSpace, DEFAULT_VIEWPORT,
     evaluate_media_query, parse_color,

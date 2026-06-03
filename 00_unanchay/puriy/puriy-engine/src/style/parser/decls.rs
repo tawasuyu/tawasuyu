@@ -340,6 +340,7 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "vertical-align" => parse_vertical_align(value).map(DeclKind::VerticalAlign),
         "visibility" => parse_visibility(value).map(DeclKind::Visibility),
         "pointer-events" => parse_pointer_events(value).map(DeclKind::PointerEvents),
+        "object-fit" => parse_object_fit(value).map(DeclKind::ObjectFit),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {

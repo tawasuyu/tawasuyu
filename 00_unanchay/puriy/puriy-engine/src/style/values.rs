@@ -170,6 +170,9 @@ pub struct ComputedStyle {
     pub visibility: Visibility,
     /// `pointer-events: none` → ignora clics/hover.
     pub pointer_events: PointerEvents,
+    /// `object-fit` de un `<img>`. `None` = no especificado (el chrome
+    /// mantiene su encaje por defecto, contain responsivo). Fase 7.230.
+    pub object_fit: Option<ObjectFit>,
     /// Sangrado de primera línea de un bloque (en px).
     pub text_indent: f32,
     /// Espacio extra entre palabras (en px). Heredable.
@@ -541,6 +544,20 @@ pub enum Visibility {
 pub enum PointerEvents {
     Auto,
     None,
+}
+
+/// `object-fit` de un reemplazado (`<img>`): cómo encaja la imagen en la
+/// caja cuando el tamaño de la caja (CSS `width`/`height`) difiere del
+/// intrínseco. `Fill` estira a la caja (default CSS), `Contain`/`Cover`
+/// preservan aspecto (cabe / cubre), `None` usa el tamaño natural,
+/// `ScaleDown` = el menor entre `None` y `Contain`. Fase 7.230.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectFit {
+    Fill,
+    Contain,
+    Cover,
+    None,
+    ScaleDown,
 }
 
 /// `background-size`. `Auto` = tamaño natural de la imagen; `Cover`/`Contain`
@@ -975,6 +992,7 @@ impl Default for ComputedStyle {
             vertical_align: VerticalAlign::Baseline,
             visibility: Visibility::Visible,
             pointer_events: PointerEvents::Auto,
+            object_fit: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
