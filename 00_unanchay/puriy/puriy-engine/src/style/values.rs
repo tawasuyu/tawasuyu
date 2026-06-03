@@ -296,6 +296,15 @@ pub enum BorderLineStyle {
     Dashed,
     Dotted,
     Double,
+    /// 3D "carved" — top+left dark, bottom+right light.
+    Groove,
+    /// 3D opuesto a `Groove` — top+left light, bottom+right dark.
+    Ridge,
+    /// 3D "hundido" — render como `Groove` (suficiente aprox sin
+    /// gradiente real por dentro del lado).
+    Inset,
+    /// 3D opuesto a `Inset` — render como `Ridge`.
+    Outset,
 }
 
 /// CSS `font-style`. Heredable. `Oblique` lo tratamos igual que

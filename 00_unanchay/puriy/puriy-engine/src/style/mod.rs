@@ -812,8 +812,11 @@ mod tests {
         assert_eq!(parse_border_line_style("dashed"), Some(BorderLineStyle::Dashed));
         assert_eq!(parse_border_line_style("DOTTED"), Some(BorderLineStyle::Dotted));
         assert_eq!(parse_border_line_style("double"), Some(BorderLineStyle::Double));
-        // Estilos 3D sin soporte → Solid (no se dropea la regla).
-        assert_eq!(parse_border_line_style("groove"), Some(BorderLineStyle::Solid));
+        // Estilos 3D (desde Fase 7.237) — mapean a sus variantes.
+        assert_eq!(parse_border_line_style("groove"), Some(BorderLineStyle::Groove));
+        assert_eq!(parse_border_line_style("RIDGE"), Some(BorderLineStyle::Ridge));
+        assert_eq!(parse_border_line_style("inset"), Some(BorderLineStyle::Inset));
+        assert_eq!(parse_border_line_style("outset"), Some(BorderLineStyle::Outset));
         assert_eq!(parse_border_line_style("zigzag"), None);
 
         let html = r##"<html><head><style>
@@ -849,6 +852,42 @@ mod tests {
         assert_eq!(nb.border_widths.top, 0.0);
         // Sin estilo explícito → Solid default.
         assert_eq!(eng.compute(&divs[4]).border_style, BorderLineStyle::Solid);
+    }
+
+    #[test]
+    fn border_style_3d_fase_7_237() {
+        // Los 4 estilos 3D llegan a `ComputedStyle.border_style` por
+        // shorthand y longhand. El render por par de lados se prueba
+        // visualmente — acá sólo el mapeo.
+        let html = r##"<html><head><style>
+            div.gr { border: 4px groove #888 }
+            div.rg { border: 4px ridge #888 }
+            div.ins { border: 4px inset #888 }
+            div.out { border: 4px outset #888 }
+            div.lh { border: 4px solid #888; border-style: groove }
+        </style></head><body>
+            <div class="gr"></div><div class="rg"></div>
+            <div class="ins"></div><div class="out"></div>
+            <div class="lh"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        assert_eq!(divs.len(), 5);
+        assert_eq!(eng.compute(&divs[0]).border_style, BorderLineStyle::Groove);
+        assert_eq!(eng.compute(&divs[1]).border_style, BorderLineStyle::Ridge);
+        assert_eq!(eng.compute(&divs[2]).border_style, BorderLineStyle::Inset);
+        assert_eq!(eng.compute(&divs[3]).border_style, BorderLineStyle::Outset);
+        // El longhand `border-style: groove` pisa el `solid` del
+        // shorthand previo.
+        assert_eq!(eng.compute(&divs[4]).border_style, BorderLineStyle::Groove);
+        // Y el width sobrevive (border-style: groove no apaga el border).
+        assert_eq!(eng.compute(&divs[4]).border_widths.top, 4.0);
     }
 
     #[test]

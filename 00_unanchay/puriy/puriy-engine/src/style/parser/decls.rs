@@ -506,22 +506,27 @@ fn parse_one_box_shadow(s: &str) -> Option<BoxShadow> {
 
 pub(crate) fn parse_border_style(s: &str) -> Option<bool> {
     match s.trim().to_ascii_lowercase().as_str() {
-        "solid" | "dashed" | "dotted" | "double" => Some(true),
+        "solid" | "dashed" | "dotted" | "double" | "groove" | "ridge" | "inset" | "outset" => {
+            Some(true)
+        }
         "none" | "hidden" => Some(false),
         _ => None,
     }
 }
 
 /// Mapea un keyword de `border-style` al patrón visual. `none`/`hidden` →
-/// `None` (no togglea estilo, sólo el enabled). Otros estilos CSS sin
-/// soporte (`groove`/`ridge`/`inset`/`outset`) caen a `Solid`.
+/// `None` (no togglea estilo, sólo el enabled). `groove`/`ridge`/
+/// `inset`/`outset` reciben render 3D real desde la Fase 7.237.
 pub(crate) fn parse_border_line_style(s: &str) -> Option<BorderLineStyle> {
     match s.trim().to_ascii_lowercase().as_str() {
         "solid" => Some(BorderLineStyle::Solid),
         "dashed" => Some(BorderLineStyle::Dashed),
         "dotted" => Some(BorderLineStyle::Dotted),
         "double" => Some(BorderLineStyle::Double),
-        "groove" | "ridge" | "inset" | "outset" => Some(BorderLineStyle::Solid),
+        "groove" => Some(BorderLineStyle::Groove),
+        "ridge" => Some(BorderLineStyle::Ridge),
+        "inset" => Some(BorderLineStyle::Inset),
+        "outset" => Some(BorderLineStyle::Outset),
         _ => None,
     }
 }

@@ -1690,7 +1690,57 @@ fn border_dash_pattern(style: BorderLineStyle, w: f64) -> Option<[f64; 2]> {
     match style {
         BorderLineStyle::Dotted => Some([w.max(0.5), w.max(0.5) * 1.5]),
         BorderLineStyle::Dashed => Some([w.max(0.5) * 3.0, w.max(0.5) * 2.0]),
-        BorderLineStyle::Solid | BorderLineStyle::Double => None,
+        BorderLineStyle::Solid
+        | BorderLineStyle::Double
+        | BorderLineStyle::Groove
+        | BorderLineStyle::Ridge
+        | BorderLineStyle::Inset
+        | BorderLineStyle::Outset => None,
+    }
+}
+
+/// Cuáles `border-style` requieren render per-lado por usar dos
+/// tonalidades del color base (top+left vs bottom+right). Cuando es
+/// `true`, el camino uniforme no aplica.
+fn border_style_is_3d(style: BorderLineStyle) -> bool {
+    matches!(
+        style,
+        BorderLineStyle::Groove
+            | BorderLineStyle::Ridge
+            | BorderLineStyle::Inset
+            | BorderLineStyle::Outset
+    )
+}
+
+/// Mezcla el color base con blanco/negro para producir las dos
+/// tonalidades del 3D. `factor` ∈ [-1, 1]: -1 ⇒ negro puro, 0 ⇒ base,
+/// +1 ⇒ blanco puro. Mantiene alfa.
+fn shade(c: puriy_engine::Color, factor: f32) -> puriy_engine::Color {
+    let mix = |ch: u8| -> u8 {
+        let v = ch as f32;
+        let t = if factor >= 0.0 {
+            v + (255.0 - v) * factor
+        } else {
+            v + v * factor
+        };
+        t.clamp(0.0, 255.0) as u8
+    };
+    puriy_engine::Color { r: mix(c.r), g: mix(c.g), b: mix(c.b), a: c.a }
+}
+
+/// Color a usar en cada par de lados (top/left, bottom/right) según
+/// la variante 3D. Sigue la convención de browsers — `groove`/`inset`
+/// hunden (top+left oscuro), `ridge`/`outset` elevan (top+left claro).
+fn border_3d_colors(
+    style: BorderLineStyle,
+    base: puriy_engine::Color,
+) -> (puriy_engine::Color, puriy_engine::Color) {
+    let dark = shade(base, -0.4);
+    let light = shade(base, 0.4);
+    match style {
+        BorderLineStyle::Groove | BorderLineStyle::Inset => (dark, light),
+        BorderLineStyle::Ridge | BorderLineStyle::Outset => (light, dark),
+        _ => (base, base),
     }
 }
 
@@ -1746,7 +1796,12 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     let bw = b.border_widths;
     let bc = b.border_colors;
     let border_style = b.border_style;
-    let uniform_border = if bw.top == bw.right
+    // Los estilos 3D (`groove`/`ridge`/`inset`/`outset`) NUNCA usan el
+    // camino uniforme porque cada par de lados pinta una tonalidad
+    // distinta — fuerza el camino per-lado.
+    let force_per_side = border_style_is_3d(border_style);
+    let uniform_border = if !force_per_side
+        && bw.top == bw.right
         && bw.right == bw.bottom
         && bw.bottom == bw.left
         && bc.top == bc.right
@@ -2028,10 +2083,28 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 }
                 s
             };
+            // Para `groove`/`ridge`/`inset`/`outset` cada par de lados usa
+            // una tonalidad distinta del color base (top+left vs
+            // bottom+right). Para el resto la tonalidad es la base tal cual.
+            let tone_tl = |c: puriy_engine::Color| -> puriy_engine::Color {
+                if border_style_is_3d(border_style) {
+                    border_3d_colors(border_style, c).0
+                } else {
+                    c
+                }
+            };
+            let tone_br = |c: puriy_engine::Color| -> puriy_engine::Color {
+                if border_style_is_3d(border_style) {
+                    border_3d_colors(border_style, c).1
+                } else {
+                    c
+                }
+            };
             // Cada lado se inseta por w/2 para que el trazo caiga dentro
             // del rect del nodo (vello pinta centrado al path). Pintamos
             // inline (sin closure) para evitar capturas raras del scene.
             if let Some((c, w)) = s_top {
+                let c = tone_tl(c);
                 let h = (w as f64) * 0.5;
                 let a = (c.a as f32 * alpha_mul) as u8;
                 let color = Color::from_rgba8(c.r, c.g, c.b, a);
@@ -2039,6 +2112,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 scene.stroke(&side_stroke(w as f64), Affine::IDENTITY, color, None, &line);
             }
             if let Some((c, w)) = s_bottom {
+                let c = tone_br(c);
                 let h = (w as f64) * 0.5;
                 let a = (c.a as f32 * alpha_mul) as u8;
                 let color = Color::from_rgba8(c.r, c.g, c.b, a);
@@ -2046,6 +2120,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 scene.stroke(&side_stroke(w as f64), Affine::IDENTITY, color, None, &line);
             }
             if let Some((c, w)) = s_left {
+                let c = tone_tl(c);
                 let h = (w as f64) * 0.5;
                 let a = (c.a as f32 * alpha_mul) as u8;
                 let color = Color::from_rgba8(c.r, c.g, c.b, a);
@@ -2053,6 +2128,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 scene.stroke(&side_stroke(w as f64), Affine::IDENTITY, color, None, &line);
             }
             if let Some((c, w)) = s_right {
+                let c = tone_br(c);
                 let h = (w as f64) * 0.5;
                 let a = (c.a as f32 * alpha_mul) as u8;
                 let color = Color::from_rgba8(c.r, c.g, c.b, a);
