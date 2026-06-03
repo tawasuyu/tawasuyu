@@ -55,8 +55,11 @@ pub enum Msg {
     ShumaSubmit,
     /// Resultado estructurado del comando (líneas + código) para la card.
     ShumaResult(shuma::RunResult),
-    /// Re-ejecutar una línea (clic en una etapa de pipe de una card).
+    /// Re-ejecutar una línea (clic en el comando de una card sin pipe).
     ShumaRunLine(String),
+    /// Revelar/ocultar la salida capturada (tee) de una etapa intermedia de la
+    /// card `idx`: `(idx_card, idx_etapa)`.
+    ShumaStageToggle(usize, usize),
     /// Plegar/desplegar la card `idx` del historial.
     ShumaCollapse(usize),
     /// Desplazar el historial del drawer `delta` px (rueda / arrastre de barra).
@@ -325,6 +328,15 @@ impl App for PataApp {
                 if model.shuma.open && !line.trim().is_empty() {
                     model.shuma.push_pending(line.clone());
                     handle.spawn(move || Msg::ShumaResult(shuma::ejecutar(&line)));
+                }
+            }
+            Msg::ShumaStageToggle(idx, stage) => {
+                if let Some(b) = model.shuma.blocks.get_mut(idx) {
+                    b.expanded_stage = if b.expanded_stage == Some(stage) {
+                        None
+                    } else {
+                        Some(stage)
+                    };
                 }
             }
             Msg::ShumaCollapse(idx) => {

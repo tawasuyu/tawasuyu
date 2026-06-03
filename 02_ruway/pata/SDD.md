@@ -130,6 +130,17 @@ borde; shuma provee el contenido.
   comando es, estrictamente, de `shuma`: mientras no haya puente, `shuma::
   ejecutar_stand_in` corre por `sh -c` como **sustituto temporal** (patrón de
   mirada) — se reemplaza sin tocar el mecanismo del drawer.
+  - **Puente real + cards (✅)** — el drawer corre por `shuma-exec` (no `sh -c`
+    pelado): historial de *cards* (`$ cmd` + etapas + salida + código), plegables,
+    con scroll. **Captura por etapa (tee, paridad con el shell de shuma):** un
+    pipe «simple» (sólo comandos/args/flags y `|`, sin comillas/variables/
+    redirecciones/globs/`~`) corre por `Exec::Direct` con `capture_stages`; cada
+    etapa **intermedia** emite su stdout en vivo (`StageStdout`) y se guarda en
+    `DrawerBlock::stage_lines`. Clickear la chip de una etapa intermedia **revela
+    su salida capturada inline** (sin re-ejecutar); la última etapa no se captura
+    aparte (su stdout es el cuerpo de la card). Cualquier otra sintaxis cae a
+    `sh -c` (sin tee). Detección en `shuma::simple_pipe_stages` (espeja
+    `shuma-module-shell`), testeada.
 - **Fase 8 ✅** — `mirada-compositor` reconoce el marco `pata`:
   - Identidad: el viejo `SHELL_APP_ID = "carmen.shell"` → `is_shell_app_id`, que
     matchea `gioser.pata` (la identidad que anuncia `pata-llimphi`) o el alias

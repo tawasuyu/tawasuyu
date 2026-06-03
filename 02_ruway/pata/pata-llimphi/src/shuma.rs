@@ -20,7 +20,8 @@ use llimphi_ui::View;
 
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use pata_core::WidgetSpec;
-use shuma_line::{split_pipeline, tokenize, Dialect};
+use shuma_exec::StageSpec;
+use shuma_line::{split_pipeline, tokenize, Dialect, TokenKind};
 
 use crate::Msg;
 
@@ -43,10 +44,17 @@ pub struct DrawerBlock {
     /// La línea tal cual se tecleó.
     pub cmd: String,
     /// Etiquetas de cada etapa del pipe (de `shuma-line`) — chips clickeables
-    /// que re-ejecutan la línea truncada hasta esa etapa.
+    /// que revelan la salida capturada (tee) de esa etapa intermedia.
     pub stages: Vec<String>,
     /// Líneas de salida (stdout/stderr entremezcladas en orden de llegada).
+    /// Es la salida de la **última** etapa del pipe.
     pub lines: Vec<OutLine>,
+    /// Salida capturada de cada etapa **intermedia** del pipe (tee), indexada
+    /// por etapa. La última etapa no tiene entrada propia: su stdout es
+    /// `lines`. Vacío si la línea no corrió como pipe directo simple.
+    pub stage_lines: Vec<Vec<OutLine>>,
+    /// Etapa cuya salida capturada está revelada inline (`None` = ninguna).
+    pub expanded_stage: Option<usize>,
     /// Código de salida; `None` mientras el comando sigue corriendo.
     pub exit: Option<i32>,
     /// `true` si la card está plegada (sólo se ve el encabezado).
@@ -59,6 +67,9 @@ pub struct DrawerBlock {
 pub struct RunResult {
     pub lines: Vec<OutLine>,
     pub exit: Option<i32>,
+    /// Salida capturada por etapa intermedia (tee), indexada por etapa. Vacío
+    /// si la línea no corrió como pipe directo simple (cayó a `sh -c`).
+    pub stages: Vec<Vec<OutLine>>,
 }
 
 /// Las etiquetas de las etapas de pipe de una línea (vía `shuma-line`): el
@@ -81,25 +92,40 @@ pub fn stage_labels(cmd: &str) -> Vec<String> {
         .collect()
 }
 
-/// La línea truncada hasta la etapa `upto` inclusive — lo que re-ejecuta el
-/// clic en una chip (`a | b | c`, clic en `b` → `a | b`). Reconstruye cada
-/// etapa desde su comando+args.
-pub fn truncated_line(cmd: &str, upto: usize) -> String {
-    let pipeline = split_pipeline(&tokenize(cmd, Dialect::Bash));
-    pipeline
-        .stages
-        .iter()
-        .take(upto + 1)
-        .map(|s| {
-            let mut parts = Vec::new();
-            if let Some(c) = &s.command {
-                parts.push(c.clone());
-            }
-            parts.extend(s.args.iter().cloned());
-            parts.join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join(" | ")
+/// Si `cmd` es un pipe «simple» (sólo comandos/args/flags y `|`, sin comillas,
+/// variables, redirecciones, globs ni `~`), lo descompone en [`StageSpec`] para
+/// correrlo por `Exec::Direct` con **captura por etapa** (tee). Si no, `None`
+/// (cae a `sh -c`, sin tee). Espeja `shuma-module-shell::simple_pipe_stages`:
+/// cualquier sintaxis que el modo directo no absorbe va al shell.
+pub fn simple_pipe_stages(cmd: &str) -> Option<Vec<StageSpec>> {
+    let tokens = tokenize(cmd, Dialect::Bash);
+    let simple = !tokens.is_empty()
+        && tokens.iter().all(|t| {
+            matches!(
+                t.kind,
+                TokenKind::Command
+                    | TokenKind::Argument
+                    | TokenKind::Flag
+                    | TokenKind::Pipe
+                    | TokenKind::Whitespace
+            ) && !t.text.contains(['*', '?', '[', ']', '{', '}'])
+                && !t.text.starts_with('~')
+        });
+    if !simple {
+        return None;
+    }
+    let pipeline = split_pipeline(&tokens);
+    if pipeline.stages.len() < 2 {
+        return None;
+    }
+    let mut stages = Vec::with_capacity(pipeline.stages.len());
+    for st in &pipeline.stages {
+        // Una etapa sin comando (línea incompleta, p. ej. termina en `|`)
+        // → al shell, que reporta el error de sintaxis como toca.
+        let program = st.command.clone()?;
+        stages.push(StageSpec { program, args: st.args.clone() });
+    }
+    Some(stages)
 }
 
 /// El estado del cabezal del shell y su drawer. Vive en el `Model` del frontend
@@ -164,6 +190,12 @@ impl ShumaState {
                 if matches!(b.exit, Some(c) if c != 0) {
                     lines += 1; // el footer "exit N"
                 }
+                // La etapa revelada (tee) agrega su salida capturada, o una
+                // línea de aviso si no capturó nada.
+                if let Some(si) = b.expanded_stage {
+                    let n = b.stage_lines.get(si).map(|l| l.len()).unwrap_or(0);
+                    lines += n.max(1);
+                }
                 h += lines as f32 * LINE_H + BODY_GAP;
             }
             h += CARD_GAP;
@@ -193,6 +225,8 @@ impl ShumaState {
             cmd,
             stages,
             lines: Vec::new(),
+            stage_lines: Vec::new(),
+            expanded_stage: None,
             exit: None,
             collapsed: false,
         });
@@ -209,6 +243,7 @@ impl ShumaState {
         self.pending = false;
         if let Some(b) = self.blocks.last_mut() {
             b.lines = res.lines;
+            b.stage_lines = res.stages;
             b.exit = res.exit;
         }
         self.pin_bottom();
@@ -481,23 +516,32 @@ fn blocks_view(state: &ShumaState, theme: &Theme, viewport_h: f32) -> View<Msg> 
 }
 
 /// Una card: encabezado (`$` plegable + etapas de pipe clickeables) y, si no
-/// está plegada, las líneas de salida y el código de salida.
+/// está plegada, la salida de la etapa revelada (tee), las líneas de salida
+/// final y el código de salida.
 fn card_view(idx: usize, b: &DrawerBlock, theme: &Theme) -> View<Msg> {
-    // Encabezado: el `$` pliega/despliega; las etapas re-ejecutan la línea
-    // truncada hasta esa etapa (o, sin pipe, la línea entera).
+    // Encabezado: el `$` pliega/despliega; las chips de etapa **intermedia**
+    // revelan su salida capturada en vivo (tee). La última etapa no se captura
+    // aparte —su stdout es el cuerpo de la card— así que su chip es pasiva.
     let mut head: Vec<View<Msg>> = vec![chip_text("$", 14.0, theme.accent)
         .on_click(Msg::ShumaCollapse(idx))];
     if b.stages.is_empty() {
+        // Sin pipe: la línea entera re-ejecuta al clickearla.
         head.push(chip_text(&b.cmd, 14.0, theme.fg_text).on_click(Msg::ShumaRunLine(b.cmd.clone())));
     } else {
+        let last = b.stages.len() - 1;
         for (si, label) in b.stages.iter().enumerate() {
             if si > 0 {
                 head.push(chip_text("|", 14.0, theme.fg_muted));
             }
-            head.push(
-                chip_text(label, 14.0, theme.accent)
-                    .on_click(Msg::ShumaRunLine(truncated_line(&b.cmd, si))),
-            );
+            // La etapa revelada se resalta (más clara); clic togglea su revelado.
+            let revealed = b.expanded_stage == Some(si);
+            let color = if revealed { theme.fg_text } else { theme.accent };
+            let chip = chip_text(label, 14.0, color);
+            head.push(if si < last {
+                chip.on_click(Msg::ShumaStageToggle(idx, si)).hover_fill(theme.bg_button_hover)
+            } else {
+                chip // la última etapa: su salida es el cuerpo de la card
+            });
         }
     }
     let header = View::new(Style {
@@ -511,6 +555,18 @@ fn card_view(idx: usize, b: &DrawerBlock, theme: &Theme) -> View<Msg> {
 
     let mut col: Vec<View<Msg>> = vec![header];
     if !b.collapsed {
+        // Salida capturada de la etapa revelada (tee), indentada y atenuada.
+        if let Some(si) = b.expanded_stage {
+            match b.stage_lines.get(si) {
+                Some(lines) if !lines.is_empty() => {
+                    for l in lines {
+                        let c = if l.err { theme.fg_destructive } else { theme.fg_muted };
+                        col.push(out_line(&format!("  {}", l.text), c));
+                    }
+                }
+                _ => col.push(out_line("  (sin salida capturada)", theme.fg_muted)),
+            }
+        }
         if b.exit.is_none() {
             col.push(out_line("…", theme.fg_muted));
         }
@@ -562,22 +618,44 @@ fn chip_text(t: &str, size: f32, color: llimphi_theme::Color) -> View<Msg> {
 /// [`CAPTURE_CAP`] (lo que excede se marca como truncado). Bloqueante: se
 /// llama desde un hilo de fondo (`Handle::spawn` o `std::thread`).
 pub fn ejecutar(cmd: &str) -> RunResult {
-    use shuma_exec::{run, CommandSpec, RunEvent};
+    use shuma_exec::{run, CommandSpec, Exec, RunEvent};
 
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "/".to_string());
-    let spec = CommandSpec::shell(cmd, cwd).with_limit(CAPTURE_CAP);
+
+    // Pipe «simple» → ejecución directa con **captura por etapa** (tee): cada
+    // etapa intermedia emite su stdout en vivo, sin re-ejecutar (paridad con el
+    // shell de shuma). Cualquier otra sintaxis cae a `sh -c`, sin tee.
+    let (spec, n_stages) = match simple_pipe_stages(cmd) {
+        Some(stages) => {
+            let n = stages.len();
+            let spec = CommandSpec {
+                exec: Exec::Direct { stages },
+                cwd,
+                capture_limit: CAPTURE_CAP,
+                spill_path: None,
+                stdin_data: None,
+                capture_stages: true,
+            };
+            (spec, n)
+        }
+        None => (CommandSpec::shell(cmd, cwd).with_limit(CAPTURE_CAP), 0),
+    };
 
     let mut lines: Vec<OutLine> = Vec::new();
     let mut exit: Option<i32> = None;
+    let mut stages: Vec<Vec<OutLine>> = vec![Vec::new(); n_stages];
     for ev in run(&spec).wait_all() {
         match ev {
             RunEvent::Stdout(t) => lines.push(OutLine { err: false, text: t }),
-            // El drawer corre por `sh -c` (sin `capture_stages`), así que
-            // no debería ver salida por etapa; si llegara, la tratamos como
-            // stdout normal para no perderla.
-            RunEvent::StageStdout { line, .. } => lines.push(OutLine { err: false, text: line }),
+            // Salida de una etapa intermedia (tee): a su balde, para revelarla
+            // al clickear la chip de esa etapa. La última etapa va por Stdout.
+            RunEvent::StageStdout { stage, line } => {
+                if let Some(buf) = stages.get_mut(stage) {
+                    buf.push(OutLine { err: false, text: line });
+                }
+            }
             RunEvent::Stderr(t) => lines.push(OutLine { err: true, text: t }),
             RunEvent::Exited(c) => exit = Some(c),
             RunEvent::Failed(m) => lines.push(OutLine {
@@ -596,7 +674,7 @@ pub fn ejecutar(cmd: &str) -> RunResult {
             RunEvent::Bytes(_) => {}
         }
     }
-    RunResult { lines, exit }
+    RunResult { lines, exit, stages }
 }
 
 /// Tope de captura del drawer, en bytes — un comando charlatán no infla la RAM.
@@ -621,11 +699,25 @@ mod tests {
     }
 
     #[test]
-    fn la_linea_truncada_corta_en_la_etapa_clickeada() {
-        let cmd = "ls -la | grep foo | sort";
-        assert_eq!(truncated_line(cmd, 0), "ls -la");
-        assert_eq!(truncated_line(cmd, 1), "ls -la | grep foo");
-        assert_eq!(truncated_line(cmd, 2), "ls -la | grep foo | sort");
+    fn un_pipe_simple_se_descompone_en_etapas() {
+        let stages = simple_pipe_stages("ls -la | grep foo | sort").expect("pipe simple");
+        assert_eq!(stages.len(), 3);
+        assert_eq!(stages[0].program, "ls");
+        assert_eq!(stages[0].args, vec!["-la".to_string()]);
+        assert_eq!(stages[1].program, "grep");
+        assert_eq!(stages[2].program, "sort");
+    }
+
+    #[test]
+    fn sin_pipe_o_con_sintaxis_compleja_no_hay_etapas_directas() {
+        // Una sola etapa: no amerita modo directo.
+        assert!(simple_pipe_stages("ls -la").is_none());
+        // Comillas, variables, redirecciones, globs o `~` → al shell (sin tee).
+        assert!(simple_pipe_stages("echo \"hola\" | cat").is_none());
+        assert!(simple_pipe_stages("cat *.rs | wc -l").is_none());
+        assert!(simple_pipe_stages("echo $HOME | cat").is_none());
+        // Línea incompleta (termina en `|`).
+        assert!(simple_pipe_stages("ls |").is_none());
     }
 
     #[test]
@@ -649,11 +741,33 @@ mod tests {
         s.finish_last(RunResult {
             lines: vec![OutLine { err: false, text: "hi".into() }],
             exit: Some(0),
+            stages: Vec::new(),
         });
         let last = s.blocks.last().unwrap();
         assert_eq!(last.exit, Some(0));
         assert_eq!(last.lines.len(), 1);
         assert!(!s.pending);
+    }
+
+    #[test]
+    fn finish_last_guarda_la_salida_por_etapa() {
+        let mut s = ShumaState::default();
+        s.push_pending("seq 3 | sort".into());
+        s.finish_last(RunResult {
+            lines: vec![OutLine { err: false, text: "1".into() }],
+            exit: Some(0),
+            stages: vec![
+                vec![OutLine { err: false, text: "3".into() }],
+                Vec::new(),
+            ],
+        });
+        let last = s.blocks.last().unwrap();
+        assert_eq!(last.stage_lines.len(), 2);
+        assert_eq!(last.stage_lines[0][0].text, "3");
+        // Revelar la etapa 0 agranda el contenido (entra su salida capturada).
+        let antes = s.content_height();
+        s.blocks.last_mut().unwrap().expanded_stage = Some(0);
+        assert!(s.content_height() > antes);
     }
 }
 
@@ -669,6 +783,7 @@ mod scroll_tests {
         s.finish_last(RunResult {
             lines: vec![OutLine { err: false, text: "x".into() }; 3],
             exit: Some(0),
+            stages: Vec::new(),
         });
         assert!(s.content_height() > vacio);
     }
@@ -683,6 +798,7 @@ mod scroll_tests {
             s.finish_last(RunResult {
                 lines: vec![OutLine { err: false, text: "l".into() }; 4],
                 exit: Some(0),
+                stages: Vec::new(),
             });
         }
         let max = (s.content_height() - s.viewport_h).max(0.0);
@@ -699,7 +815,7 @@ mod scroll_tests {
         s.viewport_h = 40.0;
         for _ in 0..6 {
             s.push_pending("c".into());
-            s.finish_last(RunResult { lines: vec![], exit: Some(0) });
+            s.finish_last(RunResult { lines: vec![], exit: Some(0), stages: Vec::new() });
         }
         s.scroll = 0.0; // el usuario subió a ver lo viejo
         s.push_pending("nuevo".into()); // un comando nuevo
