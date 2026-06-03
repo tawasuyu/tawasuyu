@@ -33,6 +33,15 @@ use crate::Enlace;
 /// (internamente), y mono nos basta para una voz.
 const SR_OPUS: u32 = 48_000;
 
+/// Latencia objetivo del jitter buffer (tope de cola): acota el retardo a la
+/// vez que absorbe el jitter de red. Por encima, descartamos lo más viejo
+/// (catch-up). 120 ms es un compromiso típico de VoIP.
+const LATENCIA_OBJETIVO_MS: usize = 120;
+
+/// Cuánto acumular antes de empezar a sonar (y re-acumular tras un underrun):
+/// evita el chasquido de arrancar con la cola casi vacía.
+const PREBUFFER_MS: usize = 40;
+
 /// El audio pendiente de un par, en mono y a su sample-rate nativo.
 struct ColaRemota {
     sr: u32,
@@ -41,6 +50,8 @@ struct ColaRemota {
     /// Posición de lectura fraccionaria (en frames de entrada) para el
     /// resampleo lineal hacia el sample-rate de salida.
     frac: f64,
+    /// `false` mientras la cola pre-acumula (silencio hasta llegar al prebuffer).
+    iniciado: bool,
 }
 
 /// Mezclador de las voces remotas. Es el `AudioSource` que alimenta el sink.
@@ -61,6 +72,7 @@ impl MezclaRemota {
             sr: sr.max(1),
             muestras: VecDeque::new(),
             frac: 0.0,
+            iniciado: false,
         });
         cola.sr = sr.max(1);
         let frames = inter.len() / ch;
@@ -71,11 +83,14 @@ impl MezclaRemota {
             }
             cola.muestras.push_back(acc / ch as f32);
         }
-        // Jitter buffer acotado a ~1 s: si nos pasamos, soltamos lo más viejo.
-        let tope = cola.sr as usize;
-        while cola.muestras.len() > tope {
-            cola.muestras.pop_front();
-            cola.frac = 0.0;
+        // Jitter buffer acotado a la latencia objetivo: si nos pasamos (la red
+        // mandó una ráfaga), descartamos el exceso más viejo DE UNA y corremos
+        // la posición de lectura con él (catch-up suave, sin resetear la fase).
+        let tope = (cola.sr as usize * LATENCIA_OBJETIVO_MS / 1000).max(2);
+        if cola.muestras.len() > tope {
+            let exceso = cola.muestras.len() - tope;
+            cola.muestras.drain(..exceso);
+            cola.frac = (cola.frac - exceso as f64).max(0.0);
         }
     }
 
@@ -100,6 +115,15 @@ impl AudioSource for MezclaRemota {
         let out_sr = out_sr.max(1) as f64;
 
         for cola in self.remotas.values_mut() {
+            // Prebuffer: mientras no juntemos el mínimo, esta voz queda en
+            // silencio (no arrancamos con la cola casi vacía → sin chasquido).
+            let prebuffer = (cola.sr as usize * PREBUFFER_MS / 1000).max(2);
+            if !cola.iniciado {
+                if cola.muestras.len() < prebuffer {
+                    continue;
+                }
+                cola.iniciado = true;
+            }
             // Frames de entrada por cada frame de salida.
             let paso = cola.sr as f64 / out_sr;
             for i in 0..frames {
@@ -123,6 +147,12 @@ impl AudioSource for MezclaRemota {
                 cola.muestras.pop_front();
             }
             cola.frac -= consumidas as f64;
+            // Underrun: nos quedamos sin material para interpolar → re-bufferizar
+            // (volvemos a esperar el prebuffer antes de seguir sonando).
+            if cola.muestras.len() < 2 {
+                cola.iniciado = false;
+                cola.frac = 0.0;
+            }
         }
 
         // Varias voces sumadas pueden pasarse de rango: recorte suave.
@@ -267,23 +297,31 @@ mod tests {
         [n; 32]
     }
 
+    /// Más muestras que el prebuffer (40 ms @ 48 kHz = 1920), para que la voz
+    /// ya esté sonando cuando el test mide.
+    const N: usize = 2400;
+
     #[test]
     fn downmix_estereo_a_mono() {
         let mut m = MezclaRemota::default();
         // Estéreo intercalado: L=1.0 R=0.0 → mono 0.5.
-        m.empujar(id(1), 48_000, 2, &[1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
-        assert_eq!(m.recibidas(), 8);
+        let mut inter = Vec::new();
+        for _ in 0..N {
+            inter.push(1.0);
+            inter.push(0.0);
+        }
+        m.empujar(id(1), 48_000, 2, &inter);
+        assert_eq!(m.recibidas(), (N * 2) as u64);
         let mut buf = vec![0.0f32; 4]; // out: 48k mono, mismo rate → sin resampleo
         m.fill(&mut buf, 48_000, 1);
-        // Interpolando entre muestras iguales (0.5) da 0.5.
         assert!((buf[0] - 0.5).abs() < 1e-6, "buf[0]={}", buf[0]);
     }
 
     #[test]
     fn mezcla_suma_dos_pares() {
         let mut m = MezclaRemota::default();
-        m.empujar(id(1), 48_000, 1, &[0.3, 0.3, 0.3, 0.3]);
-        m.empujar(id(2), 48_000, 1, &[0.4, 0.4, 0.4, 0.4]);
+        m.empujar(id(1), 48_000, 1, &vec![0.3; N]);
+        m.empujar(id(2), 48_000, 1, &vec![0.4; N]);
         let mut buf = vec![0.0f32; 2];
         m.fill(&mut buf, 48_000, 1);
         // 0.3 + 0.4 = 0.7 (sin recorte, < 1.0).
@@ -293,11 +331,45 @@ mod tests {
     #[test]
     fn salir_silencia_al_par() {
         let mut m = MezclaRemota::default();
-        m.empujar(id(1), 48_000, 1, &[0.5, 0.5, 0.5, 0.5]);
+        m.empujar(id(1), 48_000, 1, &vec![0.5; N]);
         m.quitar(&id(1));
         let mut buf = vec![0.0f32; 2];
         m.fill(&mut buf, 48_000, 1);
         assert_eq!(buf, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn prebuffer_calla_hasta_juntar_minimo() {
+        let mut m = MezclaRemota::default();
+        // Menos que el prebuffer → silencio (aún acumulando).
+        m.empujar(id(1), 48_000, 1, &vec![0.5; 100]);
+        let mut buf = vec![0.0f32; 8];
+        m.fill(&mut buf, 48_000, 1);
+        assert!(buf.iter().all(|&s| s == 0.0), "debería estar callado: {buf:?}");
+        // Ahora sí supera el prebuffer → suena.
+        m.empujar(id(1), 48_000, 1, &vec![0.5; N]);
+        let mut buf2 = vec![0.0f32; 8];
+        m.fill(&mut buf2, 48_000, 1);
+        assert!((buf2[0] - 0.5).abs() < 1e-6, "buf2[0]={}", buf2[0]);
+    }
+
+    #[test]
+    fn latencia_acotada_descarta_rafagas() {
+        let mut m = MezclaRemota::default();
+        // Empujamos 1 s de audio de golpe (una ráfaga enorme).
+        m.empujar(id(1), 48_000, 1, &vec![0.2; 48_000]);
+        // La cola NO debe guardar 1 s: queda acotada a la latencia objetivo.
+        let tope = 48_000 * LATENCIA_OBJETIVO_MS / 1000;
+        let cola = m.remotas.get(&id(1)).unwrap();
+        assert!(
+            cola.muestras.len() <= tope,
+            "cola {} > tope {tope}",
+            cola.muestras.len()
+        );
+        // Y sigue reproduciendo sin pánico.
+        let mut buf = vec![0.0f32; 480];
+        m.fill(&mut buf, 48_000, 1);
+        assert!((buf[0] - 0.2).abs() < 1e-6, "buf[0]={}", buf[0]);
     }
 }
 

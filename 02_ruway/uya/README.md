@@ -73,6 +73,8 @@ Anda hoy, end-to-end y feo a propósito:
   `UYA_TONO=1`), downmix + resampleo a 48 kHz mono, encode Opus por frame de 20 ms;
   en recepción un `OpusDecoder` por par decodifica a PCM y una `MezclaRemota`
   resamplea al dispositivo + suma a los N pares, reproducida por `AudioSink` (cpal).
+  **Jitter buffer adaptativo**: latencia acotada (~120 ms, descarta ráfagas con
+  catch-up suave) + prebuffer (~40 ms, sin chasquido al arrancar / tras underrun).
 - ✅ **Llamadas grupales (malla N-a-N automática)**: uniéndote a un solo nodo
   anfitrión, todos se descubren y auto-conectan. Cada nodo gossipea las
   multiaddrs dialables que conoce (`Paquete::Pares`); el receptor disca las que
@@ -97,5 +99,7 @@ Anda hoy, end-to-end y feo a propósito:
 2. **Rendezvous sin bootstrap manual**: hoy la sala DHT necesita un
    `UYA_BOOTSTRAP` conocido para sembrarse. Falta mDNS (LAN) y/o un bootstrap
    público por defecto para "entrar por nombre" sin pasar dirección alguna.
-3. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).
+3. **Cancelación de eco acústico (AEC)**: cuando el micro capta el parlante.
+   Necesita un AEC real (y oídos/hardware para evaluarlo). El jitter buffer ya
+   es adaptativo.
 4. **SFU / selective forwarding** para grupos grandes (hoy malla completa: N² streams).
