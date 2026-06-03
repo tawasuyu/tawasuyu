@@ -2,23 +2,27 @@
 //  renaser :: kernel/src/compositor/pata_marco.rs — Fase 9 :: el marco (pata)
 // -----------------------------------------------------------------------------
 //  El kernel consume el MISMO `pata-core` que el frontend Llimphi en Linux: el
-//  modelo agnóstico de widgets (un `WidgetSpec` → `Widget` que, alimentado por
-//  un `WidgetCtx`, emite un `WidgetView`). Acá el kernel arma ese `WidgetCtx`
-//  desde sus propios datos (la RAM del heap) y traduce el view-model a sus
-//  primitivas de dibujo (`grafico::Lienzo` + `texto::rasterizar`). Es la regla
-//  del repo hecha carne: un modelo, dos pinceles.
+//  esquema declarativo (`Config` → barras + widgets), su geometría
+//  (`layout::resolve`: config + pantalla → superficies colocadas) y el modelo de
+//  widgets (`WidgetSpec` → `Widget` → `WidgetView`). Acá el kernel arma el
+//  `Config` del marco y un `WidgetCtx` desde sus propios datos (la RAM del heap),
+//  y traduce todo a sus primitivas de dibujo (`grafico::Lienzo` +
+//  `texto::rasterizar`). Es la regla del repo hecha carne: un modelo, dos
+//  pinceles.
 //
-//  Hoy pinta el cluster de indicadores del taskbar (un medidor de RAM real, el
-//  primer dato del sistema que pata pinta sobre el framebuffer de wawa). El
-//  layout de pantalla completa (`pata_core::resolve`) y el resto de los widgets
-//  llegan cuando el config venga por akasha — el modelo ya está, sólo falta la
-//  fuente de config y el ruteo de input al `start_button`.
+//  Hoy pinta una **barra de menú** completa (resuelta por `pata_core::resolve`)
+//  con sus tres slots: el `start_button` a la izquierda y el medidor de RAM
+//  (dato real del heap) a la derecha. El config se arma en memoria; cuando llegue
+//  por akasha, sólo cambia la fuente. El ruteo de input al `start_button` y más
+//  widgets (reloj wall-clock, etc.) llegan después.
 // =============================================================================
 
+use alloc::vec;
 use alloc::vec::Vec;
 
+use pata_core::layout::Rect as MarcoRect;
 use pata_core::widget::{build_all, WidgetCtx, WidgetView};
-use pata_core::WidgetSpec;
+use pata_core::{resolve, Anchor, Config, Surface, SurfaceKind, WidgetSpec};
 
 use crate::grafico::{Color, Lienzo, RegionPantalla};
 use crate::texto;
@@ -29,13 +33,30 @@ const BARRA_W: usize = 56;
 const BARRA_H: usize = 6;
 /// Separación entre piezas de un widget y entre widgets, en px.
 const GAP: usize = 8;
-/// Tamaño de fuente de las leyendas, en px (igual que el reloj del taskbar).
+/// Padding interno de la barra (borde → primer widget), en px.
+const PAD: usize = 12;
+/// Tamaño de fuente de las leyendas, en px.
 const TAM: f32 = 16.0;
+/// Grosor de la barra de menú del kernel, en px.
+const BARRA_ALTO: f32 = 32.0;
+
+/// El `Config` del marco del kernel — declarado como en Linux (mismos `kind`s).
+/// Una barra superior con el botón de inicio a la izquierda y el medidor de RAM
+/// a la derecha. Cuando akasha entregue el config real, esto se reemplaza por lo
+/// que venga del grafo, sin tocar el resto.
+fn marco_config() -> Config {
+    let mut top = Surface::bar(Anchor::Top);
+    top.thickness = BARRA_ALTO;
+    top.start = vec![WidgetSpec::new("start_button")];
+    top.end = vec![WidgetSpec::new("ram_meter")];
+    let mut cfg = Config::default();
+    cfg.surfaces.push(top);
+    cfg
+}
 
 /// El snapshot del sistema que el kernel le entrega a los widgets de `pata-core`.
 /// Hoy sólo la RAM (usado/total del heap); el resto queda en cero (un widget que
-/// dependa de un campo en cero se ve vacío, no rompe). Cuando el kernel exponga
-/// más contadores (CPU, etc.) se rellenan acá, sin tocar a `pata-core`.
+/// dependa de un campo en cero se ve vacío, no rompe).
 pub(crate) fn ctx_kernel() -> WidgetCtx {
     let (usado, total) = crate::memory::allocator::stats();
     let total = total.max(1);
@@ -46,13 +67,6 @@ pub(crate) fn ctx_kernel() -> WidgetCtx {
         ram_total_mb: (total / mib) as u32,
         ..WidgetCtx::default()
     }
-}
-
-/// Los widgets del cluster de indicadores del kernel, declarados como lo haría un
-/// config de `pata` (mismos `kind`s que en Linux). Cuando akasha entregue el
-/// config real, esto se reemplaza por lo que venga del grafo.
-fn specs_indicadores() -> Vec<WidgetSpec> {
-    alloc::vec![WidgetSpec::new("ram_meter")]
 }
 
 /// Mezcla `fondo`→`tinta` según una cobertura de glifo `0..=255` (anti-aliasing).
@@ -75,7 +89,7 @@ fn medir_texto(s: &str) -> usize {
 }
 
 /// Funde una cadena sobre el lienzo en `(x, base_y)`, sobre un fondo conocido —
-/// el mismo patrón que `consola::pintar_etiqueta`, sin estado de pluma.
+/// mismo patrón que `consola::pintar_etiqueta`, sin estado de pluma.
 fn dibujar_texto(lienzo: &mut Lienzo, x: usize, base_y: usize, s: &str, fondo: Color, tinta: Color) {
     let mut cursor = x;
     for caracter in s.chars() {
@@ -116,10 +130,16 @@ fn medir_vista(v: &WidgetView) -> usize {
     }
 }
 
-/// Pinta un view-model en `(x, …)` dentro de `rect`, sobre `fondo`. Devuelve el
+/// El ancho total (con gaps) de una secuencia de vistas.
+fn ancho_total(vistas: &[WidgetView]) -> usize {
+    let suma: usize = vistas.iter().map(medir_vista).sum();
+    suma + GAP * vistas.len().saturating_sub(1)
+}
+
+/// Pinta un view-model en `(x, …)` dentro de `region`, sobre `fondo`. Devuelve el
 /// ancho pintado (para avanzar al siguiente widget).
-fn pintar_vista(lienzo: &mut Lienzo, v: &WidgetView, x: usize, rect: RegionPantalla, fondo: Color) -> usize {
-    let base_y = rect.y + (rect.alto + 14) / 2;
+fn pintar_vista(lienzo: &mut Lienzo, v: &WidgetView, x: usize, region: RegionPantalla, fondo: Color) -> usize {
+    let base_y = region.y + (region.alto + 14) / 2;
     match v {
         WidgetView::Empty => 0,
         WidgetView::Text(t) | WidgetView::Placeholder(t) => {
@@ -134,7 +154,7 @@ fn pintar_vista(lienzo: &mut Lienzo, v: &WidgetView, x: usize, rect: RegionPanta
             }
             // Pista (track) + relleno proporcional. El framebuffer es color
             // sólido (no hay gradiente como en Llimphi/vello).
-            let barra_y = rect.y + rect.alto.saturating_sub(BARRA_H) / 2;
+            let barra_y = region.y + region.alto.saturating_sub(BARRA_H) / 2;
             lienzo.rellenar_rect(cur, barra_y, BARRA_W, BARRA_H, Color::SIN_FOCO);
             let relleno = (BARRA_W as f32 * fraction.clamp(0.0, 1.0)) as usize;
             lienzo.rellenar_rect(cur, barra_y, relleno, BARRA_H, Color::FOCO);
@@ -146,25 +166,72 @@ fn pintar_vista(lienzo: &mut Lienzo, v: &WidgetView, x: usize, rect: RegionPanta
     }
 }
 
-/// Pinta el cluster de indicadores de `pata` **alineado a la derecha** dentro de
-/// `rect`, sobre `fondo`. Construye los widgets desde el config del kernel, los
-/// `tick`ea con [`ctx_kernel`] y traduce cada `WidgetView` a las primitivas del
-/// framebuffer. Lo llama el taskbar (`consola::pintar_taskbar`).
-pub(crate) fn pintar_cluster(lienzo: &mut Lienzo, rect: RegionPantalla, fondo: Color) {
-    let specs = specs_indicadores();
-    let ctx = ctx_kernel();
-    let mut widgets = build_all(&specs);
-    for w in &mut widgets {
-        w.tick(&ctx);
-    }
-    let vistas: Vec<WidgetView> = widgets.iter().map(|w| w.view()).collect();
-
-    let suma: usize = vistas.iter().map(medir_vista).sum();
-    let total = suma + GAP * vistas.len().saturating_sub(1);
-    // Alineado a la derecha: arranca a `total` px del borde derecho del rect.
-    let mut x = rect.x + rect.ancho.saturating_sub(total);
-    for v in &vistas {
-        let w = pintar_vista(lienzo, v, x, rect, fondo);
+/// Pinta una secuencia de vistas de izquierda a derecha desde `x0`.
+fn pintar_secuencia(lienzo: &mut Lienzo, vistas: &[WidgetView], x0: usize, region: RegionPantalla, fondo: Color) {
+    let mut x = x0;
+    for v in vistas {
+        let w = pintar_vista(lienzo, v, x, region, fondo);
         x += w + GAP;
+    }
+}
+
+/// Construye, `tick`ea y proyecta a `WidgetView` los widgets de un slot.
+fn vistas(specs: &[WidgetSpec], ctx: &WidgetCtx) -> Vec<WidgetView> {
+    let mut widgets = build_all(specs);
+    for w in &mut widgets {
+        w.tick(ctx);
+    }
+    widgets.iter().map(|w| w.view()).collect()
+}
+
+/// Pinta una barra resuelta: fondo + separador + sus tres slots
+/// (start a la izquierda, center centrado, end a la derecha).
+fn pintar_barra(lienzo: &mut Lienzo, rect: MarcoRect, s: &Surface, ctx: &WidgetCtx, fondo: Color) {
+    let (x, y) = (rect.x.max(0) as usize, rect.y.max(0) as usize);
+    let (ancho, alto) = (rect.w.max(0) as usize, rect.h.max(0) as usize);
+    if ancho == 0 || alto == 0 {
+        return;
+    }
+    let region = RegionPantalla { x, y, ancho, alto };
+    // Fondo de la barra + línea de separación inferior (cromo).
+    lienzo.rellenar_rect(x, y, ancho, alto, fondo);
+    lienzo.rellenar_rect(x, y + alto.saturating_sub(1), ancho, 1, Color::SIN_FOCO);
+
+    let vs_start = vistas(&s.start, ctx);
+    let vs_center = vistas(&s.center, ctx);
+    let vs_end = vistas(&s.end, ctx);
+
+    // start: pegado al borde izquierdo.
+    pintar_secuencia(lienzo, &vs_start, x + PAD, region, fondo);
+    // center: centrado en el ancho de la barra.
+    let wc = ancho_total(&vs_center);
+    let cx = x + ancho.saturating_sub(wc) / 2;
+    pintar_secuencia(lienzo, &vs_center, cx, region, fondo);
+    // end: pegado al borde derecho.
+    let we = ancho_total(&vs_end);
+    let ex = x + ancho.saturating_sub(PAD + we);
+    pintar_secuencia(lienzo, &vs_end, ex, region, fondo);
+}
+
+/// Pinta el **marco completo** de `pata` sobre `area`: resuelve el `Config` del
+/// kernel con `pata_core::resolve` (la geometría canónica que comparten Linux y
+/// wawa) y pinta cada barra resuelta en su rect, con sus tres slots. La llama el
+/// compositor (`consola::recomponer`) tras componer el escritorio.
+pub(crate) fn pintar_marco(lienzo: &mut Lienzo, area: RegionPantalla) {
+    let cfg = marco_config();
+    let pantalla = MarcoRect::new(
+        area.x as i32,
+        area.y as i32,
+        area.ancho as i32,
+        area.alto as i32,
+    );
+    let frame = resolve(&cfg, pantalla);
+    let ctx = ctx_kernel();
+    for placed in &frame.surfaces {
+        let s = &cfg.surfaces[placed.index];
+        if s.kind != SurfaceKind::Bar || !placed.rect.es_visible() {
+            continue;
+        }
+        pintar_barra(lienzo, placed.rect, s, &ctx, Color::PANEL);
     }
 }

@@ -301,8 +301,16 @@ borde; shuma provee el contenido.
   del taskbar (medidor de RAM) a la izquierda del reloj — un modelo, dos pinceles,
   sobre bare-metal. Compila con `cargo +nightly check --target x86_64-unknown-none
   -Z build-std=core,alloc`; runtime a validar en QEMU (norma de wawa).
-  Pendiente: `pata_core::resolve` para el marco de pantalla completa, el config por
-  akasha (en vez de armado en memoria) y el ruteo de input al `start_button`.
+  - **`pata_core::resolve` integrado** — `pata_marco` ahora arma un `Config`
+    (barra de menú superior con `start_button` + `ram_meter`), lo resuelve con la
+    geometría canónica `resolve` (la misma que en Linux) y pinta **cada barra
+    resuelta** con sus tres slots (start izquierda / center centrado / end
+    derecha) en su rect. Se llama desde `consola::recomponer` sobre el área de
+    apps, tras componer el escritorio. El cluster suelto del taskbar se reemplazó
+    por esta barra completa.
+  - Pendiente: el config por akasha (en vez de armado en memoria) y el ruteo de
+    input al `start_button` (abrir/lanzar apps WASM); que el compositor reserve la
+    franja de la barra usando `Frame::work_area` de resolve.
 - **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
   excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
   nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se

@@ -428,6 +428,13 @@ impl Consola {
             self.dibujar_borde(m, capa.enfocada);
         }
         self.pintar_taskbar(taskbar, resolver);
+        // FASE 9 :: el marco del escritorio (`pata`), resuelto por
+        // `pata_core::resolve` sobre el área de apps: una barra de menú superior
+        // con el `start_button` y el medidor de RAM (dato real del heap),
+        // manejada por el MISMO `pata-core` que el frontend Llimphi en Linux —
+        // un modelo, dos pinceles. Se pinta tras componer el escritorio para
+        // quedar sobre la franja superior de las apps.
+        crate::compositor::pata_marco::pintar_marco(&mut self.lienzo, area);
         // FASE 58 :: si el launcher esta abierto, pintar su overlay como
         // ULTIMA capa, encima de la taskbar — el operador lo ve por encima
         // de todo y no se confunde con una ventana mas.
@@ -669,20 +676,6 @@ impl Consola {
         let r = taskbar.reloj_region;
         let base_y = r.y + (r.alto + 14) / 2;
         self.pintar_etiqueta(r.x, base_y, taskbar.reloj, 16.0, Color::PANEL, Color::TEXTO);
-
-        // Fase 9 :: el cluster de indicadores del marco (`pata`), a la izquierda
-        // del reloj. `pata-core` —el MISMO modelo que el frontend Llimphi en
-        // Linux— maneja el medidor de RAM (dato real del heap del kernel),
-        // pintado aquí sobre el framebuffer. Un modelo, dos pinceles.
-        const CLUSTER_ANCHO: usize = 180;
-        let cluster_x = r.x.saturating_sub(CLUSTER_ANCHO + 16);
-        let region = RegionPantalla {
-            x: cluster_x,
-            y: taskbar.area.y,
-            ancho: CLUSTER_ANCHO,
-            alto: taskbar.area.alto,
-        };
-        crate::compositor::pata_marco::pintar_cluster(&mut self.lienzo, region, Color::PANEL);
     }
 
     /// Rasteriza una cadena de texto a un tamaño dado, en (x, base_y), sobre
