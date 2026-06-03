@@ -262,5 +262,29 @@ borde; shuma provee el contenido.
     foreign-toplevel (que vive en el backend layer-shell) o el IPC de toplevels de
     mirada; hasta entonces queda vacío en ese path. Helper `config_tiene_widget`
     compartido por ambos backends para arrancar el tray sólo si hace falta.
+- **Fase 8c — pulido de escritorio** (en curso):
+  - **Gradiente en los medidores** ✅ — la barra de relleno de cpu/ram/volumen/
+    brillo pinta un gradiente lineal (acento → acento aclarado) con `paint_with`
+    (Llimphi sólo tiene fill de color sólido). Ambos backends.
+  - **Task manager estilo KDE** ✅ — el `window_list` pasa de chips planos a
+    botones con ícono-badge (inicial del `app_id`) + título; la activa resaltada,
+    las minimizadas atenuadas. Clic izq. activa o **minimiza** si ya estaba activa;
+    clic der. **cierra** (`Msg::CloseWindow` → `handle.close()`). `Toplevel`
+    trackea `minimized`; el pointer del layer-shell rutea `BTN_RIGHT`.
+  - **Tarjetas flotantes (conky)** ✅ — `SurfaceKind::Panel` + `FloatingCard` ya
+    estaban en el modelo; ahora `render::card_view` las pinta y el layer-shell crea
+    **una layer surface por tarjeta** en `Layer::Bottom` (sobre el escritorio,
+    anclada a la esquina sup-izq con margen (x,y), sin reservar franja ni teclado).
+    En winit se pintan en absoluto. Asset con una tarjeta `sistema`.
+  - **Botón de inicio con menú nativo** ✅ — el `start_button` despliega un menú
+    de apps del registro (`app-bus AppRegistry::discover`). En layer-shell la barra
+    superior crece hacia abajo (truco del drawer Quake, al revés); en winit sale
+    por `view_overlay`. `exec` en el spec lo deja delegando a un lanzador externo.
+  - **Hover en todos los widgets** ✅ — el layer-shell pasaba `None` a `paint`, así
+    que `hover_fill` estaba muerto; ahora trackea `Motion`/`Leave` →
+    `hit_test_hover` → `hover_idx`. Todos los widgets dan realce al pasar el cursor.
+  - **Tooltip flotante (texto)** ⏳ — pendiente: necesita una surface popup aparte
+    (las barras son finas y recortan), a validar en compositor. La base (hover
+    tracking) ya está.
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
 - **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
