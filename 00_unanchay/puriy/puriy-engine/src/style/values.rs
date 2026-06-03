@@ -408,6 +408,19 @@ pub struct ComputedStyle {
     /// `-webkit-line-clamp` / `line-clamp` (Fase 7.303). `None` = sin
     /// truncado. NO heredable. Plumb: el layout no recorta a N líneas.
     pub line_clamp: Option<u32>,
+    /// `font-variant-caps` (Fase 7.304). Default `Normal`. **Heredable**.
+    /// Plumb: el shaper no aplica caps variants.
+    pub font_variant_caps: FontVariantCaps,
+    /// `font-variant-numeric` (Fase 7.305). Bitset. **Heredable**. Plumb.
+    pub font_variant_numeric: FontVariantNumeric,
+    /// `font-variant-ligatures` (Fase 7.306). Bitset + `None` (todas off)
+    /// vs `Normal` (defaults). **Heredable**. Plumb.
+    pub font_variant_ligatures: FontVariantLigatures,
+    /// `font-variant-east-asian` (Fase 7.307). Bitset. **Heredable**. Plumb.
+    pub font_variant_east_asian: FontVariantEastAsian,
+    /// `font-variant-position` (Fase 7.308). Default `Normal`. **Heredable**.
+    /// Plumb.
+    pub font_variant_position: FontVariantPosition,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -978,6 +991,86 @@ pub enum ForcedColorAdjust {
     None,
     /// Hint moderno (subset opt-in).
     Preserve,
+}
+
+/// `font-variant-caps` (CSS Fonts 4). Default `Normal`. Heredable.
+/// Fase 7.304.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontVariantCaps {
+    #[default]
+    Normal,
+    SmallCaps,
+    AllSmallCaps,
+    PetiteCaps,
+    AllPetiteCaps,
+    Unicase,
+    TitlingCaps,
+}
+
+/// `font-variant-numeric` (CSS Fonts 4). Bitset libre — los valores
+/// `normal` (todos false) y los individuales se acumulan. Heredable.
+/// Fase 7.305.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FontVariantNumeric {
+    pub lining_nums: bool,
+    pub oldstyle_nums: bool,
+    pub proportional_nums: bool,
+    pub tabular_nums: bool,
+    pub diagonal_fractions: bool,
+    pub stacked_fractions: bool,
+    pub ordinal: bool,
+    pub slashed_zero: bool,
+}
+
+/// `font-variant-ligatures` (CSS Fonts 4). `None` (variante) = todas las
+/// ligaduras off; `Normal` (todos false, no_* false) = defaults de la
+/// font. Fase 7.306.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontVariantLigatures {
+    #[default]
+    Normal,
+    None,
+    /// Combinación de habilitaciones/deshabilitaciones explícitas.
+    Custom(LigatureSet),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LigatureSet {
+    pub common_ligatures: bool,
+    pub no_common_ligatures: bool,
+    pub discretionary_ligatures: bool,
+    pub no_discretionary_ligatures: bool,
+    pub historical_ligatures: bool,
+    pub no_historical_ligatures: bool,
+    pub contextual: bool,
+    pub no_contextual: bool,
+}
+
+/// `font-variant-east-asian` (CSS Fonts 4). Bitset libre — `normal` =
+/// todos false. Las variantes JIS78/JIS83/.../Simplified/Traditional son
+/// mutuamente excluyentes, igual que `full-width`/`proportional-width`;
+/// el parser rechaza combinaciones inválidas. Heredable. Fase 7.307.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FontVariantEastAsian {
+    pub jis78: bool,
+    pub jis83: bool,
+    pub jis90: bool,
+    pub jis04: bool,
+    pub simplified: bool,
+    pub traditional: bool,
+    pub full_width: bool,
+    pub proportional_width: bool,
+    pub ruby: bool,
+}
+
+/// `font-variant-position` (CSS Fonts 4). Default `Normal`. Heredable.
+/// Fase 7.308.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontVariantPosition {
+    #[default]
+    Normal,
+    Sub,
+    Super,
 }
 
 impl ContainFlags {
@@ -1969,6 +2062,11 @@ impl Default for ComputedStyle {
             print_color_adjust: PrintColorAdjust::Economy,
             forced_color_adjust: ForcedColorAdjust::Auto,
             line_clamp: None,
+            font_variant_caps: FontVariantCaps::Normal,
+            font_variant_numeric: FontVariantNumeric::default(),
+            font_variant_ligatures: FontVariantLigatures::Normal,
+            font_variant_east_asian: FontVariantEastAsian::default(),
+            font_variant_position: FontVariantPosition::Normal,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

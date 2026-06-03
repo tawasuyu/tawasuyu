@@ -10,7 +10,7 @@
     <header id="barra">
       <span class="marca">wawa</span>
       <span class="separador">·</span>
-      <span class="contexto">demo web</span>
+      <span class="contexto">demo web — host wasmi del kernel en wasm32</span>
       <span class="estado" id="estado">cargando…</span>
     </header>
 
@@ -19,17 +19,21 @@
         <header class="titulo">
           <span class="punto"></span>
           <span class="nombre">hello_wasm</span>
-          <span class="hint">W A S D para mover</span>
+          <span class="hint">W A S D para mover · click para enfocar</span>
         </header>
         <canvas id="canvas-hello" width="480" height="560" tabindex="0"></canvas>
       </section>
     </main>
 
     <footer id="pie">
-      <span>módulo <code>renaser</code> · <code>sys_render_frame</code> · <code>sys_get_scancode</code></span>
+      <span>
+        binario <code>wawa-web</code> compilado a <code>wasm32-unknown-unknown</code> ·
+        <code>wasmi</code> en wasm hostea las apps · capacidades <code>renaser::*</code>
+        son las del kernel real
+      </span>
     </footer>
   </div>
 
-  <script type="module" src="wawa.js"></script>
+  <script type="module" src="bootstrap.js"></script>
 </body>
 </html>

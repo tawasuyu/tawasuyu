@@ -263,6 +263,12 @@ impl StyleEngine {
             style.text_justify = p.text_justify;
             style.print_color_adjust = p.print_color_adjust;
             style.forced_color_adjust = p.forced_color_adjust;
+            // CSS Fonts 4 — todos los font-variant-* heredan.
+            style.font_variant_caps = p.font_variant_caps;
+            style.font_variant_numeric = p.font_variant_numeric;
+            style.font_variant_ligatures = p.font_variant_ligatures;
+            style.font_variant_east_asian = p.font_variant_east_asian;
+            style.font_variant_position = p.font_variant_position;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -3345,6 +3351,201 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[1], Some(&body_cs)).line_clamp,
             None
+        );
+    }
+
+    #[test]
+    fn font_variant_caps_fase_7_304() {
+        assert_eq!(parse_font_variant_caps("normal"), Some(FontVariantCaps::Normal));
+        assert_eq!(parse_font_variant_caps("SMALL-CAPS"), Some(FontVariantCaps::SmallCaps));
+        assert_eq!(
+            parse_font_variant_caps("titling-caps"),
+            Some(FontVariantCaps::TitlingCaps)
+        );
+        assert_eq!(parse_font_variant_caps("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { font-variant-caps: small-caps }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.font_variant_caps, FontVariantCaps::SmallCaps);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).font_variant_caps,
+            FontVariantCaps::SmallCaps
+        );
+    }
+
+    #[test]
+    fn font_variant_numeric_fase_7_305() {
+        assert_eq!(
+            parse_font_variant_numeric("normal"),
+            Some(FontVariantNumeric::default())
+        );
+        let n = parse_font_variant_numeric("tabular-nums lining-nums").unwrap();
+        assert!(n.tabular_nums && n.lining_nums);
+        assert!(!n.proportional_nums && !n.oldstyle_nums);
+        // Mutuamente excluyentes.
+        assert!(parse_font_variant_numeric("lining-nums oldstyle-nums").is_none());
+        assert!(parse_font_variant_numeric("tabular-nums proportional-nums").is_none());
+        assert!(parse_font_variant_numeric("diagonal-fractions stacked-fractions").is_none());
+        // Token desconocido descarta.
+        assert!(parse_font_variant_numeric("tabular-nums bogus").is_none());
+
+        let html = r##"<html><head><style>
+            body { font-variant-numeric: tabular-nums slashed-zero }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(body_cs.font_variant_numeric.tabular_nums);
+        assert!(body_cs.font_variant_numeric.slashed_zero);
+        // SÍ se hereda.
+        let plain = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(plain.font_variant_numeric.tabular_nums);
+        assert!(plain.font_variant_numeric.slashed_zero);
+    }
+
+    #[test]
+    fn font_variant_ligatures_fase_7_306() {
+        assert_eq!(
+            parse_font_variant_ligatures("normal"),
+            Some(FontVariantLigatures::Normal)
+        );
+        assert_eq!(
+            parse_font_variant_ligatures("NONE"),
+            Some(FontVariantLigatures::None)
+        );
+        if let Some(FontVariantLigatures::Custom(l)) =
+            parse_font_variant_ligatures("common-ligatures discretionary-ligatures contextual")
+        {
+            assert!(l.common_ligatures && l.discretionary_ligatures && l.contextual);
+            assert!(!l.no_common_ligatures);
+        } else {
+            panic!("esperaba Custom");
+        }
+        // on/off del mismo grupo es inválido.
+        assert!(parse_font_variant_ligatures("common-ligatures no-common-ligatures").is_none());
+        // Token desconocido descarta.
+        assert!(parse_font_variant_ligatures("common-ligatures bogus").is_none());
+
+        let html = r##"<html><head><style>
+            body { font-variant-ligatures: discretionary-ligatures }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(matches!(body_cs.font_variant_ligatures, FontVariantLigatures::Custom(_)));
+        // SÍ se hereda.
+        assert!(matches!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).font_variant_ligatures,
+            FontVariantLigatures::Custom(_)
+        ));
+    }
+
+    #[test]
+    fn font_variant_east_asian_fase_7_307() {
+        assert_eq!(
+            parse_font_variant_east_asian("normal"),
+            Some(FontVariantEastAsian::default())
+        );
+        let e = parse_font_variant_east_asian("jis90 ruby full-width").unwrap();
+        assert!(e.jis90 && e.ruby && e.full_width);
+        // 2 JIS forms simultaneous = inválido.
+        assert!(parse_font_variant_east_asian("jis78 jis83").is_none());
+        // full-width + proportional-width = inválido.
+        assert!(
+            parse_font_variant_east_asian("full-width proportional-width").is_none()
+        );
+        // Token desconocido descarta.
+        assert!(parse_font_variant_east_asian("ruby bogus").is_none());
+
+        let html = r##"<html><head><style>
+            body { font-variant-east-asian: simplified ruby }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(body_cs.font_variant_east_asian.simplified);
+        assert!(body_cs.font_variant_east_asian.ruby);
+        // SÍ se hereda.
+        let plain = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(plain.font_variant_east_asian.simplified && plain.font_variant_east_asian.ruby);
+    }
+
+    #[test]
+    fn font_variant_position_fase_7_308() {
+        assert_eq!(
+            parse_font_variant_position("normal"),
+            Some(FontVariantPosition::Normal)
+        );
+        assert_eq!(parse_font_variant_position("SUB"), Some(FontVariantPosition::Sub));
+        assert_eq!(parse_font_variant_position("super"), Some(FontVariantPosition::Super));
+        assert_eq!(parse_font_variant_position("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { font-variant-position: sub }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.font_variant_position, FontVariantPosition::Sub);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).font_variant_position,
+            FontVariantPosition::Sub
         );
     }
 

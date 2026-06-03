@@ -581,6 +581,21 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // `-webkit-line-clamp` (de facto estándar) y `line-clamp` (CSS Overflow 4).
         "line-clamp" | "-webkit-line-clamp" => Some(DeclKind::LineClamp(parse_line_clamp(value))),
+        "font-variant-caps" => {
+            parse_font_variant_caps(value).map(DeclKind::FontVariantCaps)
+        }
+        "font-variant-numeric" => {
+            parse_font_variant_numeric(value).map(DeclKind::FontVariantNumeric)
+        }
+        "font-variant-ligatures" => {
+            parse_font_variant_ligatures(value).map(DeclKind::FontVariantLigatures)
+        }
+        "font-variant-east-asian" => {
+            parse_font_variant_east_asian(value).map(DeclKind::FontVariantEastAsian)
+        }
+        "font-variant-position" => {
+            parse_font_variant_position(value).map(DeclKind::FontVariantPosition)
+        }
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1831,6 +1846,139 @@ pub(crate) fn parse_line_clamp(value: &str) -> Option<u32> {
         return None;
     }
     v.parse::<u32>().ok().filter(|n| *n >= 1)
+}
+
+/// `font-variant-caps`: 7 valores enum. Fase 7.304.
+pub(crate) fn parse_font_variant_caps(value: &str) -> Option<FontVariantCaps> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(FontVariantCaps::Normal),
+        "small-caps" => Some(FontVariantCaps::SmallCaps),
+        "all-small-caps" => Some(FontVariantCaps::AllSmallCaps),
+        "petite-caps" => Some(FontVariantCaps::PetiteCaps),
+        "all-petite-caps" => Some(FontVariantCaps::AllPetiteCaps),
+        "unicase" => Some(FontVariantCaps::Unicase),
+        "titling-caps" => Some(FontVariantCaps::TitlingCaps),
+        _ => None,
+    }
+}
+
+/// `font-variant-numeric`: `normal | <bitset>`. Token desconocido o
+/// combinación inválida (proportional+tabular, lining+oldstyle,
+/// diagonal+stacked) descarta la regla. Fase 7.305.
+pub(crate) fn parse_font_variant_numeric(value: &str) -> Option<FontVariantNumeric> {
+    let v = value.trim().to_ascii_lowercase();
+    if v == "normal" {
+        return Some(FontVariantNumeric::default());
+    }
+    let mut n = FontVariantNumeric::default();
+    for tok in v.split_whitespace() {
+        match tok {
+            "lining-nums" => n.lining_nums = true,
+            "oldstyle-nums" => n.oldstyle_nums = true,
+            "proportional-nums" => n.proportional_nums = true,
+            "tabular-nums" => n.tabular_nums = true,
+            "diagonal-fractions" => n.diagonal_fractions = true,
+            "stacked-fractions" => n.stacked_fractions = true,
+            "ordinal" => n.ordinal = true,
+            "slashed-zero" => n.slashed_zero = true,
+            _ => return None,
+        }
+    }
+    // Mutuamente excluyentes — la spec lo dice y los browsers descartan.
+    if n.lining_nums && n.oldstyle_nums {
+        return None;
+    }
+    if n.proportional_nums && n.tabular_nums {
+        return None;
+    }
+    if n.diagonal_fractions && n.stacked_fractions {
+        return None;
+    }
+    Some(n)
+}
+
+/// `font-variant-ligatures`: `normal | none | <bitset>`. Fase 7.306.
+pub(crate) fn parse_font_variant_ligatures(value: &str) -> Option<FontVariantLigatures> {
+    let v = value.trim().to_ascii_lowercase();
+    if v == "normal" {
+        return Some(FontVariantLigatures::Normal);
+    }
+    if v == "none" {
+        return Some(FontVariantLigatures::None);
+    }
+    let mut l = LigatureSet::default();
+    for tok in v.split_whitespace() {
+        match tok {
+            "common-ligatures" => l.common_ligatures = true,
+            "no-common-ligatures" => l.no_common_ligatures = true,
+            "discretionary-ligatures" => l.discretionary_ligatures = true,
+            "no-discretionary-ligatures" => l.no_discretionary_ligatures = true,
+            "historical-ligatures" => l.historical_ligatures = true,
+            "no-historical-ligatures" => l.no_historical_ligatures = true,
+            "contextual" => l.contextual = true,
+            "no-contextual" => l.no_contextual = true,
+            _ => return None,
+        }
+    }
+    // Cada par on/off es mutuamente excluyente.
+    if l.common_ligatures && l.no_common_ligatures {
+        return None;
+    }
+    if l.discretionary_ligatures && l.no_discretionary_ligatures {
+        return None;
+    }
+    if l.historical_ligatures && l.no_historical_ligatures {
+        return None;
+    }
+    if l.contextual && l.no_contextual {
+        return None;
+    }
+    Some(FontVariantLigatures::Custom(l))
+}
+
+/// `font-variant-east-asian`: `normal | <bitset>` con grupos
+/// mutuamente excluyentes. Fase 7.307.
+pub(crate) fn parse_font_variant_east_asian(value: &str) -> Option<FontVariantEastAsian> {
+    let v = value.trim().to_ascii_lowercase();
+    if v == "normal" {
+        return Some(FontVariantEastAsian::default());
+    }
+    let mut e = FontVariantEastAsian::default();
+    for tok in v.split_whitespace() {
+        match tok {
+            "jis78" => e.jis78 = true,
+            "jis83" => e.jis83 = true,
+            "jis90" => e.jis90 = true,
+            "jis04" => e.jis04 = true,
+            "simplified" => e.simplified = true,
+            "traditional" => e.traditional = true,
+            "full-width" => e.full_width = true,
+            "proportional-width" => e.proportional_width = true,
+            "ruby" => e.ruby = true,
+            _ => return None,
+        }
+    }
+    // JIS78/83/90/04/simplified/traditional mutuamente excluyentes.
+    let jis_count = (e.jis78 as u32) + (e.jis83 as u32) + (e.jis90 as u32) + (e.jis04 as u32)
+        + (e.simplified as u32) + (e.traditional as u32);
+    if jis_count > 1 {
+        return None;
+    }
+    // full-width vs proportional-width también.
+    if e.full_width && e.proportional_width {
+        return None;
+    }
+    Some(e)
+}
+
+/// `font-variant-position`: `normal | sub | super`. Fase 7.308.
+pub(crate) fn parse_font_variant_position(value: &str) -> Option<FontVariantPosition> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(FontVariantPosition::Normal),
+        "sub" => Some(FontVariantPosition::Sub),
+        "super" => Some(FontVariantPosition::Super),
+        _ => None,
+    }
 }
 
 /// `break-inside`: `auto | avoid | avoid-page | avoid-column | avoid-region`.

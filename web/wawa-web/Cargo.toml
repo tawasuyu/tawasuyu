@@ -1,0 +1,40 @@
+# =============================================================================
+#  web/wawa-web — host wasmi del kernel de wawa, recompilado a wasm32 para el
+#  navegador. Trae los handlers de capacidades del propio kernel
+#  (03_ukupacha/wawa/wawa-kernel/src/wasm/), los expone como API JS via
+#  wasm-bindgen y carga una o varias apps WASM embebidas en el binario.
+#
+#  Es una rebanada delgada del kernel: NO incluye compositor, ejecutor async,
+#  drivers, manifiesto ni almacen. Eso entra en iteraciones siguientes.
+# =============================================================================
+
+[package]
+name = "wawa-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "wawa :: host wasmi del kernel hosteado en el navegador"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# El mismo runtime que monta el kernel de wawa. Las defaults estan bien aqui:
+# el browser tiene std completo, no hay restriccion no_std como en x86-none.
+wasmi = "1.0"
+
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+
+# Lo mismo que gioser-web: getrandom 0.4 llega por uuid; en wasm32-unknown
+# exige `wasm_js` para usar WebCrypto.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[dependencies.web-sys]
+workspace = true
+features = [
+    "console",
+]
