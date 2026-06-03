@@ -28,8 +28,18 @@ impl<Msg> View<Msg> {
             focusable: None,
             alpha: None,
             transform: None,
+            tooltip: None,
             children: Vec::new(),
         }
+    }
+
+    /// Asocia un texto de **tooltip** a este nodo. Llimphi sólo lo transporta
+    /// hasta el [`MountedNode`](crate::MountedNode); el consumidor decide cómo
+    /// mostrarlo (un overlay del runtime, una surface popup del cliente) tras
+    /// localizar el nodo bajo el cursor con el hit-test de hover.
+    pub fn tooltip(mut self, text: impl Into<String>) -> Self {
+        self.tooltip = Some(text.into());
+        self
     }
 
     /// Registra un handler de rueda local: si el cursor está sobre este

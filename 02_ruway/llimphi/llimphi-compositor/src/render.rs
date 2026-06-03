@@ -42,6 +42,7 @@ pub fn mount_recursive<Msg: Clone>(
         focusable,
         alpha,
         transform,
+        tooltip,
         children,
     } = v;
     let parent_idx = out.len();
@@ -71,6 +72,7 @@ pub fn mount_recursive<Msg: Clone>(
         focusable,
         alpha,
         transform,
+        tooltip,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());

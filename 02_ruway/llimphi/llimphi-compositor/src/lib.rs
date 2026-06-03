@@ -269,6 +269,12 @@ pub struct View<Msg> {
     /// el afín, y la posición local que reciben los handlers `*_at` se
     /// reporta en espacio de pantalla, no en el espacio local del nodo.
     pub transform: Option<Affine>,
+    /// Texto de **tooltip**: si está, el runtime/cliente puede mostrar un
+    /// rótulo flotante cuando el cursor se posa sobre este nodo. Llimphi sólo
+    /// transporta el dato hasta el [`MountedNode`]; *quién* lo pinta (un overlay
+    /// del runtime, una surface popup del cliente) lo decide el consumidor. El
+    /// hit-test de hover ya localiza el nodo bajo el cursor. `None` = sin tip.
+    pub tooltip: Option<String>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -332,6 +338,9 @@ pub struct MountedNode<Msg> {
     /// Transformación afín 2D del nodo (alrededor del centro de su rect).
     /// Ver [`View::transform`]. `paint` la compone con la del padre.
     pub transform: Option<Affine>,
+    /// Texto de tooltip de este nodo (ver [`View::tooltip`]). El consumidor lo
+    /// lee tras un hit-test de hover para pintar el rótulo flotante.
+    pub tooltip: Option<String>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.
