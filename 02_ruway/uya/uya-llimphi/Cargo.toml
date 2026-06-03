@@ -30,3 +30,7 @@ uya-app = { path = "../uya-app" }
 # La UI saca View, App, el runtime y, vía re-export, peniko (Image/Blob/Color)
 # y taffy (layout) de un solo crate — sin sumar dependencias.
 llimphi-ui = { workspace = true }
+# Campo de texto para pegar la dirección de un par + pegar del clipboard.
+llimphi-widget-text-input = { workspace = true }
+llimphi-widget-edit-menu = { workspace = true }
+llimphi-clipboard = { workspace = true }

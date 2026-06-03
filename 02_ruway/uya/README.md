@@ -69,6 +69,9 @@ Anda hoy, end-to-end y feo a propósito:
   conexiones. Verificado con 3 nodos: cada uno ve y recibe video de los otros dos.
 - ✅ Cámara sintética por defecto (TestCard); webcam real v4l2 con `--features camara` en `uya-app`.
 - ✅ Toggle de cámara / micrófono y cuelgue.
+- ✅ **Conectar desde la UI**: la app muestra tu dirección dialable (para
+  compartir) y un campo donde pegás (Ctrl/Cmd+V) la de un par + Enter/botón —
+  ya no hace falta `UYA_CONECTAR`. (Funciona también por env, como antes.)
 
 ## Pendiente (por orden)
 
@@ -78,6 +81,5 @@ Anda hoy, end-to-end y feo a propósito:
 2. **Descubrimiento por DHT**: `BrahmanNet` ya trae Kademlia — anunciar/encontrar
    pares por una clave de sala en vez de pasar la multiaddr del anfitrión a mano
    (la malla ya converge sola una vez que entrás; falta el "entrar por nombre").
-3. **Marcar/conectar desde la UI** (hoy la dirección se pasa por `UYA_CONECTAR`).
-4. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).
-5. **SFU / selective forwarding** para grupos grandes (hoy malla completa: N² streams).
+3. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).
+4. **SFU / selective forwarding** para grupos grandes (hoy malla completa: N² streams).

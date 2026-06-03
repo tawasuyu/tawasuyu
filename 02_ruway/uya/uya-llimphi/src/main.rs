@@ -24,7 +24,11 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, FlexDirection, FlexWrap, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image as PenikoImage, ImageFormat};
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+
+use llimphi_clipboard::SystemClipboard;
+use llimphi_widget_edit_menu::{self as editmenu, EditAction};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 // --- Paleta (sobria, oscura). Hardcoded a propósito: MVP feo. ----------------
 const FONDO: Color = Color::from_rgba8(16, 18, 24, 255);
@@ -51,6 +55,12 @@ struct Modelo {
     cuadros: HashMap<ParticipanteId, CuadroUI>,
     cam_on: bool,
     mic_on: bool,
+    /// Mi propia dirección dialable (con `/p2p/`), para mostrarla y compartirla.
+    mi_dir: String,
+    /// Campo donde se pega/teclea la dirección de un par a conectar.
+    conectar_input: TextInputState,
+    /// Clipboard del sistema, para pegar la dirección con Ctrl/Cmd+V.
+    clipboard: SystemClipboard,
     /// Salida de audio: hay que conservarla viva (al soltarla, el stream
     /// de reproducción se cierra). `None` si no hay dispositivo de salida.
     _audio: Option<uya_app::AudioSink>,
@@ -60,9 +70,15 @@ struct Modelo {
 enum Msg {
     /// Un evento de la llamada llegó por el hilo de red.
     Red(EventoUya),
+    /// Una tecla para el campo de conectar.
+    Tecla(KeyEvent),
+    /// Conectar a la dirección tecleada/pegada.
+    Conectar,
     ToggleCamara,
     ToggleMicrofono,
     Colgar,
+    /// No-op (p. ej. foco de un campo).
+    Nada,
 }
 
 struct Uya;
@@ -108,13 +124,29 @@ impl App for Uya {
             }
         });
 
+        let mi_dir = enlace.direccion_local().to_string();
         Modelo {
             sala: Sala::nueva(nombre),
             enlace,
             cuadros: HashMap::new(),
             cam_on: true,
             mic_on: true,
+            mi_dir,
+            conectar_input: TextInputState::new(),
+            clipboard: SystemClipboard::new(),
             _audio: audio,
+        }
+    }
+
+    fn on_key(_model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
+        if e.state != KeyState::Pressed {
+            return None;
+        }
+        match &e.key {
+            // Enter conecta a lo que haya en el campo.
+            Key::Named(NamedKey::Enter) => Some(Msg::Conectar),
+            // Todo lo demás (incluido Ctrl/Cmd+V) va al campo de conectar.
+            _ => Some(Msg::Tecla(e.clone())),
         }
     }
 
@@ -155,12 +187,33 @@ impl App for Uya {
                 model.mic_on = !model.mic_on;
                 model.enlace.set_microfono(model.mic_on);
             }
+            Msg::Tecla(e) => {
+                // Ctrl/Cmd+V pega del clipboard; el resto edita el campo.
+                let es_v = matches!(&e.key, Key::Character(c) if c.eq_ignore_ascii_case("v"));
+                if (e.modifiers.ctrl || e.modifiers.meta) && es_v {
+                    editmenu::apply(
+                        model.conectar_input.editor_mut(),
+                        EditAction::Paste,
+                        &mut model.clipboard,
+                    );
+                } else {
+                    model.conectar_input.apply_key(&e);
+                }
+            }
+            Msg::Conectar => {
+                let dir = model.conectar_input.text().trim().to_string();
+                if !dir.is_empty() {
+                    model.enlace.conectar(&dir);
+                    model.conectar_input.clear();
+                }
+            }
             Msg::Colgar => {
                 model.enlace.colgar();
                 model.sala.participantes.clear();
                 let yo = model.sala.yo;
                 model.cuadros.retain(|id, _| *id == yo);
             }
+            Msg::Nada => {}
         }
         model
     }
@@ -214,8 +267,55 @@ impl App for Uya {
             ..Default::default()
         })
         .fill(FONDO)
-        .children(vec![rejilla, barra_controles(model)])
+        .children(vec![rejilla, barra_conectar(model), barra_controles(model)])
     }
+}
+
+/// La barra de unión: mi dirección dialable (para compartir) + un campo donde
+/// pegar la dirección de un par + botón conectar.
+fn barra_conectar(model: &Modelo) -> View<Msg> {
+    let mi = View::new(Style {
+        size: Size {
+            width: percent(0.4),
+            height: percent(1.0),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(format!("tu dirección:  {}", model.mi_dir), 12.0, TENUE);
+
+    let campo = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: auto(),
+            height: length(34.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        &model.conectar_input,
+        "pegá (Ctrl+V) la dirección de un par y Enter…",
+        true,
+        &TextInputPalette::default(),
+        Msg::Nada,
+    )]);
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0),
+            height: length(50.0),
+        },
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(12.0),
+            height: length(0.0),
+        },
+        padding: rect_all(8.0),
+        ..Default::default()
+    })
+    .fill(BARRA_BG)
+    .children(vec![mi, campo, boton("conectar", Msg::Conectar, true, false)])
 }
 
 /// Un tile de participante: video (o placeholder) arriba + etiqueta abajo.
