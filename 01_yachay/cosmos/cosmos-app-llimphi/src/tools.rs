@@ -24,7 +24,7 @@ use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use crate::astroview;
 use crate::chrome;
 use crate::glyphs::{self, Icon};
-use crate::model::{Model, Msg, ToolCat, ToolPanel, MENU_BAR_H, STATUS_H, TOOLS_RAIL_W};
+use crate::model::{Model, Msg, ToolCat, ToolPanel, MENU_BAR_H, STATUS_H};
 use crate::view;
 
 /// Alto visible del contenedor de paneles (de bajo la barra de menú a
@@ -36,9 +36,9 @@ pub(crate) fn tools_viewport_h(model: &Model) -> f32 {
 /// Alto total estimado del acordeón (cabecera de categoría + paneles).
 /// Aproximado a partir del nº de filas de cada tabla — suficiente para
 /// dimensionar la barra de scroll y acotar el offset.
-pub(crate) fn tools_content_h(model: &Model) -> f32 {
+pub(crate) fn tools_content_h(cat: ToolCat, model: &Model) -> f32 {
     let mut h = 24.0 + 8.0; // cabecera de categoría + padding del acordeón
-    for panel in model.tool_cat.panels() {
+    for panel in cat.panels() {
         h += HEAD_H + 6.0; // cabecera de la card + gap
         if model.panel_expanded(*panel) {
             h += panel_rows(*panel, model) as f32 * 20.0 + 22.0; // filas + padding
@@ -86,7 +86,7 @@ fn panel_rows(panel: ToolPanel, model: &Model) -> usize {
 }
 
 /// Icono del rail vertical para cada categoría.
-fn cat_icon(cat: ToolCat) -> Icon {
+pub(crate) fn cat_icon(cat: ToolCat) -> Icon {
     match cat {
         ToolCat::Principal => Icon::Triangle,
         ToolCat::Analisis => Icon::Star,
@@ -95,17 +95,13 @@ fn cat_icon(cat: ToolCat) -> Icon {
     }
 }
 
-/// El panel derecho completo: acordeón (crece) + rail de categorías
-/// (fijo, pegado al borde). Pensado para vivir dentro de la zona
-/// resizable de la derecha.
-pub(crate) fn tools_panel(model: &Model, theme: &Theme) -> View<Msg> {
-    let accordion = accordion_view(model, theme);
-    let rail = category_rail(model, theme);
-
-    // Scroll vertical del acordeón: el contenido no se limita en alto; si
-    // excede, el contenedor (no cada panel) hace scroll.
+/// Contenido de una categoría de herramientas (acordeón scrolleable),
+/// para montar en un sidebar del dock. El rail de pestañas lo arma el
+/// dock en `chrome`.
+pub(crate) fn dock_tool_content(cat: ToolCat, model: &Model, theme: &Theme) -> View<Msg> {
+    let accordion = accordion_view(cat, model, theme);
     let viewport = tools_viewport_h(model);
-    let content = tools_content_h(model);
+    let content = tools_content_h(cat, model);
     let offset = clamp_offset(model.tools_scroll, content, viewport);
     let scroll = scroll_y(
         offset,
@@ -115,25 +111,11 @@ pub(crate) fn tools_panel(model: &Model, theme: &Theme) -> View<Msg> {
         Msg::ToolsScroll,
         &ScrollPalette::from_theme(theme),
     );
-    let scroll_box = View::new(Style {
+    View::new(Style {
         flex_grow: 1.0,
         size: Size {
-            width: percent(0.0_f32),
-            height: percent(1.0_f32),
-        },
-        min_size: Size {
-            width: length(0.0_f32),
-            height: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![scroll]);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
             width: percent(1.0_f32),
-            height: percent(1.0_f32),
+            height: percent(0.0_f32),
         },
         min_size: Size {
             width: length(0.0_f32),
@@ -142,86 +124,14 @@ pub(crate) fn tools_panel(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![rail, scroll_box])
-}
-
-// =====================================================================
-// Rail vertical de categorías (tabs estilo Photoshop)
-// =====================================================================
-
-/// Rail de categorías: tabs verticales **a la izquierda** del panel, sólo
-/// del alto de sus dientes (no toda la vertical), pegado arriba para no
-/// solapar con el lienzo. Cada diente lleva su icono; el activo va con un
-/// borde de acento a la izquierda (estilo pestaña).
-fn category_rail(model: &Model, theme: &Theme) -> View<Msg> {
-    let mut btns: Vec<View<Msg>> = Vec::new();
-    for cat in ToolCat::all() {
-        let active = model.tool_cat == *cat;
-        let fg = if active { theme.accent } else { theme.fg_muted };
-        // Marca de acento a la izquierda del diente activo.
-        let accent_bar = View::new(Style {
-            size: Size {
-                width: length(3.0_f32),
-                height: length(40.0_f32),
-            },
-            flex_shrink: 0.0,
-            ..Default::default()
-        });
-        let accent_bar = if active {
-            accent_bar.fill(theme.accent).radius(2.0)
-        } else {
-            accent_bar
-        };
-        let icon_box = View::new(Style {
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(0.0_f32),
-                height: length(42.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .children(vec![glyphs::icon_view(cat_icon(*cat), 20.0, fg)]);
-        let mut btn = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(42.0_f32),
-            },
-            flex_shrink: 0.0,
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .hover_fill(theme.bg_row_hover)
-        .on_click(Msg::SelectToolCat(*cat))
-        .children(vec![accent_bar, icon_box]);
-        if active {
-            btn = btn.fill(theme.bg_selected);
-        }
-        btns.push(btn);
-    }
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        // Alto auto = sólo los dientes; alineado arriba.
-        size: Size {
-            width: length(TOOLS_RAIL_W),
-            height: Dimension::auto(),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(theme.bg_panel_alt)
-    .radius(4.0)
-    .children(btns)
+    .children(vec![scroll])
 }
 
 // =====================================================================
 // Acordeón de paneles colapsables
 // =====================================================================
 
-fn accordion_view(model: &Model, theme: &Theme) -> View<Msg> {
+fn accordion_view(cat: ToolCat, model: &Model, theme: &Theme) -> View<Msg> {
     // Cabecera de la categoría activa (texto centrado vertical: nodo de
     // alto auto dentro de una fila centrada).
     let header = View::new(Style {
@@ -249,14 +159,14 @@ fn accordion_view(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        model.tool_cat.title().to_uppercase(),
+        cat.title().to_uppercase(),
         10.0,
         theme.fg_muted,
         Alignment::Start,
     )]);
 
     let mut kids: Vec<View<Msg>> = vec![header];
-    for panel in model.tool_cat.panels() {
+    for panel in cat.panels() {
         kids.push(collapsible(*panel, model, theme));
     }
 

@@ -53,6 +53,11 @@ pub(crate) struct UiState {
     pub(crate) expanded_panels: Vec<ToolPanel>,
     #[serde(default)]
     pub(crate) tile_mode: bool,
+    // dock (reparto de paneles por sidebar)
+    #[serde(default = "crate::model::default_dock_left")]
+    pub(crate) dock_left: Vec<crate::model::DockItem>,
+    #[serde(default = "crate::model::default_dock_right")]
+    pub(crate) dock_right: Vec<crate::model::DockItem>,
     #[serde(default = "default_yaw")]
     pub(crate) sphere_yaw: f32,
     #[serde(default = "default_pitch")]
@@ -103,6 +108,8 @@ impl Default for UiState {
             tool_cat: ToolCat::default(),
             expanded_panels: ToolPanel::defaults_expanded(),
             tile_mode: false,
+            dock_left: crate::model::default_dock_left(),
+            dock_right: crate::model::default_dock_right(),
             sphere_yaw: default_yaw(),
             sphere_pitch: default_pitch(),
         }

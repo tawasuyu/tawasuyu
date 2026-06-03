@@ -86,6 +86,92 @@ impl ChartView {
 }
 
 // =====================================================================
+// Dock — items acoplables que viven en el sidebar izquierdo o derecho
+// =====================================================================
+
+/// Lado del dock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DockSide {
+    Left,
+    Right,
+}
+
+/// Un panel acoplable: el árbol de datos o una de las categorías de
+/// herramientas. Cada uno es una pestaña (diente del rail) que puede
+/// vivir en cualquiera de los dos sidebars y arrastrarse entre ellos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DockItem {
+    Arbol,
+    Principal,
+    Analisis,
+    Astronomia,
+    Sistema,
+}
+
+impl DockItem {
+    /// El item de dock que corresponde a una categoría de herramientas.
+    pub(crate) fn from_tool_cat(tc: ToolCat) -> DockItem {
+        match tc {
+            ToolCat::Principal => DockItem::Principal,
+            ToolCat::Analisis => DockItem::Analisis,
+            ToolCat::Astronomia => DockItem::Astronomia,
+            ToolCat::Sistema => DockItem::Sistema,
+        }
+    }
+
+    /// La categoría de herramientas asociada (None para el árbol).
+    pub(crate) fn tool_cat(self) -> Option<ToolCat> {
+        match self {
+            DockItem::Arbol => None,
+            DockItem::Principal => Some(ToolCat::Principal),
+            DockItem::Analisis => Some(ToolCat::Analisis),
+            DockItem::Astronomia => Some(ToolCat::Astronomia),
+            DockItem::Sistema => Some(ToolCat::Sistema),
+        }
+    }
+
+    pub(crate) fn to_u64(self) -> u64 {
+        match self {
+            DockItem::Arbol => 0,
+            DockItem::Principal => 1,
+            DockItem::Analisis => 2,
+            DockItem::Astronomia => 3,
+            DockItem::Sistema => 4,
+        }
+    }
+
+    pub(crate) fn from_u64(v: u64) -> Option<DockItem> {
+        Some(match v {
+            0 => DockItem::Arbol,
+            1 => DockItem::Principal,
+            2 => DockItem::Analisis,
+            3 => DockItem::Astronomia,
+            4 => DockItem::Sistema,
+            _ => return None,
+        })
+    }
+}
+
+/// Reparto por defecto: la biblioteca a la izquierda, las herramientas a
+/// la derecha.
+pub(crate) fn default_dock_left() -> Vec<DockItem> {
+    vec![DockItem::Arbol]
+}
+pub(crate) fn default_dock_right() -> Vec<DockItem> {
+    vec![
+        DockItem::Principal,
+        DockItem::Analisis,
+        DockItem::Astronomia,
+        DockItem::Sistema,
+    ]
+}
+
+/// Por debajo de este ancho de ventana los sidebars se colapsan a sólo el
+/// rail (auto-colapso responsive).
+pub(crate) const DOCK_COLLAPSE_W: f32 = 920.0;
+
+// =====================================================================
 // Categorías del panel de herramientas (derecha)
 // =====================================================================
 
@@ -490,8 +576,10 @@ pub(crate) enum Msg {
     SetToolsWidth(f32),
     PersistLayout,
     // panel de herramientas (derecha)
-    SelectToolCat(ToolCat),
     ToggleToolPanel(ToolPanel),
+    // dock: activar una pestaña de un sidebar / moverla de lado (drop)
+    DockActivate(DockSide, DockItem),
+    DockDrop(DockSide, u64),
     // tipo de gráfica del centro
     SetChartView(ChartView),
     /// Resultado del cómputo astronómico PESADO (orto/ocaso/efemérides),
@@ -565,6 +653,11 @@ pub(crate) struct Model {
     pub(crate) chart_view: ChartView,
     pub(crate) tool_cat: ToolCat,
     pub(crate) expanded_panels: Vec<ToolPanel>,
+    // dock: qué paneles viven en cada sidebar + cuál está activo
+    pub(crate) dock_left: Vec<DockItem>,
+    pub(crate) dock_right: Vec<DockItem>,
+    pub(crate) active_left: Option<DockItem>,
+    pub(crate) active_right: Option<DockItem>,
     // chrome
     pub(crate) menu_open: Option<MenuKind>,
     /// Fila activa (resaltada por teclado) del dropdown del menú principal.
@@ -623,6 +716,33 @@ impl Model {
             self.expanded_panels.remove(i);
         } else {
             self.expanded_panels.push(p);
+        }
+    }
+
+    /// Pestaña activa de un sidebar (con fallback a la primera del lado).
+    pub(crate) fn dock_active(&self, side: DockSide) -> Option<DockItem> {
+        let (items, active) = match side {
+            DockSide::Left => (&self.dock_left, self.active_left),
+            DockSide::Right => (&self.dock_right, self.active_right),
+        };
+        active
+            .filter(|a| items.contains(a))
+            .or_else(|| items.first().copied())
+    }
+
+    /// Mueve `item` al `side` indicado (lo saca del otro), y lo activa.
+    pub(crate) fn dock_move(&mut self, item: DockItem, side: DockSide) {
+        self.dock_left.retain(|x| *x != item);
+        self.dock_right.retain(|x| *x != item);
+        match side {
+            DockSide::Left => {
+                self.dock_left.push(item);
+                self.active_left = Some(item);
+            }
+            DockSide::Right => {
+                self.dock_right.push(item);
+                self.active_right = Some(item);
+            }
         }
     }
 

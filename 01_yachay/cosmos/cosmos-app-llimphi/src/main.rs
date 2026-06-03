@@ -463,7 +463,17 @@ fn apply_cmd(m: &mut Model, cmd: MenuCmd) {
         MenuCmd::Recargar => do_recargar(m),
         MenuCmd::Eliminar => do_eliminar(m),
         MenuCmd::SetChartView(cv) => m.chart_view = cv,
-        MenuCmd::GoToolCat(tc) => m.tool_cat = tc,
+        MenuCmd::GoToolCat(tc) => {
+            // Activa la categoría en el sidebar donde vive (o la trae al
+            // derecho si no está acoplada en ningún lado).
+            let item = model::DockItem::from_tool_cat(tc);
+            if m.dock_left.contains(&item) {
+                m.active_left = Some(item);
+            } else {
+                m.dock_move(item, model::DockSide::Right);
+            }
+            m.tools_open = true;
+        }
         MenuCmd::ToggleNav => m.nav_open = !m.nav_open,
         MenuCmd::ToggleTools => m.tools_open = !m.tools_open,
         MenuCmd::Overlay(k) => apply_overlay(m, k),
@@ -699,9 +709,60 @@ fn save_ui(m: &Model) {
         tool_cat: m.tool_cat,
         expanded_panels: m.expanded_panels.clone(),
         tile_mode: m.tile_mode,
+        dock_left: m.dock_left.clone(),
+        dock_right: m.dock_right.clone(),
         sphere_yaw: m.sphere_yaw,
         sphere_pitch: m.sphere_pitch,
     });
+}
+
+/// Fila contenido(flex) + sidebar(ancho fijo) sin splitter — usada en
+/// modo colapsado (rail-only). `left` ubica el sidebar a la izquierda.
+fn fixed_row(content: View<Msg>, sidebar: Option<(View<Msg>, f32)>, left: bool) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::prelude::length;
+    let content_box = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(0.0_f32),
+            height: percent(1.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![content]);
+    let mut kids: Vec<View<Msg>> = Vec::new();
+    if let Some((sb, w)) = sidebar {
+        let sb_box = View::new(Style {
+            size: Size {
+                width: length(w),
+                height: percent(1.0_f32),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .children(vec![sb]);
+        if left {
+            kids.push(sb_box);
+            kids.push(content_box);
+        } else {
+            kids.push(content_box);
+            kids.push(sb_box);
+        }
+    } else {
+        kids.push(content_box);
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(kids)
 }
 
 impl App for Cosmos {
@@ -807,6 +868,10 @@ impl App for Cosmos {
             chart_view: ui.chart_view,
             tool_cat: ui.tool_cat,
             expanded_panels: ui.expanded_panels,
+            active_left: ui.dock_left.first().copied(),
+            active_right: ui.dock_right.first().copied(),
+            dock_left: ui.dock_left,
+            dock_right: ui.dock_right,
             menu_open: None,
             menu_active: usize::MAX,
             menu_anim: llimphi_motion::Tween::idle(1.0),
@@ -869,7 +934,13 @@ impl App for Cosmos {
             }
             Msg::Resized(w, h) => m.viewport = (w, h),
             Msg::ToolsScroll(delta) => {
-                let content = tools::tools_content_h(&m);
+                // El panel de herramientas que scrollea es la categoría
+                // activa (derecha primero, si no izquierda).
+                let cat = m
+                    .dock_active(model::DockSide::Right)
+                    .and_then(|i| i.tool_cat())
+                    .or_else(|| m.dock_active(model::DockSide::Left).and_then(|i| i.tool_cat()));
+                let content = cat.map(|c| tools::tools_content_h(c, &m)).unwrap_or(0.0);
                 let viewport = tools::tools_viewport_h(&m);
                 m.tools_scroll = llimphi_widget_scroll::clamp_offset(
                     m.tools_scroll + delta,
@@ -1060,13 +1131,23 @@ impl App for Cosmos {
             Msg::SetToolsWidth(dx) => m.nudge_tools(dx),
             Msg::PersistLayout => persist = true,
             // panel de herramientas
-            Msg::SelectToolCat(c) => {
-                m.tool_cat = c;
-                persist = true;
-            }
             Msg::ToggleToolPanel(p) => {
                 m.toggle_panel(p);
                 persist = true;
+            }
+            // dock
+            Msg::DockActivate(side, item) => {
+                match side {
+                    model::DockSide::Left => m.active_left = Some(item),
+                    model::DockSide::Right => m.active_right = Some(item),
+                }
+                persist = true;
+            }
+            Msg::DockDrop(side, payload) => {
+                if let Some(item) = model::DockItem::from_u64(payload) {
+                    m.dock_move(item, side);
+                    persist = true;
+                }
             }
             // tipo de gráfica
             Msg::SetChartView(v) => {
@@ -1108,42 +1189,46 @@ impl App for Cosmos {
 
         let center = chrome::center_view(model, &theme);
 
-        // Zona derecha: centro (flex) + panel de herramientas (fijo,
-        // resizable). Arrastrar el divisor a la derecha achica las
-        // herramientas (ver Model::nudge_tools).
-        let center_and_tools = if model.tools_open {
-            splitter_two(
+        // Dock: sidebars izquierdo/derecho armados desde el reparto de
+        // pestañas. Angosto → colapsados a sólo el rail (sin splitter).
+        let collapsed = chrome::dock_collapsed(model);
+        let left = chrome::sidebar_view(model::DockSide::Left, model, &theme, collapsed);
+        let right = chrome::sidebar_view(model::DockSide::Right, model, &theme, collapsed);
+
+        // Centro + sidebar derecho.
+        let center_and_right = match right {
+            Some(r) if !collapsed => splitter_two(
                 Direction::Row,
                 center,
                 PaneSize::Flex,
-                tools::tools_panel(model, &theme),
+                r,
                 PaneSize::Fixed(model.tools_w),
                 |phase, dx| match phase {
                     DragPhase::Move => Some(Msg::SetToolsWidth(dx)),
                     DragPhase::End => Some(Msg::PersistLayout),
                 },
                 &sp,
-            )
-        } else {
-            center
+            ),
+            Some(r) => fixed_row(center, Some((r, model::TOOLS_RAIL_W)), false),
+            None => center,
         };
 
-        // Zona completa: árbol de datos (fijo, resizable) + lo anterior.
-        let body = if model.nav_open {
-            splitter_two(
+        // Sidebar izquierdo + lo anterior.
+        let body = match left {
+            Some(l) if !collapsed => splitter_two(
                 Direction::Row,
-                chrome::nav_tree(model, &theme),
+                l,
                 PaneSize::Fixed(model.nav_w),
-                center_and_tools,
+                center_and_right,
                 PaneSize::Flex,
                 |phase, dx| match phase {
                     DragPhase::Move => Some(Msg::SetNavWidth(dx)),
                     DragPhase::End => Some(Msg::PersistLayout),
                 },
                 &sp,
-            )
-        } else {
-            center_and_tools
+            ),
+            Some(l) => fixed_row(center_and_right, Some((l, model::TOOLS_RAIL_W)), true),
+            None => center_and_right,
         };
 
         let body_box = View::new(Style {

@@ -41,8 +41,8 @@ use crate::glyphs::{self, Icon};
 use crate::library::{ChartKind, NavKind, NavNode};
 use crate::model::MenuKind;
 use crate::model::{
-    ChartView, Model, Msg, OverlayKind, ToolCat, WheelOpt, HARMONICS, MENU_BAR_H, MENU_BTN_W,
-    STATUS_H, TAB_BAR_H, VIEWPORT, WHEEL_SIZE,
+    ChartView, DockItem, DockSide, Model, Msg, OverlayKind, ToolCat, WheelOpt, DOCK_COLLAPSE_W,
+    HARMONICS, MENU_BAR_H, MENU_BTN_W, STATUS_H, TAB_BAR_H, TOOLS_RAIL_W, VIEWPORT, WHEEL_SIZE,
 };
 use crate::view;
 
@@ -220,12 +220,13 @@ pub(crate) fn menu_entries(kind: MenuKind, m: &Model) -> Vec<MenuEntry> {
                 ));
             }
             v.push(MenuEntry::sep());
-            // Categorías del panel de herramientas (derecha).
+            // Categorías de herramientas: activas si su pestaña es la
+            // activa en algún sidebar del dock.
             for tc in ToolCat::all() {
-                v.push(MenuEntry::act_string(
-                    check(tc.title(), m.tool_cat == *tc),
-                    MenuCmd::GoToolCat(*tc),
-                ));
+                let item = DockItem::from_tool_cat(*tc);
+                let on = m.dock_active(DockSide::Left) == Some(item)
+                    || m.dock_active(DockSide::Right) == Some(item);
+                v.push(MenuEntry::act_string(check(tc.title(), on), MenuCmd::GoToolCat(*tc)));
             }
             v.push(MenuEntry::sep());
             // Paneles laterales guardables.
@@ -727,6 +728,153 @@ fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
 // =====================================================================
 // Pestañas + contenido
 // =====================================================================
+
+// =====================================================================
+// Dock — sidebars con pestañas acoplables (arrastrables entre lados)
+// =====================================================================
+
+/// Icono del diente de un item del dock.
+fn dock_icon(item: DockItem) -> Icon {
+    match item {
+        DockItem::Arbol => Icon::Folder,
+        _ => crate::tools::cat_icon(item.tool_cat().unwrap_or(ToolCat::Principal)),
+    }
+}
+
+/// Contenido del item activo de un sidebar.
+fn dock_content(item: DockItem, model: &Model, theme: &Theme) -> View<Msg> {
+    match item.tool_cat() {
+        None => nav_tree(model, theme),
+        Some(cat) => crate::tools::dock_tool_content(cat, model, theme),
+    }
+}
+
+/// Rail de dientes (pestañas) de un sidebar. Cada diente: icono, activa
+/// al click y **arrastrable** (su payload = el item) para moverlo al otro
+/// sidebar. Alto auto (sólo los dientes), pegado arriba.
+fn dock_rail(side: DockSide, items: &[DockItem], active: Option<DockItem>, theme: &Theme) -> View<Msg> {
+    let mut teeth: Vec<View<Msg>> = Vec::new();
+    for &item in items {
+        let is_active = active == Some(item);
+        let fg = if is_active { theme.accent } else { theme.fg_muted };
+        let accent_bar = {
+            let b = View::new(Style {
+                size: Size {
+                    width: length(3.0_f32),
+                    height: length(40.0_f32),
+                },
+                flex_shrink: 0.0,
+                ..Default::default()
+            });
+            if is_active {
+                b.fill(theme.accent).radius(2.0)
+            } else {
+                b
+            }
+        };
+        let icon_box = View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(0.0_f32),
+                height: length(42.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .children(vec![glyphs::icon_view(dock_icon(item), 20.0, fg)]);
+        let mut tooth = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(42.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .hover_fill(theme.bg_row_hover)
+        // Click (en el press) activa; arrastrar mueve de sidebar.
+        .on_click_at(move |_, _, _, _| Some(Msg::DockActivate(side, item)))
+        .draggable_at(|_, _, _, _, _| None)
+        .drag_payload(item.to_u64())
+        .children(vec![accent_bar, icon_box]);
+        if is_active {
+            tooth = tooth.fill(theme.bg_selected);
+        }
+        teeth.push(tooth);
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(TOOLS_RAIL_W),
+            height: auto(),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(teeth)
+}
+
+/// Un sidebar del dock (izq/der). `None` si no tiene items o está oculto.
+/// `collapsed` (ventana angosta) → sólo el rail. Acepta drops de dientes
+/// del otro lado.
+pub(crate) fn sidebar_view(
+    side: DockSide,
+    model: &Model,
+    theme: &Theme,
+    collapsed: bool,
+) -> Option<View<Msg>> {
+    let open = match side {
+        DockSide::Left => model.nav_open,
+        DockSide::Right => model.tools_open,
+    };
+    if !open {
+        return None;
+    }
+    let items: &[DockItem] = match side {
+        DockSide::Left => &model.dock_left,
+        DockSide::Right => &model.dock_right,
+    };
+    if items.is_empty() {
+        return None;
+    }
+    let active = model.dock_active(side);
+    let rail = dock_rail(side, items, active, theme);
+
+    let mut kids = vec![rail];
+    if !collapsed {
+        if let Some(item) = active {
+            kids.push(dock_content(item, model, theme));
+        }
+    }
+
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            min_size: Size {
+                width: length(0.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        // Drop target: soltar un diente acá lo mueve a este lado.
+        .on_drop(move |payload| Some(Msg::DockDrop(side, payload)))
+        .drop_hover_fill(theme.bg_row_hover)
+        .children(kids),
+    )
+}
+
+/// `true` si la ventana es angosta y los sidebars deben colapsar a rail.
+pub(crate) fn dock_collapsed(model: &Model) -> bool {
+    model.viewport.0 < DOCK_COLLAPSE_W
+}
 
 /// El panel central: cabecera con el switch de tipo de gráfica + la
 /// gráfica elegida. El centro es **sólo el gráfico**; las tablas viven en
