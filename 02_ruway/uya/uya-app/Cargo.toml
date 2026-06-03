@@ -61,3 +61,6 @@ media-encode-opus = { path = "../../media/media-encode-opus" }
 opus-wave = { workspace = true }
 # Baliza LAN: socket UDP multicast con SO_REUSEPORT + IP_MULTICAST_LOOP.
 socket2 = "0.5"
+# Enumerar interfaces IPv4 para unirse/emitir el multicast por TODAS (no sólo
+# la default) — robusto en desktops con varias NIC (wifi+eth+docker+VPN).
+if-addrs = "0.15"

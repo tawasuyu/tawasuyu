@@ -94,8 +94,10 @@ Anda hoy, end-to-end y feo a propósito:
   UDP multicast `uya1\t<sala>\t<puerto>\t<peerid>` (grupo 239.255.42.99:7799) y
   escucha las ajenas; al recibir una de su sala, reconstruye la multiaddr usando
   la **IP de origen del datagrama** (resuelve el caso loopback → anda entre
-  máquinas) y disca. Room-aware, sin `UYA_BOOTSTRAP` ni `UYA_CONECTAR`. Verificado:
-  2 nodos misma sala → se descubren y conectan solos. (También se sumó mDNS a
+  máquinas) y disca. Room-aware, sin `UYA_BOOTSTRAP` ni `UYA_CONECTAR`. Se une y
+  emite por **todas las interfaces IPv4** (robusto en desktops con wifi+eth+docker+
+  VPN, donde el multicast por la interfaz default no llega). Verificado: 2 nodos
+  misma sala → se descubren y conectan solos. (También se sumó mDNS a
   `shared/card/card-net` para poblar el DHT, pero la baliza propia es el camino
   fiable de uya en LAN.)
 

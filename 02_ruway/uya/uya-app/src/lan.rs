@@ -1,24 +1,27 @@
 // =============================================================================
 //  uya-app::lan — descubrimiento LAN por baliza UDP multicast (zero-config).
 // -----------------------------------------------------------------------------
-//  El mDNS de libp2p resultó poco fiable entre instancias (sobre todo en la
-//  misma máquina), así que uya trae su propio descubrimiento de sala en la LAN:
-//  cada nodo emite cada 2 s una baliza multicast `uya1\t<sala>\t<puerto>\t<peerid>`
-//  y escucha las ajenas. Al recibir una de MI sala, reconstruye la multiaddr
-//  dialable usando la **IP de ORIGEN del datagrama** (así funciona entre
-//  máquinas aunque la dirección anunciada del par sea loopback) y la disca.
+//  El mDNS de libp2p resultó poco fiable entre instancias, así que uya trae su
+//  propio descubrimiento de sala en la LAN: cada nodo emite cada 2 s una baliza
+//  multicast `uya1\t<sala>\t<puerto>\t<peerid>` y escucha las ajenas. Al recibir
+//  una de MI sala, reconstruye la multiaddr dialable usando la **IP de ORIGEN
+//  del datagrama** (así funciona entre máquinas aunque la dirección anunciada
+//  del par sea loopback) y la disca.
 //
-//  Es room-aware (filtra por nombre de sala), anda en la misma máquina (gracias
-//  a `IP_MULTICAST_LOOP` + `SO_REUSEPORT`) y entre máquinas, y no depende del
-//  DHT ni del mDNS. Convive con `Enlace::unir_sala` (DHT, para WAN/bootstrap):
-//  ambos alimentan la misma malla, deduplicada.
+//  Robusto a desktops con varias interfaces (wifi + eth + docker + VPN): se une
+//  al grupo y emite por TODAS las interfaces IPv4, no sólo la default — que es
+//  la causa típica de que el multicast "no se vea" en una máquina real.
+//
+//  Room-aware (filtra por nombre de sala), anda misma-máquina (`IP_MULTICAST_LOOP`
+//  + `SO_REUSEPORT`) y entre máquinas, y no depende del DHT ni del mDNS. Convive
+//  con `Enlace::unir_sala` (DHT, para WAN/bootstrap): ambos alimentan la malla.
 // =============================================================================
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 use crate::Enlace;
 
@@ -28,21 +31,34 @@ const GRUPO: Ipv4Addr = Ipv4Addr::new(239, 255, 42, 99);
 const PUERTO: u16 = 7799;
 const MAGIA: &str = "uya1";
 
-/// Arranca la baliza LAN para una sala: un hilo que anuncia y otro que escucha y
-/// disca a los pares de la misma sala que aparezcan.
+/// Arranca la baliza LAN para una sala: un hilo que anuncia (por todas las
+/// interfaces) y otro que escucha y disca a los pares de la misma sala.
 pub fn iniciar_baliza_lan(enlace: Arc<Enlace>, sala: String) {
     let depurar = std::env::var("UYA_DEBUG").is_ok();
 
-    // Mi puerto TCP y PeerId salen de mi propia dirección dialable.
     let Some((puerto, peerid)) = parsear_dialable(enlace.direccion_local()) else {
         eprintln!("uya: baliza LAN: no pude parsear mi dirección dialable");
         return;
     };
 
-    let sock = match socket_multicast() {
+    let ifaces = interfaces_ipv4();
+    if depurar {
+        eprintln!("uya: baliza LAN: interfaces {ifaces:?}");
+    }
+
+    // Socket receptor: unido al grupo en todas las interfaces.
+    let rx = match socket_receptor(&ifaces) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("uya: baliza LAN desactivada ({e})");
+            eprintln!("uya: baliza LAN desactivada (rx: {e})");
+            return;
+        }
+    };
+    // Socket emisor: rota la interfaz de salida en cada ronda.
+    let tx = match socket_emisor() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("uya: baliza LAN desactivada (tx: {e})");
             return;
         }
     };
@@ -50,22 +66,19 @@ pub fn iniciar_baliza_lan(enlace: Arc<Enlace>, sala: String) {
         eprintln!("uya: baliza LAN activa en {GRUPO}:{PUERTO} (sala '{sala}')");
     }
 
-    // Emisor: anuncia cada 2 s.
+    // Emisor: anuncia cada 2 s por cada interfaz IPv4.
     {
-        let sock = match sock.try_clone() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("uya: baliza LAN: no pude clonar el socket ({e})");
-                return;
-            }
-        };
         let mensaje = format!("{MAGIA}\t{sala}\t{puerto}\t{peerid}");
+        let ifaces = ifaces.clone();
         std::thread::Builder::new()
             .name("uya-baliza-tx".into())
             .spawn(move || {
-                let destino = SocketAddr::new(GRUPO.into(), PUERTO);
+                let destino: SockAddr = SocketAddr::new(GRUPO.into(), PUERTO).into();
                 loop {
-                    let _ = sock.send_to(mensaje.as_bytes(), destino);
+                    for ip in &ifaces {
+                        let _ = tx.set_multicast_if_v4(ip);
+                        let _ = tx.send_to(mensaje.as_bytes(), &destino);
+                    }
                     std::thread::sleep(Duration::from_secs(2));
                 }
             })
@@ -78,7 +91,7 @@ pub fn iniciar_baliza_lan(enlace: Arc<Enlace>, sala: String) {
         .spawn(move || {
             let mut buf = [0u8; 512];
             loop {
-                let (n, src) = match sock.recv_from(&mut buf) {
+                let (n, src) = match rx.recv_from(&mut buf) {
                     Ok(x) => x,
                     Err(_) => continue,
                 };
@@ -92,9 +105,8 @@ pub fn iniciar_baliza_lan(enlace: Arc<Enlace>, sala: String) {
                 let (Some(r), Some(pu), Some(pid)) = (it.next(), it.next(), it.next()) else {
                     continue;
                 };
-                // Otra sala, o mi propia baliza (loopback): ignorar.
                 if r != sala || pid == peerid {
-                    continue;
+                    continue; // otra sala o mi propia baliza
                 }
                 let IpAddr::V4(ip) = src.ip() else {
                     continue;
@@ -107,6 +119,28 @@ pub fn iniciar_baliza_lan(enlace: Arc<Enlace>, sala: String) {
             }
         })
         .expect("uya: spawn baliza rx");
+}
+
+/// Direcciones IPv4 no-loopback de las interfaces locales (para unirse/emitir el
+/// multicast por todas). Si no se puede enumerar, cae a `UNSPECIFIED` (default).
+fn interfaces_ipv4() -> Vec<Ipv4Addr> {
+    let mut v = Vec::new();
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for i in ifaces {
+            if i.is_loopback() {
+                continue;
+            }
+            if let IpAddr::V4(ip) = i.ip() {
+                if !v.contains(&ip) {
+                    v.push(ip);
+                }
+            }
+        }
+    }
+    if v.is_empty() {
+        v.push(Ipv4Addr::UNSPECIFIED);
+    }
+    v
 }
 
 /// Extrae `(puerto_tcp, peerid)` de una multiaddr `…/tcp/<puerto>/p2p/<peerid>`.
@@ -124,15 +158,29 @@ fn parsear_dialable(addr: &str) -> Option<(String, String)> {
     Some((puerto?, peerid?))
 }
 
-/// Socket UDP unido al grupo multicast, con reuse (para varias instancias en la
-/// misma máquina) y loopback (para que se vean entre sí en un solo host).
-fn socket_multicast() -> std::io::Result<UdpSocket> {
+/// Socket receptor: bind a `*:PUERTO` con reuse, loopback, y unido al grupo en
+/// la interfaz default + cada interfaz IPv4.
+fn socket_receptor(ifaces: &[Ipv4Addr]) -> std::io::Result<UdpSocket> {
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     sock.set_reuse_address(true)?;
     #[cfg(unix)]
     sock.set_reuse_port(true)?;
     sock.bind(&SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), PUERTO).into())?;
     sock.set_multicast_loop_v4(true)?;
-    sock.join_multicast_v4(&GRUPO, &Ipv4Addr::UNSPECIFIED)?;
+    // Default como respaldo + cada interfaz (errores por-interfaz no son fatales).
+    let _ = sock.join_multicast_v4(&GRUPO, &Ipv4Addr::UNSPECIFIED);
+    for ip in ifaces {
+        let _ = sock.join_multicast_v4(&GRUPO, ip);
+    }
     Ok(sock.into())
+}
+
+/// Socket emisor: efímero, con loopback, cuya interfaz de salida se rota antes
+/// de cada `send_to` para cubrir todas las NIC.
+fn socket_emisor() -> std::io::Result<Socket> {
+    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    sock.set_reuse_address(true)?;
+    sock.set_multicast_loop_v4(true)?;
+    sock.bind(&SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0).into())?;
+    Ok(sock)
 }
