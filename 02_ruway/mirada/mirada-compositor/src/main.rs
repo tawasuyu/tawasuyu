@@ -356,6 +356,9 @@ struct App {
     /// Con el dock autoescondido (`MIRADA_SHELL_AUTOHIDE`), si está oculto
     /// ahora. Sin autohide se ignora. El puntero cerca del borde lo alterna.
     shell_hidden: bool,
+    /// Última reserva publicada `(top, bottom, left, right)` en px — define el
+    /// área de trabajo (salida menos dock/layers). Las zonas se escalan a ella.
+    reserved: (i32, i32, i32, i32),
 
     /// Ventanas gestionadas, en orden de aparición.
     windows: Vec<ManagedWindow>,
@@ -847,6 +850,7 @@ impl App {
             left += sl;
             right += sr;
         }
+        self.reserved = (top, bottom, left, right);
         let ev = self.body.reserve_output(0, top, bottom, left, right);
         self.brain_feed(ev);
     }
@@ -1987,6 +1991,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         output_size: (0, 0),
         // Con autohide, el dock arranca oculto (se revela al tocar el borde).
         shell_hidden: shell_dock().autohide,
+        reserved: (0, 0, 0, 0),
         windows: Vec::new(),
         body: BodyState::new(),
         brain,

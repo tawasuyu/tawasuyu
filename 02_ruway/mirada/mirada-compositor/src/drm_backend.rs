@@ -301,9 +301,8 @@ impl DrmState {
         let zone_overlay: Option<(Vec<Rect>, Option<usize>)> = {
             let m = self.app.drag.as_ref().map(|d| d.mode);
             if matches!(m, Some(DragMode::Move) | Some(DragMode::Tile)) && !self.zones.is_empty() {
-                let (ow, oh) = self.app.output_size;
-                let screen = Rect::new(0, 0, ow, oh);
-                let rects = self.zones.iter().map(|z| z.to_rect(screen)).collect();
+                let wr = self.work_rect();
+                let rects = self.zones.iter().map(|z| z.to_rect(wr)).collect();
                 Some((rects, self.drag_zone))
             } else {
                 None
@@ -927,6 +926,33 @@ impl DrmState {
                     }
                 }
 
+                // Click izquierdo sobre la BARRA DE TÍTULO (sin `Super`): arranca
+                // un arrastre Move — saca la ventana de su tile y la lleva
+                // flotante, lista para aterrizar en una zona (drag-to-zone) o
+                // quedar overflow. La barra deja de ser chrome inerte.
+                if pressed
+                    && button == BTN_LEFT
+                    && self.app.drag.is_none()
+                    && self.app.mode != BodyMode::Greeter
+                {
+                    let (x, y) = self.app.pointer_loc;
+                    if let Some(i) = self.titlebar_at(x, y) {
+                        let (id, loc, size) = {
+                            let w = &self.app.windows[i];
+                            (w.id, w.loc, w.size)
+                        };
+                        self.app.drag = Some(DragGrab {
+                            id,
+                            mode: DragMode::Move,
+                            start_pointer: (x, y),
+                            start_rect: (loc.0, loc.1, size.0, size.1),
+                        });
+                        let ev = self.app.body.clicked(id); // enfoca la agarrada
+                        self.app.brain_feed(ev);
+                        return; // el arrastre captura el botón
+                    }
+                }
+
                 // Durante un arrastre los botones no llegan al cliente;
                 // soltar cualquiera lo termina. Si se soltó sobre una zona
                 // (drag-to-zone), la ventana aterriza en ese rect (flotante);
@@ -1166,10 +1192,47 @@ impl DrmState {
         })
     }
 
-    /// El rect en píxeles de la zona `i` (fracciones escaladas a la salida).
-    fn zone_rect(&self, i: usize) -> Option<Rect> {
+    /// El índice de la ventana cuya **barra de título** está bajo `(x, y)`, si
+    /// la hay (front-to-back). Permite agarrar la ventana por su barra para
+    /// arrastrarla (sin `Super`).
+    fn titlebar_at(&self, x: f64, y: f64) -> Option<usize> {
+        let tbh = self.app.decorations.titlebar_height;
+        if tbh <= 0 {
+            return None;
+        }
+        let output_h = self.app.output_size.1;
+        let mut idx: Vec<usize> = (0..self.app.windows.len())
+            .filter(|&i| self.app.windows[i].visible)
+            .collect();
+        idx.sort_by_key(|&i| {
+            let w = &self.app.windows[i];
+            (!w.is_shell, !w.floating, !w.focused)
+        });
+        idx.into_iter().find(|&i| {
+            let w = &self.app.windows[i];
+            let tb = crate::titlebar_for(w, tbh);
+            if tb == 0 {
+                return false;
+            }
+            let (lx, ly) = crate::render_loc(w, output_h, tbh);
+            let (sw, _) = crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
+            let top = ly - tb;
+            x >= lx as f64 && y >= top as f64 && x < (lx + sw) as f64 && y < (top + tb) as f64
+        })
+    }
+
+    /// El área de trabajo en px: la salida menos las reservas (dock/layers).
+    /// Las zonas se escalan a ella, así no aterrizan bajo la barra.
+    fn work_rect(&self) -> Rect {
         let (ow, oh) = self.app.output_size;
-        self.zones.get(i).map(|z| z.to_rect(Rect::new(0, 0, ow, oh)))
+        let (top, bottom, left, right) = self.app.reserved;
+        Rect::new(left, top, (ow - left - right).max(1), (oh - top - bottom).max(1))
+    }
+
+    /// El rect en píxeles de la zona `i` (fracciones escaladas al área útil).
+    fn zone_rect(&self, i: usize) -> Option<Rect> {
+        let wr = self.work_rect();
+        self.zones.get(i).map(|z| z.to_rect(wr))
     }
 
     /// El índice de la zona de arrastre bajo `(x, y)`, si la hay.
@@ -1178,10 +1241,10 @@ impl DrmState {
         if ow == 0 || oh == 0 || self.zones.is_empty() {
             return None;
         }
-        let screen = Rect::new(0, 0, ow, oh);
+        let wr = self.work_rect();
         let (xi, yi) = (x.round() as i32, y.round() as i32);
         self.zones.iter().position(|z| {
-            let r = z.to_rect(screen);
+            let r = z.to_rect(wr);
             xi >= r.x && yi >= r.y && xi < r.x + r.w && yi < r.y + r.h
         })
     }
