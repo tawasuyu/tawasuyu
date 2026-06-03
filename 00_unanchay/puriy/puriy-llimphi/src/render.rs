@@ -1757,7 +1757,9 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     // text-decoration sólo tiene efecto visual sobre hojas de texto. En
     // un nodo container, la línea ya la pinta cada hoja descendiente.
     let deco = if b.text.is_some() && b.text_decoration != TextDecorationLine::None {
-        Some((b.text_decoration, b.color, b.font_size * z))
+        // `text-decoration-color` default = currentColor (sigue al texto).
+        let dc = b.text_decoration_color.unwrap_or(b.color);
+        Some((b.text_decoration, dc, b.font_size * z, b.text_decoration_style))
     } else {
         None
     };
@@ -1968,7 +1970,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
             let color = Color::from_rgba8(oc.r, oc.g, oc.b, a);
             scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
         }
-        if let Some((line_kind, c, font_size)) = deco {
+        if let Some((line_kind, c, font_size, deco_style)) = deco {
             // Posición vertical relativa al rect (sin baseline real). El
             // rect del leaf de texto tiene height = font_size * line_height
             // (≈1.4 default), así que el texto vive arriba-centro:
@@ -1983,15 +1985,47 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
             };
             let y = rect.y as f64 + rect.h as f64 * y_frac;
             let thickness = ((font_size * 0.07) as f64).max(1.0);
-            let stroke = Stroke::new(thickness);
-            let dec_color = Color::from_rgba8(c.r, c.g, c.b, 255);
-            scene.stroke(
-                &stroke,
-                Affine::IDENTITY,
-                dec_color,
-                None,
-                &Line::new((rect.x as f64, y), ((rect.x + rect.w) as f64, y)),
-            );
+            let dec_color = Color::from_rgba8(c.r, c.g, c.b, (c.a as f32 * alpha_mul) as u8);
+            let x0 = rect.x as f64;
+            let x1 = (rect.x + rect.w) as f64;
+            // `text-decoration-style`: solid/double/dotted/dashed/wavy.
+            // dotted/dashed → patrón de stroke; double → dos líneas; wavy
+            // → zig-zag triangular aproximado (peniko no tiene línea ondulada).
+            match deco_style {
+                TextDecorationStyle::Wavy => {
+                    let amp = thickness.max(1.0); // amplitud del zig-zag
+                    let period = (amp * 4.0).max(3.0);
+                    let mut path = KurboBezPath::new();
+                    path.move_to((x0, y));
+                    let mut x = x0;
+                    let mut up = true;
+                    while x < x1 {
+                        let nx = (x + period).min(x1);
+                        let ny = if up { y - amp } else { y + amp };
+                        path.line_to((nx, ny));
+                        x = nx;
+                        up = !up;
+                    }
+                    scene.stroke(&Stroke::new(thickness), Affine::IDENTITY, dec_color, None, &path);
+                }
+                TextDecorationStyle::Double => {
+                    let off = (thickness * 1.6).max(2.0);
+                    for dy in [-off * 0.5, off * 0.5] {
+                        let line = Line::new((x0, y + dy), (x1, y + dy));
+                        scene.stroke(&Stroke::new(thickness), Affine::IDENTITY, dec_color, None, &line);
+                    }
+                }
+                other => {
+                    let mut stroke = Stroke::new(thickness);
+                    if let TextDecorationStyle::Dotted = other {
+                        stroke = stroke.with_dashes(0.0, [thickness, thickness * 1.5]);
+                    } else if let TextDecorationStyle::Dashed = other {
+                        stroke = stroke.with_dashes(0.0, [thickness * 3.0, thickness * 2.0]);
+                    }
+                    let line = Line::new((x0, y), (x1, y));
+                    scene.stroke(&stroke, Affine::IDENTITY, dec_color, None, &line);
+                }
+            }
         }
     })
 }

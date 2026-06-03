@@ -25,7 +25,7 @@ use llimphi_layout::taffy::prelude::{
 };
 use llimphi_layout::taffy::{Display as TaffyDisplay, GridTemplateComponent, TrackSizingFunction};
 use llimphi_raster::kurbo::{
-    Affine, Line, Point, Rect as KurboRect, RoundedRect, Stroke,
+    Affine, BezPath as KurboBezPath, Line, Point, Rect as KurboRect, RoundedRect, Stroke,
 };
 use llimphi_raster::peniko::{
     Blob, Color, ColorStop, ColorStops, Fill, Gradient, GradientKind,
@@ -54,7 +54,7 @@ use puriy_engine::{
     AlignContent as CssAlignContent, FlexWrap as CssFlexWrap, GridTrackSize,
     JustifyContent as CssJustifyContent, LengthVal,
     LinearGradient, Overflow, PointerEvents, Position as CssPosition, TextAlign,
-    TextDecorationLine, VerticalAlign, Visibility,
+    TextDecorationLine, TextDecorationStyle, VerticalAlign, Visibility,
 };
 
 mod canvas;

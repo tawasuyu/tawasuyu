@@ -721,6 +721,59 @@ mod tests {
     }
 
     #[test]
+    fn text_decoration_color_y_style() {
+        // Parser de longhands sueltos.
+        assert_eq!(
+            parse_text_decoration_style("dotted"),
+            Some(TextDecorationStyle::Dotted)
+        );
+        assert_eq!(parse_text_decoration_style("WAVY"), Some(TextDecorationStyle::Wavy));
+        assert_eq!(parse_text_decoration_style("zigzag"), None);
+
+        let html = r##"<html><head><style>
+            p.full { text-decoration: underline dotted red }
+            p.color { text-decoration-color: rgb(0,128,0) }
+            p.style { text-decoration-style: dashed }
+            p.cc { color: blue; text-decoration: line-through currentColor }
+            p.plain { color: red }
+        </style></head><body>
+            <p class="full">a</p>
+            <p class="color">b</p>
+            <p class="style">c</p>
+            <p class="cc">d</p>
+            <p class="plain">e</p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        assert_eq!(ps.len(), 5);
+        // Shorthand: line + style + color de un mismo `text-decoration`.
+        let full = eng.compute(&ps[0]);
+        assert_eq!(full.text_decoration, TextDecorationLine::Underline);
+        assert_eq!(full.text_decoration_style, TextDecorationStyle::Dotted);
+        assert_eq!(full.text_decoration_color.map(|c| (c.r, c.g, c.b)), Some((255, 0, 0)));
+        // Longhand de color suelto (no toca line/style).
+        let color = eng.compute(&ps[1]);
+        assert_eq!(color.text_decoration_color.map(|c| (c.r, c.g, c.b)), Some((0, 128, 0)));
+        assert_eq!(color.text_decoration_style, TextDecorationStyle::Solid);
+        // Longhand de style suelto.
+        assert_eq!(eng.compute(&ps[2]).text_decoration_style, TextDecorationStyle::Dashed);
+        // `currentColor` explícito → None (el render sigue al `color`).
+        let cc = eng.compute(&ps[3]);
+        assert_eq!(cc.text_decoration, TextDecorationLine::LineThrough);
+        assert_eq!(cc.text_decoration_color, None);
+        // Sin declarar → defaults (color None = currentColor, style Solid).
+        let plain = eng.compute(&ps[4]);
+        assert_eq!(plain.text_decoration_color, None);
+        assert_eq!(plain.text_decoration_style, TextDecorationStyle::Solid);
+    }
+
+    #[test]
     fn font_size_acepta_calc_y_clamp() {
         // Tipografía fluida: font-size con funciones matemáticas de
         // unidades absolutas resuelve en parse-time.

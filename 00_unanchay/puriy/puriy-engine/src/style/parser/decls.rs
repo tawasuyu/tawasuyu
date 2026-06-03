@@ -138,6 +138,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_outline_shorthand(value, important));
             continue;
         }
+        if prop.eq_ignore_ascii_case("text-decoration") {
+            out.extend(parse_text_decoration_shorthand(value, important));
+            continue;
+        }
         if prop.eq_ignore_ascii_case("background") {
             out.extend(parse_background_shorthand(value, important));
             continue;
@@ -262,8 +266,16 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "counter-reset" => Some(DeclKind::CounterReset(parse_counter_list(value, 0))),
         "counter-increment" => Some(DeclKind::CounterIncrement(parse_counter_list(value, 1))),
         "box-shadow" => Some(DeclKind::BoxShadow(parse_box_shadow(value))),
-        "text-decoration" | "text-decoration-line" => {
+        // `text-decoration` (shorthand) se expande en `parse_declarations`.
+        "text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
+        }
+        "text-decoration-color" if is_current_color(value) => {
+            Some(DeclKind::TextDecorationColor(None))
+        }
+        "text-decoration-color" => parse_color(value).map(|c| DeclKind::TextDecorationColor(Some(c))),
+        "text-decoration-style" => {
+            parse_text_decoration_style(value).map(DeclKind::TextDecorationStyle)
         }
         "list-style-type" => parse_list_style_type(value).map(DeclKind::ListStyleType),
         // `list-style` shorthand reducido: sólo capturamos el `-type`.
@@ -651,6 +663,52 @@ pub(crate) fn parse_text_decoration(value: &str) -> Option<TextDecorationLine> {
         }
     }
     None
+}
+
+/// `text-decoration-style: solid | double | dotted | dashed | wavy`.
+pub(crate) fn parse_text_decoration_style(value: &str) -> Option<TextDecorationStyle> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "solid" => Some(TextDecorationStyle::Solid),
+        "double" => Some(TextDecorationStyle::Double),
+        "dotted" => Some(TextDecorationStyle::Dotted),
+        "dashed" => Some(TextDecorationStyle::Dashed),
+        "wavy" => Some(TextDecorationStyle::Wavy),
+        _ => None,
+    }
+}
+
+/// Expande el shorthand `text-decoration: <line> || <style> || <color>`
+/// (orden libre) a sus longhands. Cada token se prueba como line, luego
+/// como style, luego como color; los no reconocidos se ignoran. Emite
+/// siempre la línea (default `None` si no hubo keyword de línea) para que
+/// el shorthand resetee; color/style sólo si aparecieron explícitos.
+fn parse_text_decoration_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut out = Vec::new();
+    let mut line: Option<TextDecorationLine> = None;
+    for tok in value.split_whitespace() {
+        let low = tok.to_ascii_lowercase();
+        match low.as_str() {
+            "none" => line = Some(TextDecorationLine::None),
+            "underline" => line = Some(TextDecorationLine::Underline),
+            "line-through" => line = Some(TextDecorationLine::LineThrough),
+            "overline" => line = Some(TextDecorationLine::Overline),
+            "blink" => {} // CSS legacy, sin efecto
+            _ => {
+                if let Some(st) = parse_text_decoration_style(tok) {
+                    out.push(Decl { kind: DeclKind::TextDecorationStyle(st), important });
+                } else if is_current_color(tok) {
+                    out.push(Decl { kind: DeclKind::TextDecorationColor(None), important });
+                } else if let Some(c) = parse_color(tok) {
+                    out.push(Decl { kind: DeclKind::TextDecorationColor(Some(c)), important });
+                }
+            }
+        }
+    }
+    out.push(Decl {
+        kind: DeclKind::TextDecoration(line.unwrap_or(TextDecorationLine::None)),
+        important,
+    });
+    out
 }
 
 /// Parsea `list-style-type: <keyword>`. Acepta los aliases comunes

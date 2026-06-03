@@ -75,6 +75,11 @@ pub struct ComputedStyle {
     /// `text-decoration-line` reducido al subset que pintamos.
     /// `None` = sin decoración (default HTML, salvo `<a>`/`<u>`/`<s>`).
     pub text_decoration: TextDecorationLine,
+    /// `text-decoration-color`. `None` = `currentColor` (sigue al `color`
+    /// del texto, el default CSS). Se propaga junto a `text_decoration`.
+    pub text_decoration_color: Option<Color>,
+    /// `text-decoration-style` (`solid`/`double`/`dotted`/`dashed`/`wavy`).
+    pub text_decoration_style: TextDecorationStyle,
     /// Marker que `<li>` pinta delante del contenido. Hereda (CSS spec).
     /// Default `Disc` (CSS default); UA stylesheet override en `<ol>` y
     /// `<ul>` por consistencia.
@@ -256,6 +261,19 @@ pub enum TextDecorationLine {
     Underline,
     LineThrough,
     Overline,
+}
+
+/// CSS `text-decoration-style`. El subset que el chrome sabe pintar:
+/// `solid` (línea continua), `double` (dos líneas), `dotted`/`dashed`
+/// (patrón de stroke) y `wavy` (aproximada como zig-zag). Default `Solid`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecorationStyle {
+    #[default]
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
 }
 
 /// CSS `font-style`. Heredable. `Oblique` lo tratamos igual que
@@ -952,6 +970,8 @@ impl Default for ComputedStyle {
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
             text_decoration: TextDecorationLine::None,
+            text_decoration_color: None,
+            text_decoration_style: TextDecorationStyle::Solid,
             list_style_type: ListStyleType::Disc,
             flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::Start,

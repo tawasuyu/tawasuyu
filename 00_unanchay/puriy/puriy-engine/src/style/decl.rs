@@ -121,6 +121,9 @@ pub(crate) enum DeclKind {
     /// `None` = `box-shadow: none` (limpia la sombra).
     BoxShadow(Option<BoxShadow>),
     TextDecoration(TextDecorationLine),
+    /// `text-decoration-color`. `None` = `currentColor`.
+    TextDecorationColor(Option<Color>),
+    TextDecorationStyle(TextDecorationStyle),
     ListStyleType(ListStyleType),
     FlexDirection(FlexDirection),
     JustifyContent(JustifyContent),
@@ -270,6 +273,8 @@ impl Decl {
             DeclKind::CounterIncrement(v) => s.counter_increment = v.clone(),
             DeclKind::BoxShadow(v) => s.box_shadow = *v,
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
+            DeclKind::TextDecorationColor(c) => s.text_decoration_color = *c,
+            DeclKind::TextDecorationStyle(st) => s.text_decoration_style = *st,
             DeclKind::ListStyleType(t) => s.list_style_type = *t,
             DeclKind::FlexDirection(d) => s.flex_direction = *d,
             DeclKind::JustifyContent(j) => s.justify_content = *j,

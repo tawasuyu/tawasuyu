@@ -107,6 +107,11 @@ pub struct BoxNode {
     /// Línea decorativa que el chrome dibuja sobre la hoja de texto
     /// (underline / line-through / overline). `None` = sin decoración.
     pub text_decoration: TextDecorationLine,
+    /// `text-decoration-color`. `None` = sigue al `color` del texto. Se
+    /// propaga junto a `text_decoration`.
+    pub text_decoration_color: Option<Color>,
+    /// `text-decoration-style` (solid/double/dotted/dashed/wavy).
+    pub text_decoration_style: TextDecorationStyle,
     /// Propiedades de flex container — sólo relevantes si `display` es
     /// `Flex`/`InlineFlex`. El chrome las mapea 1:1 a taffy.
     pub flex_direction: FlexDirection,
