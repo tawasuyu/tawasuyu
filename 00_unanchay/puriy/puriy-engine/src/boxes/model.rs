@@ -171,6 +171,12 @@ pub struct BoxNode {
     pub object_fit: Option<ObjectFit>,
     /// `object-position` de un `<img>` (`None` = centro). Fase 7.231.
     pub object_position: Option<BackgroundPosition>,
+    /// `caret-color`. `None` = `auto`. Heredable. Fase 7.238.
+    pub caret_color: Option<Color>,
+    /// `accent-color`. `None` = `auto`. Heredable. Fase 7.239.
+    pub accent_color: Option<Color>,
+    /// `cursor`. Heredable. Fase 7.240.
+    pub cursor: Cursor,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no

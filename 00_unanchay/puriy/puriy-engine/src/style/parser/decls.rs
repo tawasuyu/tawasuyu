@@ -387,6 +387,12 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             Some(DeclKind::BackgroundPosition(p)) => Some(DeclKind::ObjectPosition(p)),
             _ => None,
         },
+        // `caret-color: auto | currentColor | <color>`. `currentColor` queda
+        // como `None` (sigue al color heredado en el chrome eventual).
+        "caret-color" => Some(DeclKind::CaretColor(parse_caret_color(value))),
+        // `accent-color: auto | <color>`. Sin `currentColor` por espec.
+        "accent-color" => Some(DeclKind::AccentColor(parse_auto_or_color(value))),
+        "cursor" => parse_cursor(value).map(DeclKind::Cursor),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -529,6 +535,63 @@ pub(crate) fn parse_border_line_style(s: &str) -> Option<BorderLineStyle> {
         "outset" => Some(BorderLineStyle::Outset),
         _ => None,
     }
+}
+
+/// `caret-color`: `auto`/`currentColor` → `None` (= seguir al color
+/// heredado); de lo contrario, color CSS. Si nada matchea, `None`
+/// (default seguro = auto, no se dropea la regla).
+pub(crate) fn parse_caret_color(value: &str) -> Option<Color> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") || is_current_color(v) {
+        return None;
+    }
+    parse_color(v)
+}
+
+/// `accent-color`: `auto` → `None`; de lo contrario, color CSS.
+/// Sin `currentColor` por espec (CSS UI 4).
+pub(crate) fn parse_auto_or_color(value: &str) -> Option<Color> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    parse_color(v)
+}
+
+/// `cursor`: subset reconocido (los más comunes en web). Valores no
+/// listados (incluyendo el fallback `url(...) x y`) caen a `Auto`
+/// para no dropear la regla. Case-insensitive.
+pub(crate) fn parse_cursor(value: &str) -> Option<Cursor> {
+    let v = value.trim().to_ascii_lowercase();
+    // `cursor` puede traer una lista `url(...), pointer` — tomamos el
+    // último token reconocido (= el fallback CSS), no el primer url.
+    let last = v.split(',').last()?.trim();
+    Some(match last {
+        "auto" => Cursor::Auto,
+        "default" => Cursor::Default,
+        "pointer" => Cursor::Pointer,
+        "text" => Cursor::Text,
+        "wait" => Cursor::Wait,
+        "help" => Cursor::Help,
+        "crosshair" => Cursor::Crosshair,
+        "move" => Cursor::Move,
+        "not-allowed" => Cursor::NotAllowed,
+        "grab" => Cursor::Grab,
+        "grabbing" => Cursor::Grabbing,
+        "zoom-in" => Cursor::ZoomIn,
+        "zoom-out" => Cursor::ZoomOut,
+        "e-resize" => Cursor::EResize,
+        "n-resize" => Cursor::NResize,
+        "s-resize" => Cursor::SResize,
+        "w-resize" => Cursor::WResize,
+        "ns-resize" => Cursor::NsResize,
+        "ew-resize" => Cursor::EwResize,
+        "nesw-resize" => Cursor::NeswResize,
+        "nwse-resize" => Cursor::NwseResize,
+        "row-resize" => Cursor::RowResize,
+        "col-resize" => Cursor::ColResize,
+        _ => Cursor::Auto,
+    })
 }
 
 /// Parsea el shorthand `border: <width> <style> <color>` (componentes en

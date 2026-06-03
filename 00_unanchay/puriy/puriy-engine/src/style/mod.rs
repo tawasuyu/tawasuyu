@@ -207,6 +207,10 @@ impl StyleEngine {
             style.text_indent = p.text_indent;
             style.visibility = p.visibility;
             style.pointer_events = p.pointer_events;
+            // caret-color, accent-color, cursor son heredables (CSS UI).
+            style.caret_color = p.caret_color;
+            style.accent_color = p.accent_color;
+            style.cursor = p.cursor;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -718,6 +722,130 @@ mod tests {
         );
         // Sin declarar → None (el chrome centra).
         assert_eq!(eng.compute(&imgs[2]).object_position, None);
+    }
+
+    #[test]
+    fn caret_color_fase_7_238() {
+        // Parser puro.
+        assert_eq!(parse_caret_color("auto"), None);
+        assert_eq!(parse_caret_color("AUTO"), None);
+        assert_eq!(parse_caret_color("currentColor"), None);
+        assert_eq!(parse_caret_color("#ff0000"), Some(Color::rgb(255, 0, 0)));
+        assert_eq!(parse_caret_color("zigzag"), None);
+
+        // End-to-end: declarado, sin declarar, y herencia padre→hijo
+        // (vía `compute_with_parent` — `compute()` no traversa).
+        let html = r##"<html><head><style>
+            body { caret-color: #00ff00 }
+            input.a { caret-color: red }
+            input.auto { caret-color: auto }
+            input.plain {}
+        </style></head><body>
+          <input class="a"><input class="auto"><input class="plain">
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut inputs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("input") => inputs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.caret_color, Some(Color::rgb(0, 255, 0)));
+        assert_eq!(inputs.len(), 3);
+        assert_eq!(
+            eng.compute_with_parent(&inputs[0], Some(&body_cs)).caret_color,
+            Some(Color::rgb(255, 0, 0))
+        );
+        assert_eq!(eng.compute_with_parent(&inputs[1], Some(&body_cs)).caret_color, None);
+        // Heredado de body.
+        assert_eq!(
+            eng.compute_with_parent(&inputs[2], Some(&body_cs)).caret_color,
+            Some(Color::rgb(0, 255, 0))
+        );
+    }
+
+    #[test]
+    fn accent_color_fase_7_239() {
+        assert_eq!(parse_auto_or_color("auto"), None);
+        assert_eq!(parse_auto_or_color("rebeccapurple"), Some(Color::rgb(102, 51, 153)));
+        assert_eq!(parse_auto_or_color("zigzag"), None);
+
+        let html = r##"<html><head><style>
+            body { accent-color: #112233 }
+            input.a { accent-color: blue }
+            input.auto { accent-color: auto }
+            input.plain {}
+        </style></head><body>
+          <input class="a"><input class="auto"><input class="plain">
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut inputs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("input") => inputs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.accent_color, Some(Color::rgb(0x11, 0x22, 0x33)));
+        assert_eq!(
+            eng.compute_with_parent(&inputs[0], Some(&body_cs)).accent_color,
+            Some(Color::rgb(0, 0, 255))
+        );
+        assert_eq!(eng.compute_with_parent(&inputs[1], Some(&body_cs)).accent_color, None);
+        // Heredado de body.
+        assert_eq!(
+            eng.compute_with_parent(&inputs[2], Some(&body_cs)).accent_color,
+            Some(Color::rgb(0x11, 0x22, 0x33))
+        );
+    }
+
+    #[test]
+    fn cursor_fase_7_240() {
+        // Parser puro: keywords reconocidos + fallback `auto` para
+        // lo no soportado + tail-of-list (CSS `cursor: url(...), pointer`).
+        assert_eq!(parse_cursor("pointer"), Some(Cursor::Pointer));
+        assert_eq!(parse_cursor("POINTER"), Some(Cursor::Pointer));
+        assert_eq!(parse_cursor("not-allowed"), Some(Cursor::NotAllowed));
+        assert_eq!(parse_cursor("zoom-in"), Some(Cursor::ZoomIn));
+        assert_eq!(parse_cursor("nesw-resize"), Some(Cursor::NeswResize));
+        assert_eq!(parse_cursor("xyz"), Some(Cursor::Auto));
+        // Lista CSS — tomamos el último fallback reconocido.
+        assert_eq!(parse_cursor("url(a.png), pointer"), Some(Cursor::Pointer));
+        assert_eq!(parse_cursor("url(a.png), nope"), Some(Cursor::Auto));
+
+        // End-to-end: declarado y heredado.
+        let html = r##"<html><head><style>
+            body { cursor: text }
+            a.btn { cursor: pointer }
+            a.plain {}
+        </style></head><body>
+          <a class="btn">x</a><a class="plain">y</a>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut anchors = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("a") => anchors.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.cursor, Cursor::Text);
+        assert_eq!(eng.compute_with_parent(&anchors[0], Some(&body_cs)).cursor, Cursor::Pointer);
+        // Heredado de body.
+        assert_eq!(eng.compute_with_parent(&anchors[1], Some(&body_cs)).cursor, Cursor::Text);
     }
 
     #[test]

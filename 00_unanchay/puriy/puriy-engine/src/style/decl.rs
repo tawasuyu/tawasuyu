@@ -190,6 +190,11 @@ pub(crate) enum DeclKind {
     PointerEvents(PointerEvents),
     ObjectFit(ObjectFit),
     ObjectPosition(BackgroundPosition),
+    /// `None` = `caret-color: auto`.
+    CaretColor(Option<Color>),
+    /// `None` = `accent-color: auto`.
+    AccentColor(Option<Color>),
+    Cursor(Cursor),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -350,6 +355,9 @@ impl Decl {
             DeclKind::PointerEvents(pe) => s.pointer_events = *pe,
             DeclKind::ObjectFit(f) => s.object_fit = Some(*f),
             DeclKind::ObjectPosition(p) => s.object_position = Some(*p),
+            DeclKind::CaretColor(c) => s.caret_color = *c,
+            DeclKind::AccentColor(c) => s.accent_color = *c,
+            DeclKind::Cursor(c) => s.cursor = *c,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

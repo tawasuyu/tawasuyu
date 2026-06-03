@@ -200,6 +200,16 @@ pub struct ComputedStyle {
     /// chrome todavía no lo pinta (la capa de texto compartida no expone
     /// tracking aún) — mismo estado que `word-spacing`.
     pub letter_spacing: f32,
+    /// `caret-color` (Fase 7.238). `None` = `auto` (= currentColor). Heredable.
+    /// Sólo parseado/propagado — el caret real lo pinta el widget de
+    /// `<input>`/`<textarea>` aguas abajo, que aún no consume este campo.
+    pub caret_color: Option<Color>,
+    /// `accent-color` (Fase 7.239). `None` = `auto` (= color del tema UA).
+    /// Heredable. Sólo parseado/propagado por ahora.
+    pub accent_color: Option<Color>,
+    /// `cursor` (Fase 7.240). Default `Auto`. Heredable. El chrome
+    /// todavía no setea el cursor del mouse — sólo se almacena.
+    pub cursor: Cursor,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -284,6 +294,39 @@ pub enum TextDecorationStyle {
     Dotted,
     Dashed,
     Wavy,
+}
+
+/// `cursor` CSS — subset reconocido. Otros valores (`url(...)` y
+/// `<x> <y>` fallback, `none`, `progress`, `cell`, `vertical-text`,
+/// `alias`, `copy`, `no-drop`, todas las flechas direccionales y los
+/// resize compuestos) caen a `Auto` (= no cambia el cursor por
+/// elemento). Heredable. Fase 7.240.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Cursor {
+    #[default]
+    Auto,
+    Default,
+    Pointer,
+    Text,
+    Wait,
+    Help,
+    Crosshair,
+    Move,
+    NotAllowed,
+    Grab,
+    Grabbing,
+    ZoomIn,
+    ZoomOut,
+    EResize,
+    NResize,
+    SResize,
+    WResize,
+    NsResize,
+    EwResize,
+    NeswResize,
+    NwseResize,
+    RowResize,
+    ColResize,
 }
 
 /// CSS `border-style` reducido al subset que el chrome pinta: `solid`
@@ -1063,6 +1106,9 @@ impl Default for ComputedStyle {
             pointer_events: PointerEvents::Auto,
             object_fit: None,
             object_position: None,
+            caret_color: None,
+            accent_color: None,
+            cursor: Cursor::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

@@ -14,7 +14,7 @@ use crate::dom::{self, DomTree};
 use crate::style::{
     AlignContent, AlignItems, AlignSelf, BackgroundClip, BackgroundOrigin, BackgroundPosition,
     BackgroundRepeat, BackgroundSize, BorderLineStyle,
-    BoxShadow, BoxSizing, ComputedStyle, Corners,
+    BoxShadow, BoxSizing, ComputedStyle, Corners, Cursor,
     FlexDirection, FlexWrap,
     GridTrackSize, JustifyContent, LengthVal, LinearGradient, ListStyleType, ObjectFit, Outline,
     Overflow, PointerEvents, Position, Sides, StyleEngine, TextAlign, TextDecorationLine,
