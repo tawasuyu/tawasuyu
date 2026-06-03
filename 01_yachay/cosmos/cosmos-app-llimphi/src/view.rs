@@ -277,13 +277,6 @@ pub(crate) fn tile_cuerpos(render: &RenderModel, theme: &Theme) -> View<Msg> {
 // Aspectos — tabla unificada geocéntrico + topocéntrico
 // =====================================================================
 
-fn aspecto_importancia(kind: &str) -> u8 {
-    match kind {
-        "conjunction" | "opposition" | "square" | "trine" | "sextile" => 0,
-        _ => 1,
-    }
-}
-
 /// Una fila de la tabla unificada: un par (de cuerpos, aspecto) con su
 /// orbe geocéntrico y/o topocéntrico.
 struct AspRow {
@@ -335,14 +328,12 @@ pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
     }
 
     let mut rows: Vec<AspRow> = map.into_values().collect();
+    // Orden por intensidad: el orbe más cerrado (aspecto más exacto y
+    // fuerte) primero, sin importar mayor/menor.
     rows.sort_by(|a, b| {
-        aspecto_importancia(&a.kind)
-            .cmp(&aspecto_importancia(&b.kind))
-            .then_with(|| {
-                let oa = a.geo.or(a.topo).unwrap_or(99.0);
-                let ob = b.geo.or(b.topo).unwrap_or(99.0);
-                oa.partial_cmp(&ob).unwrap_or(std::cmp::Ordering::Equal)
-            })
+        let oa = a.geo.or(a.topo).unwrap_or(99.0);
+        let ob = b.geo.or(b.topo).unwrap_or(99.0);
+        oa.partial_cmp(&ob).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     if rows.is_empty() {
@@ -368,6 +359,7 @@ pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![
+        txt_cell(String::new(), 4.0, 10.0, theme.fg_muted, Alignment::Start),
         txt_cell(String::new(), GLYPH, 10.0, theme.fg_muted, Alignment::Start),
         txt_cell(String::new(), GLYPH + SGN + 4.0, 10.0, theme.fg_muted, Alignment::Start),
         txt_cell(String::new(), GLYPH + SGN + 4.0, 10.0, theme.fg_muted, Alignment::Start),
@@ -379,6 +371,8 @@ pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
     let mut out: Vec<View<Msg>> = Vec::with_capacity(rows.len() + 1);
     out.push(header);
     for row in rows.into_iter().take(60) {
+        let orb = row.geo.or(row.topo).unwrap_or(8.0);
+        let intensity = (1.0 - orb / 8.0).clamp(0.15, 1.0) as f32;
         let geo = row
             .geo
             .map(fmt_dms)
@@ -396,17 +390,43 @@ pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
             Some(false) => glyphs::icon_view(glyphs::Icon::Separating, 12.0, theme.fg_muted),
             None => txt_cell(String::new(), 12.0, 10.0, theme.fg_muted, Alignment::Center),
         };
+        // Texto del orbe a más contraste cuanto más fuerte el aspecto.
+        let orb_col = if intensity > 0.55 { theme.fg_text } else { theme.fg_muted };
         out.push(cells_row(vec![
+            intensity_bar(&row.kind, intensity),
             glyphs::aspect_view(&row.kind, GLYPH),
             body_sign(&row.from, lons.get(&row.from).copied(), theme),
             body_sign(&row.to, lons.get(&row.to).copied(), theme),
-            txt_cell(geo, 46.0, 11.0, theme.fg_text, Alignment::Start),
-            txt_cell(topo, 46.0, 11.0, theme.fg_text, Alignment::Start),
+            txt_cell(geo, 46.0, 11.0, orb_col, Alignment::Start),
+            txt_cell(topo, 46.0, 11.0, orb_col, Alignment::Start),
             txt_cell(diff, 40.0, 11.0, theme.fg_muted, Alignment::Start),
             dir,
         ]));
     }
     tile_container(out, theme)
+}
+
+/// Color del aspecto (paleta oscura) con la opacidad dada.
+fn aspect_color_intensity(kind: &str, intensity: f32) -> Color {
+    let c = Palette::dark().aspect(kind);
+    let to = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color::from_rgba8(to(c.r), to(c.g), to(c.b), to(intensity))
+}
+
+/// Barra vertical en el color del aspecto cuya opacidad marca la
+/// intensidad — los aspectos exactos se ven más fuertes en la lista,
+/// igual que sus líneas en la carta.
+fn intensity_bar(kind: &str, intensity: f32) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(4.0),
+            height: length(ROW_H - 6.0),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(aspect_color_intensity(kind, intensity))
+    .radius(2.0)
 }
 
 // =====================================================================
