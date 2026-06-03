@@ -2996,6 +2996,39 @@ line2</pre></body></html>"#;
     }
 
     #[test]
+    fn attr_selector_flag_case_insensitive() {
+        let html = r#"<html><head><style>
+            [data-x="hello" i] { color: rgb(0,0,255) }
+            [type="EMAIL"] { color: rgb(255,0,0) }
+            [href^="HTTP" i] { color: rgb(0,128,0) }
+        </style></head><body>
+            <p id="a" data-x="HELLO">a</p>
+            <input id="c" type="email">
+            <input id="d" type="EMAIL">
+            <a id="e" href="https://x">e</a>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by_id = |id: &str| -> Handle {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // `[data-x="hello" i]` matchea "HELLO" (insensible).
+        assert_eq!(eng.compute(&by_id("a")).color, Color::rgb(0, 0, 255));
+        // `[type="EMAIL"]` SIN flag es case-sensitive: "email" no matchea.
+        assert_ne!(eng.compute(&by_id("c")).color, Color::rgb(255, 0, 0));
+        // "EMAIL" exacto sí matchea.
+        assert_eq!(eng.compute(&by_id("d")).color, Color::rgb(255, 0, 0));
+        // Prefijo con flag i: `[href^="HTTP" i]` matchea "https://x".
+        assert_eq!(eng.compute(&by_id("e")).color, Color::rgb(0, 128, 0));
+    }
+
+    #[test]
     fn css_nesting_expande_y_aplica() {
         let html = r#"<html><head><style>
             .card {

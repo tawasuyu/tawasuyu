@@ -348,15 +348,29 @@ pub(crate) fn parse_attr_match(inner: &str) -> Option<AttrMatch> {
             if name.is_empty() {
                 return None;
             }
-            let raw = inner[pos + sym.len()..].trim();
+            let mut raw = inner[pos + sym.len()..].trim();
+            // Flag de case-sensitivity CSS4: ` i` (insensible) / ` s`
+            // (sensible, default). Es un token suelto al final, separado por
+            // whitespace del valor (`[a=b i]`, `[a="b" i]`).
+            let mut case_insensitive = false;
+            for (flag, ci) in [('i', true), ('I', true), ('s', false), ('S', false)] {
+                if let Some(stripped) = raw.strip_suffix(flag) {
+                    if stripped.ends_with(char::is_whitespace) {
+                        case_insensitive = ci;
+                        raw = stripped.trim_end();
+                        break;
+                    }
+                }
+            }
             let value = raw.trim_matches(|c| c == '"' || c == '\'').to_string();
-            return Some(AttrMatch { name, op: *op, value });
+            return Some(AttrMatch { name, op: *op, value, case_insensitive });
         }
     }
     Some(AttrMatch {
         name: inner.to_string(),
         op: AttrOp::Present,
         value: String::new(),
+        case_insensitive: false,
     })
 }
 

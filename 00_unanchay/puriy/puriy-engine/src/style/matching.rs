@@ -190,6 +190,9 @@ pub(crate) struct AttrMatch {
     pub(crate) name: String,
     pub(crate) op: AttrOp,
     pub(crate) value: String,
+    /// Flag `i` de CSS4 (`[attr=val i]`) — comparación case-insensitive.
+    /// Default `false` (case-sensitive, equivalente al flag `s`).
+    pub(crate) case_insensitive: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -350,6 +353,18 @@ pub(crate) fn attr_matches(node: &markup5ever_rcdom::Handle, am: &AttrMatch) -> 
         AttrOp::Present => actual.is_some(),
         op => {
             let Some(actual) = actual else { return false };
+            // Con el flag `i` (CSS4) comparamos en minúsculas ASCII.
+            if am.case_insensitive {
+                let a = actual.to_ascii_lowercase();
+                let v = am.value.to_ascii_lowercase();
+                return match op {
+                    AttrOp::Equals => a == v,
+                    AttrOp::Prefix => a.starts_with(&v),
+                    AttrOp::Suffix => a.ends_with(&v),
+                    AttrOp::Contains => a.contains(&v),
+                    AttrOp::Present => unreachable!(),
+                };
+            }
             match op {
                 AttrOp::Equals => actual == am.value,
                 AttrOp::Prefix => actual.starts_with(&am.value),
