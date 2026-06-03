@@ -333,9 +333,14 @@ struct App {
     /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
     /// waybar, swaybg, wofi, mako).
     layer_shell_state: WlrLayerShellState,
-    /// La salida persistente — la necesita `layer_map_for_output` para
-    /// arreglar anclajes y zonas exclusivas de los layer surfaces.
+    /// La salida **primaria** — la necesita `layer_map_for_output` para
+    /// arreglar anclajes y zonas exclusivas de los layer surfaces que el
+    /// cliente no ate a un output específico (cae al primario).
     output: Option<Output>,
+    /// Todas las salidas activas (la primaria es `outputs[0]`). El compositor
+    /// las publica acá tras armarlas, así un layer surface con `output_hint`
+    /// puede mapearse al monitor que el cliente pidió, no siempre al primario.
+    outputs: Vec<Output>,
     /// Gestor de salidas con `xdg-output` (`zxdg_output_manager_v1`): waybar
     /// y otras barras lo exigen para conocer nombre/geometría de las salidas.
     /// Se conserva sólo para mantener vivo el global (de ahí el `allow`).
@@ -1152,14 +1157,18 @@ impl WlrLayerShellHandler for App {
     fn new_layer_surface(
         &mut self,
         surface: WlrLayerSurface,
-        _output: Option<wl_output::WlOutput>,
+        output_hint: Option<wl_output::WlOutput>,
         _layer: Layer,
         namespace: String,
     ) {
-        // Sin salida todavía no podemos colocarlo; el cliente reintentará
-        // al haber output. Mapeamos al único Output de mirada.
-        let Some(output) = self.output.clone() else {
-            return;
+        // Si el cliente pasó `output_hint`, mapeamos al monitor que pidió.
+        // Si no, cae al primario (status quo: dock/barras sin elección).
+        let target = output_hint
+            .as_ref()
+            .and_then(Output::from_resource)
+            .or_else(|| self.output.clone());
+        let Some(output) = target else {
+            return; // sin outputs todavía; el cliente reintentará
         };
         let desktop = DesktopLayerSurface::new(surface, namespace.clone());
         let mut map = layer_map_for_output(&output);
@@ -1171,17 +1180,23 @@ impl WlrLayerShellHandler for App {
     }
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
-        let Some(output) = self.output.clone() else {
-            return;
-        };
-        let mut map = layer_map_for_output(&output);
-        if let Some(layer) = map
-            .layer_for_surface(surface.wl_surface(), WindowSurfaceType::ALL)
-            .cloned()
-        {
-            map.unmap_layer(&layer);
+        // Una layer puede haber sido mapeada a cualquier output (per-output
+        // layer-shell): la buscamos en todos hasta dar con su mapa.
+        let mut found = false;
+        for output in self.outputs.clone() {
+            let mut map = layer_map_for_output(&output);
+            if let Some(layer) = map
+                .layer_for_surface(surface.wl_surface(), WindowSurfaceType::ALL)
+                .cloned()
+            {
+                map.unmap_layer(&layer);
+                found = true;
+                break;
+            }
         }
-        drop(map);
+        if !found {
+            return;
+        }
         self.recompute_reservations();
         // Una layer destruida pudo ser la Exclusive: devolver el teclado.
         self.reconcile_layer_keyboard();
@@ -2033,6 +2048,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         layer_shell_state: WlrLayerShellState::new::<App>(&dh),
         output_manager_state: OutputManagerState::new_with_xdg_output::<App>(&dh),
         output: None,
+        outputs: Vec::new(),
         shm_state: ShmState::new::<App>(&dh, Vec::new()),
         dmabuf_state: DmabufState::new(),
         seat_state,

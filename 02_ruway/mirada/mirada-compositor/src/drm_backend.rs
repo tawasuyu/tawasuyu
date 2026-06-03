@@ -966,7 +966,9 @@ impl DrmState {
         for w in &self.app.windows {
             send_frames_surface_tree(&w.surface, time);
         }
-        if let Some(output) = self.app.output.clone() {
+        // Layers de TODAS las salidas — un cliente puede tener barras en
+        // distintos monitores, cada una con su frame-callback propio.
+        for output in self.app.outputs.clone() {
             for layer in smithay::desktop::layer_map_for_output(&output).layers() {
                 send_frames_surface_tree(layer.wl_surface(), time);
             }
@@ -1016,22 +1018,19 @@ impl DrmState {
                 self.emit_reveal_band(rect, &mut out);
             }
 
-            // 6. Layer surfaces (waybar, swaybg…). Smithay las cuelga del
-            //    `Output` primario; por ahora se renderizan sólo ahí.
-            if is_primary {
-                let (over_layers, under_layers) =
-                    crate::layer_render_elements(self.app.output.as_ref(), &mut self.renderer);
-                for el in over_layers {
-                    out.push(Frame::Window(el));
-                }
-                // 7a. Ventanas entre layers Overlay/Top y Bottom/Background.
-                self.emit_windows(rect, &mut out);
-                for el in under_layers {
-                    out.push(Frame::Window(el));
-                }
-            } else {
-                // 7b. Sin layers en secundarias: ventanas y abajo wallpaper.
-                self.emit_windows(rect, &mut out);
+            // 6. Layer surfaces (waybar, swaybg…) de **esta** salida —
+            //    smithay las cuelga por output, así que un layer mapeado a
+            //    una secundaria con `output_hint` aparece donde toca.
+            let output_for_layers = self.outputs[idx].output.clone();
+            let (over_layers, under_layers) =
+                crate::layer_render_elements(Some(&output_for_layers), &mut self.renderer);
+            for el in over_layers {
+                out.push(Frame::Window(el));
+            }
+            // 7. Ventanas entre layers Overlay/Top y Bottom/Background.
+            self.emit_windows(rect, &mut out);
+            for el in under_layers {
+                out.push(Frame::Window(el));
             }
 
             // 8. Wallpaper al fondo (por salida).
@@ -1934,6 +1933,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     );
     // Primary `smithay::Output` para layer-shell, xdg-output handlers, etc.
     app.output = Some(output_ctxs[0].output.clone());
+    app.outputs = output_ctxs.iter().map(|c| c.output.clone()).collect();
 
     // El socket Wayland por el que se conectan los clientes.
     let listener = ListeningSocket::bind_auto("wayland", 1..32)?;
