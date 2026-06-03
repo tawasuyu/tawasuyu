@@ -50,7 +50,9 @@ Anda hoy, end-to-end y feo a propósito:
 - ✅ **Transporte P2P soberano** sobre card-net (`BrahmanNet`/libp2p): Noise +
   Yamux + relay/dcutr/autonat — el mismo nodo que ayni/minga/agora, así que
   sirve cruzando NAT, no sólo en LAN. Streams multiplexados por `/uya/transporte/1.0.0`.
-- ✅ Identidad de app determinista por nombre (BLAKE3) en el handshake `Hola`.
+- ✅ **Identidad determinista por nombre**: el `ParticipanteId` de app y el
+  keypair ed25519 del transporte derivan ambos de `BLAKE3(nombre)`, así que el
+  **PeerId (y la multiaddr dialable) es estable entre arranques** — comparten raíz.
 - ✅ Presencia: entrar / salir / estado de medios.
 - ✅ **Video en ambos sentidos** + preview local. Comprimido con **JPEG por
   cuadro** (MJPEG): ~40× menos bytes que RGBA crudo (192×144: 110 KB → ~2,8 KB),
@@ -65,9 +67,9 @@ Anda hoy, end-to-end y feo a propósito:
 
 ## Pendiente (por orden)
 
-1. **Identidad por agora**: hoy el PeerId libp2p es aleatorio por arranque (la
-   dirección dialable cambia). Derivar el keypair del nombre (PeerId estable) y,
-   mejor, atar la identidad de app a `agora` (firma del `Hola`).
+1. **Firma agora del `Hola`**: el PeerId ya es estable (deriva de `BLAKE3(nombre)`),
+   pero el nombre es auto-declarado. Atar la identidad a `agora`: firmar el `Hola`
+   con la clave agora y verificarla, para que nadie suplante un nombre.
 2. **Descubrimiento por DHT**: `BrahmanNet` ya trae Kademlia — anunciar/encontrar
    pares por una clave de sala en vez de pasar la multiaddr a mano.
 3. **Malla N-a-N** automática (hoy cada par se conecta) y/o un SFU mínimo.

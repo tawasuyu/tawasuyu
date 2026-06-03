@@ -125,7 +125,7 @@ impl Enlace {
                         }
                     };
                     rt.block_on(async move {
-                        match arrancar(&bind).await {
+                        match arrancar(&bind, yo_compartido.id).await {
                             Ok((node, dial_addr)) => {
                                 let _ = listo_tx.send(Ok(dial_addr));
                                 conducir(node, yo_compartido, cmd_rx, ev_tx, mezcla).await;
@@ -233,8 +233,15 @@ impl Enlace {
 }
 
 /// Crea el nodo, escucha, y compone la multiaddr dialable (con `/p2p/`).
-async fn arrancar(bind: &str) -> Result<(BrahmanNet, String), String> {
-    let node = BrahmanNet::new().map_err(|e| format!("uya: nodo libp2p: {e:?}"))?;
+async fn arrancar(bind: &str, semilla: [u8; 32]) -> Result<(BrahmanNet, String), String> {
+    // Identidad de transporte determinista: el keypair ed25519 deriva de la
+    // misma semilla BLAKE3(nombre) que el `ParticipanteId` de app. Así el PeerId
+    // —y por ende la multiaddr dialable— es estable entre arranques, y la
+    // identidad libp2p comparte raíz con la de la app.
+    let keypair = card_net::Keypair::ed25519_from_bytes(semilla)
+        .map_err(|e| format!("uya: keypair ed25519: {e}"))?;
+    let node =
+        BrahmanNet::with_keypair(keypair).map_err(|e| format!("uya: nodo libp2p: {e:?}"))?;
     let addr: Multiaddr = bind
         .parse()
         .map_err(|e| format!("uya: multiaddr inválida '{bind}': {e}"))?;
