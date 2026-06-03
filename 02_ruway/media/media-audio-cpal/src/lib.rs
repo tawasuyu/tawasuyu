@@ -66,10 +66,19 @@ impl AudioSink {
 
         let err_fn = |e| eprintln!("media-audio-cpal: stream error: {e}");
 
+        // `build_stream` convierte f32 → cualquier formato vía `from_sample`,
+        // así soportamos todos los que cpal puede pedir (no sólo F32/I16/U16).
         let stream = match sample_format {
             SampleFormat::F32 => build_stream::<f32>(&device, &config, source, err_fn)?,
+            SampleFormat::F64 => build_stream::<f64>(&device, &config, source, err_fn)?,
+            SampleFormat::I8 => build_stream::<i8>(&device, &config, source, err_fn)?,
             SampleFormat::I16 => build_stream::<i16>(&device, &config, source, err_fn)?,
+            SampleFormat::I32 => build_stream::<i32>(&device, &config, source, err_fn)?,
+            SampleFormat::I64 => build_stream::<i64>(&device, &config, source, err_fn)?,
+            SampleFormat::U8 => build_stream::<u8>(&device, &config, source, err_fn)?,
             SampleFormat::U16 => build_stream::<u16>(&device, &config, source, err_fn)?,
+            SampleFormat::U32 => build_stream::<u32>(&device, &config, source, err_fn)?,
+            SampleFormat::U64 => build_stream::<u64>(&device, &config, source, err_fn)?,
             other => return Err(OpenError::UnsupportedFormat(other)),
         };
         stream.play().map_err(|e| OpenError::Play(e.to_string()))?;
