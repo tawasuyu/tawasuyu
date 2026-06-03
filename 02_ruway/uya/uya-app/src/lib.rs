@@ -60,4 +60,9 @@ pub enum EventoUya {
         nombre: String,
         texto: String,
     },
+    /// Cambió la actividad de voz de un participante (empezó / dejó de hablar).
+    /// Lo emite el detector de voz local (mi micrófono) y el del lector por
+    /// cada par; la UI lo usa para resaltar al que habla. Es un flanco, no un
+    /// estado continuo.
+    Voz { id: ParticipanteId, hablando: bool },
 }

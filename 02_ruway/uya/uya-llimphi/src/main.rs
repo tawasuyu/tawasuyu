@@ -13,7 +13,7 @@
 //                  coma-separado; lo imprime el otro nodo al arrancar)
 // =============================================================================
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::Arc;
 
@@ -75,6 +75,8 @@ struct Modelo {
     sala: Sala,
     enlace: Arc<Enlace>,
     cuadros: HashMap<ParticipanteId, CuadroUI>,
+    /// Quiénes están hablando ahora mismo (detección de voz), para resaltarlos.
+    hablando: HashSet<ParticipanteId>,
     cam_on: bool,
     mic_on: bool,
     /// Mi propia dirección dialable (con `/p2p/`), para mostrarla y compartirla.
@@ -175,6 +177,7 @@ impl App for Uya {
             sala: Sala::nueva(nombre),
             enlace,
             cuadros: HashMap::new(),
+            hablando: HashSet::new(),
             cam_on: true,
             mic_on: true,
             mi_dir,
@@ -226,6 +229,14 @@ impl App for Uya {
             Msg::Red(EventoUya::Sale { id }) => {
                 model.sala.salir(&id);
                 model.cuadros.remove(&id);
+                model.hablando.remove(&id);
+            }
+            Msg::Red(EventoUya::Voz { id, hablando }) => {
+                if hablando {
+                    model.hablando.insert(id);
+                } else {
+                    model.hablando.remove(&id);
+                }
             }
             Msg::Red(EventoUya::Estado {
                 id,
@@ -323,6 +334,7 @@ impl App for Uya {
             model.cam_on,
             model.mic_on,
             true,
+            model.hablando.contains(&model.sala.yo),
         ));
         // Los demás, en orden estable por id (BTreeMap).
         for p in model.sala.participantes.values() {
@@ -332,6 +344,7 @@ impl App for Uya {
                 p.camara,
                 p.microfono,
                 false,
+                model.hablando.contains(&p.id),
             ));
         }
 
@@ -510,8 +523,16 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
     .children(vec![mi, campo, boton("conectar", Msg::Conectar, true, false)])
 }
 
-/// Un tile de participante: video (o placeholder) arriba + etiqueta abajo.
-fn tile(nombre: &str, cuadro: Option<&CuadroUI>, cam: bool, mic: bool, yo: bool) -> View<Msg> {
+/// Un tile de participante: video (o placeholder) arriba + etiqueta abajo. Si
+/// `hablando`, el marco se tiñe de acento (detección de voz).
+fn tile(
+    nombre: &str,
+    cuadro: Option<&CuadroUI>,
+    cam: bool,
+    mic: bool,
+    yo: bool,
+    hablando: bool,
+) -> View<Msg> {
     let estilo_video = Style {
         size: Size {
             width: percent(1.0),
@@ -537,11 +558,14 @@ fn tile(nombre: &str, cuadro: Option<&CuadroUI>, cam: bool, mic: bool, yo: bool)
             .text("camara apagada", 15.0, TENUE),
     };
 
-    let etiqueta = if mic {
-        nombre.to_string()
-    } else {
+    let etiqueta = if !mic {
         format!("{nombre}  ·  mic off")
+    } else if hablando {
+        format!("{nombre}  ·  hablando")
+    } else {
+        nombre.to_string()
     };
+    let color_label = if hablando || yo { ACENTO } else { TEXTO };
     let label = View::new(Style {
         size: Size {
             width: percent(1.0),
@@ -549,7 +573,10 @@ fn tile(nombre: &str, cuadro: Option<&CuadroUI>, cam: bool, mic: bool, yo: bool)
         },
         ..Default::default()
     })
-    .text(etiqueta, 14.0, if yo { ACENTO } else { TEXTO });
+    .text(etiqueta, 14.0, color_label);
+
+    // El marco se tiñe de acento cuando este participante está hablando.
+    let marco = if hablando { ACENTO_BG } else { TILE_BG };
 
     View::new(Style {
         size: Size {
@@ -564,7 +591,7 @@ fn tile(nombre: &str, cuadro: Option<&CuadroUI>, cam: bool, mic: bool, yo: bool)
         padding: rect_all(6.0),
         ..Default::default()
     })
-    .fill(TILE_BG)
+    .fill(marco)
     .radius(10.0)
     .children(vec![video, label])
 }

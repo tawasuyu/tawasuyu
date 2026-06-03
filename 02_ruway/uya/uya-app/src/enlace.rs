@@ -36,7 +36,7 @@ use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
 
 use uya_core::{id_desde_nombre, FormatoCuadro, Paquete, ParticipanteId};
 
-use crate::audio::MezclaRemota;
+use crate::audio::{DetectorVoz, MezclaRemota};
 use crate::EventoUya;
 
 /// El protocolo libp2p del transporte de uya. Coexiste multiplexado con los
@@ -498,6 +498,8 @@ async fn registrar(
         let mut remoto_nombre: Option<String> = None;
         // Decoder Opus con estado, propio de esta conexión (lazy).
         let mut dec: Option<OpusDecoder> = None;
+        // Detector de voz del par, para resaltar a quien habla en la UI.
+        let mut vad = DetectorVoz::nuevo();
         loop {
             let bytes = match leer_frame(&mut rd).await {
                 Ok(b) => b,
@@ -557,6 +559,11 @@ async fn registrar(
                             {
                                 // `decode_float` devuelve frames por canal (mono → muestras).
                                 pcm.truncate(frames.max(0) as usize);
+                                // Detección de voz del par: avisar a la UI en
+                                // los flancos para resaltar a quien habla.
+                                if let Some(hablando) = vad.procesar(&pcm) {
+                                    let _ = ev_tx.send(EventoUya::Voz { id, hablando });
+                                }
                                 mezcla.lock().empujar(id, 48_000, 1, &pcm);
                             }
                         }

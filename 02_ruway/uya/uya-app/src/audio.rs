@@ -162,6 +162,78 @@ impl AudioSource for MezclaRemota {
     }
 }
 
+/// Umbral de energía (RMS) por encima del cual consideramos que hay voz. Por
+/// debajo de ~0.01 suele ser ruido de fondo; 0.02 deja un margen cómodo.
+const UMBRAL_VOZ: f32 = 0.02;
+
+/// Cuántos frames seguidos por debajo del umbral hace falta para declarar
+/// silencio (hangover, ~20 ms/frame → ≈240 ms). Evita que la detección
+/// parpadee en las pausas naturales entre palabras.
+const HANGOVER_FRAMES: u32 = 12;
+
+/// Detector de actividad de voz (VAD) por energía, con histéresis. Procesa
+/// bloques mono y avisa sólo en los *flancos* (empezó / dejó de hablar), para
+/// no inundar la UI con un evento por frame.
+pub struct DetectorVoz {
+    umbral: f32,
+    hangover: u32,
+    silencio: u32,
+    hablando: bool,
+}
+
+impl DetectorVoz {
+    /// Detector con el umbral y hangover por defecto del cable de uya.
+    pub fn nuevo() -> Self {
+        Self {
+            umbral: UMBRAL_VOZ,
+            hangover: HANGOVER_FRAMES,
+            silencio: 0,
+            hablando: false,
+        }
+    }
+
+    /// Procesa un bloque mono. Devuelve `Some(true)` cuando arranca la voz y
+    /// `Some(false)` cuando se confirma el silencio; `None` si no hubo flanco.
+    pub fn procesar(&mut self, mono: &[f32]) -> Option<bool> {
+        let rms = rms(mono);
+        if rms >= self.umbral {
+            self.silencio = 0;
+            if !self.hablando {
+                self.hablando = true;
+                return Some(true);
+            }
+        } else {
+            self.silencio = self.silencio.saturating_add(1);
+            if self.hablando && self.silencio >= self.hangover {
+                self.hablando = false;
+                return Some(false);
+            }
+        }
+        None
+    }
+
+    /// Fuerza el silencio (micrófono apagado, par que se va). Devuelve el flanco
+    /// `Some(false)` si venía hablando.
+    pub fn callar(&mut self) -> Option<bool> {
+        self.silencio = 0;
+        if self.hablando {
+            self.hablando = false;
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+/// Raíz cuadrática media de un bloque mono (energía).
+fn rms(mono: &[f32]) -> f32 {
+    if mono.is_empty() {
+        return 0.0;
+    }
+    let suma: f32 = mono.iter().map(|s| s * s).sum();
+    (suma / mono.len() as f32).sqrt()
+}
+
 /// Remuestreador lineal mono con estado, para llevar el micrófono a 48 kHz (lo
 /// único que acepta Opus). A 48 kHz nativos es prácticamente identidad.
 struct Remuestreo {
@@ -231,6 +303,11 @@ pub fn iniciar_microfono(enlace: Arc<Enlace>) {
             let mut mono: Vec<f32> = Vec::new();
             let mut acc: Vec<f32> = Vec::new(); // mono @ 48 kHz pendiente de encodear
             let mut reporto = false;
+            // VAD local: avisa a la UI (por el mismo canal de eventos) cuándo
+            // empiezo/dejo de hablar, para resaltar mi propio tile.
+            let yo = enlace.yo();
+            let eventos = enlace.eventos();
+            let mut vad = DetectorVoz::nuevo();
             loop {
                 fuente.fill(&mut buf, sr, ch);
                 if enlace.microfono_encendido() {
@@ -238,6 +315,10 @@ pub fn iniciar_microfono(enlace: Arc<Enlace>) {
                     mono.clear();
                     for cuadro in buf.chunks_exact(ch_n) {
                         mono.push(cuadro.iter().copied().sum::<f32>() / ch_n as f32);
+                    }
+                    // Detección de voz sobre el mono nativo (~20 ms por bloque).
+                    if let Some(hablando) = vad.procesar(&mono) {
+                        let _ = eventos.send(crate::EventoUya::Voz { id: yo, hablando });
                     }
                     resamp.procesar(&mono, &mut acc);
                     let completos = acc.len() / frame * frame;
@@ -260,6 +341,9 @@ pub fn iniciar_microfono(enlace: Arc<Enlace>) {
                         }
                         acc.drain(..completos);
                     }
+                } else if let Some(hablando) = vad.callar() {
+                    // Micrófono apagado: si venía hablando, avisar que paré.
+                    let _ = eventos.send(crate::EventoUya::Voz { id: yo, hablando });
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -351,6 +435,44 @@ mod tests {
         let mut buf2 = vec![0.0f32; 8];
         m.fill(&mut buf2, 48_000, 1);
         assert!((buf2[0] - 0.5).abs() < 1e-6, "buf2[0]={}", buf2[0]);
+    }
+
+    #[test]
+    fn vad_detecta_flancos_con_hangover() {
+        let mut vad = DetectorVoz::nuevo();
+        let voz = vec![0.3f32; 480]; // RMS 0.3 ≫ umbral
+        let mudo = vec![0.0f32; 480];
+        // Primer bloque con voz → flanco de arranque.
+        assert_eq!(vad.procesar(&voz), Some(true));
+        // Sigue hablando → sin flanco nuevo.
+        assert_eq!(vad.procesar(&voz), None);
+        // Silencio: NO declara fin hasta cumplir el hangover.
+        for _ in 0..(HANGOVER_FRAMES - 1) {
+            assert_eq!(vad.procesar(&mudo), None);
+        }
+        // El frame de silencio que completa el hangover → flanco de fin.
+        assert_eq!(vad.procesar(&mudo), Some(false));
+        // Ya callado → sin más flancos.
+        assert_eq!(vad.procesar(&mudo), None);
+    }
+
+    #[test]
+    fn vad_callar_fuerza_silencio() {
+        let mut vad = DetectorVoz::nuevo();
+        assert_eq!(vad.procesar(&vec![0.5f32; 480]), Some(true));
+        // Apagar el micro mientras hablaba → flanco de fin inmediato.
+        assert_eq!(vad.callar(), Some(false));
+        // Callar de nuevo (ya callado) → nada.
+        assert_eq!(vad.callar(), None);
+    }
+
+    #[test]
+    fn vad_ignora_ruido_bajo_umbral() {
+        let mut vad = DetectorVoz::nuevo();
+        // Ruido de fondo por debajo del umbral: nunca arranca.
+        for _ in 0..50 {
+            assert_eq!(vad.procesar(&vec![0.005f32; 480]), None);
+        }
     }
 
     #[test]

@@ -82,6 +82,11 @@ fn main() {
             Ok(EventoUya::Mensaje { nombre, texto, .. }) => {
                 println!("  💬 {nombre}: {texto}");
             }
+            Ok(EventoUya::Voz { id, hablando }) => {
+                if hablando {
+                    println!("  🔊 habla [{}]", hex_corto(&id));
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
