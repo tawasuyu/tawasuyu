@@ -256,6 +256,13 @@ impl StyleEngine {
             style.list_style_position = p.list_style_position;
             style.list_style_image = p.list_style_image.clone();
             style.quotes = p.quotes.clone();
+            // CSS Text Decoration 4 — text-underline-position hereda.
+            // CSS Text 3 — text-justify hereda. CSS Color Adjustment 1 —
+            // print-color-adjust y forced-color-adjust heredan. line-clamp NO.
+            style.text_underline_position = p.text_underline_position;
+            style.text_justify = p.text_justify;
+            style.print_color_adjust = p.print_color_adjust;
+            style.forced_color_adjust = p.forced_color_adjust;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -3155,6 +3162,190 @@ mod tests {
         // SÍ se hereda.
         let plain = eng.compute_with_parent(&divs[0], Some(&body_cs));
         assert!(matches!(plain.quotes, Quotes::Pairs(_)));
+    }
+
+    #[test]
+    fn text_underline_position_fase_7_299() {
+        assert_eq!(parse_text_underline_position("auto"), Some(TextUnderlinePosition::Auto));
+        assert_eq!(
+            parse_text_underline_position("FROM-FONT"),
+            Some(TextUnderlinePosition::FromFont)
+        );
+        assert_eq!(parse_text_underline_position("under"), Some(TextUnderlinePosition::Under));
+        assert_eq!(parse_text_underline_position("left"), Some(TextUnderlinePosition::Left));
+        assert_eq!(parse_text_underline_position("right"), Some(TextUnderlinePosition::Right));
+        assert_eq!(parse_text_underline_position("middle"), None);
+
+        let html = r##"<html><head><style>
+            body { text-underline-position: under }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_underline_position, TextUnderlinePosition::Under);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_underline_position,
+            TextUnderlinePosition::Under
+        );
+    }
+
+    #[test]
+    fn text_justify_fase_7_300() {
+        assert_eq!(parse_text_justify("auto"), Some(TextJustify::Auto));
+        assert_eq!(parse_text_justify("INTER-WORD"), Some(TextJustify::InterWord));
+        assert_eq!(
+            parse_text_justify("inter-character"),
+            Some(TextJustify::InterCharacter)
+        );
+        assert_eq!(parse_text_justify("distribute"), Some(TextJustify::Distribute));
+        assert_eq!(parse_text_justify("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-justify: inter-word }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_justify, TextJustify::InterWord);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_justify,
+            TextJustify::InterWord
+        );
+    }
+
+    #[test]
+    fn print_color_adjust_fase_7_301() {
+        assert_eq!(
+            parse_print_color_adjust("economy"),
+            Some(PrintColorAdjust::Economy)
+        );
+        assert_eq!(parse_print_color_adjust("EXACT"), Some(PrintColorAdjust::Exact));
+        assert_eq!(parse_print_color_adjust("nope"), None);
+
+        // Alias legacy `color-adjust` debería rutear igual.
+        let html = r##"<html><head><style>
+            body { print-color-adjust: exact }
+            div.legacy { color-adjust: economy }
+            div.plain {}
+        </style></head><body>
+          <div class="legacy"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.print_color_adjust, PrintColorAdjust::Exact);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).print_color_adjust,
+            PrintColorAdjust::Economy
+        );
+        // SÍ se hereda → div.plain hereda Exact del body.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).print_color_adjust,
+            PrintColorAdjust::Exact
+        );
+    }
+
+    #[test]
+    fn forced_color_adjust_fase_7_302() {
+        assert_eq!(parse_forced_color_adjust("auto"), Some(ForcedColorAdjust::Auto));
+        assert_eq!(parse_forced_color_adjust("NONE"), Some(ForcedColorAdjust::None));
+        assert_eq!(
+            parse_forced_color_adjust("preserve"),
+            Some(ForcedColorAdjust::Preserve)
+        );
+        assert_eq!(parse_forced_color_adjust("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { forced-color-adjust: none }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.forced_color_adjust, ForcedColorAdjust::None);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).forced_color_adjust,
+            ForcedColorAdjust::None
+        );
+    }
+
+    #[test]
+    fn line_clamp_fase_7_303() {
+        assert_eq!(parse_line_clamp("none"), None);
+        assert_eq!(parse_line_clamp("3"), Some(3));
+        assert_eq!(parse_line_clamp("0"), None);
+        assert_eq!(parse_line_clamp("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { -webkit-line-clamp: 2 }
+            div.std { line-clamp: 5 }
+            div.plain {}
+        </style></head><body>
+          <div class="std"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.line_clamp, Some(2));
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).line_clamp,
+            Some(5)
+        );
+        // NO se hereda → default None.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).line_clamp,
+            None
+        );
     }
 
     #[test]

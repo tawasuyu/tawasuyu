@@ -393,6 +393,21 @@ pub struct ComputedStyle {
     /// recicla en el último par si se profundiza más allá. **Heredable**.
     /// Plumb: el `content: open-quote` no se resuelve contra esta tabla.
     pub quotes: Quotes,
+    /// `text-underline-position` (Fase 7.299). Default `Auto`. **Heredable**.
+    /// Plumb: el shaper no mueve el underline a posición alternativa aún.
+    pub text_underline_position: TextUnderlinePosition,
+    /// `text-justify` (Fase 7.300). Default `Auto`. **Heredable**. Sólo
+    /// aplica si `text-align: justify`. Plumb.
+    pub text_justify: TextJustify,
+    /// `print-color-adjust` (Fase 7.301). Default `Economy`. **Heredable**.
+    /// Plumb: el chrome no decide cuándo simplificar colores para imprimir.
+    pub print_color_adjust: PrintColorAdjust,
+    /// `forced-color-adjust` (Fase 7.302). Default `Auto`. **Heredable**.
+    /// Plumb: el chrome no entra en modo forced-colors.
+    pub forced_color_adjust: ForcedColorAdjust,
+    /// `-webkit-line-clamp` / `line-clamp` (Fase 7.303). `None` = sin
+    /// truncado. NO heredable. Plumb: el layout no recorta a N líneas.
+    pub line_clamp: Option<u32>,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -918,6 +933,51 @@ pub enum Quotes {
     None,
     /// Lista `(open, close)` por nivel — el último par se recicla.
     Pairs(Vec<(String, String)>),
+}
+
+/// `text-underline-position` (CSS Text Decoration 4). Default `Auto`.
+/// Heredable. `Left`/`Right` aplican sólo a writing-modes verticales.
+/// Fase 7.299.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextUnderlinePosition {
+    #[default]
+    Auto,
+    FromFont,
+    Under,
+    Left,
+    Right,
+}
+
+/// `text-justify` (CSS Text 3). Default `Auto`. Heredable. Fase 7.300.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextJustify {
+    #[default]
+    Auto,
+    None,
+    InterWord,
+    InterCharacter,
+    /// Alias legacy de `InterCharacter`.
+    Distribute,
+}
+
+/// `print-color-adjust` (CSS Color Adjustment 1). Alias `color-adjust`.
+/// Default `Economy`. Heredable. Fase 7.301.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrintColorAdjust {
+    #[default]
+    Economy,
+    Exact,
+}
+
+/// `forced-color-adjust` (CSS Color Adjustment 1). Default `Auto`.
+/// Heredable. Fase 7.302.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForcedColorAdjust {
+    #[default]
+    Auto,
+    None,
+    /// Hint moderno (subset opt-in).
+    Preserve,
 }
 
 impl ContainFlags {
@@ -1904,6 +1964,11 @@ impl Default for ComputedStyle {
             list_style_image: None,
             counter_set: Vec::new(),
             quotes: Quotes::Auto,
+            text_underline_position: TextUnderlinePosition::Auto,
+            text_justify: TextJustify::Auto,
+            print_color_adjust: PrintColorAdjust::Economy,
+            forced_color_adjust: ForcedColorAdjust::Auto,
+            line_clamp: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

@@ -568,6 +568,19 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "color-scheme" => parse_color_scheme(value).map(DeclKind::ColorScheme),
         "counter-set" => Some(DeclKind::CounterSet(parse_counter_list(value, 0))),
         "quotes" => Some(DeclKind::Quotes(parse_quotes(value))),
+        "text-underline-position" => {
+            parse_text_underline_position(value).map(DeclKind::TextUnderlinePosition)
+        }
+        "text-justify" => parse_text_justify(value).map(DeclKind::TextJustify),
+        // `color-adjust` es alias legacy de `print-color-adjust`.
+        "print-color-adjust" | "color-adjust" => {
+            parse_print_color_adjust(value).map(DeclKind::PrintColorAdjust)
+        }
+        "forced-color-adjust" => {
+            parse_forced_color_adjust(value).map(DeclKind::ForcedColorAdjust)
+        }
+        // `-webkit-line-clamp` (de facto estándar) y `line-clamp` (CSS Overflow 4).
+        "line-clamp" | "-webkit-line-clamp" => Some(DeclKind::LineClamp(parse_line_clamp(value))),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1761,6 +1774,63 @@ pub(crate) fn parse_quotes(value: &str) -> Quotes {
         pairs.push((open, close));
     }
     Quotes::Pairs(pairs)
+}
+
+/// `text-underline-position`: `auto | from-font | under | left | right`.
+/// Fase 7.299.
+pub(crate) fn parse_text_underline_position(value: &str) -> Option<TextUnderlinePosition> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(TextUnderlinePosition::Auto),
+        "from-font" => Some(TextUnderlinePosition::FromFont),
+        "under" => Some(TextUnderlinePosition::Under),
+        "left" => Some(TextUnderlinePosition::Left),
+        "right" => Some(TextUnderlinePosition::Right),
+        _ => None,
+    }
+}
+
+/// `text-justify`: `auto | none | inter-word | inter-character | distribute`.
+/// `distribute` (legacy) se mantiene como variante separada por compat.
+/// Fase 7.300.
+pub(crate) fn parse_text_justify(value: &str) -> Option<TextJustify> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(TextJustify::Auto),
+        "none" => Some(TextJustify::None),
+        "inter-word" => Some(TextJustify::InterWord),
+        "inter-character" => Some(TextJustify::InterCharacter),
+        "distribute" => Some(TextJustify::Distribute),
+        _ => None,
+    }
+}
+
+/// `print-color-adjust` / `color-adjust`: `economy | exact`. Fase 7.301.
+pub(crate) fn parse_print_color_adjust(value: &str) -> Option<PrintColorAdjust> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "economy" => Some(PrintColorAdjust::Economy),
+        "exact" => Some(PrintColorAdjust::Exact),
+        _ => None,
+    }
+}
+
+/// `forced-color-adjust`: `auto | none | preserve-parent-color` (subset).
+/// Fase 7.302.
+pub(crate) fn parse_forced_color_adjust(value: &str) -> Option<ForcedColorAdjust> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ForcedColorAdjust::Auto),
+        "none" => Some(ForcedColorAdjust::None),
+        "preserve" | "preserve-parent-color" => Some(ForcedColorAdjust::Preserve),
+        _ => None,
+    }
+}
+
+/// `line-clamp` / `-webkit-line-clamp`: `none | <integer>` positivo.
+/// Fase 7.303.
+pub(crate) fn parse_line_clamp(value: &str) -> Option<u32> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    v.parse::<u32>().ok().filter(|n| *n >= 1)
 }
 
 /// `break-inside`: `auto | avoid | avoid-page | avoid-column | avoid-region`.
