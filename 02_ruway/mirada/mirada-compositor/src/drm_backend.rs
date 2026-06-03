@@ -61,7 +61,7 @@ use smithay::utils::{
 };
 
 use auth_core::SessionTicket;
-use mirada_brain::{BodyEvent, CtlReply, Rect};
+use mirada_brain::{BodyEvent, CtlReply, Rect, ZoneFrac};
 
 use crate::{
     combo_string, send_frames_surface_tree, App, BodyMode, ClientState, DragGrab, DragMode,
@@ -246,6 +246,10 @@ struct DrmState {
     menu_entries: Vec<crate::menu::MenuNode>,
     /// Menú raíz abierto, si lo hay (click derecho sobre el fondo).
     root_menu: Option<crate::menu::RootMenu>,
+    /// Zonas de arrastre (fracciones de la salida), de la config.
+    zones: Vec<ZoneFrac>,
+    /// Índice de la zona resaltada bajo el puntero durante un arrastre.
+    drag_zone: Option<usize>,
 }
 
 impl DrmState {
@@ -292,6 +296,20 @@ impl DrmState {
         });
         let menu_hl_color = rgba_f32(self.app.decorations.border_focus);
 
+        // Snapshot de las zonas de arrastre: sólo durante un arrastre Move/Tile.
+        // `(rects en px, índice resaltado bajo el puntero)`.
+        let zone_overlay: Option<(Vec<Rect>, Option<usize>)> = {
+            let m = self.app.drag.as_ref().map(|d| d.mode);
+            if matches!(m, Some(DragMode::Move) | Some(DragMode::Tile)) && !self.zones.is_empty() {
+                let (ow, oh) = self.app.output_size;
+                let screen = Rect::new(0, 0, ow, oh);
+                let rects = self.zones.iter().map(|z| z.to_rect(screen)).collect();
+                Some((rects, self.drag_zone))
+            } else {
+                None
+            }
+        };
+
         // Paso 2 · arma los elementos — lista front-to-back (índice 0 =
         // encima): el cursor, y por cada ventana su marco sobre su
         // superficie. Las flotantes van antes que las teseladas.
@@ -329,6 +347,33 @@ impl DrmState {
                         CommitCounter::default(),
                         CURSOR_COLOR,
                         Kind::Cursor,
+                    )));
+                }
+            }
+
+            // Zonas de arrastre (drag-to-zone): mientras se arrastra, se pintan
+            // tenues sobre las ventanas; la que está bajo el puntero, más fuerte
+            // (es donde aterrizará al soltar). Bajo el cursor/menú.
+            if let Some((rects, hot)) = &zone_overlay {
+                let acc = self.app.decorations.border_focus;
+                let fill = |a: f32| {
+                    [
+                        acc[0] as f32 / 255.0,
+                        acc[1] as f32 / 255.0,
+                        acc[2] as f32 / 255.0,
+                        a,
+                    ]
+                };
+                for (i, r) in rects.iter().enumerate() {
+                    let color = if Some(i) == *hot { fill(0.40) } else { fill(0.16) };
+                    let mut buf = SolidColorBuffer::default();
+                    buf.update((r.w, r.h), color);
+                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &buf,
+                        (r.x, r.y),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
                     )));
                 }
             }
@@ -668,6 +713,7 @@ impl DrmState {
         // aplicó teselado/decoración/foco.
         if self.watches.poll(&mut self.app) {
             self.menu_entries = self.app.config_menu();
+            self.zones = self.app.config_zones();
             self.root_menu = None; // un menú abierto puede quedar obsoleto
             let new_wp = self.app.config_wallpaper_path();
             if new_wp != self.wallpaper_path {
@@ -882,10 +928,23 @@ impl DrmState {
                 }
 
                 // Durante un arrastre los botones no llegan al cliente;
-                // soltar cualquiera lo termina.
+                // soltar cualquiera lo termina. Si se soltó sobre una zona
+                // (drag-to-zone), la ventana aterriza en ese rect (flotante);
+                // si no, queda flotando donde cayó (overflow, ya aplicado por
+                // el último drag_update).
                 if self.app.drag.is_some() {
                     if !pressed {
+                        let mode = self.app.drag.as_ref().map(|d| d.mode);
+                        let id = self.app.drag.as_ref().map(|d| d.id);
+                        let zone = self.drag_zone.take();
                         self.app.drag = None;
+                        if let (Some(mode), Some(id), Some(zi)) = (mode, id, zone) {
+                            if matches!(mode, DragMode::Move | DragMode::Tile) {
+                                if let Some(rect) = self.zone_rect(zi) {
+                                    self.app.brain_feed(BodyEvent::WindowFloatTo { id, rect });
+                                }
+                            }
+                        }
                     }
                     return;
                 }
@@ -1054,11 +1113,17 @@ impl DrmState {
         let id = drag.id;
 
         let (px, py) = self.app.pointer_loc;
+        // Drag-to-zone: resalta la zona bajo el puntero (Move/Tile, no Resize).
+        // Sobre una zona, la ventana aterrizará ahí al soltar.
+        self.drag_zone = if mode == DragMode::Resize { None } else { self.zone_at(px, py) };
         // Arrastre de una teselada: el Cerebro la intercambia con la tesela
-        // bajo el puntero — no flota, sólo reordena el stack.
+        // bajo el puntero — no flota, sólo reordena el stack. Pero si está
+        // sobre una zona, suprimimos el swap (se resolverá al soltar).
         if mode == DragMode::Tile {
-            self.app
-                .brain_feed(BodyEvent::WindowDragged { id, x: px as i32, y: py as i32 });
+            if self.drag_zone.is_none() {
+                self.app
+                    .brain_feed(BodyEvent::WindowDragged { id, x: px as i32, y: py as i32 });
+            }
             return true;
         }
         let dx = (px - spx) as i32;
@@ -1098,6 +1163,26 @@ impl DrmState {
             // Impacto sobre la SUPERFICIE (la barra de título es chrome inerte
             // en este MVP: no captura el puntero hacia el cliente).
             x >= lx as f64 && y >= ly as f64 && x < (lx + sw) as f64 && y < (ly + sh) as f64
+        })
+    }
+
+    /// El rect en píxeles de la zona `i` (fracciones escaladas a la salida).
+    fn zone_rect(&self, i: usize) -> Option<Rect> {
+        let (ow, oh) = self.app.output_size;
+        self.zones.get(i).map(|z| z.to_rect(Rect::new(0, 0, ow, oh)))
+    }
+
+    /// El índice de la zona de arrastre bajo `(x, y)`, si la hay.
+    fn zone_at(&self, x: f64, y: f64) -> Option<usize> {
+        let (ow, oh) = self.app.output_size;
+        if ow == 0 || oh == 0 || self.zones.is_empty() {
+            return None;
+        }
+        let screen = Rect::new(0, 0, ow, oh);
+        let (xi, yi) = (x.round() as i32, y.round() as i32);
+        self.zones.iter().position(|z| {
+            let r = z.to_rect(screen);
+            xi >= r.x && yi >= r.y && xi < r.x + r.w && yi < r.y + r.h
         })
     }
 }
@@ -1397,6 +1482,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let font_path = app.config_font_path();
     let wallpaper_path = app.config_wallpaper_path();
     let menu_entries = app.config_menu();
+    let zones = app.config_zones();
     let mut state = DrmState {
         app,
         session: session.clone(),
@@ -1428,6 +1514,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         wallpaper: None,
         menu_entries,
         root_menu: None,
+        zones,
+        drag_zone: None,
     };
 
     let signal = event_loop.get_signal();

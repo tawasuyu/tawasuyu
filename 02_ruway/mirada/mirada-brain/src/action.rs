@@ -148,7 +148,6 @@ pub(crate) fn layout_slug(mode: LayoutMode) -> &'static str {
         LayoutMode::Rows => "rows",
         LayoutMode::CenteredMaster => "centered-master",
         LayoutMode::Spiral => "spiral",
-        LayoutMode::Zones => "zones",
     }
 }
 
@@ -162,7 +161,6 @@ pub(crate) fn layout_from_slug(slug: &str) -> Option<LayoutMode> {
         "rows" => LayoutMode::Rows,
         "centered-master" => LayoutMode::CenteredMaster,
         "spiral" => LayoutMode::Spiral,
-        "zones" => LayoutMode::Zones,
         _ => return None,
     })
 }

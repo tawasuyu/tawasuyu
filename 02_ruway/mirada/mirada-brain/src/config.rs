@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use mirada_layout::{LayoutMode, LayoutParams, ZoneFrac};
+use mirada_layout::{LayoutMode, LayoutParams};
 use mirada_protocol::Decorations;
 
 /// `app_id` con el que se marca y reconoce la terminal dropdown (quake).
@@ -41,7 +41,7 @@ mod layout_slug_serde {
         crate::action::layout_from_slug(&slug).ok_or_else(|| {
             serde::de::Error::custom(format!(
                 "modo de teselado desconocido «{slug}» (usa master-stack, centered-master, \
-                 spiral, grid, columns, rows, monocle o zones)"
+                 spiral, grid, columns, rows o monocle)"
             ))
         })
     }
@@ -95,16 +95,18 @@ pub struct Config {
     /// sobre el fondo. Vacío = sin menú (el click derecho en el fondo no hace
     /// nada). Cada entrada lanza su `command` con `sh -c`.
     pub menu: Vec<MenuEntry>,
-    /// Zonas nombradas del área de trabajo (fracciones `0..=1`). Sólo se usan
-    /// con `layout: "zones"`: las ventanas caen en ellas en orden, cíclicamente
-    /// si sobran. Es la fusión WM↔DE — un tablero de slots semánticos.
+    /// Zonas de la pantalla (fracciones `0..=1`): **blancos de arrastre**.
+    /// Al arrastrar una ventana sobre una zona, el compositor la resalta; al
+    /// soltarla encima, la ancla a ese rect (flotante). Soltarla fuera de toda
+    /// zona la deja flotando donde cae (overflow). Vacío = sin zonas.
     pub zones: Vec<ZoneCfg>,
 }
 
-/// Una zona nombrada: el `name` es semántico (para el DE; hoy sólo se documenta)
-/// y `(x, y, w, h)` son fracciones `0..=1` del área de trabajo.
+/// Una zona: `(x, y, w, h)` en fracciones `0..=1` de la pantalla. El `name` es
+/// opcional, sólo una etiqueta para tu propia referencia (no se pinta).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZoneCfg {
+    #[serde(default)]
     pub name: String,
     pub x: f32,
     pub y: f32,
@@ -188,11 +190,6 @@ impl Config {
             master_ratio: self.master_ratio.clamp(0.05, 0.95),
             master_count: self.master_count.max(1),
             gap: self.gap.max(0),
-            zones: self
-                .zones
-                .iter()
-                .map(|z| ZoneFrac { x: z.x, y: z.y, w: z.w, h: z.h })
-                .collect(),
         }
     }
 
@@ -260,7 +257,7 @@ const CONFIG_TEMPLATE: &str = "\
     dropterm_height_pct: 45,
 
     // Teselado inicial de cada escritorio.
-    //   master-stack · centered-master · spiral · grid · columns · rows · monocle · zones
+    //   master-stack · centered-master · spiral · grid · columns · rows · monocle
     layout: \"master-stack\",
     gap: 8,                    // margen en px alrededor de cada ventana
     master_ratio: 0.6,         // fracción de ancho de la ventana maestra
@@ -301,14 +298,14 @@ const CONFIG_TEMPLATE: &str = "\
     //   ],
     menu: [],
 
-    // Zonas: tablero de slots semánticos para `layout: \"zones\"` (funde WM+DE).
-    // (x, y, w, h) en fracciones 0..=1 del área de trabajo; las ventanas caen
-    // en orden, cíclicamente si sobran. Vacío = sin zonas. Ej:
-    //   layout: \"zones\",
+    // Zonas: blancos de arrastre (fracciones 0..=1 de la pantalla). Al arrastrar
+    // una ventana sobre una zona se resalta; al soltarla encima, aterriza en ese
+    // rect; soltarla fuera la deja flotando donde cae (overflow). El `name` es
+    // opcional (sólo tu referencia). Vacío = sin zonas. Ej (media/cuartos):
     //   zones: [
-    //       (name: \"código\",       x: 0.0, y: 0.0, w: 0.6, h: 1.0),
-    //       (name: \"comunicación\", x: 0.6, y: 0.0, w: 0.4, h: 0.5),
-    //       (name: \"monitoreo\",    x: 0.6, y: 0.5, w: 0.4, h: 0.5),
+    //       (x: 0.0, y: 0.0, w: 0.5, h: 1.0),
+    //       (x: 0.5, y: 0.0, w: 0.5, h: 0.5),
+    //       (x: 0.5, y: 0.5, w: 0.5, h: 0.5),
     //   ],
     zones: [],
 )
@@ -390,20 +387,18 @@ mod tests {
     }
 
     #[test]
-    fn zones_parsean_y_se_mapean_a_layout_params() {
+    fn zones_parsean_con_nombre_opcional() {
         let c = Config::from_ron(
-            r#"( layout: "zones", zones: [
-                (name: "código", x: 0.0, y: 0.0, w: 0.6, h: 1.0),
-                (name: "chat",   x: 0.6, y: 0.0, w: 0.4, h: 1.0),
+            r#"( zones: [
+                (x: 0.0, y: 0.0, w: 0.6, h: 1.0),
+                (name: "chat", x: 0.6, y: 0.0, w: 0.4, h: 1.0),
             ] )"#,
         )
         .unwrap();
-        assert_eq!(c.layout, LayoutMode::Zones);
         assert_eq!(c.zones.len(), 2);
-        assert_eq!(c.zones[0].name, "código");
-        let lp = c.layout_params();
-        assert_eq!(lp.zones.len(), 2);
-        assert!((lp.zones[0].w - 0.6).abs() < 1e-6);
+        assert_eq!(c.zones[0].name, ""); // name es opcional
+        assert!((c.zones[0].w - 0.6).abs() < 1e-6);
+        assert_eq!(c.zones[1].name, "chat");
     }
 
     #[test]

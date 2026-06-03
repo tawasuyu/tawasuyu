@@ -122,7 +122,7 @@ impl Desktop {
     pub fn set_config(&mut self, config: Config) {
         let params = config.layout_params();
         for ws in &mut self.workspaces {
-            ws.set_params(params.clone());
+            ws.set_params(params);
         }
         self.config = config;
     }

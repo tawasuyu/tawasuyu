@@ -626,6 +626,20 @@ impl App {
         }
     }
 
+    /// Las zonas de arrastre configuradas (fracciones de la salida). Vacío con
+    /// Cerebro enlazado o sin zonas en la config.
+    fn config_zones(&self) -> Vec<mirada_brain::ZoneFrac> {
+        match &self.brain {
+            Brain::Embedded(d) => d
+                .config()
+                .zones
+                .iter()
+                .map(|z| mirada_brain::ZoneFrac { x: z.x, y: z.y, w: z.w, h: z.h })
+                .collect(),
+            Brain::Linked(_) => Vec::new(),
+        }
+    }
+
     /// Lanza `cmd` como el usuario de la sesión (igual que [`BodyOp::Spawn`]),
     /// salvo en modo greeter, donde no se lanza nada. Lo usa el menú raíz.
     fn spawn_user(&self, cmd: &str) {

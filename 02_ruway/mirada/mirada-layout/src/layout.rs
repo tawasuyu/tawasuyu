@@ -31,17 +31,12 @@ pub enum LayoutMode {
     /// Espiral de Fibonacci: cada ventana parte por la mitad el espacio
     /// que queda, alternando el sentido del corte.
     Spiral,
-    /// **Zonas**: regiones fijas y nombradas del área de trabajo (definidas en
-    /// la config como fracciones), donde caen las ventanas en orden. Funde el
-    /// WM con el DE: un tablero de slots semánticos en vez de teselado
-    /// algorítmico. Si hay más ventanas que zonas, se reparten cíclicamente
-    /// (se apilan en la misma zona). Sin zonas definidas, cae a `MasterStack`.
-    Zones,
 }
 
-/// Una zona como fracciones `0..=1` del área de trabajo: esquina `(x, y)` y
-/// tamaño `(w, h)`. El nombre vive en la config (semántico, para el DE); el
-/// motor sólo necesita la geometría.
+/// Una zona como fracciones `0..=1` de una pantalla: esquina `(x, y)` y tamaño
+/// `(w, h)`. Es un **blanco de arrastre** (drag-to-zone): el compositor la pinta
+/// mientras se arrastra una ventana y, al soltar encima, la ancla a este rect.
+/// El nombre vive en la config; el motor sólo da la geometría ([`Self::to_rect`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ZoneFrac {
@@ -49,6 +44,24 @@ pub struct ZoneFrac {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+}
+
+impl ZoneFrac {
+    /// Escala la zona (fracciones `0..=1`) a un rect absoluto dentro de
+    /// `screen`, acotándola para que no se salga. Pura (`no_std`).
+    pub fn to_rect(self, screen: Rect) -> Rect {
+        let fx = self.x.clamp(0.0, 1.0);
+        let fy = self.y.clamp(0.0, 1.0);
+        // `clamp` (núcleo) en vez de `min` (que vive en `std`): este crate es no_std.
+        let fw = self.w.clamp(0.0, 1.0 - fx);
+        let fh = self.h.clamp(0.0, 1.0 - fy);
+        // `libm` (no `f32::round`, que vive en `std`): este crate es `no_std`.
+        let x = screen.x + libm::roundf(fx * screen.w as f32) as i32;
+        let y = screen.y + libm::roundf(fy * screen.h as f32) as i32;
+        let w = (libm::roundf(fw * screen.w as f32) as i32).max(1);
+        let h = (libm::roundf(fh * screen.h as f32) as i32).max(1);
+        Rect::new(x, y, w, h)
+    }
 }
 
 impl LayoutMode {
@@ -71,9 +84,7 @@ impl LayoutMode {
 }
 
 /// Parámetros del teselado.
-///
-/// No es `Copy` (lleva el `Vec` de zonas); se clona donde haga falta.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LayoutParams {
     pub mode: LayoutMode,
@@ -84,10 +95,6 @@ pub struct LayoutParams {
     pub master_count: usize,
     /// Margen en píxeles alrededor de cada ventana.
     pub gap: i32,
-    /// Zonas (fracciones del área de trabajo) para el modo [`LayoutMode::Zones`].
-    /// Vacío en los demás modos.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub zones: Vec<ZoneFrac>,
 }
 
 impl Default for LayoutParams {
@@ -97,7 +104,6 @@ impl Default for LayoutParams {
             master_ratio: 0.6,
             master_count: 1,
             gap: 8,
-            zones: Vec::new(),
         }
     }
 }
@@ -121,40 +127,11 @@ pub fn tile(screen: Rect, count: usize, params: &LayoutParams) -> Vec<Rect> {
             centered_master(screen, count, params.master_ratio, params.master_count)
         }
         LayoutMode::Spiral => spiral(screen, count),
-        LayoutMode::Zones => zones_layout(screen, count, &params.zones),
     };
     // El margen se aplica al final, uniforme para todos los modos. *Smart
     // gaps*: una sola ventana va a sangre, sin margen desperdiciado.
     let gap = if count == 1 { 0 } else { params.gap };
     cells.into_iter().map(|c| c.inset(gap)).collect()
-}
-
-/// Reparte las ventanas en las `zones` (fracciones del área de trabajo), en
-/// orden y cíclicamente si hay más ventanas que zonas. Sin zonas, cae a
-/// `MasterStack` para no dejar la pantalla vacía.
-fn zones_layout(screen: Rect, count: usize, zones: &[ZoneFrac]) -> Vec<Rect> {
-    if zones.is_empty() {
-        return master_stack(screen, count, 0.6, 1);
-    }
-    (0..count)
-        .map(|i| zone_rect(screen, &zones[i % zones.len()]))
-        .collect()
-}
-
-/// Convierte una [`ZoneFrac`] (fracciones `0..=1`) en un rect absoluto dentro
-/// de `screen`. Acota las fracciones para que la zona no se salga del área.
-fn zone_rect(screen: Rect, z: &ZoneFrac) -> Rect {
-    let fx = z.x.clamp(0.0, 1.0);
-    let fy = z.y.clamp(0.0, 1.0);
-    // `clamp` (núcleo) en vez de `min` (que vive en `std`): este crate es no_std.
-    let fw = z.w.clamp(0.0, 1.0 - fx);
-    let fh = z.h.clamp(0.0, 1.0 - fy);
-    // `libm` (no `f32::round`, que vive en `std`): este crate es `no_std`.
-    let x = screen.x + libm::roundf(fx * screen.w as f32) as i32;
-    let y = screen.y + libm::roundf(fy * screen.h as f32) as i32;
-    let w = (libm::roundf(fw * screen.w as f32) as i32).max(1);
-    let h = (libm::roundf(fh * screen.h as f32) as i32).max(1);
-    Rect::new(x, y, w, h)
 }
 
 /// Columnas verticales de igual ancho.
@@ -285,48 +262,18 @@ mod tests {
     }
 
     #[test]
-    fn zones_coloca_cada_ventana_en_su_zona() {
+    fn zone_frac_escala_a_pixeles() {
         let screen = Rect::new(0, 0, 1000, 800);
-        let zones = vec![
-            ZoneFrac { x: 0.0, y: 0.0, w: 0.5, h: 1.0 },
-            ZoneFrac { x: 0.5, y: 0.0, w: 0.5, h: 0.5 },
-            ZoneFrac { x: 0.5, y: 0.5, w: 0.5, h: 0.5 },
-        ];
-        let p = LayoutParams { mode: LayoutMode::Zones, gap: 0, zones, ..LayoutParams::default() };
-        let r = tile(screen, 3, &p);
-        assert_eq!(r[0], Rect::new(0, 0, 500, 800));
-        assert_eq!(r[1], Rect::new(500, 0, 500, 400));
-        assert_eq!(r[2], Rect::new(500, 400, 500, 400));
+        let z = ZoneFrac { x: 0.5, y: 0.0, w: 0.5, h: 0.5 };
+        assert_eq!(z.to_rect(screen), Rect::new(500, 0, 500, 400));
     }
 
     #[test]
-    fn zones_ciclan_cuando_hay_mas_ventanas_que_zonas() {
-        let screen = Rect::new(0, 0, 1000, 800);
-        let zones = vec![
-            ZoneFrac { x: 0.0, y: 0.0, w: 0.5, h: 1.0 },
-            ZoneFrac { x: 0.5, y: 0.0, w: 0.5, h: 1.0 },
-        ];
-        let p = LayoutParams { mode: LayoutMode::Zones, gap: 0, zones, ..LayoutParams::default() };
-        let r = tile(screen, 3, &p);
-        assert_eq!(r[2], r[0], "la 3ra ventana recicla la zona 0");
-    }
-
-    #[test]
-    fn zones_vacias_caen_a_master_stack() {
-        let screen = Rect::new(0, 0, 1000, 800);
-        let z = LayoutParams { mode: LayoutMode::Zones, gap: 0, zones: vec![], ..LayoutParams::default() };
-        let ms = LayoutParams { mode: LayoutMode::MasterStack, gap: 0, ..LayoutParams::default() };
-        assert_eq!(tile(screen, 2, &z), tile(screen, 2, &ms));
-    }
-
-    #[test]
-    fn zona_fuera_de_rango_se_acota_a_la_pantalla() {
+    fn zone_frac_fuera_de_rango_se_acota_a_la_pantalla() {
         let screen = Rect::new(0, 0, 1000, 800);
         // x=0.8 + w=0.5 se pasa: w se recorta a 0.2.
-        let zones = vec![ZoneFrac { x: 0.8, y: 0.0, w: 0.5, h: 1.0 }];
-        let p = LayoutParams { mode: LayoutMode::Zones, gap: 0, zones, ..LayoutParams::default() };
-        let r = tile(screen, 1, &p);
-        assert_eq!(r[0], Rect::new(800, 0, 200, 800));
+        let z = ZoneFrac { x: 0.8, y: 0.0, w: 0.5, h: 1.0 };
+        assert_eq!(z.to_rect(screen), Rect::new(800, 0, 200, 800));
     }
 
     #[test]
