@@ -47,8 +47,8 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use libp2p::{
-    autonat, dcutr, identify, identity, kad, noise, relay,
-    swarm::{NetworkBehaviour, SwarmEvent},
+    autonat, dcutr, identify, identity, kad, mdns, noise, relay,
+    swarm::{behaviour::toggle::Toggle, NetworkBehaviour, SwarmEvent},
     tcp, yamux, Swarm, SwarmBuilder,
 };
 use libp2p_allow_block_list::{self as allow_block_list, BlockedPeers};
@@ -95,6 +95,13 @@ struct BrahmanBehaviour {
     /// "confiar a ciegas en el observed_addr de identify" por direcciones
     /// verificadas — sólo esas se anuncian (y entran en reservas de relay).
     autonat: autonat::Behaviour,
+    /// mDNS: descubrimiento de pares en la MISMA LAN sin bootstrap ni IP
+    /// conocida (multicast 224.0.0.251). Los pares descubiertos se inyectan
+    /// a la routing table de Kad (igual que las listen-addrs de identify), así
+    /// el DHT y los protocolos de stream funcionan zero-config en LAN.
+    /// `Toggle`: si el socket multicast no se puede abrir (sandbox, red sin
+    /// multicast), queda deshabilitado y el nodo sigue andando igual.
+    mdns: Toggle<mdns::tokio::Behaviour>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -196,6 +203,12 @@ impl BrahmanNet {
                     identify::Config::new(IDENTIFY_PROTOCOL.to_string(), key.public())
                         .with_agent_version(format!("brahman-net/{}", env!("CARGO_PKG_VERSION"))),
                 );
+                // mDNS resiliente: si el socket multicast no abre, seguimos sin
+                // descubrimiento LAN en vez de fallar el nodo entero.
+                let mdns = match mdns::tokio::Behaviour::new(mdns::Config::default(), local) {
+                    Ok(b) => Toggle::from(Some(b)),
+                    Err(_) => Toggle::from(None),
+                };
                 BrahmanBehaviour {
                     block_list: allow_block_list::Behaviour::default(),
                     stream: stream::Behaviour::new(),
@@ -204,6 +217,7 @@ impl BrahmanNet {
                     relay: relay::Behaviour::new(local, Default::default()),
                     relay_client,
                     dcutr: dcutr::Behaviour::new(local),
+                    mdns,
                     autonat: autonat::Behaviour::new(
                         local,
                         autonat::Config {
@@ -308,6 +322,16 @@ impl BrahmanNet {
                                 // listen-addrs del peer pueblan la routing
                                 // table de Kad.
                                 for addr in info.listen_addrs {
+                                    swarm.behaviour_mut().kad.add_address(&peer_id, addr);
+                                }
+                            }
+                            // mDNS descubrió pares en la LAN: inyectamos sus
+                            // direcciones a Kad (igual que identify). Con eso el
+                            // DHT y los streams funcionan sin bootstrap manual.
+                            SwarmEvent::Behaviour(BrahmanBehaviourEvent::Mdns(
+                                mdns::Event::Discovered(list)
+                            )) => {
+                                for (peer_id, addr) in list {
                                     swarm.behaviour_mut().kad.add_address(&peer_id, addr);
                                 }
                             }

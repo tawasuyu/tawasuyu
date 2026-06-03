@@ -559,7 +559,7 @@ tower = "0.5"
 instant-distance = "0.6"
 
 # === P2P (minga) ===
-libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macros", "kad", "identify", "relay", "dcutr", "autonat"] }
+libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macros", "kad", "identify", "relay", "dcutr", "autonat", "mdns"] }
 libp2p-stream = "=0.4.0-alpha"
 libp2p-allow-block-list = "0.6"
 

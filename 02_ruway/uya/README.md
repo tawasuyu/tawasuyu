@@ -87,18 +87,22 @@ Anda hoy, end-to-end y feo a propósito:
   ya no hace falta `UYA_CONECTAR`. (Funciona también por env, como antes.)
 - ✅ **Entrar por nombre de sala (DHT)**: `UYA_SALA=<nombre>` se anuncia como
   provider de `BLAKE3("uya/sala/<nombre>")` en la Kademlia de `BrahmanNet` y
-  descubre a los demás providers, que entran a la malla solos. Necesita sembrar
-  el DHT con un rendezvous conocido (`UYA_BOOTSTRAP=<multiaddr>`). Verificado con
-  3 nodos: misma sala + bootstrap a uno → los tres se ven, sin pegar direcciones.
+  descubre a los demás providers, que entran a la malla solos. Verificado con
+  3 nodos (con `UYA_BOOTSTRAP` para sembrar el DHT): los tres se ven, sin pegar
+  direcciones.
+- ✅ **Zero-config en LAN (mDNS)**: `BrahmanNet` ahora trae mDNS (agregado a
+  `shared/card/card-net`): los pares de la misma LAN se descubren por multicast
+  e inyectan a Kad, así la sala anda **sin `UYA_BOOTSTRAP`** en red local. (El
+  código es el patrón estándar de libp2p; la verificación en LAN real queda
+  pendiente — el sandbox no tiene multicast.)
 
 ## Pendiente (por orden)
 
 1. **Firma agora del `Hola`**: el PeerId ya es estable (deriva de `BLAKE3(nombre)`),
    pero el nombre es auto-declarado. Atar la identidad a `agora`: firmar el `Hola`
    con la clave agora y verificarla, para que nadie suplante un nombre.
-2. **Rendezvous sin bootstrap manual**: hoy la sala DHT necesita un
-   `UYA_BOOTSTRAP` conocido para sembrarse. Falta mDNS (LAN) y/o un bootstrap
-   público por defecto para "entrar por nombre" sin pasar dirección alguna.
+2. **Bootstrap público para WAN**: en LAN ya hay mDNS; falta un rendezvous
+   conocido por defecto para "entrar por nombre" entre redes distintas.
 3. **Cancelación de eco acústico (AEC)**: cuando el micro capta el parlante.
    Necesita un AEC real (y oídos/hardware para evaluarlo). El jitter buffer ya
    es adaptativo.
