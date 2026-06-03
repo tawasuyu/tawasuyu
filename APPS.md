@@ -251,7 +251,6 @@ cargo run -p mirada-compositor               # daemon compositor (Cuerpo)
 cargo run -p mirada-ctl                       # control CLI del compositor
 cargo run -p mirada-greeter --release         # greeter (display manager)
 cargo run -p mirada-launcher --release        # lanzador de apps
-cargo run -p mirada-launcher-llimphi --release
 cargo run -p mirada-portal                    # backend portal XDG
 cargo run -p asistente-puente                 # puente Linux (scaffolding)
 cargo run -p mirada-body --example headless

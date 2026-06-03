@@ -63,7 +63,9 @@ como tarjeta flotante; la × la cierra — `on_close` en el spec).
 - Módulos vivos del host (`clock`/`cpu`/`ram` desde `/proc`, tick 2 s) +
   dropdown del menú global vía `llimphi-widget-context-menu`.
 - Dock con tear-off cerrable; API `launcher_view`/`launcher_overlay` para
-  montar el launcher en otra app. Consumido por `mirada-launcher-llimphi`.
+  montar el launcher en otra app. (Su consumidor histórico, `mirada-launcher-
+  llimphi`, se retiró en 2026-06-03: el marco del escritorio es ahora `pata`,
+  con su propio modelo `pata-core`. Este crate queda disponible para reuso.)
 
 ### Pendiente
 - Persistencia de tear-offs / layout editado por el usuario entre sesiones.

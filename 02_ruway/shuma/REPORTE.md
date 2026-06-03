@@ -20,7 +20,8 @@
   `%cN` en el `SessionGraph`; nodo verde/rojo según exit; canvas clickeable que
   inserta `%cN`/`%pN` en el cursor del shell.
 - **Adiós al Quake-drawer** (2026-05-29): el chasis es app standalone normal (tabs
-  siempre visibles); el overlay launcher vive en `mirada-launcher-llimphi`.
+  siempre visibles); el overlay launcher vive en `pata` (antes en el retirado
+  `mirada-launcher-llimphi`).
 - **vim como card themeable** (2026-05): PTY con skin app-aware, drag-to-select +
   copia al clipboard, paste con click derecho/medio, iconitos por tipo en paths.
 - **Menús** (lote 4): menú principal + menús contextuales en el chasis.
@@ -299,8 +300,8 @@ sesión (3 tests nuevos en `shell` + 1 en `canvas`).
 **Adiós al Quake-drawer (2026-05-29, tercer bloque).** El chasis dejó
 de ser una imitación del launcher overlay y volvió a ser app standalone
 normal: tabs siempre visibles, sin F12, sin Esc-cierra-drawer, sin
-overlay absoluto sobre el escritorio. Eso vive en
-`mirada-launcher-llimphi`. Cambios concretos:
+overlay absoluto sobre el escritorio. Eso vive en `pata` (antes en el
+retirado `mirada-launcher-llimphi`). Cambios concretos:
 
 - `Model`: `drawer_tabs` → `tabs`, `active_drawer_tab` → `active_tab`,
   fuera `drawer_open` y `drawer_trigger`.

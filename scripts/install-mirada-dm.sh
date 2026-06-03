@@ -8,7 +8,7 @@
 #
 # Deja instalado:
 #   /usr/local/bin/{mirada-compositor,mirada-greeter,pata-llimphi}
-#   /usr/local/bin/{shuma-shell-llimphi,mirada-launcher,mirada-launcher-llimphi}
+#   /usr/local/bin/{shuma-shell-llimphi,mirada-launcher}
 #   /usr/local/bin/{mirada-session,mirada-session-pata,mirada-dm}
 #   /etc/pam.d/carmen                              (login del greeter)
 #   /usr/share/wayland-sessions/{carmen,mirada-pata}.desktop
@@ -29,7 +29,7 @@ MC="$REPO/02_ruway/mirada/mirada-compositor"
 echo "==> construyendo (release): compositor, greeter, pata, shuma y launchers"
 cargo build --release \
     -p mirada-compositor -p mirada-greeter -p pata-llimphi \
-    -p shuma-shell-llimphi -p mirada-launcher -p mirada-launcher-llimphi
+    -p shuma-shell-llimphi -p mirada-launcher
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -43,7 +43,6 @@ sudo install -Dm755 "$BIN/pata-llimphi"      /usr/local/bin/pata-llimphi
 # y el launcher por su atajo (Super+p) o desde la barra superior de shuma.
 sudo install -Dm755 "$BIN/shuma-shell-llimphi"     /usr/local/bin/shuma-shell-llimphi
 sudo install -Dm755 "$BIN/mirada-launcher"         /usr/local/bin/mirada-launcher
-sudo install -Dm755 "$BIN/mirada-launcher-llimphi" /usr/local/bin/mirada-launcher-llimphi
 
 # Scripts de sesión + lanzador del DM.
 sudo install -Dm755 "$MC/session/mirada-session"      /usr/local/bin/mirada-session

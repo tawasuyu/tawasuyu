@@ -292,4 +292,9 @@ borde; shuma provee el contenido.
     `set_size`); al salir se oculta fuera de vista. Cajita opaca (no depende de
     transparencia de surface). Runtime a validar en compositor (norma de pata).
 - **Fase 9** — kernel launcher de wawa sobre `pata-core`.
-- **Fase 10** — retirar `mirada-launcher-llimphi` (migrado a pata).
+- **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
+  excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
+  nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se
+  limpiaron las referencias (scripts/install-mirada-dm.sh, APPS.md, README de
+  mirada, REPORTE de shuma, LEEME de launcher-llimphi). El triplete de launchers
+  del §0 queda resuelto: el marco es **una sola capa**, `pata`.

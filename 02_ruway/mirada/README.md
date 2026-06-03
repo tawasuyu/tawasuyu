@@ -29,11 +29,11 @@ Crates listed in [README.md](README.md).
 ## Estado (2026-06-03)
 
 ### Hecho
-- `mirada-launcher-llimphi`: barra de escritorio configurable sobre Llimphi (MVP → iteraciones): widgets builtin (reloj/timezone, brillo, volumen, clipboard, **bandeja del sistema** StatusNotifierItem, hotkeys configurables **con modificadores** `Ctrl+Space`/`Super+d`), barra inferior con `shuma_bar` (shell), overlay quake con cards flotantes estilo conky, y submit que ejecuta shell + IA.
-- **Bandeja del sistema** (`system_tray`): el launcher hospeda un `org.kde.StatusNotifierWatcher` (zbus en hilo aparte) y pinta los applets modernos (nm-applet, blueman, clientes de chat) con su ícono; click → activa el item por D-Bus.
+- **El marco del escritorio migró a `pata`** (`02_ruway/pata`, Fase 10, 2026-06-03): el viejo `mirada-launcher-llimphi` se retiró. Su rol —barras/paneles/dock declarativos, widgets builtin (reloj/UTC, brillo, volumen, clipboard, bandeja, medidores con gradiente, astro), drawer Quake (shell por shuma-exec + IA), task manager estilo KDE, tarjetas flotantes conky, botón de inicio con menú nativo, tooltips— lo cubre y excede `pata`, portable Linux/wawa. Ver `02_ruway/pata/SDD.md`.
+- **Bandeja del sistema** (`tray`): la hospeda `pata` (un `org.kde.StatusNotifierWatcher`, zbus en hilo aparte) y pinta los applets modernos (nm-applet, blueman, clientes de chat) con su ícono; click → activa el item por D-Bus.
 - **Wallpaper** del escritorio (`config.ron` → `wallpaper_path`): PNG/JPEG/WebP escalado a la salida, compuesto al fondo (backend DRM).
 - **Menú raíz estilo openbox**: click derecho sobre el fondo despliega comandos del usuario (`config.ron` → `menu`), con **submenús anidados** en cascada (hover abre la columna hija); click en una hoja la lanza (backend DRM).
-- **Barra inferior autoescondible** (`panel.bottom.autohide`): en reposo sólo una franja fina en el borde que la revela al pasar el puntero; subir al área libre la esconde.
+- **Barra inferior autoescondible** (`autohide` de pata): en reposo sólo una franja fina en el borde que la revela al pasar el puntero; subir al área libre la esconde.
 - `mirada-layout::outputs`: geometría pura de disposición multi-monitor, ahora **multi-DPI** (`Salida` + `disponer_logico`: reparte en coordenadas lógicas según la escala fraccional de cada output, así un 1× y un 2× comparten un plano continuo). Lista para cuando aterrice la enumeración de scanouts.
 - `asistente-puente` / `mirada-asistente-llimphi`: pipeline de propuestas extremo a extremo (modo daemon Unix socket + codec testeado, firma humana de propuestas por hash — Fase 60).
 - Compositor/portal/greeter sobre Llimphi-HAL; portal XDG completo (file pickers genéricos sin código por app). Menú principal + contextual (lotes 4–6).
