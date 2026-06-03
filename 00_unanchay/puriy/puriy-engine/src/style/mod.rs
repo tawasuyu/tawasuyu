@@ -287,6 +287,9 @@ impl StyleEngine {
             style.line_break = p.line_break;
             style.hanging_punctuation = p.hanging_punctuation;
             style.text_decoration_skip_ink = p.text_decoration_skip_ink;
+            // CSS Fonts 4 — font-optical-sizing y font-synthesis-* heredan.
+            style.font_optical_sizing = p.font_optical_sizing;
+            style.font_synthesis = p.font_synthesis;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -4455,6 +4458,168 @@ mod tests {
                 .text_decoration_skip_ink,
             TextDecorationSkipInk::None
         );
+    }
+
+    #[test]
+    fn font_optical_sizing_fase_7_329() {
+        assert_eq!(
+            parse_font_optical_sizing("auto"),
+            Some(FontOpticalSizing::Auto)
+        );
+        assert_eq!(
+            parse_font_optical_sizing("NONE"),
+            Some(FontOpticalSizing::None)
+        );
+        assert_eq!(parse_font_optical_sizing("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { font-optical-sizing: none }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.font_optical_sizing, FontOpticalSizing::None);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).font_optical_sizing,
+            FontOpticalSizing::None
+        );
+    }
+
+    #[test]
+    fn font_synthesis_weight_fase_7_330() {
+        // Longhand 1/3: weight.
+        assert_eq!(parse_auto_or_none("auto"), Some(true));
+        assert_eq!(parse_auto_or_none("none"), Some(false));
+        assert_eq!(parse_auto_or_none("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { font-synthesis-weight: none }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(!body_cs.font_synthesis.weight);
+        // Los otros 2 axes siguen en true (default).
+        assert!(body_cs.font_synthesis.style);
+        assert!(body_cs.font_synthesis.small_caps);
+        // SÍ hereda (toda la struct).
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(!div_cs.font_synthesis.weight);
+        assert!(div_cs.font_synthesis.style);
+    }
+
+    #[test]
+    fn font_synthesis_style_fase_7_331() {
+        let html = r##"<html><head><style>
+            body { font-synthesis-style: none }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(body_cs.font_synthesis.weight);
+        assert!(!body_cs.font_synthesis.style);
+        assert!(body_cs.font_synthesis.small_caps);
+    }
+
+    #[test]
+    fn font_synthesis_small_caps_fase_7_332() {
+        let html = r##"<html><head><style>
+            body { font-synthesis-small-caps: none }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(body_cs.font_synthesis.weight);
+        assert!(body_cs.font_synthesis.style);
+        assert!(!body_cs.font_synthesis.small_caps);
+    }
+
+    #[test]
+    fn font_synthesis_shorthand_fase_7_333() {
+        // `none` apaga los 3.
+        assert_eq!(
+            parse_font_synthesis_shorthand("none"),
+            Some(FontSynthesis::NONE)
+        );
+        // `weight` solo: weight=true, los demás false.
+        assert_eq!(
+            parse_font_synthesis_shorthand("weight"),
+            Some(FontSynthesis { weight: true, style: false, small_caps: false })
+        );
+        // Combinación orden libre.
+        assert_eq!(
+            parse_font_synthesis_shorthand("small-caps weight"),
+            Some(FontSynthesis { weight: true, style: false, small_caps: true })
+        );
+        // Los 3.
+        assert_eq!(
+            parse_font_synthesis_shorthand("weight style small-caps"),
+            Some(FontSynthesis { weight: true, style: true, small_caps: true })
+        );
+        // Duplicado descarta.
+        assert_eq!(parse_font_synthesis_shorthand("weight weight"), None);
+        // Token desconocido descarta.
+        assert_eq!(parse_font_synthesis_shorthand("weight foo"), None);
+        // Vacío descarta.
+        assert_eq!(parse_font_synthesis_shorthand(""), None);
+
+        // E2E via shorthand: `font-synthesis: style` apaga weight y small-caps.
+        let html = r##"<html><head><style>
+            body { font-synthesis: style small-caps }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(!body_cs.font_synthesis.weight);
+        assert!(body_cs.font_synthesis.style);
+        assert!(body_cs.font_synthesis.small_caps);
+        // SÍ hereda.
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(!div_cs.font_synthesis.weight);
+        assert!(div_cs.font_synthesis.style);
     }
 
     #[test]

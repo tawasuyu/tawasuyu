@@ -197,6 +197,16 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_text_emphasis_shorthand(value, important));
             continue;
         }
+        // `font-synthesis` shorthand (Fase 7.333):
+        // `none | [weight || style || small-caps]`. Orden libre, sin
+        // duplicados, sin tokens desconocidos. Emite `FontSynthesisAll`
+        // con los 3 axes resueltos.
+        if prop.eq_ignore_ascii_case("font-synthesis") {
+            if let Some(fs) = parse_font_synthesis_shorthand(value) {
+                out.push(Decl { kind: DeclKind::FontSynthesisAll(fs), important });
+            }
+            continue;
+        }
         // `column-rule` shorthand (Fase 7.280): mismo shape que `outline`.
         if prop.eq_ignore_ascii_case("column-rule") {
             out.extend(parse_column_rule_shorthand(value, important));
@@ -657,6 +667,19 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_text_decoration_skip_ink(value)
                 .map(DeclKind::TextDecorationSkipInk)
         }
+        "font-optical-sizing" => {
+            parse_font_optical_sizing(value).map(DeclKind::FontOpticalSizing)
+        }
+        "font-synthesis-weight" => {
+            parse_auto_or_none(value).map(DeclKind::FontSynthesisWeight)
+        }
+        "font-synthesis-style" => {
+            parse_auto_or_none(value).map(DeclKind::FontSynthesisStyle)
+        }
+        "font-synthesis-small-caps" => {
+            parse_auto_or_none(value).map(DeclKind::FontSynthesisSmallCaps)
+        }
+        // `font-synthesis` shorthand: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -2563,6 +2586,67 @@ pub(crate) fn parse_text_decoration_skip_ink(
         "all" => Some(TextDecorationSkipInk::All),
         _ => None,
     }
+}
+
+/// `font-optical-sizing`: `auto | none`. Fase 7.329.
+pub(crate) fn parse_font_optical_sizing(
+    value: &str,
+) -> Option<FontOpticalSizing> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(FontOpticalSizing::Auto),
+        "none" => Some(FontOpticalSizing::None),
+        _ => None,
+    }
+}
+
+/// `font-synthesis-{weight,style,small-caps}`: `auto | none`. Devuelve
+/// `true` para `auto` (síntesis habilitada, default) y `false` para
+/// `none`. Fases 7.330–7.332.
+pub(crate) fn parse_auto_or_none(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(true),
+        "none" => Some(false),
+        _ => None,
+    }
+}
+
+/// `font-synthesis` shorthand (CSS Fonts 4):
+/// `none | [weight || style || small-caps]`. Fase 7.333.
+pub(crate) fn parse_font_synthesis_shorthand(
+    value: &str,
+) -> Option<FontSynthesis> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(FontSynthesis::NONE);
+    }
+    let mut fs = FontSynthesis::NONE;
+    for tok in v.split_whitespace() {
+        match tok.to_ascii_lowercase().as_str() {
+            "weight" => {
+                if fs.weight {
+                    return None;
+                }
+                fs.weight = true;
+            }
+            "style" => {
+                if fs.style {
+                    return None;
+                }
+                fs.style = true;
+            }
+            "small-caps" => {
+                if fs.small_caps {
+                    return None;
+                }
+                fs.small_caps = true;
+            }
+            _ => return None,
+        }
+    }
+    if fs == FontSynthesis::NONE {
+        return None;
+    }
+    Some(fs)
 }
 
 /// `break-inside`: `auto | avoid | avoid-page | avoid-column | avoid-region`.

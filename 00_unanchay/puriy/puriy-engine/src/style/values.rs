@@ -482,6 +482,16 @@ pub struct ComputedStyle {
     /// `text-decoration-skip-ink` (Fase 7.328). Default `Auto`.
     /// **Heredable**. Plumb: no se saltean descendientes en underline.
     pub text_decoration_skip_ink: TextDecorationSkipInk,
+    /// `font-optical-sizing` (Fase 7.329). Default `Auto`. **Heredable**.
+    /// Plumb: el shaper no setea el axis `opsz` de fuentes variables.
+    pub font_optical_sizing: FontOpticalSizing,
+    /// `font-synthesis-{weight,style,small-caps}` (Fases 7.330–7.332) +
+    /// shorthand `font-synthesis` (Fase 7.333). Cada flag = `auto`
+    /// (true, default) o `none` (false). Si toda la struct está en
+    /// `none`, equivale al keyword `font-synthesis: none`. **Heredable**.
+    /// Plumb: el shaper hace synthesis siempre si la fuente no provee
+    /// la variante.
+    pub font_synthesis: FontSynthesis,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1372,6 +1382,37 @@ pub enum TextDecorationSkipInk {
     Auto,
     None,
     All,
+}
+
+/// `font-optical-sizing` (CSS Fonts 4). `Auto` deja que el shaper
+/// setee el axis `opsz` según el tamaño; `None` lo fija al default.
+/// Heredable. Fase 7.329.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontOpticalSizing {
+    #[default]
+    Auto,
+    None,
+}
+
+/// `font-synthesis-*` (CSS Fonts 4). Cada eje permite la síntesis
+/// (true, default) o la desactiva (false). El shorthand `font-synthesis`
+/// (Fase 7.333) setea los tres a la vez. Heredable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontSynthesis {
+    pub weight: bool,
+    pub style: bool,
+    pub small_caps: bool,
+}
+
+impl Default for FontSynthesis {
+    fn default() -> Self {
+        Self { weight: true, style: true, small_caps: true }
+    }
+}
+
+impl FontSynthesis {
+    /// `font-synthesis: none` apaga los tres.
+    pub const NONE: Self = Self { weight: false, style: false, small_caps: false };
 }
 
 impl ContainFlags {
@@ -2387,6 +2428,8 @@ impl Default for ComputedStyle {
             line_break: LineBreak::Auto,
             hanging_punctuation: HangingPunctuation::default(),
             text_decoration_skip_ink: TextDecorationSkipInk::Auto,
+            font_optical_sizing: FontOpticalSizing::Auto,
+            font_synthesis: FontSynthesis::default(),
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
