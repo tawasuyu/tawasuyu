@@ -228,6 +228,14 @@ impl StyleEngine {
             style.direction = p.direction;
             style.font_stretch = p.font_stretch;
             style.image_rendering = p.image_rendering;
+            // font-kerning, font-feature-settings, font-variation-settings,
+            // font-language-override (CSS Fonts 4) heredan. text-rendering
+            // (SVG 1.1) hereda.
+            style.font_kerning = p.font_kerning;
+            style.font_feature_settings = p.font_feature_settings.clone();
+            style.font_variation_settings = p.font_variation_settings.clone();
+            style.font_language_override = p.font_language_override.clone();
+            style.text_rendering = p.text_rendering;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -1578,6 +1586,218 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&inputs[1], Some(&body_cs)).appearance,
             Appearance::Auto
+        );
+    }
+
+    #[test]
+    fn font_kerning_fase_7_259() {
+        assert_eq!(parse_font_kerning("auto"), Some(FontKerning::Auto));
+        assert_eq!(parse_font_kerning("NORMAL"), Some(FontKerning::Normal));
+        assert_eq!(parse_font_kerning("none"), Some(FontKerning::None));
+        assert_eq!(parse_font_kerning("xx"), None);
+
+        let html = r##"<html><head><style>
+            body { font-kerning: normal }
+            p.off { font-kerning: none }
+            p.plain {}
+        </style></head><body>
+          <p class="off"></p><p class="plain"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.font_kerning, FontKerning::Normal);
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs)).font_kerning,
+            FontKerning::None
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&ps[1], Some(&body_cs)).font_kerning,
+            FontKerning::Normal
+        );
+    }
+
+    #[test]
+    fn font_feature_settings_fase_7_260() {
+        // `normal` → vacío.
+        assert!(parse_font_feature_settings("normal").is_empty());
+        // Default value = 1.
+        let r = parse_font_feature_settings("\"liga\"");
+        assert_eq!(r, vec![FontFeatureSetting { tag: *b"liga", value: 1 }]);
+        // on/off + número.
+        let r2 = parse_font_feature_settings("\"liga\" on, \"smcp\" off, \"ss01\" 2");
+        assert_eq!(
+            r2,
+            vec![
+                FontFeatureSetting { tag: *b"liga", value: 1 },
+                FontFeatureSetting { tag: *b"smcp", value: 0 },
+                FontFeatureSetting { tag: *b"ss01", value: 2 },
+            ]
+        );
+        // Tags inválidas (longitud) se descartan.
+        let r3 = parse_font_feature_settings("\"abc\", \"lig\"");
+        assert!(r3.is_empty());
+
+        let html = r##"<html><head><style>
+            body { font-feature-settings: "liga" on }
+            p.over { font-feature-settings: "smcp" }
+        </style></head><body>
+          <p class="over"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.font_feature_settings,
+            vec![FontFeatureSetting { tag: *b"liga", value: 1 }]
+        );
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs)).font_feature_settings,
+            vec![FontFeatureSetting { tag: *b"smcp", value: 1 }]
+        );
+    }
+
+    #[test]
+    fn font_variation_settings_fase_7_261() {
+        assert!(parse_font_variation_settings("normal").is_empty());
+        let r = parse_font_variation_settings("\"wght\" 700, \"wdth\" 80, \"slnt\" -15.5");
+        assert_eq!(r.len(), 3);
+        assert_eq!(&r[0].tag, b"wght");
+        assert!((r[0].value - 700.0).abs() < 1e-3);
+        assert_eq!(&r[2].tag, b"slnt");
+        assert!((r[2].value + 15.5).abs() < 1e-3);
+
+        let html = r##"<html><head><style>
+            body { font-variation-settings: "wght" 700 }
+            p.plain {}
+        </style></head><body><p class="plain"></p></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.font_variation_settings.len(), 1);
+        assert_eq!(&body_cs.font_variation_settings[0].tag, b"wght");
+        // Heredado.
+        let p_cs = eng.compute_with_parent(&ps[0], Some(&body_cs));
+        assert_eq!(p_cs.font_variation_settings.len(), 1);
+    }
+
+    #[test]
+    fn font_language_override_fase_7_262() {
+        assert_eq!(parse_font_language_override("normal"), None);
+        assert_eq!(
+            parse_font_language_override("\"DEU\""),
+            Some("DEU".to_string())
+        );
+        // Single-quote también.
+        assert_eq!(
+            parse_font_language_override("'TRK'"),
+            Some("TRK".to_string())
+        );
+        // Sin comillas o vacío.
+        assert_eq!(parse_font_language_override("DEU"), None);
+        assert_eq!(parse_font_language_override("\"\""), None);
+
+        let html = r##"<html><head><style>
+            body { font-language-override: "DEU" }
+            p.over { font-language-override: "ROM" }
+            p.plain {}
+        </style></head><body>
+          <p class="over"></p><p class="plain"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.font_language_override.as_deref(), Some("DEU"));
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs))
+                .font_language_override
+                .as_deref(),
+            Some("ROM")
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&ps[1], Some(&body_cs))
+                .font_language_override
+                .as_deref(),
+            Some("DEU")
+        );
+    }
+
+    #[test]
+    fn text_rendering_fase_7_263() {
+        assert_eq!(parse_text_rendering("auto"), Some(TextRendering::Auto));
+        assert_eq!(
+            parse_text_rendering("optimizeSpeed"),
+            Some(TextRendering::OptimizeSpeed)
+        );
+        assert_eq!(
+            parse_text_rendering("OptimizeLegibility"),
+            Some(TextRendering::OptimizeLegibility)
+        );
+        assert_eq!(
+            parse_text_rendering("geometricprecision"),
+            Some(TextRendering::GeometricPrecision)
+        );
+        assert_eq!(parse_text_rendering("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-rendering: optimizeLegibility }
+            p.plain {}
+        </style></head><body><p class="plain"></p></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_rendering, TextRendering::OptimizeLegibility);
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs)).text_rendering,
+            TextRendering::OptimizeLegibility
         );
     }
 

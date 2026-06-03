@@ -216,6 +216,14 @@ pub(crate) enum DeclKind {
     /// `will-change: auto` = lista vacía.
     WillChange(Vec<WillChangeHint>),
     Appearance(Appearance),
+    FontKerning(FontKerning),
+    /// Vacío = `font-feature-settings: normal`.
+    FontFeatureSettings(Vec<FontFeatureSetting>),
+    /// Vacío = `font-variation-settings: normal`.
+    FontVariationSettings(Vec<FontVariationSetting>),
+    /// `None` = `font-language-override: normal`.
+    FontLanguageOverride(Option<String>),
+    TextRendering(TextRendering),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -397,6 +405,11 @@ impl Decl {
             DeclKind::Isolation(i) => s.isolation = *i,
             DeclKind::WillChange(v) => s.will_change = v.clone(),
             DeclKind::Appearance(a) => s.appearance = *a,
+            DeclKind::FontKerning(k) => s.font_kerning = *k,
+            DeclKind::FontFeatureSettings(v) => s.font_feature_settings = v.clone(),
+            DeclKind::FontVariationSettings(v) => s.font_variation_settings = v.clone(),
+            DeclKind::FontLanguageOverride(o) => s.font_language_override = o.clone(),
+            DeclKind::TextRendering(r) => s.text_rendering = *r,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

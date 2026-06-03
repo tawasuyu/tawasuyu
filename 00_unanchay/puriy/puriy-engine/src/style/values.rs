@@ -273,6 +273,22 @@ pub struct ComputedStyle {
     /// `appearance` (Fase 7.258). NO heredable. CSS UI 4. El chrome aún
     /// no remueve el render UA al ver `appearance: none`.
     pub appearance: Appearance,
+    /// `font-kerning` (Fase 7.259). Heredable. Plumb: el shaper no
+    /// togglea el kerning por flag aún.
+    pub font_kerning: FontKerning,
+    /// `font-feature-settings` (Fase 7.260). Lista parseada. Vacío =
+    /// `normal`. Heredable.
+    pub font_feature_settings: Vec<FontFeatureSetting>,
+    /// `font-variation-settings` (Fase 7.261). Lista parseada. Vacío =
+    /// `normal`. Heredable.
+    pub font_variation_settings: Vec<FontVariationSetting>,
+    /// `font-language-override` (Fase 7.262). `None` = `normal`. El tag
+    /// se guarda tal cual lo escribió el autor (uppercase recomendado
+    /// por OpenType). Heredable.
+    pub font_language_override: Option<String>,
+    /// `text-rendering` (Fase 7.263). Heredable. Plumb: el shaper no
+    /// elige entre legibility/speed/precision aún.
+    pub text_rendering: TextRendering,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -513,6 +529,43 @@ pub enum UnicodeBidi {
     BidiOverride,
     IsolateOverride,
     Plaintext,
+}
+
+/// `font-kerning`. Heredable. Default `Auto`. Fase 7.259.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontKerning {
+    #[default]
+    Auto,
+    Normal,
+    None,
+}
+
+/// Un entry de `font-feature-settings`: tag de 4 bytes + valor entero
+/// (0 = off, 1 = on, N = índice de variante). Fase 7.260.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFeatureSetting {
+    /// 4 ASCII chars (case-sensitive por OpenType). Sin validar contra
+    /// `[a-zA-Z0-9]` por simplicidad — el shaper hace la verificación final.
+    pub tag: [u8; 4],
+    pub value: i32,
+}
+
+/// Un entry de `font-variation-settings`: tag de 4 bytes + valor
+/// número (`wght 700`, `wdth 100`, `slnt -15`...). Fase 7.261.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontVariationSetting {
+    pub tag: [u8; 4],
+    pub value: f32,
+}
+
+/// `text-rendering`. Heredable. Default `Auto`. Fase 7.263.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextRendering {
+    #[default]
+    Auto,
+    OptimizeSpeed,
+    OptimizeLegibility,
+    GeometricPrecision,
 }
 
 /// `mix-blend-mode` / `background-blend-mode`. Subset Compositing &
@@ -1389,6 +1442,11 @@ impl Default for ComputedStyle {
             isolation: Isolation::Auto,
             will_change: Vec::new(),
             appearance: Appearance::Auto,
+            font_kerning: FontKerning::Auto,
+            font_feature_settings: Vec::new(),
+            font_variation_settings: Vec::new(),
+            font_language_override: None,
+            text_rendering: TextRendering::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

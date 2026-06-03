@@ -242,6 +242,13 @@ pub(crate) fn inherit_style_to_child(parent: &BoxNode, child: &mut BoxNode) {
     child.direction = parent.direction;
     child.font_stretch = parent.font_stretch;
     child.image_rendering = parent.image_rendering;
+    // font-kerning, font-feature-settings, font-variation-settings,
+    // font-language-override (CSS Fonts 4) y text-rendering heredan.
+    child.font_kerning = parent.font_kerning;
+    child.font_feature_settings = parent.font_feature_settings.clone();
+    child.font_variation_settings = parent.font_variation_settings.clone();
+    child.font_language_override = parent.font_language_override.clone();
+    child.text_rendering = parent.text_rendering;
     // Propagar al text leaf interno (primer hijo si es text node).
     for c in child.children.iter_mut() {
         if c.text.is_some() {
@@ -719,6 +726,11 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.isolation = s.isolation;
     b.will_change = s.will_change.clone();
     b.appearance = s.appearance;
+    b.font_kerning = s.font_kerning;
+    b.font_feature_settings = s.font_feature_settings.clone();
+    b.font_variation_settings = s.font_variation_settings.clone();
+    b.font_language_override = s.font_language_override.clone();
+    b.text_rendering = s.text_rendering;
     b.text_indent = s.text_indent;
     b.word_spacing = s.word_spacing;
     b.letter_spacing = s.letter_spacing;
@@ -769,6 +781,11 @@ pub(crate) fn set_leaf_inherited(leaf: &mut BoxNode, p: &ComputedStyle) {
     leaf.direction = p.direction;
     leaf.font_stretch = p.font_stretch;
     leaf.image_rendering = p.image_rendering;
+    leaf.font_kerning = p.font_kerning;
+    leaf.font_feature_settings = p.font_feature_settings.clone();
+    leaf.font_variation_settings = p.font_variation_settings.clone();
+    leaf.font_language_override = p.font_language_override.clone();
+    leaf.text_rendering = p.text_rendering;
 }
 
 pub(crate) fn propagate_text_color(node: &mut BoxNode, c: Color) {

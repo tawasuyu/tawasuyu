@@ -15,11 +15,11 @@ use crate::style::{
     AlignContent, AlignItems, AlignSelf, Appearance, BackgroundClip, BackgroundOrigin,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode, BorderLineStyle,
     BoxShadow, BoxSizing, ComputedStyle, Corners, Cursor, Direction,
-    FlexDirection, FlexWrap,
+    FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontVariationSetting,
     GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, LengthVal, LinearGradient,
     ListStyleType, ObjectFit, Outline, Overflow, OverflowWrap, PointerEvents, Position, Resize,
     ScrollBehavior, Sides, StyleEngine, TabSize, TextAlign, TextDecorationLine,
-    TextDecorationStyle, TextOverflow, TextShadow,
+    TextDecorationStyle, TextOverflow, TextRendering, TextShadow,
     TextTransform, Transform, UnicodeBidi, UserSelect, VerticalAlign, Visibility, WhiteSpace,
     WillChangeHint, WordBreak, WritingMode,
 };

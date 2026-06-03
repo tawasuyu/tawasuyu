@@ -424,6 +424,17 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "appearance" | "-webkit-appearance" | "-moz-appearance" => {
             parse_appearance(value).map(DeclKind::Appearance)
         }
+        "font-kerning" => parse_font_kerning(value).map(DeclKind::FontKerning),
+        "font-feature-settings" => {
+            Some(DeclKind::FontFeatureSettings(parse_font_feature_settings(value)))
+        }
+        "font-variation-settings" => {
+            Some(DeclKind::FontVariationSettings(parse_font_variation_settings(value)))
+        }
+        "font-language-override" => {
+            Some(DeclKind::FontLanguageOverride(parse_font_language_override(value)))
+        }
+        "text-rendering" => parse_text_rendering(value).map(DeclKind::TextRendering),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -882,6 +893,132 @@ pub(crate) fn parse_appearance(value: &str) -> Option<Appearance> {
         | "textarea" => Some(Appearance::Auto),
         _ => None,
     }
+}
+
+/// `font-kerning`: `auto | normal | none`.
+pub(crate) fn parse_font_kerning(value: &str) -> Option<FontKerning> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(FontKerning::Auto),
+        "normal" => Some(FontKerning::Normal),
+        "none" => Some(FontKerning::None),
+        _ => None,
+    }
+}
+
+/// `font-feature-settings`: `normal` o lista `"tag" [on|off|N], ...`.
+/// Tag debe ser 4 ASCII chars entre comillas (simples o dobles). El
+/// valor opcional default es 1 (on). `on`/`off` se convierten a 1/0.
+pub(crate) fn parse_font_feature_settings(value: &str) -> Vec<FontFeatureSetting> {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("normal") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for item in v.split(',') {
+        let item = item.trim();
+        let (tag_str, rest) = match strip_quoted_tag(item) {
+            Some(p) => p,
+            None => continue,
+        };
+        if tag_str.len() != 4 || !tag_str.is_ascii() {
+            continue;
+        }
+        let mut tag = [0u8; 4];
+        tag.copy_from_slice(tag_str.as_bytes());
+        let val_str = rest.trim();
+        let value = if val_str.is_empty() {
+            1
+        } else if val_str.eq_ignore_ascii_case("on") {
+            1
+        } else if val_str.eq_ignore_ascii_case("off") {
+            0
+        } else if let Ok(n) = val_str.parse::<i32>() {
+            n
+        } else {
+            continue;
+        };
+        out.push(FontFeatureSetting { tag, value });
+    }
+    out
+}
+
+/// `font-variation-settings`: `normal` o `"tag" <number>`.
+pub(crate) fn parse_font_variation_settings(value: &str) -> Vec<FontVariationSetting> {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("normal") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for item in v.split(',') {
+        let item = item.trim();
+        let (tag_str, rest) = match strip_quoted_tag(item) {
+            Some(p) => p,
+            None => continue,
+        };
+        if tag_str.len() != 4 || !tag_str.is_ascii() {
+            continue;
+        }
+        let mut tag = [0u8; 4];
+        tag.copy_from_slice(tag_str.as_bytes());
+        let val_str = rest.trim();
+        let Ok(value) = val_str.parse::<f32>() else {
+            continue;
+        };
+        out.push(FontVariationSetting { tag, value });
+    }
+    out
+}
+
+/// `font-language-override`: `normal` o `"tag"` (3-4 chars OpenType).
+/// El tag se devuelve sin comillas, conservando el case.
+pub(crate) fn parse_font_language_override(value: &str) -> Option<String> {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("normal") {
+        return None;
+    }
+    let bytes = v.as_bytes();
+    if bytes.len() < 3 {
+        return None;
+    }
+    let first = bytes[0];
+    let last = bytes[bytes.len() - 1];
+    if (first != b'"' && first != b'\'') || first != last {
+        return None;
+    }
+    let inner = &v[1..v.len() - 1];
+    if !inner.is_ascii() || inner.is_empty() {
+        return None;
+    }
+    Some(inner.to_string())
+}
+
+/// `text-rendering`: 4 keywords. Case-insensitive.
+pub(crate) fn parse_text_rendering(value: &str) -> Option<TextRendering> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(TextRendering::Auto),
+        "optimizespeed" => Some(TextRendering::OptimizeSpeed),
+        "optimizelegibility" => Some(TextRendering::OptimizeLegibility),
+        "geometricprecision" => Some(TextRendering::GeometricPrecision),
+        _ => None,
+    }
+}
+
+/// Helper: dado `"tag" rest`, devuelve `(tag, rest)` sin las comillas.
+/// Soporta tanto `"…"` como `'…'`. Devuelve `None` si no encuentra
+/// comillas de cierre.
+fn strip_quoted_tag(s: &str) -> Option<(&str, &str)> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let quote = bytes[0];
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    // Buscar la próxima comilla del mismo tipo.
+    let rest = &s[1..];
+    let close = rest.find(quote as char)?;
+    Some((&rest[..close], &rest[close + 1..]))
 }
 
 /// `tab-size`: integer (= ancho en caracteres del space) o length

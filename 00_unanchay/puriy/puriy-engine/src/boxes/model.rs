@@ -214,6 +214,16 @@ pub struct BoxNode {
     pub will_change: Vec<WillChangeHint>,
     /// `appearance`. NO heredable. Fase 7.258.
     pub appearance: Appearance,
+    /// `font-kerning`. Heredable. Fase 7.259.
+    pub font_kerning: FontKerning,
+    /// `font-feature-settings`. Heredable. Fase 7.260.
+    pub font_feature_settings: Vec<FontFeatureSetting>,
+    /// `font-variation-settings`. Heredable. Fase 7.261.
+    pub font_variation_settings: Vec<FontVariationSetting>,
+    /// `font-language-override` (None = normal). Heredable. Fase 7.262.
+    pub font_language_override: Option<String>,
+    /// `text-rendering`. Heredable. Fase 7.263.
+    pub text_rendering: TextRendering,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no
