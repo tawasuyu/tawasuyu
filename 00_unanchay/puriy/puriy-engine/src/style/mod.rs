@@ -3238,6 +3238,33 @@ line2</pre></body></html>"#;
         assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
     }
 
+    #[test]
+    fn supports_query_and_or_not_selector() {
+        // and: ambas soportadas.
+        assert!(evaluate_supports_query("(display: grid) and (color: red)"));
+        assert!(!evaluate_supports_query("(display: grid) and (frobnicate: 1)"));
+        // or: alguna soportada.
+        assert!(evaluate_supports_query("(display: grid) or (frobnicate: 1)"));
+        assert!(!evaluate_supports_query("(frob: 1) or (nicate: 2)"));
+        // not.
+        assert!(evaluate_supports_query("not (frobnicate: 1)"));
+        assert!(!evaluate_supports_query("not (display: grid)"));
+        // selector(): soportado si el selector parsea.
+        assert!(evaluate_supports_query("selector(.a > .b)"));
+        // agrupación anidada.
+        assert!(evaluate_supports_query("((display: grid))"));
+        assert!(evaluate_supports_query("(display: grid) and ((color: red) or (frob: 1))"));
+        // @supports con `and` aplica el bloque end-to-end.
+        let html = r#"<html><head><style>
+            @supports (display: grid) and (color: red) { p { color: rgb(0,0,255) } }
+            @supports (display: grid) and (frob: 1) { p { color: rgb(255,0,0) } }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
+    }
+
     // === Fase B1: @keyframes ===
 
     #[test]

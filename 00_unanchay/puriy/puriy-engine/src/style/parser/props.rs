@@ -2190,18 +2190,115 @@ pub(crate) fn parse_resolution_dppx(val: &str) -> Option<f32> {
     }
 }
 
-/// Evalúa una condición `@supports (prop: value)` ⇒ true si nuestro
-/// parser puede convertirla a algún DeclKind. Subset minimal: no
-/// soporta `and`/`or`/`not` por ahora.
+/// Evalúa una condición `@supports`: una declaración `(prop: value)` es
+/// soportada si nuestro parser la convierte a algún `DeclKind`. Soporta
+/// `and`/`or`/`not`, agrupación con paréntesis y `selector(<sel>)`
+/// (recursivo). Las keywords se reconocen en minúsculas.
 pub(crate) fn evaluate_supports_query(condition: &str) -> bool {
     let cond = condition.trim();
-    let Some(inner) = cond.strip_prefix('(').and_then(|s| s.strip_suffix(')')) else {
-        return false;
-    };
-    let Some((prop, val)) = inner.split_once(':') else {
-        return false;
-    };
-    decl_kind_from_pair(prop.trim(), val.trim()).is_some()
+    // `not <cond>`.
+    if let Some(rest) = strip_supports_not(cond) {
+        return !evaluate_supports_query(rest);
+    }
+    // `a and b and ...` (a nivel de paréntesis 0).
+    let and_parts = split_supports(cond, "and");
+    if and_parts.len() > 1 {
+        return and_parts.iter().all(|p| evaluate_supports_query(p));
+    }
+    // `a or b or ...`.
+    let or_parts = split_supports(cond, "or");
+    if or_parts.len() > 1 {
+        return or_parts.iter().any(|p| evaluate_supports_query(p));
+    }
+    // `selector(<sel>)` — soportado si el selector parsea.
+    if let Some(sel) = cond
+        .strip_prefix("selector(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return parse_selector(sel.trim()).is_some();
+    }
+    // Grupo o declaración entre paréntesis.
+    if let Some(inner) = strip_supports_parens(cond) {
+        let inner = inner.trim();
+        if let Some((prop, val)) = split_top_colon(inner) {
+            return decl_kind_from_pair(prop.trim(), val.trim()).is_some();
+        }
+        // Agrupación `( <cond> )`.
+        return evaluate_supports_query(inner);
+    }
+    false
+}
+
+/// `not <cond>` / `not(<cond>)` (whitespace o `(` tras el keyword).
+fn strip_supports_not(s: &str) -> Option<&str> {
+    let rest = s.trim().strip_prefix("not")?;
+    let c = rest.chars().next()?;
+    (c.is_whitespace() || c == '(').then(|| rest.trim_start())
+}
+
+/// Divide `s` por ` kw ` (whitespace a ambos lados) a profundidad de
+/// paréntesis 0. Devuelve `[s]` si no hay separador.
+fn split_supports<'a>(s: &'a str, kw: &str) -> Vec<&'a str> {
+    let bytes = s.as_bytes();
+    let kwb = kw.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b' ' if depth == 0 => {
+                let j = i + 1;
+                if bytes[j..].starts_with(kwb) && bytes.get(j + kwb.len()) == Some(&b' ') {
+                    parts.push(s[start..i].trim());
+                    i = j + kwb.len() + 1;
+                    start = i;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    parts.push(s[start..].trim());
+    parts
+}
+
+/// Si `s` está envuelto por un par de paréntesis que se cierran al final
+/// (no `(a) ... (b)`), devuelve el interior.
+fn strip_supports_parens(s: &str) -> Option<&str> {
+    let s = s.trim();
+    let inner = s.strip_prefix('(')?.strip_suffix(')')?;
+    let mut depth = 0i32;
+    for c in inner.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return None; // se cierra antes del final → no envuelve todo
+                }
+            }
+            _ => {}
+        }
+    }
+    (depth == 0).then_some(inner)
+}
+
+/// Primer `:` a profundidad de paréntesis 0 → `(prop, value)`.
+fn split_top_colon(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    for (i, b) in s.bytes().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b':' if depth == 0 => return Some((&s[..i], &s[i + 1..])),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Indica que `cssparser` está enlazado aunque el subset actual no use
