@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use mirada_layout::{LayoutMode, LayoutParams};
+use mirada_layout::{LayoutMode, LayoutParams, WallpaperFit};
 use mirada_protocol::Decorations;
 
 /// `app_id` con el que se marca y reconoce la terminal dropdown (quake).
@@ -42,6 +42,28 @@ mod layout_slug_serde {
             serde::de::Error::custom(format!(
                 "modo de teselado desconocido «{slug}» (usa master-stack, centered-master, \
                  spiral, grid, columns, rows o monocle)"
+            ))
+        })
+    }
+}
+
+/// (De)serializa un [`WallpaperFit`] como su slug en kebab-case (`"stretch"`,
+/// `"fit"`, `"fill"`, `"center"`, `"tile"`). El derive `serde` del propio
+/// enum produce identificadores RON desnudos, incompatibles con la forma
+/// quoteada que escribimos en la plantilla.
+mod wallpaper_fit_slug_serde {
+    use mirada_layout::WallpaperFit;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(fit: &WallpaperFit, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(fit.slug())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<WallpaperFit, D::Error> {
+        let slug = String::deserialize(d)?;
+        WallpaperFit::from_slug(&slug).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "modo de wallpaper desconocido «{slug}» (usa stretch, fit, fill, center o tile)"
             ))
         })
     }
@@ -89,8 +111,15 @@ pub struct Config {
     /// Vacía = se prueba una lista de fuentes comunes del sistema.
     pub font_path: String,
     /// Ruta a la imagen de fondo del escritorio (PNG/JPEG/WebP). Vacía =
-    /// color sólido. La imagen se escala para cubrir la salida (stretch).
+    /// color sólido. Su colocación dentro de la salida la dicta
+    /// [`Self::wallpaper_fit`].
     pub wallpaper_path: String,
+    /// Cómo se ajusta el wallpaper a la salida: `stretch` (deforma para cubrir),
+    /// `fit` (entra entero con barras), `fill` (cubre y recorta), `center`
+    /// (tamaño nativo centrado) o `tile` (repetido). En RON va como cadena
+    /// kebab-case: `"stretch"`, `"fit"`, `"fill"`, `"center"`, `"tile"`.
+    #[serde(with = "wallpaper_fit_slug_serde")]
+    pub wallpaper_fit: WallpaperFit,
     /// Entradas del menú raíz (estilo openbox) que aparece al click derecho
     /// sobre el fondo. Vacío = sin menú (el click derecho en el fondo no hace
     /// nada). Cada entrada lanza su `command` con `sh -c`.
@@ -154,6 +183,7 @@ impl Default for Config {
             titlebar_height: dec.titlebar_height,
             font_path: String::new(),
             wallpaper_path: String::new(),
+            wallpaper_fit: WallpaperFit::default(),
             menu: Vec::new(),
             zones: Vec::new(),
             zone_presets: Vec::new(),
@@ -287,8 +317,15 @@ const CONFIG_TEMPLATE: &str = "\
     font_path: \"\",
 
     // Imagen de fondo del escritorio (PNG/JPEG/WebP). Vacía = color sólido.
-    // Se escala para cubrir la salida. Ej: \"/home/yo/.config/mirada/fondo.png\".
+    // Ej: \"/home/yo/.config/mirada/fondo.png\".
     wallpaper_path: \"\",
+    // Cómo encaja la imagen en la salida:
+    //   stretch — deforma para cubrir exactamente (default).
+    //   fit     — la imagen entra entera, con barras negras (letterbox).
+    //   fill    — la imagen cubre la salida, los bordes se recortan.
+    //   center  — tamaño nativo centrado (padding negro o recorte si es grande).
+    //   tile    — repetida en su tamaño nativo desde la esquina superior-izquierda.
+    wallpaper_fit: \"stretch\",
 
     // Menú raíz (estilo openbox): aparece al click DERECHO sobre el fondo.
     // Vacío = sin menú. Una entrada es hoja (lanza command con `sh -c`) o
@@ -413,6 +450,25 @@ mod tests {
         assert_eq!(c.zones[0].name, ""); // name es opcional
         assert!((c.zones[0].w - 0.6).abs() < 1e-6);
         assert_eq!(c.zones[1].name, "chat");
+    }
+
+    #[test]
+    fn wallpaper_fit_parsea_de_su_slug() {
+        for (slug, want) in [
+            ("stretch", WallpaperFit::Stretch),
+            ("fit", WallpaperFit::Fit),
+            ("fill", WallpaperFit::Fill),
+            ("center", WallpaperFit::Center),
+            ("tile", WallpaperFit::Tile),
+        ] {
+            let c = Config::from_ron(&format!(r#"( wallpaper_fit: "{slug}" )"#)).unwrap();
+            assert_eq!(c.wallpaper_fit, want);
+        }
+    }
+
+    #[test]
+    fn wallpaper_fit_default_es_stretch() {
+        assert_eq!(Config::default().wallpaper_fit, WallpaperFit::Stretch);
     }
 
     #[test]

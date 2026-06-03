@@ -624,6 +624,16 @@ impl App {
         }
     }
 
+    /// Cómo se ajusta el wallpaper a la salida (stretch/fit/fill/center/tile).
+    /// Con Cerebro enlazado cae al default (stretch) — es sólo cosmético, el
+    /// Cerebro no toma decisiones sobre el fondo.
+    fn config_wallpaper_fit(&self) -> mirada_brain::WallpaperFit {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().wallpaper_fit,
+            Brain::Linked(_) => mirada_brain::WallpaperFit::default(),
+        }
+    }
+
     /// El árbol del menú raíz configurado (con submenús anidados). Vacío con
     /// Cerebro enlazado o sin entradas en la config.
     fn config_menu(&self) -> Vec<crate::menu::MenuNode> {

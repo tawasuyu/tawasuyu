@@ -135,12 +135,19 @@ fn border_rects(sx: i32, sy: i32, sw: i32, sh: i32, bw: i32) -> [(i32, i32, i32,
     ]
 }
 
-/// Decodifica el wallpaper de `path`, lo escala para cubrir `(w, h)` (stretch)
-/// y lo arma como [`MemoryRenderBuffer`] listo para componer en el fondo.
-/// `None` si la imagen no abre o el tamaño es degenerado. El formato es
-/// `Argb8888` (little-endian → bytes `[B, G, R, A]` en memoria); el wallpaper
-/// es opaco, así que la premultiplicación por alfa es identidad.
-fn load_wallpaper(path: &str, w: i32, h: i32) -> Option<MemoryRenderBuffer> {
+/// Decodifica el wallpaper de `path` y lo compone en un buffer del tamaño
+/// de la salida (`w` × `h`) según `fit`. El resto del buffer queda en negro
+/// opaco (BGRA `[0, 0, 0, 255]`). Devuelve `None` si la imagen no abre o el
+/// tamaño es degenerado. El formato es `Argb8888` (little-endian → bytes
+/// `[B, G, R, A]` en memoria); el wallpaper es opaco, así que la
+/// premultiplicación por alfa es identidad.
+fn load_wallpaper(
+    path: &str,
+    fit: mirada_brain::WallpaperFit,
+    w: i32,
+    h: i32,
+) -> Option<MemoryRenderBuffer> {
+    use mirada_brain::WallpaperFit;
     if w <= 0 || h <= 0 {
         return None;
     }
@@ -151,17 +158,63 @@ fn load_wallpaper(path: &str, w: i32, h: i32) -> Option<MemoryRenderBuffer> {
             return None;
         }
     };
-    let scaled = image::imageops::resize(
-        &img.to_rgba8(),
-        w as u32,
-        h as u32,
-        image::imageops::FilterType::Triangle,
-    );
-    let mut bgra = Vec::with_capacity((w * h * 4) as usize);
-    for px in scaled.chunks_exact(4) {
-        // RGBA (image) → BGRA (Argb8888 little-endian), alfa forzado opaco.
-        bgra.extend_from_slice(&[px[2], px[1], px[0], 255]);
+    let rgba = img.to_rgba8();
+    let sw = rgba.width() as i32;
+    let sh = rgba.height() as i32;
+    if sw <= 0 || sh <= 0 {
+        return None;
     }
+
+    // Lienzo negro opaco del tamaño de la salida.
+    let mut bgra = vec![0u8; (w as usize) * (h as usize) * 4];
+    for px in bgra.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+
+    match fit {
+        WallpaperFit::Tile => {
+            // Repetir desde la esquina superior-izquierda en tamaño nativo.
+            let src = rgba.as_raw();
+            let sw_u = sw as usize;
+            let sh_u = sh as usize;
+            for y in 0..(h as usize) {
+                let sy = y % sh_u;
+                let src_row = &src[sy * sw_u * 4..(sy + 1) * sw_u * 4];
+                let dst_row = &mut bgra[y * (w as usize) * 4..(y + 1) * (w as usize) * 4];
+                for x in 0..(w as usize) {
+                    let sx = x % sw_u;
+                    let si = sx * 4;
+                    let di = x * 4;
+                    dst_row[di] = src_row[si + 2]; // B
+                    dst_row[di + 1] = src_row[si + 1]; // G
+                    dst_row[di + 2] = src_row[si]; // R
+                    dst_row[di + 3] = 255;
+                }
+            }
+        }
+        _ => {
+            let (dx, dy, dw, dh) = mirada_brain::wallpaper_dst_rect(fit, sw, sh, w, h);
+            // Para Stretch/Fit/Fill escalamos la imagen al rect que cae en
+            // pantalla; para Center la dejamos a tamaño nativo. En todos los
+            // casos el "lienzo" donde se pintará es de tamaño `(dw, dh)` y
+            // luego se composita con offset `(dx, dy)` clipeando al destino.
+            let (img_pixels, iw, ih) = if matches!(fit, WallpaperFit::Center) {
+                (rgba.as_raw().clone(), sw, sh)
+            } else if dw <= 0 || dh <= 0 {
+                return None;
+            } else {
+                let scaled = image::imageops::resize(
+                    &rgba,
+                    dw as u32,
+                    dh as u32,
+                    image::imageops::FilterType::Triangle,
+                );
+                (scaled.into_raw(), dw, dh)
+            };
+            paste_rgba_into_bgra(&mut bgra, w, h, &img_pixels, iw, ih, dx, dy);
+        }
+    }
+
     Some(MemoryRenderBuffer::from_slice(
         &bgra,
         Fourcc::Argb8888,
@@ -170,6 +223,50 @@ fn load_wallpaper(path: &str, w: i32, h: i32) -> Option<MemoryRenderBuffer> {
         Transform::Normal,
         None,
     ))
+}
+
+/// Pega un bloque RGBA de `(iw, ih)` en un lienzo BGRA `(dw, dh)` con esquina
+/// superior-izquierda en `(dx, dy)`. Filas y columnas fuera del destino se
+/// clipean. Alfa se fuerza opaco.
+fn paste_rgba_into_bgra(
+    dst: &mut [u8],
+    dw: i32,
+    dh: i32,
+    src: &[u8],
+    iw: i32,
+    ih: i32,
+    dx: i32,
+    dy: i32,
+) {
+    if iw <= 0 || ih <= 0 || dw <= 0 || dh <= 0 {
+        return;
+    }
+    let row_dst = (dw as usize) * 4;
+    let row_src = (iw as usize) * 4;
+    // Recorta horizontalmente: rango de columnas de la fuente que cae en pantalla.
+    let x0 = dx.max(0);
+    let x1 = (dx + iw).min(dw);
+    if x1 <= x0 {
+        return;
+    }
+    let src_x0 = (x0 - dx) as usize;
+    let copy_w = (x1 - x0) as usize;
+    for y in 0..ih {
+        let ty = dy + y;
+        if ty < 0 || ty >= dh {
+            continue;
+        }
+        let src_row = &src[(y as usize) * row_src..(y as usize + 1) * row_src];
+        let dst_row = &mut dst[(ty as usize) * row_dst..(ty as usize + 1) * row_dst];
+        for k in 0..copy_w {
+            let si = (src_x0 + k) * 4;
+            let di = (x0 as usize + k) * 4;
+            dst_row[di] = src_row[si + 2]; // B
+            dst_row[di + 1] = src_row[si + 1]; // G
+            dst_row[di + 2] = src_row[si]; // R
+            dst_row[di + 3] = 255;
+        }
+    }
 }
 
 /// Rasteriza un título a un `MemoryRenderBuffer` (Argb8888); si no rasteriza
@@ -238,9 +335,12 @@ struct DrmState {
     text_cache: std::collections::HashMap<(String, [u8; 4]), MemoryRenderBuffer>,
     /// Ruta del wallpaper configurado (`None` = fondo de color sólido).
     wallpaper_path: Option<String>,
-    /// Wallpaper ya decodificado y escalado a la salida, con el tamaño para
-    /// el que se construyó. Se (re)arma perezosamente cuando cambia el
-    /// tamaño de salida. `None` si no hay ruta o la imagen no carga.
+    /// Modo de ajuste de la imagen (stretch/fit/fill/center/tile).
+    wallpaper_fit: mirada_brain::WallpaperFit,
+    /// Wallpaper ya decodificado y compuesto al tamaño de la salida, con el
+    /// tamaño para el que se construyó. Se (re)arma perezosamente cuando
+    /// cambia el tamaño, la ruta o el modo. `None` si no hay ruta o la
+    /// imagen no carga.
     wallpaper: Option<(MemoryRenderBuffer, (i32, i32))>,
     /// Árbol del menú raíz (de la config), con submenús anidados.
     menu_entries: Vec<crate::menu::MenuNode>,
@@ -620,7 +720,8 @@ impl DrmState {
                     .map(|(_, s)| *s != size)
                     .unwrap_or(true);
                 if stale && size.0 > 0 && size.1 > 0 {
-                    self.wallpaper = load_wallpaper(&path, size.0, size.1).map(|b| (b, size));
+                    self.wallpaper = load_wallpaper(&path, self.wallpaper_fit, size.0, size.1)
+                        .map(|b| (b, size));
                 }
                 if let Some((buf, _)) = &self.wallpaper {
                     if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
@@ -727,8 +828,10 @@ impl DrmState {
             self.zones = self.zone_presets.get(self.active_preset).cloned().unwrap_or_default();
             self.root_menu = None; // un menú abierto puede quedar obsoleto
             let new_wp = self.app.config_wallpaper_path();
-            if new_wp != self.wallpaper_path {
+            let new_fit = self.app.config_wallpaper_fit();
+            if new_wp != self.wallpaper_path || new_fit != self.wallpaper_fit {
                 self.wallpaper_path = new_wp;
+                self.wallpaper_fit = new_fit;
                 self.wallpaper = None; // se rearma en el próximo render
             }
             self.text = crate::text::TextRenderer::system(self.app.config_font_path().as_deref());
@@ -1566,6 +1669,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
 
     let font_path = app.config_font_path();
     let wallpaper_path = app.config_wallpaper_path();
+    let wallpaper_fit = app.config_wallpaper_fit();
     let menu_entries = app.config_menu();
     let zones = app.config_zones();
     // Lista de presets: el 0 es `config.zones`, luego los de `zone_presets`.
@@ -1599,6 +1703,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         },
         text_cache: std::collections::HashMap::new(),
         wallpaper_path,
+        wallpaper_fit,
         wallpaper: None,
         menu_entries,
         root_menu: None,

@@ -64,6 +64,118 @@ impl ZoneFrac {
     }
 }
 
+/// Cómo se coloca la imagen del wallpaper dentro de la salida. Es **geometría
+/// pura**: el compositor decide qué hacer con el rect que devuelve [`wallpaper_dst_rect`]
+/// y los píxeles que quedan fuera de él (típicamente negro).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum WallpaperFit {
+    /// Deformar la imagen para que cubra exactamente la salida. Sin barras
+    /// negras, puede distorsionar la relación de aspecto. Es el default.
+    Stretch,
+    /// Encajar la imagen entera dentro de la salida (contain): se respeta el
+    /// aspecto y la dimensión más restrictiva toca el borde; el resto queda
+    /// negro (letterbox/pillarbox).
+    Fit,
+    /// Cubrir la salida (cover): se respeta el aspecto y la dimensión más
+    /// laxa toca el borde; el resto de la imagen sobresale y se recorta.
+    Fill,
+    /// Pegar la imagen en su tamaño nativo, centrada. Si es más chica queda
+    /// rodeada de negro; si es más grande se recorta.
+    Center,
+    /// Repetir la imagen en su tamaño nativo, tilada desde la esquina
+    /// superior-izquierda hasta cubrir la salida.
+    Tile,
+}
+
+impl Default for WallpaperFit {
+    fn default() -> Self {
+        WallpaperFit::Stretch
+    }
+}
+
+impl WallpaperFit {
+    /// Identificador kebab-case del modo (`"stretch"`, `"fit"`, `"fill"`,
+    /// `"center"`, `"tile"`) para serializarlo en config de texto.
+    pub fn slug(self) -> &'static str {
+        match self {
+            WallpaperFit::Stretch => "stretch",
+            WallpaperFit::Fit => "fit",
+            WallpaperFit::Fill => "fill",
+            WallpaperFit::Center => "center",
+            WallpaperFit::Tile => "tile",
+        }
+    }
+
+    /// Parsea un slug; `None` si no coincide con ninguno conocido.
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Some(match slug {
+            "stretch" => WallpaperFit::Stretch,
+            "fit" => WallpaperFit::Fit,
+            "fill" => WallpaperFit::Fill,
+            "center" => WallpaperFit::Center,
+            "tile" => WallpaperFit::Tile,
+            _ => return None,
+        })
+    }
+}
+
+/// Para `Stretch`/`Fit`/`Fill`/`Center`, devuelve el rect `(x, y, w, h)` —en
+/// coordenadas de la salida— donde se pinta la imagen escalada. El consumidor
+/// rellena el resto con un color de fondo (típicamente negro). Para `Center`
+/// la imagen va a su tamaño nativo (puede salirse del destino, se clipea).
+/// Para [`WallpaperFit::Tile`] devuelve `(0, 0, sw, sh)` — el consumidor lo
+/// tila a mano.
+///
+/// Pura (`no_std`): aritmética entera salvo el escalado proporcional, que usa
+/// `libm` para no depender de `std`.
+pub fn wallpaper_dst_rect(
+    fit: WallpaperFit,
+    src_w: i32,
+    src_h: i32,
+    dst_w: i32,
+    dst_h: i32,
+) -> (i32, i32, i32, i32) {
+    let sw = src_w.max(1);
+    let sh = src_h.max(1);
+    let dw = dst_w.max(0);
+    let dh = dst_h.max(0);
+    match fit {
+        WallpaperFit::Stretch => (0, 0, dw, dh),
+        WallpaperFit::Tile => (0, 0, sw, sh),
+        WallpaperFit::Center => {
+            let x = (dw - sw) / 2;
+            let y = (dh - sh) / 2;
+            (x, y, sw, sh)
+        }
+        WallpaperFit::Fit | WallpaperFit::Fill => {
+            // `src_wider`: la imagen es más ancha que el destino (mismo signo
+            // que `sw/sh > dw/dh`, sin floats: `sw*dh > sh*dw`).
+            let src_wider = (sw as i64) * (dh as i64) > (sh as i64) * (dw as i64);
+            // Fit (contain): la dimensión más restrictiva toca el borde, la
+            // imagen entra entera → si la imagen es más ancha, igualar ancho.
+            // Fill (cover): la dimensión más laxa toca el borde, la imagen
+            // sobresale por la otra → si la imagen es más ancha, igualar alto.
+            let match_width = match fit {
+                WallpaperFit::Fit => src_wider,
+                WallpaperFit::Fill => !src_wider,
+                _ => unreachable!(),
+            };
+            let (scaled_w, scaled_h) = if match_width {
+                let h = libm::roundf(dw as f32 * sh as f32 / sw as f32) as i32;
+                (dw, h.max(1))
+            } else {
+                let w = libm::roundf(dh as f32 * sw as f32 / sh as f32) as i32;
+                (w.max(1), dh)
+            };
+            let x = (dw - scaled_w) / 2;
+            let y = (dh - scaled_h) / 2;
+            (x, y, scaled_w, scaled_h)
+        }
+    }
+}
+
 impl LayoutMode {
     /// Todos los modos, en el orden del ciclo de `CycleLayout`.
     pub const ALL: [LayoutMode; 7] = [
@@ -426,5 +538,91 @@ mod tests {
     fn layout_is_deterministic() {
         let p = params(LayoutMode::Grid);
         assert_eq!(tile(SCREEN, 7, &p), tile(SCREEN, 7, &p));
+    }
+
+    // --- wallpaper_dst_rect ---------------------------------------------
+
+    #[test]
+    fn wallpaper_stretch_cubre_toda_la_salida() {
+        assert_eq!(
+            wallpaper_dst_rect(WallpaperFit::Stretch, 800, 600, 1920, 1080),
+            (0, 0, 1920, 1080),
+        );
+    }
+
+    #[test]
+    fn wallpaper_center_pega_la_imagen_a_su_tamano() {
+        // Imagen más chica → queda centrada con padding.
+        let r = wallpaper_dst_rect(WallpaperFit::Center, 800, 600, 1920, 1080);
+        assert_eq!(r, ((1920 - 800) / 2, (1080 - 600) / 2, 800, 600));
+        // Imagen más grande → offset negativo (se clipea).
+        let r = wallpaper_dst_rect(WallpaperFit::Center, 4000, 3000, 1920, 1080);
+        assert_eq!(r, ((1920 - 4000) / 2, (1080 - 3000) / 2, 4000, 3000));
+    }
+
+    #[test]
+    fn wallpaper_fit_respeta_aspecto_y_no_sobresale() {
+        // Imagen 4:3 (más cuadrada) en pantalla 16:9 (más ancha) → fit toca el
+        // alto (la imagen es más alta-proporcional que la pantalla, así que la
+        // dimensión más restrictiva es el ancho-virtual; el alto llena 1080 y
+        // el ancho queda con pillarbox).
+        let (x, y, w, h) = wallpaper_dst_rect(WallpaperFit::Fit, 800, 600, 1920, 1080);
+        assert!(w <= 1920 && h <= 1080);
+        assert_eq!(h, 1080);
+        assert_eq!(w, 1440); // 1080 * 800 / 600
+        assert_eq!(y, 0);
+        assert_eq!(x, (1920 - 1440) / 2);
+
+        // Imagen 16:9 panorámica en pantalla 4:3 → letterbox arriba/abajo.
+        let (x, y, w, h) = wallpaper_dst_rect(WallpaperFit::Fit, 1600, 900, 1024, 768);
+        assert_eq!(w, 1024);
+        assert_eq!(h, 576); // 1024 * 9 / 16
+        assert_eq!(x, 0);
+        assert_eq!(y, (768 - 576) / 2);
+    }
+
+    #[test]
+    fn wallpaper_fill_cubre_y_recorta_los_bordes() {
+        // 4:3 imagen en 16:9 pantalla → fill llena el ancho, sobra arriba/abajo
+        // (offset y negativo).
+        let (x, y, w, h) = wallpaper_dst_rect(WallpaperFit::Fill, 800, 600, 1920, 1080);
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1440); // 1920 * 600 / 800
+        assert_eq!(x, 0);
+        assert!(y < 0, "fill debe sobresalir en Y, no quedar dentro");
+
+        // 16:9 imagen en 4:3 pantalla → fill llena el alto, sobra a los lados.
+        let (x, y, w, h) = wallpaper_dst_rect(WallpaperFit::Fill, 1600, 900, 1024, 768);
+        assert_eq!(h, 768);
+        // 768 * 1600 / 900 = 1365.33 → 1365.
+        assert!(w >= 1024);
+        assert!(x < 0);
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn wallpaper_tile_devuelve_el_tamano_nativo() {
+        assert_eq!(
+            wallpaper_dst_rect(WallpaperFit::Tile, 128, 128, 1920, 1080),
+            (0, 0, 128, 128),
+        );
+    }
+
+    #[test]
+    fn wallpaper_aspecto_igual_no_distorsiona_ni_recorta() {
+        // Si la imagen ya tiene el mismo aspecto, fit y fill coinciden con
+        // stretch (cubre todo, sin offset).
+        let r_fit = wallpaper_dst_rect(WallpaperFit::Fit, 1600, 900, 1920, 1080);
+        let r_fill = wallpaper_dst_rect(WallpaperFit::Fill, 1600, 900, 1920, 1080);
+        assert_eq!(r_fit, (0, 0, 1920, 1080));
+        assert_eq!(r_fill, (0, 0, 1920, 1080));
+    }
+
+    #[test]
+    fn wallpaper_dimensiones_degeneradas_no_panican() {
+        // No se exige nada de los valores devueltos: que no panique.
+        let _ = wallpaper_dst_rect(WallpaperFit::Fit, 0, 0, 1920, 1080);
+        let _ = wallpaper_dst_rect(WallpaperFit::Fill, 100, 100, 0, 0);
+        let _ = wallpaper_dst_rect(WallpaperFit::Center, 100, 100, 0, 0);
     }
 }
