@@ -173,7 +173,6 @@ pub(crate) enum Icon {
     Window,
     Folder,
     FolderOpen,
-    Person,
     Moon,
     Triangle,
     ZoomIn,
@@ -188,73 +187,214 @@ pub(crate) fn icon_view<Msg: Clone + 'static>(icon: Icon, px: f32, color: Color)
     cell(icon_cmds(icon, px / 2.0, px / 2.0, px, rgba(color)), px)
 }
 
-/// Icono del tipo de carta para el árbol.
-pub(crate) fn chart_kind_view<Msg: Clone + 'static>(
-    kind: ChartKind,
-    px: f32,
-    color: Color,
-) -> View<Msg> {
-    cell(chart_kind_cmds(kind, px / 2.0, px / 2.0, px, rgba(color)), px)
+// =====================================================================
+// Iconos coloridos para el árbol (grupo / contacto / tipo de carta)
+// =====================================================================
+
+const fn rg(r: f32, g: f32, b: f32) -> Rgba {
+    Rgba { r, g, b, a: 1.0 }
 }
 
-fn chart_kind_cmds(kind: ChartKind, cx: f32, cy: f32, box_px: f32, c: Rgba) -> Vec<DrawCommand> {
-    let s = box_px * 0.82;
-    match kind {
-        // Retornos: el luminar correspondiente.
-        ChartKind::SolarReturn => planet_commands("sun", cx, cy, s, c, sw(box_px)),
-        ChartKind::LunarReturn => planet_commands("moon", cx, cy, s, c, sw(box_px)),
-        // Natal y derivadas: una rueda chica (anillo + cruz de ejes).
-        ChartKind::Natal | ChartKind::Mundane => wheel_icon(cx, cy, box_px, c),
-        // Tránsitos / sinastría / compuestas: dos anillos concéntricos.
-        ChartKind::Transit | ChartKind::Synastry | ChartKind::Composite | ChartKind::Davison => {
-            let r = box_px * 0.40;
-            vec![
-                ring(cx, cy, r, c, box_px),
-                ring(cx, cy, r * 0.55, c, box_px),
-            ]
+/// Carpeta (grupo) — ámbar.
+pub(crate) fn group_icon_view<Msg: Clone + 'static>(px: f32) -> View<Msg> {
+    let (cx, cy, r) = (px / 2.0, px / 2.0, px * 0.5);
+    let body = rg(0.96, 0.78, 0.33);
+    let tab = rg(0.86, 0.62, 0.22);
+    let left = cx - r * 0.66;
+    let right = cx + r * 0.66;
+    let top = cy - r * 0.28;
+    let bot = cy + r * 0.46;
+    let cmds = vec![
+        // Pestaña de la carpeta (atrás).
+        DrawCommand::Polygon {
+            points: vec![
+                (left, top - r * 0.22),
+                (left + r * 0.5, top - r * 0.22),
+                (left + r * 0.66, top),
+                (left, top),
+            ],
+            fill: Some(tab),
+            stroke: None,
+            stroke_w: 0.0,
+        },
+        // Cuerpo.
+        DrawCommand::Polygon {
+            points: vec![(left, top), (right, top), (right, bot), (left, bot)],
+            fill: Some(body),
+            stroke: None,
+            stroke_w: 0.0,
+        },
+    ];
+    cell(cmds, px)
+}
+
+/// Persona (contacto) — turquesa.
+pub(crate) fn contact_icon_view<Msg: Clone + 'static>(px: f32) -> View<Msg> {
+    let (cx, cy, r) = (px / 2.0, px / 2.0, px * 0.5);
+    let c = rg(0.32, 0.72, 0.82);
+    let cmds = vec![
+        DrawCommand::Circle {
+            cx,
+            cy: cy - r * 0.34,
+            r: r * 0.26,
+            stroke: None,
+            fill: Some(c),
+            stroke_w: 0.0,
+        },
+        DrawCommand::Polygon {
+            points: vec![
+                (cx - r * 0.46, cy + r * 0.58),
+                (cx - r * 0.30, cy + r * 0.04),
+                (cx + r * 0.30, cy + r * 0.04),
+                (cx + r * 0.46, cy + r * 0.58),
+            ],
+            fill: Some(c),
+            stroke: None,
+            stroke_w: 0.0,
+        },
+    ];
+    cell(cmds, px)
+}
+
+/// Icono colorido del tipo de carta (rueda natal, torta de cumpleaños
+/// para la revolución solar, luna para la lunar, etc.).
+pub(crate) fn chart_kind_colored<Msg: Clone + 'static>(kind: ChartKind, px: f32) -> View<Msg> {
+    let (cx, cy, r) = (px / 2.0, px / 2.0, px * 0.5);
+    let w = sw(px);
+    let cmds = match kind {
+        ChartKind::SolarReturn => birthday_cake_cmds(cx, cy, r),
+        ChartKind::LunarReturn => {
+            planet_commands("moon", cx, cy, px * 0.78, rg(0.80, 0.84, 0.92), w)
         }
-        // Progresiones / arcos / direcciones / perfecciones: anillo + punto.
-        _ => {
-            let r = box_px * 0.40;
+        ChartKind::Natal | ChartKind::Mundane => natal_wheel_cmds(cx, cy, r, w),
+        ChartKind::Transit | ChartKind::Synastry | ChartKind::Composite | ChartKind::Davison => {
             vec![
-                ring(cx, cy, r, c, box_px),
                 DrawCommand::Circle {
                     cx,
                     cy,
-                    r: box_px * 0.09,
-                    stroke: None,
-                    fill: Some(c),
-                    stroke_w: 0.0,
+                    r: r * 0.42,
+                    stroke: Some(rg(0.58, 0.52, 0.86)),
+                    fill: None,
+                    stroke_w: w,
+                },
+                DrawCommand::Circle {
+                    cx,
+                    cy,
+                    r: r * 0.22,
+                    stroke: Some(rg(0.36, 0.74, 0.82)),
+                    fill: None,
+                    stroke_w: w,
                 },
             ]
         }
-    }
+        _ => vec![
+            DrawCommand::Circle {
+                cx,
+                cy,
+                r: r * 0.40,
+                stroke: Some(rg(0.95, 0.70, 0.35)),
+                fill: None,
+                stroke_w: w,
+            },
+            DrawCommand::Circle {
+                cx,
+                cy,
+                r: r * 0.10,
+                stroke: None,
+                fill: Some(rg(0.95, 0.70, 0.35)),
+                stroke_w: 0.0,
+            },
+        ],
+    };
+    cell(cmds, px)
 }
 
-fn wheel_icon(cx: f32, cy: f32, box_px: f32, c: Rgba) -> Vec<DrawCommand> {
-    let r = box_px * 0.40;
-    let w = sw(box_px);
+/// Ruedita natal: aro violeta + cruz de ejes dorada + punto central.
+fn natal_wheel_cmds(cx: f32, cy: f32, r: f32, w: f32) -> Vec<DrawCommand> {
+    let ring = rg(0.62, 0.52, 0.88);
+    let cross = rg(0.95, 0.80, 0.42);
+    let rr = r * 0.44;
     vec![
-        ring(cx, cy, r, c, box_px),
+        DrawCommand::Circle {
+            cx,
+            cy,
+            r: rr,
+            stroke: Some(ring),
+            fill: None,
+            stroke_w: w,
+        },
         DrawCommand::Line {
-            x1: cx - r,
+            x1: cx - rr,
             y1: cy,
-            x2: cx + r,
+            x2: cx + rr,
             y2: cy,
-            color: c,
+            color: cross,
             width: w * 0.8,
             dash: None,
         },
         DrawCommand::Line {
             x1: cx,
-            y1: cy - r,
+            y1: cy - rr,
             x2: cx,
-            y2: cy + r,
-            color: c,
+            y2: cy + rr,
+            color: cross,
             width: w * 0.8,
             dash: None,
         },
+        DrawCommand::Circle {
+            cx,
+            cy,
+            r: r * 0.09,
+            stroke: None,
+            fill: Some(cross),
+            stroke_w: 0.0,
+        },
     ]
+}
+
+/// Torta de cumpleaños (revolución solar): plato, bizcocho, glaseado
+/// rosa, velas y llamas.
+fn birthday_cake_cmds(cx: f32, cy: f32, r: f32) -> Vec<DrawCommand> {
+    let plate = rg(0.80, 0.82, 0.88);
+    let cake = rg(0.82, 0.58, 0.40);
+    let frosting = rg(0.96, 0.62, 0.72);
+    let candle = rg(0.45, 0.70, 0.95);
+    let flame = rg(0.99, 0.75, 0.25);
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32, c: Rgba| DrawCommand::Polygon {
+        points: vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
+        fill: Some(c),
+        stroke: None,
+        stroke_w: 0.0,
+    };
+    let mut out = vec![
+        // Plato.
+        rect(cx - r * 0.7, cy + r * 0.5, cx + r * 0.7, cy + r * 0.62, plate),
+        // Bizcocho.
+        rect(cx - r * 0.55, cy - r * 0.02, cx + r * 0.55, cy + r * 0.5, cake),
+        // Glaseado.
+        rect(cx - r * 0.55, cy - r * 0.18, cx + r * 0.55, cy - r * 0.02, frosting),
+    ];
+    // Velas + llamas.
+    for dx in [-r * 0.28, 0.0, r * 0.28] {
+        out.push(DrawCommand::Line {
+            x1: cx + dx,
+            y1: cy - r * 0.18,
+            x2: cx + dx,
+            y2: cy - r * 0.52,
+            color: candle,
+            width: (r * 0.12).max(1.4),
+            dash: None,
+        });
+        out.push(DrawCommand::Circle {
+            cx: cx + dx,
+            cy: cy - r * 0.62,
+            r: r * 0.10,
+            stroke: None,
+            fill: Some(flame),
+            stroke_w: 0.0,
+        });
+    }
+    out
 }
 
 fn ring(cx: f32, cy: f32, r: f32, c: Rgba, box_px: f32) -> DrawCommand {
@@ -541,30 +681,6 @@ fn icon_cmds(icon: Icon, cx: f32, cy: f32, box_px: f32, c: Rgba) -> Vec<DrawComm
             }
             out
         }
-        Icon::Person => vec![
-            DrawCommand::Circle {
-                cx,
-                cy: cy - r * 0.32,
-                r: r * 0.26,
-                stroke: Some(c),
-                fill: None,
-                stroke_w: w,
-            },
-            DrawCommand::Path {
-                d: format!(
-                    "M {} {} A {} {} 0 0 1 {} {}",
-                    cx - r * 0.45,
-                    cy + r * 0.55,
-                    r * 0.45,
-                    r * 0.45,
-                    cx + r * 0.45,
-                    cy + r * 0.55,
-                ),
-                stroke: Some(c),
-                fill: None,
-                stroke_w: w,
-            },
-        ],
         Icon::Moon => planet_commands("moon", cx, cy, box_px * 0.82, c, w),
         Icon::ZoomIn | Icon::ZoomOut => {
             let lens = r * 0.38;

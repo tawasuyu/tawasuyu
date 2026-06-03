@@ -716,55 +716,6 @@ fn save_ui(m: &Model) {
     });
 }
 
-/// Fila contenido(flex) + sidebar(ancho fijo) sin splitter — usada en
-/// modo colapsado (rail-only). `left` ubica el sidebar a la izquierda.
-fn fixed_row(content: View<Msg>, sidebar: Option<(View<Msg>, f32)>, left: bool) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::prelude::length;
-    let content_box = View::new(Style {
-        flex_grow: 1.0,
-        size: Size {
-            width: percent(0.0_f32),
-            height: percent(1.0_f32),
-        },
-        min_size: Size {
-            width: length(0.0_f32),
-            height: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![content]);
-    let mut kids: Vec<View<Msg>> = Vec::new();
-    if let Some((sb, w)) = sidebar {
-        let sb_box = View::new(Style {
-            size: Size {
-                width: length(w),
-                height: percent(1.0_f32),
-            },
-            flex_shrink: 0.0,
-            ..Default::default()
-        })
-        .children(vec![sb]);
-        if left {
-            kids.push(sb_box);
-            kids.push(content_box);
-        } else {
-            kids.push(content_box);
-            kids.push(sb_box);
-        }
-    } else {
-        kids.push(content_box);
-    }
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(kids)
-}
-
 impl App for Cosmos {
     type Model = Model;
     type Msg = Msg;
@@ -1203,15 +1154,14 @@ impl App for Cosmos {
 
         let center = chrome::center_view(model, &theme);
 
-        // Dock: el **rail** de cada lado va pegado al centro (sobresale del
-        // panel), y el **contenido** vive en un pane resizable por fuera
-        // del rail, así la barra azul queda pegada al panel. Angosto →
-        // sólo rails; clic en un diente despliega ese lado (estilo web).
+        // Dock: los **rails** flotan como overlay sobre el centro (los
+        // dibuja `center_view`), así la rueda usa todo el hueco. Acá sólo
+        // colocamos los **paneles** de contenido en panes resizables; la
+        // barra azul queda pegada al panel. Angosto → sólo rails; clic en
+        // un diente despliega ese lado (estilo web).
         let collapsed = chrome::dock_collapsed(model);
         let left_show = !collapsed || model.dock_expanded == Some(model::DockSide::Left);
         let right_show = !collapsed || model.dock_expanded == Some(model::DockSide::Right);
-        let left_rail = chrome::dock_rail_for(model::DockSide::Left, model, &theme);
-        let right_rail = chrome::dock_rail_for(model::DockSide::Right, model, &theme);
         let left_panel = if left_show {
             chrome::dock_panel_for(model::DockSide::Left, model, &theme)
         } else {
@@ -1223,14 +1173,7 @@ impl App for Cosmos {
             None
         };
 
-        // Construcción de adentro hacia afuera: centro → rails (pegados) →
-        // paneles resizables (con la barra azul pegada al panel).
         let mut core = center;
-        // Rail derecho pegado al centro.
-        if let Some(r) = right_rail {
-            core = fixed_row(core, Some((r, model::TOOLS_RAIL_W)), false);
-        }
-        // Panel derecho resizable, por fuera del rail.
         if let Some(rp) = right_panel {
             core = splitter_two(
                 Direction::Row,
@@ -1245,11 +1188,6 @@ impl App for Cosmos {
                 &sp,
             );
         }
-        // Rail izquierdo pegado al centro.
-        if let Some(l) = left_rail {
-            core = fixed_row(core, Some((l, model::TOOLS_RAIL_W)), true);
-        }
-        // Panel izquierdo resizable, por fuera del rail.
         if let Some(lp) = left_panel {
             core = splitter_two(
                 Direction::Row,

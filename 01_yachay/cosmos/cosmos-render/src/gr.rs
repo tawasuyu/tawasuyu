@@ -1,4 +1,4 @@
-//! Sistema GR (García Rosas) — detección de *triggers* de rectificación.
+//! Sistema GR (Germán Rosas) — detección de *triggers* de rectificación.
 //!
 //! Un trigger GR es un cuerpo natal proyectado por dirección primaria
 //! —directa o conversa— que cae cerca de un punto natal. La

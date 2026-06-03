@@ -17,7 +17,7 @@ use cosmos_render::{
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Size, Style},
-    style::FlexWrap,
+    style::{FlexWrap, Position},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -496,17 +496,12 @@ pub(crate) const NAV_TOOLBAR_H: f32 = 28.0;
 
 /// Icono de un nodo según su tipo (grupo abierto/cerrado, contacto, o el
 /// tipo de carta).
-fn nav_icon(n: &NavNode, expanded: bool, theme: &Theme) -> View<Msg> {
+fn nav_icon(n: &NavNode, _expanded: bool, _theme: &Theme) -> View<Msg> {
+    // Iconos coloridos (sencillos) por tipo de nodo.
     match n.kind {
-        NavKind::Group => glyphs::icon_view(
-            if expanded { Icon::FolderOpen } else { Icon::Folder },
-            16.0,
-            theme.accent,
-        ),
-        NavKind::Contact => glyphs::icon_view(Icon::Person, 16.0, theme.fg_text),
-        NavKind::Chart => {
-            glyphs::chart_kind_view(n.chart_kind.unwrap_or(ChartKind::Natal), 16.0, theme.fg_text)
-        }
+        NavKind::Group => glyphs::group_icon_view(17.0),
+        NavKind::Contact => glyphs::contact_icon_view(17.0),
+        NavKind::Chart => glyphs::chart_kind_colored(n.chart_kind.unwrap_or(ChartKind::Natal), 17.0),
     }
 }
 
@@ -807,22 +802,57 @@ fn dock_rail(side: DockSide, items: &[DockItem], active: Option<DockItem>, theme
         }
         teeth.push(tooth);
     }
-    // Tira de rail a alto completo (los dientes arriba) — es además el
-    // **drop target** del lado, así que soltar un diente del otro sidebar
-    // sobre el rail lo mueve a este lado.
+    // Sólo del alto de los dientes (el hueco de abajo lo aprovecha la
+    // rueda, porque el rail flota como overlay sobre el centro). Es además
+    // el **drop target** del lado: soltar un diente del otro sidebar acá
+    // lo mueve a este lado.
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: length(TOOLS_RAIL_W),
-            height: percent(1.0_f32),
+            height: auto(),
         },
         flex_shrink: 0.0,
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
+    .radius(5.0)
     .on_drop(move |payload| Some(Msg::DockDrop(side, payload)))
     .drop_hover_fill(theme.bg_row_hover)
     .children(teeth)
+}
+
+/// Envuelve el rail de un lado como **overlay absoluto** pegado al borde
+/// interno del centro (los dientes flotan sobre la rueda; el hueco debajo
+/// lo usa la rueda). `None` si el lado no tiene rail.
+fn dock_rail_overlay(side: DockSide, model: &Model, theme: &Theme) -> Option<View<Msg>> {
+    let rail = dock_rail_for(side, model, theme)?;
+    let inset = match side {
+        DockSide::Left => Rect {
+            top: length(6.0_f32),
+            left: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        DockSide::Right => Rect {
+            top: length(6.0_f32),
+            right: length(0.0_f32),
+            left: auto(),
+            bottom: auto(),
+        },
+    };
+    Some(
+        View::new(Style {
+            position: Position::Absolute,
+            inset,
+            size: Size {
+                width: length(TOOLS_RAIL_W),
+                height: auto(),
+            },
+            ..Default::default()
+        })
+        .children(vec![rail]),
+    )
 }
 
 /// El rail (tira de dientes) de un sidebar, o `None` si está oculto o sin
@@ -897,6 +927,16 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
         graphic_for(model, &model.chart, &model.render, WHEEL_SIZE, theme, true)
     };
 
+    // Los rails de los sidebars flotan como overlay sobre el área gráfica
+    // (pegados a los bordes internos), así la rueda usa todo el espacio y
+    // los dientes sobresalen sobre ella.
+    let mut area_kids = vec![inner];
+    if let Some(l) = dock_rail_overlay(DockSide::Left, model, theme) {
+        area_kids.push(l);
+    }
+    if let Some(r) = dock_rail_overlay(DockSide::Right, model, theme) {
+        area_kids.push(r);
+    }
     let graphic_area = View::new(Style {
         flex_grow: 1.0,
         flex_direction: FlexDirection::Column,
@@ -912,7 +952,7 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .children(vec![inner]);
+    .children(area_kids);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
