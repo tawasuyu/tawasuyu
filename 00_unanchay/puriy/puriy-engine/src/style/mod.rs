@@ -345,6 +345,21 @@ mod tests {
     }
 
     #[test]
+    fn parsea_named_colors_extendidos() {
+        // Tabla CSS3 completa: colores que antes dropeaban la declaración.
+        assert_eq!(parse_color("coral"), Some(Color::rgb(255, 127, 80)));
+        assert_eq!(parse_color("tomato"), Some(Color::rgb(255, 99, 71)));
+        assert_eq!(parse_color("slateblue"), Some(Color::rgb(106, 90, 205)));
+        assert_eq!(parse_color("rebeccapurple"), Some(Color::rgb(102, 51, 153)));
+        assert_eq!(parse_color("darkslategray"), Some(Color::rgb(47, 79, 79)));
+        // Case-insensitive + variante grey.
+        assert_eq!(parse_color("SteelBlue"), Some(Color::rgb(70, 130, 180)));
+        assert_eq!(parse_color("dimgrey"), Some(Color::rgb(105, 105, 105)));
+        // No-color sigue siendo None.
+        assert_eq!(parse_color("notacolor"), None);
+    }
+
+    #[test]
     fn parsea_length() {
         assert_eq!(parse_length_px("12px"), Some(12.0));
         assert_eq!(parse_length_px("1.5em"), Some(24.0));
