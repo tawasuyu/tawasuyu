@@ -109,6 +109,17 @@ impl App for Uya {
                 enlace.conectar(par);
             }
         }
+        // Descubrimiento por sala (DHT): unirse por nombre en vez de pegar dirección.
+        if let Ok(sala) = env::var("UYA_SALA") {
+            let bootstrap: Vec<String> = env::var("UYA_BOOTSTRAP")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            enlace.unir_sala(sala, bootstrap);
+        }
 
         // Cámara sintética (256×192 @ 12 fps): preview local + difusión a pares.
         iniciar_camara(enlace.clone(), 256, 192, 12.0);

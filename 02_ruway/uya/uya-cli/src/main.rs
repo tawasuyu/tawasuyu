@@ -38,6 +38,19 @@ fn main() {
         }
     }
 
+    // Descubrimiento por sala: anunciarse y encontrar a los demás por nombre.
+    if let Ok(sala) = env::var("UYA_SALA") {
+        let bootstrap: Vec<String> = env::var("UYA_BOOTSTRAP")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        println!("uya-cli: uniéndome a la sala '{sala}' ({} bootstrap)", bootstrap.len());
+        enlace.unir_sala(sala, bootstrap);
+    }
+
     iniciar_camara(enlace.clone(), 192, 144, 12.0);
     // Audio: reproducción sobre la mezcla remota + captura de micrófono.
     let mezcla = enlace.mezcla();

@@ -75,6 +75,12 @@ struct Malla {
 enum Cmd {
     Conectar(String),
     Difundir(Vec<u8>),
+    /// Unirse a una sala por nombre vía DHT: anunciarse como provider de la
+    /// clave de la sala y descubrir periódicamente a los demás providers.
+    UnirSala {
+        sala: String,
+        bootstrap: Vec<String>,
+    },
 }
 
 /// Identidad y estado de medios locales, compartidos con cada conexión para el
@@ -212,6 +218,18 @@ impl Enlace {
         let _ = self.cmd_tx.send(Cmd::Conectar(addr.to_string()));
     }
 
+    /// Se une a una sala por nombre: se anuncia en el DHT como provider de la
+    /// clave de la sala y descubre a los demás providers (que entran a la malla
+    /// automáticamente). `bootstrap` son multiaddrs de nodos a los que dialear
+    /// para sembrar el DHT (un rendezvous conocido). Aditivo: convive con
+    /// `conectar` manual.
+    pub fn unir_sala(&self, sala: impl Into<String>, bootstrap: Vec<String>) {
+        let _ = self.cmd_tx.send(Cmd::UnirSala {
+            sala: sala.into(),
+            bootstrap,
+        });
+    }
+
     /// Difunde un paquete a todos los pares (serializa una vez).
     pub fn emitir(&self, paquete: &Paquete) {
         let _ = self.cmd_tx.send(Cmd::Difundir(paquete.codificar()));
@@ -280,6 +298,9 @@ async fn conducir(
     ev_tx: Sender<EventoUya>,
     mezcla: Arc<Mutex<MezclaRemota>>,
 ) {
+    // El nodo se comparte con la tarea de descubrimiento DHT (Arc): start/find
+    // toman `&self` y corren en el mismo runtime.
+    let node = Arc::new(node);
     // Mi propia dirección dialable arranca el set de conocidas: es lo que
     // gossipeo para que los demás puedan discarme.
     let mut conocidas = HashSet::new();
@@ -360,6 +381,45 @@ async fn conducir(
             }
             Cmd::Difundir(bytes) => {
                 difundir_a_todos(&malla.escritores, &bytes).await;
+            }
+            Cmd::UnirSala { sala, bootstrap } => {
+                // Clave de la sala = BLAKE3("uya/sala/<nombre>"), reusando la
+                // misma derivación determinista de los ParticipanteId.
+                let clave = id_desde_nombre(&format!("uya/sala/{sala}"));
+                // Sembrar el DHT dialando los bootstraps (rendezvous conocidos).
+                for b in &bootstrap {
+                    if let Ok(a) = b.parse::<Multiaddr>() {
+                        node.dial(a);
+                    }
+                }
+                node.start_providing(&clave);
+
+                // Loop de descubrimiento: cada pocos segundos busca a los demás
+                // providers de la sala y los mete en la malla (deduplicada).
+                let node_d = node.clone();
+                let cmd_d = malla.cmd_tx.clone();
+                let mi = malla.mi_peer;
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        for p in node_d.find_providers(&clave).await {
+                            if p == mi {
+                                continue;
+                            }
+                            // Resolver una dirección dialable del provider.
+                            if let Some(dp) = node_d
+                                .find_closest_peers(p)
+                                .await
+                                .into_iter()
+                                .find(|d| d.peer_id == p)
+                            {
+                                if let Some(addr) = dp.addrs.into_iter().next() {
+                                    let _ = cmd_d.send(Cmd::Conectar(format!("{addr}/p2p/{p}")));
+                                }
+                            }
+                        }
+                    }
+                });
             }
         }
     }

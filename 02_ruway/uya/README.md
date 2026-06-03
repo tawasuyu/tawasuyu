@@ -43,6 +43,17 @@ Variables: `UYA_NOMBRE` (→ identidad), `UYA_ESCUCHAR` (multiaddr de escucha,
 default `/ip4/0.0.0.0/tcp/0`), `UYA_CONECTAR` (multiaddr(s) dialable(s),
 coma-separado), `UYA_TONO=1` (tono sintético si no hay micrófono).
 
+**Entrar por nombre de sala** (en vez de pegar direcciones): todos con la misma
+`UYA_SALA`, sembrando el DHT con un rendezvous (`UYA_BOOTSTRAP`, p. ej. el primer
+nodo). Quien quiera puede dialear a cualquiera de la sala; la malla converge sola.
+
+```bash
+# Anfitrión/rendezvous (anotá su dirección dialable):
+UYA_NOMBRE=Ana UYA_SALA=oficina UYA_ESCUCHAR=/ip4/0.0.0.0/tcp/7880 cargo run -p uya-cli
+# Los demás: misma sala, bootstrap al anfitrión, SIN pegar direcciones:
+UYA_NOMBRE=Bea UYA_SALA=oficina UYA_BOOTSTRAP=<dirección de Ana> cargo run -p uya-cli
+```
+
 ## Estado (MVP)
 
 Anda hoy, end-to-end y feo a propósito:
@@ -72,14 +83,19 @@ Anda hoy, end-to-end y feo a propósito:
 - ✅ **Conectar desde la UI**: la app muestra tu dirección dialable (para
   compartir) y un campo donde pegás (Ctrl/Cmd+V) la de un par + Enter/botón —
   ya no hace falta `UYA_CONECTAR`. (Funciona también por env, como antes.)
+- ✅ **Entrar por nombre de sala (DHT)**: `UYA_SALA=<nombre>` se anuncia como
+  provider de `BLAKE3("uya/sala/<nombre>")` en la Kademlia de `BrahmanNet` y
+  descubre a los demás providers, que entran a la malla solos. Necesita sembrar
+  el DHT con un rendezvous conocido (`UYA_BOOTSTRAP=<multiaddr>`). Verificado con
+  3 nodos: misma sala + bootstrap a uno → los tres se ven, sin pegar direcciones.
 
 ## Pendiente (por orden)
 
 1. **Firma agora del `Hola`**: el PeerId ya es estable (deriva de `BLAKE3(nombre)`),
    pero el nombre es auto-declarado. Atar la identidad a `agora`: firmar el `Hola`
    con la clave agora y verificarla, para que nadie suplante un nombre.
-2. **Descubrimiento por DHT**: `BrahmanNet` ya trae Kademlia — anunciar/encontrar
-   pares por una clave de sala en vez de pasar la multiaddr del anfitrión a mano
-   (la malla ya converge sola una vez que entrás; falta el "entrar por nombre").
+2. **Rendezvous sin bootstrap manual**: hoy la sala DHT necesita un
+   `UYA_BOOTSTRAP` conocido para sembrarse. Falta mDNS (LAN) y/o un bootstrap
+   público por defecto para "entrar por nombre" sin pasar dirección alguna.
 3. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).
 4. **SFU / selective forwarding** para grupos grandes (hoy malla completa: N² streams).
