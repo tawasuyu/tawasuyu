@@ -1877,10 +1877,17 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         let surface = drm
             .create_surface(crtc_h, mode, &[conn_handle])
             .map_err(|e| format!("create_surface[{name}] falló: {e}"))?;
+        // Scale/transform por salida — overrides de la config o defaults.
+        // Para `OutputModeSource::Static` (geometría DRM) hace falta el
+        // factor decimal; el announce al protocolo usa el enum de smithay
+        // (Integer/Fractional) para no romper clientes viejos.
+        let scale_120 = app.config_output_scale_120_for(&name);
+        let transform = app.config_output_transform_for(&name);
+        let scale_f64 = (if scale_120 > 0 { scale_120 } else { 120 }) as f64 / 120.0;
         let mode_source = OutputModeSource::Static {
             size: Size::from((w as i32, h as i32)),
-            scale: Scale::from(1.0),
-            transform: Transform::Normal,
+            scale: Scale::from(scale_f64),
+            transform,
         };
         let comp: Compositor = DrmCompositor::new(
             mode_source,
@@ -1895,8 +1902,15 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         )
         .map_err(|e| format!("DrmCompositor::new[{name}] falló: {e}"))?;
         let refresh_mhz = mode.vrefresh() as i32 * 1000;
-        let smithay_out =
-            crate::announce_output(&display.handle(), &name, w as i32, h as i32, refresh_mhz);
+        let smithay_out = crate::announce_output(
+            &display.handle(),
+            &name,
+            w as i32,
+            h as i32,
+            refresh_mhz,
+            scale_120,
+            transform,
+        );
         // Brain: cada salida es un id incremental con su tamaño local.
         let ev = app.body.add_output(i as u32, w as i32, h as i32);
         app.brain_feed(ev);

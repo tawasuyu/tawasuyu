@@ -175,6 +175,18 @@ pub struct OutputOverride {
     /// (sin override, todas son `0` y mandan los nombres alfabéticamente).
     #[serde(default)]
     pub order: i32,
+    /// Escala HiDPI en 120-avos: `120` = 100 %, `180` = 150 %, `240` = 200 %.
+    /// Misma convención que `wp_fractional_scale` de Wayland y que
+    /// [`mirada_layout::ESCALA_100`]. Vale `0` (default) = sin override → la
+    /// salida se anuncia a 100 % nativo. Valores `<= 0` se ignoran.
+    #[serde(default)]
+    pub scale_120: u32,
+    /// Rotación / espejado del scanout. Slugs: `"normal"` (default si vacío),
+    /// `"90"`, `"180"`, `"270"`, `"flipped"`, `"flipped-90"`, `"flipped-180"`,
+    /// `"flipped-270"`. Validado al cargar la config (`from_ron`); el
+    /// compositor lo parsea a su `Transform` al usar.
+    #[serde(default)]
+    pub transform: String,
 }
 
 /// Parsea el slug de [`Config::output_direction`] a [`Disposicion`].
@@ -184,6 +196,27 @@ fn parse_disposition(slug: &str) -> Option<Disposicion> {
         "vertical" => Some(Disposicion::Vertical),
         _ => None,
     }
+}
+
+/// Slugs válidos para [`OutputOverride::transform`]. Mismo orden que la enum
+/// `Transform` de smithay (Normal / 90 / 180 / 270 / Flipped / Flipped90 /
+/// Flipped180 / Flipped270). El consumidor (drm_backend) hace el match a su
+/// tipo; acá sólo validamos.
+pub const TRANSFORM_SLUGS: &[&str] = &[
+    "normal",
+    "90",
+    "180",
+    "270",
+    "flipped",
+    "flipped-90",
+    "flipped-180",
+    "flipped-270",
+];
+
+/// `true` si `slug` es un valor reconocido de [`OutputOverride::transform`].
+/// Vacío (`""`) cuenta como ausente y es válido — significa «sin override».
+pub fn is_valid_transform_slug(slug: &str) -> bool {
+    slug.is_empty() || TRANSFORM_SLUGS.contains(&slug)
 }
 
 impl OutputOverride {
@@ -305,6 +338,30 @@ impl Config {
             .unwrap_or(0)
     }
 
+    /// Escala HiDPI en 120-avos a usar para la salida `name`: el override si
+    /// existe y es positivo; si no, `120` (100 % nativo, [`mirada_layout::ESCALA_100`]).
+    pub fn output_scale_120_for(&self, name: &str) -> u32 {
+        for o in &self.outputs {
+            if o.name == name && o.scale_120 > 0 {
+                return o.scale_120;
+            }
+        }
+        mirada_layout::ESCALA_100 as u32
+    }
+
+    /// Slug de transformación a usar para la salida `name`: el override si
+    /// existe y es no vacío; si no, `"normal"`. Vocabulario en
+    /// [`TRANSFORM_SLUGS`]. Un slug inválido se ignora silenciosamente —
+    /// el chequeo duro se hace al cargar la config (ver [`Self::from_ron`]).
+    pub fn output_transform_for(&self, name: &str) -> &str {
+        for o in &self.outputs {
+            if o.name == name && is_valid_transform_slug(&o.transform) && !o.transform.is_empty() {
+                return &o.transform;
+            }
+        }
+        "normal"
+    }
+
     /// La ruta del wallpaper a usar para la salida `name`. Si hay un override
     /// en [`Self::outputs`] con `wallpaper_path` no vacío para esa salida, se
     /// usa esa; si no, cae al global [`Self::wallpaper_path`]. Vacía = fondo
@@ -354,6 +411,14 @@ impl Config {
         let cfg: Config = ron::from_str(text).map_err(|e| format!("RON inválido: {e}"))?;
         for o in &cfg.outputs {
             o.parsed_wallpaper_fit()?;
+            if !is_valid_transform_slug(&o.transform) {
+                return Err(format!(
+                    "transform desconocido «{}» en outputs[name=\"{}\"] (usa {})",
+                    o.transform,
+                    o.name,
+                    TRANSFORM_SLUGS.join(", ")
+                ));
+            }
         }
         if parse_disposition(&cfg.output_direction).is_none() {
             return Err(format!(
@@ -496,14 +561,18 @@ const CONFIG_TEMPLATE: &str = "\
 
     // Overrides por salida (monitor). Cada entrada identifica el conector
     // DRM por su `name` (ej. \"HDMI-A-1\", \"DP-1\", \"eDP-1\"; sale en los
-    // logs de arranque del compositor) y sobreescribe el wallpaper de esa
-    // salida + el orden en que se dispone. Lo que se deja vacío cae al
-    // global. La salida con `order` más chico queda primaria (origen 0,0).
-    // Vacío = orden alfabético, wallpaper global para todas. Ej:
+    // logs de arranque del compositor). Sobreescribe wallpaper + orden +
+    // escala HiDPI + transformación de la salida. Lo que se deja vacío
+    // cae al global. La salida con `order` más chico queda primaria
+    // (origen 0,0). `scale_120` en 120-avos (120=100%, 180=150%, 240=200%).
+    // `transform`: normal / 90 / 180 / 270 / flipped / flipped-90 /
+    // flipped-180 / flipped-270. Vacío = orden alfabético, sin overrides. Ej:
     //   outputs: [
-    //       (name: \"DP-1\",     order: 0, wallpaper_path: \"/home/yo/fondos/code.png\",
+    //       (name: \"DP-1\",     order: 0, scale_120: 240,
+    //                            wallpaper_path: \"/home/yo/fondos/code.png\",
     //                            wallpaper_fit: \"fill\"),
-    //       (name: \"HDMI-A-1\", order: 1, wallpaper_path: \"/home/yo/fondos/sala.png\"),
+    //       (name: \"HDMI-A-1\", order: 1, transform: \"90\",
+    //                            wallpaper_path: \"/home/yo/fondos/sala.png\"),
     //   ],
     outputs: [],
 )
@@ -683,6 +752,57 @@ mod tests {
     fn output_order_for_cae_a_cero_sin_override() {
         let c = Config::default();
         assert_eq!(c.output_order_for("HDMI-A-1"), 0);
+    }
+
+    #[test]
+    fn output_scale_120_default_es_100_pct_si_no_hay_override() {
+        let c = Config::default();
+        assert_eq!(c.output_scale_120_for("HDMI-A-1"), 120);
+    }
+
+    #[test]
+    fn output_scale_120_lee_el_override() {
+        let c = Config::from_ron(
+            r#"( outputs: [
+                (name: "DP-1", scale_120: 240),
+                (name: "HDMI-A-1", scale_120: 0),
+            ] )"#,
+        )
+        .unwrap();
+        assert_eq!(c.output_scale_120_for("DP-1"), 240);
+        // `scale_120: 0` cuenta como sin override → 100 %.
+        assert_eq!(c.output_scale_120_for("HDMI-A-1"), 120);
+        // Salida sin entrada → 100 %.
+        assert_eq!(c.output_scale_120_for("eDP-1"), 120);
+    }
+
+    #[test]
+    fn output_transform_default_es_normal() {
+        let c = Config::default();
+        assert_eq!(c.output_transform_for("HDMI-A-1"), "normal");
+    }
+
+    #[test]
+    fn output_transform_lee_el_override() {
+        let c = Config::from_ron(
+            r#"( outputs: [
+                (name: "HDMI-A-1", transform: "90"),
+                (name: "DP-1", transform: "flipped-180"),
+            ] )"#,
+        )
+        .unwrap();
+        assert_eq!(c.output_transform_for("HDMI-A-1"), "90");
+        assert_eq!(c.output_transform_for("DP-1"), "flipped-180");
+        assert_eq!(c.output_transform_for("eDP-1"), "normal");
+    }
+
+    #[test]
+    fn output_transform_desconocido_es_rechazado() {
+        let err = Config::from_ron(
+            r#"( outputs: [ (name: "DP-1", transform: "diagonal") ] )"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("diagonal"), "mensaje útil: {err}");
     }
 
     #[test]

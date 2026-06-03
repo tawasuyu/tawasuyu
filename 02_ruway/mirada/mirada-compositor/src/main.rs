@@ -663,6 +663,25 @@ impl App {
         }
     }
 
+    /// Escala HiDPI en 120-avos para la salida `name`: override si existe,
+    /// si no `120` (100 % nativo). Con Cerebro enlazado: 100 %.
+    fn config_output_scale_120_for(&self, name: &str) -> u32 {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().output_scale_120_for(name),
+            Brain::Linked(_) => 120,
+        }
+    }
+
+    /// Transformación de scanout para la salida `name`: override si existe,
+    /// si no [`Transform::Normal`]. Parsea el slug en su sitio.
+    fn config_output_transform_for(&self, name: &str) -> Transform {
+        let slug = match &self.brain {
+            Brain::Embedded(d) => d.config().output_transform_for(name).to_string(),
+            Brain::Linked(_) => "normal".to_string(),
+        };
+        transform_from_slug(&slug)
+    }
+
     /// El árbol del menú raíz configurado (con submenús anidados). Vacío con
     /// Cerebro enlazado o sin entradas en la config.
     fn config_menu(&self) -> Vec<crate::menu::MenuNode> {
@@ -1888,8 +1907,10 @@ fn announce_output(
     width: i32,
     height: i32,
     refresh_mhz: i32,
+    scale_120: u32,
+    transform: Transform,
 ) -> smithay::output::Output {
-    use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
+    use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
     let output = Output::new(
         name.to_string(),
         PhysicalProperties {
@@ -1901,14 +1922,41 @@ fn announce_output(
     );
     output.create_global::<App>(dh);
     let mode = Mode { size: (width, height).into(), refresh: refresh_mhz };
-    output.change_current_state(
-        Some(mode),
-        Some(Transform::Normal),
-        Some(Scale::Integer(1)),
-        Some((0, 0).into()),
-    );
+    let scale = scale_to_smithay(scale_120);
+    output.change_current_state(Some(mode), Some(transform), Some(scale), Some((0, 0).into()));
     output.set_preferred(mode);
     output
+}
+
+/// Convierte una escala en 120-avos (convención `wp_fractional_scale`:
+/// `120` = 100 %) al [`smithay::output::Scale`] correspondiente. Múltiplos
+/// exactos de `120` se mapean a `Scale::Integer` (1×, 2×, 3×, …) — el
+/// camino rápido del compositor cuando el cliente soporta sólo escalas
+/// enteras; el resto cae a `Fractional`.
+pub fn scale_to_smithay(scale_120: u32) -> smithay::output::Scale {
+    use smithay::output::Scale;
+    let s = if scale_120 > 0 { scale_120 } else { 120 };
+    if s % 120 == 0 {
+        Scale::Integer((s / 120) as i32)
+    } else {
+        Scale::Fractional(s as f64 / 120.0)
+    }
+}
+
+/// Parsea un slug de transformación (ver `mirada_brain::TRANSFORM_SLUGS`)
+/// al [`Transform`] de smithay. Slug vacío o desconocido cae a `Normal`
+/// (la validación dura se hace al cargar la config en `Config::from_ron`).
+pub fn transform_from_slug(slug: &str) -> Transform {
+    match slug {
+        "90" => Transform::_90,
+        "180" => Transform::_180,
+        "270" => Transform::_270,
+        "flipped" => Transform::Flipped,
+        "flipped-90" => Transform::Flipped90,
+        "flipped-180" => Transform::Flipped180,
+        "flipped-270" => Transform::Flipped270,
+        _ => Transform::Normal,
+    }
 }
 
 /// Anuncia el global `zwp_linux_dmabuf` con los formatos que el
@@ -2196,12 +2244,16 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     // Salida inicial = el tamaño de la ventana winit.
     let win_size = backend.window_size();
+    // Backend winit (single-output nested): 100 % nativo y sin transform —
+    // los overrides per-output sólo aplican en el backend DRM.
     state.output = Some(announce_output(
         &display.handle(),
         "winit",
         win_size.w,
         win_size.h,
         60_000,
+        120,
+        Transform::Normal,
     ));
     {
         let ev = state.body.add_output(0, win_size.w, win_size.h);
