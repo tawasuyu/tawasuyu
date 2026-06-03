@@ -205,9 +205,20 @@ impl BrahmanNet {
                 );
                 // mDNS resiliente: si el socket multicast no abre, seguimos sin
                 // descubrimiento LAN en vez de fallar el nodo entero.
+                let depurar = std::env::var("BRAHMAN_DEBUG").is_ok();
                 let mdns = match mdns::tokio::Behaviour::new(mdns::Config::default(), local) {
-                    Ok(b) => Toggle::from(Some(b)),
-                    Err(_) => Toggle::from(None),
+                    Ok(b) => {
+                        if depurar {
+                            eprintln!("brahman: mDNS ACTIVO (descubrimiento LAN)");
+                        }
+                        Toggle::from(Some(b))
+                    }
+                    Err(e) => {
+                        if depurar {
+                            eprintln!("brahman: mDNS DESACTIVADO ({e})");
+                        }
+                        Toggle::from(None)
+                    }
                 };
                 BrahmanBehaviour {
                     block_list: allow_block_list::Behaviour::default(),
@@ -332,6 +343,9 @@ impl BrahmanNet {
                                 mdns::Event::Discovered(list)
                             )) => {
                                 for (peer_id, addr) in list {
+                                    if std::env::var("BRAHMAN_DEBUG").is_ok() {
+                                        eprintln!("brahman: mDNS descubrió {peer_id} en {addr}");
+                                    }
                                     swarm.behaviour_mut().kad.add_address(&peer_id, addr);
                                 }
                             }

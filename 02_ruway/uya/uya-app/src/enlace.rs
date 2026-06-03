@@ -399,24 +399,22 @@ async fn conducir(
                 let node_d = node.clone();
                 let cmd_d = malla.cmd_tx.clone();
                 let mi = malla.mi_peer;
+                let depurar = std::env::var("UYA_DEBUG").is_ok();
                 tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(Duration::from_secs(3)).await;
-                        for p in node_d.find_providers(&clave).await {
+                        let provs = node_d.find_providers(&clave).await;
+                        if depurar {
+                            eprintln!("uya: find_providers(sala) → {} provider(s)", provs.len());
+                        }
+                        for p in provs {
                             if p == mi {
                                 continue;
                             }
-                            // Resolver una dirección dialable del provider.
-                            if let Some(dp) = node_d
-                                .find_closest_peers(p)
-                                .await
-                                .into_iter()
-                                .find(|d| d.peer_id == p)
-                            {
-                                if let Some(addr) = dp.addrs.into_iter().next() {
-                                    let _ = cmd_d.send(Cmd::Conectar(format!("{addr}/p2p/{p}")));
-                                }
-                            }
+                            // Discar por PeerId desnudo: el swarm resuelve la
+                            // dirección desde Kad (poblado por mDNS/identify). Más
+                            // robusto que resolverla a mano con find_closest_peers.
+                            let _ = cmd_d.send(Cmd::Conectar(format!("/p2p/{p}")));
                         }
                     }
                 });
