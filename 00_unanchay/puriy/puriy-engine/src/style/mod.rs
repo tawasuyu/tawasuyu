@@ -2177,9 +2177,9 @@ line2</pre></body></html>"#;
         assert_eq!(s.background_origin, BackgroundOrigin::ContentBox);
         assert_eq!(s.background_clip, BackgroundClip::PaddingBox);
 
-        // `text` no se modela → descartado, queda el default.
+        // `text` ahora es un valor real (Fase 7.208).
         let s = compute("background-clip: text");
-        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+        assert_eq!(s.background_clip, BackgroundClip::Text);
 
         // Shorthand con UNA caja → fija origin Y clip.
         let s = compute("background: url(b.png) content-box");
@@ -2207,6 +2207,43 @@ line2</pre></body></html>"#;
         let (o, c) = got.expect("box d");
         assert_eq!(o, BackgroundOrigin::ContentBox);
         assert_eq!(c, BackgroundClip::PaddingBox);
+    }
+
+    #[test]
+    fn background_clip_text_parsea_y_propaga_a_la_hoja() {
+        // Fase 7.208 — `background-clip: text` (+ `-webkit-` prefix) y la
+        // propagación del gradiente del elemento estilado a su hoja de texto.
+        let compute = |css: &str| {
+            let html = format!(
+                "<html><head><style>div {{ {css} }}</style></head><body><div></div></body></html>"
+            );
+            let dom = DomTree::parse(&html);
+            let eng = StyleEngine::from_dom(&dom);
+            eng.compute(&dom.find("div").unwrap())
+        };
+        assert_eq!(compute("background-clip: text").background_clip, BackgroundClip::Text);
+        assert_eq!(
+            compute("-webkit-background-clip: text").background_clip,
+            BackgroundClip::Text
+        );
+
+        // El gradiente vive en el <h1>; su hoja de texto hija lo hereda junto
+        // con el clip:text para rellenar los glifos.
+        let eng = crate::Engine::new();
+        let doc = eng.load_html(
+            "about:test",
+            r#"<html><body><h1 style="background-image: linear-gradient(90deg, red, blue);
+               -webkit-background-clip: text; color: transparent">Hola</h1></body></html>"#,
+        );
+        let mut leaf = None;
+        doc.box_tree.walk(|b| {
+            if b.text.as_deref() == Some("Hola") {
+                leaf = Some((b.background_clip, b.background_gradient.is_some()));
+            }
+        });
+        let (clip, has_grad) = leaf.expect("hoja de texto Hola");
+        assert_eq!(clip, BackgroundClip::Text);
+        assert!(has_grad, "la hoja debería heredar el gradiente del <h1>");
     }
 
     #[test]

@@ -272,7 +272,21 @@ pub fn draw_layout_xf(
     color: Color,
     transform: vello::kurbo::Affine,
 ) {
-    let brush = Brush::Solid(color);
+    draw_layout_brush_xf(scene, layout, &Brush::Solid(color), transform);
+}
+
+/// Igual que [`draw_layout_xf`] pero con un [`Brush`] arbitrario en vez de un
+/// color sólido: permite rellenar los glifos con un gradiente o una imagen
+/// (p. ej. CSS `background-clip: text`). El brush se interpreta en el espacio
+/// **local** del layout (origen 0,0) y `transform` lo lleva al lugar final —
+/// así un gradiente construido en coords (0,0)-(w,h) queda alineado con los
+/// glifos. Para texto normal usá [`draw_layout_xf`] (solid = máxima compat).
+pub fn draw_layout_brush_xf(
+    scene: &mut vello::Scene,
+    layout: &parley::Layout<()>,
+    brush: &Brush,
+    transform: vello::kurbo::Affine,
+) {
     for line in layout.lines() {
         for item in line.items() {
             if let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item {
@@ -282,7 +296,7 @@ pub fn draw_layout_xf(
                 scene
                     .draw_glyphs(&font)
                     .font_size(font_size)
-                    .brush(&brush)
+                    .brush(brush)
                     .transform(transform)
                     .draw(
                         peniko::Fill::NonZero,

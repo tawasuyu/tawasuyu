@@ -488,13 +488,15 @@ pub enum BackgroundOrigin {
 }
 
 /// `background-clip`: hasta qué caja se recorta el pintado del background.
-/// Default CSS `BorderBox`. El valor `text` (recortar a las glifos) no se
-/// modela todavía — el parser lo descarta y queda el default.
+/// Default CSS `BorderBox`. `Text` recorta el background a las glifos del
+/// texto (Fase 7.208): el chrome lo propaga a las hojas de texto y rellena
+/// los glifos con el gradiente en vez de pintar el fondo como rect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundClip {
     BorderBox,
     PaddingBox,
     ContentBox,
+    Text,
 }
 
 /// La imagen de una capa de background: o un gradiente, o una URL sin

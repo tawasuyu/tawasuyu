@@ -473,11 +473,62 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             });
         }
         let italic = matches!(b.font_style, puriy_engine::FontStyle::Italic);
+        // `background-clip: text` (Fase 7.208): si la hoja trae el gradiente
+        // propagado (build), rellenamos sus glifos con él vía `paint_with` +
+        // `draw_layout_brush_xf`, y dejamos el color normal TRANSPARENTE para
+        // que la pasada de texto de llimphi (que corre después) no lo tape.
+        let grad_text =
+            if matches!(b.background_clip, puriy_engine::style::BackgroundClip::Text) {
+                b.background_gradient.clone()
+            } else {
+                None
+            };
+        let text_fill = if grad_text.is_some() {
+            Color::from_rgba8(0, 0, 0, 0)
+        } else {
+            display_color
+        };
+        if let Some(g) = grad_text {
+            let txt = text.clone();
+            let size_c = size;
+            let italic_c = italic;
+            let ff = b.font_family.clone();
+            let lh = b.line_height.unwrap_or(1.2);
+            let alpha = b.opacity.clamp(0.0, 1.0);
+            view = view.paint_with(move |scene, ts, rect| {
+                // Re-shaping idéntico al de la pasada normal (mismo
+                // size/wrap/alignment/line-height) para que las glifos del
+                // gradiente caigan exactamente sobre las transparentes.
+                let layout = ts.layout(
+                    &txt,
+                    size_c,
+                    Some(rect.w),
+                    Alignment::Start,
+                    lh,
+                    italic_c,
+                    ff.as_deref(),
+                );
+                // Gradiente en coords LOCALES (0,0)-(w,h): `draw_layout_brush_xf`
+                // lo lleva al origen del texto con la afín, alineándolo.
+                let w = layout.width().max(1.0);
+                let h = llimphi_ui::llimphi_text::measurement(&layout).height.max(1.0);
+                let local = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w, h };
+                if let Some(grad) = build_linear_gradient_brush(&g, local, alpha) {
+                    let brush = llimphi_raster::peniko::Brush::Gradient(grad);
+                    llimphi_ui::llimphi_text::draw_layout_brush_xf(
+                        scene,
+                        &layout,
+                        &brush,
+                        Affine::translate((rect.x as f64, rect.y as f64)),
+                    );
+                }
+            });
+        }
         return view
             .text_aligned_full(
                 text.clone(),
                 size,
-                display_color,
+                text_fill,
                 Alignment::Start,
                 italic,
                 b.font_family.clone(),
@@ -1611,10 +1662,17 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
         puriy_engine::style::BackgroundOrigin::ContentBox => cb_ins,
     };
     let clip_ins = match b.background_clip {
-        puriy_engine::style::BackgroundClip::BorderBox => (0.0, 0.0, 0.0, 0.0),
         puriy_engine::style::BackgroundClip::PaddingBox => pb_ins,
         puriy_engine::style::BackgroundClip::ContentBox => cb_ins,
+        // BorderBox y Text no insetean el rect (Text ni siquiera pinta el
+        // fondo como rect — lo rellena en las glifos de la hoja de texto).
+        _ => (0.0, 0.0, 0.0, 0.0),
     };
+    // `background-clip: text` (Fase 7.208): el elemento estilado NO pinta su
+    // gradiente/imagen como rect — el relleno va a las glifos de su texto hijo
+    // (propagado en build a la hoja). Acá lo suprimimos en el rect.
+    let clip_is_text =
+        matches!(b.background_clip, puriy_engine::style::BackgroundClip::Text);
     // Capas de background EXTRA (debajo de la capa 0). Cada una es imagen
     // (raster ya decodificado) o gradiente. Se preparan acá para no capturar
     // el BoxNode dentro del closure.
@@ -1668,21 +1726,23 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
         // clip box. peniko interpreta `Linear { start, end }` como las dos
         // puntas — `build_linear_gradient_brush` cruza el rect dado.
         if let Some(g) = &gradient {
-            if let Some(brush) = build_linear_gradient_brush(g, origin_rect, alpha_mul) {
-                let r = RoundedRect::new(
-                    clip_rect.x as f64,
-                    clip_rect.y as f64,
-                    (clip_rect.x + clip_rect.w) as f64,
-                    (clip_rect.y + clip_rect.h) as f64,
-                    clip_radius,
-                );
-                scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &r);
+            if !clip_is_text {
+                if let Some(brush) = build_linear_gradient_brush(g, origin_rect, alpha_mul) {
+                    let r = RoundedRect::new(
+                        clip_rect.x as f64,
+                        clip_rect.y as f64,
+                        (clip_rect.x + clip_rect.w) as f64,
+                        (clip_rect.y + clip_rect.h) as f64,
+                        clip_radius,
+                    );
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &r);
+                }
             }
         }
         // background-image: resuelve tamaño/posición/repeat (Fase 7.204) contra
         // el origin box y tilea, recortado al clip box (Fase 7.207).
         if let Some((img, iw, ih)) = &bg_image {
-            if *iw > 0.0 && *ih > 0.0 {
+            if *iw > 0.0 && *ih > 0.0 && !clip_is_text {
                 paint_background_image(
                     scene, origin_rect, clip_rect, clip_radius, img, *iw, *ih, bg_size,
                     bg_position, bg_repeat,

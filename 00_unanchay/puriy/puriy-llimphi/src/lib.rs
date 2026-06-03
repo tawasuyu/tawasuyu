@@ -4321,6 +4321,57 @@ mod tests {
     }
 
     #[test]
+    fn background_clip_text_rellena_glifos_con_gradiente() {
+        // Fase 7.208 — el camino real de `background-clip: text`: shaping del
+        // texto + draw_layout_brush_xf con un Brush::Gradient. Verifica que
+        // pinta (encoding no vacío) y que el gradiente añade más draws que el
+        // mismo texto en color sólido.
+        use puriy_engine::style::{GradientStop, LinearGradient};
+        let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
+        // Forzamos la DejaVu embebida (registrada en `Typesetter::new`) para
+        // que el texto Latin shapee también en el sandbox sin fuentes de
+        // sistema; en una máquina real el font-family normal funciona igual.
+        let layout = ts.layout(
+            "Hola",
+            48.0,
+            None,
+            llimphi_ui::llimphi_text::Alignment::Start,
+            1.2,
+            false,
+            Some("DejaVu Sans"),
+        );
+        let local = llimphi_ui::PaintRect {
+            x: 0.0,
+            y: 0.0,
+            w: (layout.width()).max(1.0),
+            h: 60.0,
+        };
+        let grad = LinearGradient {
+            angle_deg: 90.0,
+            stops: vec![
+                GradientStop { color: puriy_engine::Color::rgb(255, 0, 0), pos: None },
+                GradientStop { color: puriy_engine::Color::rgb(0, 0, 255), pos: None },
+            ],
+        };
+        let brush = llimphi_raster::peniko::Brush::Gradient(
+            build_linear_gradient_brush(&grad, local, 1.0).expect("gradiente de 2 stops"),
+        );
+        let xf = llimphi_raster::kurbo::Affine::translate((10.0, 10.0));
+        let mut scene = llimphi_raster::vello::Scene::new();
+        llimphi_ui::llimphi_text::draw_layout_brush_xf(&mut scene, &layout, &brush, xf);
+        // Los glifos se encodan en `draw_tags` + `glyph_runs` (las siluetas se
+        // resuelven después, así que `path_tags`/`is_empty()` no sirven acá).
+        assert!(
+            !scene.encoding().draw_tags.is_empty(),
+            "los glifos con gradiente deberían encodar un draw"
+        );
+        assert!(
+            !scene.encoding().resources.glyph_runs.is_empty(),
+            "debería haber al menos un glyph run shapeado (DejaVu)"
+        );
+    }
+
+    #[test]
     fn paint_extra_bg_layers_pinta_imagen_y_gradiente() {
         // Fase 7.206 — las capas extra (debajo de la capa 0) se pintan: una
         // imagen vía paint_background_image y un gradiente lineal vía fill.

@@ -1120,7 +1120,7 @@ pub(crate) fn build_node(
 /// del estilo dado — usado tanto por hojas Text reales como por los
 /// markers sintéticos (`•` de `<li>`, `[img: alt]` de `<img>` roto).
 pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
-    BoxNode {
+    let mut leaf = BoxNode {
         display: Display::Inline,
         background: None,
         color: style.color,
@@ -1213,7 +1213,16 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         animation: None,
         transitions: Vec::new(),
         node_id: 0,
+    };
+    // `background-clip: text` (Fase 7.208): el gradiente vive en el elemento
+    // estilado (p. ej. el `<h1>`), pero las glifos están en esta hoja de texto
+    // hija. Propagamos el clip + el gradiente para rellenar los glifos con él;
+    // el `color: transparent` típico del patrón deja ver sólo el gradiente.
+    if style.background_clip == BackgroundClip::Text {
+        leaf.background_clip = BackgroundClip::Text;
+        leaf.background_gradient = style.background_gradient.clone();
     }
+    leaf
 }
 
 /// `true` si el nodo se comporta como block-level para el flujo (Block,

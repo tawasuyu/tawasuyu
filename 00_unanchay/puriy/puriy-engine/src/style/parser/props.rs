@@ -802,13 +802,14 @@ pub(crate) fn parse_background_origin(value: &str) -> Option<DeclKind> {
     Some(DeclKind::BackgroundOrigin(o))
 }
 
-/// `background-clip`: `border-box` | `padding-box` | `content-box`. El valor
-/// `text` se descarta (recorte a glifos no modelado todavía).
+/// `background-clip`: `border-box` | `padding-box` | `content-box` | `text`.
+/// `text` recorta el fondo a las glifos (Fase 7.208).
 pub(crate) fn parse_background_clip(value: &str) -> Option<DeclKind> {
     let c = match value.trim().to_ascii_lowercase().as_str() {
         "border-box" => BackgroundClip::BorderBox,
         "padding-box" => BackgroundClip::PaddingBox,
         "content-box" => BackgroundClip::ContentBox,
+        "text" => BackgroundClip::Text,
         _ => return None,
     };
     Some(DeclKind::BackgroundClip(c))
