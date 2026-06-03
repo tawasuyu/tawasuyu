@@ -561,6 +561,8 @@ fn emitir_subtree(
         selected: selected == Some(hash),
         on_toggle: Msg::Toggle(hash),
         on_select: Msg::Select(hash),
+        icon: None,
+        on_context: None,
         editor: None,
     });
 
@@ -642,7 +644,7 @@ fn header_view(model: &Model, palette: &Palette) -> View<Msg> {
 fn main_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
     let tree_palette = TreePalette::from_theme(theme);
     let rows = filas_visibles(model);
-    let tree = tree_view(TreeSpec { rows, row_height: 22.0, indent_px: 16.0, palette: tree_palette });
+    let tree = tree_view(TreeSpec { rows, row_height: 22.0, indent_px: 16.0, palette: tree_palette, guides: false });
 
     let tree_panel = View::new(Style {
         size: Size { width: length(420.0_f32), height: percent(1.0_f32) },

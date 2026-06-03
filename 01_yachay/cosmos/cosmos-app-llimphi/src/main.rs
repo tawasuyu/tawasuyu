@@ -678,6 +678,7 @@ impl App for Cosmos {
             menu_anim: llimphi_motion::Tween::idle(1.0),
             ctx_open: None,
             nav_ctx: None,
+            nav_scroll: 0.0,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
         }
@@ -877,9 +878,9 @@ impl App for Cosmos {
                 m.nav_ctx = None;
             }
             // menú contextual del árbol de datos
-            Msg::OpenNavCtx(key, x, y) => {
+            Msg::OpenNavCtx(key) => {
                 m.nav_selected = Some(key.clone());
-                m.nav_ctx = Some((key, (x, y)));
+                m.nav_ctx = Some(key);
                 m.ctx_open = None;
                 m.menu_open = None;
             }
@@ -887,13 +888,19 @@ impl App for Cosmos {
                 let act = m
                     .nav_ctx
                     .as_ref()
-                    .map(|(k, _)| chrome::nav_ctx_entries(&m, k))
+                    .map(|k| chrome::nav_ctx_entries(&m, k))
                     .and_then(|entries| entries.get(idx).and_then(|e| e.act));
                 m.nav_ctx = None;
                 if let Some(act) = act {
                     apply_nav_act(&mut m, act);
                     persist = true;
                 }
+            }
+            Msg::NavScroll(delta) => {
+                let content = chrome::nav_content_h(&m);
+                let viewport = chrome::nav_viewport_h(&m);
+                m.nav_scroll =
+                    llimphi_widget_scroll::clamp_offset(m.nav_scroll + delta, content, viewport);
             }
             // layout guardable
             Msg::SetNavWidth(dx) => m.nudge_nav(dx),
@@ -1083,30 +1090,21 @@ impl App for Cosmos {
     }
 
     /// Rueda del ratón sobre el lienzo central: zoom (rueda sola), paneo
-    /// vertical (Ctrl) y paneo horizontal (Alt). Sólo actúa cuando el
-    /// cursor está sobre el área gráfica (ni el árbol ni el panel de
-    /// herramientas) — fuera de ahí deja pasar el evento.
+    /// vertical (Ctrl) y paneo horizontal (Alt). El árbol y el panel de
+    /// herramientas **consumen** la rueda por su cuenta (scroll propio),
+    /// así que cuando este handler global se invoca el cursor está sobre
+    /// el área gráfica — no hace falta gating por coordenadas (que fallaba
+    /// al maximizar / en HiDPI).
     fn on_wheel(
-        model: &Model,
+        _model: &Model,
         delta: llimphi_ui::WheelDelta,
-        cursor: (f32, f32),
+        _cursor: (f32, f32),
         modifiers: llimphi_ui::Modifiers,
     ) -> Option<Msg> {
-        let (vw, vh) = model.viewport;
-        let left = if model.nav_open { model.nav_w + 6.0 } else { 0.0 };
-        let right = vw - if model.tools_open { model.tools_w } else { 0.0 };
-        let top = model::MENU_BAR_H + model::TAB_BAR_H;
-        let bottom = vh - model::STATUS_H;
-        let (cx, cy) = cursor;
-        if cx < left || cx > right || cy < top || cy > bottom {
-            return None;
-        }
         const STEP: f32 = 40.0;
         if modifiers.ctrl {
-            // Paneo vertical.
             Some(Msg::WheelPan(0.0, -delta.y * STEP))
         } else if modifiers.alt {
-            // Paneo horizontal.
             Some(Msg::WheelPan(-delta.y * STEP, 0.0))
         } else {
             // Zoom: rueda hacia arriba (delta.y < 0) acerca.

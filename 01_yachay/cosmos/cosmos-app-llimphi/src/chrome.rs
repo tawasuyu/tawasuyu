@@ -20,16 +20,17 @@ use llimphi_ui::llimphi_layout::taffy::{
     style::FlexWrap,
     AlignItems, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Line as KurboLine, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{DragPhase, PaintRect, View};
+use llimphi_ui::{DragPhase, View};
 use llimphi_widget_context_menu::{
     context_menu_view, context_menu_view_ex, ContextMenuExtras, ContextMenuItem,
     ContextMenuPalette, ContextMenuSpec,
 };
 use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
+use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
+use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use llimphi_widget_switch::{switch_view, SwitchPalette};
@@ -485,13 +486,12 @@ fn ancestors_expanded(
     true
 }
 
-/// Alto de fila del árbol y sangría por nivel.
-const TREE_ROW_H: f32 = 22.0;
-const TREE_INDENT: f32 = 14.0;
-/// Offset vertical absoluto del primer renglón del árbol (barra de menú +
-/// barra de acciones del explorador). Usado para anclar el menú
-/// contextual de fila cerca del cursor.
-const TREE_TOP: f32 = MENU_BAR_H + 28.0 + 4.0;
+/// Alto de fila del árbol, sangría por nivel y alto de la barra de
+/// acciones — compartidos por el render y por el anclaje del menú
+/// contextual de fila.
+pub(crate) const NAV_ROW_H: f32 = 26.0;
+const NAV_INDENT: f32 = 16.0;
+pub(crate) const NAV_TOOLBAR_H: f32 = 28.0;
 
 /// Icono de un nodo según su tipo (grupo abierto/cerrado, contacto, o el
 /// tipo de carta).
@@ -499,78 +499,112 @@ fn nav_icon(n: &NavNode, expanded: bool, theme: &Theme) -> View<Msg> {
     match n.kind {
         NavKind::Group => glyphs::icon_view(
             if expanded { Icon::FolderOpen } else { Icon::Folder },
-            15.0,
+            16.0,
             theme.accent,
         ),
-        NavKind::Contact => glyphs::icon_view(Icon::Person, 15.0, theme.fg_text),
+        NavKind::Contact => glyphs::icon_view(Icon::Person, 16.0, theme.fg_text),
         NavKind::Chart => {
-            glyphs::chart_kind_view(n.chart_kind.unwrap_or(ChartKind::Natal), 15.0, theme.fg_text)
+            glyphs::chart_kind_view(n.chart_kind.unwrap_or(ChartKind::Natal), 16.0, theme.fg_text)
         }
     }
 }
 
-/// Árbol izquierdo: explorador de datos jerárquico (grupo → contacto →
-/// carta) sobre `cosmos-store`, estilo file-manager. Filas con icono por
-/// tipo, líneas guía de indentación, chevron de expandir y menú
-/// contextual (click derecho). Las gráficas y análisis ya no viven acá.
-pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
+/// Filas visibles del árbol (las que tienen todos sus ancestros
+/// expandidos), en orden de display. Reusado por el render y por el
+/// anclaje del menú contextual.
+fn visible_nav_nodes<'a>(model: &'a Model) -> Vec<&'a NavNode> {
     let by_key: HashMap<&str, &NavNode> =
         model.nav_nodes.iter().map(|n| (n.key.as_str(), n)).collect();
+    model
+        .nav_nodes
+        .iter()
+        .filter(|n| ancestors_expanded(n, &by_key, model))
+        .collect()
+}
 
-    let mut rows: Vec<View<Msg>> = Vec::new();
-    let mut vis = 0usize;
-    for n in &model.nav_nodes {
-        if !ancestors_expanded(n, &by_key, model) {
-            continue;
-        }
-        rows.push(nav_row(n, vis, model, theme));
-        vis += 1;
+/// Alto del viewport del árbol (de la barra de acciones a la barra de
+/// estado).
+pub(crate) fn nav_viewport_h(model: &Model) -> f32 {
+    (model.viewport.1 - MENU_BAR_H - STATUS_H - NAV_TOOLBAR_H).max(60.0)
+}
+
+/// Alto total del contenido del árbol.
+pub(crate) fn nav_content_h(model: &Model) -> f32 {
+    visible_nav_nodes(model).len() as f32 * NAV_ROW_H + 8.0
+}
+
+/// Árbol izquierdo: explorador jerárquico (grupo → contacto → carta)
+/// sobre `cosmos-store`, con el widget `llimphi-widget-tree`: icono
+/// gráfico por tipo, líneas guía, chevron y menú contextual. Scroll
+/// vertical propio cuando desborda.
+pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
+    let mut rows: Vec<TreeRow<Msg>> = Vec::new();
+    for n in visible_nav_nodes(model) {
+        let is_container = n.kind != NavKind::Chart;
+        let expanded = is_container && model.nav_expanded.contains(&n.key);
+        let editor = if model.nav_rename.as_deref() == Some(n.key.as_str()) {
+            Some(text_input_view(
+                &model.rename_input,
+                "nombre…",
+                true,
+                &TextInputPalette::from_theme(theme),
+                Msg::RenameStart,
+            ))
+        } else {
+            None
+        };
+        let toggle = if is_container {
+            Msg::ToggleNavNode(n.key.clone())
+        } else {
+            Msg::NavClick(n.key.clone())
+        };
+        rows.push(TreeRow {
+            label: n.label.clone(),
+            depth: n.depth,
+            has_children: is_container,
+            expanded,
+            selected: model.nav_selected.as_deref() == Some(n.key.as_str()),
+            on_toggle: toggle,
+            on_select: Msg::NavClick(n.key.clone()),
+            icon: Some(nav_icon(n, expanded, theme)),
+            on_context: Some(Msg::OpenNavCtx(n.key.clone())),
+            editor,
+        });
     }
 
-    let body: View<Msg> = if rows.is_empty() {
-        View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(TREE_ROW_H),
-            },
-            padding: Rect {
-                left: length(10.0_f32),
-                right: length(0.0_f32),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text_aligned(
-            "(biblioteca vacía)".to_string(),
-            12.0,
-            theme.fg_muted,
-            Alignment::Start,
-        )
-    } else {
-        View::new(Style {
-            flex_direction: FlexDirection::Column,
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(0.0_f32),
-            },
-            min_size: Size {
-                width: length(0.0_f32),
-                height: length(0.0_f32),
-            },
-            padding: Rect {
-                left: length(0.0_f32),
-                right: length(0.0_f32),
-                top: length(4.0_f32),
-                bottom: length(4.0_f32),
-            },
-            ..Default::default()
-        })
-        .clip(true)
-        .children(rows)
-    };
+    let tree = tree_view(TreeSpec {
+        rows,
+        row_height: NAV_ROW_H,
+        indent_px: NAV_INDENT,
+        palette: TreePalette::from_theme(theme),
+        guides: true,
+    });
+
+    // Scroll vertical del árbol.
+    let viewport = nav_viewport_h(model);
+    let content = nav_content_h(model);
+    let offset = clamp_offset(model.nav_scroll, content, viewport);
+    let scroll = scroll_y(
+        offset,
+        content,
+        viewport,
+        tree,
+        Msg::NavScroll,
+        &ScrollPalette::from_theme(theme),
+    );
+    let scroll_box = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(0.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![scroll]);
 
     View::new(Style {
         size: Size {
@@ -585,148 +619,7 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![nav_toolbar(model, theme), body])
-}
-
-/// Una fila del árbol: líneas guía + chevron + icono + label (o editor de
-/// renombrado). Click selecciona/carga; click derecho abre el menú
-/// contextual de la fila.
-fn nav_row(n: &NavNode, vis: usize, model: &Model, theme: &Theme) -> View<Msg> {
-    let is_container = n.kind != NavKind::Chart;
-    let expanded = is_container && model.nav_expanded.contains(&n.key);
-    let selected = model.nav_selected.as_deref() == Some(n.key.as_str());
-    let indent = n.depth as f32 * TREE_INDENT;
-
-    // Chevron (icono dibujado) — sólo en contenedores.
-    let chevron: View<Msg> = if is_container {
-        View::new(Style {
-            size: Size {
-                width: length(14.0_f32),
-                height: length(TREE_ROW_H),
-            },
-            flex_shrink: 0.0,
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .hover_fill(theme.bg_row_hover)
-        .on_click(Msg::ToggleNavNode(n.key.clone()))
-        .children(vec![glyphs::icon_view(
-            if expanded { Icon::ChevronDown } else { Icon::ChevronRight },
-            11.0,
-            theme.fg_muted,
-        )])
-    } else {
-        View::new(Style {
-            size: Size {
-                width: length(14.0_f32),
-                height: length(TREE_ROW_H),
-            },
-            flex_shrink: 0.0,
-            ..Default::default()
-        })
-    };
-
-    let icon_box = View::new(Style {
-        size: Size {
-            width: length(20.0_f32),
-            height: length(TREE_ROW_H),
-        },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        ..Default::default()
-    })
-    .children(vec![nav_icon(n, expanded, theme)]);
-
-    // Label o editor de renombrado in-situ.
-    let label: View<Msg> = if model.nav_rename.as_deref() == Some(n.key.as_str()) {
-        View::new(Style {
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(0.0_f32),
-                height: length(TREE_ROW_H),
-            },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .children(vec![text_input_view(
-            &model.rename_input,
-            "nombre…",
-            true,
-            &TextInputPalette::from_theme(theme),
-            Msg::RenameStart,
-        )])
-    } else {
-        // Alto `auto` (= alto del texto) para que el `align_items: Center`
-        // de la fila lo centre verticalmente.
-        View::new(Style {
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(0.0_f32),
-                height: auto(),
-            },
-            padding: Rect {
-                left: length(2.0_f32),
-                right: length(6.0_f32),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
-            },
-            ..Default::default()
-        })
-        .text_aligned(n.label.clone(), 12.0, theme.fg_text, Alignment::Start)
-    };
-
-    // Líneas guía de indentación, pintadas por debajo de los hijos.
-    let guide = theme.border;
-    let depth = n.depth;
-    let row = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(TREE_ROW_H),
-        },
-        flex_shrink: 0.0,
-        padding: Rect {
-            left: length(6.0_f32 + indent),
-            right: length(0.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .fill(if selected {
-        theme.bg_selected
-    } else {
-        theme.bg_panel
-    })
-    .hover_fill(theme.bg_row_hover)
-    .paint_with(move |scene, _ts, rect: PaintRect| {
-        if depth == 0 {
-            return;
-        }
-        let stroke = Stroke::new(1.0);
-        let col = guide;
-        for k in 0..depth {
-            let x = (rect.x + 6.0 + k as f32 * TREE_INDENT + 7.0) as f64;
-            let l = KurboLine::new((x, rect.y as f64), (x, (rect.y + rect.h) as f64));
-            scene.stroke(&stroke, llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY, col, None, &l);
-        }
-    })
-    .on_click(Msg::NavClick(n.key.clone()))
-    .on_right_click_at({
-        let key = n.key.clone();
-        move |lx, ly, _w, _h| {
-            Some(Msg::OpenNavCtx(
-                key.clone(),
-                lx,
-                TREE_TOP + vis as f32 * TREE_ROW_H + ly,
-            ))
-        }
-    })
-    .children(vec![chevron, icon_box, label]);
-    row
+    .children(vec![nav_toolbar(model, theme), scroll_box])
 }
 
 /// Barra de acciones del explorador: crear grupo/contacto/carta sobre la
@@ -1961,15 +1854,24 @@ pub(crate) fn overlay_view(model: &Model, theme: &Theme) -> Option<View<Msg>> {
             palette: pal,
         }));
     }
-    if let Some((key, anchor)) = &model.nav_ctx {
+    if let Some(key) = &model.nav_ctx {
         let entries = nav_ctx_entries(model, key);
         let items: Vec<ContextMenuItem> = entries.iter().map(NavCtxItem::to_item).collect();
         let header = model
             .node(key)
             .map(|n| n.label.to_uppercase())
             .unwrap_or_else(|| "ÁRBOL".to_string());
+        // Ancla: índice visible de la fila × alto de fila, menos el scroll.
+        let vis_idx = visible_nav_nodes(model)
+            .iter()
+            .position(|n| &n.key == key)
+            .unwrap_or(0) as f32;
+        let anchor_y = MENU_BAR_H + NAV_TOOLBAR_H + 4.0 - model.nav_scroll
+            + vis_idx * NAV_ROW_H
+            + NAV_ROW_H * 0.5;
+        let anchor = ((model.nav_w * 0.45).max(40.0), anchor_y.max(MENU_BAR_H));
         return Some(context_menu_view(ContextMenuSpec {
-            anchor: *anchor,
+            anchor,
             viewport: VIEWPORT,
             header: Some(header),
             items,

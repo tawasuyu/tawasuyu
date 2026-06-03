@@ -115,6 +115,7 @@ impl App for Showcase {
             row_height: 22.0,
             indent_px: 16.0,
             palette,
+            guides: true,
         });
 
         // Header con info de la selección.
@@ -191,6 +192,8 @@ fn visit(
             selected: selected == Some(*id),
             on_toggle: Msg::Toggle(*id),
             on_select: Msg::Select(*id),
+            icon: None,
+            on_context: None,
             editor: None,
         });
         if has_children && is_expanded {

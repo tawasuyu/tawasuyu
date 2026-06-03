@@ -694,6 +694,8 @@ fn corpus_tree(model: &Model, theme: &Theme) -> View<Msg> {
             selected: model.open == Some(i),
             on_toggle: Msg::OpenFile(i),
             on_select: Msg::OpenFile(i),
+            icon: None,
+            on_context: None,
             editor: None,
         })
         .collect();
@@ -725,6 +727,7 @@ fn corpus_tree(model: &Model, theme: &Theme) -> View<Msg> {
             row_height: TREE_ROW_H,
             indent_px: TREE_INDENT,
             palette,
+            guides: false,
         })
     };
 

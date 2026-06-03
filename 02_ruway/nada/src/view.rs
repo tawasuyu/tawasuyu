@@ -268,6 +268,8 @@ pub(crate) fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
             selected: model.selected == Some(i),
             on_toggle: Msg::ToggleNode(i),
             on_select: Msg::SelectNode(i),
+            icon: None,
+            on_context: None,
             editor: None,
         })
         .collect();
@@ -277,6 +279,7 @@ pub(crate) fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
         row_height: TREE_ROW_H,
         indent_px: TREE_INDENT,
         palette: TreePalette::from_theme(theme),
+        guides: false,
     };
 
     // El árbol scrollea: viewport clipeado de alto = panel, contenido =
