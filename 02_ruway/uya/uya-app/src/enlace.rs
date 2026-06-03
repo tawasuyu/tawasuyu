@@ -27,6 +27,8 @@ use card_net::{
     BrahmanNet, Multiaddr, PeerId as LpPeerId, Protocol, Stream as LpStream, StreamProtocol,
 };
 use futures::StreamExt;
+use opus_wave::types::{Channels, SampleRate};
+use opus_wave::OpusDecoder;
 use parking_lot::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::sync::{mpsc as tmpsc, Mutex as TMutex};
@@ -43,6 +45,9 @@ const PROTO: StreamProtocol = StreamProtocol::new("/uya/transporte/1.0.0");
 
 /// Tope defensivo de un paquete serializado (8 MiB: cubre un cuadro RGBA).
 const MAX_PAQUETE: usize = 8 * 1024 * 1024;
+
+/// Tope de muestras que un frame Opus puede expandir (120 ms @ 48 kHz mono).
+const MAX_OPUS_FRAME: usize = 5_760;
 
 type CompatStream = Compat<LpStream>;
 type Escritor = WriteHalf<CompatStream>;
@@ -368,6 +373,8 @@ async fn registrar(
     let escritores_lector = escritores.clone();
     tokio::spawn(async move {
         let mut remoto: Option<ParticipanteId> = None;
+        // Decoder Opus con estado, propio de esta conexión (lazy).
+        let mut dec: Option<OpusDecoder> = None;
         loop {
             let bytes = match leer_frame(&mut rd).await {
                 Ok(b) => b,
@@ -414,13 +421,21 @@ async fn registrar(
                         }
                     }
                 }
-                Paquete::Audio {
-                    sample_rate,
-                    canales,
-                    muestras,
-                } => {
+                Paquete::Audio { opus } => {
                     if let Some(id) = remoto {
-                        mezcla.lock().empujar(id, sample_rate, canales as u16, &muestras);
+                        if dec.is_none() {
+                            dec = OpusDecoder::new(SampleRate::Hz48000, Channels::Mono).ok();
+                        }
+                        if let Some(d) = dec.as_mut() {
+                            let mut pcm = vec![0f32; MAX_OPUS_FRAME];
+                            if let Ok(frames) =
+                                d.decode_float(Some(&opus), &mut pcm, MAX_OPUS_FRAME as i32, false)
+                            {
+                                // `decode_float` devuelve frames por canal (mono → muestras).
+                                pcm.truncate(frames.max(0) as usize);
+                                mezcla.lock().empujar(id, 48_000, 1, &pcm);
+                            }
+                        }
                     }
                 }
                 Paquete::Adios => break,

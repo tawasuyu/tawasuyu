@@ -55,23 +55,21 @@ Anda hoy, end-to-end y feo a propósito:
 - ✅ **Video en ambos sentidos** + preview local. Comprimido con **JPEG por
   cuadro** (MJPEG): ~40× menos bytes que RGBA crudo (192×144: 110 KB → ~2,8 KB),
   sin estado inter-cuadro (baja latencia). El preview local va sin comprimir.
-- ✅ **Audio en ambos sentidos**: captura de micrófono (`MicSource`, o tono sintético
-  con `UYA_TONO=1` sin micro), `Paquete::Audio` PCM `f32`, y una `MezclaRemota` que
-  baja a mono + resamplea linealmente al formato del dispositivo + suma a los N pares,
-  reproducida por `AudioSink` (cpal).
+- ✅ **Audio en ambos sentidos**, comprimido con **Opus** (~57×: 20 ms = 3840 B PCM
+  → ~67 B): captura de micrófono (`MicSource` a 48 kHz, o tono sintético con
+  `UYA_TONO=1`), downmix + resampleo a 48 kHz mono, encode Opus por frame de 20 ms;
+  en recepción un `OpusDecoder` por par decodifica a PCM y una `MezclaRemota`
+  resamplea al dispositivo + suma a los N pares, reproducida por `AudioSink` (cpal).
 - ✅ Cámara sintética por defecto (TestCard); webcam real v4l2 con `--features camara` en `uya-app`.
 - ✅ Toggle de cámara / micrófono y cuelgue.
 
 ## Pendiente (por orden)
 
-1. **Compresión** de video y audio (hoy RGBA + PCM crudos; ya viaja por libp2p,
-   pero sin comprimir es caro en WAN). Reusar `media-encode-av1` (video) y
-   `media-encode-opus` (audio).
-2. **Identidad por agora**: hoy el PeerId libp2p es aleatorio por arranque (la
+1. **Identidad por agora**: hoy el PeerId libp2p es aleatorio por arranque (la
    dirección dialable cambia). Derivar el keypair del nombre (PeerId estable) y,
    mejor, atar la identidad de app a `agora` (firma del `Hola`).
-3. **Descubrimiento por DHT**: `BrahmanNet` ya trae Kademlia — anunciar/encontrar
+2. **Descubrimiento por DHT**: `BrahmanNet` ya trae Kademlia — anunciar/encontrar
    pares por una clave de sala en vez de pasar la multiaddr a mano.
-4. **Malla N-a-N** automática (hoy cada par se conecta) y/o un SFU mínimo.
-5. **Marcar/conectar desde la UI** (hoy la dirección se pasa por `UYA_CONECTAR`).
-6. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).
+3. **Malla N-a-N** automática (hoy cada par se conecta) y/o un SFU mínimo.
+4. **Marcar/conectar desde la UI** (hoy la dirección se pasa por `UYA_CONECTAR`).
+5. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).

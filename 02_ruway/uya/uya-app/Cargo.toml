@@ -55,3 +55,7 @@ futures = { workspace = true }
 # Compresión de cuadros: JPEG (MJPEG) encode/decode. El mismo `image` del
 # workspace (feature jpeg ya activa).
 image = { workspace = true }
+# Compresión de audio: encoder Opus nativo (puro-Rust) para el micrófono...
+media-encode-opus = { path = "../../media/media-encode-opus" }
+# ...y el decoder Opus en streaming (un `OpusDecoder` por par en el lector).
+opus-wave = { workspace = true }

@@ -23,10 +23,15 @@ use parking_lot::Mutex;
 
 use media_audio_cpal::AudioSink;
 use media_core::{AudioSource, ToneSource};
+use media_encode_opus::{FrameDuration, OpusEncoder, OpusEncoderConfig};
 use media_source_capture::MicSource;
 use uya_core::{Paquete, ParticipanteId};
 
 use crate::Enlace;
+
+/// Sample-rate canónico del cable de audio: Opus sólo trabaja a 48 kHz
+/// (internamente), y mono nos basta para una voz.
+const SR_OPUS: u32 = 48_000;
 
 /// El audio pendiente de un par, en mono y a su sample-rate nativo.
 struct ColaRemota {
@@ -127,29 +132,104 @@ impl AudioSource for MezclaRemota {
     }
 }
 
+/// Remuestreador lineal mono con estado, para llevar el micrófono a 48 kHz (lo
+/// único que acepta Opus). A 48 kHz nativos es prácticamente identidad.
+struct Remuestreo {
+    sr_in: f64,
+    pos: f64,
+    historia: Vec<f32>,
+}
+
+impl Remuestreo {
+    fn new(sr_in: u32) -> Self {
+        Self {
+            sr_in: sr_in.max(1) as f64,
+            pos: 0.0,
+            historia: Vec::new(),
+        }
+    }
+
+    /// Agrega entrada mono nativa y produce salida mono a 48 kHz en `salida`.
+    fn procesar(&mut self, mono_in: &[f32], salida: &mut Vec<f32>) {
+        self.historia.extend_from_slice(mono_in);
+        let paso = self.sr_in / SR_OPUS as f64;
+        while (self.pos.floor() as usize) + 1 < self.historia.len() {
+            let i = self.pos.floor() as usize;
+            let t = (self.pos - i as f64) as f32;
+            salida.push(self.historia[i] + (self.historia[i + 1] - self.historia[i]) * t);
+            self.pos += paso;
+        }
+        let consumidas = (self.pos.floor() as usize).min(self.historia.len());
+        if consumidas > 0 {
+            self.historia.drain(..consumidas);
+            self.pos -= consumidas as f64;
+        }
+    }
+}
+
 /// Arranca el hilo de captura de micrófono: tira del `MicSource` (o de un tono
-/// sintético si no hay micro y `UYA_TONO` está puesto) y difunde el audio a los
+/// sintético si no hay micro y `UYA_TONO` está puesto), lo lleva a 48 kHz mono,
+/// lo **comprime con Opus** en frames de 20 ms y difunde los paquetes a los
 /// pares mientras el micrófono esté encendido.
 pub fn iniciar_microfono(enlace: Arc<Enlace>) {
     std::thread::Builder::new()
         .name("uya-mic".into())
         .spawn(move || {
+            // `fuente` (p. ej. MicSource con su Stream cpal) es !Send; vive y
+            // muere dentro de este hilo, así que no exigimos `Send` en el box.
             let Some((mut fuente, sr, ch)) = construir_fuente_audio() else {
                 return;
             };
-            // `fuente` (p. ej. MicSource con su Stream cpal) es !Send; vive y
-            // muere dentro de este hilo, así que no exigimos `Send` en el box.
-            // Bloque de ~20 ms a (sr, ch).
-            let bloque = ((sr as usize / 50).max(1)) * ch as usize;
+            let mut enc = match OpusEncoder::new(OpusEncoderConfig {
+                sample_rate: SR_OPUS,
+                channels: 1,
+                bitrate_bps: Some(24_000),
+                frame: FrameDuration::Ms20,
+            }) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("uya: no pude crear el encoder Opus: {e}");
+                    return;
+                }
+            };
+            let frame = enc.samples_per_packet() as usize; // 960 muestras (20 ms)
+            let ch_n = ch.max(1) as usize;
+            let mut resamp = Remuestreo::new(sr);
+            // Bloque de captura de ~20 ms a (sr, ch) nativos.
+            let bloque = ((sr as usize / 50).max(1)) * ch_n;
             let mut buf = vec![0.0f32; bloque];
+            let mut mono: Vec<f32> = Vec::new();
+            let mut acc: Vec<f32> = Vec::new(); // mono @ 48 kHz pendiente de encodear
+            let mut reporto = false;
             loop {
                 fuente.fill(&mut buf, sr, ch);
                 if enlace.microfono_encendido() {
-                    enlace.emitir(&Paquete::Audio {
-                        sample_rate: sr,
-                        canales: ch as u8,
-                        muestras: buf.clone(),
-                    });
+                    // Downmix a mono nativo, luego resampleo a 48 kHz.
+                    mono.clear();
+                    for cuadro in buf.chunks_exact(ch_n) {
+                        mono.push(cuadro.iter().copied().sum::<f32>() / ch_n as f32);
+                    }
+                    resamp.procesar(&mono, &mut acc);
+                    let completos = acc.len() / frame * frame;
+                    if completos > 0 {
+                        match enc.encode_interleaved(&acc[..completos]) {
+                            Ok(paquetes) => {
+                                for pkt in paquetes {
+                                    if !reporto {
+                                        eprintln!(
+                                            "uya: audio 20ms PCM={} B → Opus={} B",
+                                            frame * 4,
+                                            pkt.len()
+                                        );
+                                        reporto = true;
+                                    }
+                                    enlace.emitir(&Paquete::Audio { opus: pkt });
+                                }
+                            }
+                            Err(e) => eprintln!("uya: encode Opus falló: {e}"),
+                        }
+                        acc.drain(..completos);
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
