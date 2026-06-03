@@ -141,6 +141,11 @@ pub struct ComputedStyle {
     pub background_position: BackgroundPosition,
     /// `background-repeat`. Default `Repeat` (tile en ambos ejes).
     pub background_repeat: BackgroundRepeat,
+    /// Capas de background ADICIONALES (debajo de la capa 0, que vive en los
+    /// campos `background_*` de arriba). Son las capas 2..N de una lista
+    /// `background: a, b, c`. Default vacío. La shorthand siempre las setea
+    /// (posiblemente vacías) para resetear las de una regla previa.
+    pub background_extra_layers: Vec<BackgroundLayer>,
     /// CSS `position`. Default Static.
     pub position: Position,
     /// Insets (top/right/bottom/left). `Auto` por default.
@@ -464,6 +469,27 @@ pub enum BackgroundRepeat {
     RepeatX,
     RepeatY,
     NoRepeat,
+}
+
+/// La imagen de una capa de background: o un gradiente, o una URL sin
+/// resolver (el engine la descarga en `build_node`). Una capa siempre tiene
+/// imagen — sin imagen no hay nada que pintar.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackgroundImage {
+    Url(String),
+    Gradient(LinearGradient),
+}
+
+/// Una capa de background ADICIONAL (más allá de la capa 0, que vive en los
+/// campos `background_*` sueltos de `ComputedStyle`). CSS pinta la PRIMERA
+/// capa de la lista arriba; estas capas extra son las 2..N de una lista
+/// `background: a, b, c` separada por coma y van por DEBAJO de la capa 0.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundLayer {
+    pub image: BackgroundImage,
+    pub size: BackgroundSize,
+    pub position: BackgroundPosition,
+    pub repeat: BackgroundRepeat,
 }
 
 /// Una sombra de texto. CSS permite varias separadas por coma.
@@ -806,6 +832,7 @@ impl Default for ComputedStyle {
                 y: LengthVal::Pct(0.0),
             },
             background_repeat: BackgroundRepeat::Repeat,
+            background_extra_layers: Vec::new(),
             position: Position::Static,
             inset_top: LengthVal::Auto,
             inset_right: LengthVal::Auto,

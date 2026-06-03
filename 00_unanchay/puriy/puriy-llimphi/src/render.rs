@@ -1333,6 +1333,57 @@ pub(crate) fn render_svg(scene: &puriy_engine::SvgScene, zoom: f32) -> View<Msg>
     })
 }
 
+/// Una capa de background extra ya lista para pintar dentro del closure de
+/// `paint_with` (la imagen ya envuelta en `peniko::Image`, o el gradiente
+/// clonado). Preparada fuera del closure para no capturar `BoxNode`.
+pub(crate) enum PreparedBgLayer {
+    Image {
+        img: PenikoImage,
+        iw: f64,
+        ih: f64,
+        size: puriy_engine::style::BackgroundSize,
+        position: puriy_engine::style::BackgroundPosition,
+        repeat: puriy_engine::style::BackgroundRepeat,
+    },
+    Gradient(puriy_engine::style::LinearGradient),
+}
+
+/// Pinta las capas de background EXTRA (debajo de la capa 0) dentro de `rect`.
+/// CSS pinta la primera capa de la lista arriba, así que estas van debajo y se
+/// pintan en orden inverso (la última de la lista, la más al fondo, primero).
+/// Cada capa es imagen (vía `paint_background_image`) o gradiente lineal.
+pub(crate) fn paint_extra_bg_layers(
+    scene: &mut llimphi_raster::vello::Scene,
+    rect: llimphi_ui::PaintRect,
+    radius: f64,
+    layers: &[PreparedBgLayer],
+    alpha_mul: f32,
+) {
+    for layer in layers.iter().rev() {
+        match layer {
+            PreparedBgLayer::Gradient(g) => {
+                if let Some(brush) = build_linear_gradient_brush(g, rect, alpha_mul) {
+                    let r = RoundedRect::new(
+                        rect.x as f64,
+                        rect.y as f64,
+                        (rect.x + rect.w) as f64,
+                        (rect.y + rect.h) as f64,
+                        radius,
+                    );
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &r);
+                }
+            }
+            PreparedBgLayer::Image { img, iw, ih, size, position, repeat } => {
+                if *iw > 0.0 && *ih > 0.0 {
+                    paint_background_image(
+                        scene, rect, radius, img, *iw, *ih, *size, *position, *repeat,
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Pinta `background-image` dentro de `rect` resolviendo `background-size`,
 /// `background-position` y `background-repeat` (Fase 7.204). Recorta al rect
 /// (esquinas redondeadas incluidas) con un clip layer y tilea según el repeat.
@@ -1535,6 +1586,29 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     let bg_size = b.background_size;
     let bg_position = b.background_position;
     let bg_repeat = b.background_repeat;
+    // Capas de background EXTRA (debajo de la capa 0). Cada una es imagen
+    // (raster ya decodificado) o gradiente. Se preparan acá para no capturar
+    // el BoxNode dentro del closure.
+    let extra_layers: Vec<PreparedBgLayer> = b
+        .background_extra_layers
+        .iter()
+        .filter_map(|l| {
+            if let Some(img) = &l.image {
+                let blob = Blob::from(img.rgba.clone());
+                let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
+                Some(PreparedBgLayer::Image {
+                    img: peniko,
+                    iw: img.width as f64,
+                    ih: img.height as f64,
+                    size: l.size,
+                    position: l.position,
+                    repeat: l.repeat,
+                })
+            } else {
+                l.gradient.clone().map(PreparedBgLayer::Gradient)
+            }
+        })
+        .collect();
     if shadow.is_none()
         && uniform_border.is_none()
         && per_side_border.is_none()
@@ -1542,10 +1616,13 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
         && outline.is_none()
         && gradient.is_none()
         && bg_image.is_none()
+        && extra_layers.is_empty()
     {
         return view;
     }
     view.paint_with(move |scene, _typesetter, rect| {
+        // Capas de background EXTRA, debajo de la capa 0.
+        paint_extra_bg_layers(scene, rect, radius, &extra_layers, alpha_mul);
         // linear-gradient: se pinta como fill rectangular alineado al
         // ángulo CSS. peniko interpreta `Linear { start, end }` como
         // las dos puntas — calculamos el segmento atravesando el rect

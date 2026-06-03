@@ -101,6 +101,10 @@ pub(crate) enum DeclKind {
     BackgroundSize(BackgroundSize),
     BackgroundPosition(BackgroundPosition),
     BackgroundRepeat(BackgroundRepeat),
+    /// Capas de background EXTRA (debajo de la capa 0), de un `background:`
+    /// o `background-image:` con varias capas separadas por coma. La
+    /// shorthand siempre la emite (posiblemente vacía) para resetear.
+    BackgroundExtraLayers(Vec<BackgroundLayer>),
     Position(Position),
     InsetTop(LengthVal),
     InsetRight(LengthVal),
@@ -214,11 +218,15 @@ impl Decl {
             DeclKind::BackgroundGradientNone => {
                 s.background_gradient = None;
                 s.background_image_url = None;
+                // `background-image: none` no deja ninguna imagen — limpia
+                // también las capas extra de una lista previa.
+                s.background_extra_layers.clear();
             }
             DeclKind::BackgroundImageUrl(u) => s.background_image_url = Some(u.clone()),
             DeclKind::BackgroundSize(sz) => s.background_size = *sz,
             DeclKind::BackgroundPosition(pos) => s.background_position = *pos,
             DeclKind::BackgroundRepeat(r) => s.background_repeat = *r,
+            DeclKind::BackgroundExtraLayers(ls) => s.background_extra_layers = ls.clone(),
             DeclKind::Position(p) => s.position = *p,
             DeclKind::InsetTop(v) => s.inset_top = *v,
             DeclKind::InsetRight(v) => s.inset_right = *v,

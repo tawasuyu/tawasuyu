@@ -835,27 +835,26 @@ pub(crate) fn parse_background_position(value: &str) -> Option<DeclKind> {
     Some(DeclKind::BackgroundPosition(pos))
 }
 
-/// Shorthand `background:` — expande a los longhands presentes (color, image,
-/// position, size, repeat) reusando los value-parsers de cada sub-propiedad.
-/// Sólo la PRIMERA capa (antes de la primera coma de nivel superior); las
-/// capas múltiples no se modelan todavía (igual que el render — una sola capa).
-/// Sintaxis: `<color> || <image> || <position> [ / <size> ] || <repeat> ||
-/// <attachment> || <box>`. `scroll`/`fixed`/`local` (attachment) y
-/// `border-box`/`padding-box`/`content-box` (origin/clip) se aceptan y se
-/// descartan (no se modelan). Sólo emite los longhands presentes (igual que el
-/// shorthand `border`); los omitidos no se resetean.
-pub(crate) fn parse_background_shorthand(value: &str, important: bool) -> Vec<Decl> {
-    // Una sola capa: cortar en la primera coma de nivel superior.
-    let layer = split_top_level_comma(value)
-        .into_iter()
-        .next()
-        .unwrap_or_default();
-    let layer = layer.trim();
-    // Tokeniza respetando paréntesis (`url(...)`/gradiente quedan enteros) y
-    // luego separa el `/` (position / size) que pudo venir pegado a un token
-    // (`center/cover`). Los `/` dentro de paréntesis no se tocan.
+/// Las piezas de UNA capa de `background` ya clasificadas. Los longhands
+/// (color/image/size/position/repeat) salen de los value-parsers existentes;
+/// `None` = la pieza no apareció en esa capa.
+struct BgLayerParts {
+    color: Option<Color>,
+    /// `BackgroundImageUrl` | `BackgroundGradient` | `BackgroundGradientNone`.
+    image: Option<DeclKind>,
+    size: Option<BackgroundSize>,
+    position: Option<BackgroundPosition>,
+    repeat: Option<BackgroundRepeat>,
+}
+
+/// Clasifica los tokens de UNA capa de `background` (un segmento sin comas).
+/// Tokeniza respetando paréntesis (`url(...)`/gradiente quedan enteros) y
+/// separa el `/` (position / size) aunque venga pegado (`center/cover`).
+/// `scroll`/`fixed`/`local` (attachment) y `*-box` (origin/clip) se aceptan y
+/// se descartan (no se modelan). Lo que sobra se intenta parsear como color.
+fn classify_background_layer(layer: &str) -> BgLayerParts {
     let mut tokens: Vec<String> = Vec::new();
-    for t in split_top_level_ws(layer) {
+    for t in split_top_level_ws(layer.trim()) {
         if t.contains('/') && !t.contains('(') {
             let mut buf = String::new();
             for ch in t.chars() {
@@ -876,9 +875,13 @@ pub(crate) fn parse_background_shorthand(value: &str, important: bool) -> Vec<De
         }
     }
 
-    let mut color: Option<DeclKind> = None;
-    let mut image: Option<DeclKind> = None;
-    let mut repeat: Option<DeclKind> = None;
+    let mut parts = BgLayerParts {
+        color: None,
+        image: None,
+        size: None,
+        position: None,
+        repeat: None,
+    };
     let mut pos_tokens: Vec<String> = Vec::new();
     let mut size_tokens: Vec<String> = Vec::new();
     let mut after_slash = false;
@@ -893,64 +896,151 @@ pub(crate) fn parse_background_shorthand(value: &str, important: bool) -> Vec<De
             continue;
         }
         let lt = t.to_ascii_lowercase();
-        // Imagen: url(...) / linear-gradient(...) / none.
         if lt.starts_with("url(") || lt.starts_with("linear-gradient(") || lt == "none" {
             if let Some(k) = parse_background_image(t) {
-                image = Some(k);
+                parts.image = Some(k);
             }
             continue;
         }
-        // Repeat.
         if matches!(
             lt.as_str(),
             "repeat" | "no-repeat" | "repeat-x" | "repeat-y" | "space" | "round"
         ) {
-            if let Some(k) = parse_background_repeat(t) {
-                repeat = Some(k);
+            if let Some(DeclKind::BackgroundRepeat(r)) = parse_background_repeat(t) {
+                parts.repeat = Some(r);
             }
             continue;
         }
-        // Attachment (scroll/fixed/local) y origin/clip (border/padding/content-box):
-        // aceptados y descartados — no se modelan.
         if matches!(
             lt.as_str(),
             "scroll" | "fixed" | "local" | "border-box" | "padding-box" | "content-box"
         ) {
             continue;
         }
-        // Position: keyword o length/%.
         if matches!(lt.as_str(), "left" | "right" | "top" | "bottom" | "center")
             || parse_length_or_pct(t).is_some()
         {
             pos_tokens.push(t.clone());
             continue;
         }
-        // Lo que sobra: color (conviene último por convención del shorthand).
         if let Some(c) = parse_color(t) {
-            color = Some(DeclKind::Background(c));
+            parts.color = Some(c);
         }
     }
-
-    let mut out = Vec::new();
-    if let Some(k) = color {
-        out.push(Decl { kind: k, important });
-    }
-    if let Some(k) = image {
-        out.push(Decl { kind: k, important });
-    }
     if !pos_tokens.is_empty() {
-        if let Some(k) = parse_background_position(&pos_tokens.join(" ")) {
-            out.push(Decl { kind: k, important });
+        if let Some(DeclKind::BackgroundPosition(p)) =
+            parse_background_position(&pos_tokens.join(" "))
+        {
+            parts.position = Some(p);
         }
     }
     if !size_tokens.is_empty() {
-        if let Some(k) = parse_background_size(&size_tokens.join(" ")) {
-            out.push(Decl { kind: k, important });
+        if let Some(DeclKind::BackgroundSize(s)) = parse_background_size(&size_tokens.join(" ")) {
+            parts.size = Some(s);
         }
     }
-    if let Some(k) = repeat {
-        out.push(Decl { kind: k, important });
+    parts
+}
+
+/// Convierte las piezas de una capa EXTRA (índice ≥ 1) en un [`BackgroundLayer`].
+/// Una capa sin imagen no pinta nada → `None` (se descarta). Los longhands
+/// omitidos caen a sus defaults CSS (`auto` / `0% 0%` / `repeat`).
+fn extra_layer_from_parts(parts: &BgLayerParts) -> Option<BackgroundLayer> {
+    let image = match &parts.image {
+        Some(DeclKind::BackgroundImageUrl(u)) => BackgroundImage::Url(u.clone()),
+        Some(DeclKind::BackgroundGradient(g)) => BackgroundImage::Gradient(g.clone()),
+        // `none` u otra cosa → sin imagen pintable.
+        _ => return None,
+    };
+    Some(BackgroundLayer {
+        image,
+        size: parts.size.unwrap_or(BackgroundSize::Auto),
+        position: parts.position.unwrap_or(BackgroundPosition {
+            x: LengthVal::Pct(0.0),
+            y: LengthVal::Pct(0.0),
+        }),
+        repeat: parts.repeat.unwrap_or(BackgroundRepeat::Repeat),
+    })
+}
+
+/// Shorthand `background:` — expande a los longhands de cada capa. La PRIMERA
+/// capa (la de más arriba en CSS) va a los campos `background_*` sueltos; las
+/// capas 2..N (separadas por coma) a `BackgroundExtraLayers`. Reusa los
+/// value-parsers de cada sub-propiedad. Cada capa: `<color> || <image> ||
+/// <position> [ / <size> ] || <repeat> || <attachment> || <box>` (attachment y
+/// origin/clip se aceptan y descartan). El color sólo cuenta en la última capa
+/// (semántica CSS). Siempre emite `BackgroundExtraLayers` (posiblemente vacía)
+/// para resetear las capas de una regla previa. Los demás longhands se emiten
+/// sólo si la capa 0 los trae (igual que el shorthand `border`).
+pub(crate) fn parse_background_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let layers = split_top_level_comma(value);
+    let mut out = Vec::new();
+    let mut extra: Vec<BackgroundLayer> = Vec::new();
+    // El color de la última capa que lo declare (en CSS sólo la final lo lleva).
+    let mut last_color: Option<Color> = None;
+
+    for (i, layer) in layers.iter().enumerate() {
+        let parts = classify_background_layer(layer);
+        if let Some(c) = parts.color {
+            last_color = Some(c);
+        }
+        if i == 0 {
+            // Capa 0 → longhands sueltos.
+            if let Some(k) = parts.image {
+                out.push(Decl { kind: k, important });
+            }
+            if let Some(p) = parts.position {
+                out.push(Decl { kind: DeclKind::BackgroundPosition(p), important });
+            }
+            if let Some(s) = parts.size {
+                out.push(Decl { kind: DeclKind::BackgroundSize(s), important });
+            }
+            if let Some(r) = parts.repeat {
+                out.push(Decl { kind: DeclKind::BackgroundRepeat(r), important });
+            }
+        } else if let Some(l) = extra_layer_from_parts(&parts) {
+            extra.push(l);
+        }
     }
+
+    if let Some(c) = last_color {
+        out.push(Decl { kind: DeclKind::Background(c), important });
+    }
+    // Siempre (incluso vacía) — resetea capas extra de una regla previa.
+    out.push(Decl { kind: DeclKind::BackgroundExtraLayers(extra), important });
+    out
+}
+
+/// Longhand `background-image: a, b, c` con varias capas. Capa 0 → su DeclKind
+/// de imagen suelto; capas 2..N → `BackgroundExtraLayers` con size/position/
+/// repeat por default (los longhands hermanos `background-size:`/etc. en lista
+/// NO se zipean por capa todavía — sólo afectan la capa 0). Sólo se invoca
+/// cuando el value trae ≥2 capas (sino cae al path normal de un solo valor).
+pub(crate) fn parse_background_image_list(value: &str, important: bool) -> Vec<Decl> {
+    let layers = split_top_level_comma(value);
+    let mut out = Vec::new();
+    let mut extra: Vec<BackgroundLayer> = Vec::new();
+    for (i, layer) in layers.iter().enumerate() {
+        let img = parse_background_image(layer.trim());
+        if i == 0 {
+            if let Some(k) = img {
+                out.push(Decl { kind: k, important });
+            }
+        } else {
+            let image = match img {
+                Some(DeclKind::BackgroundImageUrl(u)) => BackgroundImage::Url(u),
+                Some(DeclKind::BackgroundGradient(g)) => BackgroundImage::Gradient(g),
+                _ => continue,
+            };
+            extra.push(BackgroundLayer {
+                image,
+                size: BackgroundSize::Auto,
+                position: BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
+                repeat: BackgroundRepeat::Repeat,
+            });
+        }
+    }
+    out.push(Decl { kind: DeclKind::BackgroundExtraLayers(extra), important });
     out
 }
 

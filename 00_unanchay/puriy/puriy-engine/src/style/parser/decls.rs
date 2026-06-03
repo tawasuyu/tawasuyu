@@ -100,6 +100,14 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_background_shorthand(value, important));
             continue;
         }
+        // `background-image: a, b` con varias capas → expandir a capa 0 +
+        // BackgroundExtraLayers. Una sola capa cae al path normal de abajo.
+        if prop.eq_ignore_ascii_case("background-image")
+            && split_top_level_comma(value).len() > 1
+        {
+            out.extend(parse_background_image_list(value, important));
+            continue;
+        }
         if let Some(kind) = decl_kind_from_pair(prop, value) {
             out.push(Decl { kind, important });
         }

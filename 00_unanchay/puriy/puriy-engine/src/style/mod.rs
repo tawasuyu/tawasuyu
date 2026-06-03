@@ -2156,6 +2156,72 @@ line2</pre></body></html>"#;
     }
 
     #[test]
+    fn background_capas_multiples_shorthand_y_longhand() {
+        // Fase 7.206 — la lista `background: a, b` reparte la capa 0 en los
+        // campos sueltos y las capas 2..N en background_extra_layers.
+        let compute = |css: &str| {
+            let html = format!(
+                "<html><head><style>div {{ {css} }}</style></head><body><div></div></body></html>"
+            );
+            let dom = DomTree::parse(&html);
+            let eng = StyleEngine::from_dom(&dom);
+            eng.compute(&dom.find("div").unwrap())
+        };
+
+        // Shorthand: capa 0 (arriba) = url(top) no-repeat center/cover; capa
+        // extra = url(bottom) repeat-x con defaults de size/position.
+        let s = compute("background: url(top.png) no-repeat center / cover, url(bottom.png) repeat-x");
+        assert_eq!(s.background_image_url.as_deref(), Some("top.png"));
+        assert_eq!(s.background_repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(s.background_size, BackgroundSize::Cover);
+        assert_eq!(s.background_extra_layers.len(), 1);
+        let ex = &s.background_extra_layers[0];
+        assert_eq!(ex.image, BackgroundImage::Url("bottom.png".into()));
+        assert_eq!(ex.repeat, BackgroundRepeat::RepeatX);
+        assert_eq!(ex.size, BackgroundSize::Auto); // default
+        assert_eq!((ex.position.x, ex.position.y), (LengthVal::Pct(0.0), LengthVal::Pct(0.0)));
+
+        // Gradiente arriba de una imagen, y color sólo en la última capa.
+        let s = compute("background: linear-gradient(red, blue), url(img.png) green");
+        assert!(s.background_gradient.is_some()); // capa 0 = gradiente
+        assert_eq!(s.background, Some(Color::rgb(0, 128, 0))); // color de la última capa
+        assert_eq!(s.background_extra_layers.len(), 1);
+        assert_eq!(s.background_extra_layers[0].image, BackgroundImage::Url("img.png".into()));
+
+        // Una sola capa resetea las extra (la shorthand siempre emite la lista).
+        let s = compute("background-image: url(a.png), url(b.png); background: blue");
+        assert!(s.background_extra_layers.is_empty());
+        assert_eq!(s.background, Some(Color::rgb(0, 0, 255)));
+
+        // Longhand `background-image` con varias capas.
+        let s = compute("background-image: url(a.png), url(b.png), url(c.png)");
+        assert_eq!(s.background_image_url.as_deref(), Some("a.png"));
+        assert_eq!(s.background_extra_layers.len(), 2);
+        assert_eq!(s.background_extra_layers[0].image, BackgroundImage::Url("b.png".into()));
+        assert_eq!(s.background_extra_layers[1].image, BackgroundImage::Url("c.png".into()));
+    }
+
+    #[test]
+    fn background_capas_extra_resueltas_viajan_al_box() {
+        // La capa extra de gradiente se resuelve y viaja al BoxNode (las url()
+        // que no resuelven se descartan; el gradiente siempre pinta).
+        let eng = crate::Engine::new();
+        let html = r#"<html><body>
+            <div id="d" style="background: url(x.png) no-repeat, linear-gradient(red, blue)"></div>
+        </body></html>"#;
+        let doc = eng.load_html("about:test", html);
+        let mut layers = None;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("d") {
+                layers = Some(b.background_extra_layers.len());
+                // El gradiente de la capa extra está presente.
+                assert!(b.background_extra_layers.iter().any(|l| l.gradient.is_some()));
+            }
+        });
+        assert_eq!(layers, Some(1));
+    }
+
+    #[test]
     fn parsea_padding_individual_4_lados() {
         let html = r#"<html><head><style>
             div {

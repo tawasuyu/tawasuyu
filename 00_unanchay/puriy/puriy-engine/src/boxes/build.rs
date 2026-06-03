@@ -519,6 +519,7 @@ pub(crate) fn empty_root() -> BoxNode {
         background_size: BackgroundSize::Auto,
         background_position: BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
         background_repeat: BackgroundRepeat::Repeat,
+        background_extra_layers: Vec::new(),
         input_kind: None,
         input_initial: None,
         input_placeholder: None,
@@ -735,6 +736,31 @@ pub(crate) fn build_node(
                 .background_image_url
                 .as_deref()
                 .and_then(|u| fetch_image_src(base, u));
+            // Capas de background extra (lista `background: a, b, ...`):
+            // resolver cada `url(...)` igual que la capa 0 (misma cache);
+            // las que fallan se descartan; los gradientes pasan tal cual.
+            let background_extra_layers: Vec<BoxBackgroundLayer> = style
+                .background_extra_layers
+                .iter()
+                .filter_map(|l| {
+                    let (image, gradient) = match &l.image {
+                        crate::style::BackgroundImage::Url(u) => {
+                            match fetch_image_src(base, u) {
+                                Some(img) => (Some(img), None),
+                                None => return None, // url no resoluble → capa descartada
+                            }
+                        }
+                        crate::style::BackgroundImage::Gradient(g) => (None, Some(g.clone())),
+                    };
+                    Some(BoxBackgroundLayer {
+                        image,
+                        gradient,
+                        size: l.size,
+                        position: l.position,
+                        repeat: l.repeat,
+                    })
+                })
+                .collect();
             let mut children = Vec::new();
             // `::before` pseudo-element. Se inyecta ANTES que el marker
             // de `<li>` y que los children reales — matchea spec ("the
@@ -908,6 +934,7 @@ pub(crate) fn build_node(
                 background_size: style.background_size,
                 background_position: style.background_position,
                 background_repeat: style.background_repeat,
+                background_extra_layers,
                 input_kind,
                 input_initial,
                 input_placeholder,
@@ -1061,6 +1088,7 @@ pub(crate) fn build_node(
                 background_size: BackgroundSize::Auto,
                 background_position: BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
                 background_repeat: BackgroundRepeat::Repeat,
+                background_extra_layers: Vec::new(),
                 input_kind: None,
                 input_initial: None,
                 input_placeholder: None,
@@ -1160,6 +1188,7 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         background_size: BackgroundSize::Auto,
         background_position: BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
         background_repeat: BackgroundRepeat::Repeat,
+        background_extra_layers: Vec::new(),
         input_kind: None,
         input_initial: None,
         input_placeholder: None,
@@ -1509,11 +1538,20 @@ pub(crate) fn prefetch_background_image_urls(
             return;
         }
         let style = styles.compute(node);
-        if let Some(u) = style.background_image_url.as_deref() {
+        let mut push = |u: &str| {
             if let Some(abs) = resolve_href(base, u) {
                 if seen.insert(abs.clone()) {
                     urls.push(abs);
                 }
+            }
+        };
+        if let Some(u) = style.background_image_url.as_deref() {
+            push(u);
+        }
+        // Capas extra (lista `background: a, b`): prefetch sus url() también.
+        for l in &style.background_extra_layers {
+            if let crate::style::BackgroundImage::Url(u) = &l.image {
+                push(u);
             }
         }
     });

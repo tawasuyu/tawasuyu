@@ -199,6 +199,12 @@ pub struct BoxNode {
     pub background_position: BackgroundPosition,
     /// `background-repeat` (tiling). Default `Repeat`.
     pub background_repeat: BackgroundRepeat,
+    /// Capas de background ADICIONALES resueltas (debajo de la capa 0, que
+    /// vive en `background`/`background_gradient`/`background_image`). Cada
+    /// `url(...)` ya viene decodificada a `ImageData` (las que fallaron se
+    /// descartaron en build); los gradientes van tal cual. El chrome las
+    /// pinta de la última a la primera, todas debajo de la capa 0.
+    pub background_extra_layers: Vec<BoxBackgroundLayer>,
     /// Si el nodo es un `<input>` de tipo texto o un `<textarea>`, el
     /// chrome lo renderea como widget editable. `None` para todo lo
     /// demás. Multilinea = textarea.
@@ -451,6 +457,21 @@ pub struct ImageData {
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
+}
+
+/// Una capa de background ADICIONAL ya resuelta para pintar (la capa 0 vive
+/// en los campos `background_*`/`background_image`/`background_gradient`).
+/// Exactamente uno de `image`/`gradient` es `Some` (la otra mitad de la
+/// capa). `size`/`position`/`repeat` aplican a esa imagen.
+#[derive(Debug, Clone)]
+pub struct BoxBackgroundLayer {
+    /// Raster decodificado si la capa era `url(...)`, sino `None`.
+    pub image: Option<ImageData>,
+    /// Gradiente si la capa era `linear-gradient(...)`, sino `None`.
+    pub gradient: Option<LinearGradient>,
+    pub size: BackgroundSize,
+    pub position: BackgroundPosition,
+    pub repeat: BackgroundRepeat,
 }
 
 /// Árbol de boxes. Wrapper para poder agregar utilidades.

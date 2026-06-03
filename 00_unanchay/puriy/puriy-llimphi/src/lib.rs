@@ -4287,6 +4287,58 @@ mod tests {
     }
 
     #[test]
+    fn paint_extra_bg_layers_pinta_imagen_y_gradiente() {
+        // Fase 7.206 — las capas extra (debajo de la capa 0) se pintan: una
+        // imagen vía paint_background_image y un gradiente lineal vía fill.
+        use puriy_engine::style::{GradientStop, LinearGradient};
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+
+        // Sin capas → no pinta nada.
+        let mut none = llimphi_raster::vello::Scene::new();
+        paint_extra_bg_layers(&mut none, rect, 0.0, &[], 1.0);
+        assert!(none.encoding().is_empty(), "sin capas no debería pintar");
+
+        // Una capa de gradiente → un fill.
+        let grad = LinearGradient {
+            angle_deg: 180.0,
+            stops: vec![
+                GradientStop { color: puriy_engine::Color::rgb(255, 0, 0), pos: None },
+                GradientStop { color: puriy_engine::Color::rgb(0, 0, 255), pos: None },
+            ],
+        };
+        let mut g = llimphi_raster::vello::Scene::new();
+        paint_extra_bg_layers(&mut g, rect, 0.0, &[PreparedBgLayer::Gradient(grad.clone())], 1.0);
+        assert!(!g.encoding().is_empty(), "una capa de gradiente debería pintar");
+
+        // Imagen + gradiente → más draws que el gradiente solo.
+        let img = PenikoImage::new(
+            llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]),
+            llimphi_raster::peniko::ImageFormat::Rgba8,
+            2,
+            2,
+        );
+        let layers = vec![
+            PreparedBgLayer::Image {
+                img,
+                iw: 2.0,
+                ih: 2.0,
+                size: BackgroundSize::Explicit { x: LengthVal::Px(50.0), y: LengthVal::Px(50.0) },
+                position: BackgroundPosition { x: LengthVal::Px(0.0), y: LengthVal::Px(0.0) },
+                repeat: BackgroundRepeat::NoRepeat,
+            },
+            PreparedBgLayer::Gradient(grad),
+        ];
+        let mut both = llimphi_raster::vello::Scene::new();
+        paint_extra_bg_layers(&mut both, rect, 0.0, &layers, 1.0);
+        assert!(
+            both.encoding().draw_tags.len() > g.encoding().draw_tags.len(),
+            "dos capas deberían encodar más draws que una ({} vs {})",
+            both.encoding().draw_tags.len(),
+            g.encoding().draw_tags.len()
+        );
+    }
+
+    #[test]
     fn canvas_shadow_lee_estado() {
         // Sin campo `sc` → None.
         let plain: serde_json::Value = serde_json::from_str(r#"{"ga":1.0}"#).unwrap();
