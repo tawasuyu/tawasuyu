@@ -87,6 +87,7 @@ pub(crate) fn tile_astrocarto(
     theme: &Theme,
     zoom: f32,
     pan: (f32, f32),
+    rect_cell: std::sync::Arc<std::sync::Mutex<Option<(f32, f32, f32, f32)>>>,
 ) -> View<Msg> {
     let bd = &chart.birth_data;
     // Local → UTC.
@@ -136,6 +137,10 @@ pub(crate) fn tile_astrocarto(
         use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, Stroke};
         use llimphi_ui::llimphi_raster::peniko::Color as PColor;
         use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment, TextBlock};
+        // Deja el rect del lienzo para que `on_wheel` haga zoom al cursor.
+        if let Ok(mut g) = rect_cell.lock() {
+            *g = Some((rect.x, rect.y, rect.w, rect.h));
+        }
         // Aspect-fit centrado + zoom/paneo del usuario.
         let scale_x = rect.w as f64 / ASTROCARTO_W as f64;
         let scale_y = rect.h as f64 / ASTROCARTO_H as f64;

@@ -902,6 +902,7 @@ impl App for Cosmos {
             sky_probe: None,
             wheel_zoom: 1.0,
             wheel_pan: (0.0, 0.0),
+            carto_rect: Arc::new(std::sync::Mutex::new(None)),
             viewport: model::VIEWPORT,
             tools_scroll: 0.0,
             nav_w: ui.nav_w,
@@ -981,6 +982,10 @@ impl App for Cosmos {
             Msg::WheelResetView => {
                 m.wheel_zoom = 1.0;
                 m.wheel_pan = (0.0, 0.0);
+            }
+            Msg::WheelSetView(z, px, py) => {
+                m.wheel_zoom = z;
+                m.wheel_pan = (px, py);
             }
             Msg::SkyProbe(dx, dy, lx0, ly0) => {
                 // El drag entrega lx0/ly0 del press (constante) + deltas
@@ -1466,9 +1471,9 @@ impl App for Cosmos {
     /// el área gráfica — no hace falta gating por coordenadas (que fallaba
     /// al maximizar / en HiDPI).
     fn on_wheel(
-        _model: &Model,
+        model: &Model,
         delta: llimphi_ui::WheelDelta,
-        _cursor: (f32, f32),
+        cursor: (f32, f32),
         modifiers: llimphi_ui::Modifiers,
     ) -> Option<Msg> {
         const STEP: f32 = 40.0;
@@ -1479,6 +1484,32 @@ impl App for Cosmos {
         } else {
             // Zoom: rueda hacia arriba (delta.y < 0) acerca.
             let factor = if delta.y < 0.0 { 1.12 } else { 0.892 };
+            // En astrocarto, el zoom va HACIA el cursor: ajusta el paneo
+            // para que el punto del mapa bajo el puntero quede fijo. Sólo
+            // ahí conocemos el rect del lienzo (lo dejó el `paint_with`).
+            if matches!(model.chart_view, crate::model::ChartView::Carto) {
+                if let Ok(guard) = model.carto_rect.lock() {
+                    if let Some((rx, ry, rw, rh)) = *guard {
+                        let base = (rw / 320.0).min(rh / 160.0);
+                        let z = model.wheel_zoom;
+                        let z2 = (z * factor).clamp(0.25, 8.0);
+                        let s = base * z;
+                        let s2 = base * z2;
+                        if s > 0.0 && base > 0.0 {
+                            let (cx, cy) = cursor;
+                            let rcx = rx + rw * 0.5;
+                            let rcy = ry + rh * 0.5;
+                            let off_x = rcx - 320.0 * s / 2.0 + model.wheel_pan.0;
+                            let off_y = rcy - 160.0 * s / 2.0 + model.wheel_pan.1;
+                            let wx = (cx - off_x) / s;
+                            let wy = (cy - off_y) / s;
+                            let pan_x = cx - wx * s2 - rcx + 320.0 * s2 / 2.0;
+                            let pan_y = cy - wy * s2 - rcy + 160.0 * s2 / 2.0;
+                            return Some(Msg::WheelSetView(z2, pan_x, pan_y));
+                        }
+                    }
+                }
+            }
             Some(Msg::WheelZoom(factor))
         }
     }

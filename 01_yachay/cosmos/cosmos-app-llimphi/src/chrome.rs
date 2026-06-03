@@ -1040,9 +1040,14 @@ fn graphic_for(
         ChartView::Estandar => wheel_canvas(model, render, size, theme, fill),
         ChartView::Uraniano => uranian_dial_canvas(model, render, size, theme, fill),
         ChartView::Armonica => harmonic_wheel_canvas(model, render, size, theme, fill),
-        ChartView::Carto => {
-            crate::astrocarto::tile_astrocarto(chart, render, theme, model.wheel_zoom, model.wheel_pan)
-        }
+        ChartView::Carto => crate::astrocarto::tile_astrocarto(
+            chart,
+            render,
+            theme,
+            model.wheel_zoom,
+            model.wheel_pan,
+            model.carto_rect.clone(),
+        ),
         ChartView::Esfera3d => sphere_canvas(model, render, size, theme, fill),
         ChartView::Cielo => sky_canvas(model, size, theme, fill),
     }
@@ -1382,7 +1387,7 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
     let canvas = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: percent(0.0_f32),
+            height: percent(1.0_f32),
         },
         flex_grow: 1.0,
         min_size: Size {

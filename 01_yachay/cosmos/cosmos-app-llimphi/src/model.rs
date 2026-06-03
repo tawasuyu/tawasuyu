@@ -516,6 +516,9 @@ pub(crate) enum Msg {
     WheelZoom(f32),
     /// Restaura zoom 1× y paneo 0 (encuadre).
     WheelResetView,
+    /// Fija zoom y paneo del lienzo de una (para zoom hacia el cursor):
+    /// (zoom, pan_x, pan_y).
+    WheelSetView(f32, f32, f32),
     /// Sonda del mouse sobre la cúpula del Cielo: (Δx, Δy del move, lx0,
     /// ly0 del press en coords del nodo). Acumula la posición para el
     /// readout alt/az.
@@ -675,6 +678,11 @@ pub(crate) struct Model {
     // rueda 2D: zoom + paneo del lienzo (transitorio, no se persiste)
     pub(crate) wheel_zoom: f32,
     pub(crate) wheel_pan: (f32, f32),
+    /// Rect (x, y, w, h en px de ventana) del último lienzo de
+    /// astrocarto pintado. Lo escribe el `paint_with` y lo lee
+    /// `on_wheel` para hacer zoom hacia la posición del cursor (el
+    /// `update` no conoce el layout computado; el paint sí).
+    pub(crate) carto_rect: std::sync::Arc<std::sync::Mutex<Option<(f32, f32, f32, f32)>>>,
     /// Tamaño actual de la ventana (px lógicos). Para gating de la rueda
     /// y el alto del scroll de paneles. Arranca en [`VIEWPORT`].
     pub(crate) viewport: (f32, f32),
