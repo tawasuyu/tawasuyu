@@ -254,6 +254,18 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                             }
                             Pseudo::Has(rels)
                         }
+                        "lang" => {
+                            // `:lang(en, fr)` — lista de tags de idioma.
+                            let tags: Vec<String> = arg
+                                .split(',')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            if tags.is_empty() {
+                                return None;
+                            }
+                            Pseudo::Lang(tags)
+                        }
                         "is" | "where" => {
                             // Lista de compounds separados por coma (sin
                             // combinadores adentro — `parse_compound` parsea

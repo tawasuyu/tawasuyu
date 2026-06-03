@@ -711,6 +711,35 @@ mod tests {
     }
 
     #[test]
+    fn pseudo_lang_matchea() {
+        let html = r#"<html lang="en-US"><head><style>
+            :lang(en){color:rgb(0,0,255)}
+            .fr:lang(fr){color:rgb(0,128,0)}
+        </style></head><body>
+            <p id="hereda">x</p>
+            <p id="propio" lang="fr" class="fr">y</p>
+            <p id="otro" lang="de">z</p>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by_id = |id: &str| -> Handle {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // Hereda `lang="en-US"` del <html> → :lang(en) matchea (subtag).
+        assert_eq!(eng.compute(&by_id("hereda")).color, Color::rgb(0, 0, 255));
+        // lang propio "fr" → .fr:lang(fr) matchea (verde), no :lang(en).
+        assert_eq!(eng.compute(&by_id("propio")).color, Color::rgb(0, 128, 0));
+        // lang "de" → ni :lang(en) ni :lang(fr).
+        assert_eq!(eng.compute(&by_id("otro")).color, Color::BLACK);
+    }
+
+    #[test]
     fn selector_hijo_directo_matchea() {
         // `ul > li` matchea `<li>` que es hijo *directo* de `<ul>`. Un
         // `<li>` dentro de `<ol>` adentro de `<ul>` no debe matchear.

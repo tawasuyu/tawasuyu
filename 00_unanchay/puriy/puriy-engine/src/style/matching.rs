@@ -281,6 +281,9 @@ pub(crate) enum Pseudo {
     /// `:has(<rel-sel-list>)` — relacional. Matchea si ALGUNA relative
     /// selector matchea contra el subárbol/hermanos del elemento.
     Has(Vec<RelativeSelector>),
+    /// `:lang(en, fr)` — el idioma del elemento (atributo `lang` propio o
+    /// del ancestro más cercano) coincide con (o es subtag de) alguno.
+    Lang(Vec<String>),
 }
 
 /// Una relative selector de `:has(...)`: un combinador (descendiente por
@@ -400,6 +403,7 @@ pub(crate) fn pseudo_matches(
                 .iter()
                 .any(|r| has_relative_match(node, r, hover_active, focus_active))
         }
+        Pseudo::Lang(tags) => return lang_matches(node, tags),
         _ => {}
     }
     let Some(parent) = parent_of(node) else { return false };
@@ -438,7 +442,8 @@ pub(crate) fn pseudo_matches(
         | Pseudo::Empty
         | Pseudo::Root
         | Pseudo::AnyLink
-        | Pseudo::Has(_) => unreachable!("ya resueltos arriba"),
+        | Pseudo::Has(_)
+        | Pseudo::Lang(_) => unreachable!("ya resueltos arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
         Pseudo::OnlyChild => elems.len() == 1,
@@ -512,6 +517,27 @@ fn any_descendant_matches(
         }
     }
     false
+}
+
+/// `:lang(...)` — el idioma efectivo del elemento (atributo `lang` propio o
+/// del ancestro más cercano) matchea si es igual a algún tag pedido o es un
+/// subtag suyo (`lang="en-US"` ↔ `:lang(en)`). Case-insensitive.
+pub(crate) fn lang_matches(node: &markup5ever_rcdom::Handle, tags: &[String]) -> bool {
+    let mut cur = Some(node.clone());
+    let lang = loop {
+        let Some(n) = cur else { return false };
+        if let Some(l) = dom::attr(&n, "lang") {
+            let l = l.trim();
+            if !l.is_empty() {
+                break l.to_ascii_lowercase();
+            }
+        }
+        cur = parent_of(&n);
+    };
+    tags.iter().any(|t| {
+        let t = t.trim().to_ascii_lowercase();
+        !t.is_empty() && (lang == t || lang.starts_with(&format!("{t}-")))
+    })
 }
 
 /// Hermanos-elemento que siguen a `node` bajo el mismo padre, en orden.
