@@ -2996,6 +2996,41 @@ line2</pre></body></html>"#;
     }
 
     #[test]
+    fn css_nesting_expande_y_aplica() {
+        let html = r#"<html><head><style>
+            .card {
+                color: rgb(1,1,1);
+                .title { color: rgb(0,0,255) }
+                &.active { color: rgb(0,128,0) }
+            }
+            .menu { & > li { color: rgb(255,0,0) } }
+        </style></head><body>
+            <div id="c1" class="card"><span id="t" class="title">t</span></div>
+            <div id="c2" class="card active">a</div>
+            <ul class="menu"><li id="li1">x</li></ul>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by_id = |id: &str| -> Handle {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // Declaración propia del padre.
+        assert_eq!(eng.compute(&by_id("c1")).color, Color::rgb(1, 1, 1));
+        // Anidada descendiente implícita: `.card .title`.
+        assert_eq!(eng.compute(&by_id("t")).color, Color::rgb(0, 0, 255));
+        // `&.active` → `.card.active` (mayor especificidad gana al padre).
+        assert_eq!(eng.compute(&by_id("c2")).color, Color::rgb(0, 128, 0));
+        // `& > li` → `.menu > li`.
+        assert_eq!(eng.compute(&by_id("li1")).color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
     fn media_query_sintaxis_de_rango() {
         // DEFAULT_VIEWPORT = 1280 × 800, dpr 1.
         let vp = DEFAULT_VIEWPORT;

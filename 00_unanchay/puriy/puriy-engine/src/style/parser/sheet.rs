@@ -416,7 +416,8 @@ pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewp
             // @-rule desconocido: lo saltamos sin parsear.
             continue;
         }
-        // Regla normal: `selector { decls }`.
+        // Regla normal: `selector { body }`. El body puede contener reglas
+        // anidadas (CSS Nesting) además de declaraciones.
         let Some(brace) = css[i..].find('{') else { break };
         let sel_raw = css[i..i + brace].trim();
         i += brace + 1;
@@ -426,15 +427,98 @@ pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewp
         if sel_raw.is_empty() {
             continue;
         }
-        for sel in split_top_level_commas(sel_raw) {
-            let sel = sel.trim();
-            let Some(selector) = parse_selector(sel) else {
-                continue;
-            };
-            out.push(Rule { selector, decls: parse_declarations(body, vars) });
-        }
+        emit_style_rules(sel_raw, body, &mut out, vars, viewport);
     }
     out
+}
+
+/// Emite las reglas de un bloque `prelude { body }`, soportando **CSS
+/// Nesting**: el `body` puede mezclar declaraciones y reglas anidadas. Una
+/// regla anidada se expande contra cada selector del padre — `&` se
+/// sustituye por el selector padre, y una regla sin `&` recibe un
+/// combinador descendiente implícito (`.a { .b {} }` ≡ `.a .b`). Recursivo
+/// (soporta anidamiento de cualquier profundidad). Ver Fase 7.218.
+pub(crate) fn emit_style_rules(
+    prelude: &str,
+    body: &str,
+    out: &mut Vec<Rule>,
+    vars: &HashMap<String, String>,
+    viewport: Viewport,
+) {
+    let (decl_str, nested) = split_rule_body(body);
+    let parents: Vec<&str> = split_top_level_commas(prelude);
+    // Declaraciones de este nivel.
+    let decls = parse_declarations(&decl_str, vars);
+    for p in &parents {
+        let p = p.trim();
+        if p.is_empty() {
+            continue;
+        }
+        if let Some(selector) = parse_selector(p) {
+            out.push(Rule { selector, decls: decls.clone() });
+        }
+    }
+    // Reglas anidadas: expandir `&` contra cada selector padre.
+    for (nprelude, nbody) in &nested {
+        let nprelude = nprelude.trim();
+        // At-rules anidados (`@media`, etc.) no soportados en nesting todavía.
+        if nprelude.is_empty() || nprelude.starts_with('@') {
+            continue;
+        }
+        let mut expanded: Vec<String> = Vec::new();
+        for p in &parents {
+            for ns in split_top_level_commas(nprelude) {
+                expanded.push(expand_amp(p.trim(), ns.trim()));
+            }
+        }
+        emit_style_rules(&expanded.join(", "), nbody, out, vars, viewport);
+    }
+}
+
+/// Separa el body de una regla en (declaraciones, reglas anidadas). Una
+/// regla anidada es un `prelude { ... }` a profundidad 0; el resto son
+/// declaraciones (terminadas en `;` o el remanente final).
+pub(crate) fn split_rule_body(body: &str) -> (String, Vec<(String, String)>) {
+    let mut decls = String::new();
+    let mut nested: Vec<(String, String)> = Vec::new();
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    let mut seg_start = 0;
+    while i < body.len() {
+        match bytes[i] {
+            b';' => {
+                decls.push_str(&body[seg_start..=i]);
+                i += 1;
+                seg_start = i;
+            }
+            b'{' => {
+                let nprelude = body[seg_start..i].trim().to_string();
+                let after = &body[i + 1..];
+                let close = matching_close_brace(after).unwrap_or(after.len());
+                let nbody = after[..close].to_string();
+                nested.push((nprelude, nbody));
+                i = i + 1 + close + 1;
+                seg_start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    let tail = body[seg_start..].trim();
+    if !tail.is_empty() {
+        decls.push_str(tail);
+    }
+    (decls, nested)
+}
+
+/// Expande un selector anidado contra su padre (CSS Nesting). Si contiene
+/// `&`, lo sustituye textualmente por el selector padre; si no, le antepone
+/// un combinador descendiente (`& <nested>`).
+pub(crate) fn expand_amp(parent: &str, nested: &str) -> String {
+    if nested.contains('&') {
+        nested.replace('&', parent)
+    } else {
+        format!("{parent} {nested}")
+    }
 }
 
 /// Encuentra el final del @-rule actual. Para at-rules con bloque,
