@@ -434,11 +434,12 @@ impl Consola {
         // que el frontend Llimphi en Linux — un modelo, dos pinceles. Se pinta en
         // su **franja reservada** (`area_apps` ya la descontó), justo encima del
         // área de apps, así no tapa ninguna ventana.
+        let alto_barra = crate::compositor::pata_marco::alto_reservado();
         let barra = RegionPantalla {
             x: area.x,
-            y: area.y.saturating_sub(crate::compositor::pata_marco::ALTO_BARRA),
+            y: area.y.saturating_sub(alto_barra),
             ancho: area.ancho,
-            alto: crate::compositor::pata_marco::ALTO_BARRA,
+            alto: alto_barra,
         };
         crate::compositor::pata_marco::pintar_marco(&mut self.lienzo, barra);
         // FASE 58 :: si el launcher esta abierto, pintar su overlay como

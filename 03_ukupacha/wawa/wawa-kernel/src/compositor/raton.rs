@@ -350,7 +350,7 @@ pub fn refrescar_puntero() {
 /// es lo que evita que las ventanas queden tapadas por ella — el equivalente al
 /// `Frame::work_area` que `pata_core::resolve` computa.
 pub fn area_apps(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla {
-    let cabeza = (FRANJA_CONSOLA + pata_marco::ALTO_BARRA).min(alto_pantalla);
+    let cabeza = (FRANJA_CONSOLA + pata_marco::alto_reservado()).min(alto_pantalla);
     let pie = FRANJA_TASKBAR.min(alto_pantalla.saturating_sub(cabeza));
     RegionPantalla {
         x: 0,
@@ -366,10 +366,11 @@ pub fn area_apps(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla 
 /// hay drift entre dónde se reserva, dónde se pinta y dónde se clickea.
 pub fn region_barra_marco(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla {
     let apps = area_apps(ancho_pantalla, alto_pantalla);
+    let alto = pata_marco::alto_reservado();
     RegionPantalla {
         x: apps.x,
-        y: apps.y.saturating_sub(pata_marco::ALTO_BARRA),
+        y: apps.y.saturating_sub(alto),
         ancho: apps.ancho,
-        alto: pata_marco::ALTO_BARRA,
+        alto,
     }
 }

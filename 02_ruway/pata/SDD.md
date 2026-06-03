@@ -338,10 +338,20 @@ borde; shuma provee el contenido.
     bidireccional. El cache es un `Mutex<Config>` que la propuesta reescribe.
   - Cierre: el launcher de wawa corre sobre el MISMO `pata-core` que Linux —
     declarativo, resuelto por `resolve`, con widgets, render al framebuffer,
-    input al `start_button`, y config por akasha (lectura + escritura). Refinos
-    futuros (no de Fase 9): que la reserva de franja lea el grosor resuelto
-    cuando una app proponga una barra de otro alto; persistir el marco activo en
-    el manifiesto (hoy el puntero vive en memoria, el nodo sí en el grafo).
+    input al `start_button`, y config por akasha (lectura + escritura).
+  - **Refino: reserva dinámica ✅** — `area_apps`/`region_barra_marco` ya no usan
+    una constante: leen `pata_marco::alto_reservado()`, la suma de los grosores de
+    las barras `Bar` superiores no-`autohide` del config **resuelto**. Si una app
+    propone (vía `sys_marco_proponer`) una barra de otro alto, la reserva, el
+    render y el hit-test la siguen sin drift.
+  - **Refino pendiente: persistir el marco activo entre reinicios** — hoy el nodo
+    del config vive en el grafo (content-addressed), pero el **puntero activo**
+    vive en memoria (`Mutex<Config>`); al reiniciar se re-siembra el default.
+    Persistirlo es un cambio **breaking del trust-root**: la firma del manifiesto
+    es sobre el hash del `Manifiesto`, y `deserializar` exige `VERSION_MANIFIESTO`,
+    así que agregar un puntero `marco: Option<Hash>` obliga a bumpear la versión +
+    actualizar el constructor de génesis + re-firmar + validar en QEMU. No es un
+    cambio seguro a ciegas; queda para coordinar con el pipeline de imagen/firma.
 - **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
   excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
   nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se

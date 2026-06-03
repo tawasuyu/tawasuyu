@@ -89,6 +89,20 @@ fn marco_cell() -> &'static Mutex<Config> {
     })
 }
 
+/// El alto (px) que el marco **reserva** en la cima del área de apps: la suma de
+/// los grosores de las barras `Bar` superiores no-`autohide` del config activo.
+/// El compositor lo descuenta de `area_apps` para que las ventanas no queden bajo
+/// la barra. Lee el config **resuelto** —si una app propone una barra de otro
+/// alto vía `sys_marco_proponer`, la reserva lo sigue—, no una constante.
+pub(crate) fn alto_reservado() -> usize {
+    let cfg = marco_cell().lock();
+    cfg.surfaces
+        .iter()
+        .filter(|s| s.kind == SurfaceKind::Bar && !s.autohide && s.anchor == Anchor::Top)
+        .map(|s| s.thickness.max(0.0) as usize)
+        .sum()
+}
+
 /// **Propone** un config nuevo desde userspace: los `bytes` son un [`WireConfig`]
 /// serializado con postcard (el espejo postcard-safe). El kernel lo deserializa
 /// (validándolo), lo re-serializa canónico y lo **graba en el grafo**
