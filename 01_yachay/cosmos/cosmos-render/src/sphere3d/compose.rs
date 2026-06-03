@@ -33,10 +33,11 @@ pub fn compose_sphere(
     // --- Cuerpo de la esfera: sombreado con volumen ---
     add_sphere_shading(&mut items, pal, center, rad);
 
-    // --- Cielo de fondo: Vía Láctea + estrellas (solo tema oscuro) ---
-    if opts.show_sky && pal.is_dark {
-        add_milky_way_glow(&mut items, &proj, eps, size, zenith);
-        add_starfield(&mut items, &proj, size, eps);
+    // --- Cielo de fondo: Vía Láctea + estrellas. En modo claro se pintan
+    // oscuras (negras) para verse sobre el fondo claro. ---
+    if opts.show_sky {
+        add_milky_way_glow(&mut items, &proj, eps, size, zenith, pal.is_dark);
+        add_starfield(&mut items, &proj, size, eps, pal.is_dark);
     }
 
     // --- Figuras de las constelaciones ---

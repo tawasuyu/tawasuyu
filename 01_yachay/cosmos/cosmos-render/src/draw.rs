@@ -658,9 +658,13 @@ pub fn compose_wheel_with_hits(
                     .unwrap_or(seg.to_deg);
                 let (ax, ay) = polar_to_screen(from_deg, asc, rot, ring_a);
                 let (bx, by) = polar_to_screen(to_deg, asc, rot, ring_b);
-                let alpha = (seg.opacity).clamp(0.0, 1.0);
-                // Width inversa al orbe — orbe 0 → 1.6, orbe 10° → 0.5
-                let width = (1.6 - seg.orb_deg.abs() * 0.10).clamp(0.45, 1.8);
+                // Intensidad por cercanía del orbe: aspecto exacto (orbe 0)
+                // = fuerte (grueso + opaco), aspecto holgado = tenue. Escala
+                // sobre un orbe de referencia de 8°.
+                let intensity = (1.0 - seg.orb_deg.abs() / 8.0).clamp(0.12, 1.0);
+                let alpha = (seg.opacity).clamp(0.0, 1.0) * (0.30 + 0.70 * intensity);
+                // Width: 0.5 (holgado) → 3.0 (exacto), contraste marcado.
+                let width = 0.5 + 2.5 * intensity;
                 // Atenúa cuando hay selección y este aspecto no involucra al cuerpo elegido.
                 let aspect_is_related = match opts.selected_body.as_deref() {
                     Some(sel) => seg.from_body == sel || seg.to_body == sel,
@@ -944,17 +948,32 @@ fn emit_coord_labels(
         };
 
         let (lx, ly) = polar_to_screen(disp_deg, asc, rot, label_ring);
-        let color = if has_planet {
-            pal.fg_muted
-        } else {
-            pal.house_cusp
-        };
+        // Texto a mayor contraste (fg_text) y un poco más grande, sobre una
+        // píldora de fondo semitransparente para que se lea sobre cualquier
+        // anillo o línea de aspecto que pase por detrás.
+        let color = if has_planet { pal.fg_text } else { pal.house_cusp };
+        let fsize = opts.size * 0.018;
+        let lcx = cx + lx;
+        let lcy = cy + ly;
+        let half_w = coord_str.chars().count() as f32 * fsize * 0.32 + fsize * 0.3;
+        let half_h = fsize * 0.62;
+        out.push(DrawCommand::Polygon {
+            points: vec![
+                (lcx - half_w, lcy - half_h),
+                (lcx + half_w, lcy - half_h),
+                (lcx + half_w, lcy + half_h),
+                (lcx - half_w, lcy + half_h),
+            ],
+            fill: Some(pal.bg_panel.with_alpha(0.72)),
+            stroke: None,
+            stroke_w: 0.0,
+        });
         out.push(DrawCommand::Text {
-            x: cx + lx,
-            y: cy + ly,
+            x: lcx,
+            y: lcy,
             content: coord_str,
             color,
-            size: opts.size * 0.0155,
+            size: fsize,
             anchor: TextAnchor::Middle,
         });
     }

@@ -49,12 +49,17 @@ pub(crate) fn push_star(
     pos: Vec3,
     brightness: f32,
     tint: f32,
+    dark: bool,
 ) {
     let p = proj.project(pos);
     let bright = brightness * brightness; // sesga hacia las tenues
     let r = size * (0.0011 + 0.0026 * bright);
     let alpha = (0.20 + 0.62 * bright) * depth_alpha(p.depth);
-    let col = if tint < 0.22 {
+    // En modo claro las estrellas se pintan oscuras (negras) para ser
+    // visibles sobre el fondo claro; en oscuro conservan su tinte.
+    let col = if !dark {
+        Rgba { r: 0.06, g: 0.08, b: 0.14, a: alpha }
+    } else if tint < 0.22 {
         Rgba { r: 0.74, g: 0.81, b: 1.0, a: alpha }
     } else if tint > 0.86 {
         Rgba { r: 1.0, g: 0.86, b: 0.72, a: alpha }
@@ -78,11 +83,17 @@ pub(crate) fn push_star(
 /// catálogo real— más una sobredensidad de estrellas tenues a lo largo
 /// del plano galáctico, que dibuja la Vía Láctea. Ambos giran con la
 /// esfera, así que delatan su rotación de un vistazo.
-pub(crate) fn add_starfield(items: &mut Vec<(f32, DrawCommand)>, proj: &Projector, size: f32, eps: f32) {
+pub(crate) fn add_starfield(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    size: f32,
+    eps: f32,
+    dark: bool,
+) {
     const FONDO: u32 = 210;
     for i in 0..FONDO {
         let pos = sphere_point(hash01(i * 3), hash01(i * 3 + 1));
-        push_star(items, proj, size, pos, hash01(i * 3 + 2), hash01(i * 7 + 1));
+        push_star(items, proj, size, pos, hash01(i * 3 + 2), hash01(i * 7 + 1), dark);
     }
     // Vía Láctea — el plano galáctico ubicado con el polo galáctico real.
     let gpole = rot_x(equatorial_dir(GAL_POLE_RA, GAL_POLE_DEC), eps);
@@ -103,7 +114,7 @@ pub(crate) fn add_starfield(items: &mut Vec<(f32, DrawCommand)>, proj: &Projecto
             on_eq.y * cb + gpole.y * sb,
             on_eq.z * cb + gpole.z * sb,
         );
-        push_star(items, proj, size, pos, hash01(s * 5 + 3) * 0.55, hash01(s * 5 + 4));
+        push_star(items, proj, size, pos, hash01(s * 5 + 3) * 0.55, hash01(s * 5 + 4), dark);
     }
 }
 
@@ -119,10 +130,15 @@ pub(crate) fn add_milky_way_glow(
     eps: f32,
     size: f32,
     zenith: Option<Vec3>,
+    dark: bool,
 ) {
     let gpole = rot_x(equatorial_dir(GAL_POLE_RA, GAL_POLE_DEC), eps);
     let gcenter = rot_x(equatorial_dir(GAL_CENTER_RA, GAL_CENTER_DEC), eps);
-    let band = Rgba::opaque(0.78, 0.82, 0.96);
+    let band = if dark {
+        Rgba::opaque(0.78, 0.82, 0.96)
+    } else {
+        Rgba::opaque(0.20, 0.24, 0.34)
+    };
     for p3 in great_circle_perp(gpole, 54) {
         // Más brillo hacia el centro galáctico.
         let toward = (p3.dot(gcenter) * 0.5 + 0.5).clamp(0.0, 1.0);

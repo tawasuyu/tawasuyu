@@ -147,7 +147,13 @@ pub(crate) fn add_constellations(
     pal: &Palette,
 ) {
     let line_col = pal.fg_muted.with_alpha(0.42);
-    let star = Rgba::opaque(0.92, 0.95, 1.0);
+    // Estrellas de las figuras: claras en tema oscuro, oscuras (casi
+    // negras) en tema claro para verse sobre el fondo.
+    let star = if pal.is_dark {
+        Rgba::opaque(0.92, 0.95, 1.0)
+    } else {
+        Rgba::opaque(0.08, 0.10, 0.16)
+    };
     for fig in crate::constellations_data::FIGURAS {
         let (mut sx, mut sy, mut sz, mut n) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
         for path in fig.paths {
