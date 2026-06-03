@@ -22,8 +22,14 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
     MANDOS.call_once(|| ArrayQueue::new(CAPACIDAD_MANDOS));
     PARTOS_POR_INDICE.call_once(|| Mutex::new(Vec::new()));
 
+    // FASE 64 :: cuantos monitores hay. Con 2+ outputs, las ventanas del
+    // genesis se REPARTEN round-robin entre ellos —asi el escritorio se ve
+    // extendido de entrada, sin esperar a que el operador mueva nada con
+    // Alt+O—. Con un solo output, `n_outputs == 1` y todas nacen en el 0 (el
+    // comportamiento de siempre).
+    let n_outputs = crate::pantallas::count().max(1);
     let mut ventanas = Vec::with_capacity(naturales.len());
-    for &(nat_ancho, nat_alto, nombre) in naturales {
+    for (idx, &(nat_ancho, nat_alto, nombre)) in naturales.iter().enumerate() {
         ventanas.push(Ventana {
             nombre: nombre.to_string(),
             natural_ancho: nat_ancho,
@@ -40,10 +46,9 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
             pintada: false,
             baliza: None,
             cerrada: false,
-            // FASE 59 v2 :: todas las ventanas del genesis nacen en el
-            // output primario. Apps que en el futuro pidan nacer en otro
-            // output usarian `nacer_ventana_en` (no implementada todavia).
-            output: 0,
+            // Reparto round-robin entre los outputs disponibles. `aplicar_teselado`
+            // agrupa por este indice y tesela cada grupo en su monitor.
+            output: idx % n_outputs,
         });
     }
 

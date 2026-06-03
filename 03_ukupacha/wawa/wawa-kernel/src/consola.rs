@@ -152,6 +152,12 @@ pub(crate) struct Consola {
     /// multi-scanout. `presentar`/`presentar_region` vuelcan el lienzo global a
     /// la primaria Y a cada extra.
     extras: alloc::vec::Vec<Pantalla>,
+    /// FASE 64 :: ancho UTIL para el texto de la consola = ancho del output
+    /// PRIMARIO. El lienzo es global (envolvente de todos los monitores), pero
+    /// la consola de arranque debe envolver al ancho del primario, no del
+    /// escritorio entero — si no, el texto se derrama al monitor 2. Con un solo
+    /// output `ancho_util == lienzo.ancho` y nada cambia.
+    ancho_util: usize,
     /// Posicion horizontal de la pluma de escritura.
     pluma_x: usize,
     /// Linea base vertical de la pluma de escritura.
@@ -167,10 +173,15 @@ unsafe impl Send for Consola {}
 impl Consola {
     /// Crea una consola con la pluma en la esquina superior izquierda.
     pub(crate) fn nueva(lienzo: Lienzo, pantalla: Pantalla) -> Consola {
+        // Por defecto el ancho util es el del lienzo (caso mono-output); el
+        // arranque multi-scanout lo acota al ancho del primario con
+        // `fijar_ancho_util` antes de escribir el primer mensaje.
+        let ancho_util = lienzo.ancho;
         Consola {
             lienzo,
             pantalla,
             extras: alloc::vec::Vec::new(),
+            ancho_util,
             pluma_x: MARGEN,
             base_y: BASE_INICIAL,
         }
@@ -181,6 +192,15 @@ impl Consola {
     /// solo output esto nunca se llama y `extras` queda vacio.
     pub(crate) fn fijar_pantallas_extra(&mut self, extras: alloc::vec::Vec<Pantalla>) {
         self.extras = extras;
+    }
+
+    /// FASE 64 :: acota el ancho de envolvado del texto de la consola al ancho
+    /// del output PRIMARIO, para que el texto de arranque no se derrame a los
+    /// monitores secundarios del lienzo global.
+    pub(crate) fn fijar_ancho_util(&mut self, ancho: usize) {
+        if ancho > 0 {
+            self.ancho_util = ancho;
+        }
     }
 
     /// Lleva la pluma al inicio de la siguiente linea. Al llegar al fondo,
@@ -202,7 +222,7 @@ impl Consola {
         }
         let (metricas, cobertura) = texto::rasterizar(caracter, TAM_FUENTE);
         // Salto de linea automatico al alcanzar el margen derecho.
-        if self.pluma_x + metricas.advance_width as usize + MARGEN > self.lienzo.ancho {
+        if self.pluma_x + metricas.advance_width as usize + MARGEN > self.ancho_util {
             self.nueva_linea();
         }
         self.dibujar_glifo(&metricas, &cobertura);
@@ -369,6 +389,22 @@ impl Consola {
             area.alto,
             Color::LIENZO_EN_REPOSO,
         );
+        // FASE 64 :: limpiar el fondo COMPLETO de cada output SECUNDARIO. El
+        // cromo (consola arriba, taskbar abajo) vive solo en el primario; los
+        // monitores extra son puro escritorio, asi que su region entera va a
+        // reposo. Esto (a) borra el texto de la consola de arranque que se
+        // derramo al lienzo global mas alla del primario, y (b) deja monitor 2
+        // limpio para que las ventanas movidas con Alt+O pinten encima sin
+        // dejar fantasmas al entrar o salir. Con un solo output el bucle no
+        // itera (no hay id != 0) y nada cambia.
+        for output in crate::pantallas::todos() {
+            if output.id == 0 {
+                continue;
+            }
+            let r = output.region;
+            self.lienzo
+                .rellenar_rect(r.x, r.y, r.ancho, r.alto, Color::LIENZO_EN_REPOSO);
+        }
         for capa in capas {
             let m = capa.marco;
             match &capa.contenido {

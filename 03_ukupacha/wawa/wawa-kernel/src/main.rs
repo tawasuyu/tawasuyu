@@ -1044,6 +1044,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut consola = Consola::nueva(lienzo, pantalla);
     // FASE 64 :: entregarle los monitores secundarios. Vacio con un solo output.
     consola.fijar_pantallas_extra(extras);
+    // FASE 64 :: el texto de la consola se envuelve al ancho del PRIMARIO
+    // (`ancho_lienzo`), no al del lienzo global — si no, se derrama al monitor 2.
+    consola.fijar_ancho_util(ancho_lienzo);
     consola.escribir("renaser :: fase 6.2 -- E/S de disco asincrona por interrupcion\n");
     consola.presentar();
     CONSOLA.call_once(|| Mutex::new(consola));
