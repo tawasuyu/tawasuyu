@@ -396,6 +396,22 @@ pub fn lerp_transforms(a: &Vec<Transform>, b: &Vec<Transform>, t: f32) -> Vec<Tr
             (Transform::Rotate(ad), Transform::Rotate(bd)) => {
                 Transform::Rotate(ad + (bd - ad) * t)
             }
+            (Transform::Skew(ax, ay), Transform::Skew(bx, by)) => {
+                Transform::Skew(ax + (bx - ax) * t, ay + (by - ay) * t)
+            }
+            // Matrix: lerp componentwise (aproximación — la spec descompone
+            // en translate/rotate/scale/skew; suficiente para tweens cortos).
+            (
+                Transform::Matrix(a0, b0, c0, d0, e0, f0),
+                Transform::Matrix(a1, b1, c1, d1, e1, f1),
+            ) => Transform::Matrix(
+                a0 + (a1 - a0) * t,
+                b0 + (b1 - b0) * t,
+                c0 + (c1 - c0) * t,
+                d0 + (d1 - d0) * t,
+                e0 + (e1 - e0) * t,
+                f0 + (f1 - f0) * t,
+            ),
             // Variantes distintas en este índice → snap al destino.
             _ => *tb,
         });

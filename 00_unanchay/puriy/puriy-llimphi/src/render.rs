@@ -161,6 +161,24 @@ pub(crate) fn transform_affine(transforms: &[puriy_engine::style::Transform], zo
             }
             T::Scale(sx, sy) => Affine::scale_non_uniform(sx as f64, sy as f64),
             T::Rotate(deg) => Affine::rotate((deg as f64).to_radians()),
+            // skew: cizalla por la tangente del ángulo en cada eje.
+            T::Skew(ax, ay) => Affine::new([
+                1.0,
+                (ay as f64).to_radians().tan(),
+                (ax as f64).to_radians().tan(),
+                1.0,
+                0.0,
+                0.0,
+            ]),
+            // matrix(a,b,c,d,e,f): afín directa; e/f (traslación) por zoom.
+            T::Matrix(a, b, c, d, e, f) => Affine::new([
+                a as f64,
+                b as f64,
+                c as f64,
+                d as f64,
+                (e * zoom) as f64,
+                (f * zoom) as f64,
+            ]),
         };
     }
     Some(a)

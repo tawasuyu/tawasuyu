@@ -2651,6 +2651,24 @@ line2</pre></body></html>"#;
     }
 
     #[test]
+    fn parsea_transforms_skew_y_matrix() {
+        // skew(x), skew(x, y), skewX, skewY (ángulos con unidad).
+        let t = parse_transforms("skew(10deg) skew(10deg, 20deg) skewX(0.25turn) skewY(15deg)").unwrap();
+        assert_eq!(t[0], Transform::Skew(10.0, 0.0));
+        assert_eq!(t[1], Transform::Skew(10.0, 20.0));
+        assert_eq!(t[2], Transform::Skew(90.0, 0.0)); // 0.25turn = 90deg
+        assert_eq!(t[3], Transform::Skew(0.0, 15.0));
+        // matrix(a,b,c,d,e,f) — afín 2D completa.
+        let t = parse_transforms("matrix(1, 0, 0, 1, 30, 40)").unwrap();
+        assert_eq!(t[0], Transform::Matrix(1.0, 0.0, 0.0, 1.0, 30.0, 40.0));
+        // matrix con escala/rotación.
+        let t = parse_transforms("matrix(2, 0, 0, 0.5, 0, 0)").unwrap();
+        assert_eq!(t[0], Transform::Matrix(2.0, 0.0, 0.0, 0.5, 0.0, 0.0));
+        // matrix con aridad incorrecta → None.
+        assert!(parse_transforms("matrix(1, 0, 0)").is_none());
+    }
+
+    #[test]
     fn parsea_text_shadow_simple_y_multiple() {
         let sh = parse_text_shadows("2px 3px 4px red").unwrap();
         assert_eq!(sh.len(), 1);

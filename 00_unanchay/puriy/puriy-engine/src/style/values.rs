@@ -556,6 +556,11 @@ pub enum Transform {
     Scale(f32, f32),
     /// Grados (sentido horario en pantalla = sentido CSS).
     Rotate(f32),
+    /// Sesgo X/Y en grados (`skew`/`skewX`/`skewY`).
+    Skew(f32, f32),
+    /// `matrix(a, b, c, d, e, f)` — afín 2D completa. `a..d` son unitless;
+    /// `e`/`f` son la traslación en px (se escalan por zoom en el render).
+    Matrix(f32, f32, f32, f32, f32, f32),
 }
 
 /// Tamaño de track para `display: grid`. `Fr(N)` = fracción del espacio

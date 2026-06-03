@@ -1828,6 +1828,24 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
             };
             Some(Transform::Rotate(deg))
         }
+        "skew" => match parts.as_slice() {
+            [x] => Some(Transform::Skew(parse_hue(x)?, 0.0)),
+            [x, y] => Some(Transform::Skew(parse_hue(x)?, parse_hue(y)?)),
+            _ => None,
+        },
+        "skewx" => Some(Transform::Skew(parse_hue(parts[0])?, 0.0)),
+        "skewy" => Some(Transform::Skew(0.0, parse_hue(parts[0])?)),
+        "matrix" => match parts.as_slice() {
+            [a, b, c, d, e, f] => Some(Transform::Matrix(
+                a.parse().ok()?,
+                b.parse().ok()?,
+                c.parse().ok()?,
+                d.parse().ok()?,
+                e.parse().ok()?,
+                f.parse().ok()?,
+            )),
+            _ => None,
+        },
         _ => None,
     }
 }
