@@ -613,6 +613,7 @@ fn mode_name(m: LayoutMode) -> &'static str {
         LayoutMode::Rows => "filas",
         LayoutMode::CenteredMaster => "maestro centrado",
         LayoutMode::Spiral => "espiral",
+        LayoutMode::Zones => "zonas",
     }
 }
 
