@@ -118,6 +118,7 @@ impl App for Uya {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
                 .collect();
+            uya_app::iniciar_baliza_lan(enlace.clone(), sala.clone());
             enlace.unir_sala(sala, bootstrap);
         }
 

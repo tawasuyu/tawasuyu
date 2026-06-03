@@ -59,3 +59,5 @@ image = { workspace = true }
 media-encode-opus = { path = "../../media/media-encode-opus" }
 # ...y el decoder Opus en streaming (un `OpusDecoder` por par en el lector).
 opus-wave = { workspace = true }
+# Baliza LAN: socket UDP multicast con SO_REUSEPORT + IP_MULTICAST_LOOP.
+socket2 = "0.5"

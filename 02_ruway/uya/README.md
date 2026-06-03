@@ -90,19 +90,23 @@ Anda hoy, end-to-end y feo a propósito:
   descubre a los demás providers, que entran a la malla solos. Verificado con
   3 nodos (con `UYA_BOOTSTRAP` para sembrar el DHT): los tres se ven, sin pegar
   direcciones.
-- ✅ **Zero-config en LAN (mDNS)**: `BrahmanNet` ahora trae mDNS (agregado a
-  `shared/card/card-net`): los pares de la misma LAN se descubren por multicast
-  e inyectan a Kad, así la sala anda **sin `UYA_BOOTSTRAP`** en red local. (El
-  código es el patrón estándar de libp2p; la verificación en LAN real queda
-  pendiente — el sandbox no tiene multicast.)
+- ✅ **Zero-config en LAN (baliza multicast)**: en una sala, uya emite una baliza
+  UDP multicast `uya1\t<sala>\t<puerto>\t<peerid>` (grupo 239.255.42.99:7799) y
+  escucha las ajenas; al recibir una de su sala, reconstruye la multiaddr usando
+  la **IP de origen del datagrama** (resuelve el caso loopback → anda entre
+  máquinas) y disca. Room-aware, sin `UYA_BOOTSTRAP` ni `UYA_CONECTAR`. Verificado:
+  2 nodos misma sala → se descubren y conectan solos. (También se sumó mDNS a
+  `shared/card/card-net` para poblar el DHT, pero la baliza propia es el camino
+  fiable de uya en LAN.)
 
 ## Pendiente (por orden)
 
 1. **Firma agora del `Hola`**: el PeerId ya es estable (deriva de `BLAKE3(nombre)`),
    pero el nombre es auto-declarado. Atar la identidad a `agora`: firmar el `Hola`
    con la clave agora y verificarla, para que nadie suplante un nombre.
-2. **Bootstrap público para WAN**: en LAN ya hay mDNS; falta un rendezvous
-   conocido por defecto para "entrar por nombre" entre redes distintas.
+2. **Bootstrap público para WAN**: en LAN ya hay descubrimiento por baliza;
+   falta un rendezvous conocido por defecto para "entrar por nombre" entre redes
+   distintas (la baliza multicast no cruza routers).
 3. **Cancelación de eco acústico (AEC)**: cuando el micro capta el parlante.
    Necesita un AEC real (y oídos/hardware para evaluarlo). El jitter buffer ya
    es adaptativo.

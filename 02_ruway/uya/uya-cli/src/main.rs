@@ -48,6 +48,8 @@ fn main() {
             .map(str::to_string)
             .collect();
         println!("uya-cli: uniéndome a la sala '{sala}' ({} bootstrap)", bootstrap.len());
+        // Baliza LAN (zero-config) + DHT (para WAN/bootstrap): ambas alimentan la malla.
+        uya_app::iniciar_baliza_lan(enlace.clone(), sala.clone());
         enlace.unir_sala(sala, bootstrap);
     }
 
